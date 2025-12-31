@@ -349,18 +349,89 @@ jobs:
         with:
           components: llvm-tools-preview
 
+      - name: Capture nightly toolchain info
+        id: nightly_toolchain
+        run: |
+          set -euo pipefail
+          rustc_version="$(rustc -V)"
+          rustc_hash="$(rustc -Vv | awk '/^commit-hash:/ {print $2}')"
+          echo "rustc_version=${rustc_version}" >> "$GITHUB_OUTPUT"
+          echo "rustc_hash=${rustc_hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo registry (fuzz-smoke)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-fuzz-cargo-registry-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+
+      - name: Cache cargo git (fuzz-smoke)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-fuzz-cargo-git-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+
+      - name: Cache fuzz target dir
+        uses: actions/cache@v4
+        with:
+          path: fuzz/target
+          key: ${{ runner.os }}-fuzz-target-${{ steps.nightly_toolchain.outputs.rustc_hash }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
 
       - name: Run fuzz smoke tests
         working-directory: fuzz
         run: |
+          set -euo pipefail
           export ASAN_OPTIONS=detect_leaks=0
           cargo fuzz run css_parser ../tests/fuzz_corpus -- -max_total_time=5 -runs=256
           cargo fuzz run selectors ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
           cargo fuzz run vars_and_calc ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
           cargo fuzz run svg_filters ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
           cargo fuzz run animation_properties ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
+          mkdir -p /tmp/fuzz_color_fonts_corpus
+          cp ../tests/fixtures/fonts/FastRenderEmoji.ttf /tmp/fuzz_color_fonts_corpus/
+          cp ../tests/fixtures/fonts/TestSbixJPEG.ttf /tmp/fuzz_color_fonts_corpus/
+          cp ../tests/fixtures/fonts/PaletteTestCOLRv1.ttf /tmp/fuzz_color_fonts_corpus/
+          cp ../tests/fixtures/fonts/colrv1-test.ttf /tmp/fuzz_color_fonts_corpus/
+          cargo fuzz run color_fonts /tmp/fuzz_color_fonts_corpus -- -max_total_time=5 -runs=64 -timeout=5 -rss_limit_mb=4096
+
+      - name: Upload fuzz artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz_smoke_artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+
+      - name: Fuzz smoke step summary
+        if: always()
+        run: |
+          {
+            echo "## Fuzz smoke"
+            echo
+            echo "- Rust (nightly): ${{ steps.nightly_toolchain.outputs.rustc_version }}"
+            echo "- Rust commit hash: ${{ steps.nightly_toolchain.outputs.rustc_hash }}"
+            echo "- cargo-fuzz: $(cargo fuzz --version 2>/dev/null || echo 'unavailable')"
+            echo
+            echo "Targets:"
+            echo "- css_parser: -max_total_time=5 -runs=256"
+            echo "- selectors: -max_total_time=5 -runs=128"
+            echo "- vars_and_calc: -max_total_time=5 -runs=128"
+            echo "- svg_filters: -max_total_time=5 -runs=128"
+            echo "- animation_properties: -max_total_time=5 -runs=128"
+            echo "- color_fonts: -max_total_time=5 -runs=64 -timeout=5 -rss_limit_mb=4096"
+            echo
+            if [ -d fuzz/artifacts ]; then
+              echo "Artifacts directory (fuzz/artifacts) exists; contents:"
+              echo
+              echo '```'
+              find fuzz/artifacts -maxdepth 2 -type f -print | head -n 50 || true
+              echo '```'
+            else
+              echo "No fuzz artifacts directory was created."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # Coverage Job - Measure test coverage
