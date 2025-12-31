@@ -906,6 +906,16 @@ thread_local! {
   static CLIP_MASK_SCRATCH: RefCell<ClipMaskScratch> = RefCell::new(ClipMaskScratch::default());
 }
 
+#[derive(Default)]
+struct MaskLayerPixmapScratch {
+  pixmap: Option<Pixmap>,
+}
+
+thread_local! {
+  static MASK_LAYER_PIXMAP_SCRATCH: RefCell<MaskLayerPixmapScratch> =
+    RefCell::new(MaskLayerPixmapScratch::default());
+}
+
 fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMaskDirtyRect> {
   let x0 = rect.x().floor().max(0.0) as u32;
   let y0 = rect.y().floor().max(0.0) as u32;
@@ -3699,32 +3709,44 @@ impl DisplayListRenderer {
         continue;
       }
 
-      let mut mask_pixmap = new_pixmap(region_w, region_h)?;
-      for ty in positions_y.iter().copied() {
-        for tx in positions_x.iter().copied() {
-          paint_mask_tile(
-            &mut mask_pixmap,
-            mask_tile,
-            tx,
-            ty,
-            tile_w,
-            tile_h,
-            clip_rect_css,
-            self.scale,
-            (x0, y0),
-          );
+      let layer_mask = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        let replace = match scratch.pixmap.as_ref() {
+          Some(existing) => existing.width() != region_w || existing.height() != region_h,
+          None => true,
+        };
+        if replace {
+          scratch.pixmap = new_pixmap(region_w, region_h);
         }
-      }
+        let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
+          return None;
+        };
+        mask_pixmap.data_mut().fill(0);
+        for ty in positions_y.iter().copied() {
+          for tx in positions_x.iter().copied() {
+            paint_mask_tile(
+              mask_pixmap,
+              mask_tile,
+              tx,
+              ty,
+              tile_w,
+              tile_h,
+              clip_rect_css,
+              self.scale,
+              (x0, y0),
+            );
+          }
+        }
 
-      let mut layer_mask = Mask::new(region_w, region_h)?;
-      {
+        let mut layer_mask = Mask::new(region_w, region_h)?;
         let mut src_idx = 3usize;
         let src = mask_pixmap.data();
         for dst in layer_mask.data_mut().iter_mut() {
           *dst = src[src_idx];
           src_idx += 4;
         }
-      }
+        Some(layer_mask)
+      })?;
 
       let layer_mask = CompositeMask::Region(OffsetMask {
         mask: layer_mask,
@@ -10322,6 +10344,58 @@ mod tests {
     assert_eq!(rendered.origin, (50, 60));
     assert_eq!(rendered.mask.width(), 10);
     assert_eq!(rendered.mask.height(), 10);
+  }
+
+  #[test]
+  fn render_mask_reuses_layer_pixmap_scratch_for_multiple_layers() {
+    MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = MaskLayerPixmapScratch::default();
+    });
+
+    let mut renderer = DisplayListRenderer::new(200, 200, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let bounds = Rect::from_xywh(50.0, 60.0, 10.0, 10.0);
+    let rects = mask_rects(bounds, (0.0, 0.0, 0.0, 0.0));
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let layer = ResolvedMaskLayer {
+      image: ResolvedMaskImage::Raster(image.clone()),
+      repeat: BackgroundRepeat::no_repeat(),
+      position: BackgroundPosition::default(),
+      size: BackgroundSize::Explicit(
+        BackgroundSizeComponent::Length(Length::percent(100.0)),
+        BackgroundSizeComponent::Length(Length::percent(100.0)),
+      ),
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode: MaskMode::Alpha,
+      composite: MaskComposite::Add,
+    };
+
+    let mask = ResolvedMask {
+      layers: vec![layer.clone(), layer],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects,
+    };
+
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    {
+      let _first = renderer.render_mask(&mask).expect("mask rendered");
+    }
+    {
+      let _second = renderer.render_mask(&mask).expect("mask rendered");
+    }
+    let allocations = recorder.take();
+    let scratch_allocs = allocations
+      .iter()
+      .filter(|record| record.width == 10 && record.height == 10)
+      .count();
+    assert_eq!(
+      scratch_allocs, 1,
+      "expected render_mask to allocate its layer scratch pixmap once, got {scratch_allocs} allocations: {allocations:?}"
+    );
   }
 
   #[test]
