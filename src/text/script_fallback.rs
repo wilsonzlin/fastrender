@@ -21,9 +21,24 @@ pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'
     Script::Bengali => &["Noto Sans Bengali"],
     Script::Devanagari => &["Noto Sans Devanagari"],
     Script::Arabic => &["Noto Sans Arabic"],
+    Script::Syriac => &["Noto Sans Syriac"],
+    Script::Thaana => &["Noto Sans Thaana"],
+    Script::Nko => &["Noto Sans NKo"],
     Script::Hangul => &["Noto Sans KR"],
     Script::Han | Script::Hiragana | Script::Katakana => cjk_fallback_families(language),
     _ => &[],
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn preferred_families_include_pageset_script_fonts() {
+    assert_eq!(preferred_families(Script::Syriac, ""), &["Noto Sans Syriac"]);
+    assert_eq!(preferred_families(Script::Thaana, ""), &["Noto Sans Thaana"]);
+    assert_eq!(preferred_families(Script::Nko, ""), &["Noto Sans NKo"]);
   }
 }
 
