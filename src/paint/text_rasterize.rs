@@ -1963,6 +1963,55 @@ mod tests {
   }
 
   #[test]
+  fn test_text_rasterizer_outline_cache_reused_across_rotation() {
+    let font = match get_test_font() {
+      Some(f) => f,
+      None => return,
+    };
+
+    let face = font.as_ttf_face().unwrap();
+    let Some(glyph_id) = face.glyph_index('A').map(|g| g.0 as u32) else {
+      return;
+    };
+
+    let glyphs = vec![GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 10.0,
+      y_advance: 0.0,
+    }];
+
+    let mut rasterizer = TextRasterizer::new();
+    rasterizer.reset_cache_stats();
+
+    rasterizer
+      .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, None, &[])
+      .unwrap();
+    rasterizer
+      .positioned_glyph_paths(
+        &glyphs,
+        &font,
+        16.0,
+        0.0,
+        0.0,
+        0.0,
+        Some(Transform::from_rotate(25.0)),
+        &[],
+      )
+      .unwrap();
+
+    let outline_stats = rasterizer
+      .cache
+      .lock()
+      .map(|cache| cache.stats())
+      .unwrap_or_default();
+    assert_eq!(outline_stats.misses, 1);
+    assert!(outline_stats.hits >= 1);
+  }
+
+  #[test]
   fn test_color_black() {
     let black = Rgba::BLACK;
     assert_eq!(black.r, 0);
