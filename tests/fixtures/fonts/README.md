@@ -21,6 +21,8 @@ pip install -r tests/fixtures/fonts/requirements.txt
    and `FastRenderEmoji.ttf` (CC0) for color emoji.
 - **Regeneration:**
   ```bash
+  python3 -m venv .venv && . .venv/bin/activate
+  pip install -r tests/fixtures/fonts/requirements.txt
   python tests/fixtures/fonts/generate_bundled_noto_subsets.py
   ```
   (pins deterministic timestamps and instantiates the CJK faces at `wght=400` before subsetting).
