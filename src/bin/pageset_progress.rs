@@ -2816,6 +2816,9 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
   if let Some(misses) = resources.resource_cache_misses {
     resource_cache_parts.push(format!("misses={misses}"));
   }
+  if let Some(bytes) = resources.resource_cache_bytes {
+    resource_cache_parts.push(format!("bytes={bytes}"));
+  }
   if !resource_cache_parts.is_empty() {
     parts.push(format!("resource_cache {}", resource_cache_parts.join(" ")));
   }
@@ -2827,6 +2830,9 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
   if let Some(misses) = resources.disk_cache_misses {
     disk_cache_parts.push(format!("misses={misses}"));
   }
+  if let Some(bytes) = resources.disk_cache_bytes {
+    disk_cache_parts.push(format!("bytes={bytes}"));
+  }
   if let Some(ms) = resources.disk_cache_ms {
     disk_cache_parts.push(format!("ms={ms:.2}ms"));
   }
@@ -2837,6 +2843,9 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
   let mut network_parts = Vec::new();
   if let Some(fetches) = resources.network_fetches {
     network_parts.push(format!("fetches={fetches}"));
+  }
+  if let Some(bytes) = resources.network_fetch_bytes {
+    network_parts.push(format!("bytes={bytes}"));
   }
   if let Some(ms) = resources.network_fetch_ms {
     network_parts.push(format!("ms={ms:.2}ms"));

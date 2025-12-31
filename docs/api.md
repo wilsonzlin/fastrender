@@ -155,8 +155,14 @@ if let Some(stats) = &result.diagnostics.stats {
     if let Some(fetch_ms) = stats.resources.network_fetch_ms {
         eprintln!("Network fetch time (ms): {fetch_ms}");
     }
+    if let Some(fetch_bytes) = stats.resources.network_fetch_bytes {
+        eprintln!("Network fetch bytes: {fetch_bytes}");
+    }
     if let Some(hits) = stats.resources.resource_cache_fresh_hits {
         eprintln!("Resource cache hits: {hits}");
+    }
+    if let Some(cache_bytes) = stats.resources.resource_cache_bytes {
+        eprintln!("Resource cache bytes: {cache_bytes}");
     }
     if let Some(samples) = &stats.counts.last_resort_font_fallback_samples {
         eprintln!("Last-resort font fallback samples: {samples:?}");

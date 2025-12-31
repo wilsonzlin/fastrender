@@ -1570,6 +1570,7 @@ impl HttpFetcher {
                 }
               };
 
+            record_network_fetch_bytes(bytes.len());
             let is_retryable_status = retryable_http_status(status_code);
 
             if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
@@ -2060,10 +2061,17 @@ pub struct ResourceCacheDiagnostics {
   pub stale_hits: usize,
   pub revalidated_hits: usize,
   pub misses: usize,
+  /// Total bytes returned from the caching layer (fresh/stale/revalidated hits only).
+  ///
+  /// This is intentionally "bytes served from cache", not "bytes stored in cache", and excludes
+  /// cache misses that hit the network.
+  pub resource_cache_bytes: usize,
   pub disk_cache_hits: usize,
   pub disk_cache_misses: usize,
+  pub disk_cache_bytes: usize,
   pub disk_cache_ms: f64,
   pub network_fetches: usize,
+  pub network_fetch_bytes: usize,
   pub network_fetch_ms: f64,
 }
 
@@ -2072,10 +2080,13 @@ struct ResourceCacheDiagnosticsState {
   stale_hits: AtomicUsize,
   revalidated_hits: AtomicUsize,
   misses: AtomicUsize,
+  resource_cache_bytes: AtomicUsize,
   disk_cache_hits: AtomicUsize,
   disk_cache_misses: AtomicUsize,
+  disk_cache_bytes: AtomicUsize,
   disk_cache_ns: AtomicU64,
   network_fetches: AtomicUsize,
+  network_fetch_bytes: AtomicUsize,
   network_fetch_ns: AtomicU64,
 }
 
@@ -2085,10 +2096,13 @@ struct ResourceCacheDiagnosticsSnapshot {
   stale_hits: usize,
   revalidated_hits: usize,
   misses: usize,
+  resource_cache_bytes: usize,
   disk_cache_hits: usize,
   disk_cache_misses: usize,
+  disk_cache_bytes: usize,
   disk_cache_ns: u64,
   network_fetches: usize,
+  network_fetch_bytes: usize,
   network_fetch_ns: u64,
 }
 
@@ -2117,10 +2131,13 @@ static RESOURCE_CACHE_DIAGNOSTICS: ResourceCacheDiagnosticsState = ResourceCache
   stale_hits: AtomicUsize::new(0),
   revalidated_hits: AtomicUsize::new(0),
   misses: AtomicUsize::new(0),
+  resource_cache_bytes: AtomicUsize::new(0),
   disk_cache_hits: AtomicUsize::new(0),
   disk_cache_misses: AtomicUsize::new(0),
+  disk_cache_bytes: AtomicUsize::new(0),
   disk_cache_ns: AtomicU64::new(0),
   network_fetches: AtomicUsize::new(0),
+  network_fetch_bytes: AtomicUsize::new(0),
   network_fetch_ns: AtomicU64::new(0),
 };
 
@@ -2136,17 +2153,26 @@ fn resource_cache_diagnostics_snapshot() -> ResourceCacheDiagnosticsSnapshot {
       .revalidated_hits
       .load(Ordering::Relaxed),
     misses: RESOURCE_CACHE_DIAGNOSTICS.misses.load(Ordering::Relaxed),
+    resource_cache_bytes: RESOURCE_CACHE_DIAGNOSTICS
+      .resource_cache_bytes
+      .load(Ordering::Relaxed),
     disk_cache_hits: RESOURCE_CACHE_DIAGNOSTICS
       .disk_cache_hits
       .load(Ordering::Relaxed),
     disk_cache_misses: RESOURCE_CACHE_DIAGNOSTICS
       .disk_cache_misses
       .load(Ordering::Relaxed),
+    disk_cache_bytes: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_bytes
+      .load(Ordering::Relaxed),
     disk_cache_ns: RESOURCE_CACHE_DIAGNOSTICS
       .disk_cache_ns
       .load(Ordering::Relaxed),
     network_fetches: RESOURCE_CACHE_DIAGNOSTICS
       .network_fetches
+      .load(Ordering::Relaxed),
+    network_fetch_bytes: RESOURCE_CACHE_DIAGNOSTICS
+      .network_fetch_bytes
       .load(Ordering::Relaxed),
     network_fetch_ns: RESOURCE_CACHE_DIAGNOSTICS
       .network_fetch_ns
@@ -2204,16 +2230,25 @@ pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnosti
       .revalidated_hits
       .saturating_sub(baseline.revalidated_hits),
     misses: current.misses.saturating_sub(baseline.misses),
+    resource_cache_bytes: current
+      .resource_cache_bytes
+      .saturating_sub(baseline.resource_cache_bytes),
     disk_cache_hits: current
       .disk_cache_hits
       .saturating_sub(baseline.disk_cache_hits),
     disk_cache_misses: current
       .disk_cache_misses
       .saturating_sub(baseline.disk_cache_misses),
+    disk_cache_bytes: current
+      .disk_cache_bytes
+      .saturating_sub(baseline.disk_cache_bytes),
     disk_cache_ms: (disk_cache_ns as f64) / 1_000_000.0,
     network_fetches: current
       .network_fetches
       .saturating_sub(baseline.network_fetches),
+    network_fetch_bytes: current
+      .network_fetch_bytes
+      .saturating_sub(baseline.network_fetch_bytes),
     network_fetch_ms: (network_fetch_ns as f64) / 1_000_000.0,
   })
 }
@@ -2254,6 +2289,15 @@ fn record_cache_miss() {
     .fetch_add(1, Ordering::Relaxed);
 }
 
+fn record_resource_cache_bytes(bytes: usize) {
+  if !resource_cache_diagnostics_enabled() {
+    return;
+  }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .resource_cache_bytes
+    .fetch_add(bytes, Ordering::Relaxed);
+}
+
 #[cfg(feature = "disk_cache")]
 fn record_disk_cache_hit() {
   if !resource_cache_diagnostics_enabled() {
@@ -2272,6 +2316,16 @@ fn record_disk_cache_miss() {
   RESOURCE_CACHE_DIAGNOSTICS
     .disk_cache_misses
     .fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(feature = "disk_cache")]
+fn record_disk_cache_bytes(bytes: usize) {
+  if !resource_cache_diagnostics_enabled() {
+    return;
+  }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_bytes
+    .fetch_add(bytes, Ordering::Relaxed);
 }
 
 #[cfg(feature = "disk_cache")]
@@ -2299,6 +2353,15 @@ fn start_network_fetch_diagnostics() -> Option<Instant> {
     .network_fetches
     .fetch_add(1, Ordering::Relaxed);
   Some(Instant::now())
+}
+
+fn record_network_fetch_bytes(bytes: usize) {
+  if !resource_cache_diagnostics_enabled() {
+    return;
+  }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .network_fetch_bytes
+    .fetch_add(bytes, Ordering::Relaxed);
 }
 
 fn finish_network_fetch_diagnostics(start: Option<Instant>) {
@@ -2890,6 +2953,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
         }
         let result = snapshot.value.as_result();
         if let Ok(ref res) = result {
+          record_resource_cache_bytes(res.bytes.len());
           reserve_policy_bytes(&self.policy, res)?;
         }
         return result;
@@ -2962,6 +3026,9 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
               }
             }
             record_cache_revalidated_hit();
+            if let Ok(ref ok) = value {
+              record_resource_cache_bytes(ok.bytes.len());
+            }
             let is_ok = value.is_ok();
             (value, is_ok)
           } else {
@@ -2974,14 +3041,17 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             )
           }
         } else {
-          if res.status.map(is_transient_http_status).unwrap_or(false) {
-            if let Some(snapshot) = plan.cached.as_ref() {
-              record_cache_stale_hit();
-              let fallback = snapshot.value.as_result();
-              let is_ok = fallback.is_ok();
-              (fallback, is_ok)
-            } else {
-              record_cache_miss();
+            if res.status.map(is_transient_http_status).unwrap_or(false) {
+              if let Some(snapshot) = plan.cached.as_ref() {
+                record_cache_stale_hit();
+                let fallback = snapshot.value.as_result();
+                if let Ok(ref ok) = fallback {
+                  record_resource_cache_bytes(ok.bytes.len());
+                }
+                let is_ok = fallback.is_ok();
+                (fallback, is_ok)
+              } else {
+                record_cache_miss();
               (Ok(res), false)
             }
           } else {
@@ -3005,6 +3075,9 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
         if let Some(snapshot) = plan.cached.as_ref() {
           record_cache_stale_hit();
           let fallback = snapshot.value.as_result();
+          if let Ok(ref ok) = fallback {
+            record_resource_cache_bytes(ok.bytes.len());
+          }
           let is_ok = fallback.is_ok();
           (fallback, is_ok)
         } else {
@@ -3449,6 +3522,11 @@ mod tests {
       "expected finite network fetch duration, got {}",
       stats.network_fetch_ms
     );
+    assert!(
+      stats.network_fetch_bytes >= requests * 2,
+      "expected network fetch byte counter to include response bodies (got {})",
+      stats.network_fetch_bytes
+    );
   }
 
   #[test]
@@ -3555,6 +3633,16 @@ mod tests {
       stats.disk_cache_ms.is_finite() && stats.disk_cache_ms >= 0.0,
       "expected finite disk cache duration, got {}",
       stats.disk_cache_ms
+    );
+    assert!(
+      stats.disk_cache_bytes >= b"cached".len(),
+      "expected disk cache byte counter to include cached payload bytes (got {})",
+      stats.disk_cache_bytes
+    );
+    assert!(
+      stats.resource_cache_bytes >= b"cached".len(),
+      "expected resource cache byte counter to include returned cached bytes (got {})",
+      stats.resource_cache_bytes
     );
   }
 

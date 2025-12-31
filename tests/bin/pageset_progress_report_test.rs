@@ -99,7 +99,7 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   ));
   assert!(stdout.contains("paint: display_items=800 optimized_items=500 culled_items=120"));
   assert!(stdout.contains(
-    "resources: fetches doc=1 css=4 img=6 font=2 other=0 | image_cache hits=5 misses=3 | resource_cache fresh_hits=10 stale_hits=2 revalidated_hits=1 misses=3 | disk_cache hits=4 misses=1 ms=12.34ms | network fetches=5 ms=67.89ms"
+    "resources: fetches doc=1 css=4 img=6 font=2 other=0 | image_cache hits=5 misses=3 | resource_cache fresh_hits=10 stale_hits=2 revalidated_hits=1 misses=3 bytes=12345 | disk_cache hits=4 misses=1 bytes=67890 ms=12.34ms | network fetches=5 bytes=4242 ms=67.89ms"
   ));
 }
 

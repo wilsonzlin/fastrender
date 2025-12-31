@@ -36,6 +36,20 @@ fn resource_cache_diagnostics_surface_hits_and_misses() {
       .expect("resource cache stale hits should be present"),
     0
   );
+  assert_eq!(
+    first_stats
+      .resources
+      .network_fetches
+      .expect("network fetch count should be present"),
+    0
+  );
+  assert_eq!(
+    first_stats
+      .resources
+      .network_fetch_bytes
+      .expect("network fetch bytes should be present"),
+    0
+  );
 
   let second = renderer
     .render_html_with_diagnostics(html, options)
@@ -56,6 +70,21 @@ fn resource_cache_diagnostics_surface_hits_and_misses() {
       .resources
       .resource_cache_stale_hits
       .expect("resource cache stale hits should be present"),
+    0
+  );
+  assert!(
+    second_stats
+      .resources
+      .resource_cache_bytes
+      .expect("resource cache bytes should be present")
+      > 0,
+    "expected cached bytes to be returned on second render"
+  );
+  assert_eq!(
+    second_stats
+      .resources
+      .network_fetch_bytes
+      .expect("network fetch bytes should be present"),
     0
   );
 }

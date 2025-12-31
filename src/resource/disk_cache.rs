@@ -554,7 +554,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
       match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
         SnapshotRead::Hit(snapshot) => {
+          let payload_bytes = match &snapshot.value {
+            super::CacheValue::Resource(res) => res.bytes.len(),
+            super::CacheValue::Error(_) => 0,
+          };
           super::record_disk_cache_hit();
+          super::record_disk_cache_bytes(payload_bytes);
           super::finish_disk_cache_diagnostics(disk_timer.take());
           return Ok(Some((current, snapshot)));
         }
@@ -567,7 +572,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           if !max_wait.is_zero() && self.wait_for_unlock(&data_path, max_wait) {
             match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
               SnapshotRead::Hit(snapshot) => {
+                let payload_bytes = match &snapshot.value {
+                  super::CacheValue::Resource(res) => res.bytes.len(),
+                  super::CacheValue::Error(_) => 0,
+                };
                 super::record_disk_cache_hit();
+                super::record_disk_cache_bytes(payload_bytes);
                 super::finish_disk_cache_diagnostics(disk_timer.take());
                 return Ok(Some((current, snapshot)));
               }
@@ -921,6 +931,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
         }
         let result = snapshot.value.as_result();
         if let Ok(ref res) = result {
+          super::record_resource_cache_bytes(res.bytes.len());
           super::reserve_policy_bytes(&self.policy, res)?;
         }
         return result;
@@ -1009,6 +1020,9 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
               }
             }
             super::record_cache_revalidated_hit();
+            if let Ok(ref ok) = value {
+              super::record_resource_cache_bytes(ok.bytes.len());
+            }
             let is_ok = value.is_ok();
             (value, is_ok)
           } else {
@@ -1028,6 +1042,9 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
             if let Some(snapshot) = plan.cached.as_ref() {
               super::record_cache_stale_hit();
               let fallback = snapshot.value.as_result();
+              if let Ok(ref ok) = fallback {
+                super::record_resource_cache_bytes(ok.bytes.len());
+              }
               let is_ok = fallback.is_ok();
               (fallback, is_ok)
             } else {
@@ -1080,6 +1097,9 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
         if let Some(snapshot) = plan.cached.as_ref() {
           super::record_cache_stale_hit();
           let fallback = snapshot.value.as_result();
+          if let Ok(ref ok) = fallback {
+            super::record_resource_cache_bytes(ok.bytes.len());
+          }
           let is_ok = fallback.is_ok();
           (fallback, is_ok)
         } else {
