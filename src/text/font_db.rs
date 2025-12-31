@@ -1420,6 +1420,13 @@ impl FontDatabase {
       .unwrap_or(false)
   }
 
+  /// Returns true when any loaded face provides a glyph for the given character.
+  ///
+  /// This is a convenience helper for coverage auditing tools.
+  pub fn any_face_has_glyph_cached(&self, c: char) -> bool {
+    self.faces().any(|face| self.has_glyph_cached(face.id, c))
+  }
+
   /// Returns true if the font advertises any color/emoji-capable tables.
   ///
   /// Detection is table-based (COLR/CPAL, CBDT/CBLC, sbix, SVG) instead of relying on family name
