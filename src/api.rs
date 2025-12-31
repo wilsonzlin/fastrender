@@ -3339,7 +3339,9 @@ impl FastRender {
     stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<RenderOutputs> {
     let toggles = self.resolve_runtime_toggles(&options);
-    runtime::with_runtime_toggles(toggles, || {
+    let previous_toggles = self.runtime_toggles.clone();
+    self.runtime_toggles = toggles.clone();
+    let result = runtime::with_runtime_toggles(toggles, || {
       let trace = TraceSession::from_options(Some(&options));
       let trace_handle = trace.handle();
       let _root_span = trace_handle.span("render", "pipeline");
@@ -3355,7 +3357,9 @@ impl FastRender {
       );
       drop(_root_span);
       trace.finalize(result)
-    })
+    });
+    self.runtime_toggles = previous_toggles;
+    result
   }
 
   fn render_html_with_options_internal_with_deadline(
@@ -4479,7 +4483,9 @@ impl FastRender {
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
     let toggles = self.resolve_runtime_toggles(&options);
-    runtime::with_runtime_toggles(toggles, || {
+    let previous_toggles = self.runtime_toggles.clone();
+    self.runtime_toggles = toggles.clone();
+    let result = runtime::with_runtime_toggles(toggles, || {
       if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
         let env_level = diagnostics_level_from_env();
         if !matches!(env_level, DiagnosticsLevel::None) {
@@ -4568,7 +4574,9 @@ impl FastRender {
       }
       drop(_root_span);
       trace.finalize(result)
-    })
+    });
+    self.runtime_toggles = previous_toggles;
+    result
   }
   /// Generate a debug snapshot of the full rendering pipeline for an HTML string.
   pub fn snapshot_pipeline(
@@ -4719,6 +4727,15 @@ impl FastRender {
     let resource_context = self.resource_context.clone();
     let diagnostics = self.diagnostics.clone();
     let deadline = crate::render_control::active_deadline();
+    let preload_stylesheets_enabled = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_PRELOAD_STYLESHEETS", true);
+    let modulepreload_stylesheets_enabled = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_MODULEPRELOAD_STYLESHEETS", false);
+    let alternate_stylesheets_enabled = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
 
     enum StylesheetTask {
       Inline { css: String },
@@ -4827,7 +4844,12 @@ impl FastRender {
             }
             StylesheetSource::External(link) => {
               if link.disabled
-                || !rel_list_contains_stylesheet(&link.rel)
+                || !Self::link_rel_is_stylesheet_candidate(
+                  link,
+                  preload_stylesheets_enabled,
+                  modulepreload_stylesheets_enabled,
+                  alternate_stylesheets_enabled,
+                )
                 || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
               {
                 continue;
@@ -4923,6 +4945,15 @@ impl FastRender {
     let sources = extract_css_sources(dom);
     let fetcher = Arc::clone(&self.fetcher);
     let resource_context = self.resource_context.as_ref();
+    let preload_stylesheets_enabled = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_PRELOAD_STYLESHEETS", true);
+    let modulepreload_stylesheets_enabled = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_MODULEPRELOAD_STYLESHEETS", false);
+    let alternate_stylesheets_enabled = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
     let inline_loader = CssImportFetcher::new(
       self.base_url.clone(),
       Arc::clone(&fetcher),
@@ -4957,7 +4988,12 @@ impl FastRender {
         }
         StylesheetSource::External(link) => {
           if link.disabled
-            || !rel_list_contains_stylesheet(&link.rel)
+            || !Self::link_rel_is_stylesheet_candidate(
+              &link,
+              preload_stylesheets_enabled,
+              modulepreload_stylesheets_enabled,
+              alternate_stylesheets_enabled,
+            )
             || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
           {
             continue;
@@ -5042,6 +5078,40 @@ impl FastRender {
         mime.is_empty() || mime.eq_ignore_ascii_case("text/css")
       }
     }
+  }
+
+  fn link_rel_is_stylesheet_candidate(
+    link: &crate::css::parser::StylesheetLink,
+    preload_stylesheets_enabled: bool,
+    modulepreload_stylesheets_enabled: bool,
+    alternate_stylesheets_enabled: bool,
+  ) -> bool {
+    let rel_has_stylesheet = rel_list_contains_stylesheet(&link.rel);
+    let rel_has_alternate = link.rel.iter().any(|t| t.eq_ignore_ascii_case("alternate"));
+    let rel_has_preload = link.rel.iter().any(|t| t.eq_ignore_ascii_case("preload"));
+    let rel_has_modulepreload = link
+      .rel
+      .iter()
+      .any(|t| t.eq_ignore_ascii_case("modulepreload"));
+    let as_style = link
+      .as_attr
+      .as_deref()
+      .map(|v| v.trim().eq_ignore_ascii_case("style"))
+      .unwrap_or(false);
+
+    let mut is_stylesheet_link =
+      rel_has_stylesheet && (alternate_stylesheets_enabled || !rel_has_alternate);
+
+    if !is_stylesheet_link && preload_stylesheets_enabled && rel_has_preload && as_style {
+      is_stylesheet_link = true;
+    }
+
+    if !is_stylesheet_link && modulepreload_stylesheets_enabled && rel_has_modulepreload && as_style
+    {
+      is_stylesheet_link = true;
+    }
+
+    is_stylesheet_link
   }
 
   fn media_attr_allows(
@@ -9140,6 +9210,48 @@ mod tests {
     }
   }
 
+  #[derive(Clone, Default)]
+  struct RecordingFetcher {
+    map: HashMap<String, (Vec<u8>, Option<String>)>,
+    fetched: Arc<Mutex<Vec<String>>>,
+  }
+
+  impl RecordingFetcher {
+    fn with_entry(mut self, url: &str, css: &str) -> Self {
+      self.map.insert(
+        url.to_string(),
+        (css.as_bytes().to_vec(), Some("text/css".to_string())),
+      );
+      self
+    }
+
+    fn fetched_urls(&self) -> Vec<String> {
+      self
+        .fetched
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+    }
+  }
+
+  impl ResourceFetcher for RecordingFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      if let Ok(mut guard) = self.fetched.lock() {
+        guard.push(url.to_string());
+      }
+      self
+        .map
+        .get(url)
+        .map(|(bytes, content_type)| FetchedResource::new(bytes.clone(), content_type.clone()))
+        .ok_or_else(|| {
+          Error::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("missing resource: {url}"),
+          ))
+        })
+    }
+  }
+
   fn apply_styles_with_media_target_and_imports(
     dom: &DomNode,
     stylesheet: &StyleSheet,
@@ -10995,6 +11107,148 @@ mod tests {
 
     let color = text_color_for(&tree, "Order Test").unwrap();
     assert_eq!(color, Rgba::rgb(20, 40, 60));
+  }
+
+  #[test]
+  fn preload_stylesheets_apply_from_dom_links() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = MapFetcher::default().with_entry(
+      "https://example.com/preload.css",
+      "#target { color: rgb(1, 2, 3); }",
+    );
+
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_PRELOAD_STYLESHEETS".to_string(),
+      "1".to_string(),
+    )]));
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(toggles)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <link rel="preload" as="style" href="preload.css">
+      <div id="target">Preload</div>
+    "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let intermediates = renderer
+      .layout_document_for_media_intermediates(&dom, 200, 200, MediaType::Screen)
+      .unwrap();
+
+    let color = styled_color_by_id(&intermediates.styled_tree, "target").unwrap();
+    assert_eq!(color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn preload_stylesheets_preserve_document_order_relative_to_stylesheets() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = Arc::new(
+      RecordingFetcher::default()
+        .with_entry(
+          "https://example.com/a.css",
+          "div { color: rgb(20, 40, 60); }",
+        )
+        .with_entry(
+          "https://example.com/b.css",
+          "div { color: rgb(70, 80, 90); }",
+        ),
+    );
+
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_PRELOAD_STYLESHEETS".to_string(),
+      "1".to_string(),
+    )]));
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(fetcher.clone() as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(toggles)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <link rel="preload" as="style" href="a.css">
+      <link rel="stylesheet" href="b.css">
+      <div>Order</div>
+    "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+
+    let fetched_urls = fetcher.fetched_urls();
+    assert!(fetched_urls.contains(&"https://example.com/a.css".to_string()));
+    assert!(fetched_urls.contains(&"https://example.com/b.css".to_string()));
+
+    let color = text_color_for(&tree, "Order").unwrap();
+    assert_eq!(color, Rgba::rgb(70, 80, 90));
+  }
+
+  #[test]
+  fn modulepreload_stylesheets_are_ignored_by_default() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = Arc::new(RecordingFetcher::default().with_entry(
+      "https://example.com/module.css",
+      "div { color: rgb(1, 2, 3); }",
+    ));
+
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_MODULEPRELOAD_STYLESHEETS".to_string(),
+      "0".to_string(),
+    )]));
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(fetcher.clone() as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(toggles)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <style>div { color: rgb(200, 0, 0); }</style>
+      <link rel="modulepreload" as="style" href="module.css">
+      <div>Module</div>
+    "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+
+    let fetched_urls = fetcher.fetched_urls();
+    assert!(!fetched_urls.contains(&"https://example.com/module.css".to_string()));
+
+    let color = text_color_for(&tree, "Module").unwrap();
+    assert_eq!(color, Rgba::rgb(200, 0, 0));
+  }
+
+  #[test]
+  fn modulepreload_stylesheets_can_be_enabled_via_toggle() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = Arc::new(RecordingFetcher::default().with_entry(
+      "https://example.com/module.css",
+      "div { color: rgb(1, 2, 3); }",
+    ));
+
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_MODULEPRELOAD_STYLESHEETS".to_string(),
+      "1".to_string(),
+    )]));
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(fetcher.clone() as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(toggles)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <style>div { color: rgb(200, 0, 0); }</style>
+      <link rel="modulepreload" as="style" href="module.css">
+      <div>Module</div>
+    "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+
+    let fetched_urls = fetcher.fetched_urls();
+    assert!(fetched_urls.contains(&"https://example.com/module.css".to_string()));
+
+    let color = text_color_for(&tree, "Module").unwrap();
+    assert_eq!(color, Rgba::rgb(1, 2, 3));
   }
 
   #[test]

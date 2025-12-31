@@ -3424,6 +3424,8 @@ pub struct StylesheetLink {
   pub href: String,
   /// Tokenized `rel` attribute, lowercased.
   pub rel: Vec<String>,
+  /// Optional `as` attribute value.
+  pub as_attr: Option<String>,
   /// Optional `media` attribute value.
   pub media: Option<String>,
   /// Optional `type` attribute value.
@@ -3547,6 +3549,7 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
             source: StylesheetSource::External(StylesheetLink {
               href,
               rel,
+              as_attr: node.get_attribute("as"),
               media: node.get_attribute("media"),
               type_attr: node.get_attribute("type"),
               disabled: node.get_attribute_ref("disabled").is_some(),
@@ -3631,6 +3634,7 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
           bucket.push(StylesheetSource::External(StylesheetLink {
             href,
             rel,
+            as_attr: node.get_attribute("as"),
             media: node.get_attribute("media"),
             type_attr: node.get_attribute("type"),
             disabled: node.get_attribute_ref("disabled").is_some(),
