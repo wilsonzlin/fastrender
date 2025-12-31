@@ -109,6 +109,11 @@ use std::time::Instant;
 /// User-agent stylesheet containing default browser styles
 const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
 static UA_STYLESHEET: OnceLock<StyleSheet> = OnceLock::new();
+static DEFAULT_COMPUTED_STYLE: OnceLock<ComputedStyle> = OnceLock::new();
+
+fn default_computed_style() -> &'static ComputedStyle {
+  DEFAULT_COMPUTED_STYLE.get_or_init(ComputedStyle::default)
+}
 
 // Optional cascade profiling for large-page performance analysis.
 // Enable with FASTR_CASCADE_PROFILE=1.
@@ -6191,7 +6196,7 @@ fn compute_base_styles<'a>(
     parent_ua_styles.font_size,
     ua_root_font_size,
     viewport,
-    &ComputedStyle::default(),
+    default_computed_style(),
     |_| true,
   );
   if let (true, Some(start)) = (prof, decl_start) {
@@ -13269,10 +13274,10 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
       panic!("color did not parse");
     }
     let mut manual = get_default_styles_for_element(&lone_li);
-    inherit_styles(&mut manual, &ComputedStyle::default());
+    inherit_styles(&mut manual, default_computed_style());
     let fs = manual.font_size;
     for decl in parse_declarations("color: red;") {
-      apply_declaration(&mut manual, &decl, &ComputedStyle::default(), fs, fs);
+      apply_declaration(&mut manual, &decl, default_computed_style(), fs, fs);
     }
     assert_eq!(manual.color, Rgba::RED);
     let lone_styled = apply_styles(&lone_li, &StyleSheet::new());
@@ -15319,7 +15324,7 @@ fn apply_cascaded_declarations<'a, F>(
       .then(a.decl_order.cmp(&b.decl_order))
   });
 
-  let defaults = ComputedStyle::default();
+  let defaults = default_computed_style();
   // Scope revert-layer bases to the current cascade stratum (origin + importance) so that
   // important declarations don't reuse snapshots from the normal cascade segment.
   let mut layer_snapshots: HashMap<Arc<[u32]>, ComputedStyle> = HashMap::new();
@@ -15335,7 +15340,7 @@ fn apply_cascaded_declarations<'a, F>(
       layer_snapshot_stratum = Some(stratum);
     }
     let revert_base = match entry.origin {
-      StyleOrigin::UserAgent => &defaults,
+      StyleOrigin::UserAgent => defaults,
       StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
     };
     // `layer_snapshots` is keyed by the declaration's `Arc<[u32]>` layer order. Most declarations
@@ -16259,7 +16264,7 @@ fn compute_pseudo_element_styles(
     ua_parent_styles.font_size,
     ua_root_font_size,
     viewport,
-    &ComputedStyle::default(),
+    default_computed_style(),
     |_| true,
   );
   resolve_match_parent_text_align_last(&mut ua_styles, ua_parent_styles, false);
@@ -16423,7 +16428,7 @@ fn compute_first_line_styles(
     base_ua_styles.font_size,
     ua_root_font_size,
     viewport,
-    &ComputedStyle::default(),
+    default_computed_style(),
     |decl| first_line_allows_property(&decl.property),
   );
   resolve_match_parent_text_align_last(&mut ua_styles, base_ua_styles, false);
@@ -16527,7 +16532,7 @@ fn compute_first_letter_styles(
     base_ua_styles.font_size,
     ua_root_font_size,
     viewport,
-    &ComputedStyle::default(),
+    default_computed_style(),
     |decl| first_letter_allows_property(&decl.property),
   );
   resolve_match_parent_text_align_last(&mut ua_styles, base_ua_styles, false);
@@ -16637,7 +16642,7 @@ fn compute_marker_styles(
     ua_list_item_styles.font_size,
     ua_root_font_size,
     viewport,
-    &ComputedStyle::default(),
+    default_computed_style(),
     |_| true,
   );
   resolve_match_parent_text_align_last(&mut ua_styles, ua_list_item_styles, false);
