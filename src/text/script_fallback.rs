@@ -51,7 +51,7 @@ macro_rules! script_fallbacks {
 
 pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'static str] {
   match script {
-    Script::Common => COMMON_FALLBACKS,
+    Script::Common | Script::Inherited | Script::Unknown => COMMON_FALLBACKS,
     Script::Latin | Script::Greek | Script::Cyrillic => LATIN_FALLBACKS,
     Script::Hebrew => script_fallbacks!("Noto Sans Hebrew"),
     Script::Thai => script_fallbacks!("Noto Sans Thai"),
@@ -65,7 +65,6 @@ pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'
     Script::Javanese => script_fallbacks!("Noto Sans Javanese"),
     Script::Hangul => script_fallbacks!(NOTO_SANS_KR),
     Script::Han | Script::Hiragana | Script::Katakana => cjk_fallback_families(language),
-    _ => &[],
   }
 }
 
@@ -121,6 +120,13 @@ mod tests {
       assert!(families.contains(&NOTO_SANS_SYMBOLS_2));
       assert!(families.contains(&NOTO_SANS_SYMBOLS));
       assert!(families.contains(&STIX_TWO_MATH));
+    }
+  }
+
+  #[test]
+  fn preferred_families_treat_neutral_scripts_like_common() {
+    for script in [Script::Common, Script::Inherited, Script::Unknown] {
+      assert_eq!(preferred_families(script, ""), COMMON_FALLBACKS);
     }
   }
 }
