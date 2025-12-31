@@ -158,6 +158,9 @@ if let Some(stats) = &result.diagnostics.stats {
     if let Some(fetch_bytes) = stats.resources.network_fetch_bytes {
         eprintln!("Network fetch bytes: {fetch_bytes}");
     }
+    if let Some(wait_ms) = stats.resources.fetch_inflight_wait_ms {
+        eprintln!("Inflight wait time (ms): {wait_ms}");
+    }
     if let Some(hits) = stats.resources.resource_cache_fresh_hits {
         eprintln!("Resource cache hits: {hits}");
     }

@@ -36,7 +36,7 @@ Most CLI tooling can capture `RenderDiagnostics.stats` by enabling a diagnostics
 
 When diagnostics are enabled, `RenderDiagnostics.stats.resources` also captures lightweight
 resource/cache counters to explain slow fetch-heavy pagesets (e.g. cache misses vs revalidation,
-disk cache reads, and total network fetch time). These are surfaced in
+disk cache reads, single-flight inflight waits, and total network fetch time). These are surfaced in
 `pageset_progress report --verbose-stats` and stored under `diagnostics.stats` in the per-page JSON
 when present.
 
