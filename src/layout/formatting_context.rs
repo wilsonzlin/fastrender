@@ -265,6 +265,14 @@ thread_local! {
   /// Layout result cache kept per-thread to stay contention-free during rayon-powered fan-out.
   static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>> =
     RefCell::new(HashMap::new());
+  /// Memoized `layout_style_fingerprint` results keyed by `Arc<ComputedStyle>` pointer.
+  ///
+  /// We intentionally key by the `Arc` pointer (not deep style equality) because the
+  /// underlying `ComputedStyle` is immutable once created and the existing fingerprint
+  /// already incorporates the pointer address. This keeps lookups extremely cheap in
+  /// layout-cache-heavy documents.
+  static LAYOUT_STYLE_FINGERPRINT_CACHE: RefCell<HashMap<usize, (usize, u64)>> =
+    RefCell::new(HashMap::new());
   static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
   static LAYOUT_CACHE_EPOCH: Cell<usize> = const { Cell::new(1) };
   static LAYOUT_CACHE_FRAGMENTATION: Cell<u64> = const { Cell::new(0) };
@@ -275,6 +283,12 @@ thread_local! {
   static LAYOUT_CACHE_ENTRY_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
   static LAYOUT_CACHE_CLONE_RETURNS: Cell<usize> = const { Cell::new(0) };
 }
+
+/// Maximum number of memoized style fingerprints kept per thread.
+///
+/// When exceeded the cache is cleared to avoid unbounded growth on extremely large
+/// documents.
+const LAYOUT_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES: usize = 32_768;
 
 fn pack_viewport_size(size: Size) -> u64 {
   let w = size.width.to_bits() as u64;
@@ -391,6 +405,26 @@ fn hash_template_areas(areas: &[Vec<Option<String>>], hasher: &mut DefaultHasher
 
 #[cfg(test)]
 thread_local! {
+  static STYLE_FINGERPRINT_COMPUTE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn increment_style_fingerprint_compute_count() {
+  STYLE_FINGERPRINT_COMPUTE_COUNT.with(|counter| counter.set(counter.get() + 1));
+}
+
+#[cfg(test)]
+fn reset_style_fingerprint_compute_count() {
+  STYLE_FINGERPRINT_COMPUTE_COUNT.with(|counter| counter.set(0));
+}
+
+#[cfg(test)]
+fn style_fingerprint_compute_count() -> usize {
+  STYLE_FINGERPRINT_COMPUTE_COUNT.with(|counter| counter.get())
+}
+
+#[cfg(test)]
+thread_local! {
   static SUBGRID_WALK_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -474,6 +508,9 @@ fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
 
 /// Computes a conservative fingerprint of layout-affecting style properties.
 pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
+  #[cfg(test)]
+  increment_style_fingerprint_compute_count();
+
   let mut h = DefaultHasher::new();
   (Arc::as_ptr(style) as usize).hash(&mut h);
   hash_enum_discriminant(&style.display, &mut h);
@@ -559,6 +596,33 @@ pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
   h.finish()
 }
 
+fn clear_layout_style_fingerprint_cache() {
+  LAYOUT_STYLE_FINGERPRINT_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+fn layout_style_fingerprint_cached(style: &Arc<ComputedStyle>) -> u64 {
+  let style_ptr = Arc::as_ptr(style) as usize;
+  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+  if let Some(hit) = LAYOUT_STYLE_FINGERPRINT_CACHE.with(|cache| {
+    cache
+      .borrow()
+      .get(&style_ptr)
+      .and_then(|(cached_epoch, fingerprint)| (*cached_epoch == epoch).then_some(*fingerprint))
+  }) {
+    return hit;
+  }
+
+  let fingerprint = layout_style_fingerprint(style);
+  LAYOUT_STYLE_FINGERPRINT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    if map.len() >= LAYOUT_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES && !map.contains_key(&style_ptr) {
+      map.clear();
+    }
+    map.insert(style_ptr, (epoch, fingerprint));
+  });
+  fingerprint
+}
+
 fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
   options
     .map(|opts| {
@@ -611,7 +675,7 @@ fn layout_cache_key(
     return None;
   }
 
-  let style_hash = layout_style_fingerprint(&box_node.style);
+  let style_hash = layout_style_fingerprint_cached(&box_node.style);
   let constraints_hash = layout_constraints_hash(constraints);
   let fragmentation_hash = LAYOUT_CACHE_FRAGMENTATION.with(|hash| hash.get());
   Some(LayoutCacheKeyParts {
@@ -703,6 +767,7 @@ pub(crate) fn layout_cache_reset_counters() {
   LAYOUT_RESULT_CACHE.with(|cache| {
     cache.borrow_mut().clear();
   });
+  clear_layout_style_fingerprint_cache();
   LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(0));
   LAYOUT_CACHE_HITS.with(|counter| counter.set(0));
   LAYOUT_CACHE_STORES.with(|counter| counter.set(0));
@@ -1370,6 +1435,46 @@ mod tests {
     assert_eq!(hits, 1);
     assert_eq!(stores, 1);
     assert_eq!(evictions, 0);
+
+    layout_cache_use_epoch(1, false, true, None);
+  }
+
+  #[test]
+  fn layout_style_fingerprint_memoized_per_epoch() {
+    layout_cache_use_epoch(1, true, true, None);
+    reset_style_fingerprint_compute_count();
+
+    let style = flow_root_style();
+    let mut node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+    node.id = 1;
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let viewport = Size::new(800.0, 600.0);
+    let fc_type = FormattingContextType::Block;
+
+    for _ in 0..16 {
+      layout_cache_store(
+        &node,
+        fc_type,
+        &constraints,
+        &block_fragment(100.0, 50.0),
+        viewport,
+      );
+      assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_some());
+    }
+    assert_eq!(style_fingerprint_compute_count(), 1);
+
+    layout_cache_use_epoch(2, true, true, None);
+    for _ in 0..16 {
+      layout_cache_store(
+        &node,
+        fc_type,
+        &constraints,
+        &block_fragment(100.0, 50.0),
+        viewport,
+      );
+      assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_some());
+    }
+    assert_eq!(style_fingerprint_compute_count(), 2);
 
     layout_cache_use_epoch(1, false, true, None);
   }
