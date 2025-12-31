@@ -57,7 +57,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run: `cargo run --release --bin prefetch_assets -- --help`
 - Most useful when built with `--features disk_cache` (so cache entries persist across processes).
 - Key flags: page selection (`--pages`), deterministic sharding (`--shard <index>/<total>`), parallelism (`--jobs`), and fetch timeout (`--timeout`). See `--help` for the full flag list.
-- Disk cache tuning flags (`--disk-cache-max-age-secs`, `--disk-cache-max-bytes`, or `FASTR_DISK_CACHE_MAX_*`) match the pageset render binaries.
+- Disk cache tuning flags (`--disk-cache-max-age-secs`, `--disk-cache-max-bytes`, `--disk-cache-lock-stale-secs`, or the corresponding `FASTR_DISK_CACHE_*` env vars) match the pageset render binaries.
 
 ## `render_pages`
 
