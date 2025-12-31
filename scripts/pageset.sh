@@ -66,6 +66,23 @@ for arg in "$@"; do
   ARGS+=("${arg}")
 done
 
+DISK_CACHE_ARGS=()
+for ((i=0; i < ${#ARGS[@]}; i++)); do
+  arg="${ARGS[$i]}"
+  case "${arg}" in
+    --disk-cache-max-bytes|--disk-cache-max-age-secs|--disk-cache-lock-stale-secs)
+      DISK_CACHE_ARGS+=("${arg}")
+      if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
+        DISK_CACHE_ARGS+=("${ARGS[$((i + 1))]}")
+        i=$((i + 1))
+      fi
+      ;;
+    --disk-cache-max-bytes=*|--disk-cache-max-age-secs=*|--disk-cache-lock-stale-secs=*)
+      DISK_CACHE_ARGS+=("${arg}")
+      ;;
+  esac
+done
+
 FEATURE_ARGS=()
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   FEATURE_ARGS=(--features disk_cache)
@@ -76,7 +93,7 @@ cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" -
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   echo "Prefetching CSS assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
-  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}"
+  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${DISK_CACHE_ARGS[@]}"
 fi
 
 echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
