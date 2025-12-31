@@ -74,6 +74,7 @@ use crate::style::Direction;
 use crate::style::TopLayerKind;
 use crate::{error::RenderError, error::RenderStage};
 use cssparser::ToCss;
+use rustc_hash::{FxHashSet, FxHasher};
 use selectors::context::IncludeStartingStyle;
 use selectors::context::QuirksMode;
 use selectors::context::SelectorCaches;
@@ -90,7 +91,7 @@ use std::cmp::Ordering as CmpOrdering;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::{BuildHasherDefault, Hasher};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -1403,6 +1404,306 @@ struct RuleIndex<'a> {
   part_lookup: SelectorBucketMap<Vec<usize>>,
 }
 
+#[derive(Clone, Copy)]
+struct SelectorDedupKey<'a> {
+  fingerprint: u64,
+  selector: &'a Selector<FastRenderSelectorImpl>,
+}
+
+impl<'a> SelectorDedupKey<'a> {
+  fn new(selector: &'a Selector<FastRenderSelectorImpl>) -> Self {
+    Self {
+      fingerprint: selector_fingerprint(selector),
+      selector,
+    }
+  }
+}
+
+impl Hash for SelectorDedupKey<'_> {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.fingerprint.hash(state);
+  }
+}
+
+impl PartialEq for SelectorDedupKey<'_> {
+  fn eq(&self, other: &Self) -> bool {
+    self.fingerprint == other.fingerprint && self.selector == other.selector
+  }
+}
+
+impl Eq for SelectorDedupKey<'_> {}
+
+fn selector_fingerprint(selector: &Selector<FastRenderSelectorImpl>) -> u64 {
+  let mut hasher = FxHasher::default();
+  hash_selector_for_dedup(&mut hasher, selector);
+  hasher.finish()
+}
+
+fn hash_selector_for_dedup(state: &mut impl Hasher, selector: &Selector<FastRenderSelectorImpl>) {
+  selector.specificity().hash(state);
+  selector.len().hash(state);
+  for component in selector.iter_raw_match_order() {
+    hash_component_for_dedup(state, component);
+  }
+}
+
+fn hash_selector_list_for_dedup(
+  state: &mut impl Hasher,
+  list: &SelectorList<FastRenderSelectorImpl>,
+) {
+  list.len().hash(state);
+  for selector in list.slice().iter() {
+    hash_selector_for_dedup(state, selector);
+  }
+}
+
+fn hash_relative_selector_for_dedup(
+  state: &mut impl Hasher,
+  relative: &selectors::parser::RelativeSelector<FastRenderSelectorImpl>,
+) {
+  hash_relative_selector_match_hint_for_dedup(state, relative.match_hint);
+  hash_selector_for_dedup(state, &relative.selector);
+}
+
+fn hash_relative_selector_match_hint_for_dedup(
+  state: &mut impl Hasher,
+  hint: selectors::parser::RelativeSelectorMatchHint,
+) {
+  // This is a small, stable enum; hashing its discriminant is sufficient.
+  std::mem::discriminant(&hint).hash(state);
+}
+
+fn hash_pseudo_element_for_dedup(state: &mut impl Hasher, pseudo: &PseudoElement) {
+  std::mem::discriminant(pseudo).hash(state);
+  match pseudo {
+    PseudoElement::Slotted(selectors) => {
+      selectors.len().hash(state);
+      for selector in selectors.iter() {
+        hash_selector_for_dedup(state, selector);
+      }
+    }
+    PseudoElement::Part(name) => name.hash(state),
+    _ => {}
+  }
+}
+
+fn hash_text_direction_for_dedup(state: &mut impl Hasher, dir: TextDirection) {
+  std::mem::discriminant(&dir).hash(state);
+}
+
+fn hash_pseudo_class_for_dedup(state: &mut impl Hasher, pseudo: &PseudoClass) {
+  std::mem::discriminant(pseudo).hash(state);
+  match pseudo {
+    PseudoClass::Has(relative) => {
+      relative.len().hash(state);
+      for rel in relative.iter() {
+        hash_relative_selector_for_dedup(state, rel);
+      }
+    }
+    PseudoClass::Host(list) => {
+      list.is_some().hash(state);
+      if let Some(list) = list {
+        hash_selector_list_for_dedup(state, list);
+      }
+    }
+    PseudoClass::HostContext(list) => hash_selector_list_for_dedup(state, list),
+    PseudoClass::NthChild(a, b, of) | PseudoClass::NthLastChild(a, b, of) => {
+      a.hash(state);
+      b.hash(state);
+      of.is_some().hash(state);
+      if let Some(of) = of {
+        hash_selector_list_for_dedup(state, of);
+      }
+    }
+    PseudoClass::NthOfType(a, b) | PseudoClass::NthLastOfType(a, b) => {
+      a.hash(state);
+      b.hash(state);
+    }
+    PseudoClass::Lang(langs) => {
+      langs.len().hash(state);
+      for lang in langs {
+        lang.hash(state);
+      }
+    }
+    PseudoClass::Dir(dir) => hash_text_direction_for_dedup(state, *dir),
+    _ => {}
+  }
+}
+
+fn hash_attr_selector_operator_for_dedup(
+  state: &mut impl Hasher,
+  operator: selectors::attr::AttrSelectorOperator,
+) {
+  std::mem::discriminant(&operator).hash(state);
+}
+
+fn hash_parsed_case_sensitivity_for_dedup(
+  state: &mut impl Hasher,
+  sensitivity: selectors::attr::ParsedCaseSensitivity,
+) {
+  std::mem::discriminant(&sensitivity).hash(state);
+}
+
+fn hash_namespace_constraint_for_dedup(
+  state: &mut impl Hasher,
+  namespace: &selectors::attr::NamespaceConstraint<(CssString, CssString)>,
+) {
+  match namespace {
+    selectors::attr::NamespaceConstraint::Any => {
+      0u8.hash(state);
+    }
+    selectors::attr::NamespaceConstraint::Specific((prefix, url)) => {
+      1u8.hash(state);
+      prefix.hash(state);
+      url.hash(state);
+    }
+  }
+}
+
+fn hash_parsed_attr_selector_operation_for_dedup(
+  state: &mut impl Hasher,
+  op: &selectors::attr::ParsedAttrSelectorOperation<CssString>,
+) {
+  match op {
+    selectors::attr::ParsedAttrSelectorOperation::Exists => {
+      0u8.hash(state);
+    }
+    selectors::attr::ParsedAttrSelectorOperation::WithValue {
+      operator,
+      case_sensitivity,
+      value,
+    } => {
+      1u8.hash(state);
+      hash_attr_selector_operator_for_dedup(state, *operator);
+      hash_parsed_case_sensitivity_for_dedup(state, *case_sensitivity);
+      value.hash(state);
+    }
+  }
+}
+
+fn hash_nth_type_for_dedup(state: &mut impl Hasher, ty: selectors::parser::NthType) {
+  std::mem::discriminant(&ty).hash(state);
+}
+
+fn hash_combinator_for_dedup(state: &mut impl Hasher, combinator: selectors::parser::Combinator) {
+  std::mem::discriminant(&combinator).hash(state);
+}
+
+fn hash_nth_selector_data_for_dedup(
+  state: &mut impl Hasher,
+  nth: &selectors::parser::NthSelectorData,
+) {
+  hash_nth_type_for_dedup(state, nth.ty);
+  nth.is_function.hash(state);
+  nth.an_plus_b.0.hash(state);
+  nth.an_plus_b.1.hash(state);
+}
+
+fn hash_nth_of_selector_data_for_dedup(
+  state: &mut impl Hasher,
+  nth: &selectors::parser::NthOfSelectorData<FastRenderSelectorImpl>,
+) {
+  hash_nth_selector_data_for_dedup(state, nth.nth_data());
+  nth.selectors().len().hash(state);
+  for selector in nth.selectors() {
+    hash_selector_for_dedup(state, selector);
+  }
+}
+
+fn hash_component_for_dedup(
+  state: &mut impl Hasher,
+  component: &selectors::parser::Component<FastRenderSelectorImpl>,
+) {
+  use selectors::parser::Component;
+  std::mem::discriminant(component).hash(state);
+  match component {
+    Component::LocalName(local) => {
+      local.name.hash(state);
+      local.lower_name.hash(state);
+    }
+    Component::ID(id) | Component::Class(id) => {
+      id.hash(state);
+    }
+    Component::AttributeInNoNamespaceExists {
+      local_name,
+      local_name_lower,
+    } => {
+      local_name.hash(state);
+      local_name_lower.hash(state);
+    }
+    Component::AttributeInNoNamespace {
+      local_name,
+      operator,
+      value,
+      case_sensitivity,
+    } => {
+      local_name.hash(state);
+      hash_attr_selector_operator_for_dedup(state, *operator);
+      value.hash(state);
+      hash_parsed_case_sensitivity_for_dedup(state, *case_sensitivity);
+    }
+    Component::AttributeOther(other) => {
+      other.namespace.is_some().hash(state);
+      if let Some(ns) = other.namespace.as_ref() {
+        hash_namespace_constraint_for_dedup(state, ns);
+      }
+      other.local_name.hash(state);
+      other.local_name_lower.hash(state);
+      hash_parsed_attr_selector_operation_for_dedup(state, &other.operation);
+    }
+    Component::DefaultNamespace(url) => {
+      url.hash(state);
+    }
+    Component::Namespace(prefix, url) => {
+      prefix.hash(state);
+      url.hash(state);
+    }
+    Component::Negation(list) | Component::Where(list) | Component::Is(list) => {
+      hash_selector_list_for_dedup(state, list);
+    }
+    Component::Nth(nth) => {
+      hash_nth_selector_data_for_dedup(state, nth);
+    }
+    Component::NthOf(nth) => {
+      hash_nth_of_selector_data_for_dedup(state, nth);
+    }
+    Component::NonTSPseudoClass(pseudo) => {
+      hash_pseudo_class_for_dedup(state, pseudo);
+    }
+    Component::Slotted(selector) => {
+      hash_selector_for_dedup(state, selector);
+    }
+    Component::Part(parts) => {
+      parts.len().hash(state);
+      for part in parts.iter() {
+        part.hash(state);
+      }
+    }
+    Component::Host(inner) => {
+      inner.is_some().hash(state);
+      if let Some(selector) = inner {
+        hash_selector_for_dedup(state, selector);
+      }
+    }
+    Component::Has(list) => {
+      list.len().hash(state);
+      for rel in list.iter() {
+        hash_relative_selector_for_dedup(state, rel);
+      }
+    }
+    Component::Invalid(reason) => {
+      reason.as_str().hash(state);
+    }
+    Component::PseudoElement(pseudo) => {
+      hash_pseudo_element_for_dedup(state, pseudo);
+    }
+    Component::Combinator(combinator) => {
+      hash_combinator_for_dedup(state, *combinator);
+    }
+    _ => {}
+  }
+}
+
 struct RuleScopes<'a> {
   ua: RuleIndex<'a>,
   document: RuleIndex<'a>,
@@ -2012,7 +2313,9 @@ fn pseudo_selector_subject_keys(
           );
         }
       }
-      Component::Is(list) => merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys),
+      Component::Is(list) => {
+        merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
+      }
       Component::Where(list) => {
         merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
       }
@@ -2281,12 +2584,11 @@ impl<'a> RuleIndex<'a> {
       index.rules.push(rule);
       index.rule_sets_content.push(sets_content);
       let stored_rule = &index.rules[rule_idx];
-      let mut seen_selectors: HashSet<String> = HashSet::new();
+      let mut seen_selectors: FxHashSet<SelectorDedupKey<'a>> = FxHashSet::default();
 
       for selector in stored_rule.rule.selectors.slice().iter() {
         // Skip duplicate selectors within the same rule to avoid redundant matching work.
-        let selector_css = selector.to_css_string();
-        if !seen_selectors.insert(selector_css) {
+        if !seen_selectors.insert(SelectorDedupKey::new(selector)) {
           continue;
         }
 
@@ -2357,12 +2659,12 @@ impl<'a> RuleIndex<'a> {
           {
             index.has_has_requirements = true;
           }
-           index.pseudo_selectors.push(IndexedSelector {
-             rule_idx,
-             selector,
-             specificity: selector.specificity(),
-             metadata,
-           });
+          index.pseudo_selectors.push(IndexedSelector {
+            rule_idx,
+            selector,
+            specificity: selector.specificity(),
+            metadata,
+          });
           for key in pseudo_selector_subject_keys(selector) {
             match key {
               SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
@@ -6597,6 +6899,58 @@ mod tests {
       &mut stats,
     );
     assert!(candidates.is_empty());
+  }
+
+  #[test]
+  fn rule_index_deduplicates_identical_pseudo_element_selectors_in_rule() {
+    let stylesheet = parse_stylesheet("div::before, div::before { content: \"x\"; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules);
+    assert_eq!(index.pseudo_selectors.len(), 1);
+  }
+
+  #[test]
+  fn rule_index_deduplicates_identical_slotted_selectors_in_rule() {
+    let stylesheet = parse_stylesheet("::slotted(.foo), ::slotted(.foo) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules);
+    assert_eq!(index.slotted_selectors.len(), 1);
   }
 
   #[test]

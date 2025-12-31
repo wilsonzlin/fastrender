@@ -177,7 +177,9 @@ fn pseudo_selector_candidate_benchmark(c: &mut Criterion) {
   let stats = capture_cascade_profile();
   set_cascade_profile_enabled(prior_profile);
 
-  let delta_candidates = stats.rule_candidates.saturating_sub(baseline.rule_candidates);
+  let delta_candidates = stats
+    .rule_candidates
+    .saturating_sub(baseline.rule_candidates);
   let delta_universal = stats
     .rule_candidates_universal
     .saturating_sub(baseline.rule_candidates_universal);
@@ -194,12 +196,15 @@ fn pseudo_selector_candidate_benchmark(c: &mut Criterion) {
     "pseudo selector candidate explosion (delta_candidates={delta_candidates})"
   );
 
-  c.bench_function("cascade apply_styles pseudo selectors 10k rules/250 nodes", |b| {
-    b.iter(|| {
-      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
-      black_box(styled);
-    });
-  });
+  c.bench_function(
+    "cascade apply_styles pseudo selectors 10k rules/250 nodes",
+    |b| {
+      b.iter(|| {
+        let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+        black_box(styled);
+      });
+    },
+  );
 }
 
 fn cascade_benchmark(c: &mut Criterion) {
@@ -343,6 +348,28 @@ fn generate_candidate_heavy_css(rules: usize, class_variants: usize) -> String {
   css
 }
 
+fn generate_many_selectors_css(rule_count: usize, selectors_per_rule: usize) -> String {
+  let mut css = String::new();
+  // Use long class names to amplify any selector serialization overhead in cascade setup.
+  const PAD: &str = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  for rule in 0..rule_count {
+    for idx in 0..selectors_per_rule {
+      if idx > 0 {
+        css.push_str(", ");
+      }
+      css.push('.');
+      css.push_str("rule");
+      css.push_str(&rule.to_string());
+      css.push('_');
+      css.push_str(&idx.to_string());
+      css.push('_');
+      css.push_str(PAD);
+    }
+    css.push_str(" { color: red; }\n");
+  }
+  css
+}
+
 fn candidate_heavy_benchmark(c: &mut Criterion) {
   let node_count = 200;
   let class_variants = 32;
@@ -363,6 +390,21 @@ fn candidate_heavy_benchmark(c: &mut Criterion) {
       });
     },
   );
+}
+
+fn cascade_setup_many_selectors_benchmark(c: &mut Criterion) {
+  // Minimal DOM so selector matching work stays tiny and RuleIndex construction dominates.
+  let dom = parse_html("<div></div>").expect("parse html");
+  let css = generate_many_selectors_css(1500, 8);
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  c.bench_function("cascade apply_styles setup 1500 rules/8 selectors", |b| {
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
 }
 
 fn cascade_bench_config() -> Criterion {
@@ -387,6 +429,7 @@ criterion_group!(
     cascade_not_benchmark,
     has_selector_benchmark,
     pseudo_selector_candidate_benchmark,
-    candidate_heavy_benchmark
+    candidate_heavy_benchmark,
+    cascade_setup_many_selectors_benchmark
 );
 criterion_main!(benches);

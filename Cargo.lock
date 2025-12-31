@@ -885,6 +885,7 @@ dependencies = [
  "regex",
  "resvg",
  "roxmltree",
+ "rustc-hash",
  "rustybuzz 0.20.1",
  "selectors",
  "serde",
