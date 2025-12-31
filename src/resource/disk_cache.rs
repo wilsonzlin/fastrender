@@ -36,7 +36,14 @@ use disk_cache_index::DiskCacheIndex;
 pub struct DiskCacheConfig {
   /// Maximum total bytes to keep on disk. `0` disables eviction.
   pub max_bytes: u64,
-  /// Maximum age for entries before they are treated as stale and re-fetched.
+  /// Maximum age after which entries are treated as stale (revalidated/re-fetched) rather than
+  /// immediately served.
+  ///
+  /// Stale entries remain on disk so they can still be used as a fallback when network fetches
+  /// fail. When a cached response lacks HTTP cache metadata, this value is used to synthesize a
+  /// freshness window so entries are treated as fresh until `stored_at + max_age` and stale
+  /// afterwards.
+  ///
   /// Also caps HTTP-provided freshness metadata when serving from disk.
   pub max_age: Option<Duration>,
   /// Maximum age of `.lock` files before they are treated as stale and removed.
@@ -385,13 +392,6 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       }
     };
 
-    if let Some(max_age) = self.disk_config.max_age {
-      if now_seconds().saturating_sub(meta.stored_at) > max_age.as_secs() {
-        self.remove_entry_if_unlocked(key, data_path, meta_path);
-        return SnapshotRead::Miss;
-      }
-    }
-
     let bytes = match fs::read(data_path) {
       Ok(bytes) => bytes,
       Err(_) => {
@@ -414,13 +414,30 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     );
     resource.etag = meta.etag.clone();
     resource.last_modified = meta.last_modified.clone();
-    resource.cache_policy = meta.cache.as_ref().map(|c| c.to_policy());
+
+    let stored_time = secs_to_system_time(meta.stored_at).unwrap_or(SystemTime::now());
+    let http_cache = meta.cache.as_ref().and_then(|c| c.to_http()).or_else(|| {
+      self.disk_config.max_age.map(|max_age| CachedHttpMetadata {
+        stored_at: stored_time,
+        max_age: Some(max_age),
+        expires: None,
+        no_cache: false,
+        no_store: false,
+        must_revalidate: false,
+      })
+    });
+    resource.cache_policy = meta.cache.as_ref().map(|c| c.to_policy()).or_else(|| {
+      self.disk_config.max_age.map(|max_age| HttpCachePolicy {
+        max_age: Some(max_age.as_secs()),
+        ..Default::default()
+      })
+    });
 
     SnapshotRead::Hit(CachedSnapshot {
       value: super::CacheValue::Resource(resource),
       etag: meta.etag,
       last_modified: meta.last_modified,
-      http_cache: meta.cache.and_then(|c| c.to_http()),
+      http_cache,
     })
   }
 
@@ -951,6 +968,18 @@ mod tests {
   }
 
   #[derive(Clone)]
+  struct FailingFetcher {
+    count: Arc<AtomicUsize>,
+  }
+
+  impl ResourceFetcher for FailingFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      self.count.fetch_add(1, Ordering::SeqCst);
+      Err(Error::Other("network error".to_string()))
+    }
+  }
+
+  #[derive(Clone)]
   struct SizedFetcher {
     count: Arc<AtomicUsize>,
     size: usize,
@@ -1046,6 +1075,102 @@ mod tests {
       "index rebuild should not discard zero-length entries"
     );
     assert!(second.bytes.is_empty());
+  }
+
+  #[test]
+  fn stale_disk_entries_are_not_deleted_and_can_fallback_on_network_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::with_configs(
+      FailingFetcher {
+        count: Arc::clone(&calls),
+      },
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(1)),
+      },
+    );
+
+    let url = "https://example.com/stale-fallback";
+    let cached_bytes = b"cached".to_vec();
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    fs::write(&data_path, &cached_bytes).unwrap();
+    let meta = StoredMetadata {
+      url: url.to_string(),
+      content_type: Some("text/plain".to_string()),
+      etag: None,
+      last_modified: None,
+      final_url: Some(url.to_string()),
+      stored_at: now_seconds().saturating_sub(60),
+      len: cached_bytes.len(),
+      cache: None,
+    };
+    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+
+    let res = disk
+      .fetch(url)
+      .expect("should fall back to cached disk entry");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "network fetch should be attempted"
+    );
+    assert_eq!(res.bytes, cached_bytes);
+    assert!(data_path.exists(), "stale entry should not be deleted");
+    assert!(meta_path.exists(), "stale metadata should not be deleted");
+  }
+
+  #[test]
+  fn disk_max_age_causes_staleness_planning_without_deleting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::with_configs(
+      CountingFetcher {
+        count: Arc::clone(&calls),
+      },
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(1)),
+      },
+    );
+
+    let url = "https://example.com/stale-refresh";
+    let cached_bytes = b"cached".to_vec();
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    fs::write(&data_path, &cached_bytes).unwrap();
+    let meta = StoredMetadata {
+      url: url.to_string(),
+      content_type: Some("text/plain".to_string()),
+      etag: None,
+      last_modified: None,
+      final_url: Some(url.to_string()),
+      stored_at: now_seconds().saturating_sub(60),
+      len: cached_bytes.len(),
+      cache: None,
+    };
+    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+
+    let res = disk
+      .fetch(url)
+      .expect("stale entry should trigger a refresh fetch");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "stale entry should trigger a network call"
+    );
+    assert_eq!(res.bytes, b"hello");
   }
 
   #[derive(Clone)]
@@ -1231,7 +1356,19 @@ mod tests {
       },
     ]);
 
-    let disk = DiskCachingFetcher::new(fetcher.clone(), tmp.path());
+    // Force stale planning so the second fetch revalidates and updates metadata.
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher.clone(),
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(0)),
+      },
+    );
     let url = "https://example.com/resource";
 
     let first = disk.fetch(url).expect("initial fetch");
