@@ -1756,11 +1756,9 @@ mod tests {
     let data_path = disk.data_path(url);
     let lock_path = lock_path_for(&data_path);
 
-    let contents = LockFileContents {
-      pid: std::process::id(),
-      started_at: now_seconds(),
-    };
-    fs::write(&lock_path, serde_json::to_vec(&contents).unwrap()).unwrap();
+    // Simulate a crash right after creating the lock file (before the writer
+    // can write structured PID metadata into it).
+    fs::write(&lock_path, b"").unwrap();
     filetime::set_file_mtime(&lock_path, FileTime::from_unix_time(0, 0)).unwrap();
 
     assert!(!disk.lock_is_active(&data_path));
