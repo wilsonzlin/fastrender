@@ -1042,13 +1042,7 @@ mod tests {
     // implementation detail. Compare as sets (sorted) so this regression test
     // continues to validate the presence of expected hashes without coupling to
     // internal ordering.
-    let mut expected_no_quirks = vec![
-      hash("span"),
-      hash("foo"),
-      hash("bar"),
-      hash("data-Thing"),
-      hash("data-thing"),
-    ];
+    let mut expected_no_quirks = vec![hash("span"), hash("foo"), hash("bar"), hash("data-thing")];
     expected_no_quirks.sort_unstable();
     let mut actual_no_quirks = selector
       .bloom_hashes
@@ -1057,7 +1051,7 @@ mod tests {
     actual_no_quirks.sort_unstable();
     assert_eq!(actual_no_quirks, expected_no_quirks);
 
-    let mut expected_quirks = vec![hash("span"), hash("data-Thing"), hash("data-thing")];
+    let mut expected_quirks = vec![hash("span"), hash("data-thing")];
     expected_quirks.sort_unstable();
     let mut actual_quirks = selector
       .bloom_hashes

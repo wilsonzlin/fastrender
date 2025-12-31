@@ -323,6 +323,71 @@ static HAS_PRUNES: AtomicU64 = AtomicU64::new(0);
 static HAS_FILTER_PRUNES: AtomicU64 = AtomicU64::new(0);
 static HAS_RELATIVE_EVALS: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+  static HAS_COUNTERS: std::cell::Cell<HasCounters> = std::cell::Cell::new(HasCounters::default());
+}
+
+#[inline]
+fn record_has_eval() {
+  #[cfg(test)]
+  HAS_COUNTERS.with(|c| {
+    let mut counters = c.get();
+    counters.evals += 1;
+    c.set(counters);
+  });
+  #[cfg(not(test))]
+  HAS_EVALS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn record_has_cache_hit() {
+  #[cfg(test)]
+  HAS_COUNTERS.with(|c| {
+    let mut counters = c.get();
+    counters.cache_hits += 1;
+    c.set(counters);
+  });
+  #[cfg(not(test))]
+  HAS_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn record_has_prune() {
+  #[cfg(test)]
+  HAS_COUNTERS.with(|c| {
+    let mut counters = c.get();
+    counters.prunes += 1;
+    c.set(counters);
+  });
+  #[cfg(not(test))]
+  HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn record_has_filter_prune() {
+  #[cfg(test)]
+  HAS_COUNTERS.with(|c| {
+    let mut counters = c.get();
+    counters.filter_prunes += 1;
+    c.set(counters);
+  });
+  #[cfg(not(test))]
+  HAS_FILTER_PRUNES.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn record_has_relative_eval() {
+  #[cfg(test)]
+  HAS_COUNTERS.with(|c| {
+    let mut counters = c.get();
+    counters.evaluated += 1;
+    c.set(counters);
+  });
+  #[cfg(not(test))]
+  HAS_RELATIVE_EVALS.fetch_add(1, Ordering::Relaxed);
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HasCounters {
   pub evals: u64,
@@ -342,20 +407,32 @@ impl HasCounters {
 }
 
 pub fn reset_has_counters() {
-  HAS_EVALS.store(0, Ordering::Relaxed);
-  HAS_CACHE_HITS.store(0, Ordering::Relaxed);
-  HAS_PRUNES.store(0, Ordering::Relaxed);
-  HAS_FILTER_PRUNES.store(0, Ordering::Relaxed);
-  HAS_RELATIVE_EVALS.store(0, Ordering::Relaxed);
+  #[cfg(test)]
+  HAS_COUNTERS.with(|c| c.set(HasCounters::default()));
+  #[cfg(not(test))]
+  {
+    HAS_EVALS.store(0, Ordering::Relaxed);
+    HAS_CACHE_HITS.store(0, Ordering::Relaxed);
+    HAS_PRUNES.store(0, Ordering::Relaxed);
+    HAS_FILTER_PRUNES.store(0, Ordering::Relaxed);
+    HAS_RELATIVE_EVALS.store(0, Ordering::Relaxed);
+  }
 }
 
 pub fn capture_has_counters() -> HasCounters {
-  HasCounters {
-    evals: HAS_EVALS.load(Ordering::Relaxed),
-    cache_hits: HAS_CACHE_HITS.load(Ordering::Relaxed),
-    prunes: HAS_PRUNES.load(Ordering::Relaxed),
-    filter_prunes: HAS_FILTER_PRUNES.load(Ordering::Relaxed),
-    evaluated: HAS_RELATIVE_EVALS.load(Ordering::Relaxed),
+  #[cfg(test)]
+  {
+    HAS_COUNTERS.with(|c| c.get())
+  }
+  #[cfg(not(test))]
+  {
+    HasCounters {
+      evals: HAS_EVALS.load(Ordering::Relaxed),
+      cache_hits: HAS_CACHE_HITS.load(Ordering::Relaxed),
+      prunes: HAS_PRUNES.load(Ordering::Relaxed),
+      filter_prunes: HAS_FILTER_PRUNES.load(Ordering::Relaxed),
+      evaluated: HAS_RELATIVE_EVALS.load(Ordering::Relaxed),
+    }
   }
 }
 
@@ -4247,7 +4324,7 @@ fn matches_has_relative(
         .and_then(|store| store.summary_for_id(anchor.node_id));
 
       for selector in selectors.iter() {
-        HAS_EVALS.fetch_add(1, Ordering::Relaxed);
+        record_has_eval();
         if let Err(err) = check_active_periodic(
           &mut deadline_counter,
           RELATIVE_SELECTOR_DEADLINE_STRIDE,
@@ -4261,7 +4338,7 @@ fn matches_has_relative(
           .relative_selector
           .lookup(anchor.opaque(), selector)
         {
-          HAS_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+          record_has_cache_hit();
           if cached.matched() {
             return true;
           }
@@ -4275,7 +4352,7 @@ fn matches_has_relative(
           if let Some(summary) = anchor_summary {
             let hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode);
             if !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash)) {
-              HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
+              record_has_prune();
               ctx.selector_caches.relative_selector.add(
                 anchor.opaque(),
                 selector,
@@ -4295,8 +4372,8 @@ fn matches_has_relative(
           if ctx.extra_data.deadline_error.is_some() {
             return false;
           }
-          HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
-          HAS_FILTER_PRUNES.fetch_add(1, Ordering::Relaxed);
+          record_has_prune();
+          record_has_filter_prune();
           ctx.selector_caches.relative_selector.add(
             anchor.opaque(),
             selector,
@@ -4305,7 +4382,7 @@ fn matches_has_relative(
           continue;
         }
 
-        HAS_RELATIVE_EVALS.fetch_add(1, Ordering::Relaxed);
+        record_has_relative_eval();
         let matched = match_relative_selector(
           selector,
           anchor.node,

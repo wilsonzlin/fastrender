@@ -2065,23 +2065,21 @@ fn collect_relative_selector_hashes<Impl: SelectorImpl>(
                     }
                 },
                 Component::AttributeInNoNamespaceExists {
-                    ref local_name,
                     ref local_name_lower,
                     ..
                 } => {
-                    attrs.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
-                    if local_name != local_name_lower {
-                        attrs.push(local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
-                    }
+                    // Attribute names are matched case-insensitively in HTML documents. Emit the
+                    // canonical ASCII-lowercased name so callers can safely use these hashes for
+                    // pruning without depending on the original casing used in the selector.
+                    attrs.push(local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
                 },
                 Component::AttributeInNoNamespace { ref local_name, .. } => {
                     attrs.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
                 },
                 Component::AttributeOther(selector) => {
-                    attrs.push(selector.local_name.precomputed_hash() & BLOOM_HASH_MASK);
-                    if selector.local_name != selector.local_name_lower {
-                        attrs.push(selector.local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
-                    }
+                    // Same rationale as above: the selector engine uses `local_name_lower` when
+                    // matching HTML elements, so using it here avoids false-negative prunes.
+                    attrs.push(selector.local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
                 },
                 Component::Is(list) | Component::Where(list) => {
                     let slice = list.slice();
