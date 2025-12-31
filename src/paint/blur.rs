@@ -1354,8 +1354,12 @@ fn tile_blur(
 
   // When tiles are small enough that per-tile blur won't parallelize, distribute work across tiles
   // instead of paying nested rayon overhead inside each tile blur pass.
-  let parallel_tiles =
-    budget_pixels < PARALLEL_BLUR_MIN_PIXELS && tiles > 1 && rayon::current_num_threads() > 1;
+  let max_src_w = width.min(tile_w.saturating_add(pad_x.saturating_mul(2)));
+  let max_src_h = height.min(tile_h.saturating_add(pad_y.saturating_mul(2)));
+  let max_tile_pixels = (max_src_w as usize).saturating_mul(max_src_h as usize);
+  let parallel_tiles = max_tile_pixels < PARALLEL_BLUR_MIN_PIXELS
+    && tiles > 1
+    && rayon::current_num_threads() > 1;
 
   if parallel_tiles {
     let out_stride = row_stride;
@@ -1448,7 +1452,51 @@ fn tile_blur(
       }
     };
 
-    if deadline_enabled {
+    let tiles_x_usize = tiles_x as usize;
+    let total_tiles_u64 = tiles_x as u64 * tiles_y as u64;
+    if total_tiles_u64 <= usize::MAX as u64 {
+      let total_tiles = total_tiles_u64 as usize;
+      let blur_tile = |idx: usize| {
+        let ty = idx / tiles_x_usize;
+        let tx = idx - ty * tiles_x_usize;
+        let x = (tx as u32).saturating_mul(tile_w);
+        let y = (ty as u32).saturating_mul(tile_h);
+        if x >= width || y >= height {
+          return;
+        }
+        let copy_w = tile_w.min(width - x);
+        let copy_h = tile_h.min(height - y);
+        let src_min_x = x.saturating_sub(pad_x);
+        let src_min_y = y.saturating_sub(pad_y);
+        let src_max_x = (x + copy_w + pad_x).min(width);
+        let src_max_y = (y + copy_h + pad_y).min(height);
+        let src_w = src_max_x.saturating_sub(src_min_x);
+        let src_h = src_max_y.saturating_sub(src_min_y);
+        blur_job(TileJob {
+          x,
+          y,
+          copy_w,
+          copy_h,
+          src_min_x,
+          src_min_y,
+          src_w,
+          src_h,
+          offset_x: x - src_min_x,
+          offset_y: y - src_min_y,
+        });
+      };
+
+      if deadline_enabled {
+        (0..total_tiles).into_par_iter().for_each_init(
+          || DeadlineGuard::install(deadline.as_ref()),
+          |_, idx| blur_tile(idx),
+        );
+      } else {
+        (0..total_tiles).into_par_iter().for_each(|idx| blur_tile(idx));
+      }
+    } else if deadline_enabled {
+      // Extremely high tile counts can overflow usize on 32-bit platforms; fall back to row-parallel
+      // iteration rather than allocating a tile job list.
       (0..tiles_y as usize).into_par_iter().for_each_init(
         || DeadlineGuard::install(deadline.as_ref()),
         |_, ty| {
