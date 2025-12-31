@@ -663,6 +663,7 @@ impl<S: CheapCloneStr> CoreStyle for Style<S> {
   fn box_generation_mode(&self) -> BoxGenerationMode {
     match self.display {
       Display::None => BoxGenerationMode::None,
+      #[cfg(any(feature = "block_layout", feature = "flexbox", feature = "grid"))]
       _ => BoxGenerationMode::Normal,
     }
   }
