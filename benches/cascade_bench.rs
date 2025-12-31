@@ -4,8 +4,12 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::dom::parse_html;
-use fastrender::style::cascade::apply_styles_with_media;
+use fastrender::style::cascade::{
+  apply_styles_with_media, capture_cascade_profile, cascade_profile_enabled, reset_cascade_profile,
+  set_cascade_profile_enabled,
+};
 use fastrender::style::media::MediaContext;
+use std::fmt::Write;
 
 fn generate_cascade_html(nodes: usize, class_variants: usize) -> String {
   let mut html = String::from("<html><head><style>body{margin:0;padding:0;}</style></head><body>");
@@ -117,6 +121,86 @@ fn generate_not_heavy_css(class_variants: usize) -> String {
   css
 }
 
+fn generate_pseudo_selector_css(rule_count: usize) -> String {
+  let mut css = String::new();
+  for idx in 0..rule_count {
+    let _ = write!(
+      css,
+      ".c{idx}::before {{ content: \"x\"; color: rgb({r},{g},{b}); }}\n",
+      idx = idx,
+      r = (idx * 17) % 255,
+      g = (idx * 31) % 255,
+      b = (idx * 43) % 255
+    );
+  }
+  css
+}
+
+fn generate_pseudo_selector_html(nodes: usize, class_variants: usize) -> String {
+  let mut html = String::from("<html><body><div id=\"root\">");
+  for idx in 0..nodes {
+    let _ = write!(
+      html,
+      "<div class=\"c{cls}\" id=\"n{idx}\">text</div>",
+      cls = idx % class_variants,
+      idx = idx
+    );
+  }
+  html.push_str("</div></body></html>");
+  html
+}
+
+fn pseudo_selector_candidate_benchmark(c: &mut Criterion) {
+  // Many pseudo-element selectors with distinct classes. With correct indexing, each DOM element
+  // should only consider the selectors for its own classes (instead of falling back to universal).
+  let rule_count = 10_000usize;
+  let node_count = 250usize;
+  let class_variants = 10usize;
+  let html = generate_pseudo_selector_html(node_count, class_variants);
+  let css = generate_pseudo_selector_css(rule_count);
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let empty_stylesheet = parse_stylesheet("").expect("parse empty stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  // Validate candidate counts once outside the timed loop.
+  let prior_profile = cascade_profile_enabled();
+  set_cascade_profile_enabled(true);
+  reset_cascade_profile();
+  let _ = apply_styles_with_media(&dom, &empty_stylesheet, &media);
+  let baseline = capture_cascade_profile();
+
+  reset_cascade_profile();
+  let _ = apply_styles_with_media(&dom, &stylesheet, &media);
+  let stats = capture_cascade_profile();
+  set_cascade_profile_enabled(prior_profile);
+
+  let delta_candidates = stats.rule_candidates.saturating_sub(baseline.rule_candidates);
+  let delta_universal = stats
+    .rule_candidates_universal
+    .saturating_sub(baseline.rule_candidates_universal);
+
+  // If pseudo-element selectors are indexed on the pseudo-element compound (usually empty) they'll
+  // land in the universal bucket and cause `node_count * rule_count` candidates. Indexing on the
+  // originating element's compound keeps this bounded by touched classes.
+  assert!(
+    delta_universal < 50,
+    "pseudo selectors should not contribute many universal candidates (delta_universal={delta_universal})"
+  );
+  assert!(
+    delta_candidates < (node_count as u64) * 20,
+    "pseudo selector candidate explosion (delta_candidates={delta_candidates})"
+  );
+
+  c.bench_function("cascade apply_styles pseudo selectors 10k rules/250 nodes", |b| {
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+}
+
 fn cascade_benchmark(c: &mut Criterion) {
   let node_count = 400;
   let class_variants = 24;
@@ -220,6 +304,7 @@ criterion_group!(
   benches,
   cascade_benchmark,
   cascade_not_benchmark,
-  has_selector_benchmark
+  has_selector_benchmark,
+  pseudo_selector_candidate_benchmark
 );
 criterion_main!(benches);

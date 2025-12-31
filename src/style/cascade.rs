@@ -464,7 +464,7 @@ fn namespace_matches(node: &DomNode, namespace: &str) -> bool {
   }
 }
 
-pub(crate) fn cascade_profile_enabled() -> bool {
+pub fn cascade_profile_enabled() -> bool {
   ensure_cascade_profile_initialized();
   CASCADE_PROFILE_ENABLED.load(Ordering::Relaxed)
 }
@@ -477,7 +477,7 @@ fn ensure_cascade_profile_initialized() {
 }
 
 /// Enable or disable cascade profiling independent of the FASTR_CASCADE_PROFILE env var.
-pub(crate) fn set_cascade_profile_enabled(enabled: bool) {
+pub fn set_cascade_profile_enabled(enabled: bool) {
   ensure_cascade_profile_initialized();
   CASCADE_PROFILE_ENABLED.store(enabled, Ordering::Relaxed);
 }
@@ -499,7 +499,7 @@ pub struct CascadeProfileStats {
   pub pseudo_time_ns: u64,
 }
 
-pub(crate) fn capture_cascade_profile() -> CascadeProfileStats {
+pub fn capture_cascade_profile() -> CascadeProfileStats {
   CascadeProfileStats {
     nodes: CASCADE_PROFILE_NODES.load(Ordering::Relaxed),
     rule_candidates: CASCADE_PROFILE_RULE_CANDIDATES.load(Ordering::Relaxed),
@@ -521,7 +521,7 @@ fn user_agent_stylesheet() -> &'static StyleSheet {
     .get_or_init(|| parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new()))
 }
 
-pub(crate) fn reset_cascade_profile() {
+pub fn reset_cascade_profile() {
   CASCADE_PROFILE_NODES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_CANDIDATES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_MATCHES.store(0, Ordering::Relaxed);
@@ -1568,6 +1568,101 @@ fn selector_keys(
   selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches)
 }
 
+fn pseudo_selector_subject_keys(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> Vec<SelectorKey> {
+  use selectors::parser::Combinator;
+  use selectors::parser::Component;
+
+  // Pseudo-elements are represented as their own (rightmost) sequence with a
+  // `Combinator::PseudoElement` separating them from the originating element's
+  // compound. Index pseudo-element rules using keys from that originating
+  // compound instead of the pseudo-element sequence, which often contains only
+  // `Component::PseudoElement(..)` and would fall back to universal.
+  let mut iter = selector.iter();
+  while iter.next().is_some() {}
+  let Some(Combinator::PseudoElement) = iter.next_sequence() else {
+    // Unexpected, but keep behavior safe by falling back to the regular
+    // rightmost-sequence extraction.
+    return selector_keys(selector);
+  };
+
+  let mut keys: Vec<SelectorKey> = Vec::new();
+  let polarity = SelectorKeyPolarity::Matches;
+  while let Some(component) = iter.next() {
+    match component {
+      Component::ID(ident) => {
+        if matches!(polarity, SelectorKeyPolarity::Matches) {
+          push_key(
+            &mut keys,
+            SelectorKey::Id(selector_bucket_id(ident.as_str())),
+          );
+        }
+      }
+      Component::Class(cls) => {
+        if matches!(polarity, SelectorKeyPolarity::Matches) {
+          push_key(
+            &mut keys,
+            SelectorKey::Class(selector_bucket_class(cls.as_str())),
+          );
+        }
+      }
+      Component::LocalName(local) => {
+        if matches!(polarity, SelectorKeyPolarity::Matches) {
+          push_key(
+            &mut keys,
+            SelectorKey::Tag(selector_bucket_tag(local.lower_name.as_str())),
+          );
+        }
+      }
+      Component::AttributeInNoNamespaceExists {
+        local_name_lower, ..
+      } => {
+        if matches!(polarity, SelectorKeyPolarity::Matches) {
+          push_key(
+            &mut keys,
+            SelectorKey::Attribute(selector_bucket_attr(local_name_lower.as_str())),
+          );
+        }
+      }
+      Component::AttributeInNoNamespace { local_name, .. } => {
+        if matches!(polarity, SelectorKeyPolarity::Matches) {
+          push_key(
+            &mut keys,
+            SelectorKey::Attribute(selector_bucket_attr(local_name.as_str())),
+          );
+        }
+      }
+      Component::AttributeOther(other) => {
+        if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
+          push_key(
+            &mut keys,
+            SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str())),
+          );
+        }
+      }
+      Component::Is(list) => merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys),
+      Component::Where(list) => {
+        merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
+      }
+      Component::Negation(list) => {
+        let flipped = match polarity {
+          SelectorKeyPolarity::Matches => SelectorKeyPolarity::DoesNotMatch,
+          SelectorKeyPolarity::DoesNotMatch => SelectorKeyPolarity::Matches,
+        };
+        merge_nested_keys(list.slice().iter(), flipped, keys.is_empty(), &mut keys);
+      }
+      _ => {}
+    }
+  }
+
+  if keys.is_empty() {
+    keys.push(SelectorKey::Universal);
+  }
+
+  keys
+}
+
 fn merge_namespace_constraint(current: Option<String>, new: Option<String>) -> Option<String> {
   match (current, new) {
     (None, constraint) => constraint,
@@ -1891,13 +1986,13 @@ impl<'a> RuleIndex<'a> {
           {
             index.has_has_requirements = true;
           }
-          index.pseudo_selectors.push(IndexedSelector {
-            rule_idx,
-            selector,
-            specificity: selector.specificity(),
-            metadata,
-          });
-          for key in selector_keys(selector) {
+           index.pseudo_selectors.push(IndexedSelector {
+             rule_idx,
+             selector,
+             specificity: selector.specificity(),
+             metadata,
+           });
+          for key in pseudo_selector_subject_keys(selector) {
             match key {
               SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
               SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
@@ -5837,6 +5932,96 @@ mod tests {
       .map(|v| v.len())
       .unwrap_or(0);
     assert_eq!(class_bucket_len, 1);
+  }
+
+  #[test]
+  fn rule_index_indexes_pseudo_selectors_by_subject_compound() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        .a::before { content: "x"; }
+        div.foo::after { content: "y"; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules);
+    assert_eq!(index.pseudo_selectors.len(), 2);
+
+    let before_bucket = index
+      .pseudo_buckets
+      .get(&PseudoElement::Before)
+      .expect("::before bucket");
+    assert!(before_bucket.universal.is_empty());
+    assert_eq!(
+      before_bucket
+        .by_class
+        .get(&selector_bucket_class("a"))
+        .expect("class a bucket")
+        .as_slice(),
+      &[0usize]
+    );
+
+    let after_bucket = index
+      .pseudo_buckets
+      .get(&PseudoElement::After)
+      .expect("::after bucket");
+    assert!(after_bucket.universal.is_empty());
+    assert_eq!(
+      after_bucket
+        .by_class
+        .get(&selector_bucket_class("foo"))
+        .expect("class foo bucket")
+        .as_slice(),
+      &[1usize]
+    );
+    assert_eq!(
+      after_bucket
+        .by_tag
+        .get(&selector_bucket_tag("div"))
+        .expect("tag div bucket")
+        .as_slice(),
+      &[1usize]
+    );
+
+    // An element without the `.a` class should not consider `.a::before` a candidate.
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![],
+    };
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.pseudo_selectors.len());
+    let mut stats = CandidateStats::default();
+    index.pseudo_candidates(
+      &node,
+      &PseudoElement::Before,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+    );
+    assert!(candidates.is_empty());
   }
 
   #[test]
