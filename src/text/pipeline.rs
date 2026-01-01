@@ -3355,7 +3355,21 @@ fn consider_local_font_candidate(
   id: fontdb::ID,
   covers: bool,
 ) -> Option<Arc<LoadedFont>> {
+  if !covers && picker.first_emoji_any.is_some() && picker.first_text_any.is_some() {
+    return None;
+  }
+
   let is_emoji_font = font_id_is_emoji_font(db, id);
+  if covers {
+    if is_emoji_font {
+      if picker.avoid_emoji && picker.first_emoji.is_some() {
+        return None;
+      }
+    } else if picker.prefer_emoji && picker.first_text.is_some() {
+      return None;
+    }
+  }
+
   let needs_any = if is_emoji_font {
     picker.first_emoji_any.is_none()
   } else {
