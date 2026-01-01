@@ -41,7 +41,9 @@ under render deadlines when configured to serve stale responses).
 
 ## HTTP fetch tuning
 
-These env vars tune HTTP(S) requests made by the CLI binaries that construct their fetcher via [`common::render_pipeline::build_http_fetcher`](../src/bin/common/render_pipeline.rs) (notably `fetch_pages`, `prefetch_assets`, `render_pages`, `fetch_and_render`, and `pageset_progress` workers).
+These env vars tune HTTP(S) requests made by FastRender’s [`HttpFetcher`](../src/resource.rs) when used by the CLI binaries (notably `fetch_pages`, `prefetch_assets`, `render_pages`, `fetch_and_render`, and `pageset_progress` workers).
+
+Some knobs are implemented directly in `HttpFetcher` (so they also apply to library users who rely on `HttpFetcher`), while the retry/backoff knobs are parsed by the shared CLI helper [`common::render_pipeline::build_http_fetcher`](../src/bin/common/render_pipeline.rs).
 
 Unless noted otherwise, they are parsed once at process startup; invalid values are ignored.
 
