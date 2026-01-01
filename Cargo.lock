@@ -2679,6 +2679,7 @@ dependencies = [
  "arrayvec",
  "document-features",
  "grid",
+ "rustc-hash",
  "serde",
  "serde_json",
  "slotmap",

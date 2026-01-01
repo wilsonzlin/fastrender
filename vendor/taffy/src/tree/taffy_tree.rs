@@ -13,7 +13,10 @@ use crate::tree::{
   RoundTree, RunMode, TraversePartialTree, TraverseTree,
 };
 use crate::util::debug::{debug_log, debug_log_node};
-use crate::util::sys::{new_vec_with_capacity, ChildrenVec, Map, Vec};
+use crate::util::sys::{new_vec_with_capacity, ChildrenVec, Vec};
+
+#[cfg(not(feature = "std"))]
+use crate::util::sys::Map;
 
 use crate::compute::{
   compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_root_layout,
@@ -31,6 +34,9 @@ use crate::{compute::compute_grid_layout, LayoutGridContainer};
 use crate::compute::grid::DetailedGridInfo;
 #[cfg(feature = "detailed_layout_info")]
 use crate::tree::layout::DetailedLayoutInfo;
+
+#[cfg(feature = "std")]
+use rustc_hash::FxHashMap;
 
 /// The error Taffy generates on invalid operations
 pub type TaffyResult<T> = Result<T, TaffyError>;
@@ -320,6 +326,12 @@ struct LeafMeasureCacheKey {
   available_height: LeafMeasureAvailableSpaceKey,
 }
 
+#[cfg(feature = "std")]
+type LeafMeasureCacheMap<K, V> = FxHashMap<K, V>;
+
+#[cfg(not(feature = "std"))]
+type LeafMeasureCacheMap<K, V> = Map<K, V>;
+
 impl LeafMeasureCacheKey {
   #[inline(always)]
   fn new(
@@ -363,7 +375,7 @@ where
   pub(crate) taffy: &'t mut TaffyTree<NodeContext>,
   /// The context provided for passing to measure functions if layout is run over this struct
   pub(crate) measure_function: MeasureFunction,
-  leaf_measure_cache: Map<LeafMeasureCacheKey, Size<f32>>,
+  leaf_measure_cache: LeafMeasureCacheMap<LeafMeasureCacheKey, Size<f32>>,
 }
 
 // TraversePartialTree impl for TaffyView
@@ -1121,10 +1133,20 @@ impl<NodeContext> TaffyTree<NodeContext> {
     let _subgrid_guard = crate::compute::grid::SubgridOverrideGuard::new();
 
     let use_rounding = self.config.use_rounding;
+    let leaf_measure_cache = {
+      #[cfg(feature = "std")]
+      {
+        FxHashMap::with_capacity_and_hasher(self.nodes.len(), Default::default())
+      }
+      #[cfg(not(feature = "std"))]
+      {
+        Default::default()
+      }
+    };
     let mut taffy_view = TaffyView {
       taffy: self,
       measure_function,
-      leaf_measure_cache: Default::default(),
+      leaf_measure_cache,
     };
 
     #[cfg(feature = "std")]

@@ -83,6 +83,7 @@ std = [
     "grid?/std",
     "serde?/std",
     "slotmap?/std",
+    "dep:rustc-hash",
 ]
 strict_provenance = []
 taffy_tree = ["dep:slotmap"]
@@ -136,6 +137,10 @@ optional = true
 version = "0.18.0"
 optional = true
 default-features = false
+
+[dependencies.rustc-hash]
+version = "2"
+optional = true
 
 [dependencies.serde]
 version = "1.0"
