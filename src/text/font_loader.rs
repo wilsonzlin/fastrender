@@ -2430,6 +2430,14 @@ fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
         reason: e.to_string(),
       })
     })?;
+    if let Err(err) = ensure_http_success(&resource, url)
+      .and_then(|()| ensure_font_mime_sane(&resource, url))
+    {
+      return Err(Error::Font(FontError::LoadFailed {
+        family: url.to_string(),
+        reason: err.to_string(),
+      }));
+    }
     return Ok((resource.bytes, resource.content_type));
   }
 
@@ -2633,6 +2641,9 @@ mod tests {
   use crate::style::media::MediaContext;
   use crate::ComputedStyle;
   use std::collections::HashMap;
+  use std::io::Read;
+  use std::io::Write;
+  use std::net::TcpListener;
   use std::sync::Arc;
   use std::sync::Mutex;
   use std::thread;
@@ -2655,6 +2666,22 @@ mod tests {
     fs::write(&path, data).ok()?;
     let url = Url::from_file_path(&path).ok()?;
     Some((dir, url))
+  }
+
+  fn try_bind_localhost(context: &str) -> Option<TcpListener> {
+    match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => Some(listener),
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!("skipping {context}: cannot bind localhost in this environment: {err}");
+        None
+      }
+      Err(err) => panic!("bind {context}: {err}"),
+    }
   }
 
   struct StubFetcher {
@@ -2748,6 +2775,53 @@ mod tests {
 
     let ctx = FontContext::with_database(db);
     assert_eq!(ctx.font_count(), count);
+  }
+
+  #[test]
+  fn fetch_font_bytes_errors_on_http_status_failures() {
+    let Some(listener) = try_bind_localhost("fetch_font_bytes_errors_on_http_status_failures")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/missing.woff2");
+
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept");
+      let mut buf = [0u8; 1024];
+      let mut request = Vec::new();
+      loop {
+        let read = stream.read(&mut buf).expect("read request");
+        if read == 0 {
+          break;
+        }
+        request.extend_from_slice(&buf[..read]);
+        if request.windows(4).any(|w| w == b"\r\n\r\n") || request.len() > 8192 {
+          break;
+        }
+      }
+
+      let body = b"not found";
+      let response = format!(
+        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(response.as_bytes()).expect("write head");
+      stream.write_all(body).expect("write body");
+    });
+
+    let err = fetch_font_bytes(&url).expect_err("expected http fetch to fail");
+    match err {
+      Error::Font(FontError::LoadFailed { reason, .. }) => {
+        assert!(
+          reason.contains("404"),
+          "expected status code in error message, got: {reason}"
+        );
+      }
+      other => panic!("expected FontError for HTTP failure, got: {other:?}"),
+    }
+
+    handle.join().expect("server thread");
   }
 
   #[test]
