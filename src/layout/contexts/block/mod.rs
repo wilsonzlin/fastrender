@@ -176,6 +176,9 @@ fn block_axis_sides(style: &ComputedStyle) -> (PhysicalSide, PhysicalSide) {
 pub struct BlockFormattingContext {
   /// Shared factory used to create child formatting contexts without losing shared caches.
   factory: FormattingContextFactory,
+  /// Shared inline formatting context used for intrinsic sizing, so repeated intrinsic measurements
+  /// don't rebuild inline contexts (and their hyphenator/pipeline wiring) in hot loops.
+  intrinsic_inline_fc: Arc<InlineFormattingContext>,
   font_context: FontContext,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: ContainingBlock,
@@ -232,8 +235,10 @@ impl BlockFormattingContext {
     let nearest_positioned_cb = factory.nearest_positioned_cb();
     let font_context = factory.font_context().clone();
     let parallelism = factory.parallelism();
+    let intrinsic_inline_fc = Arc::new(InlineFormattingContext::with_factory(factory.clone()));
     Self {
       factory,
+      intrinsic_inline_fc,
       font_context,
       viewport_size,
       nearest_positioned_cb,
@@ -260,8 +265,10 @@ impl BlockFormattingContext {
     let nearest_positioned_cb = factory.nearest_positioned_cb();
     let font_context = factory.font_context().clone();
     let parallelism = factory.parallelism();
+    let intrinsic_inline_fc = Arc::new(InlineFormattingContext::with_factory(factory.clone()));
     Self {
       factory,
+      intrinsic_inline_fc,
       font_context,
       viewport_size,
       nearest_positioned_cb,
@@ -273,6 +280,8 @@ impl BlockFormattingContext {
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
     self.parallelism = parallelism;
     self.factory = self.factory.clone().with_parallelism(parallelism);
+    self.intrinsic_inline_fc =
+      Arc::new(InlineFormattingContext::with_factory(self.factory.clone()));
     self
   }
 
@@ -3663,7 +3672,7 @@ impl FormattingContext for BlockFormattingContext {
     }
 
     let factory = &self.factory;
-    let inline_fc = InlineFormattingContext::with_factory(self.factory.clone());
+    let inline_fc = self.intrinsic_inline_fc.as_ref();
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     struct InlineRunCacheKey {
       hash: u64,

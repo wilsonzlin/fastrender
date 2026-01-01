@@ -143,6 +143,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 #[cfg(any(test, debug_assertions))]
 static INLINE_FC_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(any(test, debug_assertions))]
+static INLINE_FC_WITH_FACTORY_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Inline Formatting Context implementation
 ///
@@ -226,6 +228,8 @@ impl InlineFormattingContext {
   }
 
   pub(crate) fn with_factory(factory: FormattingContextFactory) -> Self {
+    #[cfg(any(test, debug_assertions))]
+    INLINE_FC_WITH_FACTORY_CALLS.fetch_add(1, Ordering::Relaxed);
     let pipeline = factory.shaping_pipeline();
     let font_context = factory.font_context().clone();
     let viewport_size = factory.viewport_size();
@@ -300,6 +304,18 @@ impl InlineFormattingContext {
   #[doc(hidden)]
   pub fn debug_reset_with_font_context_viewport_and_cb_call_count() {
     INLINE_FC_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.store(0, Ordering::Relaxed);
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  #[doc(hidden)]
+  pub fn debug_with_factory_call_count() -> usize {
+    INLINE_FC_WITH_FACTORY_CALLS.load(Ordering::Relaxed)
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  #[doc(hidden)]
+  pub fn debug_reset_with_factory_call_count() {
+    INLINE_FC_WITH_FACTORY_CALLS.store(0, Ordering::Relaxed);
   }
 
   fn hyphenator_for(&self, language: &str) -> Option<Hyphenator> {

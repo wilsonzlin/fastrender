@@ -31,6 +31,7 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
   ShapingPipeline::debug_reset_new_call_count();
   FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
   InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
+  InlineFormattingContext::debug_reset_with_factory_call_count();
 
   // Enable Taffy perf counters so we can sanity-check that we exercised the measure callback.
   let _taffy_perf_guard = TaffyPerfCountersGuard::new();
@@ -96,6 +97,7 @@ fn block_intrinsic_sizing_does_not_rebuild_shaping_pipeline_or_factory() {
   ShapingPipeline::debug_reset_new_call_count();
   FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
   InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
+  InlineFormattingContext::debug_reset_with_factory_call_count();
 
   let mut text_style = ComputedStyle::default();
   text_style.display = Display::Inline;
@@ -128,5 +130,10 @@ fn block_intrinsic_sizing_does_not_rebuild_shaping_pipeline_or_factory() {
     InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count(),
     0,
     "block intrinsic sizing should not construct inline formatting contexts via `with_font_context_viewport_and_cb`"
+  );
+  assert_eq!(
+    InlineFormattingContext::debug_with_factory_call_count(),
+    0,
+    "block intrinsic sizing should reuse a shared inline formatting context"
   );
 }
