@@ -5291,4 +5291,41 @@ mod tests {
       actual_max
     );
   }
+
+  #[test]
+  fn block_layout_reuses_shaping_pipeline_across_children() {
+    // Regression: block layout used to instantiate a new shaping pipeline for each block box that
+    // buffered inline children, preventing font fallback caches from being reused across blocks.
+    crate::text::pipeline::ShapingPipeline::debug_reset_new_call_count();
+
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Block;
+    root_style.font_size = 16.0;
+    let root_style = Arc::new(root_style);
+
+    let mut child_style = ComputedStyle::default();
+    child_style.display = Display::Block;
+    child_style.font_size = 16.0;
+    let child_style = Arc::new(child_style);
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+    let text_style = Arc::new(text_style);
+
+    let children = (0..64usize)
+      .map(|idx| {
+        let text = BoxNode::new_text(text_style.clone(), format!("hello {idx}"));
+        BoxNode::new_block(child_style.clone(), FormattingContextType::Block, vec![text])
+      })
+      .collect();
+    let root = BoxNode::new_block(root_style, FormattingContextType::Block, children);
+
+    let factory = FormattingContextFactory::new().with_parallelism(LayoutParallelism::disabled());
+    let fc = factory.create(FormattingContextType::Block);
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let _fragment = fc.layout(&root, &constraints).expect("layout");
+
+    assert_eq!(crate::text::pipeline::ShapingPipeline::debug_new_call_count(), 1);
+  }
 }

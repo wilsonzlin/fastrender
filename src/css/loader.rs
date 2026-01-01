@@ -389,6 +389,10 @@ pub fn absolutize_css_urls_cow<'a>(
     let mut last_emitted = start_pos;
 
     check_active(RenderStage::Css)?;
+    // `Parser::is_exhausted()` ignores trailing whitespace/comments, but this routine must preserve
+    // them verbatim when rewriting nested blocks. Drive the loop solely via
+    // `next_including_whitespace_and_comments()` so `parser.position()` advances to the true end
+    // of the input slice.
     loop {
       check_active_periodic(deadline_counter, 256, RenderStage::Css)?;
       let token_start = parser.position();
