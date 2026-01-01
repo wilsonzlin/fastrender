@@ -48,7 +48,9 @@ cargo xtask perf-smoke [--suite core|pageset-timeouts|all] [--top 5] [--output t
 The command renders the HTML under `tests/pages/fixtures/*`, captures `DiagnosticsLevel::Basic`
 stats, and writes `target/perf_smoke.json` with per-fixture totals and stage timings/counters. The
 JSON includes `stage_ms` buckets (`fetch`, `css`, `cascade`, `layout`, `paint`) derived from
-`RenderStats` so regressions can be attributed to a single pipeline stage.
+`RenderStats` wall-clock stage timers so regressions can be attributed to a single pipeline stage
+without double-counting. (`text_*` timings are subsystem breakdown counters and are reported
+separately; they are not included in `stage_ms`.)
 Compare against a saved baseline to flag obvious regressions:
 
 ```

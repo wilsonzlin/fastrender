@@ -159,8 +159,8 @@ heaptrack target/release/pageset_progress run --jobs 1 --pages example.com --tim
 ## 4. What to do with profiles (workflow)
 
 1. **Reproduce**: isolate to one cached page stem (`--pages <stem>`).
-2. **Attribute**: use `RenderDiagnostics.stats` (stage buckets) + trace spans.
+2. **Attribute**: use `RenderDiagnostics.stats` (wall-clock stage buckets; excludes `text_*` subsystem
+   breakdown timers) + trace spans.
 3. **Confirm**: use `samply`/`perf` to identify exact hot functions.
 4. **Fix root cause**: algorithm/data-structure, not clamps/skips.
 5. **Re-measure**: update `progress/pages/<stem>.json` and rerun profiles if still hot.
-

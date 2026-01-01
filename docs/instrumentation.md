@@ -27,11 +27,11 @@ Most CLI tooling can capture `RenderDiagnostics.stats` by enabling a diagnostics
 
 `pageset_progress` writes a stage-bucket summary into `progress/pages/<stem>.json`:
 
-- `fetch`: html decode + DOM parse
+- `fetch`: html decode + DOM parse/setup (viewport meta, DOM clone, top-layer plumbing)
 - `css`: stylesheet inlining + css parse
 - `cascade`: selector matching + box tree generation
 - `layout`: layout engine
-- `paint`: display-list build/optimize + rasterize (verbose captures `paint.gradient_ms` +
+- `paint`: display-list build/optimize + rasterize + encode (verbose captures `paint.gradient_ms` +
   `paint.gradient_pixels` for gradient-heavy pages)
 
 ### Timing semantics (wall vs CPU-sum)
