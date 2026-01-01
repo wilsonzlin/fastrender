@@ -5,19 +5,32 @@
 //! `FormattingContextFactory`.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::layout::contexts::inline::InlineFormattingContext;
 use fastrender::layout::taffy_integration::{taffy_perf_counters, TaffyPerfCountersGuard};
 use fastrender::style::display::Display;
+use fastrender::style::position::Position;
+use fastrender::style::values::Length;
 use fastrender::text::ShapingPipeline;
 use fastrender::{
   BoxNode, BoxTree, ComputedStyle, FontContext, FormattingContext, FormattingContextFactory,
   FormattingContextType, IntrinsicSizingMode, LayoutConfig, LayoutEngine, Size,
 };
 
+/// Global guard to serialize churn-counter assertions.
+///
+/// These tests reset global debug/test counters (shaping pipeline creation, factory cloning, etc.).
+/// The Rust test harness runs tests in parallel within the same integration test binary by
+/// default, so we must prevent concurrent resets from introducing flakiness.
+static CHURN_COUNTER_LOCK: Mutex<()> = Mutex::new(());
+
 #[test]
 fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
+  let _guard = CHURN_COUNTER_LOCK
+    .lock()
+    .unwrap_or_else(|err| err.into_inner());
   // Build a flex tree that forces Taffy measurement for many children. The key invariant is that
   // we should *not* be creating new shaping pipelines or formatting context factories as part of
   // repeated intrinsic sizing / measure callbacks.
@@ -100,6 +113,9 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
 
 #[test]
 fn block_intrinsic_sizing_does_not_rebuild_shaping_pipeline_or_factory() {
+  let _guard = CHURN_COUNTER_LOCK
+    .lock()
+    .unwrap_or_else(|err| err.into_inner());
   let viewport = Size::new(800.0, 600.0);
   let factory = FormattingContextFactory::with_font_context_and_viewport(FontContext::new(), viewport);
   let bfc = BlockFormattingContext::with_factory(factory);
@@ -159,4 +175,91 @@ fn block_intrinsic_sizing_does_not_rebuild_shaping_pipeline_or_factory() {
     0,
     "block intrinsic sizing should reuse a shared inline formatting context"
   );
+}
+
+#[test]
+fn flex_positioned_children_do_not_churn_factories_or_inline_contexts() {
+  let _guard = CHURN_COUNTER_LOCK
+    .lock()
+    .unwrap_or_else(|err| err.into_inner());
+  const ITEMS: usize = 256;
+
+  let viewport = Size::new(800.0, 600.0);
+  let config = LayoutConfig::for_viewport(viewport);
+  let engine = LayoutEngine::with_font_context(config, FontContext::new());
+
+  // Reset churn counters after engine creation so we measure just the layout run.
+  ShapingPipeline::debug_reset_new_call_count();
+  FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
+  FormattingContextFactory::debug_reset_detached_call_count();
+  InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
+  InlineFormattingContext::debug_reset_with_factory_call_count();
+
+  let mut flex_style = ComputedStyle::default();
+  flex_style.display = Display::Flex;
+  // Establish a positioned containing block so abs children share one CB and exercise the
+  // positioned-children layout path.
+  flex_style.position = Position::Relative;
+  let flex_style = Arc::new(flex_style);
+
+  let mut abs_style = ComputedStyle::default();
+  abs_style.display = Display::Block;
+  abs_style.position = Position::Absolute;
+  abs_style.left = Some(Length::px(0.0));
+  abs_style.top = Some(Length::px(0.0));
+  let abs_style = Arc::new(abs_style);
+
+  let mut text_style = ComputedStyle::default();
+  text_style.display = Display::Inline;
+  let text_style = Arc::new(text_style);
+
+  let mut children = Vec::with_capacity(ITEMS);
+  for idx in 0..ITEMS {
+    let mut text = BoxNode::new_text(Arc::clone(&text_style), format!("abs {idx}"));
+    text.id = 10_000 + idx;
+
+    let mut abs_child = BoxNode::new_block(
+      Arc::clone(&abs_style),
+      FormattingContextType::Block,
+      vec![text],
+    );
+    abs_child.id = idx + 1;
+    children.push(abs_child);
+  }
+
+  let mut root = BoxNode::new_block(flex_style, FormattingContextType::Flex, children);
+  root.id = 1_000_000;
+  let tree = BoxTree::new(root);
+
+  let _ = engine.layout_tree(&tree).expect("layout should succeed");
+
+  let shaping_pipeline_news = ShapingPipeline::debug_new_call_count();
+  let factory_news = FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count();
+  let detached_news = FormattingContextFactory::debug_detached_call_count();
+  let inline_fc_news = InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count();
+  let inline_fc_with_factory_news = InlineFormattingContext::debug_with_factory_call_count();
+
+  assert!(
+    shaping_pipeline_news < 20,
+    "positioned children layout should not rebuild shaping pipelines (got {shaping_pipeline_news})"
+  );
+  assert!(
+    factory_news < 20,
+    "positioned children layout should not rebuild formatting context factories (got {factory_news})"
+  );
+  assert!(
+    detached_news < 50,
+    "positioned children layout should not churn detached factories (got {detached_news})"
+  );
+  assert!(
+    inline_fc_news < 20,
+    "positioned children layout should not rebuild inline formatting contexts via `with_font_context_viewport_and_cb` (got {inline_fc_news})"
+  );
+  // Note: positioned boxes establish a new containing block for their descendants, so block layout
+  // must rebuild `InlineFormattingContext` instances when the nearest positioned containing block
+  // changes (see `BlockFormattingContext`'s `intrinsic_inline_fc` invariant). That means the raw
+  // `InlineFormattingContext::with_factory` call count is expected to scale with the number of
+  // positioned boxes we lay out here; this test intentionally focuses on detached factory churn
+  // instead.
+  let _ = inline_fc_with_factory_news;
 }

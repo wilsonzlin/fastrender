@@ -2187,10 +2187,20 @@ impl FormattingContext for FlexFormattingContext {
         Some(padding_rect.size.width),
         block_base,
       );
+      let viewport_cb = ContainingBlock::viewport(self.viewport_size);
       let cb_for_absolute = if establishes_abs_cb {
         padding_cb
       } else {
         self.nearest_positioned_cb
+      };
+      let abs_factory = positioned_factory.with_positioned_cb(cb_for_absolute);
+      let fixed_factory = positioned_factory.with_positioned_cb(viewport_cb);
+      let factory_for_cb = |cb: ContainingBlock| -> &FormattingContextFactory {
+        if cb == viewport_cb {
+          &fixed_factory
+        } else {
+          &abs_factory
+        }
       };
 
       let mut positioned_candidates: Vec<PositionedCandidate> = Vec::new();
@@ -2205,7 +2215,7 @@ impl FormattingContext for FlexFormattingContext {
             if establishes_fixed_cb {
               padding_cb
             } else {
-              ContainingBlock::viewport(self.viewport_size)
+              viewport_cb
             }
           }
           Position::Absolute => cb_for_absolute,
@@ -2227,7 +2237,7 @@ impl FormattingContext for FlexFormattingContext {
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
-        let fc = positioned_factory.with_positioned_cb(cb).create(fc_type);
+        let fc = factory_for_cb(cb).get(fc_type);
         let child_constraints = LayoutConstraints::new(
           CrateAvailableSpace::Definite(padding_rect.size.width),
           block_base
@@ -2330,9 +2340,7 @@ impl FormattingContext for FlexFormattingContext {
             .layout_child
             .formatting_context()
             .unwrap_or(crate::style::display::FormattingContextType::Block);
-          let fc = positioned_factory
-            .with_positioned_cb(candidate.cb)
-            .create(fc_type);
+          let fc = factory_for_cb(candidate.cb).get(fc_type);
           let relayout_constraints = LayoutConstraints::new(
             CrateAvailableSpace::Definite(result.size.width),
             CrateAvailableSpace::Definite(result.size.height),
@@ -2405,7 +2413,7 @@ impl FormattingContext for FlexFormattingContext {
         let fc_type = snapshot_node
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
-        let fc = snapshot_factory.create(fc_type);
+        let fc = snapshot_factory.get(fc_type);
         let snapshot_constraints = LayoutConstraints::new(
           CrateAvailableSpace::Definite(fragment.bounds.width()),
           CrateAvailableSpace::Indefinite,
