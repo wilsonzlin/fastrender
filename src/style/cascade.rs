@@ -3062,6 +3062,7 @@ fn selector_compound_fast_reject_from_iter(
   let mut tag_key: SelectorBucketKey = 0;
   let mut has_id = false;
   let mut id_key: SelectorBucketKey = 0;
+  let mut allow_single_key = false;
 
   // Note: in full quirks mode, class/ID selectors match ASCII-case-insensitively. We hash them
   // with the same normalization used by `DomSelectorKeyCache` so fast-reject comparisons remain
@@ -3178,21 +3179,27 @@ fn selector_compound_fast_reject_from_iter(
       | Component::ParentSelector => {}
       Component::Host(_) | Component::Has(_) => {}
       Component::Invalid(_) => {}
-      // Branching selector-lists (and negation) do not add *mandatory* simple-selector requirements
-      // on the element itself. Ignore them so we can still fast-reject based on any other required
-      // tag/id/class/attribute selectors in the compound.
+      // Branching selector-lists do not add *mandatory* simple-selector requirements on the element
+      // itself. Ignore them so we can still fast-reject based on any other required
+      // tag/id/class/attribute selectors in the compound. If the compound only contains a single
+      // required key, but includes one of these branching constructs, the selector index may still
+      // union-bucket it by optional keys from inside the branch (e.g. `.a:is(.b, .c)`), so we allow
+      // building a single-key descriptor to prune those false positives.
       //
       // Examples where this helps:
       // - `.a.b:not(.c)` still requires `.a` and `.b`.
       // - `div.foo.bar:is(.x, .y)` still requires `div.foo.bar`.
-      Component::Is(_) | Component::Where(_) | Component::Negation(_) => {}
+      Component::Is(_) | Component::Where(_) => {
+        allow_single_key = true;
+      }
+      Component::Negation(_) => {}
       // Branching constructs, or components we don't know how to treat soundly.
       _ => return None,
     }
   }
 
   let total_required = usize::from(has_tag) + usize::from(has_id) + class_len + attr_len;
-  if total_required < 2 {
+  if total_required < 2 && !(allow_single_key && total_required == 1) {
     return None;
   }
 
@@ -8858,6 +8865,77 @@ mod tests {
         &mut attr_keys,
       )),
       "fast reject should pass when required classes are present"
+    );
+  }
+
+  #[test]
+  fn rightmost_fast_reject_allows_single_key_with_is_where() {
+    let stylesheet = parse_stylesheet(".a:is(.b, .c) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    let fast_reject_id = index.selectors[0].fast_reject;
+    assert_ne!(
+      fast_reject_id, 0,
+      "expected fast-reject descriptor for selector with one required key and :is()"
+    );
+    let desc = index.fast_reject(fast_reject_id).expect("fast reject");
+
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node_missing = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let node_present = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b".to_string())],
+      },
+      children: vec![],
+    };
+
+    assert!(
+      !desc.matches(node_selector_keys(
+        &node_missing,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should require .a even though selector is union-bucketed by :is() keys"
+    );
+    assert!(
+      desc.matches(node_selector_keys(
+        &node_present,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should pass when required class is present"
     );
   }
 
