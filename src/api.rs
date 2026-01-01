@@ -1045,6 +1045,18 @@ fn failure_stage_for_resource(kind: ResourceKind) -> Option<RenderStage> {
   }
 }
 
+fn map_formatting_layout_error(err: FormattingLayoutError) -> Error {
+  match err {
+    FormattingLayoutError::Timeout { elapsed } => Error::Render(RenderError::Timeout {
+      stage: RenderStage::Layout,
+      elapsed,
+    }),
+    other => Error::Layout(crate::error::LayoutError::LayoutFailed {
+      message: format!("{other:?}"),
+    }),
+  }
+}
+
 /// Shared diagnostics handle for concurrent render stages.
 #[derive(Clone, Default)]
 pub struct SharedRenderDiagnostics {
@@ -6481,15 +6493,7 @@ impl FastRender {
     let mut fragment_tree = self
       .layout_engine
       .layout_tree_with_trace(&box_tree, trace)
-      .map_err(|e| match e {
-        FormattingLayoutError::Timeout { elapsed } => Error::Render(RenderError::Timeout {
-          stage: RenderStage::Layout,
-          elapsed,
-        }),
-        other => Error::Render(RenderError::InvalidParameters {
-          message: format!("Layout failed: {:?}", other),
-        }),
-      })?;
+      .map_err(map_formatting_layout_error)?;
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(&mut rec.stats.timings.layout_ms, layout_timer);
     }
@@ -6725,11 +6729,7 @@ impl FastRender {
           fragment_tree = self
             .layout_engine
             .layout_tree_reuse_caches_with_trace(&box_tree, trace)
-            .map_err(|e| {
-              Error::Render(RenderError::InvalidParameters {
-                message: format!("Layout failed: {:?}", e),
-              })
-            })?;
+            .map_err(map_formatting_layout_error)?;
           if let Some(rec) = stats.as_deref_mut() {
             RenderStatsRecorder::add_ms(&mut rec.stats.timings.layout_ms, relayout_timer);
           }
@@ -6805,11 +6805,7 @@ impl FastRender {
           stacking: options.page_stacking,
         },
       )
-      .map_err(|e| {
-        Error::Render(RenderError::InvalidParameters {
-          message: format!("Layout failed: {:?}", e),
-        })
-      })?;
+      .map_err(map_formatting_layout_error)?;
       fragment_tree = FragmentTree::from_fragments(pages, viewport);
       fragment_tree.ensure_scroll_metadata();
       if let Some(rec) = stats.as_deref_mut() {
@@ -12918,5 +12914,41 @@ mod tests {
       (snapped.x - 200.0).abs() < 0.1,
       "stop:always targets should win ties at equal distance"
     );
+  }
+
+  #[test]
+  fn formatting_layout_error_is_not_wrapped_as_paint_invalid_parameters() {
+    let inner = "Shaping failed (fonts=8): Text(ShapingFailed { text: \"abc\", reason: \"boom\" })";
+    let err = map_formatting_layout_error(FormattingLayoutError::MissingContext(inner.to_string()));
+    assert!(matches!(
+      err,
+      Error::Layout(crate::error::LayoutError::LayoutFailed { .. })
+    ));
+    let display = err.to_string();
+    assert!(
+      display.starts_with("[layout]"),
+      "expected layout stage prefix, got: {display}"
+    );
+    assert!(
+      !display.contains("[paint]") && !display.contains("Invalid paint parameters"),
+      "layout failure should not be presented as paint invalid parameters: {display}"
+    );
+    assert!(display.contains("MissingContext"));
+    assert!(display.contains("ShapingFailed"));
+    assert!(display.contains("reason:"));
+    assert!(display.contains("boom"));
+  }
+
+  #[test]
+  fn formatting_layout_timeout_maps_to_render_timeout_with_layout_stage() {
+    let elapsed = std::time::Duration::from_millis(123);
+    let err = map_formatting_layout_error(FormattingLayoutError::Timeout { elapsed });
+    assert!(matches!(
+      err,
+      Error::Render(RenderError::Timeout {
+        stage: RenderStage::Layout,
+        elapsed: e,
+      }) if e == elapsed
+    ));
   }
 }

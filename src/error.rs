@@ -349,6 +349,13 @@ pub enum LayoutError {
   #[error("Layout timed out after {elapsed:?}")]
   Timeout { elapsed: Duration },
 
+  /// Layout failed due to an internal layout engine error.
+  ///
+  /// This is used when the internal layout subsystem returns an error that does
+  /// not map cleanly onto a more specific public API variant.
+  #[error("Layout failed: {message}")]
+  LayoutFailed { message: String },
+
   /// Invalid layout constraints
   #[error("Invalid layout constraints: {message}")]
   InvalidConstraints { message: String },
@@ -615,6 +622,16 @@ mod tests {
       message: "Width cannot be negative".to_string(),
     };
     assert!(format!("{}", error).contains("Invalid layout constraints"));
+  }
+
+  #[test]
+  fn test_layout_error_layout_failed() {
+    let error = LayoutError::LayoutFailed {
+      message: "MissingContext(\"oops\")".to_string(),
+    };
+    let display = format!("{error}");
+    assert!(display.contains("Layout failed"));
+    assert!(display.contains("MissingContext"));
   }
 
   #[test]

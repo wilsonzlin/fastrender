@@ -6496,13 +6496,16 @@ mod tests {
   fn shaping_notes_elide_text_and_keep_reason() {
     let long_text = "garbled".repeat(80);
     let note = format!(
-      "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): \
+      "[layout] Layout failed: MissingContext(\"Shaping failed (fonts=8): \
        Text(ShapingFailed {{ text: \\\"{long_text}\\\", reason: \\\"No suitable font found for \
        cluster ꧟\\\\u{{333}}\\\" }})\")"
     );
 
     let normalized = normalize_progress_note(&note);
 
+    assert!(normalized.starts_with("[layout]"));
+    assert!(!normalized.contains("[paint]"));
+    assert!(!normalized.contains("Invalid paint parameters"));
     assert!(normalized.contains("ShapingFailed"));
     assert!(normalized.contains("text: <omitted>"));
     assert!(normalized.contains("No suitable font found for cluster"));
