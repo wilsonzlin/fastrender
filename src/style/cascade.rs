@@ -16105,73 +16105,19 @@ fn apply_cascaded_declarations<'a, F>(
     }
   }
 
-  fn contains_revert_layer_token(haystack: &str) -> bool {
-    const NEEDLE: &[u8] = b"revert-layer";
-    let bytes = haystack.as_bytes();
-    if bytes.len() < NEEDLE.len() {
-      return false;
-    }
-    for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
-      let mut matched = true;
-      for (offset, &needle_byte) in NEEDLE.iter().enumerate() {
-        if bytes[start + offset].to_ascii_lowercase() != needle_byte {
-          matched = false;
-          break;
-        }
-      }
-      if matched {
-        return true;
-      }
-    }
-    if !bytes.contains(&b'\\') {
-      return false;
-    }
-
-    fn contains_revert_layer_in_parser<'i, 't>(parser: &mut cssparser::Parser<'i, 't>) -> bool {
-      while let Ok(token) = parser.next_including_whitespace_and_comments() {
-        match token {
-          cssparser::Token::Ident(ident) if ident.eq_ignore_ascii_case("revert-layer") => {
-            return true;
-          }
-          cssparser::Token::Function(_)
-          | cssparser::Token::ParenthesisBlock
-          | cssparser::Token::SquareBracketBlock
-          | cssparser::Token::CurlyBracketBlock => {
-            if let Ok(nested_found) = parser.parse_nested_block(|nested| {
-              Ok::<_, cssparser::ParseError<'i, ()>>(contains_revert_layer_in_parser(nested))
-            }) {
-              if nested_found {
-                return true;
-              }
-            }
-          }
-          _ => {}
-        }
-      }
-
-      false
-    }
-
-    let mut input = cssparser::ParserInput::new(haystack);
-    let mut parser = cssparser::Parser::new(&mut input);
-    contains_revert_layer_in_parser(&mut parser)
-  }
-
   // `revert-layer` is rare, but when we track layer bases we clone the current `ComputedStyle` at
   // each layer boundary. This is expensive for large pages (especially with many custom
   // properties), so avoid the work unless `revert-layer` is actually in play.
-  let mut track_revert_layer =
-    styles
-      .custom_properties
-      .values()
-      .any(|value| contains_revert_layer_token(&value.value));
+  let mut track_revert_layer = styles.custom_properties.has_revert_layer_token();
   if !track_revert_layer {
     track_revert_layer = flattened.iter().any(|entry| {
       if entry.is_custom_property {
         return false;
       }
       match &entry.declaration.value {
-        PropertyValue::Keyword(kw) => contains_revert_layer_token(kw),
+        PropertyValue::Keyword(kw) => {
+          crate::style::custom_property_store::contains_revert_layer_token(kw)
+        }
         _ => false,
       }
     });
