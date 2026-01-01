@@ -79,7 +79,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 
 ## `prefetch_assets`
 
-- Purpose: warm the subresource cache (`fetches/assets/`) by prefetching linked stylesheets and their `@import` chains (plus referenced fonts) for the cached pages under `fetches/html/`. Optional flags can also prefetch HTML subresources (images/icons/video posters and iframe/object/embed documents). This makes subsequent pageset renders more repeatable and reduces time spent fetching during `pageset_progress`.
+- Purpose: warm the subresource cache (`fetches/assets/`) by prefetching linked stylesheets and their `@import` chains (plus referenced fonts) for the cached pages under `fetches/html/`. Optional flags can also prefetch additional HTML-linked subresources (images, iframes, embeds, icons, video posters). This makes subsequent pageset renders more repeatable and reduces time spent fetching during `pageset_progress`.
 - Entry: `src/bin/prefetch_assets.rs`
 - Run: `cargo run --release --bin prefetch_assets -- --help`
 - HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
@@ -88,7 +88,11 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
   - Optional subresource warming:
     - `--prefetch-images`: prefetch common HTML image-like assets (`<img>`, `<picture><source srcset>`, video posters, icons/manifests (including `mask-icon`), and `<link rel="preload" as="image">`). This uses the renderer's responsive image selection (DPR/viewport + `srcset`/`sizes`/`picture`) instead of enumerating every candidate.
       - Safety valves: `--max-images-per-page` and `--max-image-urls-per-element` bound image prefetching when pages contain large `srcset` lists.
-    - `--prefetch-iframes` (alias `--prefetch-documents`): prefetch iframe/object/embed documents and best-effort warm their linked stylesheets/images (non-recursive).
+      - Note: if you only need a small subset (e.g. icons or video posters) without fetching all `<img>` content, use `--prefetch-icons` / `--prefetch-video-posters` instead.
+    - `--prefetch-iframes` (alias `--prefetch-documents`): prefetch `<iframe src>` documents and best-effort warm their linked stylesheets (and images when `--prefetch-images` is enabled).
+    - `--prefetch-embeds`: prefetch `<object data>`, `<embed src>`, and media sources (`<video src>`, `<audio src>`, and `<source src>` under `<video>/<audio>`). If the fetched resource is HTML, it is treated like a nested document and its CSS/images can also be warmed (same behavior as `--prefetch-iframes`).
+    - `--prefetch-icons`: prefetch icon resources referenced by `<link rel=icon|shortcut icon|apple-touch-icon|mask-icon href=...>` without enabling full `--prefetch-images` (note: `--prefetch-images` already includes these).
+    - `--prefetch-video-posters`: prefetch `<video poster>` images without enabling full `--prefetch-images` (note: `--prefetch-images` already includes posters).
     - `--prefetch-css-url-assets`: prefetch non-CSS assets referenced via CSS `url(...)` (including in `@import`ed stylesheets).
     - `--max-images-per-page`: cap how many image-like elements are considered during HTML discovery when `--prefetch-images` is enabled.
     - `--max-image-urls-per-element`: cap how many URLs are prefetched per image element (primary + fallbacks) when `--prefetch-images` is enabled.

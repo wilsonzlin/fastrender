@@ -17,11 +17,12 @@ set -euo pipefail
 #   scripts/pageset.sh -- --pages example.com --disk-cache-max-age-secs 0
 #
 # Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
-# `--prefetch-images` / `--prefetch-css-url-assets` / `--prefetch-iframes` (alias
-# `--prefetch-documents`) / `--max-discovered-assets-per-page` / `--max-images-per-page` /
-# `--max-image-urls-per-element`, these flags are intercepted by the wrapper and forwarded to
-# `prefetch_assets` (not `pageset_progress`) so users can override the wrapper defaults without
-# breaking `pageset_progress` arg parsing.
+# `--prefetch-images` / `--prefetch-iframes` (alias `--prefetch-documents`) / `--prefetch-embeds` /
+# `--prefetch-icons` / `--prefetch-video-posters` / `--prefetch-css-url-assets` /
+# `--max-discovered-assets-per-page` / `--max-images-per-page` / `--max-image-urls-per-element`,
+# these flags are intercepted by the wrapper and forwarded to `prefetch_assets` (not
+# `pageset_progress`) so users can override the wrapper defaults without breaking `pageset_progress`
+# arg parsing.
 
 TOTAL_CPUS="$(nproc)"
 JOBS="${JOBS:-${TOTAL_CPUS}}"
