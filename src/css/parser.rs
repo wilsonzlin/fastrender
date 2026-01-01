@@ -214,15 +214,13 @@ const DECLARATION_VALUE_CACHE_MAX_LEN: usize = 256;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DeclarationValueCacheKey {
   context: DeclarationContext,
-  property_hash: u64,
-  property_len: u16,
+  property_id: u64,
   value_hash: u64,
   value_len: u16,
 }
 
 #[derive(Debug, Clone)]
 struct DeclarationValueCacheEntry {
-  property: Box<str>,
   value: Box<str>,
   parsed: PropertyValue,
 }
@@ -3801,8 +3799,7 @@ fn parse_property_value_in_context_cached(
 
   let key = DeclarationValueCacheKey {
     context,
-    property_hash: hash_bytes_for_stylesheet_cache(property.as_bytes()),
-    property_len: property.len() as u16,
+    property_id: property.as_ptr() as usize as u64,
     value_hash: hash_bytes_for_stylesheet_cache(value.as_bytes()),
     value_len: value.len() as u16,
   };
@@ -3812,7 +3809,7 @@ fn parse_property_value_in_context_cached(
     cache.get(&key).and_then(|entries| {
       entries
         .iter()
-        .find(|entry| entry.property.as_ref() == property && entry.value.as_ref() == value)
+        .find(|entry| entry.value.as_ref() == value)
         .map(|entry| entry.parsed.clone())
     })
   }) {
@@ -3824,7 +3821,6 @@ fn parse_property_value_in_context_cached(
   DECLARATION_VALUE_CACHE.with(|cache| {
     let mut cache = cache.borrow_mut();
     let entry = DeclarationValueCacheEntry {
-      property: property.to_string().into_boxed_str(),
       value: value.to_string().into_boxed_str(),
       parsed: parsed_for_cache,
     };
