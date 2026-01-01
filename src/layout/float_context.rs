@@ -677,9 +677,16 @@ impl FloatContext {
     let mut best_left = 0.0f32;
     let mut best_right = self.containing_block_width;
     let mut best_width = best_right - best_left;
-    let mut next_boundary = self
-      .next_float_boundary_after_internal(&*state, start)
-      .min(end);
+    // `next_boundary` is used by callers to decide how far to advance when the current
+    // y-position does not fit. It is important that this boundary reflects when float-driven
+    // constraints can actually change, not merely the end of the query range (which can cause
+    // callers to "step" by element height even though nothing changes until the next float
+    // start/end).
+    //
+    // We therefore return the next float boundary *after* the scan region, even when it lies
+    // below `end`. Callers can safely skip to this boundary because the active float set (and
+    // therefore available width) is constant within a segment with no boundaries.
+    let mut next_boundary = self.next_float_boundary_after_internal(&*state, start);
 
     loop {
       if let Err(RenderError::Timeout { elapsed, .. }) =
@@ -689,9 +696,8 @@ impl FloatContext {
         break;
       }
 
-      let boundary = self
-        .next_float_boundary_after_internal(&*state, scan_start)
-        .min(end);
+      let next = self.next_float_boundary_after_internal(&*state, scan_start);
+      let boundary = next.min(end);
       let (left_edge, right_edge) = self.edges_in_range_with_state(state, scan_start, boundary);
       let width = (right_edge - left_edge).max(0.0);
       if width < best_width - f32::EPSILON
@@ -700,7 +706,7 @@ impl FloatContext {
         best_left = left_edge;
         best_right = right_edge;
         best_width = width;
-        next_boundary = boundary;
+        next_boundary = next;
       }
 
       if boundary >= end || !boundary.is_finite() || boundary <= scan_start {
@@ -1182,7 +1188,7 @@ impl FloatContext {
       if !candidate_y.is_finite() || candidate_y <= y {
         let x = match side {
           FloatSide::Left => last_left,
-          FloatSide::Right => (last_left + last_width - target_width).max(last_left),
+          FloatSide::Right => last_left + last_width - target_width,
         };
         return (x, y);
       }
@@ -1192,7 +1198,7 @@ impl FloatContext {
 
     let x = match side {
       FloatSide::Left => last_left,
-      FloatSide::Right => (last_left + last_width - target_width).max(last_left),
+      FloatSide::Right => last_left + last_width - target_width,
     };
     (x, y)
   }
@@ -1308,6 +1314,8 @@ impl Default for FloatContext {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::render_control::{DeadlineGuard, RenderDeadline};
+  use std::sync::Arc;
   use std::sync::Mutex;
 
   static FLOAT_PROFILE_LOCK: Mutex<()> = Mutex::new(());
@@ -1608,6 +1616,45 @@ mod tests {
   }
 
   #[test]
+  fn oversized_float_returns_without_spinning() {
+    let ctx = FloatContext::new(400.0);
+
+    // Install a cancellation deadline that will trip if the float placement loop spins.
+    // (A correct implementation should return well before the periodic deadline check fires.)
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let (x, y) = ctx.compute_float_position(FloatSide::Left, 600.0, 20.0, 0.0);
+    assert_eq!((x, y), (0.0, 0.0));
+    assert!(ctx.take_timeout_error().is_none());
+
+    // Right floats should stay flush with the containing block's right edge even when they
+    // overflow (x can be negative).
+    let (x, y) = ctx.compute_float_position(FloatSide::Right, 600.0, 20.0, 0.0);
+    assert_eq!((x, y), (-200.0, 0.0));
+    assert!(ctx.take_timeout_error().is_none());
+  }
+
+  #[test]
+  fn oversized_float_is_placed_below_overlapping_floats() {
+    let mut ctx = FloatContext::new(400.0);
+    ctx.add_float_at(FloatSide::Left, 0.0, 0.0, 100.0, 50.0);
+
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let (x, y) = ctx.compute_float_position(FloatSide::Left, 600.0, 20.0, 0.0);
+    assert_eq!((x, y), (0.0, 50.0));
+    assert!(ctx.take_timeout_error().is_none());
+
+    let (x, y) = ctx.compute_float_position(FloatSide::Right, 600.0, 20.0, 0.0);
+    assert_eq!((x, y), (-200.0, 50.0));
+    assert!(ctx.take_timeout_error().is_none());
+  }
+
+  #[test]
   fn test_compute_float_position_stacking_left() {
     let mut ctx = FloatContext::new(800.0);
 
@@ -1712,6 +1759,36 @@ mod tests {
 
     // Large box must wait until y=100
     assert_eq!(ctx.find_fit(700.0, 50.0, 0.0), 100.0);
+  }
+
+  #[test]
+  fn find_fit_does_not_spin_when_required_width_exceeds_containing_block() {
+    let ctx = FloatContext::new(400.0);
+
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    // There is no y where a 600px line "fits" in a 400px container, but the search should still
+    // terminate and keep the line at the earliest y when there are no floats to avoid.
+    assert_eq!(ctx.find_fit(600.0, 20.0, 0.0), 0.0);
+    assert!(ctx.take_timeout_error().is_none());
+  }
+
+  #[test]
+  fn find_fit_skips_to_next_float_boundary_when_no_boundaries_in_range() {
+    let mut ctx = FloatContext::new(400.0);
+    // A tall float blocks half the width until y=10_000.
+    ctx.add_float_at(FloatSide::Right, 200.0, 0.0, 200.0, 10_000.0);
+
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    // A 300px line can't fit next to the float; it should jump to the float's end rather than
+    // stepping by line height.
+    assert_eq!(ctx.find_fit(300.0, 20.0, 0.0), 10_000.0);
+    assert!(ctx.take_timeout_error().is_none());
   }
 
   #[test]
