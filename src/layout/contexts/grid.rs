@@ -3919,6 +3919,26 @@ mod tests {
   }
 
   #[test]
+  fn grid_baseline_traversal_times_out_via_deadline_checks() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::time::Duration;
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let leaf = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), "x", 0.5);
+    let mut fragment = leaf;
+    // Ensure the baseline walk hits GRID_DEADLINE_CHECK_STRIDE checks before reaching the leaf.
+    for _ in 0..80 {
+      fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![fragment]);
+    }
+
+    let mut deadline_counter = 0usize;
+    let result = find_first_baseline_absolute(&fragment, &mut deadline_counter);
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
   fn grid_taffy_abort_surfaces_as_timeout() {
     use crate::render_control::{DeadlineGuard, RenderDeadline};
     use std::sync::atomic::{AtomicUsize, Ordering};
