@@ -18,9 +18,9 @@ use html5ever::ParseOpts;
 use markup5ever_rcdom::Handle;
 use markup5ever_rcdom::NodeData;
 use markup5ever_rcdom::RcDom;
-use selectors::bloom::BloomFilter;
 use selectors::attr::AttrSelectorOperation;
 use selectors::attr::CaseSensitivity;
+use selectors::bloom::BloomFilter;
 use selectors::context::QuirksMode;
 use selectors::matching::matches_selector;
 use selectors::matching::selector_may_match;
@@ -234,8 +234,39 @@ static SELECTOR_BLOOM_ENABLED: AtomicBool = AtomicBool::new(true);
 static ANCESTOR_BLOOM_ENV_INITIALIZED: OnceLock<()> = OnceLock::new();
 static ANCESTOR_BLOOM_ENABLED: AtomicBool = AtomicBool::new(true);
 static SELECTOR_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
-const SELECTOR_BLOOM_SUMMARY_BITS: usize = 256;
-const SELECTOR_BLOOM_SUMMARY_WORDS: usize = SELECTOR_BLOOM_SUMMARY_BITS / 64;
+static SELECTOR_BLOOM_SUMMARY_ENV_INITIALIZED: OnceLock<()> = OnceLock::new();
+static SELECTOR_BLOOM_SUMMARY_BITS: AtomicUsize =
+  const { AtomicUsize::new(SELECTOR_BLOOM_SUMMARY_BITS_DEFAULT) };
+
+const SELECTOR_BLOOM_SUMMARY_BITS_DEFAULT: usize = 1024;
+
+fn normalize_selector_bloom_summary_bits(bits: usize) -> usize {
+  match bits {
+    256 | 512 | 1024 => bits,
+    _ => SELECTOR_BLOOM_SUMMARY_BITS_DEFAULT,
+  }
+}
+
+fn selector_bloom_summary_bits() -> usize {
+  SELECTOR_BLOOM_SUMMARY_ENV_INITIALIZED.get_or_init(|| {
+    if let Ok(value) = std::env::var("FASTR_SELECTOR_BLOOM_BITS") {
+      if let Ok(bits) = value.trim().parse::<usize>() {
+        let bits = normalize_selector_bloom_summary_bits(bits);
+        SELECTOR_BLOOM_SUMMARY_BITS.store(bits, Ordering::Relaxed);
+      }
+    }
+  });
+  SELECTOR_BLOOM_SUMMARY_BITS.load(Ordering::Relaxed)
+}
+
+/// Override the selector bloom summary size (in bits) for benchmarking/testing.
+///
+/// Supported values: 256, 512, 1024.
+pub fn set_selector_bloom_summary_bits(bits: usize) {
+  SELECTOR_BLOOM_SUMMARY_ENV_INITIALIZED.get_or_init(|| ());
+  let bits = normalize_selector_bloom_summary_bits(bits);
+  SELECTOR_BLOOM_SUMMARY_BITS.store(bits, Ordering::Relaxed);
+}
 
 pub(crate) fn selector_bloom_enabled() -> bool {
   SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| {
@@ -543,38 +574,64 @@ pub fn capture_has_counters() -> HasCounters {
   }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SelectorBloomSummary {
-  bits: [u64; SELECTOR_BLOOM_SUMMARY_WORDS],
+fn insert_summary_hash<const WORDS: usize>(summary: &mut [u64; WORDS], hash: u32) {
+  let bits = WORDS * 64;
+  debug_assert!(bits.is_power_of_two());
+  let mask = bits - 1;
+  let shift = bits.trailing_zeros() as usize;
+  let slot_a = (hash as usize) & mask;
+  let slot_b = ((hash as usize) >> shift) & mask;
+  insert_summary_slot(summary, slot_a);
+  insert_summary_slot(summary, slot_b);
 }
 
-impl SelectorBloomSummary {
-  fn insert_hash(&mut self, hash: u32) {
-    let slot_a = (hash as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
-    let slot_b = ((hash >> 8) as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
-    self.insert_slot(slot_a);
-    self.insert_slot(slot_b);
-  }
+fn insert_summary_slot<const WORDS: usize>(summary: &mut [u64; WORDS], slot: usize) {
+  let (idx, bit) = (slot / 64, slot % 64);
+  summary[idx] |= 1u64 << bit;
+}
 
-  fn insert_slot(&mut self, slot: usize) {
-    let (idx, bit) = (slot / 64, slot % 64);
-    self.bits[idx] |= 1u64 << bit;
-  }
+fn summary_contains_hash<const WORDS: usize>(summary: &[u64; WORDS], hash: u32) -> bool {
+  let bits = WORDS * 64;
+  debug_assert!(bits.is_power_of_two());
+  let mask = bits - 1;
+  let shift = bits.trailing_zeros() as usize;
+  let slot_a = (hash as usize) & mask;
+  let slot_b = ((hash as usize) >> shift) & mask;
+  summary_contains_slot(summary, slot_a) && summary_contains_slot(summary, slot_b)
+}
 
+fn summary_contains_slot<const WORDS: usize>(summary: &[u64; WORDS], slot: usize) -> bool {
+  let (idx, bit) = (slot / 64, slot % 64);
+  (summary[idx] & (1u64 << bit)) != 0
+}
+
+fn merge_summary<const WORDS: usize>(summary: &mut [u64; WORDS], other: &[u64; WORDS]) {
+  for (dst, src) in summary.iter_mut().zip(other.iter()) {
+    *dst |= *src;
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SelectorBloomSummaryRef<'a> {
+  Bits256(&'a [u64; 4]),
+  Bits512(&'a [u64; 8]),
+  Bits1024(&'a [u64; 16]),
+}
+
+impl<'a> SelectorBloomSummaryRef<'a> {
   pub(crate) fn contains_hash(&self, hash: u32) -> bool {
-    let slot_a = (hash as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
-    let slot_b = ((hash >> 8) as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
-    self.contains_slot(slot_a) && self.contains_slot(slot_b)
+    match self {
+      Self::Bits256(summary) => summary_contains_hash(summary, hash),
+      Self::Bits512(summary) => summary_contains_hash(summary, hash),
+      Self::Bits1024(summary) => summary_contains_hash(summary, hash),
+    }
   }
 
-  fn contains_slot(&self, slot: usize) -> bool {
-    let (idx, bit) = (slot / 64, slot % 64);
-    (self.bits[idx] & (1u64 << bit)) != 0
-  }
-
-  fn merge(&mut self, other: &Self) {
-    for (dst, src) in self.bits.iter_mut().zip(other.bits.iter()) {
-      *dst |= *src;
+  pub fn words(&self) -> &'a [u64] {
+    match *self {
+      Self::Bits256(summary) => summary.as_ref(),
+      Self::Bits512(summary) => summary.as_ref(),
+      Self::Bits1024(summary) => summary.as_ref(),
     }
   }
 }
@@ -583,16 +640,36 @@ impl SelectorBloomSummary {
 ///
 /// Contract: `node_id` comes from [`enumerate_dom_ids`] and starts at 1. Index 0 is unused.
 #[derive(Debug, Clone)]
-pub struct SelectorBloomStore {
-  summaries: Vec<SelectorBloomSummary>,
+pub enum SelectorBloomStore {
+  Bits256(SelectorBloomStoreImpl<4>),
+  Bits512(SelectorBloomStoreImpl<8>),
+  Bits1024(SelectorBloomStoreImpl<16>),
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectorBloomStoreImpl<const WORDS: usize> {
+  summaries: Vec<[u64; WORDS]>,
 }
 
 impl SelectorBloomStore {
-  pub fn summary_for_id(&self, node_id: usize) -> Option<&SelectorBloomSummary> {
+  pub fn summary_for_id(&self, node_id: usize) -> Option<SelectorBloomSummaryRef<'_>> {
     if node_id == 0 {
       return None;
     }
-    self.summaries.get(node_id)
+    match self {
+      Self::Bits256(store) => store
+        .summaries
+        .get(node_id)
+        .map(SelectorBloomSummaryRef::Bits256),
+      Self::Bits512(store) => store
+        .summaries
+        .get(node_id)
+        .map(SelectorBloomSummaryRef::Bits512),
+      Self::Bits1024(store) => store
+        .summaries
+        .get(node_id)
+        .map(SelectorBloomSummaryRef::Bits1024),
+    }
   }
 }
 
@@ -605,23 +682,41 @@ pub fn build_selector_bloom_store(
     return None;
   }
 
+  let bits = selector_bloom_summary_bits();
+  match bits {
+    256 => Some(SelectorBloomStore::Bits256(
+      build_selector_bloom_store_impl::<4>(root, id_map),
+    )),
+    512 => Some(SelectorBloomStore::Bits512(
+      build_selector_bloom_store_impl::<8>(root, id_map),
+    )),
+    1024 => Some(SelectorBloomStore::Bits1024(
+      build_selector_bloom_store_impl::<16>(root, id_map),
+    )),
+    _ => unreachable!("selector bloom summary bits should be normalised: {bits}"),
+  }
+}
+
+fn build_selector_bloom_store_impl<const WORDS: usize>(
+  root: &DomNode,
+  id_map: &HashMap<*const DomNode, usize>,
+) -> SelectorBloomStoreImpl<WORDS> {
   // Keep index 0 unused so the 1-based `node_id` from `enumerate_dom_ids` can be used directly.
   //
   // We still accept `id_map` to reserve the right size up-front, but we avoid doing a pointer-keyed
   // HashMap lookup per element by assigning ids during a pre-order traversal (the same order as
   // `enumerate_dom_ids`).
-  let mut summaries: Vec<SelectorBloomSummary> =
-    Vec::with_capacity(id_map.len().saturating_add(1));
-  summaries.push(SelectorBloomSummary::default());
+  let mut summaries: Vec<[u64; WORDS]> = Vec::with_capacity(id_map.len().saturating_add(1));
+  summaries.push([0u64; WORDS]);
 
-  fn walk(node: &DomNode, out: &mut Vec<SelectorBloomSummary>) -> SelectorBloomSummary {
+  fn walk<const WORDS: usize>(node: &DomNode, out: &mut Vec<[u64; WORDS]>) -> [u64; WORDS] {
     let is_element = node.is_element();
     let id = out.len();
-    out.push(SelectorBloomSummary::default());
+    out.push([0u64; WORDS]);
 
-    let mut summary = SelectorBloomSummary::default();
+    let mut summary = [0u64; WORDS];
     if is_element {
-      add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
+      add_selector_bloom_hashes(node, &mut |hash| insert_summary_hash(&mut summary, hash));
     }
 
     for child in node.children.iter() {
@@ -633,7 +728,7 @@ pub fn build_selector_bloom_store(
       };
       if is_element {
         if let Some(summary_child) = child_summary.as_ref() {
-          summary.merge(summary_child);
+          merge_summary(&mut summary, summary_child);
         }
       }
     }
@@ -651,22 +746,27 @@ pub fn build_selector_bloom_store(
     id_map.len().saturating_add(1),
     "selector bloom store should align with enumerate_dom_ids node ids"
   );
-  Some(SelectorBloomStore { summaries })
+  SelectorBloomStoreImpl { summaries }
 }
 
 #[cfg(test)]
-type SelectorBloomMapLegacy = HashMap<*const DomNode, SelectorBloomSummary>;
+type SelectorBloomMapLegacy<const WORDS: usize> = HashMap<*const DomNode, [u64; WORDS]>;
 
 #[cfg(test)]
-fn build_selector_bloom_map_legacy(root: &DomNode) -> Option<SelectorBloomMapLegacy> {
+fn build_selector_bloom_map_legacy<const WORDS: usize>(
+  root: &DomNode,
+) -> Option<SelectorBloomMapLegacy<WORDS>> {
   if !selector_bloom_enabled() {
     return None;
   }
 
-  fn walk(node: &DomNode, map: &mut SelectorBloomMapLegacy) -> SelectorBloomSummary {
-    let mut summary = SelectorBloomSummary::default();
+  fn walk<const WORDS: usize>(
+    node: &DomNode,
+    map: &mut SelectorBloomMapLegacy<WORDS>,
+  ) -> [u64; WORDS] {
+    let mut summary = [0u64; WORDS];
     if node.is_element() {
-      add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
+      add_selector_bloom_hashes(node, &mut |hash| insert_summary_hash(&mut summary, hash));
     }
 
     for child in node.children.iter() {
@@ -678,7 +778,7 @@ fn build_selector_bloom_map_legacy(root: &DomNode) -> Option<SelectorBloomMapLeg
       };
       if node.is_element() {
         if let Some(summary_child) = child_summary.as_ref() {
-          summary.merge(summary_child);
+          merge_summary(&mut summary, summary_child);
         }
       }
     }
@@ -690,7 +790,7 @@ fn build_selector_bloom_map_legacy(root: &DomNode) -> Option<SelectorBloomMapLeg
     summary
   }
 
-  let mut blooms: SelectorBloomMapLegacy = SelectorBloomMapLegacy::new();
+  let mut blooms: SelectorBloomMapLegacy<WORDS> = SelectorBloomMapLegacy::new();
   walk(root, &mut blooms);
   Some(blooms)
 }
@@ -993,7 +1093,9 @@ impl ElementAttrCacheEntry {
                 let existing_range = ranges.get(*existing);
                 existing_range.is_some_and(|r| match case_sensitivity {
                   CaseSensitivity::CaseSensitive => &raw[r.start..r.end] == token,
-                  CaseSensitivity::AsciiCaseInsensitive => raw[r.start..r.end].eq_ignore_ascii_case(token),
+                  CaseSensitivity::AsciiCaseInsensitive => {
+                    raw[r.start..r.end].eq_ignore_ascii_case(token)
+                  }
                 })
               }
               ClassBucket::Multi(existing) => existing.iter().any(|existing| {
@@ -1002,7 +1104,9 @@ impl ElementAttrCacheEntry {
                 };
                 match case_sensitivity {
                   CaseSensitivity::CaseSensitive => &raw[r.start..r.end] == token,
-                  CaseSensitivity::AsciiCaseInsensitive => raw[r.start..r.end].eq_ignore_ascii_case(token),
+                  CaseSensitivity::AsciiCaseInsensitive => {
+                    raw[r.start..r.end].eq_ignore_ascii_case(token)
+                  }
                 }
               }),
             };
@@ -1047,9 +1151,12 @@ impl ElementAttrCacheEntry {
       CaseSensitivity::CaseSensitive => {
         Self::class_index(index_sensitive, raw, ranges, CaseSensitivity::CaseSensitive)
       }
-      CaseSensitivity::AsciiCaseInsensitive => {
-        Self::class_index(index_ascii, raw, ranges, CaseSensitivity::AsciiCaseInsensitive)
-      }
+      CaseSensitivity::AsciiCaseInsensitive => Self::class_index(
+        index_ascii,
+        raw,
+        ranges,
+        CaseSensitivity::AsciiCaseInsensitive,
+      ),
     };
 
     if let Some(index) = index {
@@ -1092,7 +1199,10 @@ impl ElementAttrCacheEntry {
   fn attr_index<'a>(
     &'a mut self,
     node: &DomNode,
-  ) -> Option<(&'a HashMap<u64, AttrBucket, ElementAttrCacheBuildHasher>, bool)> {
+  ) -> Option<(
+    &'a HashMap<u64, AttrBucket, ElementAttrCacheBuildHasher>,
+    bool,
+  )> {
     if matches!(self.attr_index, CachedAttrIndex::Pending) {
       let attrs: &[(String, String)] = match &node.node_type {
         DomNodeType::Element { attributes, .. } => attributes,
@@ -1117,8 +1227,7 @@ impl ElementAttrCacheEntry {
                   element_attr_cache_name_matches(existing_name, name, self.is_html)
                 }
                 AttrBucket::Multi(existing) => existing.iter().any(|existing| {
-                  let existing_name =
-                    attrs.get(*existing).map(|(n, _)| n.as_str()).unwrap_or("");
+                  let existing_name = attrs.get(*existing).map(|(n, _)| n.as_str()).unwrap_or("");
                   element_attr_cache_name_matches(existing_name, name, self.is_html)
                 }),
               };
@@ -1167,7 +1276,9 @@ impl ElementAttrCache {
   fn entry_mut<'a>(&'a self, node: &DomNode) -> RefMut<'a, ElementAttrCacheEntry> {
     let ptr = node as *const DomNode;
     RefMut::map(self.entries.borrow_mut(), |entries| {
-      entries.entry(ptr).or_insert_with(|| ElementAttrCacheEntry::new(node))
+      entries
+        .entry(ptr)
+        .or_insert_with(|| ElementAttrCacheEntry::new(node))
     })
   }
 
@@ -1216,12 +1327,7 @@ impl ElementAttrCache {
     }
   }
 
-  pub fn has_class(
-    &self,
-    node: &DomNode,
-    class: &str,
-    case_sensitivity: CaseSensitivity,
-  ) -> bool {
+  pub fn has_class(&self, node: &DomNode, class: &str, case_sensitivity: CaseSensitivity) -> bool {
     self.entry_mut(node).has_class(class, case_sensitivity)
   }
 
@@ -2115,7 +2221,8 @@ pub(crate) fn clone_dom_with_deadline_and_top_layer_hint(
         namespace,
         attributes,
       } => {
-        if (namespace.is_empty() || namespace == HTML_NAMESPACE) && tag_name.eq_ignore_ascii_case("dialog")
+        if (namespace.is_empty() || namespace == HTML_NAMESPACE)
+          && tag_name.eq_ignore_ascii_case("dialog")
         {
           *hint = true;
         }
@@ -2707,7 +2814,8 @@ fn convert_handle_to_node(
         let children_ref = handle.children.borrow();
         let mut out = Vec::with_capacity(children_ref.len());
         for child in children_ref.iter() {
-          if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)? {
+          if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
+          {
             out.push(node);
           }
         }
@@ -3466,7 +3574,8 @@ impl<'a> ElementRef<'a> {
     // Fieldset disabled state propagates to descendants except those inside the first legend.
     for (i, ancestor) in self.all_ancestors.iter().enumerate().rev() {
       if let Some(a_tag) = ancestor.tag_name() {
-        if a_tag.eq_ignore_ascii_case("fieldset") && ancestor.get_attribute_ref("disabled").is_some()
+        if a_tag.eq_ignore_ascii_case("fieldset")
+          && ancestor.get_attribute_ref("disabled").is_some()
         {
           // Find first legend child of this fieldset.
           let element_children = ancestor.element_children();
@@ -3594,7 +3703,8 @@ impl<'a> ElementRef<'a> {
 
     if tag.eq_ignore_ascii_case("input") {
       let input_type = self.node.get_attribute_ref("type");
-      if matches!(input_type, Some(t) if t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio")) {
+      if matches!(input_type, Some(t) if t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio"))
+      {
         return self.node.get_attribute_ref("checked").is_some();
       }
       return false;
@@ -3982,7 +4092,11 @@ impl<'a> ElementRef<'a> {
         return false;
       }
 
-      return self.node.get_attribute_ref("value").unwrap_or("").is_empty();
+      return self
+        .node
+        .get_attribute_ref("value")
+        .unwrap_or("")
+        .is_empty();
     }
 
     if tag.eq_ignore_ascii_case("textarea") {
@@ -4842,7 +4956,11 @@ impl<'a> Element for ElementRef<'a> {
     self
       .node
       .get_attribute_ref("part")
-      .map(|value| value.split_ascii_whitespace().any(|token| token == name.as_str()))
+      .map(|value| {
+        value
+          .split_ascii_whitespace()
+          .any(|token| token == name.as_str())
+      })
       .unwrap_or(false)
   }
 
@@ -5213,7 +5331,8 @@ fn match_relative_selector_descendants<'a>(
       let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
         .with_slot_map(context.extra_data.slot_map)
         .with_attr_cache(context.extra_data.element_attr_cache);
-      let mut matched = if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter) {
+      let mut matched = if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter)
+      {
         false
       } else {
         matches_selector(&selector.selector, 0, None, &child_ref, context)
@@ -5527,8 +5646,9 @@ mod tests {
     }
 
     let deadline = RenderDeadline::new(Some(std::time::Duration::from_millis(0)), None);
-    let result =
-      with_deadline(Some(&deadline), || clone_dom_with_deadline(&dom, RenderStage::DomParse));
+    let result = with_deadline(Some(&deadline), || {
+      clone_dom_with_deadline(&dom, RenderStage::DomParse)
+    });
 
     match result {
       Err(Error::Render(crate::error::RenderError::Timeout { stage, .. })) => {
@@ -5859,32 +5979,43 @@ mod tests {
     };
 
     let id_map = enumerate_dom_ids(&dom);
-    let store =
-      build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
-    let legacy =
-      build_selector_bloom_map_legacy(&dom).expect("legacy selector bloom map");
+    let store = build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
+    fn assert_store_matches_legacy<const WORDS: usize>(
+      dom: &DomNode,
+      id_map: &HashMap<*const DomNode, usize>,
+      store: &SelectorBloomStore,
+    ) {
+      let legacy =
+        build_selector_bloom_map_legacy::<WORDS>(dom).expect("legacy selector bloom map");
+      for (ptr, id) in id_map.iter() {
+        // Safety: ids are built from stable DOM pointers.
+        let node = unsafe { &**ptr };
+        if !node.is_element() {
+          continue;
+        }
+        let summary_store = store
+          .summary_for_id(*id)
+          .unwrap_or_else(|| panic!("store missing summary for node_id={id}"));
+        let summary_legacy = legacy
+          .get(ptr)
+          .unwrap_or_else(|| panic!("legacy missing summary for node_id={id}"));
+        assert_eq!(
+          summary_store.words(),
+          summary_legacy.as_ref(),
+          "selector bloom summary mismatch for node_id={id}"
+        );
+      }
+    }
 
     assert!(
       store.summary_for_id(0).is_none(),
       "selector bloom store index 0 must remain unused"
     );
-
-    for (ptr, id) in id_map.iter() {
-      // Safety: ids are built from stable DOM pointers.
-      let node = unsafe { &**ptr };
-      if !node.is_element() {
-        continue;
-      }
-      let summary_store = store
-        .summary_for_id(*id)
-        .unwrap_or_else(|| panic!("store missing summary for node_id={id}"));
-      let summary_legacy = legacy
-        .get(ptr)
-        .unwrap_or_else(|| panic!("legacy missing summary for node_id={id}"));
-      assert_eq!(
-        summary_store, summary_legacy,
-        "selector bloom summary mismatch for node_id={id}"
-      );
+    match selector_bloom_summary_bits() {
+      256 => assert_store_matches_legacy::<4>(&dom, &id_map, &store),
+      512 => assert_store_matches_legacy::<8>(&dom, &id_map, &store),
+      1024 => assert_store_matches_legacy::<16>(&dom, &id_map, &store),
+      bits => panic!("unexpected selector bloom summary bits: {bits}"),
     }
   }
 
@@ -5894,8 +6025,7 @@ mod tests {
     set_selector_bloom_enabled(true);
     let dom = element("div", vec![element("span", vec![])]);
     let id_map = enumerate_dom_ids(&dom);
-    let bloom_store =
-      build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
+    let bloom_store = build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
 
     let mut caches = SelectorCaches::default();
     caches.set_epoch(next_selector_cache_epoch());
@@ -5946,8 +6076,7 @@ mod tests {
       }],
     };
     let id_map = enumerate_dom_ids(&dom);
-    let bloom_store =
-      build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
+    let bloom_store = build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
 
     let mut caches = SelectorCaches::default();
     caches.set_epoch(next_selector_cache_epoch());
@@ -8402,7 +8531,11 @@ mod tests {
       ),
       element_with_attrs(
         "div",
-        vec![("id", "popover-open"), ("popover", ""), ("data-fastr-open", "oPeN")],
+        vec![
+          ("id", "popover-open"),
+          ("popover", ""),
+          ("data-fastr-open", "oPeN"),
+        ],
         vec![],
       ),
       element_with_attrs(
@@ -8454,7 +8587,11 @@ mod tests {
       element_with_attrs(
         "div",
         vec![("id", "outside")],
-        vec![element_with_attrs("span", vec![("id", "outside-child")], vec![])],
+        vec![element_with_attrs(
+          "span",
+          vec![("id", "outside-child")],
+          vec![],
+        )],
       ),
       element_with_attrs(
         "dialog",
@@ -8463,7 +8600,11 @@ mod tests {
       ),
       element_with_attrs(
         "div",
-        vec![("id", "popover"), ("popover", ""), ("data-fastr-open", "true")],
+        vec![
+          ("id", "popover"),
+          ("popover", ""),
+          ("data-fastr-open", "true"),
+        ],
         vec![],
       ),
     ]);

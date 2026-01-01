@@ -5,10 +5,13 @@ use criterion::Criterion;
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::css::types::StyleSheet;
 use fastrender::dom::build_selector_bloom_store;
+use fastrender::dom::capture_has_counters;
 use fastrender::dom::enumerate_dom_ids;
 use fastrender::dom::parse_html;
+use fastrender::dom::reset_has_counters;
 use fastrender::dom::set_ancestor_bloom_enabled;
 use fastrender::dom::set_selector_bloom_enabled;
+use fastrender::dom::set_selector_bloom_summary_bits;
 use fastrender::dom::DomNode;
 use fastrender::dom::DomNodeType;
 use fastrender::dom::ShadowRootMode;
@@ -23,6 +26,9 @@ use fastrender::style::cascade::set_cascade_profile_enabled;
 use fastrender::style::media::MediaContext;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 fn build_branching_tree_html(depth: usize, branching: usize, class_variants: usize) -> String {
   fn build_level(
@@ -595,6 +601,88 @@ fn has_selector_summary_benchmark(c: &mut Criterion) {
   set_selector_bloom_enabled(true);
 }
 
+fn selector_bloom_summary_bits_build_benchmark(c: &mut Criterion) {
+  let depth = 8;
+  let branching = 4;
+  let needle_stride = 23;
+
+  let html = build_has_tree_html(depth, branching, needle_stride);
+  let dom = parse_html(&html).expect("parse html");
+  let id_map = enumerate_dom_ids(&dom);
+
+  let mut group = c.benchmark_group("selector_bloom_summary_build");
+  for bits in [256usize, 512, 1024] {
+    let id = format!("build_selector_bloom_store_{bits}bits");
+    group.bench_function(&id, |b| {
+      set_selector_bloom_enabled(true);
+      set_selector_bloom_summary_bits(bits);
+      b.iter(|| {
+        let store = build_selector_bloom_store(black_box(&dom), black_box(&id_map));
+        black_box(store);
+      });
+    });
+  }
+  group.finish();
+
+  // Restore defaults for other benches.
+  set_selector_bloom_summary_bits(1024);
+  set_selector_bloom_enabled(true);
+}
+
+fn has_selector_summary_bits_benchmark(c: &mut Criterion) {
+  let depth = 8;
+  let branching = 4;
+  let needle_stride = 23;
+
+  let html = build_has_tree_html(depth, branching, needle_stride);
+  let css = generate_has_styles(depth, needle_stride);
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  let mut group = c.benchmark_group("has_selector_summary_bits");
+  for bits in [256usize, 512, 1024] {
+    let printed = AtomicBool::new(false);
+    let id = format!("has_summary_apply_styles_{bits}bits");
+    group.bench_function(&id, |b| {
+      b.iter_custom(|iters| {
+        set_selector_bloom_enabled(true);
+        set_selector_bloom_summary_bits(bits);
+        reset_has_counters();
+
+        let start = Instant::now();
+        for _ in 0..iters {
+          let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+          black_box(styled);
+        }
+        let duration = start.elapsed();
+
+        let counters = capture_has_counters();
+        black_box(counters);
+
+        if !printed.swap(true, Ordering::Relaxed) {
+          let iters = iters.max(1);
+          let per_call_prunes = counters.prunes / iters;
+          let per_call_summary_prunes = counters.summary_prunes() / iters;
+          let per_call_filter_prunes = counters.filter_prunes / iters;
+          let per_call_evaluated = counters.evaluated / iters;
+          eprintln!(
+            "has_summary bits={bits}: per-call prunes={per_call_prunes} summary_prunes={per_call_summary_prunes} filter_prunes={per_call_filter_prunes} relative_evals={per_call_evaluated}"
+          );
+        }
+
+        duration
+      });
+    });
+  }
+  group.finish();
+
+  // Restore defaults for other benches.
+  set_selector_bloom_summary_bits(1024);
+  set_selector_bloom_enabled(true);
+}
+
 fn selector_bloom_lookup_benchmark(c: &mut Criterion) {
   // Focused micro-benchmark: compare per-element bloom summary lookups using the dense
   // node-id indexed store vs a legacy pointer-keyed HashMap.
@@ -628,10 +716,11 @@ fn selector_bloom_lookup_benchmark(c: &mut Criterion) {
     node_ptrs.push(ptr);
   }
 
-  let mut legacy = std::collections::HashMap::with_capacity(node_ptrs.len());
+  let mut legacy: std::collections::HashMap<*const fastrender::dom::DomNode, usize> =
+    std::collections::HashMap::with_capacity(node_ptrs.len());
   for (id, ptr) in elements.iter().copied() {
-    if let Some(summary) = store.summary_for_id(id).copied() {
-      legacy.insert(ptr, summary);
+    if let Some(summary) = store.summary_for_id(id) {
+      legacy.insert(ptr, summary.words().as_ptr() as usize);
     }
   }
 
@@ -641,7 +730,7 @@ fn selector_bloom_lookup_benchmark(c: &mut Criterion) {
       let mut acc = 0usize;
       for id in node_ids.iter().copied() {
         if let Some(summary) = store.summary_for_id(id) {
-          acc ^= std::ptr::from_ref(summary) as usize;
+          acc ^= summary.words().as_ptr() as usize;
         }
       }
       black_box(acc);
@@ -651,8 +740,8 @@ fn selector_bloom_lookup_benchmark(c: &mut Criterion) {
     b.iter(|| {
       let mut acc = 0usize;
       for node_ptr in node_ptrs.iter().copied() {
-        if let Some(summary) = legacy.get(&node_ptr) {
-          acc ^= std::ptr::from_ref(summary) as usize;
+        if let Some(addr) = legacy.get(&node_ptr) {
+          acc ^= *addr;
         }
       }
       black_box(acc);
@@ -678,10 +767,13 @@ fn bloom_hash_insert_benchmark(c: &mut Criterion) {
     hasher.finish() as u32
   }
 
-  fn insert_summary(summary: &mut [u64; 4], hash: u32) {
-    const SUMMARY_BITS: usize = 256;
-    let slot_a = (hash as usize) & (SUMMARY_BITS - 1);
-    let slot_b = ((hash >> 8) as usize) & (SUMMARY_BITS - 1);
+  fn insert_summary<const WORDS: usize>(summary: &mut [u64; WORDS], hash: u32) {
+    let bits = WORDS * 64;
+    debug_assert!(bits.is_power_of_two());
+    let mask = bits - 1;
+    let shift = bits.trailing_zeros() as usize;
+    let slot_a = (hash as usize) & mask;
+    let slot_b = ((hash as usize) >> shift) & mask;
     for slot in [slot_a, slot_b] {
       let (idx, bit) = (slot / 64, slot % 64);
       summary[idx] |= 1u64 << bit;
@@ -699,26 +791,27 @@ fn bloom_hash_insert_benchmark(c: &mut Criterion) {
     .collect();
 
   let mut group = c.benchmark_group("selector_bloom_hashing");
-  group.bench_function("fxhash_mask_insert", |b| {
-    b.iter(|| {
-      let mut summary = [0u64; 4];
-      for value in values.iter() {
-        let hash = fxhash_u32(value) & BLOOM_HASH_MASK;
-        insert_summary(&mut summary, hash);
-      }
-      black_box(summary);
-    });
-  });
-  group.bench_function("siphash_mask_insert", |b| {
-    b.iter(|| {
-      let mut summary = [0u64; 4];
-      for value in values.iter() {
-        let hash = siphash_u32(value) & BLOOM_HASH_MASK;
-        insert_summary(&mut summary, hash);
-      }
-      black_box(summary);
-    });
-  });
+  macro_rules! bench_insert {
+    ($name:literal, $bits:tt, $words:tt, $hash_fn:ident) => {
+      group.bench_function(concat!($name, "_", stringify!($bits), "bits"), |b| {
+        b.iter(|| {
+          let mut summary = [0u64; $words];
+          for value in values.iter() {
+            let hash = $hash_fn(value) & BLOOM_HASH_MASK;
+            insert_summary::<$words>(&mut summary, hash);
+          }
+          black_box(summary);
+        });
+      });
+    };
+  }
+
+  bench_insert!("fxhash_mask_insert", 256, 4, fxhash_u32);
+  bench_insert!("fxhash_mask_insert", 512, 8, fxhash_u32);
+  bench_insert!("fxhash_mask_insert", 1024, 16, fxhash_u32);
+  bench_insert!("siphash_mask_insert", 256, 4, siphash_u32);
+  bench_insert!("siphash_mask_insert", 512, 8, siphash_u32);
+  bench_insert!("siphash_mask_insert", 1024, 16, siphash_u32);
   group.finish();
 }
 
@@ -729,6 +822,8 @@ criterion_group!(
   shadow_scoping_selector_bloom_benchmark,
   has_selector_bloom_benchmark,
   has_selector_summary_benchmark,
+  selector_bloom_summary_bits_build_benchmark,
+  has_selector_summary_bits_benchmark,
   selector_bloom_lookup_benchmark,
   bloom_hash_insert_benchmark
 );

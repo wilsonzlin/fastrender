@@ -41,7 +41,7 @@ use crate::dom::DomNodeType;
 use crate::dom::ElementAttrCache;
 use crate::dom::ElementRef;
 use crate::dom::SelectorBloomStore;
-use crate::dom::SelectorBloomSummary;
+use crate::dom::SelectorBloomSummaryRef;
 use crate::dom::SiblingListCache;
 use crate::dom::SlotAssignment;
 use crate::dom::HTML_NAMESPACE;
@@ -1046,10 +1046,15 @@ fn pack_ancestor_bloom_hashes(hashes: &[u32]) -> AncestorHashes {
     packed[1] |= (fourth & 0x0000ff00) << 16;
     packed[2] |= (fourth & 0x00ff0000) << 8;
   }
-  AncestorHashes { packed_hashes: packed }
+  AncestorHashes {
+    packed_hashes: packed,
+  }
 }
 
-fn cascade_ancestor_hashes(selector: &Selector<FastRenderSelectorImpl>, quirks_mode: QuirksMode) -> AncestorHashes {
+fn cascade_ancestor_hashes(
+  selector: &Selector<FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
+) -> AncestorHashes {
   use precomputed_hash::PrecomputedHash;
   use selectors::bloom::BLOOM_HASH_MASK;
   use selectors::parser::Combinator;
@@ -1068,7 +1073,9 @@ fn cascade_ancestor_hashes(selector: &Selector<FastRenderSelectorImpl>, quirks_m
     loop {
       while iter.next().is_some() {}
       match iter.next_sequence() {
-        Some(combinator) if matches!(combinator, Combinator::Child | Combinator::Descendant) => break,
+        Some(combinator) if matches!(combinator, Combinator::Child | Combinator::Descendant) => {
+          break
+        }
         Some(_) => continue,
         None => return,
       }
@@ -1142,7 +1149,9 @@ fn cascade_ancestor_hashes(selector: &Selector<FastRenderSelectorImpl>, quirks_m
         loop {
           while iter.next().is_some() {}
           match iter.next_sequence() {
-            Some(combinator) if matches!(combinator, Combinator::Child | Combinator::Descendant) => {
+            Some(combinator)
+              if matches!(combinator, Combinator::Child | Combinator::Descendant) =>
+            {
               break;
             }
             Some(_) => continue,
@@ -1319,7 +1328,9 @@ impl DomSelectorKeyCache {
 
   fn set_node_keys(&mut self, node_id: usize, entry: DomSelectorKeyEntry) {
     if node_id >= self.nodes.len() {
-      self.nodes.resize(node_id + 1, DomSelectorKeyEntry::default());
+      self
+        .nodes
+        .resize(node_id + 1, DomSelectorKeyEntry::default());
     }
     self.nodes[node_id] = entry;
   }
@@ -1654,11 +1665,7 @@ struct HasRequirement {
 }
 
 impl HasRequirement {
-  fn matches_summary(
-    &self,
-    summary: &crate::dom::SelectorBloomSummary,
-    quirks_mode: QuirksMode,
-  ) -> bool {
+  fn matches_summary(&self, summary: SelectorBloomSummaryRef<'_>, quirks_mode: QuirksMode) -> bool {
     let hashes = if matches!(quirks_mode, QuirksMode::Quirks) {
       &self.quirks_hashes
     } else {
@@ -1681,7 +1688,7 @@ struct SelectorMetadata {
 fn selector_metadata_matches_node(
   metadata: &SelectorMetadata,
   node: &DomNode,
-  summary: Option<&SelectorBloomSummary>,
+  summary: Option<SelectorBloomSummaryRef<'_>>,
   quirks_mode: QuirksMode,
 ) -> bool {
   if let Some(ns) = metadata.namespace.as_deref() {
@@ -2260,7 +2267,10 @@ impl CascadeScratch {
   }
 
   fn presentational_hint_layer_order(&mut self, tree_scope_prefix: u32) -> Arc<[u32]> {
-    if let Some(hit) = self.presentational_hint_layer_orders.get(&tree_scope_prefix) {
+    if let Some(hit) = self
+      .presentational_hint_layer_orders
+      .get(&tree_scope_prefix)
+    {
       return hit.clone();
     }
     // Store a tree-scope-only layer order so presentational hints always sort below authored
@@ -3160,8 +3170,9 @@ impl<'a> RuleIndex<'a> {
             let selector_idx = index.slotted_selectors.len();
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
-            let prelude_ancestor_hashes =
-              prelude.as_ref().map(|sel| cascade_ancestor_hashes(sel, quirks_mode));
+            let prelude_ancestor_hashes = prelude
+              .as_ref()
+              .map(|sel| cascade_ancestor_hashes(sel, quirks_mode));
             let args_ancestor_hashes = match pe {
               PseudoElement::Slotted(args) => args
                 .iter()
@@ -3370,7 +3381,7 @@ impl<'a> RuleIndex<'a> {
     &self,
     node: &DomNode,
     node_keys: NodeSelectorKeys<'_>,
-    summary: Option<&SelectorBloomSummary>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
     out: &mut Vec<usize>,
     seen: &mut CandidateSet,
@@ -3514,7 +3525,7 @@ impl<'a> RuleIndex<'a> {
     &self,
     node: &DomNode,
     node_keys: NodeSelectorKeys<'_>,
-    summary: Option<&SelectorBloomSummary>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
     out: &mut Vec<usize>,
     seen: &mut CandidateSet,
@@ -3662,7 +3673,7 @@ impl<'a> RuleIndex<'a> {
     node: &DomNode,
     pseudo: &PseudoElement,
     node_keys: NodeSelectorKeys<'_>,
-    summary: Option<&SelectorBloomSummary>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
     out: &mut Vec<usize>,
     seen: &mut CandidateSet,
@@ -3779,7 +3790,8 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_interner.intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_interner
+          .intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -5639,7 +5651,10 @@ fn ua_default_rules(
     add_rule(decls, 0);
   } else if tag.eq_ignore_ascii_case("bdo") && node.get_attribute_ref("dir").is_none() {
     add_rule(
-      cached_declarations(&UA_BDO_DECLS, "unicode-bidi: bidi-override; direction: ltr;"),
+      cached_declarations(
+        &UA_BDO_DECLS,
+        "unicode-bidi: bidi-override; direction: ltr;",
+      ),
       0,
     );
   } else if tag.eq_ignore_ascii_case("textarea") {
@@ -5678,7 +5693,10 @@ fn ua_default_rules(
       || input_type.eq_ignore_ascii_case("password")
       || input_type.eq_ignore_ascii_case("number")
     {
-      add_rule(cached_declarations(&UA_INPUT_TEXT_CURSOR_DECLS, "cursor: text;"), 1);
+      add_rule(
+        cached_declarations(&UA_INPUT_TEXT_CURSOR_DECLS, "cursor: text;"),
+        1,
+      );
     } else if input_type.eq_ignore_ascii_case("button")
       || input_type.eq_ignore_ascii_case("submit")
       || input_type.eq_ignore_ascii_case("reset")
@@ -6965,7 +6983,8 @@ fn apply_styles_internal_with_ancestors<'a>(
   }
 
   let mut stack: Vec<Frame<'a>> = Vec::new();
-  let push_ancestor_bloom = ancestor_bloom_enabled && node.is_element() && !node.children.is_empty();
+  let push_ancestor_bloom =
+    ancestor_bloom_enabled && node.is_element() && !node.children.is_empty();
   stack.push(Frame {
     node,
     scope_host,
@@ -7104,8 +7123,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       let child_is_shadow_root = matches!(child.node_type, DomNodeType::ShadowRoot { .. });
       let child_shadow_bloom_scope = ancestor_bloom_shadow_scoping && child_is_shadow_root;
       if child_shadow_bloom_scope {
-        let saved =
-          std::mem::replace(ancestor_bloom_filter, selectors::bloom::BloomFilter::new());
+        let saved = std::mem::replace(ancestor_bloom_filter, selectors::bloom::BloomFilter::new());
         shadow_bloom_stack.push(saved);
       }
 
@@ -7144,9 +7162,13 @@ fn apply_styles_internal_with_ancestors<'a>(
       .expect("style traversal stack must contain at least one frame");
 
     if frame.push_ancestor_bloom {
-      element_attr_cache.for_each_ancestor_bloom_hash(frame.node, rule_scopes.quirks_mode, |hash| {
-        ancestor_bloom_filter.remove_hash(hash);
-      });
+      element_attr_cache.for_each_ancestor_bloom_hash(
+        frame.node,
+        rule_scopes.quirks_mode,
+        |hash| {
+          ancestor_bloom_filter.remove_hash(hash);
+        },
+      );
     }
 
     if frame.entered_shadow_bloom_scope {
@@ -7332,7 +7354,9 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
     if rule.inherits {
       if !styles.custom_properties.contains_key(name) {
         if let Some(initial) = &rule.initial_value {
-          styles.custom_properties.insert(name.clone(), initial.clone());
+          styles
+            .custom_properties
+            .insert(name.clone(), initial.clone());
         }
       }
       continue;
@@ -7345,7 +7369,9 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
         .map(|value| value == initial)
         .unwrap_or(false);
       if !already_initial {
-        styles.custom_properties.insert(name.clone(), initial.clone());
+        styles
+          .custom_properties
+          .insert(name.clone(), initial.clone());
       }
     } else {
       styles.custom_properties.remove(name.as_str());
@@ -7763,7 +7789,10 @@ mod tests {
     };
 
     attach_starting_styles(&mut target, &starting_tree);
-    assert_eq!(target.starting_styles.base.as_deref(), Some(&starting_snapshot));
+    assert_eq!(
+      target.starting_styles.base.as_deref(),
+      Some(&starting_snapshot)
+    );
   }
 
   #[test]
@@ -7897,17 +7926,7 @@ mod tests {
 
     // "Legacy" behavior: rebuild a PreparedCascade for each pass.
     let legacy_first = apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
-      &dom,
-      &style_set,
-      &media_ctx,
-      None,
-      None,
-      None,
-      None,
-      None,
-      None,
-      None,
-      None,
+      &dom, &style_set, &media_ctx, None, None, None, None, None, None, None, None,
     )
     .expect("legacy first cascade");
 
@@ -7926,20 +7945,21 @@ mod tests {
       )]),
     };
 
-    let legacy_second = apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
-      &dom,
-      &style_set,
-      &media_ctx,
-      None,
-      None,
-      None,
-      Some(&container_ctx),
-      None,
-      None,
-      None,
-      None,
-    )
-    .expect("legacy second cascade");
+    let legacy_second =
+      apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
+        &dom,
+        &style_set,
+        &media_ctx,
+        None,
+        None,
+        None,
+        Some(&container_ctx),
+        None,
+        None,
+        None,
+        None,
+      )
+      .expect("legacy second cascade");
 
     reset_inline_style_declaration_parse_count();
 
@@ -8113,7 +8133,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8145,7 +8168,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8228,7 +8254,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8316,7 +8345,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8405,7 +8437,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8431,7 +8466,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8475,8 +8513,8 @@ mod tests {
     assert_eq!(prelude_host.to_css_string(), ":host(.foo) *");
     assert_eq!(prelude_named.to_css_string(), "slot[name=foo]");
 
-    use selectors::parser::Component;
     use selectors::parser::Combinator;
+    use selectors::parser::Component;
     for prelude in [&prelude_host, &prelude_named] {
       assert!(
         !prelude
@@ -8552,7 +8590,10 @@ mod tests {
       matches_selector(&prelude, 0, None, &slot_ref, ctx)
     });
 
-    assert!(matches, "prelude should match the slot when the host matches");
+    assert!(
+      matches,
+      "prelude should match the slot when the host matches"
+    );
   }
 
   #[test]
@@ -8649,7 +8690,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8717,7 +8761,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9021,7 +9068,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9085,7 +9135,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9149,7 +9202,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -14144,7 +14200,10 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
           origin: StyleOrigin::Author,
           order,
           rule: rule.rule,
-          layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+          layer_order: layer_order_with_tree_scope(
+            rule.layer_order.as_ref(),
+            DOCUMENT_TREE_SCOPE_PREFIX,
+          ),
           container_conditions: rule.container_conditions.clone(),
           scopes,
           scope_signature,
@@ -15009,12 +15068,10 @@ fn resolve_scopes<'a>(
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &ancestors[..idx]);
         let matches = context.nest_for_scope_condition(Some(base_ref.opaque()), |ctx| {
-            start_selectors
-              .iter()
-              .any(|sel| {
-              let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
-              matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
-            })
+          start_selectors.iter().any(|sel| {
+            let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
+            matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
+          })
         });
         if matches {
           matched_root = Some(idx);
@@ -15044,12 +15101,10 @@ fn resolve_scopes<'a>(
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &ancestors[..idx]);
         let blocked = context.nest_for_scope_condition(Some(scope_ref.opaque()), |ctx| {
-            limit_selectors
-              .iter()
-              .any(|sel| {
-              let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
-              matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
-            })
+          limit_selectors.iter().any(|sel| {
+            let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
+            matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
+          })
         });
         if blocked {
           return None;
@@ -15263,7 +15318,12 @@ fn find_matching_rules<'a>(
             let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
               ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+                matches_selector_cascade(
+                  selector,
+                  Some(&indexed.ancestor_hashes),
+                  &element_ref,
+                  ctx,
+                )
               })
             })
           }
@@ -15308,8 +15368,12 @@ fn find_matching_rules<'a>(
                 ctx.with_allow_featureless_host_traversal(true, |ctx| {
                   let prev_bloom_filter = ctx.bloom_filter;
                   ctx.bloom_filter = None;
-                  let matched =
-                    matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                  let matched = matches_selector_cascade(
+                    selector,
+                    Some(&indexed.ancestor_hashes),
+                    &element_ref,
+                    ctx,
+                  );
                   ctx.bloom_filter = prev_bloom_filter;
                   matched
                 })
@@ -15332,8 +15396,12 @@ fn find_matching_rules<'a>(
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                   let prev_bloom_filter = ctx.bloom_filter;
                   ctx.bloom_filter = None;
-                  let matched =
-                    matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                  let matched = matches_selector_cascade(
+                    selector,
+                    Some(&indexed.ancestor_hashes),
+                    &element_ref,
+                    ctx,
+                  );
                   ctx.bloom_filter = prev_bloom_filter;
                   matched
                 })
@@ -15343,8 +15411,12 @@ fn find_matching_rules<'a>(
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 let prev_bloom_filter = ctx.bloom_filter;
                 ctx.bloom_filter = None;
-                let matched =
-                  matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                let matched = matches_selector_cascade(
+                  selector,
+                  Some(&indexed.ancestor_hashes),
+                  &element_ref,
+                  ctx,
+                );
                 ctx.bloom_filter = prev_bloom_filter;
                 matched
               })
@@ -15551,8 +15623,7 @@ fn find_matching_rules<'a>(
                   ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                     let prev_bloom_filter = ctx.bloom_filter;
                     ctx.bloom_filter = None;
-                    let matched =
-                      matches_selector_cascade(prelude, prelude_hashes, &slot_ref, ctx);
+                    let matched = matches_selector_cascade(prelude, prelude_hashes, &slot_ref, ctx);
                     ctx.bloom_filter = prev_bloom_filter;
                     matched
                   })
@@ -15816,8 +15887,12 @@ fn find_pseudo_element_rules<'a>(
             ctx.with_allow_featureless_host_traversal(true, |ctx| {
               let prev_bloom_filter = ctx.bloom_filter;
               ctx.bloom_filter = None;
-              let matched =
-                matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+              let matched = matches_selector_cascade(
+                selector,
+                Some(&indexed.ancestor_hashes),
+                &element_ref,
+                ctx,
+              );
               ctx.bloom_filter = prev_bloom_filter;
               matched
             })
