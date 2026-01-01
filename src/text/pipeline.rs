@@ -2486,11 +2486,24 @@ fn assign_fonts_internal(
 
     for (cluster_start, cluster_end) in atomic_shaping_clusters(&run.text) {
       let cluster_text = &run.text[cluster_start..cluster_end];
-      let emoji_pref = cluster_emoji_preference(cluster_text, style.font_variant_emoji);
+      let mut cluster_iter = cluster_text.chars();
+      let first_char = cluster_iter.next().unwrap_or(' ');
+      let is_single_char_cluster = cluster_iter.next().is_none();
 
-      let (base_char, cluster_char_count) =
-        cluster_base_and_relevant_chars(cluster_text, &mut relevant_chars);
-      let cluster_chars = relevant_chars.as_slice();
+      let (emoji_pref, base_char, cluster_char_count, cluster_chars) = if is_single_char_cluster {
+        (
+          emoji_preference_with_selector(first_char, None, style.font_variant_emoji),
+          first_char,
+          1usize,
+          &[] as &[char],
+        )
+      } else {
+        let emoji_pref = cluster_emoji_preference(cluster_text, style.font_variant_emoji);
+        let (base_char, cluster_char_count) =
+          cluster_base_and_relevant_chars(cluster_text, &mut relevant_chars);
+        let cluster_chars = relevant_chars.as_slice();
+        (emoji_pref, base_char, cluster_char_count, cluster_chars)
+      };
       let require_base_glyph = !is_non_rendering_for_coverage(base_char);
       let base_arr = [base_char];
       let coverage_chars_all: &[char] = if !cluster_chars.is_empty() {
@@ -3759,15 +3772,8 @@ fn resolve_font_for_cluster_with_preferences(
   let mut picker = FontPreferencePicker::new(emoji_pref);
   let require_base_glyph = !is_non_rendering_for_coverage(base_char);
 
-  let mut needed: Vec<char> = coverage_chars.iter().copied().collect();
-  needed.sort_unstable();
-  needed.dedup();
-  if needed.is_empty() && require_base_glyph {
-    needed.push(base_char);
-  }
-
   let base_supported = |id: fontdb::ID| !require_base_glyph || db.has_glyph_cached(id, base_char);
-  let covers_needed = |id: fontdb::ID| needed.iter().all(|c| db.has_glyph_cached(id, *c));
+  let covers_needed = |id: fontdb::ID| coverage_chars.iter().all(|c| db.has_glyph_cached(id, *c));
 
   for entry in families {
     if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
@@ -3788,7 +3794,7 @@ fn resolve_font_for_cluster_with_preferences(
           let idx = picker.bump_order();
           picker.record_any(&font, is_emoji_font, idx);
           let base_ok = !require_base_glyph || font_supports_all_chars(font.as_ref(), &[base_char]);
-          if base_ok && font_supports_all_chars(font.as_ref(), &needed) {
+          if base_ok && font_supports_all_chars(font.as_ref(), coverage_chars) {
             if let Some(font) = picker.consider(font, is_emoji_font, idx) {
               return Some(font);
             }
@@ -3833,7 +3839,7 @@ fn resolve_font_for_cluster_with_preferences(
         let idx = picker.bump_order();
         picker.record_any(&font, is_emoji_font, idx);
         let base_ok = !require_base_glyph || font_supports_all_chars(font.as_ref(), &[base_char]);
-        if base_ok && font_supports_all_chars(font.as_ref(), &needed) {
+        if base_ok && font_supports_all_chars(font.as_ref(), coverage_chars) {
           if let Some(font) = picker.consider(font, is_emoji_font, idx) {
             return Some(font);
           }
