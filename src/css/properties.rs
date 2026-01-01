@@ -2562,6 +2562,39 @@ mod tests {
   }
 
   #[test]
+  fn parse_property_value_keeps_parsing_numbers() {
+    assert!(matches!(
+      parse_property_value("opacity", "0.5"),
+      Some(PropertyValue::Number(n)) if (n - 0.5).abs() < 1e-6
+    ));
+  }
+
+  #[test]
+  fn parse_function_number_fast_rejects_common_keywords() {
+    reset_parse_function_number_slow_path_calls();
+
+    for value in [
+      "block",
+      "none",
+      "inherit",
+      "currentColor",
+      "auto",
+      "solid",
+      "url(a.cur)",
+      "URL(https://example.com/v1/a2.png)",
+    ] {
+      assert!(parse_function_number(value).is_none());
+    }
+    assert_eq!(parse_function_number_slow_path_calls(), 0);
+  }
+
+  #[test]
+  fn could_be_number_or_calc_recognizes_math_functions_without_digits() {
+    assert!(could_be_number_or_calc("calc(var(--x))"));
+    assert!(could_be_number_or_calc("clamp(var(--a), var(--b), var(--c))"));
+  }
+
+  #[test]
   fn known_properties_are_unique() {
     for (name, props) in [
       ("KNOWN_STYLE_PROPERTIES", KNOWN_STYLE_PROPERTIES),
@@ -3036,6 +3069,11 @@ mod tests {
   }
 }
 
+const MATH_PREFIXES: &[&str] = &[
+  "calc(", "min(", "max(", "clamp(", "sin(", "cos(", "tan(", "asin(", "acos(", "atan(", "atan2(",
+  "pow(", "sqrt(", "hypot(", "log(", "exp(", "sign(", "abs(", "round(", "mod(", "rem(", "clamped(",
+];
+
 /// Parse a CSS length value
 pub fn parse_length(s: &str) -> Option<Length> {
   let s = s.trim();
@@ -3049,11 +3087,6 @@ pub fn parse_length(s: &str) -> Option<Length> {
     }
   }
 
-  const MATH_PREFIXES: &[&str] = &[
-    "calc(", "min(", "max(", "clamp(", "sin(", "cos(", "tan(", "asin(", "acos(", "atan(", "atan2(",
-    "pow(", "sqrt(", "hypot(", "log(", "exp(", "sign(", "abs(", "round(", "mod(", "rem(",
-    "clamped(",
-  ];
   if MATH_PREFIXES
     .iter()
     .any(|p| s.get(..p.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(p)))
@@ -3152,7 +3185,82 @@ fn parse_function_length(input: &str) -> Option<Length> {
   result.ok().and_then(calc_component_to_length)
 }
 
+fn could_be_number_or_calc(input: &str) -> bool {
+  if input.is_empty() {
+    return false;
+  }
+
+  let bytes = input.as_bytes();
+
+  // `url()` values often contain digits, but are never numeric/calc.
+  if bytes.len() >= 4
+    && bytes[0].to_ascii_lowercase() == b'u'
+    && bytes[1].to_ascii_lowercase() == b'r'
+    && bytes[2].to_ascii_lowercase() == b'l'
+    && bytes[3] == b'('
+  {
+    return false;
+  }
+
+  if bytes.len() >= 2 {
+    let first = bytes[0];
+    let second = bytes[1];
+    if (first == b'+' || first == b'-' || first == b'.') && second.is_ascii_digit() {
+      return true;
+    }
+  }
+
+  if bytes.iter().any(|b| b.is_ascii_digit()) {
+    return true;
+  }
+
+  let first = bytes[0].to_ascii_lowercase();
+  if !matches!(
+    first,
+    b'c' | b'm' | b's' | b'a' | b'p' | b'h' | b'l' | b'e' | b'r'
+  ) {
+    return false;
+  }
+
+  for prefix in MATH_PREFIXES {
+    if prefix.as_bytes()[0] != first {
+      continue;
+    }
+    if input
+      .get(..prefix.len())
+      .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    {
+      return true;
+    }
+  }
+
+  false
+}
+
+#[cfg(test)]
+thread_local! {
+  static PARSE_FUNCTION_NUMBER_SLOW_PATH_CALLS: std::cell::Cell<u32> = std::cell::Cell::new(0);
+}
+
+#[cfg(test)]
+fn reset_parse_function_number_slow_path_calls() {
+  PARSE_FUNCTION_NUMBER_SLOW_PATH_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+fn parse_function_number_slow_path_calls() -> u32 {
+  PARSE_FUNCTION_NUMBER_SLOW_PATH_CALLS.with(|calls| calls.get())
+}
+
 fn parse_function_number(input: &str) -> Option<f32> {
+  let input = input.trim();
+  if input.is_empty() || !could_be_number_or_calc(input) {
+    return None;
+  }
+
+  #[cfg(test)]
+  PARSE_FUNCTION_NUMBER_SLOW_PATH_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+
   let mut parser_input = ParserInput::new(input);
   let mut parser = Parser::new(&mut parser_input);
   let result = parser.parse_entirely(parse_calc_sum);
