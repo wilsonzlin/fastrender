@@ -125,6 +125,7 @@ fn perf_smoke_help_mentions_suites_and_regression_flags() {
       && stdout.contains("--fail-on-missing-fixtures")
       && stdout.contains("--allow-missing-fixtures")
       && stdout.contains("--fail-on-budget")
+      && stdout.contains("--fail-on-fetch-errors")
       && stdout.contains("--isolate")
       && stdout.contains("--no-isolate")
       && stdout.contains("--top")

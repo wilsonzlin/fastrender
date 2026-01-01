@@ -381,6 +381,10 @@ struct PerfSmokeArgs {
   #[arg(long)]
   fail_on_budget: bool,
 
+  /// Fail when any fixture encounters subresource fetch errors (offline fixture completeness).
+  #[arg(long)]
+  fail_on_fetch_errors: bool,
+
   /// Run the perf smoke harness in debug mode instead of release
   #[arg(long)]
   debug: bool,
@@ -1069,6 +1073,9 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   }
   if args.fail_on_budget {
     cmd.arg("--fail-on-budget");
+  }
+  if args.fail_on_fetch_errors {
+    cmd.arg("--fail-on-fetch-errors");
   }
   if args.isolate {
     cmd.arg("--isolate");
