@@ -165,44 +165,24 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         }
       }
 
-      if i < lower.len()
-        && (lower.as_bytes()[i] == b'"'
-          || lower.as_bytes()[i] == b'\''
-          || lower.as_bytes()[i] == b'`')
-      {
-        let quote = lower.as_bytes()[i];
+      // Allow redundant grouping parentheses like `location = ('/next')` or
+      // `location.replace(('/next'))`.
+      while i < lower.len() && lower.as_bytes()[i] == b'(' {
         i += 1;
-        let start = i;
-        let mut has_interpolation = false;
-        while i < lower.len() {
-          let b = lower.as_bytes()[i];
-
-          if quote == b'`' && b == b'$' && lower.as_bytes().get(i + 1) == Some(&b'{') {
-            has_interpolation = true;
-          }
-
-          if b == b'\\' {
-            i += 1;
-            if i < lower.len() {
-              i += 1;
-            }
-            continue;
-          }
-
-          if b == quote {
-            break;
-          }
+        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
           i += 1;
         }
-        let end = i.min(decoded.len());
-        let candidate = decoded[start..end].trim();
-        if quote == b'`' && has_interpolation {
-          continue;
-        }
-        if !candidate.is_empty() && candidate.len() <= MAX_REDIRECT_LEN {
-          return Some(unescape_js_literal(candidate));
-        }
-      } else {
+      }
+
+      if let Some(url) = extract_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN) {
+        return Some(url);
+      }
+
+      if let Some(url) = extract_wrapped_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN) {
+        return Some(url);
+      }
+
+      {
         let start = i;
         while i < lower.len() {
           let b = lower.as_bytes()[i];
@@ -258,6 +238,91 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
     }
   }
 
+  None
+}
+
+fn extract_js_string_literal(
+  decoded: &str,
+  lower: &str,
+  start_idx: usize,
+  max_len: usize,
+) -> Option<String> {
+  let bytes = lower.as_bytes();
+  let quote = *bytes.get(start_idx)?;
+  if quote != b'"' && quote != b'\'' && quote != b'`' {
+    return None;
+  }
+
+  let mut i = start_idx + 1;
+  let start = i;
+  let mut has_interpolation = false;
+  while i < bytes.len() {
+    let b = bytes[i];
+
+    if quote == b'`' && b == b'$' && bytes.get(i + 1) == Some(&b'{') {
+      has_interpolation = true;
+    }
+
+    if b == b'\\' {
+      i += 1;
+      if i < bytes.len() {
+        i += 1;
+      }
+      continue;
+    }
+
+    if b == quote {
+      break;
+    }
+    i += 1;
+  }
+
+  if quote == b'`' && has_interpolation {
+    return None;
+  }
+
+  let end = i.min(decoded.len());
+  let candidate = decoded[start..end].trim();
+  if candidate.is_empty() || candidate.len() > max_len {
+    return None;
+  }
+
+  Some(unescape_js_literal(candidate))
+}
+
+fn extract_wrapped_js_string_literal(
+  decoded: &str,
+  lower: &str,
+  start_idx: usize,
+  max_len: usize,
+) -> Option<String> {
+  // Some redirects wrap a static string in common URL-decoding helpers.
+  let wrappers = ["decodeuricomponent", "decodeuri", "unescape"];
+  let rest = lower.get(start_idx..)?;
+  for wrapper in wrappers.iter() {
+    if rest.starts_with(wrapper) {
+      let mut i = start_idx + wrapper.len();
+      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+      }
+      if lower.as_bytes().get(i) != Some(&b'(') {
+        continue;
+      }
+      i += 1;
+      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+      }
+      while i < lower.len() && lower.as_bytes()[i] == b'(' {
+        i += 1;
+        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+          i += 1;
+        }
+      }
+      if let Some(url) = extract_js_string_literal(decoded, lower, i, max_len) {
+        return Some(url);
+      }
+    }
+  }
   None
 }
 
@@ -751,6 +816,54 @@ mod tests {
       extract_js_location_redirect(html),
       Some("https://example.com/with\"quote".to_string())
     );
+  }
+
+  #[test]
+  fn extracts_parenthesized_js_location_literals() {
+    let html = "<script>location = ('/paren');</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/paren".to_string())
+    );
+
+    let html = "<script>window.location.href=(\"/paren-href\");</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/paren-href".to_string())
+    );
+
+    let html = "<script>location.replace((\"/paren-call\"));</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/paren-call".to_string())
+    );
+  }
+
+  #[test]
+  fn extracts_js_location_wrapped_decode_uri_literals() {
+    let html = "<script>location.href = decodeURIComponent(\"%2Fwrapped%2Fnext\");</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/wrapped/next".to_string())
+    );
+
+    let html = "<script>location.replace(decodeURI('%2Fwrapped-uri'));</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/wrapped-uri".to_string())
+    );
+
+    let html = "<script>location = (decodeURIComponent(('%2Fdouble-paren')));</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/double-paren".to_string())
+    );
+  }
+
+  #[test]
+  fn ignores_js_location_wrapped_non_literals() {
+    let html = "<script>location.href = decodeURIComponent(path);</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
   }
 
   #[test]
