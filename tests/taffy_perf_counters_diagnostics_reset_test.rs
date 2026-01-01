@@ -1,4 +1,7 @@
-use fastrender::{DiagnosticsLevel, FastRender, FastRenderConfig, FontConfig, RenderOptions};
+use fastrender::{
+  DiagnosticsLevel, FastRender, FastRenderConfig, FontConfig, FragmentContent, FragmentNode, Point,
+  Rect, RenderArtifactRequest, RenderOptions,
+};
 
 struct EnvVarGuard {
   key: &'static str,
@@ -20,6 +23,30 @@ impl Drop for EnvVarGuard {
       None => std::env::remove_var(self.key),
     }
   }
+}
+
+fn find_text_fragment_bounds(fragment: &FragmentNode, offset: Point, needle: &str) -> Option<Rect> {
+  let abs = Rect::from_xywh(
+    fragment.bounds.x() + offset.x,
+    fragment.bounds.y() + offset.y,
+    fragment.bounds.width(),
+    fragment.bounds.height(),
+  );
+
+  if let FragmentContent::Text { text, .. } = &fragment.content {
+    if text.as_ref().contains(needle) {
+      return Some(abs);
+    }
+  }
+
+  let next_offset = Point::new(abs.x(), abs.y());
+  for child in fragment.children.iter() {
+    if let Some(found) = find_text_fragment_bounds(child, next_offset, needle) {
+      return Some(found);
+    }
+  }
+
+  None
 }
 
 #[test]
@@ -106,5 +133,86 @@ fn taffy_perf_counters_reset_between_diagnostics_renders() {
   assert!(
     result.diagnostics.stats.is_none(),
     "expected stats to be absent when diagnostics are disabled"
+  );
+}
+
+#[test]
+fn taffy_perf_counters_do_not_reset_between_layout_passes_in_one_render() {
+  let _diag_env = EnvVarGuard::set("FASTR_DIAGNOSTICS_LEVEL", "none");
+  let config = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+  let mut renderer = FastRender::with_config(config).expect("renderer");
+
+  let options = RenderOptions::default()
+    .with_viewport(300, 200)
+    .with_diagnostics_level(DiagnosticsLevel::Basic);
+
+  // This document triggers two layout passes via container queries:
+  // 1) First layout runs without container query context, so `.target` uses `display:flex` and
+  //    invokes Taffy.
+  // 2) After container sizes are resolved, the container query flips `.target` to `display:block`
+  //    and the document is laid out a second time (no Taffy usage).
+  //
+  // We want per-render attribution, so Taffy counters should still reflect pass #1 even though the
+  // final pass does not use Taffy.
+  let html = r#"<!doctype html>
+    <html>
+      <head>
+        <style>
+          .container { width: 600px; container-type: inline-size; }
+          .target { display: flex; }
+          @container (width >= 500px) {
+            .target { display: block; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="target">
+            <div>AAA</div>
+            <div>BBB</div>
+          </div>
+        </div>
+      </body>
+    </html>"#;
+
+  let report = renderer
+    .render_html_with_stylesheets_report(
+      html,
+      "https://example.test/",
+      options,
+      RenderArtifactRequest {
+        fragment_tree: true,
+        ..RenderArtifactRequest::default()
+      },
+    )
+    .expect("render with container query relayout");
+
+  let stats = report
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("expected diagnostics stats");
+  let flex_calls = stats
+    .layout
+    .taffy_flex_measure_calls
+    .expect("expected flex measure calls from the first layout pass");
+  assert!(flex_calls > 0, "expected flex measure calls > 0");
+
+  let fragment_tree = report
+    .artifacts
+    .fragment_tree
+    .as_ref()
+    .expect("expected fragment tree artifact");
+  let aaa = find_text_fragment_bounds(&fragment_tree.root, Point::ZERO, "AAA")
+    .expect("expected text fragment containing AAA");
+  let bbb = find_text_fragment_bounds(&fragment_tree.root, Point::ZERO, "BBB")
+    .expect("expected text fragment containing BBB");
+
+  assert!(
+    bbb.y() > aaa.y() + 1.0,
+    "expected container query to flip the final layout to block-flow (BBB should be below AAA); \
+     aaa={:?} bbb={:?}",
+    aaa,
+    bbb
   );
 }
