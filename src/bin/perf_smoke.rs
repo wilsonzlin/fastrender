@@ -1,3 +1,5 @@
+mod stage_buckets;
+
 use clap::{ArgAction, Parser, ValueEnum};
 use fastrender::api::{DiagnosticsLevel, FastRender, RenderOptions};
 use fastrender::image_output::OutputFormat;
@@ -1182,24 +1184,13 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
 /// Buckets reflect wall-clock stage time; CPU-sum subsystem timings (e.g. `*_cpu_ms`) are excluded
 /// to avoid double-counting.
 fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown {
-  let t = &stats.timings;
+  let buckets = stage_buckets::wall_clock_stage_buckets_from_stats(stats);
   StageBreakdown {
-    fetch: round_ms(sum_timings(&[
-      t.html_decode_ms,
-      t.dom_parse_ms,
-      t.dom_meta_viewport_ms,
-      t.dom_clone_ms,
-      t.dom_top_layer_ms,
-    ])),
-    css: round_ms(t.css_parse_ms.or(t.css_inlining_ms).unwrap_or(0.0)),
-    cascade: round_ms(sum_timings(&[t.cascade_ms, t.box_tree_ms])),
-    layout: round_ms(sum_timings(&[t.layout_ms])),
-    paint: round_ms(sum_timings(&[
-      t.paint_build_ms,
-      t.paint_optimize_ms,
-      t.paint_rasterize_ms,
-      t.encode_ms,
-    ])),
+    fetch: round_ms(buckets.fetch),
+    css: round_ms(buckets.css),
+    cascade: round_ms(buckets.cascade),
+    layout: round_ms(buckets.layout),
+    paint: round_ms(buckets.paint),
   }
 }
 
@@ -1253,10 +1244,6 @@ fn round_ms(value: f64) -> f64 {
   } else {
     rounded
   }
-}
-
-fn sum_timings(values: &[Option<f64>]) -> f64 {
-  values.iter().flatten().sum()
 }
 
 fn read_summary(path: &Path) -> Result<PerfSmokeSummary, Box<dyn std::error::Error>> {

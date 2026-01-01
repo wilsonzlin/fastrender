@@ -11,6 +11,7 @@
 #![allow(clippy::struct_excessive_bools)]
 
 mod common;
+mod stage_buckets;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use common::args::{
@@ -1714,25 +1715,13 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
 }
 
 fn buckets_from_stats(stats: &RenderStats) -> StageBuckets {
-  let t = &stats.timings;
-  let fetch = t.html_decode_ms.unwrap_or(0.0)
-    + t.dom_parse_ms.unwrap_or(0.0)
-    + t.dom_meta_viewport_ms.unwrap_or(0.0)
-    + t.dom_clone_ms.unwrap_or(0.0)
-    + t.dom_top_layer_ms.unwrap_or(0.0);
-  let css = t.css_parse_ms.or(t.css_inlining_ms).unwrap_or(0.0);
-  let cascade = t.cascade_ms.unwrap_or(0.0) + t.box_tree_ms.unwrap_or(0.0);
-  let layout = t.layout_ms.unwrap_or(0.0);
-  let paint = t.paint_build_ms.unwrap_or(0.0)
-    + t.paint_optimize_ms.unwrap_or(0.0)
-    + t.paint_rasterize_ms.unwrap_or(0.0)
-    + t.encode_ms.unwrap_or(0.0);
+  let buckets = stage_buckets::wall_clock_stage_buckets_from_stats(stats);
   StageBuckets {
-    fetch,
-    css,
-    cascade,
-    layout,
-    paint,
+    fetch: buckets.fetch,
+    css: buckets.css,
+    cascade: buckets.cascade,
+    layout: buckets.layout,
+    paint: buckets.paint,
   }
 }
 
@@ -8008,8 +7997,12 @@ mod tests {
     };
 
     let args = basic_run_args(dir.path());
-    let hard_timeout = Duration::from_millis(200);
-    let _guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_MS", "500");
+    // Keep this comfortably above process spawn + stage heartbeat fsync time so the worker has time
+    // to write its initial heartbeat stage before the parent kills it.
+    let hard_timeout = Duration::from_millis(800);
+    // Delay longer than the hard timeout so the worker is guaranteed to still be running when the
+    // parent triggers the hard kill.
+    let _guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_MS", "5000");
     let _stem_guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_STEM", "heartbeat");
     let queue = VecDeque::from(vec![item]);
     run_queue(
@@ -8079,8 +8072,10 @@ mod tests {
     };
     fs::create_dir_all(&dump_settings.dir).unwrap();
 
-    let render_kill_timeout = Duration::from_secs(2);
-    let overall_kill_timeout = Duration::from_secs(3);
+    // Allow enough time for the initial render + progress write to complete before the parent kills
+    // the worker during the (intentionally stalled) dump capture phase.
+    let render_kill_timeout = Duration::from_secs(3);
+    let overall_kill_timeout = Duration::from_secs(4);
     let _guard = EnvVarGuard::set("FASTR_TEST_DUMP_DELAY_MS", "10000");
     let _stem_guard = EnvVarGuard::set("FASTR_TEST_DUMP_DELAY_STEM", "dumpkill");
     let queue = VecDeque::from(vec![item]);
