@@ -212,7 +212,7 @@ fn parse_meta_charset(attrs_lower: &[u8]) -> Option<&'static Encoding> {
     let label = trim_ascii_quotes(trim_ascii_whitespace(label));
     if !label.is_empty() {
       if let Some(enc) = Encoding::for_label(label) {
-        return Some(enc);
+        return Some(normalize_meta_encoding(enc));
       }
     }
   }
@@ -223,12 +223,22 @@ fn parse_meta_charset(attrs_lower: &[u8]) -> Option<&'static Encoding> {
       let content = trim_ascii_whitespace(content);
       if let Some(label) = charset_from_content_type_bytes(content) {
         if let Some(enc) = Encoding::for_label(label) {
-          return Some(enc);
+          return Some(normalize_meta_encoding(enc));
         }
       }
     }
   }
   None
+}
+
+fn normalize_meta_encoding(enc: &'static Encoding) -> &'static Encoding {
+  // Per HTML Living Standard, meta-declared UTF-16 encodings are treated as UTF-8. UTF-16 HTML
+  // documents must be detected via BOM sniffing instead.
+  if std::ptr::eq(enc, encoding_rs::UTF_16LE) || std::ptr::eq(enc, encoding_rs::UTF_16BE) {
+    encoding_rs::UTF_8
+  } else {
+    enc
+  }
 }
 
 fn charset_from_content_type_bytes(content_type: &[u8]) -> Option<&[u8]> {
@@ -369,6 +379,25 @@ mod tests {
     assert!(
       decoded.contains("中文"),
       "decoded text should contain Han characters when meta declares charset via unquoted http-equiv/content: {}",
+      decoded
+    );
+  }
+
+  #[test]
+  fn decode_html_meta_utf16_is_treated_as_utf8() {
+    // HTML encoding sniffing treats meta-declared UTF-16 as UTF-8 (BOM controls actual UTF-16).
+    let encoded = encoding_rs::UTF_8
+      .encode("<html><head><meta charset=\"utf-16\"></head><body>£</body></html>")
+      .0;
+    let decoded = decode_html_bytes(&encoded, None);
+    assert!(
+      decoded.contains('£'),
+      "decoded text should contain pound sign when meta declares utf-16 (treated as utf-8): {}",
+      decoded
+    );
+    assert!(
+      !decoded.contains('Â'),
+      "decoded text should not look like Windows-1252 mojibake: {}",
       decoded
     );
   }
