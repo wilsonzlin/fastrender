@@ -10,6 +10,7 @@ use super::types::RadialGradientShape;
 use super::types::RadialGradientSize;
 use super::types::TextShadow;
 use super::types::Transform;
+use super::value_cache;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::display::Display;
@@ -26,7 +27,7 @@ use cssparser::Token;
 use rustc_hash::FxHashSet;
 use std::sync::OnceLock;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeclarationContext {
   Style,
   Page,
@@ -909,7 +910,28 @@ fn parse_property_value_in_context_internal(
     return None;
   }
 
-  parse_known_property_value(property, value_str, skip_var_guard)
+  let trimmed = value_str.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  let trimmed = trimmed.trim_end_matches("!important").trim();
+
+  // If the value contains a CSS variable, keep the raw string so it can be resolved later during
+  // cascade/computed value resolution. This fast-path also skips the parsed-value cache because
+  // cloning the raw `String` on cache hits erases most of the benefit.
+  if !skip_var_guard && crate::style::var_resolution::contains_var(trimmed) {
+    return Some(PropertyValue::Keyword(trimmed.to_string()));
+  }
+
+  let cache_key =
+    value_cache::ParsedPropertyValueCacheKey::new(context, property, trimmed, skip_var_guard);
+  if let Some(cached) = value_cache::get(&cache_key) {
+    return Some(cached);
+  }
+
+  let parsed = parse_known_property_value(property, value_str)?;
+  value_cache::put(cache_key, parsed.clone());
+  Some(parsed)
 }
 
 fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
@@ -1074,11 +1096,7 @@ fn parse_box_shadow_list(value_str: &str) -> Option<Vec<BoxShadow>> {
   Some(shadows)
 }
 
-fn parse_known_property_value(
-  property: &str,
-  value_str: &str,
-  skip_var_guard: bool,
-) -> Option<PropertyValue> {
+fn parse_known_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
   let value_str = value_str.trim();
   if value_str.is_empty() {
     return None;
@@ -1086,13 +1104,6 @@ fn parse_known_property_value(
 
   // Remove trailing !important if present
   let value_str = value_str.trim_end_matches("!important").trim();
-
-  // If the value contains a CSS variable, keep the raw string so it can be resolved later
-  // during cascade/computed value resolution. Many author styles use var() with colors,
-  // sizes, etc., which would otherwise be rejected here.
-  if !skip_var_guard && crate::style::var_resolution::contains_var(value_str) {
-    return Some(PropertyValue::Keyword(value_str.to_string()));
-  }
 
   let is_background_longhand = property.starts_with("background-") || property == "background";
   let is_mask_longhand = property.starts_with("mask-") || property == "mask";
@@ -2231,6 +2242,8 @@ fn parse_stop_angle(token: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::parser::parse_stylesheet;
+  use crate::css::value_cache;
   use crate::style::color::Color;
   use crate::style::properties::supported_properties;
   use std::collections::BTreeSet;
@@ -2399,6 +2412,35 @@ mod tests {
   fn page_properties_require_page_context() {
     assert!(parse_property_value("size", "A4").is_none());
     assert!(parse_property_value_in_context(DeclarationContext::Page, "size", "A4").is_some());
+  }
+
+  #[test]
+  fn parsed_property_value_cache_is_used_and_preserves_output() {
+    value_cache::reset_for_tests();
+
+    let repeats = 256usize;
+    let mut css = String::from(".a{");
+    for _ in 0..repeats {
+      css.push_str("width:16px;height:16px;color:#fff;display:none;");
+    }
+    css.push('}');
+
+    let decls = repeats * 4;
+
+    let sheet_cold = parse_stylesheet(&css).expect("stylesheet");
+    let debug_cold = format!("{sheet_cold:?}");
+    let (hits_cold, misses_cold) = value_cache::stats_for_tests();
+    assert_eq!(hits_cold + misses_cold, decls);
+    assert!(misses_cold < decls);
+
+    value_cache::reset_stats_for_tests();
+    let sheet_warm = parse_stylesheet(&css).expect("stylesheet");
+    let debug_warm = format!("{sheet_warm:?}");
+    assert_eq!(debug_cold, debug_warm);
+
+    let (hits_warm, misses_warm) = value_cache::stats_for_tests();
+    assert_eq!(hits_warm + misses_warm, decls);
+    assert_eq!(misses_warm, 0);
   }
 
   #[test]
