@@ -103,6 +103,25 @@ fn update_pageset_guardrails_help_mentions_strategy_flag() {
 }
 
 #[test]
+fn update_pageset_timeouts_alias_help_mentions_strategy_flag() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["update-pageset-timeouts", "--help"])
+    .output()
+    .expect("run cargo xtask update-pageset-timeouts --help");
+
+  assert!(
+    output.status.success(),
+    "update-pageset-timeouts help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--strategy"),
+    "update-pageset-timeouts help should mention the selection strategy; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn perf_smoke_help_mentions_suites_and_regression_flags() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["perf-smoke", "--help"])
