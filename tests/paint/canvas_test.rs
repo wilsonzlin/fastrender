@@ -504,17 +504,19 @@ fn test_draw_text_empty() {
   let font = font_ctx.get_sans_serif().unwrap();
 
   // Draw empty glyphs - should not crash
-  canvas.draw_text(
-    Point::new(10.0, 50.0),
-    &[],
-    &font,
-    16.0,
-    Rgba::BLACK,
-    0.0,
-    0.0,
-    0,
-    &[],
-  );
+  canvas
+    .draw_text(
+      Point::new(10.0, 50.0),
+      &[],
+      &font,
+      16.0,
+      Rgba::BLACK,
+      0.0,
+      0.0,
+      0,
+      &[],
+    )
+    .unwrap();
 
   let _ = canvas.into_pixmap();
 }
@@ -549,17 +551,19 @@ fn test_draw_text_with_glyphs() {
 
   // Draw the glyphs
   let glyphs = to_glyph_instances(run);
-  canvas.draw_text(
-    Point::new(10.0, 30.0),
-    &glyphs,
-    &run.font,
-    run.font_size,
-    Rgba::BLACK,
-    run.synthetic_bold,
-    run.synthetic_oblique,
-    run.palette_index,
-    &variations,
-  );
+  canvas
+    .draw_text(
+      Point::new(10.0, 30.0),
+      &glyphs,
+      &run.font,
+      run.font_size,
+      Rgba::BLACK,
+      run.synthetic_bold,
+      run.synthetic_oblique,
+      run.palette_index,
+      &variations,
+    )
+    .unwrap();
 
   let pixmap = canvas.into_pixmap();
   assert!(pixmap.data().iter().any(|&b| b != 255)); // Some non-white pixels
@@ -591,17 +595,19 @@ fn test_draw_text_colored() {
     .map(FontVariation::from)
     .collect();
   let glyphs = to_glyph_instances(run);
-  canvas.draw_text(
-    Point::new(10.0, 35.0),
-    &glyphs,
-    &run.font,
-    run.font_size,
-    Rgba::rgb(255, 0, 0),
-    run.synthetic_bold,
-    run.synthetic_oblique,
-    run.palette_index,
-    &variations,
-  );
+  canvas
+    .draw_text(
+      Point::new(10.0, 35.0),
+      &glyphs,
+      &run.font,
+      run.font_size,
+      Rgba::rgb(255, 0, 0),
+      run.synthetic_bold,
+      run.synthetic_oblique,
+      run.palette_index,
+      &variations,
+    )
+    .unwrap();
 
   let _ = canvas.into_pixmap();
 }
@@ -635,17 +641,19 @@ fn test_draw_text_with_opacity() {
     .map(FontVariation::from)
     .collect();
   let glyphs = to_glyph_instances(run);
-  canvas.draw_text(
-    Point::new(10.0, 35.0),
-    &glyphs,
-    &run.font,
-    run.font_size,
-    Rgba::BLACK,
-    run.synthetic_bold,
-    run.synthetic_oblique,
-    run.palette_index,
-    &variations,
-  );
+  canvas
+    .draw_text(
+      Point::new(10.0, 35.0),
+      &glyphs,
+      &run.font,
+      run.font_size,
+      Rgba::BLACK,
+      run.synthetic_bold,
+      run.synthetic_oblique,
+      run.palette_index,
+      &variations,
+    )
+    .unwrap();
 
   let _ = canvas.into_pixmap();
 }
@@ -678,17 +686,19 @@ fn canvas_renders_color_fonts() {
 
   let mut canvas = Canvas::new(64, 64, Rgba::WHITE).unwrap();
   let glyphs = to_glyph_instances(run);
-  canvas.draw_text(
-    Point::new(12.0, 48.0),
-    &glyphs,
-    &run.font,
-    run.font_size * run.scale,
-    Rgba::BLACK,
-    run.synthetic_bold,
-    run.synthetic_oblique,
-    run.palette_index,
-    &variations,
-  );
+  canvas
+    .draw_text(
+      Point::new(12.0, 48.0),
+      &glyphs,
+      &run.font,
+      run.font_size * run.scale,
+      Rgba::BLACK,
+      run.synthetic_bold,
+      run.synthetic_oblique,
+      run.palette_index,
+      &variations,
+    )
+    .unwrap();
   let pixmap = canvas.into_pixmap();
   let actual_image = pixmap_to_rgba_image(&pixmap);
   let actual_png = encode_png(&actual_image).expect("encode actual png");
@@ -769,7 +779,9 @@ fn canvas_respects_font_palette() {
     Rgba::TRANSPARENT,
   )
   .unwrap();
-  canvas.draw_shaped_run(palette_run, origin, Rgba::BLACK);
+  canvas
+    .draw_shaped_run(palette_run, origin, Rgba::BLACK)
+    .unwrap();
   let palette_pixmap = canvas.into_pixmap();
   let palette_image = pixmap_to_rgba_image(&palette_pixmap);
   let palette_png = encode_png(&palette_image).expect("encode palette png");
@@ -820,7 +832,9 @@ fn canvas_respects_font_palette() {
     Rgba::TRANSPARENT,
   )
   .unwrap();
-  normal_canvas.draw_shaped_run(normal_run, normal_origin, Rgba::BLACK);
+  normal_canvas
+    .draw_shaped_run(normal_run, normal_origin, Rgba::BLACK)
+    .unwrap();
   let normal_png =
     encode_png(&pixmap_to_rgba_image(&normal_canvas.into_pixmap())).expect("encode normal png");
 
