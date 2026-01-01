@@ -34,6 +34,24 @@ Most CLI tooling can capture `RenderDiagnostics.stats` by enabling a diagnostics
 - `paint`: display-list build/optimize + rasterize (verbose captures `paint.gradient_ms` +
   `paint.gradient_pixels` for gradient-heavy pages)
 
+### Timing semantics (wall vs CPU-sum)
+
+`RenderDiagnostics.stats.timings` contains a mix of timing buckets with **different semantics**:
+
+- Most `*_ms` fields (e.g. `dom_parse_ms`, `css_parse_ms`, `layout_ms`, `paint_rasterize_ms`) are
+  **wall-clock stage timers**: elapsed time from the beginning of that stage until it completes,
+  including any parallel work performed inside the stage.
+- Fields ending in `*_cpu_ms` (e.g. `timings.text_fallback_cpu_ms`,
+  `layout.taffy_flex_compute_cpu_ms`) are **CPU-sum style accumulators**: they sum per-call
+  durations across many internal invocations and therefore **may exceed** `total_ms` when work is
+  parallelized or overlapping.
+
+This is intentional: `_cpu_ms` values are useful for attributing hotspots *within* a stage, but they
+should not be interpreted as “share of total render time”.
+
+`pageset_progress` stage buckets (`stages_ms`) intentionally use **only wall-clock stage timers** and
+exclude `_cpu_ms` fields so that `hotspot` classification stays meaningful.
+
 When diagnostics are enabled, `RenderDiagnostics.stats.resources` also captures lightweight
 resource/cache counters to explain slow fetch-heavy pagesets (e.g. cache misses vs revalidation,
 disk cache reads, single-flight inflight waits, and total network fetch time). These are surfaced in

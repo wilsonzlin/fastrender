@@ -52,12 +52,12 @@ fn display_list_parallel_reports_text_metrics() {
       .expect("stats should be present");
     let shape_ms = stats
       .timings
-      .text_shape_ms
-      .expect("text shaping time should be recorded");
+      .text_shape_cpu_ms
+      .expect("text shaping cpu time should be recorded");
     let raster_ms = stats
       .timings
-      .text_rasterize_ms
-      .expect("text raster time should be recorded");
+      .text_rasterize_cpu_ms
+      .expect("text raster cpu time should be recorded");
     let first_misses = stats.counts.glyph_cache_misses.unwrap_or(0);
 
     assert!(shape_ms > 0.0);
@@ -189,11 +189,11 @@ fn display_list_reports_color_glyph_rasters() {
       .as_ref()
       .expect("stats should be present");
     assert!(
-      stats.timings.text_shape_ms.unwrap_or(0.0) > 0.0,
+      stats.timings.text_shape_cpu_ms.unwrap_or(0.0) > 0.0,
       "expected text shaping time"
     );
     assert!(
-      stats.timings.text_rasterize_ms.unwrap_or(0.0) > 0.0,
+      stats.timings.text_rasterize_cpu_ms.unwrap_or(0.0) > 0.0,
       "expected text rasterization time"
     );
     assert!(

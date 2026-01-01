@@ -59,8 +59,8 @@ fn taffy_perf_counters_reset_between_diagnostics_renders() {
     .expect("expected flex measure calls");
   assert!(flex_calls > 0, "expected flex measure calls > 0");
   assert!(
-    stats.layout.taffy_flex_compute_ms.is_some(),
-    "expected flex compute_ms to be recorded"
+    stats.layout.taffy_flex_compute_cpu_ms.is_some(),
+    "expected flex compute_cpu_ms to be recorded"
   );
 
   let grid_calls = stats
@@ -69,8 +69,8 @@ fn taffy_perf_counters_reset_between_diagnostics_renders() {
     .expect("expected grid measure calls");
   assert!(grid_calls > 0, "expected grid measure calls > 0");
   assert!(
-    stats.layout.taffy_grid_compute_ms.is_some(),
-    "expected grid compute_ms to be recorded"
+    stats.layout.taffy_grid_compute_cpu_ms.is_some(),
+    "expected grid compute_cpu_ms to be recorded"
   );
 
   // A second diagnostics-enabled render that does not touch flex/grid should not inherit the prior
@@ -86,11 +86,13 @@ fn taffy_perf_counters_reset_between_diagnostics_renders() {
     .expect("expected diagnostics stats");
 
   assert!(
-    stats.layout.taffy_flex_compute_ms.is_none() && stats.layout.taffy_flex_measure_calls.is_none(),
+    stats.layout.taffy_flex_compute_cpu_ms.is_none()
+      && stats.layout.taffy_flex_measure_calls.is_none(),
     "expected flex perf counters to reset between renders"
   );
   assert!(
-    stats.layout.taffy_grid_compute_ms.is_none() && stats.layout.taffy_grid_measure_calls.is_none(),
+    stats.layout.taffy_grid_compute_cpu_ms.is_none()
+      && stats.layout.taffy_grid_measure_calls.is_none(),
     "expected grid perf counters to reset between renders"
   );
 

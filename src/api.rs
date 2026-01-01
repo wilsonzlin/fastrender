@@ -1619,7 +1619,19 @@ impl Default for DiagnosticsLevel {
   }
 }
 
-/// Timing information for each pipeline stage (milliseconds).
+/// Timing information captured during a render.
+///
+/// ## Wall-clock stage timers
+/// Unless otherwise noted, fields ending in `_ms` are **wall-clock** durations for the named
+/// pipeline stage, measured from the start of that stage until it completes (including any
+/// parallel work done within the stage).
+///
+/// ## CPU-sum / overlapping subsystem timers
+/// Fields ending in `_cpu_ms` are **CPU-sum** style accumulators: they sum per-call wall-clock
+/// durations for many internal operations and therefore **may exceed** the overall render wall
+/// time when work is parallelized or the same subsystem is invoked repeatedly.
+///
+/// Tooling should not interpret `_cpu_ms` as "share of total render time".
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RenderStageTimings {
   pub html_decode_ms: Option<f64>,
@@ -1643,12 +1655,15 @@ pub struct RenderStageTimings {
   pub cascade_ms: Option<f64>,
   pub box_tree_ms: Option<f64>,
   pub layout_ms: Option<f64>,
-  pub text_fallback_ms: Option<f64>,
-  pub text_shape_ms: Option<f64>,
+  #[serde(default, alias = "text_fallback_ms")]
+  pub text_fallback_cpu_ms: Option<f64>,
+  #[serde(default, alias = "text_shape_ms")]
+  pub text_shape_cpu_ms: Option<f64>,
   pub paint_build_ms: Option<f64>,
   pub paint_optimize_ms: Option<f64>,
   pub paint_rasterize_ms: Option<f64>,
-  pub text_rasterize_ms: Option<f64>,
+  #[serde(default, alias = "text_rasterize_ms")]
+  pub text_rasterize_cpu_ms: Option<f64>,
   pub encode_ms: Option<f64>,
 }
 
@@ -1765,13 +1780,21 @@ pub struct LayoutDiagnostics {
   /// This is a sum of per-call wall times across the entire render (including relayout passes such
   /// as container queries), and across rayon worker threads. As a result, it represents
   /// "core-milliseconds" and may exceed the render's wall-clock timings (`layout_ms`, `total_ms`).
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub taffy_flex_compute_ms: Option<f64>,
+  #[serde(
+    default,
+    skip_serializing_if = "Option::is_none",
+    alias = "taffy_flex_compute_ms"
+  )]
+  pub taffy_flex_compute_cpu_ms: Option<f64>,
   /// Accumulated time spent inside Taffy's grid layout computations during this render.
   ///
-  /// See [`taffy_flex_compute_ms`](Self::taffy_flex_compute_ms) for interpretation notes.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub taffy_grid_compute_ms: Option<f64>,
+  /// See [`taffy_flex_compute_cpu_ms`](Self::taffy_flex_compute_cpu_ms) for interpretation notes.
+  #[serde(
+    default,
+    skip_serializing_if = "Option::is_none",
+    alias = "taffy_grid_compute_ms"
+  )]
+  pub taffy_grid_compute_cpu_ms: Option<f64>,
   /// Number of measure callback invocations performed by Taffy during flex layout.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub taffy_flex_measure_calls: Option<u64>,
@@ -1939,7 +1962,7 @@ fn diagnostics_session_mutex() -> &'static Mutex<()> {
 ///
 /// The various `*_diagnostics` modules use global state (enabled flag + accumulator). If multiple
 /// renders run concurrently in the same process with diagnostics enabled, their counters can
-/// clobber each other (including dropping `text_shape_ms` entirely). Serialize diagnostics sessions
+/// clobber each other (including dropping `text_shape_cpu_ms` entirely). Serialize diagnostics sessions
 /// to keep metrics consistent for both users and tests.
 struct DiagnosticsSessionGuard {
   _guard: std::sync::MutexGuard<'static, ()>,
@@ -2005,9 +2028,9 @@ fn merge_dom_parse_diagnostics(stats: &mut RenderStats) {
 
 fn merge_text_diagnostics(stats: &mut RenderStats) {
   if let Some(text) = crate::text::pipeline::take_text_diagnostics() {
-    stats.timings.text_fallback_ms = Some(text.coverage_ms);
-    stats.timings.text_shape_ms = Some(text.shape_ms);
-    stats.timings.text_rasterize_ms = Some(text.rasterize_ms);
+    stats.timings.text_fallback_cpu_ms = Some(text.coverage_ms);
+    stats.timings.text_shape_cpu_ms = Some(text.shape_ms);
+    stats.timings.text_rasterize_cpu_ms = Some(text.rasterize_ms);
     stats.counts.shaped_runs = Some(text.shaped_runs);
     stats.counts.glyphs = Some(text.glyphs);
     stats.counts.color_glyph_rasters = Some(text.color_glyph_rasters);
@@ -4012,12 +4035,12 @@ impl FastRender {
           Some((taffy.flex_style_cache_misses + taffy.grid_style_cache_misses) as usize);
         let taffy_perf = crate::layout::taffy_integration::taffy_perf_counters();
         if taffy_perf.flex_compute_ns > 0 || taffy_perf.flex_measure_calls > 0 {
-          rec.stats.layout.taffy_flex_compute_ms =
+          rec.stats.layout.taffy_flex_compute_cpu_ms =
             Some(taffy_perf.flex_compute_ns as f64 / 1_000_000.0);
           rec.stats.layout.taffy_flex_measure_calls = Some(taffy_perf.flex_measure_calls);
         }
         if taffy_perf.grid_compute_ns > 0 || taffy_perf.grid_measure_calls > 0 {
-          rec.stats.layout.taffy_grid_compute_ms =
+          rec.stats.layout.taffy_grid_compute_cpu_ms =
             Some(taffy_perf.grid_compute_ns as f64 / 1_000_000.0);
           rec.stats.layout.taffy_grid_measure_calls = Some(taffy_perf.grid_measure_calls);
         }
@@ -10495,11 +10518,11 @@ mod tests {
       "expected no Taffy nodes to be reused in second render"
     );
     assert_eq!(
-      stats2.layout.taffy_flex_compute_ms, None,
+      stats2.layout.taffy_flex_compute_cpu_ms, None,
       "expected flex compute time to be absent in second render"
     );
     assert_eq!(
-      stats2.layout.taffy_grid_compute_ms, None,
+      stats2.layout.taffy_grid_compute_cpu_ms, None,
       "expected grid compute time to be absent in second render"
     );
     assert_eq!(

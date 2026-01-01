@@ -330,18 +330,18 @@ struct StageTimingsSummary {
   box_tree_ms: f64,
   #[serde(default)]
   layout_ms: f64,
-  #[serde(default)]
-  text_fallback_ms: f64,
-  #[serde(default)]
-  text_shape_ms: f64,
+  #[serde(default, alias = "text_fallback_ms")]
+  text_fallback_cpu_ms: f64,
+  #[serde(default, alias = "text_shape_ms")]
+  text_shape_cpu_ms: f64,
   #[serde(default)]
   paint_build_ms: f64,
   #[serde(default)]
   paint_optimize_ms: f64,
   #[serde(default)]
   paint_rasterize_ms: f64,
-  #[serde(default)]
-  text_rasterize_ms: f64,
+  #[serde(default, alias = "text_rasterize_ms")]
+  text_rasterize_cpu_ms: f64,
   #[serde(default)]
   encode_ms: f64,
 }
@@ -356,12 +356,12 @@ impl StageTimingsSummary {
       ("cascade_ms", self.cascade_ms),
       ("box_tree_ms", self.box_tree_ms),
       ("layout_ms", self.layout_ms),
-      ("text_fallback_ms", self.text_fallback_ms),
-      ("text_shape_ms", self.text_shape_ms),
+      ("text_fallback_cpu_ms", self.text_fallback_cpu_ms),
+      ("text_shape_cpu_ms", self.text_shape_cpu_ms),
       ("paint_build_ms", self.paint_build_ms),
       ("paint_optimize_ms", self.paint_optimize_ms),
       ("paint_rasterize_ms", self.paint_rasterize_ms),
-      ("text_rasterize_ms", self.text_rasterize_ms),
+      ("text_rasterize_cpu_ms", self.text_rasterize_cpu_ms),
       ("encode_ms", self.encode_ms),
     ]
   }
@@ -1165,12 +1165,12 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
     cascade_ms: round_opt(t.cascade_ms),
     box_tree_ms: round_opt(t.box_tree_ms),
     layout_ms: round_opt(t.layout_ms),
-    text_fallback_ms: round_opt(t.text_fallback_ms),
-    text_shape_ms: round_opt(t.text_shape_ms),
+    text_fallback_cpu_ms: round_opt(t.text_fallback_cpu_ms),
+    text_shape_cpu_ms: round_opt(t.text_shape_cpu_ms),
     paint_build_ms: round_opt(t.paint_build_ms),
     paint_optimize_ms: round_opt(t.paint_optimize_ms),
     paint_rasterize_ms: round_opt(t.paint_rasterize_ms),
-    text_rasterize_ms: round_opt(t.text_rasterize_ms),
+    text_rasterize_cpu_ms: round_opt(t.text_rasterize_cpu_ms),
     encode_ms: round_opt(t.encode_ms),
   }
 }
@@ -1179,9 +1179,8 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
 ///
 /// Keep this consistent with `pageset_progress` so regressions attribute similarly across tools.
 ///
-/// Buckets are **wall-clock stage timers**; `text_*` timings are subsystem breakdown counters (and
-/// may be CPU-summed), so they are intentionally excluded from stage buckets to avoid
-/// double-counting.
+/// Buckets reflect wall-clock stage time; CPU-sum subsystem timings (e.g. `*_cpu_ms`) are excluded
+/// to avoid double-counting.
 fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown {
   let t = &stats.timings;
   StageBreakdown {
@@ -1512,15 +1511,15 @@ mod tests {
   use super::*;
 
   #[test]
-  fn stage_breakdown_excludes_text_timings() {
+  fn stage_breakdown_excludes_cpu_sum_timings() {
     let mut stats = fastrender::RenderStats::default();
     stats.timings.layout_ms = Some(1.0);
-    stats.timings.text_fallback_ms = Some(2.0);
-    stats.timings.text_shape_ms = Some(3.0);
+    stats.timings.text_fallback_cpu_ms = Some(2000.0);
+    stats.timings.text_shape_cpu_ms = Some(3000.0);
     stats.timings.paint_build_ms = Some(4.0);
     stats.timings.paint_optimize_ms = Some(5.0);
     stats.timings.paint_rasterize_ms = Some(6.0);
-    stats.timings.text_rasterize_ms = Some(7.0);
+    stats.timings.text_rasterize_cpu_ms = Some(7000.0);
     stats.timings.encode_ms = Some(8.0);
 
     let breakdown = stage_breakdown_from_stats(&stats);

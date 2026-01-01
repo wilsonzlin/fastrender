@@ -6821,9 +6821,9 @@ mod tests {
     assert!(measure_calls > 0, "expected flex measure calls > 0");
     let compute_ms = stats
       .layout
-      .taffy_flex_compute_ms
-      .expect("flex compute_ms should be recorded");
-    assert!(compute_ms >= 0.0, "expected flex compute_ms >= 0");
+      .taffy_flex_compute_cpu_ms
+      .expect("flex compute_cpu_ms should be recorded");
+    assert!(compute_ms >= 0.0, "expected flex compute_cpu_ms >= 0");
   }
 
   #[test]

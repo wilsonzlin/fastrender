@@ -6,7 +6,9 @@
 //! render statistics.
 //!
 //! When enabled, the counters can be used to attribute slow flex/grid layouts by recording:
-//! - wall time spent inside `taffy::TaffyTree::compute_layout_with_measure(_and_cancel)`, and
+//! - **CPU-sum** time spent inside `taffy::TaffyTree::compute_layout_with_measure(_and_cancel)`
+//!   (implemented as the sum of per-call wall-clock durations, which may exceed render wall time
+//!   when flex/grid layout runs in parallel), and
 //! - how many times the measure callback is invoked,
 //! split by Flex vs Grid.
 //!

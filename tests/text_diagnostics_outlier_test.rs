@@ -46,23 +46,21 @@ fn blog_rust_lang_text_diagnostics_are_reasonable() {
     .as_ref()
     .expect("expected diagnostics stats");
 
-  let fallback_ms = stats.timings.text_fallback_ms.unwrap_or(0.0);
-  let shape_ms = stats.timings.text_shape_ms.unwrap_or(0.0);
-  let rasterize_ms = stats.timings.text_rasterize_ms.unwrap_or(0.0);
+  let fallback_cpu_ms = stats.timings.text_fallback_cpu_ms.unwrap_or(0.0);
+  let shape_cpu_ms = stats.timings.text_shape_cpu_ms.unwrap_or(0.0);
+  let rasterize_cpu_ms = stats.timings.text_rasterize_cpu_ms.unwrap_or(0.0);
 
-  assert!(
-    fallback_ms <= wall_ms * 2.0,
-    "text fallback time should be in the same order of magnitude as render wall time \
-     (fallback_ms={fallback_ms:.3} wall_ms={wall_ms:.3})"
-  );
-  assert!(
-    shape_ms <= wall_ms * 2.0,
-    "text shaping time should be in the same order of magnitude as render wall time \
-     (shape_ms={shape_ms:.3} wall_ms={wall_ms:.3})"
-  );
-  assert!(
-    rasterize_ms <= wall_ms * 2.0,
-    "text rasterization time should be in the same order of magnitude as render wall time \
-     (rasterize_ms={rasterize_ms:.3} wall_ms={wall_ms:.3})"
-  );
+  // These values are CPU-sum style accumulators and may exceed the overall wall time when the text
+  // pipeline is invoked many times and/or in parallel. We only assert basic sanity here to catch
+  // NaNs/infinities or obviously invalid negative timings.
+  for (label, value) in [
+    ("text_fallback_cpu_ms", fallback_cpu_ms),
+    ("text_shape_cpu_ms", shape_cpu_ms),
+    ("text_rasterize_cpu_ms", rasterize_cpu_ms),
+  ] {
+    assert!(
+      value.is_finite() && value >= 0.0,
+      "{label} must be a finite non-negative number (value={value} wall_ms={wall_ms:.3})"
+    );
+  }
 }

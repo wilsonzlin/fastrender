@@ -100,7 +100,7 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains("Top fetch stage (top 1 of 1 ok pages):"));
   assert!(stdout.contains("nodes: dom=1200 styled=1100 boxes=900 fragments=1500"));
   assert!(stdout.contains(
-    "text: runs=321 glyphs=6543 fallback_hits=100 fallback_misses=5 last_resort_fallbacks=2 | timings text_shape_ms=123.45ms text_fallback_ms=67.89ms"
+    "text: runs=321 glyphs=6543 fallback_hits=100 fallback_misses=5 last_resort_fallbacks=2 | timings text_shape_cpu_ms=123.45ms text_fallback_cpu_ms=67.89ms"
   ));
   assert!(stdout.contains(
     "cascade: nodes=1100 candidates=6000 matches=2000 selector=320.50ms declaration=210.25ms"
@@ -112,8 +112,8 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains(
     "resources: fetches doc=1 css=4 img=6 font=2 other=0 | image_cache hits=5 misses=3 | resource_cache fresh_hits=10 stale_hits=2 revalidated_hits=1 misses=3 bytes=12.1KiB | inflight waits=7 ms=45.67ms | disk_cache hits=4 misses=1 bytes=66.3KiB lock_waits=2 lock_wait=3.21ms ms=12.34ms | network fetches=5 bytes=4.1KiB ms=67.89ms"
   ));
-  assert!(stdout.contains("Top text_fallback_ms (top 1 of 1 ok pages with stats):"));
-  assert!(stdout.contains("Top text_shape_ms (top 1 of 1 ok pages with stats):"));
+  assert!(stdout.contains("Top text_fallback_cpu_ms (CPU-sum; top 1 of 1 ok pages with stats):"));
+  assert!(stdout.contains("Top text_shape_cpu_ms (CPU-sum; top 1 of 1 ok pages with stats):"));
   assert!(stdout.contains("Resource totals (pages with stats: 1):"));
   assert!(stdout.contains("derived:"));
   assert!(stdout.contains("Top network fetch time (top 1 of 1 with stats):"));
@@ -124,9 +124,9 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains(
     "1. stats_ok timings.css_parse_ms=150.00ms total=1800.00ms hotspot=cascade url=https://stats.test/"
   ));
-  assert!(stdout.contains("Top layout.taffy_grid_compute_ms (top 1 of 1 with stats):"));
+  assert!(stdout.contains("Top layout.taffy_grid_compute_cpu_ms (top 1 of 1 with stats):"));
   assert!(stdout.contains(
-    "1. stats_ok layout.taffy_grid_compute_ms=321.45ms total=1800.00ms hotspot=cascade url=https://stats.test/"
+    "1. stats_ok layout.taffy_grid_compute_cpu_ms=321.45ms total=1800.00ms hotspot=cascade url=https://stats.test/"
   ));
   assert!(stdout.contains("Top paint.gradient_ms (top 1 of 1 with stats):"));
   assert!(stdout.contains(

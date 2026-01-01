@@ -259,7 +259,7 @@ fn bench_flex_measure_hot_path(c: &mut Criterion) {
     // If these ever hit zero, this benchmark is no longer exercising the flex measurement path.
     assert!(perf.flex_measure_calls > 0);
     eprintln!(
-      "layout_hotspots flex_measure: taffy_flex_measure_calls={} taffy_flex_compute_ms={:.2} taffy_nodes_built={} taffy_nodes_reused={}",
+      "layout_hotspots flex_measure: taffy_flex_measure_calls={} taffy_flex_compute_cpu_ms={:.2} taffy_nodes_built={} taffy_nodes_reused={}",
       perf.flex_measure_calls,
       perf.flex_compute_ns as f64 / 1_000_000.0,
       usage.flex_nodes_built,

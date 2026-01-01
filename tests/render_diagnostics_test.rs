@@ -129,12 +129,12 @@ fn diagnostics_include_text_metrics() {
       .expect("stats should be populated");
     let text_shape = stats
       .timings
-      .text_shape_ms
-      .expect("text shaping time should be present");
+      .text_shape_cpu_ms
+      .expect("text shaping cpu time should be present");
     let text_raster = stats
       .timings
-      .text_rasterize_ms
-      .expect("text rasterization time should be present");
+      .text_rasterize_cpu_ms
+      .expect("text rasterization cpu time should be present");
 
     assert!(text_shape > 0.0);
     assert!(text_raster > 0.0);

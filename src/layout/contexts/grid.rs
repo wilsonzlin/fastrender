@@ -5196,8 +5196,8 @@ mod tests {
     assert!(measure_calls > 0, "expected grid measure calls > 0");
     let compute_ms = stats
       .layout
-      .taffy_grid_compute_ms
-      .expect("grid compute_ms should be recorded");
-    assert!(compute_ms >= 0.0, "expected grid compute_ms >= 0");
+      .taffy_grid_compute_cpu_ms
+      .expect("grid compute_cpu_ms should be recorded");
+    assert!(compute_ms >= 0.0, "expected grid compute_cpu_ms >= 0");
   }
 }

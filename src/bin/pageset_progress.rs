@@ -1692,8 +1692,8 @@ fn sync(args: SyncArgs) -> io::Result<()> {
 /// These buckets are **wall-clock stage timers** and are intended to be roughly additive (i.e.
 /// `stages_ms.sum()` should approximately match `total_ms` for successful renders).
 ///
-/// Note: `text_*` timings are **subsystem breakdown** counters (and may be CPU-summed), so they are
-/// intentionally *not* mixed into stage buckets to avoid double-counting and nonsense totals.
+/// CPU-sum subsystem accumulators (e.g. `*_cpu_ms`) are intentionally excluded to avoid
+/// double-counting and nonsense totals.
 ///
 /// Keep this consistent with `perf_smoke` (`stage_breakdown_from_stats`).
 fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
@@ -2358,7 +2358,7 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   };
   let t = &stats.timings;
   let fmt = |v: Option<f64>| -> String { v.map(|ms| format!("{ms:.2}ms")).unwrap_or("-".into()) };
-  log.push_str("Stage timings:\n");
+  log.push_str("Stage timings (wall clock):\n");
   log.push_str(&format!("  html_decode: {}\n", fmt(t.html_decode_ms)));
   log.push_str(&format!("  dom_parse: {}\n", fmt(t.dom_parse_ms)));
   log.push_str(&format!("  dom_html5ever: {}\n", fmt(t.dom_html5ever_ms)));
@@ -2379,16 +2379,47 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   log.push_str(&format!("  cascade: {}\n", fmt(t.cascade_ms)));
   log.push_str(&format!("  box_tree: {}\n", fmt(t.box_tree_ms)));
   log.push_str(&format!("  layout: {}\n", fmt(t.layout_ms)));
-  log.push_str(&format!("  text_fallback: {}\n", fmt(t.text_fallback_ms)));
-  log.push_str(&format!("  text_shape: {}\n", fmt(t.text_shape_ms)));
   log.push_str(&format!("  paint_build: {}\n", fmt(t.paint_build_ms)));
   log.push_str(&format!("  paint_optimize: {}\n", fmt(t.paint_optimize_ms)));
   log.push_str(&format!(
     "  paint_rasterize: {}\n",
     fmt(t.paint_rasterize_ms)
   ));
-  log.push_str(&format!("  text_rasterize: {}\n", fmt(t.text_rasterize_ms)));
   log.push_str(&format!("  encode: {}\n", fmt(t.encode_ms)));
+
+  let have_text_cpu = t.text_fallback_cpu_ms.is_some()
+    || t.text_shape_cpu_ms.is_some()
+    || t.text_rasterize_cpu_ms.is_some();
+  if have_text_cpu {
+    log.push_str("CPU-sum timings (may exceed total wall time):\n");
+    log.push_str(&format!(
+      "  text_fallback_cpu: {}\n",
+      fmt(t.text_fallback_cpu_ms)
+    ));
+    log.push_str(&format!(
+      "  text_shape_cpu: {}\n",
+      fmt(t.text_shape_cpu_ms)
+    ));
+    log.push_str(&format!(
+      "  text_rasterize_cpu: {}\n",
+      fmt(t.text_rasterize_cpu_ms)
+    ));
+  }
+
+  let layout_diag = &stats.layout;
+  let have_taffy_cpu = layout_diag.taffy_flex_compute_cpu_ms.is_some()
+    || layout_diag.taffy_grid_compute_cpu_ms.is_some();
+  if have_taffy_cpu {
+    log.push_str("Layout CPU-sum diagnostics (may exceed layout_ms):\n");
+    log.push_str(&format!(
+      "  taffy_flex_compute_cpu: {}\n",
+      fmt(layout_diag.taffy_flex_compute_cpu_ms)
+    ));
+    log.push_str(&format!(
+      "  taffy_grid_compute_cpu: {}\n",
+      fmt(layout_diag.taffy_grid_compute_cpu_ms)
+    ));
+  }
 }
 
 fn panic_to_string(panic: Box<dyn std::any::Any + Send + 'static>) -> String {
@@ -3405,13 +3436,13 @@ fn text_summary_with_timings(stats: &RenderStats) -> Option<String> {
   let mut timing_parts = Vec::new();
   push_opt_ms(
     &mut timing_parts,
-    "text_shape_ms",
-    stats.timings.text_shape_ms,
+    "text_shape_cpu_ms",
+    stats.timings.text_shape_cpu_ms,
   );
   push_opt_ms(
     &mut timing_parts,
-    "text_fallback_ms",
-    stats.timings.text_fallback_ms,
+    "text_fallback_cpu_ms",
+    stats.timings.text_fallback_cpu_ms,
   );
   if !timing_parts.is_empty() {
     sections.push(format!("timings {}", timing_parts.join(" ")));
@@ -4449,19 +4480,14 @@ fn report(args: ReportArgs) -> io::Result<()> {
         let top = args.top.min(timing_sorted.len());
         if top > 0 {
           println!(
-            "Top {label} (top {top} of {} ok pages with stats):",
+            "Top {label} (CPU-sum; top {top} of {} ok pages with stats):",
             timing_sorted.len(),
             label = $label
           );
           for (idx, (entry, ms)) in timing_sorted.iter().take(top).enumerate() {
             let total_ms = entry.progress.total_ms.unwrap_or(0.0);
-            let share = if total_ms > 0.0 {
-              *ms / total_ms * 100.0
-            } else {
-              0.0
-            };
             println!(
-              "  {}. {} {label}={ms:.2}ms ({share:.1}%) total={total_ms:.2}ms url={}",
+              "  {}. {} {label}={ms:.2}ms total={total_ms:.2}ms url={}",
               idx + 1,
               entry.stem,
               entry.progress.url,
@@ -4473,8 +4499,8 @@ fn report(args: ReportArgs) -> io::Result<()> {
       }};
     }
 
-    text_timing_ranking!("text_fallback_ms", text_fallback_ms);
-    text_timing_ranking!("text_shape_ms", text_shape_ms);
+    text_timing_ranking!("text_fallback_cpu_ms", text_fallback_cpu_ms);
+    text_timing_ranking!("text_shape_cpu_ms", text_shape_cpu_ms);
 
     macro_rules! stat_ranking_ms {
       ($metric:literal, $getter:expr) => {{
@@ -4584,12 +4610,12 @@ fn report(args: ReportArgs) -> io::Result<()> {
     stat_ranking_ms!("timings.paint_rasterize_ms", |stats: &RenderStats| stats
       .timings
       .paint_rasterize_ms);
-    stat_ranking_ms!("layout.taffy_grid_compute_ms", |stats: &RenderStats| stats
+    stat_ranking_ms!("layout.taffy_grid_compute_cpu_ms", |stats: &RenderStats| stats
       .layout
-      .taffy_grid_compute_ms);
-    stat_ranking_ms!("layout.taffy_flex_compute_ms", |stats: &RenderStats| stats
+      .taffy_grid_compute_cpu_ms);
+    stat_ranking_ms!("layout.taffy_flex_compute_cpu_ms", |stats: &RenderStats| stats
       .layout
-      .taffy_flex_compute_ms);
+      .taffy_flex_compute_cpu_ms);
     stat_ranking_ms!("paint.gradient_ms", |stats: &RenderStats| stats
       .paint
       .gradient_ms);
@@ -6880,7 +6906,7 @@ mod tests {
   }
 
   #[test]
-  fn buckets_from_diagnostics_excludes_text_timings() {
+  fn buckets_from_diagnostics_exclude_cpu_sum_timings() {
     let timings = RenderStageTimings {
       html_decode_ms: Some(1.0),
       dom_parse_ms: Some(2.0),
@@ -6892,12 +6918,12 @@ mod tests {
       cascade_ms: Some(5.0),
       box_tree_ms: Some(6.0),
       layout_ms: Some(7.0),
-      text_fallback_ms: Some(1.0),
-      text_shape_ms: Some(8.0),
+      text_fallback_cpu_ms: Some(1000.0),
+      text_shape_cpu_ms: Some(2000.0),
       paint_build_ms: Some(9.0),
       paint_optimize_ms: Some(10.0),
       paint_rasterize_ms: Some(11.0),
-      text_rasterize_ms: Some(12.0),
+      text_rasterize_cpu_ms: Some(3000.0),
       encode_ms: Some(13.0),
       ..RenderStageTimings::default()
     };
