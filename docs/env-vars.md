@@ -66,6 +66,7 @@ Unless noted otherwise, they are parsed once at process startup; invalid values 
   - `pageset_progress`: captured in `target/pageset/logs/<stem>.stderr.log` (worker stdout/stderr).
   - `render_pages`: captured in `fetches/renders/<stem>.stderr.log` when running in the default worker mode (with `--in-process`, logs go to the terminal).
   - Other CLIs (`fetch_pages`, `prefetch_assets`, `fetch_and_render`, `bundle_page`): printed directly to the terminal.
+- `FASTR_HTTP_WWW_FALLBACK=0|1` – enable/disable a single `www.` hostname retry for document-like HTTP(S) requests that fail with a timeout / no-response network error. Defaults to `1`. The rewritten URL is still subject to `ResourcePolicy` allow/deny checks, and the fallback is skipped for IP-literal hosts or hosts that already start with `www.`.
 
 Retry/backoff knobs map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs) and are applied by the CLI helper `build_http_fetcher` (defaults below refer to that CLI path):
 

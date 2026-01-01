@@ -776,6 +776,21 @@ fn http_backend_mode() -> HttpBackendMode {
   })
 }
 
+fn http_www_fallback_enabled() -> bool {
+  static ENABLED: OnceLock<bool> = OnceLock::new();
+  *ENABLED.get_or_init(|| {
+    std::env::var("FASTR_HTTP_WWW_FALLBACK")
+      .ok()
+      .map(|raw| {
+        !matches!(
+          raw.trim().to_ascii_lowercase().as_str(),
+          "0" | "false" | "no" | "off"
+        )
+      })
+      .unwrap_or(true)
+  })
+}
+
 fn should_fallback_to_curl(err: &Error) -> bool {
   let Error::Resource(resource) = err else {
     return false;
@@ -850,6 +865,82 @@ fn http_www_fallback_url(url: &str) -> Option<String> {
 
   let new_host = format!("www.{domain}");
   parsed.set_host(Some(&new_host)).ok()?;
+  Some(parsed.to_string())
+}
+
+fn is_timeout_or_no_response_error(err: &Error) -> bool {
+  let Error::Resource(resource_err) = err else {
+    return false;
+  };
+  // If we received an HTTP status code, then we received an HTTP response (even if the body was
+  // empty/truncated). The `www.` fallback is intended for cases where the origin never responds,
+  // so keep it narrow.
+  if resource_err.status.is_some() {
+    return false;
+  }
+
+  let msg = resource_err.message.to_ascii_lowercase();
+  if msg.contains("overall http timeout budget exceeded") {
+    return false;
+  }
+
+  let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+  while let Some(current) = source {
+    if let Some(io_err) = current.downcast_ref::<io::Error>() {
+      if matches!(
+        io_err.kind(),
+        io::ErrorKind::TimedOut
+          | io::ErrorKind::ConnectionReset
+          | io::ErrorKind::ConnectionAborted
+          | io::ErrorKind::NotConnected
+          | io::ErrorKind::BrokenPipe
+          | io::ErrorKind::UnexpectedEof
+          | io::ErrorKind::WouldBlock
+          | io::ErrorKind::Interrupted
+      ) {
+        return true;
+      }
+    }
+    source = current.source();
+  }
+
+  msg.contains("timeout")
+    || msg.contains("timed out")
+    || msg.contains("no response")
+    || msg.contains("empty reply")
+    || msg.contains("connection reset")
+    || msg.contains("connection aborted")
+    || msg.contains("broken pipe")
+    || msg.contains("unexpected eof")
+    || msg.contains("no http headers")
+}
+
+fn rewrite_url_host_with_www_prefix(
+  url: &str,
+  destination: Option<FetchDestination>,
+) -> Option<String> {
+  let Ok(mut parsed) = Url::parse(url) else {
+    return None;
+  };
+  if !matches!(parsed.scheme(), "http" | "https") {
+    return None;
+  }
+  let profile = destination.unwrap_or_else(|| http_browser_request_profile_for_url(url));
+  if profile != FetchDestination::Document {
+    return None;
+  }
+
+  let host = match parsed.host()? {
+    url::Host::Domain(domain) => domain.to_string(),
+    url::Host::Ipv4(_) | url::Host::Ipv6(_) => return None,
+  };
+
+  if host.len() >= 4 && host[..4].eq_ignore_ascii_case("www.") {
+    return None;
+  }
+
+  let host = format!("www.{host}");
+  parsed.set_host(Some(&host)).ok()?;
   Some(parsed.to_string())
 }
 
@@ -2182,6 +2273,8 @@ impl HttpFetcher {
       .unwrap_or_else(|| Cow::Borrowed(url));
 
     let mut attempted_www_fallback = false;
+    let mut www_fallback_error: Option<Error> = None;
+
     loop {
       let result = match http_backend_mode() {
         HttpBackendMode::Curl => curl_backend::fetch_http_with_accept_inner(
@@ -2278,13 +2371,37 @@ impl HttpFetcher {
       match result {
         Ok(res) => return Ok(res),
         Err(err) => {
-          if !attempted_www_fallback && error_looks_like_dns_failure(&err) {
-            if let Some(url) = http_www_fallback_url(effective_url.as_ref()) {
-              attempted_www_fallback = true;
-              effective_url = Cow::Owned(url);
-              continue;
+          if attempted_www_fallback {
+            if let Some(mut original) = www_fallback_error.take() {
+              match &mut original {
+                Error::Resource(ref mut res) => {
+                  res.message = format!("{}; www fallback failed: {}", res.message, err);
+                }
+                Error::Other(ref mut msg) => {
+                  *msg = format!("{msg}; www fallback failed: {err}");
+                }
+                _ => {}
+              }
+              return Err(original);
             }
+            return Err(err);
           }
+
+          let fallback_url = if error_looks_like_dns_failure(&err) {
+            http_www_fallback_url(effective_url.as_ref())
+          } else if http_www_fallback_enabled() && is_timeout_or_no_response_error(&err) {
+            rewrite_url_host_with_www_prefix(effective_url.as_ref(), destination)
+          } else {
+            None
+          };
+
+          if let Some(url) = fallback_url {
+            attempted_www_fallback = true;
+            www_fallback_error = Some(err);
+            effective_url = Cow::Owned(url);
+            continue;
+          }
+
           return Err(err);
         }
       }
