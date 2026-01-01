@@ -809,6 +809,7 @@ mod tests {
     meta_path.set_extension("bin.meta");
     let meta = StoredMetadata {
       url: format!("https://example.com/{key}"),
+      status: None,
       content_type: Some("application/octet-stream".to_string()),
       etag: None,
       last_modified: None,
@@ -940,6 +941,7 @@ mod tests {
           let stored_at = 1_700_000_000;
           let meta = StoredMetadata {
             url: format!("https://example.com/{key}"),
+            status: None,
             content_type: Some("application/octet-stream".to_string()),
             etag: None,
             last_modified: None,

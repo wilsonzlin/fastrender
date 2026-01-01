@@ -821,6 +821,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       meta.content_type.clone(),
       meta.final_url.clone().or_else(|| Some(url.to_string())),
     );
+    resource.status = meta.status;
     resource.etag = meta.etag.clone();
     resource.last_modified = meta.last_modified.clone();
 
@@ -976,6 +977,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     let meta = StoredMetadata {
       url: url.to_string(),
+      status: resource.status,
       content_type: resource.content_type.clone(),
       etag: etag
         .map(|s| s.to_string())
@@ -1341,6 +1343,8 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct StoredMetadata {
   url: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  status: Option<u16>,
   content_type: Option<String>,
   etag: Option<String>,
   last_modified: Option<String>,
@@ -1797,6 +1801,84 @@ mod tests {
   }
 
   #[test]
+  fn disk_cache_persists_status_across_instances() {
+    #[derive(Clone)]
+    struct StatusFetcher {
+      count: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for StatusFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let mut resource =
+          FetchedResource::new(b"not-found".to_vec(), Some("text/plain".to_string()));
+        resource.status = Some(404);
+        resource.final_url = Some(url.to_string());
+        Ok(resource)
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let url = "https://example.com/missing";
+
+    let seed = DiskCachingFetcher::new(
+      StatusFetcher {
+        count: Arc::clone(&counter),
+      },
+      tmp.path(),
+    );
+    let first = seed.fetch(url).expect("first fetch");
+    assert_eq!(first.bytes, b"not-found");
+    assert_eq!(first.status, Some(404));
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let disk_again = DiskCachingFetcher::new(
+      CountingFetcher {
+        count: Arc::clone(&counter),
+      },
+      tmp.path(),
+    );
+    let second = disk_again.fetch(url).expect("cached fetch");
+    assert_eq!(second.bytes, b"not-found");
+    assert_eq!(second.status, Some(404));
+    assert_eq!(
+      counter.load(Ordering::SeqCst),
+      1,
+      "should hit disk cache without calling the inner fetcher"
+    );
+  }
+
+  #[test]
+  fn disk_cache_loads_legacy_metadata_without_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/legacy-meta";
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+
+    let bytes = b"legacy".to_vec();
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    fs::write(&data_path, &bytes).unwrap();
+
+    let meta_json = serde_json::json!({
+      "url": url,
+      "content_type": "text/plain",
+      "etag": null,
+      "last_modified": null,
+      "final_url": url,
+      "stored_at": now_seconds(),
+      "len": bytes.len(),
+      "cache": null,
+    });
+    fs::write(&meta_path, serde_json::to_vec(&meta_json).unwrap()).unwrap();
+
+    let res = disk.fetch(url).expect("disk hit");
+    assert_eq!(res.bytes, bytes);
+    assert_eq!(res.content_type.as_deref(), Some("text/plain"));
+    assert_eq!(res.status, None);
+  }
+
+  #[test]
   fn disk_cache_persists_no_store_when_allowed() {
     #[derive(Clone)]
     struct NoStoreFetcher {
@@ -1945,6 +2027,7 @@ mod tests {
     fs::write(&data_path, &cached_bytes).unwrap();
     let meta = StoredMetadata {
       url: url.to_string(),
+      status: None,
       content_type: Some("text/plain".to_string()),
       etag: None,
       last_modified: None,
@@ -1995,6 +2078,7 @@ mod tests {
     fs::write(&data_path, &cached_bytes).unwrap();
     let meta = StoredMetadata {
       url: url.to_string(),
+      status: None,
       content_type: Some("text/plain".to_string()),
       etag: None,
       last_modified: None,
@@ -2820,6 +2904,7 @@ mod tests {
     fs::write(&data_path, &bytes).unwrap();
     let meta = StoredMetadata {
       url: url.to_string(),
+      status: None,
       content_type: Some("text/plain".to_string()),
       etag: None,
       last_modified: None,
