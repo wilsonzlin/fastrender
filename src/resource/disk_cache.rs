@@ -21,6 +21,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -181,6 +183,33 @@ pub struct DiskCachingFetcher<F: ResourceFetcher> {
   disk_config: DiskCacheConfig,
   index: DiskCacheIndex,
   policy: Option<ResourcePolicy>,
+  #[cfg(test)]
+  persist_resource_hook: Option<Arc<PersistResourceHook>>,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct PersistResourceHook {
+  before_index: Barrier,
+  after_eviction: Barrier,
+}
+
+#[cfg(test)]
+impl PersistResourceHook {
+  fn new() -> Arc<Self> {
+    Arc::new(Self {
+      before_index: Barrier::new(2),
+      after_eviction: Barrier::new(2),
+    })
+  }
+
+  fn wait_before_index(&self) {
+    let _ = self.before_index.wait();
+  }
+
+  fn wait_after_eviction(&self) {
+    let _ = self.after_eviction.wait();
+  }
 }
 
 struct EntryLock {
@@ -282,6 +311,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       disk_config,
       index,
       policy: None,
+      #[cfg(test)]
+      persist_resource_hook: None,
     }
   }
 
@@ -292,6 +323,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
     self.memory = self.memory.with_policy(policy.clone());
     self.policy = Some(policy);
+    self
+  }
+
+  #[cfg(test)]
+  fn with_persist_resource_hook(mut self, hook: Arc<PersistResourceHook>) -> Self {
+    self.persist_resource_hook = Some(hook);
     self
   }
 
@@ -853,19 +890,30 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
-    // The entry is now fully consistent on disk; release the per-entry lock before touching the
-    // shared index / eviction paths to minimize time that readers block on `.lock` files.
-    drop(entry_lock);
+    // The entry is now fully consistent on disk. Keep the per-entry lock until after we append
+    // the insert record to `index.jsonl` so concurrent evictions don't delete freshly-written files
+    // while the index still reflects the old ordering.
+    #[cfg(test)]
+    if let Some(hook) = self.persist_resource_hook.as_ref() {
+      hook.wait_before_index();
+      hook.wait_after_eviction();
+    }
 
-    self.index.record_insert_and_evict_if_needed(
+    self.index.record_insert(
       &key,
       stored_at,
       resource.bytes.len() as u64,
       &data_path,
       &meta_path,
-      self.disk_config.max_bytes,
-      |path| !self.lock_is_active(path),
     );
+
+    // Now that the entry is journaled, release the per-entry lock before running eviction to keep
+    // lock hold times small and allow oversized entries to self-evict.
+    drop(entry_lock);
+
+    self
+      .index
+      .evict_if_needed(self.disk_config.max_bytes, |path| !self.lock_is_active(path));
   }
 
   fn remove_entry(&self, key: &str, data_path: &Path, meta_path: &Path) -> Result<()> {
@@ -1958,6 +2006,105 @@ mod tests {
       (bin_files as u64) * 32 <= 96,
       "remaining entries should fit within the configured byte budget"
     );
+  }
+
+  #[test]
+  fn refresh_is_not_evicted_between_lock_release_and_journal_insert() {
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("inner fetcher should not be called on a disk cache hit");
+      }
+    }
+
+    #[derive(Clone)]
+    struct NoopFetcher;
+
+    impl ResourceFetcher for NoopFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        unreachable!("test uses persist_resource directly");
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let entry_size = 32usize;
+    let max_bytes = (entry_size * 3) as u64;
+    let memory_config = CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    };
+    let disk_config = DiskCacheConfig {
+      max_bytes,
+      max_age: Some(Duration::from_secs(60)),
+      ..DiskCacheConfig::default()
+    };
+
+    let url_target = "https://example.com/race-target";
+    let url_other1 = "https://example.com/race-other1";
+    let url_other2 = "https://example.com/race-other2";
+
+    // Seed three entries (exactly at the budget) so that a single extra insert triggers eviction.
+    let seeder = DiskCachingFetcher::with_configs(
+      NoopFetcher,
+      tmp.path(),
+      memory_config,
+      disk_config.clone(),
+    );
+    for (url, byte) in [(url_target, b'a'), (url_other1, b'b'), (url_other2, b'c')] {
+      let mut resource =
+        FetchedResource::new(vec![byte; entry_size], Some("text/plain".to_string()));
+      resource.final_url = Some(url.to_string());
+      seeder.persist_resource(url, &resource, None, None, None);
+    }
+
+    let hook = PersistResourceHook::new();
+
+    let cache_dir = tmp.path().to_path_buf();
+    let writer_hook = Arc::clone(&hook);
+    let writer_config = disk_config.clone();
+    let writer = thread::spawn(move || {
+      let disk = DiskCachingFetcher::with_configs(
+        NoopFetcher,
+        cache_dir,
+        memory_config,
+        writer_config,
+      )
+      .with_persist_resource_hook(writer_hook);
+
+      let mut refreshed =
+        FetchedResource::new(vec![b'r'; entry_size], Some("text/plain".to_string()));
+      refreshed.final_url = Some(url_target.to_string());
+      disk.persist_resource(url_target, &refreshed, None, None, None);
+    });
+
+    let cache_dir = tmp.path().to_path_buf();
+    let evict_hook = Arc::clone(&hook);
+    let evict_config = disk_config.clone();
+    let evicter = thread::spawn(move || {
+      // Wait until the writer has renamed files into place but hasn't updated the index yet.
+      evict_hook.wait_before_index();
+
+      let disk =
+        DiskCachingFetcher::with_configs(NoopFetcher, cache_dir, memory_config, evict_config);
+      let mut resource =
+        FetchedResource::new(vec![b'n'; entry_size], Some("text/plain".to_string()));
+      resource.final_url = Some("https://example.com/race-new".to_string());
+      disk.persist_resource(resource.final_url.as_ref().unwrap(), &resource, None, None, None);
+
+      evict_hook.wait_after_eviction();
+    });
+
+    writer.join().unwrap();
+    evicter.join().unwrap();
+
+    // A fresh fetcher instance should hit disk and serve the refreshed bytes without touching the
+    // inner fetcher (which would panic).
+    let reader =
+      DiskCachingFetcher::with_configs(PanicFetcher, tmp.path(), memory_config, disk_config);
+    let res = reader.fetch(url_target).expect("disk cache hit");
+    assert_eq!(res.bytes, vec![b'r'; entry_size]);
   }
 
   #[test]
