@@ -142,3 +142,98 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
     "hotspot should be recomputed from migrated stage buckets"
   );
 }
+
+#[test]
+fn pageset_progress_migrate_rewrites_legacy_cpu_sum_keys() {
+  let tmp = tempfile::tempdir().expect("temp dir");
+  let progress_dir = tmp.path().join("progress");
+  let html_dir = tmp.path().join("html");
+  fs::create_dir_all(&progress_dir).expect("create progress dir");
+  fs::create_dir_all(&html_dir).expect("create html dir");
+
+  // Mark the cache as present so `migrate` doesn't apply the missing-cache placeholder logic.
+  fs::write(html_dir.join("example.com.html"), "<!doctype html>").expect("write cache placeholder");
+
+  let progress_path = progress_dir.join("example.com.json");
+  let progress = serde_json::json!({
+    "url": "https://example.com",
+    "status": "ok",
+    "total_ms": 123.0,
+    "stages_ms": { "fetch": 0.0, "css": 0.0, "cascade": 0.0, "layout": 0.0, "paint": 0.0 },
+    "notes": "",
+    "hotspot": "unknown",
+    "failure_stage": null,
+    "timeout_stage": null,
+    "last_good_commit": "",
+    "last_regression_commit": "",
+    "diagnostics": {
+      "stats": {
+        "timings": {
+          "html_decode_ms": 1.0,
+          "dom_parse_ms": 2.0,
+          "css_parse_ms": 3.0,
+          "cascade_ms": 4.0,
+          "box_tree_ms": 5.0,
+          "layout_ms": 6.0,
+          "paint_build_ms": 7.0,
+          "paint_rasterize_ms": 8.0,
+          // Legacy CPU-sum timing keys should deserialize into `*_cpu_ms` and reserialize with the
+          // new field names.
+          "text_fallback_ms": 10.0,
+          "text_shape_ms": 11.0,
+          "text_rasterize_ms": 12.0
+        },
+        "counts": {},
+        "cascade": {},
+        "layout": {
+          // Legacy Taffy perf counter keys should deserialize into `*_compute_cpu_ms` and reserialize
+          // with the new field names.
+          "taffy_flex_compute_ms": 123.0,
+          "taffy_grid_compute_ms": 456.0
+        },
+        "paint": {},
+        "resources": {
+          "fetch_counts": {}
+        }
+      }
+    }
+  });
+  fs::write(
+    &progress_path,
+    serde_json::to_string_pretty(&progress).expect("serialize progress json"),
+  )
+  .expect("write progress json");
+
+  let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "migrate",
+      "--progress-dir",
+      progress_dir.to_str().expect("progress dir utf-8"),
+      "--html-dir",
+      html_dir.to_str().expect("html dir utf-8"),
+    ])
+    .status()
+    .expect("run pageset_progress migrate");
+  assert!(status.success(), "migrate should succeed");
+
+  let migrated_raw = fs::read_to_string(&progress_path).expect("read migrated json");
+  let migrated: Value = serde_json::from_str(&migrated_raw).expect("parse migrated json value");
+  let timings = &migrated["diagnostics"]["stats"]["timings"];
+  assert_eq!(timings["text_fallback_cpu_ms"].as_f64(), Some(10.0));
+  assert_eq!(timings["text_shape_cpu_ms"].as_f64(), Some(11.0));
+  assert_eq!(timings["text_rasterize_cpu_ms"].as_f64(), Some(12.0));
+  assert!(
+    timings.get("text_fallback_ms").is_none()
+      && timings.get("text_shape_ms").is_none()
+      && timings.get("text_rasterize_ms").is_none(),
+    "legacy text_* keys should not be emitted after migration"
+  );
+
+  let layout = &migrated["diagnostics"]["stats"]["layout"];
+  assert_eq!(layout["taffy_flex_compute_cpu_ms"].as_f64(), Some(123.0));
+  assert_eq!(layout["taffy_grid_compute_cpu_ms"].as_f64(), Some(456.0));
+  assert!(
+    layout.get("taffy_flex_compute_ms").is_none() && layout.get("taffy_grid_compute_ms").is_none(),
+    "legacy taffy_*_compute_ms keys should not be emitted after migration"
+  );
+}
