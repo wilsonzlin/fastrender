@@ -79,6 +79,15 @@ fn link_rel_is_image_asset(rel_value: &str, as_value: Option<&str>) -> bool {
   false
 }
 
+fn link_rel_is_preload_image(rel_value: &str, as_value: Option<&str>) -> bool {
+  rel_value
+    .split_ascii_whitespace()
+    .any(|token| token.eq_ignore_ascii_case("preload"))
+    && as_value
+      .map(|value| value.trim().eq_ignore_ascii_case("image"))
+      .unwrap_or(false)
+}
+
 /// Best-effort extraction of subresource URLs from raw HTML.
 ///
 /// All returned URLs are resolved against `base_url` using [`resolve_href`]. Discovery is
@@ -96,6 +105,7 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
   static ATTR_REL: OnceLock<Regex> = OnceLock::new();
   static ATTR_HREF: OnceLock<Regex> = OnceLock::new();
   static ATTR_AS: OnceLock<Regex> = OnceLock::new();
+  static ATTR_IMAGESRCSET: OnceLock<Regex> = OnceLock::new();
 
   let img_src = IMG_SRC.get_or_init(|| {
     regex(
@@ -156,6 +166,12 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
     regex(
       "(?is)(?:^|\\s)as\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "as attr",
+    )
+  });
+  let attr_imagesrcset = ATTR_IMAGESRCSET.get_or_init(|| {
+    regex(
+      "(?is)(?:^|\\s)imagesrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')",
+      "imagesrcset attr",
     )
   });
 
@@ -249,10 +265,23 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
       .captures(tag)
       .and_then(|c| capture_first(&c, &[1, 2, 3]))
       .unwrap_or("");
-    if href.is_empty() {
-      continue;
+    if !href.is_empty() {
+      push_image(href);
     }
-    push_image(href);
+    // Support responsive preloads: `<link rel=preload as=image imagesrcset=... imagesizes=...>`.
+    // Unlike the DOM-based prefetching path, this regex-based discovery is intentionally liberal
+    // and includes all srcset candidates.
+    if link_rel_is_preload_image(rel, as_value) {
+      let imagesrcset = attr_imagesrcset
+        .captures(tag)
+        .and_then(|c| capture_first(&c, &[1, 2]))
+        .unwrap_or("");
+      if !imagesrcset.is_empty() {
+        for candidate in parse_srcset_urls(imagesrcset, MAX_SRCSET_CANDIDATES) {
+          push_image(candidate);
+        }
+      }
+    }
   }
 
   out
@@ -354,6 +383,24 @@ mod tests {
         "https://example.com/base/manifest.json",
         "https://example.com/mask.svg",
         "https://example.com/base/preload.png",
+      ]
+      .into_iter()
+      .map(str::to_string)
+      .collect::<Vec<_>>()
+    );
+  }
+
+  #[test]
+  fn discovers_preload_imagesrcset_candidates() {
+    let html =
+      r#"<link rel="preload" as="image" href="fallback.png" imagesrcset="a1.png 1x, a2.png 2x">"#;
+    let out = discover_html_asset_urls(html, "https://example.com/base/page.html");
+    assert_eq!(
+      out.images,
+      vec![
+        "https://example.com/base/fallback.png",
+        "https://example.com/base/a1.png",
+        "https://example.com/base/a2.png",
       ]
       .into_iter()
       .map(str::to_string)
