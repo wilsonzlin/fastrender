@@ -604,8 +604,13 @@ fn cache_bundle_disk_cache(args: CacheArgs) -> Result<()> {
     .map(parse_cached_html_meta)
     .unwrap_or_default();
 
-  let base_hint = parsed_meta
-    .url
+  let pageset_url_hint = parsed_meta.url.clone().or_else(|| {
+    fastrender::pageset::pageset_entries()
+      .into_iter()
+      .find(|entry| entry.cache_stem == args.stem)
+      .map(|entry| entry.url)
+  });
+  let base_hint = pageset_url_hint
     .clone()
     .unwrap_or_else(|| format!("file://{}", html_path.display()));
 
@@ -663,7 +668,7 @@ fn cache_bundle_disk_cache(args: CacheArgs) -> Result<()> {
   crawl_document(&recording, &prepared, &render, crawl_mode)?;
 
   let recorded = recording.snapshot();
-  let original_url = parsed_meta.url.unwrap_or(base_hint);
+  let original_url = pageset_url_hint.unwrap_or(base_hint);
   let (manifest, resources, document_bytes) =
     build_manifest(original_url, render, document_resource, recorded);
   write_bundle(&out_path, &manifest, &resources, &document_bytes)?;
