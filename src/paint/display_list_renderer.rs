@@ -833,6 +833,7 @@ fn apply_filters_scoped(
   if filters.is_empty() {
     return Ok(());
   }
+  check_active(RenderStage::Paint)?;
 
   let Some(bounds) = bounds else {
     apply_filters(pixmap, filters, scale, bbox, cache)?;
@@ -886,14 +887,26 @@ fn apply_filters_scoped(
   let bytes_per_row = pixmap.width() as usize * 4;
   let region_row_bytes = region_w as usize * 4;
   let start = (clamped_y as usize * bytes_per_row) + clamped_x as usize * 4;
-  let data = pixmap.data();
-  let dest = region.data_mut();
 
-  for row in 0..region_h as usize {
-    let src_idx = start + row * bytes_per_row;
-    let dst_idx = row * region_row_bytes;
-    dest[dst_idx..dst_idx + region_row_bytes]
-      .copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
+  let copy_in = (|| -> RenderResult<()> {
+    let data = pixmap.data();
+    let dest = region.data_mut();
+    let mut deadline_counter = 0usize;
+    for row in 0..region_h as usize {
+      check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
+      let src_idx = start + row * bytes_per_row;
+      let dst_idx = row * region_row_bytes;
+      dest[dst_idx..dst_idx + region_row_bytes]
+        .copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
+    }
+    Ok(())
+  })();
+  if let Err(err) = copy_in {
+    scratch.region = Some(region);
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
   }
 
   let local_bbox = Rect::from_xywh(
@@ -910,12 +923,24 @@ fn apply_filters_scoped(
     return Err(err);
   }
 
-  for row in 0..region_h as usize {
-    let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
-    let src_idx = row * region_row_bytes;
-    let src = &region.data()[src_idx..src_idx + region_row_bytes];
-    let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + region_row_bytes];
-    dst.copy_from_slice(src);
+  let copy_out = (|| -> RenderResult<()> {
+    let mut deadline_counter = 0usize;
+    for row in 0..region_h as usize {
+      check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
+      let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
+      let src_idx = row * region_row_bytes;
+      let src = &region.data()[src_idx..src_idx + region_row_bytes];
+      let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + region_row_bytes];
+      dst.copy_from_slice(src);
+    }
+    Ok(())
+  })();
+  if let Err(err) = copy_out {
+    scratch.region = Some(region);
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
   }
 
   scratch.region = Some(region);
@@ -938,6 +963,7 @@ fn apply_backdrop_filters(
   if filters.is_empty() {
     return Ok(());
   }
+  check_active(RenderStage::Paint)?;
   let (out_l, out_t, out_r, out_b) =
     filter_outset_with_bounds(filters, scale, Some(filter_bounds)).as_tuple();
   let x = (bounds.min_x() - out_l).floor() as i32;
@@ -981,14 +1007,25 @@ fn apply_backdrop_filters(
   let bytes_per_row = pixmap.width() as usize * 4;
   let region_row_bytes = region_w as usize * 4;
   let start = (clamped_y as usize * bytes_per_row) + clamped_x as usize * 4;
-  let data = pixmap.data();
-  let dest = region.data_mut();
-
-  for row in 0..region_h as usize {
-    let src_idx = start + row * bytes_per_row;
-    let dst_idx = row * region_row_bytes;
-    dest[dst_idx..dst_idx + region_row_bytes]
-      .copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
+  let copy_in = (|| -> RenderResult<()> {
+    let data = pixmap.data();
+    let dest = region.data_mut();
+    let mut deadline_counter = 0usize;
+    for row in 0..region_h as usize {
+      check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
+      let src_idx = start + row * bytes_per_row;
+      let dst_idx = row * region_row_bytes;
+      dest[dst_idx..dst_idx + region_row_bytes]
+        .copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
+    }
+    Ok(())
+  })();
+  if let Err(err) = copy_in {
+    scratch.region = Some(region);
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
   }
 
   let local_bbox = Rect::from_xywh(
@@ -1019,6 +1056,14 @@ fn apply_backdrop_filters(
         }
       },
     };
+    if let Err(err) = check_active(RenderStage::Paint) {
+      scratch.region = Some(region);
+      scratch.radii_mask = Some(mask);
+      BACKDROP_FILTER_SCRATCH.with(|cell| {
+        *cell.borrow_mut() = scratch;
+      });
+      return Err(err);
+    }
     mask.data_mut().fill(0);
     let local_x = bounds.x() - clamped_x as f32;
     let local_y = bounds.y() - clamped_y as f32;
@@ -1094,7 +1139,7 @@ fn apply_backdrop_filters(
 
   let src_start_x = (write_x as i32 - clamped_x as i32) as u32;
   let src_start_y = (write_y as i32 - clamped_y as i32) as u32;
-  {
+  let write_result = (|| -> RenderResult<()> {
     let dest_data = pixmap.data_mut();
     let src_data = region.data();
     let region_width = region.width() as usize;
@@ -1104,19 +1149,28 @@ fn apply_backdrop_filters(
 
     if clip_mask_data.is_none() && radii_mask_data.is_none() {
       let row_bytes = write_w as usize * 4;
+      let mut deadline_counter = 0usize;
       for row in 0..write_h as usize {
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
         let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
         let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
         dest_data[dst_idx..dst_idx + row_bytes]
           .copy_from_slice(&src_data[src_idx..src_idx + row_bytes]);
       }
     } else {
+      let mut deadline_counter = 0usize;
+      let mut pixel_counter = 0usize;
       for row in 0..write_h as usize {
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
         let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
         let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
         let mask_y = write_y as usize + row;
 
         for col in 0..write_w as usize {
+          if pixel_counter & 4095 == 0 {
+            check_active(RenderStage::Paint)?;
+          }
+          pixel_counter = pixel_counter.wrapping_add(1);
           let dest_offset = dst_idx + col * 4;
           let src_offset = src_idx + col * 4;
           let mut coverage = 255u16;
@@ -1163,6 +1217,17 @@ fn apply_backdrop_filters(
         }
       }
     }
+    Ok(())
+  })();
+  if let Err(err) = write_result {
+    scratch.region = Some(region);
+    if let Some(mask) = radii_mask {
+      scratch.radii_mask = Some(mask);
+    }
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
   }
 
   scratch.region = Some(region);
@@ -9567,6 +9632,53 @@ mod tests {
     assert!(
       allocations.is_empty(),
       "expected apply_filters_scoped to reuse scratch pixmaps, got {allocations:?}"
+    );
+  }
+
+  #[test]
+  fn backdrop_filters_times_out_via_cancel_callback() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = BackdropFilterScratch::default();
+    });
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_cb = Arc::clone(&calls);
+    // Let the first deadline check through, then trigger cancellation on the next poll.
+    let cancel = Arc::new(move || calls_cb.fetch_add(1, Ordering::SeqCst) >= 1);
+    let deadline = crate::render_control::RenderDeadline::new(None, Some(cancel));
+
+    let mut pixmap = new_pixmap(128, 128).unwrap();
+    pixmap.data_mut().fill(200);
+    let bounds = Rect::from_xywh(0.0, 0.0, 128.0, 128.0);
+    // Blur with sigma=0 is a no-op and won't call into the blur implementation, so this test
+    // asserts that apply_backdrop_filters itself periodically checks the active deadline.
+    let filters = vec![ResolvedFilter::Blur(0.0)];
+
+    let result = with_deadline(Some(&deadline), || {
+      apply_backdrop_filters(
+        &mut pixmap,
+        &bounds,
+        &filters,
+        BorderRadii::ZERO,
+        1.0,
+        None,
+        None,
+        bounds,
+        None,
+      )
+    });
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(
+      calls.load(Ordering::SeqCst) >= 2,
+      "expected cancel callback to be polled more than once, got {}",
+      calls.load(Ordering::SeqCst)
     );
   }
 

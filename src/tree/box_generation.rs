@@ -3979,7 +3979,7 @@ mod tests {
 
     match &marker_box.box_type {
       BoxType::Marker(marker) => match &marker.content {
-        MarkerContent::Text(t) => assert_eq!(t, "[iii]"),
+        MarkerContent::Text(t) => assert_eq!(t.as_str(), "[iii]"),
         MarkerContent::Image(_) => panic!("expected text marker"),
       },
       _ => panic!("expected marker box"),
@@ -4023,7 +4023,7 @@ mod tests {
 
     match &marker_box.box_type {
       BoxType::Marker(marker) => match &marker.content {
-        MarkerContent::Text(t) => assert_eq!(t, "★ "),
+        MarkerContent::Text(t) => assert_eq!(t.as_str(), "★ "),
         MarkerContent::Image(_) => panic!("expected text marker from string list-style-type"),
       },
       _ => panic!("expected marker box"),
@@ -4076,7 +4076,7 @@ mod tests {
 
     match &marker_box.box_type {
       BoxType::Marker(marker) => match &marker.content {
-        MarkerContent::Text(t) => assert_eq!(t, "◇ "),
+        MarkerContent::Text(t) => assert_eq!(t.as_str(), "◇ "),
         MarkerContent::Image(_) => panic!("expected text marker"),
       },
       _ => panic!("expected marker box"),
