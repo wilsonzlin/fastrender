@@ -51,20 +51,21 @@ Stage buckets:
 - Most `*_ms` fields (e.g. `dom_parse_ms`, `css_parse_ms`, `layout_ms`, `paint_rasterize_ms`) are
   **wall-clock stage timers**: elapsed time from the beginning of that stage until it completes,
   including any parallel work performed inside the stage.
-- Fields ending in `*_cpu_ms` (e.g. `timings.text_fallback_cpu_ms`,
-  `layout.taffy_flex_compute_cpu_ms`) are **CPU-sum style accumulators**: they sum per-call
-  durations across many internal invocations and therefore **may exceed** `total_ms` when work is
-  parallelized or overlapping.
+- Some “subsystem” timings are **CPU-sum style accumulators**: they sum per-call durations across
+  many internal invocations and therefore **may exceed** `total_ms` when work is parallelized or
+  overlapping.
+  - Text: `timings.text_fallback_ms`, `timings.text_shape_ms`, `timings.text_rasterize_ms`
+  - Layout (Taffy): `layout.taffy_flex_compute_ms`, `layout.taffy_grid_compute_ms`
 
-This is intentional: `_cpu_ms` values are useful for attributing hotspots *within* a stage, but they
-should not be interpreted as “share of total render time”.
+This is intentional: these “CPU-sum” values are useful for attributing hotspots *within* a stage,
+but they should not be interpreted as “share of total render time”.
 
-`pageset_progress` stage buckets (`stages_ms`) intentionally use **only wall-clock stage timers** and
-exclude `_cpu_ms` fields so that `hotspot` classification stays meaningful.
+`pageset_progress` stage buckets (`stages_ms`) are a coarse heuristic for `hotspot` classification.
+Today, the buckets are based on the wall-clock stage timers, but they also fold the text subsystem
+accumulators into the `layout`/`paint` buckets. As a result, `fetch + css + cascade + layout + paint`
+may exceed `total_ms` (especially under parallelism).
 
-Stage buckets should be roughly additive for successful renders (`fetch + css + cascade + layout +
-paint ≈ total_ms`). When changing stage timing accounting, you can enable an opt-in sanity check in
-`pageset_progress report`:
+When changing stage timing accounting, you can enable an opt-in sanity check in `pageset_progress report`:
 
 - `--fail-on-stage-sum-exceeds-total` checks `status=ok` entries that have both `total_ms` and
   non-zero stage buckets, failing if the bucket sum materially exceeds `total_ms`.
@@ -79,10 +80,9 @@ disk cache reads, single-flight inflight waits, and total network fetch time). T
 `pageset_progress report --verbose-stats` and stored under `diagnostics.stats` in the per-page JSON
 when present.
 
-Paint and image-cache diagnostics are aggregated across rayon worker threads (parallel display-list
-build + parallel raster tiling). Diagnostics-enabled renders are serialized (see
-`DiagnosticsSessionGuard` in `src/api.rs`) because the underlying collectors use process-global
-state.
+Paint and image-cache diagnostics are currently collected per-thread. When paint work is parallel
+(e.g., raster tiling on rayon worker threads), these counts/timings may **undercount** because
+worker-thread collectors are not merged into the final report.
 
 For cascade hotspots, `RenderDiagnostics.stats.cascade` is normally sparse unless cascade profiling
 is enabled. You can opt in to selector-level counters (rule candidates/matches, bloom fast rejects,
