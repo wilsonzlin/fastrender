@@ -1904,9 +1904,20 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
     size: &mut RadialGradientSize,
     position: &mut GradientPosition,
   ) -> Option<()> {
-    let (prelude, pos_part) = match find_at_separator(text) {
-      Some(idx) => (text.get(..idx)?.trim(), Some(text.get(idx + 4..)?.trim())),
-      None => (text, None),
+    let trimmed = text.trim_start();
+    // Support `radial-gradient(at <position>, ...)` where no explicit shape/size precedes the `at`
+    // clause. (The `" at "` search below requires a leading space.)
+    let (prelude, pos_part) = if trimmed.len() >= 3
+      && trimmed.as_bytes()[0].to_ascii_lowercase() == b'a'
+      && trimmed.as_bytes()[1].to_ascii_lowercase() == b't'
+      && trimmed.as_bytes()[2].is_ascii_whitespace()
+    {
+      ("", Some(trimmed.get(2..)?.trim()))
+    } else {
+      match find_at_separator(text) {
+        Some(idx) => (text.get(..idx)?.trim(), Some(text.get(idx + 4..)?.trim())),
+        None => (text, None),
+      }
     };
 
     if let Some(pos_str) = pos_part {
@@ -2925,6 +2936,20 @@ mod tests {
     assert!((position.x.alignment - 0.5).abs() < 1e-6);
     assert_eq!(stops.len(), 2);
     assert_eq!(stops[1].position, Some(0.75));
+  }
+
+  #[test]
+  fn parses_radial_gradient_at_position_only_prelude() {
+    let value = "radial-gradient(at left top, red, blue)";
+    let PropertyValue::RadialGradient {
+      position, stops, ..
+    } = parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected radial gradient");
+    };
+    assert!((position.x.alignment - 0.0).abs() < 1e-6);
+    assert!((position.y.alignment - 0.0).abs() < 1e-6);
+    assert_eq!(stops.len(), 2);
   }
 
   #[test]
