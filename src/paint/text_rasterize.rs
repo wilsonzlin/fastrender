@@ -62,6 +62,7 @@ use crate::text::font_instance::{
 };
 use crate::text::pipeline::{
   record_text_rasterize, text_diagnostics_timer, GlyphPosition, ShapedRun, TextCacheStats,
+  TextDiagnosticsStage,
 };
 use lru::LruCache;
 use rustybuzz::Variation;
@@ -922,7 +923,7 @@ impl TextRasterizer {
     state: TextRenderState<'_>,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
-    let raster_timer = text_diagnostics_timer();
+    let raster_timer = text_diagnostics_timer(TextDiagnosticsStage::Rasterize);
     let diag_enabled = raster_timer.is_some();
     let mut color_glyph_rasters = 0usize;
     // Note: The shared glyph/color caches are used from multiple threads when paint parallelism is

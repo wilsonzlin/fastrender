@@ -98,7 +98,7 @@ use std::collections::HashSet;
 use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -144,21 +144,154 @@ pub struct TextDiagnostics {
   pub color_glyph_cache: TextCacheStats,
 }
 
-static TEXT_DIAGNOSTICS: OnceLock<Mutex<TextDiagnostics>> = OnceLock::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextDiagnosticsStage {
+  Coverage,
+  Shape,
+  Rasterize,
+}
+
+#[must_use]
+#[derive(Debug)]
+pub(crate) struct TextDiagnosticsTimer {
+  stage: TextDiagnosticsStage,
+  session: u64,
+}
+
+impl Drop for TextDiagnosticsTimer {
+  fn drop(&mut self) {
+    let now = Instant::now();
+    if let Ok(mut state) = diagnostics_cell().lock() {
+      if state.session != self.session {
+        return;
+      }
+      state.end_stage(self.stage, now);
+    }
+  }
+}
+
+#[derive(Debug, Default)]
+struct TextDiagnosticsState {
+  diag: TextDiagnostics,
+  session: u64,
+  coverage_active: usize,
+  coverage_start: Option<Instant>,
+  shape_active: usize,
+  shape_start: Option<Instant>,
+  rasterize_active: usize,
+  rasterize_start: Option<Instant>,
+}
+
+impl TextDiagnosticsState {
+  fn new(session: u64) -> Self {
+    Self {
+      session,
+      ..Self::default()
+    }
+  }
+
+  fn start_stage(&mut self, stage: TextDiagnosticsStage, now: Instant) {
+    match stage {
+      TextDiagnosticsStage::Coverage => {
+        self.coverage_active = self.coverage_active.saturating_add(1);
+        if self.coverage_active == 1 {
+          self.coverage_start = Some(now);
+        }
+      }
+      TextDiagnosticsStage::Shape => {
+        self.shape_active = self.shape_active.saturating_add(1);
+        if self.shape_active == 1 {
+          self.shape_start = Some(now);
+        }
+      }
+      TextDiagnosticsStage::Rasterize => {
+        self.rasterize_active = self.rasterize_active.saturating_add(1);
+        if self.rasterize_active == 1 {
+          self.rasterize_start = Some(now);
+        }
+      }
+    }
+  }
+
+  fn end_stage(&mut self, stage: TextDiagnosticsStage, now: Instant) {
+    match stage {
+      TextDiagnosticsStage::Coverage => {
+        if self.coverage_active == 0 {
+          return;
+        }
+        self.coverage_active -= 1;
+        if self.coverage_active == 0 {
+          if let Some(start) = self.coverage_start.take() {
+            self.diag.coverage_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+          }
+        }
+      }
+      TextDiagnosticsStage::Shape => {
+        if self.shape_active == 0 {
+          return;
+        }
+        self.shape_active -= 1;
+        if self.shape_active == 0 {
+          if let Some(start) = self.shape_start.take() {
+            self.diag.shape_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+          }
+        }
+      }
+      TextDiagnosticsStage::Rasterize => {
+        if self.rasterize_active == 0 {
+          return;
+        }
+        self.rasterize_active -= 1;
+        if self.rasterize_active == 0 {
+          if let Some(start) = self.rasterize_start.take() {
+            self.diag.rasterize_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+          }
+        }
+      }
+    }
+  }
+
+  fn finalize_open_stages(&mut self, now: Instant) {
+    if self.coverage_active > 0 {
+      if let Some(start) = self.coverage_start.take() {
+        self.diag.coverage_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+      }
+    }
+    if self.shape_active > 0 {
+      if let Some(start) = self.shape_start.take() {
+        self.diag.shape_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+      }
+    }
+    if self.rasterize_active > 0 {
+      if let Some(start) = self.rasterize_start.take() {
+        self.diag.rasterize_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+      }
+    }
+    self.coverage_active = 0;
+    self.shape_active = 0;
+    self.rasterize_active = 0;
+  }
+}
+
+static TEXT_DIAGNOSTICS: OnceLock<Mutex<TextDiagnosticsState>> = OnceLock::new();
 static TEXT_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
+static TEXT_DIAGNOSTICS_SESSION: AtomicU64 = AtomicU64::new(0);
 static LAST_RESORT_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SHAPING_FALLBACK_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 const LAST_RESORT_SAMPLE_LIMIT: usize = 8;
 
-fn diagnostics_cell() -> &'static Mutex<TextDiagnostics> {
-  TEXT_DIAGNOSTICS.get_or_init(|| Mutex::new(TextDiagnostics::default()))
+fn diagnostics_cell() -> &'static Mutex<TextDiagnosticsState> {
+  TEXT_DIAGNOSTICS.get_or_init(|| Mutex::new(TextDiagnosticsState::default()))
 }
 
 pub(crate) fn enable_text_diagnostics() {
+  let session = TEXT_DIAGNOSTICS_SESSION
+    .fetch_add(1, Ordering::AcqRel)
+    .wrapping_add(1);
   TEXT_DIAGNOSTICS_ENABLED.store(true, Ordering::Release);
-  if let Ok(mut diag) = diagnostics_cell().lock() {
-    *diag = TextDiagnostics::default();
+  if let Ok(mut state) = diagnostics_cell().lock() {
+    *state = TextDiagnosticsState::new(session);
   }
 }
 
@@ -167,15 +300,32 @@ pub(crate) fn take_text_diagnostics() -> Option<TextDiagnostics> {
     return None;
   }
 
-  diagnostics_cell().lock().ok().map(|diag| diag.clone())
+  let now = Instant::now();
+  diagnostics_cell().lock().ok().map(|mut state| {
+    state.finalize_open_stages(now);
+    let diag = state.diag.clone();
+    // Prevent any late-dropped timers from mutating the taken snapshot (or a later session).
+    state.session = 0;
+    diag
+  })
 }
 
 pub(crate) fn text_diagnostics_enabled() -> bool {
   TEXT_DIAGNOSTICS_ENABLED.load(Ordering::Acquire)
 }
 
-pub(crate) fn text_diagnostics_timer() -> Option<Instant> {
-  text_diagnostics_enabled().then(Instant::now)
+pub(crate) fn text_diagnostics_timer(stage: TextDiagnosticsStage) -> Option<TextDiagnosticsTimer> {
+  if !text_diagnostics_enabled() {
+    return None;
+  }
+  let now = Instant::now();
+  let mut state = diagnostics_cell().lock().ok()?;
+  let session = state.session;
+  if session == 0 {
+    return None;
+  }
+  state.start_stage(stage, now);
+  Some(TextDiagnosticsTimer { stage, session })
 }
 
 fn with_text_diagnostics(f: impl FnOnce(&mut TextDiagnostics)) {
@@ -183,8 +333,8 @@ fn with_text_diagnostics(f: impl FnOnce(&mut TextDiagnostics)) {
     return;
   }
 
-  if let Ok(mut diag) = diagnostics_cell().lock() {
-    f(&mut diag);
+  if let Ok(mut state) = diagnostics_cell().lock() {
+    f(&mut state.diag);
   }
 }
 
@@ -243,24 +393,20 @@ fn record_last_resort_fallback(cluster_text: &str) {
   }
 }
 
-pub(crate) fn record_text_shape(start: Option<Instant>, shaped_runs: usize, glyphs: usize) {
-  if let Some(start) = start {
-    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-    with_text_diagnostics(|diag| {
-      diag.shape_ms += elapsed_ms;
-      diag.shaped_runs += shaped_runs;
-      diag.glyphs += glyphs;
-    });
-  }
+pub(crate) fn record_text_shape(
+  timer: Option<TextDiagnosticsTimer>,
+  shaped_runs: usize,
+  glyphs: usize,
+) {
+  with_text_diagnostics(|diag| {
+    diag.shaped_runs = diag.shaped_runs.saturating_add(shaped_runs);
+    diag.glyphs = diag.glyphs.saturating_add(glyphs);
+  });
+  drop(timer);
 }
 
-pub(crate) fn record_text_coverage(start: Option<Instant>) {
-  if let Some(start) = start {
-    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-    with_text_diagnostics(|diag| {
-      diag.coverage_ms += elapsed_ms;
-    });
-  }
+pub(crate) fn record_text_coverage(timer: Option<TextDiagnosticsTimer>) {
+  drop(timer);
 }
 
 pub(crate) fn record_fallback_cache_stats_delta(
@@ -284,12 +430,12 @@ pub(crate) fn record_fallback_cache_stats_delta(
 }
 
 pub(crate) fn record_text_rasterize(
-  start: Option<Instant>,
+  timer: Option<TextDiagnosticsTimer>,
   color_glyph_rasters: usize,
   cache: TextCacheStats,
   color_cache: TextCacheStats,
 ) {
-  if start.is_none()
+  if timer.is_none()
     && color_glyph_rasters == 0
     && cache.hits == 0
     && cache.misses == 0
@@ -299,9 +445,6 @@ pub(crate) fn record_text_rasterize(
     return;
   }
   with_text_diagnostics(|diag| {
-    if let Some(start) = start {
-      diag.rasterize_ms += start.elapsed().as_secs_f64() * 1000.0;
-    }
     diag.color_glyph_rasters += color_glyph_rasters;
     diag.glyph_cache.hits += cache.hits;
     diag.glyph_cache.misses += cache.misses;
@@ -312,6 +455,7 @@ pub(crate) fn record_text_rasterize(
     diag.color_glyph_cache.evictions += color_cache.evictions;
     diag.color_glyph_cache.bytes = diag.color_glyph_cache.bytes.max(color_cache.bytes);
   });
+  drop(timer);
 }
 
 // ============================================================================
@@ -3869,7 +4013,6 @@ impl ShapingPipeline {
     }
 
     let diag_enabled = text_diagnostics_enabled();
-    let diag_timer = text_diagnostics_timer();
 
     if matches!(style.font_variant, FontVariant::SmallCaps)
       || matches!(
@@ -3892,9 +4035,9 @@ impl ShapingPipeline {
     };
     if let Some(cached) = self.cache.get(&cache_key) {
       let shaped_runs = cached.as_ref().clone();
-      if let Some(start) = diag_timer {
+      if diag_enabled {
         let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
-        record_text_shape(Some(start), shaped_runs.len(), glyphs);
+        record_text_shape(None, shaped_runs.len(), glyphs);
       }
       return Ok(shaped_runs);
     }
@@ -3934,7 +4077,7 @@ impl ShapingPipeline {
     let itemized_runs = split_itemized_runs_by_paragraph(itemized_runs, bidi.paragraphs());
 
     // Step 3: Font matching
-    let coverage_timer = text_diagnostics_timer();
+    let coverage_timer = text_diagnostics_timer(TextDiagnosticsStage::Coverage);
     let font_runs = assign_fonts_internal(
       &itemized_runs,
       style,
@@ -3952,7 +4095,7 @@ impl ShapingPipeline {
       font_runs = apply_sideways_text_orientation(font_runs);
     }
 
-    let shape_timer = text_diagnostics_timer();
+    let shape_timer = text_diagnostics_timer(TextDiagnosticsStage::Shape);
     let mut shaped_runs = Vec::with_capacity(font_runs.len());
     for run in &font_runs {
       let mut shaped = match shape_font_run(run) {
@@ -3982,10 +4125,11 @@ impl ShapingPipeline {
 
     self.cache.insert(cache_key, Arc::new(shaped_runs.clone()));
 
-    if let Some(start) = shape_timer.or(diag_timer) {
-      let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
-      record_text_shape(Some(start), shaped_runs.len(), glyphs);
-    }
+    let glyphs = shape_timer
+      .as_ref()
+      .map(|_| shaped_runs.iter().map(|run| run.glyphs.len()).sum())
+      .unwrap_or(0);
+    record_text_shape(shape_timer, shaped_runs.len(), glyphs);
     if let (Some(before), Some(after)) = (
       cache_stats_before,
       diag_enabled.then(|| self.font_cache.stats()),
@@ -5651,8 +5795,8 @@ mod tests {
 
   #[test]
   fn web_font_only_context_shapes_missing_glyphs_with_notdef() {
-    let font_data = fs::read("tests/fixtures/fonts/NotoSans-subset.ttf")
-      .expect("read NotoSans subset fixture");
+    let font_data =
+      fs::read("tests/fixtures/fonts/NotoSans-subset.ttf").expect("read NotoSans subset fixture");
     let parsed = ttf_parser::Face::parse(&font_data, 0).expect("parse NotoSans subset fixture");
     assert!(parsed.glyph_index('A').is_some());
     assert!(parsed.glyph_index('a').is_some());
@@ -5708,7 +5852,9 @@ mod tests {
       .shape(&missing.to_string(), &style, &ctx)
       .expect("shape missing glyph with web font last-resort");
     assert!(!missing_runs.is_empty());
-    assert!(missing_runs.iter().all(|run| run.font.family == "WebOnlySans"));
+    assert!(missing_runs
+      .iter()
+      .all(|run| run.font.family == "WebOnlySans"));
     assert!(
       missing_runs
         .iter()
