@@ -346,6 +346,13 @@ def _pick_thread(profile: Dict[str, Any], contains: Optional[str]) -> Optional[D
     return best
 
 
+def _thread_matches(t: Dict[str, Any], contains: Optional[str]) -> bool:
+    if not contains:
+        return True
+    hay = f"{t.get('processName','')} {t.get('name','')}"
+    return contains in hay
+
+
 def _to_index(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -401,6 +408,109 @@ def _func_table_len(thread: Dict[str, Any]) -> int:
     return len(names) if isinstance(names, list) else 0
 
 
+def _thread_function_weights(
+    thread: Dict[str, Any],
+) -> Tuple[
+    Dict[int, float],
+    List[float],
+    List[float],
+    float,
+    Dict[str, Any],
+    List[Any],
+    List[Any],
+    List[Any],
+]:
+    """
+    Compute (
+        leaf_by_func_idx,
+        inclusive_unique_by_func_idx,
+        leaf_stack_weight,
+        total_weight,
+        stack_table,
+        prefixes,
+        frames,
+        frame_funcs,
+    ).
+
+    `inclusive_unique_by_func_idx` is inclusive weight where each function is counted at most once per unique stack.
+    """
+    samples = thread.get("samples") or {}
+    n_samples = int(samples.get("length", 0) or 0)
+    sample_stacks = samples.get("stack") or []
+    sample_weights = samples.get("weight") or []
+    total_weight = _sum_weights(samples)
+
+    stack_table = thread.get("stackTable") or {}
+    n_stacks = int(stack_table.get("length", 0) or 0)
+    prefixes = stack_table.get("prefix") or []
+    frames = stack_table.get("frame") or []
+
+    frame_table = thread.get("frameTable") or {}
+    frame_funcs = frame_table.get("func") or []
+
+    n_funcs = _func_table_len(thread)
+
+    leaf_stack_weight = [0.0] * n_stacks
+    for i in range(n_samples):
+        s = sample_stacks[i] if i < len(sample_stacks) else None
+        si = _to_index(s)
+        if si is None or si >= n_stacks:
+            continue
+        w = sample_weights[i] if i < len(sample_weights) else 1
+        if not isinstance(w, (int, float)):
+            w = 1
+        leaf_stack_weight[si] += float(w)
+
+    leaf_func: Dict[int, float] = defaultdict(float)
+    for si in range(n_stacks):
+        lw = leaf_stack_weight[si]
+        if not lw:
+            continue
+        frame_idx = frames[si] if si < len(frames) else None
+        fi = _to_index(frame_idx)
+        if fi is None:
+            continue
+        func_idx = _safe_get(frame_funcs, fi)
+        fxi = _to_index(func_idx)
+        if fxi is None:
+            continue
+        leaf_func[fxi] += lw
+
+    inclusive_unique = [0.0] * n_funcs
+    if n_funcs:
+        seen_marker: List[int] = [0] * n_funcs
+        for stack_i, weight in enumerate(leaf_stack_weight):
+            if weight <= 0:
+                continue
+            mark = stack_i + 1
+            cur = stack_i
+            while True:
+                frame_idx = frames[cur] if cur < len(frames) else None
+                fi = _to_index(frame_idx)
+                func_idx = _safe_get(frame_funcs, fi) if fi is not None else None
+                fxi = _to_index(func_idx)
+                if fxi is not None and fxi < n_funcs:
+                    if seen_marker[fxi] != mark:
+                        seen_marker[fxi] = mark
+                        inclusive_unique[fxi] += weight
+
+                p = prefixes[cur] if cur < len(prefixes) else None
+                cur = _to_index(p)
+                if cur is None or cur >= n_stacks:
+                    break
+
+    return (
+        leaf_func,
+        inclusive_unique,
+        leaf_stack_weight,
+        total_weight,
+        stack_table,
+        prefixes,
+        frames,
+        frame_funcs,
+    )
+
+
 def _format_pct(x: float, total: float) -> str:
     if total <= 0:
         return "0.00%"
@@ -423,10 +533,26 @@ def main() -> int:
         help="Max frames to print for top stacks",
     )
     ap.add_argument(
+        "--function-contains",
+        default=None,
+        help="Only include functions whose label contains this substring (applies to printed tables)",
+    )
+    ap.add_argument(
         "--thread-index",
         type=int,
         default=None,
         help="Select a specific thread by index instead of auto-picking the heaviest",
+    )
+    ap.add_argument(
+        "--all-threads",
+        action="store_true",
+        help="Aggregate top functions across all matching threads (useful when CPU is spread across worker threads)",
+    )
+    ap.add_argument(
+        "--max-threads",
+        type=int,
+        default=None,
+        help="When using --all-threads, consider at most this many heaviest threads (default: all)",
     )
     ap.add_argument(
         "--list-threads",
@@ -454,6 +580,27 @@ def main() -> int:
     profile = _open_profile(args.profile)
     threads = profile.get("threads", []) or []
 
+    addr2line_binary = args.addr2line_binary
+    if addr2line_binary is None:
+        addr2line_binary = _auto_addr2line_binary(args.profile, profile)
+    if addr2line_binary:
+        matches, build_id, expected = _verify_addr2line_binary(profile, addr2line_binary)
+        if matches is False:
+            exp = expected or "<unknown>"
+            msg = (
+                f"WARNING: --addr2line-binary build-id {build_id} does not match profile codeId {exp}; "
+                "symbols may be incorrect."
+            )
+            hint = _guess_sibling_binary(args.profile)
+            if hint:
+                msg += f" (hint: try {hint})"
+            if args.addr2line_binary is None:
+                # Auto-detected, but verification failed: don't print misleading symbols.
+                print(msg + " (auto-detected binary rejected)", file=sys.stderr)
+                addr2line_binary = None
+            else:
+                print(msg, file=sys.stderr)
+
     if args.list_threads:
         weighted = []
         for i, t in enumerate(threads):
@@ -470,6 +617,112 @@ def main() -> int:
         print()
         return 0
 
+    if args.all_threads:
+        weighted = []
+        for i, t in enumerate(threads):
+            if not _thread_matches(t, args.thread_contains):
+                continue
+            w = _sum_weights(t.get("samples") or {})
+            if w > 0:
+                weighted.append((w, i, t))
+        weighted.sort(reverse=True)
+        if args.max_threads is not None:
+            weighted = weighted[: max(0, args.max_threads)]
+
+        if not weighted:
+            print("No matching threads with samples found.")
+            return 1
+
+        total_weight_all = float(sum(w for w, _i, _t in weighted))
+
+        leaf_all = defaultdict(float)
+        inclusive_all = defaultdict(float)
+        for _w, _i, t in weighted:
+            leaf_func, inclusive_unique, _leaf_stack_weight, _tw, _stack_table, _prefixes, _frames, _frame_funcs = (
+                _thread_function_weights(t)
+            )
+            for func_idx, w in leaf_func.items():
+                label = _strip_rust_hash(_func_label(t, func_idx))
+                if label != "<?>":
+                    leaf_all[label] += w
+            for func_idx, w in enumerate(inclusive_unique):
+                if w <= 0:
+                    continue
+                label = _strip_rust_hash(_func_label(t, func_idx))
+                if label != "<?>":
+                    inclusive_all[label] += w
+
+        repo_root = _repo_root()
+        symbolizer: Optional[_Addr2LineSymbolizer] = None
+        if addr2line_binary:
+            symbolizer = _Addr2LineSymbolizer(addr2line_binary, repo_root=repo_root)
+            if args.function_contains:
+                # When filtering on a substring we need symbolized labels to match `fastrender::...`
+                # even when the profile only recorded raw addresses for some frames.
+                addrs = {
+                    label
+                    for label in set(leaf_all.keys()) | set(inclusive_all.keys())
+                    if _ADDR_RE.match(label)
+                }
+                symbolizer.preload(addrs)
+
+        def pretty(label: str) -> str:
+            if symbolizer is None:
+                return label
+            if _ADDR_RE.match(label):
+                return symbolizer.label_for(label)
+            return label
+
+        if args.function_contains:
+            needle = args.function_contains
+
+            leaf_pretty = defaultdict(float)
+            for label, w in leaf_all.items():
+                leaf_pretty[pretty(label)] += w
+            inclusive_pretty = defaultdict(float)
+            for label, w in inclusive_all.items():
+                inclusive_pretty[pretty(label)] += w
+
+            top_leaf = sorted(
+                [(label, w) for label, w in leaf_pretty.items() if needle in label],
+                key=lambda kv: kv[1],
+                reverse=True,
+            )[: args.top]
+            top_inclusive = sorted(
+                [(label, w) for label, w in inclusive_pretty.items() if needle in label],
+                key=lambda kv: kv[1],
+                reverse=True,
+            )[: args.top]
+        else:
+            top_leaf = sorted(leaf_all.items(), key=lambda kv: kv[1], reverse=True)[: args.top]
+            top_inclusive = sorted(inclusive_all.items(), key=lambda kv: kv[1], reverse=True)[: args.top]
+            if symbolizer is not None:
+                # Symbolize just what we're going to print.
+                addrs = {
+                    label
+                    for label, _w in top_leaf + top_inclusive
+                    if _ADDR_RE.match(label)
+                }
+                symbolizer.preload(addrs)
+
+        print(f"Profile: {args.profile}")
+        print(f"Threads: {len(weighted)} (filtered) / {len(threads)} total")
+        print(f"Total weight: {total_weight_all:.0f}")
+        print()
+
+        print("Top functions (SELF / leaf samples, all threads):")
+        for label, w in top_leaf:
+            shown = label if args.function_contains else pretty(label)
+            print(f"  {_format_pct(w, total_weight_all)}  {w:10.0f}  {shown}")
+        print()
+
+        print("Top functions (INCLUSIVE / de-duped stacks, all threads):")
+        for label, w in top_inclusive:
+            shown = label if args.function_contains else pretty(label)
+            print(f"  {_format_pct(w, total_weight_all)}  {w:10.0f}  {shown}")
+        print()
+        return 0
+
     thread: Optional[Dict[str, Any]] = None
     if args.thread_index is not None:
         if args.thread_index < 0 or args.thread_index >= len(threads):
@@ -483,84 +736,20 @@ def main() -> int:
         print("No threads with samples found.")
         return 1
 
-    samples = thread.get("samples") or {}
-    n_samples = int(samples.get("length", 0) or 0)
-    sample_stacks = samples.get("stack") or []
-    sample_weights = samples.get("weight") or []
-    total_weight = _sum_weights(samples)
-
-    stack_table = thread.get("stackTable") or {}
-    n_stacks = int(stack_table.get("length", 0) or 0)
-    prefixes = stack_table.get("prefix") or []
-    frames = stack_table.get("frame") or []
-
-    frame_table = thread.get("frameTable") or {}
-    frame_funcs = frame_table.get("func") or []
-    n_funcs = _func_table_len(thread)
-
-    # leaf weights per stack entry
-    leaf_stack_weight = [0.0] * n_stacks
-    for i in range(n_samples):
-        s = sample_stacks[i] if i < len(sample_stacks) else None
-        si = _to_index(s)
-        if si is None or si >= n_stacks:
-            continue
-        w = sample_weights[i] if i < len(sample_weights) else 1
-        if not isinstance(w, (int, float)):
-            w = 1
-        leaf_stack_weight[si] += float(w)
-
-    leaf_func = defaultdict(float)
-
-    for si in range(n_stacks):
-        frame_idx = frames[si] if si < len(frames) else None
-        fi = _to_index(frame_idx)
-        if fi is None:
-            continue
-        func_idx = _safe_get(frame_funcs, fi)
-        fxi = _to_index(func_idx)
-        if fxi is None:
-            continue
-        lw = leaf_stack_weight[si]
-        if lw:
-            leaf_func[fxi] += lw
-
-    # Inclusive weight that counts each function at most once per unique sample stack.
-    #
-    # We compute this per stack table entry (not per sample) for performance: many samples share
-    # the same stack index, and leaf_stack_weight has already aggregated their weights.
-    #
-    # This avoids the common failure mode where recursive functions or repeated inlined frames make
-    # inclusive percentages exceed 100% and dominate the ranking.
-    inclusive_unique: List[float] = [0.0] * n_funcs
-    seen_marker: List[int] = [0] * n_funcs
-    for stack_i, weight in enumerate(leaf_stack_weight):
-        if weight <= 0:
-            continue
-        mark = stack_i + 1
-        cur = stack_i
-        while True:
-            frame_idx = frames[cur] if cur < len(frames) else None
-            fi = _to_index(frame_idx)
-            func_idx = _safe_get(frame_funcs, fi) if fi is not None else None
-            fxi = _to_index(func_idx)
-            if fxi is not None and fxi < n_funcs:
-                if seen_marker[fxi] != mark:
-                    seen_marker[fxi] = mark
-                    inclusive_unique[fxi] += weight
-
-            p = prefixes[cur] if cur < len(prefixes) else None
-            cur = _to_index(p)
-            if cur is None or cur >= n_stacks:
-                break
+    leaf_func, inclusive_unique, leaf_stack_weight, total_weight, stack_table, prefixes, frames, frame_funcs = (
+        _thread_function_weights(thread)
+    )
+    n_samples = int((thread.get("samples") or {}).get("length", 0) or 0)
 
     # Determine which entries we are going to print so we can optionally symbolize addresses in one batch.
-    top_leaf_items = sorted(leaf_func.items(), key=lambda kv: kv[1], reverse=True)[: args.top]
-    top_inclusive_items = sorted(
+    leaf_items_all = sorted(leaf_func.items(), key=lambda kv: kv[1], reverse=True)
+    inclusive_items_all = sorted(
         [(i, w) for i, w in enumerate(inclusive_unique) if w > 0],
         key=lambda kv: kv[1],
         reverse=True,
-    )[: args.top]
+    )
+    top_leaf_items = leaf_items_all[: args.top]
+    top_inclusive_items = inclusive_items_all[: args.top]
     top_stack_entries = sorted(
         [(w, si) for si, w in enumerate(leaf_stack_weight) if w > 0],
         key=lambda x: x[0],
@@ -590,34 +779,17 @@ def main() -> int:
 
     repo_root = _repo_root()
     symbolizer: Optional[_Addr2LineSymbolizer] = None
-    addr2line_binary = args.addr2line_binary
-    if addr2line_binary is None:
-        addr2line_binary = _auto_addr2line_binary(args.profile, profile)
-    if addr2line_binary:
-        matches, build_id, expected = _verify_addr2line_binary(profile, addr2line_binary)
-        if matches is False:
-            exp = expected or "<unknown>"
-            msg = (
-                f"WARNING: --addr2line-binary build-id {build_id} does not match profile codeId {exp}; "
-                "symbols may be incorrect."
-            )
-            hint = _guess_sibling_binary(args.profile)
-            if hint:
-                msg += f" (hint: try {hint})"
-            if args.addr2line_binary is None:
-                # Auto-detected, but verification failed: don't print misleading symbols.
-                print(msg + " (auto-detected binary rejected)", file=sys.stderr)
-                addr2line_binary = None
-            else:
-                print(msg, file=sys.stderr)
-
     if addr2line_binary:
         # Gather all addresses used by the upcoming output so we can symbolize in a single addr2line call.
         used_funcs: set[int] = set()
-        for func_idx, _w in top_leaf_items:
-            used_funcs.add(func_idx)
-        for func_idx, _w in top_inclusive_items:
-            used_funcs.add(func_idx)
+        if args.function_contains:
+            used_funcs.update(leaf_func.keys())
+            used_funcs.update(i for i, w in enumerate(inclusive_unique) if w > 0)
+        else:
+            for func_idx, _w in top_leaf_items:
+                used_funcs.add(func_idx)
+            for func_idx, _w in top_inclusive_items:
+                used_funcs.add(func_idx)
         for _w, _si, chain, _trunc in stack_chains:
             for sidx in chain:
                 frame_idx = frames[sidx] if sidx < len(frames) else None
@@ -648,6 +820,19 @@ def main() -> int:
         if _ADDR_RE.match(raw):
             return symbolizer.label_for(raw)
         return _strip_rust_hash(raw)
+
+    if args.function_contains:
+        needle = args.function_contains
+        top_leaf_items = [
+            (func_idx, w)
+            for func_idx, w in leaf_items_all
+            if needle in func_label(func_idx)
+        ][: args.top]
+        top_inclusive_items = [
+            (func_idx, w)
+            for func_idx, w in inclusive_items_all
+            if needle in func_label(func_idx)
+        ][: args.top]
 
     print(f"Profile: {args.profile}")
     print(f"Thread:  {_thread_label(thread)}")
