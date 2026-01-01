@@ -459,6 +459,33 @@ fn http_browser_headers_enabled() -> bool {
   })
 }
 
+fn http_browser_origin_and_referer_for_url(url: &Url) -> Option<(String, String)> {
+  if !matches!(url.scheme(), "http" | "https") {
+    return None;
+  }
+
+  let host = match url.host()? {
+    url::Host::Domain(domain) => domain.to_string(),
+    url::Host::Ipv4(addr) => addr.to_string(),
+    url::Host::Ipv6(addr) => format!("[{addr}]"),
+  };
+
+  let mut origin = format!("{}://{}", url.scheme(), host);
+  if let Some(port) = url.port() {
+    let default_port = match url.scheme() {
+      "http" => 80,
+      "https" => 443,
+      _ => port,
+    };
+    if port != default_port {
+      origin.push_str(&format!(":{port}"));
+    }
+  }
+
+  let referer = format!("{origin}/");
+  Some((origin, referer))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HttpBrowserRequestProfile {
   Document,
@@ -513,6 +540,13 @@ impl HttpBrowserRequestProfile {
   fn upgrade_insecure_requests(self) -> Option<&'static str> {
     match self {
       Self::Document => Some("1"),
+      _ => None,
+    }
+  }
+
+  fn origin_and_referer(self, url: &Url) -> Option<(String, String)> {
+    match self {
+      Self::Font => http_browser_origin_and_referer_for_url(url),
       _ => None,
     }
   }
@@ -1817,6 +1851,13 @@ impl HttpFetcher {
           }
           if let Some(value) = profile.upgrade_insecure_requests() {
             request = request.header("Upgrade-Insecure-Requests", value);
+          }
+          if profile == HttpBrowserRequestProfile::Font {
+            if let Ok(parsed) = Url::parse(&current) {
+              if let Some((origin, referer)) = profile.origin_and_referer(&parsed) {
+                request = request.header("Origin", &origin).header("Referer", &referer);
+              }
+            }
           }
         } else {
           request = request.header("Accept", DEFAULT_ACCEPT);
@@ -4029,6 +4070,41 @@ mod tests {
       }
       Err(err) => panic!("bind {context}: {err}"),
     }
+  }
+
+  #[test]
+  fn http_browser_font_origin_and_referer_are_derived_from_url_origin() {
+    let url = "https://www.washingtonpost.com/wp-stat/assets/fonts/ITC_Franklin-Light.woff2";
+    let profile = http_browser_request_profile_for_url(url);
+    assert_eq!(profile, HttpBrowserRequestProfile::Font);
+    let parsed = Url::parse(url).expect("parse url");
+    let (origin, referer) = profile
+      .origin_and_referer(&parsed)
+      .expect("expected origin+referer for font profile");
+    assert_eq!(origin, "https://www.washingtonpost.com");
+    assert_eq!(referer, "https://www.washingtonpost.com/");
+  }
+
+  #[test]
+  fn http_browser_font_origin_and_referer_include_non_default_port() {
+    let url = "https://example.com:8443/fonts/test.woff2";
+    let profile = http_browser_request_profile_for_url(url);
+    assert_eq!(profile, HttpBrowserRequestProfile::Font);
+    let parsed = Url::parse(url).expect("parse url");
+    let (origin, referer) = profile
+      .origin_and_referer(&parsed)
+      .expect("expected origin+referer for font profile");
+    assert_eq!(origin, "https://example.com:8443");
+    assert_eq!(referer, "https://example.com:8443/");
+  }
+
+  #[test]
+  fn http_browser_non_font_does_not_set_origin_or_referer() {
+    let url = "https://example.com/style.css";
+    let profile = http_browser_request_profile_for_url(url);
+    assert_eq!(profile, HttpBrowserRequestProfile::Stylesheet);
+    let parsed = Url::parse(url).expect("parse url");
+    assert_eq!(profile.origin_and_referer(&parsed), None);
   }
 
   static RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
