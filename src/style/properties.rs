@@ -13106,13 +13106,13 @@ mod tests {
 
     assert_eq!(
       styles.transition_properties,
-      vec![TransitionProperty::Name("opacity".to_string())]
+      vec![TransitionProperty::Name("opacity".to_string())].into()
     );
-    assert_eq!(styles.transition_durations, vec![1000.0]);
-    assert_eq!(styles.transition_delays, vec![2000.0]);
+    assert_eq!(styles.transition_durations, vec![1000.0].into());
+    assert_eq!(styles.transition_delays, vec![2000.0].into());
     assert_eq!(
       styles.transition_timing_functions,
-      vec![TransitionTimingFunction::Linear]
+      vec![TransitionTimingFunction::Linear].into()
     );
   }
 
@@ -13147,13 +13147,13 @@ mod tests {
 
     assert_eq!(
       styles.transition_properties,
-      vec![TransitionProperty::Name("opacity".to_string())]
+      vec![TransitionProperty::Name("opacity".to_string())].into()
     );
-    assert_eq!(styles.transition_durations, vec![1000.0]);
-    assert_eq!(styles.transition_delays, vec![2000.0]);
+    assert_eq!(styles.transition_durations, vec![1000.0].into());
+    assert_eq!(styles.transition_delays, vec![2000.0].into());
     assert_eq!(
       styles.transition_timing_functions,
-      vec![TransitionTimingFunction::Linear]
+      vec![TransitionTimingFunction::Linear].into()
     );
   }
 

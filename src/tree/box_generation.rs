@@ -3977,8 +3977,8 @@ mod tests {
     let marker_box = create_marker_box(&styled, &counters).expect("marker");
     counters.leave_scope();
 
-    match marker_box.box_type {
-      BoxType::Marker(marker) => match marker.content {
+    match &marker_box.box_type {
+      BoxType::Marker(marker) => match &marker.content {
         MarkerContent::Text(t) => assert_eq!(t, "[iii]"),
         MarkerContent::Image(_) => panic!("expected text marker"),
       },
@@ -4021,8 +4021,8 @@ mod tests {
     let marker_box = create_marker_box(&styled, &counters).expect("marker");
     counters.leave_scope();
 
-    match marker_box.box_type {
-      BoxType::Marker(marker) => match marker.content {
+    match &marker_box.box_type {
+      BoxType::Marker(marker) => match &marker.content {
         MarkerContent::Text(t) => assert_eq!(t, "★ "),
         MarkerContent::Image(_) => panic!("expected text marker from string list-style-type"),
       },
@@ -4074,8 +4074,8 @@ mod tests {
     let marker_box = create_marker_box(&styled, &counters).expect("marker");
     counters.leave_scope();
 
-    match marker_box.box_type {
-      BoxType::Marker(marker) => match marker.content {
+    match &marker_box.box_type {
+      BoxType::Marker(marker) => match &marker.content {
         MarkerContent::Text(t) => assert_eq!(t, "◇ "),
         MarkerContent::Image(_) => panic!("expected text marker"),
       },
