@@ -5832,7 +5832,10 @@ fn run_queue(
           let exit_summary = summarize_exit_status(&status);
           let exit_str = format_exit_status(exit_summary);
           let entry = running.swap_remove(i);
-          if let Some(p) = read_progress(&entry.item.progress_path) {
+          let progress_written = progress_sentinel_path(&entry.item.stage_path).exists();
+          let fresh_progress =
+            progress_written.then(|| read_progress(&entry.item.progress_path)).flatten();
+          if let Some(p) = fresh_progress {
             if p.status != ProgressStatus::Ok {
               let note = if p.auto_notes.trim().is_empty() {
                 p.notes.as_str()
