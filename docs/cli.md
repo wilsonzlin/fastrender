@@ -90,7 +90,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
       - Safety valves: `--max-images-per-page` and `--max-image-urls-per-element` bound image prefetching when pages contain large `srcset` lists.
       - Note: if you only need a small subset (e.g. icons or video posters) without fetching all `<img>` content, use `--prefetch-icons` / `--prefetch-video-posters` instead.
     - `--prefetch-iframes` (alias `--prefetch-documents`): prefetch `<iframe src>` documents and best-effort warm their linked stylesheets (and images when `--prefetch-images` is enabled).
-    - `--prefetch-embeds`: prefetch `<object data>`, `<embed src>`, and media sources (`<video src>`, `<audio src>`, and `<source src>` under `<video>/<audio>`). If the fetched resource is HTML, it is treated like a nested document and its CSS/images can also be warmed (same behavior as `--prefetch-iframes`).
+    - `--prefetch-embeds`: prefetch `<object data>` and `<embed src>` subresources. If the fetched resource is HTML, it is treated like a nested document and its CSS/images can also be warmed (same behavior as `--prefetch-iframes`).
     - `--prefetch-icons`: prefetch icon resources referenced by `<link rel=icon|shortcut icon|apple-touch-icon|mask-icon href=...>` without enabling full `--prefetch-images` (note: `--prefetch-images` already includes these).
     - `--prefetch-video-posters`: prefetch `<video poster>` images without enabling full `--prefetch-images` (note: `--prefetch-images` already includes posters).
     - `--prefetch-css-url-assets`: prefetch non-CSS assets referenced via CSS `url(...)` (including in `@import`ed stylesheets).

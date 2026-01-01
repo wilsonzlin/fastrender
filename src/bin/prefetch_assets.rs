@@ -125,7 +125,7 @@ mod disk_cache_main {
     )]
     prefetch_iframes: bool,
 
-    /// Prefetch subresources referenced by `<embed src>`, `<object data>`, and `<source>` (true/false)
+    /// Prefetch subresources referenced by `<embed src>` and `<object data>` (true/false)
     #[arg(
       long,
       default_value_t = false,
@@ -810,125 +810,6 @@ mod disk_cache_main {
     }
   }
 
-  fn record_media_source_candidates_from_html(
-    all: &RefCell<BTreeSet<String>>,
-    html: &str,
-    base_url: &str,
-    out: &mut BTreeSet<String>,
-    max_total: usize,
-  ) {
-    const MAX_MEDIA_SOURCES_PER_PAGE: usize = 32;
-    static MEDIA_SRC: OnceLock<Regex> = OnceLock::new();
-
-    let media_src = MEDIA_SRC.get_or_init(|| {
-      Regex::new(concat!(
-        "(?is)",
-        "<(?:video|audio|source)[^>]*\\ssrc\\s*=\\s*",
-        "(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
-      ))
-      .expect("valid media src regex")
-    });
-
-    let mut inserted = 0usize;
-    for caps in media_src.captures_iter(html) {
-      if inserted >= MAX_MEDIA_SOURCES_PER_PAGE {
-        break;
-      }
-      let raw = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .or_else(|| caps.get(3))
-        .map(|m| m.as_str())
-        .unwrap_or("");
-      if raw.trim().is_empty() {
-        continue;
-      }
-      if let Some(resolved) = resolve_href(base_url, raw) {
-        let before = out.len();
-        record_document_candidate(all, out, &resolved, max_total, max_total);
-        if out.len() > before {
-          inserted += 1;
-        }
-      }
-    }
-  }
-
-  fn record_media_source_candidates(
-    all: &RefCell<BTreeSet<String>>,
-    dom: &DomNode,
-    base_url: &str,
-    out: &mut BTreeSet<String>,
-    max_total: usize,
-  ) {
-    // Keep worst-case work bounded for pages with many <video>/<audio> tags.
-    const MAX_MEDIA_SOURCES_PER_PAGE: usize = 32;
-
-    #[derive(Clone, Copy)]
-    struct Flags {
-      in_video: bool,
-      in_audio: bool,
-    }
-
-    let mut stack: Vec<(&DomNode, Flags)> = vec![(
-      dom,
-      Flags {
-        in_video: false,
-        in_audio: false,
-      },
-    )];
-    let mut inserted = 0usize;
-
-    while let Some((node, flags)) = stack.pop() {
-      if inserted >= MAX_MEDIA_SOURCES_PER_PAGE {
-        break;
-      }
-
-      let mut child_flags = flags;
-      if let Some(tag) = node.tag_name() {
-        if tag.eq_ignore_ascii_case("video") {
-          child_flags.in_video = true;
-          if let Some(src) = node.get_attribute_ref("src") {
-            if let Some(resolved) = resolve_href(base_url, src) {
-              let before = out.len();
-              record_document_candidate(all, out, &resolved, max_total, max_total);
-              if out.len() > before {
-                inserted += 1;
-              }
-            }
-          }
-        } else if tag.eq_ignore_ascii_case("audio") {
-          child_flags.in_audio = true;
-          if let Some(src) = node.get_attribute_ref("src") {
-            if let Some(resolved) = resolve_href(base_url, src) {
-              let before = out.len();
-              record_document_candidate(all, out, &resolved, max_total, max_total);
-              if out.len() > before {
-                inserted += 1;
-              }
-            }
-          }
-        } else if (flags.in_video || flags.in_audio) && tag.eq_ignore_ascii_case("source") {
-          if let Some(src) = node.get_attribute_ref("src") {
-            if let Some(resolved) = resolve_href(base_url, src) {
-              let before = out.len();
-              record_document_candidate(all, out, &resolved, max_total, max_total);
-              if out.len() > before {
-                inserted += 1;
-              }
-            }
-          }
-        }
-      }
-
-      if is_inert_template(node) {
-        continue;
-      }
-      for child in node.children.iter().rev() {
-        stack.push((child, child_flags));
-      }
-    }
-  }
-
   fn record_css_url_asset_candidate(
     all: &RefCell<BTreeSet<String>>,
     set: &mut BTreeSet<String>,
@@ -1376,22 +1257,8 @@ mod disk_cache_main {
           &mut document_urls,
           opts.max_discovered_assets_per_page,
         );
-        record_media_source_candidates(
-          &all_asset_urls,
-          dom,
-          base_url,
-          &mut document_urls,
-          opts.max_discovered_assets_per_page,
-        );
       } else {
         record_embed_document_candidates_from_html(
-          &all_asset_urls,
-          html,
-          base_url,
-          &mut document_urls,
-          opts.max_discovered_assets_per_page,
-        );
-        record_media_source_candidates_from_html(
           &all_asset_urls,
           html,
           base_url,

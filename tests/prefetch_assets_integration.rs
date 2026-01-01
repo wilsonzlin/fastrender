@@ -1072,9 +1072,9 @@ fn prefetch_assets_selects_preload_imagesrcset_candidate() {
 }
 
 #[test]
-fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_sources() {
+fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_and_video_posters() {
   let Some(listener) = try_bind_localhost(
-    "prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_sources",
+    "prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_and_video_posters",
   ) else {
     return;
   };
@@ -1106,10 +1106,6 @@ fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_
     (b"dummy-object".to_vec(), "application/octet-stream"),
   );
   responses.insert(
-    "/media.mp4".to_string(),
-    (b"dummy-media".to_vec(), "video/mp4"),
-  );
-  responses.insert(
     "/img.png".to_string(),
     (b"dummy-img".to_vec(), "image/png"),
   );
@@ -1132,7 +1128,6 @@ fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_
       "/icon.png",
       "/embed.bin",
       "/object.bin",
-      "/media.mp4",
       "/__shutdown__",
     ],
   );
@@ -1151,7 +1146,6 @@ fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_
       <img src=\"/img.png\">\
       <iframe src=\"/frame.html\"></iframe>\
       <video poster=\"/poster.png\"></video>\
-      <video><source src=\"/media.mp4\"></video>\
       <picture><source srcset=\"/picture-1x.png 1x, /picture-2x.png 2x\"><img src=\"/fallback.png\"></picture>\
       <object data=\"/object.bin\"></object>\
       <embed src=\"/embed.bin\">\
@@ -1191,7 +1185,6 @@ fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_
   let icon = format!("http://{}/icon.png", addr);
   let embed = format!("http://{}/embed.bin", addr);
   let object = format!("http://{}/object.bin", addr);
-  let media = format!("http://{}/media.mp4", addr);
   let img = format!("http://{}/img.png", addr);
   let picture_1x = format!("http://{}/picture-1x.png", addr);
 
@@ -1213,7 +1206,6 @@ fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_
   assert!(offline.fetch(&icon).is_ok(), "icon should be cached");
   assert!(offline.fetch(&embed).is_ok(), "embed src should be cached");
   assert!(offline.fetch(&object).is_ok(), "object data should be cached");
-  assert!(offline.fetch(&media).is_ok(), "video source should be cached");
   assert!(
     offline.fetch(&img).is_err(),
     "img/src should not be cached without --prefetch-images"
