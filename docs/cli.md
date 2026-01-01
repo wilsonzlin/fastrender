@@ -38,6 +38,13 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 cargo xtask pageset --pages
 
 Note: `fetch_pages` skips URLs already cached under `fetches/html/`. When iterating on HTTP fetch knobs for document fetch failures, re-run with `fetch_pages --refresh` (or delete the cached HTML) so the network path is exercised.
 
+Example (re-fetch HTML for one page with the curl backend + browser headers):
+
+```bash
+FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 \
+  cargo run --release --bin fetch_pages -- --refresh --pages tesco.com
+```
+
 ## `cargo xtask`
 
 `cargo xtask` is the preferred entry point for common workflows; it wraps the binaries below but keeps them usable directly.
