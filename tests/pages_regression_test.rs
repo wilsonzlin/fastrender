@@ -703,6 +703,7 @@ mod pageset_timeouts {
     let (_, diagnostics) = rendered
       .encode(OutputFormat::Png)
       .map_err(|e| format!("encode failed for {}: {:?}", fixture.name, e))?;
+    assert_offline_fixture_complete(&fixture.name, &diagnostics)?;
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let stats = diagnostics.stats.ok_or_else(|| {
@@ -718,6 +719,41 @@ mod pageset_timeouts {
       budget_ms,
       timings: stats.timings,
     })
+  }
+
+  fn assert_offline_fixture_complete(
+    fixture_name: &str,
+    diagnostics: &fastrender::api::RenderDiagnostics,
+  ) -> Result<(), String> {
+    let fetch_error_count = diagnostics.fetch_errors.len();
+    if fetch_error_count == 0 && diagnostics.failure_stage.is_none() {
+      return Ok(());
+    }
+
+    const MAX_SAMPLES: usize = 10;
+    let mut urls: Vec<String> = diagnostics
+      .fetch_errors
+      .iter()
+      .map(|err| err.final_url.as_deref().unwrap_or(&err.url).to_string())
+      .collect();
+    urls.sort();
+    urls.dedup();
+    urls.truncate(MAX_SAMPLES);
+
+    let stage = diagnostics
+      .failure_stage
+      .map(|s| s.as_str().to_string())
+      .unwrap_or_else(|| "<none>".to_string());
+
+    let sample_text = if urls.is_empty() {
+      "<no urls captured>".to_string()
+    } else {
+      urls.join(", ")
+    };
+
+    Err(format!(
+      "offline fixture completeness failure for {fixture_name}: fetch_errors={fetch_error_count}, failure_stage={stage}, samples={sample_text}"
+    ))
   }
 
   fn summarize_timings(timings: &RenderStageTimings) -> String {

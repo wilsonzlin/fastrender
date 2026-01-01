@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
@@ -79,6 +80,16 @@ fn perf_smoke_emits_stage_breakdowns() {
       "fixture counts should contain numeric {key}"
     );
   }
+
+  assert_eq!(
+    fixture["fetch_error_count"].as_u64(),
+    Some(0),
+    "offline fixtures should not emit subresource fetch errors"
+  );
+  assert!(
+    fixture["fetch_error_samples"].is_null() || fixture["fetch_error_samples"].as_array().is_some(),
+    "fixture fetch_error_samples should be null/absent or an array"
+  );
 }
 
 #[test]
@@ -239,5 +250,77 @@ fn perf_smoke_fail_on_budget_exits_non_zero() {
   assert!(
     stderr.contains("flex_dashboard"),
     "stderr should mention the budget-failing fixture; got: {stderr}"
+  );
+}
+
+#[test]
+fn perf_smoke_fail_on_fetch_errors_exits_non_zero() {
+  let temp = tempdir().expect("create temp dir");
+  let output = temp.path().join("perf-smoke.json");
+  let manifest_path = temp.path().join("manifest.json");
+
+  let fixtures_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/pages/fixtures");
+  let fixture_dir = tempfile::tempdir_in(&fixtures_root).expect("create temp fixture dir");
+  let fixture_name = fixture_dir
+    .path()
+    .file_name()
+    .and_then(|s| s.to_str())
+    .expect("fixture dir name should be valid utf8")
+    .to_string();
+
+  fs::write(
+    fixture_dir.path().join("index.html"),
+    r#"<!DOCTYPE html>
+<html>
+  <head><meta charset="utf-8"></head>
+  <body>
+    <img src="https://example.com/blocked.png" width="10" height="10">
+  </body>
+</html>"#,
+  )
+  .expect("write fixture html");
+
+  let manifest = serde_json::json!({
+    "schema_version": 1,
+    "fixtures": [
+      {
+        "name": fixture_name,
+        "viewport": [1040, 1240],
+        "dpr": 1.0,
+        "media": "screen",
+        "budget_ms": 100000.0
+      }
+    ]
+  });
+  fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+  let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
+    .env(PAGESET_TIMEOUT_MANIFEST_ENV, manifest_path)
+    .args([
+      "--suite",
+      "pageset-timeouts",
+      "--fail-on-fetch-errors",
+      "--no-isolate",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .output()
+    .expect("run perf_smoke");
+
+  assert!(
+    !result.status.success(),
+    "perf_smoke should fail when subresource fetch errors are encountered"
+  );
+
+  let data = fs::read_to_string(&output).expect("read perf_smoke output");
+  let summary: Value = serde_json::from_str(&data).expect("parse perf_smoke json");
+  let fixtures = summary["fixtures"]
+    .as_array()
+    .expect("fixtures array must exist");
+  assert_eq!(fixtures.len(), 1, "manifest should run one fixture");
+  let fixture = &fixtures[0];
+  assert!(
+    fixture["fetch_error_count"].as_u64().unwrap_or(0) > 0,
+    "expected fetch_error_count > 0 for blocked subresource"
   );
 }

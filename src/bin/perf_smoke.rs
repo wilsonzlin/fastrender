@@ -90,6 +90,14 @@ struct Args {
   /// Budget checks are independent of baseline regression checking.
   #[arg(long)]
   fail_on_budget: bool,
+
+  /// Exit with a non-zero status when any fixture encounters subresource fetch errors.
+  ///
+  /// This is intended to enforce "offline fixture completeness": offline fixtures should not
+  /// attempt to load http(s) resources (blocked by policy), nor should they reference missing
+  /// local subresources.
+  #[arg(long)]
+  fail_on_fetch_errors: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -469,6 +477,13 @@ struct FixtureSummary {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   budget_ms: Option<f64>,
   #[serde(default)]
+  fetch_error_count: u64,
+  /// Bounded sample of subresource URLs that failed to load (blocked, missing, etc).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  fetch_error_samples: Option<Vec<String>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  failure_stage: Option<String>,
+  #[serde(default)]
   stage_ms: StageBreakdown,
   timings_ms: StageTimingsSummary,
   counts: CountsSummary,
@@ -660,6 +675,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           eprintln!(
             "  {:<30} total_ms={:>8.3} budget_ms={:>8.3}",
             failure.fixture, failure.total_ms, failure.budget_ms
+          );
+        }
+      }
+      exit_code = 1;
+    }
+  }
+
+  if args.fail_on_fetch_errors {
+    let mut failures = Vec::new();
+    for fixture in &summary.fixtures {
+      if fixture.fetch_error_count > 0 || fixture.failure_stage.is_some() {
+        failures.push(fixture);
+      }
+    }
+    if !failures.is_empty() {
+      eprintln!(
+        "Offline fixture completeness failures ({} fixtures had subresource fetch errors):",
+        failures.len()
+      );
+      for fixture in &failures {
+        let stage = fixture
+          .failure_stage
+          .as_deref()
+          .map(|s| format!(" failure_stage={s}"))
+          .unwrap_or_default();
+        if let Some(samples) = fixture
+          .fetch_error_samples
+          .as_ref()
+          .filter(|s| !s.is_empty())
+        {
+          eprintln!(
+            "  {:<30} fetch_errors={}{} samples={}",
+            fixture.name,
+            fixture.fetch_error_count,
+            stage,
+            samples.join(", ")
+          );
+        } else {
+          eprintln!(
+            "  {:<30} fetch_errors={}{}",
+            fixture.name, fixture.fetch_error_count, stage
           );
         }
       }
@@ -1053,6 +1109,25 @@ fn run_fixture_impl(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::e
   let (_, diagnostics) = rendered.encode(OutputFormat::Png)?;
   let total_ms = round_ms(start.elapsed().as_secs_f64() * 1000.0);
 
+  let fetch_error_count = diagnostics.fetch_errors.len() as u64;
+  let fetch_error_samples = if diagnostics.fetch_errors.is_empty() {
+    None
+  } else {
+    const MAX_SAMPLES: usize = 10;
+    let mut urls: Vec<String> = diagnostics
+      .fetch_errors
+      .iter()
+      .map(|err| err.final_url.as_deref().unwrap_or(&err.url).to_string())
+      .collect();
+    urls.sort();
+    urls.dedup();
+    urls.truncate(MAX_SAMPLES);
+    Some(urls)
+  };
+  let failure_stage = diagnostics
+    .failure_stage
+    .map(|stage| stage.as_str().to_string());
+
   let stats = diagnostics
     .stats
     .ok_or("diagnostics missing stats; expected DiagnosticsLevel::Basic")?;
@@ -1070,6 +1145,9 @@ fn run_fixture_impl(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::e
     error: None,
     total_ms,
     budget_ms: spec.budget_ms,
+    fetch_error_count,
+    fetch_error_samples,
+    failure_stage,
     stage_ms: stage_breakdown_from_stats(&stats),
     timings_ms: timings_from_stats(&stats),
     counts: counts_from_stats(&stats),

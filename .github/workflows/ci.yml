@@ -109,6 +109,7 @@ jobs:
             --suite pageset-timeouts \
             --fail-on-missing-fixtures \
             --fail-on-failure \
+            --fail-on-fetch-errors \
             --isolate \
             "${extra_args[@]}" \
             --top 5 \
@@ -161,6 +162,7 @@ jobs:
           #     --suite pageset-timeouts \
           #     --fail-on-missing-fixtures \
           #     --fail-on-failure \
+          #     --fail-on-fetch-errors \
           #     --isolate \
           #     --baseline <path> \
           #     --fail-on-regression \
@@ -180,6 +182,7 @@ jobs:
             --suite pageset-timeouts \
             --fail-on-missing-fixtures \
             --fail-on-failure \
+            --fail-on-fetch-errors \
             --isolate \
             --top 5 \
             --output target/perf_smoke_pageset_timeouts.json \
