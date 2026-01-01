@@ -53,7 +53,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::GlyphInstance;
-use crate::paint::pixmap::{new_pixmap, new_pixmap_with_context};
+use crate::paint::pixmap::new_pixmap_with_context;
 use crate::paint::text_rasterize::{
   concat_transforms, GlyphCacheStats, TextRasterizer, TextRenderState,
 };
@@ -1597,6 +1597,7 @@ impl BlendModeExt for BlendMode {
 mod tests {
   use super::*;
   use crate::paint::pixmap::NewPixmapAllocRecorder;
+  use crate::paint::pixmap::new_pixmap;
   use tiny_skia::MaskType;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {

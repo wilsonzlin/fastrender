@@ -8379,7 +8379,6 @@ mod tests {
   use crate::paint::display_list::ImageFilterQuality;
   use crate::paint::display_list::ImageItem;
   use crate::paint::display_list::LinearGradientItem;
-  use crate::paint::display_list::OpacityItem;
   use crate::paint::display_list::RadialGradientItem;
   use crate::paint::display_list::ResolvedMaskLayer;
   use crate::paint::display_list::StackingContextItem;
