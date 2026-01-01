@@ -1475,11 +1475,10 @@ impl FontDatabase {
   }
 
   pub(crate) fn cached_face(&self, id: ID) -> Option<Arc<CachedFace>> {
-    let face_info = self.db.face(id)?;
-    let data = self.get_or_load_font_data(id)?;
-
     self.glyph_coverage.get_or_put(id, || {
-      face_cache::get_ttf_face_with_data(&data, face_info.index)
+      let face_index = self.db.face(id)?.index;
+      let data = self.get_or_load_font_data(id)?;
+      face_cache::get_ttf_face_with_data(&data, face_index)
     })
   }
 
