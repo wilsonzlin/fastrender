@@ -135,8 +135,8 @@ use crate::render_control::{
 };
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{
-  origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
-  ResourceFetcher, ResourcePolicy,
+  ensure_http_success, ensure_stylesheet_mime_sane, origin_from_url, CachingFetcher,
+  DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy, ResourceFetcher, ResourcePolicy,
 };
 use crate::scroll::ScrollState;
 use crate::style::cascade::apply_starting_style_set_with_media_target_and_imports_cached_with_deadline;
@@ -3646,7 +3646,8 @@ impl FastRender {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
-          let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
+          let _ =
+            crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
           let _ = crate::dom::take_dom_parse_diagnostics();
         }
         if let Some(previous) = restore_cascade_profile {
@@ -4002,8 +4003,7 @@ impl FastRender {
           rec.stats.cascade.rule_candidates_by_tag = Some(profile.rule_candidates_by_tag);
           rec.stats.cascade.rule_candidates_by_attr = Some(profile.rule_candidates_by_attr);
           rec.stats.cascade.rule_candidates_universal = Some(profile.rule_candidates_universal);
-          rec.stats.cascade.selector_bloom_fast_rejects =
-            Some(profile.selector_bloom_fast_rejects);
+          rec.stats.cascade.selector_bloom_fast_rejects = Some(profile.selector_bloom_fast_rejects);
           rec.stats.cascade.selector_attempts_total = Some(profile.selector_attempts_total);
           rec.stats.cascade.selector_attempts_after_bloom =
             Some(profile.selector_attempts_after_bloom);
@@ -4802,7 +4802,8 @@ impl FastRender {
       let _ = crate::image_loader::take_image_cache_diagnostics();
       let _ = crate::paint::painter::take_paint_diagnostics();
       let _ = crate::text::pipeline::take_text_diagnostics();
-      let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
+      let _ =
+        crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
       let _ = crate::dom::take_dom_parse_diagnostics();
     }
     drop(_root_span);
@@ -4938,7 +4939,8 @@ impl FastRender {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
-          let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
+          let _ =
+            crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
           let _ = crate::dom::take_dom_parse_diagnostics();
         }
         return Err(err);
@@ -5076,7 +5078,9 @@ impl FastRender {
             let _ = crate::image_loader::take_image_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
             let _ = crate::text::pipeline::take_text_diagnostics();
-            let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
+            let _ =
+              crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics(
+              );
             let _ = crate::dom::take_dom_parse_diagnostics();
           }
         }
@@ -5330,6 +5334,16 @@ impl FastRender {
               {
                 return Ok((None, local_media_cache));
               }
+            }
+            if let Err(err) = ensure_http_success(&resource, &url)
+              .and_then(|()| ensure_stylesheet_mime_sane(&resource, &url))
+            {
+              if let Some(diag) = diagnostics.as_ref() {
+                if let Ok(mut guard) = diag.lock() {
+                  guard.record_error(ResourceKind::Stylesheet, &url, &err);
+                }
+              }
+              return Ok((None, local_media_cache));
             }
 
             let sheet_base = resource.final_url.clone().unwrap_or_else(|| url.clone());
@@ -5606,6 +5620,16 @@ impl FastRender {
                 {
                   continue;
                 }
+              }
+              if let Err(err) = ensure_http_success(&resource, &stylesheet_url)
+                .and_then(|()| ensure_stylesheet_mime_sane(&resource, &stylesheet_url))
+              {
+                if let Some(diag) = &self.diagnostics {
+                  if let Ok(mut guard) = diag.lock() {
+                    guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
+                  }
+                }
+                continue;
               }
               let mut css_text =
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
@@ -7548,6 +7572,12 @@ impl FastRender {
               continue;
             }
           }
+          if let Err(err) = ensure_http_success(&res, &css_url)
+            .and_then(|()| ensure_stylesheet_mime_sane(&res, &css_url))
+          {
+            diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err);
+            continue;
+          }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url)?;
           let mut import_diags: Vec<(String, String)> = Vec::new();
@@ -7578,6 +7608,12 @@ impl FastRender {
                         err.reason,
                       )));
                     }
+                  }
+                  if let Err(err) =
+                    ensure_http_success(&res, u).and_then(|()| ensure_stylesheet_mime_sane(&res, u))
+                  {
+                    diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
+                    return Err(err);
                   }
                   Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
                 }
@@ -8338,6 +8374,16 @@ impl CssImportLoader for CssImportFetcher {
           err.reason,
         )));
       }
+    }
+    if let Err(err) = ensure_http_success(&resource, &resolved)
+      .and_then(|()| ensure_stylesheet_mime_sane(&resource, &resolved))
+    {
+      if let Some(ctx) = &self.resource_context {
+        if let Some(diag) = &ctx.diagnostics {
+          diag.record_error(ResourceKind::Stylesheet, resolved.as_str(), &err);
+        }
+      }
+      return Err(err);
     }
 
     // Decode CSS bytes with charset handling
@@ -9800,6 +9846,75 @@ mod tests {
   use std::collections::{HashMap, HashSet};
   use std::io;
   use std::sync::{Arc, Mutex};
+
+  #[test]
+  fn inline_stylesheet_http_403_records_fetch_error_status_and_url() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => listener,
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!("skipping inline_stylesheet_http_403_records_fetch_error_status_and_url: cannot bind localhost: {err}");
+        return;
+      }
+      Err(err) => panic!("bind localhost: {err}"),
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let css_url = format!("http://{addr}/blocked.css");
+
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept");
+      let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+      let mut buf = [0u8; 1024];
+      let _ = stream.read(&mut buf);
+
+      let body = "<html>Forbidden</html>";
+      let response = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .expect("write response");
+      let _ = stream.flush();
+    });
+
+    let html = format!(
+      "<!doctype html><html><head><link rel=\"stylesheet\" href=\"{css_url}\"></head><body>ok</body></html>"
+    );
+    let fetcher = HttpFetcher::new();
+    let mut diagnostics = RenderDiagnostics::default();
+    let output = FastRender::inline_stylesheets_for_html(
+      &fetcher,
+      &html,
+      "http://example.com/",
+      MediaType::Screen,
+      None,
+      &mut diagnostics,
+      None,
+    )
+    .expect("inline stylesheets");
+
+    // The stylesheet fetch should fail and be recorded, but inlining remains best-effort.
+    assert!(!output.is_empty());
+    let entry = diagnostics
+      .fetch_errors
+      .iter()
+      .find(|e| e.kind == ResourceKind::Stylesheet && e.url == css_url)
+      .expect("stylesheet fetch error");
+    assert_eq!(entry.status, Some(403));
+    assert_eq!(entry.final_url.as_deref(), Some(css_url.as_str()));
+
+    server.join().unwrap();
+  }
 
   #[derive(Clone, Default)]
   struct MapFetcher {

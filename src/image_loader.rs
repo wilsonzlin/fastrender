@@ -6,9 +6,11 @@
 use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
 use crate::debug::runtime;
 use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
-use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
 use crate::paint::painter::with_paint_diagnostics;
+use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
 use crate::render_control::{self, check_active, check_active_periodic};
+use crate::resource::ensure_http_success;
+use crate::resource::ensure_image_mime_sane;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;
@@ -1393,11 +1395,9 @@ impl Drop for ProbeInFlightOwnerGuard<'_> {
       reason: "in-flight image probe owner dropped without resolving".to_string(),
     });
     self.cache.record_image_error(self.url, &err);
-    self.cache.finish_meta_inflight(
-      self.url,
-      &self.flight,
-      SharedMetaResult::Error(err),
-    );
+    self
+      .cache
+      .finish_meta_inflight(self.url, &self.flight, SharedMetaResult::Error(err));
   }
 }
 
@@ -1864,6 +1864,12 @@ impl ImageCache {
         return Err(blocked);
       }
     }
+    if let Err(err) = ensure_http_success(&resource, resolved_url)
+      .and_then(|()| ensure_image_mime_sane(&resource, resolved_url))
+    {
+      self.record_image_error(resolved_url, &err);
+      return Err(err);
+    }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let decode_timer = Instant::now();
     let decode_start = profile_enabled.then_some(decode_timer);
@@ -1995,6 +2001,12 @@ impl ImageCache {
         self.record_image_error(resolved_url, &blocked);
         return Err(blocked);
       }
+    }
+    if let Err(err) = ensure_http_success(resource.as_ref(), resolved_url)
+      .and_then(|()| ensure_image_mime_sane(resource.as_ref(), resolved_url))
+    {
+      self.record_image_error(resolved_url, &err);
+      return Err(err);
     }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let probe_start = profile_enabled.then(Instant::now);
@@ -3174,6 +3186,74 @@ mod tests {
   use std::time::SystemTime;
 
   #[test]
+  fn http_403_image_reports_resource_error_with_status() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => listener,
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!("skipping http_403_image_reports_resource_error_with_status: cannot bind localhost: {err}");
+        return;
+      }
+      Err(err) => panic!("bind localhost: {err}"),
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/blocked.png");
+
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept");
+      let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+      let mut buf = [0u8; 1024];
+      let _ = stream.read(&mut buf);
+
+      let body = "<html>Forbidden</html>";
+      let response = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .expect("write response");
+      let _ = stream.flush();
+    });
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let mut cache = ImageCache::with_fetcher(Arc::new(HttpFetcher::new()));
+    cache.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+
+    let err = match cache.load(&url) {
+      Ok(_) => panic!("image load should fail"),
+      Err(err) => err,
+    };
+    match err {
+      Error::Resource(ref res) => {
+        assert_eq!(res.status, Some(403));
+        assert_eq!(res.final_url.as_deref(), Some(url.as_str()));
+      }
+      other => panic!("expected resource error, got {other:?}"),
+    }
+
+    let diag = diagnostics.lock().unwrap().clone();
+    let entry = diag
+      .fetch_errors
+      .iter()
+      .find(|e| e.kind == ResourceKind::Image && e.url == url)
+      .expect("diagnostics entry");
+    assert_eq!(entry.status, Some(403));
+    assert_eq!(entry.final_url.as_deref(), Some(url.as_str()));
+
+    server.join().unwrap();
+  }
+
+  #[test]
   fn svg_viewbox_renders_with_default_letterboxing() {
     let cache = ImageCache::new();
     let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='red'/></svg>";
@@ -3702,7 +3782,8 @@ mod tests {
     let waiter_handle = thread::spawn(move || {
       let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
       let start = Instant::now();
-      let result = render_control::with_deadline(Some(&deadline), || waiter_cache.load(&waiter_url));
+      let result =
+        render_control::with_deadline(Some(&deadline), || waiter_cache.load(&waiter_url));
       tx.send((result, start.elapsed())).unwrap();
     });
 
@@ -3791,7 +3872,8 @@ mod tests {
     let waiter_handle = thread::spawn(move || {
       let deadline = render_control::RenderDeadline::new(None, Some(cancel));
       let start = Instant::now();
-      let result = render_control::with_deadline(Some(&deadline), || waiter_cache.load(&waiter_url));
+      let result =
+        render_control::with_deadline(Some(&deadline), || waiter_cache.load(&waiter_url));
       tx.send((result, start.elapsed())).unwrap();
     });
 

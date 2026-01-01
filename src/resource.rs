@@ -22,6 +22,7 @@
 //! # }
 //! ```
 
+use crate::debug::runtime;
 use crate::error::{Error, ImageError, RenderError, RenderStage, ResourceError, Result};
 use crate::render_control::{self, check_active_periodic};
 use brotli::Decompressor;
@@ -1176,6 +1177,162 @@ impl FetchedResource {
       .map(|ct| ct.contains("image/svg"))
       .unwrap_or(false)
   }
+}
+
+// ============================================================================
+// Subresource response validation
+// ============================================================================
+
+/// Returns true if strict MIME sanity checks are enabled for HTTP subresources.
+///
+/// Controlled by `FASTR_FETCH_STRICT_MIME` (truthy/falsey). Defaults to `true`.
+pub fn strict_mime_checks_enabled() -> bool {
+  runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_STRICT_MIME", true)
+}
+
+fn response_final_url(resource: &FetchedResource, requested_url: &str) -> String {
+  resource
+    .final_url
+    .clone()
+    .unwrap_or_else(|| requested_url.to_string())
+}
+
+fn response_resource_error(
+  resource: &FetchedResource,
+  requested_url: &str,
+  message: impl Into<String>,
+) -> Error {
+  let mut err = ResourceError::new(requested_url.to_string(), message)
+    .with_final_url(response_final_url(resource, requested_url))
+    .with_validators(resource.etag.clone(), resource.last_modified.clone());
+  if let Some(status) = resource.status {
+    err = err.with_status(status);
+  }
+  Error::Resource(err)
+}
+
+fn content_type_mime(content_type: &str) -> &str {
+  content_type
+    .split(';')
+    .next()
+    .unwrap_or(content_type)
+    .trim()
+}
+
+fn mime_is_html(mime: &str) -> bool {
+  let lower = mime.trim().to_ascii_lowercase();
+  lower.starts_with("text/html") || lower.starts_with("application/xhtml+xml")
+}
+
+fn url_looks_like_suffix(url: &str, suffix: &str) -> bool {
+  let lower = url.trim().to_ascii_lowercase();
+  let lower = lower
+    .split_once('#')
+    .map(|(before, _)| before)
+    .unwrap_or(&lower);
+  let lower = lower
+    .split_once('?')
+    .map(|(before, _)| before)
+    .unwrap_or(lower);
+  lower.ends_with(suffix)
+}
+
+fn url_looks_like_svg_or_html(url: &str) -> bool {
+  url_looks_like_suffix(url, ".svg")
+    || url_looks_like_suffix(url, ".svgz")
+    || url_looks_like_suffix(url, ".html")
+    || url_looks_like_suffix(url, ".htm")
+}
+
+/// Ensures an HTTP response represents a successful fetch for a subresource.
+///
+/// `HttpFetcher` intentionally returns `Ok(FetchedResource)` for many non-2xx responses so that
+/// higher-level code can decide how to handle HTTP errors. For subresources (images, fonts,
+/// stylesheets), we generally want to surface the HTTP status and final URL as a fetch error
+/// instead of attempting to decode/parse an HTML error page.
+pub fn ensure_http_success(resource: &FetchedResource, requested_url: &str) -> Result<()> {
+  let Some(code) = resource.status else {
+    return Ok(());
+  };
+  if code < 400 {
+    return Ok(());
+  }
+  Err(response_resource_error(
+    resource,
+    requested_url,
+    format!("HTTP status {code}"),
+  ))
+}
+
+/// Best-effort MIME sanity check for fetched images.
+///
+/// When enabled, prevents common bot-mitigation HTML responses (`text/html`, `text/plain`) from
+/// being fed into image decoders, surfacing a `ResourceError` instead.
+pub fn ensure_image_mime_sane(resource: &FetchedResource, requested_url: &str) -> Result<()> {
+  if !strict_mime_checks_enabled() || resource.status.is_none() {
+    return Ok(());
+  }
+  if url_looks_like_svg_or_html(requested_url) {
+    return Ok(());
+  }
+  let Some(content_type) = resource.content_type.as_deref() else {
+    return Ok(());
+  };
+  let mime = content_type_mime(content_type);
+  let lower = mime.to_ascii_lowercase();
+  if lower.starts_with("text/html") || lower.starts_with("application/xhtml+xml") {
+    return Err(response_resource_error(
+      resource,
+      requested_url,
+      format!("unexpected content-type {mime}"),
+    ));
+  }
+  if lower.starts_with("text/plain") {
+    return Err(response_resource_error(
+      resource,
+      requested_url,
+      format!("unexpected content-type {mime}"),
+    ));
+  }
+  Ok(())
+}
+
+/// Best-effort MIME sanity check for fetched fonts.
+pub fn ensure_font_mime_sane(resource: &FetchedResource, requested_url: &str) -> Result<()> {
+  if !strict_mime_checks_enabled() || resource.status.is_none() {
+    return Ok(());
+  }
+  let Some(content_type) = resource.content_type.as_deref() else {
+    return Ok(());
+  };
+  let mime = content_type_mime(content_type);
+  if mime_is_html(mime) {
+    return Err(response_resource_error(
+      resource,
+      requested_url,
+      format!("unexpected content-type {mime}"),
+    ));
+  }
+  Ok(())
+}
+
+/// Best-effort MIME sanity check for fetched stylesheets.
+pub fn ensure_stylesheet_mime_sane(resource: &FetchedResource, requested_url: &str) -> Result<()> {
+  if !strict_mime_checks_enabled() || resource.status.is_none() {
+    return Ok(());
+  }
+  let Some(content_type) = resource.content_type.as_deref() else {
+    return Ok(());
+  };
+  let mime = content_type_mime(content_type);
+  if mime_is_html(mime) {
+    return Err(response_resource_error(
+      resource,
+      requested_url,
+      format!("unexpected content-type {mime}"),
+    ));
+  }
+  Ok(())
 }
 
 /// Parses cached HTML metadata sidecars.
@@ -2901,7 +3058,11 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       };
     }
 
-    if http_cache.as_ref().map(|meta| meta.no_store).unwrap_or(false) {
+    if http_cache
+      .as_ref()
+      .map(|meta| meta.no_store)
+      .unwrap_or(false)
+    {
       if !self.config.allow_no_store {
         return CachePlan {
           cached: None,
@@ -4146,8 +4307,7 @@ mod tests {
     }
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let mut resource =
-      FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+    let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
     resource.final_url = Some("https://example.com/no-store".to_string());
     resource.cache_policy = Some(HttpCachePolicy {
       no_store: true,
@@ -4190,8 +4350,7 @@ mod tests {
     impl ResourceFetcher for NoStoreFetcher {
       fn fetch(&self, url: &str) -> Result<FetchedResource> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let mut resource =
-          FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+        let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
         resource.final_url = Some(url.to_string());
         resource.cache_policy = Some(HttpCachePolicy {
           no_store: true,

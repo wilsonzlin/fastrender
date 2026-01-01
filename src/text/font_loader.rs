@@ -36,7 +36,9 @@ use crate::error::FontError;
 use crate::error::RenderStage;
 use crate::error::Result;
 use crate::render_control;
-use crate::resource::{FetchedResource, ResourceFetcher};
+use crate::resource::{
+  ensure_font_mime_sane, ensure_http_success, FetchedResource, ResourceFetcher,
+};
 use crate::text::face_cache;
 use crate::text::font_db::FontCacheConfig;
 use crate::text::font_db::FontConfig;
@@ -634,7 +636,10 @@ impl FontContext {
     let active_generation = self.active_web_font_generation.load(Ordering::Relaxed);
     let faces = self.web_fonts.read().ok()?;
 
-    fn choose<'a>(current: Option<&'a WebFontFace>, candidate: &'a WebFontFace) -> Option<&'a WebFontFace> {
+    fn choose<'a>(
+      current: Option<&'a WebFontFace>,
+      candidate: &'a WebFontFace,
+    ) -> Option<&'a WebFontFace> {
       match current {
         None => Some(candidate),
         Some(best) => {
@@ -651,7 +656,10 @@ impl FontContext {
     let mut best_non_emoji: Option<&WebFontFace> = None;
     let mut best_basic_latin: Option<&WebFontFace> = None;
 
-    for face in faces.iter().filter(|face| face.generation <= active_generation) {
+    for face in faces
+      .iter()
+      .filter(|face| face.generation <= active_generation)
+    {
       best_any = choose(best_any, face);
       let is_emoji = FontDatabase::family_name_is_emoji_font(&face.family);
       if is_emoji {
@@ -1154,9 +1162,7 @@ impl FontContext {
 
       // If the render deadline has expired (timeout or cooperative cancellation), stop blocking
       // on web fonts so the pipeline can promptly surface the deadline error.
-      if render_deadline
-        .is_some_and(|deadline| deadline.check(RenderStage::Css).is_err())
-      {
+      if render_deadline.is_some_and(|deadline| deadline.check(RenderStage::Css).is_err()) {
         break;
       }
 
@@ -1483,6 +1489,12 @@ impl FontContext {
         self.record_font_error(resolved_url, &blocked);
         return Err(blocked);
       }
+    }
+    if let Err(err) = ensure_http_success(&resource, resolved_url)
+      .and_then(|()| ensure_font_mime_sane(&resource, resolved_url))
+    {
+      self.record_font_error(resolved_url, &err);
+      return Err(err);
     }
     let decoded = match decode_font_bytes(resource.bytes, resource.content_type.as_deref()) {
       Ok(decoded) => decoded,
