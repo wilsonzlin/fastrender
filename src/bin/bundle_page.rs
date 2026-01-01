@@ -611,10 +611,20 @@ fn cache_bundle_disk_cache(args: CacheArgs) -> Result<()> {
     .unwrap_or_default();
 
   let pageset_url_hint = parsed_meta.url.clone().or_else(|| {
-    fastrender::pageset::pageset_entries()
-      .into_iter()
-      .find(|entry| entry.cache_stem == args.stem)
-      .map(|entry| entry.url)
+    let entries = fastrender::pageset::pageset_entries();
+    if let Some(entry) = entries.iter().find(|entry| entry.cache_stem == args.stem) {
+      return Some(entry.url.clone());
+    }
+
+    let Some(stem) = fastrender::pageset::pageset_stem(&args.stem) else {
+      return None;
+    };
+    let mut candidates = entries.into_iter().filter(|entry| entry.stem == stem);
+    let entry = candidates.next()?;
+    if candidates.next().is_some() {
+      return None;
+    }
+    Some(entry.url)
   });
   let base_hint = pageset_url_hint
     .clone()

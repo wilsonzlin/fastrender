@@ -3,7 +3,7 @@
 use fastrender::resource::bundle::{Bundle, BundledFetcher};
 use fastrender::resource::{
   normalize_user_agent_for_log, CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher,
-  FetchedResource, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+  FetchDestination, FetchRequest, FetchedResource, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use fastrender::{Error, ResourceFetcher};
 use std::collections::HashMap;
@@ -108,9 +108,15 @@ fn bundle_page_cache_captures_from_disk_cache_offline() {
     disk_config,
   );
 
-  cache_writer.fetch(&css_url).expect("warm css");
-  cache_writer.fetch(&img_url).expect("warm img");
-  cache_writer.fetch(&bg_url).expect("warm bg");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&css_url, FetchDestination::Style))
+    .expect("warm css");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&img_url, FetchDestination::Image))
+    .expect("warm img");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&bg_url, FetchDestination::Image))
+    .expect("warm bg");
 
   let bundle_dir = tmp.path().join("bundle");
   let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
@@ -217,9 +223,97 @@ fn bundle_page_cache_infers_original_url_from_pageset_when_html_meta_lacks_url()
     disk_config,
   );
 
-  cache_writer.fetch(&css_url).expect("warm css");
-  cache_writer.fetch(&img_url).expect("warm img");
-  cache_writer.fetch(&bg_url).expect("warm bg");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&css_url, FetchDestination::Style))
+    .expect("warm css");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&img_url, FetchDestination::Image))
+    .expect("warm img");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&bg_url, FetchDestination::Image))
+    .expect("warm bg");
+
+  let bundle_dir = tmp.path().join("bundle");
+  let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
+    .current_dir(tmp.path())
+    .env_remove("FASTR_PAGESET_URLS")
+    .args(["cache", stem, "--out"])
+    .arg(bundle_dir.to_string_lossy().as_ref())
+    .status()
+    .expect("run bundle_page cache");
+
+  assert!(
+    status.success(),
+    "bundle_page cache should succeed when URL is inferred from pageset stem"
+  );
+
+  let bundle = Bundle::load(&bundle_dir).expect("load bundle");
+  assert_eq!(bundle.manifest().original_url, page_url);
+  assert!(bundle.manifest().resources.contains_key(css_url.as_str()));
+  assert!(bundle.manifest().resources.contains_key(img_url.as_str()));
+  assert!(bundle.manifest().resources.contains_key(bg_url.as_str()));
+}
+
+#[test]
+fn bundle_page_cache_infers_original_url_from_pageset_when_cache_stem_is_legacy_www() {
+  let tmp = TempDir::new().expect("tempdir");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+  let asset_dir = tmp.path().join("fetches/assets");
+  std::fs::create_dir_all(&asset_dir).expect("create asset dir");
+
+  // Older caches may include `www.` in the cached HTML stem even though pageset normalization
+  // strips it (e.g. `fetches/html/www.w3.org.html`). When the meta sidecar is in the legacy
+  // content-type-only format, bundle_page should still infer the original URL from pageset
+  // metadata so relative subresources resolve to the correct HTTP origin.
+  let stem = "www.w3.org";
+  let page_url = "https://www.w3.org";
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/a.css\"></head><body><img src=\"img.png\"></body></html>",
+  )
+  .expect("write html");
+  std::fs::write(html_path.with_extension("html.meta"), "text/html").expect("write meta");
+
+  let css_url = "https://www.w3.org/a.css".to_string();
+  let img_url = "https://www.w3.org/img.png".to_string();
+  let bg_url = "https://www.w3.org/bg.png".to_string();
+
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    css_url.clone(),
+    (
+      b"body { background-image: url(\"bg.png\"); }".to_vec(),
+      "text/css",
+    ),
+  );
+  responses.insert(img_url.clone(), (b"png-bytes-1".to_vec(), "image/png"));
+  responses.insert(bg_url.clone(), (b"png-bytes-2".to_vec(), "image/png"));
+
+  let mut disk_config = DiskCacheConfig::default();
+  disk_config.namespace = Some(disk_cache_namespace());
+  disk_config.allow_no_store = true;
+
+  let cache_writer = DiskCachingFetcher::with_configs(
+    StaticFetcher {
+      responses: Arc::new(responses),
+    },
+    asset_dir.clone(),
+    CachingFetcherConfig::default(),
+    disk_config,
+  );
+
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&css_url, FetchDestination::Style))
+    .expect("warm css");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&img_url, FetchDestination::Image))
+    .expect("warm img");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&bg_url, FetchDestination::Image))
+    .expect("warm bg");
 
   let bundle_dir = tmp.path().join("bundle");
   let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
@@ -284,7 +378,9 @@ fn bundle_page_cache_fails_when_resource_missing() {
     disk_config,
   );
 
-  cache_writer.fetch(&css_url).expect("warm css");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&css_url, FetchDestination::Style))
+    .expect("warm css");
 
   let bundle_dir = tmp.path().join("bundle");
   let output = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
@@ -352,7 +448,9 @@ fn bundle_page_cache_allow_missing_inserts_placeholders() {
     disk_config,
   );
 
-  cache_writer.fetch(&css_url).expect("warm css");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&css_url, FetchDestination::Style))
+    .expect("warm css");
 
   let bundle_dir = tmp.path().join("bundle");
   let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
@@ -442,9 +540,15 @@ fn bundle_page_cache_respects_user_agent_for_namespace() {
     disk_config,
   );
 
-  cache_writer.fetch(&css_url).expect("warm css");
-  cache_writer.fetch(&img_url).expect("warm img");
-  cache_writer.fetch(&bg_url).expect("warm bg");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&css_url, FetchDestination::Style))
+    .expect("warm css");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&img_url, FetchDestination::Image))
+    .expect("warm img");
+  cache_writer
+    .fetch_with_request(FetchRequest::new(&bg_url, FetchDestination::Image))
+    .expect("warm bg");
 
   let mismatch_out = tmp.path().join("bundle-mismatch");
   let mismatch_status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))

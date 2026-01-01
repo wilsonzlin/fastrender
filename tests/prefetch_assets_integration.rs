@@ -1,12 +1,9 @@
 #![cfg(feature = "disk_cache")]
 
 use fastrender::pageset::pageset_stem;
-use fastrender::resource::CachingFetcherConfig;
-use fastrender::resource::DiskCacheConfig;
-use fastrender::resource::DiskCachingFetcher;
-use fastrender::resource::FetchedResource;
 use fastrender::resource::{
-  normalize_user_agent_for_log, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+  normalize_user_agent_for_log, CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher,
+  FetchDestination, FetchRequest, FetchedResource, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use fastrender::Error;
 use fastrender::ResourceFetcher;
@@ -215,15 +212,21 @@ fn prefetch_assets_warms_disk_cache_with_imports_and_fonts() {
     },
   );
   assert!(
-    offline.fetch(&a_css).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a_css, FetchDestination::Style))
+      .is_ok(),
     "a.css should be cached on disk"
   );
   assert!(
-    offline.fetch(&b_css).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&b_css, FetchDestination::Style))
+      .is_ok(),
     "b.css (import) should be cached on disk"
   );
   assert!(
-    offline.fetch(&font).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&font, FetchDestination::Font))
+      .is_ok(),
     "font url referenced by @font-face should be cached on disk"
   );
 }
@@ -311,15 +314,21 @@ fn prefetch_assets_warms_disk_cache_with_layer_imports_and_fonts() {
   );
 
   assert!(
-    offline.fetch(&a_css).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a_css, FetchDestination::Style))
+      .is_ok(),
     "a.css should be cached on disk"
   );
   assert!(
-    offline.fetch(&b_css).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&b_css, FetchDestination::Style))
+      .is_ok(),
     "b.css (layer import) should be cached on disk"
   );
   assert!(
-    offline.fetch(&font).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&font, FetchDestination::Font))
+      .is_ok(),
     "font url referenced by imported stylesheet should be cached on disk"
   );
 }
@@ -401,11 +410,15 @@ fn prefetch_assets_warms_disk_cache_with_inline_style_import_and_fonts() {
     },
   );
   assert!(
-    offline.fetch(&a_css).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a_css, FetchDestination::Style))
+      .is_ok(),
     "a.css (import from inline <style>) should be cached on disk"
   );
   assert!(
-    offline.fetch(&font).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&font, FetchDestination::Font))
+      .is_ok(),
     "font url referenced by imported stylesheet should be cached on disk"
   );
 }
@@ -474,7 +487,9 @@ fn prefetch_assets_warms_disk_cache_with_shadow_root_style_import() {
     },
   );
   assert!(
-    offline.fetch(&shadow_css).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&shadow_css, FetchDestination::Style))
+      .is_ok(),
     "shadow-root stylesheet import should be cached on disk"
   );
 }
@@ -617,18 +632,23 @@ fn prefetch_assets_warms_disk_cache_with_html_images_iframes_and_embeds() {
     },
   );
 
-  for url in [
-    &img,
-    &poster,
-    &favicon,
-    &manifest,
-    &iframe_doc,
-    &iframe_css,
-    &iframe_img,
-    &object_doc,
-    &embed_doc,
+  for (url, destination) in [
+    (&img, FetchDestination::Image),
+    (&poster, FetchDestination::Image),
+    (&favicon, FetchDestination::Image),
+    (&manifest, FetchDestination::Image),
+    (&iframe_doc, FetchDestination::Document),
+    (&iframe_css, FetchDestination::Style),
+    (&iframe_img, FetchDestination::Image),
+    (&object_doc, FetchDestination::Document),
+    (&embed_doc, FetchDestination::Document),
   ] {
-    assert!(offline.fetch(url).is_ok(), "{url} should be cached on disk");
+    assert!(
+      offline
+        .fetch_with_request(FetchRequest::new(url, destination))
+        .is_ok(),
+      "{url} should be cached on disk"
+    );
   }
 }
 
@@ -730,17 +750,28 @@ fn prefetch_assets_does_not_fetch_embeds_without_prefetch_embeds() {
     },
   );
 
-  assert!(offline.fetch(&iframe_doc).is_ok(), "iframe should be cached");
   assert!(
-    offline.fetch(&object).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&iframe_doc, FetchDestination::Document))
+      .is_ok(),
+    "iframe should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&object, FetchDestination::Document))
+      .is_err(),
     "object should not be cached without --prefetch-embeds"
   );
   assert!(
-    offline.fetch(&embed).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&embed, FetchDestination::Document))
+      .is_err(),
     "embed should not be cached without --prefetch-embeds"
   );
   assert!(
-    offline.fetch(&media).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&media, FetchDestination::Document))
+      .is_err(),
     "media source should not be cached without --prefetch-embeds"
   );
 
@@ -842,9 +873,24 @@ fn prefetch_assets_honors_base_href_for_html_discovery() {
     },
   );
 
-  assert!(offline.fetch(&iframe_doc).is_ok(), "iframe should be cached");
-  assert!(offline.fetch(&icon).is_ok(), "icon should be cached");
-  assert!(offline.fetch(&poster).is_ok(), "poster should be cached");
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&iframe_doc, FetchDestination::Document))
+      .is_ok(),
+    "iframe should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&icon, FetchDestination::Image))
+      .is_ok(),
+    "icon should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&poster, FetchDestination::Image))
+      .is_ok(),
+    "poster should be cached"
+  );
 }
 
 #[test]
@@ -950,19 +996,27 @@ fn prefetch_assets_selects_srcset_candidate_and_respects_max_urls_per_element() 
   );
 
   assert!(
-    offline.fetch(&a2).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a2, FetchDestination::Image))
+      .is_ok(),
     "selected 2x candidate should be cached on disk"
   );
   assert!(
-    offline.fetch(&a1).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a1, FetchDestination::Image))
+      .is_err(),
     "non-selected 1x candidate should not be cached (max urls per element = 1)"
   );
   assert!(
-    offline.fetch(&a3).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a3, FetchDestination::Image))
+      .is_err(),
     "non-selected 3x candidate should not be cached (max urls per element = 1)"
   );
   assert!(
-    offline.fetch(&fallback).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&fallback, FetchDestination::Image))
+      .is_err(),
     "base src should not be cached (max urls per element = 1)"
   );
 
@@ -1068,15 +1122,21 @@ fn prefetch_assets_selects_preload_imagesrcset_candidate() {
   );
 
   assert!(
-    offline.fetch(&a2).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a2, FetchDestination::Image))
+      .is_ok(),
     "selected 2x preload candidate should be cached on disk"
   );
   assert!(
-    offline.fetch(&a1).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&a1, FetchDestination::Image))
+      .is_err(),
     "non-selected 1x preload candidate should not be cached (max urls per element = 1)"
   );
   assert!(
-    offline.fetch(&fallback).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&fallback, FetchDestination::Image))
+      .is_err(),
     "preload href fallback should not be cached (max urls per element = 1)"
   );
 
@@ -1216,17 +1276,46 @@ fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_and_video_posters(
     },
   );
 
-  assert!(offline.fetch(&iframe).is_ok(), "iframe document should be cached");
-  assert!(offline.fetch(&poster).is_ok(), "video poster should be cached");
-  assert!(offline.fetch(&icon).is_ok(), "icon should be cached");
-  assert!(offline.fetch(&embed).is_ok(), "embed src should be cached");
-  assert!(offline.fetch(&object).is_ok(), "object data should be cached");
   assert!(
-    offline.fetch(&img).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&iframe, FetchDestination::Document))
+      .is_ok(),
+    "iframe document should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&poster, FetchDestination::Image))
+      .is_ok(),
+    "video poster should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&icon, FetchDestination::Image))
+      .is_ok(),
+    "icon should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&embed, FetchDestination::Document))
+      .is_ok(),
+    "embed src should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&object, FetchDestination::Document))
+      .is_ok(),
+    "object data should be cached"
+  );
+  assert!(
+    offline
+      .fetch_with_request(FetchRequest::new(&img, FetchDestination::Image))
+      .is_err(),
     "img/src should not be cached without --prefetch-images"
   );
   assert!(
-    offline.fetch(&picture_1x).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&picture_1x, FetchDestination::Image))
+      .is_err(),
     "picture srcset candidate should not be cached without --prefetch-images"
   );
 
@@ -1322,11 +1411,15 @@ fn prefetch_assets_respects_max_images_per_page() {
   );
 
   assert!(
-    offline.fetch(&one).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&one, FetchDestination::Image))
+      .is_ok(),
     "first image should be cached on disk"
   );
   assert!(
-    offline.fetch(&two).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&two, FetchDestination::Image))
+      .is_err(),
     "second image should not be cached (max-images-per-page=1)"
   );
 
@@ -1435,15 +1528,21 @@ fn prefetch_assets_selects_picture_source_by_media_and_dpr() {
   );
 
   assert!(
-    offline.fetch(&small2).is_ok(),
+    offline
+      .fetch_with_request(FetchRequest::new(&small2, FetchDestination::Image))
+      .is_ok(),
     "selected picture source should be cached on disk"
   );
   assert!(
-    offline.fetch(&large2).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&large2, FetchDestination::Image))
+      .is_err(),
     "non-matching picture source should not be cached"
   );
   assert!(
-    offline.fetch(&fallback).is_err(),
+    offline
+      .fetch_with_request(FetchRequest::new(&fallback, FetchDestination::Image))
+      .is_err(),
     "img fallback should not be cached (max urls per element = 1)"
   );
 
