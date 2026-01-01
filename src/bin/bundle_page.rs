@@ -1368,7 +1368,7 @@ mod tests {
       dom_compat_mode: fastrender::dom::DomCompatibilityMode::default(),
     };
 
-    crawl_document(&recording, &doc, &render)?;
+    crawl_document(&recording, &doc, &render, CrawlMode::Strict)?;
 
     let base_hint = doc.base_hint.clone();
     let calls = inner.calls();
