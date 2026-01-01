@@ -95,7 +95,7 @@ use rustybuzz::Language as HbLanguage;
 use rustybuzz::UnicodeBuffer;
 use rustybuzz::Variation;
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
@@ -120,9 +120,15 @@ const SHAPING_CACHE_HASH_COLLISION_BUCKET_LIMIT: usize = 8;
 const FONT_RESOLUTION_CACHE_SIZE: usize = 131072;
 const TEXT_FALLBACK_CACHE_CAPACITY_ENV: &str = "FASTR_TEXT_FALLBACK_CACHE_CAPACITY";
 #[cfg(any(test, debug_assertions))]
-static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(any(test, debug_assertions))]
-static SHAPING_PIPELINE_NEW_CALLS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+  // These counters are used by unit/integration tests as guardrails against excessive churn.
+  //
+  // They are thread-local so tests can run in parallel without racing on global state. Layout
+  // tests frequently run in parallel (default `cargo test` behavior), and using a process-wide
+  // counter makes "reset + assert" patterns flaky.
+  static SHAPE_FONT_RUN_INVOCATIONS: Cell<usize> = Cell::new(0);
+  static SHAPING_PIPELINE_NEW_CALLS: Cell<usize> = Cell::new(0);
+}
 
 type ShapingCacheHasher = BuildHasherDefault<FxHasher>;
 
@@ -4497,7 +4503,7 @@ fn recycle_unicode_buffer(buffer: UnicodeBuffer) {
 /// Shapes a single font run into positioned glyphs.
 fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   #[cfg(any(test, debug_assertions))]
-  SHAPE_FONT_RUN_INVOCATIONS.fetch_add(1, Ordering::Relaxed);
+  SHAPE_FONT_RUN_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
 
   enum ShaperFace {
     Shared(Arc<rustybuzz::Face<'static>>),
@@ -5141,7 +5147,7 @@ impl ShapingPipeline {
   /// Creates a new shaping pipeline.
   pub fn new() -> Self {
     #[cfg(any(test, debug_assertions))]
-    SHAPING_PIPELINE_NEW_CALLS.fetch_add(1, Ordering::Relaxed);
+    SHAPING_PIPELINE_NEW_CALLS.with(|calls| calls.set(calls.get() + 1));
     Self {
       cache: ShapingCache::new(shaping_cache_capacity_from_env()),
       font_cache: FallbackCache::new(fallback_cache_capacity()),
@@ -5151,13 +5157,13 @@ impl ShapingPipeline {
   #[cfg(any(test, debug_assertions))]
   #[doc(hidden)]
   pub fn debug_new_call_count() -> usize {
-    SHAPING_PIPELINE_NEW_CALLS.load(Ordering::Relaxed)
+    SHAPING_PIPELINE_NEW_CALLS.with(|calls| calls.get())
   }
 
   #[cfg(any(test, debug_assertions))]
   #[doc(hidden)]
   pub fn debug_reset_new_call_count() {
-    SHAPING_PIPELINE_NEW_CALLS.store(0, Ordering::Relaxed);
+    SHAPING_PIPELINE_NEW_CALLS.with(|calls| calls.set(0));
   }
 
   #[cfg(test)]
@@ -5686,7 +5692,6 @@ mod tests {
   use crate::text::font_db::GenericFamily;
   use crate::text::font_fallback::FamilyEntry;
   use std::fs;
-  use std::sync::atomic::Ordering;
   use std::sync::Arc;
   use std::time::Duration;
   use unicode_bidi::Level;
@@ -6338,13 +6343,13 @@ mod tests {
     let style = ComputedStyle::default();
     let ctx = FontContext::new();
     let pipeline = ShapingPipeline::new();
-    SHAPE_FONT_RUN_INVOCATIONS.store(0, Ordering::Relaxed);
+    SHAPE_FONT_RUN_INVOCATIONS.with(|calls| calls.set(0));
 
     let first = pipeline
       .shape("Cached text", &style, &ctx)
       .expect("first shape should succeed");
     assert!(!first.is_empty());
-    let first_run_calls = SHAPE_FONT_RUN_INVOCATIONS.load(Ordering::Relaxed);
+    let first_run_calls = SHAPE_FONT_RUN_INVOCATIONS.with(|calls| calls.get());
     assert!(
       first_run_calls > 0,
       "initial shape should call shape_font_run"
@@ -6358,7 +6363,7 @@ mod tests {
       .shape("Cached text", &style, &ctx)
       .expect("cache hit should succeed");
     assert_eq!(
-      SHAPE_FONT_RUN_INVOCATIONS.load(Ordering::Relaxed),
+      SHAPE_FONT_RUN_INVOCATIONS.with(|calls| calls.get()),
       first_run_calls,
       "cache hit should not invoke shaping again"
     );
@@ -6375,7 +6380,7 @@ mod tests {
     let ctx = FontContext::new();
     let capacity = 4;
     let pipeline = ShapingPipeline::with_cache_capacity_for_test(capacity);
-    SHAPE_FONT_RUN_INVOCATIONS.store(0, Ordering::Relaxed);
+    SHAPE_FONT_RUN_INVOCATIONS.with(|calls| calls.set(0));
 
     let texts: Vec<String> = (0..(capacity + 2))
       .map(|i| format!("Eviction {}", i))
@@ -6427,7 +6432,7 @@ mod tests {
     let style = ComputedStyle::default();
     let ctx = FontContext::new();
     let pipeline = ShapingPipeline::with_cache_capacity_for_test(8);
-    SHAPE_FONT_RUN_INVOCATIONS.store(0, Ordering::Relaxed);
+    SHAPE_FONT_RUN_INVOCATIONS.with(|calls| calls.set(0));
 
     pipeline
       .shape_core("Cached bidi", &style, &ctx, None, None)

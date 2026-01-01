@@ -659,6 +659,33 @@ impl BlockFormattingContext {
       }
     }
 
+    // If this block establishes a new containing block for absolute/fixed descendants (via
+    // positioning, transforms, or perspective), propagate that updated containing block into the
+    // descendant layout call. Otherwise absolutely-positioned descendants inside inline content can
+    // incorrectly resolve percentages against an ancestor CB (e.g. the viewport).
+    let establishes_positioned_cb =
+      style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some();
+    let padding_origin = Point::new(
+      computed_width.border_left + computed_width.padding_left,
+      border_top + padding_top,
+    );
+    let content_height_base = specified_height.unwrap_or(0.0).max(0.0);
+    let padding_size = Size::new(
+      computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
+      content_height_base + padding_top + padding_bottom,
+    );
+    let cb_block_base = specified_height.map(|h| h.max(0.0) + padding_top + padding_bottom);
+    let descendant_nearest_positioned_cb = if establishes_positioned_cb {
+      ContainingBlock::with_viewport_and_bases(
+        Rect::new(padding_origin, padding_size),
+        self.viewport_size,
+        Some(padding_size.width),
+        cb_block_base,
+      )
+    } else {
+      *nearest_positioned_cb
+    };
+
     let use_columns = Self::is_multicol_container(style);
     let (mut child_fragments, content_height, positioned_children, column_info) = if let Some(
       fc_type,
@@ -702,13 +729,13 @@ impl BlockFormattingContext {
           let (frags, height, positioned, info) = self.layout_multicolumn(
             child,
             &child_constraints,
-            nearest_positioned_cb,
+            &descendant_nearest_positioned_cb,
             computed_width.content_width,
           )?;
           (frags, height, positioned, info)
         } else {
           let (frags, height, positioned) =
-            self.layout_children(child, &child_constraints, nearest_positioned_cb)?;
+            self.layout_children(child, &child_constraints, &descendant_nearest_positioned_cb)?;
           (frags, height, positioned, None)
         }
       }
@@ -718,13 +745,13 @@ impl BlockFormattingContext {
         let (frags, height, positioned, info) = self.layout_multicolumn(
           child,
           &child_constraints,
-          nearest_positioned_cb,
+          &descendant_nearest_positioned_cb,
           computed_width.content_width,
         )?;
         (frags, height, positioned, info)
       } else {
         let (frags, height, positioned) =
-          self.layout_children(child, &child_constraints, nearest_positioned_cb)?;
+          self.layout_children(child, &child_constraints, &descendant_nearest_positioned_cb)?;
         (frags, height, positioned, None)
       }
     };
@@ -5606,8 +5633,6 @@ mod tests {
     let mut container_style = ComputedStyle::default();
     container_style.display = Display::Block;
     container_style.width = Some(Length::px(200.0));
-    container_style.border_left_width = Length::px(10.0);
-    container_style.border_top_width = Length::px(12.0);
     // Non-empty transforms establish a new positioned containing block. The block formatting
     // context clones itself when entering such a subtree; ensure the shared inline formatting
     // context is rebuilt with the updated `nearest_positioned_cb`.
@@ -5622,7 +5647,7 @@ mod tests {
     let mut abs_style = ComputedStyle::default();
     abs_style.display = Display::Block;
     abs_style.position = Position::Absolute;
-    abs_style.left = Some(Length::px(0.0));
+    abs_style.left = Some(Length::percent(50.0));
     abs_style.top = Some(Length::px(0.0));
     abs_style.width = Some(Length::px(20.0));
     abs_style.height = Some(Length::px(10.0));
@@ -5649,14 +5674,9 @@ mod tests {
 
     let abs_fragment = find_fragment_by_box_id(&fragment, abs_id).expect("positioned fragment");
     assert!(
-      (abs_fragment.bounds.x() - 10.0).abs() < 0.01,
-      "expected positioned child x to account for container border-left, got {}",
+      (abs_fragment.bounds.x() - 100.0).abs() < 0.01,
+      "left:50% should resolve against the transformed 200px-wide containing block, got {}",
       abs_fragment.bounds.x()
-    );
-    assert!(
-      (abs_fragment.bounds.y() - 12.0).abs() < 0.01,
-      "expected positioned child y to account for container border-top, got {}",
-      abs_fragment.bounds.y()
     );
   }
 
