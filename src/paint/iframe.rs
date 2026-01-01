@@ -1,9 +1,11 @@
 use crate::api::{render_html_with_shared_resources, ResourceKind};
+use crate::error::RenderStage;
 use crate::geometry::Rect;
 use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::ImageCache;
 use crate::paint::display_list::ImageData;
 use crate::paint::pixmap::new_pixmap;
+use crate::render_control;
 use crate::resource::origin_from_url;
 use crate::resource::ResourceAccessPolicy;
 use crate::style::color::Rgba;
@@ -11,9 +13,10 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use lru::LruCache;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 use tiny_skia::Pixmap;
 
 const IFRAME_NESTING_LIMIT_MESSAGE: &str = "iframe nesting limit exceeded";
@@ -57,6 +60,72 @@ struct IframeRenderCacheKey {
   policy_hash: u64,
 }
 
+#[derive(Clone)]
+enum SharedIframeResult {
+  Success(Arc<ImageData>),
+  None,
+}
+
+impl SharedIframeResult {
+  fn as_option(&self) -> Option<Arc<ImageData>> {
+    match self {
+      Self::Success(image) => Some(Arc::clone(image)),
+      Self::None => None,
+    }
+  }
+}
+
+struct IframeInFlight {
+  result: Mutex<Option<SharedIframeResult>>,
+  cv: Condvar,
+}
+
+impl IframeInFlight {
+  fn new() -> Self {
+    Self {
+      result: Mutex::new(None),
+      cv: Condvar::new(),
+    }
+  }
+
+  fn set(&self, result: SharedIframeResult) {
+    let mut slot = self.result.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = Some(result);
+    self.cv.notify_all();
+  }
+
+  fn wait(&self) -> Option<Arc<ImageData>> {
+    let mut guard = self.result.lock().unwrap_or_else(|e| e.into_inner());
+    let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
+    while guard.is_none() {
+      if let Some(deadline) = deadline.as_ref() {
+        if deadline.check(RenderStage::Paint).is_err() {
+          return None;
+        }
+        let wait_for = if deadline.timeout_limit().is_some() {
+          match deadline.remaining_timeout() {
+            Some(remaining) if !remaining.is_zero() => remaining.min(Duration::from_millis(10)),
+            _ => return None,
+          }
+        } else {
+          Duration::from_millis(10)
+        };
+        guard = self
+          .cv
+          .wait_timeout(guard, wait_for)
+          .unwrap_or_else(|e| e.into_inner())
+          .0;
+      } else {
+        guard = self
+          .cv
+          .wait(guard)
+          .unwrap_or_else(|e| e.into_inner());
+      }
+    }
+    guard.as_ref()?.as_option()
+  }
+}
+
 struct CachedIframeRenderEntry {
   image: Arc<ImageData>,
   bytes: usize,
@@ -64,6 +133,7 @@ struct CachedIframeRenderEntry {
 
 struct IframeRenderCache {
   inner: LruCache<IframeRenderCacheKey, CachedIframeRenderEntry>,
+  in_flight: HashMap<IframeRenderCacheKey, Arc<IframeInFlight>>,
   max_entries: usize,
   max_bytes: usize,
   current_bytes: usize,
@@ -73,6 +143,7 @@ impl IframeRenderCache {
   fn new(max_entries: usize, max_bytes: usize) -> Self {
     Self {
       inner: LruCache::unbounded(),
+      in_flight: HashMap::new(),
       max_entries,
       max_bytes,
       current_bytes: 0,
@@ -81,6 +152,18 @@ impl IframeRenderCache {
 
   fn get(&mut self, key: &IframeRenderCacheKey) -> Option<Arc<ImageData>> {
     self.inner.get(key).map(|entry| Arc::clone(&entry.image))
+  }
+
+  fn join_inflight(&mut self, key: &IframeRenderCacheKey) -> (Arc<IframeInFlight>, bool) {
+    if let Some(existing) = self.in_flight.get(key) {
+      return (Arc::clone(existing), false);
+    }
+
+    let flight = Arc::new(IframeInFlight::new());
+    self
+      .in_flight
+      .insert(key.clone(), Arc::clone(&flight));
+    (flight, true)
   }
 
   fn insert(&mut self, key: IframeRenderCacheKey, image: Arc<ImageData>) {
@@ -119,6 +202,58 @@ fn iframe_render_cache() -> &'static Mutex<IframeRenderCache> {
       IFRAME_RENDER_CACHE_MAX_BYTES,
     ))
   })
+}
+
+fn finish_iframe_inflight(
+  key: IframeRenderCacheKey,
+  flight: &Arc<IframeInFlight>,
+  result: Option<Arc<ImageData>>,
+) {
+  match result {
+    Some(image) => {
+      let mut cache = iframe_render_cache().lock().unwrap_or_else(|e| e.into_inner());
+      cache.in_flight.remove(&key);
+      cache.insert(key, Arc::clone(&image));
+      drop(cache);
+      flight.set(SharedIframeResult::Success(image));
+    }
+    None => {
+      let mut cache = iframe_render_cache().lock().unwrap_or_else(|e| e.into_inner());
+      cache.in_flight.remove(&key);
+      drop(cache);
+      flight.set(SharedIframeResult::None);
+    }
+  }
+}
+
+struct IframeInFlightOwnerGuard {
+  key: Option<IframeRenderCacheKey>,
+  flight: Arc<IframeInFlight>,
+}
+
+impl IframeInFlightOwnerGuard {
+  fn new(key: IframeRenderCacheKey, flight: Arc<IframeInFlight>) -> Self {
+    Self {
+      key: Some(key),
+      flight,
+    }
+  }
+
+  fn finish(&mut self, result: Option<Arc<ImageData>>) {
+    let Some(key) = self.key.take() else {
+      return;
+    };
+    finish_iframe_inflight(key, &self.flight, result);
+  }
+}
+
+impl Drop for IframeInFlightOwnerGuard {
+  fn drop(&mut self) {
+    let Some(key) = self.key.take() else {
+      return;
+    };
+    finish_iframe_inflight(key, &self.flight, None);
+  }
 }
 
 fn stable_hash_bytes(bytes: &[u8]) -> u64 {
@@ -162,6 +297,36 @@ fn record_iframe_cache_hit(hit: bool) {
 #[cfg(test)]
 pub(crate) fn take_last_iframe_cache_hit() -> Option<bool> {
   LAST_IFRAME_CACHE_HIT.with(|cell| cell.replace(None))
+}
+
+#[cfg(test)]
+type IframeJoinHook = Arc<dyn Fn(&IframeRenderCacheKey, bool) + Send + Sync>;
+
+#[cfg(test)]
+static IFRAME_RENDER_CACHE_JOIN_HOOK: OnceLock<Mutex<Option<IframeJoinHook>>> = OnceLock::new();
+
+#[cfg(test)]
+fn iframe_render_cache_join_hook() -> &'static Mutex<Option<IframeJoinHook>> {
+  IFRAME_RENDER_CACHE_JOIN_HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn set_iframe_render_cache_join_hook(hook: Option<IframeJoinHook>) {
+  let mut guard = iframe_render_cache_join_hook()
+    .lock()
+    .unwrap_or_else(|e| e.into_inner());
+  *guard = hook;
+}
+
+#[cfg(test)]
+fn run_iframe_render_cache_join_hook(key: &IframeRenderCacheKey, is_owner: bool) {
+  let hook = iframe_render_cache_join_hook()
+    .lock()
+    .ok()
+    .and_then(|guard| guard.as_ref().cloned());
+  if let Some(hook) = hook {
+    hook(key, is_owner);
+  }
 }
 
 pub(crate) fn render_iframe_srcdoc(
@@ -237,13 +402,24 @@ pub(crate) fn render_iframe_srcdoc(
     policy_hash: policy_fingerprint(&policy),
   };
 
-  if let Ok(mut guard) = iframe_render_cache().lock() {
-    if let Some(image) = guard.get(&key) {
+  let (flight, is_owner) = {
+    let mut cache = iframe_render_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(image) = cache.get(&key) {
       #[cfg(test)]
       record_iframe_cache_hit(true);
       return Some(image);
     }
+    cache.join_inflight(&key)
+  };
+  #[cfg(test)]
+  run_iframe_render_cache_join_hook(&key, is_owner);
+  if !is_owner {
+    let image = flight.wait();
+    #[cfg(test)]
+    record_iframe_cache_hit(image.is_some());
+    return image;
   }
+  let mut owner_guard = IframeInFlightOwnerGuard::new(key, flight);
 
   let pixmap = render_html_with_shared_resources(
     html,
@@ -261,10 +437,7 @@ pub(crate) fn render_iframe_srcdoc(
   )
   .ok()?;
   let image = image_data_from_pixmap(&pixmap, width, height);
-
-  if let Ok(mut guard) = iframe_render_cache().lock() {
-    guard.insert(key, Arc::clone(&image));
-  }
+  owner_guard.finish(Some(Arc::clone(&image)));
   #[cfg(test)]
   record_iframe_cache_hit(false);
   Some(image)
@@ -337,13 +510,24 @@ pub(crate) fn render_iframe_src(
     background: background.into(),
     policy_hash: policy_fingerprint(&policy),
   };
-  if let Ok(mut guard) = iframe_render_cache().lock() {
-    if let Some(image) = guard.get(&key) {
+  let (flight, is_owner) = {
+    let mut cache = iframe_render_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(image) = cache.get(&key) {
       #[cfg(test)]
       record_iframe_cache_hit(true);
       return Some(image);
     }
+    cache.join_inflight(&key)
+  };
+  #[cfg(test)]
+  run_iframe_render_cache_join_hook(&key, is_owner);
+  if !is_owner {
+    let image = flight.wait();
+    #[cfg(test)]
+    record_iframe_cache_hit(image.is_some());
+    return image;
   }
+  let mut owner_guard = IframeInFlightOwnerGuard::new(key, flight);
 
   let resource = fetcher.fetch(&resolved).ok()?;
   if let Some(ctx) = context.as_ref() {
@@ -407,9 +591,7 @@ pub(crate) fn render_iframe_src(
   .ok()?;
 
   let image = image_data_from_pixmap(&pixmap, width, height);
-  if let Ok(mut guard) = iframe_render_cache().lock() {
-    guard.insert(key, Arc::clone(&image));
-  }
+  owner_guard.finish(Some(Arc::clone(&image)));
   #[cfg(test)]
   record_iframe_cache_hit(false);
   Some(image)
@@ -422,7 +604,8 @@ mod tests {
   use crate::resource::FetchedResource;
   use crate::resource::ResourceFetcher;
   use std::io;
-  use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::{Arc, Barrier};
  
   #[derive(Clone, Default)]
   struct RejectingFetcher;
@@ -482,6 +665,87 @@ mod tests {
     assert!(
       Arc::ptr_eq(&first, &second),
       "cache hit should return the same Arc<ImageData>"
+    );
+  }
+
+  #[test]
+  fn iframe_render_cache_deduplicates_inflight_srcdoc_renders() {
+    let font_ctx = FontContext::new();
+    let image_cache = ImageCache::with_fetcher(Arc::new(RejectingFetcher::default()));
+    let rect = Rect::from_xywh(0.0, 0.0, 16.0, 16.0);
+    let html = r#"
+      <style>html, body { margin: 0; padding: 0; background: rgb(0, 0, 255); }</style>
+      <div data-fastr-test="iframe-render-cache-inflight-113"></div>
+    "#;
+
+    let key = IframeRenderCacheKey {
+      content: IframeRenderCacheContent::Srcdoc {
+        html_hash: stable_hash_bytes(html.as_bytes()),
+        base_url: None,
+      },
+      css_width: 16,
+      css_height: 16,
+      device_pixel_ratio_bits: 1.0f32.to_bits(),
+      nested_depth: 2,
+      background: Rgba::WHITE.into(),
+      policy_hash: policy_fingerprint(&ResourceAccessPolicy::default()),
+    };
+    let barrier = Arc::new(Barrier::new(2));
+    let owners = Arc::new(AtomicUsize::new(0));
+    let waiters = Arc::new(AtomicUsize::new(0));
+
+    struct HookReset;
+    impl Drop for HookReset {
+      fn drop(&mut self) {
+        set_iframe_render_cache_join_hook(None);
+      }
+    }
+    let _reset = HookReset;
+
+    let key_for_hook = key.clone();
+    let barrier_for_hook = Arc::clone(&barrier);
+    let owners_for_hook = Arc::clone(&owners);
+    let waiters_for_hook = Arc::clone(&waiters);
+    set_iframe_render_cache_join_hook(Some(Arc::new(move |hook_key, is_owner| {
+      if hook_key != &key_for_hook {
+        return;
+      }
+      if is_owner {
+        owners_for_hook.fetch_add(1, Ordering::SeqCst);
+      } else {
+        waiters_for_hook.fetch_add(1, Ordering::SeqCst);
+      }
+      barrier_for_hook.wait();
+    })));
+
+    let cache1 = image_cache.clone();
+    let cache2 = image_cache.clone();
+    let font1 = font_ctx.clone();
+    let font2 = font_ctx.clone();
+    let t1 = std::thread::spawn(move || {
+      render_iframe_srcdoc(html, None, rect, None, &cache1, &font1, 1.0, 3)
+        .expect("thread1 iframe render")
+    });
+    let t2 = std::thread::spawn(move || {
+      render_iframe_srcdoc(html, None, rect, None, &cache2, &font2, 1.0, 3)
+        .expect("thread2 iframe render")
+    });
+    let first = t1.join().expect("join thread1");
+    let second = t2.join().expect("join thread2");
+
+    assert_eq!(
+      owners.load(Ordering::SeqCst),
+      1,
+      "exactly one thread should render the iframe"
+    );
+    assert_eq!(
+      waiters.load(Ordering::SeqCst),
+      1,
+      "the other thread should wait on the in-flight render"
+    );
+    assert!(
+      Arc::ptr_eq(&first, &second),
+      "in-flight waiters should receive the same Arc<ImageData>"
     );
   }
 }
