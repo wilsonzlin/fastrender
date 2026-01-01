@@ -2,6 +2,9 @@
 
 FastRender has many internal debug/profiling toggles controlled via environment variables. These are intentionally lightweight (read at runtime) and primarily used by:
 
+- `pageset_progress`
+- `fetch_pages`
+- `prefetch_assets`
 - `render_pages`
 - `fetch_and_render`
 - `inspect_frag`
