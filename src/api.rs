@@ -1959,11 +1959,17 @@ pub struct ResourceDiagnostics {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderStats {
+  #[serde(default)]
   pub timings: RenderStageTimings,
+  #[serde(default)]
   pub counts: RenderCounts,
+  #[serde(default)]
   pub cascade: CascadeDiagnostics,
+  #[serde(default)]
   pub layout: LayoutDiagnostics,
+  #[serde(default)]
   pub paint: PaintDiagnostics,
+  #[serde(default)]
   pub resources: ResourceDiagnostics,
 }
 

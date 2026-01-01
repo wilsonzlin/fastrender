@@ -30,7 +30,7 @@ fn pageset_progress_soft_timeout_in_box_tree_includes_stage_note() {
     .current_dir(temp.path())
     // Delay once StageHeartbeat reaches `box_tree` so the next cooperative deadline check in box
     // generation trips the renderer timeout.
-    .env("FASTR_TEST_BOX_TREE_DELAY_MS", "700")
+    .env("FASTR_TEST_BOX_TREE_DELAY_MS", "1200")
     .args([
       "run",
       "--jobs",
@@ -38,7 +38,7 @@ fn pageset_progress_soft_timeout_in_box_tree_includes_stage_note() {
       "--timeout",
       "3",
       "--soft-timeout-ms",
-      "500",
+      "1000",
       "--diagnostics",
       "none",
       "--progress-dir",

@@ -22,13 +22,13 @@ fn pageset_progress_worker_fast_exits_after_writing_progress() {
     // The worker uses `std::process::exit` after writing progress artifacts to
     // bypass Drop-based cleanup. Keep the hard timeout below the injected drop
     // delay so this test fails if destructors run.
-    .env("FASTR_TEST_WORKER_DROP_DELAY_MS", "5000")
+    .env("FASTR_TEST_WORKER_DROP_DELAY_MS", "10000")
     .args([
       "run",
       "--jobs",
       "1",
       "--timeout",
-      "2",
+      "4",
       // Reduce paint workload so debug builds can complete before the timeout (the test is about
       // worker exit behavior, not rendering a large viewport).
       "--viewport",

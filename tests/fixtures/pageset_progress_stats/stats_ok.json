@@ -40,9 +40,28 @@
         "fragments": 1500,
         "shaped_runs": 321,
         "glyphs": 6543,
+        "shaping_cache_hits": 1234,
+        "shaping_cache_misses": 56,
+        "shaping_cache_evictions": 7,
+        "shaping_cache_entries": 89,
         "fallback_cache_hits": 100,
         "fallback_cache_misses": 5,
-        "last_resort_font_fallbacks": 2
+        "fallback_cache_glyph_entries": 10,
+        "fallback_cache_glyph_capacity": 100,
+        "fallback_cache_cluster_entries": 20,
+        "fallback_cache_cluster_capacity": 200,
+        "fallback_cache_shards": 4,
+        "last_resort_font_fallbacks": 2,
+        "fallback_descriptor_stats": {
+          "unique_descriptors": 3,
+          "unique_family_signatures": 2,
+          "unique_languages": 1,
+          "unique_weights": 4,
+          "samples": [
+            "lang=en weight=400 families=[Arial]",
+            "lang=ja weight=700 families=[Noto Sans JP]"
+          ]
+        }
       },
       "cascade": {
         "nodes": 1100,

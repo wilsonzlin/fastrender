@@ -3372,6 +3372,22 @@ fn push_opt_u64(parts: &mut Vec<String>, label: &str, value: Option<u64>) {
   }
 }
 
+fn push_opt_ratio(
+  parts: &mut Vec<String>,
+  label: &str,
+  numerator: Option<usize>,
+  denom: Option<usize>,
+) {
+  if numerator.is_none() && denom.is_none() {
+    return;
+  }
+  let numerator = numerator
+    .map(|v| v.to_string())
+    .unwrap_or_else(|| "?".to_string());
+  let denom = denom.map(|v| v.to_string()).unwrap_or_else(|| "?".to_string());
+  parts.push(format!("{label}={numerator}/{denom}"));
+}
+
 fn saturating_usize_from_u64(value: u64) -> usize {
   usize::try_from(value).unwrap_or(usize::MAX)
 }
@@ -3436,6 +3452,35 @@ fn text_summary(counts: &RenderCounts) -> Option<String> {
     if !samples.is_empty() {
       parts.push(format!("last_resort_samples=[{}]", samples.join("; ")));
     }
+  }
+  push_opt_u64(&mut parts, "shape_cache_hits", counts.shaping_cache_hits);
+  push_opt_u64(&mut parts, "shape_cache_misses", counts.shaping_cache_misses);
+  push_opt_u64(&mut parts, "shape_cache_evict", counts.shaping_cache_evictions);
+  push_opt_usize(&mut parts, "shape_cache_entries", counts.shaping_cache_entries);
+  push_opt_ratio(
+    &mut parts,
+    "fallback_entries",
+    counts.fallback_cache_glyph_entries,
+    counts.fallback_cache_glyph_capacity,
+  );
+  push_opt_ratio(
+    &mut parts,
+    "fallback_cluster_entries",
+    counts.fallback_cache_cluster_entries,
+    counts.fallback_cache_cluster_capacity,
+  );
+  push_opt_usize(&mut parts, "fallback_shards", counts.fallback_cache_shards);
+  if let Some(stats) = &counts.fallback_descriptor_stats {
+    parts.push(format!(
+      "fallback_desc_unique={}",
+      stats.unique_descriptors
+    ));
+    parts.push(format!(
+      "fallback_desc_families={}",
+      stats.unique_family_signatures
+    ));
+    parts.push(format!("fallback_desc_lang={}", stats.unique_languages));
+    parts.push(format!("fallback_desc_weights={}", stats.unique_weights));
   }
   if parts.is_empty() {
     None
@@ -3887,13 +3932,21 @@ fn build_comparison<'a>(
   }
 }
 
-fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
+fn print_render_stats(stats: &RenderStats, indent: &str, verbose_text: bool) -> bool {
   let mut lines: Vec<(&str, String)> = Vec::new();
 
   if let Some(nodes) = nodes_summary(&stats.counts) {
     lines.push(("nodes", nodes));
   }
-  if let Some(text) = text_summary_with_timings(stats) {
+  if let Some(mut text) = text_summary_with_timings(stats) {
+    if verbose_text {
+      if let Some(desc) = stats.counts.fallback_descriptor_stats.as_ref() {
+        if !desc.samples.is_empty() {
+          text.push(' ');
+          text.push_str(&format!("fallback_desc_samples=[{}]", desc.samples.join("; ")));
+        }
+      }
+    }
     lines.push(("text", text));
   }
   if let Some(cascade) = cascade_summary(&stats.cascade) {
@@ -4322,7 +4375,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
       );
       if args.verbose_stats {
         if let Some(stats) = &entry.stats {
-          if !print_render_stats(stats, "      ") {
+          if !print_render_stats(stats, "      ", args.verbose) {
             println!("      stats: (present but empty)");
           }
         } else {

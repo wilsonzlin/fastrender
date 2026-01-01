@@ -99,9 +99,30 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains("stats:"));
   assert!(stdout.contains("Top fetch stage (top 1 of 1 ok pages):"));
   assert!(stdout.contains("nodes: dom=1200 styled=1100 boxes=900 fragments=1500"));
+  assert!(
+    stdout.contains(
+      "text: runs=321 glyphs=6543 fallback_hits=100 fallback_misses=5 last_resort_fallbacks=2"
+    ),
+    "missing baseline text counters"
+  );
+  assert!(stdout.contains("shape_cache_hits=1234"));
+  assert!(stdout.contains("shape_cache_misses=56"));
+  assert!(stdout.contains("shape_cache_evict=7"));
+  assert!(stdout.contains("shape_cache_entries=89"));
+  assert!(stdout.contains("fallback_entries=10/100"));
+  assert!(stdout.contains("fallback_cluster_entries=20/200"));
+  assert!(stdout.contains("fallback_shards=4"));
+  assert!(stdout.contains("fallback_desc_unique=3"));
+  assert!(stdout.contains("fallback_desc_families=2"));
+  assert!(stdout.contains("fallback_desc_lang=1"));
+  assert!(stdout.contains("fallback_desc_weights=4"));
   assert!(stdout.contains(
-    "text: runs=321 glyphs=6543 fallback_hits=100 fallback_misses=5 last_resort_fallbacks=2 | timings text_shape_cpu_ms=123.45ms text_fallback_cpu_ms=67.89ms"
+    "| timings text_shape_cpu_ms=123.45ms text_fallback_cpu_ms=67.89ms"
   ));
+  assert!(
+    !stdout.contains("fallback_desc_samples="),
+    "descriptor samples should not print without --verbose"
+  );
   assert!(stdout.contains(
     "cascade: nodes=1100 candidates=6000 matches=2000 selector=320.50ms declaration=210.25ms"
   ));
@@ -136,6 +157,28 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains(
     "1. stats_ok layout.taffy_grid_measure_calls=9012 total=1800.00ms hotspot=cascade url=https://stats.test/"
   ));
+}
+
+#[test]
+fn pageset_progress_report_outputs_descriptor_samples_when_verbose() {
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      stats_fixtures_dir().to_str().unwrap(),
+      "--top",
+      "1",
+      "--verbose-stats",
+      "--verbose",
+    ])
+    .output()
+    .expect("run pageset_progress report --verbose-stats --verbose");
+  assert!(output.status.success(), "expected success for report");
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(stdout.contains("fallback_desc_samples=["));
+  assert!(stdout.contains("lang=en weight=400 families=[Arial]"));
+  assert!(stdout.contains("lang=ja weight=700 families=[Noto Sans JP]"));
 }
 
 #[test]
