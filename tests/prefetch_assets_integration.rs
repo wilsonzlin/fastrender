@@ -615,3 +615,129 @@ fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
     assert!(offline.fetch(url).is_ok(), "{url} should be cached on disk");
   }
 }
+
+#[test]
+fn prefetch_assets_selects_srcset_candidate_and_respects_max_urls_per_element() {
+  let Some(listener) = try_bind_localhost(
+    "prefetch_assets_selects_srcset_candidate_and_respects_max_urls_per_element",
+  ) else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    "/a1.jpg".to_string(),
+    (b"dummy-a1".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/a2.jpg".to_string(),
+    (b"dummy-a2".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/a3.jpg".to_string(),
+    (b"dummy-a3".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/fallback.jpg".to_string(),
+    (b"dummy-fallback".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/__shutdown__".to_string(),
+    (b"shutdown".to_vec(), "text/plain"),
+  );
+
+  // Keep the server alive until the prefetch binary finishes, then send a
+  // `/__shutdown__` request so we can assert what was (and wasn't) fetched.
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec!["/a2.jpg", "/__shutdown__"],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><body>\
+      <img src=\"/fallback.jpg\" srcset=\"/a1.jpg 1x, /a2.jpg 2x, /a3.jpg 3x\">\
+    </body></html>",
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .arg("--prefetch-images")
+    .arg("--dpr")
+    .arg("2.0")
+    .arg("--max-image-urls-per-element")
+    .arg("1")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  // Trigger server shutdown so we can assert the full hit list.
+  let shutdown_url = format!("http://{}/__shutdown__", addr);
+  let _ = ureq::get(&shutdown_url).call();
+
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let a1 = format!("http://{}/a1.jpg", addr);
+  let a2 = format!("http://{}/a2.jpg", addr);
+  let a3 = format!("http://{}/a3.jpg", addr);
+  let fallback = format!("http://{}/fallback.jpg", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  assert!(
+    offline.fetch(&a2).is_ok(),
+    "selected 2x candidate should be cached on disk"
+  );
+  assert!(
+    offline.fetch(&a1).is_err(),
+    "non-selected 1x candidate should not be cached (max urls per element = 1)"
+  );
+  assert!(
+    offline.fetch(&a3).is_err(),
+    "non-selected 3x candidate should not be cached (max urls per element = 1)"
+  );
+  assert!(
+    offline.fetch(&fallback).is_err(),
+    "base src should not be cached (max urls per element = 1)"
+  );
+
+  let hits = hits.lock().unwrap();
+  assert_eq!(hits.get("/a2.jpg").copied().unwrap_or(0), 1);
+  assert_eq!(hits.get("/a1.jpg").copied().unwrap_or(0), 0);
+  assert_eq!(hits.get("/a3.jpg").copied().unwrap_or(0), 0);
+  assert_eq!(hits.get("/fallback.jpg").copied().unwrap_or(0), 0);
+}
