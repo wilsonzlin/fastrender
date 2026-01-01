@@ -299,10 +299,10 @@ fn perf_smoke_fail_on_fetch_errors_exits_non_zero() {
   fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
 
   let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
-    .env(PAGESET_TIMEOUT_MANIFEST_ENV, manifest_path)
+    .env(PAGESET_GUARDRAILS_MANIFEST_ENV, manifest_path)
     .args([
       "--suite",
-      "pageset-timeouts",
+      "pageset-guardrails",
       "--fail-on-fetch-errors",
       "--no-isolate",
       "--output",
