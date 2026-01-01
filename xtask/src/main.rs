@@ -123,7 +123,12 @@ struct PagesetArgs {
   #[arg(long, value_name = "MS", requires = "cascade_diagnostics")]
   cascade_diagnostics_slow_ms: Option<u64>,
 
-  /// Extra arguments forwarded to `pageset_progress run` (use `--` before these)
+  /// Extra arguments forwarded to `pageset_progress run` (use `--` before these).
+  ///
+  /// Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
+  /// prefetch toggles like `--prefetch-images`, those flags are intercepted here and forwarded to
+  /// `prefetch_assets` instead so users can override the wrapper defaults without breaking
+  /// `pageset_progress` arg parsing.
   #[arg(last = true)]
   extra: Vec<String>,
 }
@@ -494,7 +499,6 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 
   let pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
   let shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
-  let disk_cache_extra_args = extract_disk_cache_args(&args.extra);
   let viewport_arg = args
     .viewport
     .map(|(width, height)| format!("{width}x{height}"));
@@ -506,6 +510,42 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   } else {
     "disabled"
   };
+
+  let prefetch_support = PrefetchAssetsSupport::detect();
+  let (mut prefetch_asset_args, mut pageset_extra_args) =
+    if disk_cache_enabled && prefetch_support.any() {
+      extract_prefetch_assets_args(&args.extra, prefetch_support)
+    } else {
+      (Vec::new(), args.extra.clone())
+    };
+
+  let mut disk_cache_extra_args = extract_disk_cache_args(&pageset_extra_args);
+  if disk_cache_enabled
+    && std::env::var_os("FASTR_DISK_CACHE_ALLOW_NO_STORE").is_none()
+    && !disk_cache_extra_args.iter().any(|arg| {
+      arg == "--disk-cache-allow-no-store" || arg.starts_with("--disk-cache-allow-no-store=")
+    })
+  {
+    disk_cache_extra_args.push("--disk-cache-allow-no-store".to_string());
+    pageset_extra_args.push("--disk-cache-allow-no-store".to_string());
+  }
+
+  if disk_cache_enabled
+    && prefetch_support.prefetch_images
+    && !prefetch_asset_args.iter().any(|arg| {
+      arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")
+    })
+  {
+    prefetch_asset_args.push("--prefetch-images".to_string());
+  }
+  if disk_cache_enabled
+    && prefetch_support.prefetch_css_url_assets
+    && !prefetch_asset_args.iter().any(|arg| {
+      arg == "--prefetch-css-url-assets" || arg.starts_with("--prefetch-css-url-assets=")
+    })
+  {
+    prefetch_asset_args.push("--prefetch-css-url-assets".to_string());
+  }
   if disk_cache_enabled {
     println!(
       "Disk cache enabled (persisting subresources under fetches/assets/). \
@@ -584,6 +624,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(dpr) = &dpr_arg {
       cmd.arg("--dpr").arg(dpr);
     }
+    cmd.args(&prefetch_asset_args);
     cmd.args(&disk_cache_extra_args);
     if rayon_threads_env.is_none() {
       cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());
@@ -635,7 +676,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       cmd.arg("--cascade-diagnostics-slow-ms").arg(ms.to_string());
     }
   }
-  cmd.args(&args.extra);
+  cmd.args(&pageset_extra_args);
   if rayon_threads_env.is_none() {
     cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());
   }
@@ -649,6 +690,66 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   run_command(cmd)?;
 
   Ok(())
+}
+
+#[derive(Copy, Clone)]
+struct PrefetchAssetsSupport {
+  prefetch_images: bool,
+  prefetch_css_url_assets: bool,
+}
+
+impl PrefetchAssetsSupport {
+  fn any(self) -> bool {
+    self.prefetch_images || self.prefetch_css_url_assets
+  }
+
+  fn detect() -> Self {
+    let path = repo_root().join("src/bin/prefetch_assets.rs");
+    let Ok(contents) = fs::read_to_string(path) else {
+      return Self {
+        prefetch_images: false,
+        prefetch_css_url_assets: false,
+      };
+    };
+
+    Self {
+      prefetch_images: contents.contains("prefetch_images"),
+      prefetch_css_url_assets: contents.contains("prefetch_css_url_assets"),
+    }
+  }
+}
+
+fn extract_prefetch_assets_args(
+  extra: &[String],
+  support: PrefetchAssetsSupport,
+) -> (Vec<String>, Vec<String>) {
+  let mut prefetch_args = Vec::new();
+  let mut pageset_args = Vec::new();
+
+  let mut iter = extra.iter().peekable();
+  while let Some(arg) = iter.next() {
+    let is_prefetch_arg = (support.prefetch_images
+      && (arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")))
+      || (support.prefetch_css_url_assets
+        && (arg == "--prefetch-css-url-assets" || arg.starts_with("--prefetch-css-url-assets=")));
+
+    if is_prefetch_arg {
+      prefetch_args.push(arg.clone());
+
+      if !arg.contains('=') {
+        if let Some(next) = iter.peek() {
+          if !next.starts_with('-') {
+            prefetch_args.push((*next).clone());
+            iter.next();
+          }
+        }
+      }
+    } else {
+      pageset_args.push(arg.clone());
+    }
+  }
+
+  (prefetch_args, pageset_args)
 }
 
 fn extract_disk_cache_args(extra: &[String]) -> Vec<String> {

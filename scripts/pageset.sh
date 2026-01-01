@@ -10,10 +10,16 @@ set -euo pipefail
 #   USER_AGENT=... ACCEPT_LANGUAGE=... VIEWPORT=... DPR=...
 #   FASTR_DISK_CACHE_MAX_BYTES=... FASTR_DISK_CACHE_MAX_AGE_SECS=... (0 = never expire)
 #   FASTR_DISK_CACHE_LOCK_STALE_SECS=... (seconds before `.lock` files are treated as stale)
+#   FASTR_DISK_CACHE_ALLOW_NO_STORE=0|1 (do not override via wrapper defaults when set)
 #
 # Extra arguments are forwarded to `pageset_progress run`. Use `--` to separate them from the
 # wrapper flags, e.g.:
 #   scripts/pageset.sh -- --pages example.com --disk-cache-max-age-secs 0
+#
+# Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
+# `--prefetch-images` / `--prefetch-css-url-assets`, these flags are intercepted by the wrapper
+# and forwarded to `prefetch_assets` (not `pageset_progress`) so users can override the wrapper
+# defaults without breaking `pageset_progress` arg parsing.
 
 TOTAL_CPUS="$(nproc)"
 JOBS="${JOBS:-${TOTAL_CPUS}}"
@@ -181,6 +187,78 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
   esac
 done
 
+EXTRA_DISK_CACHE_ARGS=()
+if [[ "${USE_DISK_CACHE}" != 0 ]]; then
+  DISK_CACHE_ALLOW_NO_STORE_IN_ARGS=0
+  for arg in "${DISK_CACHE_ARGS[@]}"; do
+    case "${arg}" in
+      --disk-cache-allow-no-store|--disk-cache-allow-no-store=*)
+        DISK_CACHE_ALLOW_NO_STORE_IN_ARGS=1
+        break
+        ;;
+    esac
+  done
+
+  if [[ -z "${FASTR_DISK_CACHE_ALLOW_NO_STORE:-}" && "${DISK_CACHE_ALLOW_NO_STORE_IN_ARGS}" -eq 0 ]]; then
+    EXTRA_DISK_CACHE_ARGS+=(--disk-cache-allow-no-store)
+  fi
+fi
+
+PREFETCH_ASSET_ARGS=()
+PAGESET_ARGS=()
+PREFETCH_IMAGES_IN_ARGS=0
+PREFETCH_CSS_URL_ASSETS_IN_ARGS=0
+PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=0
+PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=0
+PREFETCH_ASSETS_SOURCE="src/bin/prefetch_assets.rs"
+if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
+  if grep -q "prefetch_images" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=1
+  fi
+  if grep -q "prefetch_css_url_assets" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=1
+  fi
+fi
+
+for ((i=0; i < ${#ARGS[@]}; i++)); do
+  arg="${ARGS[$i]}"
+  case "${arg}" in
+    --prefetch-images|--prefetch-images=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES}" -eq 1 ]]; then
+        PREFETCH_IMAGES_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--prefetch-images" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --prefetch-css-url-assets|--prefetch-css-url-assets=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS}" -eq 1 ]]; then
+        PREFETCH_CSS_URL_ASSETS_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--prefetch-css-url-assets" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    *)
+      PAGESET_ARGS+=("${arg}")
+      ;;
+  esac
+done
+
 FEATURE_ARGS=()
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   FEATURE_ARGS=(--features disk_cache)
@@ -190,9 +268,15 @@ echo "Fetching pages (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, disk_cache=${USE_
 cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${FETCH_KNOB_ARGS[@]}"
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
-  echo "Prefetching CSS assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
-  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${PREFETCH_KNOB_ARGS[@]}" "${DISK_CACHE_ARGS[@]}"
+  echo "Prefetching assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
+  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES}" -eq 1 && "${PREFETCH_IMAGES_IN_ARGS}" -eq 0 ]]; then
+    PREFETCH_ASSET_ARGS+=(--prefetch-images)
+  fi
+  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS}" -eq 1 && "${PREFETCH_CSS_URL_ASSETS_IN_ARGS}" -eq 0 ]]; then
+    PREFETCH_ASSET_ARGS+=(--prefetch-css-url-assets)
+  fi
+  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${PREFETCH_KNOB_ARGS[@]}" "${PREFETCH_ASSET_ARGS[@]}" "${DISK_CACHE_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
 fi
 
 echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts "${PAGESET_KNOB_ARGS[@]}" "${ARGS[@]}"
+cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts "${PAGESET_KNOB_ARGS[@]}" "${PAGESET_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
