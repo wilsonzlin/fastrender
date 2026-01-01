@@ -1,13 +1,13 @@
 {
   "url": "https://www.nasa.gov/image-detail/pia26680orig/",
   "status": "ok",
-  "total_ms": 1974.6911489999998,
+  "total_ms": 1974.691149,
   "stages_ms": {
-    "fetch": 6.491766,
-    "css": 95.325507,
-    "cascade": 357.848832,
-    "layout": 861.4046969999999,
-    "paint": 328.187804
+    "fetch": 7.772724553288845,
+    "css": 114.13518429555343,
+    "cascade": 428.4597446753526,
+    "layout": 1031.3775078599933,
+    "paint": 392.9459876158117
   },
   "notes": "",
   "hotspot": "layout",
@@ -21,16 +21,16 @@
         "html_decode_ms": null,
         "dom_parse_ms": 6.473256,
         "dom_html5ever_ms": 4.340388,
-        "dom_convert_ms": 1.7244789999999999,
+        "dom_convert_ms": 1.724479,
         "dom_shadow_attach_ms": 0.113302,
         "dom_compat_ms": 0.0,
-        "dom_meta_viewport_ms": 0.018510000000000002,
+        "dom_meta_viewport_ms": 0.01851,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 75.90465,
         "css_parse_ms": 95.325507,
         "cascade_ms": 263.861945,
-        "box_tree_ms": 93.98688700000001,
+        "box_tree_ms": 93.986887,
         "layout_ms": 861.4046969999999,
         "text_fallback_cpu_ms": 2.298998000000001,
         "text_shape_cpu_ms": 5.310020000000001,
@@ -185,7 +185,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 174.94615100000001
+        "image_decode_ms": 174.946151
       }
     }
   }

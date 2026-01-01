@@ -5,7 +5,7 @@
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
-    "cascade": 0.0,
+    "cascade": 4912.087162,
     "layout": 0.0,
     "paint": 0.0
   },

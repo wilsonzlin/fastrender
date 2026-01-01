@@ -6,7 +6,7 @@
     "fetch": 0.0,
     "css": 0.0,
     "cascade": 0.0,
-    "layout": 0.0,
+    "layout": 5598.347742,
     "paint": 0.0
   },
   "notes": "See docs/notes/layout-timeouts-profiling.md; dominated by BlockFormattingContext::layout + FloatContext::compute_float_position (float placement) + intrinsic sizing.",

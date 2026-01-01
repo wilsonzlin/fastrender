@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 956.948174,
   "stages_ms": {
-    "fetch": 4.874883,
-    "css": 112.214539,
-    "cascade": 203.201959,
-    "layout": 236.091728,
-    "paint": 25.034608
+    "fetch": 8.023509172345433,
+    "css": 184.69251117145058,
+    "cascade": 334.4475717417343,
+    "layout": 388.5804326222564,
+    "paint": 41.204149292213245
   },
   "notes": "",
   "hotspot": "layout",
@@ -22,7 +22,7 @@
         "dom_parse_ms": 4.856272,
         "dom_html5ever_ms": 3.743536,
         "dom_convert_ms": 0.998353,
-        "dom_shadow_attach_ms": 0.022470999999999998,
+        "dom_shadow_attach_ms": 0.022471,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.018611,
         "dom_clone_ms": null,

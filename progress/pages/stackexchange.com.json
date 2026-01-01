@@ -7,7 +7,7 @@
     "css": 0.0,
     "cascade": 0.0,
     "layout": 0.0,
-    "paint": 0.0
+    "paint": 5000.0
   },
   "notes": "",
   "auto_notes": "timeout at css after 4.804384352s\nhard timeout after 5.00s\nstage: layout\nstage: paint_build\nstage: paint_rasterize",

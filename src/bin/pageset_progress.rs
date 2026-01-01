@@ -1583,14 +1583,24 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
     // Historical progress files may have stage buckets that included `text_*` subsystem timings.
     // When stats are present, recompute buckets using the current wall-clock-only definition so
     // `migrate` can update committed progress artifacts without requiring a rerender.
-    if progress.status == ProgressStatus::Ok {
-      if let Some(stats) = progress
-        .diagnostics
-        .as_ref()
-        .and_then(|diag| diag.stats.as_ref())
-      {
-        progress.stages_ms = buckets_from_stats(stats);
+    if let Some(total_ms) = progress.total_ms {
+      if progress.status == ProgressStatus::Ok {
+        if let Some(stats) = progress
+          .diagnostics
+          .as_ref()
+          .and_then(|diag| diag.stats.as_ref())
+        {
+          progress.stages_ms = buckets_from_stats(stats);
+        }
+        if progress.stages_ms.sum() > 0.0 {
+          progress.stages_ms.rescale_to_total(total_ms);
+        }
         progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
+      } else if progress.stages_ms.sum() > 0.0 {
+        progress.stages_ms.rescale_to_total(total_ms);
+      } else if let Some(stage) = progress.timeout_stage.or(progress.failure_stage) {
+        progress.stages_ms = stage_buckets_for_progress_stage(stage, total_ms);
+        progress.stages_ms.rescale_to_total(total_ms);
       }
     }
     let formatted = serialize_progress(&progress)?;

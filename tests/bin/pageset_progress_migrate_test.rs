@@ -130,12 +130,26 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
   let migrated_raw = fs::read_to_string(&progress_path).expect("read migrated json");
   let migrated: Value = serde_json::from_str(&migrated_raw).expect("parse migrated json value");
   let stages = migrated.get("stages_ms").expect("stages_ms object");
-  assert_eq!(stages["fetch"].as_f64(), Some(4.5));
-  assert_eq!(stages["css"].as_f64(), Some(4.0));
-  assert_eq!(stages["cascade"].as_f64(), Some(11.0));
-  // `text_*` subsystem timings should not affect wall-clock stage buckets.
-  assert_eq!(stages["layout"].as_f64(), Some(7.0));
-  assert_eq!(stages["paint"].as_f64(), Some(43.0));
+  let fetch = stages["fetch"].as_f64().expect("fetch stage");
+  let css = stages["css"].as_f64().expect("css stage");
+  let cascade = stages["cascade"].as_f64().expect("cascade stage");
+  let layout = stages["layout"].as_f64().expect("layout stage");
+  let paint = stages["paint"].as_f64().expect("paint stage");
+  let sum = fetch + css + cascade + layout + paint;
+  assert!(
+    (sum - 123.0).abs() < 1.0,
+    "expected migrated stages_ms sum ({sum}) to match total_ms (123.0)"
+  );
+  // `text_*` subsystem timings should not affect wall-clock stage buckets (only the stage wall
+  // timers are used, then rescaled to total_ms for share calculations).
+  let raw = (4.5, 4.0, 11.0, 7.0, 43.0);
+  let raw_sum = raw.0 + raw.1 + raw.2 + raw.3 + raw.4;
+  let scale = 123.0 / raw_sum;
+  assert!((fetch - raw.0 * scale).abs() < 1e-6);
+  assert!((css - raw.1 * scale).abs() < 1e-6);
+  assert!((cascade - raw.2 * scale).abs() < 1e-6);
+  assert!((layout - raw.3 * scale).abs() < 1e-6);
+  assert!((paint - raw.4 * scale).abs() < 1e-6);
   assert_eq!(
     migrated.get("hotspot"),
     Some(&Value::String("paint".into())),
