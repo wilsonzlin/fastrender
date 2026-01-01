@@ -162,7 +162,12 @@ impl ShardedCounter {
 
   #[inline]
   fn inc(&self) {
-    self.shards[Self::shard_index()].fetch_add(1);
+    self.add(1);
+  }
+
+  #[inline]
+  fn add(&self, value: usize) {
+    self.shards[Self::shard_index()].fetch_add(value);
   }
 
   fn store(&self, value: usize) {
@@ -183,6 +188,11 @@ static CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
 static BLOCK_INTRINSIC_CALLS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
 static FLEX_INTRINSIC_CALLS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
 static INLINE_INTRINSIC_CALLS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static LAYOUT_CACHE_LOOKUPS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static LAYOUT_CACHE_HITS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static LAYOUT_CACHE_STORES: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static LAYOUT_CACHE_EVICTIONS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static LAYOUT_CACHE_CLONE_RETURNS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
 
 #[cfg(test)]
 static INTRINSIC_CACHE_TEST_LOCK: LazyLock<parking_lot::ReentrantMutex<()>> =
@@ -191,6 +201,15 @@ static INTRINSIC_CACHE_TEST_LOCK: LazyLock<parking_lot::ReentrantMutex<()>> =
 #[cfg(test)]
 pub(crate) fn intrinsic_cache_test_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
   INTRINSIC_CACHE_TEST_LOCK.lock()
+}
+
+#[cfg(test)]
+static LAYOUT_CACHE_TEST_LOCK: LazyLock<parking_lot::ReentrantMutex<()>> =
+  LazyLock::new(|| parking_lot::ReentrantMutex::new(()));
+
+#[cfg(test)]
+pub(crate) fn layout_cache_test_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+  LAYOUT_CACHE_TEST_LOCK.lock()
 }
 
 fn clear_subgrid_cache() {
@@ -357,12 +376,7 @@ thread_local! {
   static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
   static LAYOUT_CACHE_EPOCH: Cell<usize> = const { Cell::new(1) };
   static LAYOUT_CACHE_FRAGMENTATION: Cell<u64> = const { Cell::new(0) };
-  static LAYOUT_CACHE_LOOKUPS: Cell<usize> = const { Cell::new(0) };
-  static LAYOUT_CACHE_HITS: Cell<usize> = const { Cell::new(0) };
-  static LAYOUT_CACHE_STORES: Cell<usize> = const { Cell::new(0) };
-  static LAYOUT_CACHE_EVICTIONS: Cell<usize> = const { Cell::new(0) };
   static LAYOUT_CACHE_ENTRY_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
-  static LAYOUT_CACHE_CLONE_RETURNS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Maximum number of memoized style fingerprints kept per thread.
@@ -831,7 +845,7 @@ fn enforce_layout_cache_entry_limit(
   }
 
   if removed > 0 {
-    LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + removed));
+    LAYOUT_CACHE_EVICTIONS.add(removed);
   }
 }
 
@@ -840,7 +854,7 @@ fn layout_cache_clear() {
     let mut map = cache.borrow_mut();
     let evicted = map.len();
     if evicted > 0 {
-      LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + evicted));
+      LAYOUT_CACHE_EVICTIONS.add(evicted);
     }
     map.clear();
   });
@@ -853,23 +867,26 @@ fn evict_cache_entries_for_box(box_id: usize) {
     map.retain(|existing_key, _| existing_key.box_id != box_id);
     let evicted = before.saturating_sub(map.len());
     if evicted > 0 {
-      LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + evicted));
+      LAYOUT_CACHE_EVICTIONS.add(evicted);
     }
   });
 }
 
 pub(crate) fn layout_cache_reset_counters() {
+  #[cfg(test)]
+  let _guard = layout_cache_test_lock();
+
   LAYOUT_RESULT_CACHE.with(|cache| {
     cache.borrow_mut().clear();
   });
   clear_layout_style_fingerprint_cache();
-  LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(0));
-  LAYOUT_CACHE_HITS.with(|counter| counter.set(0));
-  LAYOUT_CACHE_STORES.with(|counter| counter.set(0));
-  LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(0));
+  LAYOUT_CACHE_LOOKUPS.store(0);
+  LAYOUT_CACHE_HITS.store(0);
+  LAYOUT_CACHE_STORES.store(0);
+  LAYOUT_CACHE_EVICTIONS.store(0);
   let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   subgrid_cache_use_epoch(epoch, true);
-  LAYOUT_CACHE_CLONE_RETURNS.with(|counter| counter.set(0));
+  LAYOUT_CACHE_CLONE_RETURNS.store(0);
 }
 
 /// Configures the layout cache epoch and run-scoped parameters.
@@ -879,6 +896,9 @@ pub(crate) fn layout_cache_use_epoch(
   reset_counters: bool,
   fragmentation: Option<FragmentationOptions>,
 ) {
+  #[cfg(test)]
+  let _guard = layout_cache_test_lock();
+
   let epoch = epoch.max(1);
   let previous = LAYOUT_CACHE_EPOCH.with(|cell| {
     let previous = cell.get();
@@ -918,7 +938,7 @@ pub(crate) fn layout_cache_lookup(
     evict_cache_entries_for_box(key.key.box_id);
     return None;
   }
-  LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(counter.get() + 1));
+  LAYOUT_CACHE_LOOKUPS.inc();
 
   let result = LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
@@ -929,15 +949,15 @@ pub(crate) fn layout_cache_lookup(
       // Drop stale entries tied to an old epoch.
       if entry.epoch != epoch {
         map.remove(&key.key);
-        LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
+        LAYOUT_CACHE_EVICTIONS.inc();
       }
     }
     None
   });
 
   if let Some(fragment) = result {
-    LAYOUT_CACHE_HITS.with(|counter| counter.set(counter.get() + 1));
-    LAYOUT_CACHE_CLONE_RETURNS.with(|counter| counter.set(counter.get() + 1));
+    LAYOUT_CACHE_HITS.inc();
+    LAYOUT_CACHE_CLONE_RETURNS.inc();
     fragment_clone_profile::record_fragment_clone_from_fragment(
       CloneSite::LayoutCacheHit,
       fragment.as_ref(),
@@ -974,22 +994,22 @@ pub(crate) fn layout_cache_store(
     };
     if let Some(previous) = map.insert(key.key, new_entry) {
       if previous.epoch != epoch || previous.style_hash != key.style_hash {
-        LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
+        LAYOUT_CACHE_EVICTIONS.inc();
       }
     }
     enforce_layout_cache_entry_limit(&mut map, &key.key);
   });
 
-  LAYOUT_CACHE_STORES.with(|counter| counter.set(counter.get() + 1));
+  LAYOUT_CACHE_STORES.inc();
 }
 
 pub(crate) fn layout_cache_stats() -> (usize, usize, usize, usize, usize) {
   (
-    LAYOUT_CACHE_LOOKUPS.with(|counter| counter.get()),
-    LAYOUT_CACHE_HITS.with(|counter| counter.get()),
-    LAYOUT_CACHE_STORES.with(|counter| counter.get()),
-    LAYOUT_CACHE_EVICTIONS.with(|counter| counter.get()),
-    LAYOUT_CACHE_CLONE_RETURNS.with(|counter| counter.get()),
+    LAYOUT_CACHE_LOOKUPS.load_sum(),
+    LAYOUT_CACHE_HITS.load_sum(),
+    LAYOUT_CACHE_STORES.load_sum(),
+    LAYOUT_CACHE_EVICTIONS.load_sum(),
+    LAYOUT_CACHE_CLONE_RETURNS.load_sum(),
   )
 }
 
@@ -1530,6 +1550,7 @@ mod tests {
 
   #[test]
   fn layout_epoch_clears_subgrid_cache() {
+    let _guard = layout_cache_test_lock();
     layout_cache_use_epoch(9, false, true, None);
 
     let child = BoxNode::new_block(
@@ -1579,6 +1600,7 @@ mod tests {
 
   #[test]
   fn layout_cache_hits_on_stable_style() {
+    let _guard = layout_cache_test_lock();
     layout_cache_use_epoch(1, true, true, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
@@ -1609,6 +1631,7 @@ mod tests {
 
   #[test]
   fn layout_style_fingerprint_memoized_per_epoch() {
+    let _guard = layout_cache_test_lock();
     layout_cache_use_epoch(1, true, true, None);
     reset_style_fingerprint_compute_count();
 
@@ -1649,6 +1672,7 @@ mod tests {
 
   #[test]
   fn layout_cache_overwrites_style_changes() {
+    let _guard = layout_cache_test_lock();
     layout_cache_use_epoch(1, true, true, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
@@ -1696,6 +1720,7 @@ mod tests {
 
   #[test]
   fn layout_cache_evicted_on_epoch_change() {
+    let _guard = layout_cache_test_lock();
     layout_cache_use_epoch(1, true, true, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
