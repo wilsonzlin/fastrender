@@ -6972,6 +6972,8 @@ mod tests {
   use super::*;
   use crate::layout::constraints::AvailableSpace;
   use crate::layout::constraints::LayoutConstraints;
+  use crate::layout::contexts::factory::FormattingContextFactory;
+  use crate::layout::engine::LayoutParallelism;
   use crate::layout::formatting_context::intrinsic_cache_epoch;
   use crate::layout::formatting_context::intrinsic_cache_use_epoch;
   use crate::render_control::{with_deadline, RenderDeadline};
@@ -6990,6 +6992,7 @@ mod tests {
   use crate::style::values::CalcLength;
   use crate::style::values::Length;
   use crate::style::ComputedStyle;
+  use crate::text::font_db::FontConfig;
   use crate::text::font_loader::FontContext;
   use crate::tree::box_tree::BoxTree;
   use crate::tree::debug::DebugInfo;
@@ -7079,6 +7082,71 @@ mod tests {
       vec![cell],
     )
     .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]))
+  }
+
+  #[test]
+  fn cell_intrinsic_measurement_reuses_table_factory_shaping_cache() {
+    let viewport = crate::geometry::Size::new(800.0, 600.0);
+    let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+    let factory = FormattingContextFactory::with_font_context_and_viewport(font_ctx, viewport)
+      .with_parallelism(LayoutParallelism::disabled());
+    factory.reset_caches();
+    let tfc = TableFormattingContext::with_factory(factory.clone());
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.font_size = 16.0;
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+
+    let text = BoxNode::new_text(Arc::new(text_style), "hello world".to_string());
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![text]);
+    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+      .map(|_| ColumnConstraints::new(0.0, 0.0))
+      .collect();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic_cache_share",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
+
+    let before = factory.shaping_cache_size();
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
+    let after = factory.shaping_cache_size();
+
+    assert!(
+      after > before,
+      "expected cell intrinsic measurement to reuse the table factory shaping cache (before={before}, after={after})"
+    );
   }
 
   fn normalized_table_with_row_group() -> BoxNode {
