@@ -90,6 +90,10 @@ fn perf_smoke_emits_stage_breakdowns() {
     fixture["fetch_error_samples"].is_null() || fixture["fetch_error_samples"].as_array().is_some(),
     "fixture fetch_error_samples should be null/absent or an array"
   );
+  assert!(
+    fixture["failure_stage"].is_null() || fixture["failure_stage"].as_str().is_some(),
+    "fixture failure_stage should be null/absent or a string"
+  );
 }
 
 #[test]
@@ -322,5 +326,20 @@ fn perf_smoke_fail_on_fetch_errors_exits_non_zero() {
   assert!(
     fixture["fetch_error_count"].as_u64().unwrap_or(0) > 0,
     "expected fetch_error_count > 0 for blocked subresource"
+  );
+
+  let samples = fixture["fetch_error_samples"]
+    .as_array()
+    .expect("fetch_error_samples should be present when fetch_error_count > 0");
+  assert!(
+    samples
+      .iter()
+      .any(|entry| entry.as_str() == Some("https://example.com/blocked.png")),
+    "fetch_error_samples should include the blocked URL; got: {samples:?}"
+  );
+  assert_eq!(
+    fixture["failure_stage"].as_str(),
+    Some("paint"),
+    "blocked image fetch should set failure_stage=paint"
   );
 }
