@@ -3366,6 +3366,8 @@ impl FormattingContext for BlockFormattingContext {
     child_ctx.nearest_positioned_cb = nearest_cb;
     if nearest_cb != self.nearest_positioned_cb {
       child_ctx.factory = child_ctx.factory.with_positioned_cb(nearest_cb);
+      child_ctx.intrinsic_inline_fc =
+        Arc::new(InlineFormattingContext::with_factory(child_ctx.factory.clone()));
     }
     let use_columns = Self::is_multicol_container(style);
     let (mut child_fragments, mut content_height, positioned_children, column_info) = if use_columns
@@ -5222,6 +5224,75 @@ mod tests {
     assert_eq!(abs_frag.bounds.y(), 7.0);
     assert_eq!(abs_frag.bounds.width(), 30.0);
     assert_eq!(abs_frag.bounds.height(), 12.0);
+  }
+
+  #[test]
+  fn absolute_children_inside_inline_descendants_use_updated_positioned_containing_block() {
+    // Regression: BlockFormattingContext reuses a cached InlineFormattingContext when the nearest
+    // positioned containing block matches. When cloning a block context for a positioned element,
+    // we must rebuild that cached inline context so percentage offsets for absolutely positioned
+    // descendants resolve against the new containing block (not the previous one).
+
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Block;
+    root_style.width = Some(Length::px(800.0));
+
+    let mut parent_style = ComputedStyle::default();
+    parent_style.display = Display::Block;
+    parent_style.position = Position::Relative;
+    parent_style.width = Some(Length::px(200.0));
+
+    let mut inline_style = ComputedStyle::default();
+    inline_style.display = Display::Inline;
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.display = Display::Block;
+    abs_style.position = Position::Absolute;
+    abs_style.left = Some(Length::percent(50.0));
+    abs_style.top = Some(Length::px(0.0));
+    abs_style.width = Some(Length::px(10.0));
+    abs_style.height = Some(Length::px(10.0));
+
+    let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+    let inline = BoxNode::new_inline(Arc::new(inline_style), vec![abs_child]);
+    let parent = BoxNode::new_block(
+      Arc::new(parent_style),
+      FormattingContextType::Block,
+      vec![inline],
+    );
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![parent],
+    );
+
+    fn find_abs_fragment(node: &FragmentNode) -> Option<&FragmentNode> {
+      if node
+        .style
+        .as_ref()
+        .map(|s| s.position == Position::Absolute)
+        .unwrap_or(false)
+      {
+        return Some(node);
+      }
+      for child in node.children.iter() {
+        if let Some(found) = find_abs_fragment(child) {
+          return Some(found);
+        }
+      }
+      None
+    }
+
+    let fc = BlockFormattingContext::new();
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let fragment = fc.layout(&root, &constraints).unwrap();
+
+    let abs_fragment = find_abs_fragment(&fragment).expect("expected absolute-positioned descendant");
+    assert_eq!(
+      abs_fragment.bounds.x(),
+      100.0,
+      "left:50% should resolve against the positioned 200px-wide containing block"
+    );
   }
 
   #[test]
