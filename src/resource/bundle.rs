@@ -307,3 +307,54 @@ impl ResourceFetcher for BundledFetcher {
     self.fetch(url)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn bundled_fetcher_decodes_data_urls_without_manifest_entries() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let doc_path = tmp.path().join("document.html");
+    std::fs::write(&doc_path, "<!doctype html><html><body>hi</body></html>").expect("write doc");
+
+    let manifest = BundleManifest {
+      version: BUNDLE_VERSION,
+      original_url: "https://example.com/".to_string(),
+      document: BundledDocument {
+        path: "document.html".to_string(),
+        content_type: Some("text/html".to_string()),
+        final_url: "https://example.com/".to_string(),
+        status: Some(200),
+        etag: None,
+        last_modified: None,
+      },
+      render: BundleRenderConfig {
+        viewport: (1200, 800),
+        device_pixel_ratio: 1.0,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        full_page: false,
+        same_origin_subresources: false,
+        allowed_subresource_origins: Vec::new(),
+        compat_profile: CompatProfile::default(),
+        dom_compat_mode: DomCompatibilityMode::default(),
+      },
+      resources: BTreeMap::new(),
+    };
+    std::fs::write(
+      tmp.path().join(BUNDLE_MANIFEST),
+      serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+
+    let bundle = Bundle::load(tmp.path()).expect("load bundle");
+    let fetcher = BundledFetcher::new(bundle);
+
+    let res = fetcher
+      .fetch("data:text/plain;base64,aGk=")
+      .expect("fetch data url");
+    assert_eq!(res.bytes, b"hi");
+    assert_eq!(res.content_type.as_deref(), Some("text/plain"));
+  }
+}
