@@ -1,5 +1,6 @@
+use crate::style::custom_property_store::CustomPropertyStore;
 use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Definition of a registered custom property from an @property rule.
 #[derive(Debug, Clone, PartialEq)]
@@ -13,7 +14,7 @@ pub struct PropertyRule {
 /// Registry of custom property registrations from @property rules.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CustomPropertyRegistry {
-  definitions: HashMap<String, PropertyRule>,
+  definitions: FxHashMap<String, PropertyRule>,
 }
 
 impl CustomPropertyRegistry {
@@ -49,17 +50,14 @@ impl CustomPropertyRegistry {
   }
 
   /// Initial values provided by registered custom properties.
-  pub fn initial_values(&self) -> HashMap<String, CustomPropertyValue> {
-    self
-      .definitions
-      .iter()
-      .filter_map(|(name, rule)| {
-        rule
-          .initial_value
-          .as_ref()
-          .map(|v| (name.clone(), v.clone()))
-      })
-      .collect()
+  pub fn initial_values(&self) -> CustomPropertyStore {
+    let mut store = CustomPropertyStore::default();
+    for (name, rule) in self.definitions.iter() {
+      if let Some(value) = rule.initial_value.as_ref() {
+        store.insert(name.clone(), value.clone());
+      }
+    }
+    store
   }
 
   /// Whether a property is registered and the value of its `inherits` descriptor.

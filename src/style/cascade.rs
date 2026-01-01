@@ -7269,33 +7269,34 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
 
   // CSS Custom Properties inherit according to registration.
   styles.custom_property_registry = parent.custom_property_registry.clone();
-  let mut custom_properties = HashMap::new();
-  for (name, value) in &parent.custom_properties {
-    if styles
-      .custom_property_registry
-      .inherits(name)
-      .unwrap_or(true)
-    {
-      custom_properties.insert(name.clone(), value.clone());
-    }
-  }
+  styles.custom_properties = parent.custom_properties.clone();
+
+  // Registered custom properties with `inherits: false` behave like non-inherited properties:
+  // descendants compute to their own initial value (or the guaranteed-invalid value when the
+  // initial value is omitted).
   for (name, rule) in styles.custom_property_registry.iter() {
-    if !rule.inherits {
-      if let Some(initial) = &rule.initial_value {
-        custom_properties
-          .entry(name.clone())
-          .or_insert_with(|| initial.clone());
+    if rule.inherits {
+      if !styles.custom_properties.contains_key(name) {
+        if let Some(initial) = &rule.initial_value {
+          styles.custom_properties.insert(name.clone(), initial.clone());
+        }
       }
       continue;
     }
-    if custom_properties.contains_key(name) {
-      continue;
-    }
+
     if let Some(initial) = &rule.initial_value {
-      custom_properties.insert(name.clone(), initial.clone());
+      let already_initial = styles
+        .custom_properties
+        .get(name.as_str())
+        .map(|value| value == initial)
+        .unwrap_or(false);
+      if !already_initial {
+        styles.custom_properties.insert(name.clone(), initial.clone());
+      }
+    } else {
+      styles.custom_properties.remove(name.as_str());
     }
   }
-  styles.custom_properties = custom_properties;
 }
 
 /// Resolves line-height lengths to absolute pixels using computed font sizes and viewport metrics.

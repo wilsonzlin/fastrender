@@ -81,11 +81,11 @@ mod tests {
   fn resolves_var_reference_in_string_set() {
     use crate::css::types::PropertyValue;
     use crate::style::content::StringSetValue;
+    use crate::style::custom_property_store::CustomPropertyStore;
     use crate::style::values::CustomPropertyValue;
     use crate::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
-    use std::collections::HashMap;
 
-    let mut custom_properties = HashMap::new();
+    let mut custom_properties = CustomPropertyStore::default();
     custom_properties.insert(
       "--title".to_string(),
       CustomPropertyValue::new(" \"Var Title\"", None),

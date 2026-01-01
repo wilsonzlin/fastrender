@@ -9,6 +9,7 @@
 //! - Edge cases and error handling
 
 use fastrender::css::types::Declaration;
+use fastrender::style::custom_property_store::CustomPropertyStore;
 use fastrender::style::properties::apply_declaration;
 use fastrender::style::values::CustomPropertyValue;
 use fastrender::style::values::LengthUnit;
@@ -22,14 +23,14 @@ use fastrender::style::var_resolution::VarResolutionResult;
 use fastrender::style::ComputedStyle;
 use fastrender::Length;
 use fastrender::PropertyValue;
-use std::collections::HashMap;
 
 /// Helper function to create a custom properties map from pairs
-fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, CustomPropertyValue> {
-  pairs
-    .iter()
-    .map(|(k, v)| (k.to_string(), CustomPropertyValue::new(*v, None)))
-    .collect()
+fn make_props(pairs: &[(&str, &str)]) -> CustomPropertyStore {
+  let mut store = CustomPropertyStore::default();
+  for (name, value) in pairs.iter().copied() {
+    store.insert(name.to_string(), CustomPropertyValue::new(value, None));
+  }
+  store
 }
 
 fn decl(property: &str, value: PropertyValue, raw_value: &str) -> Declaration {
@@ -122,7 +123,7 @@ fn test_resolve_var_case_insensitive_function_name() {
 
 #[test]
 fn test_resolve_var_not_found_no_fallback() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var(--undefined)".to_string());
   let resolved = resolve_var(&value, &props);
 
@@ -141,7 +142,7 @@ fn test_resolve_var_not_found_no_fallback() {
 
 #[test]
 fn test_resolve_var_with_fallback_used() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var(--missing, 20px)".to_string());
   let resolved = resolve_var(&value, &props);
 
@@ -155,7 +156,7 @@ fn test_resolve_var_with_fallback_used() {
 
 #[test]
 fn test_resolve_var_fallback_with_commas_and_functions() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var(--missing, rgb(1, 2, 3))".to_string());
   let resolved = resolve_var_for_property(&value, &props, "color");
 
@@ -170,7 +171,7 @@ fn test_resolve_var_fallback_with_commas_and_functions() {
 
 #[test]
 fn test_resolve_var_fallback_with_commas_inside_url() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var(--missing, url(a,b))".to_string());
   let resolved = resolve_var_for_property(&value, &props, "background-image");
 
@@ -204,7 +205,7 @@ fn test_resolve_var_with_fallback_not_used() {
 
 #[test]
 fn test_resolve_var_with_color_fallback() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var(--missing, red)".to_string());
   let resolved = resolve_var(&value, &props);
 
@@ -218,7 +219,7 @@ fn test_resolve_var_with_color_fallback() {
 
 #[test]
 fn test_resolve_var_with_complex_fallback() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var(--shadow, 0 2px 4px rgba(0,0,0,0.1))".to_string());
   let resolved = resolve_var(&value, &props);
 
@@ -481,7 +482,7 @@ fn test_is_valid_custom_property_name_invalid() {
 
 #[test]
 fn test_empty_var() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var()".to_string());
   let resolved = resolve_var(&value, &props);
 
@@ -544,7 +545,7 @@ fn test_non_keyword_value_unchanged() {
 
 #[test]
 fn test_var_with_numeric_fallback() {
-  let props = HashMap::new();
+  let props = CustomPropertyStore::default();
   let value = PropertyValue::Keyword("var(--opacity, 0.5)".to_string());
   let resolved = resolve_var(&value, &props);
 

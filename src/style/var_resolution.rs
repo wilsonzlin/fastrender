@@ -6,14 +6,13 @@
 
 use crate::css::properties::{parse_length, parse_property_value};
 use crate::css::types::PropertyValue;
-use crate::style::values::CustomPropertyValue;
+use crate::style::custom_property_store::CustomPropertyStore;
 use cssparser::ParseError;
 use cssparser::ParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
-use std::collections::HashMap;
 
 /// Maximum depth for recursive var() resolution to prevent infinite loops
 const MAX_RECURSION_DEPTH: usize = 10;
@@ -65,11 +64,9 @@ impl VarResolutionResult {
 ///
 /// This helper performs property-agnostic resolution (parses fallback/results without knowing
 /// the destination property). For property-aware parsing, use `resolve_var_for_property`.
-// Custom properties are keyed by String with the default hasher; this is fine for our usage.
-#[allow(clippy::implicit_hasher)]
 pub fn resolve_var(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, 0, "") {
     VarResolutionResult::Resolved { value, .. } => *value,
@@ -81,11 +78,9 @@ pub fn resolve_var(
 ///
 /// Passing the property name allows the resolver to parse the substituted value using the
 /// appropriate grammar (e.g., background layers with commas), rather than the generic parser.
-// As above, allow implicit_hasher for the property map rather than plumbing a custom hasher.
-#[allow(clippy::implicit_hasher)]
 pub fn resolve_var_for_property(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   property_name: &str,
 ) -> VarResolutionResult {
   resolve_var_recursive(value, custom_properties, 0, property_name)
@@ -95,10 +90,9 @@ pub fn resolve_var_for_property(
 ///
 /// This function is useful when you need to track the recursion depth,
 /// for example when implementing custom resolution strategies.
-#[allow(clippy::implicit_hasher)]
 pub fn resolve_var_with_depth(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   depth: usize,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, depth, "") {
@@ -110,7 +104,7 @@ pub fn resolve_var_with_depth(
 /// Internal recursive implementation of var() resolution
 fn resolve_var_recursive(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   depth: usize,
   property_name: &str,
 ) -> VarResolutionResult {
@@ -132,7 +126,7 @@ fn resolve_var_recursive(
 
 fn resolve_from_string(
   raw: &str,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   depth: usize,
   property_name: &str,
 ) -> VarResolutionResult {
@@ -154,7 +148,7 @@ fn resolve_from_string(
 
 fn resolve_value_tokens(
   value: &str,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -169,7 +163,7 @@ fn resolve_value_tokens(
 
 fn resolve_tokens_from_parser<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -244,7 +238,7 @@ fn map_nested_result<'i>(
 
 fn parse_var_function<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -307,7 +301,7 @@ fn parse_var_function_arguments<'i, 't>(
 fn resolve_variable_reference(
   name: &str,
   fallback: Option<&str>,
-  custom_properties: &HashMap<String, CustomPropertyValue>,
+  custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -471,11 +465,12 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
 
-  fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, CustomPropertyValue> {
-    pairs
-      .iter()
-      .map(|(k, v)| ((*k).to_string(), CustomPropertyValue::new(*v, None)))
-      .collect()
+  fn make_props(pairs: &[(&str, &str)]) -> CustomPropertyStore {
+    let mut store = CustomPropertyStore::default();
+    for (name, value) in pairs.iter().copied() {
+      store.insert(name.to_string(), CustomPropertyValue::new(value, None));
+    }
+    store
   }
 
   // Basic var() resolution tests
@@ -504,7 +499,7 @@ mod tests {
 
   #[test]
   fn test_resolve_var_not_found() {
-    let props = HashMap::new();
+    let props = CustomPropertyStore::default();
     let value = PropertyValue::Keyword("var(--missing)".to_string());
     let resolved = resolve_var(&value, &props);
 
@@ -532,7 +527,7 @@ mod tests {
 
   #[test]
   fn test_resolve_var_with_fallback_used() {
-    let props = HashMap::new();
+    let props = CustomPropertyStore::default();
     let value = PropertyValue::Keyword("var(--missing, red)".to_string());
     let resolved = resolve_var(&value, &props);
 
@@ -545,7 +540,7 @@ mod tests {
 
   #[test]
   fn test_resolve_var_with_fallback_length() {
-    let props = HashMap::new();
+    let props = CustomPropertyStore::default();
     let value = PropertyValue::Keyword("var(--spacing, 10px)".to_string());
     let resolved = resolve_var(&value, &props);
 
@@ -635,7 +630,7 @@ mod tests {
 
   #[test]
   fn unresolved_var_marks_declaration_invalid() {
-    let props = HashMap::new();
+    let props = CustomPropertyStore::default();
     let value = PropertyValue::Keyword("var(--missing)".to_string());
     let resolved = resolve_var_for_property(&value, &props, "color");
     assert!(matches!(resolved, VarResolutionResult::NotFound(_)));
@@ -708,7 +703,7 @@ mod tests {
   // Edge cases
   #[test]
   fn test_empty_var() {
-    let props = HashMap::new();
+    let props = CustomPropertyStore::default();
     let value = PropertyValue::Keyword("var()".to_string());
     let resolved = resolve_var(&value, &props);
 

@@ -10,6 +10,7 @@ pub mod content;
 pub mod counter_styles;
 pub mod counters;
 pub mod custom_properties;
+pub mod custom_property_store;
 pub mod defaults;
 pub mod display;
 pub mod float;
@@ -31,9 +32,9 @@ use crate::css::types::TextShadow;
 use crate::css::types::Transform;
 use crate::style::computed::Visibility;
 use crate::style::custom_properties::CustomPropertyRegistry;
+use crate::style::custom_property_store::CustomPropertyStore;
 use crate::style::float::Clear;
 use crate::style::float::Float;
-use crate::style::values::CustomPropertyValue;
 use color::Rgba;
 use counter_styles::CounterStyleRegistry;
 use counters::CounterProperties;
@@ -760,7 +761,7 @@ pub struct ComputedStyle {
 
   // CSS Custom Properties (variables)
   pub custom_property_registry: Arc<CustomPropertyRegistry>,
-  pub custom_properties: HashMap<String, CustomPropertyValue>,
+  pub custom_properties: CustomPropertyStore,
 
   // Generated content (for ::before and ::after pseudo-elements)
   pub content: String,
@@ -1072,7 +1073,7 @@ impl Default for ComputedStyle {
       empty_cells: EmptyCells::Show,
 
       custom_property_registry: Arc::new(CustomPropertyRegistry::default()),
-      custom_properties: HashMap::new(),
+      custom_properties: CustomPropertyStore::default(),
 
       content: String::new(),
       content_value: crate::style::content::ContentValue::Normal,

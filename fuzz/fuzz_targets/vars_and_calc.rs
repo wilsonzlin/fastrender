@@ -3,12 +3,12 @@
 use arbitrary::Arbitrary;
 use fastrender::css::properties::parse_property_value;
 use fastrender::css::types::PropertyValue;
+use fastrender::style::custom_property_store::CustomPropertyStore;
 use fastrender::style::values::CustomPropertyValue;
 use fastrender::style::var_resolution::{
   resolve_var, resolve_var_for_property, resolve_var_with_depth,
 };
 use libfuzzer_sys::fuzz_target;
-use std::collections::HashMap;
 
 const MAX_LEN: usize = 8 * 1024;
 const CALC_PROPERTIES: &[&str] = &[
@@ -79,8 +79,8 @@ fn pick_calc_property(seed_a: &str, seed_b: &str) -> &'static str {
   CALC_PROPERTIES[idx]
 }
 
-fn build_custom_properties(entries: Vec<(String, String)>) -> HashMap<String, CustomPropertyValue> {
-  let mut map = HashMap::new();
+fn build_custom_properties(entries: Vec<(String, String)>) -> CustomPropertyStore {
+  let mut store = CustomPropertyStore::default();
   for (name, value) in entries.into_iter().take(16) {
     let key = if name.trim_start().starts_with("--") {
       name.trim().to_string()
@@ -89,11 +89,11 @@ fn build_custom_properties(entries: Vec<(String, String)>) -> HashMap<String, Cu
     };
 
     let val = truncate_str(&value);
-    map
-      .entry(key)
-      .or_insert_with(|| CustomPropertyValue::new(val.clone(), None));
+    if !store.contains_key(&key) {
+      store.insert(key, CustomPropertyValue::new(val.clone(), None));
+    }
   }
-  map
+  store
 }
 
 fuzz_target!(|case: VarCalcCase| {
@@ -103,9 +103,9 @@ fuzz_target!(|case: VarCalcCase| {
   let calc_expr = format!("calc({})", calc_fragment);
   let custom_props = build_custom_properties(case.custom_properties);
   let custom_name = custom_props
-    .keys()
+    .iter()
     .next()
-    .cloned()
+    .map(|(name, _)| name.clone())
     .unwrap_or_else(|| "--fuzz-var".to_string());
   let var_expr = format!("var({}, {})", custom_name, value);
 

@@ -128,3 +128,49 @@ fn cascade_handles_thousands_of_has_rules_under_budget() {
     "inline-flex"
   );
 }
+
+#[test]
+fn cascade_handles_many_custom_properties_under_budget() {
+  // Heavy custom-property pages (e.g. GitHub, large design systems) often define hundreds or
+  // thousands of variables on the root element. The cascade must not clone that entire map for
+  // every node.
+  let var_count = 800usize;
+  let item_count = 2500usize;
+
+  let mut css = String::new();
+  css.push_str("#root {");
+  for idx in 0..var_count {
+    css.push_str(&format!("--v{idx}: {}px;", (idx % 50) + 1));
+  }
+  css.push_str("}\n");
+  css.push_str(
+    ".item { padding-left: var(--v0); padding-right: var(--v1); margin-top: var(--v2); }\n",
+  );
+  let stylesheet = parse_stylesheet(&css).expect("stylesheet parses");
+
+  let mut html = String::from("<div id=\"root\">");
+  for idx in 0..item_count {
+    html.push_str(&format!(
+      "<div id=\"item{idx}\" class=\"item\"><span class=\"inner\"></span></div>"
+    ));
+  }
+  html.push_str("</div>");
+  let dom = parse_html(&html).expect("html parses");
+
+  let media = MediaContext::screen(1280.0, 720.0);
+  let start = Instant::now();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+  let elapsed = start.elapsed();
+
+  assert!(
+    elapsed < Duration::from_millis(2500),
+    "cascade perf regression: {}ms for {} custom properties over {} nodes",
+    elapsed.as_millis(),
+    var_count,
+    item_count * 2 + 1
+  );
+
+  let first = find_by_id(&styled, "item0").expect("item0 styled");
+  assert_eq!(first.styles.padding_left.value, 1.0);
+  assert_eq!(first.styles.padding_left.unit, fastrender::LengthUnit::Px);
+}
