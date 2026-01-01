@@ -1145,6 +1145,21 @@ pub trait FormattingContext: Send + Sync {
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError>;
 
+  /// Computes both the min-content and max-content intrinsic inline sizes for a box.
+  ///
+  /// Shrink-to-fit algorithms typically need both values (floats, inline-blocks, abspos). Default
+  /// implementation calls `compute_intrinsic_inline_size` twice, but formatting contexts can
+  /// override this to share work between the two measurements.
+  fn compute_intrinsic_inline_sizes(&self, box_node: &BoxNode) -> Result<(f32, f32), LayoutError> {
+    let min = self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)?;
+    let max = match self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
+      Ok(value) => value,
+      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+      Err(_) => min,
+    };
+    Ok((min, max))
+  }
+
   /// Computes intrinsic size for a box in the block axis
   ///
   /// Used for shrink-to-fit resolution of absolutely positioned height when

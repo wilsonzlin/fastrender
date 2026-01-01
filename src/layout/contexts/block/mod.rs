@@ -500,14 +500,7 @@ impl BlockFormattingContext {
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
       let fc = factory.get(fc_type);
-      let preferred_min_content =
-        fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)?;
-      let preferred_content =
-        match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent) {
-          Ok(value) => value,
-          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-          Err(_) => preferred_min_content,
-        };
+      let (preferred_min_content, preferred_content) = fc.compute_intrinsic_inline_sizes(child)?;
 
       let preferred_min = preferred_min_content + horizontal_edges;
       let preferred = preferred_content + horizontal_edges;
@@ -1848,17 +1841,21 @@ impl BlockFormattingContext {
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
         let fc = factory.get(fc_type);
-        let preferred_min_content =
-          match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent) {
-            Ok(value) => value,
+        let (preferred_min_content, preferred_content) =
+          match fc.compute_intrinsic_inline_sizes(child) {
+            Ok(values) => values,
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => 0.0,
-          };
-        let preferred_content =
-          match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent) {
-            Ok(value) => value,
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => preferred_min_content,
+            Err(_) => {
+              // Preserve legacy semantics for non-timeout intrinsic sizing failures: treat
+              // the min-content width as 0 but still attempt the max-content measurement.
+              let preferred_content =
+                match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent) {
+                  Ok(value) => value,
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => 0.0,
+                };
+              (0.0, preferred_content)
+            }
           };
 
         let preferred_min = preferred_min_content + horizontal_edges;
@@ -3055,15 +3052,12 @@ impl FormattingContext for BlockFormattingContext {
       let fc_type = box_node
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
-      let fc = self.factory.get(fc_type);
-      let preferred_min_content =
-        fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)?;
-      let preferred_content =
-        match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
-          Ok(value) => value,
-          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-          Err(_) => preferred_min_content,
-        };
+      let (preferred_min_content, preferred_content) = if fc_type == FormattingContextType::Block {
+        self.compute_intrinsic_inline_sizes(box_node)?
+      } else {
+        let fc = self.factory.get(fc_type);
+        fc.compute_intrinsic_inline_sizes(box_node)?
+      };
 
       let preferred_min = preferred_min_content + horizontal_edges;
       let preferred = preferred_content + horizontal_edges;
@@ -3633,6 +3627,233 @@ impl FormattingContext for BlockFormattingContext {
     );
 
     Ok(converted)
+  }
+
+  fn compute_intrinsic_inline_sizes(&self, box_node: &BoxNode) -> Result<(f32, f32), LayoutError> {
+    count_block_intrinsic_call();
+    let min_cached = intrinsic_cache_lookup(box_node, IntrinsicSizingMode::MinContent);
+    let max_cached = intrinsic_cache_lookup(box_node, IntrinsicSizingMode::MaxContent);
+    if let (Some(min), Some(max)) = (min_cached, max_cached) {
+      return Ok((min, max));
+    }
+    if let Some(min) = min_cached {
+      let max = self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)?;
+      return Ok((min, max));
+    }
+    if let Some(max) = max_cached {
+      let min = self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)?;
+      return Ok((min, max));
+    }
+
+    let style = &box_node.style;
+    let edges = horizontal_padding_and_borders(style, 0.0, self.viewport_size, &self.font_context);
+    // Honor specified widths that resolve without a containing block.
+    if let Some(specified) = style.width.as_ref() {
+      let resolved = resolve_length_for_width(
+        *specified,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      );
+      // Ignore auto/relative cases that resolve to 0.0.
+      if resolved > 0.0 {
+        let result = border_size_from_box_sizing(resolved, edges, style.box_sizing);
+        intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, result);
+        intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, result);
+        return Ok((result, result));
+      }
+    }
+
+    if style.containment.size || style.containment.inline_size {
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, edges);
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, edges);
+      return Ok((edges, edges));
+    }
+
+    // Replaced elements fall back to their intrinsic content size plus padding/borders.
+    if let BoxType::Replaced(replaced_box) = &box_node.box_type {
+      let size = compute_replaced_size(style, replaced_box, None, self.viewport_size);
+      let edges =
+        horizontal_padding_and_borders(style, size.width, self.viewport_size, &self.font_context);
+      let result = size.width + edges;
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, result);
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, result);
+      return Ok((result, result));
+    }
+
+    let factory = &self.factory;
+    let inline_fc = self.intrinsic_inline_fc.as_ref();
+
+    // Inline formatting context contribution (text and inline-level children).
+    // Block-level children split inline runs into separate formatting contexts.
+    let log_ids = crate::debug::runtime::runtime_toggles()
+      .usize_list("FASTR_LOG_INTRINSIC_IDS")
+      .unwrap_or_default();
+    let log_children = !log_ids.is_empty() && log_ids.contains(&box_node.id);
+
+    let mut inline_min_width = 0.0f32;
+    let mut inline_max_width = 0.0f32;
+    let mut block_min_width = 0.0f32;
+    let mut block_max_width = 0.0f32;
+    let mut inline_run: Vec<&BoxNode> = Vec::new();
+    let flush_inline_run =
+      |run: &mut Vec<&BoxNode>,
+       widest_min: &mut f32,
+       widest_max: &mut f32|
+       -> Result<(), LayoutError> {
+        if run.is_empty() {
+          return Ok(());
+        }
+
+        let (min_width, max_width) =
+          inline_fc.intrinsic_widths_for_children(&box_node.style, run.as_slice())?;
+        if log_children {
+          let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
+          eprintln!(
+            "[intrinsic-inline-run] parent_id={} ids={:?} min={:.2} max={:.2}",
+            box_node.id, ids, min_width, max_width
+          );
+        }
+
+        *widest_min = widest_min.max(min_width);
+        *widest_max = widest_max.max(max_width);
+        run.clear();
+        Ok(())
+      };
+
+    let mut inline_child_debug: Vec<(usize, Display)> = Vec::new();
+    let mut deadline_counter = 0usize;
+    for child in &box_node.children {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
+      if is_out_of_flow(child) {
+        continue;
+      }
+
+      // Floats are out-of-flow for intrinsic sizing; they shouldn't contribute to the
+      // parent’s min/max-content inline size.
+      if child.style.float.is_floating() {
+        continue;
+      }
+
+      let treated_as_block = match child.box_type {
+        BoxType::Replaced(_) if child.style.display.is_inline_level() => false,
+        _ => child.is_block_level(),
+      };
+
+      if treated_as_block {
+        flush_inline_run(
+          &mut inline_run,
+          &mut inline_min_width,
+          &mut inline_max_width,
+        )?;
+
+        // Block-level in-flow children contribute their own intrinsic widths.
+        let fc_type = child
+          .formatting_context()
+          .unwrap_or(FormattingContextType::Block);
+        // Avoid going through `factory.get(FormattingContextType::Block)` for block children:
+        // `FormattingContextFactory::block_context` constructs a BlockFormattingContext backed by a
+        // `detached()` factory clone (to avoid factory↔cached-FC Arc cycles). If we used `get(Block)`
+        // recursively we'd create a new detached factory per block depth during intrinsic sizing,
+        // which is exactly the kind of allocation churn tables can amplify.
+        let (child_min, child_max) = if fc_type == FormattingContextType::Block {
+          self.compute_intrinsic_inline_sizes(child)?
+        } else {
+          factory.get(fc_type).compute_intrinsic_inline_sizes(child)?
+        };
+        block_min_width = block_min_width.max(child_min);
+        block_max_width = block_max_width.max(child_max);
+        if log_children {
+          let sel = child
+            .debug_info
+            .as_ref()
+            .map(|d| d.to_selector())
+            .unwrap_or_else(|| "<anon>".to_string());
+          let disp = child.style.display;
+          eprintln!(
+            "[intrinsic-child] parent_id={} child_id={} selector={} display={:?} min={:.2} max={:.2}",
+            box_node.id, child.id, sel, disp, child_min, child_max
+          );
+        }
+      } else {
+        if log_children {
+          inline_child_debug.push((child.id, child.style.display));
+        }
+        inline_run.push(child);
+      }
+    }
+    flush_inline_run(
+      &mut inline_run,
+      &mut inline_min_width,
+      &mut inline_max_width,
+    )?;
+
+    let min_content_width = inline_min_width.max(block_min_width);
+    let max_content_width = inline_max_width.max(block_max_width);
+
+    // Add this box's own padding and borders.
+    let mut min_width = min_content_width + edges;
+    let mut max_width = max_content_width + edges;
+
+    // Apply min/max constraints to the border box.
+    let min_constraint = style
+      .min_width
+      .map(|l| resolve_length_for_width(l, 0.0, style, &self.font_context, self.viewport_size))
+      .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
+      .unwrap_or(0.0);
+    let max_constraint = style
+      .max_width
+      .map(|l| resolve_length_for_width(l, 0.0, style, &self.font_context, self.viewport_size))
+      .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
+      .unwrap_or(f32::INFINITY);
+    let (min_constraint, max_constraint) = if max_constraint < min_constraint {
+      (min_constraint, min_constraint)
+    } else {
+      (min_constraint, max_constraint)
+    };
+    min_width = crate::layout::utils::clamp_with_order(min_width, min_constraint, max_constraint);
+    max_width = crate::layout::utils::clamp_with_order(max_width, min_constraint, max_constraint);
+
+    let clamped_min = min_width.max(0.0);
+    let clamped_max = max_width.max(0.0);
+
+    // Optional tracing for over-large intrinsic widths.
+    if !log_ids.is_empty() && log_ids.contains(&box_node.id) {
+      let selector = box_node
+        .debug_info
+        .as_ref()
+        .map(|d| d.to_selector())
+        .unwrap_or_else(|| "<anon>".to_string());
+      if !inline_child_debug.is_empty() {
+        eprintln!(
+          "[intrinsic-inline-children] parent_id={} ids={:?}",
+          box_node.id, inline_child_debug
+        );
+      }
+      eprintln!(
+        "[intrinsic-widths] id={} selector={} inline_min={:.2} inline_max={:.2} block_min={:.2} block_max={:.2} edges={:.2} min={:.2} max={:.2} result_min={:.2} result_max={:.2}",
+        box_node.id,
+        selector,
+        inline_min_width,
+        inline_max_width,
+        block_min_width,
+        block_max_width,
+        edges,
+        min_constraint,
+        max_constraint,
+        clamped_min,
+        clamped_max
+      );
+    }
+
+    intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, clamped_min);
+    intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, clamped_max);
+    Ok((clamped_min, clamped_max))
   }
 
   fn compute_intrinsic_inline_size(

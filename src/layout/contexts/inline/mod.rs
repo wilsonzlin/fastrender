@@ -1887,17 +1887,21 @@ impl InlineFormattingContext {
 
     // CSS 2.1 §10.3.9: inline-block width auto -> shrink-to-fit:
     // min(max(preferred_min, available), preferred)
-    let preferred_min_content =
-      match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent) {
-        Ok(value) => value,
+    let (preferred_min_content, preferred_content) =
+      match fc.compute_intrinsic_inline_sizes(box_node) {
+        Ok(values) => values,
         Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-        Err(_) => 0.0,
-      };
-    let preferred_content =
-      match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
-        Ok(value) => value,
-        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-        Err(_) => preferred_min_content,
+        Err(_) => {
+          // Preserve legacy semantics for non-timeout intrinsic sizing failures: treat
+          // the min-content width as 0 but still attempt the max-content measurement.
+          let preferred_content =
+            match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
+              Ok(value) => value,
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => 0.0,
+            };
+          (0.0, preferred_content)
+        }
       };
 
     let horizontal_edges = horizontal_padding_and_borders(
@@ -5216,6 +5220,64 @@ impl InlineFormattingContext {
     Ok(width)
   }
 
+  fn calculate_intrinsic_widths(&self, box_node: &BoxNode) -> Result<(f32, f32), LayoutError> {
+    let style = &box_node.style;
+    if style.containment.size || style.containment.inline_size {
+      let edges = resolve_length_for_width(
+        style.padding_left,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.padding_right,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.border_left_width,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.border_right_width,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      );
+      return Ok((edges, edges));
+    }
+
+    let base_direction = resolve_base_direction_for_box(box_node);
+    let mut positioned = Vec::new();
+    let items = match self.collect_inline_items_with_base(
+      box_node,
+      f32::INFINITY,
+      None,
+      base_direction,
+      &mut positioned,
+    ) {
+      Ok(items) => items,
+      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+      Err(_) => return Ok((0.0, 0.0)),
+    };
+    let _indent_value = resolve_length_with_percentage_inline(
+      style.text_indent.length,
+      None,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    )
+    .unwrap_or(0.0);
+
+    let min_width = self.min_content_width(&items);
+    let max_width = self.max_content_width(&items);
+    Ok((min_width, max_width))
+  }
+
   pub(crate) fn intrinsic_width_for_children(
     &self,
     container_style: &Arc<ComputedStyle>,
@@ -5223,6 +5285,14 @@ impl InlineFormattingContext {
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
     self.calculate_intrinsic_width_for_children(container_style, children, mode)
+  }
+
+  pub(crate) fn intrinsic_widths_for_children(
+    &self,
+    container_style: &Arc<ComputedStyle>,
+    children: &[&BoxNode],
+  ) -> Result<(f32, f32), LayoutError> {
+    self.calculate_intrinsic_widths_for_children(container_style, children)
   }
 
   fn calculate_intrinsic_width_for_children(
@@ -5288,6 +5358,69 @@ impl InlineFormattingContext {
       IntrinsicSizingMode::MinContent => self.min_content_width(&items),
       IntrinsicSizingMode::MaxContent => self.max_content_width(&items),
     })
+  }
+
+  fn calculate_intrinsic_widths_for_children(
+    &self,
+    container_style: &Arc<ComputedStyle>,
+    children: &[&BoxNode],
+  ) -> Result<(f32, f32), LayoutError> {
+    let style = container_style;
+    if style.containment.size || style.containment.inline_size {
+      let edges = resolve_length_for_width(
+        style.padding_left,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.padding_right,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.border_left_width,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.border_right_width,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      );
+      return Ok((edges, edges));
+    }
+
+    let base_direction = resolve_base_direction_for_style_and_children(style, children);
+    let mut positioned = Vec::new();
+    let items = match self.collect_inline_items_for_children_with_base(
+      container_style,
+      children,
+      f32::INFINITY,
+      None,
+      base_direction,
+      &mut positioned,
+    ) {
+      Ok(items) => items,
+      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+      Err(_) => return Ok((0.0, 0.0)),
+    };
+    let _indent_value = resolve_length_with_percentage_inline(
+      style.text_indent.length,
+      None,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    )
+    .unwrap_or(0.0);
+
+    let min_width = self.min_content_width(&items);
+    let max_width = self.max_content_width(&items);
+    Ok((min_width, max_width))
   }
 
   fn collect_inline_items_for_children_with_base<'a>(
@@ -6575,6 +6708,13 @@ impl FormattingContext for InlineFormattingContext {
     // using the shared intrinsic cache to avoid reusing layout-sized results.
     self.calculate_intrinsic_width(box_node, mode)
   }
+
+  fn compute_intrinsic_inline_sizes(&self, box_node: &BoxNode) -> Result<(f32, f32), LayoutError> {
+    count_inline_intrinsic_call();
+    // Match `compute_intrinsic_inline_size`: recompute each time (no shared intrinsic cache),
+    // but share the expensive inline-item collection between min/max measurements.
+    self.calculate_intrinsic_widths(box_node)
+  }
 }
 
 impl InlineFormattingContext {
@@ -6934,17 +7074,21 @@ impl InlineFormattingContext {
       .formatting_context()
       .unwrap_or(FormattingContextType::Block);
     let fc = self.factory.get(fc_type);
-    let preferred_min_content =
-      match fc.compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MinContent) {
-        Ok(value) => value,
+    let (preferred_min_content, preferred_content) =
+      match fc.compute_intrinsic_inline_sizes(&float_node) {
+        Ok(values) => values,
         Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-        Err(_) => 0.0,
-      };
-    let preferred_content =
-      match fc.compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MaxContent) {
-        Ok(value) => value,
-        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-        Err(_) => preferred_min_content,
+        Err(_) => {
+          // Preserve legacy semantics for non-timeout intrinsic sizing failures: treat
+          // the min-content width as 0 but still attempt the max-content measurement.
+          let preferred_content =
+            match fc.compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MaxContent) {
+              Ok(value) => value,
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => 0.0,
+            };
+          (0.0, preferred_content)
+        }
       };
 
     let preferred_min = preferred_min_content + horizontal_edges;
