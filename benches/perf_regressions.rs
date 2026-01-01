@@ -263,8 +263,13 @@ fn bench_css_parse(c: &mut Criterion) {
   //
   // Real-world pages can have hundreds of gradients (e.g. Discord has 300+ linear gradients),
   // and gradient parsing should avoid allocating/copying the entire function text per occurrence.
+  //
+  // Note: keep at least one ASCII uppercase character in the gradient (e.g. `RGBA`) so this bench
+  // exercises the case-insensitive parsing path and would catch regressions where we allocate a
+  // full lowercased copy of the function text.
   fn synthetic_gradient_stylesheet(declarations: usize) -> String {
-    const GRADIENT: &str = "linear-gradient(to right, rgba(0,0,0,0) 0%, rgba(255,0,0,0.5) 25%, rgba(0,255,0,0.5) 50%, rgba(0,0,255,0.5) 75%, rgba(0,0,0,0) 100%)";
+    const GRADIENT: &str =
+      "linear-gradient(to right, RGBA(0,0,0,0) 0%, RGBA(255,0,0,0.5) 25%, RGBA(0,255,0,0.5) 50%, RGBA(0,0,255,0.5) 75%, RGBA(0,0,0,0) 100%)";
     let mut css = String::with_capacity(declarations.saturating_mul(GRADIENT.len() + 32));
     css.push_str(".synthetic{");
     for _ in 0..declarations {
