@@ -324,12 +324,16 @@ struct PerfSmokeArgs {
   baseline: Option<PathBuf>,
 
   /// Relative regression threshold (e.g. 0.05 = 5%)
-  #[arg(long, default_value_t = 0.05)]
-  threshold: f64,
+  ///
+  /// Defaults to the `perf_smoke` binary default.
+  #[arg(long)]
+  threshold: Option<f64>,
 
   /// Where to write the perf smoke JSON report
-  #[arg(long, default_value = "target/perf_smoke.json")]
-  output: PathBuf,
+  ///
+  /// Defaults to the `perf_smoke` binary default (`target/perf_smoke.json`).
+  #[arg(long)]
+  output: Option<PathBuf>,
 
   /// Fail when regressions are detected
   #[arg(long)]
@@ -832,22 +836,27 @@ impl DiskCacheFeatureExt for Command {
   }
 }
 fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
-  if args.threshold < 0.0 {
-    bail!("threshold must be >= 0");
+  if let Some(threshold) = args.threshold {
+    if threshold < 0.0 {
+      bail!("threshold must be >= 0");
+    }
   }
 
   // Keep renders deterministic across machines.
-  std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
-
   let mut cmd = Command::new("cargo");
+  cmd.env("FASTR_USE_BUNDLED_FONTS", "1");
   cmd.arg("run");
   if !args.debug {
     cmd.arg("--release");
   }
   cmd.args(["--bin", "perf_smoke", "--"]);
   cmd.args(["--suite", args.suite.as_cli_value()]);
-  cmd.arg("--output").arg(&args.output);
-  cmd.arg("--threshold").arg(args.threshold.to_string());
+  if let Some(output) = &args.output {
+    cmd.arg("--output").arg(output);
+  }
+  if let Some(threshold) = args.threshold {
+    cmd.arg("--threshold").arg(threshold.to_string());
+  }
   if let Some(only) = &args.only {
     cmd.arg("--only").arg(only.join(","));
   }
