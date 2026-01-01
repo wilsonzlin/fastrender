@@ -2076,6 +2076,18 @@ mod tests {
   }
 
   #[test]
+  fn absolutizes_css_urls_cow_ignores_urls_inside_comments_and_strings() {
+    let css = r#"
+      /* url('should-not-change.png') */
+      .icon::before { content: "url(in-string.png)"; }
+      body { color: red; }
+    "#;
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert!(matches!(out, Cow::Borrowed(_)));
+    assert_eq!(out.as_ref(), css);
+  }
+
+  #[test]
   fn absolutizes_css_urls_cow_rewrites_urls_inside_nested_blocks() {
     let css = "@media screen { body { background: url(images/bg.png); } }";
     let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
