@@ -46,5 +46,7 @@ echo "To view later: samply load ${OUT_FILE}"
 if command -v python3 >/dev/null 2>&1; then
   echo
   echo "Summary (terminal-friendly):"
-  python3 scripts/samply_summary.py "${OUT_FILE}" --top 25 || true
+  # `samply` writes raw `0x...` frames into the JSON; symbolize them via llvm-addr2line using the
+  # exact binary that was profiled (rebuilt binaries won't match the recorded addresses).
+  python3 scripts/samply_summary.py "${OUT_FILE}" --top 25 --addr2line-binary target/release/pageset_progress || true
 fi

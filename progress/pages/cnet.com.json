@@ -9,7 +9,7 @@
     "layout": 2818.932328,
     "paint": 527.6045690000001
   },
-  "notes": "",
+  "notes": "See docs/notes/layout-timeouts-profiling.md; slow OK layout hotspot dominated by inline text/shaping; very sensitive to --layout-parallel (auto helps a lot).",
   "hotspot": "layout",
   "failure_stage": "paint",
   "timeout_stage": null,

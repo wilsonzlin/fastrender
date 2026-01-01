@@ -39,12 +39,29 @@ scripts/profile_samply.sh cnet.com --timeout 5 --bundled-fonts --progress-dir ta
 
 ### Symbolicating frames (important)
 
-In this environment, `scripts/samply_summary.py` prints raw addresses (`0x...`) instead of symbols.
-To map addresses to symbols / file+line, use:
+Samply profiles often contain raw addresses (`0x...`) instead of function names.
+To get useful terminal summaries, run the summary script with **the exact binary that was profiled**
+(rebuilt binaries will not match the recorded addresses):
 
 ```bash
-llvm-addr2line -f -C -e target/release/pageset_progress 0xDEADBEEF
+python3 scripts/samply_summary.py <profile.json.gz> --top 25 \
+  --addr2line-binary target/release/pageset_progress
 ```
+
+To map individual addresses to symbols / file+line by hand, use `llvm-addr2line` (include `-i` to
+show inlined frames):
+
+```bash
+llvm-addr2line -f -C -i -a -e target/release/pageset_progress 0xDEADBEEF
+```
+
+### Interpreting terminal summaries (gotchas)
+
+- The summary is **per-thread**; on pages where layout parallelism kicks in, CPU can be spread
+  across many worker threads.
+- The “inclusive” percentages are derived from the stack table and can be misleading when
+  recursion/inlining repeats the same function multiple times in a stack. Treat them qualitatively
+  and confirm in the full Samply UI when needed.
 
 ## Results
 
@@ -114,4 +131,9 @@ These three pages support the current hypotheses:
    - This suggests targeted optimization in `FloatContext` scanning logic (task **26** if it covers floats, otherwise a new float-specific perf task).
 4. **Text shaping is a first-class perf problem on “slow OK” pages** (cnet: shaping + inline line layout dominate CPU).
    - This aligns with shaping pipeline churn / fallback work (tasks **25/26**).
-
+5. **These layout timeouts are far beyond the current wall-time budget**.
+   - As a sanity check, both `nytimes.com` and `stackoverflow.com` still hard-timeout at `--timeout 20`,
+     with <~2s spent before layout and the rest in layout.
+6. **Layout parallelism is a major factor in wall-time**.
+   - `cnet.com` completes around ~4s with default `--layout-parallel auto`, but becomes extremely slow
+     in serial mode (`--layout-parallel off` took ~18s with `--timeout 20` in a follow-up run).
