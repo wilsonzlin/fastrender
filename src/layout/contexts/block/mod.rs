@@ -92,9 +92,6 @@ use margin_collapse::should_collapse_with_first_child;
 use margin_collapse::should_collapse_with_last_child;
 use margin_collapse::MarginCollapseContext;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
-use rustc_hash::FxHasher;
-use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -3682,15 +3679,6 @@ impl FormattingContext for BlockFormattingContext {
 
     let factory = &self.factory;
     let inline_fc = self.intrinsic_inline_fc.as_ref();
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    struct InlineRunCacheKey {
-      hash: u64,
-      fingerprint: u64,
-      len: usize,
-      mode: IntrinsicSizingMode,
-    }
-
-    let mut inline_run_cache: FxHashMap<InlineRunCacheKey, f32> = FxHashMap::default();
 
     // Inline formatting context contribution (text and inline-level children).
     // Block-level children split inline runs into separate formatting contexts.
@@ -3700,63 +3688,32 @@ impl FormattingContext for BlockFormattingContext {
     let log_children = !log_ids.is_empty() && log_ids.contains(&box_node.id);
 
     let mut inline_width = 0.0f32;
+    let mut block_child_width = 0.0f32;
     let mut inline_run: Vec<&BoxNode> = Vec::new();
-    let mut inline_run_hasher = FxHasher::default();
-    let mut inline_run_fingerprint: u64 = 0xcbf29ce484222325;
-    let mut flush_inline_run =
+    let flush_inline_run =
       |run: &mut Vec<&BoxNode>,
-       hasher: &mut FxHasher,
-       fingerprint: &mut u64,
        widest: &mut f32|
        -> Result<(), LayoutError> {
         if run.is_empty() {
           return Ok(());
         }
 
-        let key = InlineRunCacheKey {
-          hash: hasher.finish(),
-          fingerprint: *fingerprint,
-          len: run.len(),
-          mode,
-        };
-
-        let width = match inline_run_cache.entry(key) {
-          std::collections::hash_map::Entry::Occupied(entry) => {
-            let width = *entry.get();
-            if log_children {
-              let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
-              eprintln!(
-                "[intrinsic-inline-run-cache] parent_id={} mode={:?} ids={:?} width={:.2}",
-                box_node.id, mode, ids, width
-              );
-            }
-            width
-          }
-          std::collections::hash_map::Entry::Vacant(entry) => {
-            let width =
-              inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode)?;
-            entry.insert(width);
-            if log_children {
-              let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
-              eprintln!(
-                "[intrinsic-inline-run] parent_id={} mode={:?} ids={:?} width={:.2}",
-                box_node.id, mode, ids, width
-              );
-            }
-            width
-          }
-        };
+        let width = inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode)?;
+        if log_children {
+          let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
+          eprintln!(
+            "[intrinsic-inline-run] parent_id={} mode={:?} ids={:?} width={:.2}",
+            box_node.id, mode, ids, width
+          );
+        }
 
         *widest = widest.max(width);
         run.clear();
-        *hasher = FxHasher::default();
-        *fingerprint = 0xcbf29ce484222325;
         Ok(())
       };
 
     let mut inline_child_debug: Vec<(usize, Display)> = Vec::new();
     let mut deadline_counter = 0usize;
-    let mut block_child_width = 0.0f32;
     for child in &box_node.children {
       if let Err(RenderError::Timeout { elapsed, .. }) =
         check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
@@ -3781,8 +3738,6 @@ impl FormattingContext for BlockFormattingContext {
       if treated_as_block {
         flush_inline_run(
           &mut inline_run,
-          &mut inline_run_hasher,
-          &mut inline_run_fingerprint,
           &mut inline_width,
         )?;
 
@@ -3820,15 +3775,10 @@ impl FormattingContext for BlockFormattingContext {
           inline_child_debug.push((child.id, child.style.display));
         }
         inline_run.push(child);
-        inline_run_hasher.write_usize(child.id());
-        inline_run_fingerprint ^= child.id() as u64;
-        inline_run_fingerprint = inline_run_fingerprint.wrapping_mul(0x100000001b3);
       }
     }
     flush_inline_run(
       &mut inline_run,
-      &mut inline_run_hasher,
-      &mut inline_run_fingerprint,
       &mut inline_width,
     )?;
 
@@ -5120,6 +5070,40 @@ mod tests {
             max_width <= run_max * 1.1,
             "max-content width should not concatenate inline runs across blocks, got {max_width} vs run {run_max}"
         );
+  }
+
+  #[test]
+  fn intrinsic_inline_size_includes_inline_replaced_children() {
+    let bfc = BlockFormattingContext::new();
+    let mut replaced_style = ComputedStyle::default();
+    replaced_style.display = Display::Inline;
+    let replaced = BoxNode::new_replaced(
+      Arc::new(replaced_style),
+      crate::tree::box_tree::ReplacedType::Canvas,
+      Some(Size::new(120.0, 50.0)),
+      None,
+    );
+
+    let container = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![replaced],
+    );
+    let min = bfc
+      .compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MinContent)
+      .unwrap();
+    let max = bfc
+      .compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MaxContent)
+      .unwrap();
+
+    assert!(
+      (min - 120.0).abs() < 0.5,
+      "expected min-content width ~120, got {min}"
+    );
+    assert!(
+      (max - 120.0).abs() < 0.5,
+      "expected max-content width ~120, got {max}"
+    );
   }
 
   #[test]
