@@ -21,6 +21,15 @@ pub fn render_bitmap_glyph(
   if ppem <= 0.0 || ppem > u16::MAX as f32 {
     return None;
   }
+
+  // Prefer sbix strikes when present so we can apply the strike's metrics when positioning the
+  // raster. `ttf_parser::Face::glyph_raster_image` can surface sbix payloads, but the meaning of
+  // its offsets differs across bitmap tables; keeping sbix handling here avoids having to
+  // heuristically reinterpret those offsets later.
+  if let Some(sbix) = render_sbix_bitmap_glyph(face, glyph_id, ppem as u16, limits) {
+    return Some(sbix);
+  }
+
   if let Some(raster) = face.glyph_raster_image(glyph_id, ppem as u16) {
     let width = u32::from(raster.width);
     let height = u32::from(raster.height);
@@ -35,7 +44,7 @@ pub fn render_bitmap_glyph(
     }
   }
 
-  render_sbix_bitmap_glyph(face, glyph_id, ppem as u16, limits)
+  None
 }
 
 fn decode_bitmap_pixmap(raster: &ttf_parser::RasterGlyphImage<'_>) -> Option<Pixmap> {
@@ -45,7 +54,13 @@ fn decode_bitmap_pixmap(raster: &ttf_parser::RasterGlyphImage<'_>) -> Option<Pix
       .or_else(|| decode_image_with_format(raster.data, None)),
     ttf_parser::RasterImageFormat::BitmapPremulBgra32 => {
       let size = IntSize::from_wh(raster.width as u32, raster.height as u32)?;
-      Pixmap::from_vec(raster.data.to_vec(), size)
+      // `ttf_parser` exposes these payloads as premultiplied BGRA, while tiny-skia expects
+      // premultiplied RGBA.
+      let mut pixels = raster.data.to_vec();
+      for chunk in pixels.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+      }
+      Pixmap::from_vec(pixels, size)
     }
     _ => decode_image_with_format(raster.data, None),
   }
@@ -62,6 +77,7 @@ fn render_sbix_bitmap_glyph(
     .table(ttf_parser::Tag::from_bytes(b"sbix"))?;
   let glyph_count = face.number_of_glyphs() as usize;
   let strike_offset = select_sbix_strike(sbix, glyph_count, pixels_per_em)?;
+  let strike_ppem = read_u16(sbix, strike_offset)?;
   let glyph = parse_sbix_glyph(sbix, strike_offset, glyph_count, glyph_id, 0)?;
 
   let (width, height) = preflight_sbix_image(&glyph.tag, glyph.data)?;
@@ -82,10 +98,58 @@ fn render_sbix_bitmap_glyph(
     return None;
   }
 
+  // sbix stores per-glyph origin offsets, but real-world fonts (and our test fixtures) disagree on
+  // whether the Y offset is relative to the baseline or the top of the em square. When the bitmap
+  // payload covers the full strike PPEM (common for emoji-like fonts), generators often leave the
+  // sbix Y offset at 0 and rely on font metrics to position the baseline within that em square.
+  //
+  // We use the strike PPEM to convert the font's ascender into device pixels and select the
+  // interpretation that places the baseline closest to that expected ascender distance.
+  let top = {
+    let glyph_y = glyph.y as f32;
+    let baseline_from_top = {
+      let units_per_em = face.units_per_em() as f32;
+      if units_per_em > 0.0 {
+        (face.ascender() as f32) * (strike_ppem as f32 / units_per_em)
+      } else {
+        0.0
+      }
+    };
+
+    // Candidate A: treat sbix originOffsetY like a traditional top bearing (baseline-relative, y-up).
+    let top_baseline_relative = -glyph_y;
+    // Candidate B: treat sbix originOffsetY as an em-top-relative offset (y-down).
+    let top_em_relative = glyph_y - baseline_from_top;
+
+    // Compare where the baseline would land within the bitmap for each interpretation and pick the
+    // one that best matches the strike's baseline position derived from font metrics.
+    let baseline_pos_baseline_relative = glyph_y;
+    let baseline_pos_em_relative = baseline_from_top - glyph_y;
+
+    let height = pixmap.height() as f32;
+    let within = |v: f32| v.is_finite() && v >= 0.0 && v <= height;
+    let baseline_ok = within(baseline_pos_baseline_relative);
+    let em_ok = within(baseline_pos_em_relative);
+
+    match (baseline_ok, em_ok) {
+      (true, false) => top_baseline_relative,
+      (false, true) => top_em_relative,
+      (true, true) | (false, false) => {
+        let err_baseline = (baseline_pos_baseline_relative - baseline_from_top).abs();
+        let err_em = (baseline_pos_em_relative - baseline_from_top).abs();
+        if err_em < err_baseline {
+          top_em_relative
+        } else {
+          top_baseline_relative
+        }
+      }
+    }
+  };
+
   Some(ColorGlyphRaster {
     image: Arc::new(pixmap),
     left: glyph.x as f32,
-    top: -(glyph.y as f32),
+    top,
   })
 }
 
@@ -300,9 +364,10 @@ fn decode_image_with_format(data: &[u8], format: Option<ImageFormat>) -> Option<
     let alpha = a as u16;
     let premultiply = |c: u8| ((c as u16 * alpha + 127) / 255) as u8;
 
-    chunk[0] = premultiply(b);
+    // tiny-skia expects premultiplied RGBA.
+    chunk[0] = premultiply(r);
     chunk[1] = premultiply(g);
-    chunk[2] = premultiply(r);
+    chunk[2] = premultiply(b);
     chunk[3] = a;
   }
 

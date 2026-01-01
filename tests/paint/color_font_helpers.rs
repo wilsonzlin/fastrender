@@ -3,8 +3,7 @@ use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::paint::text_rasterize::TextRasterizer;
 use fastrender::style::color::Rgba;
-use fastrender::text::font_db::FontDatabase;
-use fastrender::text::font_db::LoadedFont;
+use fastrender::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::{Direction, GlyphPosition, RunRotation, ShapedRun};
 use fastrender::tree::fragment_tree::FragmentNode;
@@ -28,8 +27,23 @@ fn font_path(name: &str) -> PathBuf {
 pub fn load_fixture_font(name: &str) -> LoadedFont {
   let bytes = std::fs::read(font_path(name)).expect("load font bytes");
   let mut db = FontDatabase::empty();
-  db.load_font_data(bytes).expect("load fixture font");
-  db.first_font().expect("fixture font present")
+  if db.load_font_data(bytes.clone()).is_ok() {
+    if let Some(font) = db.first_font() {
+      return font;
+    }
+  }
+
+  // Some fixtures (notably ones that contain sbix strikes) are not parseable by our `fontdb`
+  // dependency, but we can still use them in tests via the renderer's direct `ttf_parser` path.
+  LoadedFont {
+    id: None,
+    data: Arc::new(bytes),
+    index: 0,
+    family: name.to_string(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    stretch: FontStretch::Normal,
+  }
 }
 
 pub fn shaped_run(font: &LoadedFont, ch: char, font_size: f32, palette_index: u16) -> ShapedRun {

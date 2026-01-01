@@ -60,9 +60,9 @@ fn renders_sbix_jpeg_bitmap_glyph() {
   let mut glyph_red = 0;
   let mut glyph_green = 0;
   for chunk in color_glyph.image.data().chunks(4) {
-    let b = chunk[0];
+    let r = chunk[0];
     let g = chunk[1];
-    let r = chunk[2];
+    let b = chunk[2];
     let a = chunk[3];
     if a == 0 {
       continue;
