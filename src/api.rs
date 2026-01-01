@@ -10379,7 +10379,11 @@ mod tests {
       .with_runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
         "FASTR_FETCH_LINK_CSS".to_string(),
         "1".to_string(),
-      )])));
+      )])))
+      // Keep diagnostics stable by forcing single-threaded layout/paint; many of the diagnostics
+      // collectors are thread-local and are snapped from the caller thread.
+      .with_paint_parallelism(PaintParallelism::disabled())
+      .with_layout_parallelism(LayoutParallelism::disabled());
 
     let html_with_text_and_flex = r#"<!DOCTYPE html>
 <html>
