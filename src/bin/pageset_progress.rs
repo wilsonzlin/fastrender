@@ -2106,6 +2106,12 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   log.push_str(&format!("Final resource base: {}\n", doc.base_url));
   let dump_doc = doc.clone();
 
+  if let Some(timeout_ms) = args.soft_timeout_ms.filter(|ms| *ms > 0) {
+    let budget = Duration::from_millis(timeout_ms).min(hard_timeout);
+    let remaining = budget.saturating_sub(started.elapsed());
+    options.timeout = Some(remaining);
+  }
+
   record_stage(StageHeartbeat::CssInline);
   log.push_str("Stage: render\n");
   flush_log(&log, &args.log_path);
