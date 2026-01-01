@@ -3,7 +3,7 @@ use lru::LruCache;
 use parking_lot::Mutex;
 use rustc_hash::FxHasher;
 use rustybuzz::Face as RbFace;
-use std::hash::BuildHasherDefault;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 
@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// handles to the same font bytes share entries.
 const FACE_CACHE_SIZE: usize = 256;
 const RUSTYBUZZ_FACE_CACHE_SIZE: usize = 256;
+const FACE_CACHE_SHARD_TARGET: usize = 32;
+const FACE_CACHE_SHARD_LIMIT: usize = 16;
 type FaceCacheHasher = BuildHasherDefault<FxHasher>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,31 +102,60 @@ impl CachedRustybuzzFace {
   }
 }
 
-/// Global parsed face cache guarded by a single mutex.
+/// Global parsed face cache.
 ///
-/// LRU operations require mutable access, so we use a coarse lock but keep
-/// critical sections short and the cache small to limit contention.
+/// The cache is sharded to reduce mutex contention during parallel shaping/layout.
+/// LRU operations require mutable access, so each shard is guarded by a mutex and
+/// critical sections are kept short by parsing outside the lock.
 #[derive(Clone)]
 struct FaceCache {
-  inner: Arc<Mutex<LruCache<FaceCacheKey, Arc<CachedFace>, FaceCacheHasher>>>,
+  inner: Arc<FaceCacheInner>,
+}
+
+#[derive(Debug)]
+struct FaceCacheInner {
+  shards: Vec<Mutex<LruCache<FaceCacheKey, Arc<CachedFace>, FaceCacheHasher>>>,
+  shard_mask: usize,
 }
 
 impl FaceCache {
   fn new(capacity: usize) -> Self {
-    let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
-    Self {
-      inner: Arc::new(Mutex::new(LruCache::with_hasher(
+    let capacity = capacity.max(1);
+    let desired_shards = (capacity / FACE_CACHE_SHARD_TARGET).clamp(1, FACE_CACHE_SHARD_LIMIT);
+    let shard_count = desired_shards.next_power_of_two().min(FACE_CACHE_SHARD_LIMIT);
+    let shard_count = shard_count.max(1);
+    let shard_mask = shard_count - 1;
+
+    let base = capacity / shard_count;
+    let rem = capacity % shard_count;
+    let mut shards = Vec::with_capacity(shard_count);
+    for idx in 0..shard_count {
+      let shard_cap = base + usize::from(idx < rem);
+      let cap = NonZeroUsize::new(shard_cap.max(1)).unwrap();
+      shards.push(Mutex::new(LruCache::with_hasher(
         cap,
         FaceCacheHasher::default(),
-      ))),
+      )));
     }
+
+    Self {
+      inner: Arc::new(FaceCacheInner { shards, shard_mask }),
+    }
+  }
+
+  #[inline]
+  fn shard_index(&self, key: &FaceCacheKey) -> usize {
+    let mut hasher = FxHasher::default();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) & self.inner.shard_mask
   }
 
   fn get_or_parse(&self, data: Arc<Vec<u8>>, index: u32) -> Option<Arc<CachedFace>> {
     let key = FaceCacheKey::new(&data, index);
+    let shard_idx = self.shard_index(&key);
 
     {
-      let mut cache = self.inner.lock();
+      let mut cache = self.inner.shards[shard_idx].lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
@@ -133,7 +164,7 @@ impl FaceCache {
     let parsed = Arc::new(CachedFace::parse(data, index).ok()?);
 
     {
-      let mut cache = self.inner.lock();
+      let mut cache = self.inner.shards[shard_idx].lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
@@ -144,31 +175,60 @@ impl FaceCache {
   }
 }
 
-/// Global rustybuzz face cache guarded by a single mutex.
+/// Global rustybuzz face cache.
 ///
 /// Shares the same keying and eviction strategy as the ttf-parser cache to
-/// avoid reparsing HarfBuzz faces for each shaping run.
+/// avoid reparsing HarfBuzz faces for each shaping run. Like `FaceCache`, this
+/// cache is sharded to reduce lock contention under parallel shaping.
 #[derive(Clone)]
 struct RustybuzzFaceCache {
-  inner: Arc<Mutex<LruCache<FaceCacheKey, Arc<CachedRustybuzzFace>, FaceCacheHasher>>>,
+  inner: Arc<RustybuzzFaceCacheInner>,
+}
+
+#[derive(Debug)]
+struct RustybuzzFaceCacheInner {
+  shards: Vec<Mutex<LruCache<FaceCacheKey, Arc<CachedRustybuzzFace>, FaceCacheHasher>>>,
+  shard_mask: usize,
 }
 
 impl RustybuzzFaceCache {
   fn new(capacity: usize) -> Self {
-    let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
-    Self {
-      inner: Arc::new(Mutex::new(LruCache::with_hasher(
+    let capacity = capacity.max(1);
+    let desired_shards = (capacity / FACE_CACHE_SHARD_TARGET).clamp(1, FACE_CACHE_SHARD_LIMIT);
+    let shard_count = desired_shards.next_power_of_two().min(FACE_CACHE_SHARD_LIMIT);
+    let shard_count = shard_count.max(1);
+    let shard_mask = shard_count - 1;
+
+    let base = capacity / shard_count;
+    let rem = capacity % shard_count;
+    let mut shards = Vec::with_capacity(shard_count);
+    for idx in 0..shard_count {
+      let shard_cap = base + usize::from(idx < rem);
+      let cap = NonZeroUsize::new(shard_cap.max(1)).unwrap();
+      shards.push(Mutex::new(LruCache::with_hasher(
         cap,
         FaceCacheHasher::default(),
-      ))),
+      )));
     }
+
+    Self {
+      inner: Arc::new(RustybuzzFaceCacheInner { shards, shard_mask }),
+    }
+  }
+
+  #[inline]
+  fn shard_index(&self, key: &FaceCacheKey) -> usize {
+    let mut hasher = FxHasher::default();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) & self.inner.shard_mask
   }
 
   fn get_or_parse(&self, data: Arc<Vec<u8>>, index: u32) -> Option<Arc<CachedRustybuzzFace>> {
     let key = FaceCacheKey::new(&data, index);
+    let shard_idx = self.shard_index(&key);
 
     {
-      let mut cache = self.inner.lock();
+      let mut cache = self.inner.shards[shard_idx].lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
@@ -177,7 +237,7 @@ impl RustybuzzFaceCache {
     let parsed = Arc::new(CachedRustybuzzFace::parse(data, index)?);
 
     {
-      let mut cache = self.inner.lock();
+      let mut cache = self.inner.shards[shard_idx].lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
