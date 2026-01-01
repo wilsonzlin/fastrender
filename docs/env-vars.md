@@ -91,6 +91,7 @@ These are emitted by the paint pipeline:
 - `FASTR_LOG_FRAG_BOUNDS=1` – log fragment-tree bounds vs the viewport.
 - `FASTR_DUMP_TEXT_FRAGMENTS=<N>` – sample text fragments (default 20 when enabled).
 - `FASTR_TEXT_DIAGNOSTICS=verbose` – log sampled clusters that relied on last-resort font fallback.
+- `FASTR_TEXT_FALLBACK_DESCRIPTOR_STATS=1` – collect per-render font fallback descriptor keyspace statistics (unique descriptor/family/language/weight counts + a small sample of descriptor summaries) and surface them in render diagnostics stats/progress JSON.
 - `FASTR_TRACE_TEXT=<substring>` – walk the fragment tree and print a containment trail for the first text fragment containing the substring.
 - `FASTR_TRACE_FRAGMENTATION=1` – trace fragmentation break opportunities/boundary choices (also available via `inspect_frag --trace-fragmentation`).
 - `FASTR_FIND_TEXT` / `FASTR_FIND_BOX_TEXT` / `FASTR_INSPECT_MASK` – search for matching text fragments/boxes.

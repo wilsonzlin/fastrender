@@ -87,6 +87,7 @@ use crate::text::font_fallback::GlyphFallbackCacheKey;
 use crate::text::font_loader::FontContext;
 use crate::text::script_fallback;
 use lru::LruCache;
+use rustc_hash::FxHashSet;
 use rustc_hash::FxHasher;
 use rustybuzz::Direction as HbDirection;
 use rustybuzz::Feature;
@@ -157,6 +158,11 @@ pub struct TextDiagnostics {
   pub fallback_cache_clears: usize,
   pub last_resort_fallbacks: usize,
   pub last_resort_samples: Vec<String>,
+  pub fallback_descriptor_unique_descriptors: Option<usize>,
+  pub fallback_descriptor_unique_family_signatures: Option<usize>,
+  pub fallback_descriptor_unique_languages: Option<usize>,
+  pub fallback_descriptor_unique_weights: Option<usize>,
+  pub fallback_descriptor_samples: Vec<String>,
   pub glyph_cache: TextCacheStats,
   pub color_glyph_cache: TextCacheStats,
 }
@@ -197,6 +203,15 @@ struct TextDiagnosticsState {
   shape_start: Option<Instant>,
   rasterize_active: usize,
   rasterize_start: Option<Instant>,
+  fallback_descriptor_stats: Option<FallbackDescriptorStatsState>,
+}
+
+#[derive(Debug, Default)]
+struct FallbackDescriptorStatsState {
+  descriptors: FxHashSet<FallbackCacheDescriptor>,
+  families: FxHashSet<u64>,
+  languages: FxHashSet<u64>,
+  weights: FxHashSet<u16>,
 }
 
 impl TextDiagnosticsState {
@@ -297,6 +312,7 @@ static LAST_RESORT_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SHAPING_FALLBACK_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 const LAST_RESORT_SAMPLE_LIMIT: usize = 8;
+const FALLBACK_DESCRIPTOR_SAMPLE_LIMIT: usize = 16;
 
 fn diagnostics_cell() -> &'static Mutex<TextDiagnosticsState> {
   TEXT_DIAGNOSTICS.get_or_init(|| Mutex::new(TextDiagnosticsState::default()))
@@ -320,6 +336,13 @@ pub(crate) fn take_text_diagnostics() -> Option<TextDiagnostics> {
   let now = Instant::now();
   diagnostics_cell().lock().ok().map(|mut state| {
     state.finalize_open_stages(now);
+    if text_fallback_descriptor_stats_enabled() {
+      let stats = state.fallback_descriptor_stats.take().unwrap_or_default();
+      state.diag.fallback_descriptor_unique_descriptors = Some(stats.descriptors.len());
+      state.diag.fallback_descriptor_unique_family_signatures = Some(stats.families.len());
+      state.diag.fallback_descriptor_unique_languages = Some(stats.languages.len());
+      state.diag.fallback_descriptor_unique_weights = Some(stats.weights.len());
+    }
     let diag = state.diag.clone();
     // Prevent any late-dropped timers from mutating the taken snapshot (or a later session).
     state.session = 0;
@@ -345,14 +368,18 @@ pub(crate) fn text_diagnostics_timer(stage: TextDiagnosticsStage) -> Option<Text
   Some(TextDiagnosticsTimer { stage, session })
 }
 
-fn with_text_diagnostics(f: impl FnOnce(&mut TextDiagnostics)) {
+fn with_text_diagnostics_state(f: impl FnOnce(&mut TextDiagnosticsState)) {
   if !TEXT_DIAGNOSTICS_ENABLED.load(Ordering::Acquire) {
     return;
   }
 
   if let Ok(mut state) = diagnostics_cell().lock() {
-    f(&mut state.diag);
+    f(&mut state);
   }
+}
+
+fn with_text_diagnostics(f: impl FnOnce(&mut TextDiagnostics)) {
+  with_text_diagnostics_state(|state| f(&mut state.diag));
 }
 
 fn text_diagnostics_verbose_logging() -> bool {
@@ -364,6 +391,21 @@ fn text_diagnostics_verbose_logging() -> bool {
         matches!(
           value.as_str(),
           "verbose" | "2" | "debug" | "true" | "1" | "on"
+        )
+      })
+      .unwrap_or(false)
+  })
+}
+
+fn text_fallback_descriptor_stats_enabled() -> bool {
+  static ENABLED: OnceLock<bool> = OnceLock::new();
+  *ENABLED.get_or_init(|| {
+    std::env::var("FASTR_TEXT_FALLBACK_DESCRIPTOR_STATS")
+      .map(|value| {
+        let value = value.trim().to_ascii_lowercase();
+        matches!(
+          value.as_str(),
+          "1" | "true" | "on" | "yes" | "debug" | "verbose"
         )
       })
       .unwrap_or(false)
@@ -387,6 +429,135 @@ fn format_codepoints_for_log(text: &str) -> String {
     added += 1;
   }
   out
+}
+
+fn script_from_u8(value: u8) -> Option<Script> {
+  Some(match value {
+    v if v == Script::Common as u8 => Script::Common,
+    v if v == Script::Inherited as u8 => Script::Inherited,
+    v if v == Script::Unknown as u8 => Script::Unknown,
+    v if v == Script::Latin as u8 => Script::Latin,
+    v if v == Script::Arabic as u8 => Script::Arabic,
+    v if v == Script::Syriac as u8 => Script::Syriac,
+    v if v == Script::Thaana as u8 => Script::Thaana,
+    v if v == Script::Nko as u8 => Script::Nko,
+    v if v == Script::Hebrew as u8 => Script::Hebrew,
+    v if v == Script::Greek as u8 => Script::Greek,
+    v if v == Script::Cyrillic as u8 => Script::Cyrillic,
+    v if v == Script::Devanagari as u8 => Script::Devanagari,
+    v if v == Script::Bengali as u8 => Script::Bengali,
+    v if v == Script::Tamil as u8 => Script::Tamil,
+    v if v == Script::Thai as u8 => Script::Thai,
+    v if v == Script::Javanese as u8 => Script::Javanese,
+    v if v == Script::Han as u8 => Script::Han,
+    v if v == Script::Hiragana as u8 => Script::Hiragana,
+    v if v == Script::Katakana as u8 => Script::Katakana,
+    v if v == Script::Hangul as u8 => Script::Hangul,
+    _ => return None,
+  })
+}
+
+fn generic_family_for_sample(generic: crate::text::font_db::GenericFamily) -> &'static str {
+  match generic {
+    crate::text::font_db::GenericFamily::Serif => "serif",
+    crate::text::font_db::GenericFamily::SansSerif => "sans-serif",
+    crate::text::font_db::GenericFamily::Monospace => "monospace",
+    crate::text::font_db::GenericFamily::Cursive => "cursive",
+    crate::text::font_db::GenericFamily::Fantasy => "fantasy",
+    crate::text::font_db::GenericFamily::SystemUi => "system-ui",
+    crate::text::font_db::GenericFamily::UiSerif => "ui-serif",
+    crate::text::font_db::GenericFamily::UiSansSerif => "ui-sans-serif",
+    crate::text::font_db::GenericFamily::UiMonospace => "ui-monospace",
+    crate::text::font_db::GenericFamily::UiRounded => "ui-rounded",
+    crate::text::font_db::GenericFamily::Emoji => "emoji",
+    crate::text::font_db::GenericFamily::Math => "math",
+    crate::text::font_db::GenericFamily::Fangsong => "fangsong",
+  }
+}
+
+fn format_family_entries_for_sample(
+  families: &[crate::text::font_fallback::FamilyEntry],
+) -> String {
+  use crate::text::font_fallback::FamilyEntry;
+
+  const MAX_ENTRIES: usize = 8;
+  const MAX_LEN_BYTES: usize = 160;
+
+  let mut out = String::new();
+  for (idx, family) in families.iter().enumerate() {
+    if idx >= MAX_ENTRIES {
+      out.push_str(", …");
+      break;
+    }
+    if idx > 0 {
+      out.push_str(", ");
+    }
+    match family {
+      FamilyEntry::Named(name) => {
+        if name
+          .chars()
+          .any(|c| c.is_whitespace() || matches!(c, ',' | '"' | '\''))
+        {
+          out.push_str(&format!("{name:?}"));
+        } else {
+          out.push_str(name);
+        }
+      }
+      FamilyEntry::Generic(generic) => out.push_str(generic_family_for_sample(*generic)),
+    }
+
+    if out.len() > MAX_LEN_BYTES {
+      // Truncate at a char boundary.
+      let mut cutoff = MAX_LEN_BYTES;
+      while cutoff > 0 && !out.is_char_boundary(cutoff) {
+        cutoff -= 1;
+      }
+      out.truncate(cutoff);
+      out.push('…');
+      break;
+    }
+  }
+  out
+}
+
+fn format_stretch_pct(pct: f32) -> String {
+  if pct.fract().abs() < f32::EPSILON {
+    format!("{pct:.0}")
+  } else {
+    format!("{pct:.1}")
+  }
+}
+
+fn format_oblique_degrees(degrees: i16) -> String {
+  if degrees == 0 {
+    "0".to_string()
+  } else {
+    format!("{:.1}", degrees as f32 / 10.0)
+  }
+}
+
+fn format_descriptor_sample(
+  descriptor: FallbackCacheDescriptor,
+  language: &str,
+  families_display: &str,
+) -> String {
+  let script = script_from_u8(descriptor.script)
+    .map(|s| format!("{s:?}"))
+    .unwrap_or_else(|| format!("{}", descriptor.script));
+  let stretch_pct = format_stretch_pct(descriptor.stretch.to_percentage());
+  let oblique_deg = format_oblique_degrees(descriptor.oblique_degrees);
+  format!(
+    "lang={language:?} lang_sig=0x{lang_sig:016x} \
+script={script} weight={weight} style={style:?} stretch={stretch_pct}% oblique={oblique_deg}deg \
+emoji_pref={emoji:?} require_base={require_base} families_sig=0x{families_sig:016x} \
+families=[{families_display}]",
+    lang_sig = descriptor.language,
+    weight = descriptor.weight,
+    style = descriptor.style,
+    emoji = descriptor.emoji_pref,
+    require_base = descriptor.require_base,
+    families_sig = descriptor.families,
+  )
 }
 
 fn record_last_resort_fallback(cluster_text: &str) {
@@ -1818,6 +1989,9 @@ fn assign_fonts_internal(
   font_cache: Option<&FallbackCache>,
   font_generation: u64,
 ) -> Result<Vec<FontRun>> {
+  let descriptor_stats_enabled =
+    font_cache.is_some() && text_diagnostics_enabled() && text_fallback_descriptor_stats_enabled();
+
   let features = collect_opentype_features(style);
   let authored_variations = authored_variations_from_style(style);
   let preferred_aspect = preferred_font_aspect(style, font_context);
@@ -1842,6 +2016,10 @@ fn assign_fonts_internal(
     FontLanguageOverride::Override(tag) => tag.as_str(),
   };
   let language_signature = family_name_signature(language);
+  let families_display =
+    descriptor_stats_enabled.then(|| format_family_entries_for_sample(&families));
+  let mut local_descriptors: Option<FxHashSet<FallbackCacheDescriptor>> =
+    descriptor_stats_enabled.then(|| FxHashSet::default());
 
   if font_context.is_effectively_empty() {
     let sample = runs.first().map(|run| run.text.clone()).unwrap_or_default();
@@ -1878,6 +2056,11 @@ fn assign_fonts_internal(
           require_base_glyph,
         )
       });
+      if let Some(set) = local_descriptors.as_mut() {
+        if let Some(descriptor) = descriptor {
+          set.insert(descriptor);
+        }
+      }
       let cluster_cache_key = if cluster_char_count > 1 {
         descriptor.map(|descriptor| ClusterFallbackCacheKey {
           descriptor,
@@ -2079,6 +2262,41 @@ fn assign_fonts_internal(
         style,
         font_context,
       );
+    }
+  }
+
+  if let Some(local_descriptors) = local_descriptors {
+    if !local_descriptors.is_empty() {
+      let families_display = families_display.as_deref().unwrap_or_default();
+      with_text_diagnostics_state(|state| {
+        let stats = state
+          .fallback_descriptor_stats
+          .get_or_insert_with(FallbackDescriptorStatsState::default);
+        stats.families.insert(families_signature);
+        stats.languages.insert(language_signature);
+        stats.weights.insert(weight_value);
+
+        if state.diag.fallback_descriptor_samples.len() >= FALLBACK_DESCRIPTOR_SAMPLE_LIMIT {
+          stats.descriptors.extend(local_descriptors);
+          return;
+        }
+
+        for descriptor in local_descriptors {
+          let inserted = stats.descriptors.insert(descriptor);
+          if inserted
+            && state.diag.fallback_descriptor_samples.len() < FALLBACK_DESCRIPTOR_SAMPLE_LIMIT
+          {
+            state
+              .diag
+              .fallback_descriptor_samples
+              .push(format_descriptor_sample(
+                descriptor,
+                language,
+                families_display,
+              ));
+          }
+        }
+      });
     }
   }
 
@@ -2948,8 +3166,7 @@ fn resolve_font_for_cluster(
           let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
           let idx = picker.bump_order();
           picker.record_any(&font, is_emoji_font, idx);
-          let base_ok =
-            !require_base_glyph || font_supports_all_chars(font.as_ref(), &[base_char]);
+          let base_ok = !require_base_glyph || font_supports_all_chars(font.as_ref(), &[base_char]);
           if base_ok && font_supports_all_chars(font.as_ref(), &needed) {
             if let Some(font) = picker.consider(font, is_emoji_font, idx) {
               return Some(font);

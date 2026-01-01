@@ -1652,6 +1652,22 @@ pub struct RenderStageTimings {
   pub encode_ms: Option<f64>,
 }
 
+/// Per-render statistics about the font fallback cache descriptor keyspace.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TextFallbackDescriptorStats {
+  /// Number of distinct `FallbackCacheDescriptor` values observed during fallback resolution.
+  pub unique_descriptors: usize,
+  /// Number of distinct `families_signature` values observed.
+  pub unique_family_signatures: usize,
+  /// Number of distinct `language_signature` values observed.
+  pub unique_languages: usize,
+  /// Number of distinct `font_weight.to_u16()` values observed.
+  pub unique_weights: usize,
+  /// Bounded sample of descriptor summaries (language/script/axis flags + family list).
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub samples: Vec<String>,
+}
+
 /// Common counters gathered during rendering.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RenderCounts {
@@ -1675,6 +1691,8 @@ pub struct RenderCounts {
   /// space-separated Unicode codepoints (e.g. "U+09AC U+09BE U+0982").
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub last_resort_font_fallback_samples: Option<Vec<String>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub fallback_descriptor_stats: Option<TextFallbackDescriptorStats>,
   pub glyph_cache_hits: Option<u64>,
   pub glyph_cache_misses: Option<u64>,
   pub glyph_cache_evictions: Option<u64>,
@@ -2001,6 +2019,19 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
     stats.counts.last_resort_font_fallbacks = Some(text.last_resort_fallbacks);
     if !text.last_resort_samples.is_empty() {
       stats.counts.last_resort_font_fallback_samples = Some(text.last_resort_samples);
+    }
+    if let Some(unique_descriptors) = text.fallback_descriptor_unique_descriptors {
+      stats.counts.fallback_descriptor_stats = Some(TextFallbackDescriptorStats {
+        unique_descriptors,
+        unique_family_signatures: text
+          .fallback_descriptor_unique_family_signatures
+          .unwrap_or_default(),
+        unique_languages: text
+          .fallback_descriptor_unique_languages
+          .unwrap_or_default(),
+        unique_weights: text.fallback_descriptor_unique_weights.unwrap_or_default(),
+        samples: text.fallback_descriptor_samples,
+      });
     }
     stats.counts.glyph_cache_hits = Some(text.glyph_cache.hits);
     stats.counts.glyph_cache_misses = Some(text.glyph_cache.misses);
