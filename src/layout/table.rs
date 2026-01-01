@@ -5232,14 +5232,39 @@ impl FormattingContext for TableFormattingContext {
     );
     let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
 
-    // Helper to position out-of-flow children against a containing block.
+    // Helper to position out-of-flow children against containing blocks.
     let place_out_of_flow =
-      |fragment: &mut FragmentNode, cb: ContainingBlock| -> Result<(), LayoutError> {
+      |fragment: &mut FragmentNode,
+       cb_for_absolute: ContainingBlock,
+       cb_for_fixed: ContainingBlock|
+       -> Result<(), LayoutError> {
         if positioned_children.is_empty() {
           return Ok(());
         }
         let abs = AbsoluteLayout::with_font_context(self.factory.font_context().clone());
-        let positioned_factory = self.factory.with_positioned_cb(cb);
+        // `FormattingContextFactory::with_positioned_cb` resets the per-factory cached formatting
+        // contexts store. Build factory variants once so we can reuse cached formatting contexts
+        // when multiple positioned children share the same containing block.
+        let base_factory = self.factory.clone();
+        let abs_factory = if cb_for_absolute == base_factory.nearest_positioned_cb() {
+          base_factory.clone()
+        } else {
+          base_factory.with_positioned_cb(cb_for_absolute)
+        };
+        let fixed_factory = if cb_for_fixed == cb_for_absolute {
+          abs_factory.clone()
+        } else if cb_for_fixed == base_factory.nearest_positioned_cb() {
+          base_factory.clone()
+        } else {
+          base_factory.with_positioned_cb(cb_for_fixed)
+        };
+        let factory_for_cb = |cb: ContainingBlock| -> &FormattingContextFactory {
+          if cb == cb_for_fixed {
+            &fixed_factory
+          } else {
+            &abs_factory
+          }
+        };
         for child in positioned_children.iter().copied() {
           let original_style = child.style.clone();
           let mut layout_child = child.clone();
@@ -5250,6 +5275,11 @@ impl FormattingContext for TableFormattingContext {
           style.bottom = None;
           style.left = None;
           layout_child.style = Arc::new(style);
+
+          let cb = match child.style.position {
+            crate::style::position::Position::Fixed => cb_for_fixed,
+            _ => cb_for_absolute,
+          };
 
           let fc_type = layout_child
             .formatting_context()
@@ -5280,7 +5310,7 @@ impl FormattingContext for TableFormattingContext {
             preferred_block,
           ) = match fc_type {
             FormattingContextType::Table => {
-              let fc = positioned_factory.create(fc_type);
+              let fc = factory_for_cb(cb).create(fc_type);
               let fragment = fc.layout(&layout_child, &child_constraints)?;
               let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
                 match fc.compute_intrinsic_inline_sizes(&layout_child) {
@@ -5337,7 +5367,7 @@ impl FormattingContext for TableFormattingContext {
                 preferred_block,
               )
             }
-            _ => positioned_factory.with_fc(fc_type, |fc| {
+            _ => factory_for_cb(cb).with_fc(fc_type, |fc| {
               let fragment = fc.layout(&layout_child, &child_constraints)?;
               let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
                 match fc.compute_intrinsic_inline_sizes(&layout_child) {
@@ -5464,30 +5494,46 @@ impl FormattingContext for TableFormattingContext {
         }
       }
       if !positioned_children.is_empty() {
-        let cb = if table_box.style.position.is_positioned() {
-          let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
-          let padding_rect = Rect::new(
-            padding_origin,
-            crate::geometry::Size::new(
-              width - border_left - border_right,
-              height - border_top - border_bottom,
-            ),
-          );
-          let block_base = if table_box.style.height.is_some() {
-            Some(padding_rect.size.height)
-          } else {
-            None
-          };
-          ContainingBlock::with_viewport_and_bases(
-            padding_rect,
-            self.viewport_size,
-            Some(padding_rect.size.width),
-            block_base,
-          )
+        let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
+        let padding_rect = Rect::new(
+          padding_origin,
+          crate::geometry::Size::new(
+            width - border_left - border_right,
+            height - border_top - border_bottom,
+          ),
+        );
+        let block_base = if table_box.style.height.is_some() {
+          Some(padding_rect.size.height)
+        } else {
+          None
+        };
+        let padding_cb = ContainingBlock::with_viewport_and_bases(
+          padding_rect,
+          self.viewport_size,
+          Some(padding_rect.size.width),
+          block_base,
+        );
+        let viewport_cb = ContainingBlock::viewport(self.viewport_size);
+        let establishes_abs_cb = table_box.style.position.is_positioned()
+          || !table_box.style.transform.is_empty()
+          || table_box.style.perspective.is_some()
+          || table_box.style.containment.layout
+          || table_box.style.containment.paint;
+        let establishes_fixed_cb = !table_box.style.transform.is_empty()
+          || table_box.style.perspective.is_some()
+          || table_box.style.containment.layout
+          || table_box.style.containment.paint;
+        let cb_for_absolute = if establishes_abs_cb {
+          padding_cb
         } else {
           self.nearest_positioned_cb
         };
-        place_out_of_flow(&mut fragment, cb)?;
+        let cb_for_fixed = if establishes_fixed_cb {
+          padding_cb
+        } else {
+          viewport_cb
+        };
+        place_out_of_flow(&mut fragment, cb_for_absolute, cb_for_fixed)?;
       }
       if !has_running_children {
         layout_cache_store(
@@ -6896,35 +6942,53 @@ impl FormattingContext for TableFormattingContext {
     }
 
     if !positioned_children.is_empty() {
-      // Containing block is the table's padding box when the table itself is positioned; otherwise, inherit.
-      let cb = if table_box.style.position.is_positioned() {
-        let padding_origin = Point::new(
-          border_left + pad_left,
-          table_origin_y + border_top + pad_top,
-        );
-        let padding_rect = Rect::new(
-          padding_origin,
-          crate::geometry::Size::new(
-            table_bounds.width() - border_left - border_right,
-            table_bounds.height() - border_top - border_bottom,
-          ),
-        );
-        let block_base = if table_box.style.height.is_some() {
-          Some(padding_rect.size.height)
-        } else {
-          None
-        };
-        ContainingBlock::with_viewport_and_bases(
-          padding_rect,
-          self.viewport_size,
-          Some(padding_rect.size.width),
-          block_base,
-        )
+      // Containing blocks: absolute positioning uses the table's padding box when the table itself
+      // establishes an absolute containing block; fixed positioning uses the viewport unless a
+      // transform/perspective/containment establishes a fixed containing block.
+      let padding_origin = Point::new(
+        border_left + pad_left,
+        table_origin_y + border_top + pad_top,
+      );
+      let padding_rect = Rect::new(
+        padding_origin,
+        crate::geometry::Size::new(
+          table_bounds.width() - border_left - border_right,
+          table_bounds.height() - border_top - border_bottom,
+        ),
+      );
+      let block_base = if table_box.style.height.is_some() {
+        Some(padding_rect.size.height)
+      } else {
+        None
+      };
+      let padding_cb = ContainingBlock::with_viewport_and_bases(
+        padding_rect,
+        self.viewport_size,
+        Some(padding_rect.size.width),
+        block_base,
+      );
+      let viewport_cb = ContainingBlock::viewport(self.viewport_size);
+      let establishes_abs_cb = table_box.style.position.is_positioned()
+        || !table_box.style.transform.is_empty()
+        || table_box.style.perspective.is_some()
+        || table_box.style.containment.layout
+        || table_box.style.containment.paint;
+      let establishes_fixed_cb = !table_box.style.transform.is_empty()
+        || table_box.style.perspective.is_some()
+        || table_box.style.containment.layout
+        || table_box.style.containment.paint;
+      let cb_for_absolute = if establishes_abs_cb {
+        padding_cb
       } else {
         self.nearest_positioned_cb
       };
+      let cb_for_fixed = if establishes_fixed_cb {
+        padding_cb
+      } else {
+        viewport_cb
+      };
 
-      place_out_of_flow(&mut wrapper_fragment, cb)?;
+      place_out_of_flow(&mut wrapper_fragment, cb_for_absolute, cb_for_fixed)?;
     }
 
     if !has_running_children {

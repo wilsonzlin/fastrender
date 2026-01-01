@@ -530,3 +530,127 @@ fn block_positioned_children_do_not_churn_detached_factories() {
   // fixed upper bound on `InlineFormattingContext::with_factory` calls here.
   let _ = inline_fc_with_factory_news;
 }
+
+#[test]
+fn table_positioned_children_do_not_churn_detached_factories() {
+  let _guard = CHURN_COUNTER_LOCK
+    .lock()
+    .unwrap_or_else(|err| err.into_inner());
+  const ITEMS: usize = 256;
+
+  let viewport = Size::new(800.0, 600.0);
+  let config = LayoutConfig::for_viewport(viewport);
+  let engine = LayoutEngine::with_font_context(config, FontContext::new());
+
+  // Reset churn counters after engine creation so we measure just the layout run.
+  ShapingPipeline::debug_reset_new_call_count();
+  FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
+  FormattingContextFactory::debug_reset_detached_call_count();
+  InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
+  InlineFormattingContext::debug_reset_with_factory_call_count();
+
+  let mut table_style = ComputedStyle::default();
+  table_style.display = Display::Table;
+  // Establish an absolute-position containing block (padding box) so absolute vs fixed positioned
+  // children use different CBs (padding vs viewport).
+  table_style.position = Position::Relative;
+  table_style.border_spacing_horizontal = Length::px(0.0);
+  table_style.border_spacing_vertical = Length::px(0.0);
+  table_style.width = Some(Length::px(viewport.width));
+  table_style.height = Some(Length::px(viewport.height));
+  let table_style = Arc::new(table_style);
+
+  let mut caption_style = ComputedStyle::default();
+  caption_style.display = Display::TableCaption;
+  caption_style.height = Some(Length::px(4.0));
+  let caption = BoxNode::new_block(
+    Arc::new(caption_style),
+    FormattingContextType::Block,
+    vec![],
+  );
+
+  let mut row_style = ComputedStyle::default();
+  row_style.display = Display::TableRow;
+  let row_style = Arc::new(row_style);
+
+  let mut cell_style = ComputedStyle::default();
+  cell_style.display = Display::TableCell;
+  cell_style.width = Some(Length::px(20.0));
+  cell_style.height = Some(Length::px(10.0));
+  let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+  let row = BoxNode::new_block(row_style, FormattingContextType::Block, vec![cell]);
+
+  let mut positioned_children = Vec::with_capacity(ITEMS);
+  for idx in 0..ITEMS {
+    let mut positioned_style = ComputedStyle::default();
+    positioned_style.display = Display::Block;
+    positioned_style.position = if idx % 2 == 0 {
+      Position::Absolute
+    } else {
+      Position::Fixed
+    };
+    positioned_style.left = Some(Length::px(0.0));
+    positioned_style.top = Some(Length::px(0.0));
+    positioned_style.width = Some(Length::px(7.0));
+    positioned_style.height = Some(Length::px(3.0));
+    let mut positioned = BoxNode::new_block(
+      Arc::new(positioned_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+    positioned.id = idx + 1;
+    positioned_children.push(positioned);
+  }
+
+  let mut table_children = Vec::with_capacity(2 + positioned_children.len());
+  table_children.push(caption);
+  table_children.push(row);
+  table_children.extend(positioned_children);
+
+  let mut root = BoxNode::new_block(table_style, FormattingContextType::Table, table_children);
+  root.id = 5_000_000;
+  let tree = BoxTree::new(root);
+
+  let fragment_tree = engine.layout_tree(&tree).expect("layout should succeed");
+  let positioned_fragments = fragment_tree
+    .iter_fragments()
+    .filter(|fragment| {
+      fragment
+        .style
+        .as_ref()
+        .is_some_and(|style| matches!(style.position, Position::Absolute | Position::Fixed))
+    })
+    .count();
+  assert_eq!(
+    positioned_fragments,
+    ITEMS,
+    "expected all positioned table children (abs/fixed) to produce fragments",
+  );
+
+  let shaping_pipeline_news = ShapingPipeline::debug_new_call_count();
+  let factory_news = FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count();
+  let detached_news = FormattingContextFactory::debug_detached_call_count();
+  let inline_fc_news = InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count();
+  let inline_fc_with_factory_news = InlineFormattingContext::debug_with_factory_call_count();
+
+  assert!(
+    shaping_pipeline_news < 20,
+    "positioned children layout should not rebuild shaping pipelines (got {shaping_pipeline_news})"
+  );
+  assert!(
+    factory_news < 20,
+    "positioned children layout should not rebuild formatting context factories (got {factory_news})"
+  );
+  assert!(
+    detached_news < 50,
+    "positioned children layout should not churn detached factories (got {detached_news})"
+  );
+  assert!(
+    inline_fc_news < 20,
+    "positioned children layout should not rebuild inline formatting contexts via `with_font_context_viewport_and_cb` (got {inline_fc_news})"
+  );
+  // Table layout uses block formatting contexts for cells and positioned children, so the raw
+  // `InlineFormattingContext::with_factory` call count can legitimately scale when positioned boxes
+  // establish new containing blocks for their descendants.
+  let _ = inline_fc_with_factory_news;
+}
