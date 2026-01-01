@@ -436,7 +436,8 @@ pub struct FloatContext {
   /// Unsorted list of float start/end events.
   ///
   /// Sweep queries are powered by a per-context heap inside [`FloatSweepState`], which allows
-  /// floats to be added without repeatedly sorting all prior events.
+  /// floats to be added without repeatedly sorting all prior events. The append-only event list is
+  /// kept so the sweep can be rebuilt when queries move backwards.
   events: Vec<FloatEvent>,
 
   /// Sweep state used to answer monotonic Y queries efficiently.
