@@ -7,6 +7,7 @@ set -euo pipefail
 # Environment overrides:
 #   JOBS=8 FETCH_TIMEOUT=30 RENDER_TIMEOUT=5 DISK_CACHE=0 NO_DISK_CACHE=1
 #   RAYON_NUM_THREADS=4 FASTR_LAYOUT_PARALLEL=off|on|auto
+#   USER_AGENT=... ACCEPT_LANGUAGE=... VIEWPORT=... DPR=...
 #   FASTR_DISK_CACHE_MAX_BYTES=... FASTR_DISK_CACHE_MAX_AGE_SECS=... (0 = never expire)
 #   FASTR_DISK_CACHE_LOCK_STALE_SECS=... (seconds before `.lock` files are treated as stale)
 #
@@ -66,19 +67,116 @@ for arg in "$@"; do
   ARGS+=("${arg}")
 done
 
+USER_AGENT_ARG="${USER_AGENT:-}"
+ACCEPT_LANGUAGE_ARG="${ACCEPT_LANGUAGE:-}"
+VIEWPORT_ARG="${VIEWPORT:-}"
+DPR_ARG="${DPR:-}"
+
+USER_AGENT_IN_ARGS=0
+ACCEPT_LANGUAGE_IN_ARGS=0
+VIEWPORT_IN_ARGS=0
+DPR_IN_ARGS=0
+
+for ((i=0; i < ${#ARGS[@]}; i++)); do
+  arg="${ARGS[$i]}"
+  case "${arg}" in
+    --user-agent)
+      USER_AGENT_IN_ARGS=1
+      if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
+        USER_AGENT_ARG="${ARGS[$((i + 1))]}"
+        i=$((i + 1))
+      fi
+      ;;
+    --user-agent=*)
+      USER_AGENT_IN_ARGS=1
+      USER_AGENT_ARG="${arg#--user-agent=}"
+      ;;
+    --accept-language)
+      ACCEPT_LANGUAGE_IN_ARGS=1
+      if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
+        ACCEPT_LANGUAGE_ARG="${ARGS[$((i + 1))]}"
+        i=$((i + 1))
+      fi
+      ;;
+    --accept-language=*)
+      ACCEPT_LANGUAGE_IN_ARGS=1
+      ACCEPT_LANGUAGE_ARG="${arg#--accept-language=}"
+      ;;
+    --viewport)
+      VIEWPORT_IN_ARGS=1
+      if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
+        VIEWPORT_ARG="${ARGS[$((i + 1))]}"
+        i=$((i + 1))
+      fi
+      ;;
+    --viewport=*)
+      VIEWPORT_IN_ARGS=1
+      VIEWPORT_ARG="${arg#--viewport=}"
+      ;;
+    --dpr)
+      DPR_IN_ARGS=1
+      if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
+        DPR_ARG="${ARGS[$((i + 1))]}"
+        i=$((i + 1))
+      fi
+      ;;
+    --dpr=*)
+      DPR_IN_ARGS=1
+      DPR_ARG="${arg#--dpr=}"
+      ;;
+  esac
+done
+
+FETCH_KNOB_ARGS=()
+PREFETCH_KNOB_ARGS=()
+PAGESET_KNOB_ARGS=()
+
+if [[ -n "${USER_AGENT_ARG}" ]]; then
+  FETCH_KNOB_ARGS+=(--user-agent "${USER_AGENT_ARG}")
+  PREFETCH_KNOB_ARGS+=(--user-agent "${USER_AGENT_ARG}")
+  if [[ "${USER_AGENT_IN_ARGS}" -eq 0 ]]; then
+    PAGESET_KNOB_ARGS+=(--user-agent "${USER_AGENT_ARG}")
+  fi
+fi
+
+if [[ -n "${ACCEPT_LANGUAGE_ARG}" ]]; then
+  FETCH_KNOB_ARGS+=(--accept-language "${ACCEPT_LANGUAGE_ARG}")
+  PREFETCH_KNOB_ARGS+=(--accept-language "${ACCEPT_LANGUAGE_ARG}")
+  if [[ "${ACCEPT_LANGUAGE_IN_ARGS}" -eq 0 ]]; then
+    PAGESET_KNOB_ARGS+=(--accept-language "${ACCEPT_LANGUAGE_ARG}")
+  fi
+fi
+
+if [[ -n "${VIEWPORT_ARG}" ]]; then
+  PREFETCH_KNOB_ARGS+=(--viewport "${VIEWPORT_ARG}")
+  if [[ "${VIEWPORT_IN_ARGS}" -eq 0 ]]; then
+    PAGESET_KNOB_ARGS+=(--viewport "${VIEWPORT_ARG}")
+  fi
+fi
+
+if [[ -n "${DPR_ARG}" ]]; then
+  PREFETCH_KNOB_ARGS+=(--dpr "${DPR_ARG}")
+  if [[ "${DPR_IN_ARGS}" -eq 0 ]]; then
+    PAGESET_KNOB_ARGS+=(--dpr "${DPR_ARG}")
+  fi
+fi
+
 DISK_CACHE_ARGS=()
 for ((i=0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "${arg}" in
-    --disk-cache-max-bytes|--disk-cache-max-age-secs|--disk-cache-lock-stale-secs)
+    --disk-cache-*=*)
+      DISK_CACHE_ARGS+=("${arg}")
+      ;;
+    --disk-cache-*)
       DISK_CACHE_ARGS+=("${arg}")
       if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
-        DISK_CACHE_ARGS+=("${ARGS[$((i + 1))]}")
-        i=$((i + 1))
+        next="${ARGS[$((i + 1))]}"
+        if [[ "${next}" != -* ]]; then
+          DISK_CACHE_ARGS+=("${next}")
+          i=$((i + 1))
+        fi
       fi
-      ;;
-    --disk-cache-max-bytes=*|--disk-cache-max-age-secs=*|--disk-cache-lock-stale-secs=*)
-      DISK_CACHE_ARGS+=("${arg}")
       ;;
   esac
 done
@@ -89,12 +187,12 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
 fi
 
 echo "Fetching pages (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, disk_cache=${USE_DISK_CACHE})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}"
+cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${FETCH_KNOB_ARGS[@]}"
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   echo "Prefetching CSS assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
-  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${DISK_CACHE_ARGS[@]}"
+  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${PREFETCH_KNOB_ARGS[@]}" "${DISK_CACHE_ARGS[@]}"
 fi
 
 echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts "${ARGS[@]}"
+cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts "${PAGESET_KNOB_ARGS[@]}" "${ARGS[@]}"

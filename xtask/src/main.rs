@@ -95,6 +95,22 @@ struct PagesetArgs {
   #[arg(long = "no-disk-cache", default_value_t = true, action = ArgAction::SetFalse)]
   disk_cache: bool,
 
+  /// Override the User-Agent header (propagated to fetch/prefetch/render steps)
+  #[arg(long)]
+  user_agent: Option<String>,
+
+  /// Override the Accept-Language header (propagated to fetch/prefetch/render steps)
+  #[arg(long)]
+  accept_language: Option<String>,
+
+  /// Viewport size as WxH (e.g. 1200x800; propagated to prefetch/render steps)
+  #[arg(long, value_parser = parse_viewport)]
+  viewport: Option<(u32, u32)>,
+
+  /// Device pixel ratio for media queries/srcset (propagated to prefetch/render steps)
+  #[arg(long)]
+  dpr: Option<f32>,
+
   /// Populate `diagnostics.stats.cascade` by re-running slow cascade pages/timeouts with cascade profiling enabled.
   ///
   /// This forwards `--cascade-diagnostics` to `pageset_progress run`.
@@ -475,6 +491,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   let pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
   let shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
   let disk_cache_extra_args = extract_disk_cache_args(&args.extra);
+  let viewport_arg = args
+    .viewport
+    .map(|(width, height)| format!("{width}x{height}"));
+  let dpr_arg = args.dpr.map(|dpr| dpr.to_string());
 
   let disk_cache_enabled = disk_cache_enabled(args.disk_cache);
   let disk_cache_status = if disk_cache_enabled {
@@ -511,6 +531,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(shard) = &shard_arg {
       cmd.arg("--shard").arg(shard);
     }
+    if let Some(user_agent) = &args.user_agent {
+      cmd.arg("--user-agent").arg(user_agent);
+    }
+    if let Some(accept_language) = &args.accept_language {
+      cmd.arg("--accept-language").arg(accept_language);
+    }
     if rayon_threads_env.is_none() {
       cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());
     }
@@ -541,6 +567,18 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     }
     if let Some(shard) = &shard_arg {
       cmd.arg("--shard").arg(shard);
+    }
+    if let Some(user_agent) = &args.user_agent {
+      cmd.arg("--user-agent").arg(user_agent);
+    }
+    if let Some(accept_language) = &args.accept_language {
+      cmd.arg("--accept-language").arg(accept_language);
+    }
+    if let Some(viewport) = &viewport_arg {
+      cmd.arg("--viewport").arg(viewport);
+    }
+    if let Some(dpr) = &dpr_arg {
+      cmd.arg("--dpr").arg(dpr);
     }
     cmd.args(&disk_cache_extra_args);
     if rayon_threads_env.is_none() {
@@ -575,6 +613,18 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   if let Some(shard) = &shard_arg {
     cmd.arg("--shard").arg(shard);
   }
+  if let Some(user_agent) = &args.user_agent {
+    cmd.arg("--user-agent").arg(user_agent);
+  }
+  if let Some(accept_language) = &args.accept_language {
+    cmd.arg("--accept-language").arg(accept_language);
+  }
+  if let Some(viewport) = &viewport_arg {
+    cmd.arg("--viewport").arg(viewport);
+  }
+  if let Some(dpr) = &dpr_arg {
+    cmd.arg("--dpr").arg(dpr);
+  }
   if args.cascade_diagnostics {
     cmd.arg("--cascade-diagnostics");
     if let Some(ms) = args.cascade_diagnostics_slow_ms {
@@ -598,35 +648,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 }
 
 fn extract_disk_cache_args(extra: &[String]) -> Vec<String> {
-  let flags = [
-    "--disk-cache-max-bytes",
-    "--disk-cache-max-age-secs",
-    "--disk-cache-lock-stale-secs",
-  ];
-  let mut out = Vec::new();
-  let mut iter = extra.iter().peekable();
-  while let Some(arg) = iter.next() {
-    let mut matched = None;
-    for flag in &flags {
-      if arg == flag {
-        matched = Some(*flag);
-        break;
-      }
-      let prefix = format!("{flag}=");
-      if arg.starts_with(&prefix) {
-        out.push(arg.clone());
-        matched = None;
-        break;
-      }
-    }
-    if let Some(flag) = matched {
-      out.push(flag.to_string());
-      if let Some(value) = iter.next() {
-        out.push(value.clone());
-      }
-    }
-  }
-  out
+  xtask::extract_disk_cache_args(extra)
 }
 
 fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {

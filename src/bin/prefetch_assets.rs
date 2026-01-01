@@ -59,9 +59,6 @@ mod disk_cache_main {
     #[command(flatten)]
     timeout: TimeoutArgs,
 
-    #[command(flatten)]
-    disk_cache: DiskCacheArgs,
-
     /// Override the User-Agent header
     #[arg(long, default_value = DEFAULT_USER_AGENT)]
     user_agent: String,
@@ -72,6 +69,9 @@ mod disk_cache_main {
 
     #[command(flatten)]
     viewport: ViewportArgs,
+
+    #[command(flatten)]
+    disk_cache: DiskCacheArgs,
 
     /// Prefetch font URLs referenced by fetched CSS (true/false)
     #[arg(
@@ -580,7 +580,6 @@ mod disk_cache_main {
     )
     .with_device_pixel_ratio(args.viewport.dpr)
     .with_env_overrides();
-
     let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);
     let mut disk_config = args.disk_cache.to_config();
     let lock_stale_after = disk_config.lock_stale_after;
