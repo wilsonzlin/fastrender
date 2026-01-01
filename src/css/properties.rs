@@ -1803,23 +1803,19 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
 }
 
 fn parse_linear_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
-  let parts = split_top_level_commas(inner);
-  if parts.len() < 2 {
-    return None;
-  }
-  let part_count = parts.len();
-
-  let mut iter = parts.into_iter();
-  let first = iter.next().unwrap();
+  let mut iter = split_top_level_commas(inner);
+  let first = iter.next()?;
+  let second = iter.next()?;
   let (angle, first_stop) = match parse_gradient_angle(first) {
     Some(angle) => (angle, None),
     None => (180.0, Some(first)),
   };
 
-  let mut stops = Vec::with_capacity(part_count.saturating_add(1));
+  let mut stops = Vec::new();
   if let Some(stop) = first_stop {
     let _ = parse_color_stop_segment(stop, &mut stops);
   }
+  let _ = parse_color_stop_segment(second, &mut stops);
   for part in iter {
     let _ = parse_color_stop_segment(part, &mut stops);
   }
@@ -1899,7 +1895,8 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
       }
     }
 
-    let mut explicit_sizes = Vec::new();
+    let mut explicit_x: Option<Length> = None;
+    let mut explicit_y: Option<Length> = None;
     for token in prelude.split_whitespace() {
       if token.eq_ignore_ascii_case("circle") {
         *shape = RadialGradientShape::Circle;
@@ -1914,27 +1911,29 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
       } else if token.eq_ignore_ascii_case("farthest-corner") {
         *size = RadialGradientSize::FarthestCorner;
       } else if let Some(len) = parse_length_token(token) {
-        explicit_sizes.push(len);
+        if explicit_x.is_none() {
+          explicit_x = Some(len);
+        } else if explicit_y.is_none() {
+          explicit_y = Some(len);
+        }
       } else {
         return None;
       }
     }
 
-    if let Some((&first, rest)) = explicit_sizes.split_first() {
-      let second = rest.first().copied();
+    if let Some(first) = explicit_x {
       *size = RadialGradientSize::Explicit {
         x: first,
-        y: second,
+        y: explicit_y,
       };
     }
 
     Some(())
   }
 
-  let parts = split_top_level_commas(inner);
-  if parts.len() < 2 {
-    return None;
-  }
+  let mut parts = split_top_level_commas(inner);
+  let first_part = parts.next()?;
+  let second_part = parts.next()?;
 
   let mut shape = RadialGradientShape::Ellipse;
   let mut size = RadialGradientSize::FarthestCorner;
@@ -1950,15 +1949,16 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
   };
 
   let mut stops = Vec::new();
-  if !looks_like_prelude(parts[0]) {
-    if !parse_color_stop_segment(parts[0], &mut stops) {
-      parse_prelude(parts[0], &mut shape, &mut size, &mut position)?;
+  if !looks_like_prelude(first_part) {
+    if !parse_color_stop_segment(first_part, &mut stops) {
+      parse_prelude(first_part, &mut shape, &mut size, &mut position)?;
     }
   } else {
-    parse_prelude(parts[0], &mut shape, &mut size, &mut position)?;
+    parse_prelude(first_part, &mut shape, &mut size, &mut position)?;
   }
 
-  for part in parts.iter().skip(1) {
+  let _ = parse_color_stop_segment(second_part, &mut stops);
+  for part in parts {
     let _ = parse_color_stop_segment(part, &mut stops);
   }
 
@@ -2195,10 +2195,9 @@ fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
     }
   }
 
-  let parts = split_top_level_commas(inner);
-  if parts.len() < 2 {
-    return None;
-  }
+  let mut parts = split_top_level_commas(inner);
+  let first_part = parts.next()?;
+  let second_part = parts.next()?;
 
   let mut from_angle = 0.0;
   let mut position = GradientPosition {
@@ -2212,8 +2211,8 @@ fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
     },
   };
 
-  let prelude = parts[0].trim();
-  let mut stops = Vec::with_capacity(parts.len().saturating_add(1));
+  let prelude = first_part.trim();
+  let mut stops = Vec::new();
 
   // Conic gradients may have an optional `from <angle>` and/or `at <position>` prelude.
   //
@@ -2231,7 +2230,8 @@ fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
     parse_prelude(prelude, &mut from_angle, &mut position);
   }
 
-  for part in parts.iter().skip(1) {
+  let _ = parse_color_stop_segment(second_part, &mut stops);
+  for part in parts {
     let _ = parse_color_stop_segment(part, &mut stops);
   }
   if stops.len() < 2 {
@@ -2253,49 +2253,89 @@ fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
   }
 }
 
-fn split_top_level_commas(input: &str) -> Vec<&str> {
-  let mut parts = Vec::new();
-  let mut paren = 0i32;
-  let mut bracket = 0i32;
-  let mut brace = 0i32;
-  let mut start = 0usize;
-  let mut in_string: Option<char> = None;
-  let mut escape = false;
+struct TopLevelCommaSplit<'a> {
+  input: &'a str,
+  idx: usize,
+  paren: i32,
+  bracket: i32,
+  brace: i32,
+  in_string: Option<u8>,
+  escape: bool,
+}
 
-  for (i, ch) in input.char_indices() {
-    if escape {
-      escape = false;
-      continue;
-    }
-    if ch == '\\' {
-      escape = true;
-      continue;
-    }
-    if let Some(q) = in_string {
-      if ch == q {
-        in_string = None;
-      }
-      continue;
-    }
-    match ch {
-      '"' | '\'' => in_string = Some(ch),
-      '(' => paren += 1,
-      ')' => paren -= 1,
-      '[' => bracket += 1,
-      ']' => bracket -= 1,
-      '{' => brace += 1,
-      '}' => brace -= 1,
-      ',' if paren == 0 && bracket == 0 && brace == 0 => {
-        parts.push(input[start..i].trim());
-        start = i + 1;
-      }
-      _ => {}
+impl<'a> TopLevelCommaSplit<'a> {
+  fn new(input: &'a str) -> Self {
+    Self {
+      input,
+      idx: 0,
+      paren: 0,
+      bracket: 0,
+      brace: 0,
+      in_string: None,
+      escape: false,
     }
   }
-  if start < input.len() {
-    parts.push(input[start..].trim());
+}
+
+impl<'a> Iterator for TopLevelCommaSplit<'a> {
+  type Item = &'a str;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    let bytes = self.input.as_bytes();
+    if self.idx >= bytes.len() {
+      return None;
+    }
+
+    let start = self.idx;
+    let mut idx = self.idx;
+    while idx < bytes.len() {
+      let b = bytes[idx];
+
+      if self.escape {
+        self.escape = false;
+        idx += 1;
+        continue;
+      }
+
+      if b == b'\\' {
+        self.escape = true;
+        idx += 1;
+        continue;
+      }
+
+      if let Some(q) = self.in_string {
+        if b == q {
+          self.in_string = None;
+        }
+        idx += 1;
+        continue;
+      }
+
+      match b {
+        b'"' | b'\'' => self.in_string = Some(b),
+        b'(' => self.paren += 1,
+        b')' => self.paren -= 1,
+        b'[' => self.bracket += 1,
+        b']' => self.bracket -= 1,
+        b'{' => self.brace += 1,
+        b'}' => self.brace -= 1,
+        b',' if self.paren == 0 && self.bracket == 0 && self.brace == 0 => {
+          self.idx = idx + 1;
+          return Some(self.input[start..idx].trim());
+        }
+        _ => {}
+      }
+
+      idx += 1;
+    }
+
+    self.idx = bytes.len();
+    Some(self.input[start..].trim())
   }
-  parts
+}
+
+fn split_top_level_commas(input: &str) -> TopLevelCommaSplit<'_> {
+  TopLevelCommaSplit::new(input)
 }
 
 fn parse_angle_expression(token: &str) -> Option<f32> {
