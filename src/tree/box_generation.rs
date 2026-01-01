@@ -60,9 +60,11 @@ use crate::tree::table_fixup::TableStructureFixer;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 #[cfg(any(test, feature = "box_generation_demo"))]
 pub use crate::tree::box_generation_demo::{
@@ -316,6 +318,81 @@ impl BoxGenerationOptions {
 }
 
 const BOX_GEN_DEADLINE_STRIDE: usize = 256;
+const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Default, Clone, Copy)]
+struct SvgSerializationProfile {
+  calls: usize,
+  bytes: usize,
+  time_ms: f64,
+}
+
+thread_local! {
+  static SVG_SERIALIZATION_PROFILE: RefCell<Option<SvgSerializationProfile>> = RefCell::new(None);
+}
+
+fn svg_serialization_profile_enabled() -> bool {
+  runtime::runtime_toggles().truthy("FASTR_SVG_PROFILE")
+}
+
+fn enable_svg_serialization_profile() {
+  SVG_SERIALIZATION_PROFILE.with(|cell| {
+    *cell.borrow_mut() = Some(SvgSerializationProfile::default());
+  });
+}
+
+fn take_svg_serialization_profile() -> Option<SvgSerializationProfile> {
+  SVG_SERIALIZATION_PROFILE.with(|cell| cell.borrow_mut().take())
+}
+
+fn record_svg_serialization(duration: std::time::Duration, bytes: usize) {
+  SVG_SERIALIZATION_PROFILE.with(|cell| {
+    if let Some(profile) = cell.borrow_mut().as_mut() {
+      profile.calls += 1;
+      profile.bytes += bytes;
+      profile.time_ms += duration.as_secs_f64() * 1000.0;
+    }
+  });
+}
+
+#[derive(Debug, Clone)]
+struct SvgDocumentCssPolicy {
+  embedded_style_element: Option<String>,
+  max_embedded_svgs: usize,
+  replaced_svg_count: usize,
+  forced: Option<bool>,
+}
+
+fn svg_embed_document_css_override() -> Option<bool> {
+  let toggles = runtime::runtime_toggles();
+  let raw = toggles.get("FASTR_SVG_EMBED_DOCUMENT_CSS")?;
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  let lower = trimmed.to_ascii_lowercase();
+  Some(!matches!(lower.as_str(), "0" | "false" | "off"))
+}
+
+fn svg_embed_document_css_max_svgs() -> usize {
+  runtime::runtime_toggles().usize_with_default("FASTR_SVG_EMBED_DOCUMENT_CSS_MAX_SVGS", 16)
+}
+
+fn build_svg_cdata_style_element(css: &str) -> String {
+  // Ensure embedded document CSS stays XML-safe by wrapping it in CDATA and splitting any
+  // terminators that would otherwise close the section.
+  let mut out = String::with_capacity(css.len() + 32);
+  out.push_str("<style><![CDATA[");
+  let mut last = 0;
+  for (idx, _) in css.match_indices("]]>") {
+    out.push_str(&css[last..idx]);
+    out.push_str("]]]]><![CDATA[>");
+    last = idx + 3;
+  }
+  out.push_str(&css[last..]);
+  out.push_str("]]></style>");
+  out
+}
 
 fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<ComputedStyle>> {
   style.as_ref().map(|s| Arc::new((**s).clone()))
@@ -323,6 +400,7 @@ fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<Comput
 
 struct BoxGenerationPrepass<'a> {
   document_css: String,
+  svg_document_css: SvgDocumentCssPolicy,
   picture_sources: PictureSourceLookup,
   styled_lookup: StyledLookup<'a>,
 }
@@ -387,8 +465,6 @@ fn collect_box_generation_prepass<'a>(
   styled: &'a StyledNode,
   deadline_counter: &mut usize,
 ) -> Result<BoxGenerationPrepass<'a>> {
-  const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
-
   struct CssState {
     enabled: bool,
   }
@@ -400,6 +476,7 @@ fn collect_box_generation_prepass<'a>(
     max_css_bytes: usize,
     css: &mut CssState,
     css_allowed: bool,
+    svg_count_allowed: bool,
   ) -> Result<()> {
     check_active_periodic(
       deadline_counter,
@@ -436,6 +513,28 @@ fn collect_box_generation_prepass<'a>(
       }
     }
 
+    let mut children_svg_count_allowed = svg_count_allowed;
+    if svg_count_allowed {
+      if node.styles.display == Display::None {
+        children_svg_count_allowed = false;
+      } else if let Some(tag) = node.node.tag_name() {
+        if is_replaced_element(tag) && node.styles.display != Display::Contents {
+          let is_object_with_fallback = tag.eq_ignore_ascii_case("object")
+            && node
+              .node
+              .get_attribute_ref("data")
+              .map(|d| d.is_empty())
+              .unwrap_or(true);
+          if !is_object_with_fallback {
+            if tag.eq_ignore_ascii_case("svg") {
+              out.svg_document_css.replaced_svg_count += 1;
+            }
+            children_svg_count_allowed = false;
+          }
+        }
+      }
+    }
+
     for child in node.children.iter() {
       walk(
         child,
@@ -444,19 +543,50 @@ fn collect_box_generation_prepass<'a>(
         max_css_bytes,
         css,
         children_css_allowed,
+        children_svg_count_allowed,
       )?;
     }
     Ok(())
   }
 
   let max_css_bytes = foreign_object_css_limit_bytes().max(MAX_EMBEDDED_SVG_CSS_BYTES);
+  let forced = svg_embed_document_css_override();
+  let max_embedded_svgs = svg_embed_document_css_max_svgs();
   let mut out = BoxGenerationPrepass {
     document_css: String::new(),
+    svg_document_css: SvgDocumentCssPolicy {
+      embedded_style_element: None,
+      max_embedded_svgs,
+      replaced_svg_count: 0,
+      forced,
+    },
     picture_sources: PictureSourceLookup::new(),
     styled_lookup: StyledLookup::new(),
   };
   let mut css = CssState { enabled: true };
-  walk(styled, &mut out, deadline_counter, max_css_bytes, &mut css, true)?;
+  walk(
+    styled,
+    &mut out,
+    deadline_counter,
+    max_css_bytes,
+    &mut css,
+    true,
+    true,
+  )?;
+
+  let css_trimmed = out.document_css.trim();
+  let css_size_ok = !css_trimmed.is_empty() && out.document_css.len() <= MAX_EMBEDDED_SVG_CSS_BYTES;
+  let allow_embed = if !css_size_ok {
+    false
+  } else if let Some(forced) = out.svg_document_css.forced {
+    forced
+  } else {
+    out.svg_document_css.replaced_svg_count <= out.svg_document_css.max_embedded_svgs
+  };
+  if allow_embed {
+    out.svg_document_css.embedded_style_element = Some(build_svg_cdata_style_element(&out.document_css));
+  }
+
   Ok(out)
 }
 
@@ -467,24 +597,49 @@ fn build_box_tree_root(
 ) -> Result<BoxNode> {
   let BoxGenerationPrepass {
     document_css,
+    svg_document_css,
     mut picture_sources,
     styled_lookup,
   } = collect_box_generation_prepass(styled, deadline_counter)?;
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
   let mut roots = Vec::new();
-  generate_boxes_for_styled_into(
+  let svg_profile = svg_serialization_profile_enabled();
+  if svg_profile {
+    enable_svg_serialization_profile();
+  }
+  let result = generate_boxes_for_styled_into(
     styled,
     &styled_lookup,
     &mut counters,
     true,
     &document_css,
+    svg_document_css.embedded_style_element.as_deref(),
     &mut picture_sources,
     options,
     deadline_counter,
     &mut roots,
-  )?;
+  );
   counters.leave_scope();
+  if svg_profile {
+    if let Some(profile) = take_svg_serialization_profile() {
+      eprintln!(
+        "[svg-serialize] calls={} bytes={} time_ms={:.2} embed_doc_css={} doc_css_bytes={} svgs={} max_svgs={} forced={}",
+        profile.calls,
+        profile.bytes,
+        profile.time_ms,
+        svg_document_css.embedded_style_element.is_some(),
+        document_css.len(),
+        svg_document_css.replaced_svg_count,
+        svg_document_css.max_embedded_svgs,
+        svg_document_css
+          .forced
+          .map(|v| if v { "on" } else { "off" })
+          .unwrap_or("auto")
+      );
+    }
+  }
+  result?;
   match roots.len() {
     0 => Ok(BoxNode::new_block(
       Arc::new(ComputedStyle::default()),
@@ -984,22 +1139,14 @@ fn box_debug_info_enabled() -> bool {
   })
 }
 
-fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent {
-  const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
-
-  fn append_style_with_cdata(out: &mut String, css: &str) {
-    // Ensure embedded document CSS stays XML-safe by wrapping it in CDATA and splitting any
-    // terminators that would otherwise close the section.
-    out.push_str("<style><![CDATA[");
-    let mut last = 0;
-    for (idx, _) in css.match_indices("]]>") {
-      out.push_str(&css[last..idx]);
-      out.push_str("]]]]><![CDATA[>");
-      last = idx + 3;
-    }
-    out.push_str(&css[last..]);
-    out.push_str("]]></style>");
-  }
+fn serialize_svg_subtree(
+  styled: &StyledNode,
+  document_css: &str,
+  svg_document_css_style_element: Option<&str>,
+) -> SvgContent {
+  let profile_start = SVG_SERIALIZATION_PROFILE
+    .with(|cell| cell.borrow().is_some())
+    .then(Instant::now);
 
   fn merge_style_attribute(attrs: &mut Vec<(String, String)>, extra: &str) {
     if extra.trim().is_empty() {
@@ -1080,9 +1227,13 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     node.children.iter().any(svg_uses_document_css)
   }
 
-  let embed_document_css = !document_css.trim().is_empty()
-    && document_css.len() <= MAX_EMBEDDED_SVG_CSS_BYTES
-    && svg_uses_document_css(styled);
+  let embed_document_css =
+    svg_document_css_style_element.is_some() && svg_uses_document_css(styled);
+  let svg_document_css_style_element = if embed_document_css {
+    svg_document_css_style_element
+  } else {
+    None
+  };
 
   fn serialize_foreign_object_placeholder(
     styled: &StyledNode,
@@ -1246,7 +1397,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   fn serialize_node(
     styled: &StyledNode,
     document_css: &str,
-    embed_document_css: bool,
+    svg_document_css_style_element: Option<&str>,
     parent_ns: Option<&str>,
     is_root: bool,
     out: &mut String,
@@ -1259,7 +1410,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           serialize_node(
             child,
             document_css,
-            embed_document_css,
+            svg_document_css_style_element,
             parent_ns,
             false,
             out,
@@ -1273,7 +1424,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           serialize_node(
             child,
             document_css,
-            embed_document_css,
+            svg_document_css_style_element,
             parent_ns,
             false,
             out,
@@ -1378,10 +1529,12 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           fallback_out.push('>');
         }
 
-        if is_root && embed_document_css {
-          append_style_with_cdata(out, document_css);
-          if let Some(fallback_out) = fallback_out.as_mut() {
-            append_style_with_cdata(fallback_out, document_css);
+        if is_root {
+          if let Some(style_element) = svg_document_css_style_element {
+            out.push_str(style_element);
+            if let Some(fallback_out) = fallback_out.as_mut() {
+              fallback_out.push_str(style_element);
+            }
           }
         }
 
@@ -1389,7 +1542,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           serialize_node(
             child,
             document_css,
-            embed_document_css,
+            svg_document_css_style_element,
             Some(current_ns),
             false,
             out,
@@ -1420,7 +1573,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   serialize_node(
     styled,
     document_css,
-    embed_document_css,
+    svg_document_css_style_element,
     None,
     true,
     &mut out,
@@ -1429,7 +1582,11 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   );
 
   let fallback_svg = if foreign_objects.is_empty() {
-    String::new()
+    if embed_document_css {
+      out.clone()
+    } else {
+      String::new()
+    }
   } else {
     fallback_out.unwrap_or_else(|| out.clone())
   };
@@ -1442,12 +1599,18 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     String::new()
   };
 
-  SvgContent {
+  let content = SvgContent {
     svg: out,
     fallback_svg,
     foreign_objects,
     shared_css,
+  };
+
+  if let Some(start) = profile_start {
+    record_svg_serialization(start.elapsed(), content.svg.len() + content.fallback_svg.len());
   }
+
+  content
 }
 
 /// Recursively generates BoxNodes from a StyledNode, honoring display: contents by
@@ -1458,6 +1621,7 @@ fn generate_boxes_for_styled_into(
   counters: &mut CounterManager,
   _is_root: bool,
   document_css: &str,
+  svg_document_css_style_element: Option<&str>,
   picture_sources: &mut PictureSourceLookup,
   options: &BoxGenerationOptions,
   deadline_counter: &mut usize,
@@ -1580,6 +1744,7 @@ fn generate_boxes_for_styled_into(
           styled,
           Arc::new(styled.styles.clone()),
           document_css,
+          svg_document_css_style_element,
           picture_sources_for_img,
         );
         let mut box_node = box_node;
@@ -1623,6 +1788,7 @@ fn generate_boxes_for_styled_into(
                       counters,
                       false,
                       document_css,
+                      svg_document_css_style_element,
                       picture_sources,
                       options,
                       deadline_counter,
@@ -1645,6 +1811,7 @@ fn generate_boxes_for_styled_into(
       counters,
       false,
       document_css,
+      svg_document_css_style_element,
       picture_sources,
       options,
       deadline_counter,
@@ -2762,6 +2929,7 @@ fn create_replaced_box_from_styled(
   styled: &StyledNode,
   style: Arc<ComputedStyle>,
   document_css: &str,
+  svg_document_css_style_element: Option<&str>,
   picture_sources: Vec<PictureSource>,
 ) -> BoxNode {
   let tag = styled.node.tag_name().unwrap_or("img");
@@ -2802,7 +2970,7 @@ fn create_replaced_box_from_styled(
     ReplacedType::Canvas
   } else if tag.eq_ignore_ascii_case("svg") {
     ReplacedType::Svg {
-      content: serialize_svg_subtree(styled, document_css),
+      content: serialize_svg_subtree(styled, document_css, svg_document_css_style_element),
     }
   } else if tag.eq_ignore_ascii_case("iframe") {
     let src = styled.node.get_attribute("src").unwrap_or_default();
@@ -3370,7 +3538,7 @@ mod tests {
 
     for tag in ["canvas", "video", "iframe", "embed", "object"] {
       let styled = styled_element(tag);
-      let box_node = create_replaced_box_from_styled(&styled, style.clone(), "", Vec::new());
+      let box_node = create_replaced_box_from_styled(&styled, style.clone(), "", None, Vec::new());
       match &box_node.box_type {
         BoxType::Replaced(replaced) => {
           assert_eq!(
