@@ -1650,6 +1650,75 @@ mod disk_cache_main {
     }
 
     #[test]
+    fn iframe_prefetch_uses_fetch_with_request_with_referrer() {
+      use std::sync::Mutex;
+
+      #[derive(Default)]
+      struct RecordingFetcher {
+        calls: Mutex<Vec<(String, FetchDestination, Option<String>)>>,
+      }
+
+      impl ResourceFetcher for RecordingFetcher {
+        fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
+          panic!("iframe prefetch should use fetch_with_request");
+        }
+
+        fn fetch_with_request(&self, req: FetchRequest<'_>) -> fastrender::Result<FetchedResource> {
+          self.calls.lock().unwrap().push((
+            req.url.to_string(),
+            req.destination,
+            req.referrer.map(|r| r.to_string()),
+          ));
+          Ok(FetchedResource::with_final_url(
+            b"<html></html>".to_vec(),
+            Some("text/html".to_string()),
+            Some(req.url.to_string()),
+          ))
+        }
+      }
+
+      let html = r#"<!doctype html><html><head><base href="https://example.com/base/"></head><body><iframe src="frame.html"></iframe></body></html>"#;
+      let document_url = "https://example.com/page";
+      let base_url = "https://example.com/base/";
+      let media_ctx = MediaContext::screen(800.0, 600.0);
+      let opts = PrefetchOptions {
+        prefetch_fonts: false,
+        prefetch_images: false,
+        prefetch_icons: false,
+        prefetch_video_posters: false,
+        prefetch_iframes: true,
+        prefetch_embeds: false,
+        prefetch_css_url_assets: false,
+        max_discovered_assets_per_page: 2000,
+        image_limits: ImagePrefetchLimits {
+          max_image_elements: 150,
+          max_urls_per_element: 2,
+        },
+      };
+
+      let fetcher = RecordingFetcher::default();
+      let summary = prefetch_assets_for_html(
+        "test",
+        document_url,
+        html,
+        base_url,
+        &fetcher,
+        &media_ctx,
+        opts,
+      );
+
+      assert_eq!(summary.discovered_documents, 1);
+      assert_eq!(summary.fetched_documents, 1);
+      assert_eq!(summary.failed_documents, 0);
+
+      let calls = fetcher.calls.lock().unwrap();
+      assert_eq!(calls.len(), 1);
+      assert_eq!(calls[0].0, "https://example.com/base/frame.html");
+      assert_eq!(calls[0].1, FetchDestination::Document);
+      assert_eq!(calls[0].2.as_deref(), Some(document_url));
+    }
+
+    #[test]
     fn prefetch_warms_disk_cache_for_html_images_and_css_url_assets() {
       let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
       listener.set_nonblocking(true).expect("set_nonblocking");
