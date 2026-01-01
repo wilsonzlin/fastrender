@@ -54,6 +54,13 @@ pub struct DiskCacheConfig {
   /// layer: they will normally trigger a network refresh but can be served as a fallback (or
   /// immediately under render deadlines when configured to serve stale entries).
   pub allow_no_store: bool,
+  /// Whether to allow persisting disk cache entries while a render deadline with a timeout
+  /// configured is active.
+  ///
+  /// Pageset renders run under a cooperative timeout; disabling writeback avoids spending render
+  /// budget on disk writes but means newly-discovered subresources won't be persisted for future
+  /// runs.
+  pub writeback_under_deadline: bool,
   /// Maximum age of `.lock` files before they are treated as stale and removed.
   ///
   /// Pageset workers can be hard-killed (e.g. timeout) while persisting a cache entry, leaving a
@@ -74,6 +81,7 @@ impl Default for DiskCacheConfig {
       max_age: Some(Duration::from_secs(60 * 60 * 24 * 7)), // 7 days
       lock_stale_after: DEFAULT_LOCK_STALE_AFTER,
       allow_no_store: false,
+      writeback_under_deadline: false,
       namespace: None,
     }
   }
@@ -87,6 +95,9 @@ const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
 /// Small time buffer to avoid spending the entire render budget waiting on `.lock` files.
 const LOCK_DEADLINE_BUFFER: Duration = Duration::from_millis(10);
 const DISK_READ_CHUNK_SIZE: usize = 64 * 1024;
+const DISK_WRITE_CHUNK_SIZE: usize = 64 * 1024;
+/// Small time buffer to avoid spending the entire render budget persisting cache entries.
+const DISK_WRITE_DEADLINE_BUFFER: Duration = Duration::from_millis(10);
 /// Minimum chunk size used for deadline-aware disk reads.
 ///
 /// Most disk-cache hits are tiny (CSS, meta JSON) so reading with a 64KiB scratch buffer on every
@@ -168,6 +179,57 @@ fn read_path_with_deadline(
     .ok()
     .and_then(|meta| meta.len().try_into().ok());
   read_all_with_deadline(&mut file, capacity_hint, stage, max_chunk_size)
+}
+
+#[derive(Debug)]
+enum WriteAllWithDeadlineError {
+  Io,
+  Timeout,
+}
+
+impl From<io::Error> for WriteAllWithDeadlineError {
+  fn from(_err: io::Error) -> Self {
+    Self::Io
+  }
+}
+
+fn write_all_with_deadline<W: Write>(
+  writer: &mut W,
+  bytes: &[u8],
+  stage: RenderStage,
+  chunk_size: usize,
+) -> std::result::Result<(), WriteAllWithDeadlineError> {
+  if bytes.is_empty() {
+    return Ok(());
+  }
+
+  let mut offset = 0usize;
+  let mut deadline_counter = 0usize;
+  while offset < bytes.len() {
+    if let Err(err) = render_control::check_active_periodic(&mut deadline_counter, 1, stage) {
+      let _ = err;
+      return Err(WriteAllWithDeadlineError::Timeout);
+    }
+
+    let end = (offset + chunk_size).min(bytes.len());
+    writer.write_all(&bytes[offset..end])?;
+    offset = end;
+  }
+  Ok(())
+}
+
+fn write_path_with_deadline(
+  path: &Path,
+  bytes: &[u8],
+  stage: RenderStage,
+) -> std::result::Result<(), WriteAllWithDeadlineError> {
+  let mut file = OpenOptions::new()
+    .write(true)
+    .create(true)
+    .truncate(true)
+    .open(path)?;
+  write_all_with_deadline(&mut file, bytes, stage, DISK_WRITE_CHUNK_SIZE)?;
+  Ok(())
 }
 
 fn stage_for_cached_content_type(content_type: Option<&str>) -> RenderStage {
@@ -380,7 +442,22 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
   fn disk_writeback_disabled(&self) -> bool {
     render_control::active_deadline()
-      .map(|deadline| deadline.timeout_limit().is_some())
+      .map(|deadline| {
+        deadline.timeout_limit().is_some() && !self.disk_config.writeback_under_deadline
+      })
+      .unwrap_or(false)
+  }
+
+  fn deadline_allows_disk_writeback(&self) -> bool {
+    let Some(deadline) = render_control::active_deadline() else {
+      return true;
+    };
+    if deadline.timeout_limit().is_none() {
+      return true;
+    }
+    deadline
+      .remaining_timeout()
+      .map(|remaining| remaining > DISK_WRITE_DEADLINE_BUFFER)
       .unwrap_or(false)
   }
 
@@ -653,23 +730,23 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
             let unlocked = self.wait_for_unlock(&data_path, max_wait);
             super::finish_disk_cache_lock_wait_diagnostics(lock_wait_timer);
             if unlocked {
-            match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
-              SnapshotRead::Hit(snapshot) => {
-                let payload_bytes = match &snapshot.value {
-                  super::CacheValue::Resource(res) => res.bytes.len(),
-                  super::CacheValue::Error(_) => 0,
-                };
-                super::record_disk_cache_hit();
-                super::record_disk_cache_bytes(payload_bytes);
-                super::finish_disk_cache_diagnostics(disk_timer.take());
-                return Ok(Some((current, snapshot)));
+              match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
+                SnapshotRead::Hit(snapshot) => {
+                  let payload_bytes = match &snapshot.value {
+                    super::CacheValue::Resource(res) => res.bytes.len(),
+                    super::CacheValue::Error(_) => 0,
+                  };
+                  super::record_disk_cache_hit();
+                  super::record_disk_cache_bytes(payload_bytes);
+                  super::finish_disk_cache_diagnostics(disk_timer.take());
+                  return Ok(Some((current, snapshot)));
+                }
+                SnapshotRead::Timeout(err) => {
+                  super::finish_disk_cache_diagnostics(disk_timer.take());
+                  return Err(Error::Render(err));
+                }
+                _ => {}
               }
-              SnapshotRead::Timeout(err) => {
-                super::finish_disk_cache_diagnostics(disk_timer.take());
-                return Err(Error::Render(err));
-              }
-              _ => {}
-            }
             }
           }
         }
@@ -705,18 +782,15 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return SnapshotRead::Locked;
     }
 
-    let meta_bytes = match read_path_with_deadline(
-      meta_path,
-      DISK_META_READ_STAGE,
-      DISK_META_READ_CHUNK_SIZE,
-    ) {
-      Ok(bytes) => bytes,
-      Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotRead::Timeout(err),
-      Err(_) => {
-        self.remove_entry_if_unlocked(key, data_path, meta_path);
-        return SnapshotRead::Miss;
-      }
-    };
+    let meta_bytes =
+      match read_path_with_deadline(meta_path, DISK_META_READ_STAGE, DISK_META_READ_CHUNK_SIZE) {
+        Ok(bytes) => bytes,
+        Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotRead::Timeout(err),
+        Err(_) => {
+          self.remove_entry_if_unlocked(key, data_path, meta_path);
+          return SnapshotRead::Miss;
+        }
+      };
     let meta: StoredMetadata = match serde_json::from_slice(&meta_bytes) {
       Ok(meta) => meta,
       Err(_) => {
@@ -849,6 +923,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     if self.should_skip_disk(url) {
       return;
     }
+    if !self.deadline_allows_disk_writeback() {
+      return;
+    }
 
     self.remove_alias_for(url);
 
@@ -861,6 +938,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let Some(entry_lock) = self.acquire_lock(&data_path) else {
       return;
     };
+    if !self.deadline_allows_disk_writeback() {
+      return;
+    }
 
     let stored_at = now_seconds();
     let stored_time = UNIX_EPOCH
@@ -889,6 +969,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let meta_path = self.meta_path_for_data(&data_path);
     let data_tmp = tmp_path(&data_path);
     let meta_tmp = tmp_path(&meta_path);
+    let stage = stage_for_cached_content_type(resource.content_type.as_deref());
+    let deadline_aware_write = render_control::active_deadline()
+      .map(|deadline| deadline.is_enabled())
+      .unwrap_or(false);
 
     let meta = StoredMetadata {
       url: url.to_string(),
@@ -907,7 +991,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         .and_then(StoredCacheMetadata::from_http),
     };
 
-    if fs::write(&data_tmp, &resource.bytes).is_err() {
+    let data_written = if deadline_aware_write {
+      write_path_with_deadline(&data_tmp, &resource.bytes, stage).is_ok()
+    } else {
+      fs::write(&data_tmp, &resource.bytes).is_ok()
+    };
+    if !data_written {
       let _ = fs::remove_file(&data_tmp);
       let _ = fs::remove_file(&meta_tmp);
       return;
@@ -919,7 +1008,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     };
 
-    if fs::write(&meta_tmp, &serialized).is_err() {
+    let meta_written = if deadline_aware_write {
+      write_path_with_deadline(&meta_tmp, &serialized, stage).is_ok()
+    } else {
+      fs::write(&meta_tmp, &serialized).is_ok()
+    };
+    if !meta_written {
       let _ = fs::remove_file(&data_tmp);
       let _ = fs::remove_file(&meta_tmp);
       return;
@@ -960,7 +1054,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     self
       .index
-      .evict_if_needed(self.disk_config.max_bytes, |path| !self.lock_is_active(path));
+      .evict_if_needed(self.disk_config.max_bytes, |path| {
+        !self.lock_is_active(path)
+      });
   }
 
   fn remove_entry(&self, key: &str, data_path: &Path, meta_path: &Path) -> Result<()> {
@@ -1443,7 +1539,12 @@ mod tests {
 
     let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(70)), None);
     let result = render_control::with_deadline(Some(&deadline), || {
-      read_all_with_deadline(&mut reader, Some(total_bytes), RenderStage::Css, DISK_READ_CHUNK_SIZE)
+      read_all_with_deadline(
+        &mut reader,
+        Some(total_bytes),
+        RenderStage::Css,
+        DISK_READ_CHUNK_SIZE,
+      )
     });
 
     assert!(
@@ -1562,6 +1663,112 @@ mod tests {
     let meta_path = disk.meta_path_for_data(&data_path);
     assert!(!data_path.exists());
     assert!(!meta_path.exists());
+  }
+
+  #[test]
+  fn disk_cache_persists_under_deadline_when_enabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        writeback_under_deadline: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let url = "https://example.com/persist-under-deadline";
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(500)), None);
+    let res = render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect("fetch");
+    assert_eq!(res.bytes, b"hello");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    assert!(
+      data_path.exists(),
+      "expected .bin to be written under deadline"
+    );
+    assert!(
+      meta_path.exists(),
+      "expected .bin.meta to be written under deadline"
+    );
+
+    // A new instance should hit the persisted disk cache and avoid a second network fetch.
+    let second_fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk_again = DiskCachingFetcher::new(second_fetcher, tmp.path());
+    let second =
+      render_control::with_deadline(Some(&deadline), || disk_again.fetch(url)).expect("disk hit");
+    assert_eq!(second.bytes, b"hello");
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
+  }
+
+  #[test]
+  fn disk_cache_writeback_aborts_cleanly_when_deadline_triggers_mid_persist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = SizedFetcher {
+      count: Arc::clone(&counter),
+      size: DISK_WRITE_CHUNK_SIZE * 4,
+    };
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        writeback_under_deadline: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let url = "https://example.com/timeout-writeback";
+
+    let cancel_calls = Arc::new(AtomicUsize::new(0));
+    let cancel_counter = Arc::clone(&cancel_calls);
+    let cancel = Arc::new(move || cancel_counter.fetch_add(1, Ordering::SeqCst) >= 1);
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(60)), Some(cancel));
+
+    let res = render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect("fetch");
+    assert_eq!(res.bytes.len(), DISK_WRITE_CHUNK_SIZE * 4);
+    assert!(
+      cancel_calls.load(Ordering::SeqCst) >= 2,
+      "test requires the deadline to trigger after the write starts"
+    );
+
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    let lock_path = lock_path_for(&data_path);
+
+    assert!(
+      !lock_path.exists(),
+      "cache entry lock file should not survive a deadline-triggered abort"
+    );
+    assert_eq!(
+      data_path.exists(),
+      meta_path.exists(),
+      "cache entry should be either fully written or fully absent"
+    );
+    assert!(!data_path.exists(), "expected aborted entry to be absent");
+    assert!(
+      !tmp_path(&data_path).exists(),
+      "expected data tmp to be removed"
+    );
+    assert!(
+      !tmp_path(&meta_path).exists(),
+      "expected meta tmp to be removed"
+    );
   }
 
   #[test]
@@ -2208,12 +2415,8 @@ mod tests {
     let url_other2 = "https://example.com/race-other2";
 
     // Seed three entries (exactly at the budget) so that a single extra insert triggers eviction.
-    let seeder = DiskCachingFetcher::with_configs(
-      NoopFetcher,
-      tmp.path(),
-      memory_config,
-      disk_config.clone(),
-    );
+    let seeder =
+      DiskCachingFetcher::with_configs(NoopFetcher, tmp.path(), memory_config, disk_config.clone());
     for (url, byte) in [(url_target, b'a'), (url_other1, b'b'), (url_other2, b'c')] {
       let mut resource =
         FetchedResource::new(vec![byte; entry_size], Some("text/plain".to_string()));
@@ -2227,13 +2430,9 @@ mod tests {
     let writer_hook = Arc::clone(&hook);
     let writer_config = disk_config.clone();
     let writer = thread::spawn(move || {
-      let disk = DiskCachingFetcher::with_configs(
-        NoopFetcher,
-        cache_dir,
-        memory_config,
-        writer_config,
-      )
-      .with_persist_resource_hook(writer_hook);
+      let disk =
+        DiskCachingFetcher::with_configs(NoopFetcher, cache_dir, memory_config, writer_config)
+          .with_persist_resource_hook(writer_hook);
 
       let mut refreshed =
         FetchedResource::new(vec![b'r'; entry_size], Some("text/plain".to_string()));
@@ -2253,7 +2452,13 @@ mod tests {
       let mut resource =
         FetchedResource::new(vec![b'n'; entry_size], Some("text/plain".to_string()));
       resource.final_url = Some("https://example.com/race-new".to_string());
-      disk.persist_resource(resource.final_url.as_ref().unwrap(), &resource, None, None, None);
+      disk.persist_resource(
+        resource.final_url.as_ref().unwrap(),
+        &resource,
+        None,
+        None,
+        None,
+      );
 
       evict_hook.wait_after_eviction();
     });

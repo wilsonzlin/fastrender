@@ -462,7 +462,7 @@ struct ReportArgs {
   /// Exit non-zero when ok entries have `total_ms` but no per-stage timings (all stage buckets are zero)
   #[arg(long)]
   fail_on_missing_stage_timings: bool,
- 
+
   /// Exit non-zero when ok entries exceed this total render time threshold (ms)
   #[arg(long, value_name = "MS")]
   fail_on_slow_ok_ms: Option<f64>,
@@ -1364,12 +1364,8 @@ fn prune_stale_progress(progress_dir: &Path, keep: &BTreeSet<String>) -> io::Res
 }
 
 fn migrate(args: MigrateArgs) -> io::Result<()> {
-  let entries = fs::read_dir(&args.progress_dir).map_err(|e| {
-    io::Error::new(
-      e.kind(),
-      format!("{}: {}", args.progress_dir.display(), e),
-    )
-  })?;
+  let entries = fs::read_dir(&args.progress_dir)
+    .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", args.progress_dir.display(), e)))?;
 
   let mut paths: Vec<PathBuf> = entries
     .filter_map(|entry| {
@@ -1531,9 +1527,8 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
     + t.dom_top_layer_ms.unwrap_or(0.0);
   let css = t.css_inlining_ms.unwrap_or(0.0) + t.css_parse_ms.unwrap_or(0.0);
   let cascade = t.cascade_ms.unwrap_or(0.0) + t.box_tree_ms.unwrap_or(0.0);
-  let layout = t.layout_ms.unwrap_or(0.0)
-    + t.text_fallback_ms.unwrap_or(0.0)
-    + t.text_shape_ms.unwrap_or(0.0);
+  let layout =
+    t.layout_ms.unwrap_or(0.0) + t.text_fallback_ms.unwrap_or(0.0) + t.text_shape_ms.unwrap_or(0.0);
   let paint = t.paint_build_ms.unwrap_or(0.0)
     + t.paint_optimize_ms.unwrap_or(0.0)
     + t.paint_rasterize_ms.unwrap_or(0.0)
@@ -1781,8 +1776,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       format!("{}s", args.disk_cache.max_age_secs)
     };
     log.push_str(&format!(
-      "Disk cache: max_bytes={} max_age={}\n",
-      args.disk_cache.max_bytes, max_age
+      "Disk cache: max_bytes={} max_age={} writeback_under_deadline={}\n",
+      args.disk_cache.max_bytes, max_age, args.disk_cache.writeback_under_deadline
     ));
     let stale_policy = if serve_stale_when_deadline {
       "use_stale_when_deadline"
@@ -1996,7 +1991,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   // Attribute cooperative failures using the on-disk stage timeline (also used by the parent for
   // hard-killed workers). This keeps timeout/error artifacts useful for triage even when the
   // renderer exits via a soft timeout and doesn't produce structured timing stats.
-  if is_bad_status(progress.status) && progress.total_ms.is_some() && progress.stages_ms.sum() == 0.0
+  if is_bad_status(progress.status)
+    && progress.total_ms.is_some()
+    && progress.stages_ms.sum() == 0.0
   {
     let total_ms = progress.total_ms.unwrap_or(0.0);
     let timeline_total_ms = total_ms.round().max(0.0) as u64;
@@ -2132,10 +2129,7 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   log.push_str(&format!("  cascade: {}\n", fmt(t.cascade_ms)));
   log.push_str(&format!("  box_tree: {}\n", fmt(t.box_tree_ms)));
   log.push_str(&format!("  layout: {}\n", fmt(t.layout_ms)));
-  log.push_str(&format!(
-    "  text_fallback: {}\n",
-    fmt(t.text_fallback_ms)
-  ));
+  log.push_str(&format!("  text_fallback: {}\n", fmt(t.text_fallback_ms)));
   log.push_str(&format!("  text_shape: {}\n", fmt(t.text_shape_ms)));
   log.push_str(&format!("  paint_build: {}\n", fmt(t.paint_build_ms)));
   log.push_str(&format!("  paint_optimize: {}\n", fmt(t.paint_optimize_ms)));
@@ -3119,7 +3113,11 @@ fn text_summary_with_timings(stats: &RenderStats) -> Option<String> {
     sections.push(summary);
   }
   let mut timing_parts = Vec::new();
-  push_opt_ms(&mut timing_parts, "text_shape_ms", stats.timings.text_shape_ms);
+  push_opt_ms(
+    &mut timing_parts,
+    "text_shape_ms",
+    stats.timings.text_shape_ms,
+  );
   push_opt_ms(
     &mut timing_parts,
     "text_fallback_ms",
@@ -3766,7 +3764,10 @@ fn report(args: ReportArgs) -> io::Result<()> {
       *stage_counts.entry(stage.as_str().to_string()).or_default() += 1;
     }
     for label in ["css", "layout", "paint"] {
-      println!("  {label}: {}", stage_counts.get(label).copied().unwrap_or(0));
+      println!(
+        "  {label}: {}",
+        stage_counts.get(label).copied().unwrap_or(0)
+      );
     }
     for (label, count) in stage_counts {
       if matches!(label.as_str(), "css" | "layout" | "paint") {
@@ -3789,9 +3790,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
     });
     let timed_count = ok_with_failures_timed.len();
     let top_n = args.top.min(timed_count);
-    println!(
-      "Slowest ok pages with failures (top {top_n} of {timed_count} with timings):"
-    );
+    println!("Slowest ok pages with failures (top {top_n} of {timed_count} with timings):");
     if top_n == 0 {
       println!("  (none)");
     } else {
@@ -4646,8 +4645,10 @@ fn report(args: ReportArgs) -> io::Result<()> {
         .iter()
         .map(|entry| (entry.stem.as_str(), entry))
         .collect();
-      let baseline_map: HashMap<&str, &LoadedProgress> =
-        baseline.iter().map(|entry| (entry.stem.as_str(), entry)).collect();
+      let baseline_map: HashMap<&str, &LoadedProgress> = baseline
+        .iter()
+        .map(|entry| (entry.stem.as_str(), entry))
+        .collect();
 
       for (stem, baseline_entry) in baseline_map {
         let Some(current_entry) = current_map.get(stem) else {
@@ -5409,10 +5410,12 @@ fn merge_cascade_diagnostics(dst: &mut CascadeDiagnostics, src: &CascadeDiagnost
     .rule_candidates_universal
     .or(src.rule_candidates_universal);
   dst.selector_attempts_total = dst.selector_attempts_total.or(src.selector_attempts_total);
-  dst.selector_attempts_after_bloom =
-    dst.selector_attempts_after_bloom.or(src.selector_attempts_after_bloom);
-  dst.selector_bloom_fast_rejects =
-    dst.selector_bloom_fast_rejects.or(src.selector_bloom_fast_rejects);
+  dst.selector_attempts_after_bloom = dst
+    .selector_attempts_after_bloom
+    .or(src.selector_attempts_after_bloom);
+  dst.selector_bloom_fast_rejects = dst
+    .selector_bloom_fast_rejects
+    .or(src.selector_bloom_fast_rejects);
   dst.selector_time_ms = dst.selector_time_ms.or(src.selector_time_ms);
   dst.declaration_time_ms = dst.declaration_time_ms.or(src.declaration_time_ms);
   dst.pseudo_time_ms = dst.pseudo_time_ms.or(src.pseudo_time_ms);
@@ -6264,6 +6267,7 @@ mod tests {
         max_age_secs: common::args::DEFAULT_DISK_CACHE_MAX_AGE_SECS,
         lock_stale_secs: common::args::DEFAULT_DISK_CACHE_LOCK_STALE_SECS,
         allow_no_store: false,
+        writeback_under_deadline: false,
       },
       css_limit: None,
       fonts: FontSourceArgs {
@@ -6412,20 +6416,31 @@ mod tests {
 
     merge_cascade_diagnostics(&mut dst, &src);
 
-    assert_eq!(dst.nodes, Some(1), "existing fields should not be overwritten");
+    assert_eq!(
+      dst.nodes,
+      Some(1),
+      "existing fields should not be overwritten"
+    );
     assert_eq!(
       dst.selector_time_ms,
       Some(2.0),
       "existing fields should not be overwritten"
     );
-    assert_eq!(dst.rule_candidates, Some(10), "missing fields should be filled");
+    assert_eq!(
+      dst.rule_candidates,
+      Some(10),
+      "missing fields should be filled"
+    );
     assert_eq!(dst.has_evals, Some(7), "missing fields should be filled");
   }
 
   #[test]
   fn merge_cascade_stats_into_progress_creates_containers() {
     let mut progress = PageProgress::new("https://example.com".to_string());
-    assert!(progress.diagnostics.is_none(), "sanity: starts without diagnostics");
+    assert!(
+      progress.diagnostics.is_none(),
+      "sanity: starts without diagnostics"
+    );
 
     let rerun_stats = RenderStats {
       cascade: CascadeDiagnostics {

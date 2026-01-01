@@ -23,6 +23,7 @@ Pageset wrappers enable the disk-backed subresource cache (writes to `fetches/as
 Disk cache tuning knobs (useful for reproducibility when long-lived caches would otherwise age out):
 - `FASTR_DISK_CACHE_MAX_AGE_SECS=0` pins cached subresources (never expire purely due to age).
 - `FASTR_DISK_CACHE_MAX_BYTES=<bytes>` increases the on-disk cache eviction budget (0 disables eviction).
+- `FASTR_DISK_CACHE_WRITEBACK_UNDER_DEADLINE=1` enables best-effort disk-cache writeback even when a cooperative render timeout is active (default off).
 
 **Hard memory cap (recommended for any long-running command):**
 

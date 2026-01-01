@@ -372,6 +372,22 @@ pub struct DiskCacheArgs {
     num_args = 0..=1
   )]
   pub allow_no_store: bool,
+
+  /// Allow disk cache writes while a render timeout is active.
+  ///
+  /// Pageset renders run under a cooperative timeout, which normally disables disk cache
+  /// writeback to avoid spending render budget on disk writes. Enabling this allows
+  /// newly-fetched subresources (e.g. images discovered during render) to persist across runs,
+  /// reducing repeat network fetches.
+  #[arg(
+    long = "disk-cache-writeback-under-deadline",
+    env = "FASTR_DISK_CACHE_WRITEBACK_UNDER_DEADLINE",
+    default_value_t = false,
+    value_parser = parse_bool_preference,
+    default_missing_value = "true",
+    num_args = 0..=1
+  )]
+  pub writeback_under_deadline: bool,
 }
 
 pub fn disk_cache_max_age_from_secs(secs: u64) -> Option<Duration> {
@@ -390,6 +406,7 @@ impl DiskCacheArgs {
       max_age: disk_cache_max_age_from_secs(self.max_age_secs),
       lock_stale_after: Duration::from_secs(self.lock_stale_secs),
       allow_no_store: self.allow_no_store,
+      writeback_under_deadline: self.writeback_under_deadline,
       ..fastrender::resource::DiskCacheConfig::default()
     }
   }
