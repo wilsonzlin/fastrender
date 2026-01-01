@@ -7,9 +7,6 @@ mod common;
 use clap::Parser;
 use common::args::{parse_shard, TimeoutArgs};
 use common::render_pipeline::build_http_fetcher;
-use fastrender::html::encoding::decode_html_bytes;
-use fastrender::html::meta_refresh::extract_js_location_redirect;
-use fastrender::html::meta_refresh::extract_meta_refresh_url;
 use fastrender::pageset::{
   cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
@@ -25,7 +22,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
-use url::Url;
 
 /// Fetch and cache HTML pages for testing
 #[derive(Parser, Debug)]
@@ -148,95 +144,29 @@ fn write_cached_html(
   Ok(())
 }
 
-fn fetch_page(
-  url: &str,
-  timeout_secs: Option<u64>,
-  user_agent: &str,
-  accept_language: &str,
-) -> Result<FetchedResource, String> {
-  let fetcher = build_http_fetcher(user_agent, accept_language, timeout_secs);
+fn fetch_page(fetcher: &dyn ResourceFetcher, url: &str) -> Result<FetchedResource, String> {
+  let mut res = fetcher.fetch(url).map_err(|e| e.to_string())?;
+  if res.bytes.is_empty() {
+    let status = res
+      .status
+      .map(|code| code.to_string())
+      .unwrap_or_else(|| "<unknown>".to_string());
+    let final_url = res.final_url.clone().unwrap_or_else(|| url.to_string());
+    return Err(format!(
+      "empty response body (status {status}, final url {final_url})"
+    ));
+  }
+  let canonical_url = res.final_url.clone().unwrap_or_else(|| url.to_string());
+  res.final_url.get_or_insert_with(|| canonical_url.clone());
 
-  let is_error_status = |status: Option<u16>| status.is_some_and(|code| code >= 400);
-
-  let fetch = |target: &str| -> Result<(FetchedResource, String), String> {
-    let mut res = fetcher.fetch(target).map_err(|e| e.to_string())?;
-    if res.bytes.is_empty() {
-      let status = res
-        .status
-        .map(|code| code.to_string())
-        .unwrap_or_else(|| "<unknown>".to_string());
-      let final_url = res.final_url.clone().unwrap_or_else(|| target.to_string());
-      return Err(format!(
-        "empty response body (status {status}, final url {final_url})"
-      ));
+  let mut log = |line: &str| {
+    if line.starts_with("Warning:") {
+      eprintln!("{line}");
     }
-    let canonical_url = res.final_url.clone().unwrap_or_else(|| target.to_string());
-    res.final_url.get_or_insert_with(|| canonical_url.clone());
-    Ok((res, canonical_url))
   };
-
-  let (mut res, mut current_url) = fetch(url)?;
-
-  // Follow a single meta refresh (common for noscript fallbacks)
-  let mut html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
-  if let Some(refresh) = extract_meta_refresh_url(&html) {
-    if let Ok(base) = Url::parse(&current_url) {
-      if let Ok(next) = base.join(&refresh) {
-        match fetch(next.as_str()) {
-          Ok((next_res, next_url)) => {
-            if is_error_status(next_res.status) {
-              eprintln!(
-                "Warning: meta refresh fetch failed: status {} (keeping original)",
-                next_res
-                  .status
-                  .map(|code| code.to_string())
-                  .unwrap_or_else(|| "<unknown>".to_string())
-              );
-            } else {
-              res = next_res;
-              current_url = next_url;
-              html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
-            }
-          }
-          Err(e) => eprintln!(
-            "Warning: meta refresh fetch failed: {} (keeping original)",
-            e
-          ),
-        }
-      }
-    }
-  }
-
-  // Follow a simple JS location redirect once (common in script-only handoffs)
-  if let Some(js_redirect) = extract_js_location_redirect(&html) {
-    if let Ok(base) = Url::parse(&current_url) {
-      if let Ok(next) = base.join(&js_redirect) {
-        match fetch(next.as_str()) {
-          Ok((next_res, next_url)) => {
-            if is_error_status(next_res.status) {
-              eprintln!(
-                "Warning: js redirect fetch failed: status {} (keeping original)",
-                next_res
-                  .status
-                  .map(|code| code.to_string())
-                  .unwrap_or_else(|| "<unknown>".to_string())
-              );
-            } else {
-              res = next_res;
-              current_url = next_url;
-            }
-          }
-          Err(e) => eprintln!(
-            "Warning: js redirect fetch failed: {} (keeping original)",
-            e
-          ),
-        }
-      }
-    }
-  }
-
-  res.final_url.get_or_insert(current_url);
-  Ok(res)
+  Ok(common::render_pipeline::follow_client_redirects_resource(
+    fetcher, res, url, &mut log,
+  ))
 }
 
 fn main() {
@@ -302,6 +232,12 @@ fn main() {
   }
   println!();
 
+  let fetcher = Arc::new(build_http_fetcher(
+    &args.user_agent,
+    &args.accept_language,
+    timeout_secs,
+  ));
+
   let success = Arc::new(AtomicUsize::new(0));
   let failed = Arc::new(AtomicUsize::new(0));
   let skipped = Arc::new(AtomicUsize::new(0));
@@ -315,13 +251,12 @@ fn main() {
   pool.scope(|s| {
     for entry in &selected {
       let entry = entry.clone();
+      let fetcher = Arc::clone(&fetcher);
       let success = Arc::clone(&success);
       let failed = Arc::clone(&failed);
       let skipped = Arc::clone(&skipped);
       let failed_urls = Arc::clone(&failed_urls);
       let refresh = args.refresh;
-      let user_agent = args.user_agent.clone();
-      let accept_language = args.accept_language.clone();
       let timings = args.timings;
 
       s.spawn(move |_| {
@@ -338,7 +273,7 @@ fn main() {
         } else {
           None
         };
-        match fetch_page(&entry.url, timeout_secs, &user_agent, &accept_language) {
+        match fetch_page(fetcher.as_ref(), &entry.url) {
           Ok(res) => {
             let canonical_url = res.final_url.as_deref().unwrap_or(&entry.url);
             if write_cached_html(
@@ -669,8 +604,8 @@ mod tests {
     });
 
     let url = format!("http://{}/start", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
     handle.join().unwrap();
 
     let dir = tempfile::tempdir().expect("temp dir");
@@ -713,7 +648,8 @@ mod tests {
     });
 
     let url = format!("http://{}", addr);
-    let result = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE);
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let result = fetch_page(&fetcher, &url);
     assert!(
       result.is_err(),
       "empty bodies should be treated as failures"
@@ -750,8 +686,8 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let res =
-      fetch_page(&url, Some(5), DEFAULT_USER_AGENT, "es-MX,es;q=0.8").expect("fetch succeeds");
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, "es-MX,es;q=0.8", Some(5));
+    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
     handle.join().unwrap();
 
     assert_eq!(res.bytes, b"ok");
@@ -806,8 +742,8 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
     handle.join().unwrap();
 
     let expected_final = format!("http://{}/next", addr);
@@ -864,8 +800,8 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
     handle.join().unwrap();
 
     let expected_final = format!("http://{}/js", addr);
@@ -920,8 +856,8 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
     handle.join().unwrap();
 
     assert_eq!(

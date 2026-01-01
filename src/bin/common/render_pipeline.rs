@@ -16,6 +16,7 @@ use fastrender::resource::{
 use fastrender::style::media::MediaType;
 use fastrender::text::font_db::FontConfig;
 use fastrender::{Error, LayoutParallelism, Result};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
@@ -211,50 +212,186 @@ pub fn read_cached_document(path: &Path) -> Result<CachedDocument> {
   })
 }
 
-/// Follow client-side redirects (meta refresh and JS location) once per page.
-pub fn follow_client_redirects(
-  fetcher: &dyn ResourceFetcher,
-  mut doc: PreparedDocument,
+const MAX_CLIENT_REDIRECT_HOPS: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientRedirectKind {
+  MetaRefresh,
+  JsLocation,
+}
+
+fn format_client_redirect_kind(kind: ClientRedirectKind) -> &'static str {
+  match kind {
+    ClientRedirectKind::MetaRefresh => "meta refresh",
+    ClientRedirectKind::JsLocation => "JS redirect",
+  }
+}
+
+fn client_redirect_target(
+  kind: ClientRedirectKind,
+  doc: &PreparedDocument,
   mut log: impl FnMut(&str),
-) -> PreparedDocument {
-  if let Some(refresh) = extract_meta_refresh_url(&doc.html) {
-    if let Some(target) = resolve_href(&doc.base_url, &refresh) {
-      log(&format!("Following meta refresh to: {target}"));
+) -> Option<String> {
+  match kind {
+    ClientRedirectKind::MetaRefresh => {
+      let refresh = extract_meta_refresh_url(&doc.html)?;
+      resolve_href(&doc.base_url, &refresh)
+    }
+    ClientRedirectKind::JsLocation => {
+      let js_redirect = extract_js_location_redirect(&doc.html)?;
+      if js_redirect.len() > 2048 {
+        log(&format!(
+          "Warning: skipping JS redirect of length {}",
+          js_redirect.len()
+        ));
+        return None;
+      }
+      resolve_href(&doc.base_url, &js_redirect)
+    }
+  }
+}
+
+#[derive(Debug)]
+struct FollowClientRedirectsState {
+  doc: PreparedDocument,
+  resource: Option<FetchedResource>,
+}
+
+fn follow_client_redirects_state(
+  fetcher: &dyn ResourceFetcher,
+  mut state: FollowClientRedirectsState,
+  keep_resource: bool,
+  mut log: impl FnMut(&str),
+) -> FollowClientRedirectsState {
+  let mut visited: HashSet<String> = HashSet::new();
+  visited.insert(state.doc.base_hint.clone());
+
+  let is_error_status = |status: Option<u16>| status.is_some_and(|code| code >= 400);
+
+  for _ in 0..MAX_CLIENT_REDIRECT_HOPS {
+    let mut redirected = false;
+
+    for kind in [
+      ClientRedirectKind::MetaRefresh,
+      ClientRedirectKind::JsLocation,
+    ] {
+      let Some(target) = client_redirect_target(kind, &state.doc, &mut log) else {
+        continue;
+      };
+
+      if visited.contains(&target) {
+        log(&format!(
+          "Warning: client redirect loop detected ({} -> {target}); skipping",
+          format_client_redirect_kind(kind)
+        ));
+        continue;
+      }
+
+      log(&format!(
+        "Following {} to: {target}",
+        format_client_redirect_kind(kind)
+      ));
+
       match fetcher.fetch(&target) {
-        Ok(res) => {
+        Ok(mut res) => {
+          if is_error_status(res.status) {
+            let status = res
+              .status
+              .map(|code| code.to_string())
+              .unwrap_or_else(|| "<unknown>".to_string());
+            log(&format!(
+              "Warning: {} fetch failed: status {status} (keeping original)",
+              format_client_redirect_kind(kind)
+            ));
+            continue;
+          }
+
+          if res.bytes.is_empty() {
+            log(&format!(
+              "Warning: {} fetch returned empty body (keeping original)",
+              format_client_redirect_kind(kind)
+            ));
+            continue;
+          }
+
           let base_hint = res.final_url.as_deref().unwrap_or(&target).to_string();
-          doc = decode_html_resource(&res, &base_hint);
+          if visited.contains(&base_hint) {
+            log(&format!(
+              "Warning: client redirect loop detected ({} -> {base_hint}); skipping",
+              format_client_redirect_kind(kind)
+            ));
+            continue;
+          }
+          visited.insert(target);
+          visited.insert(base_hint.clone());
+          res.final_url.get_or_insert(base_hint.clone());
+
+          state.doc = decode_html_resource(&res, &base_hint);
+          state.resource = if keep_resource { Some(res) } else { None };
+          redirected = true;
+          break;
         }
         Err(err) => log(&format!(
-          "Warning: failed to follow meta refresh {target}: {err}"
+          "Warning: failed to follow {} {target}: {err}",
+          format_client_redirect_kind(kind)
         )),
       }
     }
-  }
 
-  if let Some(js_redirect) = extract_js_location_redirect(&doc.html) {
-    if js_redirect.len() <= 2048 {
-      if let Some(target) = resolve_href(&doc.base_url, &js_redirect) {
-        log(&format!("Following JS location redirect to: {target}"));
-        match fetcher.fetch(&target) {
-          Ok(res) => {
-            let base_hint = res.final_url.as_deref().unwrap_or(&target).to_string();
-            doc = decode_html_resource(&res, &base_hint);
-          }
-          Err(err) => log(&format!(
-            "Warning: failed to follow JS redirect {target}: {err}"
-          )),
-        }
-      }
-    } else {
-      log(&format!(
-        "Warning: skipping JS redirect of length {}",
-        js_redirect.len()
-      ));
+    if !redirected {
+      break;
     }
   }
 
-  doc
+  state
+}
+
+/// Follow client-side redirects (meta refresh and JS location).
+pub fn follow_client_redirects(
+  fetcher: &dyn ResourceFetcher,
+  doc: PreparedDocument,
+  mut log: impl FnMut(&str),
+) -> PreparedDocument {
+  follow_client_redirects_state(
+    fetcher,
+    FollowClientRedirectsState {
+      doc,
+      resource: None,
+    },
+    false,
+    &mut log,
+  )
+  .doc
+}
+
+/// Follow client-side redirects for a fetched HTML resource, returning the final resource.
+pub fn follow_client_redirects_resource(
+  fetcher: &dyn ResourceFetcher,
+  mut resource: FetchedResource,
+  requested_url: &str,
+  mut log: impl FnMut(&str),
+) -> FetchedResource {
+  if resource.bytes.is_empty() {
+    return resource;
+  }
+  let base_hint = resource
+    .final_url
+    .clone()
+    .unwrap_or_else(|| requested_url.to_string());
+  resource.final_url.get_or_insert(base_hint.clone());
+  let doc = decode_html_resource(&resource, &base_hint);
+
+  let FollowClientRedirectsState { resource, .. } = follow_client_redirects_state(
+    fetcher,
+    FollowClientRedirectsState {
+      doc,
+      resource: Some(resource),
+    },
+    true,
+    &mut log,
+  );
+
+  resource.expect("keep_resource=true should preserve the last successful fetch")
 }
 
 /// Render prepared HTML using the shared render pipeline (including linked stylesheets).
