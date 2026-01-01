@@ -3,12 +3,14 @@
 //! These tests verify the Canvas wrapper for tiny-skia works correctly
 //! for real-world rendering scenarios.
 
+use fastrender::error::{Error, RenderError, RenderStage};
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::image_compare::{compare_images, decode_png, encode_png, CompareConfig};
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::FontVariation;
 use fastrender::paint::display_list::GlyphInstance;
+use fastrender::render_control::{with_deadline, CancelCallback, RenderDeadline};
 use fastrender::style::types::FontPalette;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::FontDatabase;
@@ -24,6 +26,7 @@ use fastrender::ShapingPipeline;
 use image::RgbaImage;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tiny_skia::Pixmap;
 
@@ -519,6 +522,64 @@ fn test_draw_text_empty() {
     .unwrap();
 
   let _ = canvas.into_pixmap();
+}
+
+#[test]
+fn canvas_draw_text_respects_deadline_timeout() {
+  let font = FontContext::new()
+    .get_sans_serif()
+    .expect("expected bundled sans-serif font for tests");
+  let face = font.as_ttf_face().expect("parse test font");
+  let glyph_id = face
+    .glyph_index(' ')
+    .or_else(|| face.glyph_index('A'))
+    .expect("resolve glyph for deadline timeout test")
+    .0 as u32;
+
+  let glyphs = [GlyphInstance {
+    glyph_id,
+    offset: Point::new(0.0, 0.0),
+    advance: 0.0,
+  }];
+
+  let checks = Arc::new(AtomicUsize::new(0));
+  let checks_for_cb = Arc::clone(&checks);
+  let cancel: Arc<CancelCallback> = Arc::new(move || {
+    let prev = checks_for_cb.fetch_add(1, Ordering::SeqCst);
+    prev >= 1
+  });
+  let deadline = RenderDeadline::new(None, Some(cancel));
+
+  let mut canvas = Canvas::new(16, 16, Rgba::WHITE).unwrap();
+  let result = with_deadline(Some(&deadline), || {
+    canvas.draw_text(
+      Point::new(0.0, 12.0),
+      &glyphs,
+      &font,
+      16.0,
+      Rgba::BLACK,
+      0.0,
+      0.0,
+      0,
+      &[],
+    )
+  });
+
+  assert!(
+    checks.load(Ordering::SeqCst) >= 2,
+    "expected entry + final deadline checks, got {}",
+    checks.load(Ordering::SeqCst)
+  );
+  assert!(
+    matches!(
+      result,
+      Err(Error::Render(RenderError::Timeout {
+        stage: RenderStage::Paint,
+        ..
+      }))
+    ),
+    "expected paint-stage timeout, got {result:?}"
+  );
 }
 
 #[test]
