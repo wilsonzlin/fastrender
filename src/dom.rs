@@ -731,44 +731,73 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
   let mut summaries: Vec<[u64; WORDS]> = Vec::with_capacity(id_map.len().saturating_add(1));
   summaries.push([0u64; WORDS]);
 
-  fn walk<const WORDS: usize>(
-    node: &DomNode,
-    quirks_mode: QuirksMode,
-    out: &mut Vec<[u64; WORDS]>,
-  ) -> [u64; WORDS] {
-    let is_element = node.is_element();
-    let id = out.len();
-    out.push([0u64; WORDS]);
-
-    let mut summary = [0u64; WORDS];
-    if is_element {
-      add_selector_bloom_hashes_internal(node, quirks_mode, &mut |hash| {
-        insert_summary_hash(&mut summary, hash);
-      });
-    }
-
-    for child in node.children.iter() {
-      let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
-        walk(child, quirks_mode, out);
-        None
-      } else {
-        Some(walk(child, quirks_mode, out))
-      };
-      if is_element {
-        if let Some(summary_child) = child_summary.as_ref() {
-          merge_summary(&mut summary, summary_child);
-        }
-      }
-    }
-
-    if is_element {
-      out[id] = summary;
-    }
-
-    summary
+  struct Frame<'a, const WORDS: usize> {
+    node: &'a DomNode,
+    id: usize,
+    is_element: bool,
+    is_shadow_root: bool,
+    next_child: usize,
+    summary: [u64; WORDS],
   }
 
-  walk(root, quirks_mode, &mut summaries);
+  let mut stack: Vec<Frame<'_, WORDS>> = Vec::with_capacity(id_map.len().min(1024));
+
+  let root_id = summaries.len();
+  summaries.push([0u64; WORDS]);
+  let root_is_element = root.is_element();
+  let mut root_summary = [0u64; WORDS];
+  if root_is_element {
+    add_selector_bloom_hashes_internal(root, quirks_mode, &mut |hash| {
+      insert_summary_hash(&mut root_summary, hash);
+    });
+  }
+  stack.push(Frame {
+    node: root,
+    id: root_id,
+    is_element: root_is_element,
+    is_shadow_root: matches!(root.node_type, DomNodeType::ShadowRoot { .. }),
+    next_child: 0,
+    summary: root_summary,
+  });
+
+  while let Some(mut frame) = stack.pop() {
+    if frame.next_child < frame.node.children.len() {
+      let child = &frame.node.children[frame.next_child];
+      frame.next_child += 1;
+      stack.push(frame);
+
+      let child_id = summaries.len();
+      summaries.push([0u64; WORDS]);
+
+      let child_is_element = child.is_element();
+      let mut child_summary = [0u64; WORDS];
+      if child_is_element {
+        add_selector_bloom_hashes_internal(child, quirks_mode, &mut |hash| {
+          insert_summary_hash(&mut child_summary, hash);
+        });
+      }
+
+      stack.push(Frame {
+        node: child,
+        id: child_id,
+        is_element: child_is_element,
+        is_shadow_root: matches!(child.node_type, DomNodeType::ShadowRoot { .. }),
+        next_child: 0,
+        summary: child_summary,
+      });
+      continue;
+    }
+
+    if frame.is_element {
+      summaries[frame.id] = frame.summary;
+    }
+
+    if let Some(parent) = stack.last_mut() {
+      if parent.is_element && !frame.is_shadow_root {
+        merge_summary(&mut parent.summary, &frame.summary);
+      }
+    }
+  }
   debug_assert_eq!(
     summaries.len(),
     id_map.len().saturating_add(1),
@@ -2433,12 +2462,17 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
 }
 
 fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
-  if matches!(node.node_type, DomNodeType::Slot { .. }) {
-    out.insert(node.get_attribute_ref("name").unwrap_or(""));
-  }
+  let mut stack: Vec<&'a DomNode> = Vec::new();
+  stack.push(node);
 
-  for child in node.children.iter() {
-    collect_slot_names(child, out);
+  while let Some(current) = stack.pop() {
+    if matches!(current.node_type, DomNodeType::Slot { .. }) {
+      out.insert(current.get_attribute_ref("name").unwrap_or(""));
+    }
+
+    for child in current.children.iter().rev() {
+      stack.push(child);
+    }
   }
 }
 
@@ -2474,55 +2508,62 @@ fn fill_slot_assignments(
   ids: &HashMap<*const DomNode, usize>,
   out: &mut SlotAssignment,
 ) {
-  if matches!(node.node_type, DomNodeType::Slot { .. }) {
-    let slot_name = node.get_attribute_ref("name").unwrap_or("");
-    let assigned = take_assignments_for_slot_ptr(assignments, slot_name, available_slots);
-    if !assigned.is_empty() {
-      let slot_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
-      let assigned_ids: Vec<usize> = assigned
-        .iter()
-        .filter_map(|ptr| ids.get(ptr).copied())
-        .collect();
-      out
-        .shadow_to_slots
-        .entry(shadow_root_id)
-        .or_default()
-        .entry(slot_name.to_string())
-        .or_default()
-        .extend(assigned_ids.iter().copied());
-      for &node_id in &assigned_ids {
-        out.node_to_slot.insert(
-          node_id,
-          AssignedSlot {
-            slot_name: slot_name.to_string(),
-            slot_node_id: slot_id,
-            shadow_root_id,
-          },
-        );
-      }
-      out.slot_to_nodes.insert(slot_id, assigned_ids);
-      // Once a slot is assigned, its fallback subtree is not rendered; stop recursion.
-      return;
-    }
-  }
+  let mut stack: Vec<&DomNode> = Vec::new();
+  stack.push(node);
 
-  for child in node.children.iter() {
-    fill_slot_assignments(
-      child,
-      shadow_root_id,
-      assignments,
-      available_slots,
-      ids,
-      out,
-    );
+  while let Some(current) = stack.pop() {
+    let mut traverse_children = true;
+
+    if matches!(current.node_type, DomNodeType::Slot { .. }) {
+      let slot_name = current.get_attribute_ref("name").unwrap_or("");
+      let assigned = take_assignments_for_slot_ptr(assignments, slot_name, available_slots);
+      if !assigned.is_empty() {
+        let slot_id = ids.get(&(current as *const DomNode)).copied().unwrap_or(0);
+        let assigned_ids: Vec<usize> = assigned
+          .iter()
+          .filter_map(|ptr| ids.get(ptr).copied())
+          .collect();
+        out
+          .shadow_to_slots
+          .entry(shadow_root_id)
+          .or_default()
+          .entry(slot_name.to_string())
+          .or_default()
+          .extend(assigned_ids.iter().copied());
+        for &node_id in &assigned_ids {
+          out.node_to_slot.insert(
+            node_id,
+            AssignedSlot {
+              slot_name: slot_name.to_string(),
+              slot_node_id: slot_id,
+              shadow_root_id,
+            },
+          );
+        }
+        out.slot_to_nodes.insert(slot_id, assigned_ids);
+        // Once a slot is assigned, its fallback subtree is not rendered; do not traverse children.
+        traverse_children = false;
+      }
+    }
+
+    if traverse_children {
+      for child in current.children.iter().rev() {
+        stack.push(child);
+      }
+    }
   }
 }
 
 fn enumerate_node_ids(node: &DomNode, next: &mut usize, map: &mut HashMap<*const DomNode, usize>) {
-  map.insert(node as *const DomNode, *next);
-  *next += 1;
-  for child in node.children.iter() {
-    enumerate_node_ids(child, next, map);
+  let mut stack: Vec<&DomNode> = Vec::new();
+  stack.push(node);
+
+  while let Some(current) = stack.pop() {
+    map.insert(current as *const DomNode, *next);
+    *next += 1;
+    for child in current.children.iter().rev() {
+      stack.push(child);
+    }
   }
 }
 
@@ -2547,12 +2588,10 @@ pub fn compute_slot_assignment_with_ids(
 ) -> SlotAssignment {
   let mut assignment = SlotAssignment::default();
 
-  fn walk<'a>(
-    node: &'a DomNode,
-    parent: Option<&'a DomNode>,
-    ids: &HashMap<*const DomNode, usize>,
-    out: &mut SlotAssignment,
-  ) {
+  let mut stack: Vec<(&DomNode, Option<&DomNode>)> = Vec::with_capacity(ids.len().min(1024));
+  stack.push((root, None));
+
+  while let Some((node, parent)) = stack.pop() {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       if let Some(host) = parent {
         let mut available_slots: HashSet<&str> = HashSet::new();
@@ -2577,17 +2616,15 @@ pub fn compute_slot_assignment_with_ids(
           &mut light_children,
           &available_slots,
           ids,
-          out,
+          &mut assignment,
         );
       }
     }
 
-    for child in node.children.iter() {
-      walk(child, Some(node), ids, out);
+    for child in node.children.iter().rev() {
+      stack.push((child, Some(node)));
     }
   }
-
-  walk(root, None, ids, &mut assignment);
   assignment
 }
 
@@ -2612,14 +2649,28 @@ pub fn compute_part_export_map_with_ids(
   root: &DomNode,
   ids: &HashMap<*const DomNode, usize>,
 ) -> PartExportMap {
-  fn collect_for_host(
-    host: &DomNode,
-    ids: &HashMap<*const DomNode, usize>,
-    map: &mut PartExportMap,
-  ) -> HashMap<String, Vec<usize>> {
+  // Collect shadow hosts in pre-order, then compute exports in reverse (leaf-to-root) order so
+  // nested shadow host exports are available when processing their ancestors.
+  let mut hosts: Vec<&DomNode> = Vec::new();
+  let mut traversal_stack: Vec<&DomNode> = Vec::with_capacity(ids.len().min(1024));
+  traversal_stack.push(root);
+
+  while let Some(node) = traversal_stack.pop() {
+    if node.is_shadow_host() {
+      hosts.push(node);
+    }
+
+    for child in node.children.iter().rev() {
+      traversal_stack.push(child);
+    }
+  }
+
+  let mut map = PartExportMap::default();
+
+  for host in hosts.into_iter().rev() {
     let host_id = ids.get(&(host as *const DomNode)).copied().unwrap_or(0);
-    if let Some(existing) = map.exports_for_host(host_id) {
-      return existing.clone();
+    if map.exports_for_host(host_id).is_some() {
+      continue;
     }
 
     let shadow_root = host
@@ -2627,46 +2678,45 @@ pub fn compute_part_export_map_with_ids(
       .iter()
       .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }));
     let Some(shadow_root) = shadow_root else {
-      return HashMap::new();
+      continue;
     };
 
-    fn walk(
-      node: &DomNode,
-      ids: &HashMap<*const DomNode, usize>,
-      map: &mut PartExportMap,
-      exports: &mut HashMap<String, Vec<usize>>,
-    ) {
+    let mut exports: HashMap<String, Vec<usize>> = HashMap::new();
+
+    let mut shadow_stack: Vec<&DomNode> = Vec::new();
+    shadow_stack.push(shadow_root);
+
+    while let Some(node) = shadow_stack.pop() {
       if let Some(parts) = node.get_attribute_ref("part") {
         let node_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
         for part in parts.split_ascii_whitespace() {
-          push_part_export(exports, part, node_id);
+          push_part_export(&mut exports, part, node_id);
         }
       }
 
       if node.is_shadow_host() {
-        let nested_exports = collect_for_host(node, ids, map);
+        let nested_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
         if let Some(mapping) = node.get_attribute_ref("exportparts") {
-          for (inner, alias) in parse_exportparts(mapping) {
-            if let Some(targets) = nested_exports.get(&inner) {
-              for target in targets {
-                push_part_export(exports, &alias, *target);
+          if let Some(nested_exports) = map.exports_for_host(nested_id) {
+            for (inner, alias) in parse_exportparts(mapping) {
+              if let Some(targets) = nested_exports.get(&inner) {
+                for target in targets {
+                  push_part_export(&mut exports, &alias, *target);
+                }
               }
             }
           }
         }
       }
 
-      for child in node.children.iter() {
+      for child in node.children.iter().rev() {
         if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
           // Nested shadow contents are only exposed via exportparts on the host.
           continue;
         }
-        walk(child, ids, map, exports);
+        shadow_stack.push(child);
       }
     }
-
-    let mut exports: HashMap<String, Vec<usize>> = HashMap::new();
-    walk(shadow_root, ids, map, &mut exports);
 
     if let Some(exportparts) = host.get_attribute_ref("exportparts") {
       for (internal, alias) in parse_exportparts(exportparts) {
@@ -2678,21 +2728,9 @@ pub fn compute_part_export_map_with_ids(
       }
     }
 
-    map.insert_host_exports(host_id, exports.clone());
-    exports
+    map.insert_host_exports(host_id, exports);
   }
 
-  fn traverse(node: &DomNode, ids: &HashMap<*const DomNode, usize>, map: &mut PartExportMap) {
-    if node.is_shadow_host() {
-      collect_for_host(node, ids, map);
-    }
-    for child in node.children.iter() {
-      traverse(child, ids, map);
-    }
-  }
-
-  let mut map = PartExportMap::default();
-  traverse(root, ids, &mut map);
   map
 }
 
@@ -5644,6 +5682,29 @@ mod tests {
     }
   }
 
+  fn drop_dom_iterative(root: DomNode) {
+    let mut stack: Vec<DomNode> = Vec::new();
+    stack.push(root);
+    while let Some(mut node) = stack.pop() {
+      stack.append(&mut node.children);
+    }
+  }
+
+  fn enumerate_dom_ids_legacy(root: &DomNode) -> HashMap<*const DomNode, usize> {
+    fn walk(node: &DomNode, next: &mut usize, map: &mut HashMap<*const DomNode, usize>) {
+      map.insert(node as *const DomNode, *next);
+      *next += 1;
+      for child in node.children.iter() {
+        walk(child, next, map);
+      }
+    }
+
+    let mut ids: HashMap<*const DomNode, usize> = HashMap::new();
+    let mut next_id = 1usize;
+    walk(root, &mut next_id, &mut ids);
+    ids
+  }
+
   #[test]
   fn selector_bloom_hash_matches_selector_token_hash() {
     use precomputed_hash::PrecomputedHash;
@@ -6007,6 +6068,83 @@ mod tests {
       2,
       "nth-last-child(of ...) should maintain an independent cached index map"
     );
+  }
+
+  #[test]
+  fn enumerate_dom_ids_matches_legacy_preorder() {
+    let dom = document(vec![
+      element_with_attrs(
+        "div",
+        vec![("id", "host")],
+        vec![
+          DomNode {
+            node_type: DomNodeType::ShadowRoot {
+              mode: ShadowRootMode::Open,
+              delegates_focus: false,
+            },
+            children: vec![element("span", vec![text("shadow")])],
+          },
+          element("p", vec![text("light")]),
+        ],
+      ),
+      element("footer", vec![]),
+    ]);
+
+    let ids = enumerate_dom_ids(&dom);
+    let legacy = enumerate_dom_ids_legacy(&dom);
+    assert_eq!(ids, legacy);
+  }
+
+  #[test]
+  fn deep_dom_traversals_do_not_overflow_stack() {
+    set_selector_bloom_enabled(true);
+
+    let depth = 100_000usize;
+    let mut dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: String::new(),
+        attributes: vec![],
+      },
+      children: vec![],
+    };
+
+    for _ in 1..depth {
+      dom = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: String::new(),
+          attributes: vec![],
+        },
+        children: vec![dom],
+      };
+    }
+
+    let ids = enumerate_dom_ids(&dom);
+    assert_eq!(ids.len(), depth);
+
+    let store = build_selector_bloom_store(&dom, &ids).expect("selector bloom store");
+    let summary_len = match &store {
+      SelectorBloomStore::Bits256(store) => store.summaries.len(),
+      SelectorBloomStore::Bits512(store) => store.summaries.len(),
+      SelectorBloomStore::Bits1024(store) => store.summaries.len(),
+    };
+    assert_eq!(summary_len, ids.len() + 1);
+    assert!(store.summary_for_id(0).is_none());
+
+    let div_hash = selector_bloom_hash("div");
+    assert!(store
+      .summary_for_id(1)
+      .expect("root summary")
+      .contains_hash(div_hash));
+    assert!(store
+      .summary_for_id(depth)
+      .expect("leaf summary")
+      .contains_hash(div_hash));
+
+    drop(ids);
+    drop(store);
+    drop_dom_iterative(dom);
   }
 
   #[test]

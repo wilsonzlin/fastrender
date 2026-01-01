@@ -182,6 +182,58 @@ thread_local! {
   static SCOPE_RESOLVE_MISSES: std::cell::Cell<u64> = std::cell::Cell::new(0);
 }
 
+// `@scope` prelude selectors are parsed as relative selectors by the `selectors` crate, which
+// implicitly prefixes selectors like `.foo` as `:scope .foo`. When resolving scope roots we need
+// to treat that implicit scope anchor as matching the scope element itself as well (i.e.
+// descendant-or-self) so that a scope-start selector can match the outermost element in a test DOM
+// like `<div class="outer">...`.
+//
+// To avoid reparsing selector text, cache "self-inclusive" variants by stripping the implicit
+// `:scope` prefix when it is the only combinator in the selector.
+thread_local! {
+  static SCOPE_SELF_MATCH_SELECTOR_CACHE: RefCell<HashMap<usize, Selector<FastRenderSelectorImpl>>> =
+    RefCell::new(HashMap::new());
+}
+
+fn scope_selector_self_match_variant(
+  selector: &Selector<FastRenderSelectorImpl>,
+) -> Option<Selector<FastRenderSelectorImpl>> {
+  use selectors::parser::Combinator;
+  use selectors::parser::Component;
+
+  let key = selector as *const _ as usize;
+  if let Some(hit) = SCOPE_SELF_MATCH_SELECTOR_CACHE.with(|cache| cache.borrow().get(&key).cloned())
+  {
+    return Some(hit);
+  }
+
+  // ParseRelative::ForScope turns `.foo` into `:scope .foo` using an implicit `:scope` selector.
+  // Allow the scope element itself to match by stripping that implicit prefix, but only when the
+  // selector otherwise contains a single compound selector (i.e., no additional combinators).
+  let components: Vec<Component<FastRenderSelectorImpl>> =
+    selector.iter_raw_parse_order_from(0).cloned().collect();
+  if components.len() < 3 {
+    return None;
+  }
+
+  if !matches!(components[0], Component::ImplicitScope) {
+    return None;
+  }
+  if !matches!(components[1], Component::Combinator(Combinator::Descendant)) {
+    return None;
+  }
+  if components[2..]
+    .iter()
+    .any(|component| matches!(component, Component::Combinator(_)))
+  {
+    return None;
+  }
+
+  let stripped = Selector::from_components(components[2..].to_vec());
+  SCOPE_SELF_MATCH_SELECTOR_CACHE.with(|cache| cache.borrow_mut().insert(key, stripped.clone()));
+  Some(stripped)
+}
+
 #[cfg(test)]
 thread_local! {
   static ANCESTOR_BLOOM_HASH_INSERTS: std::cell::Cell<u64> = std::cell::Cell::new(0);
@@ -814,31 +866,38 @@ fn collect_shadow_stylesheets(
   ids: &HashMap<*const DomNode, usize>,
 ) -> Result<HashMap<usize, StyleSheet>, RenderError> {
   fn gather_styles(node: &DomNode, root_ptr: *const DomNode, out: &mut String) {
-    if let DomNodeType::ShadowRoot { .. } = node.node_type {
-      if (node as *const DomNode) != root_ptr {
-        return;
+    let mut stack: Vec<&DomNode> = Vec::new();
+    stack.push(node);
+
+    while let Some(current) = stack.pop() {
+      if matches!(current.node_type, DomNodeType::ShadowRoot { .. })
+        && (current as *const DomNode) != root_ptr
+      {
+        continue;
       }
-    }
-    if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("style") {
-        for child in node.children.iter() {
-          if let Some(text) = child.text_content() {
-            out.push_str(text);
-            out.push('\n');
+
+      if let Some(tag) = current.tag_name() {
+        if tag.eq_ignore_ascii_case("style") {
+          for child in current.children.iter() {
+            if let Some(text) = child.text_content() {
+              out.push_str(text);
+              out.push('\n');
+            }
           }
         }
       }
-    }
-    for child in node.children.iter() {
-      gather_styles(child, root_ptr, out);
+
+      for child in current.children.iter().rev() {
+        stack.push(child);
+      }
     }
   }
 
-  fn walk(
-    node: &DomNode,
-    ids: &HashMap<*const DomNode, usize>,
-    out: &mut HashMap<usize, StyleSheet>,
-  ) -> Result<(), RenderError> {
+  let mut out = HashMap::new();
+  let mut stack: Vec<&DomNode> = Vec::with_capacity(ids.len().min(1024));
+  stack.push(root);
+
+  while let Some(node) = stack.pop() {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       let mut css = String::new();
       gather_styles(node, node as *const DomNode, &mut css);
@@ -853,14 +912,12 @@ fn collect_shadow_stylesheets(
         }
       }
     }
-    for child in node.children.iter() {
-      walk(child, ids, out)?;
+
+    for child in node.children.iter().rev() {
+      stack.push(child);
     }
-    Ok(())
   }
 
-  let mut out = HashMap::new();
-  walk(root, ids, &mut out)?;
   Ok(out)
 }
 
@@ -1420,17 +1477,11 @@ impl DomMaps {
     let mut exportparts_map: HashMap<usize, Vec<(String, String)>> = HashMap::new();
     let mut selector_keys = DomSelectorKeyCache::new(id_map.len());
 
-    fn walk(
-      node: &DomNode,
-      parent: Option<usize>,
-      ids: &HashMap<*const DomNode, usize>,
-      quirks_mode: QuirksMode,
-      parent_map: &mut HashMap<usize, usize>,
-      shadow_hosts: &mut HashMap<usize, usize>,
-      exportparts_map: &mut HashMap<usize, Vec<(String, String)>>,
-      selector_keys: &mut DomSelectorKeyCache,
-    ) {
-      let id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
+    let mut stack: Vec<(&DomNode, Option<usize>)> = Vec::with_capacity(id_map.len().min(1024));
+    stack.push((root, None));
+
+    while let Some((node, parent)) = stack.pop() {
+      let id = id_map.get(&(node as *const DomNode)).copied().unwrap_or(0);
       if let Some(p) = parent {
         parent_map.insert(id, p);
         if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
@@ -1479,31 +1530,11 @@ impl DomMaps {
           },
         );
       }
-      for child in node.children.iter() {
-        walk(
-          child,
-          Some(id),
-          ids,
-          quirks_mode,
-          parent_map,
-          shadow_hosts,
-          exportparts_map,
-          selector_keys,
-        );
+
+      for child in node.children.iter().rev() {
+        stack.push((child, Some(id)));
       }
     }
-
-    walk(
-      root,
-      None,
-      &id_map,
-      quirks_mode,
-      &mut parent_map,
-      &mut shadow_hosts,
-      &mut exportparts_map,
-      &mut selector_keys,
-    );
-
     Self {
       id_map,
       id_to_node,
@@ -4814,6 +4845,10 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   deadline: Option<&RenderDeadline>,
   include_starting_style: bool,
 ) -> Result<StyledNode, RenderError> {
+  // This cache is keyed by selector addresses, so clear it for each cascade run to avoid potential
+  // ABA issues if caller-created stylesheets are dropped and later allocations reuse addresses.
+  SCOPE_SELF_MATCH_SELECTOR_CACHE.with(|cache| cache.borrow_mut().clear());
+
   let profile_enabled = cascade_profile_enabled();
   let profile_start = profile_enabled.then(|| Instant::now());
   if profile_enabled {
@@ -16375,7 +16410,16 @@ fn resolve_scopes<'a>(
             let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
             matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
           })
-        });
+        }) || (idx == root_index
+          && start_selectors.iter().any(|sel| {
+            let Some(stripped) = scope_selector_self_match_variant(sel) else {
+              return false;
+            };
+            context.nest_for_scope_condition(None, |ctx| {
+              let hashes = cascade_ancestor_hashes(&stripped, ctx.quirks_mode());
+              matches_selector_cascade(&stripped, Some(&hashes), &candidate_ref, ctx)
+            })
+          }));
         if matches {
           matched_root = Some(idx);
           break;
@@ -16699,9 +16743,13 @@ fn find_matching_rules<'a>(
         }
 
         // `:host(...)` can also bridge from a shadow tree to the outer document when there are
-        // additional ancestor sequences to the left (e.g. `body :host(.x) .y`). The shadow-scoped
-        // bloom filter intentionally omits outer-ancestor hashes, so avoid bloom fast-reject when
-        // such a selector is otherwise rejected.
+        // additional ancestor sequences to the left (e.g. `body :host(.x) .y`).
+        //
+        // Two implementation details can cause false negatives here:
+        // 1. Shadow hosts are normally treated as "featureless", preventing traversal of further
+        //    ancestor combinators. Allow traversal for this retry.
+        // 2. The shadow-scoped bloom filter intentionally omits outer-ancestor hashes, so disable
+        //    bloom fast-reject as well.
         if allow_shadow_host && !selector_matches && selector_contains_nonleftmost_host(selector) {
           selector_matches = match scope_match {
             ScopeMatchResult::Scoped(scope_root) => {
@@ -16709,6 +16757,20 @@ fn find_matching_rules<'a>(
               let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+                  ctx.with_allow_featureless_host_traversal(true, |ctx| {
+                    let prev_bloom_filter = ctx.bloom_filter;
+                    ctx.bloom_filter = None;
+                    let matched =
+                      matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                    ctx.bloom_filter = prev_bloom_filter;
+                    matched
+                  })
+                })
+              })
+            }
+            ScopeMatchResult::Unscoped => {
+              match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+                ctx.with_allow_featureless_host_traversal(true, |ctx| {
                   let prev_bloom_filter = ctx.bloom_filter;
                   ctx.bloom_filter = None;
                   let matched = matches_selector_cascade_counted(
@@ -16720,20 +16782,6 @@ fn find_matching_rules<'a>(
                   ctx.bloom_filter = prev_bloom_filter;
                   matched
                 })
-              })
-            }
-            ScopeMatchResult::Unscoped => {
-              match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-                let prev_bloom_filter = ctx.bloom_filter;
-                ctx.bloom_filter = None;
-                let matched = matches_selector_cascade_counted(
-                  selector,
-                  Some(&indexed.ancestor_hashes),
-                  &element_ref,
-                  ctx,
-                );
-                ctx.bloom_filter = prev_bloom_filter;
-                matched
               })
             }
           };
