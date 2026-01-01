@@ -1409,6 +1409,7 @@ impl DomSelectorKeyCache {
 
 impl DomMaps {
   fn new(root: &DomNode, id_map: HashMap<*const DomNode, usize>) -> Self {
+    let quirks_mode = quirks_mode_for_dom(root);
     let mut id_to_node: HashMap<usize, *const DomNode> = HashMap::new();
     for (ptr, id) in &id_map {
       id_to_node.insert(*id, *ptr);
@@ -1423,6 +1424,7 @@ impl DomMaps {
       node: &DomNode,
       parent: Option<usize>,
       ids: &HashMap<*const DomNode, usize>,
+      quirks_mode: QuirksMode,
       parent_map: &mut HashMap<usize, usize>,
       shadow_hosts: &mut HashMap<usize, usize>,
       exportparts_map: &mut HashMap<usize, Vec<(String, String)>>,
@@ -1445,13 +1447,15 @@ impl DomMaps {
         let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
         let (id_key, has_id) = node
           .get_attribute_ref("id")
-          .map(|value| (selector_bucket_id(value), true))
+          .map(|value| (selector_bucket_id_for_mode(value, quirks_mode), true))
           .unwrap_or((SelectorBucketKey::default(), false));
 
         let class_start = selector_keys.class_keys.len();
         if let Some(class_attr) = node.get_attribute_ref("class") {
           for cls in class_attr.split_ascii_whitespace() {
-            selector_keys.class_keys.push(selector_bucket_class(cls));
+            selector_keys
+              .class_keys
+              .push(selector_bucket_class_for_mode(cls, quirks_mode));
           }
         }
         let class_len = selector_keys.class_keys.len() - class_start;
@@ -1480,6 +1484,7 @@ impl DomMaps {
           child,
           Some(id),
           ids,
+          quirks_mode,
           parent_map,
           shadow_hosts,
           exportparts_map,
@@ -1492,6 +1497,7 @@ impl DomMaps {
       root,
       None,
       &id_map,
+      quirks_mode,
       &mut parent_map,
       &mut shadow_hosts,
       &mut exportparts_map,
@@ -1899,8 +1905,26 @@ fn selector_bucket_id(value: &str) -> SelectorBucketKey {
 }
 
 #[inline]
+fn selector_bucket_id_for_mode(value: &str, quirks_mode: QuirksMode) -> SelectorBucketKey {
+  if matches!(quirks_mode, QuirksMode::Quirks) {
+    selector_hash_ascii_lowercase(value)
+  } else {
+    selector_bucket_id(value)
+  }
+}
+
+#[inline]
 fn selector_bucket_class(value: &str) -> SelectorBucketKey {
   selector_hash_str(value)
+}
+
+#[inline]
+fn selector_bucket_class_for_mode(value: &str, quirks_mode: QuirksMode) -> SelectorBucketKey {
+  if matches!(quirks_mode, QuirksMode::Quirks) {
+    selector_hash_ascii_lowercase(value)
+  } else {
+    selector_bucket_class(value)
+  }
 }
 
 #[inline]
@@ -2768,6 +2792,7 @@ enum SelectorKeyPolarity {
 
 fn merge_nested_keys<'a, I>(
   selectors: I,
+  quirks_mode: QuirksMode,
   polarity: SelectorKeyPolarity,
   allow_universal: bool,
   out: &mut Vec<SelectorKey>,
@@ -2777,7 +2802,7 @@ where
 {
   let mut inserted = false;
   for selector in selectors {
-    let nested = selector_keys_with_polarity(selector, polarity);
+    let nested = selector_keys_with_polarity(selector, quirks_mode, polarity);
     if nested.keys.len() == 1
       && matches!(nested.keys[0], SelectorKey::Universal)
       && !allow_universal
@@ -2800,6 +2825,7 @@ struct SelectorKeyAnalysis {
 
 fn collect_sequence_keys(
   iter: &mut selectors::parser::SelectorIter<crate::css::selectors::FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
   polarity: SelectorKeyPolarity,
 ) -> SelectorKeyAnalysis {
   use selectors::parser::Component;
@@ -2812,7 +2838,7 @@ fn collect_sequence_keys(
         if matches!(polarity, SelectorKeyPolarity::Matches) {
           push_key(
             &mut keys,
-            SelectorKey::Id(selector_bucket_id(ident.as_str())),
+            SelectorKey::Id(selector_bucket_id_for_mode(ident.as_str(), quirks_mode)),
           );
         }
       }
@@ -2820,7 +2846,7 @@ fn collect_sequence_keys(
         if matches!(polarity, SelectorKeyPolarity::Matches) {
           push_key(
             &mut keys,
-            SelectorKey::Class(selector_bucket_class(cls.as_str())),
+            SelectorKey::Class(selector_bucket_class_for_mode(cls.as_str(), quirks_mode)),
           );
         }
       }
@@ -2860,38 +2886,66 @@ fn collect_sequence_keys(
       }
       Component::NthOf(nth) => {
         if keys.is_empty()
-          && merge_nested_keys(nth.selectors().iter(), polarity, true, &mut keys)
+          && merge_nested_keys(
+            nth.selectors().iter(),
+            quirks_mode,
+            polarity,
+            true,
+            &mut keys,
+          )
         {
           required_and = false;
         }
       }
       Component::Host(Some(inner)) => {
         if keys.is_empty()
-          && merge_nested_keys(std::iter::once(inner), polarity, true, &mut keys)
+          && merge_nested_keys(
+            std::iter::once(inner),
+            quirks_mode,
+            polarity,
+            true,
+            &mut keys,
+          )
         {
           required_and = false;
         }
       }
       Component::NonTSPseudoClass(pc) => match pc {
         PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
-          if keys.is_empty() && merge_nested_keys(list.slice().iter(), polarity, true, &mut keys) {
+          if keys.is_empty()
+            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut keys)
+          {
             required_and = false;
           }
         }
         PseudoClass::Host(Some(list)) => {
-          if keys.is_empty() && merge_nested_keys(list.slice().iter(), polarity, true, &mut keys) {
+          if keys.is_empty()
+            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut keys)
+          {
             required_and = false;
           }
         }
         _ => {}
       },
       Component::Is(list) => {
-        if merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys) {
+        if merge_nested_keys(
+          list.slice().iter(),
+          quirks_mode,
+          polarity,
+          keys.is_empty(),
+          &mut keys,
+        ) {
           required_and = false;
         }
       }
       Component::Where(list) => {
-        if merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys) {
+        if merge_nested_keys(
+          list.slice().iter(),
+          quirks_mode,
+          polarity,
+          keys.is_empty(),
+          &mut keys,
+        ) {
           required_and = false;
         }
       }
@@ -2900,7 +2954,13 @@ fn collect_sequence_keys(
           SelectorKeyPolarity::Matches => SelectorKeyPolarity::DoesNotMatch,
           SelectorKeyPolarity::DoesNotMatch => SelectorKeyPolarity::Matches,
         };
-        if merge_nested_keys(list.slice().iter(), flipped, keys.is_empty(), &mut keys) {
+        if merge_nested_keys(
+          list.slice().iter(),
+          quirks_mode,
+          flipped,
+          keys.is_empty(),
+          &mut keys,
+        ) {
           required_and = false;
         }
       }
@@ -2917,24 +2977,26 @@ fn collect_sequence_keys(
 
 fn selector_keys_with_polarity(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
   polarity: SelectorKeyPolarity,
 ) -> SelectorKeyAnalysis {
   let mut iter = selector.iter();
-  collect_sequence_keys(&mut iter, polarity)
+  collect_sequence_keys(&mut iter, quirks_mode, polarity)
 }
 
 fn pseudo_selector_subject_key_analysis(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
 ) -> SelectorKeyAnalysis {
   use selectors::parser::Combinator;
 
   let mut iter = selector.iter();
   while iter.next().is_some() {}
   let Some(Combinator::PseudoElement) = iter.next_sequence() else {
-    return selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches);
+    return selector_keys_with_polarity(selector, quirks_mode, SelectorKeyPolarity::Matches);
   };
 
-  collect_sequence_keys(&mut iter, SelectorKeyPolarity::Matches)
+  collect_sequence_keys(&mut iter, quirks_mode, SelectorKeyPolarity::Matches)
 }
 
 fn selector_rightmost_compound_fast_reject(
@@ -2970,10 +3032,9 @@ fn selector_compound_fast_reject_from_iter(
   let mut has_id = false;
   let mut id_key: SelectorBucketKey = 0;
 
-  // We intentionally skip class/id requirements in full quirks mode: those selectors match
-  // ASCII-case-insensitively against HTML elements, but `NodeSelectorKeys` stores case-sensitive
-  // hashes and would cause false negatives.
-  let allow_class_id = !matches!(quirks_mode, QuirksMode::Quirks);
+  // Note: in full quirks mode, class/ID selectors match ASCII-case-insensitively. We hash them
+  // with the same normalization used by `DomSelectorKeyCache` so fast-reject comparisons remain
+  // sound.
 
   let mut class_keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS] =
     [0; RIGHTMOST_FAST_REJECT_MAX_KEYS];
@@ -2998,10 +3059,7 @@ fn selector_compound_fast_reject_from_iter(
       }
       Component::ExplicitUniversalType => {}
       Component::ID(ident) => {
-        if !allow_class_id {
-          continue;
-        }
-        let key = selector_bucket_id(ident.as_str());
+        let key = selector_bucket_id_for_mode(ident.as_str(), quirks_mode);
         if has_id && id_key != key {
           return None;
         }
@@ -3009,11 +3067,11 @@ fn selector_compound_fast_reject_from_iter(
         id_key = key;
       }
       Component::Class(class) => {
-        if !allow_class_id {
-          continue;
-        }
-        let key = selector_bucket_class(class.as_str());
-        if class_keys[..class_len].iter().any(|existing| *existing == key) {
+        let key = selector_bucket_class_for_mode(class.as_str(), quirks_mode);
+        if class_keys[..class_len]
+          .iter()
+          .any(|existing| *existing == key)
+        {
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3026,7 +3084,10 @@ fn selector_compound_fast_reject_from_iter(
         local_name_lower, ..
       } => {
         let key = selector_bucket_attr(local_name_lower.as_str());
-        if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+        if attr_keys[..attr_len]
+          .iter()
+          .any(|existing| *existing == key)
+        {
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3037,7 +3098,10 @@ fn selector_compound_fast_reject_from_iter(
       }
       Component::AttributeInNoNamespace { local_name, .. } => {
         let key = selector_bucket_attr(local_name.as_str());
-        if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+        if attr_keys[..attr_len]
+          .iter()
+          .any(|existing| *existing == key)
+        {
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3051,7 +3115,10 @@ fn selector_compound_fast_reject_from_iter(
           return None;
         }
         let key = selector_bucket_attr(other.local_name_lower.as_str());
-        if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+        if attr_keys[..attr_len]
+          .iter()
+          .any(|existing| *existing == key)
+        {
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3095,7 +3162,8 @@ fn selector_compound_fast_reject_from_iter(
     return None;
   }
 
-  let mut keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS] = [0; RIGHTMOST_FAST_REJECT_MAX_KEYS];
+  let mut keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS] =
+    [0; RIGHTMOST_FAST_REJECT_MAX_KEYS];
   keys[..class_len].copy_from_slice(&class_keys[..class_len]);
   keys[class_len..class_len + attr_len].copy_from_slice(&attr_keys[..attr_len]);
 
@@ -3333,7 +3401,10 @@ fn selector_key_type_rank(key: SelectorKey) -> u8 {
   }
 }
 
-fn choose_anchor_key(keys: &[SelectorKey], frequencies: &FxHashMap<SelectorKey, usize>) -> SelectorKey {
+fn choose_anchor_key(
+  keys: &[SelectorKey],
+  frequencies: &FxHashMap<SelectorKey, usize>,
+) -> SelectorKey {
   debug_assert!(!keys.is_empty());
   let mut best = keys[0];
   let mut best_freq = *frequencies.get(&best).unwrap_or(&0);
@@ -3415,8 +3486,9 @@ impl<'a> RuleIndex<'a> {
           if matches!(pe, PseudoElement::Slotted(_)) {
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
-            let prelude_ancestor_hashes =
-              prelude.as_ref().map(|sel| cascade_ancestor_hashes(sel, quirks_mode));
+            let prelude_ancestor_hashes = prelude
+              .as_ref()
+              .map(|sel| cascade_ancestor_hashes(sel, quirks_mode));
             let prelude_fast_reject = match prelude
               .as_ref()
               .and_then(|sel| selector_rightmost_compound_fast_reject(sel, quirks_mode))
@@ -3476,7 +3548,9 @@ impl<'a> RuleIndex<'a> {
             let arg_analyses: Vec<SelectorKeyAnalysis> = match pe {
               PseudoElement::Slotted(args) => args
                 .iter()
-                .map(|sel| selector_keys_with_polarity(sel, SelectorKeyPolarity::Matches))
+                .map(|sel| {
+                  selector_keys_with_polarity(sel, quirks_mode, SelectorKeyPolarity::Matches)
+                })
                 .collect(),
               _ => Vec::new(),
             };
@@ -3517,7 +3591,7 @@ impl<'a> RuleIndex<'a> {
             fast_reject,
           });
 
-          let analysis = pseudo_selector_subject_key_analysis(selector);
+          let analysis = pseudo_selector_subject_key_analysis(selector, quirks_mode);
           let freq = pseudo_key_frequencies.entry(pseudo.clone()).or_default();
           for &key in analysis.keys.iter() {
             *freq.entry(key).or_default() += 1;
@@ -3551,7 +3625,8 @@ impl<'a> RuleIndex<'a> {
           fast_reject,
         });
 
-        let analysis = selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches);
+        let analysis =
+          selector_keys_with_polarity(selector, quirks_mode, SelectorKeyPolarity::Matches);
         for &key in analysis.keys.iter() {
           *selector_key_frequencies.entry(key).or_default() += 1;
         }
@@ -3598,7 +3673,9 @@ impl<'a> RuleIndex<'a> {
           SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
           SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
           SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
-          SelectorKey::Attribute(attr) => bucket.by_attr.entry(attr).or_default().push(selector_idx),
+          SelectorKey::Attribute(attr) => {
+            bucket.by_attr.entry(attr).or_default().push(selector_idx)
+          }
           SelectorKey::Universal => bucket.universal.push(selector_idx),
         }
       } else {
@@ -4246,10 +4323,14 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
         self.tmp_class_keys.clear();
         self.tmp_attr_keys.clear();
         let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
-        let id_key = node.get_attribute_ref("id").map(selector_bucket_id);
+        let id_key = node
+          .get_attribute_ref("id")
+          .map(|value| selector_bucket_id_for_mode(value, self.quirks_mode));
         if let Some(class_attr) = node.get_attribute_ref("class") {
           for cls in class_attr.split_ascii_whitespace() {
-            self.tmp_class_keys.push(selector_bucket_class(cls));
+            self
+              .tmp_class_keys
+              .push(selector_bucket_class_for_mode(cls, self.quirks_mode));
           }
         }
         for (name, _) in node.attributes_iter() {
@@ -7943,16 +8024,19 @@ mod tests {
 
   fn node_selector_keys<'a>(
     node: &DomNode,
+    quirks_mode: QuirksMode,
     class_keys: &'a mut Vec<SelectorBucketKey>,
     attr_keys: &'a mut Vec<SelectorBucketKey>,
   ) -> NodeSelectorKeys<'a> {
     class_keys.clear();
     attr_keys.clear();
     let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
-    let id_key = node.get_attribute_ref("id").map(selector_bucket_id);
+    let id_key = node
+      .get_attribute_ref("id")
+      .map(|value| selector_bucket_id_for_mode(value, quirks_mode));
     if let Some(class_attr) = node.get_attribute_ref("class") {
       for cls in class_attr.split_ascii_whitespace() {
-        class_keys.push(selector_bucket_class(cls));
+        class_keys.push(selector_bucket_class_for_mode(cls, quirks_mode));
       }
     }
     for (name, _) in node.attributes_iter() {
@@ -8535,7 +8619,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8547,8 +8634,9 @@ mod tests {
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.selectors.len(), 1);
 
-    let count_bucket_occurrences =
-      |map: &SelectorBucketMap<Vec<usize>>| -> usize { map.values().flatten().filter(|&&i| i == 0).count() };
+    let count_bucket_occurrences = |map: &SelectorBucketMap<Vec<usize>>| -> usize {
+      map.values().flatten().filter(|&&i| i == 0).count()
+    };
     let total_occurrences = count_bucket_occurrences(&index.by_id)
       + count_bucket_occurrences(&index.by_class)
       + count_bucket_occurrences(&index.by_tag)
@@ -8573,7 +8661,8 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    let node_keys =
+      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
     index.selector_candidates(
       &node,
       node_keys,
@@ -8600,7 +8689,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8650,7 +8742,8 @@ mod tests {
       let mut merge = CandidateMergeScratch::default();
       let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
       let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-      let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+      let node_keys =
+        node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
       index.selector_candidates(
         &node,
         node_keys,
@@ -8661,7 +8754,11 @@ mod tests {
         &mut stats,
         &mut merge,
       );
-      assert_eq!(candidates.as_slice(), &[0usize], "selector should match .{cls}");
+      assert_eq!(
+        candidates.as_slice(),
+        &[0usize],
+        "selector should match .{cls}"
+      );
     }
   }
 
@@ -8792,7 +8889,8 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    let node_keys =
+      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
     index.selector_candidates(
       &node,
       node_keys,
@@ -8882,7 +8980,8 @@ mod tests {
     let mut stats = CandidateStats::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    let node_keys =
+      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
     index.pseudo_candidates(
       &node,
       &PseudoElement::Before,
@@ -8981,7 +9080,8 @@ mod tests {
     let mut stats = CandidateStats::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    let node_keys =
+      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
     index.pseudo_candidates(
       &node,
       &PseudoElement::Before,
@@ -9293,7 +9393,8 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    let node_keys =
+      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
@@ -9318,6 +9419,73 @@ mod tests {
     assert_eq!(selected.len(), 2);
     assert!(selected.contains(&"#Foo".to_string()));
     assert!(selected.contains(&".Bar".to_string()));
+  }
+
+  #[test]
+  fn quirks_mode_class_and_id_selectors_match_ascii_case_insensitive() {
+    let stylesheet = parse_stylesheet("#HIT-ID { display: inline; } .foo { display: inline; }")
+      .expect("parse stylesheet");
+
+    let dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::Quirks,
+      },
+      children: vec![
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![("id".to_string(), "hit-id".to_string())],
+          },
+          children: vec![],
+        },
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              ("id".to_string(), "hit-class".to_string()),
+              ("class".to_string(), "FOO".to_string()),
+            ],
+          },
+          children: vec![],
+        },
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              ("id".to_string(), "miss".to_string()),
+              ("class".to_string(), "bar".to_string()),
+            ],
+          },
+          children: vec![],
+        },
+      ],
+    };
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(
+      find_styled_node_by_id(&styled, "hit-id")
+        .expect("hit-id styled")
+        .styles
+        .display,
+      Display::Inline
+    );
+    assert_eq!(
+      find_styled_node_by_id(&styled, "hit-class")
+        .expect("hit-class styled")
+        .styles
+        .display,
+      Display::Inline
+    );
+    assert_eq!(
+      find_styled_node_by_id(&styled, "miss")
+        .expect("miss styled")
+        .styles
+        .display,
+      Display::Block
+    );
   }
 
   #[test]
@@ -9356,7 +9524,8 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    let node_keys =
+      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
@@ -9502,7 +9671,8 @@ mod tests {
       let cached_keys = dom_maps.selector_keys(node_id);
       let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
       let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-      let uncached_keys = node_selector_keys(node, &mut class_keys, &mut attr_keys);
+      let uncached_keys =
+        node_selector_keys(node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
 
       let mut cached: Vec<usize> = Vec::new();
       let mut uncached: Vec<usize> = Vec::new();
@@ -14921,7 +15091,12 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let mut scratch = CascadeScratch::new(rule_index.rules.len());
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&dom.children[0], &mut class_keys, &mut attr_keys);
+    let node_keys = node_selector_keys(
+      &dom.children[0],
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+    );
     let marker_matches = find_pseudo_element_rules(
       &dom.children[0],
       0,
@@ -16007,7 +16182,12 @@ fn find_matching_rules<'a>(
           }
           ScopeMatchResult::Unscoped => {
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-              matches_selector_cascade_counted(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+              matches_selector_cascade_counted(
+                selector,
+                Some(&indexed.ancestor_hashes),
+                &element_ref,
+                ctx,
+              )
             })
           }
         };
@@ -16564,13 +16744,23 @@ fn find_pseudo_element_rules<'a>(
         let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
           ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-            matches_selector_cascade_counted(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+            matches_selector_cascade_counted(
+              selector,
+              Some(&indexed.ancestor_hashes),
+              &element_ref,
+              ctx,
+            )
           })
         })
       }
       ScopeMatchResult::Unscoped => {
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-          matches_selector_cascade_counted(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+          matches_selector_cascade_counted(
+            selector,
+            Some(&indexed.ancestor_hashes),
+            &element_ref,
+            ctx,
+          )
         })
       }
     };
