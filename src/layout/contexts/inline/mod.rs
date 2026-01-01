@@ -171,6 +171,7 @@ pub struct InlineFormattingContext {
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
   parallelism: LayoutParallelism,
+  factory: FormattingContextFactory,
 }
 
 fn dump_text_enabled() -> bool {
@@ -221,28 +222,38 @@ fn ensure_box_id(node: &BoxNode) -> usize {
 impl InlineFormattingContext {
   /// Creates a new InlineFormattingContext
   pub fn new() -> Self {
+    Self::with_factory(FormattingContextFactory::new())
+  }
+
+  pub(crate) fn with_factory(factory: FormattingContextFactory) -> Self {
+    let pipeline = factory.shaping_pipeline();
+    let font_context = factory.font_context().clone();
+    let viewport_size = factory.viewport_size();
+    let nearest_positioned_cb = factory.nearest_positioned_cb();
+    let parallelism = factory.parallelism();
     Self {
-      pipeline: ShapingPipeline::new(),
-      font_context: FontContext::new(),
+      pipeline,
+      font_context,
       default_hyphenator: Hyphenator::new("en-us").ok(),
-      viewport_size: crate::geometry::Size::new(800.0, 600.0),
-      nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock::viewport(
-        crate::geometry::Size::new(800.0, 600.0),
-      ),
-      parallelism: LayoutParallelism::default(),
+      viewport_size,
+      nearest_positioned_cb,
+      parallelism,
+      factory,
     }
   }
 
   pub fn with_font_context(font_context: FontContext) -> Self {
-    Self::with_font_context_and_viewport(font_context, crate::geometry::Size::new(800.0, 600.0))
+    Self::with_factory(FormattingContextFactory::with_font_context(font_context))
   }
 
   pub fn with_font_context_and_viewport(
     font_context: FontContext,
     viewport_size: crate::geometry::Size,
   ) -> Self {
-    let cb = crate::layout::contexts::positioned::ContainingBlock::viewport(viewport_size);
-    Self::with_font_context_viewport_and_cb(font_context, viewport_size, cb)
+    Self::with_factory(FormattingContextFactory::with_font_context_and_viewport(
+      font_context,
+      viewport_size,
+    ))
   }
 
   pub fn with_font_context_viewport_and_cb(
@@ -252,12 +263,10 @@ impl InlineFormattingContext {
   ) -> Self {
     #[cfg(any(test, debug_assertions))]
     INLINE_FC_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.fetch_add(1, Ordering::Relaxed);
-    Self::with_font_context_viewport_cb_and_pipeline(
-      font_context,
-      viewport_size,
-      nearest_positioned_cb,
-      ShapingPipeline::new(),
-    )
+    let factory =
+      FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
+        .with_positioned_cb(nearest_positioned_cb);
+    Self::with_factory(factory)
   }
 
   pub fn with_font_context_viewport_cb_and_pipeline(
@@ -266,18 +275,18 @@ impl InlineFormattingContext {
     nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
     pipeline: ShapingPipeline,
   ) -> Self {
-    Self {
-      pipeline,
-      font_context,
-      default_hyphenator: Hyphenator::new("en-us").ok(),
-      viewport_size,
-      nearest_positioned_cb,
-      parallelism: LayoutParallelism::default(),
-    }
+    let factory =
+      FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
+        .with_positioned_cb(nearest_positioned_cb)
+        .with_shaping_pipeline(pipeline.clone());
+    let mut ctx = Self::with_factory(factory);
+    ctx.pipeline = pipeline;
+    ctx
   }
 
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
     self.parallelism = parallelism;
+    self.factory = self.factory.clone().with_parallelism(parallelism);
     self
   }
 
@@ -396,11 +405,6 @@ impl InlineFormattingContext {
     } else {
       self.viewport_size.width
     };
-    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-    );
     let fc_type = snapshot_node.formatting_context().unwrap_or_else(|| {
       if snapshot_node.is_block_level() {
         FormattingContextType::Block
@@ -408,7 +412,7 @@ impl InlineFormattingContext {
         FormattingContextType::Inline
       }
     });
-    let fc = factory.create(fc_type);
+    let fc = self.factory.get(fc_type);
     let snapshot_constraints = LayoutConstraints::new(
       AvailableSpace::Definite(inline_size),
       AvailableSpace::Indefinite,
@@ -1829,12 +1833,7 @@ impl InlineFormattingContext {
     let metrics = self.resolve_scaled_metrics(style);
     let line_height =
       compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(self.viewport_size));
-    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-    );
-    let fc = factory.create(fc_type);
+    let fc = self.factory.get(fc_type);
 
     let percentage_base = available_width.is_finite().then_some(available_width);
     let percentage_base_px = percentage_base.unwrap_or(0.0);
@@ -6910,15 +6909,10 @@ impl InlineFormattingContext {
       &self.font_context,
     );
 
-    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-    );
     let fc_type = float_node
       .formatting_context()
       .unwrap_or(FormattingContextType::Block);
-    let fc = factory.create(fc_type);
+    let fc = self.factory.get(fc_type);
     let preferred_min_content =
       match fc.compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MinContent) {
         Ok(value) => value,
@@ -7910,15 +7904,10 @@ impl InlineFormattingContext {
             &mut flow_order,
           );
 
-          let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-            self.font_context.clone(),
-            self.viewport_size,
-            self.nearest_positioned_cb,
-          );
           let fc_type = block_node
             .formatting_context()
             .unwrap_or(FormattingContextType::Block);
-          let fc = factory.create(fc_type);
+          let fc = self.factory.get(fc_type);
           let child_constraints = LayoutConstraints::new(
             AvailableSpace::Definite(available_inline),
             constraints.available_height,
@@ -8270,8 +8259,8 @@ impl InlineFormattingContext {
 
       let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
       let font_context = self.font_context.clone();
+      let base_factory = self.factory.clone();
       let viewport_size = self.viewport_size;
-      let parallelism = self.parallelism;
       let layout_positioned_child = |positioned_child: &PositionedChild| {
         let PositionedChild {
           node: child,
@@ -8316,16 +8305,11 @@ impl InlineFormattingContext {
         child_style.left = None;
         layout_child.style = Arc::new(child_style);
 
-        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-          font_context.clone(),
-          viewport_size,
-          child_cb,
-        )
-        .with_parallelism(parallelism);
+        let factory = base_factory.with_positioned_cb(child_cb);
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
-        let fc = factory.create(fc_type);
+        let fc = factory.get(fc_type);
         let child_constraints = LayoutConstraints::new(
           AvailableSpace::Definite(child_cb.rect.size.width),
           child_cb
@@ -9699,18 +9683,20 @@ mod tests {
       .expect("max intrinsic size");
 
     let child_refs: Vec<&BoxNode> = children.iter().collect();
-    let min_actual = ifc.intrinsic_width_for_children(
-      &container_style,
-      child_refs.as_slice(),
-      IntrinsicSizingMode::MinContent,
-    )
-    .expect("min intrinsic width for children");
-    let max_actual = ifc.intrinsic_width_for_children(
-      &container_style,
-      child_refs.as_slice(),
-      IntrinsicSizingMode::MaxContent,
-    )
-    .expect("max intrinsic width for children");
+    let min_actual = ifc
+      .intrinsic_width_for_children(
+        &container_style,
+        child_refs.as_slice(),
+        IntrinsicSizingMode::MinContent,
+      )
+      .expect("min intrinsic width for children");
+    let max_actual = ifc
+      .intrinsic_width_for_children(
+        &container_style,
+        child_refs.as_slice(),
+        IntrinsicSizingMode::MaxContent,
+      )
+      .expect("max intrinsic width for children");
 
     assert!(
       (min_expected - min_actual).abs() < 0.01,
@@ -9723,6 +9709,27 @@ mod tests {
       "max-content: expected {}, got {}",
       max_expected,
       max_actual
+    );
+  }
+
+  #[test]
+  fn layout_inline_block_reuses_factory_caches() {
+    let mut style = ComputedStyle::default();
+    style.display = Display::InlineBlock;
+    style.font_size = 16.0;
+    let inline_block =
+      BoxNode::new_inline_block(Arc::new(style), FormattingContextType::Inline, vec![]);
+
+    let ifc = InlineFormattingContext::new();
+    FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
+    for _ in 0..25 {
+      ifc
+        .layout_inline_block(&inline_block, 200.0, None)
+        .expect("layout inline-block");
+    }
+    assert_eq!(
+      FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count(),
+      0
     );
   }
 

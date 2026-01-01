@@ -139,13 +139,7 @@ impl FormattingContextFactory {
   }
 
   fn inline_context(&self) -> InlineFormattingContext {
-    InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-      self.shaping_pipeline.clone(),
-    )
-    .with_parallelism(self.parallelism)
+    InlineFormattingContext::with_factory(self.detached())
   }
 
   fn flex_context(&self) -> FlexFormattingContext {
@@ -275,6 +269,16 @@ impl FormattingContextFactory {
 
   pub(crate) fn shaping_cache_size(&self) -> usize {
     self.shaping_pipeline.cache_len()
+  }
+
+  pub(crate) fn shaping_pipeline(&self) -> ShapingPipeline {
+    self.shaping_pipeline.clone()
+  }
+
+  pub(crate) fn with_shaping_pipeline(mut self, shaping_pipeline: ShapingPipeline) -> Self {
+    self.shaping_pipeline = shaping_pipeline;
+    self.reset_cached_contexts();
+    self
   }
 
   /// Clears any shared caches held by formatting contexts.
