@@ -25,6 +25,7 @@ use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
 use rustc_hash::FxHashSet;
+use smallvec::SmallVec;
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -443,7 +444,7 @@ fn is_known_page_property(property: &str) -> bool {
   known_page_property_set().contains(property)
 }
 
-fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> Vec<&'a str> {
+fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> SmallVec<[&'a str; 8]> {
   #[cfg(test)]
   TOKENIZE_PROPERTY_VALUE_CALLS.with(|calls| calls.set(calls.get() + 1));
 
@@ -461,7 +462,7 @@ fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> Vec<&'
     &s[start..end]
   }
 
-  let mut tokens: Vec<&'a str> = Vec::new();
+  let mut tokens: SmallVec<[&'a str; 8]> = SmallVec::new();
   let mut token_start: Option<usize> = None;
   let mut paren = 0i32;
   let mut bracket = 0i32;
@@ -1436,7 +1437,7 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
     // Tokenize respecting commas (for background layering) and spaces.
     let tokens = tokenize_property_value(value_str, allow_commas);
 
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(tokens.len());
     for token in tokens {
       if token == "/" {
         parts.push(PropertyValue::Keyword("/".to_string()));
@@ -3508,7 +3509,10 @@ mod tests {
   #[test]
   fn does_not_split_slash_inside_functions() {
     let tokens = tokenize_property_value("url(data:image/svg+xml;base64,abc/def==)", true);
-    assert_eq!(tokens, vec!["url(data:image/svg+xml;base64,abc/def==)"]);
+    assert_eq!(
+      tokens.as_slice(),
+      &["url(data:image/svg+xml;base64,abc/def==)"]
+    );
   }
 
   #[test]
@@ -3518,7 +3522,7 @@ mod tests {
     let old = tokenize_property_value_allocating(value, true);
     let new = tokenize_property_value(value, true);
     let old_slices: Vec<&str> = old.iter().map(String::as_str).collect();
-    assert_eq!(new, old_slices);
+    assert_eq!(new.as_slice(), old_slices.as_slice());
   }
 
   #[test]
