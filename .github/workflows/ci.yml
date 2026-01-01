@@ -101,6 +101,10 @@ jobs:
           if [ "${PERF_SMOKE_FAIL_ON_BUDGET}" = "1" ]; then
             extra_args+=(--fail-on-budget)
           fi
+          # Keep CI invocation explicit (instead of delegating to `cargo xtask perf-smoke`) so we
+          # can't silently drift from the perf_smoke guardrails we intend to enforce here. Once
+          # xtask exposes all of these flags directly (Task 62), consider switching to reduce
+          # duplication between local workflows and CI.
           cargo run --release --bin perf_smoke -- \
             --suite pageset-timeouts \
             --fail-on-missing-fixtures \
