@@ -310,6 +310,10 @@ struct PerfSmokeArgs {
   /// Run the perf smoke harness in debug mode instead of release
   #[arg(long)]
   debug: bool,
+
+  /// Extra arguments forwarded to the `perf_smoke` binary (use `--` before these)
+  #[arg(last = true)]
+  extra: Vec<String>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -816,6 +820,8 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   if args.fail_on_regression {
     cmd.arg("--fail-on-regression");
   }
+
+  cmd.args(&args.extra);
 
   cmd.current_dir(repo_root());
   println!("Running perf_smoke...");

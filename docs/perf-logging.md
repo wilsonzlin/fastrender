@@ -42,7 +42,7 @@ Run a quick offline perf pass against the curated pages fixtures with bundled fo
 machine-readable timings:
 
 ```
-cargo xtask perf-smoke [--suite core|pageset-timeouts|all] [--top 5] [--output target/perf_smoke.json]
+cargo xtask perf-smoke [--suite core|pageset-timeouts|all] [--top 5] [--output target/perf_smoke.json] [-- <extra perf_smoke args...>]
 ```
 
 The command renders the HTML under `tests/pages/fixtures/*`, captures `DiagnosticsLevel::Basic`
