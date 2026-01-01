@@ -4261,6 +4261,36 @@ impl HttpFetcher {
     ))
   }
 
+  fn fetch_file_prefix(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    let path = url.strip_prefix("file://").unwrap_or(url);
+    let limit = self.policy.allowed_response_limit()?;
+    let read_limit = max_bytes.min(limit);
+
+    let mut file = std::fs::File::open(path).map_err(|e| {
+      Error::Resource(
+        ResourceError::new(url.to_string(), e.to_string())
+          .with_final_url(url.to_string())
+          .with_source(e),
+      )
+    })?;
+    let bytes = read_response_prefix(&mut file, read_limit).map_err(|e| {
+      Error::Resource(
+        ResourceError::new(url.to_string(), e.to_string())
+          .with_final_url(url.to_string())
+          .with_source(e),
+      )
+    })?;
+
+    self.policy.reserve_budget(bytes.len())?;
+    let content_type = guess_content_type_from_path(path);
+    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+    Ok(FetchedResource::with_final_url(
+      bytes,
+      content_type,
+      Some(url.to_string()),
+    ))
+  }
+
   /// Decode a data: URL
   fn fetch_data(&self, url: &str) -> Result<FetchedResource> {
     let limit = self.policy.allowed_response_limit()?;
@@ -4281,6 +4311,15 @@ impl HttpFetcher {
       )));
     }
     self.policy.reserve_budget(len)?;
+    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+    Ok(resource)
+  }
+
+  fn fetch_data_prefix(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    let limit = self.policy.allowed_response_limit()?;
+    let read_limit = max_bytes.min(limit);
+    let resource = data_url::decode_data_url_prefix(url, read_limit)?;
+    self.policy.reserve_budget(resource.bytes.len())?;
     render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
     Ok(resource)
   }
@@ -4335,28 +4374,10 @@ impl ResourceFetcher for HttpFetcher {
 
     render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
-      ResourceScheme::Data => {
-        let mut res = self.fetch_data(url)?;
-        if res.bytes.len() > max_bytes {
-          res.bytes.truncate(max_bytes);
-        }
-        Ok(res)
-      }
-      ResourceScheme::File => {
-        let mut res = self.fetch_file(url)?;
-        if res.bytes.len() > max_bytes {
-          res.bytes.truncate(max_bytes);
-        }
-        Ok(res)
-      }
+      ResourceScheme::Data => self.fetch_data_prefix(url, max_bytes),
+      ResourceScheme::File => self.fetch_file_prefix(url, max_bytes),
       ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_partial(url, max_bytes),
-      ResourceScheme::Relative => {
-        let mut res = self.fetch_file(&format!("file://{}", url))?;
-        if res.bytes.len() > max_bytes {
-          res.bytes.truncate(max_bytes);
-        }
-        Ok(res)
-      }
+      ResourceScheme::Relative => self.fetch_file_prefix(&format!("file://{}", url), max_bytes),
       ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
   }
@@ -6243,6 +6264,7 @@ mod tests {
   use std::sync::OnceLock;
   use std::thread;
   use std::time::{Duration, Instant};
+  use tempfile::NamedTempFile;
 
   fn try_bind_localhost(context: &str) -> Option<TcpListener> {
     match TcpListener::bind("127.0.0.1:0") {
@@ -7991,6 +8013,41 @@ mod tests {
       err.to_string().contains("response too large"),
       "unexpected error: {err:?}"
     );
+  }
+
+  #[test]
+  fn fetch_partial_allows_oversized_data_url_prefixes() {
+    let bytes = vec![42u8; 1024];
+    let url = data_url::encode_base64_data_url("application/octet-stream", &bytes);
+    let fetcher = HttpFetcher::new().with_max_size(64);
+    assert!(
+      fetcher.fetch(&url).is_err(),
+      "full fetch should exceed max_size"
+    );
+
+    let res = fetcher
+      .fetch_partial(&url, 16)
+      .expect("partial fetch succeeds");
+    assert_eq!(res.bytes, bytes[..16]);
+  }
+
+  #[test]
+  fn fetch_partial_allows_oversized_files() {
+    let bytes = vec![7u8; 1024];
+    let mut file = NamedTempFile::new().expect("temp file");
+    file.write_all(&bytes).expect("write file");
+    let url = format!("file://{}", file.path().display());
+
+    let fetcher = HttpFetcher::new().with_max_size(64);
+    assert!(
+      fetcher.fetch(&url).is_err(),
+      "full fetch should exceed max_size"
+    );
+
+    let res = fetcher
+      .fetch_partial(&url, 16)
+      .expect("partial fetch succeeds");
+    assert_eq!(res.bytes, bytes[..16]);
   }
 
   #[test]
