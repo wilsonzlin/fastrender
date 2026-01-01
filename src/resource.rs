@@ -50,6 +50,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use ureq::ResponseExt;
+use publicsuffix::{List, Psl};
 use url::Url;
 
 pub mod bundle;
@@ -526,6 +527,38 @@ fn http_browser_origin_and_referer_for_url(url: &Url) -> Option<(String, String)
 
   let referer = format!("{origin}/");
   Some((origin, referer))
+}
+
+fn http_browser_registrable_domain(host: &str) -> Option<String> {
+  static PSL: OnceLock<List> = OnceLock::new();
+  let list = PSL.get_or_init(List::default);
+
+  let lowered = host.trim_end_matches('.').to_ascii_lowercase();
+  let domain = list.domain(lowered.as_bytes())?;
+  let domain = std::str::from_utf8(domain.as_bytes()).ok()?;
+  Some(domain.to_ascii_lowercase())
+}
+
+fn http_browser_schemeful_same_site(referrer_url: &Url, target_url: &Url) -> bool {
+  if referrer_url.scheme() != target_url.scheme() {
+    return false;
+  }
+
+  let (Some(url::Host::Domain(referrer_host)), Some(url::Host::Domain(target_host))) =
+    (referrer_url.host(), target_url.host())
+  else {
+    // IP hosts do not have registrable domains, so treat them as cross-site unless they were
+    // already classified as same-origin.
+    return false;
+  };
+
+  let Some(referrer_site) = http_browser_registrable_domain(referrer_host) else {
+    return false;
+  };
+  let Some(target_site) = http_browser_registrable_domain(target_host) else {
+    return false;
+  };
+  referrer_site == target_site
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2154,6 +2187,9 @@ fn build_http_header_pairs<'a>(
   kind: FetchContextKind,
   referrer: Option<&str>,
 ) -> Vec<(String, String)> {
+  let parsed_target_url = Url::parse(url).ok();
+  let parsed_referrer_url = referrer.and_then(|referrer| Url::parse(referrer).ok());
+
   let mut headers = vec![
     ("User-Agent".to_string(), user_agent.to_string()),
     ("Accept-Language".to_string(), accept_language.to_string()),
@@ -2162,13 +2198,22 @@ fn build_http_header_pairs<'a>(
 
   if http_browser_headers_enabled() {
     let profile: FetchDestination = kind.into();
-    let sec_fetch_site = if let Some(referrer) = referrer {
-      match (Url::parse(referrer), Url::parse(url)) {
-        (Ok(referrer_url), Ok(target_url)) => {
-          let ref_origin = DocumentOrigin::from_parsed_url(&referrer_url);
-          let target_origin = DocumentOrigin::from_parsed_url(&target_url);
+    // When `FASTR_HTTP_BROWSER_HEADERS` is enabled we approximate Chromium's request headers.
+    //
+    // - `Sec-Fetch-Site` uses schemeful same-site (scheme + registrable domain), so sibling
+    //   subdomains can be labelled `same-site` rather than `cross-site`.
+    // - For `Referer`, callers can provide a full referrer URL; we apply Chromium's default
+    //   `Referrer-Policy: strict-origin-when-cross-origin` further down (fragment stripping,
+    //   origin-only referrers for cross-origin requests, and HTTPS→HTTP downgrade suppression).
+    let sec_fetch_site = if referrer.is_some() {
+      match (parsed_referrer_url.as_ref(), parsed_target_url.as_ref()) {
+        (Some(referrer_url), Some(target_url)) => {
+          let ref_origin = DocumentOrigin::from_parsed_url(referrer_url);
+          let target_origin = DocumentOrigin::from_parsed_url(target_url);
           if ref_origin.same_origin(&target_origin) {
             "same-origin"
+          } else if http_browser_schemeful_same_site(referrer_url, target_url) {
+            "same-site"
           } else {
             "cross-site"
           }
@@ -2195,14 +2240,14 @@ fn build_http_header_pairs<'a>(
       headers.push(("Upgrade-Insecure-Requests".to_string(), value.to_string()));
     }
     if profile == FetchDestination::Font {
-      if let Some(referrer) = referrer {
-        if let Ok(referrer_url) = Url::parse(referrer) {
-          if let Some((origin, _)) = http_browser_origin_and_referer_for_url(&referrer_url) {
+      if referrer.is_some() {
+        if let Some(referrer_url) = parsed_referrer_url.as_ref() {
+          if let Some((origin, _)) = http_browser_origin_and_referer_for_url(referrer_url) {
             headers.push(("Origin".to_string(), origin));
           }
         }
-      } else if let Ok(parsed) = Url::parse(url) {
-        if let Some((origin, referer)) = profile.origin_and_referer(&parsed) {
+      } else if let Some(parsed) = parsed_target_url.as_ref() {
+        if let Some((origin, referer)) = profile.origin_and_referer(parsed) {
           headers.push(("Origin".to_string(), origin));
           headers.push(("Referer".to_string(), referer));
         }
@@ -2212,8 +2257,34 @@ fn build_http_header_pairs<'a>(
     headers.push(("Accept".to_string(), DEFAULT_ACCEPT.to_string()));
   }
 
-  if let Some(referrer) = referrer {
-    headers.push(("Referer".to_string(), referrer.to_string()));
+  if let Some(raw_referrer) = referrer {
+    let value = match (parsed_referrer_url.as_ref(), parsed_target_url.as_ref()) {
+      (Some(referrer_url), Some(target_url)) => {
+        let mut referrer_url = referrer_url.clone();
+        referrer_url.set_fragment(None);
+
+        // Default `Referrer-Policy` in Chromium: strict-origin-when-cross-origin.
+        // https://www.w3.org/TR/referrer-policy/#referrer-policy-strict-origin-when-cross-origin
+        if referrer_url.scheme() == "https" && target_url.scheme() == "http" {
+          None
+        } else {
+          let ref_origin = DocumentOrigin::from_parsed_url(&referrer_url);
+          let target_origin = DocumentOrigin::from_parsed_url(target_url);
+          if ref_origin.same_origin(&target_origin) {
+            Some(referrer_url.to_string())
+          } else {
+            http_browser_origin_and_referer_for_url(&referrer_url)
+              .map(|(_, origin_only)| origin_only)
+              .or_else(|| Some(referrer_url.to_string()))
+          }
+        }
+      }
+      _ => Some(raw_referrer.to_string()),
+    };
+
+    if let Some(value) = value {
+      headers.push(("Referer".to_string(), value));
+    }
   }
 
   if let Some(v) = validators {
@@ -6800,6 +6871,85 @@ mod tests {
     assert_eq!(profile, FetchDestination::Style);
     let parsed = Url::parse(url).expect("parse url");
     assert_eq!(profile.origin_and_referer(&parsed), None);
+  }
+
+  fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+      .iter()
+      .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+      .map(|(_, value)| value.as_str())
+  }
+
+  #[test]
+  fn http_headers_same_origin_referrer_strips_fragment() {
+    let headers = build_http_header_pairs(
+      "https://www.example.com/img.png",
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      SUPPORTED_ACCEPT_ENCODING,
+      None,
+      FetchContextKind::Image,
+      Some("https://www.example.com/page?a=b#frag"),
+    );
+    assert_eq!(
+      header_value(&headers, "Sec-Fetch-Site"),
+      Some("same-origin")
+    );
+    assert_eq!(
+      header_value(&headers, "Referer"),
+      Some("https://www.example.com/page?a=b")
+    );
+  }
+
+  #[test]
+  fn http_headers_same_site_cross_origin_referrer_is_origin_only() {
+    let headers = build_http_header_pairs(
+      "https://static.example.com/img.png",
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      SUPPORTED_ACCEPT_ENCODING,
+      None,
+      FetchContextKind::Image,
+      Some("https://www.example.com/page"),
+    );
+    assert_eq!(header_value(&headers, "Sec-Fetch-Site"), Some("same-site"));
+    assert_eq!(
+      header_value(&headers, "Referer"),
+      Some("https://www.example.com/")
+    );
+  }
+
+  #[test]
+  fn http_headers_cross_site_referrer_is_origin_only() {
+    let headers = build_http_header_pairs(
+      "https://cdn.other.com/img.png",
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      SUPPORTED_ACCEPT_ENCODING,
+      None,
+      FetchContextKind::Image,
+      Some("https://www.example.com/page"),
+    );
+    assert_eq!(header_value(&headers, "Sec-Fetch-Site"), Some("cross-site"));
+    assert_eq!(
+      header_value(&headers, "Referer"),
+      Some("https://www.example.com/")
+    );
+  }
+
+  #[test]
+  fn http_headers_https_to_http_downgrade_omits_referrer() {
+    let headers = build_http_header_pairs(
+      "http://static.example.com/img.png",
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      SUPPORTED_ACCEPT_ENCODING,
+      None,
+      FetchContextKind::Image,
+      Some("https://www.example.com/page"),
+    );
+    assert_eq!(header_value(&headers, "Sec-Fetch-Site"), Some("cross-site"));
+    assert_eq!(header_value(&headers, "Referer"), None);
   }
 
   #[test]

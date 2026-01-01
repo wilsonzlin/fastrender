@@ -911,6 +911,7 @@ dependencies = [
  "pathdiff",
  "percent-encoding",
  "precomputed-hash",
+ "publicsuffix",
  "rayon",
  "read-fonts",
  "regex",
