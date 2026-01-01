@@ -149,6 +149,22 @@ fn bundle_page_cache_captures_from_disk_cache_offline() {
     fetcher.fetch(&bg_url).expect("fetch bg").bytes,
     b"png-bytes-2".to_vec()
   );
+
+  let output_png = tmp.path().join("out.png");
+  let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
+    .current_dir(tmp.path())
+    .args(["render"])
+    .arg(bundle_dir.to_string_lossy().as_ref())
+    .args(["--out", output_png.to_string_lossy().as_ref()])
+    .status()
+    .expect("run bundle_page render");
+  assert!(status.success(), "bundle_page render should succeed offline");
+  let png_bytes = std::fs::read(&output_png).expect("png output");
+  assert!(
+    png_bytes.starts_with(b"\x89PNG"),
+    "expected PNG header, got {} bytes",
+    png_bytes.len()
+  );
 }
 
 #[test]
