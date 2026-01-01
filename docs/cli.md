@@ -72,6 +72,7 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 \
 - Purpose: fetch a curated set of real pages and cache HTML under `fetches/html/` (and metadata alongside).
 - Entry: `src/bin/fetch_pages.rs`
 - Run: `cargo run --release --bin fetch_pages -- --help`
+- HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
 - Supports deterministic sharding with `--shard <index>/<total>` when splitting the page list across workers.
 - Cache filenames and `--pages` filters use the canonical stem from `normalize_page_name` (strip the scheme and a leading `www.`). Colliding stems fail fast unless you opt into `--allow-collisions`, which appends a deterministic suffix.
 - **Migration:** cached HTML written before canonical stems were enforced may be ignored. Delete stale `fetches/html/*.html` entries and re-run `fetch_pages`.
@@ -81,6 +82,7 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 \
 - Purpose: warm the subresource cache (`fetches/assets/`) by prefetching linked stylesheets and their `@import` chains (plus referenced fonts) for the cached pages under `fetches/html/`. Optional flags can also prefetch HTML subresources (images/icons/video posters and iframe/object/embed documents). This makes subsequent pageset renders more repeatable and reduces time spent fetching during `pageset_progress`.
 - Entry: `src/bin/prefetch_assets.rs`
 - Run: `cargo run --release --bin prefetch_assets -- --help`
+- HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
 - Most useful when built with `--features disk_cache` (so cache entries persist across processes).
 - Key flags: page selection (`--pages`), deterministic sharding (`--shard <index>/<total>`), parallelism (`--jobs`), and fetch timeout (`--timeout`). See `--help` for the full flag list.
   - Optional subresource warming:
@@ -98,6 +100,7 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 \
 - Purpose: render all cached HTML in `fetches/html/` to `fetches/renders/` (PNG + per-page logs + `_summary.log`).
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
+- HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
 - Accepts `--shard <index>/<total>` to render a slice of the cached pages in a stable order.
 - `--pages` (and positional filters) use the same canonical stems as `fetch_pages` (strip scheme + leading `www.`). Cached filenames are normalized when matching filters so `www.`/non-`www` variants map consistently.
 - Optional outputs:
@@ -193,6 +196,7 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 \
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
+  - HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
   - Compatibility (opt-in only): `--compat-profile site` enables site-specific hacks and
     `--dom-compat compat` applies DOM class flips. Defaults stay spec-only; `cargo xtask
     pageset` forwards the flags only when you provide them.
