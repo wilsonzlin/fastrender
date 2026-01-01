@@ -5592,18 +5592,33 @@ fn apply_worker_env_overrides(cmd: &mut Command) {
   });
 }
 
-fn spawn_worker(
-  exe: &Path,
+fn push_disk_cache_args(cmd: &mut Command, args: &DiskCacheArgs) {
+  cmd
+    .arg("--disk-cache-max-bytes")
+    .arg(args.max_bytes.to_string())
+    .arg("--disk-cache-max-age-secs")
+    .arg(args.max_age_secs.to_string())
+    .arg("--disk-cache-lock-stale-secs")
+    .arg(args.lock_stale_secs.to_string())
+    // Pass the bool toggles explicitly to keep parent/worker parity when env vars are set
+    // (clap env parsing occurs separately for each process).
+    .arg("--disk-cache-allow-no-store")
+    .arg(args.allow_no_store.to_string())
+    .arg("--disk-cache-writeback-under-deadline")
+    .arg(args.writeback_under_deadline.to_string());
+}
+
+fn push_worker_args(
+  cmd: &mut Command,
   args: &RunArgs,
   item: &WorkItem,
   diagnostics: DiagnosticsArg,
-  cascade_profile: bool,
   soft_timeout_ms: Option<u64>,
   worker_timeout: Duration,
   dump: Option<&DumpSettings>,
-) -> io::Result<Child> {
+) {
   let worker_timeout_secs = worker_timeout.as_secs().max(1);
-  let mut cmd = Command::new(exe);
+
   cmd
     .arg("worker")
     .arg("--cache-path")
@@ -5623,13 +5638,9 @@ fn spawn_worker(
     .arg("--user-agent")
     .arg(&args.user_agent)
     .arg("--accept-language")
-    .arg(&args.accept_language)
-    .arg("--disk-cache-max-bytes")
-    .arg(args.disk_cache.max_bytes.to_string())
-    .arg("--disk-cache-max-age-secs")
-    .arg(args.disk_cache.max_age_secs.to_string())
-    .arg("--disk-cache-lock-stale-secs")
-    .arg(args.disk_cache.lock_stale_secs.to_string())
+    .arg(&args.accept_language);
+  push_disk_cache_args(cmd, &args.disk_cache);
+  cmd
     .arg("--diagnostics")
     .arg(format!("{:?}", diagnostics).to_ascii_lowercase())
     .arg("--timeout")
@@ -5718,6 +5729,28 @@ fn spawn_worker(
       cmd.arg("--dump-soft-timeout-ms").arg(ms.to_string());
     }
   }
+}
+
+fn spawn_worker(
+  exe: &Path,
+  args: &RunArgs,
+  item: &WorkItem,
+  diagnostics: DiagnosticsArg,
+  cascade_profile: bool,
+  soft_timeout_ms: Option<u64>,
+  worker_timeout: Duration,
+  dump: Option<&DumpSettings>,
+) -> io::Result<Child> {
+  let mut cmd = Command::new(exe);
+  push_worker_args(
+    &mut cmd,
+    args,
+    item,
+    diagnostics,
+    soft_timeout_ms,
+    worker_timeout,
+    dump,
+  );
 
   if cascade_profile {
     cmd.env("FASTR_CASCADE_PROFILE", "1");
@@ -7193,6 +7226,84 @@ mod tests {
       diagnostics: DiagnosticsArg::None,
       verbose: false,
     }
+  }
+
+  #[test]
+  fn worker_command_propagates_disk_cache_flags() {
+    let dir = tempdir().unwrap();
+    let cache_path = dir.path().join("page.html");
+    let progress_path = dir.path().join("page.json");
+    let log_path = dir.path().join("page.log");
+    let stage_path = dir.path().join("page.stage");
+    let stderr_path = dir.path().join("page.stderr.log");
+
+    let item = WorkItem {
+      stem: "disk_cache".to_string(),
+      cache_stem: "disk_cache".to_string(),
+      url: "https://disk_cache.test".to_string(),
+      cache_path,
+      progress_path,
+      log_path,
+      stderr_path,
+      stage_path,
+      trace_out: None,
+    };
+
+    let mut args = basic_run_args(dir.path());
+    args.disk_cache.max_bytes = 123;
+    args.disk_cache.max_age_secs = 456;
+    args.disk_cache.lock_stale_secs = 7;
+    args.disk_cache.allow_no_store = true;
+    args.disk_cache.writeback_under_deadline = true;
+
+    let mut cmd = Command::new("pageset_progress");
+    push_worker_args(
+      &mut cmd,
+      &args,
+      &item,
+      args.diagnostics,
+      None,
+      Duration::from_secs(5),
+      None,
+    );
+
+    let cmd_args = cmd
+      .get_args()
+      .map(|arg| arg.to_string_lossy().into_owned())
+      .collect::<Vec<_>>();
+
+    let max_bytes_pos = cmd_args
+      .iter()
+      .position(|arg| arg == "--disk-cache-max-bytes")
+      .expect("expected --disk-cache-max-bytes in worker command");
+    assert_eq!(cmd_args.get(max_bytes_pos + 1), Some(&"123".to_string()));
+
+    let max_age_pos = cmd_args
+      .iter()
+      .position(|arg| arg == "--disk-cache-max-age-secs")
+      .expect("expected --disk-cache-max-age-secs in worker command");
+    assert_eq!(cmd_args.get(max_age_pos + 1), Some(&"456".to_string()));
+
+    let lock_stale_pos = cmd_args
+      .iter()
+      .position(|arg| arg == "--disk-cache-lock-stale-secs")
+      .expect("expected --disk-cache-lock-stale-secs in worker command");
+    assert_eq!(cmd_args.get(lock_stale_pos + 1), Some(&"7".to_string()));
+
+    let allow_no_store_pos = cmd_args
+      .iter()
+      .position(|arg| arg == "--disk-cache-allow-no-store")
+      .expect("expected --disk-cache-allow-no-store in worker command");
+    assert_eq!(
+      cmd_args.get(allow_no_store_pos + 1),
+      Some(&"true".to_string())
+    );
+
+    let writeback_pos = cmd_args
+      .iter()
+      .position(|arg| arg == "--disk-cache-writeback-under-deadline")
+      .expect("expected --disk-cache-writeback-under-deadline in worker command");
+    assert_eq!(cmd_args.get(writeback_pos + 1), Some(&"true".to_string()));
   }
 
   #[test]
