@@ -89,7 +89,6 @@ use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
-use crate::paint::display_list::{list_marker_bounds, text_bounds};
 use crate::paint::display_list_renderer::PaintParallelism;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
@@ -316,6 +315,39 @@ impl Visibility {
       rect,
       hard_clip: self.hard_clip || (hard && rect.is_some()),
     }
+  }
+}
+
+struct ConservativeGlyphRunBoundsBuilder {
+  origin: Point,
+  min_x: f32,
+  max_x: f32,
+}
+
+impl ConservativeGlyphRunBoundsBuilder {
+  fn new(origin: Point, advance_width: f32) -> Self {
+    Self {
+      origin,
+      min_x: origin.x,
+      max_x: origin.x + advance_width,
+    }
+  }
+
+  fn include_glyph(&mut self, offset_x: f32, advance: f32) {
+    let gx = self.origin.x + offset_x;
+    self.min_x = self.min_x.min(gx);
+    self.max_x = self.max_x.max(gx + advance);
+  }
+
+  fn finish(self, font_size: f32) -> Rect {
+    let ascent = font_size;
+    let descent = font_size * 0.25;
+    Rect::from_xywh(
+      self.min_x,
+      self.origin.y - ascent,
+      (self.max_x - self.min_x).max(0.0),
+      ascent + descent,
+    )
   }
 }
 
@@ -3412,27 +3444,6 @@ impl DisplayListBuilder {
           // Fallback: naive glyphs when shaping fails or no style is present
           let font_size = style_opt.map(|s| s.font_size).unwrap_or(16.0);
           let char_width = font_size * 0.6;
-          let glyphs: Vec<GlyphInstance> = if inline_vertical {
-            text
-              .chars()
-              .enumerate()
-              .map(|(i, _c)| GlyphInstance {
-                glyph_id: i as u32,
-                offset: Point::new(0.0, i as f32 * char_width),
-                advance: 0.0,
-              })
-              .collect()
-          } else {
-            text
-              .chars()
-              .enumerate()
-              .map(|(i, _c)| GlyphInstance {
-                glyph_id: i as u32,
-                offset: Point::new(i as f32 * char_width, 0.0),
-                advance: char_width,
-              })
-              .collect()
-          };
           let advance_width = if inline_vertical {
             0.0
           } else {
@@ -3443,10 +3454,27 @@ impl DisplayListBuilder {
           } else {
             Point::new(baseline_block, baseline_inline)
           };
+          let mut bounds = ConservativeGlyphRunBoundsBuilder::new(origin, advance_width);
+          let mut glyphs = Vec::new();
+          for (i, _c) in text.chars().enumerate() {
+            let (offset, advance) = if inline_vertical {
+              (Point::new(0.0, i as f32 * char_width), 0.0)
+            } else {
+              (Point::new(i as f32 * char_width, 0.0), char_width)
+            };
+            bounds.include_glyph(offset.x, advance);
+            glyphs.push(GlyphInstance {
+              glyph_id: i as u32,
+              offset,
+              advance,
+            });
+          }
+          let cached_bounds = bounds.finish(font_size);
 
           if *is_marker {
-            let mut item = ListMarkerItem {
+            let item = ListMarkerItem {
               origin,
+              cached_bounds: Some(cached_bounds),
               glyphs,
               color,
               shadows: shadows.clone(),
@@ -3454,11 +3482,11 @@ impl DisplayListBuilder {
               advance_width,
               ..Default::default()
             };
-            item.cached_bounds = Some(list_marker_bounds(&item));
             self.list.push(DisplayItem::ListMarker(item));
           } else {
-            let mut item = TextItem {
+            let item = TextItem {
               origin,
+              cached_bounds: Some(cached_bounds),
               glyphs,
               color,
               shadows: shadows.clone(),
@@ -3467,7 +3495,6 @@ impl DisplayListBuilder {
               decorations: Vec::new(),
               ..Default::default()
             };
-            item.cached_bounds = Some(text_bounds(&item));
             self.list.push(DisplayItem::Text(item));
           }
         }
@@ -4681,7 +4708,7 @@ impl DisplayListBuilder {
       } else {
         pen_x
       };
-      let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+      let (glyphs, cached_bounds) = self.glyphs_from_run(run, origin_x, baseline_y);
       let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
@@ -4691,8 +4718,9 @@ impl DisplayListBuilder {
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
 
-      let mut item = TextItem {
+      let item = TextItem {
         origin: Point::new(origin_x, baseline_y),
+        cached_bounds: Some(cached_bounds),
         glyphs,
         color,
         palette_index: run.palette_index,
@@ -4708,7 +4736,6 @@ impl DisplayListBuilder {
         decorations: Vec::new(),
         ..Default::default()
       };
-      item.cached_bounds = Some(text_bounds(&item));
       self.list.push(DisplayItem::Text(item));
 
       pen_x += run.advance;
@@ -4735,7 +4762,7 @@ impl DisplayListBuilder {
       } else {
         pen_inline
       };
-      let glyphs =
+      let (glyphs, cached_bounds) =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
       let font_id = self.font_id_from_run(run);
       let emphasis =
@@ -4746,8 +4773,9 @@ impl DisplayListBuilder {
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
 
-      let mut item = TextItem {
+      let item = TextItem {
         origin: Point::new(block_baseline, inline_start),
+        cached_bounds: Some(cached_bounds),
         glyphs,
         color,
         palette_index: run.palette_index,
@@ -4763,7 +4791,6 @@ impl DisplayListBuilder {
         decorations: Vec::new(),
         ..Default::default()
       };
-      item.cached_bounds = Some(text_bounds(&item));
       self.list.push(DisplayItem::Text(item));
 
       pen_inline += run.advance;
@@ -4791,7 +4818,7 @@ impl DisplayListBuilder {
       } else {
         pen_x
       };
-      let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+      let (glyphs, cached_bounds) = self.glyphs_from_run(run, origin_x, baseline_y);
       let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
@@ -4800,8 +4827,9 @@ impl DisplayListBuilder {
         .iter()
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
-      let mut item = ListMarkerItem {
+      let item = ListMarkerItem {
         origin: Point::new(origin_x, baseline_y),
+        cached_bounds: Some(cached_bounds),
         glyphs,
         font_size: run.font_size,
         color,
@@ -4817,7 +4845,6 @@ impl DisplayListBuilder {
         background: None,
         ..Default::default()
       };
-      item.cached_bounds = Some(list_marker_bounds(&item));
       self.list.push(DisplayItem::ListMarker(item));
 
       pen_x += run.advance;
@@ -4844,7 +4871,7 @@ impl DisplayListBuilder {
       } else {
         pen_inline
       };
-      let glyphs =
+      let (glyphs, cached_bounds) =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
       let font_id = self.font_id_from_run(run);
       let emphasis =
@@ -4854,8 +4881,9 @@ impl DisplayListBuilder {
         .iter()
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
-      let mut item = ListMarkerItem {
+      let item = ListMarkerItem {
         origin: Point::new(block_baseline, inline_start),
+        cached_bounds: Some(cached_bounds),
         glyphs,
         font_size: run.font_size,
         color,
@@ -4871,7 +4899,6 @@ impl DisplayListBuilder {
         background: None,
         ..Default::default()
       };
-      item.cached_bounds = Some(list_marker_bounds(&item));
       self.list.push(DisplayItem::ListMarker(item));
 
       pen_inline += run.advance;
@@ -5241,8 +5268,15 @@ impl DisplayListBuilder {
     scaled
   }
 
-  fn glyphs_from_run(&self, run: &ShapedRun, origin_x: f32, baseline_y: f32) -> Vec<GlyphInstance> {
+  fn glyphs_from_run(
+    &self,
+    run: &ShapedRun,
+    origin_x: f32,
+    baseline_y: f32,
+  ) -> (Vec<GlyphInstance>, Rect) {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
+    let origin = Point::new(origin_x, baseline_y);
+    let mut bounds = ConservativeGlyphRunBoundsBuilder::new(origin, run.advance);
 
     for glyph in &run.glyphs {
       let x = match run.direction {
@@ -5250,14 +5284,16 @@ impl DisplayListBuilder {
         crate::text::pipeline::Direction::LeftToRight => origin_x + glyph.x_offset,
       };
       let y = baseline_y - glyph.y_offset;
+      let offset = Point::new(x - origin_x, y - baseline_y);
+      bounds.include_glyph(offset.x, glyph.x_advance);
       glyphs.push(GlyphInstance {
         glyph_id: glyph.glyph_id,
-        offset: Point::new(x - origin_x, y - baseline_y),
+        offset,
         advance: glyph.x_advance,
       });
     }
 
-    glyphs
+    (glyphs, bounds.finish(run.font_size))
   }
 
   fn glyphs_from_run_vertical(
@@ -5266,8 +5302,10 @@ impl DisplayListBuilder {
     block_baseline: f32,
     inline_origin: f32,
     inline_start: f32,
-  ) -> Vec<GlyphInstance> {
+  ) -> (Vec<GlyphInstance>, Rect) {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
+    let origin = Point::new(block_baseline, inline_start);
+    let mut bounds = ConservativeGlyphRunBoundsBuilder::new(origin, run.advance);
 
     for glyph in &run.glyphs {
       let inline_pos = match run.direction {
@@ -5275,14 +5313,16 @@ impl DisplayListBuilder {
         crate::text::pipeline::Direction::LeftToRight => inline_origin + glyph.x_offset,
       };
       let block_pos = block_baseline - glyph.y_offset;
+      let offset = Point::new(block_pos - block_baseline, inline_pos - inline_start);
+      bounds.include_glyph(offset.x, 0.0);
       glyphs.push(GlyphInstance {
         glyph_id: glyph.glyph_id,
-        offset: Point::new(block_pos - block_baseline, inline_pos - inline_start),
+        offset,
         advance: 0.0,
       });
     }
 
-    glyphs
+    (glyphs, bounds.finish(run.font_size))
   }
 
   fn build_emphasis(
@@ -5904,19 +5944,23 @@ impl DisplayListBuilder {
     let shadows = Self::text_shadows_from_style(style);
     let char_width = font_size * 0.6;
     let origin = Point::new(rect.x(), rect.y() + font_size * 0.8);
-    let glyphs: Vec<GlyphInstance> = text
-      .chars()
-      .enumerate()
-      .map(|(i, _)| GlyphInstance {
-        glyph_id: 0,
-        offset: Point::new(i as f32 * char_width, 0.0),
-        advance: char_width,
-      })
-      .collect();
     let advance_width = text.len() as f32 * char_width;
+    let mut bounds = ConservativeGlyphRunBoundsBuilder::new(origin, advance_width);
+    let mut glyphs = Vec::new();
+    for (i, _) in text.chars().enumerate() {
+      let offset = Point::new(i as f32 * char_width, 0.0);
+      bounds.include_glyph(offset.x, char_width);
+      glyphs.push(GlyphInstance {
+        glyph_id: 0,
+        offset,
+        advance: char_width,
+      });
+    }
+    let cached_bounds = bounds.finish(font_size);
 
-    let mut item = TextItem {
+    let item = TextItem {
       origin,
+      cached_bounds: Some(cached_bounds),
       glyphs,
       color,
       shadows,
@@ -5925,7 +5969,6 @@ impl DisplayListBuilder {
       decorations: Vec::new(),
       ..Default::default()
     };
-    item.cached_bounds = Some(text_bounds(&item));
     self.list.push(DisplayItem::Text(item));
     true
   }
@@ -6189,6 +6232,7 @@ mod tests {
   use crate::css::types::PropertyValue;
   use crate::css::types::Transform;
   use crate::image_loader::ImageCache;
+  use crate::paint::display_list::text_bounds;
   use crate::paint::display_list::ResolvedMaskImage;
   use crate::paint::stacking::StackingContext;
   use crate::paint::stacking::StackingContextReason;
@@ -6221,6 +6265,7 @@ mod tests {
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
   use crate::text::face_cache;
+  use crate::text::font_db::FontDatabase;
   use crate::text::font_loader::FontContext;
   use crate::text::pipeline::ShapingPipeline;
   use crate::tree::box_tree::ReplacedType;
@@ -6330,6 +6375,42 @@ mod tests {
 
     assert_eq!(list.len(), 1);
     assert!(matches!(list.items()[0], DisplayItem::Text(_)));
+  }
+
+  #[test]
+  fn builder_populates_text_cached_bounds() {
+    let mut db = FontDatabase::empty();
+    let font_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts");
+    db.load_fonts_dir(font_dir);
+    db.refresh_generic_fallbacks();
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let fragment = FragmentNode::new_text_styled(
+      Rect::from_xywh(10.0, 20.0, 100.0, 20.0),
+      "Hello".to_string(),
+      12.0,
+      Arc::new(ComputedStyle::default()),
+    );
+    let mut builder = DisplayListBuilder::new();
+    builder.font_ctx = font_ctx;
+    let list = builder.build(&fragment);
+
+    let text_item = list
+      .items()
+      .iter()
+      .find_map(|item| match item {
+        DisplayItem::Text(text) => Some(text),
+        _ => None,
+      })
+      .expect("display list should include a Text item");
+
+    let cached = text_item
+      .cached_bounds
+      .expect("TextItem.cached_bounds should be populated during build");
+    let mut uncached = text_item.clone();
+    uncached.cached_bounds = None;
+    let expected = text_bounds(&uncached);
+    assert_eq!(cached, expected);
   }
 
   #[test]
