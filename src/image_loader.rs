@@ -58,6 +58,13 @@ fn image_profile_threshold_ms() -> Option<f64> {
   runtime::runtime_toggles().f64("FASTR_IMAGE_PROFILE_MS")
 }
 
+fn image_probe_max_bytes() -> usize {
+  runtime::runtime_toggles()
+    .usize("FASTR_IMAGE_PROBE_MAX_BYTES")
+    .unwrap_or(64 * 1024)
+    .clamp(1, 16 * 1024 * 1024)
+}
+
 /// Image cache diagnostics collection.
 #[derive(Debug, Default, Clone)]
 pub struct ImageCacheDiagnostics {
@@ -65,6 +72,13 @@ pub struct ImageCacheDiagnostics {
   pub cache_hits: usize,
   pub cache_misses: usize,
   pub decode_ms: f64,
+  /// Number of `ResourceFetcher::fetch_partial` calls made by image probes.
+  pub probe_partial_requests: usize,
+  /// Total bytes returned by partial probe fetches (sum of response body prefixes).
+  pub probe_partial_bytes_total: usize,
+  /// Number of times an image probe attempted partial fetches but ultimately fell back to a full
+  /// `fetch()` due to insufficient bytes / unsupported partial responses.
+  pub probe_partial_fallback_full: usize,
   pub raster_pixmap_cache_hits: usize,
   pub raster_pixmap_cache_misses: usize,
   /// Maximum cached bytes observed for the raster pixmap cache during the diagnostic window.
@@ -120,6 +134,17 @@ fn record_image_decode_ms(duration_ms: f64) {
     return;
   }
   with_image_cache_diagnostics(|stats| stats.decode_ms += duration_ms);
+}
+
+fn record_probe_partial_fetch(bytes: usize) {
+  with_image_cache_diagnostics(|stats| {
+    stats.probe_partial_requests += 1;
+    stats.probe_partial_bytes_total = stats.probe_partial_bytes_total.saturating_add(bytes);
+  });
+}
+
+fn record_probe_partial_fallback_full() {
+  with_image_cache_diagnostics(|stats| stats.probe_partial_fallback_full += 1);
 }
 
 fn record_raster_pixmap_cache_hit() {
@@ -1977,27 +2002,108 @@ impl ImageCache {
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
 
+    let check_resource_allowed = |resource: &FetchedResource| -> Result<()> {
+      if let Some(ctx) = &self.resource_context {
+        let policy_url = resource.final_url.as_deref().unwrap_or(resolved_url);
+        if let Err(err) = ctx.check_allowed(ResourceKind::Image, policy_url) {
+          return Err(Error::Image(ImageError::LoadFailed {
+            url: resolved_url.to_string(),
+            reason: err.reason,
+          }));
+        }
+      }
+      ensure_http_success(resource, resolved_url)
+        .and_then(|()| ensure_image_mime_sane(resource, resolved_url))
+    };
+
+    let probe_limit = image_probe_max_bytes();
+    let retry_limit = probe_limit
+      .saturating_mul(8)
+      .max(512 * 1024)
+      .clamp(1, 64 * 1024 * 1024);
+
+    for (idx, limit) in [probe_limit, retry_limit].into_iter().enumerate() {
+      let resource = match self.fetcher.fetch_partial(resolved_url, limit) {
+        Ok(res) => res,
+        Err(err) => {
+          let _ = err;
+          break;
+        }
+      };
+      record_probe_partial_fetch(resource.bytes.len());
+      let resource = Arc::new(resource);
+
+      if let Err(err) = check_resource_allowed(resource.as_ref()) {
+        self.record_image_error(resolved_url, &err);
+        return Err(err);
+      }
+
+      let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+      let attempt_probe_start = profile_enabled.then(Instant::now);
+      match self.probe_resource(&resource, resolved_url) {
+        Ok(meta) => {
+          let probe_ms = attempt_probe_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+          let meta = Arc::new(meta);
+
+          if let Ok(mut cache) = self.meta_cache.lock() {
+            cache.insert(resolved_url.to_string(), Arc::clone(&meta));
+          }
+
+          if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
+            let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+            if total_ms >= threshold_ms {
+              let content_type = resource
+                .content_type
+                .as_deref()
+                .unwrap_or("<unknown>")
+                .split(';')
+                .next()
+                .unwrap_or("<unknown>");
+              eprintln!(
+                "image_profile kind=probe total_ms={total_ms:.2} fetch_ms={:.2} probe_ms={:.2} bytes={} dims={}x{} vector={} url={}",
+                fetch_ms.unwrap_or(0.0),
+                probe_ms.unwrap_or(0.0),
+                resource.bytes.len(),
+                meta.width,
+                meta.height,
+                meta.is_vector,
+                resolved_url
+              );
+              eprintln!(" image_profile content_type={content_type}");
+            }
+          }
+
+          return Ok(meta);
+        }
+        Err(err) => {
+          // Only retry/fallback when it looks like the prefix may have been truncated.
+          if resource.bytes.len() < limit {
+            self.record_image_error(resolved_url, &err);
+            return Err(err);
+          }
+          let _ = err;
+          // Retry once with a larger prefix, then fall back to a full fetch.
+          if idx == 0 {
+            continue;
+          }
+          break;
+        }
+      }
+    }
+
+    if probe_limit > 0 {
+      record_probe_partial_fallback_full();
+    }
+
     let resource = match self.fetcher.fetch(resolved_url) {
-      Ok(res) => Arc::new(res),
+      Ok(res) => res,
       Err(err) => {
         self.record_image_error(resolved_url, &err);
         return Err(err);
       }
     };
-    if let Some(ctx) = &self.resource_context {
-      let policy_url = resource.final_url.as_deref().unwrap_or(resolved_url);
-      if let Err(err) = ctx.check_allowed(ResourceKind::Image, policy_url) {
-        let blocked = Error::Image(ImageError::LoadFailed {
-          url: resolved_url.to_string(),
-          reason: err.reason,
-        });
-        self.record_image_error(resolved_url, &blocked);
-        return Err(blocked);
-      }
-    }
-    if let Err(err) = ensure_http_success(resource.as_ref(), resolved_url)
-      .and_then(|()| ensure_image_mime_sane(resource.as_ref(), resolved_url))
-    {
+    let resource = Arc::new(resource);
+    if let Err(err) = check_resource_allowed(resource.as_ref()) {
       self.record_image_error(resolved_url, &err);
       return Err(err);
     }
@@ -3326,6 +3432,169 @@ mod tests {
       .expect("diagnostics entry");
     assert_eq!(entry.status, Some(403));
     assert_eq!(entry.final_url.as_deref(), Some(url.as_str()));
+
+    server.join().unwrap();
+  }
+
+  fn padded_png() -> Vec<u8> {
+    // 1x1 RGBA PNG, padded with trailing bytes so that the probe must use a prefix fetch.
+    const PNG_1X1: &[u8] = &[
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xB5,
+      0x1C, 0x0C, 0x02, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xFC,
+      0xFF, 0x1F, 0x00, 0x03, 0x03, 0x01, 0x02, 0x94, 0x60, 0xC4, 0x1B, 0x00, 0x00, 0x00, 0x00,
+      0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    let mut bytes = PNG_1X1.to_vec();
+    bytes.resize(128 * 1024, 0);
+    bytes
+  }
+
+  fn read_http_headers(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+
+    let mut buf = Vec::new();
+    let mut scratch = [0u8; 1024];
+    loop {
+      match stream.read(&mut scratch) {
+        Ok(0) => break,
+        Ok(n) => {
+          buf.extend_from_slice(&scratch[..n]);
+          if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 32 * 1024 {
+            break;
+          }
+        }
+        Err(_) => break,
+      }
+    }
+    String::from_utf8_lossy(&buf).to_string()
+  }
+
+  fn extract_range_header(req: &str) -> Option<String> {
+    req.lines().find_map(|line| {
+      let (name, value) = line.split_once(':')?;
+      if name.trim().eq_ignore_ascii_case("range") {
+        Some(value.trim().to_string())
+      } else {
+        None
+      }
+    })
+  }
+
+  fn parse_range_end(range: &str) -> Option<usize> {
+    let range = range.trim();
+    let range = range.strip_prefix("bytes=")?;
+    let (_start, end) = range.split_once('-')?;
+    end.trim().parse::<usize>().ok()
+  }
+
+  #[test]
+  fn image_probe_uses_http_range_requests() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => listener,
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!("skipping image_probe_uses_http_range_requests: cannot bind localhost: {err}");
+        return;
+      }
+      Err(err) => panic!("bind localhost: {err}"),
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/probe.png");
+    let body = padded_png();
+
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept");
+      let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+      let req = read_http_headers(&mut stream);
+
+      let range = extract_range_header(&req).expect("missing Range header");
+      let end = parse_range_end(&range).expect("invalid Range header");
+      let prefix_len = (end + 1).min(body.len());
+      let prefix = &body[..prefix_len];
+
+      let header = format!(
+        "HTTP/1.1 206 Partial Content\r\nContent-Type: image/png\r\nContent-Length: {}\r\nContent-Range: bytes 0-{}/{}\r\nConnection: close\r\n\r\n",
+        prefix.len(),
+        prefix.len().saturating_sub(1),
+        body.len()
+      );
+      stream.write_all(header.as_bytes()).expect("write header");
+      stream.write_all(prefix).expect("write body");
+      let _ = stream.flush();
+    });
+
+    let cache = ImageCache::with_fetcher(Arc::new(HttpFetcher::new()));
+    let meta = cache.probe(&url).expect("probe succeeds");
+    assert_eq!(meta.dimensions(), (1, 1));
+
+    server.join().unwrap();
+  }
+
+  #[test]
+  fn image_probe_partial_fetch_handles_range_ignored() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => listener,
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!(
+          "skipping image_probe_partial_fetch_handles_range_ignored: cannot bind localhost: {err}"
+        );
+        return;
+      }
+      Err(err) => panic!("bind localhost: {err}"),
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/probe.png");
+    let body = padded_png();
+
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept");
+      let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+      let req = read_http_headers(&mut stream);
+
+      let range = extract_range_header(&req).expect("missing Range header");
+      let end = parse_range_end(&range).expect("invalid Range header");
+      let prefix_len = (end + 1).min(body.len());
+      let prefix = &body[..prefix_len];
+
+      // Ignore Range and respond with 200 + the full content-length. Send only the prefix
+      // immediately; if the client tried to read the entire body it would stall and hit the
+      // request timeout below.
+      let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(header.as_bytes()).expect("write header");
+      stream.write_all(prefix).expect("write prefix");
+      let _ = stream.flush();
+      std::thread::sleep(Duration::from_millis(500));
+      let _ = stream.write_all(&body[prefix_len..]);
+      let _ = stream.flush();
+    });
+
+    let cache = ImageCache::with_fetcher(Arc::new(
+      HttpFetcher::new().with_timeout(Duration::from_millis(150)),
+    ));
+    let meta = cache.probe(&url).expect("probe succeeds");
+    assert_eq!(meta.dimensions(), (1, 1));
 
     server.join().unwrap();
   }

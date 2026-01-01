@@ -159,6 +159,7 @@ These are emitted by the paint pipeline:
 - `FASTR_TRACE_OUT=/path/to/trace.json` – emit Chrome trace events for parse/style/layout/paint.
 - `FASTR_DISABLE_LAYOUT_CACHE=1` / `FASTR_DISABLE_FLEX_CACHE=1` – disable layout/flex caches.
 - `FASTR_IMAGE_PROFILE_MS=<ms>` / `FASTR_STACK_PROFILE_MS=<ms>` / `FASTR_TEXT_PROFILE_MS=<ms>` / `FASTR_CMD_PROFILE_MS=<ms>` – emit timing when operations exceed the threshold.
+- `FASTR_IMAGE_PROBE_MAX_BYTES=<bytes>` – cap bytes fetched when probing image dimensions/metadata (default 65536; the probe retries with a larger prefix before falling back to a full fetch).
 - `FASTR_TEXT_FALLBACK_CACHE_CAPACITY=<N>` – override the font fallback cache capacity in entries (default 131072). This applies separately to the glyph and cluster fallback caches; 0/empty/unset disables the override (use the default). Applied values are clamped to >= 1.
 
 How to interpret fallback-cache diagnostics (when render diagnostics are enabled and `RenderStats` is available):
@@ -167,7 +168,6 @@ How to interpret fallback-cache diagnostics (when render diagnostics are enabled
 - `fallback_cache_*_{entries,capacity}` and `fallback_cache_shards` provide context on cache sizing/sharding.
 
 High eviction counts typically imply cache pressure (raise `FASTR_TEXT_FALLBACK_CACHE_CAPACITY`). High `RenderStats.counts.fallback_descriptor_stats.unique_descriptors` (enable `FASTR_TEXT_FALLBACK_DESCRIPTOR_STATS=1`) suggests a descriptor keyspace explosion, which can keep hit rates low even with a large cache.
-
 - `FASTR_SELECTOR_BLOOM=0` – disable selector bloom-filter hashing (useful for perf A/B checks).
 - `FASTR_SELECTOR_BLOOM_BITS=256|512|1024` – selector bloom summary bit size used for `:has()` pruning (default 1024; larger reduces false positives on large subtrees but costs more memory/build time).
 - `FASTR_ANCESTOR_BLOOM=0` – disable the cascade's ancestor bloom filter fast-reject for descendant selectors.

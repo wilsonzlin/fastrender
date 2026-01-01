@@ -1956,6 +1956,12 @@ pub struct ResourceDiagnostics {
   pub image_cache_hits: Option<usize>,
   pub image_cache_misses: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub probe_partial_requests: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub probe_partial_bytes_total: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub probe_partial_fallback_full: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub raster_pixmap_cache_hits: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub raster_pixmap_cache_misses: Option<usize>,
@@ -2033,6 +2039,9 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
   if let Some(image_stats) = crate::image_loader::take_image_cache_diagnostics() {
     stats.resources.image_cache_hits = Some(image_stats.cache_hits);
     stats.resources.image_cache_misses = Some(image_stats.cache_misses);
+    stats.resources.probe_partial_requests = Some(image_stats.probe_partial_requests);
+    stats.resources.probe_partial_bytes_total = Some(image_stats.probe_partial_bytes_total);
+    stats.resources.probe_partial_fallback_full = Some(image_stats.probe_partial_fallback_full);
     stats.resources.raster_pixmap_cache_hits = Some(image_stats.raster_pixmap_cache_hits);
     stats.resources.raster_pixmap_cache_misses = Some(image_stats.raster_pixmap_cache_misses);
     stats.resources.raster_pixmap_cache_bytes = Some(image_stats.raster_pixmap_cache_bytes);

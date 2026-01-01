@@ -168,6 +168,46 @@ fn read_all_with_deadline<R: Read>(
   })
 }
 
+fn read_prefix_with_deadline<R: Read>(
+  reader: &mut R,
+  stage: RenderStage,
+  max_chunk_size: usize,
+  max_bytes: usize,
+) -> std::result::Result<Vec<u8>, ReadAllWithDeadlineError> {
+  if max_bytes == 0 {
+    return Ok(Vec::new());
+  }
+
+  // Keep allocations proportional to the requested prefix (not the full file size).
+  let mut bytes = Vec::with_capacity(max_bytes.min(max_chunk_size));
+  let desired_chunk_size = max_bytes.clamp(DISK_READ_MIN_CHUNK_SIZE, max_chunk_size);
+
+  DISK_READ_SCRATCH.with(|scratch| {
+    let mut buf = scratch.borrow_mut();
+    if buf.len() < desired_chunk_size {
+      buf.resize(desired_chunk_size, 0);
+    }
+    let mut deadline_counter = 0usize;
+    loop {
+      if bytes.len() >= max_bytes {
+        break;
+      }
+      if let Err(err) = render_control::check_active_periodic(&mut deadline_counter, 1, stage) {
+        return Err(ReadAllWithDeadlineError::Timeout(err));
+      }
+      let remaining = max_bytes - bytes.len();
+      let to_read = remaining.min(desired_chunk_size);
+      match reader.read(&mut buf[..to_read]) {
+        Ok(0) => break,
+        Ok(n) => bytes.extend_from_slice(&buf[..n]),
+        Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+        Err(_err) => return Err(ReadAllWithDeadlineError::Io),
+      }
+    }
+    Ok(bytes)
+  })
+}
+
 fn read_path_with_deadline(
   path: &Path,
   stage: RenderStage,
@@ -179,6 +219,16 @@ fn read_path_with_deadline(
     .ok()
     .and_then(|meta| meta.len().try_into().ok());
   read_all_with_deadline(&mut file, capacity_hint, stage, max_chunk_size)
+}
+
+fn read_path_prefix_with_deadline(
+  path: &Path,
+  stage: RenderStage,
+  max_chunk_size: usize,
+  max_bytes: usize,
+) -> std::result::Result<Vec<u8>, ReadAllWithDeadlineError> {
+  let mut file = fs::File::open(path)?;
+  read_prefix_with_deadline(&mut file, stage, max_chunk_size, max_bytes)
 }
 
 #[derive(Debug)]
@@ -320,6 +370,13 @@ struct EntryLock {
 
 enum SnapshotRead {
   Hit(CachedSnapshot),
+  Miss,
+  Locked,
+  Timeout(RenderError),
+}
+
+enum SnapshotPrefixRead {
+  Hit(FetchedResource),
   Miss,
   Locked,
   Timeout(RenderError),
@@ -771,6 +828,81 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
+  fn read_disk_entry_prefix(
+    &self,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<Option<(String, FetchedResource)>> {
+    let mut disk_timer = super::start_disk_cache_diagnostics();
+    let mut current = url.to_string();
+    let mut hops = 0usize;
+
+    loop {
+      if let Err(err) = render_control::check_active(DISK_META_READ_STAGE) {
+        super::finish_disk_cache_diagnostics(disk_timer.take());
+        return Err(Error::Render(err));
+      }
+
+      let key = self.cache_key(&current);
+      let data_path = self.data_path_for_key(&key);
+      let meta_path = self.meta_path_for_data(&data_path);
+
+      match self.try_read_resource_prefix(&key, &current, &data_path, &meta_path, max_bytes) {
+        SnapshotPrefixRead::Hit(resource) => {
+          super::record_disk_cache_hit();
+          super::record_disk_cache_bytes(resource.bytes.len());
+          super::finish_disk_cache_diagnostics(disk_timer.take());
+          return Ok(Some((current, resource)));
+        }
+        SnapshotPrefixRead::Timeout(err) => {
+          super::finish_disk_cache_diagnostics(disk_timer.take());
+          return Err(Error::Render(err));
+        }
+        SnapshotPrefixRead::Locked => {
+          let max_wait = self.deadline_aware_lock_wait(READ_LOCK_WAIT_TIMEOUT);
+          if !max_wait.is_zero() {
+            let lock_wait_timer = super::start_disk_cache_lock_wait_diagnostics();
+            let unlocked = self.wait_for_unlock(&data_path, max_wait);
+            super::finish_disk_cache_lock_wait_diagnostics(lock_wait_timer);
+            if unlocked {
+              match self.try_read_resource_prefix(&key, &current, &data_path, &meta_path, max_bytes)
+              {
+                SnapshotPrefixRead::Hit(resource) => {
+                  super::record_disk_cache_hit();
+                  super::record_disk_cache_bytes(resource.bytes.len());
+                  super::finish_disk_cache_diagnostics(disk_timer.take());
+                  return Ok(Some((current, resource)));
+                }
+                SnapshotPrefixRead::Timeout(err) => {
+                  super::finish_disk_cache_diagnostics(disk_timer.take());
+                  return Err(Error::Render(err));
+                }
+                _ => {}
+              }
+            }
+          }
+        }
+        SnapshotPrefixRead::Miss => {}
+      }
+
+      let Some(next) = self.read_alias_target(&current) else {
+        super::record_disk_cache_miss();
+        super::finish_disk_cache_diagnostics(disk_timer.take());
+        return Ok(None);
+      };
+
+      if hops >= MAX_ALIAS_HOPS || next == current {
+        self.remove_alias_for(&current);
+        super::record_disk_cache_miss();
+        super::finish_disk_cache_diagnostics(disk_timer.take());
+        return Ok(None);
+      }
+
+      current = next;
+      hops += 1;
+    }
+  }
+
   fn try_read_snapshot(
     &self,
     key: &str,
@@ -849,6 +981,80 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       last_modified: meta.last_modified,
       http_cache,
     })
+  }
+
+  fn try_read_resource_prefix(
+    &self,
+    key: &str,
+    url: &str,
+    data_path: &Path,
+    meta_path: &Path,
+    max_bytes: usize,
+  ) -> SnapshotPrefixRead {
+    if self.lock_is_active(data_path) {
+      return SnapshotPrefixRead::Locked;
+    }
+
+    let meta_bytes =
+      match read_path_with_deadline(meta_path, DISK_META_READ_STAGE, DISK_META_READ_CHUNK_SIZE) {
+        Ok(bytes) => bytes,
+        Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotPrefixRead::Timeout(err),
+        Err(_) => {
+          self.remove_entry_if_unlocked(key, data_path, meta_path);
+          return SnapshotPrefixRead::Miss;
+        }
+      };
+    let meta: StoredMetadata = match serde_json::from_slice(&meta_bytes) {
+      Ok(meta) => meta,
+      Err(_) => {
+        self.remove_entry_if_unlocked(key, data_path, meta_path);
+        return SnapshotPrefixRead::Miss;
+      }
+    };
+
+    let data_len_ok = fs::metadata(data_path)
+      .ok()
+      .and_then(|m| usize::try_from(m.len()).ok())
+      .map(|len| len == meta.len)
+      .unwrap_or(false);
+    if !data_len_ok {
+      self.remove_entry_if_unlocked(key, data_path, meta_path);
+      return SnapshotPrefixRead::Miss;
+    }
+
+    let read_stage = stage_for_cached_content_type(meta.content_type.as_deref());
+    let target_len = meta.len.min(max_bytes);
+    let bytes =
+      match read_path_prefix_with_deadline(data_path, read_stage, DISK_READ_CHUNK_SIZE, target_len)
+      {
+        Ok(bytes) => bytes,
+        Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotPrefixRead::Timeout(err),
+        Err(_) => {
+          self.remove_entry_if_unlocked(key, data_path, meta_path);
+          return SnapshotPrefixRead::Miss;
+        }
+      };
+
+    self
+      .index
+      .backfill_if_missing(key, meta.stored_at, meta.len as u64, data_path, meta_path);
+
+    let mut resource = FetchedResource::with_final_url(
+      bytes,
+      meta.content_type.clone(),
+      meta.final_url.clone().or_else(|| Some(url.to_string())),
+    );
+    resource.status = meta.status;
+    resource.etag = meta.etag.clone();
+    resource.last_modified = meta.last_modified.clone();
+    resource.cache_policy = meta.cache.as_ref().map(|c| c.to_policy()).or_else(|| {
+      self.disk_config.max_age.map(|max_age| HttpCachePolicy {
+        max_age: Some(max_age.as_secs()),
+        ..Default::default()
+      })
+    });
+
+    SnapshotPrefixRead::Hit(resource)
   }
 
   fn read_alias_target(&self, url: &str) -> Option<String> {
@@ -1337,6 +1543,38 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
     inflight_guard.finish(notify);
 
     result
+  }
+
+  fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    if let Some(policy) = &self.policy {
+      policy.ensure_url_allowed(url)?;
+    }
+
+    if let Some(snapshot) = self.memory.cached_snapshot(url) {
+      let result = snapshot.value.as_result();
+      if let Ok(mut res) = result {
+        if res.bytes.len() > max_bytes {
+          res.bytes.truncate(max_bytes);
+        }
+        super::record_cache_fresh_hit();
+        super::record_resource_cache_bytes(res.bytes.len());
+        super::reserve_policy_bytes(&self.policy, &res)?;
+        return Ok(res);
+      }
+      return result;
+    }
+
+    if let Some((_canonical, mut res)) = self.read_disk_entry_prefix(url, max_bytes)? {
+      if res.bytes.len() > max_bytes {
+        res.bytes.truncate(max_bytes);
+      }
+      super::record_cache_fresh_hit();
+      super::record_resource_cache_bytes(res.bytes.len());
+      super::reserve_policy_bytes(&self.policy, &res)?;
+      return Ok(res);
+    }
+
+    self.memory.inner.fetch_partial(url, max_bytes)
   }
 }
 
