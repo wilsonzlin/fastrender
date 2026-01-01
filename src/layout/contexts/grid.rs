@@ -1634,7 +1634,11 @@ impl GridFormattingContext {
             reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
             "measured fragments should be normalized to the origin",
           );
-          translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()));
+          if let Err(err) =
+            translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()), &mut deadline_counter)
+          {
+            return Some(Err(err));
+          }
           reused_fragments[idx] = Some(reused);
         }
       }
@@ -1689,7 +1693,12 @@ impl GridFormattingContext {
             fc.layout(&layout_child, &child_constraints)?
           };
 
-          translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()));
+          let mut translate_deadline_counter = 0usize;
+          translate_fragment_tree(
+            &mut laid_out,
+            Point::new(bounds.x(), bounds.y()),
+            &mut translate_deadline_counter,
+          )?;
           laid_out.content = FragmentContent::Block {
             box_id: Some(child.id),
           };
@@ -1862,7 +1871,11 @@ impl GridFormattingContext {
             reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
             "measured fragments should be normalized to the origin",
           );
-          translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()));
+          translate_fragment_tree(
+            &mut reused,
+            Point::new(bounds.x(), bounds.y()),
+            deadline_counter,
+          )?;
           return Ok(reused);
         }
       }
@@ -1891,7 +1904,7 @@ impl GridFormattingContext {
         layout_child.style = Arc::new(layout_style);
         fc.layout(&layout_child, &child_constraints)?
       };
-      translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()));
+      translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()), deadline_counter)?;
       laid_out.content = FragmentContent::Block {
         box_id: Some(box_node.id),
       };
@@ -2210,7 +2223,7 @@ impl GridFormattingContext {
           );
         }
         if let Some(child) = fragment.children_mut().get_mut(item.idx) {
-          translate_along_axis(child, axis, delta);
+          translate_along_axis(child, axis, delta, deadline_counter)?;
         }
       } else if debug_baseline {
         eprintln!(
@@ -2558,8 +2571,14 @@ impl GridFormattingContext {
       hook
         .borrow()
         .as_ref()
-        .and_then(|hook| hook(box_node).map(normalize_fragment_origin))
+        .and_then(|hook| hook(box_node))
     }) {
+      let mut normalize_deadline_counter = 0usize;
+      fragment = match normalize_fragment_origin(fragment, &mut normalize_deadline_counter) {
+        Ok(fragment) => fragment,
+        Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+        Err(_) => return taffy::geometry::Size::ZERO,
+      };
       let percentage_base = match available_space.width {
         taffy::style::AvailableSpace::Definite(w) => w,
         _ => constraints
@@ -2681,7 +2700,12 @@ impl GridFormattingContext {
       box_id: Some(box_node.id),
     };
     fragment.style = Some(box_node.style.clone());
-    let fragment = normalize_fragment_origin(fragment);
+    let mut normalize_deadline_counter = 0usize;
+    let fragment = match normalize_fragment_origin(fragment, &mut normalize_deadline_counter) {
+      Ok(fragment) => fragment,
+      Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+      Err(_) => return taffy::geometry::Size::ZERO,
+    };
     let content_size = self.content_box_size(&fragment, &box_node.style, percentage_base);
     let size = taffy::geometry::Size {
       width: content_size.width.max(0.0),
@@ -2715,7 +2739,12 @@ fn grid_child_fingerprint(
   Ok(h.finish())
 }
 
-fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
+fn translate_fragment_tree(
+  fragment: &mut FragmentNode,
+  delta: Point,
+  deadline_counter: &mut usize,
+) -> Result<(), LayoutError> {
+  check_layout_deadline(deadline_counter)?;
   fragment.bounds = Rect::new(
     Point::new(fragment.bounds.x() + delta.x, fragment.bounds.y() + delta.y),
     fragment.bounds.size,
@@ -2727,16 +2756,20 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
     ));
   }
   for child in fragment.children_mut() {
-    translate_fragment_tree(child, delta);
+    translate_fragment_tree(child, delta, deadline_counter)?;
   }
+  Ok(())
 }
 
-fn normalize_fragment_origin(mut fragment: FragmentNode) -> FragmentNode {
+fn normalize_fragment_origin(
+  mut fragment: FragmentNode,
+  deadline_counter: &mut usize,
+) -> Result<FragmentNode, LayoutError> {
   let origin = fragment.bounds.origin;
   if origin.x != 0.0 || origin.y != 0.0 {
-    translate_fragment_tree(&mut fragment, Point::new(-origin.x, -origin.y));
+    translate_fragment_tree(&mut fragment, Point::new(-origin.x, -origin.y), deadline_counter)?;
   }
-  fragment
+  Ok(fragment)
 }
 
 #[cfg(test)]
@@ -2942,15 +2975,20 @@ struct BaselineItem {
   size: f32,
 }
 
-fn translate_along_axis(fragment: &mut FragmentNode, axis: Axis, delta: f32) {
+fn translate_along_axis(
+  fragment: &mut FragmentNode,
+  axis: Axis,
+  delta: f32,
+  deadline_counter: &mut usize,
+) -> Result<(), LayoutError> {
   if delta == 0.0 {
-    return;
+    return Ok(());
   }
   let delta_point = match axis {
     Axis::Horizontal => Point::new(delta, 0.0),
     Axis::Vertical => Point::new(0.0, delta),
   };
-  translate_fragment_tree(fragment, delta_point);
+  translate_fragment_tree(fragment, delta_point, deadline_counter)
 }
 
 fn parse_grid_line_placement_raw(raw: &str) -> Line<TaffyGridPlacement<String>> {

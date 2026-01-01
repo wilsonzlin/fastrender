@@ -142,7 +142,12 @@ fn record_flex_measure_inline_hint_call() {
   });
 }
 
-fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
+fn translate_fragment_tree(
+  fragment: &mut FragmentNode,
+  delta: Point,
+  deadline_counter: &mut usize,
+) -> Result<(), LayoutError> {
+  check_layout_deadline(deadline_counter)?;
   crate::tree::fragment_tree::record_fragment_traversal(1);
   fragment.bounds = Rect::new(
     Point::new(fragment.bounds.x() + delta.x, fragment.bounds.y() + delta.y),
@@ -155,15 +160,20 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
     ));
   }
   for child in fragment.children_mut() {
-    translate_fragment_tree(child, delta);
+    translate_fragment_tree(child, delta, deadline_counter)?;
   }
+  Ok(())
 }
 
-fn normalize_fragment_origin(fragment: &mut FragmentNode) {
+fn normalize_fragment_origin(
+  fragment: &mut FragmentNode,
+  deadline_counter: &mut usize,
+) -> Result<(), LayoutError> {
   let origin = fragment.bounds.origin;
   if origin.x != 0.0 || origin.y != 0.0 {
-    translate_fragment_tree(fragment, Point::new(-origin.x, -origin.y));
+    translate_fragment_tree(fragment, Point::new(-origin.x, -origin.y), deadline_counter)?;
   }
+  Ok(())
 }
 
 const FLEX_DEADLINE_CHECK_STRIDE: usize = 64;
@@ -1491,13 +1501,18 @@ impl FormattingContext for FlexFormattingContext {
                         std::sync::Arc<FragmentNode>,
                       >| {
                         normalized_fragment
-                          .get_or_insert_with(|| {
-                            let mut fragment = fragment.take().expect("fragment already normalized");
-                            normalize_fragment_origin(&mut fragment);
-                            std::sync::Arc::new(fragment)
-                          })
-                          .clone()
-                      };
+                           .get_or_insert_with(|| {
+                             let mut fragment = fragment.take().expect("fragment already normalized");
+                             let mut deadline_counter = 0usize;
+                             if let Err(err) = normalize_fragment_origin(&mut fragment, &mut deadline_counter) {
+                               if matches!(err, LayoutError::Timeout { .. }) {
+                                 taffy::abort_layout_now();
+                               }
+                             }
+                             std::sync::Arc::new(fragment)
+                           })
+                           .clone()
+                       };
 
                     if measured_fragments.get(cache_key, &key).is_none() {
                       let normalized_fragment =
@@ -1757,9 +1772,17 @@ impl FormattingContext for FlexFormattingContext {
             if line.has_baseline {
               let delta = line.baseline - metrics.baseline_pos;
               if cross_is_horizontal {
-                translate_fragment_tree(child_fragment, Point::new(delta, 0.0));
+                translate_fragment_tree(
+                  child_fragment,
+                  Point::new(delta, 0.0),
+                  &mut deadline_counter,
+                )?;
               } else {
-                translate_fragment_tree(child_fragment, Point::new(0.0, delta));
+                translate_fragment_tree(
+                  child_fragment,
+                  Point::new(0.0, delta),
+                  &mut deadline_counter,
+                )?;
               }
               continue;
             }
