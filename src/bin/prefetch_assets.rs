@@ -37,10 +37,12 @@ mod disk_cache_main {
   use rayon::ThreadPoolBuilder;
   use std::cell::RefCell;
   use std::collections::{HashMap, HashSet};
-  use std::path::PathBuf;
+  use std::path::{Path, PathBuf};
   use std::sync::Arc;
+  use std::time::Duration;
 
   use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs, ViewportArgs};
+  use crate::common::disk_cache_stats::scan_disk_cache_dir;
   use crate::common::render_pipeline::{
     build_http_fetcher, disk_cache_namespace, read_cached_document,
   };
@@ -495,6 +497,49 @@ mod disk_cache_main {
     summary.into_inner()
   }
 
+  fn log_disk_cache_stats(
+    phase: &str,
+    cache_dir: &Path,
+    lock_stale_after: Duration,
+    max_bytes: u64,
+    lock_stale_secs: u64,
+  ) {
+    let stats = match scan_disk_cache_dir(cache_dir, lock_stale_after) {
+      Ok(stats) => stats,
+      Err(err) => {
+        println!("Disk cache stats ({phase}): unavailable ({err})");
+        return;
+      }
+    };
+
+    println!(
+      "Disk cache stats ({phase}): bin_count={} meta_count={} alias_count={} bin_bytes={} locks={} stale_locks={} tmp={} journal={}",
+      stats.bin_count,
+      stats.meta_count,
+      stats.alias_count,
+      stats.bin_bytes,
+      stats.lock_count,
+      stats.stale_lock_count,
+      stats.tmp_count,
+      stats.journal_bytes
+    );
+    println!("{}", stats.usage_summary(max_bytes));
+
+    if max_bytes != 0 && stats.bin_bytes > max_bytes {
+      println!(
+        "Warning: disk cache usage exceeds max_bytes (bin_bytes={} > max_bytes={}). Consider increasing --disk-cache-max-bytes or setting FASTR_DISK_CACHE_MAX_BYTES=0 to disable eviction.",
+        stats.bin_bytes, max_bytes
+      );
+    }
+    if stats.stale_lock_count > 0 {
+      println!(
+        "Warning: disk cache contains {} stale .lock file(s). Consider tuning FASTR_DISK_CACHE_LOCK_STALE_SECS (currently {}).",
+        stats.stale_lock_count, lock_stale_secs
+      );
+    }
+    println!();
+  }
+
   pub fn main() {
     let args = Args::parse();
 
@@ -538,6 +583,7 @@ mod disk_cache_main {
 
     let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);
     let mut disk_config = args.disk_cache.to_config();
+    let lock_stale_after = disk_config.lock_stale_after;
     disk_config.namespace = Some(disk_cache_namespace(
       &args.user_agent,
       &args.accept_language,
@@ -571,6 +617,13 @@ mod disk_cache_main {
     println!(
       "Disk cache: max_bytes={} max_age={}",
       args.disk_cache.max_bytes, max_age
+    );
+    log_disk_cache_stats(
+      "start",
+      &args.cache_dir,
+      lock_stale_after,
+      args.disk_cache.max_bytes,
+      args.disk_cache.lock_stale_secs,
     );
     println!();
 
@@ -635,6 +688,14 @@ mod disk_cache_main {
       total_imports_failed,
       total_fonts_fetched,
       total_fonts_failed
+    );
+    println!();
+    log_disk_cache_stats(
+      "end",
+      &args.cache_dir,
+      lock_stale_after,
+      args.disk_cache.max_bytes,
+      args.disk_cache.lock_stale_secs,
     );
 
     // Best-effort tool: do not fail the process on fetch errors.

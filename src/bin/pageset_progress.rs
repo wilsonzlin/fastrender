@@ -5555,6 +5555,36 @@ fn run(args: RunArgs) -> io::Result<()> {
       "Disk cache: max_bytes={} max_age={}",
       args.disk_cache.max_bytes, max_age
     );
+    let lock_stale_after = Duration::from_secs(args.disk_cache.lock_stale_secs);
+    match common::disk_cache_stats::scan_disk_cache_dir(Path::new(ASSET_DIR), lock_stale_after) {
+      Ok(stats) => {
+        println!(
+          "Disk cache stats: bin_count={} meta_count={} alias_count={} bin_bytes={} locks={} stale_locks={} tmp={} journal={}",
+          stats.bin_count,
+          stats.meta_count,
+          stats.alias_count,
+          stats.bin_bytes,
+          stats.lock_count,
+          stats.stale_lock_count,
+          stats.tmp_count,
+          stats.journal_bytes
+        );
+        println!("{}", stats.usage_summary(args.disk_cache.max_bytes));
+        if args.disk_cache.max_bytes != 0 && stats.bin_bytes > args.disk_cache.max_bytes {
+          println!(
+            "Warning: disk cache usage exceeds max_bytes (bin_bytes={} > max_bytes={}). Consider increasing --disk-cache-max-bytes or setting FASTR_DISK_CACHE_MAX_BYTES=0 to disable eviction.",
+            stats.bin_bytes, args.disk_cache.max_bytes
+          );
+        }
+        if stats.stale_lock_count > 0 {
+          println!(
+            "Warning: disk cache contains {} stale .lock file(s). Consider tuning FASTR_DISK_CACHE_LOCK_STALE_SECS (currently {}).",
+            stats.stale_lock_count, args.disk_cache.lock_stale_secs
+          );
+        }
+      }
+      Err(err) => println!("Disk cache stats: unavailable ({err})"),
+    }
   }
   if args.fonts.bundled_fonts {
     println!("Fonts: bundled fixtures (system fonts skipped)");
