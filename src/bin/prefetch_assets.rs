@@ -19,26 +19,28 @@ mod disk_cache_main {
   use clap::{ArgAction, Parser};
   use fastrender::css::encoding::decode_css_bytes;
   use fastrender::css::loader::{
-    absolutize_css_urls, extract_css_links, extract_embedded_css_urls, resolve_href,
+    absolutize_css_urls, extract_css_links, extract_embedded_css_urls,
+    link_rel_is_stylesheet_candidate, resolve_href, resolve_href_with_base,
   };
-  use fastrender::css::parser::parse_stylesheet;
+  use fastrender::css::parser::{extract_scoped_css_sources, parse_stylesheet, StylesheetSource};
   use fastrender::css::types::CssImportLoader;
-  use fastrender::css::types::StyleSheet;
+  use fastrender::css::types::{FontFaceSource, StyleSheet};
+  use fastrender::debug::runtime;
+  use fastrender::dom::parse_html;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
     CachingFetcherConfig, DiskCachingFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
     DEFAULT_USER_AGENT,
   };
-  use fastrender::style::media::MediaContext;
-  use fastrender::style::media::MediaQueryCache;
+  use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
   use rayon::prelude::*;
   use rayon::ThreadPoolBuilder;
   use std::cell::RefCell;
-  use std::collections::{BTreeSet, HashMap, HashSet};
+  use std::collections::{HashMap, HashSet};
   use std::path::PathBuf;
   use std::sync::Arc;
 
-  use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs};
+  use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs, ViewportArgs};
   use crate::common::render_pipeline::{
     build_http_fetcher, disk_cache_namespace, read_cached_document,
   };
@@ -57,6 +59,17 @@ mod disk_cache_main {
 
     #[command(flatten)]
     disk_cache: DiskCacheArgs,
+
+    /// Override the User-Agent header
+    #[arg(long, default_value = DEFAULT_USER_AGENT)]
+    user_agent: String,
+
+    /// Override the Accept-Language header
+    #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
+    accept_language: String,
+
+    #[command(flatten)]
+    viewport: ViewportArgs,
 
     /// Prefetch font URLs referenced by fetched CSS (true/false)
     #[arg(
@@ -120,101 +133,17 @@ mod disk_cache_main {
     }
   }
 
-  fn extract_font_urls(css: &str) -> Vec<String> {
-    fn is_font_like(url: &str) -> bool {
-      let lower = url.to_ascii_lowercase();
-      let stripped = lower
-        .split_once('#')
-        .map(|(before, _)| before)
-        .unwrap_or(&lower);
-      let stripped = stripped
-        .split_once('?')
-        .map(|(before, _)| before)
-        .unwrap_or(stripped);
-      matches!(
-        stripped,
-        s if s.ends_with(".woff2")
-          || s.ends_with(".woff")
-          || s.ends_with(".ttf")
-          || s.ends_with(".otf")
-          || s.ends_with(".eot")
-      )
-    }
-
-    let mut urls = Vec::new();
-    let bytes = css.as_bytes();
-    let mut i = 0usize;
-    while i + 4 <= bytes.len() {
-      if bytes[i].eq_ignore_ascii_case(&b'u')
-        && bytes[i + 1].eq_ignore_ascii_case(&b'r')
-        && bytes[i + 2].eq_ignore_ascii_case(&b'l')
-        && bytes[i + 3] == b'('
-      {
-        let mut j = i + 4;
-        while j < bytes.len() && (bytes[j] as char).is_whitespace() {
-          j += 1;
-        }
-        if j >= bytes.len() {
-          break;
-        }
-        let quote = bytes[j];
-        let (start, end) = if quote == b'"' || quote == b'\'' {
-          j += 1;
-          let start = j;
-          while j < bytes.len() {
-            if bytes[j] == b'\\' {
-              j += 2;
-              continue;
-            }
-            if bytes[j] == quote {
-              break;
-            }
-            j += 1;
-          }
-          (start, j)
-        } else {
-          let start = j;
-          while j < bytes.len() && bytes[j] != b')' {
-            j += 1;
-          }
-          (start, j)
-        };
-
-        if end > start && end <= css.len() {
-          let candidate = css[start..end].trim();
-          if !candidate.is_empty() && is_font_like(candidate) {
-            urls.push(candidate.to_string());
-          }
-        }
-
-        i = j;
-      } else {
-        i += 1;
-      }
-    }
-    urls
-  }
-
   struct PrefetchImportLoader<'a> {
     fetcher: &'a dyn ResourceFetcher,
-    prefetch_fonts: bool,
     css_cache: RefCell<HashMap<String, String>>,
-    seen_fonts: &'a RefCell<HashSet<String>>,
     summary: &'a RefCell<PageSummary>,
   }
 
   impl<'a> PrefetchImportLoader<'a> {
-    fn new(
-      fetcher: &'a dyn ResourceFetcher,
-      prefetch_fonts: bool,
-      seen_fonts: &'a RefCell<HashSet<String>>,
-      summary: &'a RefCell<PageSummary>,
-    ) -> Self {
+    fn new(fetcher: &'a dyn ResourceFetcher, summary: &'a RefCell<PageSummary>) -> Self {
       Self {
         fetcher,
-        prefetch_fonts,
         css_cache: RefCell::new(HashMap::new()),
-        seen_fonts,
         summary,
       }
     }
@@ -236,12 +165,6 @@ mod disk_cache_main {
             Err(_) => decoded,
           };
 
-          if self.prefetch_fonts {
-            let mut seen = self.seen_fonts.borrow_mut();
-            let mut summary = self.summary.borrow_mut();
-            prefetch_fonts_from_css(self.fetcher, base, &rewritten, &mut seen, &mut summary);
-          }
-
           self
             .css_cache
             .borrow_mut()
@@ -257,26 +180,152 @@ mod disk_cache_main {
     }
   }
 
-  fn prefetch_fonts_from_css(
+  #[derive(Debug, Clone)]
+  enum StylesheetTask {
+    Inline(String),
+    External(String),
+  }
+
+  fn stylesheet_type_is_css(type_attr: Option<&str>) -> bool {
+    match type_attr {
+      None => true,
+      Some(value) => {
+        let mime = value.split(';').next().map(str::trim).unwrap_or("");
+        mime.is_empty() || mime.eq_ignore_ascii_case("text/css")
+      }
+    }
+  }
+
+  fn media_attr_allows(
+    media_attr: Option<&str>,
+    media_ctx: &MediaContext,
+    cache: &mut MediaQueryCache,
+  ) -> bool {
+    match media_attr {
+      None => true,
+      Some(media) => {
+        let trimmed = media.trim();
+        if trimmed.is_empty() {
+          return true;
+        }
+
+        match MediaQuery::parse_list(trimmed) {
+          Ok(list) => media_ctx.evaluate_list_with_cache(&list, Some(cache)),
+          Err(_) => false,
+        }
+      }
+    }
+  }
+
+  fn discover_dom_stylesheet_tasks(
+    html: &str,
+    base_url: &str,
+    media_ctx: &MediaContext,
+    media_query_cache: &mut MediaQueryCache,
+  ) -> Option<Vec<StylesheetTask>> {
+    let dom = parse_html(html).ok()?;
+    let scoped_sources = extract_scoped_css_sources(&dom);
+    let toggles = runtime::runtime_toggles();
+    let fetch_link_css = toggles.truthy_with_default("FASTR_FETCH_LINK_CSS", true);
+    let preload_stylesheets_enabled =
+      toggles.truthy_with_default("FASTR_FETCH_PRELOAD_STYLESHEETS", true);
+    let modulepreload_stylesheets_enabled =
+      toggles.truthy_with_default("FASTR_FETCH_MODULEPRELOAD_STYLESHEETS", false);
+    let alternate_stylesheets_enabled =
+      toggles.truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
+
+    let mut tasks = Vec::new();
+    let mut seen_external: HashSet<String> = HashSet::new();
+
+    let mut consider_source = |source: &StylesheetSource| match source {
+      StylesheetSource::Inline(inline) => {
+        if inline.disabled || !stylesheet_type_is_css(inline.type_attr.as_deref()) {
+          return;
+        }
+        if !media_attr_allows(inline.media.as_deref(), media_ctx, media_query_cache) {
+          return;
+        }
+        if inline.css.trim().is_empty() {
+          return;
+        }
+        tasks.push(StylesheetTask::Inline(inline.css.clone()));
+      }
+      StylesheetSource::External(link) => {
+        if !fetch_link_css {
+          return;
+        }
+        if link.disabled
+          || !link_rel_is_stylesheet_candidate(
+            &link.rel,
+            link.as_attr.as_deref(),
+            preload_stylesheets_enabled,
+            modulepreload_stylesheets_enabled,
+            alternate_stylesheets_enabled,
+          )
+          || !stylesheet_type_is_css(link.type_attr.as_deref())
+        {
+          return;
+        }
+        if !media_attr_allows(link.media.as_deref(), media_ctx, media_query_cache) {
+          return;
+        }
+        if link.href.trim().is_empty() {
+          return;
+        }
+
+        let Some(stylesheet_url) = resolve_href_with_base(Some(base_url), &link.href) else {
+          return;
+        };
+        if seen_external.insert(stylesheet_url.clone()) {
+          tasks.push(StylesheetTask::External(stylesheet_url));
+        }
+      }
+    };
+
+    for source in scoped_sources.document.iter() {
+      consider_source(source);
+    }
+
+    let mut shadow_hosts: Vec<usize> = scoped_sources.shadows.keys().copied().collect();
+    shadow_hosts.sort_unstable();
+    for host in shadow_hosts {
+      if let Some(sources) = scoped_sources.shadows.get(&host) {
+        for source in sources {
+          consider_source(source);
+        }
+      }
+    }
+
+    Some(tasks)
+  }
+
+  fn prefetch_fonts_from_stylesheet(
     fetcher: &dyn ResourceFetcher,
     css_base_url: &str,
-    css_text: &str,
-    seen: &mut HashSet<String>,
+    sheet: &StyleSheet,
+    media_ctx: &MediaContext,
+    media_query_cache: &mut MediaQueryCache,
+    seen_fonts: &mut HashSet<String>,
     summary: &mut PageSummary,
   ) {
-    for raw in extract_font_urls(css_text) {
-      let Some(resolved) = resolve_href(css_base_url, &raw) else {
-        continue;
-      };
-      if resolved.starts_with("data:") {
-        continue;
-      }
-      if !seen.insert(resolved.clone()) {
-        continue;
-      }
-      match fetcher.fetch(&resolved) {
-        Ok(_) => summary.fetched_fonts += 1,
-        Err(_) => summary.failed_fonts += 1,
+    for face in sheet.collect_font_face_rules_with_cache(media_ctx, Some(media_query_cache)) {
+      for source in face.sources {
+        let FontFaceSource::Url(url_source) = source else {
+          continue;
+        };
+        let Some(resolved) = resolve_href(css_base_url, &url_source.url) else {
+          continue;
+        };
+        if resolved.starts_with("data:") {
+          continue;
+        }
+        if !seen_fonts.insert(resolved.clone()) {
+          continue;
+        }
+        match fetcher.fetch(&resolved) {
+          Ok(_) => summary.fetched_fonts += 1,
+          Err(_) => summary.failed_fonts += 1,
+        }
       }
     }
   }
@@ -284,6 +333,7 @@ mod disk_cache_main {
   fn prefetch_page(
     entry: &PagesetEntry,
     fetcher: &dyn ResourceFetcher,
+    media_ctx: &MediaContext,
     prefetch_fonts: bool,
   ) -> PageSummary {
     let summary = RefCell::new(PageSummary {
@@ -307,56 +357,138 @@ mod disk_cache_main {
     let base_url = cached.document.base_url.clone();
     let html = cached.document.html;
 
-    let media_ctx = MediaContext::screen(1200.0, 800.0).with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
 
-    let mut css_urls: BTreeSet<String> = BTreeSet::new();
-    match extract_css_links(&html, &base_url, media_ctx.media_type) {
-      Ok(urls) => css_urls.extend(urls),
-      Err(_) => {}
-    }
-    match extract_embedded_css_urls(&html, &base_url) {
-      Ok(urls) => css_urls.extend(urls),
-      Err(_) => {}
-    }
+    let mut tasks: Vec<StylesheetTask> =
+      match discover_dom_stylesheet_tasks(&html, &base_url, media_ctx, &mut media_query_cache) {
+        Some(tasks) => {
+          if tasks.is_empty() {
+            // Pages that load their primary stylesheet dynamically (without emitting `<link rel="stylesheet">`
+            // or `<style>`) are still best-effort handled by scanning the raw HTML for `.css`-looking
+            // substrings.
+            let mut out = Vec::new();
+            let mut seen = HashSet::new();
+            if let Ok(urls) = extract_embedded_css_urls(&html, &base_url) {
+              for url in urls {
+                if seen.insert(url.clone()) {
+                  out.push(StylesheetTask::External(url));
+                }
+              }
+            }
+            out
+          } else {
+            tasks
+          }
+        }
+        None => {
+          // DOM parse failed; fall back to the string-based extraction used by older versions.
+          let mut out = Vec::new();
+          let mut seen = HashSet::new();
+          if let Ok(urls) = extract_css_links(&html, &base_url, media_ctx.media_type) {
+            for url in urls {
+              if seen.insert(url.clone()) {
+                out.push(StylesheetTask::External(url));
+              }
+            }
+          }
+          if let Ok(urls) = extract_embedded_css_urls(&html, &base_url) {
+            for url in urls {
+              if seen.insert(url.clone()) {
+                out.push(StylesheetTask::External(url));
+              }
+            }
+          }
+          out
+        }
+      };
 
-    summary.borrow_mut().discovered_css = css_urls.len();
-    if css_urls.is_empty() {
+    summary.borrow_mut().discovered_css = tasks.len();
+    if tasks.is_empty() {
       return summary.into_inner();
     }
 
-    let seen_fonts: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
-    let import_loader = PrefetchImportLoader::new(fetcher, prefetch_fonts, &seen_fonts, &summary);
+    // Process external stylesheets in sorted order for more reproducible network/cache behavior.
+    tasks.sort_by(|a, b| match (a, b) {
+      (StylesheetTask::Inline(_), StylesheetTask::External(_)) => std::cmp::Ordering::Less,
+      (StylesheetTask::External(_), StylesheetTask::Inline(_)) => std::cmp::Ordering::Greater,
+      (StylesheetTask::Inline(_), StylesheetTask::Inline(_)) => std::cmp::Ordering::Equal,
+      (StylesheetTask::External(a), StylesheetTask::External(b)) => a.cmp(b),
+    });
 
-    for css_url in css_urls {
-      match fetcher.fetch(&css_url) {
-        Ok(res) => {
-          summary.borrow_mut().fetched_css += 1;
-          let sheet_base = res.final_url.as_deref().unwrap_or(&css_url);
-          let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-          let css_text = match absolutize_css_urls(&css_text, sheet_base) {
-            Ok(css) => css,
-            Err(_) => css_text,
-          };
-          if prefetch_fonts {
-            let mut seen = seen_fonts.borrow_mut();
-            let mut summary = summary.borrow_mut();
-            prefetch_fonts_from_css(fetcher, sheet_base, &css_text, &mut seen, &mut summary);
-          }
+    let import_loader = PrefetchImportLoader::new(fetcher, &summary);
+    let mut seen_fonts: HashSet<String> = HashSet::new();
 
-          let sheet: StyleSheet = match parse_stylesheet(&css_text) {
+    for task in tasks {
+      match task {
+        StylesheetTask::Inline(css) => {
+          let sheet: StyleSheet = match parse_stylesheet(&css) {
             Ok(sheet) => sheet,
             Err(_) => continue,
           };
 
-          let _ = sheet.resolve_imports_with_cache(
+          let resolved = match sheet.resolve_imports_with_cache(
             &import_loader,
-            Some(sheet_base),
-            &media_ctx,
+            Some(&base_url),
+            media_ctx,
             Some(&mut media_query_cache),
-          );
+          ) {
+            Ok(sheet) => sheet,
+            Err(_) => sheet,
+          };
+
+          if prefetch_fonts {
+            let mut summary = summary.borrow_mut();
+            prefetch_fonts_from_stylesheet(
+              fetcher,
+              &base_url,
+              &resolved,
+              media_ctx,
+              &mut media_query_cache,
+              &mut seen_fonts,
+              &mut summary,
+            );
+          }
         }
-        Err(_) => summary.borrow_mut().failed_css += 1,
+        StylesheetTask::External(css_url) => match fetcher.fetch(&css_url) {
+          Ok(res) => {
+            summary.borrow_mut().fetched_css += 1;
+            let sheet_base = res.final_url.as_deref().unwrap_or(&css_url);
+            let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+            let css_text = match absolutize_css_urls(&css_text, sheet_base) {
+              Ok(css) => css,
+              Err(_) => css_text,
+            };
+
+            let sheet: StyleSheet = match parse_stylesheet(&css_text) {
+              Ok(sheet) => sheet,
+              Err(_) => continue,
+            };
+
+            let resolved = match sheet.resolve_imports_with_cache(
+              &import_loader,
+              Some(sheet_base),
+              media_ctx,
+              Some(&mut media_query_cache),
+            ) {
+              Ok(sheet) => sheet,
+              Err(_) => sheet,
+            };
+
+            if prefetch_fonts {
+              let mut summary = summary.borrow_mut();
+              prefetch_fonts_from_stylesheet(
+                fetcher,
+                sheet_base,
+                &resolved,
+                media_ctx,
+                &mut media_query_cache,
+                &mut seen_fonts,
+                &mut summary,
+              );
+            }
+          }
+          Err(_) => summary.borrow_mut().failed_css += 1,
+        },
       }
     }
 
@@ -397,11 +529,18 @@ mod disk_cache_main {
       }
     }
 
-    let http = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, timeout_secs);
+    let media_ctx = MediaContext::screen(
+      args.viewport.viewport.0 as f32,
+      args.viewport.viewport.1 as f32,
+    )
+    .with_device_pixel_ratio(args.viewport.dpr)
+    .with_env_overrides();
+
+    let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);
     let mut disk_config = args.disk_cache.to_config();
     disk_config.namespace = Some(disk_cache_namespace(
-      DEFAULT_USER_AGENT,
-      DEFAULT_ACCEPT_LANGUAGE,
+      &args.user_agent,
+      &args.accept_language,
     ));
     let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
       http,
@@ -443,7 +582,7 @@ mod disk_cache_main {
     let mut results: Vec<PageSummary> = pool.install(|| {
       selected
         .par_iter()
-        .map(|entry| prefetch_page(entry, fetcher.as_ref(), args.prefetch_fonts))
+        .map(|entry| prefetch_page(entry, fetcher.as_ref(), &media_ctx, args.prefetch_fonts))
         .collect()
     });
 
