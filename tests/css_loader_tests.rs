@@ -113,6 +113,14 @@ fn infer_base_url_preserves_file_like_base_href_without_trailing_slash() {
 }
 
 #[test]
+fn resolve_href_accepts_uppercase_data_urls() {
+  let data_url = "DATA:text/plain,hello";
+  let resolved = resolve_href("https://example.com/root/page.html", data_url)
+    .expect("data: urls should resolve without needing a base");
+  assert_eq!(resolved, data_url);
+}
+
+#[test]
 fn inline_imports_resolves_urls_relative_to_imported_sheet() {
   let mut state = InlineImportState::new();
   let mut fetch = |url: &str| -> fastrender::error::Result<String> {

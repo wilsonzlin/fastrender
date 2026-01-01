@@ -66,6 +66,10 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     return None;
   }
 
+  fn starts_with_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.len() >= needle.len() && haystack[..needle.len()].eq_ignore_ascii_case(needle)
+  }
+
   // CSS/HTML authors sometimes escape path characters with backslashes. The WHATWG URL parser
   // treats `\` as a path separator for special schemes, but for our resource fetching and URL
   // rewriting we want a stable percent-encoded representation instead.
@@ -80,19 +84,15 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     return None;
   }
 
-  if href.starts_with("data:") {
-    return Some(href.to_string());
+  let href_bytes = href.as_ref().as_bytes();
+  if starts_with_ignore_ascii_case(href_bytes, b"data:") {
+    return Some(href.into_owned());
   }
 
-  let href_lower = href.to_ascii_lowercase();
-  if href_lower.starts_with("javascript:")
-    || href_lower.starts_with("vbscript:")
-    || href_lower.starts_with("mailto:")
+  if starts_with_ignore_ascii_case(href_bytes, b"javascript:")
+    || starts_with_ignore_ascii_case(href_bytes, b"vbscript:")
+    || starts_with_ignore_ascii_case(href_bytes, b"mailto:")
   {
-    return None;
-  }
-
-  if href.starts_with('#') {
     return None;
   }
 
@@ -100,17 +100,20 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     return Some(abs.to_string());
   }
 
-  let mut base_candidate = base.to_string();
+  let mut base_candidate: Cow<'_, str> = Cow::Borrowed(base);
   if base_candidate.starts_with("file://") {
     let path = &base_candidate["file://".len()..];
     if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
-      base_candidate.push('/');
+      let mut owned = base_candidate.into_owned();
+      owned.push('/');
+      base_candidate = Cow::Owned(owned);
     }
   }
 
-  Url::parse(&base_candidate)
+  Url::parse(base_candidate.as_ref())
     .or_else(|_| {
-      Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase)
+      Url::from_file_path(base_candidate.as_ref())
+        .map_err(|()| url::ParseError::RelativeUrlWithoutBase)
     })
     .ok()?
     .join(href.as_ref())
