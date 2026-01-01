@@ -197,7 +197,7 @@ fn sticky_constraints_use_font_metrics_for_relative_units() {
 
   let mut style = default_style();
   style.position = Position::Sticky;
-  style.font_family = vec![font.family.clone()];
+  style.font_family = vec![font.family.clone()].into();
   style.font_size = font_size;
   style.root_font_size = font_size;
   style.top = LengthOrAuto::Length(Length::new(1.0, LengthUnit::Ex));
@@ -649,7 +649,7 @@ fn relative_offsets_use_font_metrics_and_adjust() {
 
   let mut style = default_style();
   style.position = Position::Relative;
-  style.font_family = vec![font.family.clone()];
+  style.font_family = vec![font.family.clone()].into();
   style.font_size = font_size;
   style.root_font_size = font_size;
   style.font_size_adjust = FontSizeAdjust::Number(adjust);
