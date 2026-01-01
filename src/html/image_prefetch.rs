@@ -100,7 +100,14 @@ fn push_unique_url(
   }
 }
 
-fn link_rel_is_icon_candidate(rel_tokens: &[String], as_attr: Option<&str>) -> bool {
+fn link_rel_is_preload_image(rel_tokens: &[String], as_attr: Option<&str>) -> bool {
+  rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("preload"))
+    && as_attr
+      .map(|v| v.trim().eq_ignore_ascii_case("image"))
+      .unwrap_or(false)
+}
+
+fn link_rel_is_icon_candidate(rel_tokens: &[String]) -> bool {
   if rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("icon")) {
     return true;
   }
@@ -112,17 +119,10 @@ fn link_rel_is_icon_candidate(rel_tokens: &[String], as_attr: Option<&str>) -> b
     return true;
   }
 
-  if rel_tokens
-    .iter()
-    .any(|t| t.eq_ignore_ascii_case("apple-touch-icon-precomposed") || t.eq_ignore_ascii_case("manifest"))
-  {
+  if rel_tokens.iter().any(|t| {
+    t.eq_ignore_ascii_case("apple-touch-icon-precomposed") || t.eq_ignore_ascii_case("manifest")
+  }) {
     return true;
-  }
-
-  if rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("preload")) {
-    return as_attr
-      .map(|v| v.trim().eq_ignore_ascii_case("image"))
-      .unwrap_or(false);
   }
 
   false
@@ -289,27 +289,64 @@ pub fn discover_image_prefetch_urls(
           }
         }
       } else if tag.eq_ignore_ascii_case("link") {
-        // Note: do not apply srcset selection logic to `<link>` elements.
-        // This tool intentionally fetches only `href` for icon-like links
-        // (and `rel=preload as=image`). See `imagesrcset` / `imagesizes` for
-        // responsive preloads, which are intentionally not parsed here.
         if let Some(rel_attr) = node.get_attribute_ref("rel") {
           let rel_tokens = tokenize_rel_list(rel_attr);
           if !rel_tokens.is_empty() {
-            let href = node.get_attribute_ref("href").unwrap_or("");
-            if !href.trim().is_empty() {
-              let as_attr = node.get_attribute_ref("as");
-              if link_rel_is_icon_candidate(&rel_tokens, as_attr) {
-                if *image_elements >= limits.max_image_elements {
-                  *limited = true;
-                  return false;
-                }
-                *image_elements += 1;
-                push_unique_url(ctx, seen_urls, urls, href);
-                if *image_elements >= limits.max_image_elements {
-                  *limited = true;
-                  return false;
-                }
+            let href = node.get_attribute_ref("href").unwrap_or("").trim();
+            let as_attr = node.get_attribute_ref("as");
+
+            let media_matches = match node.get_attribute_ref("media") {
+              Some(media) => MediaQuery::parse_list(media)
+                .ok()
+                .map(|list| ctx.media_context.map(|m| m.evaluate_list(&list)).unwrap_or(true))
+                .unwrap_or(true),
+              None => true,
+            };
+            if !media_matches {
+              return true;
+            }
+
+            if link_rel_is_preload_image(&rel_tokens, as_attr) {
+              let parsed_srcset = node
+                .get_attribute_ref("imagesrcset")
+                .map(parse_srcset)
+                .unwrap_or_default();
+              let parsed_sizes = node
+                .get_attribute_ref("imagesizes")
+                .and_then(parse_sizes);
+              if href.is_empty() && parsed_srcset.is_empty() {
+                return true;
+              }
+
+              if *image_elements >= limits.max_image_elements {
+                *limited = true;
+                return false;
+              }
+              *image_elements += 1;
+              for selected in
+                image_sources_with_fallback(href, &parsed_srcset, parsed_sizes.as_ref(), &[], ctx)
+                  .into_iter()
+                  .take(limits.max_urls_per_element)
+              {
+                push_unique_url(ctx, seen_urls, urls, selected.url);
+              }
+              if *image_elements >= limits.max_image_elements {
+                *limited = true;
+                return false;
+              }
+            } else if link_rel_is_icon_candidate(&rel_tokens) {
+              if href.is_empty() {
+                return true;
+              }
+              if *image_elements >= limits.max_image_elements {
+                *limited = true;
+                return false;
+              }
+              *image_elements += 1;
+              push_unique_url(ctx, seen_urls, urls, href);
+              if *image_elements >= limits.max_image_elements {
+                *limited = true;
+                return false;
               }
             }
           }
@@ -427,5 +464,36 @@ mod tests {
     assert_eq!(out.image_elements, 1);
     assert!(out.limited);
     assert_eq!(out.urls, vec!["https://example.com/a.jpg".to_string()]);
+  }
+
+  #[test]
+  fn selects_link_preload_imagesrcset() {
+    let html = r#"
+      <link rel="preload" as="image"
+        href="fallback.jpg"
+        imagesrcset="a1.jpg 1x, a2.jpg 2x">
+    "#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 2.0);
+    let ctx = ctx_for((800.0, 600.0), 2.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(
+      out.urls,
+      vec![
+        "https://example.com/a2.jpg".to_string(),
+        "https://example.com/fallback.jpg".to_string(),
+      ]
+    );
   }
 }
