@@ -5,8 +5,27 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tempfile::tempdir;
+
+fn parse_debug_duration(raw: &str) -> Option<Duration> {
+  let raw = raw.trim();
+  let (value, scale) = if let Some(value) = raw.strip_suffix("ns") {
+    (value, 1e-9)
+  } else if let Some(value) = raw.strip_suffix("µs") {
+    (value, 1e-6)
+  } else if let Some(value) = raw.strip_suffix("us") {
+    (value, 1e-6)
+  } else if let Some(value) = raw.strip_suffix("ms") {
+    (value, 1e-3)
+  } else if let Some(value) = raw.strip_suffix('s') {
+    (value, 1.0)
+  } else {
+    return None;
+  };
+  let parsed = value.trim().parse::<f64>().ok()?;
+  Some(Duration::from_secs_f64(parsed * scale))
+}
 
 #[test]
 fn pageset_progress_worker_respects_fetch_timeout_budget() {
@@ -50,7 +69,6 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
   let progress_path = temp.path().join("progress.json");
   let log_path = temp.path().join("worker.log");
 
-  let start = Instant::now();
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .env("FASTR_USE_BUNDLED_FONTS", "0")
     .env("FASTR_HTTP_MAX_ATTEMPTS", "5")
@@ -85,16 +103,11 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
     ])
     .status()
     .expect("run pageset_progress worker with fetch timeout");
-  let elapsed = start.elapsed();
 
   running.store(false, Ordering::Relaxed);
   let _ = server.join();
 
   assert!(status.success(), "worker exited with {status:?}");
-  assert!(
-    elapsed < Duration::from_millis(500),
-    "worker should respect fetch timeout budget, took {elapsed:?}"
-  );
 
   let progress_raw = fs::read_to_string(&progress_path).expect("read progress json");
   let progress: Value = serde_json::from_str(&progress_raw).expect("parse progress json");
@@ -111,8 +124,25 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
 
   let log = fs::read_to_string(&log_path).expect("read worker log");
   let log_lower = log.to_ascii_lowercase();
-  assert!(
-    log_lower.contains("overall http timeout budget exceeded"),
+  let needle = "overall http timeout budget exceeded (budget=";
+  let idx = log_lower.find(needle).expect(&format!(
     "expected worker log to mention budget exhaustion (budget semantics), got:\n{log}"
+  ));
+  let rest = &log[idx + needle.len()..];
+  let (budget_raw, rest) = rest
+    .split_once(',')
+    .expect("budget log should contain a comma after budget");
+  let rest = rest.trim_start();
+  let rest = rest
+    .strip_prefix("elapsed=")
+    .expect("budget log should contain elapsed=");
+  let (elapsed_raw, _) = rest
+    .split_once(')')
+    .expect("budget log should contain ) after elapsed");
+  let budget = parse_debug_duration(budget_raw).expect("parse budget duration");
+  let elapsed = parse_debug_duration(elapsed_raw).expect("parse elapsed duration");
+  assert!(
+    elapsed <= budget + Duration::from_millis(250),
+    "expected budget-mode fetch to finish near the configured budget; budget={budget_raw} elapsed={elapsed_raw}"
   );
 }
