@@ -525,22 +525,20 @@ def main() -> int:
         if lw:
             leaf_func[fxi] += lw
 
-    # Inclusive weight that counts each function at most once per sample stack.
+    # Inclusive weight that counts each function at most once per unique sample stack.
+    #
+    # We compute this per stack table entry (not per sample) for performance: many samples share
+    # the same stack index, and leaf_stack_weight has already aggregated their weights.
+    #
     # This avoids the common failure mode where recursive functions or repeated inlined frames make
     # inclusive percentages exceed 100% and dominate the ranking.
     inclusive_unique: List[float] = [0.0] * n_funcs
     seen_marker: List[int] = [0] * n_funcs
-    for sample_i in range(n_samples):
-        s = sample_stacks[sample_i] if sample_i < len(sample_stacks) else None
-        cur = _to_index(s)
-        if cur is None or cur >= n_stacks:
+    for stack_i, weight in enumerate(leaf_stack_weight):
+        if weight <= 0:
             continue
-        w = sample_weights[sample_i] if sample_i < len(sample_weights) else 1
-        if not isinstance(w, (int, float)):
-            w = 1
-        weight = float(w)
-        mark = sample_i + 1
-
+        mark = stack_i + 1
+        cur = stack_i
         while True:
             frame_idx = frames[cur] if cur < len(frames) else None
             fi = _to_index(frame_idx)
