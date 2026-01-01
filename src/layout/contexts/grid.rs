@@ -1748,7 +1748,26 @@ impl GridFormattingContext {
       Ok(results) => results,
       Err(err) => return Some(Err(err)),
     };
-    child_results.sort_by_key(|(idx, _)| *idx);
+    // `indices_to_layout` is collected in index order, and Rayon will usually preserve that order
+    // when collecting into a Vec. Avoid an unconditional sort (which would allocate in
+    // `sort_by_key`) unless we actually observe out-of-order results.
+    let mut ordered = true;
+    let mut prev_idx: Option<usize> = None;
+    for (idx, _) in &child_results {
+      if let Some(prev) = prev_idx {
+        if *idx <= prev {
+          ordered = false;
+          break;
+        }
+      }
+      prev_idx = Some(*idx);
+    }
+    if !ordered {
+      if let Err(err) = check_layout_deadline(&mut deadline_counter) {
+        return Some(Err(err));
+      }
+      child_results.sort_unstable_by_key(|(idx, _)| *idx);
+    }
 
     let mut child_fragments = Vec::with_capacity(child_ids.len());
     let mut child_results = child_results.into_iter();

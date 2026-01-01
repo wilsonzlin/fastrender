@@ -1129,7 +1129,26 @@ impl BlockFormattingContext {
       Ok(results) => results,
       Err(err) => return Some(Err(err)),
     };
-    parallel_results.sort_by_key(|(idx, _, _)| *idx);
+    // `par_iter().enumerate()` should produce results in order, but `collect` through `Result`
+    // doesn't strictly guarantee it. Avoid paying an unconditional stable `sort_by_key` (which
+    // allocates and caches keys) unless the collected results are actually out of order.
+    let mut ordered = true;
+    let mut prev_idx: Option<usize> = None;
+    for (idx, _, _) in &parallel_results {
+      if let Some(prev) = prev_idx {
+        if *idx <= prev {
+          ordered = false;
+          break;
+        }
+      }
+      prev_idx = Some(*idx);
+    }
+    if !ordered {
+      if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+        return Some(Err(LayoutError::Timeout { elapsed }));
+      }
+      parallel_results.sort_unstable_by_key(|(idx, _, _)| *idx);
+    }
 
     let mut fragments = Vec::with_capacity(parallel_results.len());
     let mut content_height: f32 = 0.0;
