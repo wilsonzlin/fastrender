@@ -2927,7 +2927,7 @@ impl DisplayListRenderer {
   }
 
   fn render_linear_gradient(&mut self, item: &LinearGradientItem) -> Result<()> {
-    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
+    let Some(stops) = self.convert_stops(&item.stops) else {
       return Ok(());
     };
     let rect = self.ds_rect(item.rect);
@@ -2941,64 +2941,75 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let offset_x = visible_rect.x() - rect.x();
-    let offset_y = visible_rect.y() - rect.y();
-    let start = Point::new(
-      self.ds_len(item.start.x) - offset_x,
-      self.ds_len(item.start.y) - offset_y,
+    let start = SkiaPoint::from_xy(
+      rect.x() + self.ds_len(item.start.x),
+      rect.y() + self.ds_len(item.start.y),
     );
-    let end = Point::new(
-      self.ds_len(item.end.x) - offset_x,
-      self.ds_len(item.end.y) - offset_y,
+    let end = SkiaPoint::from_xy(
+      rect.x() + self.ds_len(item.end.x),
+      rect.y() + self.ds_len(item.end.y),
     );
     let spread = match item.spread {
       crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
       crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
       crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
     };
-    let original_width = rect.width().ceil().max(0.0) as u32;
-    let original_height = rect.height().ceil().max(0.0) as u32;
+
+    let Some(skia_rect) = tiny_skia::Rect::from_xywh(
+      visible_rect.x(),
+      visible_rect.y(),
+      visible_rect.width(),
+      visible_rect.height(),
+    ) else {
+      return Ok(());
+    };
+
+    let mut paint = tiny_skia::Paint::default();
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let denom = dx * dx + dy * dy;
+    if denom <= f32::EPSILON {
+      if let Some(first) = item.stops.first() {
+        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+        let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+        paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
+      } else {
+        return Ok(());
+      }
+    } else if let Some(shader) = tiny_skia::LinearGradient::new(
+      start,
+      end,
+      stops,
+      spread,
+      tiny_skia::Transform::identity(),
+    ) {
+      paint.shader = shader;
+    } else if let Some(first) = item.stops.first() {
+      let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+      let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+      paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
+    } else {
+      return Ok(());
+    }
+    paint.anti_alias = false;
+    paint.blend_mode = self.canvas.blend_mode();
+
     let background_timer = self
       .background_paint_diagnostics
       .as_ref()
       .map(|_| Instant::now());
-    let timer = self.diagnostics_enabled.then(Instant::now);
-    let Some(pixmap) = rasterize_linear_gradient(
-      width,
-      height,
-      start,
-      end,
-      spread,
-      &stops,
-      &self.gradient_cache,
-      gradient_bucket(original_width.max(original_height)),
-    )?
-    else {
-      return Ok(());
-    };
-    if let Some(start) = timer {
-      self.record_gradient_usage((width * height) as u64, start);
-    }
 
-    let paint = tiny_skia::PixmapPaint {
-      opacity: 1.0,
-      blend_mode: self.canvas.blend_mode(),
-      ..Default::default()
-    };
-    let dest_x = visible_rect.x().floor() as i32;
-    let dest_y = visible_rect.y().floor() as i32;
-    let frac_x = visible_rect.x() - dest_x as f32;
-    let frac_y = visible_rect.y() - dest_y as f32;
-    let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
-    let clip = self.canvas.clip_mask().cloned();
-    self.canvas.pixmap_mut().draw_pixmap(
-      dest_x,
-      dest_y,
-      pixmap.as_ref(),
-      &paint,
-      transform,
-      clip.as_ref(),
-    );
+    let transform = self.canvas.transform();
+    let clip_mask = self.canvas.clip_mask().cloned();
+    let timer = self.diagnostics_enabled.then(Instant::now);
+    self
+      .canvas
+      .pixmap_mut()
+      .fill_rect(skia_rect, &paint, transform, clip_mask.as_ref());
+    if let Some(start) = timer {
+      let pixels = u64::from(width).saturating_mul(u64::from(height));
+      self.record_gradient_usage(pixels, start);
+    }
     self.record_background_paint(background_timer);
     Ok(())
   }
@@ -10284,6 +10295,57 @@ mod tests {
     assert!(second.2 > second.0);
     assert_eq!(first.3, 255);
     assert_eq!(second.3, 255);
+  }
+
+  #[test]
+  fn linear_gradient_respects_transparent_stops() {
+    let renderer = DisplayListRenderer::new(3, 1, Rgba::TRANSPARENT, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::LinearGradient(LinearGradientItem {
+      rect: Rect::from_xywh(0.0, 0.0, 3.0, 1.0),
+      start: Point::new(0.0, 0.0),
+      end: Point::new(3.0, 0.0),
+      spread: GradientSpread::Pad,
+      stops: vec![
+        GradientStop {
+          position: 0.0,
+          color: Rgba::from_rgba8(255, 0, 0, 0),
+        },
+        GradientStop {
+          position: 1.0,
+          color: Rgba::rgb(255, 0, 0),
+        },
+      ],
+    }));
+
+    let pixmap = renderer.render(&list).unwrap();
+    assert_rgba_close(pixel(&pixmap, 1, 0), (128, 0, 0, 128), 2);
+  }
+
+  #[test]
+  fn linear_gradient_degenerate_vector_paints_start_color() {
+    let renderer = DisplayListRenderer::new(2, 1, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::LinearGradient(LinearGradientItem {
+      rect: Rect::from_xywh(0.0, 0.0, 2.0, 1.0),
+      start: Point::new(0.0, 0.0),
+      end: Point::new(0.0, 0.0),
+      spread: GradientSpread::Pad,
+      stops: vec![
+        GradientStop {
+          position: 0.0,
+          color: Rgba::rgb(255, 0, 0),
+        },
+        GradientStop {
+          position: 1.0,
+          color: Rgba::rgb(0, 0, 255),
+        },
+      ],
+    }));
+
+    let pixmap = renderer.render(&list).unwrap();
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
   }
 
   #[test]
