@@ -15,9 +15,12 @@ When a pageset run fails to fetch a page or subresource from a CDN-protected "ha
 
 Checklist (start here, in order):
 
-1. **Use an HTTP/2-capable backend**: `FASTR_HTTP_BACKEND=curl` (or leave it at the default `auto` to use the Rust backend first with a `curl` fallback on retryable network/TLS/HTTP2 errors).
-   - Ensure your system `curl` supports HTTP/2 (check `curl --version` includes `HTTP2`).
-    - For differential diagnosis, `FASTR_HTTP_BACKEND=ureq` disables the `curl` fallback so you can see whether the Rust backend fails on its own.
+1. **Use an HTTP/2-capable backend**: `FASTR_HTTP_BACKEND=reqwest` (in-process) or `FASTR_HTTP_BACKEND=curl` (shell out).
+   - `auto` (default) prefers `reqwest` for `https://` URLs and will fall back to `curl` on retryable network/TLS/HTTP2 errors.
+   - Ensure your system `curl` supports HTTP/2 (check `curl --version` includes `HTTP2`) before relying on the `curl` backend.
+   - For differential diagnosis:
+     - `FASTR_HTTP_BACKEND=reqwest` disables the `curl` fallback (pure in-process HTTP/2).
+     - `FASTR_HTTP_BACKEND=ureq` disables the `curl` fallback and forces the HTTP/1.1 Rust backend.
    - If an error message includes `curl fallback failed: ...`, `auto` already attempted both backends.
    - If you are seeing `empty HTTP response body` (0 bytes) failures, force `FASTR_HTTP_BACKEND=curl`: `auto` only falls back on network/TLS/HTTP2-style errors and will not switch backends for empty-body responses.
 2. **Enable browser-like headers**: `FASTR_HTTP_BROWSER_HEADERS=1` (this is the default; set it explicitly when debugging to ensure it wasn't disabled).
@@ -30,7 +33,7 @@ Checklist (start here, in order):
 Example (pageset loop, targeted):
 
 ```bash
-FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
+FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
   cargo xtask pageset --pages tesco.com,washingtonpost.com
 ```
 

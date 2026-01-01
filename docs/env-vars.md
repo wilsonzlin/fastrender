@@ -86,7 +86,7 @@ Note: when rendering under a cooperative render timeout (e.g. `pageset_progress`
 Hard-site starting point (Akamai/CDN bot gating, empty bodies, HTTP/2 errors):
 
 ```bash
-FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
+FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
   cargo xtask pageset --pages tesco.com,washingtonpost.com
 ```
 
