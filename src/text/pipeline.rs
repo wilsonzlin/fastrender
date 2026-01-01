@@ -2707,23 +2707,65 @@ fn assign_fonts_internal(
             None => true,
           };
           if needs_retry && coverage_chars_required.len() != coverage_chars_all.len() {
-            resolved = resolve_font_for_cluster_with_preferences(
-              base_char,
-              run.script,
-              language,
-              coverage_chars_required,
-              &families,
-              weight_value,
-              font_style,
-              requested_oblique,
-              font_stretch,
-              font_context,
-              emoji_pref,
-              &weight_preferences,
-              &stretch_preferences,
-              slope_preferences,
-              math_families,
-            );
+            if coverage_chars_required.len() <= 1 {
+              // Marks are optional in mixed clusters (Task 72), so when the only required codepoint
+              // is the base glyph we can reuse the glyph fallback cache rather than running the
+              // full cluster resolver a second time.
+              let char_cache_key = descriptor.map(|descriptor| GlyphFallbackCacheKey {
+                descriptor,
+                ch: base_char,
+              });
+              let mut glyph_cached_none = false;
+              if let (Some(cache), Some(key)) = (font_cache, char_cache_key.as_ref()) {
+                let cached = cache.get_glyph(key);
+                match cached {
+                  Some(Some(font)) => resolved = Some(font),
+                  Some(None) => glyph_cached_none = true,
+                  None => {}
+                }
+              }
+              if !glyph_cached_none && resolved.is_none() {
+                let mut picker = FontPreferencePicker::new(emoji_pref);
+                let candidate = resolve_font_for_char_with_preferences(
+                  base_char,
+                  run.script,
+                  language,
+                  &families,
+                  weight_value,
+                  font_style,
+                  requested_oblique,
+                  font_stretch,
+                  font_context,
+                  &mut picker,
+                  &weight_preferences,
+                  &stretch_preferences,
+                  slope_preferences,
+                  math_families,
+                );
+                if let (Some(cache), Some(key)) = (font_cache, char_cache_key) {
+                  cache.insert_glyph(key, candidate.clone());
+                }
+                resolved = candidate;
+              }
+            } else {
+              resolved = resolve_font_for_cluster_with_preferences(
+                base_char,
+                run.script,
+                language,
+                coverage_chars_required,
+                &families,
+                weight_value,
+                font_style,
+                requested_oblique,
+                font_stretch,
+                font_context,
+                emoji_pref,
+                &weight_preferences,
+                &stretch_preferences,
+                slope_preferences,
+                math_families,
+              );
+            }
           }
         }
       }
@@ -8020,6 +8062,60 @@ mod tests {
     assert!(
       glyph_lookups > 0,
       "expected variation selector clusters to consult glyph fallback cache"
+    );
+  }
+
+  #[test]
+  fn mark_relax_retry_uses_glyph_fallback_cache() {
+    let ctx = FontContext::with_config(FontConfig::bundled_only());
+    let style = ComputedStyle::default();
+    let db = ctx.database();
+
+    let candidates = [
+      '\u{1AB0}',
+      '\u{1AB1}',
+      '\u{1AB2}',
+      '\u{1AB3}',
+      '\u{1AB4}',
+      '\u{1ABE}',
+      '\u{1AC0}',
+      '\u{1AC1}',
+      '\u{1AC2}',
+    ];
+
+    let missing_mark = candidates
+      .into_iter()
+      .find(|ch| !db.faces().any(|face| db.has_glyph_cached(face.id, *ch)))
+      .expect("expected at least one missing combining mark in bundled fonts");
+
+    let text = format!("中{missing_mark}");
+    let text_len = text.len();
+
+    let run = ItemizedRun {
+      text,
+      start: 0,
+      end: text_len,
+      script: Script::Han,
+      direction: Direction::LeftToRight,
+      level: 0,
+    };
+
+    let cache = FallbackCache::new(256);
+    let _ = assign_fonts_internal(
+      &[run],
+      &style,
+      &ctx,
+      Some(&cache),
+      ctx.font_generation(),
+      true,
+    )
+    .expect("assign fonts");
+
+    let stats = cache.stats();
+    let glyph_lookups = stats.glyph_hits + stats.glyph_misses;
+    assert!(
+      glyph_lookups > 0,
+      "expected mark-relax fallback to consult glyph fallback cache (glyph lookups={glyph_lookups})"
     );
   }
 
