@@ -3177,7 +3177,96 @@ fn selector_compound_fast_reject_from_iter(
       | Component::Scope
       | Component::ImplicitScope
       | Component::ParentSelector => {}
-      Component::Host(_) | Component::Has(_) => {}
+      Component::Host(Some(inner)) => {
+        let mut inner_iter = inner.iter();
+        while let Some(inner_component) = inner_iter.next() {
+          match inner_component {
+            Component::LocalName(local) => {
+              let name = local.lower_name.as_str();
+              if name == "*" {
+                continue;
+              }
+              let key = selector_bucket_tag(name);
+              if has_tag && tag_key != key {
+                return None;
+              }
+              has_tag = true;
+              tag_key = key;
+            }
+            Component::ExplicitUniversalType => {}
+            Component::ID(ident) => {
+              let key = selector_bucket_id_for_mode(ident.as_str(), quirks_mode);
+              if has_id && id_key != key {
+                return None;
+              }
+              has_id = true;
+              id_key = key;
+            }
+            Component::Class(class) => {
+              let key = selector_bucket_class_for_mode(class.as_str(), quirks_mode);
+              if class_keys[..class_len].iter().any(|existing| *existing == key) {
+                continue;
+              }
+              if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+                continue;
+              }
+              class_keys[class_len] = key;
+              class_len += 1;
+            }
+            Component::AttributeInNoNamespaceExists {
+              local_name_lower, ..
+            } => {
+              let key = selector_bucket_attr(local_name_lower.as_str());
+              if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+                continue;
+              }
+              if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+                continue;
+              }
+              attr_keys[attr_len] = key;
+              attr_len += 1;
+            }
+            Component::AttributeInNoNamespace { local_name, .. } => {
+              let key = selector_bucket_attr(local_name.as_str());
+              if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+                continue;
+              }
+              if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+                continue;
+              }
+              attr_keys[attr_len] = key;
+              attr_len += 1;
+            }
+            Component::AttributeOther(other) => {
+              if other.namespace.is_some() {
+                return None;
+              }
+              let key = selector_bucket_attr(other.local_name_lower.as_str());
+              if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+                continue;
+              }
+              if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+                continue;
+              }
+              attr_keys[attr_len] = key;
+              attr_len += 1;
+            }
+            Component::Namespace(..)
+            | Component::DefaultNamespace(..)
+            | Component::ExplicitNoNamespace
+            | Component::ExplicitAnyNamespace => {}
+            _ => return None,
+          }
+        }
+        // :host() arguments are parsed as a single compound selector (no combinators). If we ever
+        // see a combinator here, treat the whole rightmost compound as unsupported to avoid
+        // accidentally extracting incomplete requirements.
+        if inner_iter.next_sequence().is_some() {
+          return None;
+        }
+      }
+      Component::Host(None) => {}
+      Component::Has(_) => {}
       Component::Invalid(_) => {}
       // Branching selector-lists do not add *mandatory* simple-selector requirements on the element
       // itself. Ignore them so we can still fast-reject based on any other required
@@ -8936,6 +9025,77 @@ mod tests {
         &mut attr_keys,
       )),
       "fast reject should pass when required class is present"
+    );
+  }
+
+  #[test]
+  fn rightmost_fast_reject_includes_host_argument_selector_keys() {
+    let stylesheet = parse_stylesheet(":host(.a.b) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    let fast_reject_id = index.selectors[0].fast_reject;
+    assert_ne!(
+      fast_reject_id, 0,
+      "expected fast-reject descriptor for :host() selector with multiple required keys"
+    );
+    let desc = index.fast_reject(fast_reject_id).expect("fast reject");
+
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node_missing = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a".to_string())],
+      },
+      children: vec![],
+    };
+    let node_present = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b".to_string())],
+      },
+      children: vec![],
+    };
+
+    assert!(
+      !desc.matches(node_selector_keys(
+        &node_missing,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should require both .a and .b from the :host() argument"
+    );
+    assert!(
+      desc.matches(node_selector_keys(
+        &node_present,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should pass when :host() argument keys are present"
     );
   }
 
