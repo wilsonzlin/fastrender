@@ -4225,6 +4225,17 @@ pub fn apply_declaration_with_viewport(
   );
 }
 
+#[inline]
+fn decl_raw_text(decl: &Declaration) -> &str {
+  if !decl.raw_value.is_empty() {
+    return decl.raw_value.as_str();
+  }
+  match &decl.value {
+    PropertyValue::Custom(raw) | PropertyValue::Keyword(raw) => raw.as_str(),
+    _ => decl.raw_value.as_str(),
+  }
+}
+
 pub fn apply_declaration_with_base(
   styles: &mut ComputedStyle,
   decl: &Declaration,
@@ -4237,7 +4248,8 @@ pub fn apply_declaration_with_base(
 ) {
   // Handle CSS Custom Properties (--*)
   if decl.property.starts_with("--") {
-    let raw_trimmed = decl.raw_value.trim();
+    let raw_text = decl_raw_text(decl);
+    let raw_trimmed = raw_text.trim();
     let registration = styles.custom_property_registry.get(&decl.property);
 
     // Unregistered custom properties (or those registered with `syntax: *`) behave like token
@@ -4247,7 +4259,7 @@ pub fn apply_declaration_with_base(
     {
       styles.custom_properties.insert(
         decl.property.clone(),
-        CustomPropertyValue::new(decl.raw_value.clone(), None),
+        CustomPropertyValue::new(raw_text.to_string(), None),
       );
       return;
     }
@@ -4285,7 +4297,7 @@ pub fn apply_declaration_with_base(
       };
       styles.custom_properties.insert(
         decl.property.clone(),
-        CustomPropertyValue::new(decl.raw_value.clone(), Some(typed)),
+        CustomPropertyValue::new(raw_text.to_string(), Some(typed)),
       );
     }
     return;
@@ -12939,7 +12951,9 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::parser::parse_stylesheet;
   use crate::css::properties::parse_property_value;
+  use crate::style::custom_properties::{CustomPropertyRegistry, PropertyRule};
   use crate::geometry::Size;
   use crate::style::cascade::inherit_styles;
   use crate::style::content::{ContentItem, ContentValue, RunningElementSelect};
@@ -12996,9 +13010,11 @@ mod tests {
   use crate::style::types::WordBreak;
   use crate::style::types::WritingMode;
   use crate::style::values::CalcLength;
+  use crate::style::values::CustomPropertyTypedValue;
   use crate::style::values::LengthUnit;
   use cssparser::Parser;
   use cssparser::ParserInput;
+  use std::sync::Arc;
 
   #[test]
   fn extract_margin_values_accepts_zero_number_and_calc_zero() {
@@ -13221,6 +13237,79 @@ mod tests {
       Some("10px")
     );
     assert_eq!(styles.color, Rgba::BLACK);
+  }
+
+  #[test]
+  fn parsed_custom_properties_apply_using_value_when_raw_value_is_empty() {
+    let css = "div { --no-var:10px; --with-var:var(--no-var); }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let rule = match &stylesheet.rules[0] {
+      crate::css::types::CssRule::Style(rule) => rule,
+      other => panic!("expected style rule, got {:?}", other),
+    };
+
+    assert_eq!(rule.declarations.len(), 2);
+    for decl in &rule.declarations {
+      assert!(decl.property.starts_with("--"));
+      assert!(decl.raw_value.is_empty(), "custom-property raw_value should be empty");
+    }
+
+    let mut styles = ComputedStyle::default();
+    let parent = ComputedStyle::default();
+    for decl in &rule.declarations {
+      apply_declaration(&mut styles, decl, &parent, 16.0, 16.0);
+    }
+
+    assert_eq!(
+      styles.custom_properties.get("--no-var").map(|v| v.value.as_str()),
+      Some("10px")
+    );
+    assert_eq!(
+      styles
+        .custom_properties
+        .get("--with-var")
+        .map(|v| v.value.as_str()),
+      Some("var(--no-var)")
+    );
+  }
+
+  #[test]
+  fn registered_custom_properties_resolve_var_using_value_when_raw_value_is_empty() {
+    let css = "div { --bar:5px; --len:var(--bar); }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let rule = match &stylesheet.rules[0] {
+      crate::css::types::CssRule::Style(rule) => rule,
+      other => panic!("expected style rule, got {:?}", other),
+    };
+
+    assert_eq!(rule.declarations.len(), 2);
+    for decl in &rule.declarations {
+      assert!(decl.property.starts_with("--"));
+      assert!(decl.raw_value.is_empty(), "custom-property raw_value should be empty");
+    }
+
+    let mut registry = CustomPropertyRegistry::new();
+    registry.register(PropertyRule {
+      name: "--len".to_string(),
+      syntax: CustomPropertySyntax::Length,
+      inherits: false,
+      initial_value: None,
+    });
+
+    let mut styles = ComputedStyle::default();
+    styles.custom_property_registry = Arc::new(registry);
+
+    let parent = ComputedStyle::default();
+    for decl in &rule.declarations {
+      apply_declaration(&mut styles, decl, &parent, 16.0, 16.0);
+    }
+
+    let value = styles.custom_properties.get("--len").expect("custom property");
+    assert_eq!(value.value, "5px");
+    assert_eq!(
+      value.typed,
+      Some(CustomPropertyTypedValue::Length(Length::px(5.0)))
+    );
   }
 
   #[test]

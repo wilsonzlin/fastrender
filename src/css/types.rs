@@ -2125,7 +2125,12 @@ pub enum FontFaceStyle {
 pub struct Declaration {
   pub property: String,
   pub value: PropertyValue,
-  /// Raw token string as authored (after stripping !important/semicolon). Used for custom properties.
+  /// Raw token string as authored (after stripping !important/semicolon).
+  ///
+  /// For properties that store their value as a token stream (e.g. transitions), the parser keeps
+  /// this string so computed-value application can re-parse it later. Custom properties (`--*`)
+  /// store their raw tokens in [`PropertyValue::Custom`] and may leave `raw_value` empty to avoid
+  /// duplicating the bytes.
   pub raw_value: String,
   pub important: bool,
 }

@@ -3673,20 +3673,19 @@ fn parse_declaration<'i, 't>(
 }
 
 fn property_needs_raw_value(property: &str) -> bool {
-  property.starts_with("--")
-    || matches!(
-      property,
-      "scroll-timeline"
-        | "view-timeline"
-        | "animation-timeline"
-        | "animation-range"
-        | "animation-name"
-        | "transition-property"
-        | "transition-duration"
-        | "transition-delay"
-        | "transition-timing-function"
-        | "transition"
-    )
+  matches!(
+    property,
+    "scroll-timeline"
+      | "view-timeline"
+      | "animation-timeline"
+      | "animation-range"
+      | "animation-name"
+      | "transition-property"
+      | "transition-duration"
+      | "transition-delay"
+      | "transition-timing-function"
+      | "transition"
+  )
 }
 
 fn parse_declaration_collecting_errors<'i, 't>(
@@ -4379,7 +4378,7 @@ mod tests {
       PropertyValue::Custom(raw) => assert_eq!(raw, "  10px  var(--bar)"),
       other => panic!("expected custom value, got {:?}", other),
     }
-    assert_eq!(decls[0].raw_value, "  10px  var(--bar)");
+    assert!(decls[0].raw_value.is_empty());
   }
 
   #[test]
