@@ -1,7 +1,10 @@
+use fastrender::render_control::{set_stage_listener, StageHeartbeat};
 use fastrender::{
   DiagnosticsLevel, FastRender, FastRenderConfig, FontConfig, FragmentContent, FragmentNode, Point,
   Rect, RenderArtifactRequest, RenderOptions,
 };
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
 struct EnvVarGuard {
   key: &'static str,
@@ -23,6 +26,30 @@ impl Drop for EnvVarGuard {
       None => std::env::remove_var(self.key),
     }
   }
+}
+
+struct StageListenerGuard;
+
+impl StageListenerGuard {
+  fn set(listener: Option<Arc<dyn Fn(StageHeartbeat) + Send + Sync>>) -> Self {
+    set_stage_listener(listener);
+    Self
+  }
+}
+
+impl Drop for StageListenerGuard {
+  fn drop(&mut self) {
+    set_stage_listener(None);
+  }
+}
+
+static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_test() -> std::sync::MutexGuard<'static, ()> {
+  TEST_LOCK
+    .get_or_init(|| Mutex::new(()))
+    .lock()
+    .expect("taffy perf diagnostics test lock poisoned")
 }
 
 fn find_text_fragment_bounds(fragment: &FragmentNode, offset: Point, needle: &str) -> Option<Rect> {
@@ -51,6 +78,7 @@ fn find_text_fragment_bounds(fragment: &FragmentNode, offset: Point, needle: &st
 
 #[test]
 fn taffy_perf_counters_reset_between_diagnostics_renders() {
+  let _lock = lock_test();
   let _diag_env = EnvVarGuard::set("FASTR_DIAGNOSTICS_LEVEL", "none");
   let config = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
   let mut renderer = FastRender::with_config(config).expect("renderer");
@@ -138,6 +166,7 @@ fn taffy_perf_counters_reset_between_diagnostics_renders() {
 
 #[test]
 fn taffy_perf_counters_do_not_reset_between_layout_passes_in_one_render() {
+  let _lock = lock_test();
   let _diag_env = EnvVarGuard::set("FASTR_DIAGNOSTICS_LEVEL", "none");
   let config = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
   let mut renderer = FastRender::with_config(config).expect("renderer");
@@ -214,5 +243,140 @@ fn taffy_perf_counters_do_not_reset_between_layout_passes_in_one_render() {
      aaa={:?} bbb={:?}",
     aaa,
     bbb
+  );
+}
+
+#[test]
+fn taffy_perf_counters_do_not_leak_between_overlapping_diagnostics_renders() {
+  let _lock = lock_test();
+  let _diag_env = EnvVarGuard::set("FASTR_DIAGNOSTICS_LEVEL", "none");
+  // Block one diagnostics render mid-pipeline to ensure another thread can attempt to start while
+  // the global diagnostics session lock is held. This used to expose a bug where Taffy perf
+  // counters could be enabled before acquiring the diagnostics session lock, leaking counters
+  // across renders.
+
+  let options = RenderOptions::default()
+    .with_viewport(200, 200)
+    .with_diagnostics_level(DiagnosticsLevel::Basic);
+
+  let flex_html = r#"<!doctype html>
+    <html>
+      <body>
+        <div style="display:flex">
+          <div>hello</div>
+        </div>
+      </body>
+    </html>"#;
+  let plain_html = r#"<!doctype html><html><body><div>plain</div></body></html>"#;
+
+  struct BlockerState {
+    entered_dom_parse: bool,
+    release: bool,
+  }
+
+  let blocker = Arc::new((
+    Mutex::new(BlockerState {
+      entered_dom_parse: false,
+      release: false,
+    }),
+    Condvar::new(),
+  ));
+  let blocker_listener = Arc::clone(&blocker);
+
+  let _stage_listener = StageListenerGuard::set(Some(Arc::new(move |stage| {
+    if stage != StageHeartbeat::DomParse {
+      return;
+    }
+    let (lock, cv) = &*blocker_listener;
+    let mut state = lock.lock().expect("diagnostics overlap blocker lock poisoned");
+    if state.entered_dom_parse {
+      return;
+    }
+    state.entered_dom_parse = true;
+    cv.notify_all();
+    while !state.release {
+      state = cv
+        .wait(state)
+        .expect("diagnostics overlap blocker lock poisoned");
+    }
+  })));
+
+  let handle_a = std::thread::spawn({
+    let options = options.clone();
+    move || {
+      let config = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+      let mut renderer = FastRender::with_config(config).expect("renderer");
+      renderer
+        .render_html_with_diagnostics(flex_html, options)
+        .expect("render flex document")
+    }
+  });
+
+  // Wait until thread A reaches the first DOM parse stage and is blocked by the stage listener.
+  {
+    let (lock, cv) = &*blocker;
+    let guard = lock.lock().expect("diagnostics overlap blocker lock poisoned");
+    let (_guard, timeout) = cv
+      .wait_timeout_while(guard, Duration::from_secs(2), |state| !state.entered_dom_parse)
+      .expect("diagnostics overlap blocker lock poisoned");
+    assert!(
+      !timeout.timed_out(),
+      "timed out waiting for flex render to reach dom_parse stage"
+    );
+  }
+
+  let (b_started_tx, b_started_rx) = mpsc::channel();
+
+  let handle_b = std::thread::spawn({
+    let options = options.clone();
+    move || {
+      b_started_tx.send(()).ok();
+      let config = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+      let mut renderer = FastRender::with_config(config).expect("renderer");
+      renderer
+        .render_html_with_diagnostics(plain_html, options)
+        .expect("render plain document")
+    }
+  });
+
+  b_started_rx
+    .recv_timeout(Duration::from_secs(2))
+    .expect("expected thread B to start");
+  // Give thread B a chance to attempt the diagnostics render while thread A is still blocked.
+  std::thread::sleep(Duration::from_millis(10));
+
+  {
+    let (lock, cv) = &*blocker;
+    let mut state = lock.lock().expect("diagnostics overlap blocker lock poisoned");
+    state.release = true;
+    cv.notify_all();
+  }
+
+  let result_a = handle_a.join().expect("thread A join");
+  let stats_a = result_a
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("expected stats for flex render");
+  assert!(
+    stats_a
+      .layout
+      .taffy_flex_measure_calls
+      .is_some_and(|calls| calls > 0),
+    "expected flex render to produce taffy perf counters"
+  );
+
+  let result_b = handle_b.join().expect("thread B join");
+  let stats_b = result_b
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("expected stats for plain render");
+  assert!(
+    stats_b.layout.taffy_flex_compute_cpu_ms.is_none()
+      && stats_b.layout.taffy_flex_measure_calls.is_none()
+      && stats_b.layout.taffy_grid_compute_cpu_ms.is_none()
+      && stats_b.layout.taffy_grid_measure_calls.is_none(),
+    "expected plain render to not inherit taffy perf counters from another diagnostics render"
   );
 }
