@@ -5154,6 +5154,126 @@ mod tests {
   }
 
   #[test]
+  fn http_fetcher_sets_font_request_headers() {
+    let Some(listener) = try_bind_localhost("http_fetcher_sets_font_request_headers") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_req = Arc::clone(&captured);
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let request = read_http_request(&mut stream)
+        .unwrap()
+        .expect("expected HTTP request");
+      if let Ok(mut slot) = captured_req.lock() {
+        *slot = String::from_utf8_lossy(&request).to_string();
+      }
+
+      let body = b"font";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: font/woff2\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}/asset.woff2", addr);
+    let res = fetcher.fetch(&url).expect("fetch font");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"font");
+    let req = captured.lock().unwrap().to_ascii_lowercase();
+    assert!(
+      req.contains("accept: */*"),
+      "expected font accept header, got: {req}"
+    );
+    assert!(
+      req.contains("sec-fetch-dest: font"),
+      "expected Sec-Fetch-Dest for font, got: {req}"
+    );
+    assert!(
+      req.contains("sec-fetch-mode: cors"),
+      "expected Sec-Fetch-Mode cors for font, got: {req}"
+    );
+    assert!(
+      req.contains("sec-fetch-site: same-origin"),
+      "expected Sec-Fetch-Site same-origin for font, got: {req}"
+    );
+    assert!(
+      req.contains("accept-encoding: gzip, deflate, br"),
+      "expected Accept-Encoding for font, got: {req}"
+    );
+    assert!(
+      !req.contains("upgrade-insecure-requests: 1"),
+      "font requests should not set Upgrade-Insecure-Requests, got: {req}"
+    );
+    assert!(
+      !req.contains("sec-fetch-user: ?1"),
+      "font requests should not set Sec-Fetch-User, got: {req}"
+    );
+  }
+
+  #[test]
+  fn http_fetcher_sets_stylesheet_request_headers() {
+    let Some(listener) = try_bind_localhost("http_fetcher_sets_stylesheet_request_headers") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_req = Arc::clone(&captured);
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let request = read_http_request(&mut stream)
+        .unwrap()
+        .expect("expected HTTP request");
+      if let Ok(mut slot) = captured_req.lock() {
+        *slot = String::from_utf8_lossy(&request).to_string();
+      }
+
+      let body = b"body { color: red; }";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}/style.css", addr);
+    let res = fetcher.fetch(&url).expect("fetch stylesheet");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"body { color: red; }");
+    let req = captured.lock().unwrap().to_ascii_lowercase();
+    assert!(
+      req.contains(&format!("accept: {BROWSER_ACCEPT_STYLESHEET}").to_ascii_lowercase()),
+      "expected stylesheet accept header, got: {req}"
+    );
+    assert!(
+      req.contains("sec-fetch-dest: style"),
+      "expected Sec-Fetch-Dest style for stylesheet, got: {req}"
+    );
+    assert!(
+      req.contains("sec-fetch-mode: no-cors"),
+      "expected Sec-Fetch-Mode no-cors for stylesheet, got: {req}"
+    );
+    assert!(
+      req.contains("sec-fetch-site: same-origin"),
+      "expected Sec-Fetch-Site same-origin for stylesheet, got: {req}"
+    );
+  }
+
+  #[test]
   fn http_fetcher_reuses_keep_alive_connections() {
     let Some(listener) = try_bind_localhost("http_fetcher_reuses_keep_alive_connections") else {
       return;
