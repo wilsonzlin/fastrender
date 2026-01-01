@@ -1323,7 +1323,12 @@ impl FormattingContext for FlexFormattingContext {
                     };
                     let mut content_size = this.content_box_size(&fragment, &box_node.style, percentage_base);
                     // Guard against zero-sized measurements when the fragment actually has content.
-                    let intrinsic_size = Self::fragment_subtree_size(&fragment);
+                    let mut subtree_deadline_counter = 0usize;
+                    let intrinsic_size = match Self::fragment_subtree_size(&fragment, &mut subtree_deadline_counter) {
+                      Ok(size) => size,
+                      Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                      Err(_) => Size::new(0.0, 0.0),
+                    };
                     let eps = 0.01;
                     if content_size.width <= eps && intrinsic_size.width > eps {
                         content_size.width = intrinsic_size.width;
@@ -1331,7 +1336,11 @@ impl FormattingContext for FlexFormattingContext {
                     if content_size.height <= eps && intrinsic_size.height > eps {
                         content_size.height = intrinsic_size.height;
                     }
-                    let descendant_span = Self::fragment_descendant_span(&fragment);
+                    let descendant_span = match Self::fragment_descendant_span(&fragment, &mut subtree_deadline_counter) {
+                      Ok(span) => span,
+                      Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                      Err(_) => None,
+                    };
                     if matches!(
                         constraints.available_width,
                         CrateAvailableSpace::MaxContent | CrateAvailableSpace::MinContent
@@ -3625,7 +3634,7 @@ impl FlexFormattingContext {
             selector_for_profile.as_deref(),
             node_timer,
           );
-          let intrinsic_size = Self::fragment_subtree_size(&child_fragment);
+          let intrinsic_size = Self::fragment_subtree_size(&child_fragment, &mut deadline_counter)?;
 
           if !trace_flex_text_ids().is_empty() && trace_flex_text_ids().contains(&work.child_box.id)
           {
@@ -3696,7 +3705,8 @@ impl FlexFormattingContext {
                   mc_timer,
                 );
                 let mc_fragment = mc_fragment;
-                let mut mc_size = Self::fragment_subtree_size(&mc_fragment);
+                let mut mc_size =
+                  Self::fragment_subtree_size(&mc_fragment, &mut deadline_counter)?;
                 if rect.width().is_finite() && rect.width() > 0.0 {
                   mc_size.width = mc_size.width.min(rect.width());
                 }
@@ -3775,7 +3785,8 @@ impl FlexFormattingContext {
         } => {
           record_fragment_clone(CloneSite::FlexMeasureReuse, fragment.as_ref());
           let template = CachedFragmentTemplate::new(fragment);
-          let intrinsic_size = Self::fragment_subtree_size(template.fragment());
+          let intrinsic_size =
+            Self::fragment_subtree_size(template.fragment(), &mut deadline_counter)?;
           let mut resolved_width = layout_width;
           let mut resolved_height = layout_height;
           if resolved_width <= eps && intrinsic_size.width > eps {
@@ -4855,8 +4866,18 @@ impl FlexFormattingContext {
     constraints
   }
 
-  fn fragment_subtree_size(fragment: &FragmentNode) -> Size {
-    fn walk(node: &FragmentNode, offset: Point, min: &mut Point, max: &mut Point) {
+  fn fragment_subtree_size(
+    fragment: &FragmentNode,
+    deadline_counter: &mut usize,
+  ) -> Result<Size, LayoutError> {
+    fn walk(
+      node: &FragmentNode,
+      offset: Point,
+      min: &mut Point,
+      max: &mut Point,
+      deadline_counter: &mut usize,
+    ) -> Result<(), LayoutError> {
+      check_layout_deadline(deadline_counter)?;
       let origin = Point::new(node.bounds.x() + offset.x, node.bounds.y() + offset.y);
       let bounds = Rect::new(origin, node.bounds.size);
       min.x = min.x.min(bounds.x());
@@ -4864,24 +4885,33 @@ impl FlexFormattingContext {
       max.x = max.x.max(bounds.max_x());
       max.y = max.y.max(bounds.max_y());
       for child in node.children.iter() {
-        walk(child, origin, min, max);
+        walk(child, origin, min, max, deadline_counter)?;
       }
+      Ok(())
     }
     let mut min = Point::new(0.0, 0.0);
     let mut max = Point::new(0.0, 0.0);
-    walk(fragment, Point::ZERO, &mut min, &mut max);
-    Size::new((max.x - min.x).max(0.0), (max.y - min.y).max(0.0))
+    walk(fragment, Point::ZERO, &mut min, &mut max, deadline_counter)?;
+    Ok(Size::new(
+      (max.x - min.x).max(0.0),
+      (max.y - min.y).max(0.0),
+    ))
   }
 
   /// Returns the tight bounds of all descendants, excluding the root node’s own bounds.
-  fn fragment_descendant_span(fragment: &FragmentNode) -> Option<Size> {
+  fn fragment_descendant_span(
+    fragment: &FragmentNode,
+    deadline_counter: &mut usize,
+  ) -> Result<Option<Size>, LayoutError> {
     fn walk(
       node: &FragmentNode,
       offset: Point,
       min: &mut Point,
       max: &mut Point,
       found: &mut bool,
-    ) {
+      deadline_counter: &mut usize,
+    ) -> Result<(), LayoutError> {
+      check_layout_deadline(deadline_counter)?;
       for child in node.children.iter() {
         let origin = Point::new(child.bounds.x() + offset.x, child.bounds.y() + offset.y);
         let bounds = Rect::new(origin, child.bounds.size);
@@ -4890,21 +4920,30 @@ impl FlexFormattingContext {
         min.y = min.y.min(bounds.y());
         max.x = max.x.max(bounds.max_x());
         max.y = max.y.max(bounds.max_y());
-        walk(child, origin, min, max, found);
+        walk(child, origin, min, max, found, deadline_counter)?;
       }
+      Ok(())
     }
     let mut min = Point::new(f32::INFINITY, f32::INFINITY);
     let mut max = Point::new(f32::NEG_INFINITY, f32::NEG_INFINITY);
     let mut found = false;
-    walk(fragment, Point::ZERO, &mut min, &mut max, &mut found);
-    if !found {
+    walk(
+      fragment,
+      Point::ZERO,
+      &mut min,
+      &mut max,
+      &mut found,
+      deadline_counter,
+    )?;
+    let span = if !found {
       None
     } else {
       Some(Size::new(
         (max.x - min.x).max(0.0),
         (max.y - min.y).max(0.0),
       ))
-    }
+    };
+    Ok(span)
   }
 
   /// Returns the content-box size for a laid-out fragment, stripping padding and borders.
