@@ -612,7 +612,6 @@ impl FloatContext {
   }
 
   fn rect_edges(&self, state: &mut FloatSweepState) -> (f32, f32) {
-    self.prune_heaps(state);
     let left_edge = state
       .active_left
       .peek()
