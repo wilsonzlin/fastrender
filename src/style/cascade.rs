@@ -2938,10 +2938,64 @@ fn collect_sequence_keys(
         }
       }
       Component::Host(Some(inner)) => {
-        if all_keys.is_empty()
-          && merge_nested_keys(std::iter::once(inner), quirks_mode, polarity, true, &mut all_keys)
-        {
-          required_and = false;
+        // `:host(<compound>)` arguments are a single compound selector, so their keys are mandatory
+        // requirements on the subject element just like regular simple selectors in this
+        // sequence. Merge them into the key set so AND-anchored selectors can choose the best
+        // representative key.
+        let mut inner_iter = inner.iter();
+        while let Some(inner_component) = inner_iter.next() {
+          match inner_component {
+            Component::ID(ident) => {
+              if matches!(polarity, SelectorKeyPolarity::Matches) {
+                let key = SelectorKey::Id(selector_bucket_id_for_mode(ident.as_str(), quirks_mode));
+                push_key(&mut all_keys, key);
+                push_key(&mut mandatory_keys, key);
+              }
+            }
+            Component::Class(cls) => {
+              if matches!(polarity, SelectorKeyPolarity::Matches) {
+                let key =
+                  SelectorKey::Class(selector_bucket_class_for_mode(cls.as_str(), quirks_mode));
+                push_key(&mut all_keys, key);
+                push_key(&mut mandatory_keys, key);
+              }
+            }
+            Component::LocalName(local) => {
+              if matches!(polarity, SelectorKeyPolarity::Matches) {
+                let name = local.lower_name.as_str();
+                if name != "*" {
+                  let key = SelectorKey::Tag(selector_bucket_tag(name));
+                  push_key(&mut all_keys, key);
+                  push_key(&mut mandatory_keys, key);
+                }
+              }
+            }
+            Component::AttributeInNoNamespaceExists {
+              local_name_lower, ..
+            } => {
+              if matches!(polarity, SelectorKeyPolarity::Matches) {
+                let key = SelectorKey::Attribute(selector_bucket_attr(local_name_lower.as_str()));
+                push_key(&mut all_keys, key);
+                push_key(&mut mandatory_keys, key);
+              }
+            }
+            Component::AttributeInNoNamespace { local_name, .. } => {
+              if matches!(polarity, SelectorKeyPolarity::Matches) {
+                let key = SelectorKey::Attribute(selector_bucket_attr(local_name.as_str()));
+                push_key(&mut all_keys, key);
+                push_key(&mut mandatory_keys, key);
+              }
+            }
+            Component::AttributeOther(other) => {
+              if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
+                let key =
+                  SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str()));
+                push_key(&mut all_keys, key);
+                push_key(&mut mandatory_keys, key);
+              }
+            }
+            _ => {}
+          }
         }
       }
       Component::NonTSPseudoClass(pc) => match pc {
@@ -3444,10 +3498,11 @@ fn selector_metadata(
 fn selector_targets_shadow_host(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
 ) -> bool {
-  use selectors::parser::Component;
+  use selectors::parser::{Combinator, Component};
 
-  let mut iter = selector.iter();
-  loop {
+  fn compound_targets_shadow_host(
+    iter: &mut selectors::parser::SelectorIter<FastRenderSelectorImpl>,
+  ) -> bool {
     while let Some(component) = iter.next() {
       match component {
         Component::Host(..) => return true,
@@ -3463,12 +3518,21 @@ fn selector_targets_shadow_host(
         _ => {}
       }
     }
-    if iter.next_sequence().is_none() {
-      break;
-    }
+    false
   }
 
-  false
+  // Shadow-host rules are applied to the light DOM shadow host. Only selectors whose
+  // **subject compound** can match `:host(...)` should be extracted into that host-only index.
+  // Host pseudo-classes appearing in ancestor compounds (e.g. `:host(.a) .b`) do not match the
+  // shadow host itself.
+  let mut iter = selector.iter();
+  while iter.next().is_some() {}
+  if let Some(Combinator::PseudoElement) = iter.next_sequence() {
+    return compound_targets_shadow_host(&mut iter);
+  }
+
+  let mut iter = selector.iter();
+  compound_targets_shadow_host(&mut iter)
 }
 
 fn rule_targets_shadow_host(rule: &StyleRule) -> bool {
@@ -9426,6 +9490,72 @@ mod tests {
   }
 
   #[test]
+  fn rule_index_anchors_host_selectors_using_host_argument_keys() {
+    let mut css = String::new();
+    for _ in 0..8 {
+      css.push_str(".c { color: red; }\n");
+    }
+    css.push_str(":host(.a.b).c { color: blue; }\n");
+
+    let stylesheet = parse_stylesheet(&css).unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+
+    use selectors::parser::Component;
+    let host_selector_idx = index
+      .selectors
+      .iter()
+      .position(|sel| sel.selector.iter().any(|c| matches!(c, Component::Host(_))))
+      .expect("host selector");
+
+    let class_a = selector_bucket_class("a");
+    let class_b = selector_bucket_class("b");
+    let class_c = selector_bucket_class("c");
+    let indexed_under_a = index
+      .by_class
+      .get(&class_a)
+      .map(|list| list.contains(&host_selector_idx))
+      .unwrap_or(false);
+    let indexed_under_b = index
+      .by_class
+      .get(&class_b)
+      .map(|list| list.contains(&host_selector_idx))
+      .unwrap_or(false);
+    let indexed_under_c = index
+      .by_class
+      .get(&class_c)
+      .map(|list| list.contains(&host_selector_idx))
+      .unwrap_or(false);
+
+    assert!(
+      indexed_under_a || indexed_under_b,
+      "expected :host(.a.b).c selector to be anchored by a key from the :host() argument"
+    );
+    assert!(
+      !indexed_under_c,
+      "expected :host(.a.b).c selector not to be anchored under the common .c bucket"
+    );
+  }
+
+  #[test]
   fn rightmost_fast_reject_ignores_is_where_and_not_components() {
     let stylesheet =
       parse_stylesheet(".a.b:where(.c, .d):not(.e):is(.f, .g) { color: red; }").unwrap();
@@ -9646,6 +9776,31 @@ mod tests {
       )),
       "fast reject should pass when :host() argument keys are present"
     );
+  }
+
+  #[test]
+  fn selector_targets_shadow_host_requires_host_in_subject_compound() {
+    let media_ctx = MediaContext::default();
+
+    let stylesheet = parse_stylesheet(":host(.foo) { color: red; }").unwrap();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let selector = &collected[0].rule.selectors.slice()[0];
+    assert!(selector_targets_shadow_host(selector));
+
+    let stylesheet = parse_stylesheet(":host(.foo) .bar { color: red; }").unwrap();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let selector = &collected[0].rule.selectors.slice()[0];
+    assert!(!selector_targets_shadow_host(selector));
+
+    let stylesheet = parse_stylesheet(":host(.foo)::before { color: red; }").unwrap();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let selector = &collected[0].rule.selectors.slice()[0];
+    assert!(selector_targets_shadow_host(selector));
+
+    let stylesheet = parse_stylesheet(":host(.foo) ::slotted(.a) { color: red; }").unwrap();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let selector = &collected[0].rule.selectors.slice()[0];
+    assert!(!selector_targets_shadow_host(selector));
   }
 
   #[test]
