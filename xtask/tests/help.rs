@@ -64,6 +64,25 @@ fn pageset_help_mentions_filters() {
 }
 
 #[test]
+fn pageset_help_mentions_cascade_diagnostics() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["pageset", "--help"])
+    .output()
+    .expect("run cargo xtask pageset --help");
+
+  assert!(
+    output.status.success(),
+    "xtask pageset help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--cascade-diagnostics"),
+    "pageset help should mention cascade diagnostics reruns; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn update_pageset_timeouts_help_mentions_strategy_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["update-pageset-timeouts", "--help"])

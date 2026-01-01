@@ -31,10 +31,11 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
-- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
+- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [--cascade-diagnostics] [--cascade-diagnostics-slow-ms 500] [-- <pageset_progress args...>]`
   - Sharded example: `cargo xtask pageset --shard 0/4` (applies to fetch + prefetch (disk cache only) + render; add `--no-fetch` to reuse cached pages)
   - Forward compatibility gates when needed: `--compat-profile site` and/or `--dom-compat compat` are passed through to `pageset_progress run` but remain off by default.
   - Disk cache tuning flags passed after `--` (e.g. `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--disk-cache-lock-stale-secs`) are also forwarded to `prefetch_assets` when it runs.
+  - Cascade triage: `--cascade-diagnostics` re-runs slow-cascade ok pages (defaults to 500ms threshold; override with `--cascade-diagnostics-slow-ms`) plus cascade timeouts with cascade profiling enabled, then merges `diagnostics.stats.cascade` into the committed progress JSON.
 - Pageset diff: `cargo xtask pageset-diff [--baseline <dir>|--baseline-ref <git-ref>] [--no-run] [--fail-on-regression] [--fail-on-missing-stages] [--fail-on-missing-stage-timings]` (extracts `progress/pages` from the chosen git ref by default and compares it to the freshly updated scoreboard). `--fail-on-regression` also enables the missing-stage gates by default (use `--no-fail-on-missing-stages` / `--no-fail-on-missing-stage-timings` to opt out).
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`

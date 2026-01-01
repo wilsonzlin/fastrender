@@ -95,6 +95,18 @@ struct PagesetArgs {
   #[arg(long = "no-disk-cache", default_value_t = true, action = ArgAction::SetFalse)]
   disk_cache: bool,
 
+  /// Populate `diagnostics.stats.cascade` by re-running slow cascade pages/timeouts with cascade profiling enabled.
+  ///
+  /// This forwards `--cascade-diagnostics` to `pageset_progress run`.
+  #[arg(long)]
+  cascade_diagnostics: bool,
+
+  /// Re-run ok pages whose cascade stage exceeds this threshold (ms) with cascade profiling enabled
+  ///
+  /// Defaults to the pageset_progress default (500ms) when unset.
+  #[arg(long, value_name = "MS", requires = "cascade_diagnostics")]
+  cascade_diagnostics_slow_ms: Option<u64>,
+
   /// Extra arguments forwarded to `pageset_progress run` (use `--` before these)
   #[arg(last = true)]
   extra: Vec<String>,
@@ -562,6 +574,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   }
   if let Some(shard) = &shard_arg {
     cmd.arg("--shard").arg(shard);
+  }
+  if args.cascade_diagnostics {
+    cmd.arg("--cascade-diagnostics");
+    if let Some(ms) = args.cascade_diagnostics_slow_ms {
+      cmd.arg("--cascade-diagnostics-slow-ms").arg(ms.to_string());
+    }
   }
   cmd.args(&args.extra);
   if rayon_threads_env.is_none() {
