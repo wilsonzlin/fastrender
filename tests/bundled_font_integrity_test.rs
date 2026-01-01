@@ -54,6 +54,8 @@ fn bundled_font_set_integrity() {
   assert_family_has_glyph(&ctx, "Noto Sans Arabic", 'م');
   assert_family_has_glyph(&ctx, "Noto Sans Devanagari", 'न');
   assert_family_has_glyph(&ctx, "Noto Sans Bengali", 'ব');
+  assert_family_has_glyph(&ctx, "Noto Sans Myanmar", 'မ');
+  assert_family_has_glyph(&ctx, "Noto Sans Telugu", 'త');
   assert_family_has_glyph(&ctx, "Noto Sans SC", '中');
   assert_family_has_glyph(&ctx, "Noto Sans JP", 'あ');
   assert_family_has_glyph(&ctx, "Noto Sans KR", '한');
@@ -61,4 +63,6 @@ fn bundled_font_set_integrity() {
   assert_family_has_glyph(&ctx, "Noto Sans Symbols 2", '✓');
   assert_family_has_glyph(&ctx, "STIX Two Math", '∑');
   assert_family_has_glyph(&ctx, "DejaVu Sans", 'W');
+  assert_family_has_glyph(&ctx, "FastRender Emoji", '😀');
+  assert_family_has_glyph(&ctx, "FastRender Emoji", '🇺');
 }

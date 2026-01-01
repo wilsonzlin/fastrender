@@ -823,6 +823,10 @@ pub enum Script {
   Devanagari,
   /// Bengali script
   Bengali,
+  /// Myanmar script
+  Myanmar,
+  /// Telugu script
+  Telugu,
   /// Tamil script
   Tamil,
   /// Thai script
@@ -931,9 +935,22 @@ impl Script {
       return Self::Tamil;
     }
 
+    // Telugu
+    if (0x0c00..=0x0c7f).contains(&cp) {
+      return Self::Telugu;
+    }
+
     // Thai
     if (0x0e00..=0x0e7f).contains(&cp) {
       return Self::Thai;
+    }
+
+    // Myanmar
+    if (0x1000..=0x109f).contains(&cp)
+      || (0xaa60..=0xaa7f).contains(&cp)
+      || (0xa9e0..=0xa9ff).contains(&cp)
+    {
+      return Self::Myanmar;
     }
 
     // Javanese
@@ -1035,6 +1052,8 @@ impl Script {
       Self::Cyrillic => Some(*b"Cyrl"),
       Self::Devanagari => Some(*b"Deva"),
       Self::Bengali => Some(*b"Beng"),
+      Self::Myanmar => Some(*b"Mymr"),
+      Self::Telugu => Some(*b"Telu"),
       Self::Tamil => Some(*b"Taml"),
       Self::Thai => Some(*b"Thai"),
       Self::Javanese => Some(*b"Java"),
@@ -4360,6 +4379,46 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   let mut glyphs = Vec::with_capacity(glyph_infos.len());
   let mut inline_position = 0.0_f32;
   let mark_only = is_mark_only_cluster(&run.text);
+  let suppress_optional_mark_notdefs = if run.text.chars().any(is_unicode_mark) && !mark_only {
+    let clusters = atomic_shaping_clusters(&run.text);
+    let face = crate::text::face_cache::get_ttf_face(&run.font);
+    let mut can_suppress = Vec::with_capacity(clusters.len());
+    for (start, end) in &clusters {
+      let cluster_text = &run.text[*start..*end];
+      let mut saw_required_non_mark = false;
+      let mut saw_mark = false;
+      let mut required_non_marks_supported = true;
+      let mut saw_unsupported_mark = false;
+
+      for ch in cluster_text.chars() {
+        if is_bidi_control_char(ch) || is_non_rendering_for_coverage(ch) {
+          continue;
+        }
+
+        if is_unicode_mark(ch) {
+          saw_mark = true;
+          if let Some(face) = face.as_ref() {
+            saw_unsupported_mark |= !face.has_glyph(ch);
+          }
+        } else {
+          saw_required_non_mark = true;
+          if let Some(face) = face.as_ref() {
+            required_non_marks_supported &= face.has_glyph(ch);
+          } else {
+            required_non_marks_supported = false;
+          }
+        }
+      }
+
+      can_suppress.push(
+        saw_mark && saw_required_non_mark && required_non_marks_supported && saw_unsupported_mark,
+      );
+    }
+
+    Some((clusters, can_suppress))
+  } else {
+    None
+  };
 
   for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
     let cluster_in_shape = info.cluster as usize;
@@ -4374,8 +4433,18 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     let is_bidi_control = char_at_cluster.is_some_and(is_bidi_control_char);
 
     if !is_bidi_control {
-      if info.glyph_id == 0 && !mark_only && char_at_cluster.is_some_and(is_unicode_mark) {
-        continue;
+      if info.glyph_id == 0 {
+        if let Some((clusters, can_suppress)) = suppress_optional_mark_notdefs.as_ref() {
+          let cluster_idx = match clusters.binary_search_by_key(&logical_cluster, |(start, _)| *start)
+          {
+            Ok(idx) => idx,
+            Err(0) => 0,
+            Err(idx) => idx.saturating_sub(1),
+          };
+          if can_suppress.get(cluster_idx).copied().unwrap_or(false) {
+            continue;
+          }
+        }
       }
 
       let (x_offset, y_offset, x_advance, y_advance) =
@@ -5464,6 +5533,16 @@ mod tests {
   }
 
   #[test]
+  fn test_script_detection_myanmar() {
+    assert_eq!(Script::detect('မ'), Script::Myanmar);
+  }
+
+  #[test]
+  fn test_script_detection_telugu() {
+    assert_eq!(Script::detect('త'), Script::Telugu);
+  }
+
+  #[test]
   fn test_script_detection_hebrew() {
     assert_eq!(Script::detect('ש'), Script::Hebrew);
     assert_eq!(Script::detect('ל'), Script::Hebrew);
@@ -5684,11 +5763,6 @@ mod tests {
 
     let pipeline = ShapingPipeline::new();
     let text = "中\u{1AB0}";
-    let combining_offset = text
-      .char_indices()
-      .nth(1)
-      .expect("string should contain two chars")
-      .0;
 
     let shaped = pipeline.shape(text, &style, &ctx).expect("shape succeeds");
     assert!(
@@ -5708,7 +5782,7 @@ mod tests {
     let has_notdef_for_mark = shaped
       .iter()
       .flat_map(|run| run.glyphs.iter())
-      .any(|glyph| glyph.cluster as usize == combining_offset && glyph.glyph_id == 0);
+      .any(|glyph| glyph.glyph_id == 0);
     assert!(
       !has_notdef_for_mark,
       "unsupported combining marks should not emit .notdef glyphs"
@@ -6059,6 +6133,8 @@ mod tests {
     assert!(Script::Nko.to_harfbuzz().is_some());
     assert!(Script::Hebrew.to_harfbuzz().is_some());
     assert!(Script::Javanese.to_harfbuzz().is_some());
+    assert!(Script::Myanmar.to_harfbuzz().is_some());
+    assert!(Script::Telugu.to_harfbuzz().is_some());
     // Common/neutral scripts should return None (auto-detect)
     assert!(Script::Common.to_harfbuzz().is_none());
     assert!(Script::Inherited.to_harfbuzz().is_none());

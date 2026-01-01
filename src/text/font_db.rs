@@ -99,6 +99,14 @@ const BUNDLED_FONTS: &[BundledFont] = &[
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansBengali-subset.ttf"),
   },
   BundledFont {
+    name: "Noto Sans Myanmar",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansMyanmar-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Telugu",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansTelugu-subset.ttf"),
+  },
+  BundledFont {
     name: "Noto Sans Javanese",
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansJavanese-subset.ttf"),
   },

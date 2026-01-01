@@ -50,6 +50,8 @@ pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'
     Script::Thai => script_fallbacks!("Noto Sans Thai"),
     Script::Bengali => script_fallbacks!("Noto Sans Bengali"),
     Script::Devanagari => script_fallbacks!("Noto Sans Devanagari"),
+    Script::Myanmar => script_fallbacks!("Noto Sans Myanmar"),
+    Script::Telugu => script_fallbacks!("Noto Sans Telugu"),
     Script::Tamil => script_fallbacks!("Noto Sans Tamil"),
     Script::Arabic => script_fallbacks!("Noto Sans Arabic"),
     Script::Syriac => script_fallbacks!("Noto Sans Syriac"),
@@ -75,6 +77,8 @@ mod tests {
       (Script::Nko, "Noto Sans NKo"),
       (Script::Javanese, "Noto Sans Javanese"),
       (Script::Tamil, "Noto Sans Tamil"),
+      (Script::Myanmar, "Noto Sans Myanmar"),
+      (Script::Telugu, "Noto Sans Telugu"),
     ] {
       assert_eq!(preferred_families(script, "")[0], expected_first);
       let families = preferred_families(script, "");
@@ -149,6 +153,8 @@ mod tests {
       (Script::Nko, ""),
       (Script::Devanagari, ""),
       (Script::Bengali, ""),
+      (Script::Myanmar, ""),
+      (Script::Telugu, ""),
       (Script::Tamil, ""),
       (Script::Thai, ""),
       (Script::Javanese, ""),

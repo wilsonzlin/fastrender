@@ -37,6 +37,9 @@ pip install -r tests/fixtures/fonts/requirements.txt
     Wikipedia-language-list coverage in bundled-font runs.
   - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners + combining marks (U+0300–036F).
   - `NotoSansBengali-subset.ttf`: Bengali + joiners + combining marks (U+0300–036F).
+  - `NotoSansMyanmar-subset.ttf`: Myanmar block (U+1000–109F) plus Myanmar Extended A/B (U+AA60–AA7F, U+A9E0–A9FF),
+    joiners, punctuation, and combining marks (U+0300–036F).
+  - `NotoSansTelugu-subset.ttf`: Telugu block (U+0C00–0C7F) with joiners, punctuation, and combining marks (U+0300–036F).
   - `NotoSansJavanese-subset.ttf`: Javanese block (U+A980–A9DF) with joiners + combining marks (U+0300–036F).
   - `NotoSansTamil-subset.ttf`: Tamil (U+0B80–0BFF) plus common punctuation and joiners.
   - `NotoSansThai-subset.ttf`: Thai (U+0E00–0E7F) plus common punctuation and joiners.
@@ -351,9 +354,15 @@ pip install -r tests/fixtures/fonts/requirements.txt
 - **Glyphs:** Single sbix strike at 32ppem for the glyph `A`, embedding a small JPEG with a red background and green square.
 
 ### `FastRenderEmoji.ttf`
-- **Source:** Hand-authored COLRv0 emoji subset generated with `fontTools` 4.61.1.
+- **Source:** Generated in-repo with `fontTools` 4.61.1 via `generate_fastrender_emoji_font.py`.
 - **License:** Public Domain / CC0.
-- **Glyphs:** U+1F600 (😀), U+2764 (❤), U+1F44D (👍), and U+0020 (space) drawn with simple layered shapes and a single palette to keep CI emoji renders deterministic when bundled fonts are used.
+- **Glyphs:** U+1F600 (😀), U+2764 (❤), U+1F44D (👍), U+1F1FA/U+1F1F8 (🇺🇸 regional indicators), and U+0020 (space).
+  A tiny `GSUB` ligature maps 🇺🇸 to a single `flag_us` glyph so flag sequences render as a single emoji glyph.
+  The shapes are intentionally simple to keep CI emoji renders deterministic when bundled fonts are used.
+  - **Regeneration:** From the repository root:
+    ```bash
+    python tests/fixtures/fonts/generate_fastrender_emoji_font.py
+    ```
 
 ### `DejaVuSans-subset.ttf` / `DejaVuSans-subset.woff2`
 - **Source:** Subset of the DejaVu Sans family bundled for deterministic text rendering during tests.

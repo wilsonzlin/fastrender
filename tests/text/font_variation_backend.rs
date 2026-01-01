@@ -31,8 +31,9 @@ fn ttf_parser_reports_variable_axes() {
 }
 
 #[test]
-fn ttf_parser_set_variation_has_no_effect_on_bbox_or_outline() {
-  // ttf-parser 0.25 exposes set_variation, but it appears to be a no-op for gvar/HVAR.
+fn ttf_parser_set_variation_affects_bbox_outline_and_advance() {
+  // ttf-parser exposes `set_variation` for variable fonts. This test documents what
+  // it affects (gvar/HVAR) for our fixture font.
   let mut face = parse_face();
   let gid = face.glyph_index('A').expect("glyph should exist");
 
@@ -57,17 +58,17 @@ fn ttf_parser_set_variation_has_no_effect_on_bbox_or_outline() {
     .glyph_hor_advance(gid)
     .expect("advance available after variations");
 
-  assert_eq!(
+  assert_ne!(
     bbox_default, bbox_varied,
-    "HVAR/gvar not applied by ttf-parser"
+    "expected gvar-driven bbox changes when applying variations via ttf-parser"
   );
-  assert_eq!(
+  assert_ne!(
     metrics_default, metrics_varied,
-    "outline stays unchanged when applying variations via ttf-parser"
+    "expected gvar-driven outline changes when applying variations via ttf-parser"
   );
-  assert_eq!(
+  assert_ne!(
     advance_default, advance_varied,
-    "HVAR data should influence advances, but ttf-parser leaves them unchanged"
+    "expected HVAR-driven advance width changes when applying variations via ttf-parser"
   );
 }
 

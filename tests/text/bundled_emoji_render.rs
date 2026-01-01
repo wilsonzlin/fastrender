@@ -42,8 +42,32 @@ fn bundled_emoji_renders_with_bundled_fonts() {
   );
 
   let hash = fnv1a64(&pixmap.encode_png().expect("encode emoji render"));
-  const EXPECTED_HASH: u64 = 12_114_580_719_173_447_215;
+  const EXPECTED_HASH: u64 = 14_075_767_298_342_112_933;
   assert_eq!(hash, EXPECTED_HASH);
+}
+
+#[test]
+fn bundled_emoji_shapes_us_flag_sequence_as_single_glyph() {
+  let mut pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["emoji".to_string(), "sans-serif".to_string()];
+  style.font_size = 64.0;
+
+  let runs = pipeline
+    .shape("🇺🇸", &style, &font_ctx)
+    .expect("flag should shape");
+
+  assert!(!runs.is_empty(), "flag should yield at least one shaped run");
+  assert_eq!(
+    runs[0].font.family, "FastRender Emoji",
+    "bundled emoji font should shape the flag sequence"
+  );
+  assert_eq!(
+    runs[0].glyphs.len(),
+    1,
+    "expected 🇺🇸 to ligate into a single glyph"
+  );
 }
 
 #[test]

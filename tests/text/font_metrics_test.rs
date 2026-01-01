@@ -236,6 +236,9 @@ fn test_font_caching() {
 
   let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
   if let Some(id) = id {
+    // Some FontDatabase configurations may touch the cache during initialization (e.g. when
+    // computing generic fallback families), so normalize the starting point explicitly.
+    db.clear_cache();
     assert_eq!(db.cache_size(), 0);
 
     let font1 = db.load_font(id);
