@@ -404,6 +404,25 @@ mod tests {
   }
 
   #[test]
+  fn decode_html_meta_http_equiv_utf16_is_treated_as_utf8() {
+    // Same rule applies for the legacy http-equiv Content-Type form.
+    let encoded = encoding_rs::UTF_8.encode(
+      "<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-16\"></head><body>£</body></html>",
+    ).0;
+    let decoded = decode_html_bytes(&encoded, None);
+    assert!(
+      decoded.contains('£'),
+      "decoded text should contain pound sign when http-equiv declares utf-16 (treated as utf-8): {}",
+      decoded
+    );
+    assert!(
+      !decoded.contains('\u{FFFD}'),
+      "decoded text should not contain replacement characters when decoding utf-8 content: {}",
+      decoded
+    );
+  }
+
+  #[test]
   fn decode_html_defaults_to_windows_1252() {
     let bytes = vec![0xa3]; // U+00A3 in Windows-1252
     let decoded = decode_html_bytes(&bytes, None);
