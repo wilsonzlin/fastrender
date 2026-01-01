@@ -811,4 +811,24 @@ mod tests {
     assert!(args.iter().any(|a| a == "--"));
     assert_eq!(args.last().unwrap(), "https://example.com/");
   }
+
+  #[test]
+  fn build_args_sanitizes_header_values() {
+    let cookie = PathBuf::from("/tmp/cookies.txt");
+    let headers = vec![("X-Test".to_string(), "a\r\nb\0c".to_string())];
+    let args = build_curl_args("https://example.com/", &cookie, None, &headers);
+    let header_value = args
+      .iter()
+      .skip_while(|v| *v != "--header")
+      .nth(1)
+      .expect("expected header value");
+    assert!(!header_value.contains('\r'));
+    assert!(!header_value.contains('\n'));
+    assert!(!header_value.contains('\0'));
+  }
+
+  #[test]
+  fn status_line_parses_http2() {
+    assert_eq!(parse_status_line("HTTP/2 204\r\n"), Some(204));
+  }
 }
