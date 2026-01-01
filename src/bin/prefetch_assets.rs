@@ -36,8 +36,7 @@ mod disk_cache_main {
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
     is_data_url, CachingFetcherConfig, DiskCachingFetcher, FetchDestination, FetchRequest,
-    FetchedResource, ResourceFetcher,
-    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    FetchedResource, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
   use regex::Regex;
@@ -1062,8 +1061,9 @@ mod disk_cache_main {
 
   fn prefetch_assets_for_html(
     stem: &str,
-    document_url: &str,
+    _document_url: &str,
     html: &str,
+    base_hint: &str,
     base_url: &str,
     fetcher: &dyn ResourceFetcher,
     media_ctx: &MediaContext,
@@ -1313,7 +1313,7 @@ mod disk_cache_main {
       };
       let import_loader = PrefetchImportLoader::new(
         fetcher,
-        document_url,
+        base_hint,
         &summary,
         &all_asset_urls,
         css_asset_urls_ref,
@@ -1363,7 +1363,7 @@ mod disk_cache_main {
               let mut summary = summary.borrow_mut();
               prefetch_fonts_from_stylesheet(
                 fetcher,
-                document_url,
+                base_hint,
                 base_url,
                 &resolved,
                 media_ctx,
@@ -1374,7 +1374,7 @@ mod disk_cache_main {
             }
           }
           StylesheetTask::External(css_url) => match fetcher.fetch_with_request(
-            FetchRequest::new(css_url.as_str(), FetchDestination::Style).with_referrer(document_url),
+            FetchRequest::new(css_url.as_str(), FetchDestination::Style).with_referrer(base_hint),
           ) {
             Ok(res) => {
               summary.borrow_mut().fetched_css += 1;
@@ -1421,7 +1421,7 @@ mod disk_cache_main {
                 let mut summary = summary.borrow_mut();
                 prefetch_fonts_from_stylesheet(
                   fetcher,
-                  document_url,
+                  base_hint,
                   sheet_base,
                   &resolved,
                   media_ctx,
@@ -1450,7 +1450,7 @@ mod disk_cache_main {
       let mut summary = summary.borrow_mut();
       for url in &image_urls {
         match fetcher.fetch_with_request(
-          FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(document_url),
+          FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(base_hint),
         ) {
           Ok(_) => summary.fetched_images += 1,
           Err(_) => summary.failed_images += 1,
@@ -1464,7 +1464,7 @@ mod disk_cache_main {
         let mut summary = summary.borrow_mut();
         for url in &document_urls {
           match fetcher.fetch_with_request(
-            FetchRequest::new(url.as_str(), FetchDestination::Document).with_referrer(document_url),
+            FetchRequest::new(url.as_str(), FetchDestination::Other).with_referrer(base_hint),
           ) {
             Ok(res) => {
               summary.fetched_documents += 1;
@@ -1493,6 +1493,7 @@ mod disk_cache_main {
           &format!("{stem}::document:{url}"),
           base_hint,
           &doc.html,
+          &doc.base_hint,
           &doc.base_url,
           fetcher,
           media_ctx,
@@ -1506,7 +1507,7 @@ mod disk_cache_main {
       let mut summary = summary.borrow_mut();
       for url in &css_asset_urls {
         match fetcher.fetch_with_request(
-          FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(document_url),
+          FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(base_hint),
         ) {
           Ok(_) => summary.fetched_css_assets += 1,
           Err(_) => summary.failed_css_assets += 1,
@@ -1547,6 +1548,7 @@ mod disk_cache_main {
       &entry.cache_stem,
       entry.url.as_str(),
       &cached.document.html,
+      &cached.document.base_hint,
       &cached.document.base_url,
       fetcher,
       media_ctx,
@@ -1775,6 +1777,7 @@ mod disk_cache_main {
         "test",
         &cached.document.base_hint,
         &cached.document.html,
+        &cached.document.base_hint,
         &cached.document.base_url,
         &fetcher,
         &media_ctx,

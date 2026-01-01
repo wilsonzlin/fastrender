@@ -529,8 +529,9 @@ pub fn follow_client_redirects_resource(
 mod tests {
   use super::*;
   use fastrender::render_control;
-  use fastrender::resource::FetchedResource;
+  use fastrender::resource::FetchDestination;
   use std::sync::atomic::{AtomicBool, Ordering};
+  use std::sync::Mutex;
 
   struct DeadlineAssertingFetcher {
     observed_deadline: AtomicBool,
@@ -566,6 +567,32 @@ mod tests {
     }
   }
 
+  #[derive(Default)]
+  struct RecordingFetcher {
+    requests: Mutex<Vec<(String, FetchDestination, Option<String>)>>,
+  }
+
+  impl ResourceFetcher for RecordingFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      panic!("follow_client_redirects should use fetch_with_request");
+    }
+
+    fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+      self.requests.lock().unwrap().push((
+        req.url.to_string(),
+        req.destination,
+        req.referrer.map(|r| r.to_string()),
+      ));
+
+      let mut res = FetchedResource::new(
+        b"<!doctype html><html><body>done</body></html>".to_vec(),
+        Some("text/html".to_string()),
+      );
+      res.status = Some(200);
+      Ok(res)
+    }
+  }
+
   #[test]
   fn follow_client_redirects_with_deadline_installs_and_clears_deadline() {
     assert!(
@@ -593,6 +620,30 @@ mod tests {
       render_control::active_deadline().is_none(),
       "deadline should be cleared after redirect following"
     );
+  }
+
+  #[test]
+  fn follow_client_redirects_sets_destination_and_referrer() {
+    let html = r#"<!doctype html>
+<html>
+  <head>
+    <base href="https://cdn.example/">
+    <meta http-equiv="refresh" content="0;url=/next">
+  </head>
+  <body>start</body>
+</html>"#;
+    let base_hint = "https://origin.example/start";
+    let doc = PreparedDocument::new(html.to_string(), base_hint.to_string());
+
+    let fetcher = RecordingFetcher::default();
+    let _ = follow_client_redirects(&fetcher, doc, |_| {});
+
+    let requests = fetcher.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "expected exactly one follow-up fetch");
+    let (url, destination, referrer) = &requests[0];
+    assert_eq!(destination, &FetchDestination::Document);
+    assert_eq!(referrer.as_deref(), Some(base_hint));
+    assert_eq!(url, "https://cdn.example/next");
   }
 }
 

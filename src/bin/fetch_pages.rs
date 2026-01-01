@@ -10,9 +10,7 @@ use common::render_pipeline::build_http_fetcher;
 use fastrender::pageset::{
   cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
-use fastrender::resource::FetchRequest;
-use fastrender::resource::FetchedResource;
-use fastrender::resource::ResourceFetcher;
+use fastrender::resource::{FetchRequest, FetchedResource, ResourceFetcher};
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use rayon::ThreadPoolBuilder;
