@@ -81,10 +81,12 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
   `<foreignObject>` HTML renders (default 262_144 bytes).
 - `FASTR_SVG_EMBED_DOCUMENT_CSS=0|1` – force-disable/force-enable embedding document `<style>` CSS into
   serialized inline `<svg>` replaced elements. When unset, embedding is automatic and is disabled when
-  the document CSS exceeds 64KiB or when the document contains more than
-  `FASTR_SVG_EMBED_DOCUMENT_CSS_MAX_SVGS` replaced inline SVGs. The 64KiB cap still applies when forced on.
+  the document CSS exceeds 64KiB. When `FASTR_SVG_EMBED_DOCUMENT_CSS_MAX_SVGS` is set, embedding is also
+  disabled when the document contains more than that many replaced inline SVGs. The 64KiB cap still
+  applies when forced on.
 - `FASTR_SVG_EMBED_DOCUMENT_CSS_MAX_SVGS=<N>` – maximum replaced inline `<svg>` elements allowed before
-  document CSS embedding is disabled (default 16). Only used when `FASTR_SVG_EMBED_DOCUMENT_CSS` is unset.
+  document CSS embedding is disabled. Unset means unlimited. Only used when
+  `FASTR_SVG_EMBED_DOCUMENT_CSS` is unset.
 - `FASTR_INLINE_MAX_STYLESHEETS=<N>` – maximum number of stylesheets inlined across `<link>`/embedded
   discovery and `@import` chains (default 128).
 - `FASTR_EMBEDDED_CSS_MAX_CANDIDATES=<N>` – cap the number of stylesheet URLs discovered via the

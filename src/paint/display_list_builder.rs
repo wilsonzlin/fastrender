@@ -152,13 +152,16 @@ use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::ReplacedType;
+use crate::tree::box_tree::SvgContent;
 use crate::tree::box_tree::TextControlKind;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use lru::LruCache;
 use rayon::prelude::*;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
@@ -3642,6 +3645,12 @@ impl DisplayListBuilder {
 
         let style_for_image = fragment.style.as_deref();
 
+        if let ReplacedType::Svg { content } = replaced_type {
+          if self.emit_inline_svg(content, rect, style_for_image) {
+            return;
+          }
+        }
+
         if let ReplacedType::Iframe { src, srcdoc } = replaced_type {
           if let Some(cache) = self.image_cache.as_ref() {
             if let Some(image) = srcdoc.as_deref().and_then(|html| {
@@ -6015,6 +6024,194 @@ impl DisplayListBuilder {
       filter_quality: Self::image_filter_quality(style),
       src_rect: None,
     }));
+  }
+
+  fn emit_inline_svg(
+    &mut self,
+    content: &SvgContent,
+    rect: Rect,
+    style: Option<&ComputedStyle>,
+  ) -> bool {
+    let Some(image_cache) = self.image_cache.as_ref() else {
+      return false;
+    };
+
+    // The display-list pipeline cannot render SVG foreignObject content yet, so prefer the
+    // fallback SVG when present (it contains best-effort placeholder rendering for foreignObject).
+    let svg = if content.foreign_objects.is_empty() {
+      content.svg.as_str()
+    } else if !content.fallback_svg.is_empty() {
+      content.fallback_svg.as_str()
+    } else {
+      content.svg.as_str()
+    };
+    if svg.is_empty() {
+      return false;
+    }
+
+    let meta = match image_cache.probe_svg_content(svg, "inline-svg") {
+      Ok(meta) => meta,
+      Err(_) => return false,
+    };
+
+    let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
+    let orientation = style
+      .map(|s| s.image_orientation.resolve(meta.orientation, false))
+      .unwrap_or_else(|| ImageOrientation::default().resolve(meta.orientation, false));
+
+    let (img_w_raw, img_h_raw) = meta.oriented_dimensions(orientation);
+    if img_w_raw == 0 || img_h_raw == 0 {
+      return false;
+    }
+    let Some((img_w_css, img_h_css)) = meta.css_dimensions(
+      orientation,
+      &image_resolution,
+      self.device_pixel_ratio,
+      None,
+    ) else {
+      return false;
+    };
+
+    let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
+    let pos = style
+      .map(|s| s.object_position)
+      .unwrap_or_else(default_object_position);
+
+    let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(
+      fit,
+      pos,
+      rect.width(),
+      rect.height(),
+      img_w_css,
+      img_h_css,
+      style.map(|s| s.font_size).unwrap_or(16.0),
+      self.viewport,
+    ) {
+      Some(v) => v,
+      None => return false,
+    };
+    let dest_rect = Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
+
+    let dest_w_device = dest_w * self.device_pixel_ratio;
+    let dest_h_device = dest_h * self.device_pixel_ratio;
+    if dest_w_device <= 0.0 || dest_h_device <= 0.0 {
+      return false;
+    }
+    let render_w = dest_w_device.ceil().max(1.0) as u32;
+    let render_h = dest_h_device.ceil().max(1.0) as u32;
+
+    let injection = content.document_css_injection.as_ref();
+    let (content_hash, content_len) = match injection {
+      Some(injection) => match (
+        svg.get(..injection.insert_pos),
+        svg.get(injection.insert_pos..),
+      ) {
+        // Hash the final SVG markup (with injected CSS) without allocating it, matching `str::hash`
+        // semantics (single 0xFF terminator byte).
+        (Some(prefix), Some(suffix)) => {
+          let style_element = injection.style_element.as_ref();
+          let mut hasher = DefaultHasher::new();
+          hasher.write(prefix.as_bytes());
+          hasher.write(style_element.as_bytes());
+          hasher.write(suffix.as_bytes());
+          hasher.write_u8(0xff);
+          (
+            hasher.finish(),
+            prefix.len() + style_element.len() + suffix.len(),
+          )
+        }
+        _ => {
+          let mut hasher = DefaultHasher::new();
+          svg.hash(&mut hasher);
+          (hasher.finish(), svg.len())
+        }
+      },
+      None => {
+        let mut hasher = DefaultHasher::new();
+        svg.hash(&mut hasher);
+        (hasher.finish(), svg.len())
+      }
+    };
+
+    // Avoid caching large inline SVG markup strings in display-list builder caches by using a
+    // compact hash-based identifier.
+    let inline_key = format!(
+      "inline-svg:{:016x}:{}:{}x{}",
+      content_hash, content_len, render_w, render_h
+    );
+    let used_resolution =
+      image_resolution.used_resolution(None, meta.resolution, self.device_pixel_ratio);
+    let cache_key = ImageKey {
+      url: inline_key,
+      orientation,
+      decorative: false,
+      used_resolution_bits: used_resolution.to_bits(),
+      device_pixel_ratio_bits: self.device_pixel_ratio.to_bits(),
+    };
+
+    {
+      let mut decoded_cache = self
+        .decoded_image_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+      if let Some(image) = decoded_cache.get(&cache_key) {
+        self.list.push(DisplayItem::Image(ImageItem {
+          dest_rect,
+          image,
+          filter_quality: Self::image_filter_quality(style),
+          src_rect: None,
+        }));
+        return true;
+      }
+    }
+
+    let pixmap = match injection {
+      Some(injection) => image_cache.render_svg_pixmap_at_size_with_injected_style(
+        svg,
+        injection.insert_pos,
+        injection.style_element.as_ref(),
+        render_w,
+        render_h,
+        "inline-svg",
+        self.device_pixel_ratio,
+      ),
+      None => image_cache.render_svg_pixmap_at_size(
+        svg,
+        render_w,
+        render_h,
+        "inline-svg",
+        self.device_pixel_ratio,
+      ),
+    };
+    let pixmap = match pixmap {
+      Ok(pixmap) => pixmap,
+      Err(_) => return false,
+    };
+
+    let image_data = Arc::new(ImageData::from_pixmap(pixmap.as_ref(), dest_w, dest_h));
+
+    let mut decoded_cache = self
+      .decoded_image_cache
+      .lock()
+      .unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = decoded_cache.get(&cache_key) {
+      self.list.push(DisplayItem::Image(ImageItem {
+        dest_rect,
+        image: existing,
+        filter_quality: Self::image_filter_quality(style),
+        src_rect: None,
+      }));
+      return true;
+    }
+    decoded_cache.insert(cache_key, image_data.clone());
+
+    self.list.push(DisplayItem::Image(ImageItem {
+      dest_rect,
+      image: image_data,
+      filter_quality: Self::image_filter_quality(style),
+      src_rect: None,
+    }));
+    true
   }
 
   fn decode_image(

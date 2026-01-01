@@ -2132,8 +2132,6 @@ impl ImageCache {
     url: &str,
     device_pixel_ratio: f32,
   ) -> Result<Arc<tiny_skia::Pixmap>> {
-    use resvg::usvg;
-
     self.enforce_svg_resource_policy(svg_content, url)?;
     self.enforce_decode_limits(render_width, render_height, url)?;
     check_active(RenderStage::Paint).map_err(Error::Render)?;
@@ -2154,6 +2152,92 @@ impl ImageCache {
     }
 
     record_image_cache_miss();
+    self.render_svg_pixmap_at_size_uncached(svg_content, key, render_width, render_height, url)
+  }
+
+  pub(crate) fn render_svg_pixmap_at_size_with_injected_style(
+    &self,
+    svg_content: &str,
+    insert_pos: usize,
+    style_element: &str,
+    render_width: u32,
+    render_height: u32,
+    url: &str,
+    device_pixel_ratio: f32,
+  ) -> Result<Arc<tiny_skia::Pixmap>> {
+    // Policy enforcement is based on the SVG markup itself; injected document CSS does not add
+    // new `<image href>` style subresources that we currently police.
+    self.enforce_svg_resource_policy(svg_content, url)?;
+    self.enforce_decode_limits(render_width, render_height, url)?;
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
+
+    let Some(prefix) = svg_content.get(..insert_pos) else {
+      return self.render_svg_pixmap_at_size(
+        svg_content,
+        render_width,
+        render_height,
+        url,
+        device_pixel_ratio,
+      );
+    };
+    let Some(suffix) = svg_content.get(insert_pos..) else {
+      return self.render_svg_pixmap_at_size(
+        svg_content,
+        render_width,
+        render_height,
+        url,
+        device_pixel_ratio,
+      );
+    };
+
+    // Match `svg_pixmap_key` hashing semantics for a single combined string without allocating it.
+    // `Hash` for `str` appends a 0xFF terminator byte, so hashing chunks separately would
+    // introduce extra terminators and change the key. We instead hash the raw bytes and append
+    // the terminator once.
+    let mut content_hasher = DefaultHasher::new();
+    content_hasher.write(prefix.as_bytes());
+    content_hasher.write(style_element.as_bytes());
+    content_hasher.write(suffix.as_bytes());
+    content_hasher.write_u8(0xff);
+    let mut url_hasher = DefaultHasher::new();
+    url.hash(&mut url_hasher);
+    let key = SvgPixmapKey {
+      hash: content_hasher.finish(),
+      url_hash: url_hasher.finish(),
+      len: prefix.len() + style_element.len() + suffix.len(),
+      width: render_width,
+      height: render_height,
+      device_pixel_ratio_bits: device_pixel_ratio.to_bits(),
+    };
+
+    record_image_cache_request();
+    if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
+      if let Some(cached) = cache.get_cloned(&key) {
+        record_image_cache_hit();
+        return Ok(cached);
+      }
+    }
+
+    record_image_cache_miss();
+
+    let mut combined = String::with_capacity(key.len);
+    combined.push_str(prefix);
+    combined.push_str(style_element);
+    combined.push_str(suffix);
+
+    self.render_svg_pixmap_at_size_uncached(&combined, key, render_width, render_height, url)
+  }
+
+  fn render_svg_pixmap_at_size_uncached(
+    &self,
+    svg_content: &str,
+    key: SvgPixmapKey,
+    render_width: u32,
+    render_height: u32,
+    url: &str,
+  ) -> Result<Arc<tiny_skia::Pixmap>> {
+    use resvg::usvg;
+
     let render_timer = Instant::now();
 
     if let Some(pixmap) = try_render_simple_svg_pixmap(svg_content, render_width, render_height)? {

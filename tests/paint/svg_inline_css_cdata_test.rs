@@ -48,28 +48,28 @@ fn inline_svg_wraps_document_css_in_cdata() {
       "#;
 
       let serialized = serialized_inline_svg(html, 20.0, 20.0).expect("serialize svg");
+      let injection = serialized
+        .document_css_injection
+        .as_ref()
+        .expect("document CSS injection should be captured");
       assert!(
-        serialized.svg.contains("<![CDATA["),
+        injection.style_element.contains("<![CDATA["),
         "embedded document CSS should be wrapped in CDATA"
       );
       assert!(
-        serialized.svg.contains("]]]]><![CDATA[>"),
+        injection.style_element.contains("]]]]><![CDATA[>"),
         "]]> terminators inside CSS should be split across CDATA sections"
       );
-      assert!(
-        serialized.fallback_svg.contains("<![CDATA["),
-        "fallback SVG should also wrap document CSS in CDATA"
+
+      let mut svg_with_css = String::with_capacity(
+        serialized.svg.len() + injection.style_element.len(),
       );
-      assert!(
-        serialized.fallback_svg.contains("]]]]><![CDATA[>"),
-        "fallback SVG should split embedded CDATA terminators"
-      );
+      svg_with_css.push_str(&serialized.svg[..injection.insert_pos]);
+      svg_with_css.push_str(injection.style_element.as_ref());
+      svg_with_css.push_str(&serialized.svg[injection.insert_pos..]);
 
       Document::parse(&serialized.svg).expect("serialized svg should be parseable XML");
-      Document::parse(&serialized.fallback_svg)
-        .expect("fallback svg should also be parseable XML");
-
-      let doc = Document::parse(&serialized.svg).expect("parse serialized svg");
+      let doc = Document::parse(&svg_with_css).expect("parse serialized svg with injected CSS");
       let style_text = doc
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "style")
@@ -91,7 +91,7 @@ fn inline_svg_wraps_document_css_in_cdata() {
 
       let cache = ImageCache::new();
       cache
-        .render_svg(&serialized.svg)
+        .render_svg(&svg_with_css)
         .expect("render serialized svg with CDATA-wrapped CSS");
     })
     .unwrap()

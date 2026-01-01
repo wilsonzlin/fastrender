@@ -270,6 +270,17 @@ pub struct PictureSource {
 
 /// Serialized SVG content plus any inlined foreignObject metadata.
 #[derive(Debug, Clone, PartialEq)]
+pub struct SvgDocumentCssInjection {
+  /// CDATA-wrapped `<style>` element containing document-level CSS to inject into the SVG root.
+  pub style_element: Arc<str>,
+  /// Byte offset within the serialized SVG string where `style_element` should be inserted.
+  ///
+  /// This is typically immediately after the root element's `>` delimiter.
+  pub insert_pos: usize,
+}
+
+/// Serialized SVG content plus any inlined foreignObject metadata.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SvgContent {
   /// Serialized SVG markup (may include foreignObject placeholders).
   pub svg: String,
@@ -279,6 +290,8 @@ pub struct SvgContent {
   pub foreign_objects: Vec<ForeignObjectInfo>,
   /// Document-level CSS collected while serializing the SVG subtree.
   pub shared_css: String,
+  /// Optional injection of document-level CSS into the SVG root.
+  pub document_css_injection: Option<SvgDocumentCssInjection>,
 }
 
 impl SvgContent {
@@ -290,6 +303,7 @@ impl SvgContent {
       fallback_svg: svg,
       foreign_objects: Vec::new(),
       shared_css: String::new(),
+      document_css_injection: None,
     }
   }
 }

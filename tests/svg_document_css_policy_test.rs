@@ -5,6 +5,7 @@ use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::media::MediaContext;
 use fastrender::tree::box_generation::generate_box_tree;
 use fastrender::tree::box_tree::{BoxNode, BoxType, ReplacedType, SvgContent};
+use fastrender::FastRender;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -56,7 +57,7 @@ fn svg_document_css_embedding_policy_respects_svg_count_overrides_and_size_limit
     || serialized_inline_svg(html_many_svgs, 20.0, 20.0).expect("serialize svg"),
   );
   assert!(
-    !disabled.svg.contains("<style><![CDATA["),
+    disabled.document_css_injection.is_none(),
     "document CSS embedding should be disabled when SVG count exceeds the max"
   );
   assert!(
@@ -67,10 +68,7 @@ fn svg_document_css_embedding_policy_respects_svg_count_overrides_and_size_limit
   // Forcing embedding on should override the SVG count guard (while still honoring the CSS size cap).
   let forced_on = runtime::with_runtime_toggles(
     Arc::new(RuntimeToggles::from_map(HashMap::from([
-      (
-        "FASTR_SVG_EMBED_DOCUMENT_CSS".to_string(),
-        "1".to_string(),
-      ),
+      ("FASTR_SVG_EMBED_DOCUMENT_CSS".to_string(), "1".to_string()),
       (
         "FASTR_SVG_EMBED_DOCUMENT_CSS_MAX_SVGS".to_string(),
         "1".to_string(),
@@ -79,12 +77,16 @@ fn svg_document_css_embedding_policy_respects_svg_count_overrides_and_size_limit
     || serialized_inline_svg(html_many_svgs, 20.0, 20.0).expect("serialize svg"),
   );
   assert!(
-    forced_on.svg.contains("<style><![CDATA["),
+    forced_on.document_css_injection.is_some(),
     "document CSS should be embedded when forced on"
   );
+  assert!(
+    !forced_on.svg.contains("<style><![CDATA["),
+    "document CSS should be injected at render time instead of being inlined into every SVG"
+  );
   assert_eq!(
-    forced_on.svg, forced_on.fallback_svg,
-    "fallback SVG should mirror the primary SVG when embedding document CSS"
+    forced_on.fallback_svg, "",
+    "fallback SVG should remain empty for non-foreignObject inline SVGs"
   );
 
   // Forcing embedding off should disable it even for a single inline SVG.
@@ -104,7 +106,7 @@ fn svg_document_css_embedding_policy_respects_svg_count_overrides_and_size_limit
     || serialized_inline_svg(html_one_svg, 20.0, 20.0).expect("serialize svg"),
   );
   assert!(
-    !forced_off.svg.contains("<style><![CDATA["),
+    forced_off.document_css_injection.is_none(),
     "document CSS embedding should be disabled when forced off"
   );
   assert!(
@@ -126,7 +128,7 @@ fn svg_document_css_embedding_policy_respects_svg_count_overrides_and_size_limit
     || serialized_inline_svg(&html_oversized_css, 20.0, 20.0).expect("serialize svg"),
   );
   assert!(
-    !forced_on_oversized.svg.contains("<style><![CDATA["),
+    forced_on_oversized.document_css_injection.is_none(),
     "document CSS should not be embedded when it exceeds the embedded CSS cap"
   );
   assert!(
@@ -135,3 +137,27 @@ fn svg_document_css_embedding_policy_respects_svg_count_overrides_and_size_limit
   );
 }
 
+#[test]
+fn inline_svg_renders_with_injected_document_css() {
+  // The root-style injected by box generation is not enough to apply this rule; the fill override
+  // must come from document-level CSS applied by the SVG renderer.
+  let html = r#"
+    <style>
+      body { margin: 0; background: white; }
+      .shape { fill: rgb(255, 0, 0); }
+    </style>
+    <svg width="20" height="20" viewBox="0 0 20 20">
+     <rect class="shape" width="20" height="20" />
+    </svg>
+  "#;
+
+  let mut renderer = FastRender::new().expect("renderer");
+  let pixmap = renderer.render_html(html, 30, 30).expect("render html");
+  let idx = (10usize * pixmap.width() as usize + 10usize) * 4;
+  let data = pixmap.data();
+  assert_eq!(
+    [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]],
+    [255, 0, 0, 255],
+    "document-level CSS should affect inline SVG rendering"
+  );
+}

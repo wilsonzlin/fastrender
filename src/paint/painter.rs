@@ -137,6 +137,7 @@ use crate::tree::box_tree::ForeignObjectInfo;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::box_tree::SvgContent;
+use crate::tree::box_tree::SvgDocumentCssInjection;
 use crate::tree::box_tree::{FormControl, FormControlKind, TextControlKind};
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
@@ -2729,7 +2730,9 @@ impl Painter {
           if let Some(start) = paint_clipped_start {
             clip_paint_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
-          base_painter.gradient_stats.merge(&clip_painter.gradient_stats);
+          base_painter
+            .gradient_stats
+            .merge(&clip_painter.gradient_stats);
           let mut clip_pixmap = clip_painter.pixmap;
           if let Some(clip) = clip {
             let mut clip_rect = clip.rect;
@@ -2737,13 +2740,21 @@ impl Painter {
             let clip_x = clip.clip_x;
             let clip_y = clip.clip_y;
             if !clip_x {
-              clip_rect =
-                Rect::from_xywh(bounds.min_x(), clip_rect.y(), bounds.width(), clip_rect.height());
+              clip_rect = Rect::from_xywh(
+                bounds.min_x(),
+                clip_rect.y(),
+                bounds.width(),
+                clip_rect.height(),
+              );
               clip_radii = BorderRadii::ZERO;
             }
             if !clip_y {
-              clip_rect =
-                Rect::from_xywh(clip_rect.x(), bounds.min_y(), clip_rect.width(), bounds.height());
+              clip_rect = Rect::from_xywh(
+                clip_rect.x(),
+                bounds.min_y(),
+                clip_rect.width(),
+                bounds.height(),
+              );
               clip_radii = BorderRadii::ZERO;
             }
             let local_clip = clip_rect_axes(clip_rect, bounds, true, true);
@@ -2780,7 +2791,9 @@ impl Painter {
 
         if let Some(ref clip_path) = clip_path {
           let clip_path_start = profile_enabled.then(Instant::now);
-          if let Some(size) = IntSize::from_wh(base_painter.pixmap.width(), base_painter.pixmap.height()) {
+          if let Some(size) =
+            IntSize::from_wh(base_painter.pixmap.width(), base_painter.pixmap.height())
+          {
             let transform =
               Transform::from_translate(-offset.x * self.scale, -offset.y * self.scale);
             if let Some(mask) = clip_path.mask(self.scale, size, transform) {
@@ -2827,7 +2840,12 @@ impl Painter {
 
         if !filters.is_empty() {
           let filter_start = profile_enabled.then(Instant::now);
-          apply_filters(&mut base_painter.pixmap, &filters, self.scale, device_root_rect)?;
+          apply_filters(
+            &mut base_painter.pixmap,
+            &filters,
+            self.scale,
+            device_root_rect,
+          )?;
           if let Some(start) = filter_start {
             filter_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
@@ -3979,8 +3997,7 @@ impl Painter {
       gradient_bucket(width.max(height).saturating_mul(2)),
     )
     .ok()
-    .flatten()
-    else {
+    .flatten() else {
       return;
     };
     if let Some(start) = timer {
@@ -5710,7 +5727,19 @@ impl Painter {
           return;
         }
         if !content.fallback_svg.is_empty() {
-          if self.paint_svg(
+          if let Some(injection) = content.document_css_injection.as_ref() {
+            if self.paint_inline_svg_with_injected_style(
+              &content.fallback_svg,
+              injection,
+              style,
+              content_rect.x(),
+              content_rect.y(),
+              content_rect.width(),
+              content_rect.height(),
+            ) {
+              return;
+            }
+          } else if self.paint_svg(
             &content.fallback_svg,
             style,
             content_rect.x(),
@@ -5858,15 +5887,139 @@ impl Painter {
     width: f32,
     height: f32,
   ) -> bool {
+    let injection = content.document_css_injection.as_ref();
     if content.foreign_objects.is_empty() {
+      if let Some(injection) = injection {
+        return self.paint_inline_svg_with_injected_style(
+          &content.svg,
+          injection,
+          style,
+          x,
+          y,
+          width,
+          height,
+        );
+      }
       return self.paint_svg(&content.svg, style, x, y, width, height);
     }
 
     if let Some(svg) = self.inline_svg_with_foreign_objects(content) {
+      if let Some(injection) = injection {
+        return self
+          .paint_inline_svg_with_injected_style(&svg, injection, style, x, y, width, height);
+      }
       return self.paint_svg(&svg, style, x, y, width, height);
     }
 
     false
+  }
+
+  fn paint_inline_svg_with_injected_style(
+    &mut self,
+    content: &str,
+    injection: &SvgDocumentCssInjection,
+    style: Option<&ComputedStyle>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+  ) -> bool {
+    if content.is_empty() {
+      return false;
+    }
+
+    // Defensive: allow callers to fall back to the generic SVG paint path if this does not
+    // look like inline SVG markup.
+    let trimmed = content.trim_start();
+    let inline_svg = trimmed.starts_with("<svg") || trimmed.starts_with("<?xml");
+    if !inline_svg {
+      return self.paint_svg(content, style, x, y, width, height);
+    }
+
+    let meta = match self.image_cache.probe_svg_content(content, "inline-svg") {
+      Ok(meta) => meta,
+      Err(_) => return false,
+    };
+
+    let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
+    let orientation = style
+      .map(|s| s.image_orientation.resolve(meta.orientation, false))
+      .unwrap_or_else(|| ImageOrientation::default().resolve(meta.orientation, false));
+    let (img_w_raw, img_h_raw) = meta.oriented_dimensions(orientation);
+    if img_w_raw == 0 || img_h_raw == 0 {
+      return false;
+    }
+    let Some((img_w_css, img_h_css)) =
+      meta.css_dimensions(orientation, &image_resolution, self.scale, None)
+    else {
+      return false;
+    };
+
+    let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
+    let pos = style
+      .map(|s| s.object_position)
+      .unwrap_or_else(default_object_position);
+
+    let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(
+      fit,
+      pos,
+      width,
+      height,
+      img_w_css,
+      img_h_css,
+      style.map(|s| s.font_size).unwrap_or(16.0),
+      Some((self.css_width, self.css_height)),
+    ) {
+      Some(v) => v,
+      None => return false,
+    };
+
+    let dest_x_device = self.device_length(dest_x);
+    let dest_y_device = self.device_length(dest_y);
+    let dest_w_device = self.device_length(dest_w);
+    let dest_h_device = self.device_length(dest_h);
+    if dest_w_device <= 0.0 || dest_h_device <= 0.0 {
+      return false;
+    }
+
+    let render_w = dest_w_device.ceil().max(1.0) as u32;
+    let render_h = dest_h_device.ceil().max(1.0) as u32;
+    let pixmap = match self
+      .image_cache
+      .render_svg_pixmap_at_size_with_injected_style(
+        content,
+        injection.insert_pos,
+        injection.style_element.as_ref(),
+        render_w,
+        render_h,
+        "inline-svg",
+        self.scale,
+      ) {
+      Ok(pixmap) => pixmap,
+      Err(_) => return false,
+    };
+
+    let scale_x = dest_w_device / render_w as f32;
+    let scale_y = dest_h_device / render_h as f32;
+    if !scale_x.is_finite() || !scale_y.is_finite() {
+      return false;
+    }
+
+    let mut paint = PixmapPaint::default();
+    paint.quality = Self::filter_quality_for_image(style);
+
+    let transform = Transform::from_row(
+      scale_x,
+      0.0,
+      0.0,
+      scale_y,
+      self.device_x(x) + dest_x_device,
+      self.device_y(y) + dest_y_device,
+    );
+    self
+      .pixmap
+      .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
+    true
   }
 
   fn inline_svg_with_foreign_objects(&mut self, content: &SvgContent) -> Option<String> {
@@ -6720,20 +6873,20 @@ impl Painter {
         return false;
       }
 
-        let mut paint = PixmapPaint::default();
-        paint.quality = Self::filter_quality_for_image(style);
+      let mut paint = PixmapPaint::default();
+      paint.quality = Self::filter_quality_for_image(style);
 
-        let transform = Transform::from_row(
-          scale_x,
-          0.0,
-          0.0,
-          scale_y,
-          self.device_x(x) + dest_x_device,
-          self.device_y(y) + dest_y_device,
-        );
-        self
-          .pixmap
-          .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
+      let transform = Transform::from_row(
+        scale_x,
+        0.0,
+        0.0,
+        scale_y,
+        self.device_x(x) + dest_x_device,
+        self.device_y(y) + dest_y_device,
+      );
+      self
+        .pixmap
+        .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
       return true;
     }
 
@@ -9289,7 +9442,9 @@ fn apply_filters(
       ResolvedFilter::Saturate(amount) => {
         apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))?
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a))?,
+      ResolvedFilter::HueRotate(deg) => {
+        apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a))?
+      }
       ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a))?,
       ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount))?,
       ResolvedFilter::DropShadow {
@@ -10167,9 +10322,7 @@ struct BackgroundClipMaskGuard {
 
 impl BackgroundClipMaskGuard {
   fn take() -> Self {
-    let scratch = BACKGROUND_CLIP_MASK_SCRATCH.with(|cell| {
-      std::mem::take(&mut *cell.borrow_mut())
-    });
+    let scratch = BACKGROUND_CLIP_MASK_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
     Self { scratch }
   }
 
@@ -10518,8 +10671,7 @@ fn apply_mask_rect_rgba(pixmap: &mut Pixmap, mask: &Mask, rect: ClipMaskDirtyRec
   for y in rect.y0 as usize..rect.y1 as usize {
     let pixel_row_start = y * pixel_stride;
     let mask_row_start = y * mask_stride;
-    let row_pixels =
-      &mut pixmap_data[pixel_row_start + x0 * 4..pixel_row_start + x1 * 4];
+    let row_pixels = &mut pixmap_data[pixel_row_start + x0 * 4..pixel_row_start + x1 * 4];
     let row_mask = &mask_data[mask_row_start + x0..mask_row_start + x1];
     for (px, m) in row_pixels.chunks_exact_mut(4).zip(row_mask.iter()) {
       let m = *m;
@@ -10749,18 +10901,10 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
         let right_radius = clamped.top_right.x.max(clamped.bottom_right.x);
         let top_radius = clamped.top_left.y.max(clamped.top_right.y);
         let bottom_radius = clamped.bottom_left.y.max(clamped.bottom_right.y);
-        let skip_x0 = (rect.x() + left_radius)
-          .ceil()
-          .clamp(0.0, width as f32) as u32;
-        let skip_x1 = (right - right_radius)
-          .floor()
-          .clamp(0.0, width as f32) as u32;
-        let skip_y0 = (rect.y() + top_radius)
-          .ceil()
-          .clamp(0.0, height as f32) as u32;
-        let skip_y1 = (bottom - bottom_radius)
-          .floor()
-          .clamp(0.0, height as f32) as u32;
+        let skip_x0 = (rect.x() + left_radius).ceil().clamp(0.0, width as f32) as u32;
+        let skip_x1 = (right - right_radius).floor().clamp(0.0, width as f32) as u32;
+        let skip_y0 = (rect.y() + top_radius).ceil().clamp(0.0, height as f32) as u32;
+        let skip_y1 = (bottom - bottom_radius).floor().clamp(0.0, height as f32) as u32;
 
         let skip_x0 = skip_x0.clamp(dirty.x0, dirty.x1);
         let skip_x1 = skip_x1.clamp(dirty.x0, dirty.x1);
@@ -11645,16 +11789,16 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
     .map(|remaining| (remaining / 2).min(std::time::Duration::from_millis(1000)));
   let build_display_list_for_root =
     |root: &FragmentNode| -> Result<crate::paint::display_list::DisplayList> {
-    DisplayListBuilder::with_image_cache(image_cache.clone())
-      .with_font_context(font_ctx.clone())
-      .with_svg_filter_defs(tree.svg_filter_defs.clone())
-      .with_scroll_state(scroll_state.clone())
-      .with_device_pixel_ratio(scale)
-      .with_parallelism(&paint_parallelism)
-      .with_max_iframe_depth(max_iframe_depth)
-      .with_viewport_size(viewport.width, viewport.height)
-      .build_with_stacking_tree_offset_checked(root, offset)
-  };
+      DisplayListBuilder::with_image_cache(image_cache.clone())
+        .with_font_context(font_ctx.clone())
+        .with_svg_filter_defs(tree.svg_filter_defs.clone())
+        .with_scroll_state(scroll_state.clone())
+        .with_device_pixel_ratio(scale)
+        .with_parallelism(&paint_parallelism)
+        .with_max_iframe_depth(max_iframe_depth)
+        .with_viewport_size(viewport.width, viewport.height)
+        .build_with_stacking_tree_offset_checked(root, offset)
+    };
   let display_list_result = match build_budget {
     Some(budget) => {
       let cancel = active_deadline().and_then(|deadline| deadline.cancel_callback());
@@ -11725,7 +11869,9 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
     Some(budget) => {
       let cancel = active_deadline().and_then(|deadline| deadline.cancel_callback());
       let deadline = RenderDeadline::new(Some(budget), cancel);
-      with_deadline(Some(&deadline), || optimizer.optimize_checked(&display_list, viewport_rect))
+      with_deadline(Some(&deadline), || {
+        optimizer.optimize_checked(&display_list, viewport_rect)
+      })
     }
     None => optimizer.optimize_checked(&display_list, viewport_rect),
   };
@@ -12350,12 +12496,12 @@ mod tests {
   use crate::style::types::FilterShadow;
   use crate::style::types::ImageRendering;
   use crate::style::types::Isolation;
-  use crate::style::types::MixBlendMode;
   use crate::style::types::MaskClip;
   use crate::style::types::MaskComposite;
   use crate::style::types::MaskLayer;
   use crate::style::types::MaskMode;
   use crate::style::types::MaskOrigin;
+  use crate::style::types::MixBlendMode;
   use crate::style::types::OutlineColor;
   use crate::style::types::OutlineStyle;
   use crate::style::types::Overflow;
@@ -16753,12 +16899,7 @@ mod tests {
     guard.mask(rect, radii, 10, 10).expect("mask");
 
     let idx = 5 * 10 + 5;
-    guard
-      .scratch
-      .mask
-      .as_mut()
-      .expect("mask")
-      .data_mut()[idx] = 123;
+    guard.scratch.mask.as_mut().expect("mask").data_mut()[idx] = 123;
 
     guard.mask(rect, radii, 10, 10).expect("mask");
     assert_eq!(
@@ -16786,14 +16927,20 @@ mod tests {
 
     let mut optimized_painter =
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
-    let optimized =
-      optimized_painter.render_mask(&style, css_bounds, layer_bounds, device_size).expect("mask");
+    let optimized = optimized_painter
+      .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("mask");
 
     let mut reference_painter =
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
-    let reference =
-      render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
-        .expect("mask");
+    let reference = render_mask_reference(
+      &mut reference_painter,
+      &style,
+      css_bounds,
+      layer_bounds,
+      device_size,
+    )
+    .expect("mask");
 
     assert_eq!(optimized.mask().data(), reference.data());
   }
@@ -16816,14 +16963,20 @@ mod tests {
 
     let mut optimized_painter =
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
-    let optimized =
-      optimized_painter.render_mask(&style, css_bounds, layer_bounds, device_size).expect("mask");
+    let optimized = optimized_painter
+      .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("mask");
 
     let mut reference_painter =
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
-    let reference =
-      render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
-        .expect("mask");
+    let reference = render_mask_reference(
+      &mut reference_painter,
+      &style,
+      css_bounds,
+      layer_bounds,
+      device_size,
+    )
+    .expect("mask");
 
     assert_eq!(optimized.mask().data(), reference.data());
 
@@ -16862,14 +17015,20 @@ mod tests {
 
     let mut optimized_painter =
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
-    let optimized =
-      optimized_painter.render_mask(&style, css_bounds, layer_bounds, device_size).expect("mask");
+    let optimized = optimized_painter
+      .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("mask");
 
     let mut reference_painter =
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
-    let reference =
-      render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
-        .expect("mask");
+    let reference = render_mask_reference(
+      &mut reference_painter,
+      &style,
+      css_bounds,
+      layer_bounds,
+      device_size,
+    )
+    .expect("mask");
 
     assert_eq!(optimized.mask().data(), reference.data());
 
@@ -17003,8 +17162,7 @@ mod tests {
     let layer_bounds = css_bounds;
     let device_size = (64, 64);
 
-    let mut painter =
-      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
     let recorder = NewPixmapAllocRecorder::start();
     let _mask = painter
       .render_mask(&style, css_bounds, layer_bounds, device_size)
