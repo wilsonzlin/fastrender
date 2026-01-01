@@ -483,14 +483,14 @@
       "budget_ms": 20000.0
     },
     {
-      "name": "nasa.gov",
+      "name": "debian.org",
       "viewport": [
         1200,
         800
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "sqlite.org",
