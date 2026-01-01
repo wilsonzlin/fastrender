@@ -2656,6 +2656,12 @@ mod tests {
       "currentColor",
       "auto",
       "solid",
+      "10px",
+      "50%",
+      "rgb(0, 0, 0)",
+      "rotate(90deg)",
+      "translate(10px)",
+      "linear-gradient(to right, #000, #fff)",
       "url(a.cur)",
       "URL(https://example.com/v1/a2.png)",
     ] {
@@ -3214,6 +3220,10 @@ pub fn parse_length(s: &str) -> Option<Length> {
     return None;
   }
 
+  if !could_be_number_or_calc(s) {
+    return None;
+  }
+
   if let Ok(num) = s.parse::<f32>() {
     if num == 0.0 {
       return Some(Length::px(0.0));
@@ -3335,19 +3345,28 @@ fn could_be_number_or_calc(input: &str) -> bool {
     return false;
   }
 
-  if bytes.len() >= 2 {
-    let first = bytes[0];
-    let second = bytes[1];
-    if (first == b'+' || first == b'-' || first == b'.') && second.is_ascii_digit() {
-      return true;
-    }
-  }
-
-  if bytes.iter().any(|b| b.is_ascii_digit()) {
+  let first = bytes[0];
+  if first.is_ascii_digit() {
     return true;
   }
 
-  let first = bytes[0].to_ascii_lowercase();
+  if bytes.len() >= 2 {
+    let second = bytes[1];
+    if ((first == b'+' || first == b'-') && second.is_ascii_digit())
+      || (first == b'.' && second.is_ascii_digit())
+    {
+      return true;
+    }
+
+    // Accept `.5`-style numbers with an explicit sign (e.g. `-.5`).
+    if (first == b'+' || first == b'-') && second == b'.' {
+      if bytes.get(2).is_some_and(|b| b.is_ascii_digit()) {
+        return true;
+      }
+    }
+  }
+
+  let first = first.to_ascii_lowercase();
   if !matches!(
     first,
     b'c' | b'm' | b's' | b'a' | b'p' | b'h' | b'l' | b'e' | b'r'
@@ -3387,7 +3406,19 @@ fn parse_function_number_slow_path_calls() -> u32 {
 
 fn parse_function_number(input: &str) -> Option<f32> {
   let input = input.trim();
-  if input.is_empty() || !could_be_number_or_calc(input) {
+  if input.is_empty() {
+    return None;
+  }
+
+  // Plain numbers are extremely common (e.g. opacity, z-index), so fast-path them without going
+  // through cssparser. If the value starts like a number but fails to parse as one, it cannot be a
+  // valid numeric/calc value (e.g. `10px`, `50%`), so bail out early without invoking calc parsing.
+  let first = input.as_bytes()[0];
+  if first.is_ascii_digit() || matches!(first, b'+' | b'-' | b'.') {
+    return input.parse::<f32>().ok();
+  }
+
+  if !could_be_number_or_calc(input) {
     return None;
   }
 
