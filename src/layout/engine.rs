@@ -916,21 +916,19 @@ impl LayoutEngine {
     let parallelism = self.config.parallelism.resolve_for_workload(workload);
     let factory = self.factory.clone().with_parallelism(parallelism);
     factory.tune_taffy_template_cache_for_box_tree(workload.nodes);
-    let work_items = workload.work_items().max(1);
     let threads_for_pool = parallelism
       .max_threads
       .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
       .max(1);
-    let parallel_pool =
-      if parallelism.is_active() && work_items >= parallelism.min_fanout && threads_for_pool > 1 {
-        if let Some(pool) = &self.parallel_pool {
-          Some(pool.clone())
-        } else {
-          layout_thread_pool_for_threads(threads_for_pool)
-        }
+    let parallel_pool = if parallelism.is_active() && threads_for_pool > 1 {
+      if let Some(pool) = &self.parallel_pool {
+        Some(pool.clone())
       } else {
-        None
-      };
+        layout_thread_pool_for_threads(threads_for_pool)
+      }
+    } else {
+      None
+    };
     (parallelism, workload, parallel_pool, factory)
   }
 
