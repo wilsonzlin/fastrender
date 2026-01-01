@@ -19,7 +19,10 @@ fn pageset_progress_worker_fast_exits_after_writing_progress() {
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .current_dir(temp.path())
-    .env("FASTR_TEST_WORKER_DROP_DELAY_MS", "2000")
+    // The worker uses `std::process::exit` after writing progress artifacts to
+    // bypass Drop-based cleanup. Keep the hard timeout below the injected drop
+    // delay so this test fails if destructors run.
+    .env("FASTR_TEST_WORKER_DROP_DELAY_MS", "5000")
     .args([
       "run",
       "--jobs",

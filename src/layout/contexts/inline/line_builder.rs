@@ -35,9 +35,12 @@ use super::baseline::BaselineMetrics;
 use super::baseline::LineBaselineAccumulator;
 use super::baseline::VerticalAlign;
 use crate::debug::runtime;
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Size;
+use crate::layout::formatting_context::LayoutError;
 use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::inline::float_integration::LineSpaceOptions;
+use crate::render_control::check_active_periodic;
 use crate::style::display::Display;
 use crate::style::types::Direction;
 use crate::style::types::ListStylePosition;
@@ -73,6 +76,17 @@ fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
     Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
     Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
   }
+}
+
+const LINE_BUILDER_DEADLINE_STRIDE: usize = 256;
+
+fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
+  if let Err(RenderError::Timeout { elapsed, .. }) =
+    check_active_periodic(counter, LINE_BUILDER_DEADLINE_STRIDE, RenderStage::Layout)
+  {
+    return Err(LayoutError::Timeout { elapsed });
+  }
+  Ok(())
 }
 
 /// An item in the inline formatting context
@@ -918,7 +932,13 @@ impl TextItem {
     let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
 
     if (can_overflow_break_word || can_overflow_break_by_wrap) && best_break.is_none() {
-      if let Some(offset) = self.offset_for_width(max_width) {
+      if let Some(mut offset) = self.offset_for_width(max_width) {
+        // `offset_for_width` can return `text.len()` when `max_width` exceeds the full advance.
+        // Returning a break opportunity at the end doesn't actually split the text and differs
+        // from the legacy break scan (which never proposes `text.len()`).
+        if offset >= self.text.len() {
+          offset = Self::previous_char_boundary_in_text(&self.text, self.text.len().saturating_sub(1));
+        }
         if offset > 0 {
           best_break = Some(BreakOpportunity::allowed(offset));
         }
@@ -2015,6 +2035,8 @@ pub struct LineBuilder<'a> {
   root_unicode_bidi: UnicodeBidi,
   /// Root direction on the paragraph container.
   root_direction: Direction,
+
+  deadline_counter: usize,
 }
 
 impl<'a> LineBuilder<'a> {
@@ -2120,6 +2142,7 @@ impl<'a> LineBuilder<'a> {
       base_level,
       root_unicode_bidi,
       root_direction,
+      deadline_counter: 0,
     };
 
     builder.start_new_line();
@@ -2132,7 +2155,8 @@ impl<'a> LineBuilder<'a> {
   }
 
   /// Adds an inline item to the builder
-  pub fn add_item(&mut self, item: InlineItem) {
+  pub fn add_item(&mut self, item: InlineItem) -> Result<(), LayoutError> {
+    check_layout_deadline(&mut self.deadline_counter)?;
     let (item, item_width) = item.resolve_width_at(self.current_x);
     let line_width = self.current_line_width();
 
@@ -2165,22 +2189,23 @@ impl<'a> LineBuilder<'a> {
     } else if item.is_breakable() {
       // Try to break the item even on an empty line; oversized items should
       // still honor break opportunities instead of overflowing the line.
-      self.add_breakable_item(item);
+      self.add_breakable_item(item)?;
     } else {
       // Item doesn't fit and can't be broken
       if self.current_line.is_empty() {
         // No break possible; overflow this line
         self.place_item_with_width(item, item_width);
       } else {
-        self.finish_line();
+        self.finish_line()?;
         let (resolved, width) = item.resolve_width_at(self.current_x);
         self.place_item_with_width(resolved, width);
       }
     }
+    Ok(())
   }
 
   /// Adds a breakable item (text or inline box), handling line breaking
-  fn add_breakable_item(&mut self, item: InlineItem) {
+  fn add_breakable_item(&mut self, item: InlineItem) -> Result<(), LayoutError> {
     if let InlineItem::Text(text_item) = item {
       let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
 
@@ -2231,17 +2256,17 @@ impl<'a> LineBuilder<'a> {
           if matches!(break_opportunity.break_type, BreakType::Mandatory) {
             self.current_line.ends_with_hard_break = true;
           }
-          self.finish_line();
+          self.finish_line()?;
 
           // Add remaining text (may need further breaking)
-          self.add_item(InlineItem::Text(after));
+          self.add_item(InlineItem::Text(after))?;
         } else {
           // If splitting fails, fall back to placing the whole item
           let width = text_item.advance_for_layout;
           if self.current_line.is_empty() {
             self.place_item_with_width(InlineItem::Text(text_item), width);
           } else {
-            self.finish_line();
+            self.finish_line()?;
             self.place_item_with_width(InlineItem::Text(text_item), width);
           }
         }
@@ -2253,8 +2278,8 @@ impl<'a> LineBuilder<'a> {
           self.place_item_with_width(InlineItem::Text(text_item), width);
         } else {
           // Start new line and try again
-          self.finish_line();
-          self.add_item(InlineItem::Text(text_item));
+          self.finish_line()?;
+          self.add_item(InlineItem::Text(text_item))?;
         }
       }
     } else if let InlineItem::InlineBox(inline_box) = item {
@@ -2263,24 +2288,25 @@ impl<'a> LineBuilder<'a> {
 
       if total_width <= remaining_width {
         self.place_item_with_width(InlineItem::InlineBox(inline_box), total_width);
-        return;
+        return Ok(());
       }
 
       // If nothing has been placed yet, flatten the inline box and lay out its children so they can break.
       if !self.current_line.is_empty() {
-        self.finish_line();
+        self.finish_line()?;
       }
 
       if inline_box.start_edge > 0.0 {
         self.current_x += inline_box.start_edge;
       }
       for child in inline_box.children {
-        self.add_item(child);
+        self.add_item(child)?;
       }
       if inline_box.end_edge > 0.0 {
         self.current_x += inline_box.end_edge;
       }
     }
+    Ok(())
   }
 
   /// Places an item on the current line without breaking
@@ -2329,13 +2355,15 @@ impl<'a> LineBuilder<'a> {
   }
 
   /// Forces a line break (e.g., from mandatory break)
-  pub fn force_break(&mut self) {
+  pub fn force_break(&mut self) -> Result<(), LayoutError> {
+    check_layout_deadline(&mut self.deadline_counter)?;
     self.current_line.ends_with_hard_break = true;
-    self.finish_line();
+    self.finish_line()
   }
 
   /// Finishes the current line and starts a new one
-  fn finish_line(&mut self) {
+  fn finish_line(&mut self) -> Result<(), LayoutError> {
+    check_layout_deadline(&mut self.deadline_counter)?;
     if !self.current_line.is_empty() {
       // Calculate final line metrics
       self.current_line.width = self.current_x;
@@ -2355,6 +2383,7 @@ impl<'a> LineBuilder<'a> {
 
       // Adjust Y positions for top/bottom aligned items
       for positioned in &mut self.current_line.items {
+        check_layout_deadline(&mut self.deadline_counter)?;
         let align = positioned.item.vertical_align();
         match align {
           VerticalAlign::Top => {
@@ -2395,6 +2424,7 @@ impl<'a> LineBuilder<'a> {
       ..Line::new()
     };
     self.start_new_line();
+    Ok(())
   }
 
   /// Run bidi reordering across all built lines, respecting paragraph boundaries.
@@ -2402,14 +2432,16 @@ impl<'a> LineBuilder<'a> {
   /// The Unicode Bidi algorithm operates at paragraph scope; explicit embeddings/isolates can span
   /// line breaks. We therefore resolve bidi across each paragraph (lines separated by hard breaks)
   /// and then reorder each line using the paragraph-level embedding results.
-  fn reorder_lines_for_bidi(&mut self) {
+  fn reorder_lines_for_bidi(&mut self) -> Result<(), LayoutError> {
+    check_layout_deadline(&mut self.deadline_counter)?;
     if self.lines.is_empty() {
-      return;
+      return Ok(());
     }
 
     let mut ranges = Vec::new();
     let mut start = 0usize;
     for (idx, line) in self.lines.iter().enumerate() {
+      check_layout_deadline(&mut self.deadline_counter)?;
       if line.ends_with_hard_break {
         ranges.push((start, idx + 1));
         start = idx + 1;
@@ -2425,6 +2457,7 @@ impl<'a> LineBuilder<'a> {
     let font_context = self.font_context.clone();
 
     for (start, end) in ranges {
+      check_layout_deadline(&mut self.deadline_counter)?;
       let paragraph_level = if self.root_unicode_bidi == UnicodeBidi::Plaintext
         || Self::paragraph_all_plaintext(&self.lines[start..end])
       {
@@ -2434,13 +2467,15 @@ impl<'a> LineBuilder<'a> {
       };
       reorder_paragraph(
         &mut self.lines[start..end],
+        &mut self.deadline_counter,
         paragraph_level,
         self.root_unicode_bidi,
         self.root_direction,
         &shaper,
         &font_context,
-      );
+      )?;
     }
+    Ok(())
   }
 
   fn paragraph_all_plaintext(lines: &[Line]) -> bool {
@@ -2502,11 +2537,11 @@ impl<'a> LineBuilder<'a> {
   }
 
   /// Finishes building and returns all lines
-  pub fn finish(mut self) -> Vec<Line> {
+  pub fn finish(mut self) -> Result<Vec<Line>, LayoutError> {
     // Finish any remaining line
-    self.finish_line();
-    self.reorder_lines_for_bidi();
-    self.lines
+    self.finish_line()?;
+    self.reorder_lines_for_bidi()?;
+    Ok(self.lines)
   }
 
   /// Returns the current line width
@@ -2523,14 +2558,16 @@ impl<'a> LineBuilder<'a> {
 /// Resolve bidi at paragraph scope and reorder each line using the paragraph embedding levels.
 fn reorder_paragraph(
   lines: &mut [Line],
+  deadline_counter: &mut usize,
   base_level: Option<Level>,
   root_unicode_bidi: UnicodeBidi,
   root_direction: Direction,
   shaper: &ShapingPipeline,
   font_context: &FontContext,
-) {
+) -> Result<(), LayoutError> {
+  check_layout_deadline(deadline_counter)?;
   if lines.is_empty() {
-    return;
+    return Ok(());
   }
 
   #[derive(Clone, PartialEq, Eq)]
@@ -2613,8 +2650,10 @@ fn reorder_paragraph(
   let mut box_counter = 0usize;
   let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
   for line in lines.iter() {
+    check_layout_deadline(deadline_counter)?;
     let mut leaves = Vec::new();
     for positioned in &line.items {
+      check_layout_deadline(deadline_counter)?;
       flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
     }
     line_leaves.push(leaves);
@@ -2630,8 +2669,10 @@ fn reorder_paragraph(
   let root_context = (root_unicode_bidi, root_direction);
 
   for leaves in &line_leaves {
+    check_layout_deadline(deadline_counter)?;
     let line_start = content_index;
     for leaf in leaves {
+      check_layout_deadline(deadline_counter)?;
       let leaf_index = paragraph_leaves.len();
       let mut stack: Vec<(UnicodeBidi, Direction)> = vec![root_context];
       stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
@@ -2653,12 +2694,14 @@ fn reorder_paragraph(
         .count();
 
       for scope in open_scopes.drain(common..).rev() {
+        check_layout_deadline(deadline_counter)?;
         for ch in scope.close {
           paragraph_text.push(*ch);
         }
       }
 
       for scope in desired_scopes.iter().skip(common) {
+        check_layout_deadline(deadline_counter)?;
         for ch in scope.open {
           paragraph_text.push(*ch);
         }
@@ -2668,6 +2711,7 @@ fn reorder_paragraph(
       match &leaf.item {
         InlineItem::Text(t) => {
           for (byte_idx, ch) in t.text.char_indices() {
+            check_layout_deadline(deadline_counter)?;
             let bidi_byte_index = paragraph_text.len();
             content_map.push(ContentChar {
               leaf_index,
@@ -2708,13 +2752,14 @@ fn reorder_paragraph(
   }
 
   for scope in open_scopes.iter().rev() {
+    check_layout_deadline(deadline_counter)?;
     for ch in scope.close {
       paragraph_text.push(*ch);
     }
   }
 
   if content_map.is_empty() {
-    return;
+    return Ok(());
   }
 
   let resolved_base = if let Some(level) = base_level {
@@ -2737,16 +2782,19 @@ fn reorder_paragraph(
     Direction::Ltr
   };
   for line in lines.iter_mut() {
+    check_layout_deadline(deadline_counter)?;
     line.resolved_direction = paragraph_direction;
   }
 
   for (leaf, stack) in paragraph_leaves.iter_mut().zip(leaf_contexts.iter()) {
+    check_layout_deadline(deadline_counter)?;
     leaf.bidi_context =
       crate::layout::contexts::inline::explicit_bidi_context(paragraph_direction, stack);
   }
 
   let mut content_levels: Vec<Level> = Vec::with_capacity(content_map.len());
   for entry in &content_map {
+    check_layout_deadline(deadline_counter)?;
     let lvl = bidi
       .levels
       .get(entry.bidi_byte_index)
@@ -2778,6 +2826,7 @@ fn reorder_paragraph(
   };
 
   for (line_idx, line_range) in line_ranges.into_iter().enumerate() {
+    check_layout_deadline(deadline_counter)?;
     if line_range.is_empty() {
       continue;
     }
@@ -2786,6 +2835,7 @@ fn reorder_paragraph(
     let order = unicode_bidi::BidiInfo::reorder_visual(slice_levels);
     let mut segments: Vec<VisualSegment> = Vec::new();
     for visual_idx in order {
+      check_layout_deadline(deadline_counter)?;
       let content_idx = line_range.start + visual_idx;
       if let Some(entry) = content_map.get(content_idx) {
         let lvl = content_levels
@@ -2802,6 +2852,7 @@ fn reorder_paragraph(
 
     let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
     for seg in segments {
+      check_layout_deadline(deadline_counter)?;
       if let Some(para_leaf) = paragraph_leaves.get(seg.leaf_index) {
         let mut frag = para_leaf.leaf.clone();
         if let InlineItem::Text(text_item) = &para_leaf.leaf.item {
@@ -2824,7 +2875,9 @@ fn reorder_paragraph(
 
     let mut box_positions: FxHashMap<usize, (usize, usize)> = FxHashMap::default();
     for (vis_pos, frag) in visual_fragments.iter().enumerate() {
+      check_layout_deadline(deadline_counter)?;
       for ctx in &frag.box_stack {
+        check_layout_deadline(deadline_counter)?;
         box_positions
           .entry(ctx.id)
           .and_modify(|entry| entry.1 = vis_pos)
@@ -2832,9 +2885,13 @@ fn reorder_paragraph(
       }
     }
 
-    fn coalesce_inline_boxes(items: Vec<PositionedItem>) -> Vec<PositionedItem> {
+    fn coalesce_inline_boxes(
+      items: Vec<PositionedItem>,
+      deadline_counter: &mut usize,
+    ) -> Result<Vec<PositionedItem>, LayoutError> {
       let mut out: Vec<PositionedItem> = Vec::new();
       for item in items {
+        check_layout_deadline(deadline_counter)?;
         if let Some(last) = out.last_mut() {
           if let (InlineItem::InlineBox(prev), InlineItem::InlineBox(mut curr)) =
             (&mut last.item, item.item.clone())
@@ -2848,14 +2905,16 @@ fn reorder_paragraph(
         }
         out.push(item);
       }
-      out
+      Ok(out)
     }
 
     let mut reordered: Vec<PositionedItem> = Vec::new();
     for (vis_pos, frag) in visual_fragments.into_iter().enumerate() {
+      check_layout_deadline(deadline_counter)?;
       let mut item = frag.item;
 
       for ctx in frag.box_stack.iter().rev() {
+        check_layout_deadline(deadline_counter)?;
         let (first, last) = box_positions
           .get(&ctx.id)
           .copied()
@@ -2891,9 +2950,10 @@ fn reorder_paragraph(
       reordered.push(positioned);
     }
 
-    let mut reordered = coalesce_inline_boxes(reordered);
+    let mut reordered = coalesce_inline_boxes(reordered, deadline_counter)?;
     let mut x = 0.0;
     for positioned in &mut reordered {
+      check_layout_deadline(deadline_counter)?;
       positioned.x = x;
       x += positioned.item.width();
     }
@@ -2903,6 +2963,8 @@ fn reorder_paragraph(
     line.width = width;
     line.items = reordered;
   }
+
+  Ok(())
 }
 
 fn slice_text_item(
@@ -3124,12 +3186,14 @@ mod tests {
   use super::*;
   use crate::geometry::Rect;
   use crate::layout::contexts::inline::explicit_bidi_context;
+  use crate::render_control::{with_deadline, RenderDeadline};
   use crate::style::types::FontKerning;
   use crate::style::ComputedStyle;
   use crate::text::font_loader::FontContext;
   use crate::text::line_break::find_break_opportunities;
   use crate::text::pipeline::ShapingPipeline;
   use std::sync::Arc;
+  use std::time::Duration;
   use unicode_bidi::level;
   use unicode_bidi::BidiInfo;
   use unicode_bidi::Level;
@@ -3157,6 +3221,25 @@ mod tests {
       None,
       0.0,
     )
+  }
+
+  #[test]
+  fn line_builder_times_out_in_hot_loop() {
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    with_deadline(Some(&deadline), || {
+      let mut builder = make_builder(1e9);
+      let anchor = InlineItem::StaticPositionAnchor(StaticPositionAnchor::new(
+        1,
+        Direction::Ltr,
+        UnicodeBidi::Normal,
+      ));
+      for _ in 0..(LINE_BUILDER_DEADLINE_STRIDE - 1) {
+        builder.add_item(anchor.clone()).unwrap();
+      }
+
+      let err = builder.add_item(anchor).unwrap_err();
+      assert!(matches!(err, LayoutError::Timeout { .. }));
+    });
   }
 
   fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
@@ -3615,9 +3698,9 @@ mod tests {
     let mut builder = make_builder(100.0);
 
     let item = make_text_item("Hello", 50.0);
-    builder.add_item(InlineItem::Text(item));
+    builder.add_item(InlineItem::Text(item)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items.len(), 1);
     assert!(lines[0].width <= 100.0);
@@ -3627,11 +3710,11 @@ mod tests {
   fn test_line_builder_multiple_items_fit() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-    builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));
-    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" ", 5.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items.len(), 3);
   }
@@ -3640,10 +3723,10 @@ mod tests {
   fn test_line_builder_item_exceeds_width() {
     let mut builder = make_builder(80.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     // Second item should go to new line
     assert_eq!(lines.len(), 2);
   }
@@ -3652,11 +3735,11 @@ mod tests {
   fn test_line_builder_force_break() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-    builder.force_break();
-    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0))).unwrap();
+    builder.force_break().unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
     assert!(lines[0].ends_with_hard_break);
   }
@@ -3665,7 +3748,7 @@ mod tests {
   fn test_line_builder_empty_result() {
     let builder = make_builder(100.0);
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert!(lines.is_empty());
   }
 
@@ -3673,9 +3756,9 @@ mod tests {
   fn test_line_has_baseline() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     assert!(lines[0].baseline > 0.0);
     assert!(lines[0].height > 0.0);
@@ -3698,9 +3781,9 @@ mod tests {
       0.0,
       0.0,
     );
-    builder.add_item(InlineItem::Replaced(replaced));
+    builder.add_item(InlineItem::Replaced(replaced)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items[0].item.width(), 100.0);
   }
@@ -3718,9 +3801,9 @@ mod tests {
       0.0,
       true,
     );
-    builder.add_item(InlineItem::InlineBlock(inline_block));
+    builder.add_item(InlineItem::InlineBlock(inline_block)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items[0].item.width(), 80.0);
   }
@@ -3819,9 +3902,9 @@ mod tests {
     let mut builder = make_builder(30.0);
 
     // Item too wide but line is empty, so it must fit
-    builder.add_item(InlineItem::Text(make_text_item("VeryLongWord", 100.0)));
+    builder.add_item(InlineItem::Text(make_text_item("VeryLongWord", 100.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     assert!(lines[0].width > 30.0); // Overflow allowed
   }
@@ -3830,11 +3913,11 @@ mod tests {
   fn test_positioned_item_x_position() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-    builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));
-    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" ", 5.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines[0].items[0].x, 0.0);
     assert_eq!(lines[0].items[1].x, 50.0);
     assert_eq!(lines[0].items[2].x, 55.0);
@@ -3861,8 +3944,8 @@ mod tests {
     item.metrics = BaselineMetrics::new(12.0, 16.0, 12.0, 4.0);
 
     let mut builder = make_builder(200.0);
-    builder.add_item(InlineItem::Text(item));
-    let lines = builder.finish();
+    builder.add_item(InlineItem::Text(item)).unwrap();
+    let lines = builder.finish().unwrap();
 
     // With parent x-height 6, middle shift = 12 - 8 + 3 = 7.
     let first = &lines[0].items[0];
@@ -3881,11 +3964,11 @@ mod tests {
     // Hebrew characters are multi-byte; the RTL byte length must not confuse run-level lookup.
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("א", 10.0)));
-    builder.add_item(InlineItem::Text(make_text_item("a", 10.0)));
-    builder.add_item(InlineItem::Text(make_text_item("b", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("א", 10.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("a", 10.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("b", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -3906,9 +3989,9 @@ mod tests {
   fn bidi_mixed_direction_splits_text_item() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("abc אבג", 70.0)));
+    builder.add_item(InlineItem::Text(make_text_item("abc אבג", 70.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -3925,13 +4008,15 @@ mod tests {
   #[test]
   fn bidi_plaintext_chooses_first_strong_base_direction() {
     let mut builder = make_builder_with_base(200.0, Level::rtl());
-    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-      "abc אבג",
-      70.0,
-      UnicodeBidi::Plaintext,
-    )));
+    builder
+      .add_item(InlineItem::Text(make_text_item_with_bidi(
+        "abc אבג",
+        70.0,
+        UnicodeBidi::Plaintext,
+      )))
+      .unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -3949,14 +4034,16 @@ mod tests {
   #[test]
   fn bidi_plaintext_inline_preserves_paragraph_base_direction() {
     let mut builder = make_builder_with_base(200.0, Level::ltr());
-    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-      "אבג",
-      30.0,
-      UnicodeBidi::Plaintext,
-    )));
-    builder.add_item(InlineItem::Text(make_text_item(" xyz", 30.0)));
+    builder
+      .add_item(InlineItem::Text(make_text_item_with_bidi(
+        "אבג",
+        30.0,
+        UnicodeBidi::Plaintext,
+      )))
+      .unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" xyz", 30.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].resolved_direction, Direction::Ltr);
     let texts: Vec<String> = lines[0]
@@ -4009,7 +4096,7 @@ mod tests {
   fn bidi_isolate_inline_box_prevents_surrounding_reordering() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("ABC ", 40.0)));
+    builder.add_item(InlineItem::Text(make_text_item("ABC ", 40.0))).unwrap();
 
     let mut inline_box = InlineBoxItem::new(
       0.0,
@@ -4024,11 +4111,11 @@ mod tests {
     inline_box.add_child(InlineItem::Text(make_text_item("א", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("ג", 10.0)));
-    builder.add_item(InlineItem::InlineBox(inline_box));
+    builder.add_item(InlineItem::InlineBox(inline_box)).unwrap();
 
-    builder.add_item(InlineItem::Text(make_text_item(" DEF", 40.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" DEF", 40.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4071,11 +4158,11 @@ mod tests {
     inline_box.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("ג", 10.0)));
 
-    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
-    builder.add_item(InlineItem::InlineBox(inline_box));
-    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0))).unwrap();
+    builder.add_item(InlineItem::InlineBox(inline_box)).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4106,7 +4193,7 @@ mod tests {
   fn bidi_isolate_override_reverses_child_order() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("A ", 10.0))).unwrap();
 
     let mut inline_box = InlineBoxItem::new(
       0.0,
@@ -4121,11 +4208,11 @@ mod tests {
     inline_box.add_child(InlineItem::Text(make_text_item("a", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("b", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("c", 10.0)));
-    builder.add_item(InlineItem::InlineBox(inline_box));
+    builder.add_item(InlineItem::InlineBox(inline_box)).unwrap();
 
-    builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" C", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4209,14 +4296,17 @@ mod tests {
     line.items.push(positioned);
     let mut lines = vec![line];
 
+    let mut deadline_counter = 0usize;
     reorder_paragraph(
       &mut lines,
+      &mut deadline_counter,
       Some(Level::ltr()),
       UnicodeBidi::Normal,
       Direction::Ltr,
       &ShapingPipeline::new(),
       &FontContext::new(),
-    );
+    )
+    .unwrap();
 
     assert!(
       !lines[0].items.is_empty(),
@@ -4268,14 +4358,17 @@ mod tests {
     });
     let mut lines = vec![line];
 
+    let mut deadline_counter = 0usize;
     reorder_paragraph(
       &mut lines,
+      &mut deadline_counter,
       Some(Level::ltr()),
       UnicodeBidi::Normal,
       Direction::Ltr,
       &ShapingPipeline::new(),
       &FontContext::new(),
-    );
+    )
+    .unwrap();
 
     let mut collected = String::new();
     for item in &lines[0].items {
@@ -4299,9 +4392,9 @@ mod tests {
       UnicodeBidi::Plaintext,
     );
     inline_box.add_child(InlineItem::Text(make_text_item("abc אבג", 70.0)));
-    builder.add_item(InlineItem::InlineBox(inline_box));
+    builder.add_item(InlineItem::InlineBox(inline_box)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4327,7 +4420,7 @@ mod tests {
   fn bidi_nested_isolates_close_properly() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0))).unwrap();
 
     let mut inner = InlineBoxItem::new(
       0.0,
@@ -4354,10 +4447,10 @@ mod tests {
     outer.add_child(InlineItem::InlineBox(inner));
     outer.add_child(InlineItem::Text(make_text_item("א", 10.0)));
 
-    builder.add_item(InlineItem::InlineBox(outer));
-    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+    builder.add_item(InlineItem::InlineBox(outer)).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4396,15 +4489,17 @@ mod tests {
   fn bidi_plaintext_isolate_keeps_paragraph_base() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
-    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-      "אבג",
-      15.0,
-      UnicodeBidi::Plaintext,
-    )));
-    builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("A ", 10.0))).unwrap();
+    builder
+      .add_item(InlineItem::Text(make_text_item_with_bidi(
+        "אבג",
+        15.0,
+        UnicodeBidi::Plaintext,
+      )))
+      .unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" C", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4424,13 +4519,15 @@ mod tests {
   #[test]
   fn bidi_plaintext_uses_first_strong_rtl_when_text_starts_rtl() {
     let mut builder = make_builder_with_base(200.0, Level::ltr());
-    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-      "אבג abc",
-      70.0,
-      UnicodeBidi::Plaintext,
-    )));
+    builder
+      .add_item(InlineItem::Text(make_text_item_with_bidi(
+        "אבג abc",
+        70.0,
+        UnicodeBidi::Plaintext,
+      )))
+      .unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4449,18 +4546,20 @@ mod tests {
   fn bidi_plaintext_paragraph_base_only_when_present() {
     // First paragraph uses plaintext and should pick first-strong (LTR) despite RTL base.
     let mut builder = make_builder_with_base(200.0, Level::rtl());
-    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-      "abc אבג",
-      70.0,
-      UnicodeBidi::Plaintext,
-    )));
-    builder.force_break();
+    builder
+      .add_item(InlineItem::Text(make_text_item_with_bidi(
+        "abc אבג",
+        70.0,
+        UnicodeBidi::Plaintext,
+      )))
+      .unwrap();
+    builder.force_break().unwrap();
 
     // Second paragraph has no plaintext and keeps the RTL base.
-    builder.add_item(InlineItem::Text(make_text_item("abc ", 30.0)));
-    builder.add_item(InlineItem::Text(make_text_item("אבג", 30.0)));
+    builder.add_item(InlineItem::Text(make_text_item("abc ", 30.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("אבג", 30.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
 
     let para1: Vec<String> = lines[0]
@@ -4492,7 +4591,7 @@ mod tests {
     // Outer isolate keeps its children grouped; the inner isolate-override reverses its content.
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0))).unwrap();
 
     let mut inner = InlineBoxItem::new(
       0.0,
@@ -4521,10 +4620,10 @@ mod tests {
     outer.add_child(InlineItem::InlineBox(inner));
     outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
 
-    builder.add_item(InlineItem::InlineBox(outer));
-    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+    builder.add_item(InlineItem::InlineBox(outer)).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
 
     let texts: Vec<String> = lines[0]
@@ -4577,7 +4676,7 @@ mod tests {
     // An isolate-override should reverse its own content while keeping nested isolates grouped.
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0))).unwrap();
 
     let mut inner = InlineBoxItem::new(
       0.0,
@@ -4605,10 +4704,10 @@ mod tests {
     outer.add_child(InlineItem::InlineBox(inner));
     outer.add_child(InlineItem::Text(make_text_item("C", 10.0)));
 
-    builder.add_item(InlineItem::InlineBox(outer));
-    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+    builder.add_item(InlineItem::InlineBox(outer)).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
 
     let actual: String = lines[0]
@@ -4661,9 +4760,9 @@ mod tests {
     outer.add_child(InlineItem::InlineBox(inner));
     outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
 
-    builder.add_item(InlineItem::InlineBox(outer));
+    builder.add_item(InlineItem::InlineBox(outer)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let mut visual = String::new();
     for positioned in &lines[0].items {
@@ -4713,9 +4812,9 @@ mod tests {
     outer.add_child(InlineItem::InlineBox(inner));
     outer.add_child(InlineItem::Text(make_text_item("y", 10.0)));
 
-    builder.add_item(InlineItem::InlineBox(outer));
+    builder.add_item(InlineItem::InlineBox(outer)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let mut visual = String::new();
     for positioned in &lines[0].items {
@@ -4741,7 +4840,7 @@ mod tests {
     // content keeps logical order.
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0))).unwrap();
 
     let mut inner = InlineBoxItem::new(
       0.0,
@@ -4771,10 +4870,10 @@ mod tests {
     outer.add_child(InlineItem::InlineBox(inner));
     outer.add_child(InlineItem::Text(make_text_item("Y", 10.0)));
 
-    builder.add_item(InlineItem::InlineBox(outer));
-    builder.add_item(InlineItem::Text(make_text_item("R", 10.0)));
+    builder.add_item(InlineItem::InlineBox(outer)).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("R", 10.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
 
     let actual: String = lines[0]
@@ -4813,8 +4912,8 @@ mod tests {
     para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
-    builder.add_item(InlineItem::InlineBox(para1));
-    builder.force_break();
+    builder.add_item(InlineItem::InlineBox(para1)).unwrap();
+    builder.force_break().unwrap();
 
     let mut para2 = InlineBoxItem::new(
       0.0,
@@ -4827,9 +4926,9 @@ mod tests {
       UnicodeBidi::Embed,
     );
     para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
-    builder.add_item(InlineItem::InlineBox(para2));
+    builder.add_item(InlineItem::InlineBox(para2)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
 
     let actual_para1: String = lines[0]
@@ -4874,13 +4973,13 @@ mod tests {
     para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
-    builder.add_item(InlineItem::InlineBox(para1));
-    builder.force_break();
+    builder.add_item(InlineItem::InlineBox(para1)).unwrap();
+    builder.force_break().unwrap();
 
     // Second paragraph is plain LTR.
-    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
+    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -4920,8 +5019,8 @@ mod tests {
     para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
-    builder.add_item(InlineItem::InlineBox(para1));
-    builder.force_break();
+    builder.add_item(InlineItem::InlineBox(para1)).unwrap();
+    builder.force_break().unwrap();
 
     let mut para2 = InlineBoxItem::new(
       0.0,
@@ -4934,9 +5033,9 @@ mod tests {
       UnicodeBidi::Embed,
     );
     para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
-    builder.add_item(InlineItem::InlineBox(para2));
+    builder.add_item(InlineItem::InlineBox(para2)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -4985,8 +5084,8 @@ mod tests {
       20.0,
       UnicodeBidi::Embed,
     )));
-    builder.add_item(InlineItem::InlineBox(para1));
-    builder.force_break();
+    builder.add_item(InlineItem::InlineBox(para1)).unwrap();
+    builder.force_break().unwrap();
 
     // Second paragraph: plain LTR embed.
     let mut para2 = InlineBoxItem::new(
@@ -5000,9 +5099,9 @@ mod tests {
       UnicodeBidi::Embed,
     );
     para2.add_child(InlineItem::Text(make_text_item("EF", 20.0)));
-    builder.add_item(InlineItem::InlineBox(para2));
+    builder.add_item(InlineItem::InlineBox(para2)).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -5049,12 +5148,12 @@ mod tests {
     para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
-    builder.add_item(InlineItem::InlineBox(para1));
-    builder.force_break();
+    builder.add_item(InlineItem::InlineBox(para1)).unwrap();
+    builder.force_break().unwrap();
 
-    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
+    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -5110,9 +5209,9 @@ mod tests {
       Direction::Rtl,
       InlineItem::Text(make_text_item("abc", 30.0)),
     );
-    builder.add_item(deep);
+    builder.add_item(deep).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let mut collected = String::new();
     for positioned in &lines[0].items {
@@ -5182,7 +5281,7 @@ mod tests {
     let expected = reorder_with_controls("A \u{2067}XY\u{2069} Z", Some(Level::ltr()));
 
     let mut builder = make_builder(200.0);
-    builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
+    builder.add_item(InlineItem::Text(make_text_item("A ", 20.0))).unwrap();
 
     let mut inline_box = InlineBoxItem::new(
       0.0,
@@ -5196,11 +5295,11 @@ mod tests {
     );
     inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("Y", 10.0)));
-    builder.add_item(InlineItem::InlineBox(inline_box));
+    builder.add_item(InlineItem::InlineBox(inline_box)).unwrap();
 
-    builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let actual: String = lines[0]
       .items
@@ -5217,7 +5316,7 @@ mod tests {
     let expected = "A באX Z".to_string();
 
     let mut builder = make_builder(200.0);
-    builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
+    builder.add_item(InlineItem::Text(make_text_item("A ", 20.0))).unwrap();
 
     let mut inline_box = InlineBoxItem::new(
       0.0,
@@ -5232,11 +5331,11 @@ mod tests {
     inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("א", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
-    builder.add_item(InlineItem::InlineBox(inline_box));
+    builder.add_item(InlineItem::InlineBox(inline_box)).unwrap();
 
-    builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 1);
     let actual: String = lines[0]
       .items
@@ -5252,10 +5351,10 @@ mod tests {
     // Explicit embedding (RLE) without a terminator should keep later lines at the same level.
     let mut builder = make_builder(40.0);
     let first = "\u{202b}abc ";
-    builder.add_item(InlineItem::Text(make_text_item(first, 40.0)));
-    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
+    builder.add_item(InlineItem::Text(make_text_item(first, 40.0))).unwrap();
+    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0))).unwrap();
 
-    let lines = builder.finish();
+    let lines = builder.finish().unwrap();
     assert_eq!(lines.len(), 2);
 
     let logical = format!("{}{}", first, "DEF");

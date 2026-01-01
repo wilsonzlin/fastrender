@@ -3757,7 +3757,13 @@ impl FormattingContext for BlockFormattingContext {
       };
 
     let mut inline_child_debug: Vec<(usize, Display)> = Vec::new();
+    let mut deadline_counter = 0usize;
     for child in &box_node.children {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       if is_out_of_flow(child) {
         continue;
       }
@@ -3800,6 +3806,11 @@ impl FormattingContext for BlockFormattingContext {
     // Block-level in-flow children contribute their own intrinsic widths
     let mut block_child_width = 0.0f32;
     for child in &box_node.children {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       if !child.is_block_level() || is_out_of_flow(child) {
         continue;
       }

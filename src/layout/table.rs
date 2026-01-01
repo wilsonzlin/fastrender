@@ -2526,7 +2526,10 @@ fn collapsed_border_compute_count() -> usize {
 /// Returns resolved borders for vertical and horizontal grid lines.
 /// Lengths: vertical = columns + 1, horizontal = rows + 1.
 #[allow(clippy::cognitive_complexity)]
-fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) -> CollapsedBorders {
+fn compute_collapsed_borders(
+  table_box: &BoxNode,
+  structure: &TableStructure,
+) -> Result<CollapsedBorders, LayoutError> {
   #[cfg(test)]
   COLLAPSED_BORDER_COMPUTE_COUNT.with(|c| c.set(c.get() + 1));
   #[derive(Clone, Copy)]
@@ -2680,6 +2683,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
 
   let vertical_index = |col: usize, row: usize| col * rows + row;
   let horizontal_index = |row: usize, col: usize| row * columns + col;
+  let mut deadline_counter = 0usize;
 
   let max_source_row = structure
     .rows
@@ -2693,6 +2697,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     vec![None; max_source_row + 1]
   };
   for row in &structure.rows {
+    check_layout_deadline(&mut deadline_counter)?;
     if row.source_index >= source_row_to_visible.len() {
       source_row_to_visible.resize(row.source_index + 1, None);
     }
@@ -2711,6 +2716,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     vec![None; max_source_col + 1]
   };
   for col in &structure.columns {
+    check_layout_deadline(&mut deadline_counter)?;
     if col.source_index >= source_col_to_visible.len() {
       source_col_to_visible.resize(col.source_index + 1, None);
     }
@@ -2744,6 +2750,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     .iter()
     .filter(|child| child.style.running_position.is_none())
   {
+    check_layout_deadline(&mut deadline_counter)?;
     match TableStructure::get_table_element_type(child) {
       TableElementType::RowGroup
       | TableElementType::HeaderGroup
@@ -2753,6 +2760,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         let mut first_visible = None;
         let mut last_visible = None;
         for row_child in &child.children {
+          check_layout_deadline(&mut deadline_counter)?;
           if TableStructure::get_table_element_type(row_child) == TableElementType::Row {
             if let Some(visible) = source_row_to_visible.get(source_row_idx).and_then(|m| *m) {
               row_styles[visible] = Some((row_child.style.clone(), source_counter));
@@ -2798,6 +2806,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
           source_col_idx += 1;
         } else {
           for group_child in &child.children {
+            check_layout_deadline(&mut deadline_counter)?;
             if TableStructure::get_table_element_type(group_child) == TableElementType::Column {
               if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
                 column_styles[visible] = Some((group_child.style.clone(), source_counter));
@@ -2818,11 +2827,15 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
   }
 
   for entry in row_styles.iter_mut() {
+    check_layout_deadline(&mut deadline_counter)?;
     if entry.is_none() {
       *entry = Some((table_box.style.clone(), source_counter));
       source_counter += 1;
     }
   }
+
+  let mut apply_vertical_deadline_counter = 0usize;
+  let mut apply_horizontal_deadline_counter = 0usize;
 
   let mut apply_vertical = |col_idx: usize,
                             row_start: usize,
@@ -2833,16 +2846,17 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                             origin: BorderOrigin,
                             source_order: u32,
                             origin_row: usize,
-                            origin_col: usize| {
+                            origin_col: usize|
+   -> Result<(), LayoutError> {
     if col_idx >= vertical_line_count || row_start >= row_end || rows == 0 {
-      return;
+      return Ok(());
     }
     if matches!(style, BorderStyle::None) {
-      return;
+      return Ok(());
     }
     let resolved_width = resolved_border_width(style, width);
     if resolved_width <= 0.0 && !matches!(style, BorderStyle::Hidden) {
-      return;
+      return Ok(());
     }
     let candidate = BorderCandidate {
       width: resolved_width,
@@ -2855,11 +2869,13 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     };
     let end = row_end.min(rows);
     for row in row_start..end {
+      check_layout_deadline(&mut apply_vertical_deadline_counter)?;
       let slot = &mut vertical[vertical_index(col_idx, row)];
       if candidate_better(&candidate, slot, direction, Some(true)) {
         *slot = candidate;
       }
     }
+    Ok(())
   };
 
   let mut apply_horizontal = |row_idx: usize,
@@ -2871,16 +2887,17 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                               origin: BorderOrigin,
                               source_order: u32,
                               origin_row: usize,
-                              origin_col: usize| {
+                              origin_col: usize|
+   -> Result<(), LayoutError> {
     if row_idx >= horizontal_line_count || col_start >= col_end || columns == 0 {
-      return;
+      return Ok(());
     }
     if matches!(style, BorderStyle::None) {
-      return;
+      return Ok(());
     }
     let resolved_width = resolved_border_width(style, width);
     if resolved_width <= 0.0 && !matches!(style, BorderStyle::Hidden) {
-      return;
+      return Ok(());
     }
     let candidate = BorderCandidate {
       width: resolved_width,
@@ -2893,11 +2910,13 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     };
     let end = col_end.min(columns);
     for col in col_start..end {
+      check_layout_deadline(&mut apply_horizontal_deadline_counter)?;
       let slot = &mut horizontal[horizontal_index(row_idx, col)];
       if candidate_better(&candidate, slot, direction, Some(false)) {
         *slot = candidate;
       }
     }
+    Ok(())
   };
 
   // Table outer borders
@@ -2913,7 +2932,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     0,
     0,
     0,
-  );
+  )?;
   apply_vertical(
     columns,
     0,
@@ -2925,7 +2944,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     0,
     0,
     columns,
-  );
+  )?;
   apply_horizontal(
     0,
     0,
@@ -2937,7 +2956,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     0,
     0,
     0,
-  );
+  )?;
   apply_horizontal(
     rows,
     0,
@@ -2949,7 +2968,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     0,
     rows,
     0,
-  );
+  )?;
 
   // Row group borders
   for (start, end, style, order) in &row_groups {
@@ -2964,7 +2983,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       *order,
       *start,
       0,
-    );
+    )?;
     apply_horizontal(
       *end,
       0,
@@ -2976,7 +2995,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       *order,
       *start,
       0,
-    );
+    )?;
   }
 
   // Row borders
@@ -2993,7 +3012,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         *order,
         row_idx,
         0,
-      );
+      )?;
       apply_horizontal(
         row_idx + 1,
         0,
@@ -3005,7 +3024,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         *order,
         row_idx,
         0,
-      );
+      )?;
     }
   }
 
@@ -3022,7 +3041,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       *order,
       0,
       *start,
-    );
+    )?;
     apply_vertical(
       *end,
       0,
@@ -3034,7 +3053,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       *order,
       0,
       *start,
-    );
+    )?;
   }
 
   // Column borders
@@ -3051,7 +3070,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         *order,
         0,
         col_idx,
-      );
+      )?;
       apply_vertical(
         col_idx + 1,
         0,
@@ -3063,13 +3082,14 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         *order,
         0,
         col_idx,
-      );
+      )?;
     }
   }
 
   // Cells
   let source_rows = collect_source_rows(table_box);
   for cell in &structure.cells {
+    check_layout_deadline(&mut deadline_counter)?;
     let Some(row) = source_rows.get(cell.source_row) else {
       continue;
     };
@@ -3095,7 +3115,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       cell.index as u32,
       cell.row,
       cell.col,
-    );
+    )?;
     apply_vertical(
       end_col,
       start_row,
@@ -3107,7 +3127,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       cell.index as u32,
       cell.row,
       cell.col,
-    );
+    )?;
     apply_horizontal(
       start_row,
       start_col,
@@ -3119,7 +3139,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       cell.index as u32,
       cell.row,
       cell.col,
-    );
+    )?;
     apply_horizontal(
       end_row,
       start_col,
@@ -3131,7 +3151,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       cell.index as u32,
       cell.row,
       cell.col,
-    );
+    )?;
   }
 
   let candidate_to_resolved = |candidate: BorderCandidate| {
@@ -3149,8 +3169,10 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
 
   let mut resolved_vertical: Vec<Vec<ResolvedBorder>> = Vec::with_capacity(vertical_line_count);
   for col in 0..vertical_line_count {
+    check_layout_deadline(&mut deadline_counter)?;
     let mut line: Vec<ResolvedBorder> = Vec::with_capacity(rows);
     for row in 0..rows {
+      check_layout_deadline(&mut deadline_counter)?;
       line.push(candidate_to_resolved(vertical[vertical_index(col, row)]));
     }
     resolved_vertical.push(line);
@@ -3158,8 +3180,10 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
 
   let mut resolved_horizontal: Vec<Vec<ResolvedBorder>> = Vec::with_capacity(horizontal_line_count);
   for row in 0..horizontal_line_count {
+    check_layout_deadline(&mut deadline_counter)?;
     let mut line: Vec<ResolvedBorder> = Vec::with_capacity(columns);
     for col in 0..columns {
+      check_layout_deadline(&mut deadline_counter)?;
       line.push(candidate_to_resolved(
         horizontal[horizontal_index(row, col)],
       ));
@@ -3169,8 +3193,10 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
 
   let mut resolved_corners: Vec<Vec<ResolvedBorder>> = Vec::with_capacity(rows + 1);
   for r in 0..=rows {
+    check_layout_deadline(&mut deadline_counter)?;
     let mut row_vec: Vec<ResolvedBorder> = Vec::with_capacity(columns + 1);
     for c in 0..=columns {
+      check_layout_deadline(&mut deadline_counter)?;
       let mut best: Option<BorderCandidate> = None;
       if rows > 0 && c < vertical_line_count && r > 0 {
         let candidate = vertical[vertical_index(c, r - 1)];
@@ -3211,18 +3237,18 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     resolved_corners.push(row_vec);
   }
 
-  CollapsedBorders {
+  Ok(CollapsedBorders {
     vertical: resolved_vertical,
     horizontal: resolved_horizontal,
     corners: resolved_corners,
-  }
+  })
 }
 
 #[cfg(test)]
 pub fn compute_collapsed_borders_for_test(
   table_box: &BoxNode,
   structure: &TableStructure,
-) -> CollapsedBorders {
+) -> Result<CollapsedBorders, LayoutError> {
   compute_collapsed_borders(table_box, structure)
 }
 
@@ -3233,22 +3259,35 @@ fn build_table_collapsed_borders_metadata(
   row_line_pos: &[f32],
   vertical_line_max: &[f32],
   horizontal_line_max: &[f32],
-) -> TableCollapsedBorders {
+) -> Result<TableCollapsedBorders, LayoutError> {
+  let mut deadline_counter = 0usize;
   let mut vertical_borders = Vec::with_capacity((structure.column_count + 1) * structure.row_count);
   for column in &collapsed_borders.vertical {
-    vertical_borders.extend(column.iter().copied());
+    check_layout_deadline(&mut deadline_counter)?;
+    for border in column {
+      check_layout_deadline(&mut deadline_counter)?;
+      vertical_borders.push(*border);
+    }
   }
 
   let mut horizontal_borders =
     Vec::with_capacity((structure.row_count + 1) * structure.column_count);
   for row in &collapsed_borders.horizontal {
-    horizontal_borders.extend(row.iter().copied());
+    check_layout_deadline(&mut deadline_counter)?;
+    for border in row {
+      check_layout_deadline(&mut deadline_counter)?;
+      horizontal_borders.push(*border);
+    }
   }
 
   let mut corner_borders =
     Vec::with_capacity((structure.row_count + 1) * (structure.column_count + 1));
   for row in &collapsed_borders.corners {
-    corner_borders.extend(row.iter().copied());
+    check_layout_deadline(&mut deadline_counter)?;
+    for border in row {
+      check_layout_deadline(&mut deadline_counter)?;
+      corner_borders.push(*border);
+    }
   }
 
   let max_corner_half = corner_borders
@@ -3264,7 +3303,7 @@ fn build_table_collapsed_borders_metadata(
   let max_y = row_line_pos.last().copied().unwrap_or(0.0)
     + (horizontal_line_max.last().copied().unwrap_or(0.0) * 0.5).max(max_corner_half);
 
-  TableCollapsedBorders {
+  Ok(TableCollapsedBorders {
     column_count: structure.column_count,
     row_count: structure.row_count,
     column_line_positions: column_line_pos.to_vec(),
@@ -3280,7 +3319,7 @@ fn build_table_collapsed_borders_metadata(
       (max_x - min_x).max(0.0),
       (max_y - min_y).max(0.0),
     ),
-  }
+  })
 }
 
 fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
@@ -4180,10 +4219,12 @@ fn table_structure_cached(table_box: &BoxNode) -> Arc<TableStructure> {
 fn collapsed_borders_cached(
   table_box: &BoxNode,
   structure: &TableStructure,
-) -> Arc<CollapsedBorders> {
+) -> Result<Arc<CollapsedBorders>, LayoutError> {
   let box_id = table_box.id();
   let epoch = intrinsic_cache_epoch();
-  let build = || Arc::new(compute_collapsed_borders(table_box, structure));
+  let build = || -> Result<Arc<CollapsedBorders>, LayoutError> {
+    Ok(Arc::new(compute_collapsed_borders(table_box, structure)?))
+  };
   if box_id == 0 {
     return build();
   }
@@ -4192,13 +4233,13 @@ fn collapsed_borders_cached(
     epoch,
     structure_ptr: structure as *const _ as usize,
   };
-  COLLAPSED_BORDERS_CACHE.with(|cache| {
+  COLLAPSED_BORDERS_CACHE.with(|cache| -> Result<Arc<CollapsedBorders>, LayoutError> {
     if let Some(entry) = cache.borrow().get(&key) {
-      return entry.clone();
+      return Ok(entry.clone());
     }
-    let borders = build();
+    let borders = build()?;
     cache.borrow_mut().insert(key, borders.clone());
-    borders
+    Ok(borders)
   })
 }
 
@@ -4552,6 +4593,7 @@ impl TableFormattingContext {
     percent_base: Option<f32>,
     style_overrides: &StyleOverrideCache,
   ) -> Result<(), LayoutError> {
+    let mut deadline_counter = 0usize;
     let source_rows = collect_source_rows(table_box);
     let cell_bfc = BlockFormattingContext::with_factory(self.factory.detached());
     let measure_cells_in_parallel = self.parallelism.should_parallelize(structure.cells.len())
@@ -4585,6 +4627,7 @@ impl TableFormattingContext {
           .cells
           .iter()
           .map(|cell| {
+            check_layout_deadline(&mut deadline_counter)?;
             let Some(row) = source_rows.get(cell.source_row) else {
               return Ok(None);
             };
@@ -4606,6 +4649,7 @@ impl TableFormattingContext {
     };
 
     for (idx, cell) in structure.cells.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       if matches!(mode, DistributionMode::Fixed) && cell.row > 0 {
         // Fixed layout only inspects the first row.
         continue;
@@ -4767,6 +4811,7 @@ impl TableFormattingContext {
 
     // Apply specified widths from column info (<col>/<colgroup>)
     for (i, col_info) in structure.columns.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       let Some(constraint) = constraints.get_mut(i) else {
         continue;
       };
@@ -5598,7 +5643,12 @@ impl FormattingContext for TableFormattingContext {
         })
         .collect()
     } else {
-      structure.cells.iter().map(layout_single_cell).collect()
+      let mut outcomes = Vec::with_capacity(structure.cells.len());
+      for cell in &structure.cells {
+        check_layout_deadline(&mut deadline_counter)?;
+        outcomes.push(layout_single_cell(cell));
+      }
+      outcomes
     };
     let mut laid_out_cells = Vec::new();
     let mut failed_cells = 0usize;
@@ -5927,7 +5977,7 @@ impl FormattingContext for TableFormattingContext {
     // Border-collapse adjustments
     let collapsed_borders: Option<Arc<CollapsedBorders>> =
       if structure.border_collapse == BorderCollapse::Collapse {
-        Some(collapsed_borders_cached(&table_box, &structure))
+        Some(collapsed_borders_cached(&table_box, &structure)?)
       } else {
         None
       };
@@ -5949,6 +5999,7 @@ impl FormattingContext for TableFormattingContext {
       match collapsed_borders.as_ref() {
         Some(collapsed_borders) => {
           for (idx, segments) in collapsed_borders.vertical.iter().enumerate() {
+            check_layout_deadline(&mut deadline_counter)?;
             let width = if idx == 0 || idx == structure.column_count {
               // Table left/right border widths are based on the first row's collapsed border
               // (CSS 2.2 §17.6.2), with any excess in later rows spilling into the margin.
@@ -5962,18 +6013,22 @@ impl FormattingContext for TableFormattingContext {
             };
             vertical_line_max.push(width);
           }
-          horizontal_line_max = collapsed_borders
-            .horizontal
-            .iter()
-            .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
-            .collect();
+          horizontal_line_max = Vec::with_capacity(structure.row_count + 1);
+          for segments in &collapsed_borders.horizontal {
+            check_layout_deadline(&mut deadline_counter)?;
+            horizontal_line_max.push(segments.iter().map(|b| b.width).fold(0.0, f32::max));
+          }
 
           let (cols, starts, collapsed_width) =
             collapsed_line_positions(&col_widths, &vertical_line_max, pad_left, pad_right);
           column_line_pos = cols;
           col_offsets = starts;
 
-          let row_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
+          let mut row_heights: Vec<f32> = Vec::with_capacity(row_metrics.len());
+          for row in &row_metrics {
+            check_layout_deadline(&mut deadline_counter)?;
+            row_heights.push(row.height);
+          }
           let (rows, starts, collapsed_height) =
             collapsed_line_positions(&row_heights, &horizontal_line_max, pad_top, pad_bottom);
           row_line_pos = rows;
@@ -6070,16 +6125,18 @@ impl FormattingContext for TableFormattingContext {
 
     let mut stripped_border_cache: HashMap<usize, Arc<ComputedStyle>> = HashMap::new();
 
-    let table_collapsed_borders = collapsed_borders.as_ref().map(|borders| {
-      Arc::new(build_table_collapsed_borders_metadata(
+    let table_collapsed_borders = if let Some(borders) = collapsed_borders.as_ref() {
+      Some(Arc::new(build_table_collapsed_borders_metadata(
         &structure,
         borders,
         &column_line_pos,
         &row_line_pos,
         &vertical_line_max,
         &horizontal_line_max,
-      ))
-    });
+      )?))
+    } else {
+      None
+    };
 
     // Column group and column backgrounds precede row backgrounds/cells.
     let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
@@ -9100,7 +9157,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     assert_eq!(borders.horizontal.len(), 2);
     assert!((borders.horizontal[0][0].width - 0.0).abs() < f32::EPSILON);
@@ -9138,7 +9195,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     assert_eq!(borders.vertical.len(), 3);
     // Style wins over width: double outranks solid even though it is thinner.
@@ -9179,7 +9236,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     assert_eq!(borders.horizontal.len(), 2);
     let top_border = &borders.horizontal[0][0];
@@ -9230,7 +9287,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     let middle_border = &borders.vertical[1][0];
     assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
@@ -9279,7 +9336,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     let middle_border = &borders.vertical[1][0];
     // Start edge in RTL is right cell (green).
@@ -9327,7 +9384,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     assert_eq!(borders.vertical.len(), 3);
     let middle = &borders.vertical[1][0];
@@ -9380,7 +9437,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
     let border = borders
       .vertical
       .get(1)
@@ -9429,7 +9486,7 @@ mod tests {
 
     let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, rows);
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     assert_eq!(structure.row_count, 20);
     assert_eq!(structure.column_count, 20);
@@ -10013,7 +10070,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     let middle_border = &borders.vertical[1][0];
     assert_eq!(middle_border.style, BorderStyle::Double);
@@ -10119,7 +10176,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     let horizontal_border = &borders.horizontal[1][0];
     assert_eq!(horizontal_border.style, BorderStyle::Solid);
@@ -10171,7 +10228,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     let middle_border = &borders.vertical[1][0];
     // Style precedence wins: double outranks solid even when slightly thinner.
@@ -11504,7 +11561,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     // All edges should be at least 3px wide when style is double.
     assert!(borders.vertical[0][0].width >= 3.0);
@@ -11550,7 +11607,7 @@ mod tests {
     );
 
     let structure = TableStructure::from_box_tree(&table);
-    let borders = compute_collapsed_borders(&table, &structure);
+    let borders = compute_collapsed_borders(&table, &structure).unwrap();
 
     for r in 0..=structure.row_count {
       for c in 0..=structure.column_count {
@@ -14918,6 +14975,8 @@ mod tests {
 
   #[test]
   fn collapsed_borders_with_rowspan_and_vertical_align() {
+    use crate::tree::debug::DebugInfo;
+
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_collapse = BorderCollapse::Collapse;
@@ -14959,11 +15018,8 @@ mod tests {
       FormattingContextType::Block,
       vec![],
     );
-    let span_cell = BoxNode::new_block(
-      Arc::new(cell_span_style),
-      FormattingContextType::Block,
-      vec![],
-    );
+    let span_cell = BoxNode::new_block(Arc::new(cell_span_style), FormattingContextType::Block, vec![])
+      .with_debug_info(DebugInfo::new(None, None, vec![]).with_spans(1, 2));
     let bottom_cell = BoxNode::new_block(
       Arc::new(cell_bottom_style),
       FormattingContextType::Block,
@@ -14973,7 +15029,7 @@ mod tests {
     let row1 = BoxNode::new_block(
       Arc::new(row_style.clone()),
       FormattingContextType::Block,
-      vec![span_cell.clone(), top_cell],
+      vec![span_cell, top_cell],
     );
     let row2 = BoxNode::new_block(
       Arc::new(row_style),
@@ -14992,25 +15048,56 @@ mod tests {
     let constraints = LayoutConstraints::definite_width(50.0);
     let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
-    // Find child fragments; first child is collapsed border, cell fragments follow.
-    let mut cells: Vec<&FragmentNode> = fragment
+    let cells: Vec<&FragmentNode> = fragment
       .children
       .iter()
-      .filter(|f| matches!(f.content, FragmentContent::Block { .. }))
+      .filter(|f| {
+        f.style
+          .as_ref()
+          .map(|s| matches!(s.display, Display::TableCell))
+          .unwrap_or(false)
+      })
       .collect();
-    cells.retain(|f| {
-      f.style
-        .as_ref()
-        .map(|s| s.display == Display::Block)
-        .unwrap_or(true)
-    });
 
-    // Verify vertical offsets respect collapsed borders (should start at or below 0 due to stroke centering).
-    let min_y = cells
+    assert_eq!(cells.len(), 3, "expected 3 table cell fragments");
+
+    let span_cell = cells
       .iter()
-      .map(|c| c.bounds.y())
-      .fold(f32::INFINITY, f32::min);
-    assert!(min_y <= 0.0 + 0.5);
+      .find(|f| {
+        f.style
+          .as_ref()
+          .map(|s| matches!(s.vertical_align, VerticalAlign::Baseline))
+          .unwrap_or(false)
+      })
+      .expect("rowspanning cell fragment");
+    let top_cell = cells
+      .iter()
+      .find(|f| {
+        f.style
+          .as_ref()
+          .map(|s| matches!(s.vertical_align, VerticalAlign::Top))
+          .unwrap_or(false)
+      })
+      .expect("top-aligned cell fragment");
+    let bottom_cell = cells
+      .iter()
+      .find(|f| {
+        f.style
+          .as_ref()
+          .map(|s| matches!(s.vertical_align, VerticalAlign::Bottom))
+          .unwrap_or(false)
+      })
+      .expect("bottom-aligned cell fragment");
+
+    // The table border is 2px wide; collapsed border strokes are centered on the grid lines,
+    // so the first row's cell boxes should start ~1px below the table fragment origin.
+    let min_y = cells.iter().map(|c| c.bounds.y()).fold(f32::INFINITY, f32::min);
+    assert!((min_y - 1.0).abs() < 0.51);
+
+    // The rowspan cell should occupy column 0 on both rows, causing the second row's cell to
+    // be placed in column 1 (aligned with the first row's second cell).
+    assert!((bottom_cell.bounds.x() - top_cell.bounds.x()).abs() < 0.51);
+    assert!(span_cell.bounds.x() < top_cell.bounds.x() - 0.5);
   }
 
   #[test]

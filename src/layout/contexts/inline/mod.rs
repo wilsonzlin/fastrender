@@ -3579,7 +3579,7 @@ impl InlineFormattingContext {
     root_unicode_bidi: UnicodeBidi,
     float_ctx: Option<&'a FloatContext>,
     float_base_y: f32,
-  ) -> Vec<Line> {
+  ) -> Result<Vec<Line>, LayoutError> {
     let mut subsequent_line_width = subsequent_line_width;
 
     let fallback_width = self.viewport_size.width.max(0.0);
@@ -3637,12 +3637,12 @@ impl InlineFormattingContext {
 
         if has_mandatory {
           // Split at mandatory breaks
-          self.add_text_with_mandatory_breaks(&mut builder, text_item.clone());
+          self.add_text_with_mandatory_breaks(&mut builder, text_item.clone())?;
           continue;
         }
       }
 
-      builder.add_item(item);
+      builder.add_item(item)?;
     }
 
     builder.finish()
@@ -4098,7 +4098,11 @@ impl InlineFormattingContext {
   }
 
   /// Adds text item handling mandatory breaks
-  fn add_text_with_mandatory_breaks(&self, builder: &mut LineBuilder, text_item: TextItem) {
+  fn add_text_with_mandatory_breaks(
+    &self,
+    builder: &mut LineBuilder,
+    text_item: TextItem,
+  ) -> Result<(), LayoutError> {
     let mut remaining = text_item;
 
     loop {
@@ -4112,28 +4116,28 @@ impl InlineFormattingContext {
       if let Some(pos) = mandatory_pos {
         if pos >= remaining.text.len() {
           if remaining.advance > 0.0 {
-            builder.add_item(InlineItem::Text(remaining));
+            builder.add_item(InlineItem::Text(remaining))?;
           }
-          builder.force_break();
+          builder.force_break()?;
           break;
         }
 
         if pos > 0 {
           if let Some((before, after)) = builder.split_text_item(&remaining, pos, false) {
             if before.advance > 0.0 {
-              builder.add_item(InlineItem::Text(before));
+              builder.add_item(InlineItem::Text(before))?;
             }
-            builder.force_break();
+            builder.force_break()?;
             remaining = after;
             continue;
           }
           if remaining.advance > 0.0 {
-            builder.add_item(InlineItem::Text(remaining));
+            builder.add_item(InlineItem::Text(remaining))?;
           }
-          builder.force_break();
+          builder.force_break()?;
           break;
         }
-        builder.force_break();
+        builder.force_break()?;
         // Skip past the newline character
         if pos < remaining.text.len() {
           let skip_bytes = remaining.text[pos..]
@@ -4152,11 +4156,12 @@ impl InlineFormattingContext {
       } else {
         // No more mandatory breaks
         if remaining.advance > 0.0 {
-          builder.add_item(InlineItem::Text(remaining));
+          builder.add_item(InlineItem::Text(remaining))?;
         }
         break;
       }
     }
+    Ok(())
   }
 
   /// Creates fragments from lines
@@ -6573,7 +6578,7 @@ impl InlineFormattingContext {
     root_unicode_bidi: UnicodeBidi,
     float_ctx: Option<&FloatContext>,
     float_base_y: f32,
-  ) -> Vec<Line> {
+  ) -> Result<Vec<Line>, LayoutError> {
     let first_width = if matches!(
       text_wrap,
       TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
@@ -6650,10 +6655,10 @@ impl InlineFormattingContext {
       root_unicode_bidi,
       float_ctx,
       float_base_y,
-    );
+    )?;
 
     if lines.len() <= 1 {
-      return lines;
+      return Ok(lines);
     }
 
     if matches!(text_wrap, TextWrap::Stable) {
@@ -6693,9 +6698,9 @@ impl InlineFormattingContext {
       root_unicode_bidi,
       float_ctx,
       float_base_y,
-    );
+    )?;
 
-    lines
+    Ok(lines)
   }
 
   fn rebalance_text_wrap(
@@ -6714,15 +6719,15 @@ impl InlineFormattingContext {
     root_unicode_bidi: UnicodeBidi,
     float_ctx: Option<&FloatContext>,
     float_base_y: f32,
-  ) -> Vec<Line> {
+  ) -> Result<Vec<Line>, LayoutError> {
     if base_lines.len() <= 1 {
-      return base_lines;
+      return Ok(base_lines);
     }
 
     if let Some(ctx) = float_ctx {
       if !ctx.is_empty() {
         // Float-shortened lines vary in width per line; keep greedy results to avoid instability.
-        return base_lines;
+        return Ok(base_lines);
       }
     }
 
@@ -6763,7 +6768,7 @@ impl InlineFormattingContext {
     let (min_factor, step, hyphen_weight, short_last_weight) = match text_wrap {
       TextWrap::Pretty => (0.85, 0.03, 3.0, 1.5),
       TextWrap::Balance => (0.65, 0.05, 1.5, 1.0),
-      _ => return best_lines,
+      _ => return Ok(best_lines),
     };
 
     let base_width = subsequent_line_width.max(1.0);
@@ -6812,7 +6817,7 @@ impl InlineFormattingContext {
         root_unicode_bidi,
         float_ctx,
         float_base_y,
-      );
+      )?;
 
       if candidate_lines.len() != target_line_count {
         if candidate_lines.len() > target_line_count {
@@ -6828,7 +6833,7 @@ impl InlineFormattingContext {
       }
     }
 
-    best_lines
+    Ok(best_lines)
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -7725,9 +7730,9 @@ impl InlineFormattingContext {
                          lines_out: &mut Vec<Line>,
                          ctx_ref: Option<&FloatContext>,
                          order: &mut Vec<FlowChunk>|
-     -> Option<(f32, f32, f32)> {
+     -> Result<Option<(f32, f32, f32)>, LayoutError> {
       if pending.is_empty() {
-        return None;
+        return Ok(None);
       }
       if pending
         .iter()
@@ -7736,7 +7741,7 @@ impl InlineFormattingContext {
         // Static-position anchors are bookkeeping-only and should not create line boxes when
         // there is otherwise no in-flow content.
         pending.clear();
-        return None;
+        return Ok(None);
       }
       let paragraph_direction = base_direction;
       let paragraph_base_level = match style.unicode_bidi {
@@ -7762,7 +7767,7 @@ impl InlineFormattingContext {
         style.unicode_bidi,
         ctx_ref,
         float_base_y + *line_offset,
-      );
+      )?;
       let seg_height = seg_lines
         .iter()
         .map(|l| l.y_offset + l.height)
@@ -7780,7 +7785,7 @@ impl InlineFormattingContext {
       });
       *line_offset += seg_height;
       *use_first_line_width = false;
-      Some((seg_height, last_top, last_height))
+      Ok(Some((seg_height, last_top, last_height)))
     };
 
     for segment in segments {
@@ -7902,7 +7907,7 @@ impl InlineFormattingContext {
             &mut lines,
             float_ctx.as_deref().or(local_float_ctx.as_ref()),
             &mut flow_order,
-          );
+          )?;
 
           let fc_type = block_node
             .formatting_context()
@@ -7936,7 +7941,7 @@ impl InlineFormattingContext {
       &mut lines,
       final_ctx,
       &mut flow_order,
-    );
+    )?;
 
     let lines = self.apply_text_overflow(lines, style, &strut_metrics, inline_vertical)?;
 
@@ -8409,10 +8414,20 @@ impl InlineFormattingContext {
           })
           .collect::<Vec<_>>();
         for result in positioned_results {
+          if let Err(RenderError::Timeout { elapsed, .. }) =
+            check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+          {
+            return Err(LayoutError::Timeout { elapsed });
+          }
           merged_children.push(result?);
         }
       } else {
         for child in &positioned_children {
+          if let Err(RenderError::Timeout { elapsed, .. }) =
+            check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+          {
+            return Err(LayoutError::Timeout { elapsed });
+          }
           merged_children.push(layout_positioned_child(child)?);
         }
       }
@@ -11866,7 +11881,8 @@ mod tests {
       root.style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::InterCharacter);
@@ -11936,7 +11952,8 @@ mod tests {
       root.style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::Distribute);
@@ -12002,7 +12019,8 @@ mod tests {
       root.style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::InterWord);
@@ -12054,7 +12072,8 @@ mod tests {
       root.style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let first_line = lines.first().expect("line");
     eprintln!("items len={}", first_line.items.len());
     let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
@@ -13208,7 +13227,8 @@ mod tests {
       crate::style::types::UnicodeBidi::Plaintext,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     assert_eq!(lines.len(), 2, "mandatory breaks should split lines");
     assert_eq!(
       lines[0].resolved_direction,
@@ -13932,7 +13952,8 @@ mod tests {
       node.style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let line = &lines[0];
     assert_eq!(line.items.len(), 3);
 
@@ -13984,7 +14005,8 @@ mod tests {
       node.style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let line = &lines[0];
     assert_eq!(line.items.len(), 3);
 
@@ -14042,7 +14064,8 @@ mod tests {
       container.style.unicode_bidi,
       Some(&float_ctx),
       0.0,
-    );
+    )
+    .unwrap();
 
     let first = lines.first().expect("line");
     assert!(
@@ -14082,7 +14105,8 @@ mod tests {
       style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     assert_eq!(lines.first().unwrap().box_width, 100.0);
   }
@@ -14114,7 +14138,8 @@ mod tests {
       style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
@@ -14133,7 +14158,8 @@ mod tests {
       auto_style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     assert_eq!(balanced.len(), auto.len());
     let balanced_score = balance_score(&balanced, 1.5, 1.0);
@@ -14175,7 +14201,8 @@ mod tests {
       style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     assert!(balanced.len() > 1, "should wrap CJK text");
     let texts = line_texts(&balanced);
     let min_len = texts.iter().map(|t| t.chars().count()).min().unwrap();
@@ -14214,7 +14241,8 @@ mod tests {
       style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     assert!(
       lines.iter().any(|line| {
@@ -14247,7 +14275,8 @@ mod tests {
       manual.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     assert!(
       !manual_lines.iter().any(|line| {
@@ -14287,7 +14316,8 @@ mod tests {
       style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
@@ -14306,7 +14336,8 @@ mod tests {
       auto_style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     assert_eq!(pretty.len(), auto.len());
     let pretty_penalty = paragraph_short_last_penalty(&pretty);
@@ -14344,7 +14375,8 @@ mod tests {
       style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let wider = ifc.layout_segment_lines(
       items.clone(),
       true,
@@ -14360,7 +14392,8 @@ mod tests {
       style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     let narrow_texts = line_texts(&narrow);
     let wider_texts = line_texts(&wider);
@@ -14383,7 +14416,8 @@ mod tests {
       auto_style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
     let auto_wide = ifc.layout_segment_lines(
       items,
       true,
@@ -14399,7 +14433,8 @@ mod tests {
       auto_style.unicode_bidi,
       None,
       0.0,
-    );
+    )
+    .unwrap();
 
     assert_ne!(line_texts(&auto_narrow), line_texts(&auto_wide));
   }
