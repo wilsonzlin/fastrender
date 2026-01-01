@@ -59,9 +59,14 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
   let log_path = temp.path().join("worker.log");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    // Run in an isolated working directory so per-run scratch dirs like `fetches/assets` don't
+    // collide with other CLI tests (the worker uses relative cache paths by default).
+    .current_dir(temp.path())
     .env("FASTR_USE_BUNDLED_FONTS", "0")
-    // Ensure retries are actually exercised (auto mode disables retries on the first ureq hop).
+    // Force a deterministic backend so the timeout formatting asserted below stays stable.
     .env("FASTR_HTTP_BACKEND", "ureq")
+    // Redirect following installs a deadline (hard - soft), which disables retries even if a
+    // higher max attempt count is configured. Keep this set to prove the deadline override works.
     .env("FASTR_HTTP_MAX_ATTEMPTS", "5")
     .args([
       "worker",
@@ -112,18 +117,21 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
 
   let log = fs::read_to_string(&log_path).expect("read worker log");
   let log_lower = log.to_ascii_lowercase();
-  let needle = "overall http timeout budget exceeded (budget=";
   assert!(
-    log_lower.contains(needle),
-    "expected worker log to mention budget exhaustion (budget semantics), got:\n{log}"
+    log_lower.contains("timeout: global"),
+    "expected worker log to mention a global HTTP timeout while following the meta refresh, got:\n{log}"
   );
   assert!(
-    log_lower.contains("/5)"),
-    "expected worker log to include an attempt suffix with max_attempts=5 (so retries are enabled), got:\n{log}"
+    log_lower.contains("attempt 1/1"),
+    "expected redirect-following deadline to disable retries (attempt 1/1), got:\n{log}"
   );
   assert!(
-    accepted.load(Ordering::SeqCst) < 3,
-    "expected budget-mode fetch to stop after <=2 connections; got {} connections\n{log}",
-    accepted.load(Ordering::SeqCst)
+    log_lower.contains("overall_timeout="),
+    "expected worker log to include the redirect deadline budget details, got:\n{log}"
+  );
+  assert!(
+    accepted.load(Ordering::SeqCst) <= 1,
+    "expected redirect follow to make a single connection (no retries); got {} connections\n{log}",
+    accepted.load(Ordering::SeqCst),
   );
 }
