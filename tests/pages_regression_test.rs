@@ -540,25 +540,25 @@ fn page_fixtures_present() {
   }
 }
 
-mod pageset_timeouts {
+mod pageset_guardrails {
   use super::*;
 
   const MANIFEST_VERSION: u32 = 1;
   const DEFAULT_BUDGET_MS: f64 = 5000.0;
-  // Captures the current highest pageset timeouts (per progress/pages/*.json) along with a
-  // paint-heavy case to keep hotspot coverage for offline perf/regression tracking.
-  const TIMEOUT_MANIFEST: &str = include_str!("pages/pageset_timeouts.json");
+  // Captures the current worst pageset guardrails (timeouts + slow OK hotspots) for offline
+  // perf/regression tracking.
+  const GUARDRAILS_MANIFEST: &str = include_str!("pages/pageset_guardrails.json");
 
   #[derive(Deserialize)]
-  struct TimeoutManifest {
+  struct GuardrailsManifest {
     schema_version: u32,
     #[serde(default)]
     default_budget_ms: Option<f64>,
-    fixtures: Vec<TimeoutFixture>,
+    fixtures: Vec<GuardrailsFixture>,
   }
 
   #[derive(Deserialize)]
-  struct TimeoutFixture {
+  struct GuardrailsFixture {
     name: String,
     viewport: [u32; 2],
     dpr: f32,
@@ -567,7 +567,7 @@ mod pageset_timeouts {
     budget_ms: Option<f64>,
   }
 
-  struct TimeoutRun {
+  struct GuardrailsRun {
     name: String,
     elapsed_ms: f64,
     budget_ms: f64,
@@ -575,15 +575,18 @@ mod pageset_timeouts {
   }
 
   #[test]
-  fn pageset_timeouts_render_under_budget() {
-    if cfg!(debug_assertions) && std::env::var_os("PAGESET_TIMEOUTS_IN_DEBUG").is_none() {
+  fn pageset_guardrails_render_under_budget() {
+    if cfg!(debug_assertions)
+      && std::env::var_os("PAGESET_GUARDRAILS_IN_DEBUG").is_none()
+      && std::env::var_os("PAGESET_TIMEOUTS_IN_DEBUG").is_none()
+    {
       eprintln!(
-        "Skipping pageset timeout fixtures in debug (set PAGESET_TIMEOUTS_IN_DEBUG=1 to run)."
+        "Skipping pageset guardrails fixtures in debug (set PAGESET_GUARDRAILS_IN_DEBUG=1 to run)."
       );
       return;
     }
 
-    let manifest = load_manifest().expect("failed to parse pageset timeout manifest");
+    let manifest = load_manifest().expect("failed to parse pageset guardrails manifest");
     let default_budget_ms = manifest.default_budget_ms.unwrap_or(DEFAULT_BUDGET_MS);
     let global_budget = budget_override_from_env();
 
@@ -603,7 +606,7 @@ mod pageset_timeouts {
             continue;
           }
 
-          let run = render_timeout_fixture(fixture, default_budget_ms, global_budget)
+          let run = render_guardrails_fixture(fixture, default_budget_ms, global_budget)
             .unwrap_or_else(|e| panic!("Failed to render {}: {}", fixture.name, e));
           ran += 1;
           assert!(
@@ -622,7 +625,7 @@ mod pageset_timeouts {
             .map(|(name, path)| format!("{} ({})", name, path.display()))
             .collect();
           eprintln!(
-            "Skipped {} pageset timeout fixtures missing locally: {}",
+            "Skipped {} pageset guardrails fixtures missing locally: {}",
             skipped.len(),
             skipped_paths.join(", ")
           );
@@ -630,7 +633,7 @@ mod pageset_timeouts {
 
         if ran == 0 {
           eprintln!(
-            "Skipping pageset timeout fixtures: no fixture HTML found under {}",
+            "Skipping pageset guardrails fixtures: no fixture HTML found under {}",
             fixtures_dir().display()
           );
           return;
@@ -641,9 +644,9 @@ mod pageset_timeouts {
       .unwrap();
   }
 
-  fn load_manifest() -> Result<TimeoutManifest, String> {
-    let manifest: TimeoutManifest =
-      serde_json::from_str(TIMEOUT_MANIFEST).map_err(|e| format!("invalid manifest: {e}"))?;
+  fn load_manifest() -> Result<GuardrailsManifest, String> {
+    let manifest: GuardrailsManifest =
+      serde_json::from_str(GUARDRAILS_MANIFEST).map_err(|e| format!("invalid manifest: {e}"))?;
     if manifest.schema_version != MANIFEST_VERSION {
       return Err(format!(
         "unexpected manifest schema_version {}, expected {}",
@@ -653,11 +656,11 @@ mod pageset_timeouts {
     Ok(manifest)
   }
 
-  fn render_timeout_fixture(
-    fixture: &TimeoutFixture,
+  fn render_guardrails_fixture(
+    fixture: &GuardrailsFixture,
     default_budget_ms: f64,
     global_budget_ms: Option<f64>,
-  ) -> Result<TimeoutRun, String> {
+  ) -> Result<GuardrailsRun, String> {
     if fixture.viewport.len() != 2 {
       return Err(format!(
         "fixture {} viewport must have exactly two entries",
@@ -713,7 +716,7 @@ mod pageset_timeouts {
       )
     })?;
 
-    Ok(TimeoutRun {
+    Ok(GuardrailsRun {
       name: fixture.name.clone(),
       elapsed_ms,
       budget_ms,
@@ -793,7 +796,8 @@ mod pageset_timeouts {
   }
 
   fn budget_override_from_env() -> Option<f64> {
-    std::env::var("PAGESET_TIMEOUT_BUDGET_MS")
+    std::env::var("PAGESET_GUARDRAILS_BUDGET_MS")
+      .or_else(|_| std::env::var("PAGESET_TIMEOUT_BUDGET_MS"))
       .ok()
       .and_then(|value| value.parse::<f64>().ok())
   }

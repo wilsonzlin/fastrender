@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const DEFAULT_MANIFEST: &str = "tests/pages/pageset_timeouts.json";
+const DEFAULT_MANIFEST: &str = "tests/pages/pageset_guardrails.json";
 const DEFAULT_FIXTURES_ROOT: &str = "tests/pages/fixtures";
 const DEFAULT_BUNDLE_OUT_DIR: &str = "target/page-fixture-bundles";
 
@@ -15,7 +15,10 @@ const DEFAULT_DPR: f32 = 1.0;
 
 #[derive(Args, Debug)]
 pub struct RecapturePageFixturesArgs {
-  /// Path to a fixture manifest (defaults to the pageset-timeouts manifest).
+  /// Path to a fixture manifest (defaults to the pageset-guardrails manifest).
+  ///
+  /// Note: the legacy `tests/pages/pageset_timeouts.json` file is kept in sync for backwards
+  /// compatibility.
   ///
   /// The manifest must contain a `fixtures` array with at least `name` fields. Optional fields:
   /// - `url` (preferred; used directly when present)

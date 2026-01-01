@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 use tempfile::tempdir;
 
-const PAGESET_TIMEOUT_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_TIMEOUT_MANIFEST";
+const PAGESET_GUARDRAILS_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_GUARDRAILS_MANIFEST";
 
 #[test]
 fn perf_smoke_emits_stage_breakdowns() {
@@ -183,10 +183,10 @@ fn perf_smoke_fail_on_missing_fixtures_exits_non_zero() {
   fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
 
   let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
-    .env(PAGESET_TIMEOUT_MANIFEST_ENV, manifest_path)
+    .env(PAGESET_GUARDRAILS_MANIFEST_ENV, manifest_path)
     .args([
       "--suite",
-      "pageset-timeouts",
+      "pageset-guardrails",
       "--fail-on-missing-fixtures",
       "--no-isolate",
       "--output",
@@ -197,7 +197,7 @@ fn perf_smoke_fail_on_missing_fixtures_exits_non_zero() {
 
   assert!(
     !result.status.success(),
-    "perf_smoke should fail when pageset-timeouts fixtures are missing"
+    "perf_smoke should fail when pageset-guardrails fixtures are missing"
   );
   let stderr = String::from_utf8_lossy(&result.stderr);
   assert!(
@@ -226,10 +226,10 @@ fn perf_smoke_fail_on_budget_exits_non_zero() {
   fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
 
   let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
-    .env(PAGESET_TIMEOUT_MANIFEST_ENV, manifest_path)
+    .env(PAGESET_GUARDRAILS_MANIFEST_ENV, manifest_path)
     .args([
       "--suite",
-      "pageset-timeouts",
+      "pageset-guardrails",
       "--fail-on-budget",
       "--no-isolate",
       "--output",

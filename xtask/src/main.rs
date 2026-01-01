@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     Commands::RecapturePageFixtures(args) => {
       recapture_page_fixtures::run_recapture_page_fixtures(args)
     }
-    Commands::UpdatePagesetTimeouts(args) => {
+    Commands::UpdatePagesetGuardrails(args) => {
       update_pageset_timeouts::run_update_pageset_timeouts(args)
     }
     Commands::PerfSmoke(args) => run_perf_smoke(args),
@@ -65,8 +65,9 @@ enum Commands {
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
   /// (Re)capture and (re)import offline page fixtures from a manifest
   RecapturePageFixtures(recapture_page_fixtures::RecapturePageFixturesArgs),
-  /// Update `tests/pages/pageset_timeouts.json` based on `progress/pages/*.json`
-  UpdatePagesetTimeouts(update_pageset_timeouts::UpdatePagesetTimeoutsArgs),
+  /// Update `tests/pages/pageset_guardrails.json` based on `progress/pages/*.json`
+  #[command(alias = "update-pageset-timeouts")]
+  UpdatePagesetGuardrails(update_pageset_timeouts::UpdatePagesetTimeoutsArgs),
   /// Run the offline perf smoke harness (`perf_smoke` binary) over curated fixtures
   PerfSmoke(PerfSmokeArgs),
 }
@@ -318,7 +319,7 @@ struct DiffRendersArgs {
 
 #[derive(Args)]
 struct PerfSmokeArgs {
-  /// Which fixture suite to run (core/pageset-timeouts/all)
+  /// Which fixture suite to run (core/pageset-guardrails/all)
   #[arg(long, value_enum, default_value_t = PerfSmokeSuite::Core)]
   suite: PerfSmokeSuite,
 
@@ -328,13 +329,13 @@ struct PerfSmokeArgs {
 
   /// Run each fixture in its own process to keep memory bounded.
   ///
-  /// The `pageset-timeouts` suite enables this automatically (unless `--no-isolate` is set).
+  /// The `pageset-guardrails` suite enables this automatically (unless `--no-isolate` is set).
   #[arg(long, conflicts_with = "no_isolate")]
   isolate: bool,
 
   /// Disable per-fixture isolation.
   ///
-  /// Note: the underlying `perf_smoke` binary auto-enables isolation for `--suite pageset-timeouts`.
+  /// Note: the underlying `perf_smoke` binary auto-enables isolation for `--suite pageset-guardrails`.
   #[arg(long, conflicts_with = "isolate")]
   no_isolate: bool,
 
@@ -362,16 +363,16 @@ struct PerfSmokeArgs {
   #[arg(long)]
   fail_on_regression: bool,
 
-  /// Fail when a pageset-timeouts manifest fixture is missing locally.
+  /// Fail when a pageset-guardrails manifest fixture is missing locally.
   ///
-  /// When running `--suite pageset-timeouts` via `cargo xtask perf-smoke`, this gate is enabled by
+  /// When running `--suite pageset-guardrails` via `cargo xtask perf-smoke`, this gate is enabled by
   /// default unless explicitly disabled with `--allow-missing-fixtures`.
   #[arg(long, conflicts_with = "allow_missing_fixtures")]
   fail_on_missing_fixtures: bool,
 
-  /// Allow missing pageset-timeouts fixtures (skip them instead of failing).
+  /// Allow missing pageset-guardrails fixtures (skip them instead of failing).
   ///
-  /// This disables the default `--fail-on-missing-fixtures` behavior for the `pageset-timeouts`
+  /// This disables the default `--fail-on-missing-fixtures` behavior for the `pageset-guardrails`
   /// suite when running via `cargo xtask perf-smoke`.
   #[arg(long, conflicts_with = "fail_on_missing_fixtures")]
   allow_missing_fixtures: bool,
@@ -392,7 +393,8 @@ struct PerfSmokeArgs {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum PerfSmokeSuite {
   Core,
-  PagesetTimeouts,
+  #[value(alias = "pageset-timeouts")]
+  PagesetGuardrails,
   All,
 }
 
@@ -400,7 +402,7 @@ impl PerfSmokeSuite {
   fn as_cli_value(self) -> &'static str {
     match self {
       Self::Core => "core",
-      Self::PagesetTimeouts => "pageset-timeouts",
+      Self::PagesetGuardrails => "pageset-guardrails",
       Self::All => "all",
     }
   }
@@ -1067,7 +1069,7 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   let fail_on_missing_fixtures = if args.allow_missing_fixtures {
     false
   } else {
-    args.fail_on_missing_fixtures || matches!(args.suite, PerfSmokeSuite::PagesetTimeouts)
+    args.fail_on_missing_fixtures || matches!(args.suite, PerfSmokeSuite::PagesetGuardrails)
   };
 
   // Keep renders deterministic across machines.

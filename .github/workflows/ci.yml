@@ -16,7 +16,7 @@ env:
   # Deterministic complexity counters (DOM nodes, fragments, display items, etc) should not drift
   # far without an explicit change; keep this conservative while still catching blowups.
   PERF_SMOKE_COUNT_REGRESSION_THRESHOLD: "0.20"
-  # Enable once pageset-timeouts budgets are calibrated (Task 74).
+  # Enable once pageset-guardrails budgets are calibrated (Task 74).
   PERF_SMOKE_FAIL_ON_BUDGET: "0"
 
 jobs:
@@ -92,9 +92,9 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --all-features --verbose
 
-      - name: Pageset timeout perf smoke (release, offline fixtures)
+      - name: Pageset guardrails perf smoke (release, offline fixtures)
         if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
-        id: perf_smoke_pageset_timeouts
+        id: perf_smoke_pageset_guardrails
         run: |
           set -o pipefail
           extra_args=()
@@ -106,28 +106,28 @@ jobs:
           # xtask exposes all of these flags directly (Task 62), consider switching to reduce
           # duplication between local workflows and CI.
           cargo run --release --bin perf_smoke -- \
-            --suite pageset-timeouts \
+            --suite pageset-guardrails \
             --fail-on-missing-fixtures \
             --fail-on-failure \
             --fail-on-fetch-errors \
             --isolate \
             "${extra_args[@]}" \
             --top 5 \
-            --output target/perf_smoke_pageset_timeouts.json \
-            | tee target/perf_smoke_pageset_timeouts.log
-          test -s target/perf_smoke_pageset_timeouts.json
+            --output target/perf_smoke_pageset_guardrails.json \
+            | tee target/perf_smoke_pageset_guardrails.log
+          test -s target/perf_smoke_pageset_guardrails.json
           python3 - <<'PY'
           import json
           from pathlib import Path
-          path = Path("target/perf_smoke_pageset_timeouts.json")
+          path = Path("target/perf_smoke_pageset_guardrails.json")
           data = json.loads(path.read_text())
           assert isinstance(data.get("schema_version"), int), "perf_smoke output missing schema_version"
           assert isinstance(data.get("fixtures"), list), "perf_smoke output missing fixtures list"
           PY
 
-      - name: Download perf_smoke pageset-timeouts baseline (main)
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success'
-        id: download_perf_smoke_pageset_timeouts_baseline
+      - name: Download perf_smoke pageset-guardrails baseline (main)
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_guardrails.outcome == 'success'
+        id: download_perf_smoke_pageset_guardrails_baseline
         uses: dawidd6/action-download-artifact@v3
         continue-on-error: true
         with:
@@ -135,31 +135,31 @@ jobs:
           workflow: ci.yml
           workflow_conclusion: success
           branch: main
-          name: perf_smoke_pageset_timeouts
+          name: perf_smoke_pageset_guardrails
           path: baseline
 
-      - name: Locate perf_smoke pageset-timeouts baseline JSON
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
+      - name: Locate perf_smoke pageset-guardrails baseline JSON
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_guardrails.outcome == 'success' && steps.download_perf_smoke_pageset_guardrails_baseline.outcome == 'success'
         run: |
           set -e
-          if [ -f baseline/target/perf_smoke_pageset_timeouts.json ]; then
-            echo "PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE=baseline/target/perf_smoke_pageset_timeouts.json" >> "$GITHUB_ENV"
+          if [ -f baseline/target/perf_smoke_pageset_guardrails.json ]; then
+            echo "PERF_SMOKE_PAGESET_GUARDRAILS_BASELINE=baseline/target/perf_smoke_pageset_guardrails.json" >> "$GITHUB_ENV"
             exit 0
           fi
-          match=$(find baseline -type f -name "perf_smoke_pageset_timeouts.json" | head -n 1 || true)
+          match=$(find baseline -type f -name "perf_smoke_pageset_guardrails.json" | head -n 1 || true)
           if [ -z "$match" ]; then
-            echo "Downloaded baseline artifact did not contain perf_smoke_pageset_timeouts.json" >&2
+            echo "Downloaded baseline artifact did not contain perf_smoke_pageset_guardrails.json" >&2
             exit 1
           fi
-          echo "PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE=$match" >> "$GITHUB_ENV"
+          echo "PERF_SMOKE_PAGESET_GUARDRAILS_BASELINE=$match" >> "$GITHUB_ENV"
           echo "Using perf_smoke baseline at $match"
 
-      - name: Perf regression check (perf_smoke pageset-timeouts)
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
+      - name: Perf regression check (perf_smoke pageset-guardrails)
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_guardrails.outcome == 'success' && steps.download_perf_smoke_pageset_guardrails_baseline.outcome == 'success'
         run: |
           # To reproduce locally:
           #   cargo run --release --bin perf_smoke -- \
-          #     --suite pageset-timeouts \
+          #     --suite pageset-guardrails \
           #     --fail-on-missing-fixtures \
           #     --fail-on-failure \
           #     --fail-on-fetch-errors \
@@ -170,7 +170,7 @@ jobs:
           #     --count-threshold 0.20 \
           #     # Optional once budgets are calibrated:
           #     # --fail-on-budget
-          report_path=target/perf_smoke_pageset_timeouts_regression_report.txt
+          report_path=target/perf_smoke_pageset_guardrails_regression_report.txt
           status=0
           extra_args=()
           if [ "${PERF_SMOKE_FAIL_ON_BUDGET}" = "1" ]; then
@@ -179,14 +179,14 @@ jobs:
 
           # Use the already-built binary to keep the report free of cargo build noise.
           target/release/perf_smoke \
-            --suite pageset-timeouts \
+            --suite pageset-guardrails \
             --fail-on-missing-fixtures \
             --fail-on-failure \
             --fail-on-fetch-errors \
             --isolate \
             --top 5 \
-            --output target/perf_smoke_pageset_timeouts.json \
-            --baseline "${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}" \
+            --output target/perf_smoke_pageset_guardrails.json \
+            --baseline "${PERF_SMOKE_PAGESET_GUARDRAILS_BASELINE}" \
             --fail-on-regression \
             "${extra_args[@]}" \
             --threshold "${PERF_SMOKE_REGRESSION_THRESHOLD}" \
@@ -196,9 +196,9 @@ jobs:
           cat "${report_path}" >&2
 
           {
-            echo "## perf_smoke pageset-timeouts regression check"
+            echo "## perf_smoke pageset-guardrails regression check"
             echo
-            echo "Baseline: ${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}"
+            echo "Baseline: ${PERF_SMOKE_PAGESET_GUARDRAILS_BASELINE}"
             echo "Threshold: ${PERF_SMOKE_REGRESSION_THRESHOLD} (relative)"
             echo "Count threshold: ${PERF_SMOKE_COUNT_REGRESSION_THRESHOLD} (relative)"
             if [ "${PERF_SMOKE_FAIL_ON_BUDGET}" = "1" ]; then
@@ -226,8 +226,8 @@ jobs:
                 result="${result}; fixture failures detected"
               fi
             fi
-            if grep -q "Missing pageset-timeouts fixtures" "${report_path}"; then
-              result="missing pageset-timeouts fixtures"
+            if grep -q "Missing pageset-guardrails fixtures" "${report_path}"; then
+              result="missing pageset-guardrails fixtures"
             fi
             if grep -q "baseline schema_version" "${report_path}"; then
               result="baseline incompatible (schema mismatch); skipping regression gate"
@@ -249,11 +249,11 @@ jobs:
           exit $status
 
       - name: Baseline unavailable
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome != 'success'
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_guardrails.outcome == 'success' && steps.download_perf_smoke_pageset_guardrails_baseline.outcome != 'success'
         run: |
-          echo "Previous perf_smoke pageset-timeouts artifact not found; skipping regression gate."
+          echo "Previous perf_smoke pageset-guardrails artifact not found; skipping regression gate."
           {
-            echo "## perf_smoke pageset-timeouts regression check"
+            echo "## perf_smoke pageset-guardrails regression check"
             echo
             echo "No prior baseline artifact was available from main."
             echo "Threshold: ${PERF_SMOKE_REGRESSION_THRESHOLD} (relative)"
@@ -267,12 +267,12 @@ jobs:
             echo "The uploaded perf_smoke output from this run will serve as the next baseline."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload perf_smoke pageset-timeouts output
-        if: always() && matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success'
+      - name: Upload perf_smoke pageset-guardrails output
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_guardrails.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: perf_smoke_pageset_timeouts
-          path: target/perf_smoke_pageset_timeouts.json
+          name: perf_smoke_pageset_guardrails
+          path: target/perf_smoke_pageset_guardrails.json
           if-no-files-found: error
 
   # ===========================================================================

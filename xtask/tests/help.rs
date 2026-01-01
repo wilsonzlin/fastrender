@@ -84,21 +84,21 @@ fn pageset_help_mentions_cascade_diagnostics() {
 }
 
 #[test]
-fn update_pageset_timeouts_help_mentions_strategy_flag() {
+fn update_pageset_guardrails_help_mentions_strategy_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-    .args(["update-pageset-timeouts", "--help"])
+    .args(["update-pageset-guardrails", "--help"])
     .output()
-    .expect("run cargo xtask update-pageset-timeouts --help");
+    .expect("run cargo xtask update-pageset-guardrails --help");
 
   assert!(
     output.status.success(),
-    "update-pageset-timeouts help should exit successfully"
+    "update-pageset-guardrails help should exit successfully"
   );
 
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert!(
     stdout.contains("--strategy"),
-    "update-pageset-timeouts help should mention the selection strategy; got:\n{stdout}"
+    "update-pageset-guardrails help should mention the selection strategy; got:\n{stdout}"
   );
 }
 
@@ -117,7 +117,7 @@ fn perf_smoke_help_mentions_suites_and_regression_flags() {
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert!(
     stdout.contains("--suite")
-      && stdout.contains("pageset-timeouts")
+      && stdout.contains("pageset-guardrails")
       && stdout.contains("--only")
       && stdout.contains("--baseline")
       && stdout.contains("--threshold")

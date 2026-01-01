@@ -11,6 +11,8 @@ const DEFAULT_VIEWPORT: [u32; 2] = [1200, 800];
 const DEFAULT_DPR: f32 = 1.0;
 const DEFAULT_MEDIA: &str = "screen";
 const FALLBACK_DEFAULT_BUDGET_MS: f64 = 5000.0;
+const DEFAULT_MANIFEST_PATH: &str = "tests/pages/pageset_guardrails.json";
+const LEGACY_MANIFEST_PATH: &str = "tests/pages/pageset_timeouts.json";
 
 #[derive(Args, Debug)]
 pub struct UpdatePagesetTimeoutsArgs {
@@ -18,8 +20,8 @@ pub struct UpdatePagesetTimeoutsArgs {
   #[arg(long, default_value = "progress/pages")]
   pub progress_dir: PathBuf,
 
-  /// Path to the pageset-timeouts manifest to rewrite
-  #[arg(long, default_value = "tests/pages/pageset_timeouts.json")]
+  /// Path to the pageset guardrails manifest to rewrite
+  #[arg(long, default_value = DEFAULT_MANIFEST_PATH)]
   pub manifest: PathBuf,
 
   /// Minimum number of pages to include (defaults to the existing manifest length, or 10 if empty)
@@ -207,7 +209,7 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
   } else {
     fs::write(&args.manifest, format!("{json}\n")).with_context(|| {
       format!(
-        "failed to write pageset timeout manifest to {}",
+        "failed to write pageset guardrails manifest to {}",
         args.manifest.display()
       )
     })?;
@@ -216,6 +218,13 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
       args.manifest.display(),
       updated.fixtures.len()
     );
+
+    // Backwards compatibility: keep the historical pageset_timeouts.json in sync as a plain file
+    // (no symlink; Windows-friendly).
+    if args.manifest == PathBuf::from(DEFAULT_MANIFEST_PATH) {
+      fs::write(LEGACY_MANIFEST_PATH, format!("{json}\n"))
+        .context("failed to write legacy pageset_timeouts manifest copy")?;
+    }
   }
 
   let missing = missing_fixtures(&selected, &updated, &args.fixtures_root);
@@ -305,7 +314,7 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
 }
 
 fn default_bundle_path(name: &str) -> PathBuf {
-  PathBuf::from("target/pageset-timeouts/bundles").join(format!("{name}.tar"))
+  PathBuf::from("target/pageset-guardrails/bundles").join(format!("{name}.tar"))
 }
 
 fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs) -> Result<()> {
@@ -413,7 +422,7 @@ fn missing_fixtures(
 
 fn load_manifest(path: &Path) -> Result<PagesetTimeoutManifest> {
   let data = fs::read_to_string(path)
-    .with_context(|| format!("failed to read pageset timeout manifest {}", path.display()))?;
+    .with_context(|| format!("failed to read pageset guardrails manifest {}", path.display()))?;
   serde_json::from_str(&data).with_context(|| format!("invalid JSON in {}", path.display()))
 }
 
@@ -874,11 +883,11 @@ mod tests {
   }
 
   #[test]
-  fn repo_manifest_covers_all_current_failures() {
+  fn repo_guardrails_manifest_covers_all_current_failures() {
     let progress_dir = repo_root().join("progress/pages");
-    let manifest_path = repo_root().join("tests/pages/pageset_timeouts.json");
+    let manifest_path = repo_root().join(DEFAULT_MANIFEST_PATH);
     let progress = read_progress_entries(&progress_dir).expect("read progress/pages");
-    let manifest = load_manifest(&manifest_path).expect("load pageset_timeouts manifest");
+    let manifest = load_manifest(&manifest_path).expect("load pageset guardrails manifest");
 
     let failing: BTreeSet<String> = progress
       .iter()
@@ -893,8 +902,33 @@ mod tests {
     let missing: Vec<String> = failing.difference(&fixtures).cloned().collect();
     assert!(
       missing.is_empty(),
-      "tests/pages/pageset_timeouts.json is missing failing pages from progress/pages: {}",
+      "{} is missing failing pages from progress/pages: {}",
+      manifest_path.display(),
       missing.join(", ")
     );
   }
-}
+
+  #[test]
+  fn legacy_manifest_is_kept_in_sync_with_guardrails() {
+    let root = repo_root();
+    let guardrails_path = root.join(DEFAULT_MANIFEST_PATH);
+    let legacy_path = root.join(LEGACY_MANIFEST_PATH);
+
+    let guardrails_raw =
+      fs::read_to_string(&guardrails_path).expect("read pageset_guardrails manifest");
+    let legacy_raw = fs::read_to_string(&legacy_path).expect("read pageset_timeouts manifest");
+
+    let guardrails: serde_json::Value =
+      serde_json::from_str(&guardrails_raw).expect("parse pageset_guardrails manifest");
+    let legacy: serde_json::Value =
+      serde_json::from_str(&legacy_raw).expect("parse pageset_timeouts manifest");
+
+    assert_eq!(
+      guardrails,
+      legacy,
+      "legacy manifest {} should mirror {}",
+      legacy_path.display(),
+      guardrails_path.display()
+    );
+  }
+} 

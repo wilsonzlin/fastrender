@@ -17,7 +17,7 @@ use url::Url;
 #[derive(Parser)]
 #[command(about = "Offline perf smoke test for a small set of fixtures")]
 struct Args {
-  /// Which fixture suite to run (core/pageset-timeouts/all)
+  /// Which fixture suite to run (core/pageset-guardrails/all)
   #[arg(long, value_enum, default_value_t = Suite::Core)]
   suite: Suite,
 
@@ -78,9 +78,9 @@ struct Args {
   #[arg(long = "no-fail-on-failure", conflicts_with = "fail_on_failure")]
   no_fail_on_failure: bool,
 
-  /// Exit with a non-zero status when a pageset-timeouts manifest fixture is missing locally.
+  /// Exit with a non-zero status when a pageset-guardrails manifest fixture is missing locally.
   ///
-  /// Without this flag, missing pageset-timeouts fixtures are skipped so local runs can operate on
+  /// Without this flag, missing pageset-guardrails fixtures are skipped so local runs can operate on
   /// a subset of captured pages.
   #[arg(long)]
   fail_on_missing_fixtures: bool,
@@ -103,7 +103,8 @@ struct Args {
 #[derive(Clone, Copy, ValueEnum)]
 enum Suite {
   Core,
-  PagesetTimeouts,
+  #[value(alias = "pageset-timeouts")]
+  PagesetGuardrails,
   All,
 }
 
@@ -257,21 +258,22 @@ const CORE_FIXTURES: &[CoreFixture] = &[
 ];
 
 const PERF_SMOKE_SCHEMA_VERSION: u32 = 5;
-const PAGESET_TIMEOUT_MANIFEST_VERSION: u32 = 1;
-const PAGESET_TIMEOUT_MANIFEST: &str = include_str!("../../tests/pages/pageset_timeouts.json");
+const PAGESET_GUARDRAILS_MANIFEST_VERSION: u32 = 1;
+const PAGESET_GUARDRAILS_MANIFEST: &str = include_str!("../../tests/pages/pageset_guardrails.json");
 
+const PAGESET_GUARDRAILS_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_GUARDRAILS_MANIFEST";
 const PAGESET_TIMEOUT_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_TIMEOUT_MANIFEST";
 
 #[derive(Deserialize)]
-struct PagesetTimeoutManifest {
+struct PagesetGuardrailsManifest {
   schema_version: u32,
   #[serde(default)]
   default_budget_ms: Option<f64>,
-  fixtures: Vec<PagesetTimeoutFixture>,
+  fixtures: Vec<PagesetGuardrailsFixture>,
 }
 
 #[derive(Deserialize)]
-struct PagesetTimeoutFixture {
+struct PagesetGuardrailsFixture {
   name: String,
   viewport: [u32; 2],
   dpr: f32,
@@ -527,7 +529,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   let filters = args.only.as_ref().or(args.fixtures.as_ref());
-  let auto_isolate = matches!(args.suite, Suite::PagesetTimeouts);
+  let auto_isolate = matches!(args.suite, Suite::PagesetGuardrails);
   let isolate = if args.no_isolate {
     false
   } else {
@@ -558,9 +560,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut specs = fixture_specs_for_suite(args.suite, args.fail_on_missing_fixtures)?;
   specs = filter_specs(specs, filters)?;
   if specs.is_empty() {
-    if matches!(args.suite, Suite::PagesetTimeouts) {
+    if matches!(args.suite, Suite::PagesetGuardrails) {
       eprintln!(
-        "No pageset timeout fixtures available; capture them under tests/pages/fixtures before running this suite."
+        "No pageset guardrails fixtures available; capture them under tests/pages/fixtures before running this suite."
       );
       return Ok(());
     }
@@ -794,12 +796,12 @@ fn fixture_specs_for_suite(
 ) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
   let mut specs = match suite {
     Suite::Core => core_fixture_specs(),
-    Suite::PagesetTimeouts => Vec::new(),
+    Suite::PagesetGuardrails => Vec::new(),
     Suite::All => core_fixture_specs(),
   };
 
-  if matches!(suite, Suite::PagesetTimeouts | Suite::All) {
-    specs.extend(pageset_timeout_fixture_specs(fail_on_missing_fixtures)?);
+  if matches!(suite, Suite::PagesetGuardrails | Suite::All) {
+    specs.extend(pageset_guardrails_fixture_specs(fail_on_missing_fixtures)?);
   }
 
   Ok(specs)
@@ -821,16 +823,16 @@ fn core_fixture_specs() -> Vec<FixtureSpec> {
     .collect()
 }
 
-fn pageset_timeout_fixture_specs(
+fn pageset_guardrails_fixture_specs(
   fail_on_missing_fixtures: bool,
 ) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
-  let manifest_contents = load_pageset_timeout_manifest_contents()?;
-  let manifest: PagesetTimeoutManifest = serde_json::from_str(&manifest_contents)?;
-  if manifest.schema_version != PAGESET_TIMEOUT_MANIFEST_VERSION {
+  let manifest_contents = load_pageset_guardrails_manifest_contents()?;
+  let manifest: PagesetGuardrailsManifest = serde_json::from_str(&manifest_contents)?;
+  if manifest.schema_version != PAGESET_GUARDRAILS_MANIFEST_VERSION {
     return Err(
       format!(
-        "pageset timeout manifest version {} does not match expected {}",
-        manifest.schema_version, PAGESET_TIMEOUT_MANIFEST_VERSION
+        "pageset guardrails manifest version {} does not match expected {}",
+        manifest.schema_version, PAGESET_GUARDRAILS_MANIFEST_VERSION
       )
       .into(),
     );
@@ -858,7 +860,7 @@ fn pageset_timeout_fixture_specs(
         missing.push((fixture.name.clone(), full_path));
       } else {
         eprintln!(
-          "Skipping pageset timeout fixture {} (missing {})",
+          "Skipping pageset guardrails fixture {} (missing {})",
           fixture.name,
           full_path.display()
         );
@@ -877,16 +879,16 @@ fn pageset_timeout_fixture_specs(
   }
 
   if fail_on_missing_fixtures && !missing.is_empty() {
-    eprintln!("Missing pageset-timeouts fixtures ({}):", missing.len());
+    eprintln!("Missing pageset-guardrails fixtures ({}):", missing.len());
     for (name, path) in &missing {
       eprintln!("  {} ({})", name, path.display());
     }
-    return Err("pageset-timeouts suite missing required fixtures".into());
+    return Err("pageset-guardrails suite missing required fixtures".into());
   }
 
   if specs.is_empty() {
     eprintln!(
-      "No pageset timeout fixtures found under {}; skipping pageset-timeouts suite.",
+      "No pageset guardrails fixtures found under {}; skipping pageset-guardrails suite.",
       fixtures_root.display()
     );
   }
@@ -918,7 +920,7 @@ fn filter_specs(
 fn suite_cli_value(suite: Suite) -> &'static str {
   match suite {
     Suite::Core => "core",
-    Suite::PagesetTimeouts => "pageset-timeouts",
+    Suite::PagesetGuardrails => "pageset-guardrails",
     Suite::All => "all",
   }
 }
@@ -1193,18 +1195,20 @@ fn find_budget_failures(fixtures: &[FixtureSummary]) -> Vec<BudgetFailure> {
   failures
 }
 
-fn load_pageset_timeout_manifest_contents() -> Result<String, Box<dyn std::error::Error>> {
-  if let Some(path) = std::env::var_os(PAGESET_TIMEOUT_MANIFEST_ENV) {
+fn load_pageset_guardrails_manifest_contents() -> Result<String, Box<dyn std::error::Error>> {
+  if let Some(path) = std::env::var_os(PAGESET_GUARDRAILS_MANIFEST_ENV)
+    .or_else(|| std::env::var_os(PAGESET_TIMEOUT_MANIFEST_ENV))
+  {
     let path = PathBuf::from(path);
     Ok(fs::read_to_string(&path).map_err(|e| {
       format!(
-        "failed to read pageset timeout manifest at {}: {}",
+        "failed to read pageset guardrails manifest at {}: {}",
         path.display(),
         e
       )
     })?)
   } else {
-    Ok(PAGESET_TIMEOUT_MANIFEST.to_string())
+    Ok(PAGESET_GUARDRAILS_MANIFEST.to_string())
   }
 }
 
