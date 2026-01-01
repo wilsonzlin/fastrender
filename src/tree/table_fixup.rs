@@ -784,7 +784,7 @@ impl TableStructureFixer {
   ///
   /// Walks the entire box tree and applies table fixup to any
   /// table boxes found.
-  pub fn fixup_tree(mut root: BoxNode) -> Result<BoxNode> {
+  pub fn fixup_tree(root: BoxNode) -> Result<BoxNode> {
     let mut deadline_counter = 0usize;
     Self::fixup_tree_with_deadline(root, &mut deadline_counter)
   }
@@ -794,26 +794,11 @@ impl TableStructureFixer {
     mut root: BoxNode,
     deadline_counter: &mut usize,
   ) -> Result<BoxNode> {
-    check_active_periodic(
+    Self::fixup_tree_tables_in_place_with_deadline(
+      &mut root,
       deadline_counter,
-      TABLE_FIXUP_DEADLINE_STRIDE,
-      RenderStage::Cascade,
+      Self::fixup_table_with_deadline,
     )?;
-    // If this is a table, fix it up
-    if Self::is_table_box(&root) {
-      return Self::fixup_table_with_deadline(root, deadline_counter);
-    }
-
-    // Otherwise, recursively process children in place to preserve capacity and avoid
-    // allocating a new Vec for every node in large trees.
-    if !root.children.is_empty() {
-      let placeholder = BoxNode::new_text(root.style.clone(), String::new());
-      for child in root.children.iter_mut() {
-        let child_node = std::mem::replace(child, placeholder.clone());
-        *child = Self::fixup_tree_with_deadline(child_node, deadline_counter)?;
-      }
-    }
-
     Ok(root)
   }
 
@@ -821,7 +806,7 @@ impl TableStructureFixer {
   ///
   /// This normalizes table internals for use in pipelines that handle captions
   /// separately (e.g., layout).
-  pub fn fixup_tree_internals(mut root: BoxNode) -> Result<BoxNode> {
+  pub fn fixup_tree_internals(root: BoxNode) -> Result<BoxNode> {
     let mut deadline_counter = 0usize;
     Self::fixup_tree_internals_with_deadline(root, &mut deadline_counter)
   }
@@ -831,24 +816,38 @@ impl TableStructureFixer {
     mut root: BoxNode,
     deadline_counter: &mut usize,
   ) -> Result<BoxNode> {
+    Self::fixup_tree_tables_in_place_with_deadline(
+      &mut root,
+      deadline_counter,
+      Self::fixup_table_internals_with_deadline,
+    )?;
+    Ok(root)
+  }
+
+  fn fixup_tree_tables_in_place_with_deadline(
+    node: &mut BoxNode,
+    deadline_counter: &mut usize,
+    fix_table: fn(BoxNode, &mut usize) -> Result<BoxNode>,
+  ) -> Result<()> {
     check_active_periodic(
       deadline_counter,
       TABLE_FIXUP_DEADLINE_STRIDE,
       RenderStage::Cascade,
     )?;
-    if Self::is_table_box(&root) {
-      return Self::fixup_table_internals_with_deadline(root, deadline_counter);
+    if Self::is_table_box(node) {
+      // Table fixup takes ownership of the box. Avoid per-child placeholder cloning by only
+      // creating a cheap placeholder for table nodes that need to be replaced in-place.
+      let placeholder = BoxNode::new_text(node.style.clone(), String::new());
+      let table_node = std::mem::replace(node, placeholder);
+      *node = fix_table(table_node, deadline_counter)?;
+      return Ok(());
     }
 
-    if !root.children.is_empty() {
-      let placeholder = BoxNode::new_text(root.style.clone(), String::new());
-      for child in root.children.iter_mut() {
-        let child_node = std::mem::replace(child, placeholder.clone());
-        *child = Self::fixup_tree_internals_with_deadline(child_node, deadline_counter)?;
-      }
+    for child in &mut node.children {
+      Self::fixup_tree_tables_in_place_with_deadline(child, deadline_counter, fix_table)?;
     }
 
-    Ok(root)
+    Ok(())
   }
 
   /// Validates that a table has proper structure after fixup

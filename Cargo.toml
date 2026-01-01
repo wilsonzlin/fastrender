@@ -96,6 +96,10 @@ harness = false
 name = "cascade_bench"
 harness = false
 
+[[bench]]
+name = "table_fixup_traversal"
+harness = false
+
 [[bin]]
 name = "bench_compare"
 path = "tools/bench_compare.rs"
