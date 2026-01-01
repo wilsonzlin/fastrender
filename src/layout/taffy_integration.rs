@@ -15,6 +15,9 @@
 //! "core-milliseconds" and may exceed wall-clock timings for the overall render.
 
 use crate::geometry::Size;
+use crate::style::types::{AspectRatio, FlexBasis, GridTrack};
+use crate::style::values::{CalcLength, Length};
+use crate::style::ComputedStyle;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -388,11 +391,336 @@ fn viewport_hash(viewport: Size) -> u64 {
   h.finish()
 }
 
+fn hash_enum_discriminant<T>(value: &T, hasher: &mut FxHasher) {
+  std::mem::discriminant(value).hash(hasher);
+}
+
+fn hash_calc_length(calc: &CalcLength, hasher: &mut FxHasher) {
+  let terms = calc.terms();
+  (terms.len() as u8).hash(hasher);
+  for term in terms {
+    term.unit.hash(hasher);
+    term.value.to_bits().hash(hasher);
+  }
+}
+
+fn hash_length(len: &Length, hasher: &mut FxHasher) {
+  len.unit.hash(hasher);
+  len.value.to_bits().hash(hasher);
+  match &len.calc {
+    Some(calc) => {
+      1u8.hash(hasher);
+      hash_calc_length(calc, hasher);
+    }
+    None => 0u8.hash(hasher),
+  }
+}
+
+fn hash_option_length(len: &Option<Length>, hasher: &mut FxHasher) {
+  match len {
+    Some(len) => {
+      1u8.hash(hasher);
+      hash_length(len, hasher);
+    }
+    None => 0u8.hash(hasher),
+  }
+}
+
+fn hash_flex_basis(basis: &FlexBasis, hasher: &mut FxHasher) {
+  match basis {
+    FlexBasis::Auto => 0u8.hash(hasher),
+    FlexBasis::Length(len) => {
+      1u8.hash(hasher);
+      hash_length(len, hasher);
+    }
+  }
+}
+
+fn hash_aspect_ratio(value: &AspectRatio, hasher: &mut FxHasher) {
+  match value {
+    AspectRatio::Auto => 0u8.hash(hasher),
+    AspectRatio::Ratio(ratio) => {
+      1u8.hash(hasher);
+      ratio.to_bits().hash(hasher);
+    }
+  }
+}
+
+fn hash_grid_track(track: &GridTrack, hasher: &mut FxHasher) {
+  use crate::style::types::GridTrack::*;
+
+  match track {
+    Length(len) => {
+      0u8.hash(hasher);
+      hash_length(len, hasher);
+    }
+    Fr(fr) => {
+      1u8.hash(hasher);
+      fr.to_bits().hash(hasher);
+    }
+    Auto => 2u8.hash(hasher),
+    MinContent => 3u8.hash(hasher),
+    MaxContent => 4u8.hash(hasher),
+    FitContent(len) => {
+      5u8.hash(hasher);
+      hash_length(len, hasher);
+    }
+    MinMax(min, max) => {
+      6u8.hash(hasher);
+      hash_grid_track(min, hasher);
+      hash_grid_track(max, hasher);
+    }
+    RepeatAutoFill { tracks, line_names } => {
+      7u8.hash(hasher);
+      hash_grid_tracks(tracks, hasher);
+      line_names.hash(hasher);
+    }
+    RepeatAutoFit { tracks, line_names } => {
+      8u8.hash(hasher);
+      hash_grid_tracks(tracks, hasher);
+      line_names.hash(hasher);
+    }
+  }
+}
+
+fn hash_grid_tracks(tracks: &[GridTrack], hasher: &mut FxHasher) {
+  tracks.len().hash(hasher);
+  for track in tracks {
+    hash_grid_track(track, hasher);
+  }
+}
+
+/// Stable, value-based fingerprint for flex `ComputedStyle` -> Taffy style conversion.
+///
+/// This deliberately avoids pointer identity so repeated component templates can reuse cached
+/// converted styles across different box ids and `Arc<ComputedStyle>` allocations.
+pub(crate) fn taffy_flex_style_fingerprint(style: &ComputedStyle) -> u64 {
+  let mut h = FxHasher::default();
+  hash_enum_discriminant(&style.display, &mut h);
+  hash_enum_discriminant(&style.writing_mode, &mut h);
+  hash_enum_discriminant(&style.direction, &mut h);
+  hash_enum_discriminant(&style.box_sizing, &mut h);
+
+  hash_option_length(&style.width, &mut h);
+  hash_option_length(&style.height, &mut h);
+  hash_option_length(&style.min_width, &mut h);
+  hash_option_length(&style.max_width, &mut h);
+  hash_option_length(&style.min_height, &mut h);
+  hash_option_length(&style.max_height, &mut h);
+
+  hash_option_length(&style.margin_top, &mut h);
+  hash_option_length(&style.margin_right, &mut h);
+  hash_option_length(&style.margin_bottom, &mut h);
+  hash_option_length(&style.margin_left, &mut h);
+
+  hash_length(&style.padding_top, &mut h);
+  hash_length(&style.padding_right, &mut h);
+  hash_length(&style.padding_bottom, &mut h);
+  hash_length(&style.padding_left, &mut h);
+
+  hash_length(&style.border_top_width, &mut h);
+  hash_length(&style.border_right_width, &mut h);
+  hash_length(&style.border_bottom_width, &mut h);
+  hash_length(&style.border_left_width, &mut h);
+
+  hash_enum_discriminant(&style.overflow_x, &mut h);
+  hash_enum_discriminant(&style.overflow_y, &mut h);
+  style.scrollbar_gutter.stable.hash(&mut h);
+  style.scrollbar_gutter.both_edges.hash(&mut h);
+  hash_enum_discriminant(&style.scrollbar_width, &mut h);
+
+  hash_enum_discriminant(&style.flex_direction, &mut h);
+  hash_enum_discriminant(&style.flex_wrap, &mut h);
+  hash_enum_discriminant(&style.justify_content, &mut h);
+  hash_enum_discriminant(&style.align_items, &mut h);
+  hash_enum_discriminant(&style.align_content, &mut h);
+  match style.align_self {
+    Some(v) => {
+      1u8.hash(&mut h);
+      hash_enum_discriminant(&v, &mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  hash_enum_discriminant(&style.justify_items, &mut h);
+  match style.justify_self {
+    Some(v) => {
+      1u8.hash(&mut h);
+      hash_enum_discriminant(&v, &mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  style.flex_grow.to_bits().hash(&mut h);
+  style.flex_shrink.to_bits().hash(&mut h);
+  hash_flex_basis(&style.flex_basis, &mut h);
+
+  hash_length(&style.grid_row_gap, &mut h);
+  hash_length(&style.grid_column_gap, &mut h);
+
+  hash_aspect_ratio(&style.aspect_ratio, &mut h);
+  style.font_size.to_bits().hash(&mut h);
+  style.root_font_size.to_bits().hash(&mut h);
+
+  h.finish()
+}
+
+/// Stable, value-based fingerprint for grid container `ComputedStyle` -> Taffy style conversion.
+pub(crate) fn taffy_grid_container_style_fingerprint(style: &ComputedStyle) -> u64 {
+  let mut h = FxHasher::default();
+
+  hash_enum_discriminant(&style.writing_mode, &mut h);
+  hash_enum_discriminant(&style.direction, &mut h);
+  hash_enum_discriminant(&style.box_sizing, &mut h);
+  style.font_size.to_bits().hash(&mut h);
+  style.root_font_size.to_bits().hash(&mut h);
+
+  hash_option_length(&style.width, &mut h);
+  hash_option_length(&style.height, &mut h);
+  hash_option_length(&style.min_width, &mut h);
+  hash_option_length(&style.max_width, &mut h);
+  hash_option_length(&style.min_height, &mut h);
+  hash_option_length(&style.max_height, &mut h);
+
+  hash_option_length(&style.margin_top, &mut h);
+  hash_option_length(&style.margin_right, &mut h);
+  hash_option_length(&style.margin_bottom, &mut h);
+  hash_option_length(&style.margin_left, &mut h);
+
+  hash_length(&style.padding_top, &mut h);
+  hash_length(&style.padding_right, &mut h);
+  hash_length(&style.padding_bottom, &mut h);
+  hash_length(&style.padding_left, &mut h);
+
+  hash_length(&style.border_top_width, &mut h);
+  hash_length(&style.border_right_width, &mut h);
+  hash_length(&style.border_bottom_width, &mut h);
+  hash_length(&style.border_left_width, &mut h);
+
+  hash_enum_discriminant(&style.overflow_x, &mut h);
+  hash_enum_discriminant(&style.overflow_y, &mut h);
+  style.scrollbar_gutter.stable.hash(&mut h);
+  style.scrollbar_gutter.both_edges.hash(&mut h);
+  hash_enum_discriminant(&style.scrollbar_width, &mut h);
+
+  hash_enum_discriminant(&style.align_items, &mut h);
+  hash_enum_discriminant(&style.justify_items, &mut h);
+  match style.align_self {
+    Some(v) => {
+      1u8.hash(&mut h);
+      hash_enum_discriminant(&v, &mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  match style.justify_self {
+    Some(v) => {
+      1u8.hash(&mut h);
+      hash_enum_discriminant(&v, &mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+
+  style.grid_column_start.hash(&mut h);
+  style.grid_column_end.hash(&mut h);
+  style.grid_row_start.hash(&mut h);
+  style.grid_row_end.hash(&mut h);
+  style.grid_column_raw.hash(&mut h);
+  style.grid_row_raw.hash(&mut h);
+
+  hash_aspect_ratio(&style.aspect_ratio, &mut h);
+
+  // Grid container-only fields.
+  hash_grid_tracks(&style.grid_template_columns, &mut h);
+  hash_grid_tracks(&style.grid_template_rows, &mut h);
+  style.grid_row_subgrid.hash(&mut h);
+  style.grid_column_subgrid.hash(&mut h);
+  style.subgrid_row_line_names.hash(&mut h);
+  style.subgrid_column_line_names.hash(&mut h);
+  style.grid_template_areas.hash(&mut h);
+  hash_grid_tracks(&style.grid_auto_rows, &mut h);
+  hash_grid_tracks(&style.grid_auto_columns, &mut h);
+  hash_enum_discriminant(&style.grid_auto_flow, &mut h);
+  style.grid_column_line_names.hash(&mut h);
+  style.grid_row_line_names.hash(&mut h);
+  hash_length(&style.grid_gap, &mut h);
+  hash_length(&style.grid_row_gap, &mut h);
+  hash_length(&style.grid_column_gap, &mut h);
+  hash_enum_discriminant(&style.align_content, &mut h);
+  hash_enum_discriminant(&style.justify_content, &mut h);
+
+  h.finish()
+}
+
+/// Stable, value-based fingerprint for grid *item* (non-grid node) `ComputedStyle` -> Taffy style
+/// conversion. Omits grid-container-only fields that do not affect leaf conversion output.
+pub(crate) fn taffy_grid_item_style_fingerprint(style: &ComputedStyle) -> u64 {
+  let mut h = FxHasher::default();
+
+  hash_enum_discriminant(&style.writing_mode, &mut h);
+  hash_enum_discriminant(&style.direction, &mut h);
+  hash_enum_discriminant(&style.box_sizing, &mut h);
+  style.font_size.to_bits().hash(&mut h);
+  style.root_font_size.to_bits().hash(&mut h);
+
+  hash_option_length(&style.width, &mut h);
+  hash_option_length(&style.height, &mut h);
+  hash_option_length(&style.min_width, &mut h);
+  hash_option_length(&style.max_width, &mut h);
+  hash_option_length(&style.min_height, &mut h);
+  hash_option_length(&style.max_height, &mut h);
+
+  hash_option_length(&style.margin_top, &mut h);
+  hash_option_length(&style.margin_right, &mut h);
+  hash_option_length(&style.margin_bottom, &mut h);
+  hash_option_length(&style.margin_left, &mut h);
+
+  hash_length(&style.padding_top, &mut h);
+  hash_length(&style.padding_right, &mut h);
+  hash_length(&style.padding_bottom, &mut h);
+  hash_length(&style.padding_left, &mut h);
+
+  hash_length(&style.border_top_width, &mut h);
+  hash_length(&style.border_right_width, &mut h);
+  hash_length(&style.border_bottom_width, &mut h);
+  hash_length(&style.border_left_width, &mut h);
+
+  hash_enum_discriminant(&style.overflow_x, &mut h);
+  hash_enum_discriminant(&style.overflow_y, &mut h);
+  style.scrollbar_gutter.stable.hash(&mut h);
+  style.scrollbar_gutter.both_edges.hash(&mut h);
+  hash_enum_discriminant(&style.scrollbar_width, &mut h);
+
+  hash_enum_discriminant(&style.align_items, &mut h);
+  hash_enum_discriminant(&style.justify_items, &mut h);
+  match style.align_self {
+    Some(v) => {
+      1u8.hash(&mut h);
+      hash_enum_discriminant(&v, &mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  match style.justify_self {
+    Some(v) => {
+      1u8.hash(&mut h);
+      hash_enum_discriminant(&v, &mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+
+  style.grid_column_start.hash(&mut h);
+  style.grid_column_end.hash(&mut h);
+  style.grid_row_start.hash(&mut h);
+  style.grid_row_end.hash(&mut h);
+  style.grid_column_raw.hash(&mut h);
+  style.grid_row_raw.hash(&mut h);
+
+  hash_aspect_ratio(&style.aspect_ratio, &mut h);
+
+  h.finish()
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct TaffyNodeCacheKey {
   adapter: TaffyAdapterKind,
-  root_id: usize,
-  root_style: usize,
+  root_style_fingerprint: u64,
   child_fingerprint: u64,
   viewport_hash: u64,
 }
@@ -400,15 +728,13 @@ pub(crate) struct TaffyNodeCacheKey {
 impl TaffyNodeCacheKey {
   pub(crate) fn new(
     adapter: TaffyAdapterKind,
-    root_id: usize,
-    root_style: usize,
+    root_style_fingerprint: u64,
     child_fingerprint: u64,
     viewport: Size,
   ) -> Self {
     Self {
       adapter,
-      root_id,
-      root_style,
+      root_style_fingerprint,
       child_fingerprint,
       viewport_hash: viewport_hash(viewport),
     }
@@ -566,6 +892,21 @@ impl TaffyNodeCache {
       }
     }
   }
+
+  #[cfg(test)]
+  pub(crate) fn template_count(&self) -> usize {
+    self
+      .shards
+      .iter()
+      .map(|shard| {
+        shard
+          .inner
+          .lock()
+          .map(|guard| guard.templates.len())
+          .unwrap_or_else(|poisoned| poisoned.into_inner().templates.len())
+      })
+      .sum()
+  }
 }
 
 #[cfg(test)]
@@ -597,8 +938,8 @@ mod tests {
     let viewport = Size::new(800.0, 600.0);
     let tpl = template();
 
-    let key1 = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, 1, 1, 0, viewport);
-    let key2 = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, 2, 1, 0, viewport);
+    let key1 = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, 1, 0, viewport);
+    let key2 = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, 2, 0, viewport);
 
     cache.insert(key1, tpl.clone());
     cache.insert(key2, tpl.clone());
@@ -625,7 +966,7 @@ mod tests {
     let mut expected = Vec::new();
     for idx in 0..32usize {
       let tpl = template();
-      let key = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, idx + 1, 1, idx as u64, viewport);
+      let key = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, 1, idx as u64, viewport);
       cache.insert(key, tpl.clone());
       expected.push((key, tpl));
     }

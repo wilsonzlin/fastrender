@@ -35,19 +35,20 @@ use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::flex_cache::ShardedFlexCache;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::engine::LayoutParallelism;
 use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{
   record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
   record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
-  record_taffy_style_cache_miss, CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind,
+  record_taffy_style_cache_miss, taffy_grid_container_style_fingerprint,
+  taffy_grid_item_style_fingerprint, CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind,
   TaffyNodeCache, TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT, TAFFY_ABORT_CHECK_STRIDE,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
@@ -605,10 +606,10 @@ impl GridFormattingContext {
 
     if !has_subgrid && !child_has_subgrid {
       let child_fingerprint = grid_child_fingerprint(&in_flow_children);
+      let root_style_fingerprint = taffy_grid_container_style_fingerprint(box_node.style.as_ref());
       let cache_key = TaffyNodeCacheKey::new(
         TaffyAdapterKind::Grid,
-        box_node.id,
-        std::sync::Arc::as_ptr(&box_node.style) as usize,
+        root_style_fingerprint,
         child_fingerprint,
         self.viewport_size,
       );
@@ -2605,12 +2606,15 @@ impl GridFormattingContext {
 }
 
 fn grid_child_fingerprint(children: &[&BoxNode]) -> u64 {
+  use std::hash::Hash;
   use std::hash::Hasher;
+
   let mut h = std::collections::hash_map::DefaultHasher::new();
-  h.write_usize(children.len());
+  children.len().hash(&mut h);
   for child in children {
-    h.write_usize(child.id);
-    h.write_usize(std::sync::Arc::as_ptr(&child.style) as usize);
+    std::mem::discriminant(&child.box_type).hash(&mut h);
+    child.formatting_context().hash(&mut h);
+    taffy_grid_item_style_fingerprint(child.style.as_ref()).hash(&mut h);
   }
   h.finish()
 }
@@ -3577,6 +3581,135 @@ mod tests {
     let style = Arc::new(style);
     let text_child = BoxNode::new_text(style.clone(), text.to_string());
     BoxNode::new_block(style, FormattingContextType::Inline, vec![text_child])
+  }
+
+  #[test]
+  fn taffy_template_cache_reuses_grid_templates_with_equal_styles() {
+    use crate::layout::taffy_integration::{
+      taffy_grid_container_style_fingerprint, TaffyNodeCacheKey,
+    };
+    use taffy::TaffyTree;
+
+    let mut grid_style = ComputedStyle::default();
+    grid_style.display = CssDisplay::Grid;
+    grid_style.grid_template_columns =
+      vec![GridTrack::Length(Length::px(20.0)), GridTrack::Fr(1.0)];
+    grid_style.grid_template_rows = vec![GridTrack::Auto];
+    grid_style.grid_column_gap = Length::px(8.0);
+    grid_style.grid_row_gap = Length::px(4.0);
+
+    let mut item_style = ComputedStyle::default();
+    item_style.width = Some(Length::px(10.0));
+    item_style.height = Some(Length::px(10.0));
+    item_style.grid_column_start = 1;
+    item_style.grid_row_start = 1;
+
+    let grid_style_a = Arc::new(grid_style.clone());
+    let grid_style_b = Arc::new(grid_style);
+    assert!(
+      !Arc::ptr_eq(&grid_style_a, &grid_style_b),
+      "expected distinct Arc pointers for grid container styles"
+    );
+    let item_style_a = Arc::new(item_style.clone());
+    let item_style_b = Arc::new(item_style);
+    assert!(
+      !Arc::ptr_eq(&item_style_a, &item_style_b),
+      "expected distinct Arc pointers for grid item styles"
+    );
+
+    let mut container_a = BoxNode::new_block(
+      grid_style_a,
+      FormattingContextType::Grid,
+      vec![
+        BoxNode::new_block(item_style_a.clone(), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(item_style_a, FormattingContextType::Block, vec![]),
+      ],
+    );
+    container_a.id = 1;
+    container_a.children[0].id = 10;
+    container_a.children[1].id = 11;
+
+    let mut container_b = BoxNode::new_block(
+      grid_style_b,
+      FormattingContextType::Grid,
+      vec![
+        BoxNode::new_block(item_style_b.clone(), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(item_style_b, FormattingContextType::Block, vec![]),
+      ],
+    );
+    container_b.id = 2;
+    container_b.children[0].id = 20;
+    container_b.children[1].id = 21;
+
+    let gc = GridFormattingContext::new();
+    assert_eq!(gc.taffy_cache.template_count(), 0);
+
+    let children_a: Vec<&BoxNode> = container_a.children.iter().collect();
+    let key_a = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Grid,
+      taffy_grid_container_style_fingerprint(container_a.style.as_ref()),
+      super::grid_child_fingerprint(&children_a),
+      gc.viewport_size,
+    );
+
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut positioned_children: HashMap<taffy::prelude::NodeId, Vec<BoxNode>> = HashMap::new();
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+    gc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container_a,
+      &children_a,
+      &constraints,
+      &mut positioned_children,
+    )
+    .expect("build taffy tree");
+
+    assert_eq!(
+      gc.taffy_cache.template_count(),
+      1,
+      "first build should insert a single cached template"
+    );
+    let template_a = gc
+      .taffy_cache
+      .get(&key_a)
+      .expect("template should be cached after first build");
+
+    let children_b: Vec<&BoxNode> = container_b.children.iter().collect();
+    let key_b = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Grid,
+      taffy_grid_container_style_fingerprint(container_b.style.as_ref()),
+      super::grid_child_fingerprint(&children_b),
+      gc.viewport_size,
+    );
+    assert_eq!(
+      key_a, key_b,
+      "cache keys should match for identical style values regardless of ids/pointers"
+    );
+
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut positioned_children: HashMap<taffy::prelude::NodeId, Vec<BoxNode>> = HashMap::new();
+    gc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container_b,
+      &children_b,
+      &constraints,
+      &mut positioned_children,
+    )
+    .expect("build taffy tree");
+
+    assert_eq!(
+      gc.taffy_cache.template_count(),
+      1,
+      "second build should hit the template cache instead of inserting a new entry"
+    );
+    let template_b = gc
+      .taffy_cache
+      .get(&key_b)
+      .expect("template should be cached after second build");
+    assert!(
+      Arc::ptr_eq(&template_a, &template_b),
+      "expected second build to reuse existing cached template"
+    );
   }
 
   #[test]

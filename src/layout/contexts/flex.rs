@@ -55,8 +55,8 @@ use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{
   record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
   record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
-  record_taffy_style_cache_miss, CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind,
-  TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT, TAFFY_ABORT_CHECK_STRIDE,
+  record_taffy_style_cache_miss, taffy_flex_style_fingerprint, CachedTaffyTemplate, SendSyncStyle,
+  TaffyAdapterKind, TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT, TAFFY_ABORT_CHECK_STRIDE,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -2583,10 +2583,11 @@ fn layout_cache_key(
 
 fn flex_child_fingerprint(children: &[&BoxNode]) -> u64 {
   let mut h = DefaultHasher::new();
-  h.write_usize(children.len());
+  children.len().hash(&mut h);
   for child in children {
-    h.write_usize(child.id);
-    h.write_usize(std::sync::Arc::as_ptr(&child.style) as usize);
+    std::mem::discriminant(&child.box_type).hash(&mut h);
+    child.formatting_context().hash(&mut h);
+    taffy_flex_style_fingerprint(child.style.as_ref()).hash(&mut h);
   }
   h.finish()
 }
@@ -2618,10 +2619,10 @@ impl FlexFormattingContext {
     node_map: &mut HashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
     let child_fingerprint = flex_child_fingerprint(root_children);
+    let root_style_fingerprint = taffy_flex_style_fingerprint(box_node.style.as_ref());
     let cache_key = TaffyNodeCacheKey::new(
       TaffyAdapterKind::Flex,
-      box_node.id,
-      std::sync::Arc::as_ptr(&box_node.style) as usize,
+      root_style_fingerprint,
       child_fingerprint,
       self.viewport_size,
     );
@@ -5150,7 +5151,6 @@ mod tests {
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
   use crate::style::values::Length;
-  use crate::style::values::LengthOrAuto;
   use crate::text::font_db::FontConfig;
   use crate::tree::box_tree::ReplacedType;
   use crate::tree::debug::{track_to_selector_calls, DebugInfo};
@@ -5340,6 +5340,132 @@ mod tests {
       "scrollbar width should affect flex style fingerprint"
     );
     assert_ne!(fp_a, fp_c, "overflow should affect flex style fingerprint");
+  }
+
+  #[test]
+  fn taffy_template_cache_reuses_flex_templates_with_equal_styles() {
+    use crate::layout::taffy_integration::{taffy_flex_style_fingerprint, TaffyNodeCacheKey};
+    use std::collections::HashMap;
+    use taffy::TaffyTree;
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+    container_style.grid_column_gap = Length::px(8.0);
+    container_style.grid_row_gap = Length::px(4.0);
+
+    let mut item_style = ComputedStyle::default();
+    item_style.width = Some(Length::px(10.0));
+    item_style.height = Some(Length::px(10.0));
+    item_style.min_width = Some(Length::px(0.0));
+    item_style.min_height = Some(Length::px(0.0));
+
+    let container_style_a = Arc::new(container_style.clone());
+    let container_style_b = Arc::new(container_style);
+    assert!(
+      !Arc::ptr_eq(&container_style_a, &container_style_b),
+      "expected distinct Arc pointers for container styles"
+    );
+    let item_style_a = Arc::new(item_style.clone());
+    let item_style_b = Arc::new(item_style);
+    assert!(
+      !Arc::ptr_eq(&item_style_a, &item_style_b),
+      "expected distinct Arc pointers for item styles"
+    );
+
+    let mut container_a = BoxNode::new_block(
+      container_style_a,
+      FormattingContextType::Flex,
+      vec![
+        BoxNode::new_block(item_style_a.clone(), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(item_style_a, FormattingContextType::Block, vec![]),
+      ],
+    );
+    container_a.id = 1;
+    container_a.children[0].id = 10;
+    container_a.children[1].id = 11;
+
+    let mut container_b = BoxNode::new_block(
+      container_style_b,
+      FormattingContextType::Flex,
+      vec![
+        BoxNode::new_block(item_style_b.clone(), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(item_style_b, FormattingContextType::Block, vec![]),
+      ],
+    );
+    container_b.id = 2;
+    container_b.children[0].id = 20;
+    container_b.children[1].id = 21;
+
+    let fc = FlexFormattingContext::new();
+    assert_eq!(fc.taffy_cache.template_count(), 0);
+
+    let children_a: Vec<&BoxNode> = container_a.children.iter().collect();
+    let key_a = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Flex,
+      taffy_flex_style_fingerprint(container_a.style.as_ref()),
+      super::flex_child_fingerprint(&children_a),
+      fc.viewport_size,
+    );
+
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: HashMap<*const BoxNode, taffy::prelude::NodeId> = HashMap::new();
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+    fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container_a,
+      &children_a,
+      &constraints,
+      &mut node_map,
+    )
+    .expect("build taffy tree");
+
+    assert_eq!(
+      fc.taffy_cache.template_count(),
+      1,
+      "first build should insert a single cached template"
+    );
+    let template_a = fc
+      .taffy_cache
+      .get(&key_a)
+      .expect("template should be cached after first build");
+
+    let children_b: Vec<&BoxNode> = container_b.children.iter().collect();
+    let key_b = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Flex,
+      taffy_flex_style_fingerprint(container_b.style.as_ref()),
+      super::flex_child_fingerprint(&children_b),
+      fc.viewport_size,
+    );
+    assert_eq!(
+      key_a, key_b,
+      "cache keys should match for identical style values regardless of ids/pointers"
+    );
+
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: HashMap<*const BoxNode, taffy::prelude::NodeId> = HashMap::new();
+    fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container_b,
+      &children_b,
+      &constraints,
+      &mut node_map,
+    )
+    .expect("build taffy tree");
+
+    assert_eq!(
+      fc.taffy_cache.template_count(),
+      1,
+      "second build should hit the template cache instead of inserting a new entry"
+    );
+    let template_b = fc
+      .taffy_cache
+      .get(&key_b)
+      .expect("template should be cached after second build");
+    assert!(
+      Arc::ptr_eq(&template_a, &template_b),
+      "expected second build to reuse existing cached template"
+    );
   }
 
   #[test]
