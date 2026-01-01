@@ -3857,7 +3857,10 @@ impl Painter {
       stops,
       &self.gradient_cache,
       gradient_bucket(width.max(height).saturating_mul(2)),
-    ) else {
+    )
+    .ok()
+    .flatten()
+    else {
       return;
     };
     if let Some(start) = timer {
@@ -7096,7 +7099,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(width.max(height)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }
@@ -7127,7 +7132,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(width.max(height)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }
@@ -7258,7 +7265,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(width.max(height).saturating_mul(2)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }
@@ -7291,7 +7300,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(width.max(height).saturating_mul(2)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }
@@ -7349,7 +7360,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(full_w.max(full_h)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }
@@ -7378,7 +7391,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(full_w.max(full_h)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }
@@ -7513,7 +7528,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(full_w.max(full_h).saturating_mul(2)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }
@@ -7546,7 +7563,9 @@ impl Painter {
           &resolved,
           &self.gradient_cache,
           gradient_bucket(full_w.max(full_h).saturating_mul(2)),
-        )?;
+        )
+        .ok()
+        .flatten()?;
         if let Some(start) = timer {
           self.record_gradient_usage((width * height) as u64, start);
         }

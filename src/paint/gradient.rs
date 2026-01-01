@@ -1,5 +1,7 @@
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::paint::pixmap::new_pixmap;
+use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Rgba;
 use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
@@ -266,9 +268,10 @@ pub fn rasterize_linear_gradient(
   stops: &[(f32, Rgba)],
   cache: &GradientLutCache,
   bucket: u16,
-) -> Option<Pixmap> {
+) -> Result<Option<Pixmap>, RenderError> {
+  check_active(RenderStage::Paint)?;
   if width == 0 || height == 0 || stops.is_empty() {
-    return None;
+    return Ok(None);
   }
   let period = gradient_period(stops);
   let key = GradientCacheKey::new(stops, spread, period, bucket);
@@ -278,12 +281,18 @@ pub fn rasterize_linear_gradient(
   let dy = end.y - start.y;
   let denom = dx * dx + dy * dy;
   let Some(mut pixmap) = new_pixmap(width, height) else {
-    return None;
+    return Ok(None);
   };
   if denom.abs() <= f32::EPSILON {
     let color = lut.sample(0.0);
-    pixmap.pixels_mut().fill(color);
-    return Some(pixmap);
+    let pixels = pixmap.pixels_mut();
+    let mut deadline_counter = 0usize;
+    const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
+    for chunk in pixels.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      chunk.fill(color);
+    }
+    return Ok(Some(pixmap));
   }
 
   let inv_len = 1.0 / denom;
@@ -293,17 +302,22 @@ pub fn rasterize_linear_gradient(
   let mut row_start = start_dot * inv_len;
   let stride = width as usize;
   let pixels = pixmap.pixels_mut();
+  let mut deadline_counter = 0usize;
+  const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
   for y in 0..height as usize {
     let row_base = y * stride;
     let mut t = row_start;
-    for pixel in &mut pixels[row_base..row_base + stride] {
-      *pixel = lut.sample(t);
-      t += step_x;
+    for chunk in pixels[row_base..row_base + stride].chunks_mut(DEADLINE_PIXELS_STRIDE) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      for pixel in chunk {
+        *pixel = lut.sample(t);
+        t += step_x;
+      }
     }
     row_start += step_y;
   }
 
-  Some(pixmap)
+  Ok(Some(pixmap))
 }
 
 pub fn rasterize_conic_gradient(
@@ -315,16 +329,17 @@ pub fn rasterize_conic_gradient(
   stops: &[(f32, Rgba)],
   cache: &GradientLutCache,
   bucket: u16,
-) -> Option<Pixmap> {
+) -> Result<Option<Pixmap>, RenderError> {
+  check_active(RenderStage::Paint)?;
   if width == 0 || height == 0 || stops.is_empty() {
-    return None;
+    return Ok(None);
   }
 
   let period = gradient_period(stops);
   let key = GradientCacheKey::new(stops, spread, period, bucket);
   let lut = cache.get_or_build(key, || build_gradient_lut(stops, spread, period, bucket));
   let Some(mut pixmap) = new_pixmap(width, height) else {
-    return None;
+    return Ok(None);
   };
 
   let start_angle = start_angle.rem_euclid(std::f32::consts::PI * 2.0);
@@ -332,28 +347,35 @@ pub fn rasterize_conic_gradient(
   let stride = width as usize;
   let pixels = pixmap.pixels_mut();
   let dx0 = 0.5 - center.x;
+  let mut deadline_counter = 0usize;
+  const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
   for y in 0..height as usize {
     let dy = y as f32 + 0.5 - center.y;
     let mut dx = dx0;
     let row_base = y * stride;
-    for pixel in &mut pixels[row_base..row_base + stride] {
-      let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
-      if pos < 0.0 {
-        pos += period;
-      } else if pos >= period {
-        pos -= period;
+    for chunk in pixels[row_base..row_base + stride].chunks_mut(DEADLINE_PIXELS_STRIDE) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      for pixel in chunk {
+        let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
+        if pos < 0.0 {
+          pos += period;
+        } else if pos >= period {
+          pos -= period;
+        }
+        *pixel = lut.sample(pos.max(0.0));
+        dx += 1.0;
       }
-      *pixel = lut.sample(pos.max(0.0));
-      dx += 1.0;
     }
   }
 
-  Some(pixmap)
+  Ok(Some(pixmap))
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::render_control::{with_deadline, RenderDeadline};
+  use std::time::Instant;
 
   fn naive_conic(
     width: u32,
@@ -473,7 +495,8 @@ mod tests {
       &cache,
       gradient_bucket(width.max(height)),
     )
-    .expect("lut rasterize");
+    .expect("lut rasterize")
+    .expect("lut pixmap");
     let naive = naive_conic(width, height, center, 0.0, &stops, SpreadMode::Repeat);
     assert!(max_diff(&lut_pixmap, &naive) <= 1);
   }
@@ -496,7 +519,8 @@ mod tests {
       &cache,
       gradient_bucket(width.max(height)),
     )
-    .expect("lut rasterize");
+    .expect("lut rasterize")
+    .expect("lut pixmap");
 
     let mut naive = new_pixmap(width, height).expect("pixmap");
     let denom = (end.x - start.x) * (end.x - start.x) + (end.y - start.y) * (end.y - start.y);
@@ -521,5 +545,109 @@ mod tests {
     }
 
     assert!(max_diff(&lut_pixmap, &naive) <= 1);
+  }
+
+  #[test]
+  fn gradient_rasterizers_timeout_under_tiny_deadline() {
+    let stops = vec![(0.0, Rgba::RED), (1.0, Rgba::BLUE)];
+    let cache = GradientLutCache::default();
+    let width = 2048;
+    let height = 2048;
+    let center = Point::new(width as f32 / 2.0, height as f32 / 2.0);
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(1)), None);
+    let start = Instant::now();
+    let result = with_deadline(Some(&deadline), || {
+      rasterize_conic_gradient(
+        width,
+        height,
+        center,
+        0.0,
+        SpreadMode::Repeat,
+        &stops,
+        &cache,
+        gradient_bucket(width.max(height).saturating_mul(2)),
+      )
+    });
+    let elapsed = start.elapsed();
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(
+      elapsed < Duration::from_millis(250),
+      "timeout should be cooperative (elapsed {elapsed:?})"
+    );
+  }
+
+  #[test]
+  fn gradient_output_unchanged_with_deadline_enabled() {
+    let cache = GradientLutCache::default();
+    let deadline = RenderDeadline::new(Some(Duration::from_secs(60)), None);
+
+    let linear_stops = vec![(0.0, Rgba::RED), (0.35, Rgba::GREEN), (1.0, Rgba::BLUE)];
+    let width = 256;
+    let height = 128;
+    let start = Point::new(0.0, 0.0);
+    let end = Point::new(width as f32, height as f32);
+    let bucket = gradient_bucket(width.max(height));
+    let base = rasterize_linear_gradient(
+      width,
+      height,
+      start,
+      end,
+      SpreadMode::Pad,
+      &linear_stops,
+      &cache,
+      bucket,
+    )
+    .expect("linear rasterize")
+    .expect("linear pixmap");
+    let with_deadline_pixmap = with_deadline(Some(&deadline), || {
+      rasterize_linear_gradient(
+        width,
+        height,
+        start,
+        end,
+        SpreadMode::Pad,
+        &linear_stops,
+        &cache,
+        bucket,
+      )
+    })
+    .expect("linear rasterize with deadline")
+    .expect("linear pixmap with deadline");
+    assert_eq!(base.data(), with_deadline_pixmap.data());
+
+    let conic_stops = vec![(0.0, Rgba::BLACK), (0.5, Rgba::WHITE), (1.0, Rgba::BLACK)];
+    let size = 192u32;
+    let center = Point::new(size as f32 / 2.0, size as f32 / 2.0);
+    let bucket = gradient_bucket(size.saturating_mul(2));
+    let base = rasterize_conic_gradient(
+      size,
+      size,
+      center,
+      0.4,
+      SpreadMode::Repeat,
+      &conic_stops,
+      &cache,
+      bucket,
+    )
+    .expect("conic rasterize")
+    .expect("conic pixmap");
+    let with_deadline_pixmap = with_deadline(Some(&deadline), || {
+      rasterize_conic_gradient(
+        size,
+        size,
+        center,
+        0.4,
+        SpreadMode::Repeat,
+        &conic_stops,
+        &cache,
+        bucket,
+      )
+    })
+    .expect("conic rasterize with deadline")
+    .expect("conic pixmap with deadline");
+    assert_eq!(base.data(), with_deadline_pixmap.data());
   }
 }

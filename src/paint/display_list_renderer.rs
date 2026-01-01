@@ -2646,19 +2646,19 @@ impl DisplayListRenderer {
     Some(clipped)
   }
 
-  fn render_linear_gradient(&mut self, item: &LinearGradientItem) {
+  fn render_linear_gradient(&mut self, item: &LinearGradientItem) -> Result<()> {
     let Some(stops) = self.convert_stops_rgba(&item.stops) else {
-      return;
+      return Ok(());
     };
     let rect = self.ds_rect(item.rect);
     let visible_rect = match self.gradient_visible_rect(rect) {
       Some(r) => r,
-      None => return,
+      None => return Ok(()),
     };
     let width = visible_rect.width().ceil() as u32;
     let height = visible_rect.height().ceil() as u32;
     if width == 0 || height == 0 {
-      return;
+      return Ok(());
     }
 
     let offset_x = visible_rect.x() - rect.x();
@@ -2692,8 +2692,9 @@ impl DisplayListRenderer {
       &stops,
       &self.gradient_cache,
       gradient_bucket(original_width.max(original_height)),
-    ) else {
-      return;
+    )?
+    else {
+      return Ok(());
     };
     if let Some(start) = timer {
       self.record_gradient_usage((width * height) as u64, start);
@@ -2719,6 +2720,7 @@ impl DisplayListRenderer {
       clip.as_ref(),
     );
     self.record_background_paint(background_timer);
+    Ok(())
   }
 
   fn render_radial_gradient(&mut self, item: &RadialGradientItem) {
@@ -2789,20 +2791,20 @@ impl DisplayListRenderer {
     self.record_background_paint(background_timer);
   }
 
-  fn render_conic_gradient(&mut self, item: &ConicGradientItem) {
+  fn render_conic_gradient(&mut self, item: &ConicGradientItem) -> Result<()> {
     let rect = self.ds_rect(item.rect);
     let visible_rect = match self.gradient_visible_rect(rect) {
       Some(r) => r,
-      None => return,
+      None => return Ok(()),
     };
     let width = visible_rect.width().ceil() as u32;
     let height = visible_rect.height().ceil() as u32;
     if width == 0 || height == 0 {
-      return;
+      return Ok(());
     }
 
     let Some(stops) = self.convert_stops_rgba(&item.stops) else {
-      return;
+      return Ok(());
     };
 
     let offset_x = visible_rect.x() - rect.x();
@@ -2832,8 +2834,9 @@ impl DisplayListRenderer {
       &stops,
       &self.gradient_cache,
       gradient_bucket(original_width.max(original_height).saturating_mul(2)),
-    ) else {
-      return;
+    )?
+    else {
+      return Ok(());
     };
     if let Some(start) = timer {
       self.record_gradient_usage((width * height) as u64, start);
@@ -2859,6 +2862,7 @@ impl DisplayListRenderer {
       clip.as_ref(),
     );
     self.record_background_paint(background_timer);
+    Ok(())
   }
 
   fn render_border(&mut self, item: &BorderItem) {
@@ -5111,9 +5115,9 @@ impl DisplayListRenderer {
         self.ds_len(item.width),
       ),
       DisplayItem::Outline(item) => self.render_outline(item),
-      DisplayItem::LinearGradient(item) => self.render_linear_gradient(item),
+      DisplayItem::LinearGradient(item) => self.render_linear_gradient(item)?,
       DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
-      DisplayItem::ConicGradient(item) => self.render_conic_gradient(item),
+      DisplayItem::ConicGradient(item) => self.render_conic_gradient(item)?,
       DisplayItem::Border(item) => self.render_border(item),
       DisplayItem::TableCollapsedBorders(item) => self.render_table_collapsed_borders(item)?,
       DisplayItem::TextDecoration(item) => {
@@ -7109,6 +7113,8 @@ fn render_generated_border_image(
         cache,
         gradient_bucket(width.max(height)),
       )
+      .ok()
+      .flatten()
     }
     BackgroundImage::RepeatingLinearGradient { angle, stops } => {
       let resolved = normalize_color_stops(stops, current_color);
@@ -7133,6 +7139,8 @@ fn render_generated_border_image(
         cache,
         gradient_bucket(width.max(height)),
       )
+      .ok()
+      .flatten()
     }
     BackgroundImage::RadialGradient {
       shape,
@@ -7244,6 +7252,8 @@ fn render_generated_border_image(
         cache,
         gradient_bucket(width.max(height).saturating_mul(2)),
       )
+      .ok()
+      .flatten()
     }
     BackgroundImage::RepeatingConicGradient {
       from_angle,
@@ -7265,6 +7275,8 @@ fn render_generated_border_image(
         cache,
         gradient_bucket(width.max(height).saturating_mul(2)),
       )
+      .ok()
+      .flatten()
     }
     BackgroundImage::None | BackgroundImage::Url(_) => None,
   }
