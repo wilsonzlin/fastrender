@@ -6,14 +6,15 @@ use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
 use crate::paint::painter::with_paint_diagnostics;
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, check_active, with_deadline};
+use crate::resource::FetchRequest;
 use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use crate::Rgba;
 use lru::LruCache;
-use rustc_hash::FxHasher;
 use rayon::prelude::*;
 use roxmltree::Document;
+use rustc_hash::FxHasher;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::env;
@@ -1528,7 +1529,13 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
     }
   }
 
-  let resource = image_cache.fetcher().fetch(&resource_url).ok()?;
+  let fetcher = image_cache.fetcher();
+  let referrer = image_cache.base_url().filter(|url| !url.trim().is_empty());
+  let mut request = FetchRequest::image(&resource_url);
+  if let Some(referrer) = referrer.as_deref() {
+    request = request.with_referrer(referrer);
+  }
+  let resource = fetcher.fetch_with_request(request).ok()?;
   let resource_size = resource.bytes.len();
   let text = String::from_utf8(resource.bytes).ok()?;
   let mut scoped_cache = image_cache.clone();
@@ -4335,8 +4342,7 @@ fn apply_convolve_matrix(
                   continue;
                 }
                 let sx = x + kx as i32 - target_x;
-                if let Some(px) =
-                  sample_pixel(src_pixels, sx, sy, width_i32, height_i32, edge_mode)
+                if let Some(px) = sample_pixel(src_pixels, sx, sy, width_i32, height_i32, edge_mode)
                 {
                   let (r, g, b, a) = unpremultiply(px);
                   sum_r += r * weight;
@@ -4712,9 +4718,11 @@ fn apply_color_matrix_values(
 mod tests {
   use super::*;
   use crate::render_control::{with_deadline, RenderDeadline};
+  use crate::resource::{FetchDestination, FetchedResource, ResourceFetcher};
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::Arc;
+  use std::sync::Mutex;
   use tiny_skia::ColorU8;
 
   fn pixmap_from_rgba(colors: &[(u8, u8, u8, u8)]) -> Pixmap {
@@ -4737,6 +4745,60 @@ mod tests {
     let alpha = a as f32 / 255.0;
     let pm = |v: u8| ((v as f32) * alpha).round().clamp(0.0, 255.0) as u8;
     PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
+  }
+
+  #[derive(Default)]
+  struct RecordingFetcher {
+    request: Mutex<Option<(String, FetchDestination, Option<String>)>>,
+  }
+
+  impl ResourceFetcher for RecordingFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      self.fetch_with_request(FetchRequest::image(url))
+    }
+
+    fn fetch_with_request(
+      &self,
+      request: FetchRequest<'_>,
+    ) -> crate::error::Result<FetchedResource> {
+      let url = request.url.to_string();
+      let destination = request.destination;
+      let referrer = request.referrer.map(|s| s.to_string());
+      *self.request.lock().unwrap() = Some((url, destination, referrer));
+
+      // Intentionally omit a `<filter>` definition so `load_svg_filter` does not populate the
+      // global filter cache, keeping this test isolated from cache-behaviour tests.
+      const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#;
+      Ok(FetchedResource::new(
+        SVG.as_bytes().to_vec(),
+        Some("image/svg+xml".to_string()),
+      ))
+    }
+  }
+
+  #[test]
+  fn svg_filter_fetch_uses_image_destination_and_referrer() {
+    let doc_url = "https://example.com/doc.html";
+    let fetcher = Arc::new(RecordingFetcher::default());
+    let cache = ImageCache::with_base_url_and_fetcher(doc_url.to_string(), fetcher.clone());
+
+    let _ = load_svg_filter(
+      "https://example.com/filter_fetch_request_test.svg#f",
+      &cache,
+    );
+
+    let recorded = fetcher
+      .request
+      .lock()
+      .unwrap()
+      .clone()
+      .expect("expected fetch_with_request to be called");
+    assert_eq!(
+      recorded.0,
+      "https://example.com/filter_fetch_request_test.svg"
+    );
+    assert_eq!(recorded.1, FetchDestination::Image);
+    assert_eq!(recorded.2.as_deref(), Some(doc_url));
   }
 
   fn apply_primitive_for_test(
@@ -4803,7 +4865,13 @@ mod tests {
     let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
 
     assert!(
-      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
       "expected timeout, got {result:?}"
     );
     assert!(calls.load(Ordering::SeqCst) >= 2);
@@ -4822,7 +4890,13 @@ mod tests {
     let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
 
     assert!(
-      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
       "expected timeout, got {result:?}"
     );
     assert!(calls.load(Ordering::SeqCst) >= 2);
@@ -4843,7 +4917,13 @@ mod tests {
     let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
 
     assert!(
-      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
       "expected timeout, got {result:?}"
     );
     assert!(calls.load(Ordering::SeqCst) >= 2);
@@ -4864,7 +4944,13 @@ mod tests {
     let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
 
     assert!(
-      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
       "expected timeout, got {result:?}"
     );
     assert!(calls.load(Ordering::SeqCst) >= 2);
@@ -4967,8 +5053,8 @@ mod tests {
       * (0.2126 * srgb_to_linear(1.0)
         + 0.7152 * srgb_to_linear(0.5)
         + 0.0722 * srgb_to_linear(0.0)))
-      .round()
-      .clamp(0.0, 255.0) as u8;
+    .round()
+    .clamp(0.0, 255.0) as u8;
     assert_eq!(px.alpha(), expected_alpha);
   }
 

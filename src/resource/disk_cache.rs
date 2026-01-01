@@ -7,6 +7,7 @@ use super::CachedHttpMetadata;
 use super::CachedSnapshot;
 use super::CachingFetcher;
 use super::CachingFetcherConfig;
+use super::FetchRequest;
 use super::FetchedResource;
 use super::HttpCachePolicy;
 use super::ResourceFetcher;
@@ -1298,8 +1299,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 }
 
-impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
-  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+impl<F: ResourceFetcher> DiskCachingFetcher<F> {
+  fn fetch_with_context<'a>(
+    &self,
+    url: &'a str,
+    request: Option<FetchRequest<'a>>,
+  ) -> Result<FetchedResource> {
     if let Some(policy) = &self.policy {
       policy.ensure_url_allowed(url)?;
     }
@@ -1363,14 +1368,17 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       _ => None,
     };
 
-    let fetch_result = match validators {
-      Some((etag, last_modified)) => {
-        self
-          .memory
-          .inner
-          .fetch_with_validation(url, etag, last_modified)
-      }
-      None => self.memory.inner.fetch(url),
+    let fetch_result = match request {
+      Some(req) => self.memory.inner.fetch_with_request(req),
+      None => match validators {
+        Some((etag, last_modified)) => {
+          self
+            .memory
+            .inner
+            .fetch_with_validation(url, etag, last_modified)
+        }
+        None => self.memory.inner.fetch(url),
+      },
     };
 
     let (mut result, charge_budget) = match fetch_result {
@@ -1575,6 +1583,16 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
     }
 
     self.memory.inner.fetch_partial(url, max_bytes)
+  }
+}
+
+impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
+  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    self.fetch_with_context(url, None)
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    self.fetch_with_context(req.url, Some(req))
   }
 }
 

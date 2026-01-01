@@ -665,6 +665,11 @@ impl<'a> FetchRequest<'a> {
     Self::new(url, FetchDestination::Document)
   }
 
+  /// Create an image fetch request.
+  pub fn image(url: &'a str) -> Self {
+    Self::new(url, FetchDestination::Image)
+  }
+
   /// Attach a document referrer URL.
   pub fn with_referrer(mut self, referrer: &'a str) -> Self {
     self.referrer = Some(referrer);
@@ -5552,6 +5557,178 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
       Some((etag, last_modified)) => self.inner.fetch_with_validation(url, etag, last_modified),
       None => self.inner.fetch(url),
     };
+
+    let (mut result, charge_budget) = match fetch_result {
+      Ok(res) => {
+        if res.is_not_modified() {
+          if let Some(snapshot) = plan.cached.as_ref() {
+            let value = snapshot.value.as_result();
+            if let Ok(ref ok) = value {
+              let stored_at = SystemTime::now();
+              let should_store = self.config.allow_no_store
+                || !res
+                  .cache_policy
+                  .as_ref()
+                  .map(|p| p.no_store)
+                  .unwrap_or(false);
+              let updated_meta = snapshot
+                .http_cache
+                .as_ref()
+                .and_then(|meta| meta.with_updated_policy(res.cache_policy.as_ref(), stored_at))
+                .or_else(|| {
+                  res
+                    .cache_policy
+                    .as_ref()
+                    .and_then(|policy| CachedHttpMetadata::from_policy(policy, stored_at))
+                });
+
+              if should_store {
+                self.cache_entry(
+                  url,
+                  CacheEntry {
+                    value: CacheValue::Resource(ok.clone()),
+                    etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
+                    last_modified: res
+                      .last_modified
+                      .clone()
+                      .or_else(|| snapshot.last_modified.clone()),
+                    http_cache: updated_meta,
+                  },
+                  ok.final_url.as_deref(),
+                );
+              } else {
+                self.remove_cached(url);
+              }
+            }
+            record_cache_revalidated_hit();
+            if let Ok(ref ok) = value {
+              record_resource_cache_bytes(ok.bytes.len());
+            }
+            let is_ok = value.is_ok();
+            (value, is_ok)
+          } else {
+            (
+              Err(Error::Resource(
+                ResourceError::new(url.to_string(), "received 304 without cached entry")
+                  .with_final_url(url.to_string()),
+              )),
+              false,
+            )
+          }
+        } else {
+          if res.status.map(is_transient_http_status).unwrap_or(false) {
+            if let Some(snapshot) = plan.cached.as_ref() {
+              record_cache_stale_hit();
+              let fallback = snapshot.value.as_result();
+              if let Ok(ref ok) = fallback {
+                record_resource_cache_bytes(ok.bytes.len());
+              }
+              let is_ok = fallback.is_ok();
+              (fallback, is_ok)
+            } else {
+              record_cache_miss();
+              (Ok(res), false)
+            }
+          } else {
+            let stored_at = SystemTime::now();
+            if let Some(entry) = self.build_cache_entry(&res, stored_at) {
+              self.cache_entry(url, entry, res.final_url.as_deref());
+            } else if !self.config.allow_no_store
+              && res
+                .cache_policy
+                .as_ref()
+                .map(|p| p.no_store)
+                .unwrap_or(false)
+            {
+              self.remove_cached(url);
+            }
+            record_cache_miss();
+            (Ok(res), false)
+          }
+        }
+      }
+      Err(err) => {
+        if let Some(snapshot) = plan.cached.as_ref() {
+          record_cache_stale_hit();
+          let fallback = snapshot.value.as_result();
+          if let Ok(ref ok) = fallback {
+            record_resource_cache_bytes(ok.bytes.len());
+          }
+          let is_ok = fallback.is_ok();
+          (fallback, is_ok)
+        } else {
+          if self.config.cache_errors {
+            self.cache_entry(
+              url,
+              CacheEntry {
+                value: CacheValue::Error(err.clone()),
+                etag: None,
+                last_modified: None,
+                http_cache: None,
+              },
+              None,
+            );
+          }
+          (Err(err), false)
+        }
+      }
+    };
+
+    if charge_budget {
+      if let Ok(ref res) = result {
+        if let Err(err) = reserve_policy_bytes(&self.policy, res) {
+          result = Err(err);
+        }
+      }
+    }
+
+    let notify = match &result {
+      Ok(res) => SharedResult::Success(res.clone()),
+      Err(err) => SharedResult::Error(err.clone()),
+    };
+    inflight_guard.finish(notify);
+
+    result
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    let url = req.url;
+    if let Some(policy) = &self.policy {
+      policy.ensure_url_allowed(url)?;
+    }
+
+    let cached = self.cached_entry(url);
+    let plan = self.plan_cache_use(url, cached.clone(), None);
+    if let CacheAction::UseCached = plan.action {
+      if let Some(snapshot) = plan.cached.as_ref() {
+        if plan.is_stale {
+          record_cache_stale_hit();
+        } else {
+          record_cache_fresh_hit();
+        }
+        let result = snapshot.value.as_result();
+        if let Ok(ref res) = result {
+          record_resource_cache_bytes(res.bytes.len());
+          reserve_policy_bytes(&self.policy, res)?;
+        }
+        return result;
+      }
+    }
+
+    let (flight, is_owner) = self.join_inflight(url);
+    if !is_owner {
+      let inflight_timer = start_fetch_inflight_wait_diagnostics();
+      let result = flight.wait(url);
+      finish_fetch_inflight_wait_diagnostics(inflight_timer);
+      if let Ok(ref res) = result {
+        reserve_policy_bytes(&self.policy, res)?;
+      }
+      return result;
+    }
+
+    let mut inflight_guard = InFlightOwnerGuard::new(self, url, flight);
+
+    let fetch_result = self.inner.fetch_with_request(req);
 
     let (mut result, charge_budget) = match fetch_result {
       Ok(res) => {
