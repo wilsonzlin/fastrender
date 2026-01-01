@@ -208,32 +208,53 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
   }
 
   // Fallback: look for a variable assignment that captures a URL literal
-  if let Some(mut idx) = lower.find("var url") {
-    if let Some(eq) = lower[idx..].find('=') {
-      idx += eq + 1;
-      // Seek forward to the first quote in the initializer (allows concatenation before the literal)
-      while idx < lower.len() && lower.as_bytes()[idx] != b'"' && lower.as_bytes()[idx] != b'\'' {
-        idx += 1;
+  let url_decls = ["var url", "let url", "const url"];
+  for decl in url_decls.iter() {
+    let mut search_start = 0usize;
+    while let Some(found) = lower[search_start..].find(decl) {
+      let idx = search_start + found;
+      search_start = idx + decl.len();
+
+      if idx > 0 {
+        let prev = lower.as_bytes()[idx - 1];
+        if prev.is_ascii_alphanumeric() || prev == b'_' {
+          continue;
+        }
       }
-      if idx < lower.len() {
-        let quote = lower.as_bytes()[idx];
-        idx += 1;
-        let start = idx;
-        while idx < lower.len() && lower.as_bytes()[idx] != quote {
-          idx += 1;
+
+      let after = idx + decl.len();
+      if after < lower.len() {
+        let next = lower.as_bytes()[after];
+        if next.is_ascii_alphanumeric() || next == b'_' {
+          continue;
         }
-        let end = idx.min(decoded.len());
-        let raw_candidate = decoded[start..end].trim();
-        if raw_candidate.is_empty() || raw_candidate.len() > MAX_REDIRECT_LEN {
-          return None;
+      }
+
+      let mut i = after;
+      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+      }
+      if lower.as_bytes().get(i) != Some(&b'=') {
+        continue;
+      }
+      i += 1;
+      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+      }
+      while i < lower.len() && lower.as_bytes()[i] == b'(' {
+        i += 1;
+        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+          i += 1;
         }
-        let mut candidate = raw_candidate.to_string();
-        if candidate.starts_with("//") {
-          candidate = format!("https:{}", candidate);
+      }
+
+      if let Some(mut url) = extract_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN)
+        .or_else(|| extract_wrapped_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN))
+      {
+        if url.starts_with("//") {
+          url = format!("https:{}", url);
         }
-        if !candidate.is_empty() {
-          return Some(unescape_js_literal(&candidate));
-        }
+        return Some(url);
       }
     }
   }
@@ -740,6 +761,21 @@ mod tests {
     assert_eq!(
       extract_js_location_redirect(html),
       Some("https://example.com/next".to_string())
+    );
+  }
+
+  #[test]
+  fn extracts_url_from_let_const_assignment() {
+    let html = "<script>let url = '/from-let'; location.replace(url);</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/from-let".to_string())
+    );
+
+    let html = "<script>const url = '/from-const'; window.location.assign(url);</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/from-const".to_string())
     );
   }
 
