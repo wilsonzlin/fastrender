@@ -118,40 +118,35 @@ impl AnonymousBoxCreator {
     box_node: BoxNode,
     deadline_counter: &mut usize,
   ) -> Result<BoxNode> {
-    Self::fixup_tree_with_parent(box_node, None, deadline_counter)
+    let mut box_node = box_node;
+    Self::fixup_tree_with_parent_in_place(&mut box_node, None, deadline_counter)?;
+    Ok(box_node)
   }
 
-  fn fixup_tree_with_parent(
-    mut box_node: BoxNode,
+  fn fixup_tree_with_parent_in_place(
+    box_node: &mut BoxNode,
     parent_style: Option<&Arc<ComputedStyle>>,
     deadline_counter: &mut usize,
-  ) -> Result<BoxNode> {
+  ) -> Result<()> {
     check_active_periodic(
       deadline_counter,
       ANON_FIXUP_DEADLINE_STRIDE,
       RenderStage::Cascade,
     )?;
-    // First, recursively fix children (bottom-up traversal).
-    //
-    // Take ownership of the children Vec so we can avoid per-child placeholder cloning
-    // (`mem::replace` with a dummy text node) on hot paths.
-    if !box_node.children.is_empty() {
-      let parent = &box_node.style;
-      let children = std::mem::take(&mut box_node.children);
-      box_node.children = children
-        .into_iter()
-        .map(|child| Self::fixup_tree_with_parent(child, Some(parent), deadline_counter))
-        .collect::<Result<Vec<_>>>()?;
+    // First, recursively fix children (bottom-up traversal) without moving them out of the Vec.
+    // This avoids per-child placeholder cloning (via `mem::replace`) and keeps the original
+    // children Vec allocation intact.
+    let style = &box_node.style;
+    for child in &mut box_node.children {
+      Self::fixup_tree_with_parent_in_place(child, Some(style), deadline_counter)?;
     }
 
     // Then fix this node's children based on its type
-    box_node.children = Self::fixup_children(
-      box_node.children,
-      &box_node.box_type,
-      parent_style.unwrap_or(&box_node.style),
-    );
+    let children = std::mem::take(&mut box_node.children);
+    box_node.children =
+      Self::fixup_children(children, &box_node.box_type, parent_style.unwrap_or(&box_node.style));
 
-    Ok(box_node)
+    Ok(())
   }
 
   /// Fixes up children based on parent box type
@@ -410,27 +405,34 @@ impl AnonymousBoxCreator {
     children: Vec<BoxNode>,
     parent_style: &Arc<ComputedStyle>,
   ) -> Vec<BoxNode> {
+    // Wrap bare text nodes in anonymous inline boxes while reusing the existing Vec allocation.
+    let mut children = children;
     let mut inline_style: Option<Arc<ComputedStyle>> = None;
-    children
-      .into_iter()
-      .map(|child| {
-        if !child.is_text() {
-          return child;
+    let mut placeholder: Option<BoxNode> = None;
+
+    for child in children.iter_mut() {
+      if !child.is_text() {
+        continue;
+      }
+
+      let style = inline_style.get_or_insert_with(|| {
+        if parent_style.display == Display::Inline {
+          parent_style.clone()
+        } else {
+          let mut style = (**parent_style).clone();
+          style.display = Display::Inline;
+          Arc::new(style)
         }
+      });
 
-        let style = inline_style.get_or_insert_with(|| {
-          if parent_style.display == Display::Inline {
-            parent_style.clone()
-          } else {
-            let mut style = (**parent_style).clone();
-            style.display = Display::Inline;
-            Arc::new(style)
-          }
-        });
+      let placeholder = placeholder
+        .get_or_insert_with(|| BoxNode::new_text(style.clone(), String::new()))
+        .clone();
+      let text_node = std::mem::replace(child, placeholder);
+      *child = Self::create_anonymous_inline(style.clone(), vec![text_node]);
+    }
 
-        Self::create_anonymous_inline(style.clone(), vec![child])
-      })
-      .collect()
+    children
   }
 
   /// Wraps consecutive inline boxes in anonymous block boxes
@@ -500,22 +502,26 @@ impl AnonymousBoxCreator {
     parent_style: &ComputedStyle,
   ) -> Vec<BoxNode> {
     let mut inherited_inline_style: Option<Arc<ComputedStyle>> = None;
+    let mut placeholder: Option<BoxNode> = None;
+    let mut children = children;
+    for child in children.iter_mut() {
+      if !child.is_text() {
+        continue;
+      }
+      // Wrap text in anonymous inline.
+      let style = inherited_inline_style.get_or_insert_with(|| {
+        let mut inherited = inherited_style(parent_style);
+        inherited.display = Display::Inline;
+        Arc::new(inherited)
+      });
+      let placeholder = placeholder
+        .get_or_insert_with(|| BoxNode::new_text(style.clone(), String::new()))
+        .clone();
+      let text_node = std::mem::replace(child, placeholder);
+      *child = Self::create_anonymous_inline(style.clone(), vec![text_node]);
+    }
+
     children
-      .into_iter()
-      .map(|child| {
-        if !child.is_text() {
-          return child;
-        }
-
-        let style = inherited_inline_style.get_or_insert_with(|| {
-          let mut inherited = inherited_style(parent_style);
-          inherited.display = Display::Inline;
-          Arc::new(inherited)
-        });
-
-        Self::create_anonymous_inline(style.clone(), vec![child])
-      })
-      .collect()
   }
 
   /// Creates an anonymous block box
