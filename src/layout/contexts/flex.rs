@@ -3665,9 +3665,10 @@ impl FlexFormattingContext {
       let should_parallel_layout = self.parallelism.should_parallelize(layout_work_count)
         && layout_work_count >= self.parallelism.min_fanout;
       let deadline = active_deadline();
-      let run_layout = |deadline_counter: &mut usize,
-                        work: &ChildLayoutWorkItem<'_>|
-       -> Result<(usize, ChildLayoutWorkOutput), LayoutError> {
+      let run_layout =
+        |deadline_counter: &mut usize,
+         work: &ChildLayoutWorkItem<'_>|
+         -> Result<(usize, ChildLayoutWorkOutput), LayoutError> {
           let fc = factory.get(work.fc_type);
           let layout_node: &BoxNode = work.layout_child_storage.as_ref().unwrap_or(work.child_box);
           let node_timer = flex_profile::node_timer();
@@ -3751,8 +3752,7 @@ impl FlexFormattingContext {
                   mc_timer,
                 );
                 let mc_fragment = mc_fragment;
-                let mut mc_size =
-                  Self::fragment_subtree_size(&mc_fragment, deadline_counter)?;
+                let mut mc_size = Self::fragment_subtree_size(&mc_fragment, deadline_counter)?;
                 if rect.width().is_finite() && rect.width() > 0.0 {
                   mc_size.width = mc_size.width.min(rect.width());
                 }

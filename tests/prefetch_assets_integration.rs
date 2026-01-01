@@ -1130,3 +1130,221 @@ fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_
   assert_eq!(hits.get("/img.png").copied().unwrap_or(0), 0);
   assert_eq!(hits.get("/picture-1x.png").copied().unwrap_or(0), 0);
 }
+
+#[test]
+fn prefetch_assets_respects_max_images_per_page() {
+  let Some(listener) = try_bind_localhost("prefetch_assets_respects_max_images_per_page") else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    "/one.jpg".to_string(),
+    (b"dummy-one".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/two.jpg".to_string(),
+    (b"dummy-two".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/__shutdown__".to_string(),
+    (b"shutdown".to_vec(), "text/plain"),
+  );
+
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec!["/one.jpg", "/__shutdown__"],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><body>\
+      <img src=\"/one.jpg\">\
+      <img src=\"/two.jpg\">\
+    </body></html>",
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .arg("--prefetch-images")
+    .arg("--max-images-per-page")
+    .arg("1")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  let shutdown_url = format!("http://{}/__shutdown__", addr);
+  let _ = ureq::get(&shutdown_url).call();
+
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let one = format!("http://{}/one.jpg", addr);
+  let two = format!("http://{}/two.jpg", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  assert!(
+    offline.fetch(&one).is_ok(),
+    "first image should be cached on disk"
+  );
+  assert!(
+    offline.fetch(&two).is_err(),
+    "second image should not be cached (max-images-per-page=1)"
+  );
+
+  let hits = hits.lock().unwrap();
+  assert_eq!(hits.get("/one.jpg").copied().unwrap_or(0), 1);
+  assert_eq!(hits.get("/two.jpg").copied().unwrap_or(0), 0);
+}
+
+#[test]
+fn prefetch_assets_selects_picture_source_by_media_and_dpr() {
+  let Some(listener) = try_bind_localhost("prefetch_assets_selects_picture_source_by_media_and_dpr")
+  else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    "/small2.jpg".to_string(),
+    (b"dummy-small2".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/large2.jpg".to_string(),
+    (b"dummy-large2".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/fallback.jpg".to_string(),
+    (b"dummy-fallback".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/__shutdown__".to_string(),
+    (b"shutdown".to_vec(), "text/plain"),
+  );
+
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec!["/small2.jpg", "/__shutdown__"],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><body>\
+      <picture>\
+        <source media=\"(max-width: 600px)\" srcset=\"/small2.jpg 2x\">\
+        <source media=\"(min-width: 601px)\" srcset=\"/large2.jpg 2x\">\
+        <img src=\"/fallback.jpg\">\
+      </picture>\
+    </body></html>",
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .arg("--prefetch-images")
+    .arg("--viewport")
+    .arg("500x800")
+    .arg("--dpr")
+    .arg("2.0")
+    .arg("--max-image-urls-per-element")
+    .arg("1")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  let shutdown_url = format!("http://{}/__shutdown__", addr);
+  let _ = ureq::get(&shutdown_url).call();
+
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let small2 = format!("http://{}/small2.jpg", addr);
+  let large2 = format!("http://{}/large2.jpg", addr);
+  let fallback = format!("http://{}/fallback.jpg", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  assert!(
+    offline.fetch(&small2).is_ok(),
+    "selected picture source should be cached on disk"
+  );
+  assert!(
+    offline.fetch(&large2).is_err(),
+    "non-matching picture source should not be cached"
+  );
+  assert!(
+    offline.fetch(&fallback).is_err(),
+    "img fallback should not be cached (max urls per element = 1)"
+  );
+
+  let hits = hits.lock().unwrap();
+  assert_eq!(hits.get("/small2.jpg").copied().unwrap_or(0), 1);
+  assert_eq!(hits.get("/large2.jpg").copied().unwrap_or(0), 0);
+  assert_eq!(hits.get("/fallback.jpg").copied().unwrap_or(0), 0);
+}
