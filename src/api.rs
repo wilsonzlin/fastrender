@@ -67,11 +67,7 @@ use crate::css::loader::{
   resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
 };
 use crate::css::parser::{
-  extract_css_sources,
-  extract_scoped_css_sources,
-  parse_stylesheet_with_media_cached_by_url_shared,
-  parse_stylesheet_with_media_cached_shared,
-  CssTreeScope,
+  extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_media, CssTreeScope,
   StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
@@ -5397,24 +5393,23 @@ impl FastRender {
 
         match self {
           StylesheetTask::Inline { css } => {
-            let sheet = parse_stylesheet_with_media_cached_shared(
-              &css,
-              document_base_url.as_deref(),
-              media_ctx,
-              Some(&mut local_media_cache),
-            )?;
-            let loader = CssImportFetcher::new(
-              document_base_url.clone(),
-              Arc::clone(fetcher),
-              resource_context.clone(),
-              stylesheet_fetch_counter.clone(),
-            );
-            let resolved = sheet.resolve_imports_with_cache(
-              &loader,
-              document_base_url.as_deref(),
-              media_ctx,
-              Some(&mut local_media_cache),
-            )?;
+            let sheet = parse_stylesheet_with_media(&css, media_ctx, Some(&mut local_media_cache))?;
+            let resolved = if sheet.contains_imports() {
+              let loader = CssImportFetcher::new(
+                document_base_url.clone(),
+                Arc::clone(fetcher),
+                resource_context.clone(),
+                stylesheet_fetch_counter.clone(),
+              );
+              sheet.resolve_imports_with_cache(
+                &loader,
+                document_base_url.as_deref(),
+                media_ctx,
+                Some(&mut local_media_cache),
+              )?
+            } else {
+              sheet
+            };
             Ok((Some(resolved), local_media_cache))
           }
           StylesheetTask::External { url } => {
@@ -5465,24 +5460,24 @@ impl FastRender {
               css_text = rewritten;
             }
 
-            let sheet = parse_stylesheet_with_media_cached_by_url_shared(
-              &css_text,
-              &sheet_base,
-              media_ctx,
-              Some(&mut local_media_cache),
-            )?;
-            let loader = CssImportFetcher::new(
-              Some(sheet_base.clone()),
-              Arc::clone(fetcher),
-              resource_context.clone(),
-              stylesheet_fetch_counter.clone(),
-            );
-            let resolved = sheet.resolve_imports_with_cache(
-              &loader,
-              Some(&sheet_base),
-              media_ctx,
-              Some(&mut local_media_cache),
-            )?;
+            let sheet =
+              parse_stylesheet_with_media(&css_text, media_ctx, Some(&mut local_media_cache))?;
+            let resolved = if sheet.contains_imports() {
+              let loader = CssImportFetcher::new(
+                Some(sheet_base.clone()),
+                Arc::clone(fetcher),
+                resource_context.clone(),
+                stylesheet_fetch_counter.clone(),
+              );
+              sheet.resolve_imports_with_cache(
+                &loader,
+                Some(&sheet_base),
+                media_ctx,
+                Some(&mut local_media_cache),
+              )?
+            } else {
+              sheet
+            };
             Ok((Some(resolved), local_media_cache))
           }
         }
@@ -5668,19 +5663,19 @@ impl FastRender {
             continue;
           }
 
-          let sheet = parse_stylesheet_with_media_cached_shared(
-            &inline.css,
-            self.base_url.as_deref(),
-            media_ctx,
-            Some(media_query_cache),
-          )?;
-          let resolved = sheet.resolve_imports_with_cache(
-            &inline_loader,
-            self.base_url.as_deref(),
-            media_ctx,
-            Some(media_query_cache),
-          )?;
-          combined_rules.extend(resolved.rules);
+          let sheet =
+            parse_stylesheet_with_media(&inline.css, media_ctx, Some(media_query_cache))?;
+          if sheet.contains_imports() {
+            let resolved = sheet.resolve_imports_with_cache(
+              &inline_loader,
+              self.base_url.as_deref(),
+              media_ctx,
+              Some(media_query_cache),
+            )?;
+            combined_rules.extend(resolved.rules);
+          } else {
+            combined_rules.extend(sheet.rules);
+          }
         }
         StylesheetSource::External(link) => {
           if !fetch_link_css {
@@ -5758,25 +5753,25 @@ impl FastRender {
                 css_text = rewritten;
               }
 
-              let sheet = parse_stylesheet_with_media_cached_by_url_shared(
-                &css_text,
-                &sheet_base,
-                media_ctx,
-                Some(media_query_cache),
-              )?;
-              let loader = CssImportFetcher::new(
-                Some(sheet_base.clone()),
-                Arc::clone(&fetcher),
-                resource_context.cloned(),
-                stylesheet_fetch_counter.clone(),
-              );
-              let resolved = sheet.resolve_imports_with_cache(
-                &loader,
-                Some(&sheet_base),
-                media_ctx,
-                Some(media_query_cache),
-              )?;
-              combined_rules.extend(resolved.rules);
+              let sheet =
+                parse_stylesheet_with_media(&css_text, media_ctx, Some(media_query_cache))?;
+              if sheet.contains_imports() {
+                let loader = CssImportFetcher::new(
+                  Some(sheet_base.clone()),
+                  Arc::clone(&fetcher),
+                  resource_context.cloned(),
+                  stylesheet_fetch_counter.clone(),
+                );
+                let resolved = sheet.resolve_imports_with_cache(
+                  &loader,
+                  Some(&sheet_base),
+                  media_ctx,
+                  Some(media_query_cache),
+                )?;
+                combined_rules.extend(resolved.rules);
+              } else {
+                combined_rules.extend(sheet.rules);
+              }
             }
             Err(err) => {
               // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -6239,11 +6234,9 @@ impl FastRender {
     // CSS fetching/parsing happens before cascade; keep the stage heartbeat in sync so
     // render runners can attribute stalls/timeouts correctly.
     record_stage(StageHeartbeat::CssInline);
-    let css_parse_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let css_inlining_timer = css_parse_timer.clone();
+    let css_inlining_timer = stats.as_deref().and_then(|rec| rec.timer());
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
-    record_stage(StageHeartbeat::CssParse);
     let style_set = {
       let _span = trace.span("css_parse", "style");
       self.collect_document_style_set(
@@ -6254,11 +6247,17 @@ impl FastRender {
       )?
     };
     if let Some(rec) = stats.as_deref_mut() {
-      RenderStatsRecorder::add_ms(&mut rec.stats.timings.css_inlining_ms, css_inlining_timer);
+      RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_inlining_ms, css_inlining_timer);
     }
     if let Some(start) = css_parse_start {
       eprintln!("timing:css_parse {:?}", start.elapsed());
     }
+
+    // Start a fresh timer for CSS "parse" work that occurs after the stylesheet set has been
+    // collected (font face extraction, codepoint collection, etc). `pageset_progress` sums
+    // `css_inlining_ms + css_parse_ms`, so these timings must be non-overlapping.
+    record_stage(StageHeartbeat::CssParse);
+    let css_parse_timer = stats.as_deref().and_then(|rec| rec.timer());
 
     // Collect codepoints used in text nodes to avoid fetching unused web font subsets.
     let used_codepoints = dom::collect_text_codepoints(&dom_with_state);
@@ -6282,7 +6281,7 @@ impl FastRender {
     let has_container_queries = style_set.has_container_rules_any_scope();
     let has_starting_style_rules = style_set.has_starting_style_rules_any_scope();
     if let Some(rec) = stats.as_deref_mut() {
-      RenderStatsRecorder::add_ms(&mut rec.stats.timings.css_parse_ms, css_parse_timer);
+      RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_parse_ms, css_parse_timer);
     }
     if let Some(start) = style_load_start {
       eprintln!("timing:style_prepare {:?}", start.elapsed());

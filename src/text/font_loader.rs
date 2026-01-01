@@ -1086,8 +1086,10 @@ impl FontContext {
       let ctx = self.clone();
       let events = Arc::clone(&events);
       let expired_jobs = Arc::clone(&expired_jobs);
+      let render_deadline = render_deadline.clone();
       std::thread::spawn(move || {
         let _pending = guard;
+        let _deadline_guard = render_control::DeadlineGuard::install(render_deadline.as_ref());
         let start = Instant::now();
         let event = ctx.load_face_sources_with_report(
           &family_clone,

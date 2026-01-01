@@ -408,6 +408,66 @@ impl StyleSheet {
     Self { rules: Vec::new() }
   }
 
+  /// Returns true when this stylesheet (including nested conditional blocks) contains at least one
+  /// `@import` rule.
+  ///
+  /// Import resolution is relatively expensive because it must walk and clone the entire rule
+  /// tree even when no imports are present. Callers that only need import resolution when imports
+  /// exist should use this helper as a cheap pre-flight check.
+  pub fn contains_imports(&self) -> bool {
+    fn rules_contain_imports(rules: &[CssRule]) -> bool {
+      for rule in rules {
+        match rule {
+          CssRule::Import(_) => return true,
+          CssRule::Style(rule) => {
+            if rules_contain_imports(&rule.nested_rules) {
+              return true;
+            }
+          }
+          CssRule::Media(rule) => {
+            if rules_contain_imports(&rule.rules) {
+              return true;
+            }
+          }
+          CssRule::Container(rule) => {
+            if rules_contain_imports(&rule.rules) {
+              return true;
+            }
+          }
+          CssRule::Supports(rule) => {
+            if rules_contain_imports(&rule.rules) {
+              return true;
+            }
+          }
+          CssRule::Layer(rule) => {
+            if rules_contain_imports(&rule.rules) {
+              return true;
+            }
+          }
+          CssRule::StartingStyle(rule) => {
+            if rules_contain_imports(&rule.rules) {
+              return true;
+            }
+          }
+          CssRule::Scope(rule) => {
+            if rules_contain_imports(&rule.rules) {
+              return true;
+            }
+          }
+          CssRule::Page(_)
+          | CssRule::CounterStyle(_)
+          | CssRule::FontPaletteValues(_)
+          | CssRule::Property(_)
+          | CssRule::FontFace(_)
+          | CssRule::Keyframes(_) => {}
+        }
+      }
+      false
+    }
+
+    rules_contain_imports(&self.rules)
+  }
+
   /// Collects all applicable style rules, evaluating @media queries
   ///
   /// This flattens nested @media rules and filters by the given media context.
