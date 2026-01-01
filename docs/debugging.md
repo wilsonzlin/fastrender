@@ -20,6 +20,7 @@ Checklist (start here, in order):
 2. **Enable browser-like headers**: `FASTR_HTTP_BROWSER_HEADERS=1` (this is the default; set it explicitly when debugging to ensure it wasn't disabled).
    - Some font/CDN endpoints are sensitive to `Accept: */*` plus `Origin`/`Referer`; the browser-header profile is intended to match those expectations.
 3. **Turn on retry logging** when debugging transient failures: `FASTR_HTTP_LOG_RETRIES=1`.
+   - `pageset_progress`: retry logs land in `target/pageset/logs/<stem>.stderr.log` (stdout/stderr from the worker process).
 4. **Make sure you’re testing the network path** (not stale caches): use `fetch_pages --refresh` for HTML and consider disabling the disk cache (`DISK_CACHE=0`) when chasing subresource fetch behavior.
 
 Example (pageset loop, targeted):
