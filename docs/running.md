@@ -58,6 +58,10 @@ Cache layout:
 
 - Fetch and bundle (captures HTML + subresources + metadata):  
   `cargo run --release --bin bundle_page -- fetch <url> --out capture_dir`
+- When full rendering crashes or times out, you can still capture a best-effort offline bundle by
+  crawling HTML + CSS for subresources (no layout/paint):  
+  `cargo run --release --bin bundle_page -- fetch <url> --out capture_dir --no-render`
+  - Optional: bound per-request fetch time with `--fetch-timeout-secs <secs>`.
 - Render strictly from the bundle without touching the network:  
   `cargo run --release --bin bundle_page -- render capture_dir --out output.png`
 

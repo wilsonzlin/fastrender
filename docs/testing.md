@@ -57,6 +57,7 @@ Artifacts for failures land in `target/pages_diffs/<page>_{actual,expected,diff}
 Use `bundle_page` to capture a page once, then convert that bundle into a deterministic fixture consumable by `pages_regression`:
 
 1. Capture: `cargo run --release --bin bundle_page -- fetch <url> --out /tmp/capture.tar` (or a directory path)
+   - If a page crashes or times out during capture, add `--no-render` to crawl HTML + CSS for subresources without doing a full render.
 2. Import: `cargo xtask import-page-fixture /tmp/capture.tar <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
 3. Add the new fixture to `tests/pages_regression_test.rs` and generate a golden if you want it covered by the suite.
 
