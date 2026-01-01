@@ -14,7 +14,22 @@ use tempfile::TempDir;
 fn disk_cache_namespace() -> String {
   let ua = normalize_user_agent_for_log(DEFAULT_USER_AGENT).trim();
   let lang = DEFAULT_ACCEPT_LANGUAGE.trim();
-  format!("user-agent:{ua}\naccept-language:{lang}")
+  let browser_headers_enabled = std::env::var("FASTR_HTTP_BROWSER_HEADERS")
+    .ok()
+    .map(|raw| {
+      !matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
+      )
+    })
+    .unwrap_or(true);
+  if browser_headers_enabled {
+    format!("fetch-profile:contextual-v1\nuser-agent:{ua}\naccept-language:{lang}")
+  } else {
+    format!(
+      "fetch-profile:contextual-v1\nuser-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0"
+    )
+  }
 }
 
 #[derive(Clone)]
