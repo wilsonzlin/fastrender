@@ -4801,6 +4801,7 @@ fn apply_color_matrix_values(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::api::ResourceContext;
   use crate::render_control::{with_deadline, RenderDeadline};
   use crate::resource::{FetchDestination, FetchedResource, ResourceFetcher};
   use std::collections::HashMap;
@@ -4864,7 +4865,10 @@ mod tests {
   fn svg_filter_fetch_uses_image_destination_and_referrer() {
     let doc_url = "https://example.com/doc.html";
     let fetcher = Arc::new(RecordingFetcher::default());
-    let cache = ImageCache::with_base_url_and_fetcher(doc_url.to_string(), fetcher.clone());
+    let mut cache = ImageCache::with_base_url_and_fetcher(doc_url.to_string(), fetcher.clone());
+    let mut context = ResourceContext::default();
+    context.document_url = Some(doc_url.to_string());
+    cache.set_resource_context(Some(context));
 
     let _ = load_svg_filter(
       "https://example.com/filter_fetch_request_test.svg#f",
