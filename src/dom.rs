@@ -167,6 +167,25 @@ pub struct DomNode {
   pub children: Vec<DomNode>,
 }
 
+impl Drop for DomNode {
+  fn drop(&mut self) {
+    // Dropping a deeply-nested `DomNode` tree via Rust's default recursive drop can overflow the
+    // stack (e.g. degenerate 100k-depth trees from real pages or fuzzing). Drop children
+    // iteratively by draining them into an explicit stack so each node is dropped with an empty
+    // `children` vec.
+    if self.children.is_empty() {
+      return;
+    }
+
+    let mut stack: Vec<DomNode> = std::mem::take(&mut self.children);
+    while let Some(mut node) = stack.pop() {
+      stack.append(&mut node.children);
+      // `node` is dropped here with an empty `children` vec, so this `Drop` implementation becomes
+      // a cheap no-op for all non-root nodes in the iterative drain.
+    }
+  }
+}
+
 /// Mapping between light DOM nodes and their assigned slots within shadow roots.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SlotAssignment {
@@ -2442,13 +2461,14 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
 
   // Only the first declarative shadow template is promoted to a shadow root, matching browsers.
   // Subsequent templates remain as inert light DOM children.
-  let template = node.children.remove(template_idx);
+  let mut template = node.children.remove(template_idx);
+  let template_children = std::mem::take(&mut template.children);
   let shadow_root = DomNode {
     node_type: DomNodeType::ShadowRoot {
       mode,
       delegates_focus,
     },
-    children: template.children,
+    children: template_children,
   };
   let light_children = std::mem::take(&mut node.children);
   node.children = {
@@ -5682,14 +5702,6 @@ mod tests {
     }
   }
 
-  fn drop_dom_iterative(root: DomNode) {
-    let mut stack: Vec<DomNode> = Vec::new();
-    stack.push(root);
-    while let Some(mut node) = stack.pop() {
-      stack.append(&mut node.children);
-    }
-  }
-
   fn enumerate_dom_ids_legacy(root: &DomNode) -> HashMap<*const DomNode, usize> {
     fn walk(node: &DomNode, next: &mut usize, map: &mut HashMap<*const DomNode, usize>) {
       map.insert(node as *const DomNode, *next);
@@ -6144,7 +6156,7 @@ mod tests {
 
     drop(ids);
     drop(store);
-    drop_dom_iterative(dom);
+    drop(dom);
   }
 
   #[test]
