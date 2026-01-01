@@ -110,6 +110,7 @@ These are emitted by the paint pipeline:
 - `FASTR_TRACE_OUT=/path/to/trace.json` – emit Chrome trace events for parse/style/layout/paint.
 - `FASTR_DISABLE_LAYOUT_CACHE=1` / `FASTR_DISABLE_FLEX_CACHE=1` – disable layout/flex caches.
 - `FASTR_IMAGE_PROFILE_MS=<ms>` / `FASTR_STACK_PROFILE_MS=<ms>` / `FASTR_TEXT_PROFILE_MS=<ms>` / `FASTR_CMD_PROFILE_MS=<ms>` – emit timing when operations exceed the threshold.
+- `FASTR_TEXT_FALLBACK_CACHE_CAPACITY=<N>` – capacity for the font fallback resolution caches (default 131072; clamped to >= 1). This applies separately to the glyph and cluster fallback caches.
 - `FASTR_SELECTOR_BLOOM=0` – disable selector bloom-filter hashing (useful for perf A/B checks).
 - `FASTR_ANCESTOR_BLOOM=0` – disable the cascade's ancestor bloom filter fast-reject for descendant selectors.
 - `FASTR_SVG_FILTER_CACHE_ITEMS=<N>` – SVG filter cache capacity (default 256).

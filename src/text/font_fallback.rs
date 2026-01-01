@@ -51,6 +51,7 @@ use fontdb::Query;
 use fontdb::ID;
 use lru::LruCache;
 use rustc_hash::FxHasher;
+use std::hash::Hash;
 use std::hash::Hasher;
 use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
@@ -58,6 +59,71 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 type FallbackCacheHasher = BuildHasherDefault<FxHasher>;
+const FALLBACK_CACHE_SHARDS: usize = 16;
+
+#[derive(Debug)]
+struct ShardedLruCache<K: Hash + Eq, V> {
+  shards: Vec<Mutex<LruCache<K, V, FallbackCacheHasher>>>,
+}
+
+impl<K, V> ShardedLruCache<K, V>
+where
+  K: Hash + Eq,
+  V: Clone,
+{
+  fn new(capacity: usize, shard_count: usize) -> Self {
+    let shard_count = shard_count.clamp(1, capacity.max(1));
+    let base_capacity = capacity / shard_count;
+    let remainder = capacity % shard_count;
+
+    let mut shards = Vec::with_capacity(shard_count);
+    for idx in 0..shard_count {
+      let shard_capacity = base_capacity + usize::from(idx < remainder);
+      let shard_capacity = NonZeroUsize::new(shard_capacity.max(1)).unwrap();
+      shards.push(Mutex::new(LruCache::with_hasher(
+        shard_capacity,
+        FallbackCacheHasher::default(),
+      )));
+    }
+
+    Self { shards }
+  }
+
+  #[inline]
+  fn shard_index(&self, key: &K) -> usize {
+    let mut hasher = FxHasher::default();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % self.shards.len()
+  }
+
+  fn get(&self, key: &K) -> Option<V> {
+    let idx = self.shard_index(key);
+    self.shards[idx]
+      .lock()
+      .ok()
+      .and_then(|mut cache| cache.get(key).cloned())
+  }
+
+  /// Inserts into the appropriate shard, returning true if this insertion evicted another entry.
+  fn put(&self, key: K, value: V) -> bool {
+    let idx = self.shard_index(&key);
+    if let Ok(mut cache) = self.shards[idx].lock() {
+      let existed = cache.peek(&key).is_some();
+      let evicted = !existed && cache.len() >= cache.cap().get();
+      cache.put(key, value);
+      return evicted;
+    }
+    false
+  }
+
+  fn clear(&self) {
+    for shard in &self.shards {
+      if let Ok(mut cache) = shard.lock() {
+        cache.clear();
+      }
+    }
+  }
+}
 
 /// Unique identifier for a font face in the database.
 ///
@@ -201,8 +267,10 @@ pub(crate) struct ClusterFallbackCacheKey {
 struct FallbackCacheStats {
   glyph_hits: AtomicU64,
   glyph_misses: AtomicU64,
+  glyph_evictions: AtomicU64,
   cluster_hits: AtomicU64,
   cluster_misses: AtomicU64,
+  cluster_evictions: AtomicU64,
   clears: AtomicU64,
 }
 
@@ -210,8 +278,10 @@ struct FallbackCacheStats {
 pub(crate) struct FallbackCacheStatsSnapshot {
   pub glyph_hits: u64,
   pub glyph_misses: u64,
+  pub glyph_evictions: u64,
   pub cluster_hits: u64,
   pub cluster_misses: u64,
+  pub cluster_evictions: u64,
   pub clears: u64,
 }
 
@@ -220,8 +290,10 @@ impl FallbackCacheStats {
     FallbackCacheStatsSnapshot {
       glyph_hits: self.glyph_hits.load(Ordering::Relaxed),
       glyph_misses: self.glyph_misses.load(Ordering::Relaxed),
+      glyph_evictions: self.glyph_evictions.load(Ordering::Relaxed),
       cluster_hits: self.cluster_hits.load(Ordering::Relaxed),
       cluster_misses: self.cluster_misses.load(Ordering::Relaxed),
+      cluster_evictions: self.cluster_evictions.load(Ordering::Relaxed),
       clears: self.clears.load(Ordering::Relaxed),
     }
   }
@@ -245,26 +317,19 @@ impl FallbackCacheStats {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FallbackCache {
-  glyphs: Arc<Mutex<LruCache<GlyphFallbackCacheKey, Option<Arc<LoadedFont>>, FallbackCacheHasher>>>,
-  clusters: Arc<
-    Mutex<LruCache<ClusterFallbackCacheKey, Option<Arc<LoadedFont>>, FallbackCacheHasher>>,
-  >,
+  glyphs: Arc<ShardedLruCache<GlyphFallbackCacheKey, Option<Arc<LoadedFont>>>>,
+  clusters: Arc<ShardedLruCache<ClusterFallbackCacheKey, Option<Arc<LoadedFont>>>>,
   last_generation: Arc<AtomicU64>,
   stats: Arc<FallbackCacheStats>,
 }
 
 impl FallbackCache {
   pub(crate) fn new(capacity: usize) -> Self {
-    let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
+    let cap = capacity.max(1);
+    let shard_count = FALLBACK_CACHE_SHARDS.min(cap).max(1);
     Self {
-      glyphs: Arc::new(Mutex::new(LruCache::with_hasher(
-        cap,
-        FallbackCacheHasher::default(),
-      ))),
-      clusters: Arc::new(Mutex::new(LruCache::with_hasher(
-        cap,
-        FallbackCacheHasher::default(),
-      ))),
+      glyphs: Arc::new(ShardedLruCache::new(cap, shard_count)),
+      clusters: Arc::new(ShardedLruCache::new(cap, shard_count)),
       last_generation: Arc::new(AtomicU64::new(0)),
       stats: Arc::new(FallbackCacheStats::default()),
     }
@@ -276,12 +341,8 @@ impl FallbackCache {
       return;
     }
 
-    if let Ok(mut cache) = self.glyphs.lock() {
-      cache.clear();
-    }
-    if let Ok(mut cache) = self.clusters.lock() {
-      cache.clear();
-    }
+    self.glyphs.clear();
+    self.clusters.clear();
     self.last_generation.store(generation, Ordering::Release);
     self.stats.clears.fetch_add(1, Ordering::Relaxed);
   }
@@ -290,11 +351,7 @@ impl FallbackCache {
     &self,
     key: &GlyphFallbackCacheKey,
   ) -> Option<Option<Arc<LoadedFont>>> {
-    let result = self
-      .glyphs
-      .lock()
-      .ok()
-      .and_then(|mut cache| cache.get(key).cloned());
+    let result = self.glyphs.get(key);
     self.stats.record_glyph(result.is_some());
     result
   }
@@ -303,11 +360,7 @@ impl FallbackCache {
     &self,
     key: &ClusterFallbackCacheKey,
   ) -> Option<Option<Arc<LoadedFont>>> {
-    let result = self
-      .clusters
-      .lock()
-      .ok()
-      .and_then(|mut cache| cache.get(key).cloned());
+    let result = self.clusters.get(key);
     self.stats.record_cluster(result.is_some());
     result
   }
@@ -317,8 +370,8 @@ impl FallbackCache {
     key: GlyphFallbackCacheKey,
     value: Option<Arc<LoadedFont>>,
   ) {
-    if let Ok(mut cache) = self.glyphs.lock() {
-      cache.put(key, value);
+    if self.glyphs.put(key, value) {
+      self.stats.glyph_evictions.fetch_add(1, Ordering::Relaxed);
     }
   }
 
@@ -327,18 +380,14 @@ impl FallbackCache {
     key: ClusterFallbackCacheKey,
     value: Option<Arc<LoadedFont>>,
   ) {
-    if let Ok(mut cache) = self.clusters.lock() {
-      cache.put(key, value);
+    if self.clusters.put(key, value) {
+      self.stats.cluster_evictions.fetch_add(1, Ordering::Relaxed);
     }
   }
 
   pub(crate) fn clear(&self) {
-    if let Ok(mut cache) = self.glyphs.lock() {
-      cache.clear();
-    }
-    if let Ok(mut cache) = self.clusters.lock() {
-      cache.clear();
-    }
+    self.glyphs.clear();
+    self.clusters.clear();
     self.stats.clears.fetch_add(1, Ordering::Relaxed);
   }
 

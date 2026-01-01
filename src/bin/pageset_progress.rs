@@ -3117,6 +3117,17 @@ fn text_summary(counts: &RenderCounts) -> Option<String> {
   push_opt_usize(&mut parts, "fallback_misses", counts.fallback_cache_misses);
   push_opt_usize(
     &mut parts,
+    "fallback_glyph_evict",
+    counts.fallback_cache_glyph_evictions,
+  );
+  push_opt_usize(
+    &mut parts,
+    "fallback_cluster_evict",
+    counts.fallback_cache_cluster_evictions,
+  );
+  push_opt_usize(&mut parts, "fallback_clears", counts.fallback_cache_clears);
+  push_opt_usize(
+    &mut parts,
     "last_resort_fallbacks",
     counts.last_resort_font_fallbacks,
   );

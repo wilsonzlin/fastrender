@@ -114,11 +114,23 @@ use unicode_vo::Orientation as VerticalOrientation;
 
 pub(crate) const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
 const SHAPING_CACHE_CAPACITY: usize = 2048;
-const FONT_RESOLUTION_CACHE_SIZE: usize = 16384;
+const FONT_RESOLUTION_CACHE_SIZE: usize = 131072;
+const TEXT_FALLBACK_CACHE_CAPACITY_ENV: &str = "FASTR_TEXT_FALLBACK_CACHE_CAPACITY";
 #[cfg(any(test, debug_assertions))]
 static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 type ShapingCacheHasher = BuildHasherDefault<FxHasher>;
+
+fn fallback_cache_capacity() -> usize {
+  static CAPACITY: OnceLock<usize> = OnceLock::new();
+  *CAPACITY.get_or_init(|| {
+    std::env::var(TEXT_FALLBACK_CACHE_CAPACITY_ENV)
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .map(|value| value.max(1))
+      .unwrap_or(FONT_RESOLUTION_CACHE_SIZE)
+  })
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TextCacheStats {
@@ -138,6 +150,9 @@ pub struct TextDiagnostics {
   pub color_glyph_rasters: usize,
   pub fallback_cache_hits: usize,
   pub fallback_cache_misses: usize,
+  pub fallback_cache_glyph_evictions: usize,
+  pub fallback_cache_cluster_evictions: usize,
+  pub fallback_cache_clears: usize,
   pub last_resort_fallbacks: usize,
   pub last_resort_samples: Vec<String>,
   pub glyph_cache: TextCacheStats,
@@ -422,10 +437,26 @@ pub(crate) fn record_fallback_cache_stats_delta(
       .cluster_misses
       .saturating_sub(before.cluster_misses)
       .saturating_add(after.glyph_misses.saturating_sub(before.glyph_misses));
+    let glyph_eviction_delta = after
+      .glyph_evictions
+      .saturating_sub(before.glyph_evictions);
+    let cluster_eviction_delta = after
+      .cluster_evictions
+      .saturating_sub(before.cluster_evictions);
+    let clear_delta = after.clears.saturating_sub(before.clears);
     diag.fallback_cache_hits = diag.fallback_cache_hits.saturating_add(hit_delta as usize);
     diag.fallback_cache_misses = diag
       .fallback_cache_misses
       .saturating_add(miss_delta as usize);
+    diag.fallback_cache_glyph_evictions = diag
+      .fallback_cache_glyph_evictions
+      .saturating_add(glyph_eviction_delta as usize);
+    diag.fallback_cache_cluster_evictions = diag
+      .fallback_cache_cluster_evictions
+      .saturating_add(cluster_eviction_delta as usize);
+    diag.fallback_cache_clears = diag
+      .fallback_cache_clears
+      .saturating_add(clear_delta as usize);
   });
 }
 
@@ -3931,7 +3962,7 @@ impl ShapingPipeline {
   pub fn new() -> Self {
     Self {
       cache: ShapingCache::new(SHAPING_CACHE_CAPACITY),
-      font_cache: FallbackCache::new(FONT_RESOLUTION_CACHE_SIZE),
+      font_cache: FallbackCache::new(fallback_cache_capacity()),
     }
   }
 
@@ -3939,7 +3970,7 @@ impl ShapingPipeline {
   fn with_cache_capacity_for_test(capacity: usize) -> Self {
     Self {
       cache: ShapingCache::new(capacity),
-      font_cache: FallbackCache::new(FONT_RESOLUTION_CACHE_SIZE),
+      font_cache: FallbackCache::new(fallback_cache_capacity()),
     }
   }
 

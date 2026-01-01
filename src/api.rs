@@ -1664,6 +1664,12 @@ pub struct RenderCounts {
   pub color_glyph_rasters: Option<usize>,
   pub fallback_cache_hits: Option<usize>,
   pub fallback_cache_misses: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_glyph_evictions: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_cluster_evictions: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_clears: Option<usize>,
   pub last_resort_font_fallbacks: Option<usize>,
   /// Bounded sample of clusters that required the last-resort font fallback, formatted as
   /// space-separated Unicode codepoints (e.g. "U+09AC U+09BE U+0982").
@@ -1979,6 +1985,9 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
     stats.counts.color_glyph_rasters = Some(text.color_glyph_rasters);
     stats.counts.fallback_cache_hits = Some(text.fallback_cache_hits);
     stats.counts.fallback_cache_misses = Some(text.fallback_cache_misses);
+    stats.counts.fallback_cache_glyph_evictions = Some(text.fallback_cache_glyph_evictions);
+    stats.counts.fallback_cache_cluster_evictions = Some(text.fallback_cache_cluster_evictions);
+    stats.counts.fallback_cache_clears = Some(text.fallback_cache_clears);
     stats.counts.last_resort_font_fallbacks = Some(text.last_resort_fallbacks);
     if !text.last_resort_samples.is_empty() {
       stats.counts.last_resort_font_fallback_samples = Some(text.last_resort_samples);
