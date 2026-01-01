@@ -23,6 +23,28 @@ fn pageset_progress_run_help_exits_success() {
 }
 
 #[test]
+fn pageset_progress_migrate_help_mentions_progress_dir_flag() {
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args(["migrate", "--help"])
+    .output()
+    .expect("run pageset_progress migrate --help");
+  assert!(
+    output.status.success(),
+    "expected success for migrate --help"
+  );
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(
+    stdout.contains("--progress-dir"),
+    "migrate help should mention --progress-dir"
+  );
+  assert!(
+    stdout.contains("--html-dir"),
+    "migrate help should mention --html-dir"
+  );
+}
+
+#[test]
 fn pageset_progress_run_help_mentions_font_flags() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .args(["run", "--help"])
