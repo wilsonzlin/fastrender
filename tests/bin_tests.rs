@@ -3,4 +3,3 @@
 // harness pulls the nested modules into a single test crate.
 
 mod bin;
-mod test_support;
