@@ -1679,28 +1679,46 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
     return None;
   }
   if is_single_function_call(trimmed, "linear-gradient") {
-    let lower = trimmed.to_ascii_lowercase();
-    return parse_linear_gradient(&lower, false);
+    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+      let lower = trimmed.to_ascii_lowercase();
+      return parse_linear_gradient(&lower, false);
+    }
+    return parse_linear_gradient(trimmed, false);
   }
   if is_single_function_call(trimmed, "radial-gradient") {
-    let lower = trimmed.to_ascii_lowercase();
-    return parse_radial_gradient(&lower, false);
+    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+      let lower = trimmed.to_ascii_lowercase();
+      return parse_radial_gradient(&lower, false);
+    }
+    return parse_radial_gradient(trimmed, false);
   }
   if is_single_function_call(trimmed, "repeating-linear-gradient") {
-    let lower = trimmed.to_ascii_lowercase();
-    return parse_linear_gradient(&lower, true);
+    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+      let lower = trimmed.to_ascii_lowercase();
+      return parse_linear_gradient(&lower, true);
+    }
+    return parse_linear_gradient(trimmed, true);
   }
   if is_single_function_call(trimmed, "repeating-radial-gradient") {
-    let lower = trimmed.to_ascii_lowercase();
-    return parse_radial_gradient(&lower, true);
+    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+      let lower = trimmed.to_ascii_lowercase();
+      return parse_radial_gradient(&lower, true);
+    }
+    return parse_radial_gradient(trimmed, true);
   }
   if is_single_function_call(trimmed, "conic-gradient") {
-    let lower = trimmed.to_ascii_lowercase();
-    return parse_conic_gradient(&lower, false);
+    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+      let lower = trimmed.to_ascii_lowercase();
+      return parse_conic_gradient(&lower, false);
+    }
+    return parse_conic_gradient(trimmed, false);
   }
   if is_single_function_call(trimmed, "repeating-conic-gradient") {
-    let lower = trimmed.to_ascii_lowercase();
-    return parse_conic_gradient(&lower, true);
+    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+      let lower = trimmed.to_ascii_lowercase();
+      return parse_conic_gradient(&lower, true);
+    }
+    return parse_conic_gradient(trimmed, true);
   }
   None
 }
@@ -1774,9 +1792,8 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
     stops.extend(cs);
   } else {
     start_idx = 1;
-    let lower = parts[0].to_ascii_lowercase();
-    let (prelude, pos_part) = match lower.find(" at ") {
-      Some(idx) => (lower[..idx].trim(), Some(&parts[0][idx + 4..])),
+    let (prelude, pos_part) = match parts[0].find(" at ") {
+      Some(idx) => (parts[0].get(..idx)?.trim(), Some(parts[0].get(idx + 4..)?)),
       None => (parts[0], None),
     };
 
@@ -1786,14 +1803,9 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
       }
     }
 
-    let tokens: Vec<&str> = prelude
-      .split_whitespace()
-      .filter(|t| !t.is_empty())
-      .collect();
     let mut explicit_sizes = Vec::new();
-    for token in tokens {
-      let token_lower = token.to_ascii_lowercase();
-      match token_lower.as_str() {
+    for token in prelude.split_whitespace() {
+      match token {
         "circle" => shape = RadialGradientShape::Circle,
         "ellipse" => shape = RadialGradientShape::Ellipse,
         "closest-side" => size = RadialGradientSize::ClosestSide,
@@ -1871,14 +1883,21 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
 
   fn classify(value: &PropertyValue) -> Option<Part> {
     match value {
-      PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
-        "left" => Some(Part::Keyword(AxisKind::Horizontal, 0.0)),
-        "right" => Some(Part::Keyword(AxisKind::Horizontal, 1.0)),
-        "top" => Some(Part::Keyword(AxisKind::Vertical, 0.0)),
-        "bottom" => Some(Part::Keyword(AxisKind::Vertical, 1.0)),
-        "center" => Some(Part::Keyword(AxisKind::Either, 0.5)),
-        _ => None,
-      },
+      PropertyValue::Keyword(kw) => {
+        if kw.eq_ignore_ascii_case("left") {
+          Some(Part::Keyword(AxisKind::Horizontal, 0.0))
+        } else if kw.eq_ignore_ascii_case("right") {
+          Some(Part::Keyword(AxisKind::Horizontal, 1.0))
+        } else if kw.eq_ignore_ascii_case("top") {
+          Some(Part::Keyword(AxisKind::Vertical, 0.0))
+        } else if kw.eq_ignore_ascii_case("bottom") {
+          Some(Part::Keyword(AxisKind::Vertical, 1.0))
+        } else if kw.eq_ignore_ascii_case("center") {
+          Some(Part::Keyword(AxisKind::Either, 0.5))
+        } else {
+          None
+        }
+      }
       PropertyValue::Length(l) => Some(Part::Offset(*l)),
       PropertyValue::Percentage(p) => Some(Part::Offset(Length::percent(*p))),
       PropertyValue::Number(n) if *n == 0.0 => Some(Part::Offset(Length::px(0.0))),
@@ -2517,6 +2536,34 @@ mod tests {
   }
 
   #[test]
+  fn parses_gradients_case_insensitively() {
+    let value = "LINEAR-GRADIENT(To LEFT, #000, #fff)";
+    let PropertyValue::LinearGradient { angle, stops } =
+      parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+    assert!((angle - 270.0).abs() < 0.01);
+    assert_eq!(stops.len(), 2);
+
+    let value = "CONIC-GRADIENT(FROM 90DEG AT 25% 75%, red 0DEG, blue 180DEG)";
+    let PropertyValue::ConicGradient {
+      from_angle,
+      position,
+      stops,
+    } = parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected conic gradient");
+    };
+    assert!((from_angle - 90.0).abs() < 0.01);
+    assert_eq!(stops.len(), 2);
+    assert_eq!(position.x.offset.unit, LengthUnit::Percent);
+    assert!((position.x.offset.value - 25.0).abs() < 0.01);
+    assert_eq!(position.y.offset.unit, LengthUnit::Percent);
+    assert!((position.y.offset.value - 75.0).abs() < 0.01);
+  }
+
+  #[test]
   fn parses_two_position_gradient_color_stop() {
     let value = "linear-gradient(to right, black 0 50%, transparent 50%)";
     let PropertyValue::LinearGradient { stops, .. } =
@@ -2591,7 +2638,9 @@ mod tests {
   #[test]
   fn could_be_number_or_calc_recognizes_math_functions_without_digits() {
     assert!(could_be_number_or_calc("calc(var(--x))"));
-    assert!(could_be_number_or_calc("clamp(var(--a), var(--b), var(--c))"));
+    assert!(could_be_number_or_calc(
+      "clamp(var(--a), var(--b), var(--c))"
+    ));
   }
 
   #[test]
@@ -2894,7 +2943,8 @@ mod tests {
 
   #[test]
   fn tokenizer_slice_impl_matches_old_allocating_impl() {
-    let value = r#"fn1(a, fn2("b, c", "d\"e"))/url(data:image/svg+xml;base64,abc/def==) e\ f, "g\"h" / i"#;
+    let value =
+      r#"fn1(a, fn2("b, c", "d\"e"))/url(data:image/svg+xml;base64,abc/def==) e\ f, "g\"h" / i"#;
     let old = tokenize_property_value_allocating(value, true);
     let new = tokenize_property_value(value, true);
     let old_slices: Vec<&str> = old.iter().map(String::as_str).collect();
@@ -3141,10 +3191,10 @@ pub fn parse_length(s: &str) -> Option<Length> {
     }
   }
 
-  if MATH_PREFIXES
-    .iter()
-    .any(|p| s.get(..p.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(p)))
-  {
+  if MATH_PREFIXES.iter().any(|p| {
+    s.get(..p.len())
+      .is_some_and(|prefix| prefix.eq_ignore_ascii_case(p))
+  }) {
     if let Some(len) = parse_function_length(s) {
       return Some(len);
     }
@@ -3493,11 +3543,28 @@ fn parse_calc_factor<'i, 't>(
     Token::Dimension {
       value, ref unit, ..
     } => {
-      let unit = unit.as_ref().to_ascii_lowercase();
-      if let Some(angle) = angle_from_unit(&unit, *value) {
+      let unit = unit.as_ref();
+      let mut unit_lower_buf = [0u8; 16];
+      let unit_lower: std::borrow::Cow<'_, str> = if unit.len() <= unit_lower_buf.len() {
+        for (dst, src) in unit_lower_buf[..unit.len()]
+          .iter_mut()
+          .zip(unit.as_bytes().iter().copied())
+        {
+          *dst = src.to_ascii_lowercase();
+        }
+        std::borrow::Cow::Borrowed(
+          std::str::from_utf8(&unit_lower_buf[..unit.len()])
+            .map_err(|_| location.new_custom_error(()))?,
+        )
+      } else {
+        std::borrow::Cow::Owned(unit.to_ascii_lowercase())
+      };
+      let unit_lower = unit_lower.as_ref();
+
+      if let Some(angle) = angle_from_unit(unit_lower, *value) {
         return Ok(CalcComponent::Angle(angle));
       }
-      let unit = match unit.as_str() {
+      let unit = match unit_lower {
         "px" => LengthUnit::Px,
         "em" => LengthUnit::Em,
         "rem" => LengthUnit::Rem,
@@ -3526,8 +3593,23 @@ fn parse_calc_factor<'i, 't>(
       *unit_value * 100.0,
     ))),
     Token::Function(ref name) => {
-      let func = name.as_ref().to_ascii_lowercase();
-      parse_math_function(&func, input, location)
+      let name = name.as_ref();
+      let mut func_lower_buf = [0u8; 16];
+      let func_lower: std::borrow::Cow<'_, str> = if name.len() <= func_lower_buf.len() {
+        for (dst, src) in func_lower_buf[..name.len()]
+          .iter_mut()
+          .zip(name.as_bytes().iter().copied())
+        {
+          *dst = src.to_ascii_lowercase();
+        }
+        std::borrow::Cow::Borrowed(
+          std::str::from_utf8(&func_lower_buf[..name.len()])
+            .map_err(|_| location.new_custom_error(()))?,
+        )
+      } else {
+        std::borrow::Cow::Owned(name.to_ascii_lowercase())
+      };
+      parse_math_function(func_lower.as_ref(), input, location)
     }
     Token::ParenthesisBlock => input.parse_nested_block(parse_calc_sum),
     Token::Delim('+') => parse_calc_factor(input),
@@ -3843,18 +3925,25 @@ fn parse_round_function<'i, 't>(
   input.skip_whitespace();
   let strategy = input
     .try_parse(|p| {
-      p.expect_ident()
-        .map(|ident| ident.as_ref().to_ascii_lowercase())
+      p.expect_ident().map(|ident| {
+        let ident = ident.as_ref();
+        if ident.eq_ignore_ascii_case("nearest") {
+          Some(RoundStrategy::Nearest)
+        } else if ident.eq_ignore_ascii_case("up") {
+          Some(RoundStrategy::Up)
+        } else if ident.eq_ignore_ascii_case("down") {
+          Some(RoundStrategy::Down)
+        } else if ident.eq_ignore_ascii_case("to-zero") {
+          Some(RoundStrategy::ToZero)
+        } else if ident.eq_ignore_ascii_case("away-from-zero") {
+          Some(RoundStrategy::AwayFromZero)
+        } else {
+          None
+        }
+      })
     })
     .ok()
-    .and_then(|ident| match ident.as_str() {
-      "nearest" => Some(RoundStrategy::Nearest),
-      "up" => Some(RoundStrategy::Up),
-      "down" => Some(RoundStrategy::Down),
-      "to-zero" => Some(RoundStrategy::ToZero),
-      "away-from-zero" => Some(RoundStrategy::AwayFromZero),
-      _ => None,
-    });
+    .flatten();
 
   let strategy = if let Some(s) = strategy {
     input.skip_whitespace();
