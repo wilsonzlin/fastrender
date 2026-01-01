@@ -121,6 +121,10 @@ name = "layout_parallel"
 harness = false
 
 [[bench]]
+name = "layout_hotspots"
+harness = false
+
+[[bench]]
 name = "fragment_clone"
 harness = false
 

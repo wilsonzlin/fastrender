@@ -55,7 +55,8 @@ pub(crate) enum TaffyAdapterKind {
 
 /// Taffy perf counters captured during a render when diagnostics are enabled.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TaffyPerfCounters {
+#[doc(hidden)]
+pub struct TaffyPerfCounters {
   pub flex_compute_ns: u64,
   pub grid_compute_ns: u64,
   pub flex_measure_calls: u64,
@@ -72,12 +73,13 @@ static TAFFY_GRID_MEASURE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Enables Taffy perf counters for the duration of a diagnostics-enabled render.
 ///
 /// The counters are global and not intended for per-thread attribution.
-pub(crate) struct TaffyPerfCountersGuard {
+#[doc(hidden)]
+pub struct TaffyPerfCountersGuard {
   previous: bool,
 }
 
 impl TaffyPerfCountersGuard {
-  pub(crate) fn new() -> Self {
+  pub fn new() -> Self {
     let previous = TAFFY_PERF_ENABLED.swap(true, Ordering::Relaxed);
     if !previous {
       TAFFY_PERF_RESET_REQUESTED.store(true, Ordering::Relaxed);
@@ -147,7 +149,8 @@ pub(crate) fn record_taffy_measure_call(kind: TaffyAdapterKind) {
 }
 
 #[inline]
-pub(crate) fn taffy_perf_counters() -> TaffyPerfCounters {
+#[doc(hidden)]
+pub fn taffy_perf_counters() -> TaffyPerfCounters {
   TaffyPerfCounters {
     flex_compute_ns: TAFFY_FLEX_COMPUTE_NS.load(Ordering::Relaxed),
     grid_compute_ns: TAFFY_GRID_COMPUTE_NS.load(Ordering::Relaxed),
