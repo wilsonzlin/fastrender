@@ -1944,7 +1944,8 @@ pub fn compute_adjusted_font_size(
 }
 
 fn is_non_rendering_for_coverage(ch: char) -> bool {
-  matches!(ch, '\u{200c}' | '\u{200d}')
+  is_bidi_control_char(ch)
+    || matches!(ch, '\u{200c}' | '\u{200d}')
     || ('\u{fe00}'..='\u{fe0f}').contains(&ch)
     || ('\u{e0100}'..='\u{e01ef}').contains(&ch)
     || ('\u{180b}'..='\u{180d}').contains(&ch)
@@ -2171,6 +2172,7 @@ pub fn assign_fonts(
     font_context,
     None,
     font_context.font_generation(),
+    true,
   )
 }
 
@@ -2180,6 +2182,7 @@ fn assign_fonts_internal(
   font_context: &FontContext,
   font_cache: Option<&FallbackCache>,
   font_generation: u64,
+  enable_ascii_fast_path: bool,
 ) -> Result<Vec<FontRun>> {
   let descriptor_stats_enabled =
     font_cache.is_some() && text_diagnostics_enabled() && text_fallback_descriptor_stats_enabled();
@@ -2240,7 +2243,11 @@ fn assign_fonts_internal(
   for run in runs {
     // Fast path: ASCII runs (e.g. page text + code blocks) spend a lot of time in
     // per-codepoint cluster handling, even when a single font covers the run.
-    if run.text.is_ascii() && !matches!(style.font_variant_emoji, FontVariantEmoji::Emoji) {
+    if enable_ascii_fast_path
+      && !run.text.is_empty()
+      && run.text.is_ascii()
+      && !matches!(style.font_variant_emoji, FontVariantEmoji::Emoji)
+    {
       let emoji_pref = match style.font_variant_emoji {
         FontVariantEmoji::Text | FontVariantEmoji::Unicode => EmojiPreference::AvoidEmoji,
         _ => EmojiPreference::Neutral,
@@ -2402,6 +2409,29 @@ fn assign_fonts_internal(
         cluster_base_and_relevant_chars(cluster_text, &mut relevant_chars);
       let cluster_chars = relevant_chars.as_slice();
       let require_base_glyph = !is_non_rendering_for_coverage(base_char);
+      let base_arr = [base_char];
+      let coverage_chars_all: &[char] = if !cluster_chars.is_empty() {
+        cluster_chars
+      } else if require_base_glyph {
+        &base_arr[..]
+      } else {
+        &[]
+      };
+      let has_marks = coverage_chars_all.iter().copied().any(is_unicode_mark);
+      let coverage_chars_required: &[char] = if has_marks {
+        required_chars.clear();
+        for ch in coverage_chars_all.iter().copied() {
+          if !is_unicode_mark(ch) {
+            required_chars.push(ch);
+          }
+        }
+        if required_chars.is_empty() {
+          required_chars.push(base_char);
+        }
+        required_chars.as_slice()
+      } else {
+        coverage_chars_all
+      };
 
       let wants_emoji = matches!(emoji_pref, EmojiPreference::PreferEmoji);
       let avoids_emoji = matches!(emoji_pref, EmojiPreference::AvoidEmoji);
@@ -2411,14 +2441,13 @@ fn assign_fonts_internal(
           let emoji_ok = !(wants_emoji && !primary_font.is_emoji_font)
             && !(avoids_emoji && primary_font.is_emoji_font);
           if emoji_ok
-            && (cluster_chars.is_empty()
-              || (require_base_glyph
-                && font_supports_all_chars_fast(
-                  db,
-                  primary_font.font.as_ref(),
-                  &mut primary_font.cached_face,
-                  cluster_chars,
-                )))
+            && (coverage_chars_required.is_empty()
+              || font_supports_all_chars_fast(
+                db,
+                primary_font.font.as_ref(),
+                &mut primary_font.cached_face,
+                coverage_chars_required,
+              ))
           {
             // Switch back to the run's primary font without consulting the fallback cache.
             if let Some(cur) = current.take() {
@@ -2469,14 +2498,13 @@ fn assign_fonts_internal(
       if let Some(cur) = current.as_mut() {
         let emoji_ok = !(wants_emoji && !cur.is_emoji_font) && !(avoids_emoji && cur.is_emoji_font);
         if emoji_ok
-          && (cluster_chars.is_empty()
-            || (require_base_glyph
-              && font_supports_all_chars_fast(
-                db,
-                cur.font.as_ref(),
-                &mut cur.cached_face,
-                cluster_chars,
-              )))
+          && (coverage_chars_required.is_empty()
+            || font_supports_all_chars_fast(
+              db,
+              cur.font.as_ref(),
+              &mut cur.cached_face,
+              coverage_chars_required,
+            ))
         {
           last_cluster_end = cluster_end;
           continue;
@@ -2557,15 +2585,6 @@ fn assign_fonts_internal(
       }
 
       if !skip_resolution && resolved.is_none() {
-        let base_arr = [base_char];
-        let coverage_chars_all: &[char] = if !cluster_chars.is_empty() {
-          cluster_chars
-        } else if require_base_glyph {
-          &base_arr[..]
-        } else {
-          &[]
-        };
-
         resolved = resolve_font_for_cluster_with_preferences(
           base_char,
           run.script,
@@ -2584,19 +2603,7 @@ fn assign_fonts_internal(
           math_families,
         );
 
-        let has_marks = coverage_chars_all.iter().copied().any(is_unicode_mark);
         if has_marks {
-          required_chars.clear();
-          for ch in coverage_chars_all.iter().copied() {
-            if !is_unicode_mark(ch) {
-              required_chars.push(ch);
-            }
-          }
-          if required_chars.is_empty() {
-            required_chars.push(base_char);
-          }
-
-          let coverage_chars_required = required_chars.as_slice();
           let needs_retry = match resolved.as_ref() {
             Some(font) => {
               let mut face = None;
@@ -5015,6 +5022,7 @@ impl ShapingPipeline {
       font_context,
       Some(&self.font_cache),
       font_generation,
+      true,
     )?;
     record_text_coverage(coverage_timer);
 
@@ -5787,6 +5795,82 @@ mod tests {
       !has_notdef_for_mark,
       "unsupported combining marks should not emit .notdef glyphs"
     );
+  }
+
+  #[test]
+  fn ascii_runs_use_single_font_run_and_match_slow_path_shaping() {
+    let ctx = FontContext::with_config(FontConfig::bundled_only());
+    assert!(
+      !ctx.database().is_empty(),
+      "bundled font context should load deterministic fonts for tests"
+    );
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()].into();
+    style.font_size = 16.0;
+
+    let text = "The quick brown fox jumps over the lazy dog 0123456789.!? "
+      .repeat(128)
+      .trim_end()
+      .to_string();
+    assert!(text.is_ascii());
+
+    let run = ItemizedRun {
+      start: 0,
+      end: text.len(),
+      text: text.clone(),
+      script: Script::Latin,
+      direction: Direction::LeftToRight,
+      level: 0,
+    };
+
+    let fast = assign_fonts_internal(
+      &[run.clone()],
+      &style,
+      &ctx,
+      None,
+      ctx.font_generation(),
+      true,
+    )
+    .expect("assign fonts with ASCII fast path");
+    assert_eq!(
+      fast.len(),
+      1,
+      "ASCII fast-path should keep a single font run"
+    );
+
+    let slow = assign_fonts_internal(
+      &[run],
+      &style,
+      &ctx,
+      None,
+      ctx.font_generation(),
+      false,
+    )
+    .expect("assign fonts without ASCII fast path");
+    assert_eq!(slow.len(), 1, "slow path should also keep a single font run");
+
+    assert_eq!(fast[0].text, text);
+    assert_eq!(slow[0].text, text);
+    assert_eq!(fast[0].font.family, slow[0].font.family);
+    assert_eq!(fast[0].font.index, slow[0].font.index);
+
+    let shaped_fast = shape_font_run(&fast[0]).expect("shape fast run");
+    let shaped_slow = shape_font_run(&slow[0]).expect("shape slow run");
+    assert_eq!(
+      shaped_fast.glyphs.len(),
+      shaped_slow.glyphs.len(),
+      "fast/slow shaping should produce the same number of glyphs"
+    );
+    for (a, b) in shaped_fast.glyphs.iter().zip(shaped_slow.glyphs.iter()) {
+      assert_eq!(a.glyph_id, b.glyph_id);
+      assert_eq!(a.cluster, b.cluster);
+      assert!((a.x_advance - b.x_advance).abs() < 0.0001);
+      assert!((a.y_advance - b.y_advance).abs() < 0.0001);
+      assert!((a.x_offset - b.x_offset).abs() < 0.0001);
+      assert!((a.y_offset - b.y_offset).abs() < 0.0001);
+    }
+    assert!((shaped_fast.advance - shaped_slow.advance).abs() < 0.0001);
   }
 
   #[test]
@@ -7817,6 +7901,7 @@ mod tests {
       &ctx,
       Some(&cache),
       ctx.font_generation(),
+      true,
     )
     .expect("assign fonts");
 
