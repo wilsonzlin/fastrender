@@ -5251,6 +5251,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     );
     let mut rules: Vec<CascadeRule<'_>> = Vec::new();
     let mut host_rules: Vec<CascadeRule<'_>> = Vec::new();
+    let host_layer_order = layer_order_interner
+      .intern_prefixed(&[], tree_scope_prefix_for_node(&dom_maps, *host));
 
     for (idx, rule) in collected.iter().enumerate() {
       let cascade_rule = CascadeRule {
@@ -5272,6 +5274,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
       if rule_targets_shadow_host(rule.rule) {
         let host_rule = CascadeRule {
           scope: RuleScope::Document,
+          layer_order: host_layer_order.clone(),
           ..cascade_rule.clone()
         };
         host_rules.push(host_rule);
@@ -5282,6 +5285,53 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     shadow_indices.insert(*host, RuleIndex::new(rules, quirks_mode));
     if !host_rules.is_empty() {
       shadow_host_indices.insert(*host, RuleIndex::new(host_rules, quirks_mode));
+    }
+  }
+
+  // Legacy cascade entrypoints apply document styles inside shadow roots. When a document
+  // stylesheet contains :host / :host-context selectors and a shadow tree has no shadow
+  // stylesheet, treat those selectors as shadow-host rules so they can style the host element.
+  if !dom_maps.shadow_hosts.is_empty() {
+    let mut fallback_host_rule_templates: Vec<CascadeRule<'_>> = Vec::new();
+    for (idx, rule) in author_rules.iter().enumerate() {
+      if !rule_targets_shadow_host(rule.rule) {
+        continue;
+      }
+      fallback_host_rule_templates.push(CascadeRule {
+        origin: StyleOrigin::Author,
+        order: document_order_base + idx,
+        rule: rule.rule,
+        layer_order: document_unlayered_layer_order(),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      });
+    }
+
+    if !fallback_host_rule_templates.is_empty() {
+      let mut seen_hosts: HashSet<usize> = HashSet::new();
+      for host_id in dom_maps.shadow_hosts.values().copied() {
+        if !seen_hosts.insert(host_id) {
+          continue;
+        }
+        if shadow_indices.contains_key(&host_id) {
+          continue;
+        }
+        if shadow_host_indices.contains_key(&host_id) {
+          continue;
+        }
+        let host_layer_order =
+          layer_order_interner.intern_prefixed(&[], tree_scope_prefix_for_node(&dom_maps, host_id));
+        let mut rules = Vec::with_capacity(fallback_host_rule_templates.len());
+        for template in fallback_host_rule_templates.iter() {
+          let mut rule = template.clone();
+          rule.layer_order = host_layer_order.clone();
+          rules.push(rule);
+        }
+        shadow_host_indices.insert(host_id, RuleIndex::new(rules, quirks_mode));
+      }
     }
   }
 
@@ -5725,6 +5775,8 @@ impl<'a> PreparedCascade<'a> {
       );
       let mut rules: Vec<CascadeRule<'a>> = Vec::new();
       let mut host_rules: Vec<CascadeRule<'a>> = Vec::new();
+      let host_layer_order = layer_order_interner
+        .intern_prefixed(&[], tree_scope_prefix_for_node(&dom_maps, *host));
 
       for (idx, rule) in collected.iter().enumerate() {
         let cascade_rule = CascadeRule {
@@ -5744,6 +5796,7 @@ impl<'a> PreparedCascade<'a> {
         if rule_targets_shadow_host(rule.rule) {
           let host_rule = CascadeRule {
             scope: RuleScope::Document,
+            layer_order: host_layer_order.clone(),
             ..cascade_rule.clone()
           };
           host_rules.push(host_rule);
@@ -6482,7 +6535,7 @@ fn scope_rule_index_with_shadow_host<'a>(
       .or_else(|| {
         scopes
           .fallback_document_rules_in_shadow_scopes
-          .then_some((&scopes.document, false))
+          .then_some((&scopes.document, true))
       }),
     None => Some((&scopes.document, false)),
   }
@@ -17107,6 +17160,9 @@ fn resolve_scopes<'a>(
   scopes: &[ScopeContext<'a>],
   context: &mut MatchingContext<FastRenderSelectorImpl>,
 ) -> Option<ScopeMatchIndex> {
+  use selectors::parser::Combinator;
+  use selectors::parser::Component;
+
   if scopes.is_empty() {
     return None;
   }
@@ -17144,10 +17200,42 @@ fn resolve_scopes<'a>(
           continue;
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &ancestors[..idx]);
+        let root_candidate = idx == root_index;
+        let root_candidate_has_no_element_parent = root_candidate && candidate_ref.parent_element().is_none();
         let matches = context.nest_for_scope_condition(Some(base_ref.opaque()), |ctx| {
           start_selectors.iter().any(|sel| {
             let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
-            matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
+            if matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx) {
+              return true;
+            }
+
+            // `@scope` prelude selectors are parsed as relative selectors. When a selector doesn't
+            // explicitly include `:scope` and doesn't start with a combinator (e.g. `.outer`), the
+            // selectors crate inserts an implicit `:scope` with a descendant combinator
+            // (`:scope .outer`).
+            //
+            // That matches descendants of the scope element, but not the scope element itself.
+            // When styling a tree without an outer wrapper element (common in unit tests), we want
+            // a scope-start selector like `(.outer)` to be able to match the root element itself.
+            //
+            // To preserve normal scoping semantics for `>`, `+`, `~`, etc, only apply this fallback
+            // for selectors whose implicit scope uses a descendant combinator.
+            if root_candidate_has_no_element_parent {
+              let components = sel.iter_raw_match_order().as_slice();
+              if components.len() >= 2
+                && matches!(components[components.len() - 1], Component::ImplicitScope)
+                && matches!(
+                  components[components.len() - 2],
+                  Component::Combinator(Combinator::Descendant)
+                )
+              {
+                let self_ancestor = [candidate];
+                let root_ref = ElementRef::with_ancestors(candidate, &self_ancestor);
+                return matches_selector_cascade(sel, Some(&hashes), &root_ref, ctx);
+              }
+            }
+
+            false
           })
         }) || (idx == root_index
           && start_selectors.iter().any(|sel| {
@@ -17496,14 +17584,14 @@ fn find_matching_rules<'a>(
               let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                  ctx.with_allow_featureless_host_traversal(true, |ctx| {
-                    let prev_bloom_filter = ctx.bloom_filter;
-                    ctx.bloom_filter = None;
-                    let matched = matches_selector_cascade(
-                      selector,
-                      Some(&indexed.ancestor_hashes),
-                      &element_ref,
-                      ctx,
+                    ctx.with_allow_featureless_host_traversal(true, |ctx| {
+                      let prev_bloom_filter = ctx.bloom_filter;
+                      ctx.bloom_filter = None;
+                      let matched = matches_selector_cascade_counted(
+                        selector,
+                        Some(&indexed.ancestor_hashes),
+                        &element_ref,
+                        ctx,
                     );
                     ctx.bloom_filter = prev_bloom_filter;
                     matched
