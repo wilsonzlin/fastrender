@@ -4796,7 +4796,7 @@ impl DisplayListRenderer {
     // Note: The bounds must be computed in the same untransformed device coordinate space that
     // `render_box_shadow` expects. The current canvas transform is applied only when compositing
     // the offscreen pixmap back onto the destination.
-    let (shadow_bounds, temp_w, temp_h) = if shadow.inset {
+    let (shadow_bounds, blur_pad) = if shadow.inset {
       // Inset shadow rendering allocates a padded temporary surface internally. To avoid clipping
       // any pixels (and to match the previous full-canvas behavior), compute the same padded
       // region that `rasterize::render_box_shadow` draws into.
@@ -4806,14 +4806,13 @@ impl DisplayListRenderer {
       let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil();
       let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil();
 
-      let temp_w = (rect.width() + pad_x * 2.0).max(1.0) as u32;
-      let temp_h = (rect.height() + pad_y * 2.0).max(1.0) as u32;
-      let min_x = (rect.x() - pad_x) as i32 as f32;
-      let min_y = (rect.y() - pad_y) as i32 as f32;
+      let min_x = (rect.x() - pad_x).floor();
+      let min_y = (rect.y() - pad_y).floor();
+      let max_x = (rect.x() + rect.width() + pad_x).ceil();
+      let max_y = (rect.y() + rect.height() + pad_y).ceil();
       (
-        Rect::from_xywh(min_x, min_y, temp_w as f32, temp_h as f32),
-        temp_w,
-        temp_h,
+        Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y),
+        blur_pad,
       )
     } else {
       // Match the internal `rasterize::render_box_shadow` math (spread + 3σ blur padding).
@@ -4830,11 +4829,10 @@ impl DisplayListRenderer {
       let min_y = (shadow_rect.y() - blur_pad).floor();
       let max_x = (shadow_rect.x() + shadow_rect.width() + blur_pad).ceil();
       let max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
-      let width = max_x - min_x;
-      let height = max_y - min_y;
-      let temp_w = width.ceil().max(1.0) as u32;
-      let temp_h = height.ceil().max(1.0) as u32;
-      (Rect::from_xywh(min_x, min_y, width, height), temp_w, temp_h)
+      (
+        Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y),
+        blur_pad,
+      )
     };
 
     if shadow_bounds.width() <= 0.0
@@ -4847,6 +4845,46 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
+    let clipped_bounds = {
+      let mut visible_device = self.canvas.bounds();
+      if let Some(clip) = self.canvas.clip_bounds() {
+        let Some(intersection) = visible_device.intersection(clip) else {
+          return Ok(());
+        };
+        visible_device = intersection;
+      }
+      if visible_device.width() <= 0.0 || visible_device.height() <= 0.0 {
+        return Ok(());
+      }
+
+      // Avoid overly conservative allocations for huge shadows: only the portion of the shadow
+      // that maps to the visible device region (respecting the current transform) can contribute
+      // to the final output.
+      let transform = self.canvas.transform();
+      let visible_local = if transform == Transform::identity() {
+        Some(visible_device)
+      } else {
+        invert_transform(transform).map(|inv| transform_rect(visible_device, &inv))
+      };
+
+      if let Some(visible_local) = visible_local {
+        // The final output is clipped to the visible device region, but we still need a guard band
+        // around it so the gaussian blur kernel can sample pixels just outside the clip.
+        let guard = blur_pad.max(0.0) + 1.0;
+        let visible_local = visible_local.inflate(guard);
+        match shadow_bounds.intersection(visible_local) {
+          Some(bounds) => bounds,
+          None => return Ok(()),
+        }
+      } else {
+        // If the transform is non-invertible, fall back to the un-clipped bounds.
+        shadow_bounds
+      }
+    };
+
+    let temp_w = clipped_bounds.width().ceil().max(1.0) as u32;
+    let temp_h = clipped_bounds.height().ceil().max(1.0) as u32;
+
     let mut temp = match new_pixmap(temp_w, temp_h) {
       Some(p) => p,
       None => return Ok(()),
@@ -4854,8 +4892,8 @@ impl DisplayListRenderer {
 
     let _ = render_box_shadow_cached(
       &mut temp,
-      rect.x() - shadow_bounds.x(),
-      rect.y() - shadow_bounds.y(),
+      rect.x() - clipped_bounds.x(),
+      rect.y() - clipped_bounds.y(),
       rect.width(),
       rect.height(),
       &radii,
@@ -4868,10 +4906,10 @@ impl DisplayListRenderer {
       blend_mode: self.canvas.blend_mode(),
       ..Default::default()
     };
-    let dest_x = shadow_bounds.x().floor() as i32;
-    let dest_y = shadow_bounds.y().floor() as i32;
-    let frac_x = shadow_bounds.x() - dest_x as f32;
-    let frac_y = shadow_bounds.y() - dest_y as f32;
+    let dest_x = clipped_bounds.x().floor() as i32;
+    let dest_y = clipped_bounds.y().floor() as i32;
+    let frac_x = clipped_bounds.x() - dest_x as f32;
+    let frac_y = clipped_bounds.y() - dest_y as f32;
     let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
     let clip = self.canvas.clip_mask().cloned();
     self.canvas.pixmap_mut().draw_pixmap(
@@ -10405,6 +10443,58 @@ mod tests {
       (alloc.width, alloc.height),
       (44, 44),
       "unexpected offscreen allocation size for box shadow: {alloc:?}"
+    );
+  }
+
+  #[test]
+  fn box_shadow_clips_large_bounds_to_visible_region_with_guard_band() {
+    let item = BoxShadowItem {
+      // Extremely wide box to simulate page-sized containers. The left edge sits near the canvas
+      // so the shadow is actually visible, but the full shadow bounds would be enormous.
+      rect: Rect::from_xywh(5.0, 10.0, 20_000.0, 20.0),
+      radii: BorderRadii::ZERO,
+      offset: Point::new(0.0, 0.0),
+      blur_radius: 4.0,
+      spread_radius: 0.0,
+      color: Rgba::new(0, 0, 0, 0.5),
+      inset: false,
+    };
+
+    let (new_pixmap, reference_pixmap) = box_shadow_scene(|_| {}, &item);
+    assert_eq!(
+      new_pixmap.data(),
+      reference_pixmap.data(),
+      "clipped box shadow output should match reference"
+    );
+
+    let mut renderer =
+      DisplayListRenderer::new(64, 64, Rgba::WHITE, FontContext::new()).expect("renderer");
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    renderer
+      .render_box_shadow(&item)
+      .expect("box shadow render should succeed");
+    let records = recorder.take();
+    drop(recorder);
+
+    let renderer_allocs: Vec<_> = records
+      .iter()
+      .filter(|r| r.file.ends_with("display_list_renderer.rs"))
+      .collect();
+    assert_eq!(
+      renderer_allocs.len(),
+      1,
+      "expected exactly one renderer-level pixmap allocation, got {renderer_allocs:?}"
+    );
+
+    let alloc = renderer_allocs[0];
+    let blur_pad = (item.blur_radius.abs() * 3.0).ceil() as u32;
+    let canvas_w = renderer.canvas.width();
+    let canvas_h = renderer.canvas.height();
+    let max_w = canvas_w + (blur_pad + 4) * 2;
+    let max_h = canvas_h + (blur_pad + 4) * 2;
+    assert!(
+      alloc.width <= max_w && alloc.height <= max_h,
+      "expected box shadow to be clipped near the visible region (max {max_w}x{max_h}), got {alloc:?}"
     );
   }
 

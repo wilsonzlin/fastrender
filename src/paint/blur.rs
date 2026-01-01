@@ -2102,9 +2102,32 @@ fn tile_blur(
   if budget_pixels == 0 {
     return Ok(None);
   }
-  let base_span = (budget_pixels as f64).sqrt().floor() as u32;
-  let tile_w = base_span.saturating_sub(pad_x.saturating_mul(2)).max(1);
-  let tile_h = base_span.saturating_sub(pad_y.saturating_mul(2)).max(1);
+  let budget_pixels_u64 = budget_pixels as u64;
+
+  // Prefer tiles that are close to the source image aspect ratio so we don't end up with
+  // an excessive tile count on very wide/tall surfaces.
+  let (span_w, span_h) = if width >= height {
+    let aspect = width as f64 / height as f64;
+    let mut span_w = ((budget_pixels as f64) * aspect).sqrt().floor() as u64;
+    span_w = span_w
+      .max(1)
+      .min(budget_pixels_u64.max(1))
+      .min(width as u64);
+    let span_h = (budget_pixels_u64 / span_w).max(1).min(height as u64);
+    (span_w as u32, span_h as u32)
+  } else {
+    let aspect = height as f64 / width as f64;
+    let mut span_h = ((budget_pixels as f64) * aspect).sqrt().floor() as u64;
+    span_h = span_h
+      .max(1)
+      .min(budget_pixels_u64.max(1))
+      .min(height as u64);
+    let span_w = (budget_pixels_u64 / span_h).max(1).min(width as u64);
+    (span_w as u32, span_h as u32)
+  };
+
+  let tile_w = span_w.saturating_sub(pad_x.saturating_mul(2)).max(1);
+  let tile_h = span_h.saturating_sub(pad_y.saturating_mul(2)).max(1);
   if tile_w >= width && tile_h >= height {
     return Ok(None);
   }
@@ -2121,6 +2144,22 @@ fn tile_blur(
     src_h: u32,
     offset_x: u32,
     offset_y: u32,
+  }
+
+  struct TileScratch {
+    tile: Option<Pixmap>,
+  }
+
+  impl TileScratch {
+    fn get(&mut self, width: u32, height: u32) -> Result<&mut Pixmap, RenderError> {
+      let needs_new = self.tile.as_ref().map_or(true, |pixmap| {
+        pixmap.width() != width || pixmap.height() != height
+      });
+      if needs_new {
+        self.tile = Some(new_pixmap_with_context(width, height, "tile blur tile")?);
+      }
+      Ok(self.tile.as_mut().expect("tile allocated"))
+    }
   }
 
   let tiles_x = ((width as u64 + tile_w as u64 - 1) / tile_w as u64) as u32;
@@ -2149,39 +2188,35 @@ fn tile_blur(
     let deadline_counter = AtomicUsize::new(0);
     let error: Mutex<Option<RenderError>> = Mutex::new(None);
 
-    let blur_job = |job: TileJob| {
+    let store_error = |err: RenderError| {
+      cancelled.store(true, Ordering::Relaxed);
+      let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+      if slot.is_none() {
+        *slot = Some(err);
+      }
+    };
+
+    let blur_job = |job: TileJob, scratch: &mut TileScratch| {
       if cancelled.load(Ordering::Relaxed) {
         return;
       }
       let out_ptr = out_base as *mut u8;
 
       if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
-        cancelled.store(true, Ordering::Relaxed);
-        let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
-        if slot.is_none() {
-          *slot = Some(err);
-        }
+        store_error(err);
         return;
       }
       if deadline_enabled {
         if let Err(err) = check_active(RenderStage::Paint) {
-          cancelled.store(true, Ordering::Relaxed);
-          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
-          if slot.is_none() {
-            *slot = Some(err);
-          }
+          store_error(err);
           return;
         }
       }
 
-      let mut tile = match new_pixmap_with_context(job.src_w, job.src_h, "tile blur tile") {
+      let tile = match scratch.get(job.src_w, job.src_h) {
         Ok(p) => p,
         Err(err) => {
-          cancelled.store(true, Ordering::Relaxed);
-          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
-          if slot.is_none() {
-            *slot = Some(err);
-          }
+          store_error(err);
           return;
         }
       };
@@ -2192,11 +2227,7 @@ fn tile_blur(
           return;
         }
         if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
-          cancelled.store(true, Ordering::Relaxed);
-          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
-          if slot.is_none() {
-            *slot = Some(err);
-          }
+          store_error(err);
           return;
         }
         let src_start = (job.src_min_y as usize + row) * row_stride + job.src_min_x as usize * 4;
@@ -2205,30 +2236,18 @@ fn tile_blur(
           .copy_from_slice(&source[src_start..src_start + tile_stride]);
       }
 
-      match blur_anisotropic_body_with_parallelism(
-        &mut tile,
-        sigma_x,
-        sigma_y,
-        BlurParallelism::Serial,
-      ) {
+      match blur_anisotropic_body_with_parallelism(tile, sigma_x, sigma_y, BlurParallelism::Serial)
+      {
         Ok(_) => {}
         Err(err) => {
-          cancelled.store(true, Ordering::Relaxed);
-          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
-          if slot.is_none() {
-            *slot = Some(err);
-          }
+          store_error(err);
           return;
         }
       }
 
       if deadline_enabled {
         if let Err(err) = check_active(RenderStage::Paint) {
-          cancelled.store(true, Ordering::Relaxed);
-          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
-          if slot.is_none() {
-            *slot = Some(err);
-          }
+          store_error(err);
           return;
         }
       }
@@ -2242,11 +2261,7 @@ fn tile_blur(
           return;
         }
         if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
-          cancelled.store(true, Ordering::Relaxed);
-          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
-          if slot.is_none() {
-            *slot = Some(err);
-          }
+          store_error(err);
           return;
         }
         let src_start = (offset_y + row) * tile_stride + offset_x * 4;
@@ -2263,9 +2278,13 @@ fn tile_blur(
 
     let tiles_x_usize = tiles_x as usize;
     let total_tiles_u64 = tiles_x as u64 * tiles_y as u64;
+    let init = || {
+      let guard = deadline_enabled.then(|| DeadlineGuard::install(deadline.as_ref()));
+      (guard, TileScratch { tile: None })
+    };
     if total_tiles_u64 <= usize::MAX as u64 {
       let total_tiles = total_tiles_u64 as usize;
-      let blur_tile = |idx: usize| {
+      let blur_tile = |idx: usize, scratch: &mut TileScratch| {
         let ty = idx / tiles_x_usize;
         let tx = idx - ty * tiles_x_usize;
         let x = (tx as u32).saturating_mul(tile_w);
@@ -2281,36 +2300,33 @@ fn tile_blur(
         let src_max_y = (y + copy_h + pad_y).min(height);
         let src_w = src_max_x.saturating_sub(src_min_x);
         let src_h = src_max_y.saturating_sub(src_min_y);
-        blur_job(TileJob {
-          x,
-          y,
-          copy_w,
-          copy_h,
-          src_min_x,
-          src_min_y,
-          src_w,
-          src_h,
-          offset_x: x - src_min_x,
-          offset_y: y - src_min_y,
-        });
+        blur_job(
+          TileJob {
+            x,
+            y,
+            copy_w,
+            copy_h,
+            src_min_x,
+            src_min_y,
+            src_w,
+            src_h,
+            offset_x: x - src_min_x,
+            offset_y: y - src_min_y,
+          },
+          scratch,
+        );
       };
 
-      if deadline_enabled {
-        (0..total_tiles).into_par_iter().for_each_init(
-          || DeadlineGuard::install(deadline.as_ref()),
-          |_, idx| blur_tile(idx),
-        );
-      } else {
-        (0..total_tiles)
-          .into_par_iter()
-          .for_each(|idx| blur_tile(idx));
-      }
-    } else if deadline_enabled {
+      (0..total_tiles)
+        .into_par_iter()
+        .for_each_init(init, |state, idx| blur_tile(idx, &mut state.1));
+    } else {
       // Extremely high tile counts can overflow usize on 32-bit platforms; fall back to row-parallel
       // iteration rather than allocating a tile job list.
-      (0..tiles_y as usize).into_par_iter().for_each_init(
-        || DeadlineGuard::install(deadline.as_ref()),
-        |_, ty| {
+      (0..tiles_y as usize)
+        .into_par_iter()
+        .for_each_init(init, |state, ty| {
+          let scratch = &mut state.1;
           let y = (ty as u32).saturating_mul(tile_h);
           if y >= height {
             return;
@@ -2328,54 +2344,23 @@ fn tile_blur(
             let src_max_y = (y + copy_h + pad_y).min(height);
             let src_w = src_max_x.saturating_sub(src_min_x);
             let src_h = src_max_y.saturating_sub(src_min_y);
-            blur_job(TileJob {
-              x,
-              y,
-              copy_w,
-              copy_h,
-              src_min_x,
-              src_min_y,
-              src_w,
-              src_h,
-              offset_x: x - src_min_x,
-              offset_y: y - src_min_y,
-            });
+            blur_job(
+              TileJob {
+                x,
+                y,
+                copy_w,
+                copy_h,
+                src_min_x,
+                src_min_y,
+                src_w,
+                src_h,
+                offset_x: x - src_min_x,
+                offset_y: y - src_min_y,
+              },
+              scratch,
+            );
           }
-        },
-      );
-    } else {
-      (0..tiles_y as usize).into_par_iter().for_each(|ty| {
-        let y = (ty as u32).saturating_mul(tile_h);
-        if y >= height {
-          return;
-        }
-        let copy_h = tile_h.min(height - y);
-        for tx in 0..tiles_x as usize {
-          let x = (tx as u32).saturating_mul(tile_w);
-          if x >= width {
-            break;
-          }
-          let copy_w = tile_w.min(width - x);
-          let src_min_x = x.saturating_sub(pad_x);
-          let src_min_y = y.saturating_sub(pad_y);
-          let src_max_x = (x + copy_w + pad_x).min(width);
-          let src_max_y = (y + copy_h + pad_y).min(height);
-          let src_w = src_max_x.saturating_sub(src_min_x);
-          let src_h = src_max_y.saturating_sub(src_min_y);
-          blur_job(TileJob {
-            x,
-            y,
-            copy_w,
-            copy_h,
-            src_min_x,
-            src_min_y,
-            src_w,
-            src_h,
-            offset_x: x - src_min_x,
-            offset_y: y - src_min_y,
-          });
-        }
-      });
+        });
     }
 
     let stored_error = error.lock().ok().and_then(|mut slot| slot.take());
@@ -2395,6 +2380,7 @@ fn tile_blur(
   }
 
   let mut deadline_counter = 0usize;
+  let mut scratch = TileScratch { tile: None };
   for ty in 0..tiles_y {
     let y = ty.saturating_mul(tile_h);
     let copy_h = tile_h.min(height - y);
@@ -2414,7 +2400,7 @@ fn tile_blur(
         return Err(err);
       }
 
-      let mut tile = new_pixmap_with_context(src_w, src_h, "tile blur tile")?;
+      let tile = scratch.get(src_w, src_h)?;
       let tile_stride = src_w as usize * 4;
       for row in 0..src_h as usize {
         if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
@@ -2426,7 +2412,7 @@ fn tile_blur(
           .copy_from_slice(&source[src_start..src_start + tile_stride]);
       }
 
-      let blurred = blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
+      let blurred = blur_anisotropic_body(tile, sigma_x, sigma_y)?;
       if !blurred {
         return Ok(None);
       }
@@ -2611,11 +2597,7 @@ mod tests {
       let mut x = divisor.wrapping_mul(0x9E37_79B9);
       for _ in 0..128 {
         x = x.wrapping_mul(1664525).wrapping_add(1013904223);
-        assert_eq!(
-          fast.div(x),
-          x / divisor,
-          "divisor={divisor} value={x}"
-        );
+        assert_eq!(fast.div(x), x / divisor, "divisor={divisor} value={x}");
       }
     }
   }
@@ -2702,7 +2684,9 @@ mod tests {
         let window = (radius * 2 + 1) as i32;
         let half = window / 2;
         let div = FastDivU32::new(window as u32);
-        let mut seed = (width as u32).wrapping_mul(0x9E37_79B9).wrapping_add(height as u32);
+        let mut seed = (width as u32)
+          .wrapping_mul(0x9E37_79B9)
+          .wrapping_add(height as u32);
 
         let mut src = vec![0u8; width * height * 4];
         for px in src.chunks_exact_mut(4) {
@@ -2887,7 +2871,14 @@ mod tests {
           let mut fast = vec![0u8; row_stride];
           let mut reference = vec![0u8; row_stride];
           convolve_row_horizontal_fixed(src_row, &mut fast, width, &kernel, radius, scale);
-          reference_convolve_row_horizontal_fixed(src_row, &mut reference, width, &kernel, radius, scale);
+          reference_convolve_row_horizontal_fixed(
+            src_row,
+            &mut reference,
+            width,
+            &kernel,
+            radius,
+            scale,
+          );
           assert_eq!(
             fast, reference,
             "horizontal kernel mismatch: {width}x{height} sigma={sigma} y={y}"
@@ -3273,7 +3264,8 @@ mod tests {
     );
 
     let mut serial = base.clone();
-    blur_anisotropic_body_with_parallelism(&mut serial, 8.0, 12.0, BlurParallelism::Serial).unwrap();
+    blur_anisotropic_body_with_parallelism(&mut serial, 8.0, 12.0, BlurParallelism::Serial)
+      .unwrap();
     let mut parallel = base.clone();
     pool.install(|| {
       blur_anisotropic_body_with_parallelism(&mut parallel, 8.0, 12.0, BlurParallelism::Auto)
@@ -3286,7 +3278,8 @@ mod tests {
     );
 
     let mut serial = base.clone();
-    blur_anisotropic_body_with_parallelism(&mut serial, 12.0, 2.0, BlurParallelism::Serial).unwrap();
+    blur_anisotropic_body_with_parallelism(&mut serial, 12.0, 2.0, BlurParallelism::Serial)
+      .unwrap();
     let mut parallel = base.clone();
     pool.install(|| {
       blur_anisotropic_body_with_parallelism(&mut parallel, 12.0, 2.0, BlurParallelism::Auto)

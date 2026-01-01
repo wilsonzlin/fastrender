@@ -1075,10 +1075,29 @@ fn render_outset_shadow(
   };
 
   let blur_pad = (sigma * 3.0).ceil();
-  let min_x = (shadow_rect.x() - blur_pad).floor();
-  let min_y = (shadow_rect.y() - blur_pad).floor();
-  let max_x = (shadow_rect.x() + shadow_rect.width() + blur_pad).ceil();
-  let max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
+  let full_min_x = (shadow_rect.x() - blur_pad).floor();
+  let full_min_y = (shadow_rect.y() - blur_pad).floor();
+  let full_max_x = (shadow_rect.x() + shadow_rect.width() + blur_pad).ceil();
+  let full_max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
+
+  if full_max_x <= full_min_x || full_max_y <= full_min_y {
+    return Ok(false);
+  }
+
+  // Box shadows are often attached to extremely large boxes (full-document panels) even though
+  // only a small viewport-sized portion can be visible. Blurring the full shadow bounds is
+  // catastrophically expensive. Instead, clamp the offscreen shadow surface to the destination
+  // pixmap bounds plus the blur kernel radius: pixels further away cannot influence any visible
+  // destination pixels.
+  let clip_min_x = (-blur_pad).floor();
+  let clip_min_y = (-blur_pad).floor();
+  let clip_max_x = (pixmap.width() as f32 + blur_pad).ceil();
+  let clip_max_y = (pixmap.height() as f32 + blur_pad).ceil();
+
+  let min_x = full_min_x.max(clip_min_x);
+  let min_y = full_min_y.max(clip_min_y);
+  let max_x = full_max_x.min(clip_max_x);
+  let max_y = full_max_y.min(clip_max_y);
 
   if max_x <= min_x || max_y <= min_y {
     return Ok(false);
@@ -1142,15 +1161,41 @@ fn render_inset_shadow(
   let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil();
   let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil();
 
-  let canvas_w = (width + pad_x * 2.0).max(1.0) as u32;
-  let canvas_h = (height + pad_y * 2.0).max(1.0) as u32;
+  // Like outset shadows, inset shadows can be attached to very large boxes. Clamp the rendered
+  // offscreen surface to the destination bounds plus the blur radius so we don't blur pixels that
+  // cannot affect any visible destination pixels.
+  let full_min_x = (x - pad_x).floor();
+  let full_min_y = (y - pad_y).floor();
+  let full_max_x = (x + width + pad_x).ceil();
+  let full_max_y = (y + height + pad_y).ceil();
+
+  let clip_min_x = (-blur_pad).floor();
+  let clip_min_y = (-blur_pad).floor();
+  let clip_max_x = (pixmap.width() as f32 + blur_pad).ceil();
+  let clip_max_y = (pixmap.height() as f32 + blur_pad).ceil();
+
+  let min_x = full_min_x.max(clip_min_x);
+  let min_y = full_min_y.max(clip_min_y);
+  let max_x = full_max_x.min(clip_max_x);
+  let max_y = full_max_y.min(clip_max_y);
+
+  if max_x <= min_x || max_y <= min_y {
+    return Ok(false);
+  }
+
+  let canvas_w = (max_x - min_x).max(1.0) as u32;
+  let canvas_h = (max_y - min_y).max(1.0) as u32;
   let mut tmp = match new_pixmap(canvas_w, canvas_h) {
     Some(p) => p,
     None => return Ok(false),
   };
 
-  let outer_x = pad_x + shadow.offset_x + spread;
-  let outer_y = pad_y + shadow.offset_y + spread;
+  // Position of the shadow shape in destination coordinates (independent of how we clamp the
+  // offscreen surface).
+  let outer_dest_x = x + shadow.offset_x + spread;
+  let outer_dest_y = y + shadow.offset_y + spread;
+  let outer_x = outer_dest_x - min_x;
+  let outer_y = outer_dest_y - min_y;
   let outer_w = (width - 2.0 * spread).max(0.0);
   let outer_h = (height - 2.0 * spread).max(0.0);
 
@@ -1219,8 +1264,8 @@ fn render_inset_shadow(
   let mut final_paint = PixmapPaint::default();
   final_paint.blend_mode = tiny_skia::BlendMode::SourceOver;
   pixmap.draw_pixmap(
-    (x - pad_x) as i32,
-    (y - pad_y) as i32,
+    min_x as i32,
+    min_y as i32,
     tmp.as_ref(),
     &final_paint,
     Transform::identity(),
