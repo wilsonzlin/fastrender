@@ -488,19 +488,19 @@ fn http_browser_origin_and_referer_for_url(url: &Url) -> Option<(String, String)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HttpBrowserRequestProfile {
+pub enum FetchDestination {
   Document,
-  Stylesheet,
+  Style,
   Image,
   Font,
   Other,
 }
 
-impl HttpBrowserRequestProfile {
+impl FetchDestination {
   fn accept(self) -> &'static str {
     match self {
       Self::Document => DEFAULT_ACCEPT,
-      Self::Stylesheet => BROWSER_ACCEPT_STYLESHEET,
+      Self::Style => BROWSER_ACCEPT_STYLESHEET,
       Self::Image => BROWSER_ACCEPT_IMAGE,
       Self::Font | Self::Other => BROWSER_ACCEPT_ALL,
     }
@@ -509,7 +509,7 @@ impl HttpBrowserRequestProfile {
   fn sec_fetch_dest(self) -> &'static str {
     match self {
       Self::Document => "document",
-      Self::Stylesheet => "style",
+      Self::Style => "style",
       Self::Image => "image",
       Self::Font => "font",
       Self::Other => "empty",
@@ -520,14 +520,14 @@ impl HttpBrowserRequestProfile {
     match self {
       Self::Document => "navigate",
       Self::Font => "cors",
-      Self::Stylesheet | Self::Image | Self::Other => "no-cors",
+      Self::Style | Self::Image | Self::Other => "no-cors",
     }
   }
 
   fn sec_fetch_site(self) -> &'static str {
     match self {
       Self::Document => "none",
-      Self::Stylesheet | Self::Image | Self::Font | Self::Other => "same-origin",
+      Self::Style | Self::Image | Self::Font | Self::Other => "same-origin",
     }
   }
 
@@ -553,23 +553,23 @@ impl HttpBrowserRequestProfile {
   }
 }
 
-pub(crate) fn http_browser_request_profile_for_url(url: &str) -> HttpBrowserRequestProfile {
+pub(crate) fn http_browser_request_profile_for_url(url: &str) -> FetchDestination {
   let Ok(parsed) = Url::parse(url) else {
-    return HttpBrowserRequestProfile::Document;
+    return FetchDestination::Document;
   };
   let ext = Path::new(parsed.path())
     .extension()
     .and_then(|e| e.to_str());
   match ext {
-    None => HttpBrowserRequestProfile::Document,
-    Some(ext) if ext.eq_ignore_ascii_case("css") => HttpBrowserRequestProfile::Stylesheet,
+    None => FetchDestination::Document,
+    Some(ext) if ext.eq_ignore_ascii_case("css") => FetchDestination::Style,
     Some(ext)
       if ext.eq_ignore_ascii_case("woff")
         || ext.eq_ignore_ascii_case("woff2")
         || ext.eq_ignore_ascii_case("ttf")
         || ext.eq_ignore_ascii_case("otf") =>
     {
-      HttpBrowserRequestProfile::Font
+      FetchDestination::Font
     }
     Some(ext)
       if ext.eq_ignore_ascii_case("png")
@@ -582,7 +582,7 @@ pub(crate) fn http_browser_request_profile_for_url(url: &str) -> HttpBrowserRequ
         || ext.eq_ignore_ascii_case("ico")
         || ext.eq_ignore_ascii_case("bmp") =>
     {
-      HttpBrowserRequestProfile::Image
+      FetchDestination::Image
     }
     Some(ext)
       if ext.eq_ignore_ascii_case("html")
@@ -593,9 +593,42 @@ pub(crate) fn http_browser_request_profile_for_url(url: &str) -> HttpBrowserRequ
         || ext.eq_ignore_ascii_case("jsp")
         || ext.eq_ignore_ascii_case("cgi") =>
     {
-      HttpBrowserRequestProfile::Document
+      FetchDestination::Document
     }
-    Some(_) => HttpBrowserRequestProfile::Other,
+    Some(_) => FetchDestination::Other,
+  }
+}
+
+/// Contextual metadata associated with a resource fetch.
+///
+/// This is primarily used by HTTP fetchers to populate browser-like request headers (e.g. `Accept`,
+/// `Sec-Fetch-*`, and `Referer`) so captured bundles reflect a realistic fetch profile.
+#[derive(Debug, Clone, Copy)]
+pub struct FetchRequest<'a> {
+  pub url: &'a str,
+  pub destination: FetchDestination,
+  pub referrer: Option<&'a str>,
+}
+
+impl<'a> FetchRequest<'a> {
+  /// Create a new request for the given URL and destination.
+  pub fn new(url: &'a str, destination: FetchDestination) -> Self {
+    Self {
+      url,
+      destination,
+      referrer: None,
+    }
+  }
+
+  /// Create a document navigation request.
+  pub fn document(url: &'a str) -> Self {
+    Self::new(url, FetchDestination::Document)
+  }
+
+  /// Attach a document referrer URL.
+  pub fn with_referrer(mut self, referrer: &'a str) -> Self {
+    self.referrer = Some(referrer);
+    self
   }
 }
 
@@ -1627,6 +1660,16 @@ pub trait ResourceFetcher: Send + Sync {
   /// or an error if the fetch fails.
   fn fetch(&self, url: &str) -> Result<FetchedResource>;
 
+  /// Fetch a resource with contextual request metadata (destination + referrer).
+  ///
+  /// HTTP implementations can use this to set browser-like request headers (e.g. `Accept`,
+  /// `Sec-Fetch-*`, and `Referer`) that vary by resource type and initiating document.
+  ///
+  /// The default implementation delegates to [`ResourceFetcher::fetch`] using `req.url`.
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    self.fetch(req.url)
+  }
+
   /// Fetch a resource with optional cache validators for HTTP requests.
   ///
   /// Implementors can ignore the validators if they do not support conditional
@@ -1646,6 +1689,10 @@ pub trait ResourceFetcher: Send + Sync {
 impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
     (**self).fetch(url)
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    (**self).fetch_with_request(req)
   }
 
   fn fetch_with_validation(
@@ -1700,6 +1747,8 @@ fn build_http_header_pairs<'a>(
   accept_language: &str,
   accept_encoding: &str,
   validators: Option<HttpCacheValidators<'a>>,
+  destination: Option<FetchDestination>,
+  referrer: Option<&str>,
 ) -> Vec<(String, String)> {
   let mut headers = vec![
     ("User-Agent".to_string(), user_agent.to_string()),
@@ -1714,7 +1763,23 @@ fn build_http_header_pairs<'a>(
   ];
 
   if http_browser_headers_enabled() {
-    let profile = http_browser_request_profile_for_url(url);
+    let profile = destination.unwrap_or_else(|| http_browser_request_profile_for_url(url));
+    let sec_fetch_site = if let Some(referrer) = referrer {
+      match (Url::parse(referrer), Url::parse(url)) {
+        (Ok(referrer_url), Ok(target_url)) => {
+          let ref_origin = DocumentOrigin::from_parsed_url(&referrer_url);
+          let target_origin = DocumentOrigin::from_parsed_url(&target_url);
+          if ref_origin.same_origin(&target_origin) {
+            "same-origin"
+          } else {
+            "cross-site"
+          }
+        }
+        _ => profile.sec_fetch_site(),
+      }
+    } else {
+      profile.sec_fetch_site()
+    };
     headers.push(("Accept".to_string(), profile.accept().to_string()));
     headers.push((
       "Sec-Fetch-Dest".to_string(),
@@ -1726,7 +1791,7 @@ fn build_http_header_pairs<'a>(
     ));
     headers.push((
       "Sec-Fetch-Site".to_string(),
-      profile.sec_fetch_site().to_string(),
+      sec_fetch_site.to_string(),
     ));
     if let Some(user) = profile.sec_fetch_user() {
       headers.push(("Sec-Fetch-User".to_string(), user.to_string()));
@@ -1734,8 +1799,14 @@ fn build_http_header_pairs<'a>(
     if let Some(value) = profile.upgrade_insecure_requests() {
       headers.push(("Upgrade-Insecure-Requests".to_string(), value.to_string()));
     }
-    if profile == HttpBrowserRequestProfile::Font {
-      if let Ok(parsed) = Url::parse(url) {
+    if profile == FetchDestination::Font {
+      if let Some(referrer) = referrer {
+        if let Ok(referrer_url) = Url::parse(referrer) {
+          if let Some((origin, _)) = http_browser_origin_and_referer_for_url(&referrer_url) {
+            headers.push(("Origin".to_string(), origin));
+          }
+        }
+      } else if let Ok(parsed) = Url::parse(url) {
         if let Some((origin, referer)) = profile.origin_and_referer(&parsed) {
           headers.push(("Origin".to_string(), origin));
           headers.push(("Referer".to_string(), referer));
@@ -1744,6 +1815,10 @@ fn build_http_header_pairs<'a>(
     }
   } else {
     headers.push(("Accept".to_string(), DEFAULT_ACCEPT.to_string()));
+  }
+
+  if let Some(referrer) = referrer {
+    headers.push(("Referer".to_string(), referrer.to_string()));
   }
 
   if let Some(v) = validators {
@@ -1880,6 +1955,20 @@ impl HttpFetcher {
     self.fetch_http_with_accept(url, None, None)
   }
 
+  fn fetch_http_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    let deadline = render_control::active_deadline();
+    let started = Instant::now();
+    self.fetch_http_with_accept_inner(
+      req.url,
+      None,
+      None,
+      Some(req.destination),
+      req.referrer,
+      &deadline,
+      started,
+    )
+  }
+
   fn fetch_http_with_accept(
     &self,
     url: &str,
@@ -1888,56 +1977,83 @@ impl HttpFetcher {
   ) -> Result<FetchedResource> {
     let deadline = render_control::active_deadline();
     let started = Instant::now();
+    self.fetch_http_with_accept_inner(
+      url,
+      accept_encoding,
+      validators,
+      None,
+      None,
+      &deadline,
+      started,
+    )
+  }
+
+  fn fetch_http_with_accept_inner<'a>(
+    &self,
+    url: &str,
+    accept_encoding: Option<&str>,
+    validators: Option<HttpCacheValidators<'a>>,
+    destination: Option<FetchDestination>,
+    referrer: Option<&str>,
+    deadline: &Option<render_control::RenderDeadline>,
+    started: Instant,
+  ) -> Result<FetchedResource> {
     match http_backend_mode() {
       HttpBackendMode::Curl => curl_backend::fetch_http_with_accept_inner(
         self,
         url,
         accept_encoding,
         validators,
-        &deadline,
+        destination,
+        referrer,
+        deadline,
         started,
       ),
       HttpBackendMode::Ureq => self.fetch_http_with_accept_inner_ureq(
         url,
         accept_encoding,
         validators,
-        &deadline,
+        destination,
+        referrer,
+        deadline,
         started,
       ),
-      HttpBackendMode::Auto => {
-        match self.fetch_http_with_accept_inner_ureq(
-          url,
-          accept_encoding,
-          validators,
-          &deadline,
-          started,
-        ) {
-          Ok(res) => Ok(res),
-          Err(err) => {
-            if should_fallback_to_curl(&err) {
-              match curl_backend::fetch_http_with_accept_inner(
-                self,
-                url,
-                accept_encoding,
-                validators,
-                &deadline,
-                started,
-              ) {
-                Ok(res) => Ok(res),
-                Err(curl_err) => {
-                  let mut err = err;
-                  if let Error::Resource(ref mut res) = err {
-                    res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
-                  }
-                  Err(err)
+      HttpBackendMode::Auto => match self.fetch_http_with_accept_inner_ureq(
+        url,
+        accept_encoding,
+        validators,
+        destination,
+        referrer,
+        deadline,
+        started,
+      ) {
+        Ok(res) => Ok(res),
+        Err(err) => {
+          if should_fallback_to_curl(&err) {
+            match curl_backend::fetch_http_with_accept_inner(
+              self,
+              url,
+              accept_encoding,
+              validators,
+              destination,
+              referrer,
+              deadline,
+              started,
+            ) {
+              Ok(res) => Ok(res),
+              Err(curl_err) => {
+                let mut err = err;
+                if let Error::Resource(ref mut res) = err {
+                  res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
                 }
+                Err(err)
               }
-            } else {
-              Err(err)
             }
+          } else {
+            Err(err)
           }
         }
-      }
+      },
     }
   }
 
@@ -1946,6 +2062,8 @@ impl HttpFetcher {
     url: &str,
     accept_encoding: Option<&str>,
     validators: Option<HttpCacheValidators<'a>>,
+    destination: Option<FetchDestination>,
+    referrer: Option<&str>,
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
   ) -> Result<FetchedResource> {
@@ -2014,6 +2132,8 @@ impl HttpFetcher {
           &self.accept_language,
           accept_encoding_value,
           validators,
+          destination,
+          referrer,
         );
         let mut request = agent.get(&current);
         for (name, value) in &headers {
@@ -2171,6 +2291,8 @@ impl HttpFetcher {
                     &current,
                     Some("identity"),
                     validators,
+                    destination,
+                    referrer,
                     deadline,
                     started,
                   );
@@ -2537,6 +2659,17 @@ impl ResourceFetcher for HttpFetcher {
       ResourceScheme::File => self.fetch_file(url),
       ResourceScheme::Http | ResourceScheme::Https => self.fetch_http(url),
       ResourceScheme::Relative => self.fetch_file(&format!("file://{}", url)),
+      ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
+    }
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    render_control::check_active(render_stage_hint_from_url(req.url)).map_err(Error::Render)?;
+    match self.policy.ensure_url_allowed(req.url)? {
+      ResourceScheme::Data => self.fetch_data(req.url),
+      ResourceScheme::File => self.fetch_file(req.url),
+      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_with_request(req),
+      ResourceScheme::Relative => self.fetch_file(&format!("file://{}", req.url)),
       ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
   }
@@ -4225,7 +4358,7 @@ mod tests {
   fn http_browser_font_origin_and_referer_are_derived_from_url_origin() {
     let url = "https://www.washingtonpost.com/wp-stat/assets/fonts/ITC_Franklin-Light.woff2";
     let profile = http_browser_request_profile_for_url(url);
-    assert_eq!(profile, HttpBrowserRequestProfile::Font);
+    assert_eq!(profile, FetchDestination::Font);
     let parsed = Url::parse(url).expect("parse url");
     let (origin, referer) = profile
       .origin_and_referer(&parsed)
@@ -4238,7 +4371,7 @@ mod tests {
   fn http_browser_font_origin_and_referer_include_non_default_port() {
     let url = "https://example.com:8443/fonts/test.woff2";
     let profile = http_browser_request_profile_for_url(url);
-    assert_eq!(profile, HttpBrowserRequestProfile::Font);
+    assert_eq!(profile, FetchDestination::Font);
     let parsed = Url::parse(url).expect("parse url");
     let (origin, referer) = profile
       .origin_and_referer(&parsed)
@@ -4251,7 +4384,7 @@ mod tests {
   fn http_browser_non_font_does_not_set_origin_or_referer() {
     let url = "https://example.com/style.css";
     let profile = http_browser_request_profile_for_url(url);
-    assert_eq!(profile, HttpBrowserRequestProfile::Stylesheet);
+    assert_eq!(profile, FetchDestination::Style);
     let parsed = Url::parse(url).expect("parse url");
     assert_eq!(profile.origin_and_referer(&parsed), None);
   }
@@ -4320,7 +4453,7 @@ mod tests {
   #[test]
   fn http_browser_request_profile_for_url_examples() {
     let doc = http_browser_request_profile_for_url("https://tesco.com");
-    assert_eq!(doc, HttpBrowserRequestProfile::Document);
+    assert_eq!(doc, FetchDestination::Document);
     assert_eq!(doc.accept(), DEFAULT_ACCEPT);
     assert_eq!(doc.sec_fetch_dest(), "document");
     assert_eq!(doc.sec_fetch_mode(), "navigate");
@@ -4330,7 +4463,7 @@ mod tests {
 
     let font =
       http_browser_request_profile_for_url("https://www.tesco.com/fonts/TESCOModern-Regular.woff2");
-    assert_eq!(font, HttpBrowserRequestProfile::Font);
+    assert_eq!(font, FetchDestination::Font);
     assert_eq!(font.accept(), BROWSER_ACCEPT_ALL);
     assert_eq!(font.sec_fetch_dest(), "font");
     assert_eq!(font.sec_fetch_mode(), "cors");
@@ -4339,7 +4472,7 @@ mod tests {
     assert_eq!(font.upgrade_insecure_requests(), None);
 
     let stylesheet = http_browser_request_profile_for_url("https://example.com/styles/site.css");
-    assert_eq!(stylesheet, HttpBrowserRequestProfile::Stylesheet);
+    assert_eq!(stylesheet, FetchDestination::Style);
     assert_eq!(stylesheet.accept(), BROWSER_ACCEPT_STYLESHEET);
     assert_eq!(stylesheet.sec_fetch_dest(), "style");
     assert_eq!(stylesheet.sec_fetch_mode(), "no-cors");
@@ -4348,7 +4481,7 @@ mod tests {
     assert_eq!(stylesheet.upgrade_insecure_requests(), None);
 
     let image = http_browser_request_profile_for_url("https://example.com/images/logo.png");
-    assert_eq!(image, HttpBrowserRequestProfile::Image);
+    assert_eq!(image, FetchDestination::Image);
     assert_eq!(image.accept(), BROWSER_ACCEPT_IMAGE);
     assert_eq!(image.sec_fetch_dest(), "image");
     assert_eq!(image.sec_fetch_mode(), "no-cors");

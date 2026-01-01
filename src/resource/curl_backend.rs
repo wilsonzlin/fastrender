@@ -342,6 +342,8 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
   url: &str,
   accept_encoding: Option<&str>,
   validators: Option<super::HttpCacheValidators<'a>>,
+  destination: Option<super::FetchDestination>,
+  referrer: Option<&str>,
   deadline: &Option<render_control::RenderDeadline>,
   started: Instant,
 ) -> Result<super::FetchedResource> {
@@ -422,6 +424,8 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         &fetcher.accept_language,
         accept_encoding_value,
         validators,
+        destination,
+        referrer,
       );
 
       let network_timer = super::start_network_fetch_diagnostics();
@@ -601,6 +605,8 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
             &current,
             Some("identity"),
             validators,
+            destination,
+            referrer,
             deadline,
             started,
           );
@@ -813,6 +819,8 @@ mod tests {
       DEFAULT_USER_AGENT,
       DEFAULT_ACCEPT_LANGUAGE,
       "gzip, deflate, br",
+      None,
+      None,
       None,
     );
     let args = build_curl_args(

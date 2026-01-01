@@ -5,7 +5,7 @@ mod common;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 use common::args::CompatArgs;
-use common::asset_discovery::{discover_css_urls, extract_inline_css_chunks};
+use common::asset_discovery::extract_inline_css_chunks;
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, build_renderer_with_fetcher, decode_html_resource,
   render_document, RenderConfigBundle, RenderSurface,
@@ -19,8 +19,8 @@ use fastrender::resource::bundle::{
   BUNDLE_MANIFEST, BUNDLE_VERSION,
 };
 use fastrender::resource::{
-  origin_from_url, FetchedResource, ResourceAccessPolicy, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
-  DEFAULT_USER_AGENT,
+  origin_from_url, FetchDestination, FetchRequest, FetchedResource, ResourceAccessPolicy,
+  ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use fastrender::style::media::MediaType;
 use fastrender::{OutputFormat, Result};
@@ -190,6 +190,21 @@ impl ResourceFetcher for RecordingFetcher {
     let result = self.inner.fetch(url)?;
     if let Ok(mut map) = self.recorded.lock() {
       map.insert(url.to_string(), result.clone());
+    }
+    Ok(result)
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    if let Ok(map) = self.recorded.lock() {
+      if let Some(existing) = map.get(req.url) {
+        return Ok(existing.clone());
+      }
+    }
+
+    let url = req.url.to_string();
+    let result = self.inner.fetch_with_request(req)?;
+    if let Ok(mut map) = self.recorded.lock() {
+      map.insert(url, result.clone());
     }
     Ok(result)
   }
@@ -623,14 +638,15 @@ fn fetch_document(
   fetcher: &RecordingFetcher,
   url: &str,
 ) -> Result<(common::render_pipeline::PreparedDocument, FetchedResource)> {
-  let mut resource = fetcher.fetch(url)?;
+  let mut resource = fetcher.fetch_with_request(FetchRequest::document(url))?;
   let mut base_hint = resource.final_url.as_deref().unwrap_or(url).to_string();
   let mut doc = decode_html_resource(&resource, &base_hint);
 
   if let Some(refresh) = extract_meta_refresh_url(&doc.html) {
     if let Some(target) = resolve_href(&doc.base_url, &refresh) {
       eprintln!("Following meta refresh to: {target}");
-      match fetcher.fetch(&target) {
+      let referrer = doc.base_hint.clone();
+      match fetcher.fetch_with_request(FetchRequest::document(&target).with_referrer(&referrer)) {
         Ok(res) => {
           resource = res;
           base_hint = resource.final_url.as_deref().unwrap_or(&target).to_string();
@@ -645,7 +661,8 @@ fn fetch_document(
     if js_redirect.len() <= 2048 {
       if let Some(target) = resolve_href(&doc.base_url, &js_redirect) {
         eprintln!("Following JS redirect to: {target}");
-        match fetcher.fetch(&target) {
+        let referrer = doc.base_hint.clone();
+        match fetcher.fetch_with_request(FetchRequest::document(&target).with_referrer(&referrer)) {
           Ok(res) => {
             resource = res;
             base_hint = resource.final_url.as_deref().unwrap_or(&target).to_string();
@@ -678,12 +695,17 @@ fn crawl_document(
   document: &common::render_pipeline::PreparedDocument,
   render: &BundleRenderConfig,
 ) -> Result<()> {
-  fn enqueue_unique(queue: &mut VecDeque<String>, seen: &mut HashSet<String>, url: String) {
+  fn enqueue_unique(
+    queue: &mut VecDeque<(String, FetchDestination)>,
+    seen: &mut HashSet<String>,
+    url: String,
+    destination: FetchDestination,
+  ) {
     if url.is_empty() {
       return;
     }
     if seen.insert(url.clone()) {
-      queue.push_back(url);
+      queue.push_back((url, destination));
     }
   }
 
@@ -707,7 +729,7 @@ fn crawl_document(
     allowed_origins,
   };
 
-  let mut queue: VecDeque<String> = VecDeque::new();
+  let mut queue: VecDeque<(String, FetchDestination)> = VecDeque::new();
   let mut seen: HashSet<String> = HashSet::new();
 
   for css_url in fastrender::css::loader::extract_css_links(
@@ -717,26 +739,27 @@ fn crawl_document(
   )
   .unwrap_or_default()
   {
-    enqueue_unique(&mut queue, &mut seen, css_url);
+    enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
   }
 
   for css_chunk in extract_inline_css_chunks(&document.html) {
-    for url in discover_css_urls(&css_chunk, &document.base_url) {
-      enqueue_unique(&mut queue, &mut seen, url);
+    for (url, destination) in discover_css_urls_with_destination(&css_chunk, &document.base_url) {
+      enqueue_unique(&mut queue, &mut seen, url, destination);
     }
   }
 
   let html_assets =
     fastrender::html::asset_discovery::discover_html_asset_urls(&document.html, &document.base_url);
   for url in html_assets.images {
-    enqueue_unique(&mut queue, &mut seen, url);
+    enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
   }
   for url in html_assets.documents {
-    enqueue_unique(&mut queue, &mut seen, url);
+    let destination = destination_from_url_extension(&url);
+    enqueue_unique(&mut queue, &mut seen, url, destination);
   }
 
   const MAX_CRAWL_URLS: usize = 10_000;
-  while let Some(url) = queue.pop_front() {
+  while let Some((url, destination)) = queue.pop_front() {
     if seen.len() > MAX_CRAWL_URLS {
       eprintln!(
         "Warning: crawl URL limit exceeded ({}); skipping remaining discoveries",
@@ -750,7 +773,8 @@ fn crawl_document(
       continue;
     }
 
-    let res = match fetcher.fetch(&url) {
+    let req = FetchRequest::new(&url, destination).with_referrer(document.base_hint.as_str());
+    let res = match fetcher.fetch_with_request(req) {
       Ok(res) => res,
       Err(err) => {
         eprintln!("Warning: failed to fetch {url}: {err}");
@@ -771,8 +795,8 @@ fn crawl_document(
     if is_css_resource(&res, &url) {
       let css_base = res.final_url.as_deref().unwrap_or(&url);
       let css = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-      for dep in discover_css_urls(&css, css_base) {
-        enqueue_unique(&mut queue, &mut seen, dep);
+      for (dep, destination) in discover_css_urls_with_destination(&css, css_base) {
+        enqueue_unique(&mut queue, &mut seen, dep, destination);
       }
     } else if is_html_resource(&res, &url) {
       // Iframes/objects/embeds are rendered as nested documents, so crawl their HTML for the
@@ -785,27 +809,175 @@ fn crawl_document(
         fastrender::css::loader::extract_css_links(&doc.html, &doc.base_url, MediaType::Screen)
           .unwrap_or_default()
       {
-        enqueue_unique(&mut queue, &mut seen, css_url);
+        enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
       }
 
       for css_chunk in extract_inline_css_chunks(&doc.html) {
-        for url in discover_css_urls(&css_chunk, &doc.base_url) {
-          enqueue_unique(&mut queue, &mut seen, url);
+        for (url, destination) in discover_css_urls_with_destination(&css_chunk, &doc.base_url) {
+          enqueue_unique(&mut queue, &mut seen, url, destination);
         }
       }
 
       let html_assets =
         fastrender::html::asset_discovery::discover_html_asset_urls(&doc.html, &doc.base_url);
       for url in html_assets.images {
-        enqueue_unique(&mut queue, &mut seen, url);
+        enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
       }
       for url in html_assets.documents {
-        enqueue_unique(&mut queue, &mut seen, url);
+        let destination = destination_from_url_extension(&url);
+        enqueue_unique(&mut queue, &mut seen, url, destination);
       }
     }
   }
 
   Ok(())
+}
+
+fn destination_from_url_extension(url: &str) -> FetchDestination {
+  let path = url::Url::parse(url)
+    .ok()
+    .map(|parsed| parsed.path().to_string())
+    .unwrap_or_else(|| url.to_string());
+
+  let ext = Path::new(&path)
+    .extension()
+    .and_then(|e| e.to_str())
+    .map(|e| e.to_ascii_lowercase())
+    .unwrap_or_default();
+
+  match ext.as_str() {
+    "css" => FetchDestination::Style,
+    "woff2" | "woff" | "ttf" | "otf" => FetchDestination::Font,
+    "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "svg" | "ico" | "bmp" | "tif"
+    | "tiff" => FetchDestination::Image,
+    _ => FetchDestination::Other,
+  }
+}
+
+fn discover_css_urls_with_destination(css: &str, base_url: &str) -> Vec<(String, FetchDestination)> {
+  use cssparser::{Parser, ParserInput, Token};
+
+  fn record(
+    out: &mut Vec<(String, FetchDestination)>,
+    base_url: &str,
+    raw: &str,
+    from_import: bool,
+  ) {
+    if let Some(resolved) = resolve_href(base_url, raw) {
+      let destination = if from_import {
+        FetchDestination::Style
+      } else {
+        destination_from_url_extension(&resolved)
+      };
+      out.push((resolved, destination));
+    }
+  }
+
+  fn scan<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+    base_url: &str,
+    out: &mut Vec<(String, FetchDestination)>,
+  ) {
+    while !parser.is_exhausted() {
+      let token = match parser.next_including_whitespace_and_comments() {
+        Ok(t) => t,
+        Err(_) => break,
+      };
+
+      match token {
+        Token::UnquotedUrl(url) => record(out, base_url, url.as_ref(), false),
+        Token::Function(name) if name.eq_ignore_ascii_case("url") => {
+          let parse_result = parser.parse_nested_block(|nested| {
+            let mut arg: Option<String> = None;
+            while !nested.is_exhausted() {
+              match nested.next_including_whitespace_and_comments() {
+                Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
+                Ok(Token::QuotedString(s)) | Ok(Token::UnquotedUrl(s)) => {
+                  arg = Some(s.as_ref().to_string());
+                  break;
+                }
+                Ok(Token::Ident(s)) => {
+                  arg = Some(s.as_ref().to_string());
+                  break;
+                }
+                Ok(Token::BadUrl(_)) | Err(_) => break,
+                Ok(_) => {}
+              }
+            }
+            Ok::<_, cssparser::ParseError<'i, ()>>(arg)
+          });
+
+          if let Ok(Some(arg)) = parse_result {
+            record(out, base_url, &arg, false);
+          }
+        }
+        Token::AtKeyword(name) if name.eq_ignore_ascii_case("import") => {
+          let mut target: Option<String> = None;
+          while !parser.is_exhausted() {
+            let next = match parser.next_including_whitespace_and_comments() {
+              Ok(t) => t,
+              Err(_) => break,
+            };
+            match next {
+              Token::WhiteSpace(_) | Token::Comment(_) => continue,
+              Token::QuotedString(s) | Token::UnquotedUrl(s) => {
+                target = Some(s.as_ref().to_string());
+                break;
+              }
+              Token::Function(fname) if fname.eq_ignore_ascii_case("url") => {
+                let parse_result = parser.parse_nested_block(|nested| {
+                  let mut arg: Option<String> = None;
+                  while !nested.is_exhausted() {
+                    match nested.next_including_whitespace_and_comments() {
+                      Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
+                      Ok(Token::QuotedString(s)) | Ok(Token::UnquotedUrl(s)) => {
+                        arg = Some(s.as_ref().to_string());
+                        break;
+                      }
+                      Ok(Token::Ident(s)) => {
+                        arg = Some(s.as_ref().to_string());
+                        break;
+                      }
+                      Ok(Token::BadUrl(_)) | Err(_) => break,
+                      Ok(_) => {}
+                    }
+                  }
+                  Ok::<_, cssparser::ParseError<'i, ()>>(arg)
+                });
+                target = parse_result.ok().flatten();
+                break;
+              }
+              Token::Ident(s) => {
+                target = Some(s.as_ref().to_string());
+                break;
+              }
+              Token::Semicolon => break,
+              _ => break,
+            }
+          }
+          if let Some(target) = target {
+            record(out, base_url, &target, true);
+          }
+        }
+        Token::Function(_)
+        | Token::ParenthesisBlock
+        | Token::SquareBracketBlock
+        | Token::CurlyBracketBlock => {
+          let _ = parser.parse_nested_block(|nested| {
+            scan(nested, base_url, out);
+            Ok::<_, cssparser::ParseError<'i, ()>>(())
+          });
+        }
+        _ => {}
+      }
+    }
+  }
+
+  let mut out = Vec::new();
+  let mut input = ParserInput::new(css);
+  let mut parser = Parser::new(&mut input);
+  scan(&mut parser, base_url, &mut out);
+  out
 }
 
 fn is_css_resource(res: &FetchedResource, url: &str) -> bool {
@@ -845,4 +1017,107 @@ fn is_html_resource(res: &FetchedResource, url: &str) -> bool {
   };
   let lower = parsed.path().to_ascii_lowercase();
   lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::Mutex;
+
+  #[derive(Default)]
+  struct MockFetcher {
+    calls: Mutex<Vec<(String, FetchDestination, Option<String>)>>,
+  }
+
+  impl MockFetcher {
+    fn calls(&self) -> Vec<(String, FetchDestination, Option<String>)> {
+      self
+        .calls
+        .lock()
+        .map(|calls| calls.clone())
+        .unwrap_or_default()
+    }
+  }
+
+  impl ResourceFetcher for MockFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      self.fetch_with_request(FetchRequest::new(url, FetchDestination::Other))
+    }
+
+    fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+      self.calls.lock().unwrap().push((
+        req.url.to_string(),
+        req.destination,
+        req.referrer.map(|r| r.to_string()),
+      ));
+
+      match req.url {
+        "https://example.com/" => Ok(FetchedResource::with_final_url(
+          br#"<html><head><link rel="stylesheet" href="/style.css"></head><body><img src="/img.png"></body></html>"#
+            .to_vec(),
+          Some("text/html".to_string()),
+          Some(req.url.to_string()),
+        )),
+        "https://example.com/style.css" => Ok(FetchedResource::with_final_url(
+          b"body { background: url('/bg.png'); }".to_vec(),
+          Some("text/css".to_string()),
+          Some(req.url.to_string()),
+        )),
+        "https://example.com/img.png" | "https://example.com/bg.png" => Ok(
+          FetchedResource::with_final_url(
+            vec![0u8, 1, 2, 3],
+            Some("image/png".to_string()),
+            Some(req.url.to_string()),
+          ),
+        ),
+        other => Err(fastrender::Error::Other(format!(
+          "unexpected fetch: {other}"
+        ))),
+      }
+    }
+  }
+
+  #[test]
+  fn crawl_uses_destination_and_referrer() -> Result<()> {
+    let inner = Arc::new(MockFetcher::default());
+    let recording = RecordingFetcher::new(inner.clone());
+    let (doc, _) = fetch_document(&recording, "https://example.com/")?;
+
+    let render = BundleRenderConfig {
+      viewport: (1200, 800),
+      device_pixel_ratio: 1.0,
+      scroll_x: 0.0,
+      scroll_y: 0.0,
+      full_page: false,
+      same_origin_subresources: false,
+      allowed_subresource_origins: Vec::new(),
+      compat_profile: fastrender::compat::CompatProfile::default(),
+      dom_compat_mode: fastrender::dom::DomCompatibilityMode::default(),
+    };
+
+    crawl_document(&recording, &doc, &render)?;
+
+    let base_hint = doc.base_hint.clone();
+    let calls = inner.calls();
+
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://example.com/style.css"
+        && *dest == FetchDestination::Style
+        && referrer.as_deref() == Some(base_hint.as_str())
+    }));
+
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://example.com/img.png"
+        && *dest == FetchDestination::Image
+        && referrer.as_deref() == Some(base_hint.as_str())
+    }));
+
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://example.com/bg.png"
+        && *dest == FetchDestination::Image
+        && referrer.as_deref() == Some(base_hint.as_str())
+    }));
+
+    Ok(())
+  }
 }
