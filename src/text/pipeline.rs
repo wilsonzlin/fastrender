@@ -2126,47 +2126,6 @@ impl ClusterCharBuf {
   }
 }
 
-fn cluster_base_and_relevant_chars(text: &str, relevant: &mut ClusterCharBuf) -> (char, usize) {
-  relevant.clear();
-  let mut first = None;
-  let mut base = None;
-  let mut count = 0usize;
-
-  for ch in text.chars() {
-    if first.is_none() {
-      first = Some(ch);
-    }
-    count += 1;
-
-    if is_non_rendering_for_coverage(ch) {
-      continue;
-    }
-    if base.is_none() {
-      base = Some(ch);
-    }
-    relevant.push(ch);
-  }
-
-  let base = base.or(first).unwrap_or(' ');
-  if relevant.is_empty() && count == 1 && !is_non_rendering_for_coverage(base) {
-    relevant.push(base);
-  }
-  (base, count)
-}
-
-fn cluster_emoji_preference(text: &str, variant: FontVariantEmoji) -> EmojiPreference {
-  let mut iter = text.chars().peekable();
-  while let Some(ch) = iter.next() {
-    if is_non_rendering_for_coverage(ch) {
-      continue;
-    }
-    return emoji_preference_with_selector(ch, iter.peek().copied(), variant);
-  }
-  let mut iter = text.chars();
-  let base = iter.next().unwrap_or('\0');
-  emoji_preference_with_selector(base, iter.next(), variant)
-}
-
 fn cluster_signature(text: &str) -> u64 {
   use std::hash::Hash;
   use std::hash::Hasher;
@@ -2488,18 +2447,52 @@ fn assign_fonts_internal(
       let cluster_text = &run.text[cluster_start..cluster_end];
       let mut cluster_iter = cluster_text.chars();
       let first_char = cluster_iter.next().unwrap_or(' ');
-      let is_single_char_cluster = cluster_iter.next().is_none();
+      let is_single_char_cluster = cluster_iter.as_str().is_empty();
+      let emoji_variant = style.font_variant_emoji;
 
       let (emoji_pref, base_char, cluster_chars) = if is_single_char_cluster {
         (
-          emoji_preference_with_selector(first_char, None, style.font_variant_emoji),
+          emoji_preference_with_selector(first_char, None, emoji_variant),
           first_char,
           &[] as &[char],
         )
       } else {
-        let emoji_pref = cluster_emoji_preference(cluster_text, style.font_variant_emoji);
-        let (base_char, _cluster_char_count) =
-          cluster_base_and_relevant_chars(cluster_text, &mut relevant_chars);
+        relevant_chars.clear();
+        let mut base: Option<char> = None;
+        let mut emoji_pref: Option<EmojiPreference> = None;
+        let mut second_char: Option<char> = None;
+        let mut iter = cluster_iter.peekable();
+
+        if !is_non_rendering_for_coverage(first_char) {
+          base = Some(first_char);
+          emoji_pref = Some(emoji_preference_with_selector(
+            first_char,
+            iter.peek().copied(),
+            emoji_variant,
+          ));
+          relevant_chars.push(first_char);
+        }
+
+        while let Some(ch) = iter.next() {
+          second_char.get_or_insert(ch);
+          if is_non_rendering_for_coverage(ch) {
+            continue;
+          }
+          if base.is_none() {
+            emoji_pref = Some(emoji_preference_with_selector(
+              ch,
+              iter.peek().copied(),
+              emoji_variant,
+            ));
+            base = Some(ch);
+          }
+          relevant_chars.push(ch);
+        }
+
+        let base_char = base.unwrap_or(first_char);
+        let emoji_pref = emoji_pref.unwrap_or_else(|| {
+          emoji_preference_with_selector(first_char, second_char, emoji_variant)
+        });
         let cluster_chars = relevant_chars.as_slice();
         (emoji_pref, base_char, cluster_chars)
       };
