@@ -2012,10 +2012,19 @@ pub(crate) struct DiagnosticsSessionGuard {
 
 impl DiagnosticsSessionGuard {
   pub(crate) fn acquire() -> Self {
+    // The lock only guards access to process-global diagnostics collectors. The protected value is
+    // `()`, so poisoning does not indicate any state corruption we need to preserve. Clear the poison
+    // flag so a panic in one diagnostics-enabled render doesn't permanently break diagnostics for the
+    // remainder of the process (e.g. pageset runners that catch panics and continue).
+    let mutex = diagnostics_session_mutex();
     Self {
-      _guard: diagnostics_session_mutex()
-        .lock()
-        .expect("diagnostics session lock poisoned"),
+      _guard: match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+          mutex.clear_poison();
+          poisoned.into_inner()
+        }
+      },
     }
   }
 }
@@ -6268,8 +6277,8 @@ impl FastRender {
     let target_fragment = self.current_target_fragment();
     let style_load_start = timings_enabled.then(Instant::now);
     self.font_context.clear_web_fonts();
-    let font_faces =
-      style_set.collect_font_face_rules_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let font_faces = style_set
+      .collect_font_face_rules_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
     // Best-effort loading; rendering should continue even if a web font fails.
     let _ = self.font_context.load_web_fonts(
       &font_faces,
@@ -6334,11 +6343,17 @@ impl FastRender {
     // Keep the stylesheet for the `PreparedDocument`/`LayoutArtifacts` API surface, but build it
     // by moving rules out of the scoped `StyleSet` instead of cloning a combined AST up front.
     let stylesheet = {
-      let StyleSet { mut document, shadows } = style_set;
+      let StyleSet {
+        mut document,
+        shadows,
+      } = style_set;
       if !shadows.is_empty() {
         let mut shadow_entries: Vec<_> = shadows.into_iter().collect();
         shadow_entries.sort_by_key(|(host, _)| *host);
-        let additional: usize = shadow_entries.iter().map(|(_, sheet)| sheet.rules.len()).sum();
+        let additional: usize = shadow_entries
+          .iter()
+          .map(|(_, sheet)| sheet.rules.len())
+          .sum();
         document.rules.reserve(additional);
         for (_host, mut sheet) in shadow_entries {
           document.rules.append(&mut sheet.rules);
@@ -10822,6 +10837,27 @@ mod tests {
     assert_eq!(
       stats.counts.last_resort_font_fallback_samples,
       Some(vec![format!("U+{:04X} U+0301", missing as u32)])
+    );
+  }
+
+  #[test]
+  fn diagnostics_session_guard_recovers_from_poisoned_lock() {
+    let result = std::panic::catch_unwind(|| {
+      let _guard = DiagnosticsSessionGuard::acquire();
+      panic!("poison the diagnostics session lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(
+      diagnostics_session_mutex().is_poisoned(),
+      "expected diagnostics session mutex to be poisoned after panic"
+    );
+
+    {
+      let _guard = DiagnosticsSessionGuard::acquire();
+    }
+    assert!(
+      !diagnostics_session_mutex().is_poisoned(),
+      "expected DiagnosticsSessionGuard to clear mutex poison"
     );
   }
 
