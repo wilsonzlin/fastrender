@@ -61,6 +61,13 @@ struct Args {
   /// Print per-page fetch durations
   #[arg(long)]
   timings: bool,
+
+  /// Allow caching pages that return HTTP error statuses (>= 400)
+  ///
+  /// By default, `fetch_pages` treats error statuses as failures to avoid caching bot
+  /// mitigation pages (403/5xx) as if they were real page content.
+  #[arg(long)]
+  allow_http_error_status: bool,
 }
 
 fn build_pageset_entries(
@@ -144,8 +151,21 @@ fn write_cached_html(
   Ok(())
 }
 
-fn fetch_page(fetcher: &dyn ResourceFetcher, url: &str) -> Result<FetchedResource, String> {
+fn fetch_page(
+  fetcher: &dyn ResourceFetcher,
+  url: &str,
+  allow_http_error_status: bool,
+) -> Result<FetchedResource, String> {
   let mut res = fetcher.fetch(url).map_err(|e| e.to_string())?;
+
+  if !allow_http_error_status {
+    if let Some(code) = res.status {
+      if code >= 400 {
+        let final_url = res.final_url.clone().unwrap_or_else(|| url.to_string());
+        return Err(format!("HTTP status {code} (final url {final_url})"));
+      }
+    }
+  }
   if res.bytes.is_empty() {
     let status = res
       .status
@@ -258,6 +278,7 @@ fn main() {
       let failed_urls = Arc::clone(&failed_urls);
       let refresh = args.refresh;
       let timings = args.timings;
+      let allow_http_error_status = args.allow_http_error_status;
 
       s.spawn(move |_| {
         let cache_path = cache_html_path(&entry.cache_stem);
@@ -273,7 +294,7 @@ fn main() {
         } else {
           None
         };
-        match fetch_page(fetcher.as_ref(), &entry.url) {
+        match fetch_page(fetcher.as_ref(), &entry.url, allow_http_error_status) {
           Ok(res) => {
             let canonical_url = res.final_url.as_deref().unwrap_or(&entry.url);
             if write_cached_html(
@@ -605,7 +626,7 @@ mod tests {
 
     let url = format!("http://{}/start", addr);
     let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
-    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
+    let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
     let dir = tempfile::tempdir().expect("temp dir");
@@ -649,7 +670,7 @@ mod tests {
 
     let url = format!("http://{}", addr);
     let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
-    let result = fetch_page(&fetcher, &url);
+    let result = fetch_page(&fetcher, &url, false);
     assert!(
       result.is_err(),
       "empty bodies should be treated as failures"
@@ -687,7 +708,7 @@ mod tests {
 
     let url = format!("http://{}/", addr);
     let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, "es-MX,es;q=0.8", Some(5));
-    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
+    let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
     assert_eq!(res.bytes, b"ok");
@@ -743,7 +764,7 @@ mod tests {
 
     let url = format!("http://{}/", addr);
     let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
-    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
+    let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
     let expected_final = format!("http://{}/next", addr);
@@ -801,7 +822,7 @@ mod tests {
 
     let url = format!("http://{}/", addr);
     let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
-    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
+    let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
     let expected_final = format!("http://{}/js", addr);
@@ -857,7 +878,7 @@ mod tests {
 
     let url = format!("http://{}/", addr);
     let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
-    let res = fetch_page(&fetcher, &url).expect("fetch succeeds");
+    let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
     assert_eq!(
@@ -865,6 +886,87 @@ mod tests {
       b"<script>window.location.href='/missing'</script>"
     );
     assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    assert_eq!(res.final_url.as_deref(), Some(url.as_str()));
+  }
+
+  #[test]
+  fn fetch_page_rejects_http_error_status_by_default() {
+    use std::io::Read;
+    use std::io::Write;
+
+    let Some(listener) = try_bind_localhost("fetch_page_rejects_http_error_status_by_default")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = std::thread::spawn(move || {
+      if let Some(stream) = listener.incoming().next() {
+        let mut stream = stream.unwrap();
+        let _ = stream.read(&mut [0u8; 1024]);
+
+        let body = b"forbidden";
+        let headers = format!(
+          "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(body);
+      }
+    });
+
+    let url = format!("http://{}/", addr);
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let err = fetch_page(&fetcher, &url, false).unwrap_err();
+    handle.join().unwrap();
+
+    assert!(
+      err.contains("HTTP status 403"),
+      "expected status failure, got: {err}"
+    );
+    assert!(
+      err.contains("final url"),
+      "expected final url in error message, got: {err}"
+    );
+    assert!(
+      err.contains(&addr.port().to_string()),
+      "expected error message to include localhost port, got: {err}"
+    );
+  }
+
+  #[test]
+  fn fetch_page_allows_http_error_status_when_flag_set() {
+    use std::io::Read;
+    use std::io::Write;
+
+    let Some(listener) = try_bind_localhost("fetch_page_allows_http_error_status_when_flag_set")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = std::thread::spawn(move || {
+      if let Some(stream) = listener.incoming().next() {
+        let mut stream = stream.unwrap();
+        let _ = stream.read(&mut [0u8; 1024]);
+
+        let body = b"forbidden";
+        let headers = format!(
+          "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(body);
+      }
+    });
+
+    let url = format!("http://{}/", addr);
+    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let res = fetch_page(&fetcher, &url, true).expect("fetch succeeds with allow flag");
+    handle.join().unwrap();
+
+    assert_eq!(res.status, Some(403));
+    assert_eq!(res.bytes, b"forbidden");
     assert_eq!(res.final_url.as_deref(), Some(url.as_str()));
   }
 }
