@@ -17,8 +17,9 @@ Checklist (start here, in order):
 
 1. **Use an HTTP/2-capable backend**: `FASTR_HTTP_BACKEND=curl` (or leave it at the default `auto` to use the Rust backend first with a `curl` fallback on retryable network/TLS/HTTP2 errors).
    - Ensure your system `curl` supports HTTP/2 (check `curl --version` includes `HTTP2`).
-   - For differential diagnosis, `FASTR_HTTP_BACKEND=ureq` disables the `curl` fallback so you can see whether the Rust backend fails on its own.
+    - For differential diagnosis, `FASTR_HTTP_BACKEND=ureq` disables the `curl` fallback so you can see whether the Rust backend fails on its own.
    - If an error message includes `curl fallback failed: ...`, `auto` already attempted both backends.
+   - If you are seeing `empty HTTP response body` (0 bytes) failures, force `FASTR_HTTP_BACKEND=curl`: `auto` only falls back on network/TLS/HTTP2-style errors and will not switch backends for empty-body responses.
 2. **Enable browser-like headers**: `FASTR_HTTP_BROWSER_HEADERS=1` (this is the default; set it explicitly when debugging to ensure it wasn't disabled).
    - Some font/CDN endpoints are sensitive to `Accept: */*` plus `Origin`/`Referer`; the browser-header profile is intended to match those expectations.
 3. **Turn on retry logging** when debugging transient failures: `FASTR_HTTP_LOG_RETRIES=1`.
