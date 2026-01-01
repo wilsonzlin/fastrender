@@ -13117,6 +13117,47 @@ mod tests {
   }
 
   #[test]
+  fn transition_var_resolves_and_applies_from_raw_keyword() {
+    let decls = parse_declarations("transition: var(--t);");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    assert_eq!(decl.property, "transition");
+    assert!(decl.raw_value.is_empty());
+    match &decl.value {
+      PropertyValue::Keyword(raw) => assert_eq!(raw, "var(--t)"),
+      other => panic!("expected keyword, got {:?}", other),
+    }
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    styles.custom_properties.insert(
+      "--t".to_string(),
+      CustomPropertyValue::new("opacity 1s linear 2s", None),
+    );
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.transition_properties,
+      vec![TransitionProperty::Name("opacity".to_string())]
+    );
+    assert_eq!(styles.transition_durations, vec![1000.0]);
+    assert_eq!(styles.transition_delays, vec![2000.0]);
+    assert_eq!(
+      styles.transition_timing_functions,
+      vec![TransitionTimingFunction::Linear]
+    );
+  }
+
+  #[test]
   fn animation_name_declaration_is_raw_keyword_and_applies() {
     let decls = parse_declarations("animation-name: fade, slide;");
     assert_eq!(decls.len(), 1);
