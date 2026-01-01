@@ -81,3 +81,30 @@ fn update_pageset_timeouts_help_mentions_strategy_flag() {
     "update-pageset-timeouts help should mention the selection strategy; got:\n{stdout}"
   );
 }
+
+#[test]
+fn perf_smoke_help_mentions_suites_and_regression_flags() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["perf-smoke", "--help"])
+    .output()
+    .expect("run cargo xtask perf-smoke --help");
+
+  assert!(
+    output.status.success(),
+    "perf-smoke help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--suite")
+      && stdout.contains("pageset-timeouts")
+      && stdout.contains("--only")
+      && stdout.contains("--baseline")
+      && stdout.contains("--threshold")
+      && stdout.contains("--fail-on-regression")
+      && stdout.contains("--top")
+      && stdout.contains("--output")
+      && stdout.contains("--debug"),
+    "perf-smoke help should mention suite selection and regression gating flags; got:\n{stdout}"
+  );
+}

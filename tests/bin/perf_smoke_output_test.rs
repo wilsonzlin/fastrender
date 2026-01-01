@@ -13,7 +13,7 @@ fn perf_smoke_emits_stage_breakdowns() {
     .args([
       "--output",
       output.to_str().unwrap(),
-      "--fixtures",
+      "--only",
       "flex_dashboard",
     ])
     .status()
