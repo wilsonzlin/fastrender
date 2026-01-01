@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "original_url": "https://fixture.example/",
+  "document": {
+    "path": "document.html",
+    "content_type": "text/html; charset=utf-8",
+    "final_url": "https://fixture.example/",
+    "status": 200,
+    "etag": null,
+    "last_modified": null
+  },
+  "render": {
+    "viewport": [
+      800,
+      600
+    ],
+    "device_pixel_ratio": 1.0,
+    "scroll_x": 0.0,
+    "scroll_y": 0.0,
+    "full_page": false,
+    "same_origin_subresources": false,
+    "allowed_subresource_origins": []
+  },
+  "resources": {}
+}
+

@@ -318,6 +318,7 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs)
         overwrite: args.overwrite_fixtures,
         allow_missing: args.allow_missing_resources,
         allow_http_references: false,
+        legacy_rewrite: false,
         dry_run: false,
       },
     )

@@ -1,4 +1,5 @@
 use fastrender::{FastRender, RenderOptions};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -37,22 +38,57 @@ fn imports_bundle_into_fixture() {
     "assets directory should exist"
   );
 
-  // Ensure all text assets are local-only.
-  for entry in walkdir::WalkDir::new(&fixture_dir) {
-    let entry = entry.expect("walk output");
-    if !entry.file_type().is_file() {
-      continue;
-    }
-    if let Ok(content) = fs::read_to_string(entry.path()) {
-      assert!(
-        !content.contains("http://") && !content.contains("https://"),
-        "remote reference persisted in {}",
-        entry.path().display()
-      );
-    }
+  let html = fs::read_to_string(&index_path).expect("read generated HTML");
+  assert!(
+    html.contains("href=\"https://example.com/\""),
+    "<a href> navigation links should remain untouched"
+  );
+  assert!(
+    html.contains("action=\"https://example.com/submit\""),
+    "<form action> should remain untouched"
+  );
+  assert!(
+    html.contains("xmlns=\"http://www.w3.org/2000/svg\""),
+    "xmlns namespaces should remain untouched"
+  );
+  assert!(
+    html.contains("data-src=\"https://example.com/lazy.png\""),
+    "data-* attributes should remain untouched"
+  );
+
+  // Ensure fetchable subresources were rewritten to local assets.
+  let hash_prefix = |bytes: &[u8]| {
+    let digest = Sha256::digest(bytes);
+    digest
+      .iter()
+      .take(16)
+      .map(|b| format!("{b:02x}"))
+      .collect::<String>()
+  };
+
+  let logo_bytes =
+    fs::read(bundle_path.join("resources/00003_logo.png")).expect("read bundled logo");
+  let logo_hash = hash_prefix(&logo_bytes);
+  assert!(
+    html.contains(&format!("src=\"assets/{logo_hash}.png\"")),
+    "<img src> should be rewritten to a local asset filename"
+  );
+  assert!(
+    html.contains("https://fixture.example/static/logo.png") == false,
+    "remote <img src> should not survive rewrite"
+  );
+
+  // Ensure we didn't create missing placeholders for navigation links or data-* attrs.
+  for entry in fs::read_dir(fixture_dir.join("assets")).expect("read assets dir") {
+    let entry = entry.expect("asset entry");
+    let name = entry.file_name();
+    let name = name.to_string_lossy();
+    assert!(
+      !name.starts_with("missing_"),
+      "unexpected missing placeholder asset generated: {name}"
+    );
   }
 
-  let html = fs::read_to_string(&index_path).expect("read generated HTML");
   let base_url = Url::from_directory_path(&fixture_dir)
     .expect("file:// base")
     .to_string();
