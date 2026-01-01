@@ -3918,6 +3918,8 @@ impl FlexFormattingContext {
     let mut manual_col_positions = false;
     let mut unordered_children: Vec<(i32, usize, FragmentNode)> =
       Vec::with_capacity(box_node.children.len());
+    let mut unordered_children_need_sort = false;
+    let mut last_unordered_key: Option<(i32, usize)> = None;
 
     // Sequential assembly: apply placement/fallback logic in DOM order, but reuse/compute child
     // fragments using the results from the parallel stage above.
@@ -4304,6 +4306,13 @@ impl FlexFormattingContext {
       }
 
       if let Some(fragment) = final_fragment {
+        let key = (child_box.style.order, dom_idx);
+        if let Some(prev) = last_unordered_key {
+          if key < prev {
+            unordered_children_need_sort = true;
+          }
+        }
+        last_unordered_key = Some(key);
         unordered_children.push((child_box.style.order, dom_idx, fragment));
       }
 
@@ -4316,7 +4325,15 @@ impl FlexFormattingContext {
       }
     }
 
-    unordered_children.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    if unordered_children_need_sort {
+      if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+        return Err(LayoutError::Timeout { elapsed });
+      }
+      unordered_children.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+      if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+        return Err(LayoutError::Timeout { elapsed });
+      }
+    }
     children = unordered_children
       .into_iter()
       .map(|(_, _, frag)| frag)
@@ -5171,16 +5188,32 @@ impl FlexFormattingContext {
       FxHashMap::with_capacity_and_hasher(positioned.len(), Default::default());
 
     let mut ordered_children: Vec<(i32, usize)> = Vec::new();
+    let mut ordered_children_need_sort = false;
+    let mut last_ordered_order: Option<i32> = None;
     for (idx, child) in box_node.children.iter().enumerate() {
       check_layout_deadline(&mut deadline_counter)?;
       if child.style.running_position.is_some() {
         continue;
       }
+      if let Some(prev) = last_ordered_order {
+        if child.style.order < prev {
+          ordered_children_need_sort = true;
+        }
+      }
+      last_ordered_order = Some(child.style.order);
       ordered_children.push((child.style.order, idx));
     }
-    ordered_children.sort_by(|(a_order, a_idx), (b_order, b_idx)| {
-      a_order.cmp(b_order).then_with(|| a_idx.cmp(b_idx))
-    });
+    if ordered_children_need_sort {
+      if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+        return Err(LayoutError::Timeout { elapsed });
+      }
+      ordered_children.sort_by(|(a_order, a_idx), (b_order, b_idx)| {
+        a_order.cmp(b_order).then_with(|| a_idx.cmp(b_idx))
+      });
+      if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+        return Err(LayoutError::Timeout { elapsed });
+      }
+    }
 
     for (_, child_idx) in ordered_children {
       check_layout_deadline(&mut deadline_counter)?;
