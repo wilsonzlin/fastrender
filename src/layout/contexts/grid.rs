@@ -2140,9 +2140,14 @@ impl GridFormattingContext {
     }
   }
 
-  fn baseline_offset_with_fallback(&self, fragment: &FragmentNode, axis: Axis) -> Option<f32> {
-    if let Some(offset) = first_baseline_offset(fragment) {
-      return Some(offset);
+  fn baseline_offset_with_fallback(
+    &self,
+    fragment: &FragmentNode,
+    axis: Axis,
+    deadline_counter: &mut usize,
+  ) -> Result<Option<f32>, LayoutError> {
+    if let Some(offset) = first_baseline_offset(fragment, deadline_counter)? {
+      return Ok(Some(offset));
     }
 
     let size = match axis {
@@ -2150,9 +2155,9 @@ impl GridFormattingContext {
       Axis::Horizontal => fragment.bounds.width(),
     };
     if size.is_finite() && size > 0.0 {
-      Some(size)
+      Ok(Some(size))
     } else {
-      None
+      Ok(None)
     }
   }
 
@@ -2322,9 +2327,11 @@ impl GridFormattingContext {
       if self.alignment_for_axis(Axis::Vertical, child_style, container_style)
         == taffy::style::AlignItems::Baseline
       {
+        let baseline =
+          self.baseline_offset_with_fallback(child_fragment, Axis::Vertical, deadline_counter)?;
         if let (Some((area_start, area_end)), Some(baseline)) = (
           grid_area_for_item(&row_offsets, item_info.row_start, item_info.row_end),
-          self.baseline_offset_with_fallback(child_fragment, Axis::Vertical),
+          baseline,
         ) {
           if debug_baseline {
             eprintln!(
@@ -2356,9 +2363,14 @@ impl GridFormattingContext {
       if self.alignment_for_axis(Axis::Horizontal, child_style, container_style)
         == taffy::style::AlignItems::Baseline
       {
+        let baseline = self.baseline_offset_with_fallback(
+          child_fragment,
+          Axis::Horizontal,
+          deadline_counter,
+        )?;
         if let (Some((area_start, area_end)), Some(baseline)) = (
           grid_area_for_item(&col_offsets, item_info.column_start, item_info.column_end),
-          self.baseline_offset_with_fallback(child_fragment, Axis::Horizontal),
+          baseline,
         ) {
           if debug_baseline {
             eprintln!(
@@ -2800,29 +2812,36 @@ impl Drop for GridTestMeasureHookGuard {
   }
 }
 
-fn find_first_baseline_absolute(fragment: &FragmentNode) -> Option<f32> {
+fn find_first_baseline_absolute(
+  fragment: &FragmentNode,
+  deadline_counter: &mut usize,
+) -> Result<Option<f32>, LayoutError> {
+  check_layout_deadline(deadline_counter)?;
   if let Some(baseline) = fragment.baseline {
-    return Some(fragment.bounds.y() + baseline);
+    return Ok(Some(fragment.bounds.y() + baseline));
   }
   match &fragment.content {
-    FragmentContent::Line { baseline } => return Some(fragment.bounds.y() + *baseline),
+    FragmentContent::Line { baseline } => return Ok(Some(fragment.bounds.y() + *baseline)),
     FragmentContent::Text {
       baseline_offset, ..
-    } => return Some(fragment.bounds.y() + *baseline_offset),
+    } => return Ok(Some(fragment.bounds.y() + *baseline_offset)),
     _ => {}
   }
 
   for child in fragment.children.iter() {
-    if let Some(b) = find_first_baseline_absolute(child) {
-      return Some(b);
+    if let Some(b) = find_first_baseline_absolute(child, deadline_counter)? {
+      return Ok(Some(b));
     }
   }
 
-  None
+  Ok(None)
 }
 
-fn first_baseline_offset(fragment: &FragmentNode) -> Option<f32> {
-  find_first_baseline_absolute(fragment).map(|abs| abs - fragment.bounds.y())
+fn first_baseline_offset(
+  fragment: &FragmentNode,
+  deadline_counter: &mut usize,
+) -> Result<Option<f32>, LayoutError> {
+  Ok(find_first_baseline_absolute(fragment, deadline_counter)?.map(|abs| abs - fragment.bounds.y()))
 }
 
 fn apply_alignment_fallback_for_grid(
@@ -5298,8 +5317,14 @@ mod tests {
     let constraints = LayoutConstraints::definite(400.0, 200.0);
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
-    let baseline0 = super::find_first_baseline_absolute(&fragment.children[0]).unwrap();
-    let baseline1 = super::find_first_baseline_absolute(&fragment.children[1]).unwrap();
+    let mut deadline_counter = 0usize;
+    let baseline0 = super::find_first_baseline_absolute(&fragment.children[0], &mut deadline_counter)
+      .expect("baseline computation")
+      .expect("baseline");
+    let mut deadline_counter = 0usize;
+    let baseline1 = super::find_first_baseline_absolute(&fragment.children[1], &mut deadline_counter)
+      .expect("baseline computation")
+      .expect("baseline");
 
     assert!(
       (baseline0 - baseline1).abs() < 0.05,
@@ -5336,9 +5361,13 @@ mod tests {
     let constraints = LayoutConstraints::definite(300.0, 300.0);
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
-    let baseline_offset0 = super::first_baseline_offset(&fragment.children[0])
+    let mut deadline_counter = 0usize;
+    let baseline_offset0 = super::first_baseline_offset(&fragment.children[0], &mut deadline_counter)
+      .expect("baseline computation")
       .unwrap_or_else(|| fragment.children[0].bounds.width());
-    let baseline_offset1 = super::first_baseline_offset(&fragment.children[1])
+    let mut deadline_counter = 0usize;
+    let baseline_offset1 = super::first_baseline_offset(&fragment.children[1], &mut deadline_counter)
+      .expect("baseline computation")
       .unwrap_or_else(|| fragment.children[1].bounds.width());
 
     let baseline0 = fragment.children[0].bounds.x() + baseline_offset0;

@@ -250,24 +250,28 @@ fn record_fragment_clone(site: CloneSite, fragment: &FragmentNode) {
   fragment_clone_profile::record_fragment_clone_from_fragment(site, fragment);
 }
 
-fn fragment_first_baseline(fragment: &FragmentNode) -> Option<f32> {
+fn fragment_first_baseline(
+  fragment: &FragmentNode,
+  deadline_counter: &mut usize,
+) -> Result<Option<f32>, LayoutError> {
+  check_layout_deadline(deadline_counter)?;
   if let Some(baseline) = fragment.baseline {
-    return Some(baseline);
+    return Ok(Some(baseline));
   }
 
   match &fragment.content {
-    FragmentContent::Line { baseline } => Some(*baseline),
+    FragmentContent::Line { baseline } => Ok(Some(*baseline)),
     FragmentContent::Text {
       baseline_offset, ..
-    } => Some(*baseline_offset),
-    FragmentContent::Replaced { .. } => Some(fragment.bounds.height()),
+    } => Ok(Some(*baseline_offset)),
+    FragmentContent::Replaced { .. } => Ok(Some(fragment.bounds.height())),
     _ => {
       for child in fragment.children.iter() {
-        if let Some(baseline) = fragment_first_baseline(child) {
-          return Some(child.bounds.y() - fragment.bounds.y() + baseline);
+        if let Some(baseline) = fragment_first_baseline(child, deadline_counter)? {
+          return Ok(Some(child.bounds.y() - fragment.bounds.y() + baseline));
         }
       }
-      None
+      Ok(None)
     }
   }
 }
@@ -1715,8 +1719,8 @@ impl FormattingContext for FlexFormattingContext {
           } else {
             child_fragment.bounds.height()
           };
-          let mut baseline_offset =
-            fragment_first_baseline(child_fragment).unwrap_or(cross_size_child);
+          let mut baseline_offset = fragment_first_baseline(child_fragment, &mut deadline_counter)?
+            .unwrap_or(cross_size_child);
           if !baseline_offset.is_finite() {
             baseline_offset = cross_size_child;
           }
@@ -5543,7 +5547,10 @@ mod tests {
   }
 
   fn baseline_position(fragment: &FragmentNode) -> f32 {
-    let offset = fragment_first_baseline(fragment).expect("fragment has no baseline");
+    let mut deadline_counter = 0usize;
+    let offset = fragment_first_baseline(fragment, &mut deadline_counter)
+      .expect("baseline computation")
+      .expect("fragment has no baseline");
     fragment.bounds.y() + offset
   }
 
