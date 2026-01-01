@@ -9,6 +9,7 @@ use fastrender::layout::table::{TableFormattingContext, TableStructure};
 use fastrender::style::display::Display;
 use fastrender::style::types::BorderCollapse;
 use fastrender::style::types::GridTrack;
+use fastrender::tree::anonymous::AnonymousBoxCreator;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::{
   BoxNode, BoxTree, ComputedStyle, FormattingContextFactory, FormattingContextType, LayoutConfig,
@@ -112,6 +113,50 @@ fn grid_intrinsic_sizing_tree(item_count: usize, columns: usize) -> BoxTree {
 
   let root = BoxNode::new_block(grid_style, FormattingContextType::Grid, children);
   BoxTree::new(root)
+}
+
+fn synthetic_anonymous_fixup_tree() -> BoxNode {
+  // Synthetic box tree designed to stress anonymous fixup traversal.
+  //
+  // The tree is intentionally dominated by mixed inline/block runs inside block containers
+  // (CSS 2.1 9.2.1.1) so anonymous block insertion work happens alongside a large bottom-up
+  // traversal.
+  const SECTION_COUNT: usize = 900;
+  const RUNS_PER_SECTION: usize = 6;
+  const INLINE_RUN_LEN: usize = 4;
+
+  let mut block_style = ComputedStyle::default();
+  block_style.display = Display::Block;
+  let block_style = Arc::new(block_style);
+
+  let mut inline_style = ComputedStyle::default();
+  inline_style.display = Display::Inline;
+  let inline_style = Arc::new(inline_style);
+
+  let text_style = Arc::new(ComputedStyle::default());
+
+  let mut sections = Vec::with_capacity(SECTION_COUNT);
+  for _ in 0..SECTION_COUNT {
+    let mut children = Vec::with_capacity(RUNS_PER_SECTION * (INLINE_RUN_LEN + 1));
+    for _ in 0..RUNS_PER_SECTION {
+      for _ in 0..INLINE_RUN_LEN {
+        let text = BoxNode::new_text(text_style.clone(), String::new());
+        children.push(BoxNode::new_inline(inline_style.clone(), vec![text]));
+      }
+      children.push(BoxNode::new_block(
+        block_style.clone(),
+        FormattingContextType::Block,
+        Vec::new(),
+      ));
+    }
+    sections.push(BoxNode::new_block(
+      block_style.clone(),
+      FormattingContextType::Block,
+      children,
+    ));
+  }
+
+  BoxNode::new_block(block_style, FormattingContextType::Block, sections)
 }
 
 fn clear_box_ids(node: &mut BoxNode) {
@@ -249,6 +294,27 @@ fn bench_box_generation(c: &mut Criterion) {
   let styled = common::cascade(&dom, &sheet, &media);
   group.bench_function("form_controls", |b| {
     b.iter(|| common::box_tree_from_styled(black_box(&styled)))
+  });
+
+  group.finish();
+}
+
+fn bench_box_tree_anonymous_fixup(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_box_tree_anonymous_fixup");
+  // This benchmark is intentionally "large input"; keep its statistical settings modest so it
+  // remains usable in the default perf_regressions suite.
+  group.sample_size(10);
+  group.measurement_time(Duration::from_secs(2));
+
+  group.bench_function("synthetic_mixed_50k", |b| {
+    b.iter_batched(
+      synthetic_anonymous_fixup_tree,
+      |tree| {
+        let fixed = AnonymousBoxCreator::fixup_tree(tree).expect("anonymous fixup");
+        black_box(fixed);
+      },
+      BatchSize::LargeInput,
+    )
   });
 
   group.finish();
@@ -663,6 +729,7 @@ criterion_group!(
     bench_css_parse,
     bench_cascade,
     bench_box_generation,
+    bench_box_tree_anonymous_fixup,
     bench_layout_block,
     bench_layout_flex,
     bench_layout_flex_cached_text,

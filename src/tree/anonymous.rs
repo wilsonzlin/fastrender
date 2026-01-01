@@ -131,15 +131,17 @@ impl AnonymousBoxCreator {
       ANON_FIXUP_DEADLINE_STRIDE,
       RenderStage::Cascade,
     )?;
-    // First, recursively fix children (bottom-up traversal) while reusing the existing
-    // child Vec allocation to avoid allocating a new Vec for every node.
+    // First, recursively fix children (bottom-up traversal).
+    //
+    // Take ownership of the children Vec so we can avoid per-child placeholder cloning
+    // (`mem::replace` with a dummy text node) on hot paths.
     if !box_node.children.is_empty() {
-      let placeholder = BoxNode::new_text(box_node.style.clone(), String::new());
-      for child in box_node.children.iter_mut() {
-        let child_node = std::mem::replace(child, placeholder.clone());
-        *child =
-          Self::fixup_tree_with_parent(child_node, Some(&box_node.style), deadline_counter)?;
-      }
+      let parent = &box_node.style;
+      let children = std::mem::take(&mut box_node.children);
+      box_node.children = children
+        .into_iter()
+        .map(|child| Self::fixup_tree_with_parent(child, Some(parent), deadline_counter))
+        .collect::<Result<Vec<_>>>()?;
     }
 
     // Then fix this node's children based on its type
@@ -408,34 +410,27 @@ impl AnonymousBoxCreator {
     children: Vec<BoxNode>,
     parent_style: &Arc<ComputedStyle>,
   ) -> Vec<BoxNode> {
-    // Wrap bare text nodes in anonymous inline boxes while reusing the existing Vec allocation.
-    let mut children = children;
     let mut inline_style: Option<Arc<ComputedStyle>> = None;
-    let mut placeholder: Option<BoxNode> = None;
-
-    for child in children.iter_mut() {
-      if !child.is_text() {
-        continue;
-      }
-
-      let style = inline_style.get_or_insert_with(|| {
-        if parent_style.display == Display::Inline {
-          parent_style.clone()
-        } else {
-          let mut style = (**parent_style).clone();
-          style.display = Display::Inline;
-          Arc::new(style)
-        }
-      });
-
-      let placeholder = placeholder
-        .get_or_insert_with(|| BoxNode::new_text(style.clone(), String::new()))
-        .clone();
-      let text_node = std::mem::replace(child, placeholder);
-      *child = Self::create_anonymous_inline(style.clone(), vec![text_node]);
-    }
-
     children
+      .into_iter()
+      .map(|child| {
+        if !child.is_text() {
+          return child;
+        }
+
+        let style = inline_style.get_or_insert_with(|| {
+          if parent_style.display == Display::Inline {
+            parent_style.clone()
+          } else {
+            let mut style = (**parent_style).clone();
+            style.display = Display::Inline;
+            Arc::new(style)
+          }
+        });
+
+        Self::create_anonymous_inline(style.clone(), vec![child])
+      })
+      .collect()
   }
 
   /// Wraps consecutive inline boxes in anonymous block boxes
@@ -505,26 +500,22 @@ impl AnonymousBoxCreator {
     parent_style: &ComputedStyle,
   ) -> Vec<BoxNode> {
     let mut inherited_inline_style: Option<Arc<ComputedStyle>> = None;
-    let mut placeholder: Option<BoxNode> = None;
-    let mut children = children;
-    for child in children.iter_mut() {
-      if !child.is_text() {
-        continue;
-      }
-      // Wrap text in anonymous inline.
-      let style = inherited_inline_style.get_or_insert_with(|| {
-        let mut inherited = inherited_style(parent_style);
-        inherited.display = Display::Inline;
-        Arc::new(inherited)
-      });
-      let placeholder = placeholder
-        .get_or_insert_with(|| BoxNode::new_text(style.clone(), String::new()))
-        .clone();
-      let text_node = std::mem::replace(child, placeholder);
-      *child = Self::create_anonymous_inline(style.clone(), vec![text_node]);
-    }
-
     children
+      .into_iter()
+      .map(|child| {
+        if !child.is_text() {
+          return child;
+        }
+
+        let style = inherited_inline_style.get_or_insert_with(|| {
+          let mut inherited = inherited_style(parent_style);
+          inherited.display = Display::Inline;
+          Arc::new(inherited)
+        });
+
+        Self::create_anonymous_inline(style.clone(), vec![child])
+      })
+      .collect()
   }
 
   /// Creates an anonymous block box
