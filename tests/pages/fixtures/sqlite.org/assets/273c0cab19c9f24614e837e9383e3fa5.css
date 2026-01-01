@@ -1,0 +1,317 @@
+/* Style sheet for the SQLite Website and Documentation */
+* {box-sizing:border-box;}
+@media screen and (max-width: 800px){
+  body {margin: 2px;}
+}
+body {
+  margin-top: 0;
+  font-family: Verdana, sans-serif;
+}
+
+/* Horizonal rules */
+.xhr {
+  color: #044a64;
+  height: 2px;
+}
+
+/* Hyperlinks that look like buttons */
+.button {
+  background-color: #ddd;
+  border: 2px solid #aaa;
+  text-decoration: none;
+  border-radius: 4px;
+  padding: 0 1ex 0 1ex;
+  white-space: nowrap;
+  font-size: 90%;
+  line-height: 150%;
+  color: black;
+}
+.button:visited {
+  color: black;
+}
+
+/* Sidebars on the right-hand side of the screen */
+.rightsidebar {
+  padding-right: 1ex;
+  margin: 1ex;
+  float: right;
+}
+
+/* Border box */
+.border2px {
+  border: 2px solid #044a64;
+}
+
+.hdrfont {
+  font-weight:bold;
+  font-size:115%;
+}
+.nounderline a { text-decoration: none }
+
+a { color: #044a64 }
+a:visited { color: #734559 }
+
+.logo {
+  float: left;
+  margin:1px;
+  width: 200px;
+  height: 101px;
+}
+.tagline {
+  float:right;
+  text-align:right;
+  font-style:italic;
+  width:300px;
+  margin:12px;
+  margin-top:58px;
+}
+
+/* Style common to both the main and submenu */
+.menu::before {
+  content: "";
+  clear: both;     /* Clear the Logo and TagLine */
+  display: block;
+}
+.menu ul {
+  margin: 0;
+  list-style-type: none;
+  padding: 0;
+  overflow: hidden;
+}
+.menu ul li {
+  color: white;
+}
+.menu ul li a {
+  display: block;
+  color: white;
+  text-align: center;
+  padding: 0.7ex 1.4ex;
+  text-decoration: none;
+}
+
+/* Styling specific to the main menu */
+.mainmenu ul {
+  background-color: #044a64;
+  border-radius: 8px;
+}
+.mainmenu ul li {
+  float: left;
+}
+.mainmenu ul li.search {
+  float: right;
+}
+
+/* Styling specific to the submenu */
+.submenu {
+  display: none;
+}
+.submenu ul {
+  color: white;
+}
+.submenu ul li {
+  float: none;
+  border-radius: 8px;
+  background-color: #0482c4;
+  border-top: 2px solid white;
+}
+
+/* Styling for the search menu */
+.searchmenu {
+  width: 100%;
+  text-align: right;
+  display: none;
+  float: none;
+  padding: 1ex;
+  background-color: #0482c4;
+  border-radius: 8px;
+}
+
+/* Add the "mobileonly" class to any elements that should be visible
+** on narrow-screen mobile devices only */
+@media screen and (min-width: 600px){
+  /* Settings for wide desktop screens */
+  .mobileonly {display: none;}
+}
+/* Add the "desktoponly" class to any elements that should be visible
+** on desktops with at least 600 pixels of horizontal space. */
+@media screen and (max-width: 600px){
+  /* Settings for narrow mobile screens */
+  .desktoponly {display: none;}
+}
+/* Add the "wideonly" class to any elements that should be visible
+** on wide-screen desktops with  */
+@media screen and (max-width: 800px){
+  /* Settings for screens that are less than 800px wide */
+  .wideonly {display: none;}
+}
+
+.content    { margin: 5%; }
+.content dt { font-weight:bold; }
+.content dd { margin-bottom: 25px; margin-left:20%; }
+.content ul { padding:0px; padding-left: 15px; margin:0px; }
+
+/* Things for "fancyformat" documents start here. */
+.fancy img+p {font-style:italic}
+.fancy .codeblock {
+  display: table;
+  border: 1px solid #80a796;
+  padding: 1ex;
+  background-color: #eee;
+}
+.fancy .codeblock pre {
+  display: table-cell;
+  font-size: 1em;
+}
+.fancy .codeblock i { color: darkblue; }
+.fancy h1,.fancy h2,.fancy h3,.fancy h4 {font-weight:normal;color:#044a64}
+.fancy th {text-align:left;border-bottom:solid 1px #444}
+.fancy th, .fancy td {padding: 0.2em 1ex; vertical-align:top}
+.toct { color: #044a64 ! important; }
+#toc_sub a        { color: #044a64; text-decoration: none }
+#toc_sub { margin-top: 1em; }
+.fancy .todo         { color: #AA3333 ; font-style : italic }
+.fancy .todo:before  { content: 'TODO:' }
+.fancy p.todo        { border: solid #AA3333 1px; padding: 1ex }
+.fancy img { display:block; }
+.fancy :link:hover, .fancy :visited:hover { background: wheat }
+.fancy_title {
+  font-size: 2em;
+  text-align: center;
+  color: #044a64;
+}
+.fancy_toc {
+  margin-top: 1em;
+}
+.fancy_toc > a,
+.fancy_toc > summary {
+  margin: 1em;
+  margin-left: 0;
+  font-size: 1.5em;
+  color: #044a64;
+  text-decoration: none;
+  cursor: pointer;
+}
+@media screen and (min-width: 600px){
+  /* Indentation amounts for non-mobile screens, 600 pixels or wider */
+  .fancy p,.fancy ul,.fancy ol,.fancy dl { margin: 1em 5ex }
+  .fancy li p { margin: 1em 0 }
+  .fancy blockquote { margin-left : 10ex }
+  .toct {margin-left:4ex;}
+  .fancy-toc1 {margin-left:6ex;}
+  .fancy-toc2 {margin-left:12ex;}
+  .fancy-toc3 {margin-left:18ex;}
+  .fancy-toc4 {margin-left:24ex;}
+  .fancy-toc5 {margin-left:30ex;}
+  .fancy-toc6 {margin-left:36ex;}
+  .fancy .codeblock {margin:0 10ex;}
+  .fancy ol .codeblock {margin:0 5ex;}
+  .fancy .imgcontainer {margin: 1em 5ex}
+}
+@media screen and (max-width: 600px){
+  /* Indentation amounts for narrow mobile screens */
+  .toct {margin-left:0;}
+  .fancy-toc1 {padding-left:4ex;text-indent:-2ex;}
+  .fancy-toc2 {padding-left:8ex;text-indent:-4ex;}
+  .fancy-toc3 {padding-left:12ex;text-indent:-6ex;}
+  .fancy-toc4 {padding-left:16ex;text-indent:-8ex;}
+  .fancy-toc5 {padding-left:20ex;text-indent:-10ex;}
+  .fancy-toc6 {padding-left:24ex;text-indent:-12ex;}
+  .lessindent {padding-left: 1em; margin-left: 0;}
+  .fancy .codeblock {margin:0 1ex;}
+}
+/* End of "fancyformat" specific rules. */
+
+/* <ul> elements used for multi-column lists */
+.multicol_list {padding-left:1em;margin-left:0;}
+
+.yyterm {
+  background: #fff;
+  border: 1px solid #000;
+  border-radius: 11px;
+  padding-left: 4px;
+  padding-right: 4px;
+  line-height: 125%;
+}
+.yynonterm {
+  background: #fff;
+  border: 1px solid #000;
+  padding-left: 2px;
+  padding-right: 2px;
+  line-height: 125%;
+}
+
+/* Container for an image */
+.imgcontainer img {
+  max-height: 100%;
+  max-width: 100%;
+}
+
+/* Default fill and stroke for SVG paths */
+polygon { fill: black; stroke:#111111; stroke-width:1 }
+path { fill: none; stroke:#111111; stroke-width:1 }
+
+.doccat a {
+  color: #044a64 ;
+  text-decoration: none;
+}
+.doccat h {
+  font-weight: bold;
+}
+.doccat h a {
+  font-size: smaller;
+  color: black;
+}
+.doccat {
+  padding-left: 2ex;
+  padding-right: 2ex;
+  white-space:nowrap;
+}
+.doccat li {
+  list-style-type: none;
+  font-size: smaller;
+  line-height: 150%; 
+}
+.doccat ul {
+  margin-top: 0.5em;
+}
+
+.footer {
+  padding-top: 2px;
+  padding-bottom: 1px;
+  border-top: 2px solid #044a64;
+}
+
+th.sort:after {
+  margin-left: .4em;
+  cursor: pointer;
+  text-shadow: 0 0 0 #000; /* Makes arrow darker */
+}
+th.sort.none:after {
+  content: '\2666';
+}
+th.sort.asc:after {
+  content: '\2193';
+}
+th.sort.desc:after {
+  content: '\2191'
+}
+
+div.columns {
+  padding: 0 2em 0 2em;
+  max-width: 2000px;
+}
+div.columns > ul {
+  margin: 0;
+  padding: 0 0 0 1em;
+  list-style-type: none;
+  padding: 10px;
+  margin: 0px;
+  white-space: nowrap;
+}
+div.columns > ul li:first-child {
+  margin-top:0px;
+}
+.columns li {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}

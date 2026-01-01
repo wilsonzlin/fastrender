@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<link href="assets/273c0cab19c9f24614e837e9383e3fa5.css" rel="stylesheet">
+<title>SQLite Home Page</title>
+<!-- path= -->
+</head>
+<body>
+<div class=nosearch>
+<a href="index.html">
+<img class="logo" src="assets/462c4ce8229b585dd6880cd308b121d9.svg" alt="SQLite" border="0">
+</a>
+<div><!-- IE hack to prevent disappearing logo --></div>
+<div class="tagline desktoponly">
+Small. Fast. Reliable.<br>Choose any three.
+</div>
+<div class="menu mainmenu">
+<ul>
+<li><a href="index.html">Home</a>
+<li class='mobileonly'><a href="javascript:void(0)" onclick='toggle_div("submenu")'>Menu</a>
+<li class='wideonly'><a href='about.html'>About</a>
+<li class='desktoponly'><a href="docs.html">Documentation</a>
+<li class='desktoponly'><a href="download.html">Download</a>
+<li class='wideonly'><a href='copyright.html'>License</a>
+<li class='desktoponly'><a href="support.html">Support</a>
+<li class='desktoponly'><a href="prosupport.html">Purchase</a>
+<li class='search' id='search_menubutton'>
+<a href="javascript:void(0)" onclick='toggle_search()'>Search</a>
+</ul>
+</div>
+<div class="menu submenu" id="submenu">
+<ul>
+<li><a href='about.html'>About</a>
+<li><a href='docs.html'>Documentation</a>
+<li><a href='download.html'>Download</a>
+<li><a href='support.html'>Support</a>
+<li><a href='prosupport.html'>Purchase</a>
+</ul>
+</div>
+<div class="searchmenu" id="searchmenu">
+<form method="GET" action="search">
+<select name="s" id="searchtype">
+<option value="d">Search Documentation</option>
+<option value="c">Search Changelog</option>
+</select>
+<input type="text" name="q" id="searchbox" value="">
+<input type="submit" value="Go">
+</form>
+</div>
+</div>
+<script>
+function toggle_div(nm) {
+var w = document.getElementById(nm);
+if( w.style.display=="block" ){
+w.style.display = "none";
+}else{
+w.style.display = "block";
+}
+}
+function toggle_search() {
+var w = document.getElementById("searchmenu");
+if( w.style.display=="block" ){
+w.style.display = "none";
+} else {
+w.style.display = "block";
+setTimeout(function(){
+document.getElementById("searchbox").focus()
+}, 30);
+}
+}
+function div_off(nm){document.getElementById(nm).style.display="none";}
+window.onbeforeunload = function(e){div_off("submenu");}
+/* Disable the Search feature if we are not operating from CGI, since */
+/* Search is accomplished using CGI and will not work without it. */
+if( !location.origin || !location.origin.match || !location.origin.match(/http/) ){
+document.getElementById("search_menubutton").style.display = "none";
+}
+/* Used by the Hide/Show button beside syntax diagrams, to toggle the */
+function hideorshow(btn,obj){
+var x = document.getElementById(obj);
+var b = document.getElementById(btn);
+if( x.style.display!='none' ){
+x.style.display = 'none';
+b.innerHTML='show';
+}else{
+x.style.display = '';
+b.innerHTML='hide';
+}
+return false;
+}
+var antiRobot = 0;
+function antiRobotGo(){
+if( antiRobot!=3 ) return;
+antiRobot = 7;
+var j = document.getElementById("mtimelink");
+if(j && j.hasAttribute("data-href")) j.href=j.getAttribute("data-href");
+}
+function antiRobotDefense(){
+document.body.onmousedown=function(){
+antiRobot |= 2;
+antiRobotGo();
+document.body.onmousedown=null;
+}
+document.body.onmousemove=function(){
+antiRobot |= 2;
+antiRobotGo();
+document.body.onmousemove=null;
+}
+setTimeout(function(){
+antiRobot |= 1;
+antiRobotGo();
+}, 100)
+antiRobotGo();
+}
+antiRobotDefense();
+</script>
+
+
+<div class="rightsidebar desktoponly border2px">
+<h3 align="center">Common Links</h3>
+<ul class=nounderline>
+<li> <a href="features.html">Features</a> </li>
+<li> <a href="whentouse.html">When to use SQLite</a> </li>
+<li> <a href="quickstart.html">Getting Started</a> </li>
+<li> <a href="https://sqlite.org/fiddle">Try it live!</li>
+<li> <a href="lang.html">SQL Syntax</a>
+<ul>
+<li> <a href="pragma.html#toc">Pragmas</a>
+<li> <a href="lang_corefunc.html">SQL functions</a>
+<li> <a href="lang_datefunc.html">Date &amp; time functions</a>
+<li> <a href="lang_aggfunc.html#aggfunclist">Aggregate functions</a>
+<li> <a href="windowfunctions.html#biwinfunc">Window functions</a>
+<li> <a href="lang_mathfunc.html">Math functions</a>
+<li> <a href="json1.html">JSON functions</a>
+</ul>
+</li>
+<li> <a href="c3ref/intro.html">C/C++ Interface Spec</a>
+<ul>
+<li> <a href="cintro.html">Introduction</a>
+<li> <a href="c3ref/funclist.html">List of C-language APIs</a>
+</ul>
+</li>
+<li> <a href="tclsqlite.html">The TCL Interface Spec</a>
+<li> <a href="quirks.html">Quirks and Gotchas</a> </li>
+<li> <a href="faq.html">Frequently Asked Questions</a> </li>
+<li> <a href="https://www.sqlite.org/src/timeline">Commit History</a> </li>
+<li> <a href="chronology.html">Prior Releases</a>
+<li> <a href="https://www.sqlite.org/src/wiki?name=Bug+Reports">Bugs</a> </li>
+<li> <a href="news.html">News</a> </li>
+</ul>
+
+</div>
+
+<p>SQLite is a C-language library that implements a
+<a href="footprint.html">small</a>,
+<a href="fasterthanfs.html">fast</a>,
+<a href="selfcontained.html">self-contained</a>,
+<a href="hirely.html">high-reliability</a>,
+<a href="fullsql.html">full-featured</a>,
+SQL database engine.
+SQLite is the <a href="mostdeployed.html">most used</a> database engine in the world.
+SQLite is built into all mobile phones and most computers and
+comes bundled inside countless other applications that people
+use every day.
+<a href="about.html">More Information...</a>
+
+<p>
+SQLite <a href="https://sqlite.org/src">source code</a>
+is in the <a href="copyright.html">public-domain</a> and is free to
+everyone to use for any purpose.
+
+<h3>Latest Release</h3>
+<a href="releaselog/3_51_1.html">Version 3.51.1</a> (2025-11-28).
+<a class="button" href="download.html">Download</a>
+<a class="button" href="chronology.html">Prior Releases</a>
+
+<div class="mobileonly">
+<h3>Common Links</h3>
+<ul class=nounderline>
+<li> <a href="features.html">Features</a> </li>
+<li> <a href="whentouse.html">When to use SQLite</a> </li>
+<li> <a href="quickstart.html">Getting Started</a> </li>
+<li> <a href="https://sqlite.org/fiddle">Try it live!</li>
+<li> <a href="lang.html">SQL Syntax</a>
+<ul>
+<li> <a href="pragma.html#toc">Pragmas</a>
+<li> <a href="lang_corefunc.html">SQL functions</a>
+<li> <a href="lang_datefunc.html">Date &amp; time functions</a>
+<li> <a href="lang_aggfunc.html#aggfunclist">Aggregate functions</a>
+<li> <a href="windowfunctions.html#biwinfunc">Window functions</a>
+<li> <a href="lang_mathfunc.html">Math functions</a>
+<li> <a href="json1.html">JSON functions</a>
+</ul>
+</li>
+<li> <a href="c3ref/intro.html">C/C++ Interface Spec</a>
+<ul>
+<li> <a href="cintro.html">Introduction</a>
+<li> <a href="c3ref/funclist.html">List of C-language APIs</a>
+</ul>
+</li>
+<li> <a href="tclsqlite.html">The TCL Interface Spec</a>
+<li> <a href="quirks.html">Quirks and Gotchas</a> </li>
+<li> <a href="faq.html">Frequently Asked Questions</a> </li>
+<li> <a href="https://www.sqlite.org/src/timeline">Commit History</a> </li>
+<li> <a href="chronology.html">Prior Releases</a>
+<li> <a href="https://www.sqlite.org/src/wiki?name=Bug+Reports">Bugs</a> </li>
+<li> <a href="news.html">News</a> </li>
+</ul>
+
+</div>
+
+<h3>Sponsors</h3>
+
+<p>SQLite is made possible in part by sponsors and
+<a href="consortium.html">SQLite Consortium</a> members, including:</p>
+<a name="sponsors"></a>
+<style>
+#sponsors {
+  margin:auto;
+  width:80%;
+}
+.onesponsor a img {
+  width:200px;
+  max-width:200px;
+  padding:1ex;
+}
+</style>
+<div id="sponsors"></div>
+<script>
+  var sponsors = [{
+    "name":"Bloomberg",
+    "href":"https://www.techatbloomberg.com/",
+    "src":"bloomberg.png",
+    "wx":0
+  },{
+    "name":"Bentley",
+    "href":"https://www.bentley.com/",
+    "src":"bentley.gif",
+    "wx":0
+  },{
+    "name":"NDS",
+    "href":"http://www.nds-association.org/",
+    "src":"nds.png",
+    "wx":0
+  },{
+    "name":"Expensify",
+    "href":"https://www.expensify.com/",
+    "src":"expensify.png",
+    "wx":225,
+    "hx":32
+  },{
+    "name":"Visual DB",
+    "href":"https://visualdb.com/sqlite",
+    "src":"visualdb-txt.png",
+    "wx":0
+  }];
+
+  for(var i=0; i<sponsors.length; i++){sponsors[i].idx = Math.random();}
+  sponsors.sort(function(a,b){return a.idx-b.idx});
+  var h = "";
+  for(var i=0; i<sponsors.length; i++){
+    h += "<span class='onesponsor'><a href='";
+    h += sponsors[i].href;
+    h += "'><img src='assets/246c82f9e7c5a1984bb664166886972c.html'";
+    var altText = sponsors[i].name;
+    if( altText ){
+      h += " alt='" + altText + "'";
+    }
+    h += ">";
+    if( sponsors[i].text ){
+      h += "<span class='sponsor-text'>" + sponsors[i].text + "</span>";
+    }
+    h += "</a></span>\n";
+    if( (i%2)==1 && i<sponsors.length-1 ){
+      h += "<br>\n";
+    }
+  }
+  document.getElementById("sponsors").innerHTML = h;
+
+</script>
+<br clear="both">
+<p align="center"><small><i>This page was last updated on 2025-12-10 18:30:50Z </small></i></p>
+

@@ -1,0 +1,65 @@
+* { font-style: normal }
+body {
+	max-width: 50em;
+	padding: 1em;
+	font: 300 20px/1.5 Lato, "Helvetica Neue", Helvetica, arial, sans-serif;
+}
+a { color: #08e }
+em { font-weight: bold }
+aside, figure, pre, blockquote, form {
+	margin: 1em 0;
+	padding: 1em;
+	background: #f5f2f0;
+}
+aside pre, .output { background: #e9e6e4 }
+img { border: 0 }
+.inout { padding: 0 }
+.output { margin-top: -1em }
+.foodH1, .foodC, .foodF {
+	padding: 0;
+	background: transparent;
+}
+.foodC {
+	float: right;
+	margin: 0 0 1em 1em;
+}
+.foodCMulti {
+	float: left;
+	width: 100%;
+	padding: 0;
+	background: transparent;
+}
+.foodCMulti * {
+	padding: 0;
+	margin: 0;
+	list-style: none;
+}
+.foodCMulti li { float: right }
+.foodCMulti li:first-child { float: left }
+p, h1, h2, h3 { margin: 1em 0 20px 0 }
+h1 { font-size: 3em }
+h2 { font-size: 2em }
+h3 { font-size: 1.5em }
+pre {
+	padding-top: 0;
+	overflow: auto;
+	white-space: pre-wrap;
+}
+code { color: #c00 }
+pre strong {
+	color: #e00;
+	background: #fff;
+}
+.shot { text-align: center }
+
+form * {
+	display: block;
+	font: inherit;
+}
+input, textarea { margin-bottom: 1em }
+
+table { border-collapse: collapse }
+td, th {
+	border: 1px solid #ccc;
+	padding: .3em 1em;
+}
