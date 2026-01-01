@@ -531,8 +531,8 @@
       "budget_ms": 20000.0
     },
     {
-      "name": "debian.org",
-      "url": "https://www.debian.org/",
+      "name": "cnet.com",
+      "url": "https://www.cnet.com/",
       "viewport": [
         1200,
         800
