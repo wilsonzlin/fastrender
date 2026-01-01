@@ -1057,6 +1057,46 @@ fn crawl_document(
   render: &BundleRenderConfig,
   mode: CrawlMode,
 ) -> Result<()> {
+  fn html_has_style_tag(html: &str) -> bool {
+    let bytes = html.as_bytes();
+    let mut search_from = 0;
+
+    while search_from < bytes.len() {
+      let Some(rel) = bytes[search_from..].iter().position(|b| *b == b'<') else {
+        break;
+      };
+      let start = search_from + rel;
+      let mut pos = start + 1;
+
+      while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+      }
+
+      if pos < bytes.len() && bytes[pos] == b'/' {
+        search_from = start + 1;
+        continue;
+      }
+
+      const STYLE_BYTES: &[u8] = b"style";
+      if pos + STYLE_BYTES.len() <= bytes.len()
+        && bytes[pos..pos + STYLE_BYTES.len()].eq_ignore_ascii_case(STYLE_BYTES)
+      {
+        let after = pos + STYLE_BYTES.len();
+        if after >= bytes.len() {
+          return true;
+        }
+        let next = bytes[after];
+        if next == b'>' || next == b'/' || next.is_ascii_whitespace() {
+          return true;
+        }
+      }
+
+      search_from = start + 1;
+    }
+
+    false
+  }
+
   fn enqueue_unique(
     queue: &mut VecDeque<(String, FetchDestination)>,
     seen: &mut HashSet<String>,
@@ -1095,14 +1135,27 @@ fn crawl_document(
   let mut seen: HashSet<String> = HashSet::new();
   let mut fetch_errors: Vec<(String, String)> = Vec::new();
 
-  for css_url in fastrender::css::loader::extract_css_links(
+  let css_links = fastrender::css::loader::extract_css_links(
     &document.html,
     &document.base_url,
     MediaType::Screen,
   )
-  .unwrap_or_default()
-  {
+  .unwrap_or_default();
+  let has_link_stylesheets = !css_links.is_empty();
+  for css_url in css_links {
     enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+  }
+
+  let has_style_tag = html_has_style_tag(&document.html);
+  if !has_link_stylesheets && !has_style_tag {
+    for css_url in fastrender::css::loader::extract_embedded_css_urls(
+      &document.html,
+      &document.base_url,
+    )
+    .unwrap_or_default()
+    {
+      enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+    }
   }
 
   for css_chunk in extract_inline_css_chunks(&document.html) {
@@ -1182,11 +1235,25 @@ fn crawl_document(
       let base_hint = res.final_url.as_deref().unwrap_or(&url);
       let doc = decode_html_resource(&res, base_hint);
 
-      for css_url in
-        fastrender::css::loader::extract_css_links(&doc.html, &doc.base_url, MediaType::Screen)
-          .unwrap_or_default()
-      {
+      let css_links = fastrender::css::loader::extract_css_links(
+        &doc.html,
+        &doc.base_url,
+        MediaType::Screen,
+      )
+      .unwrap_or_default();
+      let has_link_stylesheets = !css_links.is_empty();
+      for css_url in css_links {
         enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+      }
+
+      let has_style_tag = html_has_style_tag(&doc.html);
+      if !has_link_stylesheets && !has_style_tag {
+        for css_url in
+          fastrender::css::loader::extract_embedded_css_urls(&doc.html, &doc.base_url)
+            .unwrap_or_default()
+        {
+          enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+        }
       }
 
       for css_chunk in extract_inline_css_chunks(&doc.html) {

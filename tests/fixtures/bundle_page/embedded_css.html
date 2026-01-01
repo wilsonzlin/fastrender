@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+  <head>
+    <script>
+      // Intentionally no stylesheet link tags or inline style blocks.
+      // The bundle_page --no-render crawler should fall back to the embedded CSS URL heuristic.
+      const stylesheet = "styles.css";
+      console.log(stylesheet);
+    </script>
+  </head>
+  <body>
+    <div class="box">Embedded CSS!</div>
+  </body>
+</html>
