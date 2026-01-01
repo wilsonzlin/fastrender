@@ -6,6 +6,7 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 const PAGESET_GUARDRAILS_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_GUARDRAILS_MANIFEST";
+const PAGESET_TIMEOUT_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_TIMEOUT_MANIFEST";
 
 #[test]
 fn perf_smoke_emits_stage_breakdowns() {

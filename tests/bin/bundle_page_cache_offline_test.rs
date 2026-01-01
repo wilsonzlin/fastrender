@@ -204,3 +204,80 @@ fn bundle_page_cache_fails_when_resource_missing() {
     "expected cache capture to fail when {img_url} is missing"
   );
 }
+
+#[test]
+fn bundle_page_cache_allow_missing_inserts_placeholders() {
+  let tmp = TempDir::new().expect("tempdir");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+  let asset_dir = tmp.path().join("fetches/assets");
+  std::fs::create_dir_all(&asset_dir).expect("create asset dir");
+
+  let stem = "example.invalid";
+  let page_url = "https://example.invalid/";
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/a.css\"></head><body><img src=\"img.png\"></body></html>",
+  )
+  .expect("write html");
+  std::fs::write(
+    html_path.with_extension("html.meta"),
+    format!("content-type: text/html\nurl: {page_url}\n"),
+  )
+  .expect("write meta");
+
+  let css_url = "https://example.invalid/a.css".to_string();
+  let missing_img_url = "https://example.invalid/img.png".to_string();
+
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(css_url.clone(), (b"body {}".to_vec(), "text/css"));
+
+  let mut disk_config = DiskCacheConfig::default();
+  disk_config.namespace = Some(disk_cache_namespace());
+  disk_config.allow_no_store = true;
+
+  let cache_writer = DiskCachingFetcher::with_configs(
+    StaticFetcher {
+      responses: Arc::new(responses),
+    },
+    asset_dir.clone(),
+    CachingFetcherConfig::default(),
+    disk_config,
+  );
+
+  cache_writer.fetch(&css_url).expect("warm css");
+
+  let bundle_dir = tmp.path().join("bundle");
+  let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
+    .current_dir(tmp.path())
+    .args(["cache", stem, "--out"])
+    .arg(bundle_dir.to_string_lossy().as_ref())
+    .arg("--allow-missing")
+    .status()
+    .expect("run bundle_page cache");
+
+  assert!(
+    status.success(),
+    "expected cache capture to succeed with --allow-missing"
+  );
+
+  let bundle = Bundle::load(&bundle_dir).expect("load bundle");
+  assert!(
+    bundle
+      .manifest()
+      .resources
+      .contains_key(missing_img_url.as_str()),
+    "bundle should include placeholder for missing resource"
+  );
+
+  let fetcher = BundledFetcher::new(bundle);
+  let missing = fetcher
+    .fetch(&missing_img_url)
+    .expect("fetch placeholder resource");
+  assert!(
+    missing.bytes.is_empty(),
+    "placeholder bytes should be empty"
+  );
+}
