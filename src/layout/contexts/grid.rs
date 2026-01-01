@@ -721,7 +721,7 @@ impl GridFormattingContext {
       box_node,
       true,
       None,
-      Some(root_children.to_vec()),
+      Some(root_children),
       positioned_children,
       &mut deadline_counter,
     )
@@ -733,7 +733,7 @@ impl GridFormattingContext {
     box_node: &BoxNode,
     is_root: bool,
     containing_grid: Option<&ComputedStyle>,
-    children_override: Option<Vec<&BoxNode>>,
+    children_override: Option<&[&BoxNode]>,
     positioned_children: &mut FxHashMap<TaffyNodeId, Vec<BoxNode>>,
     deadline_counter: &mut usize,
   ) -> Result<TaffyNodeId, LayoutError> {
@@ -757,27 +757,44 @@ impl GridFormattingContext {
     }
     let mut include_children = is_root;
 
-    // Prefer explicitly provided children (used to pre-filter out-of-flow for the root).
-    let provided_children = children_override.unwrap_or_else(|| box_node.children.iter().collect());
-
     // Partition children into in-flow vs positioned for grid containers we expand in the tree.
     if is_grid_container {
-      for child in provided_children {
-        check_layout_deadline(deadline_counter)?;
-        match child.style.position {
-          crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
-            positioned.push(child.clone())
-          }
-          _ => {
-            if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
-              has_subgrid_child = true;
+      if let Some(children_override) = children_override {
+        for child in children_override {
+          check_layout_deadline(deadline_counter)?;
+          match child.style.position {
+            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
+              positioned.push((*child).clone())
             }
-            children_iter.push(child)
+            _ => {
+              if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
+                has_subgrid_child = true;
+              }
+              children_iter.push(*child)
+            }
+          }
+        }
+      } else {
+        for child in box_node.children.iter() {
+          check_layout_deadline(deadline_counter)?;
+          match child.style.position {
+            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
+              positioned.push(child.clone())
+            }
+            _ => {
+              if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
+                has_subgrid_child = true;
+              }
+              children_iter.push(child)
+            }
           }
         }
       }
     } else if is_root {
-      children_iter = provided_children;
+      children_iter = match children_override {
+        Some(children_override) => children_override.to_vec(),
+        None => box_node.children.iter().collect(),
+      };
     }
 
     // Expand subgrids (and any grid that hosts a subgrid child) into the Taffy tree so tracks can be shared.

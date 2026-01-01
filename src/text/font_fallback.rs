@@ -1033,7 +1033,7 @@ mod tests {
 
   #[test]
   fn fallback_cache_prepare_clears_shards() {
-    let _lock = env_lock().lock().unwrap();
+    let _lock = env_lock().lock();
     let _guard = EnvVarGuard::set(FALLBACK_CACHE_CAPACITY_ENV, "0");
     let cache = FallbackCache::new(32);
     let descriptor = dummy_descriptor();
@@ -1067,7 +1067,7 @@ mod tests {
 
   #[test]
   fn fallback_cache_records_evictions() {
-    let _lock = env_lock().lock().unwrap();
+    let _lock = env_lock().lock();
     let _guard = EnvVarGuard::set(FALLBACK_CACHE_CAPACITY_ENV, "0");
     let cache = FallbackCache::new(1);
     let descriptor = dummy_descriptor();
@@ -1097,7 +1097,7 @@ mod tests {
 
   #[test]
   fn fallback_cache_capacity_env_override_is_honored() {
-    let _lock = env_lock().lock().unwrap();
+    let _lock = env_lock().lock();
     let _guard = EnvVarGuard::set(FALLBACK_CACHE_CAPACITY_ENV, "123");
 
     let cache = FallbackCache::new(1);
