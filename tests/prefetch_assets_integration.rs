@@ -463,3 +463,141 @@ fn prefetch_assets_warms_disk_cache_with_shadow_root_style_import() {
     "shadow-root stylesheet import should be cached on disk"
   );
 }
+
+#[test]
+fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
+  let Some(listener) =
+    try_bind_localhost("prefetch_assets_warms_disk_cache_with_html_images_and_iframes")
+  else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert("/img.png".to_string(), (b"dummy-img".to_vec(), "image/png"));
+  responses.insert(
+    "/poster.jpg".to_string(),
+    (b"dummy-poster".to_vec(), "image/jpeg"),
+  );
+  responses.insert(
+    "/favicon.ico".to_string(),
+    (b"dummy-favicon".to_vec(), "image/x-icon"),
+  );
+  responses.insert(
+    "/manifest.json".to_string(),
+    (b"{\"name\":\"test\"}".to_vec(), "application/manifest+json"),
+  );
+  responses.insert(
+    "/frame.html".to_string(),
+    (
+      b"<!doctype html><html><body>frame</body></html>".to_vec(),
+      "text/html",
+    ),
+  );
+  responses.insert(
+    "/object.html".to_string(),
+    (
+      b"<!doctype html><html><body>object</body></html>".to_vec(),
+      "text/html",
+    ),
+  );
+  responses.insert(
+    "/embed.html".to_string(),
+    (
+      b"<!doctype html><html><body>embed</body></html>".to_vec(),
+      "text/html",
+    ),
+  );
+
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec![
+      "/img.png",
+      "/poster.jpg",
+      "/favicon.ico",
+      "/manifest.json",
+      "/frame.html",
+      "/object.html",
+      "/embed.html",
+    ],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><head>\
+      <link rel=\"icon\" href=\"/favicon.ico\">\
+      <link rel=\"manifest\" href=\"/manifest.json\">\
+    </head><body>\
+      <img src=\"/img.png\">\
+      <video poster=\"/poster.jpg\"></video>\
+      <iframe src=\"/frame.html\"></iframe>\
+      <object data=\"/object.html\"></object>\
+      <embed src=\"/embed.html\">\
+    </body></html>",
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .arg("--prefetch-images")
+    .arg("--prefetch-iframes")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let img = format!("http://{}/img.png", addr);
+  let poster = format!("http://{}/poster.jpg", addr);
+  let favicon = format!("http://{}/favicon.ico", addr);
+  let manifest = format!("http://{}/manifest.json", addr);
+  let iframe_doc = format!("http://{}/frame.html", addr);
+  let object_doc = format!("http://{}/object.html", addr);
+  let embed_doc = format!("http://{}/embed.html", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  for url in [
+    &img,
+    &poster,
+    &favicon,
+    &manifest,
+    &iframe_doc,
+    &object_doc,
+    &embed_doc,
+  ] {
+    assert!(offline.fetch(url).is_ok(), "{url} should be cached on disk");
+  }
+}

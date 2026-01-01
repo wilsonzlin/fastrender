@@ -437,7 +437,7 @@ mod disk_cache_main {
       };
 
     summary.borrow_mut().discovered_css = tasks.len();
-    if tasks.is_empty() {
+    if tasks.is_empty() && !(prefetch_images || prefetch_iframes) {
       return summary.into_inner();
     }
 

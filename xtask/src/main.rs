@@ -695,12 +695,13 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 #[derive(Copy, Clone)]
 struct PrefetchAssetsSupport {
   prefetch_images: bool,
+  prefetch_iframes: bool,
   prefetch_css_url_assets: bool,
 }
 
 impl PrefetchAssetsSupport {
   fn any(self) -> bool {
-    self.prefetch_images || self.prefetch_css_url_assets
+    self.prefetch_images || self.prefetch_iframes || self.prefetch_css_url_assets
   }
 
   fn detect() -> Self {
@@ -708,12 +709,14 @@ impl PrefetchAssetsSupport {
     let Ok(contents) = fs::read_to_string(path) else {
       return Self {
         prefetch_images: false,
+        prefetch_iframes: false,
         prefetch_css_url_assets: false,
       };
     };
 
     Self {
       prefetch_images: contents.contains("prefetch_images"),
+      prefetch_iframes: contents.contains("prefetch_iframes"),
       prefetch_css_url_assets: contents.contains("prefetch_css_url_assets"),
     }
   }
@@ -730,6 +733,11 @@ fn extract_prefetch_assets_args(
   while let Some(arg) = iter.next() {
     let is_prefetch_arg = (support.prefetch_images
       && (arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")))
+      || (support.prefetch_iframes
+        && (arg == "--prefetch-iframes"
+          || arg.starts_with("--prefetch-iframes=")
+          || arg == "--prefetch-documents"
+          || arg.starts_with("--prefetch-documents=")))
       || (support.prefetch_css_url_assets
         && (arg == "--prefetch-css-url-assets" || arg.starts_with("--prefetch-css-url-assets=")));
 
