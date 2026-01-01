@@ -3098,6 +3098,16 @@ fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
   }
   push_opt_ms(&mut parts, "selector", cascade.selector_time_ms);
   push_opt_ms(&mut parts, "declaration", cascade.declaration_time_ms);
+  push_opt_ms(&mut parts, "pseudo", cascade.pseudo_time_ms);
+
+  let mut has_parts = Vec::new();
+  push_opt_u64(&mut has_parts, "evals", cascade.has_evals);
+  push_opt_u64(&mut has_parts, "hits", cascade.has_cache_hits);
+  push_opt_u64(&mut has_parts, "prunes", cascade.has_prunes);
+  push_opt_u64(&mut has_parts, "evaluated", cascade.has_evaluated);
+  if !has_parts.is_empty() {
+    parts.push(format!("has {}", has_parts.join(" ")));
+  }
   if parts.is_empty() {
     None
   } else {
@@ -6053,6 +6063,29 @@ mod tests {
       .expect("merge should create diagnostics.stats");
     assert_eq!(stats.cascade.nodes, Some(3));
     assert_eq!(stats.cascade.rule_candidates, Some(4));
+  }
+
+  #[test]
+  fn cascade_summary_includes_pseudo_and_has_counters() {
+    let cascade = CascadeDiagnostics {
+      nodes: Some(1),
+      rule_candidates: Some(2),
+      selector_time_ms: Some(3.0),
+      pseudo_time_ms: Some(4.0),
+      has_evals: Some(5),
+      has_cache_hits: Some(6),
+      has_prunes: Some(7),
+      has_evaluated: Some(8),
+      ..CascadeDiagnostics::default()
+    };
+
+    let summary = cascade_summary(&cascade).expect("summary");
+    assert!(summary.contains("pseudo=4.00ms"), "summary was: {summary}");
+    assert!(summary.contains("has"), "summary was: {summary}");
+    assert!(summary.contains("evals=5"), "summary was: {summary}");
+    assert!(summary.contains("hits=6"), "summary was: {summary}");
+    assert!(summary.contains("prunes=7"), "summary was: {summary}");
+    assert!(summary.contains("evaluated=8"), "summary was: {summary}");
   }
 
   #[test]
