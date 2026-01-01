@@ -62,15 +62,24 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
   // Restrict to explicit navigations to avoid false positives from innocuous property reads like
   // `location.pathname`. We also support direct assignment to the Location object (e.g. `location =
   // "/next"`).
-  let patterns: [(&str, PatternKind); 15] = [
+  let patterns: [(&str, PatternKind); 24] = [
     ("window.location.replace", PatternKind::Call),
     ("document.location.replace", PatternKind::Call),
+    ("top.location.replace", PatternKind::Call),
+    ("self.location.replace", PatternKind::Call),
+    ("parent.location.replace", PatternKind::Call),
     ("location.replace", PatternKind::Call),
     ("window.location.assign", PatternKind::Call),
     ("document.location.assign", PatternKind::Call),
+    ("top.location.assign", PatternKind::Call),
+    ("self.location.assign", PatternKind::Call),
+    ("parent.location.assign", PatternKind::Call),
     ("location.assign", PatternKind::Call),
     ("window.location.href", PatternKind::Assign),
     ("document.location.href", PatternKind::Assign),
+    ("top.location.href", PatternKind::Assign),
+    ("self.location.href", PatternKind::Assign),
+    ("parent.location.href", PatternKind::Assign),
     ("location.href", PatternKind::Assign),
     ("window.location", PatternKind::Assign),
     ("document.location", PatternKind::Assign),
@@ -675,6 +684,27 @@ mod tests {
   }
 
   #[test]
+  fn extracts_js_location_qualified_calls_and_href_assignments() {
+    let html = "<script>top.location.href = '/top-href';</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/top-href".to_string())
+    );
+
+    let html = "<script>parent.location.replace('/parent-replace');</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/parent-replace".to_string())
+    );
+
+    let html = "<script>self.location.assign('https://example.com/self-assign');</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("https://example.com/self-assign".to_string())
+    );
+  }
+
+  #[test]
   fn ignores_location_pathname_reads() {
     let html = "<script>var p = location.pathname; console.log(p);</script>";
     assert_eq!(extract_js_location_redirect(html), None);
@@ -692,6 +722,12 @@ mod tests {
   #[test]
   fn ignores_non_window_location_properties() {
     let html = "<script>foo.location = '/not-a-redirect';</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
+
+    let html = "<script>foo.location.href = '/not-a-redirect';</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
+
+    let html = "<script>foo.location.replace('/not-a-redirect');</script>";
     assert_eq!(extract_js_location_redirect(html), None);
   }
 
