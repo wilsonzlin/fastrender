@@ -88,6 +88,8 @@ use rustc_hash::FxHashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+#[cfg(test)]
+use std::cell::Cell;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::mem;
@@ -100,6 +102,43 @@ static LOG_CHILD_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new
 use taffy::prelude::*;
 use taffy::style::Overflow as TaffyOverflow;
 use taffy::TaffyTree;
+
+#[cfg(test)]
+thread_local! {
+  static FLEX_MEASURE_INTRINSIC_INLINE_HINT_COUNTING: Cell<bool> = const { Cell::new(false) };
+  static FLEX_MEASURE_INTRINSIC_INLINE_HINT_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+struct FlexMeasureInlineHintCounterGuard;
+
+#[cfg(test)]
+impl Drop for FlexMeasureInlineHintCounterGuard {
+  fn drop(&mut self) {
+    FLEX_MEASURE_INTRINSIC_INLINE_HINT_COUNTING.with(|flag| flag.set(false));
+  }
+}
+
+#[cfg(test)]
+fn start_flex_measure_inline_hint_counter() -> FlexMeasureInlineHintCounterGuard {
+  FLEX_MEASURE_INTRINSIC_INLINE_HINT_CALLS.with(|cell| cell.set(0));
+  FLEX_MEASURE_INTRINSIC_INLINE_HINT_COUNTING.with(|flag| flag.set(true));
+  FlexMeasureInlineHintCounterGuard
+}
+
+#[cfg(test)]
+fn flex_measure_inline_hint_calls() -> usize {
+  FLEX_MEASURE_INTRINSIC_INLINE_HINT_CALLS.with(|cell| cell.get())
+}
+
+#[cfg(test)]
+fn record_flex_measure_inline_hint_call() {
+  FLEX_MEASURE_INTRINSIC_INLINE_HINT_COUNTING.with(|enabled| {
+    if enabled.get() {
+      FLEX_MEASURE_INTRINSIC_INLINE_HINT_CALLS.with(|cell| cell.set(cell.get() + 1));
+    }
+  });
+}
 
 fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
   crate::tree::fragment_tree::record_fragment_traversal(1);
@@ -1214,19 +1253,6 @@ impl FormattingContext for FlexFormattingContext {
                     } else {
                         factory.get(fc_type)
                     };
-
-                    let intrinsic_inline_hint = if matches!(
-                        constraints.available_width,
-                        CrateAvailableSpace::MaxContent | CrateAvailableSpace::MinContent
-                    ) {
-                        match fc.compute_intrinsic_inline_size(measure_box, IntrinsicSizingMode::MaxContent) {
-                          Ok(size) => Some(size),
-                          Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
-                          Err(_) => None,
-                        }
-                    } else {
-                        None
-                    };
                     let node_timer = flex_profile::node_timer();
                     let selector_for_profile = node_timer
                         .as_ref()
@@ -1387,17 +1413,34 @@ impl FormattingContext for FlexFormattingContext {
                                     *entry
                                 })
                             });
-                        if let Some(seq) = seq {
-                            let selector = measure_box
-                                .debug_info
-                                .as_ref()
-                                .map(|d| d.to_selector())
-                                .unwrap_or_else(|| "<anon>".to_string());
-                            eprintln!(
-                                "[flex-measure-result] seq={} id={} selector={} avail=({:?},{:?}) known=({:?},{:?}) constraints=({:?},{:?}) content=({:.2},{:.2}) intrinsic=({:.2},{:.2}) min=({:.2},{:.2}) max=({:.2},{:.2}) inline_hint={:?}",
-                                seq,
-                                measure_box.id,
-                                selector,
+                         if let Some(seq) = seq {
+                             let selector = measure_box
+                                 .debug_info
+                                 .as_ref()
+                                 .map(|d| d.to_selector())
+                                 .unwrap_or_else(|| "<anon>".to_string());
+                             let intrinsic_inline_hint = if matches!(
+                               constraints.available_width,
+                               CrateAvailableSpace::MaxContent | CrateAvailableSpace::MinContent
+                             ) {
+                               #[cfg(test)]
+                               record_flex_measure_inline_hint_call();
+                               match fc.compute_intrinsic_inline_size(
+                                 measure_box,
+                                 IntrinsicSizingMode::MaxContent,
+                               ) {
+                                 Ok(size) => Some(size),
+                                 Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                                 Err(_) => None,
+                               }
+                             } else {
+                               None
+                             };
+                             eprintln!(
+                                 "[flex-measure-result] seq={} id={} selector={} avail=({:?},{:?}) known=({:?},{:?}) constraints=({:?},{:?}) content=({:.2},{:.2}) intrinsic=({:.2},{:.2}) min=({:.2},{:.2}) max=({:.2},{:.2}) inline_hint={:?}",
+                                 seq,
+                                 measure_box.id,
+                                 selector,
                                 avail.width,
                                 avail.height,
                                 known_dimensions.width,
@@ -1410,12 +1453,12 @@ impl FormattingContext for FlexFormattingContext {
                                 intrinsic_size.height,
                                 min_w_bound,
                                 min_h_bound,
-                                max_w_bound,
-                                max_h_bound,
-                                intrinsic_inline_hint,
-                             );
-                         }
-                     }
+                                 max_w_bound,
+                                 max_h_bound,
+                                 intrinsic_inline_hint,
+                              );
+                          }
+                      }
 
                     let stored_size =
                       Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
@@ -6719,5 +6762,66 @@ mod tests {
     assert!(measure_lookups > 0, "measure cache should see lookups");
 
     drop(guard);
+  }
+
+  #[test]
+  fn flex_measure_inline_hint_only_computed_when_measure_logging_enabled() {
+    use crate::debug::runtime::{with_runtime_toggles, RuntimeToggles};
+    use std::collections::HashMap;
+
+    let mut item_style = ComputedStyle::default();
+    item_style.display = Display::Block;
+    // Avoid flex-item auto-min-size intrinsic probes; this test only cares about the
+    // debug-only max-content hint that was previously computed unconditionally.
+    item_style.overflow_x = Overflow::Hidden;
+    let item_style = Arc::new(item_style);
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+    let text_style = Arc::new(text_style);
+
+    let mut item = BoxNode::new_block(
+      item_style,
+      FormattingContextType::Inline,
+      vec![BoxNode::new_text(text_style, "hello".to_string())],
+    );
+    item.id = 65001;
+
+    let mut container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![item]);
+    container.id = 65000;
+
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+    // Without any flex-measure logging, we should not do the extra intrinsic sizing work.
+    with_runtime_toggles(Arc::new(RuntimeToggles::from_map(HashMap::new())), || {
+      let guard = start_flex_measure_inline_hint_counter();
+      let fc = FlexFormattingContext::new();
+      fc.layout(&container, &constraints).unwrap();
+      drop(guard);
+      assert_eq!(
+        flex_measure_inline_hint_calls(),
+        0,
+        "inline hint should not be computed when flex-measure logging is disabled",
+      );
+    });
+
+    // When measure logging is enabled for this node, compute the hint for log output.
+    with_runtime_toggles(
+      Arc::new(RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_LOG_FLEX_MEASURE_IDS".to_string(),
+        "65001".to_string(),
+      )]))),
+      || {
+        let guard = start_flex_measure_inline_hint_counter();
+        let fc = FlexFormattingContext::new();
+        fc.layout(&container, &constraints).unwrap();
+        drop(guard);
+        assert!(
+          flex_measure_inline_hint_calls() > 0,
+          "expected inline hint computation when measure logging is enabled"
+        );
+      },
+    );
   }
 }
