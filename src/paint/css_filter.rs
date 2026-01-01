@@ -257,7 +257,12 @@ pub(crate) fn apply_drop_shadow(
     return Ok(());
   };
   let blur_pad = (blur_radius.abs() * 3.0).ceil() as u32;
-  let spread_pad = spread.max(0.0).ceil() as u32;
+  // Negative spread is an erosion pass. Even though it shrinks the shadow, we still need a
+  // transparent margin so edge pixels can observe transparent neighbors; otherwise a tight
+  // alpha-bounds crop would clamp-to-edge and prevent the erosion from taking effect.
+  //
+  // Positive spread already needs padding to avoid clipping the dilation.
+  let spread_pad = spread.abs().ceil() as u32;
   let pad = blur_pad + spread_pad;
 
   let mut shadow = match new_pixmap(bounds_w + pad * 2, bounds_h + pad * 2) {
@@ -326,6 +331,73 @@ mod tests {
   use crate::render_control::{with_deadline, RenderDeadline};
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::Arc;
+
+  fn bounding_box_for_color(
+    pixmap: &Pixmap,
+    predicate: impl Fn((u8, u8, u8, u8)) -> bool,
+  ) -> Option<(u32, u32, u32, u32)> {
+    let mut min_x = u32::MAX;
+    let mut min_y = u32::MAX;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let width = pixmap.width() as usize;
+
+    for (idx, px) in pixmap.pixels().iter().enumerate() {
+      if predicate((px.red(), px.green(), px.blue(), px.alpha())) {
+        let x = (idx % width) as u32;
+        let y = (idx / width) as u32;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+      }
+    }
+
+    if min_x == u32::MAX {
+      None
+    } else {
+      Some((min_x, min_y, max_x, max_y))
+    }
+  }
+
+  #[test]
+  fn drop_shadow_negative_spread_erodes_shadow() {
+    let mut pixmap = new_pixmap(60, 40).expect("pixmap");
+    pixmap.data_mut().fill(0);
+
+    // Use a semi-transparent source so the shadow is visible even where it overlaps the source.
+    // This lets us measure the actual shadow width (otherwise destination-over would drop the
+    // shadow wherever the source is fully opaque).
+    let fill = PremultipliedColorU8::from_rgba(0, 0, 0, 128).expect("premultiplied");
+    let stride = pixmap.width();
+    {
+      let pixels = pixmap.pixels_mut();
+      for y in 10..20u32 {
+        let row = y * stride;
+        for x in 10..30u32 {
+          pixels[(row + x) as usize] = fill;
+        }
+      }
+    }
+
+    apply_drop_shadow(
+      &mut pixmap,
+      0.0,
+      0.0,
+      0.0,
+      -2.0,
+      Rgba::from_rgba8(255, 0, 0, 255),
+    )
+    .expect("drop shadow");
+
+    let shadow_bbox =
+      bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
+    let width = shadow_bbox.2 - shadow_bbox.0 + 1;
+    assert!(
+      width < 20,
+      "negative spread should shrink shadow width (got width {width})"
+    );
+  }
 
   #[test]
   fn apply_color_filter_respects_cancel_callback() {
