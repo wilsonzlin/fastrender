@@ -1228,9 +1228,10 @@ mod tests {
     stats.timings.paint_optimize_ms = Some(5.0);
     stats.timings.paint_rasterize_ms = Some(6.0);
     stats.timings.text_rasterize_ms = Some(7.0);
+    stats.timings.encode_ms = Some(8.0);
 
     let breakdown = stage_breakdown_from_stats(&stats);
     assert_eq!(breakdown.layout, 6.0);
-    assert_eq!(breakdown.paint, 22.0);
+    assert_eq!(breakdown.paint, 30.0);
   }
 }

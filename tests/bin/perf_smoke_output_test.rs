@@ -26,6 +26,11 @@ fn perf_smoke_emits_stage_breakdowns() {
 
   let data = fs::read_to_string(&output).expect("read perf_smoke output");
   let summary: Value = serde_json::from_str(&data).expect("parse perf_smoke json");
+  assert_eq!(
+    summary["schema_version"].as_u64(),
+    Some(4),
+    "perf_smoke schema_version should be current"
+  );
   let fixtures = summary["fixtures"]
     .as_array()
     .expect("fixtures array must exist");
@@ -50,6 +55,19 @@ fn perf_smoke_emits_stage_breakdowns() {
     assert!(
       fixture["timings_ms"][key].as_f64().is_some(),
       "fixture timings_ms should contain numeric {key}"
+    );
+  }
+
+  for key in [
+    "shaped_runs",
+    "glyphs",
+    "fallback_cache_hits",
+    "fallback_cache_misses",
+    "last_resort_font_fallbacks",
+  ] {
+    assert!(
+      fixture["counts"][key].as_u64().is_some(),
+      "fixture counts should contain numeric {key}"
     );
   }
 }
