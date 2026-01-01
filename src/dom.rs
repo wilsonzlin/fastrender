@@ -2423,60 +2423,83 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
 }
 
 fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Result<()> {
-  check_active_periodic(
-    deadline_counter,
-    DOM_PARSE_NODE_DEADLINE_STRIDE,
-    RenderStage::DomParse,
-  )?;
+  // `attach_shadow_roots` needs to run in post-order so shadow root templates are promoted after
+  // their template contents have been scanned (allowing nested declarative shadow roots inside the
+  // template).
+  let mut stack: Vec<(*mut DomNode, bool)> = Vec::new();
+  stack.push((node as *mut DomNode, false));
 
-  for child in &mut node.children {
-    let is_inert_template = matches!(
-      child.tag_name(),
-      Some(tag) if tag.eq_ignore_ascii_case("template")
-    ) && matches!(
-      child.namespace(),
-      Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE
-    ) && parse_shadow_root_definition(child).is_none();
-    if is_inert_template {
+  while let Some((ptr, after_children)) = stack.pop() {
+    // Safety: all pointers are into the `node` (root) tree and we only mutate a node's `children`
+    // vec in the `after_children` phase, after all child frames have been processed.
+    let node = unsafe { &mut *ptr };
+
+    if !after_children {
+      check_active_periodic(
+        deadline_counter,
+        DOM_PARSE_NODE_DEADLINE_STRIDE,
+        RenderStage::DomParse,
+      )?;
+
+      stack.push((ptr, true));
+
+      let len = node.children.len();
+      let children_ptr = node.children.as_mut_ptr();
+      for idx in (0..len).rev() {
+        let child_ptr = unsafe { children_ptr.add(idx) };
+        let child = unsafe { &*child_ptr };
+        let is_inert_template = matches!(
+          child.tag_name(),
+          Some(tag) if tag.eq_ignore_ascii_case("template")
+        ) && matches!(
+          child.namespace(),
+          Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE
+        ) && parse_shadow_root_definition(child).is_none();
+        if is_inert_template {
+          continue;
+        }
+
+        stack.push((child_ptr, false));
+      }
+
       continue;
     }
-    attach_shadow_roots(child, deadline_counter)?;
-  }
 
-  if !node.is_element() {
-    return Ok(());
-  }
-
-  let mut shadow_template = None;
-  for (idx, child) in node.children.iter().enumerate() {
-    if let Some((mode, delegates_focus)) = parse_shadow_root_definition(child) {
-      shadow_template = Some((idx, mode, delegates_focus));
-      break;
+    if !node.is_element() {
+      continue;
     }
+
+    let mut shadow_template = None;
+    for (idx, child) in node.children.iter().enumerate() {
+      if let Some((mode, delegates_focus)) = parse_shadow_root_definition(child) {
+        shadow_template = Some((idx, mode, delegates_focus));
+        break;
+      }
+    }
+
+    let Some((template_idx, mode, delegates_focus)) = shadow_template else {
+      continue;
+    };
+
+    // Only the first declarative shadow template is promoted to a shadow root, matching browsers.
+    // Subsequent templates remain as inert light DOM children.
+    let mut template = node.children.remove(template_idx);
+    let template_children = std::mem::take(&mut template.children);
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode,
+        delegates_focus,
+      },
+      children: template_children,
+    };
+    let light_children = std::mem::take(&mut node.children);
+    node.children = {
+      let mut combined = Vec::with_capacity(light_children.len() + 1);
+      combined.push(shadow_root);
+      combined.extend(light_children);
+      combined
+    };
   }
-
-  let Some((template_idx, mode, delegates_focus)) = shadow_template else {
-    return Ok(());
-  };
-
-  // Only the first declarative shadow template is promoted to a shadow root, matching browsers.
-  // Subsequent templates remain as inert light DOM children.
-  let mut template = node.children.remove(template_idx);
-  let template_children = std::mem::take(&mut template.children);
-  let shadow_root = DomNode {
-    node_type: DomNodeType::ShadowRoot {
-      mode,
-      delegates_focus,
-    },
-    children: template_children,
-  };
-  let light_children = std::mem::take(&mut node.children);
-  node.children = {
-    let mut combined = Vec::with_capacity(light_children.len() + 1);
-    combined.push(shadow_root);
-    combined.extend(light_children);
-    combined
-  };
 
   Ok(())
 }
@@ -2765,57 +2788,71 @@ fn apply_dom_compatibility_mutations(
   node: &mut DomNode,
   deadline_counter: &mut usize,
 ) -> Result<()> {
-  check_active_periodic(
-    deadline_counter,
-    DOM_PARSE_NODE_DEADLINE_STRIDE,
-    RenderStage::DomParse,
-  )?;
+  let mut stack: Vec<*mut DomNode> = Vec::new();
+  stack.push(node as *mut DomNode);
 
-  if let DomNodeType::Element {
-    tag_name,
-    attributes,
-    ..
-  } = &mut node.node_type
-  {
-    let mut classes: Vec<String> = attributes
-      .iter()
-      .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-      .map(|(_, v)| v.split_ascii_whitespace().map(|s| s.to_string()).collect())
-      .unwrap_or_default();
-    let mut changed = false;
+  while let Some(ptr) = stack.pop() {
+    check_active_periodic(
+      deadline_counter,
+      DOM_PARSE_NODE_DEADLINE_STRIDE,
+      RenderStage::DomParse,
+    )?;
 
-    if tag_name.eq_ignore_ascii_case("html") {
-      if classes.iter().any(|c| c == "no-js") {
-        classes.retain(|c| c != "no-js");
-        if !classes.iter().any(|c| c == "js-enabled") {
-          classes.push("js-enabled".to_string());
-        }
-        changed = true;
-      }
-    }
+    // Safety: we only push pointers to nodes owned by `node` (root) and never mutate a node's
+    // `children` vec while any of its child pointers are in the stack, so raw pointers remain
+    // valid for the duration of this traversal.
+    let node = unsafe { &mut *ptr };
 
-    if tag_name.eq_ignore_ascii_case("html") || tag_name.eq_ignore_ascii_case("body") {
-      if !classes.iter().any(|c| c == "jsl10n-visible") {
-        classes.push("jsl10n-visible".to_string());
-        changed = true;
-      }
-    }
-
-    if changed {
-      let class_value = classes.join(" ");
-      if let Some((_, value)) = attributes
-        .iter_mut()
+    if let DomNodeType::Element {
+      tag_name,
+      attributes,
+      ..
+    } = &mut node.node_type
+    {
+      let mut classes: Vec<String> = attributes
+        .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-      {
-        *value = class_value;
-      } else {
-        attributes.push(("class".to_string(), class_value));
+        .map(|(_, v)| v.split_ascii_whitespace().map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+      let mut changed = false;
+
+      if tag_name.eq_ignore_ascii_case("html") {
+        if classes.iter().any(|c| c == "no-js") {
+          classes.retain(|c| c != "no-js");
+          if !classes.iter().any(|c| c == "js-enabled") {
+            classes.push("js-enabled".to_string());
+          }
+          changed = true;
+        }
+      }
+
+      if tag_name.eq_ignore_ascii_case("html") || tag_name.eq_ignore_ascii_case("body") {
+        if !classes.iter().any(|c| c == "jsl10n-visible") {
+          classes.push("jsl10n-visible".to_string());
+          changed = true;
+        }
+      }
+
+      if changed {
+        let class_value = classes.join(" ");
+        if let Some((_, value)) = attributes
+          .iter_mut()
+          .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+        {
+          *value = class_value;
+        } else {
+          attributes.push(("class".to_string(), class_value));
+        }
       }
     }
-  }
 
-  for child in &mut node.children {
-    apply_dom_compatibility_mutations(child, deadline_counter)?;
+    let len = node.children.len();
+    let children_ptr = node.children.as_mut_ptr();
+    for idx in (0..len).rev() {
+      // Safety: `children_ptr` came from `node.children` and the vector is not mutated until this
+      // node is popped again (which will not happen), so these pointers remain valid.
+      stack.push(unsafe { children_ptr.add(idx) });
+    }
   }
 
   Ok(())
@@ -2826,120 +2863,186 @@ fn convert_handle_to_node(
   document_quirks_mode: QuirksMode,
   deadline_counter: &mut usize,
 ) -> Result<Option<DomNode>> {
+  fn node_type_for_handle(
+    handle: &Handle,
+    document_quirks_mode: QuirksMode,
+  ) -> Option<DomNodeType> {
+    match &handle.data {
+      NodeData::Document => Some(DomNodeType::Document {
+        quirks_mode: document_quirks_mode,
+      }),
+      NodeData::Element { name, attrs, .. } => {
+        let namespace = if name.ns.as_ref() == HTML_NAMESPACE {
+          String::new()
+        } else {
+          name.ns.to_string()
+        };
+        let attrs_ref = attrs.borrow();
+        let mut attributes = Vec::with_capacity(attrs_ref.len());
+        for attr in attrs_ref.iter() {
+          attributes.push((attr.name.local.to_string(), attr.value.to_string()));
+        }
+
+        let is_html_slot = name.local.as_ref().eq_ignore_ascii_case("slot")
+          && (namespace.is_empty() || namespace == HTML_NAMESPACE);
+
+        if is_html_slot {
+          Some(DomNodeType::Slot {
+            namespace,
+            attributes,
+            assigned: false,
+          })
+        } else {
+          let tag_name = name.local.to_string();
+          Some(DomNodeType::Element {
+            tag_name,
+            namespace,
+            attributes,
+          })
+        }
+      }
+      NodeData::Text { contents } => Some(DomNodeType::Text {
+        content: contents.borrow().to_string(),
+      }),
+      _ => None,
+    }
+  }
+
+  fn children_info(handle: &Handle) -> (bool, Option<Handle>, usize) {
+    match &handle.data {
+      NodeData::Document => (false, None, handle.children.borrow().len()),
+      NodeData::Element {
+        name,
+        template_contents,
+        ..
+      } => {
+        if name.local.as_ref().eq_ignore_ascii_case("template") {
+          let borrowed = template_contents.borrow();
+          match &*borrowed {
+            Some(content) => (true, Some(content.clone()), content.children.borrow().len()),
+            None => (true, None, 0),
+          }
+        } else {
+          (false, None, handle.children.borrow().len())
+        }
+      }
+      _ => (false, None, 0),
+    }
+  }
+
+  struct Frame {
+    handle: Handle,
+    dst: *mut DomNode,
+    next_child: usize,
+    children_len: usize,
+    use_template_contents: bool,
+    template_content: Option<Handle>,
+  }
+
   check_active_periodic(
     deadline_counter,
     DOM_PARSE_NODE_DEADLINE_STRIDE,
     RenderStage::DomParse,
   )?;
 
-  let node_type = match &handle.data {
-    NodeData::Document => DomNodeType::Document {
-      quirks_mode: document_quirks_mode,
-    },
-    NodeData::Element { name, attrs, .. } => {
-      let namespace = if name.ns.as_ref() == HTML_NAMESPACE {
-        String::new()
+  let Some(node_type) = node_type_for_handle(handle, document_quirks_mode) else {
+    return Ok(None);
+  };
+
+  let (use_template_contents, template_content, children_len) = children_info(handle);
+  let mut root = DomNode {
+    node_type,
+    children: Vec::with_capacity(children_len),
+  };
+
+  let mut stack = vec![Frame {
+    handle: handle.clone(),
+    dst: &mut root as *mut DomNode,
+    next_child: 0,
+    children_len,
+    use_template_contents,
+    template_content,
+  }];
+
+  while let Some(mut frame) = stack.pop() {
+    // Safety: destination nodes are owned by `root` and its descendants, and we never mutate a
+    // node's children while a frame borrowing that node is active. This keeps raw pointers stable
+    // for the duration of the DFS conversion.
+    let dst = unsafe { &mut *frame.dst };
+
+    if frame.next_child < frame.children_len {
+      let child_handle = if frame.use_template_contents {
+        let Some(content) = frame.template_content.as_ref() else {
+          frame.next_child = frame.children_len;
+          stack.push(frame);
+          continue;
+        };
+        content
+          .children
+          .borrow()
+          .get(frame.next_child)
+          .cloned()
+          .expect("template child index should be in bounds")
       } else {
-        name.ns.to_string()
+        frame
+          .handle
+          .children
+          .borrow()
+          .get(frame.next_child)
+          .cloned()
+          .expect("child index should be in bounds")
       };
-      let attrs_ref = attrs.borrow();
-      let mut attributes = Vec::with_capacity(attrs_ref.len());
-      for attr in attrs_ref.iter() {
-        attributes.push((attr.name.local.to_string(), attr.value.to_string()));
-      }
+      frame.next_child += 1;
+      stack.push(frame);
 
-      let is_html_slot = name.local.as_ref().eq_ignore_ascii_case("slot")
-        && (namespace.is_empty() || namespace == HTML_NAMESPACE);
+      check_active_periodic(
+        deadline_counter,
+        DOM_PARSE_NODE_DEADLINE_STRIDE,
+        RenderStage::DomParse,
+      )?;
 
-      if is_html_slot {
-        DomNodeType::Slot {
-          namespace,
-          attributes,
-          assigned: false,
-        }
-      } else {
-        let tag_name = name.local.to_string();
-        DomNodeType::Element {
-          tag_name,
-          namespace,
-          attributes,
-        }
-      }
-    }
-    NodeData::Text { contents } => {
-      let content = contents.borrow().to_string();
-      DomNodeType::Text { content }
-    }
-    _ => return Ok(None),
-  };
+      let Some(child_type) = node_type_for_handle(&child_handle, document_quirks_mode) else {
+        continue;
+      };
 
-  let mut children: Vec<DomNode> = match &handle.data {
-    NodeData::Element {
-      name,
-      template_contents,
-      ..
-    } => {
-      if name.local.as_ref().eq_ignore_ascii_case("template") {
-        let borrowed = template_contents.borrow();
-        match &*borrowed {
-          Some(content) => {
-            let children_ref = content.children.borrow();
-            let mut out = Vec::with_capacity(children_ref.len());
-            for child in children_ref.iter() {
-              if let Some(node) =
-                convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
-              {
-                out.push(node);
-              }
-            }
-            out
-          }
-          None => Vec::new(),
-        }
-      } else {
-        let children_ref = handle.children.borrow();
-        let mut out = Vec::with_capacity(children_ref.len());
-        for child in children_ref.iter() {
-          if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
-          {
-            out.push(node);
-          }
-        }
-        out
-      }
-    }
-    NodeData::Document => {
-      let children_ref = handle.children.borrow();
-      let mut out = Vec::with_capacity(children_ref.len());
-      for child in children_ref.iter() {
-        if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)? {
-          out.push(node);
-        }
-      }
-      out
-    }
-    _ => Vec::new(),
-  };
-
-  // HTML <wbr> elements represent optional break opportunities. Synthesize a zero-width break
-  // text node so line breaking can consider the opportunity while still allowing the element to
-  // be styled/selected.
-  if let DomNodeType::Element { tag_name, .. } = &node_type {
-    if tag_name.eq_ignore_ascii_case("wbr") {
-      children.reserve(1);
-      children.push(DomNode {
-        node_type: DomNodeType::Text {
-          content: "\u{200B}".to_string(),
-        },
-        children: Vec::new(),
+      let (child_use_template, child_template_content, child_len) = children_info(&child_handle);
+      dst.children.push(DomNode {
+        node_type: child_type,
+        children: Vec::with_capacity(child_len),
       });
+      let child_dst = dst
+        .children
+        .last_mut()
+        .expect("child was just pushed") as *mut DomNode;
+
+      stack.push(Frame {
+        handle: child_handle,
+        dst: child_dst,
+        next_child: 0,
+        children_len: child_len,
+        use_template_contents: child_use_template,
+        template_content: child_template_content,
+      });
+
+      continue;
+    }
+
+    // HTML <wbr> elements represent optional break opportunities. Synthesize a zero-width break
+    // text node so line breaking can consider the opportunity while still allowing the element to
+    // be styled/selected.
+    if let DomNodeType::Element { tag_name, .. } = &dst.node_type {
+      if tag_name.eq_ignore_ascii_case("wbr") {
+        dst.children.push(DomNode {
+          node_type: DomNodeType::Text {
+            content: "\u{200B}".to_string(),
+          },
+          children: Vec::new(),
+        });
+      }
     }
   }
 
-  Ok(Some(DomNode {
-    node_type,
-    children,
-  }))
+  Ok(Some(root))
 }
 
 impl DomNode {
@@ -6131,6 +6234,11 @@ mod tests {
         children: vec![dom],
       };
     }
+
+    let mut deadline_counter = 0usize;
+    attach_shadow_roots(&mut dom, &mut deadline_counter).expect("attach_shadow_roots");
+    apply_dom_compatibility_mutations(&mut dom, &mut deadline_counter)
+      .expect("apply_dom_compatibility_mutations");
 
     let ids = enumerate_dom_ids(&dom);
     assert_eq!(ids.len(), depth);
