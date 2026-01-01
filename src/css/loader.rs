@@ -255,16 +255,22 @@ pub fn absolutize_css_urls_cow<'a>(
       return false;
     }
 
-    let mut idx = 0usize;
-    while idx + 3 < bytes.len() {
-      if matches!(bytes[idx], b'u' | b'U')
-        && matches!(bytes[idx + 1], b'r' | b'R')
+    let mut offset = 0usize;
+    while offset + 3 < bytes.len() {
+      let Some(pos) = memchr::memchr2(b'u', b'U', &bytes[offset..]) else {
+        return false;
+      };
+      let idx = offset + pos;
+      if idx + 3 >= bytes.len() {
+        return false;
+      }
+      if matches!(bytes[idx + 1], b'r' | b'R')
         && matches!(bytes[idx + 2], b'l' | b'L')
         && bytes[idx + 3] == b'('
       {
         return true;
       }
-      idx += 1;
+      offset = idx + 1;
     }
     false
   }
