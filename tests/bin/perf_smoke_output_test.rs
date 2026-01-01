@@ -28,7 +28,7 @@ fn perf_smoke_emits_stage_breakdowns() {
   let summary: Value = serde_json::from_str(&data).expect("parse perf_smoke json");
   assert_eq!(
     summary["schema_version"].as_u64(),
-    Some(4),
+    Some(5),
     "perf_smoke schema_version should be current"
   );
   let fixtures = summary["fixtures"]

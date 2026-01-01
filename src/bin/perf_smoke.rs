@@ -225,7 +225,7 @@ const CORE_FIXTURES: &[CoreFixture] = &[
   ),
 ];
 
-const PERF_SMOKE_SCHEMA_VERSION: u32 = 4;
+const PERF_SMOKE_SCHEMA_VERSION: u32 = 5;
 const PAGESET_TIMEOUT_MANIFEST_VERSION: u32 = 1;
 const PAGESET_TIMEOUT_MANIFEST: &str = include_str!("../../tests/pages/pageset_timeouts.json");
 
