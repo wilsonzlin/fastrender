@@ -161,13 +161,16 @@ static ACTIVE_TOGGLES: OnceLock<RwLock<Arc<RuntimeToggles>>> = OnceLock::new();
 ///
 /// Defaults to `RuntimeToggles::from_env()` if no overrides are installed.
 pub fn runtime_toggles() -> Arc<RuntimeToggles> {
-  ACTIVE_TOGGLES
-    .get_or_init(|| {
-      let default = default_toggles();
-      RwLock::new(default)
-    })
+  let lock = ACTIVE_TOGGLES.get_or_init(|| {
+    let default = default_toggles();
+    RwLock::new(default)
+  });
+  // Runtime toggles guard global configuration (and a lot of debug-only behavior). A panic that
+  // happens to occur while toggles are being read/written should not permanently poison the
+  // process, especially for long-running tools that catch panics and continue (pageset runners).
+  lock
     .read()
-    .expect("runtime toggles lock poisoned")
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
     .clone()
 }
 
@@ -185,25 +188,22 @@ pub struct RuntimeTogglesGuard {
 impl Drop for RuntimeTogglesGuard {
   fn drop(&mut self) {
     if let Some(lock) = ACTIVE_TOGGLES.get() {
-      if let Ok(mut guard) = lock.write() {
-        *guard = self.previous.clone();
-      }
+      let mut guard = lock
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+      *guard = self.previous.clone();
     }
   }
 }
 
 /// Install the provided toggles as the active set for the duration of the returned guard.
 pub fn set_runtime_toggles(toggles: Arc<RuntimeToggles>) -> RuntimeTogglesGuard {
-  let previous = ACTIVE_TOGGLES
-    .get_or_init(|| RwLock::new(default_toggles()))
+  let lock = ACTIVE_TOGGLES.get_or_init(|| RwLock::new(default_toggles()));
+  let mut guard = lock
     .write()
-    .expect("runtime toggles lock poisoned")
-    .clone();
-  if let Some(lock) = ACTIVE_TOGGLES.get() {
-    if let Ok(mut guard) = lock.write() {
-      *guard = toggles;
-    }
-  }
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  let previous = guard.clone();
+  *guard = toggles;
   RuntimeTogglesGuard { previous }
 }
 
@@ -212,9 +212,10 @@ pub fn set_runtime_toggles(toggles: Arc<RuntimeToggles>) -> RuntimeTogglesGuard 
 /// Unlike [`set_runtime_toggles`], this does not return a guard to restore the previous value.
 pub(crate) fn update_runtime_toggles(toggles: Arc<RuntimeToggles>) {
   let lock = ACTIVE_TOGGLES.get_or_init(|| RwLock::new(default_toggles()));
-  if let Ok(mut guard) = lock.write() {
-    *guard = toggles;
-  }
+  let mut guard = lock
+    .write()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  *guard = toggles;
 }
 
 /// Convenience helper to run a closure with a temporary toggles override.
@@ -980,6 +981,29 @@ mod tests {
         }
       }
     }
+  }
+
+  #[test]
+  fn runtime_toggles_recovers_from_poisoned_lock() {
+    let result = std::panic::catch_unwind(|| {
+      let lock = ACTIVE_TOGGLES.get_or_init(|| RwLock::new(default_toggles()));
+      let _guard = lock.write().expect("lock should be acquired");
+      panic!("poison runtime toggles lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+
+    let lock = ACTIVE_TOGGLES.get().expect("lock should be initialized");
+    assert!(
+      lock.is_poisoned(),
+      "expected runtime toggles lock to be poisoned after panic"
+    );
+
+    let previous = runtime_toggles();
+    let override_toggles = Arc::new(RuntimeToggles::from_map(HashMap::new()));
+    let guard = set_runtime_toggles(override_toggles.clone());
+    assert!(Arc::ptr_eq(&runtime_toggles(), &override_toggles));
+    drop(guard);
+    assert!(Arc::ptr_eq(&runtime_toggles(), &previous));
   }
 
   #[test]

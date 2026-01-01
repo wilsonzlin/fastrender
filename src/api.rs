@@ -2031,17 +2031,12 @@ impl DiagnosticsSessionGuard {
     });
 
     // The lock only guards access to process-global diagnostics collectors. The protected value is
-    // `()`, so poisoning does not indicate any state corruption we need to preserve. Clear the poison
-    // flag so a panic in one diagnostics-enabled render doesn't permanently break diagnostics for the
-    // remainder of the process (e.g. pageset runners that catch panics and continue).
+    // `()`, so poisoning does not indicate any state corruption we need to preserve. Treat a
+    // poisoned lock as non-fatal so a panic in one diagnostics-enabled render doesn't permanently
+    // break diagnostics for the remainder of the process (e.g. pageset runners that catch panics
+    // and continue).
     let mutex = diagnostics_session_mutex();
-    let guard = match mutex.lock() {
-      Ok(guard) => guard,
-      Err(poisoned) => {
-        mutex.clear_poison();
-        poisoned.into_inner()
-      }
-    };
+    let guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     DIAGNOSTICS_SESSION_DEPTH.with(|depth| depth.set(depth.get() + 1));
 
     Self { _guard: guard }
@@ -10883,8 +10878,8 @@ mod tests {
       let _guard = DiagnosticsSessionGuard::acquire();
     }
     assert!(
-      !diagnostics_session_mutex().is_poisoned(),
-      "expected DiagnosticsSessionGuard to clear mutex poison"
+      diagnostics_session_mutex().is_poisoned(),
+      "expected DiagnosticsSessionGuard to tolerate mutex poison"
     );
   }
 
