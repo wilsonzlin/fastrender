@@ -178,12 +178,15 @@ fn http_fetch_empty_body_error_mentions_attempts() {
   };
   let addr = listener.local_addr().unwrap();
   let handle = spawn_server(listener, 2, move |_count, _req, stream| {
-    let response = "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    // 202 is treated as a transient "poll again later" response and returns `Ok` once retries
+    // are exhausted. Use a normal success status so the empty body is treated as an error and we
+    // can assert the retry attempt suffix is included.
+    let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     let _ = stream.write_all(response.as_bytes());
   });
 
   let fetcher = fast_retry_fetcher();
-  let url = format!("http://{addr}/accepted");
+  let url = format!("http://{addr}/empty");
   let err = fetcher
     .fetch(&url)
     .expect_err("fetch should fail after retries");
