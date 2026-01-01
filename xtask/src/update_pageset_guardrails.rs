@@ -754,7 +754,7 @@ mod tests {
   #[test]
   fn rewrites_manifest_deterministically_preserving_schema_version_and_existing_fixtures() {
     let tempdir = TempDir::new().expect("tempdir");
-    let manifest_path = tempdir.path().join("pageset_timeouts.json");
+    let manifest_path = tempdir.path().join("pageset_guardrails.json");
     let original = json!({
       "schema_version": 99,
       "default_budget_ms": 7777.0,
@@ -798,7 +798,7 @@ mod tests {
   #[test]
   fn preserves_manifest_root_extra_fields_via_flattened_extra_map() {
     let tempdir = TempDir::new().expect("tempdir");
-    let manifest_path = tempdir.path().join("pageset_timeouts.json");
+    let manifest_path = tempdir.path().join("pageset_guardrails.json");
     let original = json!({
       "schema_version": 1,
       "default_budget_ms": 5000.0,
