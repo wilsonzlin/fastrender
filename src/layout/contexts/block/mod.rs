@@ -833,6 +833,29 @@ impl BlockFormattingContext {
         Some(padding_size.width),
         cb_block_base,
       );
+      let base_factory = self.factory.clone();
+      let viewport_cb = ContainingBlock::viewport(self.viewport_size);
+      let abs_factory = if parent_padding_cb == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(parent_padding_cb)
+      };
+      let fixed_factory = if viewport_cb == parent_padding_cb {
+        abs_factory.clone()
+      } else if viewport_cb == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(viewport_cb)
+      };
+      let factory_for_cb = |cb: ContainingBlock| -> &FormattingContextFactory {
+        if cb == parent_padding_cb {
+          &abs_factory
+        } else if cb == viewport_cb {
+          &fixed_factory
+        } else {
+          &base_factory
+        }
+      };
 
       let trace_positioned = trace_positioned_ids();
       for PositionedCandidate {
@@ -857,7 +880,7 @@ impl BlockFormattingContext {
           ContainingBlockSource::ParentPadding => parent_padding_cb,
           ContainingBlockSource::Explicit(cb) => cb,
         };
-        let factory = self.child_factory_for_cb(cb);
+        let factory = factory_for_cb(cb);
         // Layout the child as if it were in normal flow to obtain its intrinsic size.
         let mut layout_child = pos_child.clone();
         let mut style = (*layout_child.style).clone();
@@ -3515,6 +3538,29 @@ impl FormattingContext for BlockFormattingContext {
         Some(padding_size.width),
         cb_block_base,
       );
+      let base_factory = self.factory.clone();
+      let viewport_cb = ContainingBlock::viewport(self.viewport_size);
+      let abs_factory = if parent_padding_cb == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(parent_padding_cb)
+      };
+      let fixed_factory = if viewport_cb == parent_padding_cb {
+        abs_factory.clone()
+      } else if viewport_cb == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(viewport_cb)
+      };
+      let factory_for_cb = |cb: ContainingBlock| -> &FormattingContextFactory {
+        if cb == parent_padding_cb {
+          &abs_factory
+        } else if cb == viewport_cb {
+          &fixed_factory
+        } else {
+          &base_factory
+        }
+      };
 
       for PositionedCandidate {
         node: child,
@@ -3526,7 +3572,7 @@ impl FormattingContext for BlockFormattingContext {
           ContainingBlockSource::ParentPadding => parent_padding_cb,
           ContainingBlockSource::Explicit(cb) => cb,
         };
-        let factory = self.child_factory_for_cb(cb);
+        let factory = factory_for_cb(cb);
         // Layout the child as if it were in normal flow to obtain its intrinsic size.
         let mut layout_child = child.clone();
         let mut style = (*layout_child.style).clone();

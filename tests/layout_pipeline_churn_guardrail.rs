@@ -435,3 +435,98 @@ fn inline_positioned_children_do_not_churn_detached_factories() {
   // fixed upper bound on `InlineFormattingContext::with_factory` calls here.
   let _ = inline_fc_with_factory_news;
 }
+
+#[test]
+fn block_positioned_children_do_not_churn_detached_factories() {
+  let _guard = CHURN_COUNTER_LOCK
+    .lock()
+    .unwrap_or_else(|err| err.into_inner());
+  const ITEMS: usize = 256;
+
+  let viewport = Size::new(800.0, 600.0);
+  let config = LayoutConfig::for_viewport(viewport);
+  let engine = LayoutEngine::with_font_context(config, FontContext::new());
+
+  // Reset churn counters after engine creation so we measure just the layout run.
+  ShapingPipeline::debug_reset_new_call_count();
+  FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
+  FormattingContextFactory::debug_reset_detached_call_count();
+  InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
+  InlineFormattingContext::debug_reset_with_factory_call_count();
+
+  let mut root_style = ComputedStyle::default();
+  root_style.display = Display::Block;
+  // Establish a positioned containing block so absolute children use the padding box CB.
+  root_style.position = Position::Relative;
+  root_style.width = Some(Length::px(viewport.width));
+  root_style.height = Some(Length::px(viewport.height));
+  let root_style = Arc::new(root_style);
+
+  let mut abs_style = ComputedStyle::default();
+  abs_style.display = Display::Block;
+  abs_style.position = Position::Absolute;
+  abs_style.left = Some(Length::px(0.0));
+  abs_style.top = Some(Length::px(0.0));
+  let abs_style = Arc::new(abs_style);
+
+  let mut text_style = ComputedStyle::default();
+  text_style.display = Display::Inline;
+  let text_style = Arc::new(text_style);
+
+  let mut inner_children = Vec::with_capacity(ITEMS);
+  for idx in 0..ITEMS {
+    let mut text = BoxNode::new_text(Arc::clone(&text_style), format!("abs {idx}"));
+    text.id = 40_000 + idx;
+
+    let mut abs_child = BoxNode::new_block(
+      Arc::clone(&abs_style),
+      FormattingContextType::Block,
+      vec![text],
+    );
+    abs_child.id = idx + 1;
+    inner_children.push(abs_child);
+  }
+
+  // Ensure the positioned-children layout runs through `layout_block_child` by nesting the
+  // positioned container as an in-flow child of the root block.
+  let mut inner_style = ComputedStyle::default();
+  inner_style.display = Display::Block;
+  inner_style.position = Position::Relative;
+  inner_style.width = Some(Length::px(viewport.width));
+  inner_style.height = Some(Length::px(viewport.height));
+  let inner_style = Arc::new(inner_style);
+  let mut inner = BoxNode::new_block(inner_style, FormattingContextType::Block, inner_children);
+  inner.id = 4_000_000;
+
+  let mut root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![inner]);
+  root.id = 4_000_001;
+  let tree = BoxTree::new(root);
+
+  let _ = engine.layout_tree(&tree).expect("layout should succeed");
+
+  let shaping_pipeline_news = ShapingPipeline::debug_new_call_count();
+  let factory_news = FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count();
+  let detached_news = FormattingContextFactory::debug_detached_call_count();
+  let inline_fc_news = InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count();
+  let inline_fc_with_factory_news = InlineFormattingContext::debug_with_factory_call_count();
+
+  assert!(
+    shaping_pipeline_news < 20,
+    "positioned children layout should not rebuild shaping pipelines (got {shaping_pipeline_news})"
+  );
+  assert!(
+    factory_news < 20,
+    "positioned children layout should not rebuild formatting context factories (got {factory_news})"
+  );
+  assert!(
+    detached_news < 50,
+    "positioned children layout should not churn detached factories (got {detached_news})"
+  );
+  assert!(
+    inline_fc_news < 20,
+    "positioned children layout should not rebuild inline formatting contexts via `with_font_context_viewport_and_cb` (got {inline_fc_news})"
+  );
+  // Positioned boxes establish a new containing block for their descendants, so we do not assert a
+  // fixed upper bound on `InlineFormattingContext::with_factory` calls here.
+  let _ = inline_fc_with_factory_news;
+}
