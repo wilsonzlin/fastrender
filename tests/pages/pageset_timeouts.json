@@ -4,6 +4,7 @@
   "fixtures": [
     {
       "name": "fortune.com",
+      "url": "https://fortune.com/",
       "viewport": [
         1200,
         800
@@ -14,6 +15,7 @@
     },
     {
       "name": "amazon.com",
+      "url": "https://amazon.com",
       "viewport": [
         1200,
         800
@@ -24,6 +26,7 @@
     },
     {
       "name": "booking.com",
+      "url": "https://booking.com",
       "viewport": [
         1200,
         800
@@ -34,6 +37,7 @@
     },
     {
       "name": "nhk.or.jp",
+      "url": "https://nhk.or.jp",
       "viewport": [
         1200,
         800
@@ -44,6 +48,7 @@
     },
     {
       "name": "tesco.com",
+      "url": "https://tesco.com",
       "viewport": [
         1200,
         800
@@ -54,6 +59,7 @@
     },
     {
       "name": "washingtonpost.com",
+      "url": "https://washingtonpost.com",
       "viewport": [
         1200,
         800
@@ -64,6 +70,7 @@
     },
     {
       "name": "latimes.com",
+      "url": "https://latimes.com",
       "viewport": [
         1200,
         800
@@ -74,6 +81,7 @@
     },
     {
       "name": "apnews.com",
+      "url": "https://apnews.com",
       "viewport": [
         1200,
         800
@@ -84,6 +92,7 @@
     },
     {
       "name": "linkedin.com",
+      "url": "https://linkedin.com",
       "viewport": [
         1200,
         800
@@ -94,6 +103,7 @@
     },
     {
       "name": "techcrunch.com",
+      "url": "https://techcrunch.com",
       "viewport": [
         1200,
         800
@@ -104,6 +114,7 @@
     },
     {
       "name": "msnbc.com",
+      "url": "https://msnbc.com",
       "viewport": [
         1200,
         800
@@ -114,6 +125,7 @@
     },
     {
       "name": "foxnews.com",
+      "url": "https://foxnews.com",
       "viewport": [
         1200,
         800
@@ -124,6 +136,7 @@
     },
     {
       "name": "stackoverflow.com",
+      "url": "https://stackoverflow.com",
       "viewport": [
         1200,
         800
@@ -134,6 +147,7 @@
     },
     {
       "name": "cbsnews.com",
+      "url": "https://cbsnews.com",
       "viewport": [
         1200,
         800
@@ -144,6 +158,7 @@
     },
     {
       "name": "time.com",
+      "url": "https://time.com",
       "viewport": [
         1200,
         800
@@ -154,6 +169,7 @@
     },
     {
       "name": "abcnews.go.com",
+      "url": "https://abcnews.go.com",
       "viewport": [
         1200,
         800
@@ -164,6 +180,7 @@
     },
     {
       "name": "bbc.com",
+      "url": "https://bbc.com",
       "viewport": [
         1200,
         800
@@ -174,6 +191,7 @@
     },
     {
       "name": "cnn.com",
+      "url": "https://cnn.com",
       "viewport": [
         1200,
         800
@@ -184,6 +202,7 @@
     },
     {
       "name": "dailymail.co.uk",
+      "url": "https://dailymail.co.uk",
       "viewport": [
         1200,
         800
@@ -194,6 +213,7 @@
     },
     {
       "name": "developer.mozilla.org_en-US_docs_Web_CSS_writing-mode",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode",
       "viewport": [
         1200,
         800
@@ -204,6 +224,7 @@
     },
     {
       "name": "discord.com",
+      "url": "https://discord.com",
       "viewport": [
         1200,
         800
@@ -214,6 +235,7 @@
     },
     {
       "name": "dropbox.com",
+      "url": "https://dropbox.com",
       "viewport": [
         1200,
         800
@@ -224,6 +246,7 @@
     },
     {
       "name": "ebay.com",
+      "url": "https://ebay.com",
       "viewport": [
         1200,
         800
@@ -234,6 +257,7 @@
     },
     {
       "name": "espn.com",
+      "url": "https://espn.com",
       "viewport": [
         1200,
         800
@@ -244,6 +268,7 @@
     },
     {
       "name": "forbes.com",
+      "url": "https://forbes.com",
       "viewport": [
         1200,
         800
@@ -254,6 +279,7 @@
     },
     {
       "name": "ft.com",
+      "url": "https://ft.com",
       "viewport": [
         1200,
         800
@@ -264,6 +290,7 @@
     },
     {
       "name": "github.com",
+      "url": "https://github.com",
       "viewport": [
         1200,
         800
@@ -274,6 +301,7 @@
     },
     {
       "name": "imdb.com",
+      "url": "https://imdb.com",
       "viewport": [
         1200,
         800
@@ -284,6 +312,7 @@
     },
     {
       "name": "nationalgeographic.com",
+      "url": "https://nationalgeographic.com",
       "viewport": [
         1200,
         800
@@ -294,6 +323,7 @@
     },
     {
       "name": "nbcnews.com",
+      "url": "https://nbcnews.com",
       "viewport": [
         1200,
         800
@@ -304,6 +334,7 @@
     },
     {
       "name": "newsweek.com",
+      "url": "https://newsweek.com",
       "viewport": [
         1200,
         800
@@ -314,6 +345,7 @@
     },
     {
       "name": "newyorker.com",
+      "url": "https://newyorker.com",
       "viewport": [
         1200,
         800
@@ -324,6 +356,7 @@
     },
     {
       "name": "nytimes.com",
+      "url": "https://nytimes.com",
       "viewport": [
         1200,
         800
@@ -334,6 +367,7 @@
     },
     {
       "name": "sina.com.cn",
+      "url": "https://sina.com.cn",
       "viewport": [
         1200,
         800
@@ -344,6 +378,7 @@
     },
     {
       "name": "stackexchange.com",
+      "url": "https://stackexchange.com",
       "viewport": [
         1200,
         800
@@ -354,6 +389,7 @@
     },
     {
       "name": "stripe.com",
+      "url": "https://stripe.com",
       "viewport": [
         1200,
         800
@@ -364,6 +400,7 @@
     },
     {
       "name": "theguardian.com",
+      "url": "https://theguardian.com",
       "viewport": [
         1200,
         800
@@ -374,6 +411,7 @@
     },
     {
       "name": "theverge.com",
+      "url": "https://theverge.com",
       "viewport": [
         1200,
         800
@@ -384,6 +422,7 @@
     },
     {
       "name": "vogue.com",
+      "url": "https://vogue.com",
       "viewport": [
         1200,
         800
@@ -394,6 +433,7 @@
     },
     {
       "name": "vox.com",
+      "url": "https://vox.com",
       "viewport": [
         1200,
         800
@@ -404,6 +444,7 @@
     },
     {
       "name": "wired.com",
+      "url": "https://wired.com",
       "viewport": [
         1200,
         800
@@ -414,6 +455,7 @@
     },
     {
       "name": "htmldog.com",
+      "url": "https://htmldog.com",
       "viewport": [
         1200,
         800
@@ -424,6 +466,7 @@
     },
     {
       "name": "nyu.edu",
+      "url": "https://www.nyu.edu/",
       "viewport": [
         1200,
         800
@@ -434,6 +477,7 @@
     },
     {
       "name": "apple.com",
+      "url": "https://www.apple.com/",
       "viewport": [
         1200,
         800
@@ -444,6 +488,7 @@
     },
     {
       "name": "developer.apple.com",
+      "url": "https://developer.apple.com/",
       "viewport": [
         1200,
         800
@@ -454,6 +499,7 @@
     },
     {
       "name": "gitlab.io",
+      "url": "https://about.gitlab.com/",
       "viewport": [
         1200,
         800
@@ -464,6 +510,7 @@
     },
     {
       "name": "developer.mozilla.org_en-US_docs_Web_CSS_text-combine-upright",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/text-combine-upright",
       "viewport": [
         1200,
         800
@@ -474,6 +521,7 @@
     },
     {
       "name": "yahoo.com",
+      "url": "https://www.yahoo.com/",
       "viewport": [
         1200,
         800
@@ -484,6 +532,7 @@
     },
     {
       "name": "debian.org",
+      "url": "https://www.debian.org/",
       "viewport": [
         1200,
         800
@@ -494,6 +543,7 @@
     },
     {
       "name": "sqlite.org",
+      "url": "https://sqlite.org/",
       "viewport": [
         1200,
         800

@@ -151,6 +151,8 @@ struct PagesetTimeoutManifest {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct PagesetTimeoutFixture {
   name: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  url: Option<String>,
   viewport: [u32; 2],
   dpr: f32,
   media: String,
@@ -576,10 +578,20 @@ fn update_manifest(
     .iter()
     .map(|entry| {
       if let Some(existing) = existing_map.get(&entry.name) {
-        existing.clone()
+        let mut fixture = existing.clone();
+        let needs_url = fixture
+          .url
+          .as_deref()
+          .map(|url| url.trim().is_empty())
+          .unwrap_or(true);
+        if needs_url {
+          fixture.url = Some(entry.url.clone());
+        }
+        fixture
       } else {
         PagesetTimeoutFixture {
           name: entry.name.clone(),
+          url: Some(entry.url.clone()),
           viewport: DEFAULT_VIEWPORT,
           dpr: DEFAULT_DPR,
           media: DEFAULT_MEDIA.to_string(),
@@ -650,7 +662,8 @@ mod tests {
       "schema_version": 99,
       "default_budget_ms": 7777.0,
       "fixtures": [
-        { "name": "timeout-b.test", "viewport": [800, 600], "dpr": 2.0, "media": "print", "budget_ms": 1234.0 }
+        { "name": "timeout-b.test", "url": "https://override.test/", "viewport": [800, 600], "dpr": 2.0, "media": "print", "budget_ms": 1234.0 },
+        { "name": "slow-ok.test", "viewport": [640, 480], "dpr": 1.5, "media": "screen", "budget_ms": 4321.0 }
       ]
     });
     fs::write(
@@ -675,14 +688,47 @@ mod tests {
       "schema_version": 99,
       "default_budget_ms": 7777.0,
       "fixtures": [
-        { "name": "panic.test", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
-        { "name": "error.test", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
-        { "name": "timeout-a.test", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
-        { "name": "timeout-b.test", "viewport": [800, 600], "dpr": 2.0, "media": "print", "budget_ms": 1234.0 },
-        { "name": "slow-ok.test", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 }
+        { "name": "panic.test", "url": "https://panic.test/", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
+        { "name": "error.test", "url": "https://error.test/", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
+        { "name": "timeout-a.test", "url": "https://timeout-a.test/", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
+        { "name": "timeout-b.test", "url": "https://override.test/", "viewport": [800, 600], "dpr": 2.0, "media": "print", "budget_ms": 1234.0 },
+        { "name": "slow-ok.test", "url": "https://slow-ok.test/", "viewport": [640, 480], "dpr": 1.5, "media": "screen", "budget_ms": 4321.0 }
       ]
     });
     assert_eq!(reparsed, expected);
+  }
+
+  #[test]
+  fn preserves_manifest_root_extra_fields_via_flattened_extra_map() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let manifest_path = tempdir.path().join("pageset_timeouts.json");
+    let original = json!({
+      "schema_version": 1,
+      "default_budget_ms": 5000.0,
+      "extra_root_field": { "answer": 42 },
+      "fixtures": [
+        { "name": "timeout-a.test", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 5000.0 }
+      ]
+    });
+    fs::write(
+      &manifest_path,
+      serde_json::to_string_pretty(&original).unwrap(),
+    )
+    .unwrap();
+
+    let existing = load_manifest(&manifest_path).expect("load manifest");
+    let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
+    let selected = select_pages(&entries, 1, PagesetTimeoutSelectionStrategy::Slowest);
+    let updated = update_manifest(existing, &selected);
+    fs::write(
+      &manifest_path,
+      serde_json::to_string_pretty(&updated).unwrap(),
+    )
+    .unwrap();
+
+    let reparsed: serde_json::Value =
+      serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    assert_eq!(reparsed.get("extra_root_field"), Some(&json!({ "answer": 42 })));
   }
 
   fn mk_entry(
