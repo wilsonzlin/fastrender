@@ -5512,15 +5512,26 @@ fn in_shadow_tree(ancestors: &[&DomNode]) -> bool {
 }
 
 fn for_each_assigned_slot_child<'a, F: FnMut(&'a DomNode)>(node: &'a DomNode, f: &mut F) {
-  for child in node.children.iter() {
-    match &child.node_type {
+  // Avoid recursion for degenerate trees (can be reached when traversing shadow roots that contain
+  // nested slots).
+  let mut stack: Vec<&'a DomNode> = Vec::new();
+  for child in node.children.iter().rev() {
+    stack.push(child);
+  }
+
+  while let Some(node) = stack.pop() {
+    match &node.node_type {
       DomNodeType::Slot { assigned: true, .. } => {
-        for assigned_child in child.children.iter().filter(|c| c.is_element()) {
+        for assigned_child in node.children.iter().filter(|c| c.is_element()) {
           f(assigned_child);
         }
       }
       DomNodeType::ShadowRoot { .. } => {}
-      _ => for_each_assigned_slot_child(child, f),
+      _ => {
+        for child in node.children.iter().rev() {
+          stack.push(child);
+        }
+      }
     }
   }
 }
@@ -5697,61 +5708,143 @@ fn match_relative_selector_subtree<'a>(
 ) -> bool {
   debug_assert!(selector.match_hint.is_subtree());
 
+  // The u8-backed counting bloom filter saturates at 0xff and cannot be decremented once
+  // saturated to avoid false negatives. On extremely deep trees this can prevent the filter
+  // from returning to the all-zero state, so cap ancestor bloom usage and fall back to full
+  // selector matching beyond that depth.
+  const ANCESTOR_BLOOM_MAX_DEPTH: usize = 240;
+
   let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
-  ancestors.with_pushed(node, |ancestors| {
-    if use_ancestor_bloom {
-      if let Some(cache) = context.extra_data.element_attr_cache {
-        cache.for_each_selector_bloom_hash(node, |hash| bloom_filter.insert_hash(hash));
-      } else {
-        add_selector_bloom_hashes(node, &mut |hash| bloom_filter.insert_hash(hash));
-      }
+  let element_attr_cache = context.extra_data.element_attr_cache;
+  let slot_map = context.extra_data.slot_map;
+
+  fn push_bloom(
+    node: &DomNode,
+    bloom_filter: &mut BloomFilter,
+    use_ancestor_bloom: bool,
+    element_attr_cache: Option<&ElementAttrCache>,
+  ) {
+    if !use_ancestor_bloom {
+      return;
     }
-    let mut found = false;
-    for child in node.children.iter().filter(|c| c.is_element()) {
-      if let Err(err) = check_active_periodic(
-        deadline_counter,
-        RELATIVE_SELECTOR_DEADLINE_STRIDE,
-        RenderStage::Cascade,
-      ) {
-        context.extra_data.record_deadline_error(err);
-        found = false;
+    if let Some(cache) = element_attr_cache {
+      cache.for_each_selector_bloom_hash(node, |hash| bloom_filter.insert_hash(hash));
+    } else {
+      add_selector_bloom_hashes(node, &mut |hash| bloom_filter.insert_hash(hash));
+    }
+  }
+
+  fn pop_bloom(
+    node: &DomNode,
+    bloom_filter: &mut BloomFilter,
+    use_ancestor_bloom: bool,
+    element_attr_cache: Option<&ElementAttrCache>,
+  ) {
+    if !use_ancestor_bloom {
+      return;
+    }
+    if let Some(cache) = element_attr_cache {
+      cache.for_each_selector_bloom_hash(node, |hash| bloom_filter.remove_hash(hash));
+    } else {
+      add_selector_bloom_hashes(node, &mut |hash| bloom_filter.remove_hash(hash));
+    }
+  }
+
+  struct Frame<'a> {
+    node: &'a DomNode,
+    next_child: usize,
+    bloomed: bool,
+  }
+
+  ancestors.push(node);
+  let root_bloomed = use_ancestor_bloom && ANCESTOR_BLOOM_MAX_DEPTH > 0;
+  push_bloom(node, bloom_filter, root_bloomed, element_attr_cache);
+  let mut stack: Vec<Frame<'a>> = Vec::new();
+  stack.push(Frame {
+    node,
+    next_child: 0,
+    bloomed: root_bloomed,
+  });
+
+  let mut result = false;
+  loop {
+    let frame = match stack.last_mut() {
+      Some(frame) => frame,
+      None => break,
+    };
+
+    while frame.next_child < frame.node.children.len()
+      && !frame.node.children[frame.next_child].is_element()
+    {
+      frame.next_child += 1;
+    }
+
+    if frame.next_child >= frame.node.children.len() {
+      let finished = stack.pop().expect("frame exists");
+      if finished.bloomed {
+        pop_bloom(
+          finished.node,
+          bloom_filter,
+          finished.bloomed,
+          element_attr_cache,
+        );
+      }
+      let popped = ancestors.pop();
+      debug_assert!(popped.is_some());
+      continue;
+    }
+
+    let child = &frame.node.children[frame.next_child];
+    frame.next_child += 1;
+
+    if let Err(err) = check_active_periodic(
+      deadline_counter,
+      RELATIVE_SELECTOR_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    ) {
+      context.extra_data.record_deadline_error(err);
+      result = false;
+      break;
+    }
+
+    let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
+      .with_slot_map(slot_map)
+      .with_attr_cache(element_attr_cache);
+
+    let bloom_active = use_ancestor_bloom && stack.len() <= ANCESTOR_BLOOM_MAX_DEPTH;
+    let may_match = !bloom_active || selector_may_match(ancestor_hashes, bloom_filter);
+    if may_match && matches_selector(&selector.selector, 0, None, &child_ref, context) {
+      if context.extra_data.deadline_error.is_some() {
+        result = false;
         break;
       }
-      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
-        .with_slot_map(context.extra_data.slot_map)
-        .with_attr_cache(context.extra_data.element_attr_cache);
-      if (!use_ancestor_bloom || selector_may_match(ancestor_hashes, bloom_filter))
-        && matches_selector(&selector.selector, 0, None, &child_ref, context)
-      {
-        if context.extra_data.deadline_error.is_some() {
-          found = false;
-          break;
-        }
-        found = true;
-        break;
-      }
-      if match_relative_selector_subtree(
-        selector,
-        child,
-        ancestors,
-        bloom_filter,
-        use_ancestor_bloom,
-        context,
-        deadline_counter,
-      ) {
-        found = true;
-        break;
-      }
+      result = true;
+      break;
     }
-    if use_ancestor_bloom {
-      if let Some(cache) = context.extra_data.element_attr_cache {
-        cache.for_each_selector_bloom_hash(node, |hash| bloom_filter.remove_hash(hash));
-      } else {
-        add_selector_bloom_hashes(node, &mut |hash| bloom_filter.remove_hash(hash));
-      }
+    if context.extra_data.deadline_error.is_some() {
+      result = false;
+      break;
     }
-    found
-  })
+
+    ancestors.push(child);
+    let child_bloomed = use_ancestor_bloom && stack.len() < ANCESTOR_BLOOM_MAX_DEPTH;
+    push_bloom(child, bloom_filter, child_bloomed, element_attr_cache);
+    stack.push(Frame {
+      node: child,
+      next_child: 0,
+      bloomed: child_bloomed,
+    });
+  }
+
+  while let Some(frame) = stack.pop() {
+    if frame.bloomed {
+      pop_bloom(frame.node, bloom_filter, frame.bloomed, element_attr_cache);
+    }
+    let popped = ancestors.pop();
+    debug_assert!(popped.is_some());
+  }
+
+  result
 }
 
 #[cfg(test)]
@@ -6681,6 +6774,43 @@ mod tests {
     };
 
     let mut input = ParserInput::new(".a .b .c");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    assert_eq!(selectors.len(), 1);
+
+    let with_bloom = eval_relative_selector_with_ancestor_bloom(&dom, &selectors[0], true);
+    let without_bloom = eval_relative_selector_with_ancestor_bloom(&dom, &selectors[0], false);
+    assert!(with_bloom);
+    assert_eq!(with_bloom, without_bloom);
+  }
+
+  #[test]
+  fn deep_has_relative_selector_subtree_does_not_overflow_stack() {
+    let depth = 100_000usize;
+
+    let mut dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".into(),
+        namespace: HTML_NAMESPACE.into(),
+        attributes: vec![("class".into(), "target".into())],
+      },
+      children: vec![],
+    };
+
+    for _ in 0..depth {
+      dom = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".into(),
+          namespace: HTML_NAMESPACE.into(),
+          attributes: vec![],
+        },
+        children: vec![dom],
+      };
+    }
+
+    let mut input = ParserInput::new(".target");
     let mut parser = Parser::new(&mut input);
     let list =
       SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
