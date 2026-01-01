@@ -295,6 +295,11 @@ pub struct FastRender {
   /// Font context for text shaping and measurement
   font_context: FontContext,
 
+  /// Shared text shaping pipeline used for ad-hoc shaping (e.g. measuring alt text when an image
+  /// cannot be loaded). Keeping this on the renderer avoids repeatedly constructing per-call caches
+  /// (including the fallback cache) in hot loops.
+  shaping_pipeline: ShapingPipeline,
+
   /// Layout engine for computing positions
   layout_engine: LayoutEngine,
 
@@ -3438,6 +3443,7 @@ impl FastRender {
 
     Ok(Self {
       font_context,
+      shaping_pipeline: ShapingPipeline::new(),
       layout_engine,
       image_cache,
       fetcher,
@@ -8261,7 +8267,8 @@ impl FastRender {
       return None;
     }
 
-    let mut runs = ShapingPipeline::new()
+    let mut runs = self
+      .shaping_pipeline
       .shape(text, style, &self.font_context)
       .ok()?;
     if runs.is_empty() {
@@ -9881,6 +9888,7 @@ pub(crate) fn render_html_with_shared_resources(
   let layout_engine = LayoutEngine::with_font_context(layout_config, font_ctx.clone());
   let mut renderer = FastRender {
     font_context: font_ctx.clone(),
+    shaping_pipeline: ShapingPipeline::new(),
     layout_engine,
     image_cache: image_cache.clone(),
     fetcher,
