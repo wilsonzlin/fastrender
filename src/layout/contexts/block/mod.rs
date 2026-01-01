@@ -92,7 +92,9 @@ use margin_collapse::should_collapse_with_first_child;
 use margin_collapse::should_collapse_with_last_child;
 use margin_collapse::MarginCollapseContext;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHasher;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -3666,7 +3668,15 @@ impl FormattingContext for BlockFormattingContext {
       self.viewport_size,
       self.nearest_positioned_cb,
     );
-    let mut inline_run_cache: HashMap<(Vec<usize>, IntrinsicSizingMode), f32> = HashMap::new();
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct InlineRunCacheKey {
+      hash: u64,
+      fingerprint: u64,
+      len: usize,
+      mode: IntrinsicSizingMode,
+    }
+
+    let mut inline_run_cache: FxHashMap<InlineRunCacheKey, f32> = FxHashMap::default();
 
     // Inline formatting context contribution (text and inline-level children).
     // Block-level children split inline runs into separate formatting contexts.
@@ -3677,36 +3687,56 @@ impl FormattingContext for BlockFormattingContext {
 
     let mut inline_width = 0.0f32;
     let mut inline_run: Vec<&BoxNode> = Vec::new();
+    let mut inline_run_hasher = FxHasher::default();
+    let mut inline_run_fingerprint: u64 = 0xcbf29ce484222325;
     let mut flush_inline_run =
-      |run: &mut Vec<&BoxNode>, widest: &mut f32| -> Result<(), LayoutError> {
+      |run: &mut Vec<&BoxNode>,
+       hasher: &mut FxHasher,
+       fingerprint: &mut u64,
+       widest: &mut f32|
+       -> Result<(), LayoutError> {
         if run.is_empty() {
           return Ok(());
         }
-        let key = run.iter().map(|c| c.id()).collect::<Vec<_>>();
-        if let Some(width) = inline_run_cache.get(&(key.clone(), mode)) {
-          if log_children {
-            eprintln!(
-              "[intrinsic-inline-run-cache] parent_id={} mode={:?} ids={:?} width={:.2}",
-              box_node.id, mode, key, width
-            );
-          }
-          *widest = widest.max(*width);
-          run.clear();
-          return Ok(());
-        }
 
-        let width =
-          inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode)?;
-        inline_run_cache.insert((key, mode), width);
-        if log_children {
-          let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
-          eprintln!(
-            "[intrinsic-inline-run] parent_id={} mode={:?} ids={:?} width={:.2}",
-            box_node.id, mode, ids, width
-          );
-        }
+        let key = InlineRunCacheKey {
+          hash: hasher.finish(),
+          fingerprint: *fingerprint,
+          len: run.len(),
+          mode,
+        };
+
+        let width = match inline_run_cache.entry(key) {
+          std::collections::hash_map::Entry::Occupied(entry) => {
+            let width = *entry.get();
+            if log_children {
+              let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
+              eprintln!(
+                "[intrinsic-inline-run-cache] parent_id={} mode={:?} ids={:?} width={:.2}",
+                box_node.id, mode, ids, width
+              );
+            }
+            width
+          }
+          std::collections::hash_map::Entry::Vacant(entry) => {
+            let width =
+              inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode)?;
+            entry.insert(width);
+            if log_children {
+              let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
+              eprintln!(
+                "[intrinsic-inline-run] parent_id={} mode={:?} ids={:?} width={:.2}",
+                box_node.id, mode, ids, width
+              );
+            }
+            width
+          }
+        };
+
         *widest = widest.max(width);
         run.clear();
+        *hasher = FxHasher::default();
+        *fingerprint = 0xcbf29ce484222325;
         Ok(())
       };
 
@@ -3728,15 +3758,28 @@ impl FormattingContext for BlockFormattingContext {
       };
 
       if treated_as_block {
-        flush_inline_run(&mut inline_run, &mut inline_width)?;
+        flush_inline_run(
+          &mut inline_run,
+          &mut inline_run_hasher,
+          &mut inline_run_fingerprint,
+          &mut inline_width,
+        )?;
       } else {
         if log_children {
           inline_child_debug.push((child.id, child.style.display));
         }
         inline_run.push(child);
+        inline_run_hasher.write_usize(child.id());
+        inline_run_fingerprint ^= child.id() as u64;
+        inline_run_fingerprint = inline_run_fingerprint.wrapping_mul(0x100000001b3);
       }
     }
-    flush_inline_run(&mut inline_run, &mut inline_width)?;
+    flush_inline_run(
+      &mut inline_run,
+      &mut inline_run_hasher,
+      &mut inline_run_fingerprint,
+      &mut inline_width,
+    )?;
 
     // Block-level in-flow children contribute their own intrinsic widths
     let mut block_child_width = 0.0f32;

@@ -125,6 +125,41 @@ fn build_block_intrinsic_tree(span_count: usize) -> BoxTree {
   BoxTree::new(root)
 }
 
+fn build_block_intrinsic_many_runs_tree(run_count: usize) -> BoxTree {
+  // Regression protected:
+  // - Block intrinsic sizing may have to flush many short inline runs when block-level boxes are
+  //   mixed into otherwise inline content. This stresses the inline-run cache keying path in
+  //   `BlockFormattingContext::compute_intrinsic_inline_size`.
+
+  let mut root_style = ComputedStyle::default();
+  root_style.display = Display::Block;
+  let root_style = Arc::new(root_style);
+
+  let mut inline_style = ComputedStyle::default();
+  inline_style.display = Display::Inline;
+  let inline_style = Arc::new(inline_style);
+
+  let mut separator_style = ComputedStyle::default();
+  separator_style.display = Display::Block;
+  separator_style.containment.inline_size = true;
+  let separator_style = Arc::new(separator_style);
+
+  let mut children = Vec::with_capacity(run_count.saturating_mul(2).saturating_sub(1));
+  for idx in 0..run_count {
+    children.push(BoxNode::new_inline(inline_style.clone(), Vec::new()));
+    if idx + 1 < run_count {
+      children.push(BoxNode::new_block(
+        separator_style.clone(),
+        FormattingContextType::Block,
+        vec![],
+      ));
+    }
+  }
+
+  let root = BoxNode::new_block(root_style, FormattingContextType::Block, children);
+  BoxTree::new(root)
+}
+
 fn build_table_tree(rows: usize, cols: usize) -> BoxNode {
   // Regression protected:
   // - Table auto layout measures min/max-content widths for every cell, then distributes
@@ -285,6 +320,36 @@ fn bench_block_intrinsic_sizing(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_block_intrinsic_many_inline_runs(c: &mut Criterion) {
+  let viewport = Size::new(800.0, 600.0);
+  let font_ctx = common::fixed_font_context();
+  let bfc = BlockFormattingContext::with_font_context_and_viewport(font_ctx, viewport)
+    .with_parallelism(LayoutParallelism::disabled());
+  let mut tree = build_block_intrinsic_many_runs_tree(512);
+  // Disable global intrinsic caching for the root so each iteration recomputes the intrinsic width.
+  tree.root.id = 0;
+  let node = &tree.root;
+
+  let mut group = c.benchmark_group("layout_hotspots_block_intrinsic_many_runs");
+  group.bench_function("min_content", |b| {
+    b.iter(|| {
+      let width = bfc
+        .compute_intrinsic_inline_size(black_box(node), IntrinsicSizingMode::MinContent)
+        .expect("intrinsic sizing should succeed");
+      black_box(width);
+    })
+  });
+  group.bench_function("max_content", |b| {
+    b.iter(|| {
+      let width = bfc
+        .compute_intrinsic_inline_size(black_box(node), IntrinsicSizingMode::MaxContent)
+        .expect("intrinsic sizing should succeed");
+      black_box(width);
+    })
+  });
+  group.finish();
+}
+
 fn bench_table_cell_intrinsic_and_distribution(c: &mut Criterion) {
   let viewport = Size::new(960.0, 720.0);
   let font_ctx = common::fixed_font_context();
@@ -318,6 +383,7 @@ criterion_group!(
   targets =
     bench_flex_measure_hot_path,
     bench_block_intrinsic_sizing,
+    bench_block_intrinsic_many_inline_runs,
     bench_table_cell_intrinsic_and_distribution
 );
 criterion_main!(benches);
