@@ -195,11 +195,20 @@ impl GradientLutCache {
   where
     F: FnOnce() -> GradientLut,
   {
-    if let Some(found) = self.inner.lock().unwrap().get(&key) {
+    let mut guard = match self.inner.lock() {
+      Ok(guard) => guard,
+      Err(poisoned) => {
+        let mut guard = poisoned.into_inner();
+        // This cache is a performance optimization. If a panic happened while holding the lock we
+        // may have partially inserted state, so clear everything and rebuild entries on demand.
+        guard.clear();
+        guard
+      }
+    };
+    if let Some(found) = guard.get(&key) {
       return found.clone();
     }
     let lut = Arc::new(build());
-    let mut guard = self.inner.lock().unwrap();
     guard.entry(key).or_insert_with(|| lut.clone()).clone()
   }
 }
@@ -686,6 +695,24 @@ mod tests {
       }
     }
     stops.last().unwrap().1
+  }
+
+  #[test]
+  fn gradient_lut_cache_recovers_from_poisoned_lock() {
+    let cache = GradientLutCache::default();
+
+    let result = std::panic::catch_unwind(|| {
+      let _guard = cache.inner.lock().unwrap();
+      panic!("poison gradient LUT cache lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(cache.inner.is_poisoned(), "expected LUT cache mutex to be poisoned");
+
+    let stops = [(0.0, Rgba::BLACK), (1.0, Rgba::WHITE)];
+    let key = GradientCacheKey::new(&stops, SpreadMode::Pad, 1.0, 16);
+    let lut = cache.get_or_build(key, || build_gradient_lut(&stops, SpreadMode::Pad, 1.0, 16));
+    assert_eq!(lut.period, 1.0);
+    assert!(!lut.colors.is_empty());
   }
 
   fn max_diff(a: &Pixmap, b: &Pixmap) -> u8 {

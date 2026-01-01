@@ -135,13 +135,13 @@ pub fn render_colr_glyph(
     .raw_face()
     .table(ttf_parser::Tag::from_bytes(b"COLR"))?;
   let header = {
-    let mut caches = caches.lock().unwrap();
+    let mut caches = caches.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     caches.colr_v0_header(font_key, colr_data)?
   };
 
   let base_record = {
     let key = BaseGlyphCacheKey::new(font_key, glyph_id.0);
-    let mut caches = caches.lock().unwrap();
+    let mut caches = caches.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match caches.colr_v0_base_record(key, colr_data, header) {
       Some(Some(record)) => record,
       Some(None) => return None,
@@ -156,7 +156,7 @@ pub fn render_colr_glyph(
   }
 
   let palette = {
-    let mut caches = caches.lock().unwrap();
+    let mut caches = caches.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     caches
       .palette(font_key, face, palette_index)
       .unwrap_or_else(|| Arc::new(cpal::ParsedPalette::default()))

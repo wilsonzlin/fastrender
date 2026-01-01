@@ -1186,14 +1186,19 @@ impl DecodeInFlight {
   }
 
   fn set(&self, result: SharedImageResult) {
-    if let Ok(mut slot) = self.result.lock() {
-      *slot = Some(result);
-      self.cv.notify_all();
-    }
+    let mut slot = self
+      .result
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = Some(result);
+    self.cv.notify_all();
   }
 
   fn wait(&self, _url: &str) -> Result<Arc<CachedImage>> {
-    let mut guard = self.result.lock().unwrap();
+    let mut guard = self
+      .result
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
     while guard.is_none() {
       if let Some(deadline) = deadline.as_ref() {
@@ -1211,9 +1216,16 @@ impl DecodeInFlight {
         } else {
           Duration::from_millis(10)
         };
-        guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+        guard = self
+          .cv
+          .wait_timeout(guard, wait_for)
+          .unwrap_or_else(|poisoned| poisoned.into_inner())
+          .0;
       } else {
-        guard = self.cv.wait(guard).unwrap();
+        guard = self
+          .cv
+          .wait(guard)
+          .unwrap_or_else(|poisoned| poisoned.into_inner());
       }
     }
     guard.as_ref().unwrap().as_result()
@@ -1249,14 +1261,19 @@ impl ProbeInFlight {
   }
 
   fn set(&self, result: SharedMetaResult) {
-    if let Ok(mut slot) = self.result.lock() {
-      *slot = Some(result);
-      self.cv.notify_all();
-    }
+    let mut slot = self
+      .result
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = Some(result);
+    self.cv.notify_all();
   }
 
   fn wait(&self, _url: &str) -> Result<Arc<CachedImageMetadata>> {
-    let mut guard = self.result.lock().unwrap();
+    let mut guard = self
+      .result
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
     while guard.is_none() {
       if let Some(deadline) = deadline.as_ref() {
@@ -1274,9 +1291,16 @@ impl ProbeInFlight {
         } else {
           Duration::from_millis(10)
         };
-        guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+        guard = self
+          .cv
+          .wait_timeout(guard, wait_for)
+          .unwrap_or_else(|poisoned| poisoned.into_inner())
+          .0;
       } else {
-        guard = self.cv.wait(guard).unwrap();
+        guard = self
+          .cv
+          .wait(guard)
+          .unwrap_or_else(|poisoned| poisoned.into_inner());
       }
     }
     guard.as_ref().unwrap().as_result()
@@ -2218,7 +2242,14 @@ impl ImageCache {
   }
 
   fn join_inflight(&self, resolved_url: &str) -> (Arc<DecodeInFlight>, bool) {
-    let mut map = self.in_flight.lock().unwrap();
+    let mut map = match self.in_flight.lock() {
+      Ok(map) => map,
+      Err(poisoned) => {
+        let mut map = poisoned.into_inner();
+        map.clear();
+        map
+      }
+    };
     if let Some(existing) = map.get(resolved_url) {
       return (Arc::clone(existing), false);
     }
@@ -2229,7 +2260,14 @@ impl ImageCache {
   }
 
   fn join_meta_inflight(&self, resolved_url: &str) -> (Arc<ProbeInFlight>, bool) {
-    let mut map = self.meta_in_flight.lock().unwrap();
+    let mut map = match self.meta_in_flight.lock() {
+      Ok(map) => map,
+      Err(poisoned) => {
+        let mut map = poisoned.into_inner();
+        map.clear();
+        map
+      }
+    };
     if let Some(existing) = map.get(resolved_url) {
       return (Arc::clone(existing), false);
     }
@@ -2246,9 +2284,11 @@ impl ImageCache {
     result: SharedImageResult,
   ) {
     flight.set(result);
-    if let Ok(mut map) = self.in_flight.lock() {
-      map.remove(resolved_url);
-    }
+    let mut map = self
+      .in_flight
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.remove(resolved_url);
   }
 
   fn finish_meta_inflight(
@@ -2258,9 +2298,11 @@ impl ImageCache {
     result: SharedMetaResult,
   ) {
     flight.set(result);
-    if let Ok(mut map) = self.meta_in_flight.lock() {
-      map.remove(resolved_url);
-    }
+    let mut map = self
+      .meta_in_flight
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.remove(resolved_url);
   }
 
   /// Render raw SVG content to an image, caching by content hash.
@@ -3423,9 +3465,11 @@ impl Clone for ImageCache {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::render_control::RenderDeadline;
   use crate::style::types::OrientationTransform;
   use image::RgbaImage;
   use std::path::PathBuf;
+  use std::time::Duration;
   use std::time::SystemTime;
 
   #[test]
@@ -3445,6 +3489,52 @@ mod tests {
     record_image_cache_request();
     let stats = take_image_cache_diagnostics().expect("diagnostics enabled");
     assert_eq!(stats.requests, 1);
+  }
+
+  #[test]
+  fn decode_inflight_recovers_from_poisoned_lock() {
+    let inflight = DecodeInFlight::new();
+    let result = std::panic::catch_unwind(|| {
+      let _guard = inflight.result.lock().unwrap();
+      panic!("poison decode inflight lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(50)), None);
+    render_control::with_deadline(Some(&deadline), || {
+      inflight.set(SharedImageResult::Error(Error::Render(RenderError::Timeout {
+        stage: RenderStage::Paint,
+        elapsed: Duration::from_millis(0),
+      })));
+      let err = match inflight.wait("https://example.com/image.png") {
+        Ok(_) => panic!("expected error result"),
+        Err(err) => err,
+      };
+      assert!(matches!(err, Error::Render(RenderError::Timeout { .. })));
+    });
+  }
+
+  #[test]
+  fn probe_inflight_recovers_from_poisoned_lock() {
+    let inflight = ProbeInFlight::new();
+    let result = std::panic::catch_unwind(|| {
+      let _guard = inflight.result.lock().unwrap();
+      panic!("poison probe inflight lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(50)), None);
+    render_control::with_deadline(Some(&deadline), || {
+      inflight.set(SharedMetaResult::Error(Error::Render(RenderError::Timeout {
+        stage: RenderStage::Paint,
+        elapsed: Duration::from_millis(0),
+      })));
+      let err = match inflight.wait("https://example.com/image.png") {
+        Ok(_) => panic!("expected error result"),
+        Err(err) => err,
+      };
+      assert!(matches!(err, Error::Render(RenderError::Timeout { .. })));
+    });
   }
 
   #[test]

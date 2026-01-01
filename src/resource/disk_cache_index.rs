@@ -94,7 +94,10 @@ impl DiskCacheIndex {
   }
 
   pub(super) fn refresh(&self) {
-    let mut state = self.state.lock().unwrap();
+    let mut state = self
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
@@ -109,7 +112,10 @@ impl DiskCacheIndex {
     data_path: &Path,
     meta_path: &Path,
   ) {
-    let mut state = self.state.lock().unwrap();
+    let mut state = self
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
@@ -140,7 +146,10 @@ impl DiskCacheIndex {
   ) where
     F: FnMut(&Path) -> bool,
   {
-    let mut state = self.state.lock().unwrap();
+    let mut state = self
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
@@ -171,7 +180,10 @@ impl DiskCacheIndex {
   }
 
   pub(super) fn record_removal(&self, key: &str, data_path: &Path, meta_path: &Path) {
-    let mut state = self.state.lock().unwrap();
+    let mut state = self
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
@@ -198,7 +210,10 @@ impl DiskCacheIndex {
     if !self.loaded.load(Ordering::Acquire) {
       return;
     }
-    let mut state = self.state.lock().unwrap();
+    let mut state = self
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Reads should remain cheap: most pageset workers only ever *read* the cache, and loading the
     // full journal in every process defeats the point of having a disk cache. Only writer
     // processes (which call `record_*`) need a fully loaded index for eviction.
@@ -233,7 +248,10 @@ impl DiskCacheIndex {
       return;
     }
 
-    let mut state = self.state.lock().unwrap();
+    let mut state = self
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
@@ -432,7 +450,10 @@ impl DiskCacheIndex {
         removed.push(candidate);
       }
 
-      state = self.state.lock().unwrap();
+      state = self
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
       if removed.is_empty() {
         return Ok(state);
@@ -761,7 +782,10 @@ impl DiskCacheIndex {
 
   #[cfg(test)]
   pub(super) fn debug_stats(&self) -> DebugStats {
-    let state = self.state.lock().unwrap();
+    let state = self
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     DebugStats {
       rebuilds: state.rebuilds,
       journal_replays: state.journal_replays,
@@ -1061,5 +1085,24 @@ mod tests {
       vec!["orphan".to_string(), "new".to_string()],
       "pending backfills should be flushed before the next record"
     );
+  }
+
+  #[test]
+  fn disk_cache_index_recovers_from_poisoned_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = DiskCacheIndex::new(tmp.path().to_path_buf());
+
+    let result = std::panic::catch_unwind(|| {
+      let _guard = index.state.lock().unwrap();
+      panic!("poison disk cache index mutex");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(index.state.is_poisoned(), "expected index mutex to be poisoned");
+
+    index.refresh();
+
+    let data_path = tmp.path().join("example.bin");
+    let meta_path = tmp.path().join("example.bin.meta");
+    index.record_insert("example", 1_700_000_000, 0, &data_path, &meta_path);
   }
 }

@@ -264,9 +264,8 @@ fn display_allows_use(display: FontDisplay, elapsed: Duration) -> bool {
 }
 
 fn record_font_event(store: &Arc<Mutex<Vec<FontLoadEvent>>>, event: FontLoadEvent) {
-  if let Ok(mut log) = store.lock() {
-    log.push(event);
-  }
+  let mut log = store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  log.push(event);
 }
 
 struct PendingTask {
@@ -275,7 +274,8 @@ struct PendingTask {
 
 impl PendingTask {
   fn new(shared: Arc<(Mutex<usize>, Condvar)>) -> Self {
-    if let Ok(mut guard) = shared.0.lock() {
+    {
+      let mut guard = shared.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
       *guard += 1;
     }
     Self { shared }
@@ -285,12 +285,11 @@ impl PendingTask {
 impl Drop for PendingTask {
   fn drop(&mut self) {
     let (lock, cvar) = &*self.shared;
-    if let Ok(mut guard) = lock.lock() {
-      if *guard > 0 {
-        *guard -= 1;
-      }
-      cvar.notify_all();
+    let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *guard > 0 {
+      *guard -= 1;
     }
+    cvar.notify_all();
   }
 }
 
@@ -1236,7 +1235,7 @@ impl FontContext {
     }
     let deadline = Instant::now() + timeout;
     let (lock, cvar) = &*self.pending_async;
-    let mut guard = lock.lock().unwrap();
+    let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let settled = loop {
       if *guard == 0 {
         break true;
@@ -1257,7 +1256,9 @@ impl FontContext {
       } else {
         remaining
       };
-      let (g, result) = cvar.wait_timeout(guard, wait_for).unwrap();
+      let (g, result) = cvar
+        .wait_timeout(guard, wait_for)
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
       guard = g;
       // `wait_for` may be a small polling interval when a render deadline is active; only the
       // outer `now >= deadline` check should terminate the wait early.
@@ -2683,6 +2684,37 @@ mod tests {
   use std::sync::Mutex;
   use std::thread;
   use std::time::Duration;
+
+  #[test]
+  fn pending_web_font_counter_recovers_from_poisoned_lock() {
+    let shared: Arc<(Mutex<usize>, Condvar)> = Arc::new((Mutex::new(0), Condvar::new()));
+
+    let result = std::panic::catch_unwind(|| {
+      let _guard = shared.0.lock().unwrap();
+      panic!("poison pending_async lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(
+      shared.0.is_poisoned(),
+      "expected pending_async mutex to be poisoned"
+    );
+
+    let task = PendingTask::new(shared.clone());
+    let guard = shared.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(*guard, 1);
+    drop(guard);
+    drop(task);
+
+    let guard = shared.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(*guard, 0);
+    drop(guard);
+
+    let (lock, cvar) = &*shared;
+    let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_guard, _timeout) = cvar
+      .wait_timeout(guard, Duration::from_millis(0))
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+  }
 
   fn system_font_for_char(ch: char) -> Option<(Vec<u8>, String)> {
     let db = FontDatabase::new();

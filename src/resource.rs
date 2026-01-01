@@ -5050,14 +5050,19 @@ impl InFlight {
   }
 
   fn set(&self, result: SharedResult) {
-    if let Ok(mut slot) = self.result.lock() {
-      *slot = Some(result);
-      self.cv.notify_all();
-    }
+    let mut slot = self
+      .result
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = Some(result);
+    self.cv.notify_all();
   }
 
   fn wait(&self, url: &str) -> Result<FetchedResource> {
-    let mut guard = self.result.lock().unwrap();
+    let mut guard = self
+      .result
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
     let stage = render_stage_hint_from_url(url);
 
@@ -5077,9 +5082,16 @@ impl InFlight {
         } else {
           Duration::from_millis(10)
         };
-        guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+        guard = self
+          .cv
+          .wait_timeout(guard, wait_for)
+          .unwrap_or_else(|poisoned| poisoned.into_inner())
+          .0;
       } else {
-        guard = self.cv.wait(guard).unwrap();
+        guard = self
+          .cv
+          .wait(guard)
+          .unwrap_or_else(|poisoned| poisoned.into_inner());
       }
     }
     guard.as_ref().unwrap().as_result()
@@ -5533,7 +5545,14 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   }
 
   fn join_inflight(&self, url: &str) -> (Arc<InFlight>, bool) {
-    let mut map = self.in_flight.lock().unwrap();
+    let mut map = match self.in_flight.lock() {
+      Ok(map) => map,
+      Err(poisoned) => {
+        let mut map = poisoned.into_inner();
+        map.clear();
+        map
+      }
+    };
     if let Some(existing) = map.get(url) {
       return (Arc::clone(existing), false);
     }
@@ -5545,9 +5564,11 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
 
   fn finish_inflight(&self, url: &str, flight: &Arc<InFlight>, result: SharedResult) {
     flight.set(result);
-    if let Ok(mut map) = self.in_flight.lock() {
-      map.remove(url);
-    }
+    let mut map = self
+      .in_flight
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.remove(url);
   }
 }
 
@@ -6286,6 +6307,28 @@ mod tests {
       }
       Err(err) => panic!("bind {context}: {err}"),
     }
+  }
+
+  #[test]
+  fn inflight_wait_recovers_from_poisoned_lock() {
+    let inflight = InFlight::new();
+    let result = std::panic::catch_unwind(|| {
+      let _guard = inflight.result.lock().unwrap();
+      panic!("poison inflight lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
+    render_control::with_deadline(Some(&deadline), || {
+      inflight.set(SharedResult::Success(FetchedResource::new(
+        vec![1, 2, 3],
+        Some("text/plain".to_string()),
+      )));
+      let res = inflight
+        .wait("https://example.com/test.txt")
+        .expect("wait result");
+      assert_eq!(res.bytes, vec![1, 2, 3]);
+    });
   }
 
   #[test]
