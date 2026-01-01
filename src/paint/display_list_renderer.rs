@@ -5910,7 +5910,7 @@ impl DisplayListRenderer {
       item.synthetic_oblique,
       item.palette_index,
       &item.variations,
-    );
+    )?;
     if let Some(emphasis) = &item.emphasis {
       self.render_emphasis(emphasis)?;
     }
@@ -6361,27 +6361,28 @@ impl DisplayListRenderer {
       };
 
       // Ignore text rasterizer failures so shadows don't prevent painting the rest of the scene.
-      if rasterizer
-        .render_glyph_run(
-          &glyph_positions,
-          font,
-          item.font_size,
-          item.synthetic_bold,
-          item.synthetic_oblique,
-          item.palette_index,
-          &[],
-          0,
-          &variations,
-          None,
-          item.origin.x,
-          item.origin.y,
-          shadow.color,
-          state,
-          &mut shadow_pixmap,
-        )
-        .is_err()
-      {
-        continue;
+      // However, deadline timeouts should always bubble up so paint-stage cancellation doesn't get
+      // silently ignored.
+      match rasterizer.render_glyph_run(
+        &glyph_positions,
+        font,
+        item.font_size,
+        item.synthetic_bold,
+        item.synthetic_oblique,
+        item.palette_index,
+        &[],
+        0,
+        &variations,
+        None,
+        item.origin.x,
+        item.origin.y,
+        shadow.color,
+        state,
+        &mut shadow_pixmap,
+      ) {
+        Ok(_) => {}
+        Err(err @ Error::Render(RenderError::Timeout { .. })) => return Err(err),
+        Err(_) => continue,
       }
 
       if shadow.blur_radius > 0.0 {
@@ -6454,7 +6455,7 @@ impl DisplayListRenderer {
             0.0,
             text.palette_index,
             &text.variations,
-          );
+          )?;
         }
         return Ok(());
       }

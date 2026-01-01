@@ -978,22 +978,23 @@ impl Canvas {
   /// let style = ComputedStyle::default();
   /// let runs = pipeline.shape("Hello", &style, &font_context)?;
   /// let run = &runs[0];
-  /// canvas.draw_shaped_run(run, Point::new(10.0, 50.0), Rgba::BLACK);
+  /// canvas.draw_shaped_run(run, Point::new(10.0, 50.0), Rgba::BLACK)?;
   /// ```
-  pub fn draw_shaped_run(&mut self, run: &ShapedRun, position: Point, color: Rgba) {
+  pub fn draw_shaped_run(&mut self, run: &ShapedRun, position: Point, color: Rgba) -> Result<()> {
     if run.glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
-      return;
+      return Ok(());
     }
 
     let state = self.current_text_state(self.current_state.clip_mask.as_deref());
-    let _ = self.text_rasterizer.render_shaped_run_with_state(
+    self.text_rasterizer.render_shaped_run_with_state(
       run,
       position.x,
       position.y,
       color,
       &mut self.pixmap,
       state,
-    );
+    )?;
+    Ok(())
   }
 
   /// Draws text glyphs at the specified position.
@@ -1043,9 +1044,9 @@ impl Canvas {
     synthetic_oblique: f32,
     palette_index: u16,
     variations: &[FontVariation],
-  ) {
+  ) -> Result<()> {
     if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
-      return;
+      return Ok(());
     }
 
     let hb_variations = Self::hb_variations(variations);
@@ -1063,7 +1064,7 @@ impl Canvas {
       })
       .collect();
 
-    let _ = self.text_rasterizer.render_glyph_run(
+    self.text_rasterizer.render_glyph_run(
       &positions,
       font,
       font_size,
@@ -1079,7 +1080,8 @@ impl Canvas {
       color,
       state,
       &mut self.pixmap,
-    );
+    )?;
+    Ok(())
   }
 
   /// Draws a pre-rasterized color glyph pixmap.
