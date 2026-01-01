@@ -2553,7 +2553,7 @@ impl HttpFetcher {
           let fallback_url = if error_looks_like_dns_failure(&err) {
             http_www_fallback_url(effective_url.as_ref())
           } else if http_www_fallback_enabled() && is_timeout_or_no_response_error(&err) {
-            rewrite_url_host_with_www_prefix(effective_url.as_ref(), destination)
+            rewrite_url_host_with_www_prefix(effective_url.as_ref(), Some(kind.into()))
           } else {
             None
           };
