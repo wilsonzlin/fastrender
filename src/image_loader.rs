@@ -54,7 +54,7 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tiny_skia::{IntSize, Pixmap};
+use tiny_skia::{FilterQuality, IntSize, Pixmap};
 use url::Url;
 
 fn image_profile_threshold_ms() -> Option<f64> {
@@ -309,12 +309,18 @@ struct RasterPixmapKey {
   len: usize,
   orientation: OrientationTransform,
   decorative: bool,
+  target_width: u32,
+  target_height: u32,
+  quality_bits: u8,
 }
 
 fn raster_pixmap_key(
   url: &str,
   orientation: OrientationTransform,
   decorative: bool,
+  target_width: u32,
+  target_height: u32,
+  quality_bits: u8,
 ) -> RasterPixmapKey {
   let mut url_hasher = DefaultHasher::new();
   url.hash(&mut url_hasher);
@@ -323,7 +329,28 @@ fn raster_pixmap_key(
     len: url.len(),
     orientation,
     decorative,
+    target_width,
+    target_height,
+    quality_bits,
   }
+}
+
+fn raster_pixmap_quality_bits(quality: FilterQuality) -> u8 {
+  match quality {
+    FilterQuality::Nearest => 0,
+    FilterQuality::Bilinear => 1,
+    // tiny-skia currently exposes a small fixed set of qualities. Store a conservative default so
+    // future additions don't break hashing behaviour.
+    _ => 255,
+  }
+}
+
+fn raster_pixmap_full_key(
+  url: &str,
+  orientation: OrientationTransform,
+  decorative: bool,
+) -> RasterPixmapKey {
+  raster_pixmap_key(url, orientation, decorative, 0, 0, 0)
 }
 
 fn svg_pixmap_key(
@@ -1670,7 +1697,7 @@ impl ImageCache {
     let resolved_url = self.resolve_url(url);
     self.enforce_image_policy(&resolved_url)?;
 
-    let key = raster_pixmap_key(&resolved_url, orientation, decorative);
+    let key = raster_pixmap_full_key(&resolved_url, orientation, decorative);
     if let Ok(mut cache) = self.raster_pixmap_cache.lock() {
       if let Some(cached) = cache.get_cloned(&key) {
         record_raster_pixmap_cache_hit();
@@ -1726,6 +1753,145 @@ impl ImageCache {
     }
 
     let Some(size) = IntSize::from_wh(width, height) else {
+      return Ok(None);
+    };
+    let Some(pixmap) = Pixmap::from_vec(data, size) else {
+      return Ok(None);
+    };
+    let pixmap = Arc::new(pixmap);
+
+    if self.config.max_cached_raster_bytes > 0 && bytes > self.config.max_cached_raster_bytes {
+      return Ok(Some(pixmap));
+    }
+
+    if let Ok(mut cache) = self.raster_pixmap_cache.lock() {
+      cache.insert(key, Arc::clone(&pixmap), bytes);
+      record_raster_pixmap_cache_bytes(cache.current_bytes());
+    }
+
+    Ok(Some(pixmap))
+  }
+
+  /// Load a decoded raster image and convert it to a premultiplied [`tiny_skia::Pixmap`], but
+  /// first resample it toward the requested target size.
+  ///
+  /// This is intended for paint call sites that render the image substantially smaller than its
+  /// intrinsic dimensions: resampling before premultiplication keeps work proportional to the
+  /// destination pixel count.
+  ///
+  /// Callers should pass target sizes in *device pixels* (after applying device pixel ratio) and
+  /// only use this path when downscaling is desired (i.e., target <= intrinsic). If the requested
+  /// target would require upscaling, this function falls back to [`Self::load_raster_pixmap`].
+  pub fn load_raster_pixmap_at_size(
+    &self,
+    url: &str,
+    orientation: OrientationTransform,
+    decorative: bool,
+    target_width: u32,
+    target_height: u32,
+    quality: FilterQuality,
+  ) -> Result<Option<Arc<tiny_skia::Pixmap>>> {
+    if target_width == 0 || target_height == 0 {
+      return Ok(None);
+    }
+    let resolved_url = self.resolve_url(url);
+    self.enforce_image_policy(&resolved_url)?;
+
+    let key = raster_pixmap_key(
+      &resolved_url,
+      orientation,
+      decorative,
+      target_width,
+      target_height,
+      raster_pixmap_quality_bits(quality),
+    );
+    if let Ok(mut cache) = self.raster_pixmap_cache.lock() {
+      if let Some(cached) = cache.get_cloned(&key) {
+        record_raster_pixmap_cache_hit();
+        record_raster_pixmap_cache_bytes(cache.current_bytes());
+        with_paint_diagnostics(|diag| {
+          diag.image_pixmap_cache_hits = diag.image_pixmap_cache_hits.saturating_add(1);
+        });
+        return Ok(Some(cached));
+      }
+    }
+    record_raster_pixmap_cache_miss();
+    with_paint_diagnostics(|diag| {
+      diag.image_pixmap_cache_misses = diag.image_pixmap_cache_misses.saturating_add(1);
+    });
+
+    let image = self.load(&resolved_url)?;
+    if image.is_vector {
+      return Ok(None);
+    }
+
+    let (src_w, src_h) = image.oriented_dimensions(orientation);
+    if src_w == 0 || src_h == 0 {
+      return Ok(None);
+    }
+    if target_width >= src_w || target_height >= src_h {
+      // Callers should only use this path when downscaling. If any axis would require upscaling,
+      // fall back to the full-resolution pixmap cache so results stay stable (important for
+      // pixelated/crisp-edges semantics and to avoid needless resampling work).
+      return self.load_raster_pixmap(&resolved_url, orientation, decorative);
+    }
+
+    let Some(bytes) = u64::from(target_width)
+      .checked_mul(u64::from(target_height))
+      .and_then(|px| px.checked_mul(4))
+    else {
+      return Ok(None);
+    };
+    if bytes > MAX_PIXMAP_BYTES {
+      return Ok(None);
+    }
+    let bytes = match usize::try_from(bytes) {
+      Ok(bytes) => bytes,
+      Err(_) => return Ok(None),
+    };
+
+    let filter = match quality {
+      FilterQuality::Nearest => image::imageops::FilterType::Nearest,
+      FilterQuality::Bilinear => image::imageops::FilterType::Triangle,
+      _ => image::imageops::FilterType::Triangle,
+    };
+
+    // We resize in the decoded image's native orientation and then apply the requested
+    // orientation transform on the smaller output buffer.
+    let (pre_w, pre_h) = if orientation.swaps_axes() {
+      (target_height, target_width)
+    } else {
+      (target_width, target_height)
+    };
+    let resized = image.image.resize_exact(pre_w, pre_h, filter);
+    let mut rgba = resized.to_rgba8();
+
+    match orientation.quarter_turns % 4 {
+      0 => {}
+      1 => rgba = imageops::rotate90(&rgba),
+      2 => rgba = imageops::rotate180(&rgba),
+      3 => rgba = imageops::rotate270(&rgba),
+      _ => {}
+    }
+    if orientation.flip_x {
+      rgba = imageops::flip_horizontal(&rgba);
+    }
+
+    let (rgba_w, rgba_h) = rgba.dimensions();
+    if rgba_w != target_width || rgba_h != target_height {
+      return Ok(None);
+    }
+    let mut data = rgba.into_raw();
+
+    // tiny-skia expects premultiplied RGBA.
+    for pixel in data.chunks_exact_mut(4) {
+      let alpha = pixel[3] as f32 / 255.0;
+      pixel[0] = (pixel[0] as f32 * alpha).round() as u8;
+      pixel[1] = (pixel[1] as f32 * alpha).round() as u8;
+      pixel[2] = (pixel[2] as f32 * alpha).round() as u8;
+    }
+
+    let Some(size) = IntSize::from_wh(target_width, target_height) else {
       return Ok(None);
     };
     let Some(pixmap) = Pixmap::from_vec(data, size) else {
@@ -2143,16 +2309,17 @@ impl ImageCache {
       .clamp(1, 64 * 1024 * 1024);
 
     for (idx, limit) in [probe_limit, retry_limit].into_iter().enumerate() {
-      let resource = match self
-        .fetcher
-        .fetch_partial_with_context(FetchContextKind::Image, resolved_url, limit)
-      {
-        Ok(res) => res,
-        Err(err) => {
-          let _ = err;
-          break;
-        }
-      };
+      let resource =
+        match self
+          .fetcher
+          .fetch_partial_with_context(FetchContextKind::Image, resolved_url, limit)
+        {
+          Ok(res) => res,
+          Err(err) => {
+            let _ = err;
+            break;
+          }
+        };
       record_probe_partial_fetch(resource.bytes.len());
       let resource = Arc::new(resource);
 
@@ -3514,6 +3681,10 @@ mod tests {
   use super::*;
   use crate::render_control::RenderDeadline;
   use crate::style::types::OrientationTransform;
+  use base64::Engine;
+  use image::codecs::png::PngEncoder;
+  use image::ColorType;
+  use image::ImageEncoder;
   use image::RgbaImage;
   use std::path::PathBuf;
   use std::time::Duration;
@@ -3549,10 +3720,12 @@ mod tests {
 
     let deadline = RenderDeadline::new(Some(Duration::from_millis(50)), None);
     render_control::with_deadline(Some(&deadline), || {
-      inflight.set(SharedImageResult::Error(Error::Render(RenderError::Timeout {
-        stage: RenderStage::Paint,
-        elapsed: Duration::from_millis(0),
-      })));
+      inflight.set(SharedImageResult::Error(Error::Render(
+        RenderError::Timeout {
+          stage: RenderStage::Paint,
+          elapsed: Duration::from_millis(0),
+        },
+      )));
       let err = match inflight.wait("https://example.com/image.png") {
         Ok(_) => panic!("expected error result"),
         Err(err) => err,
@@ -3572,10 +3745,12 @@ mod tests {
 
     let deadline = RenderDeadline::new(Some(Duration::from_millis(50)), None);
     render_control::with_deadline(Some(&deadline), || {
-      inflight.set(SharedMetaResult::Error(Error::Render(RenderError::Timeout {
-        stage: RenderStage::Paint,
-        elapsed: Duration::from_millis(0),
-      })));
+      inflight.set(SharedMetaResult::Error(Error::Render(
+        RenderError::Timeout {
+          stage: RenderStage::Paint,
+          elapsed: Duration::from_millis(0),
+        },
+      )));
       let err = match inflight.wait("https://example.com/image.png") {
         Ok(_) => panic!("expected error result"),
         Err(err) => err,
@@ -4375,6 +4550,107 @@ mod tests {
     release.wait();
     let _ = owner_handle.join();
     let _ = waiter_handle.join();
+  }
+
+  fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let sum: u64 = a
+      .iter()
+      .zip(b.iter())
+      .map(|(lhs, rhs)| i16::from(*lhs).abs_diff(i16::from(*rhs)) as u64)
+      .sum();
+    sum as f64 / a.len() as f64
+  }
+
+  #[test]
+  fn raster_pixmap_at_size_matches_draw_scaled_output_with_orientation() {
+    let mut image = RgbaImage::new(6, 4);
+    for y in 0..image.height() {
+      for x in 0..image.width() {
+        let r = (x * 40).min(255) as u8;
+        let g = (y * 60).min(255) as u8;
+        let b = 128u8;
+        image.put_pixel(x, y, image::Rgba([r, g, b, 255]));
+      }
+    }
+    // Include one translucent pixel to exercise premultiplication.
+    image.put_pixel(2, 1, image::Rgba([255, 0, 0, 128]));
+
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png)
+      .write_image(
+        &image,
+        image.width(),
+        image.height(),
+        ColorType::Rgba8.into(),
+      )
+      .expect("encode png");
+    let src = format!(
+      "data:image/png;base64,{}",
+      base64::engine::general_purpose::STANDARD.encode(&png)
+    );
+
+    let cache = ImageCache::new();
+    let orientation = OrientationTransform {
+      quarter_turns: 1,
+      flip_x: true,
+    };
+
+    let full = cache
+      .load_raster_pixmap(&src, orientation, false)
+      .expect("load full pixmap")
+      .expect("raster pixmap");
+
+    for (target_w, target_h) in [(3u32, 4u32), (2u32, 3u32)] {
+      let mut expected = Pixmap::new(target_w, target_h).expect("dst pixmap");
+      let scale_x = target_w as f32 / full.width() as f32;
+      let scale_y = target_h as f32 / full.height() as f32;
+      let mut paint = tiny_skia::PixmapPaint::default();
+      paint.quality = FilterQuality::Bilinear;
+      expected.draw_pixmap(
+        0,
+        0,
+        full.as_ref().as_ref(),
+        &paint,
+        tiny_skia::Transform::from_row(scale_x, 0.0, 0.0, scale_y, 0.0, 0.0),
+        None,
+      );
+
+      let scaled = cache
+        .load_raster_pixmap_at_size(
+          &src,
+          orientation,
+          false,
+          target_w,
+          target_h,
+          FilterQuality::Bilinear,
+        )
+        .expect("scaled pixmap")
+        .expect("raster pixmap");
+
+      assert_eq!((scaled.width(), scaled.height()), (target_w, target_h));
+      let diff = mean_abs_diff(expected.data(), scaled.data());
+      assert!(
+        diff <= 10.0,
+        "expected scaled output to match within tolerance (diff={diff})"
+      );
+    }
+
+    let scaled_a = cache
+      .load_raster_pixmap_at_size(&src, orientation, false, 3, 4, FilterQuality::Bilinear)
+      .expect("scaled pixmap")
+      .expect("raster pixmap");
+    let scaled_a_again = cache
+      .load_raster_pixmap_at_size(&src, orientation, false, 3, 4, FilterQuality::Bilinear)
+      .expect("scaled pixmap")
+      .expect("raster pixmap");
+    assert!(Arc::ptr_eq(&scaled_a, &scaled_a_again));
+
+    let scaled_b = cache
+      .load_raster_pixmap_at_size(&src, orientation, false, 2, 3, FilterQuality::Bilinear)
+      .expect("scaled pixmap")
+      .expect("raster pixmap");
+    assert!(!Arc::ptr_eq(&scaled_a, &scaled_b));
   }
 
   #[test]

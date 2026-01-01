@@ -69,7 +69,7 @@ use crate::paint::optimize::DisplayListOptimizer;
 use crate::paint::painter::{
   paint_diagnostics_enabled, paint_diagnostics_session_id, PaintDiagnosticsThreadGuard,
 };
-use crate::paint::pixmap::new_pixmap;
+use crate::paint::pixmap::{new_pixmap, reserve_buffer};
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::{
   estimate_box_shadow_work_pixels, render_box_shadow_cached, BoxShadow,
@@ -1331,7 +1331,11 @@ fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) -> RenderResult<()>
   let deadline_row_stride = (CLIP_MASK_DEADLINE_STRIDE / row_pixels).max(1);
   let mut deadline_counter = 0usize;
   for row in y0..y1 {
-    check_active_periodic(&mut deadline_counter, deadline_row_stride, RenderStage::Paint)?;
+    check_active_periodic(
+      &mut deadline_counter,
+      deadline_row_stride,
+      RenderStage::Paint,
+    )?;
     let offset = row * stride;
     data[offset + x0..offset + x1].fill(0);
   }
@@ -1431,7 +1435,11 @@ fn hard_clip_pixmap_outside_rect_rgba(pixmap: &mut Pixmap, rect: Rect) -> Render
     let deadline_row_stride = (CLIP_MASK_DEADLINE_STRIDE / row_pixels.max(1)).max(1);
     let mut deadline_counter = 0usize;
     for row in y0..y1 {
-      check_active_periodic(&mut deadline_counter, deadline_row_stride, RenderStage::Paint)?;
+      check_active_periodic(
+        &mut deadline_counter,
+        deadline_row_stride,
+        RenderStage::Paint,
+      )?;
       let offset = row as usize * stride;
       let row = &mut data[offset..offset + stride];
       row[..left_bytes].fill(0);
@@ -2278,6 +2286,7 @@ struct ImageKey {
   pixels_ptr: *const Vec<u8>,
   width: u32,
   height: u32,
+  premultiplied: bool,
 }
 
 impl ImageKey {
@@ -2286,6 +2295,7 @@ impl ImageKey {
       pixels_ptr: Arc::as_ptr(&image.pixels),
       width: image.width,
       height: image.height,
+      premultiplied: image.premultiplied,
     }
   }
 }
@@ -2299,9 +2309,20 @@ struct ImageCropKey {
   crop_h: u32,
 }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct ImageScaledKey {
+  image: ImageKey,
+  target_w: u32,
+  target_h: u32,
+  quality_bits: u8,
+}
+
 impl PartialEq for ImageKey {
   fn eq(&self, other: &Self) -> bool {
-    self.pixels_ptr == other.pixels_ptr && self.width == other.width && self.height == other.height
+    self.pixels_ptr == other.pixels_ptr
+      && self.width == other.width
+      && self.height == other.height
+      && self.premultiplied == other.premultiplied
   }
 }
 
@@ -2312,12 +2333,14 @@ impl Hash for ImageKey {
     (self.pixels_ptr as usize).hash(state);
     self.width.hash(state);
     self.height.hash(state);
+    self.premultiplied.hash(state);
   }
 }
 
 /// Renders a display list into a pixmap using the provided font context.
 const WARP_CACHE_CAPACITY: usize = 8;
 const CROPPED_IMAGE_CACHE_CAPACITY: usize = 128;
+const SCALED_IMAGE_CACHE_CAPACITY: usize = 256;
 pub struct DisplayListRenderer {
   canvas: Canvas,
   font_ctx: FontContext,
@@ -2335,6 +2358,7 @@ pub struct DisplayListRenderer {
   paint_parallelism: PaintParallelism,
   image_cache: HashMap<ImageKey, Arc<Pixmap>>,
   cropped_image_cache: LruCache<ImageCropKey, Arc<Pixmap>>,
+  scaled_image_cache: LruCache<ImageScaledKey, Arc<Pixmap>>,
   #[cfg(test)]
   image_cache_misses: Arc<AtomicUsize>,
   image_pixmap_diagnostics: Option<Arc<ImagePixmapDiagnostics>>,
@@ -2938,6 +2962,10 @@ impl DisplayListRenderer {
         NonZeroUsize::new(CROPPED_IMAGE_CACHE_CAPACITY)
           .unwrap_or_else(|| NonZeroUsize::new(1).expect("nonzero")),
       ),
+      scaled_image_cache: LruCache::new(
+        NonZeroUsize::new(SCALED_IMAGE_CACHE_CAPACITY)
+          .unwrap_or_else(|| NonZeroUsize::new(1).expect("nonzero")),
+      ),
       #[cfg(test)]
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
       image_pixmap_diagnostics: diagnostics_enabled
@@ -3171,13 +3199,9 @@ impl DisplayListRenderer {
       } else {
         return Ok(());
       }
-    } else if let Some(shader) = tiny_skia::LinearGradient::new(
-      start,
-      end,
-      stops,
-      spread,
-      tiny_skia::Transform::identity(),
-    ) {
+    } else if let Some(shader) =
+      tiny_skia::LinearGradient::new(start, end, stops, spread, tiny_skia::Transform::identity())
+    {
       paint.shader = shader;
     } else if let Some(first) = item.stops.first() {
       let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -7360,17 +7384,26 @@ impl DisplayListRenderer {
       .background_paint_diagnostics
       .as_ref()
       .map(|_| Instant::now());
-    let Some(pixmap) = self.image_data_to_pixmap(&item.image)? else {
-      return Ok(());
-    };
-    let (img_w, img_h) = (pixmap.width() as f32, pixmap.height() as f32);
-    if img_w <= 0.0 || img_h <= 0.0 {
-      return Ok(());
-    }
 
     let tile_w = self.ds_len(item.tile_size.width);
     let tile_h = self.ds_len(item.tile_size.height);
     if tile_w <= 0.0 || tile_h <= 0.0 {
+      return Ok(());
+    }
+
+    let tile_target = transform_rect(
+      Rect::from_xywh(0.0, 0.0, tile_w, tile_h),
+      &self.canvas.transform(),
+    );
+    let target_w = tile_target.width().ceil().max(1.0) as u32;
+    let target_h = tile_target.height().ceil().max(1.0) as u32;
+    let Some(pixmap) =
+      self.image_data_to_pixmap_at_size(&item.image, target_w, target_h, item.filter_quality)?
+    else {
+      return Ok(());
+    };
+    let (img_w, img_h) = (pixmap.width() as f32, pixmap.height() as f32);
+    if img_w <= 0.0 || img_h <= 0.0 {
       return Ok(());
     }
 
@@ -7473,7 +7506,16 @@ impl DisplayListRenderer {
   }
 
   fn image_to_pixmap(&mut self, item: &ImageItem) -> RenderResult<Option<Arc<Pixmap>>> {
-    let Some(full) = self.image_data_to_pixmap(&item.image)? else {
+    let dest_rect_device = self.ds_rect(item.dest_rect);
+    let target_bounds = transform_rect(dest_rect_device, &self.canvas.transform());
+    let target_w = target_bounds.width().ceil().max(1.0) as u32;
+    let target_h = target_bounds.height().ceil().max(1.0) as u32;
+
+    let Some(full) = (if item.src_rect.is_none() {
+      self.image_data_to_pixmap_at_size(&item.image, target_w, target_h, item.filter_quality)?
+    } else {
+      self.image_data_to_pixmap(&item.image)?
+    }) else {
       return Ok(None);
     };
 
@@ -7530,6 +7572,92 @@ impl DisplayListRenderer {
       Ok(Some(full))
     }
   }
+
+  #[inline]
+  fn image_filter_quality_bits(quality: ImageFilterQuality) -> u8 {
+    match quality {
+      ImageFilterQuality::Nearest => 0,
+      ImageFilterQuality::Linear => 1,
+    }
+  }
+
+  fn should_use_scaled_image_pixmap(
+    quality: ImageFilterQuality,
+    src_width: u32,
+    src_height: u32,
+    target_width: u32,
+    target_height: u32,
+  ) -> bool {
+    if quality != ImageFilterQuality::Linear {
+      return false;
+    }
+    if src_width == 0 || src_height == 0 || target_width == 0 || target_height == 0 {
+      return false;
+    }
+    if target_width >= src_width || target_height >= src_height {
+      return false;
+    }
+
+    let src_pixels = u64::from(src_width).saturating_mul(u64::from(src_height));
+    let target_pixels = u64::from(target_width).saturating_mul(u64::from(target_height));
+
+    // Bilinear downscaling reads 4 source pixels per destination pixel. Only use the scaled pixmap
+    // path when the destination is meaningfully smaller than the intrinsic image so we don't
+    // regress on "slightly downscaled" renders.
+    target_pixels.saturating_mul(4) <= src_pixels
+  }
+
+  fn image_data_to_pixmap_at_size(
+    &mut self,
+    image: &ImageData,
+    target_width: u32,
+    target_height: u32,
+    quality: ImageFilterQuality,
+  ) -> RenderResult<Option<Arc<Pixmap>>> {
+    if !Self::should_use_scaled_image_pixmap(
+      quality,
+      image.width,
+      image.height,
+      target_width,
+      target_height,
+    ) {
+      return self.image_data_to_pixmap(image);
+    }
+
+    let key = ImageScaledKey {
+      image: ImageKey::new(image),
+      target_w: target_width,
+      target_h: target_height,
+      quality_bits: Self::image_filter_quality_bits(quality),
+    };
+
+    if let Some(cached) = self.scaled_image_cache.get(&key) {
+      if let Some(diag) = self.image_pixmap_diagnostics.as_ref() {
+        diag.record_hit();
+      }
+      return Ok(Some(cached.clone()));
+    }
+
+    let diag = self.image_pixmap_diagnostics.as_ref();
+    if let Some(diag) = diag {
+      diag.record_miss();
+    }
+    let timer = diag.map(|_| Instant::now());
+    let Some(pixmap) =
+      image_data_to_scaled_pixmap_inner(image, target_width, target_height, quality)?
+    else {
+      return Ok(None);
+    };
+    let pixmap = Arc::new(pixmap);
+    if let (Some(diag), Some(start)) = (diag, timer) {
+      diag.record_duration(start.elapsed());
+    }
+    #[cfg(test)]
+    self.image_cache_misses.fetch_add(1, Ordering::Relaxed);
+    self.scaled_image_cache.put(key, pixmap.clone());
+    Ok(Some(pixmap))
+  }
+
   fn image_data_to_pixmap(&mut self, image: &ImageData) -> RenderResult<Option<Arc<Pixmap>>> {
     let key = ImageKey::new(image);
     if let Some(cached) = self.image_cache.get(&key) {
@@ -7582,6 +7710,166 @@ fn image_data_to_pixmap_inner(image: &ImageData) -> RenderResult<Option<Pixmap>>
     data.push((g * a).round() as u8);
     data.push((b * a).round() as u8);
     data.push(chunk[3]);
+  }
+
+  Ok(Pixmap::from_vec(data, size))
+}
+
+fn image_data_to_scaled_pixmap_inner(
+  image: &ImageData,
+  target_width: u32,
+  target_height: u32,
+  quality: ImageFilterQuality,
+) -> RenderResult<Option<Pixmap>> {
+  if target_width == 0 || target_height == 0 {
+    return Ok(None);
+  }
+  let src_w = image.width;
+  let src_h = image.height;
+  if src_w == 0 || src_h == 0 {
+    return Ok(None);
+  }
+  if target_width >= src_w || target_height >= src_h {
+    return image_data_to_pixmap_inner(image);
+  }
+  if quality != ImageFilterQuality::Linear {
+    return image_data_to_pixmap_inner(image);
+  }
+
+  let Some(size) = IntSize::from_wh(target_width, target_height) else {
+    return Ok(None);
+  };
+  let Some(bytes) = u64::from(target_width)
+    .checked_mul(u64::from(target_height))
+    .and_then(|px| px.checked_mul(4))
+  else {
+    return Ok(None);
+  };
+
+  let mut data = match reserve_buffer(bytes, "scaled image pixmap") {
+    Ok(buf) => buf,
+    Err(_) => return Ok(None),
+  };
+  data.resize(bytes as usize, 0);
+
+  check_active(RenderStage::Paint)?;
+  let src_pixels = image.pixels.as_ref().as_slice();
+  if src_pixels.len() != (src_w as usize * src_h as usize * 4) {
+    return Ok(None);
+  }
+
+  #[derive(Clone, Copy)]
+  struct AxisSample {
+    i0: u32,
+    i1: u32,
+    t: f32,
+  }
+
+  let scale_x = src_w as f32 / target_width as f32;
+  let scale_y = src_h as f32 / target_height as f32;
+  if !scale_x.is_finite() || !scale_y.is_finite() {
+    return Ok(None);
+  }
+  let max_x = src_w as f32 - 1.0;
+  let max_y = src_h as f32 - 1.0;
+
+  let mut xs = Vec::with_capacity(target_width as usize);
+  for x in 0..target_width {
+    let mut sx = (x as f32 + 0.5) * scale_x - 0.5;
+    if !sx.is_finite() {
+      return Ok(None);
+    }
+    sx = sx.clamp(0.0, max_x);
+    let sx0 = sx.floor() as u32;
+    let sx1 = (sx0 + 1).min(src_w - 1);
+    xs.push(AxisSample {
+      i0: sx0,
+      i1: sx1,
+      t: sx - sx0 as f32,
+    });
+  }
+
+  let mut ys = Vec::with_capacity(target_height as usize);
+  for y in 0..target_height {
+    let mut sy = (y as f32 + 0.5) * scale_y - 0.5;
+    if !sy.is_finite() {
+      return Ok(None);
+    }
+    sy = sy.clamp(0.0, max_y);
+    let sy0 = sy.floor() as u32;
+    let sy1 = (sy0 + 1).min(src_h - 1);
+    ys.push(AxisSample {
+      i0: sy0,
+      i1: sy1,
+      t: sy - sy0 as f32,
+    });
+  }
+
+  let premultiplied = image.premultiplied;
+  let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+  let mut pixel_counter = 0usize;
+  for (y, ysamp) in ys.iter().enumerate() {
+    let y = y as u32;
+    let (sy0, sy1, fy) = (ysamp.i0, ysamp.i1, ysamp.t);
+    let row0 = sy0 as usize * src_w as usize;
+    let row1 = sy1 as usize * src_w as usize;
+    for (x, xsamp) in xs.iter().enumerate() {
+      if (pixel_counter & 4095) == 0 {
+        check_active(RenderStage::Paint)?;
+      }
+      pixel_counter = pixel_counter.wrapping_add(1);
+
+      let (sx0, sx1, fx) = (xsamp.i0, xsamp.i1, xsamp.t);
+
+      let idx00 = (row0 + sx0 as usize) * 4;
+      let idx10 = (row0 + sx1 as usize) * 4;
+      let idx01 = (row1 + sx0 as usize) * 4;
+      let idx11 = (row1 + sx1 as usize) * 4;
+
+      let read = |idx: usize| -> (f32, f32, f32, f32) {
+        let r = src_pixels[idx] as f32;
+        let g = src_pixels[idx + 1] as f32;
+        let b = src_pixels[idx + 2] as f32;
+        let a = src_pixels[idx + 3] as f32;
+        if premultiplied {
+          (r, g, b, a)
+        } else {
+          let af = a / 255.0;
+          (r * af, g * af, b * af, a)
+        }
+      };
+
+      let (r00, g00, b00, a00) = read(idx00);
+      let (r10, g10, b10, a10) = read(idx10);
+      let (r01, g01, b01, a01) = read(idx01);
+      let (r11, g11, b11, a11) = read(idx11);
+
+      let top_r = lerp(r00, r10, fx);
+      let top_g = lerp(g00, g10, fx);
+      let top_b = lerp(b00, b10, fx);
+      let top_a = lerp(a00, a10, fx);
+
+      let bot_r = lerp(r01, r11, fx);
+      let bot_g = lerp(g01, g11, fx);
+      let bot_b = lerp(b01, b11, fx);
+      let bot_a = lerp(a01, a11, fx);
+
+      let mut r = lerp(top_r, bot_r, fy).round().clamp(0.0, 255.0) as u8;
+      let mut g = lerp(top_g, bot_g, fy).round().clamp(0.0, 255.0) as u8;
+      let mut b = lerp(top_b, bot_b, fy).round().clamp(0.0, 255.0) as u8;
+      let a = lerp(top_a, bot_a, fy).round().clamp(0.0, 255.0) as u8;
+
+      // Keep premultiplied invariants stable even after rounding.
+      r = r.min(a);
+      g = g.min(a);
+      b = b.min(a);
+
+      let dst_idx = (y * target_width + x as u32) as usize * 4;
+      data[dst_idx] = r;
+      data[dst_idx + 1] = g;
+      data[dst_idx + 2] = b;
+      data[dst_idx + 3] = a;
+    }
   }
 
   Ok(Pixmap::from_vec(data, size))
@@ -9521,7 +9809,13 @@ mod tests {
     });
 
     assert!(
-      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
       "expected timeout, got {result:?}"
     );
     assert!(
@@ -9672,7 +9966,13 @@ mod tests {
     });
 
     assert!(
-      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
       "expected timeout, got {result:?}"
     );
     assert!(

@@ -905,6 +905,33 @@ impl Painter {
     }
   }
 
+  fn should_use_scaled_raster_pixmap(
+    quality: FilterQuality,
+    src_width: u32,
+    src_height: u32,
+    target_width: u32,
+    target_height: u32,
+  ) -> bool {
+    if quality != FilterQuality::Bilinear {
+      return false;
+    }
+    if src_width == 0 || src_height == 0 || target_width == 0 || target_height == 0 {
+      return false;
+    }
+    if target_width >= src_width || target_height >= src_height {
+      return false;
+    }
+
+    let src_pixels = u64::from(src_width).saturating_mul(u64::from(src_height));
+    let target_pixels = u64::from(target_width).saturating_mul(u64::from(target_height));
+
+    // Generating a downscaled pixmap requires bilinear resampling (4 source taps per output pixel),
+    // so it only pays off when the destination is substantially smaller than the intrinsic image.
+    // Keep raster→pixmap conversion work proportional to on-screen pixel count without regressing
+    // common "slightly downscaled" cases.
+    target_pixels.saturating_mul(4) <= src_pixels
+  }
+
   fn resolve_replaced_intrinsic_sizes(&self, node: &mut tree::box_tree::BoxNode, viewport: Size) {
     use tree::box_tree::BoxType;
     use tree::box_tree::MarkerContent;
@@ -3819,13 +3846,17 @@ impl Painter {
           }
         }
 
+        let quality = Self::filter_quality_for_image(Some(style));
+        let target_w = self.device_length(tile_w).ceil().max(1.0) as u32;
+        let target_h = self.device_length(tile_h).ceil().max(1.0) as u32;
+
         let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
         let pixmap = if image.is_vector {
           let Some(svg) = &image.svg_content else {
             return;
           };
-          let render_w = self.device_length(tile_w).ceil().max(1.0) as u32;
-          let render_h = self.device_length(tile_h).ceil().max(1.0) as u32;
+          let render_w = target_w;
+          let render_h = target_h;
           match self.image_cache.render_svg_pixmap_at_size(
             svg,
             render_w,
@@ -3837,10 +3868,24 @@ impl Painter {
             Err(_) => return,
           }
         } else {
-          match self
-            .image_cache
-            .load_raster_pixmap(&resolved_src, orientation, true)
-          {
+          let should_scale = Self::should_use_scaled_raster_pixmap(
+            quality, img_w_raw, img_h_raw, target_w, target_h,
+          );
+          let result = if should_scale {
+            self.image_cache.load_raster_pixmap_at_size(
+              &resolved_src,
+              orientation,
+              true,
+              target_w,
+              target_h,
+              quality,
+            )
+          } else {
+            self
+              .image_cache
+              .load_raster_pixmap(&resolved_src, orientation, true)
+          };
+          match result {
             Ok(Some(pixmap)) => pixmap,
             _ => return,
           }
@@ -3870,7 +3915,6 @@ impl Painter {
           BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round
         );
 
-        let quality = Self::filter_quality_for_image(Some(style));
         if repeat_both_axes {
           let anchor_x = origin_rect_css.x() + offset_x;
           let anchor_y = origin_rect_css.y() + offset_y;
@@ -6806,11 +6850,27 @@ impl Painter {
       }
     }
 
+    let quality = Self::filter_quality_for_image(style);
+    let target_w = dest_w_device.ceil().max(1.0) as u32;
+    let target_h = dest_h_device.ceil().max(1.0) as u32;
+
     let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
-    let pixmap = match self
-      .image_cache
-      .load_raster_pixmap(&resolved_src, orientation, false)
-    {
+    let should_scale =
+      Self::should_use_scaled_raster_pixmap(quality, img_w_raw, img_h_raw, target_w, target_h);
+    let pixmap = match if should_scale {
+      self.image_cache.load_raster_pixmap_at_size(
+        &resolved_src,
+        orientation,
+        false,
+        target_w,
+        target_h,
+        quality,
+      )
+    } else {
+      self
+        .image_cache
+        .load_raster_pixmap(&resolved_src, orientation, false)
+    } {
       Ok(Some(pixmap)) => pixmap,
       Ok(None) | Err(_) => {
         if log_image_fail {
@@ -6869,14 +6929,14 @@ impl Painter {
     let dest_w = self.device_length(dest_w);
     let dest_h = self.device_length(dest_h);
 
-    let scale_x = dest_w / img_w_raw as f32;
-    let scale_y = dest_h / img_h_raw as f32;
+    let scale_x = dest_w / pixmap.width() as f32;
+    let scale_y = dest_h / pixmap.height() as f32;
     if !scale_x.is_finite() || !scale_y.is_finite() {
       return false;
     }
 
     let mut paint = PixmapPaint::default();
-    paint.quality = Self::filter_quality_for_image(style);
+    paint.quality = quality;
 
     let transform = Transform::from_row(
       scale_x,
@@ -7069,13 +7129,35 @@ impl Painter {
       }
     }
 
-    let pixmap = match self
-      .image_cache
-      .load_raster_pixmap(&resolved_src, orientation, false)
-    {
+    let quality = Self::filter_quality_for_image(style);
+    let target_w = dest_w_device.ceil().max(1.0) as u32;
+    let target_h = dest_h_device.ceil().max(1.0) as u32;
+
+    let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
+    let should_scale =
+      Self::should_use_scaled_raster_pixmap(quality, img_w_raw, img_h_raw, target_w, target_h);
+    let pixmap = match if should_scale {
+      self.image_cache.load_raster_pixmap_at_size(
+        &resolved_src,
+        orientation,
+        false,
+        target_w,
+        target_h,
+        quality,
+      )
+    } else {
+      self
+        .image_cache
+        .load_raster_pixmap(&resolved_src, orientation, false)
+    } {
       Ok(Some(pixmap)) => pixmap,
       _ => return false,
     };
+    if let Some(start) = pixmap_timer {
+      with_paint_diagnostics(|diag| {
+        diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
+      });
+    }
 
     if matches!(
       style.map(|s| s.image_rendering),
@@ -7121,14 +7203,14 @@ impl Painter {
     let dest_w = self.device_length(dest_w);
     let dest_h = self.device_length(dest_h);
 
-    let scale_x = dest_w / img_w_raw as f32;
-    let scale_y = dest_h / img_h_raw as f32;
+    let scale_x = dest_w / pixmap.width() as f32;
+    let scale_y = dest_h / pixmap.height() as f32;
     if !scale_x.is_finite() || !scale_y.is_finite() {
       return false;
     }
 
     let mut paint = PixmapPaint::default();
-    paint.quality = Self::filter_quality_for_image(style);
+    paint.quality = quality;
 
     let transform = Transform::from_row(
       scale_x,
