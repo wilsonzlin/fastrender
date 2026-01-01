@@ -530,6 +530,10 @@ pub(crate) fn render_iframe_src(
   let mut owner_guard = IframeInFlightOwnerGuard::new(key, flight);
 
   let resource = fetcher.fetch(&resolved).ok()?;
+  let final_url = resource
+    .final_url
+    .clone()
+    .unwrap_or_else(|| resolved.clone());
   if let Some(ctx) = context.as_ref() {
     if ctx
       .check_allowed_with_final(
@@ -561,8 +565,8 @@ pub(crate) fn render_iframe_src(
 
   let html = decode_html_bytes(&resource.bytes, content_type);
   let mut cache = image_cache.clone();
-  cache.set_base_url(resolved.clone());
-  let nested_origin = origin_from_url(resource.final_url.as_deref().unwrap_or(&resolved));
+  cache.set_base_url(final_url.clone());
+  let nested_origin = origin_from_url(&final_url);
   let nested_context = context.as_ref().map(|ctx| {
     ctx
       .for_origin(nested_origin)
@@ -582,7 +586,7 @@ pub(crate) fn render_iframe_src(
     font_ctx,
     &cache,
     fetcher,
-    Some(resolved),
+    Some(final_url),
     device_pixel_ratio,
     policy_for_render,
     nested_context,
@@ -604,6 +608,7 @@ mod tests {
   use crate::resource::FetchedResource;
   use crate::resource::ResourceFetcher;
   use std::io;
+  use std::sync::Mutex as StdMutex;
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::{Arc, Barrier};
  
@@ -640,7 +645,49 @@ mod tests {
       ))
     }
   }
- 
+
+  struct RedirectingStylesheetFetcher {
+    doc_url: String,
+    final_url: String,
+    css_url: String,
+    requests: StdMutex<Vec<String>>,
+  }
+
+  impl ResourceFetcher for RedirectingStylesheetFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      self
+        .requests
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(url.to_string());
+
+      if url == self.doc_url {
+        let html = format!(
+          r#"
+            <link rel="stylesheet" href="style-redirect-113.css">
+            <div data-fastr-test="iframe-redirect-base-url-113"></div>
+          "#
+        );
+        return Ok(FetchedResource::with_final_url(
+          html.into_bytes(),
+          Some("text/html; charset=utf-8".to_string()),
+          Some(self.final_url.clone()),
+        ));
+      }
+      if url == self.css_url {
+        return Ok(FetchedResource::new(
+          b"html, body { margin: 0; padding: 0; }".to_vec(),
+          Some("text/css; charset=utf-8".to_string()),
+        ));
+      }
+
+      Err(Error::Io(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("unexpected fetch: {url}"),
+      )))
+    }
+  }
+
   #[test]
   fn iframe_render_cache_hits_for_repeated_srcdoc() {
     let font_ctx = FontContext::new();
@@ -745,6 +792,49 @@ mod tests {
       fetcher.calls.load(Ordering::SeqCst),
       1,
       "cache hit should avoid re-fetching iframe HTML"
+    );
+  }
+
+  #[test]
+  fn iframe_src_uses_final_url_for_relative_resolution() {
+    let font_ctx = FontContext::new();
+    let requested_url = "https://example.com/original/iframe-redirect-113.html";
+    let final_url = "https://example.com/final/iframe-redirect-113.html";
+    let expected_css_url = "https://example.com/final/style-redirect-113.css";
+    let fetcher = Arc::new(RedirectingStylesheetFetcher {
+      doc_url: requested_url.to_string(),
+      final_url: final_url.to_string(),
+      css_url: expected_css_url.to_string(),
+      requests: StdMutex::new(Vec::new()),
+    });
+    let image_cache = ImageCache::with_fetcher(fetcher.clone());
+    let rect = Rect::from_xywh(0.0, 0.0, 16.0, 16.0);
+
+    render_iframe_src(
+      requested_url,
+      rect,
+      None,
+      &image_cache,
+      &font_ctx,
+      1.0,
+      3,
+    )
+    .expect("iframe src render should succeed");
+
+    let urls = fetcher
+      .requests
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .clone();
+    assert!(
+      urls.iter().any(|u| u == expected_css_url),
+      "expected stylesheet URL {expected_css_url} to be requested; got {urls:?}"
+    );
+    assert!(
+      !urls
+        .iter()
+        .any(|u| u == "https://example.com/original/style-redirect-113.css"),
+      "stylesheet should resolve relative to the final URL, not the requested URL; got {urls:?}"
     );
   }
 
