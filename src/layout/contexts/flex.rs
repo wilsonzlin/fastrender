@@ -36,6 +36,7 @@ use crate::layout::contexts::flex_cache::{
   find_layout_cache_fragment, FlexCacheEntry, ShardedFlexCache,
 };
 use crate::layout::contexts::positioned::ContainingBlock;
+use crate::layout::contexts::positioned::PositionedLayout;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::flex_profile::record_node_measure_hit;
 use crate::layout::flex_profile::record_node_measure_store;
@@ -1892,6 +1893,79 @@ impl FormattingContext for FlexFormattingContext {
         if changed {
           child.bounds = Rect::new(Point::new(x, y), Size::new(w, h));
         }
+      }
+    }
+
+    // Apply relative positioning after flex layout resolves the normal positions
+    // (CSS 2.1 §9.4.3). Flex item fragments have their bounds origins overwritten
+    // by the container placement logic, so the child's own formatting context
+    // cannot preserve the offset.
+    if in_flow_children.len() == fragment.children.len() {
+      let cb_width = fragment.bounds.width();
+      let cb_height = fragment.bounds.height();
+      let border_left = self.resolve_length_for_width(
+        box_node.style.border_left_width,
+        cb_width,
+        &box_node.style,
+      );
+      let border_right = self.resolve_length_for_width(
+        box_node.style.border_right_width,
+        cb_width,
+        &box_node.style,
+      );
+      let border_top = self.resolve_length_for_width(
+        box_node.style.border_top_width,
+        cb_width,
+        &box_node.style,
+      );
+      let border_bottom = self.resolve_length_for_width(
+        box_node.style.border_bottom_width,
+        cb_width,
+        &box_node.style,
+      );
+      let padding_left =
+        self.resolve_length_for_width(box_node.style.padding_left, cb_width, &box_node.style);
+      let padding_right =
+        self.resolve_length_for_width(box_node.style.padding_right, cb_width, &box_node.style);
+      let padding_top =
+        self.resolve_length_for_width(box_node.style.padding_top, cb_width, &box_node.style);
+      let padding_bottom =
+        self.resolve_length_for_width(box_node.style.padding_bottom, cb_width, &box_node.style);
+      let content_width =
+        (cb_width - border_left - border_right - padding_left - padding_right).max(0.0);
+      let content_height =
+        (cb_height - border_top - border_bottom - padding_top - padding_bottom).max(0.0);
+      let block_base = box_node
+        .style
+        .height
+        .is_some()
+        .then_some(content_height);
+      let containing_block = ContainingBlock::with_viewport_and_bases(
+        Rect::new(Point::ZERO, Size::new(content_width, content_height)),
+        self.viewport_size,
+        Some(content_width),
+        block_base,
+      );
+      let positioned_layout = PositionedLayout::with_font_context(self.font_context.clone());
+
+      for (child_node, child_fragment) in in_flow_children
+        .iter()
+        .zip(fragment.children_mut().iter_mut())
+      {
+        if !child_node.style.position.is_relative() {
+          continue;
+        }
+        let positioned_style = resolve_positioned_style(
+          &child_node.style,
+          &containing_block,
+          self.viewport_size,
+          &self.font_context,
+        );
+        *child_fragment = positioned_layout.apply_relative_positioning(
+          child_fragment,
+          &positioned_style,
+          &containing_block,
+        )?;
       }
     }
 
@@ -5924,6 +5998,11 @@ mod tests {
 
   #[test]
   fn measured_fragments_normalize_and_reuse_fragments() {
+    use crate::debug::runtime::{set_runtime_toggles, RuntimeToggles};
+    let mut toggles = std::collections::HashMap::new();
+    toggles.insert("FASTR_FLEX_PROFILE".to_string(), "1".to_string());
+    let _guard = set_runtime_toggles(std::sync::Arc::new(RuntimeToggles::from_map(toggles)));
+
     let measured_fragments = Arc::new(ShardedFlexCache::new_measure());
     let layout_fragments = Arc::new(ShardedFlexCache::new_layout());
     let viewport = Size::new(200.0, 200.0);

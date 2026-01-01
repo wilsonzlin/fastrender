@@ -222,19 +222,9 @@ impl BlockFormattingContext {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
   ) -> Self {
-    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-      font_context.clone(),
-      viewport_size,
-      nearest_positioned_cb,
-    );
-    Self {
-      factory,
-      font_context,
-      viewport_size,
-      nearest_positioned_cb,
-      flex_item_mode: false,
-      parallelism: LayoutParallelism::default(),
-    }
+    let factory = FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
+      .with_positioned_cb(nearest_positioned_cb);
+    Self::with_factory(factory)
   }
 
   pub fn with_factory(factory: FormattingContextFactory) -> Self {
@@ -260,19 +250,9 @@ impl BlockFormattingContext {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
   ) -> Self {
-    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-      font_context.clone(),
-      viewport_size,
-      nearest_positioned_cb,
-    );
-    Self {
-      factory,
-      font_context,
-      viewport_size,
-      nearest_positioned_cb,
-      flex_item_mode: true,
-      parallelism: LayoutParallelism::default(),
-    }
+    let factory = FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
+      .with_positioned_cb(nearest_positioned_cb);
+    Self::for_flex_item_with_factory(factory)
   }
 
   pub fn for_flex_item_with_factory(factory: FormattingContextFactory) -> Self {
@@ -5279,11 +5259,7 @@ mod tests {
     );
 
     let fc = BlockFormattingContext::new();
-    let inline_fc = InlineFormattingContext::with_font_context_viewport_and_cb(
-      fc.font_context.clone(),
-      fc.viewport_size,
-      fc.nearest_positioned_cb,
-    );
+    let inline_fc = InlineFormattingContext::with_factory(fc.child_factory());
     let inline_container = BoxNode::new_inline(cell_style, cell.children.clone());
 
     let expected_min = inline_fc

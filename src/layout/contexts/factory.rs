@@ -139,7 +139,7 @@ impl FormattingContextFactory {
     BlockFormattingContext::with_factory(self.detached())
   }
 
-  fn inline_context(&self) -> InlineFormattingContext {
+  pub(crate) fn inline_context(&self) -> InlineFormattingContext {
     InlineFormattingContext::with_factory(self.detached())
   }
 

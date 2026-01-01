@@ -6,13 +6,14 @@
 
 use std::sync::Arc;
 
+use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::layout::contexts::inline::InlineFormattingContext;
 use fastrender::layout::taffy_integration::{taffy_perf_counters, TaffyPerfCountersGuard};
 use fastrender::style::display::Display;
 use fastrender::text::ShapingPipeline;
 use fastrender::{
-  BoxNode, BoxTree, ComputedStyle, FontContext, FormattingContextFactory, FormattingContextType,
-  LayoutConfig, LayoutEngine, Size,
+  BoxNode, BoxTree, ComputedStyle, FontContext, FormattingContext, FormattingContextFactory,
+  FormattingContextType, IntrinsicSizingMode, LayoutConfig, LayoutEngine, Size,
 };
 
 #[test]
@@ -82,5 +83,50 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
   assert!(
     inline_fc_news < 20,
     "layout should not rebuild inline formatting contexts via `with_font_context_viewport_and_cb` in hot paths (got {inline_fc_news})"
+  );
+}
+
+#[test]
+fn block_intrinsic_sizing_does_not_rebuild_shaping_pipeline_or_factory() {
+  let viewport = Size::new(800.0, 600.0);
+  let factory = FormattingContextFactory::with_font_context_and_viewport(FontContext::new(), viewport);
+  let bfc = BlockFormattingContext::with_factory(factory);
+
+  // Reset churn counters after initialization so we measure just the intrinsic sizing calls.
+  ShapingPipeline::debug_reset_new_call_count();
+  FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
+  InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
+
+  let mut text_style = ComputedStyle::default();
+  text_style.display = Display::Inline;
+  let text_style = Arc::new(text_style);
+  let mut root = BoxNode::new_block(
+    Arc::new(ComputedStyle::default()),
+    FormattingContextType::Block,
+    vec![BoxNode::new_text(text_style, "hello world".to_string())],
+  );
+  // Disable the intrinsic sizing cache so every call recomputes.
+  root.id = 0;
+
+  for _ in 0..16 {
+    let _ = bfc
+      .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MaxContent)
+      .expect("intrinsic sizing should succeed");
+  }
+
+  assert_eq!(
+    ShapingPipeline::debug_new_call_count(),
+    0,
+    "block intrinsic sizing should reuse the shaping pipeline"
+  );
+  assert_eq!(
+    FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count(),
+    0,
+    "block intrinsic sizing should not construct new formatting context factories"
+  );
+  assert_eq!(
+    InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count(),
+    0,
+    "block intrinsic sizing should not construct inline formatting contexts via `with_font_context_viewport_and_cb`"
   );
 }
