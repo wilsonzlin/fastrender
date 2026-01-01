@@ -13,8 +13,8 @@ use fastrender::style::types::GridTrack;
 use fastrender::tree::anonymous::AnonymousBoxCreator;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::{
-  BoxNode, BoxTree, ComputedStyle, FormattingContextFactory, FormattingContextType, LayoutConfig,
-  LayoutEngine, Length, Size,
+  BoxNode, BoxTree, Color, ComputedStyle, FormattingContextFactory, FormattingContextType,
+  LayoutConfig, LayoutEngine, Length, Size,
 };
 
 mod common;
@@ -274,6 +274,44 @@ fn bench_media_query_parse_list(c: &mut Criterion) {
       for _ in 0..COUNT {
         let queries = MediaQuery::parse_list(black_box(PRELUDE)).unwrap();
         black_box(queries);
+      }
+    })
+  });
+
+  group.finish();
+}
+
+fn bench_color_parse(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_color_parse");
+
+  const BASE: [&str; 15] = [
+    "#fff",
+    "#000",
+    "#FfF",
+    "#112233",
+    "#abcdef80",
+    "rgb(0 0 0)",
+    "rgb(255, 0, 0)",
+    "rgba(0 0 0 / 0.5)",
+    "hsl(120 100% 50% / 25%)",
+    "transparent",
+    "currentColor",
+    "red",
+    "rebeccapurple",
+    "ReD",
+    "RGB(0 0 0)",
+  ];
+
+  let mut tokens = Vec::with_capacity(20_000);
+  for idx in 0..tokens.capacity() {
+    tokens.push(BASE[idx % BASE.len()]);
+  }
+
+  group.bench_function("parse_20k_common", |b| {
+    b.iter(|| {
+      for token in &tokens {
+        let parsed = Color::parse(black_box(token)).expect("valid color");
+        black_box(parsed);
       }
     })
   });
@@ -750,6 +788,7 @@ criterion_group!(
     bench_parse_dom,
     bench_css_parse,
     bench_media_query_parse_list,
+    bench_color_parse,
     bench_cascade,
     bench_box_generation,
     bench_box_tree_anonymous_fixup,

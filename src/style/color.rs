@@ -28,6 +28,21 @@
 use std::f32::consts::PI;
 use std::fmt;
 
+#[inline]
+fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+  let prefix_len = prefix.len();
+  s.len() >= prefix_len && s.as_bytes()[..prefix_len].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+#[inline]
+fn strip_prefix_ignore_ascii_case<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+  if starts_with_ignore_ascii_case(s, prefix) {
+    Some(&s[prefix.len()..])
+  } else {
+    None
+  }
+}
+
 fn srgb_to_linear_component(c: u8) -> f32 {
   let c = c as f32 / 255.0;
   srgb_to_linear_value(c)
@@ -828,63 +843,62 @@ impl Color {
   /// ```
   pub fn parse(s: &str) -> Result<Self, ColorParseError> {
     let s = s.trim();
-    let lower = s.to_ascii_lowercase();
 
-    // Special keywords
-    if lower == "transparent" {
-      return Ok(Color::transparent());
-    }
-    if lower == "currentcolor" {
-      return Ok(Color::CurrentColor);
-    }
-
-    if lower.starts_with("color-mix(") {
-      return parse_color_mix(s);
-    }
-
-    if lower.starts_with("color-contrast(") {
-      return parse_color_contrast(s);
-    }
-
-    // Hex colors
+    // Hex colors are extremely common, so keep the hottest path allocation-free.
     if s.starts_with('#') {
       return parse_hex(s);
     }
 
+    // Special keywords
+    if s.eq_ignore_ascii_case("transparent") {
+      return Ok(Color::transparent());
+    }
+    if s.eq_ignore_ascii_case("currentcolor") {
+      return Ok(Color::CurrentColor);
+    }
+
+    if starts_with_ignore_ascii_case(s, "color-mix(") {
+      return parse_color_mix(s);
+    }
+
+    if starts_with_ignore_ascii_case(s, "color-contrast(") {
+      return parse_color_contrast(s);
+    }
+
     // RGB/RGBA functions
-    if lower.starts_with("rgb(") || lower.starts_with("rgba(") {
+    if starts_with_ignore_ascii_case(s, "rgb(") || starts_with_ignore_ascii_case(s, "rgba(") {
       return parse_rgb(s);
     }
 
     // HSL/HSLA functions
-    if lower.starts_with("hsl(") || lower.starts_with("hsla(") {
+    if starts_with_ignore_ascii_case(s, "hsl(") || starts_with_ignore_ascii_case(s, "hsla(") {
       return parse_hsl(s);
     }
 
     // HWB function
-    if lower.starts_with("hwb(") {
+    if starts_with_ignore_ascii_case(s, "hwb(") {
       return parse_hwb(s);
     }
 
-    if lower.starts_with("color(") {
-      let after_paren = lower.strip_prefix("color(").unwrap_or("");
-      if after_paren.trim_start().starts_with("from") {
+    if starts_with_ignore_ascii_case(s, "color(") {
+      let after_paren = &s["color(".len()..];
+      if starts_with_ignore_ascii_case(after_paren.trim_start(), "from") {
         return parse_relative_color(s);
       }
       return parse_color_function(s);
     }
 
     // Lab/Lch/Oklab/Oklch
-    if lower.starts_with("lab(") {
+    if starts_with_ignore_ascii_case(s, "lab(") {
       return parse_lab(s);
     }
-    if lower.starts_with("lch(") {
+    if starts_with_ignore_ascii_case(s, "lch(") {
       return parse_lch(s);
     }
-    if lower.starts_with("oklab(") {
+    if starts_with_ignore_ascii_case(s, "oklab(") {
       return parse_oklab(s);
     }
-    if lower.starts_with("oklch(") {
+    if starts_with_ignore_ascii_case(s, "oklch(") {
       return parse_oklch(s);
     }
 
@@ -964,54 +978,52 @@ impl std::error::Error for ColorParseError {}
 
 /// Parse hex color (#RGB, #RRGGBB, #RGBA, #RRGGBBAA)
 fn parse_hex(s: &str) -> Result<Color, ColorParseError> {
-  let hex = &s[1..]; // Skip '#'
+  #[inline]
+  fn nibble(b: u8) -> Option<u8> {
+    match b {
+      b'0'..=b'9' => Some(b - b'0'),
+      b'a'..=b'f' => Some(b - b'a' + 10),
+      b'A'..=b'F' => Some(b - b'A' + 10),
+      _ => None,
+    }
+  }
 
-  let (r, g, b, a) = match hex.len() {
+  #[inline]
+  fn byte(a: u8, b: u8) -> Option<u8> {
+    Some(nibble(a)? * 16 + nibble(b)?)
+  }
+
+  let digits = s.as_bytes().get(1..).unwrap_or(&[]);
+  let err = || ColorParseError::InvalidHex(s.to_string());
+
+  let (r, g, b, a) = match digits.len() {
     3 => {
-      // #RGB -> #RRGGBB
-      let r = u8::from_str_radix(&hex[0..1].repeat(2), 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let g = u8::from_str_radix(&hex[1..2].repeat(2), 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let b = u8::from_str_radix(&hex[2..3].repeat(2), 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+      let r = nibble(digits[0]).ok_or_else(err)? * 17;
+      let g = nibble(digits[1]).ok_or_else(err)? * 17;
+      let b = nibble(digits[2]).ok_or_else(err)? * 17;
       (r, g, b, 1.0)
     }
     4 => {
-      // #RGBA -> #RRGGBBAA
-      let r = u8::from_str_radix(&hex[0..1].repeat(2), 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let g = u8::from_str_radix(&hex[1..2].repeat(2), 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let b = u8::from_str_radix(&hex[2..3].repeat(2), 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let a = u8::from_str_radix(&hex[3..4].repeat(2), 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+      let r = nibble(digits[0]).ok_or_else(err)? * 17;
+      let g = nibble(digits[1]).ok_or_else(err)? * 17;
+      let b = nibble(digits[2]).ok_or_else(err)? * 17;
+      let a = nibble(digits[3]).ok_or_else(err)? * 17;
       (r, g, b, a as f32 / 255.0)
     }
     6 => {
-      // #RRGGBB
-      let r = u8::from_str_radix(&hex[0..2], 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let g = u8::from_str_radix(&hex[2..4], 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let b = u8::from_str_radix(&hex[4..6], 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+      let r = byte(digits[0], digits[1]).ok_or_else(err)?;
+      let g = byte(digits[2], digits[3]).ok_or_else(err)?;
+      let b = byte(digits[4], digits[5]).ok_or_else(err)?;
       (r, g, b, 1.0)
     }
     8 => {
-      // #RRGGBBAA
-      let r = u8::from_str_radix(&hex[0..2], 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let g = u8::from_str_radix(&hex[2..4], 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let b = u8::from_str_radix(&hex[4..6], 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-      let a = u8::from_str_radix(&hex[6..8], 16)
-        .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+      let r = byte(digits[0], digits[1]).ok_or_else(err)?;
+      let g = byte(digits[2], digits[3]).ok_or_else(err)?;
+      let b = byte(digits[4], digits[5]).ok_or_else(err)?;
+      let a = byte(digits[6], digits[7]).ok_or_else(err)?;
       (r, g, b, a as f32 / 255.0)
     }
-    _ => return Err(ColorParseError::InvalidHex(s.to_string())),
+    _ => return Err(err()),
   };
 
   Ok(Color::Rgba(Rgba::new(r, g, b, a)))
@@ -1336,8 +1348,7 @@ fn parse_lab_number(
 }
 
 fn parse_color_function(input: &str) -> Result<Color, ColorParseError> {
-  let inner = input
-    .strip_prefix("color(")
+  let inner = strip_prefix_ignore_ascii_case(input, "color(")
     .and_then(|rest| rest.strip_suffix(')'))
     .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
   let mut input = cssparser::ParserInput::new(inner);
@@ -1725,8 +1736,7 @@ fn split_on_top_level_keyword<'a>(input: &'a str, keyword: &str) -> Option<(&'a 
 }
 
 fn parse_color_contrast(input: &str) -> Result<Color, ColorParseError> {
-  let inner = input
-    .strip_prefix("color-contrast(")
+  let inner = strip_prefix_ignore_ascii_case(input, "color-contrast(")
     .and_then(|rest| rest.strip_suffix(')'))
     .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?
     .trim();
@@ -1787,13 +1797,12 @@ fn split_relative_color_source(input: &str) -> Option<(String, String)> {
 }
 
 fn parse_relative_color(input: &str) -> Result<Color, ColorParseError> {
-  let inner = input
-    .strip_prefix("color(")
+  let inner = strip_prefix_ignore_ascii_case(input, "color(")
     .and_then(|rest| rest.strip_suffix(')'))
     .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?
     .trim();
 
-  if !inner.to_ascii_lowercase().starts_with("from") {
+  if !starts_with_ignore_ascii_case(inner, "from") {
     return Err(ColorParseError::InvalidFormat(input.to_string()));
   }
   let body = inner[4..].trim_start();
@@ -2153,8 +2162,7 @@ fn relative_space_to_rgba(space: RelativeColorSpace, values: [f32; 3], alpha: f3
 }
 
 fn parse_color_mix(input: &str) -> Result<Color, ColorParseError> {
-  let inner = input
-    .strip_prefix("color-mix(")
+  let inner = strip_prefix_ignore_ascii_case(input, "color-mix(")
     .and_then(|rest| rest.strip_suffix(')'))
     .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
   let parts = split_top_level_commas(inner);
@@ -2396,8 +2404,12 @@ fn mix_colors(
 
 /// Parse named color (all 147 CSS named colors)
 fn parse_named_color(s: &str) -> Option<Rgba> {
-  let lower = s.to_lowercase();
-  match lower.as_str() {
+  let lower: std::borrow::Cow<'_, str> = if s.bytes().any(|b| b.is_ascii_uppercase()) {
+    std::borrow::Cow::Owned(s.to_ascii_lowercase())
+  } else {
+    std::borrow::Cow::Borrowed(s)
+  };
+  match lower.as_ref() {
     "aliceblue" => Some(Rgba::rgb(240, 248, 255)),
     "antiquewhite" => Some(Rgba::rgb(250, 235, 215)),
     "aqua" => Some(Rgba::rgb(0, 255, 255)),
@@ -2732,6 +2744,22 @@ mod tests {
 
     let color = Color::parse("rgb(255 0 0 / 50%)").unwrap();
     assert_eq!(color.to_rgba(Rgba::BLACK), Rgba::new(255, 0, 0, 0.5));
+  }
+
+  #[test]
+  fn test_parse_case_insensitive_tokens() {
+    assert_eq!(
+      Color::parse("RGB(0 0 0)").unwrap().to_rgba(Rgba::BLACK),
+      Rgba::BLACK
+    );
+    assert_eq!(
+      Color::parse("ReD").unwrap().to_rgba(Rgba::BLACK),
+      Rgba::RED
+    );
+    assert_eq!(
+      Color::parse("#FfF").unwrap().to_rgba(Rgba::BLACK),
+      Rgba::WHITE
+    );
   }
 
   // HSL parsing tests
