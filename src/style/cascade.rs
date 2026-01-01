@@ -131,6 +131,8 @@ static CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_SELECTOR_RIGHTMOST_FAST_REJECTS: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_SELECTOR_MATCH_CALLS: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
   /// Controls whether the ancestor bloom filter is reset at `DomNodeType::ShadowRoot` boundaries.
@@ -547,6 +549,8 @@ pub struct CascadeProfileStats {
   pub rule_candidates_by_tag: u64,
   pub rule_candidates_by_attr: u64,
   pub rule_candidates_universal: u64,
+  pub selector_rightmost_fast_rejects: u64,
+  pub selector_match_calls: u64,
   pub selector_bloom_fast_rejects: u64,
   pub selector_attempts_total: u64,
   pub selector_attempts_after_bloom: u64,
@@ -566,6 +570,9 @@ pub fn capture_cascade_profile() -> CascadeProfileStats {
     rule_candidates_by_tag: CASCADE_PROFILE_CANDIDATES_BY_TAG.load(Ordering::Relaxed),
     rule_candidates_by_attr: CASCADE_PROFILE_CANDIDATES_BY_ATTR.load(Ordering::Relaxed),
     rule_candidates_universal: CASCADE_PROFILE_CANDIDATES_UNIVERSAL.load(Ordering::Relaxed),
+    selector_rightmost_fast_rejects: CASCADE_PROFILE_SELECTOR_RIGHTMOST_FAST_REJECTS
+      .load(Ordering::Relaxed),
+    selector_match_calls: CASCADE_PROFILE_SELECTOR_MATCH_CALLS.load(Ordering::Relaxed),
     selector_bloom_fast_rejects: CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS
       .load(Ordering::Relaxed),
     selector_attempts_total: CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.load(Ordering::Relaxed),
@@ -597,6 +604,8 @@ pub fn reset_cascade_profile() {
   CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_SELECTOR_RIGHTMOST_FAST_REJECTS.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_SELECTOR_MATCH_CALLS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_FIND_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_DECL_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_PSEUDO_TIME_NS.store(0, Ordering::Relaxed);
@@ -609,6 +618,9 @@ fn log_cascade_profile(elapsed_ms: f64) {
   let pruned = CASCADE_PROFILE_RULE_PRUNED.load(Ordering::Relaxed);
   let bloom_built = CASCADE_PROFILE_SELECTOR_BLOOM_BUILT.load(Ordering::Relaxed);
   let bloom_time_ns = CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS.load(Ordering::Relaxed);
+  let rightmost_fast_rejects =
+    CASCADE_PROFILE_SELECTOR_RIGHTMOST_FAST_REJECTS.load(Ordering::Relaxed);
+  let match_calls = CASCADE_PROFILE_SELECTOR_MATCH_CALLS.load(Ordering::Relaxed);
   let selector_attempts_total = CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.load(Ordering::Relaxed);
   let selector_attempts_after_bloom =
     CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.load(Ordering::Relaxed);
@@ -652,7 +664,7 @@ fn log_cascade_profile(elapsed_ms: f64) {
     0.0
   };
   eprintln!(
-    "cascade profile: total_ms={:.2} nodes={} candidates={} pruned={} matches={} avg_candidates={:.1} avg_matches={:.1} selector_attempts={} after_bloom={} bloom_rejects={} bloom_reject_pct={:.1}% after_bloom_pct={:.1}% avg_selector_attempts={:.1} avg_after_bloom={:.1} bloom_built={} bloom_ms={:.2} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
+    "cascade profile: total_ms={:.2} nodes={} candidates={} pruned={} matches={} avg_candidates={:.1} avg_matches={:.1} rightmost_rejects={} match_calls={} selector_attempts={} after_bloom={} bloom_rejects={} bloom_reject_pct={:.1}% after_bloom_pct={:.1}% avg_selector_attempts={:.1} avg_after_bloom={:.1} bloom_built={} bloom_ms={:.2} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
     elapsed_ms,
     nodes,
     candidates,
@@ -660,6 +672,8 @@ fn log_cascade_profile(elapsed_ms: f64) {
     matches,
     avg_candidates,
     avg_matches,
+    rightmost_fast_rejects,
+    match_calls,
     selector_attempts_total,
     selector_attempts_after_bloom,
     selector_bloom_fast_rejects,
@@ -1238,6 +1252,26 @@ fn matches_selector_cascade(
   matches_selector(selector, 0, None, element, context)
 }
 
+#[inline(always)]
+fn matches_selector_cascade_counted(
+  selector: &Selector<FastRenderSelectorImpl>,
+  hashes: Option<&AncestorHashes>,
+  element: &ElementRef,
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> bool {
+  if CASCADE_PROFILE_ENABLED.load(Ordering::Relaxed) {
+    CASCADE_PROFILE_SELECTOR_MATCH_CALLS.fetch_add(1, Ordering::Relaxed);
+  }
+  matches_selector_cascade(selector, hashes, element, context)
+}
+
+#[inline(always)]
+fn record_rightmost_fast_reject_prune() {
+  if CASCADE_PROFILE_ENABLED.load(Ordering::Relaxed) {
+    CASCADE_PROFILE_SELECTOR_RIGHTMOST_FAST_REJECTS.fetch_add(1, Ordering::Relaxed);
+  }
+}
+
 /// The origin of a style rule for cascade ordering.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum StyleOrigin {
@@ -1712,6 +1746,67 @@ fn selector_metadata_matches_node(
   true
 }
 
+// Fast reject descriptor for the selector's rightmost compound. This is used to cheaply prune
+// false-positive candidates from union-bucket selection (e.g. `.a.b` showing up for any `.a`
+// element).
+//
+// The descriptor is intentionally conservative: it only encodes mandatory requirements that can
+// be checked using prehashed `NodeSelectorKeys` without consulting strings or running the full
+// selector matcher.
+const RIGHTMOST_FAST_REJECT_MAX_KEYS: usize = 4;
+
+#[derive(Clone, Copy, Debug)]
+struct RightmostFastReject {
+  tag_key: SelectorBucketKey,
+  id_key: SelectorBucketKey,
+  // First `class_len` entries are required classes; the following `attr_len` entries are required
+  // attribute names.
+  keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS],
+  class_len: u8,
+  attr_len: u8,
+  flags: u8,
+}
+
+impl RightmostFastReject {
+  const FLAG_HAS_TAG: u8 = 1 << 0;
+  const FLAG_HAS_ID: u8 = 1 << 1;
+
+  #[inline]
+  fn has_tag(self) -> bool {
+    (self.flags & Self::FLAG_HAS_TAG) != 0
+  }
+
+  #[inline]
+  fn has_id(self) -> bool {
+    (self.flags & Self::FLAG_HAS_ID) != 0
+  }
+
+  #[inline]
+  fn matches(self, node_keys: NodeSelectorKeys<'_>) -> bool {
+    if self.has_tag() && node_keys.tag_key != self.tag_key {
+      return false;
+    }
+    if self.has_id() && node_keys.id_key != Some(self.id_key) {
+      return false;
+    }
+
+    let class_len = self.class_len as usize;
+    for required in &self.keys[..class_len] {
+      if !node_keys.class_keys.iter().any(|key| key == required) {
+        return false;
+      }
+    }
+    let attr_end = class_len + self.attr_len as usize;
+    for required in &self.keys[class_len..attr_end] {
+      if !node_keys.attr_keys.iter().any(|key| key == required) {
+        return false;
+      }
+    }
+
+    true
+  }
+}
+
 /// Simple index over the rightmost compound selector to prune rule matching.
 struct IndexedSelector<'a> {
   rule_idx: usize,
@@ -1719,6 +1814,7 @@ struct IndexedSelector<'a> {
   specificity: u32,
   ancestor_hashes: AncestorHashes,
   metadata: SelectorMetadata,
+  fast_reject: u32,
 }
 
 struct IndexedSlottedSelector<'a> {
@@ -1727,7 +1823,9 @@ struct IndexedSlottedSelector<'a> {
   prelude_specificity: u32,
   prelude: Option<Selector<crate::css::selectors::FastRenderSelectorImpl>>,
   prelude_ancestor_hashes: Option<AncestorHashes>,
+  prelude_fast_reject: u32,
   args_ancestor_hashes: Vec<AncestorHashes>,
+  args_fast_reject: Vec<u32>,
   metadata: SelectorMetadata,
 }
 
@@ -1875,6 +1973,7 @@ struct RuleIndex<'a> {
   rule_sets_content: Vec<bool>,
   has_has_requirements: bool,
   selectors: Vec<IndexedSelector<'a>>,
+  fast_rejects: Vec<RightmostFastReject>,
   by_id: SelectorBucketMap<Vec<usize>>,
   by_class: SelectorBucketMap<Vec<usize>>,
   by_tag: SelectorBucketMap<Vec<usize>>,
@@ -2815,6 +2914,178 @@ fn pseudo_selector_subject_key_analysis(
   collect_sequence_keys(&mut iter, SelectorKeyPolarity::Matches)
 }
 
+fn selector_rightmost_compound_fast_reject(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
+) -> Option<RightmostFastReject> {
+  let mut iter = selector.iter();
+  selector_compound_fast_reject_from_iter(&mut iter, quirks_mode)
+}
+
+fn pseudo_selector_subject_fast_reject(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
+) -> Option<RightmostFastReject> {
+  use selectors::parser::Combinator;
+
+  let mut iter = selector.iter();
+  while iter.next().is_some() {}
+  let Some(Combinator::PseudoElement) = iter.next_sequence() else {
+    return selector_rightmost_compound_fast_reject(selector, quirks_mode);
+  };
+  selector_compound_fast_reject_from_iter(&mut iter, quirks_mode)
+}
+
+fn selector_compound_fast_reject_from_iter(
+  iter: &mut selectors::parser::SelectorIter<FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
+) -> Option<RightmostFastReject> {
+  use selectors::parser::Component;
+
+  let mut has_tag = false;
+  let mut tag_key: SelectorBucketKey = 0;
+  let mut has_id = false;
+  let mut id_key: SelectorBucketKey = 0;
+
+  // We intentionally skip class/id requirements in full quirks mode: those selectors match
+  // ASCII-case-insensitively against HTML elements, but `NodeSelectorKeys` stores case-sensitive
+  // hashes and would cause false negatives.
+  let allow_class_id = !matches!(quirks_mode, QuirksMode::Quirks);
+
+  let mut class_keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS] =
+    [0; RIGHTMOST_FAST_REJECT_MAX_KEYS];
+  let mut class_len = 0usize;
+  let mut attr_keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS] =
+    [0; RIGHTMOST_FAST_REJECT_MAX_KEYS];
+  let mut attr_len = 0usize;
+
+  while let Some(component) = iter.next() {
+    match component {
+      Component::LocalName(local) => {
+        let name = local.lower_name.as_str();
+        if name == "*" {
+          continue;
+        }
+        let key = selector_bucket_tag(name);
+        if has_tag && tag_key != key {
+          return None;
+        }
+        has_tag = true;
+        tag_key = key;
+      }
+      Component::ExplicitUniversalType => {}
+      Component::ID(ident) => {
+        if !allow_class_id {
+          continue;
+        }
+        let key = selector_bucket_id(ident.as_str());
+        if has_id && id_key != key {
+          return None;
+        }
+        has_id = true;
+        id_key = key;
+      }
+      Component::Class(class) => {
+        if !allow_class_id {
+          continue;
+        }
+        let key = selector_bucket_class(class.as_str());
+        if class_keys[..class_len].iter().any(|existing| *existing == key) {
+          continue;
+        }
+        if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+          return None;
+        }
+        class_keys[class_len] = key;
+        class_len += 1;
+      }
+      Component::AttributeInNoNamespaceExists {
+        local_name_lower, ..
+      } => {
+        let key = selector_bucket_attr(local_name_lower.as_str());
+        if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+          continue;
+        }
+        if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+          return None;
+        }
+        attr_keys[attr_len] = key;
+        attr_len += 1;
+      }
+      Component::AttributeInNoNamespace { local_name, .. } => {
+        let key = selector_bucket_attr(local_name.as_str());
+        if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+          continue;
+        }
+        if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+          return None;
+        }
+        attr_keys[attr_len] = key;
+        attr_len += 1;
+      }
+      Component::AttributeOther(other) => {
+        if other.namespace.is_some() {
+          return None;
+        }
+        let key = selector_bucket_attr(other.local_name_lower.as_str());
+        if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+          continue;
+        }
+        if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+          return None;
+        }
+        attr_keys[attr_len] = key;
+        attr_len += 1;
+      }
+      // Namespace constraints don't affect which `NodeSelectorKeys` we can check; they are already
+      // enforced by `selector_metadata_matches_node`.
+      Component::Namespace(..)
+      | Component::DefaultNamespace(..)
+      | Component::ExplicitNoNamespace
+      | Component::ExplicitAnyNamespace => {}
+      // Allow simple pseudo classes / nth selectors that don't change the meaning of the extracted
+      // type/id/class/attr requirements. Reject cases with nested selector lists.
+      Component::NonTSPseudoClass(pc) => match pc {
+        PseudoClass::Has(_)
+        | PseudoClass::Host(Some(_))
+        | PseudoClass::HostContext(_)
+        | PseudoClass::NthChild(_, _, Some(_))
+        | PseudoClass::NthLastChild(_, _, Some(_)) => return None,
+        _ => {}
+      },
+      Component::Nth(_) => {}
+      // Branching constructs, or components we don't know how to treat soundly.
+      _ => return None,
+    }
+  }
+
+  let total_required = usize::from(has_tag) + usize::from(has_id) + class_len + attr_len;
+  if total_required < 2 {
+    return None;
+  }
+
+  let mut keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS] = [0; RIGHTMOST_FAST_REJECT_MAX_KEYS];
+  keys[..class_len].copy_from_slice(&class_keys[..class_len]);
+  keys[class_len..class_len + attr_len].copy_from_slice(&attr_keys[..attr_len]);
+
+  let mut flags = 0u8;
+  if has_tag {
+    flags |= RightmostFastReject::FLAG_HAS_TAG;
+  }
+  if has_id {
+    flags |= RightmostFastReject::FLAG_HAS_ID;
+  }
+
+  Some(RightmostFastReject {
+    tag_key,
+    id_key,
+    keys,
+    class_len: class_len as u8,
+    attr_len: attr_len as u8,
+    flags,
+  })
+}
+
 fn merge_namespace_constraint(current: Option<String>, new: Option<String>) -> Option<String> {
   match (current, new) {
     (None, constraint) => constraint,
@@ -3053,12 +3324,22 @@ fn choose_anchor_key(keys: &[SelectorKey], frequencies: &FxHashMap<SelectorKey, 
 }
 
 impl<'a> RuleIndex<'a> {
+  #[inline]
+  fn fast_reject(&self, id: u32) -> Option<&RightmostFastReject> {
+    if id == 0 {
+      None
+    } else {
+      self.fast_rejects.get(id.saturating_sub(1) as usize)
+    }
+  }
+
   fn new(rules: Vec<CascadeRule<'a>>, quirks_mode: QuirksMode) -> Self {
     let mut index = RuleIndex {
       rules: Vec::new(),
       rule_sets_content: Vec::new(),
       has_has_requirements: false,
       selectors: Vec::new(),
+      fast_rejects: Vec::new(),
       by_id: SelectorBucketMap::default(),
       by_class: SelectorBucketMap::default(),
       by_tag: SelectorBucketMap::default(),
@@ -3103,14 +3384,42 @@ impl<'a> RuleIndex<'a> {
           if matches!(pe, PseudoElement::Slotted(_)) {
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
-            let prelude_ancestor_hashes = prelude
+            let prelude_ancestor_hashes =
+              prelude.as_ref().map(|sel| cascade_ancestor_hashes(sel, quirks_mode));
+            let prelude_fast_reject = match prelude
               .as_ref()
-              .map(|sel| cascade_ancestor_hashes(sel, quirks_mode));
+              .and_then(|sel| selector_rightmost_compound_fast_reject(sel, quirks_mode))
+            {
+              Some(desc) => {
+                index.fast_rejects.push(desc);
+                u32::try_from(index.fast_rejects.len())
+                  .expect("selector fast-reject cache overflow")
+              }
+              None => 0,
+            };
             let args_ancestor_hashes = match pe {
               PseudoElement::Slotted(args) => args
                 .iter()
                 .map(|sel| cascade_ancestor_hashes(sel, quirks_mode))
                 .collect(),
+              _ => Vec::new(),
+            };
+            let args_fast_reject = match pe {
+              PseudoElement::Slotted(args) => {
+                let mut out: Vec<u32> = Vec::with_capacity(args.len());
+                for sel in args.iter() {
+                  let id = match selector_rightmost_compound_fast_reject(sel, quirks_mode) {
+                    Some(desc) => {
+                      index.fast_rejects.push(desc);
+                      u32::try_from(index.fast_rejects.len())
+                        .expect("selector fast-reject cache overflow")
+                    }
+                    None => 0,
+                  };
+                  out.push(id);
+                }
+                out
+              }
               _ => Vec::new(),
             };
             let metadata = selector_metadata(selector);
@@ -3127,7 +3436,9 @@ impl<'a> RuleIndex<'a> {
               prelude_specificity,
               prelude,
               prelude_ancestor_hashes,
+              prelude_fast_reject,
               args_ancestor_hashes,
+              args_fast_reject,
               metadata,
             });
 
@@ -3159,12 +3470,20 @@ impl<'a> RuleIndex<'a> {
             index.has_has_requirements = true;
           }
           let ancestor_hashes = cascade_ancestor_hashes(selector, quirks_mode);
+          let fast_reject = match pseudo_selector_subject_fast_reject(selector, quirks_mode) {
+            Some(desc) => {
+              index.fast_rejects.push(desc);
+              u32::try_from(index.fast_rejects.len()).expect("selector fast-reject cache overflow")
+            }
+            None => 0,
+          };
           index.pseudo_selectors.push(IndexedSelector {
             rule_idx,
             selector,
             specificity: selector.specificity(),
             ancestor_hashes,
             metadata,
+            fast_reject,
           });
 
           let analysis = pseudo_selector_subject_key_analysis(selector);
@@ -3185,12 +3504,20 @@ impl<'a> RuleIndex<'a> {
           index.has_has_requirements = true;
         }
         let ancestor_hashes = cascade_ancestor_hashes(selector, quirks_mode);
+        let fast_reject = match selector_rightmost_compound_fast_reject(selector, quirks_mode) {
+          Some(desc) => {
+            index.fast_rejects.push(desc);
+            u32::try_from(index.fast_rejects.len()).expect("selector fast-reject cache overflow")
+          }
+          None => 0,
+        };
         index.selectors.push(IndexedSelector {
           rule_idx,
           selector,
           specificity: selector.specificity(),
           ancestor_hashes,
           metadata,
+          fast_reject,
         });
 
         let analysis = selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches);
@@ -15462,6 +15789,13 @@ fn find_matching_rules<'a>(
           }
         }
 
+        if let Some(fast_reject) = rules.fast_reject(indexed.fast_reject) {
+          if !fast_reject.matches(node_keys) {
+            record_rightmost_fast_reject_prune();
+            continue;
+          }
+        }
+
         let selector = indexed.selector;
         let mut selector_matches = match scope_match {
           ScopeMatchResult::Scoped(scope_root) => {
@@ -15469,7 +15803,7 @@ fn find_matching_rules<'a>(
             let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
               ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                matches_selector_cascade(
+                matches_selector_cascade_counted(
                   selector,
                   Some(&indexed.ancestor_hashes),
                   &element_ref,
@@ -15480,7 +15814,7 @@ fn find_matching_rules<'a>(
           }
           ScopeMatchResult::Unscoped => {
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-              matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+              matches_selector_cascade_counted(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
             })
           }
         };
@@ -15502,7 +15836,7 @@ fn find_matching_rules<'a>(
                     //    hashes, so disable bloom fast-reject to avoid false negatives.
                     let prev_bloom_filter = ctx.bloom_filter;
                     ctx.bloom_filter = None;
-                    let matched = matches_selector_cascade(
+                    let matched = matches_selector_cascade_counted(
                       selector,
                       Some(&indexed.ancestor_hashes),
                       &element_ref,
@@ -15519,7 +15853,7 @@ fn find_matching_rules<'a>(
                 ctx.with_allow_featureless_host_traversal(true, |ctx| {
                   let prev_bloom_filter = ctx.bloom_filter;
                   ctx.bloom_filter = None;
-                  let matched = matches_selector_cascade(
+                  let matched = matches_selector_cascade_counted(
                     selector,
                     Some(&indexed.ancestor_hashes),
                     &element_ref,
@@ -15547,7 +15881,7 @@ fn find_matching_rules<'a>(
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                   let prev_bloom_filter = ctx.bloom_filter;
                   ctx.bloom_filter = None;
-                  let matched = matches_selector_cascade(
+                  let matched = matches_selector_cascade_counted(
                     selector,
                     Some(&indexed.ancestor_hashes),
                     &element_ref,
@@ -15562,7 +15896,7 @@ fn find_matching_rules<'a>(
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 let prev_bloom_filter = ctx.bloom_filter;
                 ctx.bloom_filter = None;
-                let matched = matches_selector_cascade(
+                let matched = matches_selector_cascade_counted(
                   selector,
                   Some(&indexed.ancestor_hashes),
                   &element_ref,
@@ -15720,8 +16054,18 @@ fn find_matching_rules<'a>(
               shadow_host_for_slotted,
               |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                  for (sel, hashes) in args.iter().zip(indexed.args_ancestor_hashes.iter()) {
-                    if matches_selector_cascade(sel, Some(hashes), &element_ref, ctx) {
+                  for ((sel, hashes), fast_reject) in args
+                    .iter()
+                    .zip(indexed.args_ancestor_hashes.iter())
+                    .zip(indexed.args_fast_reject.iter())
+                  {
+                    if let Some(fast_reject) = rules.fast_reject(*fast_reject) {
+                      if !fast_reject.matches(node_keys) {
+                        record_rightmost_fast_reject_prune();
+                        continue;
+                      }
+                    }
+                    if matches_selector_cascade_counted(sel, Some(hashes), &element_ref, ctx) {
                       let spec = sel.specificity();
                       best_arg_specificity =
                         Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
@@ -15739,8 +16083,18 @@ fn find_matching_rules<'a>(
               &mut context,
               shadow_host_for_slotted,
               |ctx| {
-                for (sel, hashes) in args.iter().zip(indexed.args_ancestor_hashes.iter()) {
-                  if matches_selector_cascade(sel, Some(hashes), &element_ref, ctx) {
+                for ((sel, hashes), fast_reject) in args
+                  .iter()
+                  .zip(indexed.args_ancestor_hashes.iter())
+                  .zip(indexed.args_fast_reject.iter())
+                {
+                  if let Some(fast_reject) = rules.fast_reject(*fast_reject) {
+                    if !fast_reject.matches(node_keys) {
+                      record_rightmost_fast_reject_prune();
+                      continue;
+                    }
+                  }
+                  if matches_selector_cascade_counted(sel, Some(hashes), &element_ref, ctx) {
                     let spec = sel.specificity();
                     best_arg_specificity =
                       Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
@@ -15757,6 +16111,15 @@ fn find_matching_rules<'a>(
         };
 
         if let Some(prelude) = &indexed.prelude {
+          if let Some(fast_reject) = rules.fast_reject(indexed.prelude_fast_reject) {
+            let Some(slot_info) = assigned_slot else {
+              continue;
+            };
+            if !fast_reject.matches(dom_maps.selector_keys(slot_info.slot_node_id)) {
+              record_rightmost_fast_reject_prune();
+              continue;
+            }
+          }
           let prelude_hashes = indexed.prelude_ancestor_hashes.as_ref();
           let Some((slot_node, slot_ancestors)) = slot_node_and_ancestors.as_ref() else {
             continue;
@@ -15774,7 +16137,8 @@ fn find_matching_rules<'a>(
                   ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                     let prev_bloom_filter = ctx.bloom_filter;
                     ctx.bloom_filter = None;
-                    let matched = matches_selector_cascade(prelude, prelude_hashes, &slot_ref, ctx);
+                    let matched =
+                      matches_selector_cascade_counted(prelude, prelude_hashes, &slot_ref, ctx);
                     ctx.bloom_filter = prev_bloom_filter;
                     matched
                   })
@@ -15788,7 +16152,8 @@ fn find_matching_rules<'a>(
               |ctx| {
                 let prev_bloom_filter = ctx.bloom_filter;
                 ctx.bloom_filter = None;
-                let matched = matches_selector_cascade(prelude, prelude_hashes, &slot_ref, ctx);
+                let matched =
+                  matches_selector_cascade_counted(prelude, prelude_hashes, &slot_ref, ctx);
                 ctx.bloom_filter = prev_bloom_filter;
                 matched
               },
@@ -15959,6 +16324,12 @@ fn find_pseudo_element_rules<'a>(
 
   let mut match_candidate = |selector_idx: usize, matches: &mut Vec<MatchedRule<'a>>| -> bool {
     let indexed = &rules.pseudo_selectors[selector_idx];
+    if let Some(fast_reject) = rules.fast_reject(indexed.fast_reject) {
+      if !fast_reject.matches(node_keys) {
+        record_rightmost_fast_reject_prune();
+        return false;
+      }
+    }
     if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
       if indexed.specificity <= matches[pos].specificity {
         return false;
@@ -16000,13 +16371,13 @@ fn find_pseudo_element_rules<'a>(
         let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
           ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-            matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+            matches_selector_cascade_counted(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
           })
         })
       }
       ScopeMatchResult::Unscoped => {
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-          matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+          matches_selector_cascade_counted(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
         })
       }
     };
@@ -16021,7 +16392,7 @@ fn find_pseudo_element_rules<'a>(
               ctx.with_allow_featureless_host_traversal(true, |ctx| {
                 let prev_bloom_filter = ctx.bloom_filter;
                 ctx.bloom_filter = None;
-                let matched = matches_selector_cascade(
+                let matched = matches_selector_cascade_counted(
                   selector,
                   Some(&indexed.ancestor_hashes),
                   &element_ref,
@@ -16038,7 +16409,7 @@ fn find_pseudo_element_rules<'a>(
             ctx.with_allow_featureless_host_traversal(true, |ctx| {
               let prev_bloom_filter = ctx.bloom_filter;
               ctx.bloom_filter = None;
-              let matched = matches_selector_cascade(
+              let matched = matches_selector_cascade_counted(
                 selector,
                 Some(&indexed.ancestor_hashes),
                 &element_ref,
@@ -16061,7 +16432,7 @@ fn find_pseudo_element_rules<'a>(
             ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
               let prev_bloom_filter = ctx.bloom_filter;
               ctx.bloom_filter = None;
-              let matched = matches_selector_cascade(
+              let matched = matches_selector_cascade_counted(
                 selector,
                 Some(&indexed.ancestor_hashes),
                 &element_ref,
@@ -16076,8 +16447,12 @@ fn find_pseudo_element_rules<'a>(
           match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
             let prev_bloom_filter = ctx.bloom_filter;
             ctx.bloom_filter = None;
-            let matched =
-              matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+            let matched = matches_selector_cascade_counted(
+              selector,
+              Some(&indexed.ancestor_hashes),
+              &element_ref,
+              ctx,
+            );
             ctx.bloom_filter = prev_bloom_filter;
             matched
           })
