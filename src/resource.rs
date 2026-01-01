@@ -794,6 +794,9 @@ fn should_fallback_to_curl(err: &Error) -> bool {
   // Inspect only the message (not the URL) so we don't accidentally fall back for domains that
   // happen to include keywords like "tls" in the hostname.
   let msg = resource.message.to_ascii_lowercase();
+  if msg.contains("overall http timeout budget exceeded") {
+    return false;
+  }
   msg.contains("timeout")
     || msg.contains("timed out")
     || msg.contains("connection reset")
@@ -3194,7 +3197,10 @@ impl HttpFetcher {
     } else {
       self.retry_policy.max_attempts.max(1)
     };
-    let timeout_budget = if deadline.is_none()
+    let timeout_budget = if deadline
+      .as_ref()
+      .and_then(render_control::RenderDeadline::timeout_limit)
+      .is_none()
       && self.policy.request_timeout_is_total_budget
       && !self.policy.request_timeout.is_zero()
     {
@@ -3282,7 +3288,7 @@ impl HttpFetcher {
           Ok(resp) => resp,
           Err(err) => {
             finish_network_fetch_diagnostics(network_timer.take());
-            if attempt < max_attempts && is_retryable_ureq_error(&err) {
+            if attempt < max_attempts && is_retryable_ureq_error(&err) && !auto_fallback {
               let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
               let mut can_retry = true;
               if let Some(deadline) = deadline.as_ref() {
@@ -3301,7 +3307,7 @@ impl HttpFetcher {
               if let Some(budget) = timeout_budget {
                 match budget.checked_sub(started.elapsed()) {
                   Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
-                    let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                    let max_sleep = remaining.saturating_sub(HTTP_DEADLINE_BUFFER);
                     backoff = backoff.min(max_sleep);
                   }
                   _ => can_retry = false,
@@ -3462,7 +3468,7 @@ impl HttpFetcher {
                 if let Some(budget) = timeout_budget {
                   match budget.checked_sub(started.elapsed()) {
                     Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
-                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      let max_sleep = remaining.saturating_sub(HTTP_DEADLINE_BUFFER);
                       backoff = backoff.min(max_sleep);
                     }
                     _ => can_retry = false,
@@ -3521,7 +3527,7 @@ impl HttpFetcher {
                 if let Some(budget) = timeout_budget {
                   match budget.checked_sub(started.elapsed()) {
                     Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
-                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      let max_sleep = remaining.saturating_sub(HTTP_DEADLINE_BUFFER);
                       backoff = backoff.min(max_sleep);
                     }
                     _ => can_retry = false,
@@ -3625,7 +3631,7 @@ impl HttpFetcher {
               if let Some(budget) = timeout_budget {
                 match budget.checked_sub(started.elapsed()) {
                   Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
-                    let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                    let max_sleep = remaining.saturating_sub(HTTP_DEADLINE_BUFFER);
                     backoff = backoff.min(max_sleep);
                   }
                   _ => can_retry = false,

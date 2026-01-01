@@ -1933,7 +1933,7 @@ pub enum CssRule {
 #[derive(Debug, Clone)]
 pub struct MediaRule {
   /// Media queries to evaluate with OR semantics (a match when any query is true).
-  pub queries: Vec<MediaQuery>,
+  pub queries: Arc<[MediaQuery]>,
   /// Rules that apply when query matches (can be nested)
   pub rules: Vec<CssRule>,
 }

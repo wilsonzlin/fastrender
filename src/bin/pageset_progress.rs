@@ -2149,6 +2149,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     render_document(&mut renderer, doc, &options)
   }));
 
+  let timeline_elapsed_ms = heartbeat.elapsed_ms();
   let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
   let mut progress = PageProgress::new(url);
@@ -2158,11 +2159,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     Ok(Ok(result)) => {
       progress.status = ProgressStatus::Ok;
       let total_ms = progress.total_ms.unwrap_or(0.0);
-      let timeline_total_ms = total_ms.round().max(0.0) as u64;
       let timeline_buckets = args
         .stage_path
         .as_deref()
-        .and_then(|path| stage_buckets_from_timeline(path, timeline_total_ms));
+        .and_then(|path| stage_buckets_from_timeline(path, timeline_elapsed_ms));
       let used_timeline = timeline_buckets.is_some();
       progress.stages_ms =
         timeline_buckets.unwrap_or_else(|| buckets_from_diagnostics(&result.diagnostics));
@@ -2267,11 +2267,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     && progress.stages_ms.sum() == 0.0
   {
     let total_ms = progress.total_ms.unwrap_or(0.0);
-    let timeline_total_ms = total_ms.round().max(0.0) as u64;
     progress.stages_ms = args
       .stage_path
       .as_deref()
-      .and_then(|path| stage_buckets_from_timeline(path, timeline_total_ms))
+      .and_then(|path| stage_buckets_from_timeline(path, timeline_elapsed_ms))
       .or_else(|| {
         progress
           .timeout_stage
@@ -2744,6 +2743,10 @@ impl StageHeartbeatWriter {
 
   fn last_stage(&self) -> Option<StageHeartbeat> {
     self.last.lock().ok().and_then(|guard| *guard)
+  }
+
+  fn elapsed_ms(&self) -> u64 {
+    u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
   }
 
   fn record(&self, stage: StageHeartbeat) {

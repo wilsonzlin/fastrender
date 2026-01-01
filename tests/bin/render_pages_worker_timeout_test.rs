@@ -17,8 +17,8 @@ fn render_pages_worker_times_out_without_hanging() {
 
   let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
     .current_dir(temp.path())
-    .args(["--jobs", "1", "--timeout", "1", "--diagnostics-json"])
-    .env("FASTR_TEST_RENDER_DELAY_MS", "1500")
+    .args(["--jobs", "1", "--timeout", "2", "--diagnostics-json"])
+    .env("FASTR_TEST_RENDER_DELAY_MS", "3000")
     .env("FASTR_TEST_RENDER_DELAY_STEM", "slow")
     .status()
     .expect("run render_pages");

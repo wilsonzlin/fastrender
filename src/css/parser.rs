@@ -62,7 +62,7 @@ use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
 use lru::LruCache;
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHasher};
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use std::cell::RefCell;
@@ -140,6 +140,14 @@ fn css_deadline_allows_progress() -> bool {
 fn take_css_deadline_error() -> Option<RenderError> {
   CSS_PARSE_DEADLINE.with(|state| state.borrow_mut().error.take())
 }
+
+#[derive(Debug, Clone)]
+struct ParsedMediaQueryList {
+  queries: Arc<[MediaQuery]>,
+  matches: Option<bool>,
+}
+
+type ParsedMediaQueryListCache<'i> = FxHashMap<&'i str, ParsedMediaQueryList>;
 
 const PARSED_STYLESHEET_CACHE_CAPACITY: usize = 32;
 
@@ -292,6 +300,7 @@ fn parse_stylesheet_internal(
     ParseMode::Fast => None,
     ParseMode::CollectErrors => Some(Vec::new()),
   };
+  let mut parsed_media_query_list_cache = FxHashMap::default();
 
   let rules = {
     let mut collector = CssErrorCollector::new(errors.as_mut());
@@ -302,6 +311,7 @@ fn parse_stylesheet_internal(
       css,
       media_ctx,
       media_query_cache,
+      &mut parsed_media_query_list_cache,
     )
   };
 
@@ -486,6 +496,7 @@ fn parse_rule_list_collecting<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> Vec<CssRule> {
   let mut rules = Vec::new();
   let mut media_query_cache = media_query_cache;
@@ -506,6 +517,7 @@ fn parse_rule_list_collecting<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     ) {
       Ok(Some(rule)) => {
         rules.push(rule);
@@ -533,6 +545,7 @@ fn parse_rule_list_with_context<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> Vec<CssRule> {
   parse_rule_list_collecting(
     parser,
@@ -541,6 +554,7 @@ fn parse_rule_list_with_context<'i, 't>(
     css_source,
     media_ctx,
     media_query_cache,
+    parsed_media_query_list_cache,
   )
 }
 
@@ -571,6 +585,7 @@ fn parse_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   parser.skip_whitespace();
   let mut media_query_cache = media_query_cache;
@@ -600,6 +615,7 @@ fn parse_rule<'i, 't>(
         css_source,
         media_ctx,
         media_query_cache.as_deref_mut(),
+        parsed_media_query_list_cache,
       );
     }
     if kw.eq_ignore_ascii_case("container") {
@@ -610,6 +626,7 @@ fn parse_rule<'i, 't>(
         css_source,
         media_ctx,
         media_query_cache.as_deref_mut(),
+        parsed_media_query_list_cache,
       );
     }
     if kw.eq_ignore_ascii_case("scope") {
@@ -620,6 +637,7 @@ fn parse_rule<'i, 't>(
         css_source,
         media_ctx,
         media_query_cache.as_deref_mut(),
+        parsed_media_query_list_cache,
       );
     }
     if kw.eq_ignore_ascii_case("supports") {
@@ -630,6 +648,7 @@ fn parse_rule<'i, 't>(
         css_source,
         media_ctx,
         media_query_cache.as_deref_mut(),
+        parsed_media_query_list_cache,
       );
     }
     if kw.eq_ignore_ascii_case("layer") {
@@ -640,6 +659,7 @@ fn parse_rule<'i, 't>(
         css_source,
         media_ctx,
         media_query_cache.as_deref_mut(),
+        parsed_media_query_list_cache,
       );
     }
     if kw.eq_ignore_ascii_case("starting-style") {
@@ -650,6 +670,7 @@ fn parse_rule<'i, 't>(
         css_source,
         media_ctx,
         media_query_cache.as_deref_mut(),
+        parsed_media_query_list_cache,
       );
     }
     if kw.eq_ignore_ascii_case("page") {
@@ -683,6 +704,7 @@ fn parse_rule<'i, 't>(
     css_source,
     media_ctx,
     media_query_cache.as_deref_mut(),
+    parsed_media_query_list_cache,
   )
   .map(|opt| opt.map(CssRule::Style))
 }
@@ -873,6 +895,7 @@ fn parse_media_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let start = parser.position();
   parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
@@ -885,21 +908,41 @@ fn parse_media_rule<'i, 't>(
     Ok(())
   })?;
 
-  let prelude = parser.slice_from(start);
-  let queries = MediaQuery::parse_list(prelude).unwrap_or_default();
+  let prelude = parser.slice_from(start).trim();
+  let mut media_query_cache = media_query_cache;
+  let (queries, matches) = {
+    let entry = parsed_media_query_list_cache
+      .entry(prelude)
+      .or_insert_with(|| {
+        let parsed = MediaQuery::parse_list(prelude).unwrap_or_default();
+        ParsedMediaQueryList {
+          queries: parsed.into(),
+          matches: None,
+        }
+      });
+
+    let queries = Arc::clone(&entry.queries);
+    let matches = media_ctx.map(|media_ctx| {
+      if let Some(value) = entry.matches {
+        return value;
+      }
+
+      let value =
+        media_ctx.evaluate_list_with_cache(&entry.queries, media_query_cache.as_deref_mut());
+      entry.matches = Some(value);
+      value
+    });
+    (queries, matches)
+  };
 
   parser.expect_curly_bracket_block().map_err(|_| {
     parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
   })?;
 
-  let mut media_query_cache = media_query_cache;
-  if let Some(media_ctx) = media_ctx {
-    if !media_ctx.evaluate_list_with_cache(&queries, media_query_cache.as_deref_mut()) {
-      // Consume the block but avoid parsing nested rules that cannot match.
-      let _ =
-        parser.parse_nested_block(|_| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(()));
-      return Ok(None);
-    }
+  if matches == Some(false) {
+    // Consume the block but avoid parsing nested rules that cannot match.
+    let _ = parser.parse_nested_block(|_| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(()));
+    return Ok(None);
   }
 
   // Parse the nested rules from the block we already matched.
@@ -911,6 +954,7 @@ fn parse_media_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     ))
   })?;
 
@@ -928,6 +972,7 @@ fn parse_container_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let start = parser.position();
   parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
@@ -955,6 +1000,7 @@ fn parse_container_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     ))
   })?;
 
@@ -1221,6 +1267,7 @@ fn parse_starting_style_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   parser.expect_curly_bracket_block()?;
   let mut media_query_cache = media_query_cache;
@@ -1232,6 +1279,7 @@ fn parse_starting_style_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     ))
   })?;
 
@@ -1248,6 +1296,7 @@ fn parse_scope_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   fn parse_selector_list<'i, 't>(
     parser: &mut Parser<'i, 't>,
@@ -1319,6 +1368,7 @@ fn parse_scope_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     ))
   })?;
 
@@ -1337,6 +1387,7 @@ fn parse_supports_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let start = parser.position();
   parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
@@ -1370,6 +1421,7 @@ fn parse_supports_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     ))
   })?;
   Ok(Some(CssRule::Supports(SupportsRule { condition, rules })))
@@ -1776,6 +1828,7 @@ fn parse_layer_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut names: Vec<Vec<String>> = Vec::new();
   let mut current: Vec<String> = Vec::new();
@@ -1819,6 +1872,7 @@ fn parse_layer_rule<'i, 't>(
         css_source,
         media_ctx,
         media_query_cache.as_deref_mut(),
+        parsed_media_query_list_cache,
       ))
     })?
   } else {
@@ -3465,6 +3519,7 @@ fn parse_nested_at_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   parser.skip_whitespace();
   let kw = match parser.next() {
@@ -3480,6 +3535,7 @@ fn parse_nested_at_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache,
+      parsed_media_query_list_cache,
     );
   }
   if kw.eq_ignore_ascii_case("supports") {
@@ -3490,6 +3546,7 @@ fn parse_nested_at_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache,
+      parsed_media_query_list_cache,
     );
   }
   if kw.eq_ignore_ascii_case("container") {
@@ -3500,6 +3557,7 @@ fn parse_nested_at_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache,
+      parsed_media_query_list_cache,
     );
   }
   if kw.eq_ignore_ascii_case("layer") {
@@ -3510,6 +3568,7 @@ fn parse_nested_at_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache,
+      parsed_media_query_list_cache,
     );
   }
   if kw.eq_ignore_ascii_case("starting-style") {
@@ -3520,6 +3579,7 @@ fn parse_nested_at_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache,
+      parsed_media_query_list_cache,
     );
   }
   if kw.eq_ignore_ascii_case("nest") {
@@ -3530,6 +3590,7 @@ fn parse_nested_at_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache,
+      parsed_media_query_list_cache,
     );
   }
 
@@ -3544,6 +3605,7 @@ fn parse_style_block<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<(Vec<Declaration>, Vec<CssRule>), ParseError<'i, SelectorParseErrorKind<'i>>>
 {
   let mut declarations = Vec::new();
@@ -3571,6 +3633,7 @@ fn parse_style_block<'i, 't>(
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
+          parsed_media_query_list_cache,
         ) {
           Ok(Some(rule)) => nested_rules.push(rule),
           Ok(None) => {}
@@ -3602,6 +3665,7 @@ fn parse_style_block<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     ) {
       Ok(Some(rule)) => nested_rules.push(CssRule::Style(rule)),
       Ok(None) => {}
@@ -3623,6 +3687,7 @@ fn parse_style_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<StyleRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut media_query_cache = media_query_cache;
   let selectors = if let Some(parent) = parent_selectors {
@@ -3674,6 +3739,7 @@ fn parse_style_rule<'i, 't>(
             css_source,
             media_ctx,
             media_query_cache.as_deref_mut(),
+            parsed_media_query_list_cache,
           ))
         });
       }
@@ -3702,6 +3768,7 @@ fn parse_style_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     )
     .map_err(|_| {
       parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
@@ -3724,6 +3791,7 @@ fn parse_nest_rule<'i, 't>(
   css_source: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  parsed_media_query_list_cache: &mut ParsedMediaQueryListCache<'i>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut media_query_cache = media_query_cache;
   let start = parser.position();
@@ -3753,6 +3821,7 @@ fn parse_nest_rule<'i, 't>(
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
+          parsed_media_query_list_cache,
         ))
       });
     }
@@ -3771,6 +3840,7 @@ fn parse_nest_rule<'i, 't>(
       css_source,
       media_ctx,
       media_query_cache.as_deref_mut(),
+      parsed_media_query_list_cache,
     )
     .map_err(|_| {
       nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
@@ -4455,7 +4525,17 @@ mod tests {
     let mut parser = Parser::new(&mut input);
     assert!(!parser.is_exhausted(), "parser should see input tokens");
     let mut collector = CssErrorCollector::new(None);
-    let rule = parse_rule(&mut parser, &mut collector, None, css, None, None).expect("parse_rule");
+    let mut parsed_media_query_list_cache = FxHashMap::default();
+    let rule = parse_rule(
+      &mut parser,
+      &mut collector,
+      None,
+      css,
+      None,
+      None,
+      &mut parsed_media_query_list_cache,
+    )
+    .expect("parse_rule");
     assert!(
       matches!(rule, Some(CssRule::Style(_))),
       "expected a style rule, got {:?}",
@@ -4466,7 +4546,16 @@ mod tests {
     let mut parser = Parser::new(&mut input);
     let mut errors = Vec::new();
     let mut collector = CssErrorCollector::new(Some(&mut errors));
-    let rules = parse_rule_list_collecting(&mut parser, &mut collector, None, css, None, None);
+    let mut parsed_media_query_list_cache = FxHashMap::default();
+    let rules = parse_rule_list_collecting(
+      &mut parser,
+      &mut collector,
+      None,
+      css,
+      None,
+      None,
+      &mut parsed_media_query_list_cache,
+    );
     assert!(
       errors.is_empty(),
       "expected no parse errors, got {:?}",
@@ -4716,6 +4805,24 @@ mod tests {
     } else {
       panic!("Expected media rule");
     }
+  }
+
+  #[test]
+  fn media_query_preludes_share_parsed_query_lists() {
+    let css = r#"
+            @media (min-width: 768px) { .a { color: red; } }
+            @media   (min-width: 768px) { .b { color: blue; } }
+        "#;
+    let stylesheet = parse_stylesheet(css).unwrap();
+    assert_eq!(stylesheet.rules.len(), 2);
+    let (first, second) = match (&stylesheet.rules[0], &stylesheet.rules[1]) {
+      (CssRule::Media(first), CssRule::Media(second)) => (first, second),
+      other => panic!("expected two media rules, got {:?}", other),
+    };
+    assert!(
+      Arc::ptr_eq(&first.queries, &second.queries),
+      "expected media query list to be shared across identical preludes"
+    );
   }
 
   #[test]
