@@ -62,6 +62,7 @@ Unless noted otherwise, they are parsed once at process startup; invalid values 
 - `FASTR_HTTP_LOG_RETRIES=0|1` – log retry attempts + backoff sleeps to stderr (default off; printed by the fetcher itself, so it also applies to library users).
   - `pageset_progress`: captured in `target/pageset/logs/<stem>.stderr.log` (worker stdout/stderr).
   - `render_pages`: captured in `fetches/renders/<stem>.stderr.log` when running in the default worker mode (with `--in-process`, logs go to the terminal).
+  - Other CLIs (`fetch_pages`, `prefetch_assets`, `fetch_and_render`, `bundle_page`): printed directly to the terminal.
 
 Retry/backoff knobs map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs):
 
