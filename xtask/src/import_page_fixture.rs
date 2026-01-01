@@ -210,11 +210,25 @@ impl AssetCatalog {
     self
       .url_to_filename
       .insert(url.to_string(), filename.clone());
+    let decoded_url = decode_html_entities_if_needed(url);
+    if decoded_url.as_ref() != url {
+      self
+        .url_to_filename
+        .entry(decoded_url.to_string())
+        .or_insert_with(|| filename.clone());
+    }
     if let Some(final_url) = &info.final_url {
       self
         .url_to_filename
         .entry(final_url.clone())
         .or_insert_with(|| filename.clone());
+      let decoded_final = decode_html_entities_if_needed(final_url);
+      if decoded_final.as_ref() != final_url {
+        self
+          .url_to_filename
+          .entry(decoded_final.to_string())
+          .or_insert_with(|| filename.clone());
+      }
     }
     Ok(())
   }

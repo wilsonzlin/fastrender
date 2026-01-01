@@ -1,0 +1,73 @@
+/*
+ * The Typekit service used to deliver this font or fonts for use on websites
+ * is provided by Adobe and is subject to these Terms of Use
+ * http://www.adobe.com/products/eulas/tou_typekit. For font license
+ * information, see the list below.
+ *
+ * indivisible:
+ *   - http://typekit.com/eulas/00000000000000007735eebb
+ *   - http://typekit.com/eulas/00000000000000007735eebd
+ *   - http://typekit.com/eulas/00000000000000007735eeb6
+ *   - http://typekit.com/eulas/00000000000000007735eec2
+ * minion-3:
+ *   - http://typekit.com/eulas/000000000000000077359486
+ *   - http://typekit.com/eulas/00000000000000007735948a
+ *   - http://typekit.com/eulas/0000000000000000773594a0
+ *   - http://typekit.com/eulas/00000000000000007735949e
+ *
+ * © 2009-2025 Adobe Systems Incorporated. All Rights Reserved.
+ */
+/*{"last_published":"2024-11-15 21:55:34 UTC"}*/
+
+@import url("1c0ff118a4290c99f39c90abb38703a8.css");
+
+@font-face {
+font-family:"minion-3";
+src:url("5cfe97de15e045e09f669dde0e2a3367.bin") format("woff2"),url("476db41fe511d0a0e25637ab227dbb0d.bin") format("woff"),url("2ec1e94731bb8ce4fcf5b686c0a8abce.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"minion-3";
+src:url("6f7e538387cb1d360f46448ebd1570ff.bin") format("woff2"),url("98e8e91257f6fe701c22e9c4265574ea.bin") format("woff"),url("adedbafb438fde5bb26873a22228f845.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"minion-3";
+src:url("98653aa67112b19fb53b55ccef08b248.bin") format("woff2"),url("fbac6f0da9018bac658cdce8e71fd638.bin") format("woff"),url("6fdb7301c1a349afe1b28d9566a9759e.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:600;font-stretch:normal;
+}
+
+@font-face {
+font-family:"minion-3";
+src:url("47bf0af674c791ecaecbdc019bb48f10.bin") format("woff2"),url("3d125512f3058c8f4e99991a5a1b1a2c.bin") format("woff"),url("19633d04d17d0c7e22ccab9d9dea6ad6.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:600;font-stretch:normal;
+}
+
+@font-face {
+font-family:"indivisible";
+src:url("7bc36f3178432653efaf989001b43ac8.bin") format("woff2"),url("fb2b6ad6cdf026f85134d68e17a66894.bin") format("woff"),url("f949eb201c1855591d757dd14f5c27b1.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"indivisible";
+src:url("a0bb9061beee1754cbd9134247d58878.bin") format("woff2"),url("ffb0bcb311df83e8980845304827c6d4.bin") format("woff"),url("06e76b9647cf07343e8a97d5f4b811c0.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"indivisible";
+src:url("45608565fdac43cf1def13d7e2f351b3.bin") format("woff2"),url("23e845f5dee346c05e928a47dcd99886.bin") format("woff"),url("df30469322f1e2323b5e4434b8c2d0a8.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:600;font-stretch:normal;
+}
+
+@font-face {
+font-family:"indivisible";
+src:url("f0ded1d00e3fd02b57e29c71a443e24d.bin") format("woff2"),url("b7f66bf5018d52776ba78d13f6277dd5.bin") format("woff"),url("980cac06d6e611c437e03e834b8f4aa0.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:600;font-stretch:normal;
+}
+
+.tk-minion-3 { font-family: "minion-3",serif; }
+.tk-indivisible { font-family: "indivisible",sans-serif; }

@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "original_url": "https://fixture.example/",
+  "document": {
+    "path": "document.html",
+    "content_type": "text/html; charset=utf-8",
+    "final_url": "https://fixture.example/",
+    "status": 200,
+    "etag": null,
+    "last_modified": null
+  },
+  "render": {
+    "viewport": [
+      800,
+      600
+    ],
+    "device_pixel_ratio": 1.0,
+    "scroll_x": 0.0,
+    "scroll_y": 0.0,
+    "full_page": false,
+    "same_origin_subresources": false,
+    "allowed_subresource_origins": []
+  },
+  "resources": {
+    "https://img.test/a.png?x=1&amp;y=2": {
+      "path": "resources/00000_a.png",
+      "content_type": "image/png",
+      "status": 200,
+      "final_url": "https://img.test/a.png?x=1&amp;y=2",
+      "etag": null,
+      "last_modified": null
+    }
+  }
+}

@@ -1,0 +1,348 @@
+
+    <!doctype html>
+    <html>
+    <head>
+      <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+      <title>Page Not Found</title>
+      <meta name="generator" content="fastly">
+      <meta name="copyright" content="Copyright BuzzFeed, Inc. All rights reserved.">
+      <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no">
+      <meta property="description" content="Sorry, we couldn’t find the page you requested.">
+      <style type="text/css">
+        html {
+            font-family: sans-serif;
+            -ms-text-size-adjust: 100%;
+            -webkit-text-size-adjust: 100%;
+        }
+        body {
+            margin: 0;
+        }
+        header {
+            display: block;
+        }
+        a {
+            background-color: transparent;
+        }
+        a:active,
+        a:hover {
+            outline: 0;
+        }
+        h1 {
+            font-size: 2em;
+            margin: 0.67em 0;
+        }
+        img {
+            border: 0;
+        }
+        svg:not(:root) {
+            overflow: hidden;
+        }
+        @font-face {
+            font-family: "Proxima Nova";
+            src: url("https://webappstatic.buzzfeed.com/static/fonts/ProximaNova-Regular-webfont.woff2") format("woff2"), url("https://webappstatic.buzzfeed.com/static/fonts/ProximaNova-Regular-webfont.woff") format("woff");
+            font-weight: normal;
+            font-style: normal;
+            font-stretch: normal;
+        }
+        @font-face {
+            font-family: "Proxima Nova";
+            src: url("https://webappstatic.buzzfeed.com/static/fonts/ProximaNova-Semibold-webfont.woff2") format("woff2"), url("https://webappstatic.buzzfeed.com/static/fonts/ProximaNova-Semibold-webfont.woff") format("woff");
+            font-weight: 600;
+            font-style: normal;
+            font-stretch: normal;
+        }
+        @font-face {
+            font-family: "Proxima Nova";
+            src: url("https://webappstatic.buzzfeed.com/static/fonts/ProximaNova-Bold-webfont.woff2") format("woff2"), url("https://webappstatic.buzzfeed.com/static/fonts/ProximaNova-Bold-webfont.woff") format("woff");
+            font-weight: 700;
+            font-style: normal;
+            font-stretch: normal;
+        }
+        html,
+        body,
+        div,
+        h1,
+        h2,
+        p,
+        a,
+        img,
+        header {
+            margin: 0;
+            padding: 0;
+            border: 0;
+            font-size: 100%;
+            font: inherit;
+            vertical-align: baseline;
+        }
+        body {
+            color: #333;
+        }
+        a {
+            color: #07e;
+        }
+        html {
+            box-sizing: border-box;
+        }
+        *,
+        *:before,
+        *:after {
+            -moz-box-sizing: inherit;
+            box-sizing: inherit;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+        html {
+            font-size: 16px;
+            font-family: "Proxima Nova", Helvetica, Arial, sans-serif;
+        }
+        body {
+            font-size: 1rem;
+            line-height: 1.5rem;
+        }
+        h1 {
+            font-size: 2.25rem;
+            line-height: 2.5rem;
+        }
+        h2 {
+            font-size: 1.375rem;
+            line-height: 1.625rem;
+        }
+        a {
+            text-decoration: none;
+            color: #07e;
+        }
+        a:hover {
+            color: #004488;
+            transition: color .15s ease 0s;
+        }
+        .text-red {
+            color: #e32 !important;
+        }
+        .button {
+            cursor: pointer !important;
+            padding: 0 !important;
+            background-color: transparent !important;
+            background-image: none !important;
+            border: 0 !important;
+            white-space: nowrap !important;
+            -webkit-appearance: none;
+            appearance: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            -o-user-select: none;
+            user-select: none;
+            font-family: inherit !important;
+            padding: .5rem .875rem !important;
+            font-size: 1rem !important;
+            line-height: 1.5rem !important;
+            border-radius: 3px !important;
+            text-decoration: none !important;
+            cursor: pointer !important;
+            display: inline-block !important;
+            border: 1px solid transparent !important;
+            text-align: center !important;
+        }
+        .button,
+        .button:active:focus {
+            outline: 0 !important;
+        }
+        .button:hover {
+            transition: background-color .15s ease 0s !important;
+        }
+        .button--primary {
+            background-color: #07e !important;
+            color: #fff !important;
+        }
+        .button--primary:not(.button--disabled):hover {
+            background-color: #004488 !important;
+            color: #fff !important;
+        }
+        .button--primary:not(.button--disabled):active {
+            background-color: #001e3c !important;
+        }
+        .col {
+            float: left !important;
+        }
+        .xs-col-12 {
+            width: 100% !important;
+        }
+        @media (min-width: 40rem) {
+            .sm-col-6 {
+                width: 50% !important;
+            }
+        }
+        @media (min-width: 52rem) {
+            .md-col-5 {
+                width: 41.6666666667% !important;
+            }
+            .md-col-7 {
+                width: 58.3333333333% !important;
+            }
+        }
+        @media (min-width: 64rem) {
+            .lg-col-10 {
+                width: 83.3333333333% !important;
+            }
+            .lg-offset-1 {
+                margin-left: 8.3333333333% !important;
+            }
+        }
+        .bold {
+            font-weight: 600 !important;
+        }
+        .xs-text-left {
+            text-align: left !important;
+        }
+        .xs-text-center {
+            text-align: center !important;
+        }
+        @media (min-width: 40rem) {
+            .sm-text-left {
+                text-align: left !important;
+            }
+        }
+        .xs-hide {
+            display: none !important;
+        }
+        .xs-block {
+            display: block !important;
+        }
+        @media (min-width: 40rem) {
+            .sm-hide {
+                display: none !important;
+            }
+            .sm-block {
+                display: block !important;
+            }
+            .sm-inline-block {
+                display: inline-block !important;
+            }
+        }
+        .xs-mb1 {
+            margin-bottom: 0.5rem !important;
+        }
+        .xs-mb2 {
+            margin-bottom: 1rem !important;
+        }
+        .xs-mb3 {
+            margin-bottom: 1.5rem !important;
+        }
+        .xs-mb4 {
+            margin-bottom: 2rem !important;
+        }
+        @media (min-width: 52rem) {
+            .md-mt5 {
+                margin-top: 3rem !important;
+            }
+        }
+        .xs-p3 {
+            padding: 1.5rem !important;
+        }
+        .xs-px4 {
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+        }
+        .xs-px5 {
+            padding-left: 3rem !important;
+            padding-right: 3rem !important;
+        }
+        @media (min-width: 40rem) {
+            .sm-px2 {
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
+            .sm-p4 {
+                padding: 2rem !important;
+            }
+        }
+        @media (min-width: 52rem) {
+            .md-px2 {
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
+            .md-pb4 {
+                padding-bottom: 2rem !important;
+            }
+            .md-pl4 {
+                padding-left: 2rem !important;
+            }
+        }
+        .clearfix:before,
+        .clearfix:after {
+            content: " " !important;
+            display: table !important;
+        }
+        .clearfix:after {
+            clear: both !important;
+        }
+        .page-header__logo-bf svg {
+            height: 20px;
+            width: 112px;
+            display: block;
+        }
+        .header-text {
+            font-size: 3.5rem;
+            line-height: 3.6rem;
+            font-weight: 700;
+        }
+        .subhead-text {
+            font-size: 1.2rem;
+        }
+        .body-text {
+            font-size: 1rem;
+            line-height: 1.25rem;
+        }
+        @media (min-width: 52rem) {
+            .header-text {
+                font-size: 4rem;
+                line-height: 4.15rem;
+            }
+            .subhead-text {
+                font-size: 1.375rem;
+                line-height: 1.6rem;
+            }
+            .body-text {
+                font-size: 1.125rem;
+                line-height: 1.5rem;
+            }
+        }
+      </style>
+    </head>
+      <body>
+        <header class="page-header clearfix">
+          <div class="col xs-col-12">
+            <a href="/?utm_source=dynamic&utm_campaign=404-errorpage" title="Return to BuzzFeed's Homepage" class="page-header__logo-bf xs-block xs-p3">
+              <svg viewBox="0 0 315.7 53.2" fill="#e32" role="img" aria-labelledby="bf-logo">
+                  <title id="bf-logo">BuzzFeed logo</title>
+                  <path d="M31.8 27.3c2.5.2 4.6 1.2 6.4 3.1 1.8 1.9 2.7 4.5 2.7 7.8 0 4-1.3 7.3-4 9.7-2.7 2.4-6.5 3.6-11.6 3.6H.7V4.1h24.5c4.3 0 7.8 1.2 10.4 3.5 2.6 2.4 3.9 5.5 3.9 9.4 0 3-.8 5.3-2.5 7.1s-3.4 2.7-5.3 2.9l.1.3zm-19.4-3.6h10.2c1.7 0 3.1-.5 4.2-1.5 1-1 1.6-2.2 1.6-3.9 0-1.5-.5-2.6-1.5-3.5s-2.3-1.3-3.8-1.3H12.4v10.2zm10.8 18.4c1.8 0 3.3-.5 4.3-1.4 1-.9 1.5-2.2 1.5-3.9 0-1.6-.5-2.8-1.6-3.7-1-.9-2.4-1.4-4-1.4h-11v10.4h10.8zM81.4 51.5H70.1v-3.4c-2.8 3-6.5 4.5-10.9 4.5-4.2 0-7.5-1.4-10-4.1-2.5-2.7-3.8-6.3-3.8-10.7V16h11.2v19.4c0 2.1.6 3.8 1.7 5.1 1.1 1.3 2.6 1.9 4.4 1.9 2.3 0 4.1-.8 5.4-2.4 1.3-1.6 1.9-4.1 1.9-7.5V16h11.3l.1 35.5zM116.3 51.5h-30v-2.1L100.4 25H86.7v-9h29.4v2.1L102 42.5h14.2v9zM151.1 51.5h-29.9v-2.1l14-24.4h-13.7v-9h29.4v2.1l-14.1 24.4H151l.1 9zM167.9 24.4h20.5v10.2h-20.5v17h-11.7V4.1h34v10.2h-22.3v10.1zM271.3 36.7h-26c.7 4.4 4 6.9 8.9 6.9 3.9 0 7.8-1.5 10.7-3.8l4.3 7.5c-4 3.4-9.1 5.3-15 5.3-11.9 0-20-7.2-20-18.8 0-5.5 1.8-10 5.4-13.5 3.6-3.5 8.1-5.3 13.4-5.3 5.1 0 9.4 1.7 12.9 5.2s5.3 8 5.4 13.7v2.8zm-22.9-11.1c-1.4 1-2.4 2.4-2.9 4.1h14.6c-.5-1.8-1.4-3.2-2.7-4.2-1.3-.9-2.8-1.4-4.4-1.4-1.7 0-3.2.5-4.6 1.5zM229.9 36.7h-26c.7 4.4 4 6.9 8.9 6.9 3.9 0 7.8-1.5 10.7-3.8l4.3 7.5c-4 3.4-9.1 5.3-15 5.3-11.9 0-20-7.2-20-18.8 0-5.5 1.8-10 5.4-13.5 3.6-3.5 8.1-5.3 13.4-5.3 5.1 0 9.4 1.7 12.9 5.2s5.3 8 5.4 13.7v2.8zM207 25.6c-1.4 1-2.4 2.4-2.9 4.1h14.6c-.5-1.8-1.4-3.2-2.7-4.2-1.3-.9-2.8-1.4-4.4-1.4-1.7 0-3.2.5-4.6 1.5zM315 51.5h-11.3v-2.8c-2.9 2.6-6.5 3.9-11 3.9-4.8 0-8.9-1.8-12.3-5.3-3.4-3.5-5.1-8-5.1-13.5s1.7-10 5.1-13.5 7.5-5.3 12.3-5.3c4.5 0 8.2 1.3 11 3.9V.6H315v50.9zm-13.8-11.1c1.7-1.7 2.6-3.9 2.6-6.6 0-2.6-.9-4.8-2.6-6.6-1.7-1.7-3.8-2.6-6.1-2.6-2.5 0-4.5.9-6.1 2.6s-2.4 3.9-2.4 6.6c0 2.7.8 5 2.4 6.7s3.6 2.5 6.1 2.5c2.3 0 4.3-.9 6.1-2.6z" />
+              </svg>
+            </a>
+          </div>
+        </header>
+        <div class="clearfix lg-col-10 lg-offset-1 xs-px4 sm-p4">
+          <div class="col xs-col-12 sm-col-6 md-col-5 xs-px4 xs-mb2 xs-text-center">
+            <img src="https://img.buzzfeed.com/buzzfeed-static/static/images/error_pages/cat_standing_animated.gif" class="xs-hide sm-block xs-px5 sm-px2 md-px2 md-pb4">
+            <img src="https://img.buzzfeed.com/buzzfeed-static/static/images/error_pages/cat_standing_static.png" class="xs-block sm-hide xs-px5 sm-px2 md-px2 md-pb4">
+          </div>
+          <div class="xs-text-left col xs-col-12 sm-col-6 md-col-7 md-pl4 md-mt5">
+                <h1 class="header-text xs-mb1 text-red xs-text-center sm-text-left">Oops.</h1>
+                <h2 class="subhead-text xs-mb2 bold text-red xs-text-center sm-text-left">We can't find the page you're looking for.</h2>
+                <p class="body-text xs-mb3">It may have expired, or there could be a typo. Maybe you can find what you need from our homepage.</p>
+                <a href="/?utm_source=dynamic&utm_campaign=404-errorpage" class="button button--primary xs-mb4 xs-block sm-inline-block">Return to BuzzFeed.com</a>
+          </div>
+        </div>
+        <script>
+          (function() {
+            var img = new Image();
+            var host = window.location.origin === 'https://stage.buzzfeed.com' ? 'https://pixiedust-stage.buzzfeed.com' : 'https://pixiedust.buzzfeed.com';
+            var base = host + "/v1.gif?type=page_error&page=404&source=web&destination=buzzfeed";
+            var url = encodeURIComponent(window.location.href);
+            img.src = base + "&event_uri=" + url;
+          }());
+        </script>
+      </body>
+    </html>
+  

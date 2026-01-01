@@ -1,0 +1,2 @@
+.homepage{display:grid;grid-template-columns:var(--layout-no-sidebar-extended)}.homepage>*{grid-column:content}.homepage mdn-placement-hp-main{grid-column:extended-full}.homepage--dark{color:var(--color-text-primary);--csstools-color-scheme--light: ;background-color:var(--color-background-primary);color-scheme:dark}
+/*# sourceMappingURL=styles-homepage.0980eec27925cc11.css.map*/

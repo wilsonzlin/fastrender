@@ -1,0 +1,2 @@
+.homepage-header{column-gap:1rem;display:grid;grid-column-end:extended-full-end;grid-template-areas:"copy mandala" "search mandala"}.homepage-header__copy{grid-area:copy;padding-top:1rem}.homepage-header__search{grid-area:search;padding-bottom:1rem}.homepage-header__mandala{grid-area:mandala;max-height:20rem;overflow:hidden}.homepage-header__mandala .mandala svg{--height:35rem;display:block;height:var(--height);margin-top:calc(var(--height)*-1/4)}
+/*# sourceMappingURL=styles-homepage-header.da8a69fafe1cfb00.css.map*/

@@ -1,0 +1,16 @@
+{
+  "name": "BuzzFeed",
+  "short_name": "BuzzFeed",
+  "theme_color": "#ee3322",
+  "icons": [{
+    "src": "/static-assets/img/buzzfeed_webapp_logo.0ea3c59fd2aeb164cfdfe77e74ab3aa2.png",
+    "sizes": "144x144",
+    "type": "image/png"
+  }],
+  "related_applications": [
+    {
+      "platform": "play",
+      "id": "com.buzzfeed.android"
+    }
+  ]
+}

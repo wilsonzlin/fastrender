@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<title>Wikipedia</title>
+<meta name="description" content="Wikipedia is a free online encyclopedia, created and edited by volunteers around the world and hosted by the Wikimedia Foundation.">
+<script>
+document.documentElement.className = document.documentElement.className.replace( /(^|\s)no-js(\s|$)/, "$1js-enabled$2" );
+</script>
+<meta name="viewport" content="initial-scale=1,user-scalable=yes">
+<link rel="apple-touch-icon" href="/static/apple-touch/wikipedia.png">
+<link rel="shortcut icon" href="/static/favicon/wikipedia.ico">
+<link rel="license" href="//creativecommons.org/licenses/by-sa/4.0/">
+<style>
+.sprite{background-image:linear-gradient(transparent,transparent),url(assets/7990aaba48727a6b458090128a1ccc1a.svg);background-repeat:no-repeat;display:inline-block;vertical-align:middle}.svg-Commons-logo_sister{background-position:0 0;width:47px;height:47px}.svg-MediaWiki-logo_sister{background-position:0 -47px;width:42px;height:42px}.svg-Meta-Wiki-logo_sister{background-position:0 -89px;width:37px;height:37px}.svg-Wikibooks-logo_sister{background-position:0 -126px;width:37px;height:37px}.svg-Wikidata-logo_sister{background-position:0 -163px;width:49px;height:49px}.svg-Wikifunctions-logo_sister{background-position:0 -212px;width:50px;height:50px}.svg-Wikimedia-logo_black{background-position:0 -262px;width:42px;height:42px}.svg-Wikipedia_wordmark{background-position:0 -304px;width:176px;height:32px}.svg-Wikiquote-logo_sister{background-position:0 -336px;width:42px;height:42px}.svg-Wikisource-logo_sister{background-position:0 -378px;width:39px;height:39px}.svg-Wikispecies-logo_sister{background-position:0 -417px;width:42px;height:42px}.svg-Wikiversity-logo_sister{background-position:0 -459px;width:43px;height:37px}.svg-Wikivoyage-logo_sister{background-position:0 -496px;width:36px;height:36px}.svg-Wiktionary-logo_sister{background-position:0 -532px;width:37px;height:37px}.svg-arrow-down{background-position:0 -569px;width:12px;height:8px}.svg-arrow-down-blue{background-position:0 -577px;width:14px;height:14px}.svg-badge_google_play_store{background-position:0 -591px;width:124px;height:38px}.svg-badge_ios_app_store{background-position:0 -629px;width:110px;height:38px}.svg-language-icon{background-position:0 -667px;width:22px;height:22px}.svg-noimage{background-position:0 -689px;width:58px;height:58px}.svg-search-icon{background-position:0 -747px;width:22px;height:22px}.svg-wikipedia_app_tile{background-position:0 -769px;width:42px;height:42px}
+</style>
+<style>
+:root{--color-base:#202122;--color-base-fixed:#202122;--color-base--hover:#404244;--color-emphasized:#101418;--color-subtle:#54595d;--color-placeholder:#72777d;--color-disabled:#a2a9b1;--color-disabled-emphasized:#a2a9b1;--color-inverted:#fff;--color-inverted-fixed:#fff;--color-progressive:#36c;--color-progressive--hover:#3056a9;--color-progressive--active:#233566;--color-progressive--focus:#36c;--color-destructive:#bf3c2c;--color-destructive--hover:#9f3526;--color-destructive--active:#612419;--color-destructive--focus:#36c;--color-visited:#6a60b0;--color-visited--hover:#534fa3;--color-visited--active:#353262;--color-destructive--visited:#9f5555;--color-destructive--visited--hover:#854848;--color-destructive--visited--active:#512e2e;--color-error:#bf3c2c;--color-error--hover:#9f3526;--color-error--active:#612419;--color-warning:#886425;--color-success:#177860;--color-notice:#404244;--color-icon-error:#f54739;--color-icon-warning:#ab7f2a;--color-icon-success:#099979;--color-icon-notice:#72777d;--color-content-added:#006400;--color-content-removed:#8b0000;--opacity-base:1;--opacity-medium:0.65;--opacity-low:0.3;--opacity-transparent:0;--filter-invert-icon:0;--filter-invert-primary-button-icon:1;--background-position-base:center;--background-size-search-figure:cover;--z-index-bottom:-100;--z-index-base:0;--z-index-above-content:1;--z-index-toolbar:2;--z-index-dropdown:50;--z-index-sticky:100;--z-index-fixed:200;--z-index-off-canvas-backdrop:300;--z-index-off-canvas:350;--z-index-overlay-backdrop:400;--z-index-overlay:450;--z-index-popover:700;--z-index-tooltip:800;--z-index-toast-notification:900;--z-index-top:9999;--z-index-stacking-0:0;--z-index-stacking-1:1;--z-index-stacking-2:2;--z-index-stacking-3:3;--box-sizing-base:border-box;--size-0:0;--size-6:0.0625rem;--size-12:0.125rem;--size-25:0.25rem;--size-50:0.5rem;--size-75:0.75rem;--size-100:1rem;--size-125:1.25rem;--size-150:1.5rem;--size-200:2rem;--size-250:2.5rem;--size-275:2.75rem;--size-300:3rem;--size-400:4rem;--size-800:8rem;--size-1200:12rem;--size-1600:16rem;--size-2400:24rem;--size-2800:28rem;--size-3200:32rem;--size-4000:40rem;--size-5600:56rem;--size-viewport-width-full:100vw;--size-viewport-height-full:100vh;--size-absolute-1:1px;--size-absolute-9999:9999px;--size-content-min:min-content;--size-content-fit:fit-content;--size-content-max:max-content;--size-third:33.33%;--size-half:50%;--size-full:100%;--size-double:200%;--size-search-figure:2.5rem;--max-width-base:none;--max-width-breakpoint-mobile:calc(640px - var(--size-absolute-1));--max-width-breakpoint-tablet:calc(1120px - var(--size-absolute-1));--max-width-breakpoint-desktop:calc(1680px - var(--size-absolute-1));--max-width-button:28rem;--border-style-base:solid;--border-style-dashed:dashed;--box-shadow-inset-small:inset 0 0 0 1px;--box-shadow-inset-medium:inset 0 0 0 2px;--box-shadow-inset-medium-vertical:inset 0 -2px 0 0;--box-shadow-outset-small:0 0 0 1px;--box-shadow-outset-small-top:0 -1px 0 0;--box-shadow-outset-small-bottom:0 1px 0 0;--box-shadow-outset-small-start:-1px 0 0 0;--box-shadow-outset-medium-below:0 4px 4px 0;--box-shadow-outset-medium-around:0 0 8px 0;--box-shadow-outset-large-below:0 4px 8px 0;--box-shadow-outset-large-around:0 0 16px 0;--box-shadow-color-base:#a2a9b1;--box-shadow-color-progressive--active:#233566;--box-shadow-color-progressive--focus:#36c;--box-shadow-color-progressive-selected:#36c;--box-shadow-color-progressive-selected--hover:#3056a9;--box-shadow-color-progressive-selected--active:#233566;--box-shadow-color-destructive--focus:#36c;--box-shadow-color-inverted:#fff;--box-shadow-color-alpha-base:rgba(0,0,0,0.06);--box-shadow-color-transparent:transparent;--font-family-base:sans-serif;--font-family-system-sans:-apple-system,"BlinkMacSystemFont","Segoe UI","Roboto","Inter","Helvetica","Arial",sans-serif;--font-family-sans--fallback:sans-serif;--font-family-serif:"Linux Libertine","Georgia","Times","Source Serif 4",serif;--font-family-serif--fallback:serif;--font-family-monospace:"Menlo","Consolas","Liberation Mono","Fira Code","Courier New",monospace;--font-family-monospace--fallback:monospace,monospace;--font-family-heading-main:"Linux Libertine","Georgia","Times","Source Serif 4",serif;--font-size-x-small:0.75rem;--font-size-small:0.875rem;--font-size-medium:1rem;--font-size-large:1.125rem;--font-size-x-large:1.25rem;--font-size-xx-large:1.5rem;--font-size-xxx-large:1.75rem;--font-weight-hairline:100;--font-weight-light:300;--font-weight-normal:400;--font-weight-semi-bold:600;--font-weight-bold:700;--line-height-x-small:1.25rem;--line-height-small:1.375rem;--line-height-medium:1.625rem;--line-height-large:1.75rem;--line-height-x-large:1.875rem;--line-height-xx-large:2.125rem;--line-height-xxx-large:2.375rem;--line-height-content:1.625;--text-decoration-none:none;--text-decoration-line-through:line-through;--text-decoration-underline:underline;--text-overflow-clip:clip;--text-overflow-ellipsis:ellipsis;--tab-size-base:4;--transform-checkbox-tick--checked:rotate(45deg);--transform-progress-indicator-spinner-start:rotate(-45deg);--transform-progress-indicator-spinner-end:rotate(315deg);--transition-duration-base:100ms;--transition-duration-medium:250ms;--transition-property-base:background-color,color,border-color,box-shadow;--transition-property-fade:opacity;--transition-property-icon:color;--transition-property-icon-css-only:background-color;--transition-property-toggle-switch-grip:background-color,border-color,transform;--transition-timing-function-system:ease;--transition-timing-function-user:ease-out;--animation-delay-none:0ms;--animation-delay-medium:-160ms;--animation-delay-slow:-320ms;--animation-duration-fast:1000ms;--animation-duration-medium:1600ms;--animation-duration-slow:2000ms;--animation-timing-function-base:linear;--animation-timing-function-bouncing:ease-in-out;--animation-iteration-count-base:infinite;--cursor-base:default;--cursor-base--disabled:default;--cursor-base--hover:pointer;--cursor-grab:grab;--cursor-grabbing:grabbing;--cursor-help:help;--cursor-move:move;--cursor-not-allowed:not-allowed;--cursor-resize-nesw:nesw-resize;--cursor-resize-nwse:nwse-resize;--cursor-text:text;--cursor-zoom-in:zoom-in;--cursor-zoom-out:zoom-out;--mix-blend-mode-base:normal;--mix-blend-mode-blend:multiply;--background-color-base:#fff;--background-color-base-fixed:#fff;--background-color-neutral:#eaecf0;--background-color-neutral-subtle:#f8f9fa;--background-color-interactive:#eaecf0;--background-color-interactive--hover:#dadde3;--background-color-interactive--active:#c8ccd1;--background-color-interactive-subtle:#f8f9fa;--background-color-interactive-subtle--hover:#eaecf0;--background-color-interactive-subtle--active:#dadde3;--background-color-disabled:#dadde3;--background-color-disabled-subtle:#eaecf0;--background-color-inverted:#101418;--background-color-progressive:#36c;--background-color-progressive--hover:#3056a9;--background-color-progressive--active:#233566;--background-color-progressive--focus:#36c;--background-color-progressive-subtle:#f1f4fd;--background-color-progressive-subtle--hover:#d9e2ff;--background-color-progressive-subtle--active:#b6d4fb;--background-color-destructive:#bf3c2c;--background-color-destructive--hover:#9f3526;--background-color-destructive--active:#612419;--background-color-destructive--focus:#36c;--background-color-destructive-subtle:#ffe9e5;--background-color-destructive-subtle--hover:#ffdad3;--background-color-destructive-subtle--active:#ffc8bd;--background-color-error:#f54739;--background-color-error--hover:#d74032;--background-color-error--active:#bf3c2c;--background-color-error-subtle:#ffe9e5;--background-color-error-subtle--hover:#ffdad3;--background-color-error-subtle--active:#ffc8bd;--background-color-warning-subtle:#fdf2d5;--background-color-success-subtle:#dff2eb;--background-color-notice-subtle:#eaecf0;--background-color-content-added:#a3d3ff;--background-color-content-removed:#ffe49c;--background-color-transparent:transparent;--background-color-backdrop-light:hsla(0,0%,100%,0.65);--background-color-backdrop-dark:rgba(0,0,0,0.65);--background-color-button-quiet--hover:rgba(0,24,73,0.027);--background-color-button-quiet--active:rgba(0,24,73,0.082);--background-color-input-binary--checked:#36c;--background-color-tab-list-item-framed--hover:hsla(0,0%,100%,0.3);--background-color-tab-list-item-framed--active:hsla(0,0%,100%,0.65);--opacity-icon-base:0.87;--opacity-icon-base--hover:0.74;--opacity-icon-base--selected:1;--opacity-icon-base--disabled:0.51;--opacity-icon-placeholder:0.51;--opacity-icon-subtle:0.67;--min-size-interactive-pointer:32px;--min-size-interactive-touch:44px;--min-size-search-figure:40px;--min-size-icon-x-small:10px;--min-size-icon-small:14px;--min-size-icon-medium:18px;--min-size-input-binary:20px;--min-size-input-chip-clear-button:20px;--min-size-toggle-switch-grip:18px;--min-width-medium:256px;--min-width-breakpoint-mobile:320px;--min-width-breakpoint-tablet:640px;--min-width-breakpoint-desktop:1120px;--min-width-breakpoint-desktop-wide:1680px;--min-width-toggle-switch:42px;--spacing-0:0;--spacing-6:1px;--spacing-12:2px;--spacing-25:4px;--spacing-30:5px;--spacing-35:6px;--spacing-50:8px;--spacing-65:10px;--spacing-75:12px;--spacing-100:16px;--spacing-125:20px;--spacing-150:24px;--spacing-200:32px;--spacing-250:40px;--spacing-300:48px;--spacing-400:64px;--spacing-half:50%;--spacing-full:100%;--border-width-base:1px;--border-width-thick:2px;--border-width-input-radio--checked:6px;--border-color-base:#a2a9b1;--border-color-emphasized:#202122;--border-color-subtle:#c8ccd1;--border-color-muted:#dadde3;--border-color-interactive:#72777d;--border-color-interactive--hover:#27292d;--border-color-interactive--active:#202122;--border-color-disabled:#c8ccd1;--border-color-inverted:#fff;--border-color-inverted-fixed:#fff;--border-color-progressive:#6485d1;--border-color-progressive--hover:#3056a9;--border-color-progressive--active:#233566;--border-color-progressive--focus:#36c;--border-color-destructive:#f54739;--border-color-destructive--hover:#9f3526;--border-color-destructive--active:#612419;--border-color-destructive--focus:#36c;--border-color-error:#f54739;--border-color-error--hover:#9f3526;--border-color-error--active:#612419;--border-color-warning:#ab7f2a;--border-color-warning--hover:#735421;--border-color-warning--active:#453217;--border-color-success:#099979;--border-color-notice:#72777d;--border-color-content-added:#a3d3ff;--border-color-content-removed:#ffe49c;--border-color-transparent:transparent;--border-color-divider:#a2a9b1;--border-radius-base:2px;--border-radius-sharp:0;--border-radius-pill:9999px;--border-radius-circle:50%;--outline-color-progressive--focus:#36c;--min-height-text-area:64px;--min-height-table-header:40px;--min-height-table-footer:40px;--min-height-toggle-switch:28px;--max-height-chip:1.375rem;--color-link:var(--color-progressive);--color-link--hover:var(--color-progressive--hover);--color-link--active:var(--color-progressive--active);--color-link--focus:var(--color-progressive--focus);--color-link--visited:var(--color-visited);--color-link--visited--hover:var(--color-visited--hover);--color-link--visited--active:var(--color-visited--active);--color-link-red:var(--color-destructive);--color-link-red--hover:var(--color-destructive--hover);--color-link-red--active:var(--color-destructive--active);--color-link-red--focus:var(--color-destructive--focus);--color-link-red--visited:var(--color-destructive--visited);--color-link-red--visited--hover:var(--color-destructive--visited--hover);--color-link-red--visited--active:var(--color-destructive--visited--active);--size-icon-x-small:calc(var(--font-size-medium) - 4px);--size-icon-small:var(--font-size-medium);--size-icon-medium:calc(var(--font-size-medium) + 4px);--size-toggle-switch-grip:calc(var(--font-size-medium)*1.25);--box-shadow-small:var(--box-shadow-outset-small) var(--box-shadow-color-base);--box-shadow-small-top:var(--box-shadow-outset-small-top) var(--box-shadow-color-base);--box-shadow-small-bottom:var(--box-shadow-outset-small-bottom) var(--box-shadow-color-base);--box-shadow-medium:var(--box-shadow-outset-medium-below) var(--box-shadow-color-alpha-base),var(--box-shadow-outset-medium-around) var(--box-shadow-color-alpha-base);--box-shadow-large:var(--box-shadow-outset-large-below) var(--box-shadow-color-alpha-base),var(--box-shadow-outset-large-around) var(--box-shadow-color-alpha-base);--accent-color-base:#36c;--position-offset-border-width-base:-var(--border-width-base);--spacing-horizontal-button:var(--spacing-75) - var(--border-width-base);--spacing-horizontal-button-icon-only:var(--spacing-35) - var(--border-width-base);--spacing-horizontal-button-small-icon-only:var(--spacing-12) - var(--border-width-base);--spacing-horizontal-button-small:var(--spacing-35) - var(--border-width-base);--spacing-horizontal-button-large:var(--spacing-100) - var(--border-width-base);--spacing-horizontal-input-text-two-end-icons:calc(var(--spacing-50)*2 + var(--size-icon-small));--spacing-start-typeahead-search-figure:var(--spacing-75);--spacing-toggle-switch-grip-start:calc(var(--font-size-medium)*0.375);--spacing-toggle-switch-grip-end:calc(var(--font-size-medium)*1.25);--border-color-input--hover:var(--border-color-interactive);--border-color-input-binary:var(--border-color-interactive);--border-color-input-binary--hover:var(--border-color-progressive--hover);--border-color-input-binary--active:var(--border-color-progressive--active);--border-color-input-binary--focus:var(--border-color-progressive--focus);--border-color-input-binary--checked:var(--border-color-progressive);--border-base:var(--border-width-base) var(--border-style-base) var(--border-color-base);--border-subtle:var(--border-width-base) var(--border-style-base) var(--border-color-subtle);--border-progressive:var(--border-width-base) var(--border-style-base) var(--border-color-progressive);--border-destructive:var(--border-width-base) var(--border-style-base) var(--border-color-destructive);--border-transparent:var(--border-width-base) var(--border-style-base) var(--border-color-transparent);--outline-base--focus:var(--border-width-base) solid transparent;--width-toggle-switch:calc(var(--font-size-medium)*3);--height-toggle-switch:calc(var(--font-size-medium)*2);--spacing-start-typeahead-search-icon:calc(var(--spacing-start-typeahead-search-figure) + var(--min-size-search-figure)/2 - var(--min-size-icon-medium)/2);--spacing-typeahead-search-focus-addition:calc(var(--spacing-start-typeahead-search-figure) + var(--min-size-search-figure) - var(--min-size-icon-medium) - var(--spacing-50));--color-base--subtle:#54595d;--box-shadow-drop-xx-large:0 20px 48px 0 rgba(0,0,0,0.2);--font-family-sans:"Helvetica Neue","Helvetica","Liberation Sans","Arial",sans-serif;--line-height-xxx-small:1.4285714rem;--line-height-xx-small:1.5714285rem;--box-shadow-drop-small:var(--box-shadow-outset-small) var(--box-shadow-color-base);--box-shadow-drop-medium:var(--box-shadow-outset-medium-below) var(--box-shadow-color-alpha-base),var(--box-shadow-outset-medium-around) var(--box-shadow-color-alpha-base)}@media only screen and (prefers-color-scheme:dark){:root{--color-base:#eaecf0;--color-base--hover:#f8f9fa;--color-emphasized:#f8f9fa;--color-subtle:#a2a9b1;--color-disabled:#54595d;--color-disabled-emphasized:#72777d;--color-inverted:#101418;--color-progressive:#88a3e8;--color-progressive--hover:#a6bbf5;--color-progressive--active:#b6d4fb;--color-destructive:#fd7865;--color-destructive--hover:#fea898;--color-destructive--active:#ffc8bd;--color-visited:#a799cd;--color-visited--hover:#c5b9dd;--color-visited--active:#d9d0e9;--color-destructive--visited:#c99391;--color-destructive--visited--hover:#dcb5b3;--color-destructive--visited--active:#e8cecd;--color-error:#fd7865;--color-error--hover:#fea898;--color-error--active:#ffc8bd;--color-warning:#ca982e;--color-success:#2cb491;--color-notice:#a2a9b1;--color-content-added:#80cdb3;--color-content-removed:#fd7865;--color-base--subtle:#a2a9b1;--box-shadow-color-base:#72777d;--box-shadow-color-progressive--focus:#6485d1;--box-shadow-color-progressive-selected:#88a3e8;--box-shadow-color-progressive-selected--hover:#a6bbf5;--box-shadow-color-progressive-selected--active:#b6d4fb;--box-shadow-color-destructive--focus:#6485d1;--box-shadow-color-inverted:#000;--box-shadow-color-alpha-base:rgba(0,0,0,0.87);--mix-blend-mode-blend:screen;--background-color-base:#101418;--background-color-neutral:#27292d;--background-color-neutral-subtle:#202122;--background-color-interactive:#27292d;--background-color-interactive--hover:#404244;--background-color-interactive--active:#54595d;--background-color-interactive-subtle:#202122;--background-color-interactive-subtle--hover:#27292d;--background-color-interactive-subtle--active:#404244;--background-color-disabled:#404244;--background-color-disabled-subtle:#27292d;--background-color-inverted:#f8f9fa;--background-color-progressive--focus:#6485d1;--background-color-progressive-subtle:#1b223d;--background-color-progressive-subtle--hover:#233566;--background-color-progressive-subtle--active:#3056a9;--background-color-destructive--focus:#6485d1;--background-color-destructive-subtle:#3c1a13;--background-color-destructive-subtle--hover:#612419;--background-color-destructive-subtle--active:#9f3526;--background-color-error-subtle:#3c1a13;--background-color-error-subtle--hover:#612419;--background-color-error-subtle--active:#9f3526;--background-color-warning-subtle:#2d2212;--background-color-success-subtle:#132821;--background-color-notice-subtle:#27292d;--background-color-content-added:#233566;--background-color-content-removed:#453217;--background-color-backdrop-light:rgba(0,0,0,0.65);--background-color-backdrop-dark:hsla(0,0%,100%,0.65);--border-color-base:#72777d;--border-color-emphasized:#eaecf0;--border-color-subtle:#54595d;--border-color-muted:#404244;--border-color-interactive--hover:#a2a9b1;--border-color-interactive--active:#c8ccd1;--border-color-disabled:#54595d;--border-color-inverted:#101418;--border-color-progressive--hover:#88a3e8;--border-color-progressive--active:#a6bbf5;--border-color-progressive--focus:#6485d1;--border-color-destructive--hover:#fd7865;--border-color-destructive--active:#fea898;--border-color-destructive--focus:#6485d1;--border-color-error--hover:#fd7865;--border-color-error--active:#fea898;--border-color-warning--hover:#ca982e;--border-color-warning--active:#edb537;--border-color-content-added:#233566;--border-color-content-removed:#987027}}:root{--color-print--visited:#520;--ss-pos-top:1rem;--ss-pos-right:1.2rem;--ss-pos-bottom:1.2rem;--ss-width:9.5rem;--ss-height:2.4rem;--ss-select-width:11rem;--ss-select-z-index:1;--ss-button-z-index:2}html{font-family:sans-serif;-webkit-text-size-adjust:100%;font-size:62.5%}body{margin:0}details,summary{display:block}audio,canvas,progress,video{vertical-align:baseline}audio:not([controls]){display:none;height:0}a:active,a:hover{outline:0}abbr[title]{border-bottom:1px dotted}b,strong{font-weight:700}dfn{font-style:italic}h1{font-size:3.2rem;margin:1.2rem 0}small{font-size:1.3rem}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sup{top:-.5em}sub{bottom:-.25em}figure{margin:1.6rem 4rem}hr{box-sizing:content-box}pre{overflow:auto}code,kbd,pre,samp{font-family:var(--font-family-monospace--fallback);font-size:1.4rem}button,input,optgroup,select,textarea{color:inherit;font:inherit;margin:0}button,select{text-transform:none}button,html input[type=button],input[type=reset],input[type=submit]{-webkit-appearance:button;cursor:pointer}button[disabled],html input[disabled]{cursor:default}button::-moz-focus-inner,input::-moz-focus-inner{border:0;padding:0}input{line-height:normal}input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{height:auto}input[type=search]{-webkit-appearance:none;box-sizing:content-box}input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-search-decoration{-webkit-appearance:none}input[type=search]:focus{outline-offset:-2px}fieldset{border:var(--border-base);margin:0 .2rem;padding:.6rem 1rem 1.2rem}legend{padding:0}optgroup{font-weight:700}table{border-collapse:collapse;border-spacing:0}td,th{padding:0}.hidden{display:none!important}.screen-reader-text{display:block;position:absolute!important;clip:rect(1px,1px,1px,1px);width:1px;height:1px;margin:-1px;border:0;padding:0;overflow:hidden}body{background-color:var(--background-color-base);color:var(--color-base);font-family:var(--font-family-system-sans);font-size:1.4rem;line-height:1.5;margin:.4rem 0 1.6rem}main{padding:0 1.28rem}a{touch-action:manipulation}a,a:active,a:focus{unicode-bidi:embed;outline:0;color:var(--color-progressive);text-decoration:none}a:focus{outline:1px solid var(--outline-color-progressive--focus)}a:hover{text-decoration:underline}img{vertical-align:middle}hr,img{border:0}hr{clear:both;height:0;border-bottom:var(--border-subtle);margin:.26rem 0}.pure-button{display:inline-block;zoom:1;line-height:normal;white-space:nowrap;text-align:center;cursor:pointer;-webkit-user-drag:none;-webkit-user-select:none;-moz-user-select:none;user-select:none;box-sizing:border-box;background-color:var(--background-color-interactive-subtle);color:var(--color-base);position:relative;min-height:1.92rem;min-width:1.6rem;margin:.16rem 0;border:var(--border-base);border-radius:var(--border-radius-base);padding:.8rem 1.6rem;font-family:inherit;font-size:inherit;font-weight:700;text-decoration:none;vertical-align:top;transition:background .1s ease,color .1s ease,border-color .1s ease,box-shadow .1s ease}.pure-button::-moz-focus-inner{padding:0;border:0}.pure-button-hover,.pure-button:hover{background-color:var(--background-color-base);border-color:var(--border-color-base);color:var(--color-base--hover)}.pure-button-active,.pure-button:active{background-color:var(--background-color-interactive);border-color:var(--border-color-interactive);color:var(--color-emphasized)}.pure-button:focus{outline:var(--outline-base--focus);border-color:var(--border-color-progressive--focus);box-shadow:var(--box-shadow-inset-small) var(--box-shadow-color-progressive--focus)}.pure-button-primary-progressive{background-color:var(--background-color-progressive);border-color:var(--border-color-progressive);color:var(--color-inverted)}.pure-button-primary-progressive:hover{background:var(--background-color-progressive--hover);border-color:var(--border-color-progressive--hover)}.pure-button-primary-progressive:active{background-color:var(--background-color-progressive--active);border-color:var(--border-color-progressive--active);box-shadow:none;color:var(--color-inverted)}.pure-button-primary-progressive:focus{box-shadow:var(--box-shadow-inset-small) var(--box-shadow-color-progressive--focus),var(--box-shadow-inset-medium) var(--box-shadow-color-inverted);border-color:var(--border-color-progressive--focus)}.pure-form input[type=search]{background-color:var(--background-color-base);display:inline-block;box-sizing:border-box;border:var(--border-base);border-radius:var(--border-radius-base);padding:.8rem;box-shadow:var(--box-shadow-inset-small) var(--box-shadow-color-inverted);vertical-align:middle}.pure-form input:focus:invalid{color:var(--color-error);border-color:var(--border-color-error)}.pure-form fieldset{margin:0;padding:.56rem 0 1.2rem;border:0}@media only screen and (max-width:480px){.pure-form input[type=search]{display:block}}.central-textlogo-wrapper{display:inline-block;vertical-align:bottom}.central-textlogo{position:relative;margin:4rem auto .5rem;width:270px;font-family:Linux Libertine,Hoefler Text,Georgia,Times New Roman,Times,serif;font-size:3rem;font-weight:400;line-height:3.3rem;text-align:center;font-feature-settings:"ss05"}.localized-slogan{display:block;font-family:var(--font-family-serif);font-size:1.5rem;font-weight:400}.central-textlogo__image{color:transparent;display:inline-block;overflow:hidden;text-indent:-10000px}@media (prefers-color-scheme:dark){.central-textlogo__image{filter:url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg"><filter id="filter"><feComponentTransfer color-interpolation-filters="sRGB"><feFuncR type="table" tableValues="1 0" /><feFuncG type="table" tableValues="1 0" /><feFuncB type="table" tableValues="1 0" /></feComponentTransfer></filter></svg>#filter');-webkit-filter:invert(100%);filter:invert(100%)}}.central-featured-logo{position:absolute;top:158px;left:35px}@media (max-width:480px){.central-textlogo{position:relative;height:70px;width:auto;margin:2rem 0 0;text-align:center;line-height:2.5rem;text-indent:-1rem;font-size:1em}.central-textlogo-wrapper{position:relative;top:12px;text-indent:.2rem}.svg-Wikipedia_wordmark{width:150px;height:25px;background-position:0 -260px;background-size:100%}.localized-slogan{font-size:1.4rem}.central-featured-logo{position:relative;display:inline-block;width:57px;height:auto;left:0;top:0}}@media (max-width:240px){.central-textlogo__image{height:auto}}.central-featured{position:relative;height:32.5rem;width:54.6rem;max-width:100%;margin:0 auto;text-align:center;vertical-align:middle}.central-featured-lang{position:absolute;width:15.6rem}.central-featured-lang .link-box{display:block;border-radius:var(--border-radius-base);padding:0;text-decoration:none;white-space:normal}.central-featured-lang .link-box:hover strong{text-decoration:underline}.central-featured-lang :hover{background-color:var(--background-color-interactive)}.central-featured-lang strong{display:block;font-size:1.6rem}.central-featured-lang small{color:var(--color-subtle);display:inline-block;font-size:1.3rem;line-height:1.6}.central-featured-lang em{font-style:italic}.central-featured-lang .emNonItalicLang{font-style:normal}.lang1{top:0;right:60%}.lang2{top:0;left:60%}.lang3{top:20%;right:70%}.lang4{top:20%;left:70%}.lang5{top:40%;right:72%}.lang6{top:40%;left:72%}.lang7{top:60%;right:70%}.lang8{top:60%;left:70%}.lang9{top:80%;right:60%}.lang10{top:80%;left:60%}@media (max-width:480px){.central-featured{width:auto;height:auto;margin-top:8rem;font-size:1.3rem;text-align:left}.central-featured:after{content:" ";display:block;visibility:hidden;clear:both;height:0;font-size:0}.central-featured-lang{display:block;float:left;position:relative;top:auto;left:auto;right:auto;box-sizing:border-box;height:6.4rem;width:33%;margin:0 0 16px;padding:0 1.6rem;font-size:1.4rem;text-align:center}.central-featured-lang strong{font-size:1.4rem;margin-bottom:4px}.central-featured-lang small{line-height:1.4}}@media (max-width:375px){.central-featured-lang{font-size:1.3rem}}@media (max-width:240px){.central-featured-lang{width:100%}}.search-container{float:none;max-width:95%;width:540px;margin:.4rem auto 1.95rem;text-align:center;vertical-align:middle}.search-container fieldset{word-spacing:-4px}.search-container button{min-height:4.4rem;margin:0;border-radius:0 var(--border-radius-base) var(--border-radius-base) 0;padding:.8rem 1.6rem;font-size:1.6rem;z-index:var(--ss-button-z-index)}.search-container button .svg-search-icon{text-indent:-9999px}.search-container input[type=search]::-webkit-search-results-button,.search-container input[type=search]::-webkit-search-results-decoration{-webkit-appearance:none}.search-container input::-webkit-calendar-picker-indicator{display:none}.search-container .sprite.svg-arrow-down{position:absolute;top:.8rem;right:.6rem}#searchInput{-webkit-appearance:none;width:100%;height:4.4rem;border-left-width:var(--border-width-base);border-bottom-width:var(--border-width-base);border-right-width:0;border-top-width:var(--border-width-base);border-radius:var(--border-radius-base) 0 0 var(--border-radius-base);padding:.8rem 9.6rem .8rem 1.2rem;font-size:1.6rem;line-height:1.6;transition:background .1s ease,border-color .1s ease,box-shadow .1s ease}#searchInput:hover{border-color:var(--border-color-interactive)}#searchInput:focus{border-color:var(--border-color-progressive);box-shadow:var(--box-shadow-inset-small) var(--box-shadow-color-progressive--focus);outline:var(--outline-base--focus)}.search-container .search-input{display:inline-block;position:relative;width:73%;vertical-align:top}@media only screen and (max-width:480px){.search-container .pure-form fieldset{margin-left:1rem;margin-right:6.6rem}.search-container .search-input{width:100%;margin-right:-6.6rem}.search-container .pure-form button{float:right;right:-5.6rem}}.suggestions-dropdown{background-color:var(--background-color-base);display:inline-block;position:absolute;left:0;z-index:2;box-sizing:border-box;width:100%;margin:0;padding:0;border:var(--border-base);border-top:0;box-shadow:var(--box-shadow-drop-medium);text-align:left;list-style-type:none;word-spacing:normal}.suggestion-link{display:block;position:relative;box-sizing:border-box;min-height:7rem;width:100%;padding:1rem 1rem 1rem 8.5rem;border-bottom:1px solid var(--border-color-subtle);color:inherit;text-decoration:none;text-align:initial;white-space:normal}.suggestion-link.active{background-color:var(--background-color-progressive-subtle)}a.suggestion-link:hover{text-decoration:none}a.suggestion-link:active,a.suggestion-link:focus{outline:0;white-space:normal}.suggestion-thumbnail{background-color:var(--background-color-interactive);background-image:linear-gradient(transparent,transparent),url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 56 56'%3E%3Cpath fill='%23eee' d='M0 0h56v56H0z'/%3E%3Cpath fill='%23999' d='M36.4 13.5H17.8v24.9c0 1.4.9 2.3 2.3 2.3h18.7v-25c.1-1.4-1-2.2-2.4-2.2zM30.2 17h5.1v6.4h-5.1V17zm-8.8 0h6v1.8h-6V17zm0 4.6h6v1.8h-6v-1.8zm0 15.5v-1.8h13.8v1.8H21.4zm13.8-4.5H21.4v-1.8h13.8v1.8zm0-4.7H21.4v-1.8h13.8v1.8z'/%3E%3C/svg%3E");background-position:50%;background-repeat:no-repeat;background-size:100% auto;background-size:cover;height:100%;width:7rem;position:absolute;top:0;left:0}.suggestion-title{margin:0 0 .78rem;color:var(--color-subtle);font-size:1.6rem;line-height:1.872rem}.suggestion-link.active .suggestion-title{color:var(--color-progressive)}.suggestion-highlight{font-style:normal;text-decoration:underline}.suggestion-description{color:var(--color-placeholder);margin:0;font-size:1.3rem;line-height:1.43rem}.styled-select{display:none;position:absolute;top:var(--ss-pos-top);bottom:var(--ss-pos-bottom);right:var(--ss-pos-right);max-width:var(--ss-width);height:var(--ss-height);border-radius:var(--border-radius-base)}.styled-select:hover{background-color:var(--background-color-interactive-subtle)}.styled-select .hide-arrow{right:3.2rem;max-width:6.8rem;height:var(--ss-height);overflow:hidden;text-align:right}.styled-select select{background:transparent;display:inline;overflow:hidden;height:var(--ss-height);min-width:var(--ss-select-width);max-width:var(--ss-select-width);width:var(--ss-select-width);box-sizing:border-box;border:0;line-height:var(--ss-height);-webkit-appearance:none;-moz-appearance:window;text-indent:.01px;text-overflow:"";opacity:0;-moz-appearance:none;appearance:none;cursor:pointer}.styled-select.no-js{width:var(--ss-width)}.styled-select.no-js select{opacity:1;margin:0;padding:0 2.4rem 0 .8rem;color:var(--color-subtle)}.styled-select.no-js .hide-arrow{width:6.8rem}.search-container .styled-select.no-js .js-langpicker-label{display:none}.styled-select.js-enabled .hide-arrow{padding:0 2.4rem 0 .8rem}.styled-select.js-enabled select{background:transparent;position:absolute;top:0;left:0;height:100%;z-index:var(--ss-select-z-index);width:100%;border:0;margin:0;padding:0 2.4rem;color:transparent;color:hsla(0,0%,100%,0)}.styled-select.js-enabled select option{color:var(--color-subtle)}.styled-select.js-enabled select:hover{background-color:transparent}.styled-select-active-helper{display:none}.styled-select.js-enabled select:focus+.styled-select-active-helper{display:block;position:absolute;top:0;left:0;z-index:0;width:100%;height:100%;outline:1px solid var(--outline-color-progressive--focus)}.search-container .js-langpicker-label{display:inline-block;margin:0;color:var(--color-subtle);font-size:1.3rem;line-height:var(--ss-height);text-transform:uppercase}.styled-select select:hover{background-color:var(--background-color-interactive-subtle)}.styled-select select:focus{outline:var(--outline-base--focus);box-shadow:none}@-moz-document url-prefix(){.styled-select select{width:110%}}.other-projects{display:inline-block;width:65%}.other-project{float:left;position:relative;width:33%;height:9rem}.other-project-link{display:inline-block;min-height:50px;width:90%;padding:1em;white-space:nowrap}.other-project-link:hover{background-color:var(--background-color-interactive)}a.other-project-link{text-decoration:none}.other-project-icon{display:inline-block;width:50px;text-align:center}.svg-Wikinews-logo_sister{background-image:url(assets/37502515362b1c080916efd0d3408c10.png);background-position:0 0;background-size:47px 26px;width:47px;height:26px}@media (-webkit-min-device-pixel-ratio:1.25),(min-resolution:120dpi){.svg-Wikinews-logo_sister{background-image:url(assets/5c59903cb6a4d223eb96dd9942738aa1.png)}}.other-project-text,.other-project .sprite-project-logos{display:inline-block}.other-project-text{max-width:65%;font-size:1.4rem;vertical-align:middle;white-space:normal}.other-project-tagline,.other-project-title{display:block}.other-project-tagline{color:var(--color-subtle);font-size:1.3rem}@media screen and (max-width:768px){.other-projects{width:100%}.other-project{width:33%}}@media screen and (max-width:480px){.other-project{width:50%}.other-project-tagline{-webkit-hyphens:auto;hyphens:auto}}@media screen and (max-width:320px){.other-project-text{margin-right:5px;font-size:1.3rem}}.lang-list-container{background-color:var(--background-color-interactive-subtle);overflow:hidden;position:relative;box-sizing:border-box;max-height:0;width:80%;margin:-1.6rem auto 4.8rem;transition:max-height .5s ease-out .16s,visibility .5s ease-in 1s}.js-enabled .lang-list-container{visibility:hidden}.lang-list-active .lang-list-container,.no-js .lang-list-container{visibility:visible;max-height:10000px;transition:max-height 1s ease-in .2s,visibility 1000s ease-in 0ms}.no-js .lang-list-button{display:none}.lang-list-button-wrapper{text-align:center}.lang-list-button{background-color:var(--background-color-interactive-subtle);display:inline;position:relative;z-index:1;margin:0 auto;padding:.6rem 1.2rem;outline:1.6rem solid var(--background-color-base);border:var(--border-base);border-radius:var(--border-radius-base);color:var(--color-progressive);font-size:1.4rem;font-weight:700;line-height:1;transition:outline-width .1s ease-in .5s}.lang-list-button:hover{background-color:var(--background-color-base);border-color:var(--border-color-base)}.lang-list-button:focus{border-color:var(--border-color-progressive--focus);box-shadow:var(--box-shadow-inset-small) var(--box-shadow-color-progressive--focus)}.lang-list-active .lang-list-button{background-color:var(--background-color-base);outline:1px solid var(--border-color-inverted);border-color:var(--border-color-interactive);transition-delay:0s}.lang-list-button-text{padding:0 .64rem;vertical-align:middle}.lang-list-button i{display:inline-block;vertical-align:middle}.no-js .lang-list-border,.no-js .lang-list-button{display:none}.lang-list-border{background-color:var(--border-color-subtle);display:block;position:relative;max-width:460px;width:80%;margin:-1.6rem auto 1.6rem;height:1px;transition:max-width .2s ease-out .4s}.lang-list-active .lang-list-border{max-width:85%;transition-delay:0s}.no-js .lang-list-content{padding:0}.lang-list-content{position:relative;box-sizing:border-box;width:100%;padding:1.6rem 1.6rem 0}.svg-arrow-down-blue{transition:transform .2s ease-out}.lang-list-active .svg-arrow-down-blue{transform:rotate(180deg)}.langlist{width:auto;margin:1.6rem 0;text-align:left}.langlist-others{font-weight:700;text-align:center}.hlist ul{margin:0;padding:0}.hlist li,.hlist ul ul{display:inline}.hlist li:before{content:" · ";font-weight:700}.hlist li:first-child:before{content:none}.hlist li>ul:before{content:"\00a0("}.hlist li>ul:after{content:") "}.langlist>ul{-webkit-column-width:11.2rem;-moz-column-width:11.2rem;column-width:11.2rem}.langlist>ul>li{display:block;line-height:1.7;-webkit-column-break-inside:avoid;page-break-inside:avoid;break-inside:avoid}.no-js .langlist>ul{text-align:center;list-style-type:circle}.no-js .langlist>ul>li{display:inline-block;padding:0 .8rem}.langlist>ul>li:before{content:none}.langlist>ul>li a{white-space:normal}@media (max-width:480px){.langlist{font-size:inherit}.langlist a{word-wrap:break-word;white-space:normal}.lang-list-container{width:auto;margin-left:.8rem;margin-right:.8rem}.bookshelf{overflow:visible}}.bookshelf{display:block;border-top:var(--border-subtle);box-shadow:0 -1px 0 var(--box-shadow-color-inverted);text-align:center;white-space:nowrap}.bookshelf .text{background-color:var(--background-color-interactive-subtle);position:relative;top:-1.12rem;font-weight:400;padding:0 .8rem}.bookshelf-container{display:block;overflow:visible;width:100%;height:1px;margin:2.4rem 0 1.6rem;font-size:1.3rem;font-weight:700;line-height:1.5}@media (max-width:480px){.bookshelf{width:auto;left:auto}.bookshelf-container{text-align:left;width:auto}}.app-badges .footer-sidebar-content{background-color:var(--background-color-interactive-subtle)}.app-badges .footer-sidebar-text{padding-top:.8rem;padding-bottom:.8rem}.app-badges .sprite.footer-sidebar-icon{top:.8rem}.app-badges ul{margin:0;padding:0;list-style-type:none}.app-badge{display:inline-block}.app-badge a{color:transparent}@media screen and (max-width:768px){.app-badges .footer-sidebar-content{text-align:center}.app-badges .sprite.footer-sidebar-icon{display:inline-block;position:relative;margin:0;top:-3px;left:0;vertical-align:middle;transform:scale(.7)}}.footer{overflow:hidden;max-width:100%;margin:0 auto;padding:4.16rem 1.28rem 0;font-size:1.3rem}.footer:after,.footer:before{content:" ";display:table}.footer:after{clear:both}.footer-sidebar{width:35%;float:left;clear:left;margin-bottom:3.2rem;vertical-align:top}.footer-sidebar-content{position:relative;max-width:350px;margin:0 auto}.sprite.footer-sidebar-icon{position:absolute;top:0;left:.8rem}@media (prefers-color-scheme:dark){.footer-sidebar-icon.sprite.svg-Wikimedia-logo_black{filter:url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg"><filter id="filter"><feComponentTransfer color-interpolation-filters="sRGB"><feFuncR type="table" tableValues="1 0" /><feFuncG type="table" tableValues="1 0" /><feFuncB type="table" tableValues="1 0" /></feComponentTransfer></filter></svg>#filter');-webkit-filter:invert(100%);filter:invert(100%)}}.footer-sidebar-text{position:relative;margin:0;padding-left:6rem;padding-right:2rem;color:var(--color-subtle)}.site-license{color:var(--color-subtle);text-align:center}.site-license small:after{content:"\2022";display:inline-block;font-size:1.3rem;line-height:inherit;margin-left:.8rem;margin-right:.5rem}.site-license small:last-child:after{display:none}.footer hr{margin-top:1.28rem}@media screen and (max-width:768px){.footer{display:flex;flex-direction:column;padding-top:1.28rem}.footer .footer-sidebar{order:1}.footer .other-projects{order:2}.footer .app-badges{order:3}.footer hr{order:4}.footer .site-license{order:5}.footer-sidebar{width:100%}.sprite.footer-sidebar-icon{display:block;position:relative;left:0;margin:0 auto 1.28rem}.footer-sidebar-content{max-width:none}.footer-sidebar-text{margin:0;padding:0;text-align:center}}@media screen and (max-width:480px){.footer{padding:.96rem .64rem 1.28rem}}@media (max-width:480px){.search-container{margin-top:0;height:7.8rem;position:absolute;top:9.6rem;left:0;right:0;max-width:100%;width:auto;padding:0;text-align:left}.search-container label{display:none}.search-form #searchInput{max-width:40%;vertical-align:middle}.search-form .formBtn{max-width:25%;vertical-align:middle}form fieldset{margin:0;border-left:0;border-right:0}hr{margin-top:.65rem}}@media (-webkit-min-device-pixel-ratio:2),(min--moz-device-pixel-ratio:2),(min-resolution:2dppx),(min-resolution:192dpi){hr{border-bottom-width:.5px}}@supports (-webkit-marquee-style:slide){hr{border-bottom-width:1px}}.js-enabled .central-featured,.js-enabled .jsl10n{opacity:0}.jsl10n-visible .central-featured,.jsl10n-visible .jsl10n{opacity:1}@media print{body{background-color:transparent}a{color:#000!important;background:none!important;padding:0!important}a:link,a:visited{color:var(--color-print--visited);background:transparent}img{border:0}}body{overflow-x:hidden}.banner,.banner *{box-sizing:border-box}.banner{display:none;position:relative;z-index:3}.banner.banner--visible{display:block}.banner__close{position:absolute;margin-top:-24px;margin-right:-24px;padding:12px;top:0;right:0;cursor:pointer;background:none;border:0}.banner__button{display:inline-block;border:1px solid;border-radius:var(--border-radius-base);padding:8px 12px;cursor:pointer;font-weight:700;white-space:nowrap;line-height:1;margin-top:8px}.banner__button,.banner__button:hover{text-decoration:none}.overlay-banner-main{max-width:500px;position:fixed;right:10px;bottom:20px;background:#fff;border-radius:10px 10px 0 0;width:calc(100% - 20px);padding:0 8px 8px;height:80vh;border:1px solid #a2a9b1;box-shadow:0 0 15px rgba(50,50,50,.25);transition:all .15s ease-in-out;transform-origin:100% 50%;transform:scale(.5);visibility:hidden;opacity:0}body.overlay-banner-open .overlay-banner-main{visibility:visible;opacity:1;transform:scale(1)}.overlay-banner-main-scroll{padding-bottom:16px;max-height:calc(100% - 42px);overflow:hidden auto;transition:max-height .5s}.overlay-banner-main .frb-header-minimize{top:-48px;position:absolute;right:10px;background:rgba(0,0,0,.75);border-radius:12px 12px 0 0;padding:6px 12px;color:#fff;font-weight:700;text-align:center;font-size:1.6rem;display:flex;align-items:center;cursor:pointer;width:48px;height:48px}.overlay-banner-main .frb-header-minimize-icon{width:40px;height:40px;display:flex;border-radius:2px;justify-content:center;align-items:center}.overlay-banner-main .frb-header-minimize-icon svg{filter:url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg"><filter id="filter"><feComponentTransfer color-interpolation-filters="sRGB"><feFuncR type="table" tableValues="1 0" /><feFuncG type="table" tableValues="1 0" /><feFuncB type="table" tableValues="1 0" /></feComponentTransfer></filter></svg>#filter');-webkit-filter:invert(1);filter:invert(1);width:25px;height:auto;margin-left:-2px}.overlay-banner-main-header{display:flex;width:100%;justify-content:center}.overlay-banner-main-header a{flex:1 0 auto;text-align:center;padding:11px 6px;border:0;background:transparent;color:#36c;font-weight:700;position:relative}.overlay-banner-main-header a:hover{text-decoration:underline;cursor:pointer}.overlay-banner-main-message{position:relative;clear:both;margin-bottom:12px;padding:10px 15px;background-color:#fbe2a2;color:#000;border-radius:1.5em;font-size:1.6rem;line-height:1.5}@media (min-width:720px){.overlay-banner-main-message{padding:12px 20px;font-size:1.7rem;line-height:1.5294117647}}.overlay-banner-main-message-greeting{font-size:1.5em;line-height:1.15;font-weight:700;text-align:center;margin-top:8px;position:relative;z-index:2}.overlay-banner-main-message-subheading{font-size:1.6rem;line-height:1.35;font-weight:700;text-align:center;margin-top:8px;margin-bottom:16px;position:relative;z-index:2}.overlay-banner-main-message p{font-size:inherit!important;line-height:inherit!important;margin-bottom:16px;position:relative;z-index:2}.overlay-banner-main .button-grid{width:100%;display:flex;flex-wrap:wrap;gap:5px 1%}.overlay-banner-main .banner-button{display:flex;justify-content:center;align-items:center;width:100%;height:54px;color:#36c;background-color:#f8f9fa;border-radius:10px;border:1px solid #a2a9b1;text-align:center;cursor:pointer;transition:all .2s ease;font-weight:700;padding:5px 6px;line-height:1}.overlay-banner-main .banner-button:focus,.overlay-banner-main .banner-button:focus-within{border-color:#36c;box-shadow:inset 0 0 0 1px #36c,inset 0 0 0 2px #fff}.overlay-banner-main .button-33{flex:0 1 32%;max-width:32%}.overlay-banner-main .button-67{flex:0 1 65%;max-width:65%}.overlay-banner-main .button-50{flex:0 1 49%;max-width:49%}.overlay-banner-main .button-center{margin:0 auto}.overlay-banner-main .button-collapse{display:flex;justify-content:center;align-items:center;width:auto;height:54px;color:#000;font-weight:700;background:transparent;border:0;text-transform:uppercase;margin-top:15px;cursor:pointer}.overlay-banner-main .button-collapse:hover{text-decoration:underline}.overlay-banner-main .banner-button-disabled{opacity:.5;color:#a2a9b1}.overlay-banner-main .banner-button.selected{background-color:#36c;border-color:#2a4b8d;color:#fff}.overlay-banner-main-amounts,.overlay-banner-main-frequency{position:relative;background-color:#fdf2d5;padding:15px;border-radius:1.5em;margin-bottom:10px}.overlay-banner-main-amounts .error-highlight,.overlay-banner-main-frequency .error-highlight{font-weight:500}.overlay-banner-main-amounts .button-grid,.overlay-banner-main-frequency .button-grid{padding:18px 0 10px}.overlay-banner-main-footer-cta{margin:8px 0;background-color:#f9dde9;color:#000;padding:10px 18px;font-size:1.6rem;line-height:1.5;border-radius:1.5em}.frb-message-icon circle{fill:#b32424}.frb-message-icon path{fill:#fff}.overlay-banner-main-footer-identity{position:relative;clear:both;margin:20px 0 0;color:#000;border-radius:1.5em;line-height:1.3;display:flex;justify-content:center;align-items:center;padding:0 10px}.overlay-banner-main-footer-identity-logo{flex:0 0 60px;max-width:60px;display:flex;align-items:center;justify-content:center;height:24px;margin-right:10px}.overlay-banner-main-footer-identity-logo svg{width:100%;max-width:60px}.overlay-banner-mini{position:fixed;right:0;left:0;bottom:-500px;z-index:9999;background:#fbe2a2;display:flex;justify-content:flex-start;align-items:center;border-top:2px solid #eeb533;box-shadow:0 -2px 10px 0 rgba(0,0,0,.25);transition:all .3s ease}.overlay-banner-mini.visible{bottom:-20px;right:0;left:0}.overlay-banner-mini .frb-conversation-close,.overlay-banner-mini .frb-conversation-open{top:-50px;position:absolute;right:10px;background:rgba(0,0,0,.75);border-radius:12px 12px 0 0;padding:6px 12px;color:#fff;font-weight:700;text-align:center;font-size:1.6rem;display:none;align-items:center;cursor:pointer;width:48px;height:48px}.overlay-banner-mini .frb-conversation-open{right:60px}span.frb-conversation-close-icon:after,span.frb-conversation-close-icon:before{position:absolute;left:50%;top:12px;transform:translateX(-50%);content:" ";height:25px;width:3px;margin-left:-1px;background-color:#fff}span.frb-conversation-close-icon:before{transform:rotate(45deg)}span.frb-conversation-close-icon:after{transform:rotate(-45deg)}.frb-conversation-open-icon{width:40px;height:40px;display:flex;border-radius:2px;justify-content:center;align-items:center}.frb-conversation-open-icon svg{transform:rotate(180deg);filter:url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg"><filter id="filter"><feComponentTransfer color-interpolation-filters="sRGB"><feFuncR type="table" tableValues="1 0" /><feFuncG type="table" tableValues="1 0" /><feFuncB type="table" tableValues="1 0" /></feComponentTransfer></filter></svg>#filter');-webkit-filter:invert(1);filter:invert(1);width:25px;height:auto}.overlay-banner-mini.visible .frb-conversation-close,.overlay-banner-mini.visible .frb-conversation-open{display:flex}.overlay-banner-mini-message{display:flex;align-items:center;justify-content:center;width:100%;padding:20px 20px 30px;cursor:pointer}.overlay-banner-mini-message-text{flex:0 1 1200px;max-width:1200px}@media (max-width:960px){.overlay-banner-mini-message{flex-wrap:wrap}.overlay-banner-mini-message-text{margin-bottom:10px}.overlay-banner-mini-message-actions,.overlay-banner-mini-message-text{flex:0 0 100%;max-width:100%}}.overlay-banner-mini-message h3{color:#000;margin:0 0 5px;font-size:2.4rem;font-family:Montserrat,Helvetica Neue,Helvetica,Arial,sans-serif}.overlay-banner-mini-message p{display:block;color:#000;position:relative;margin:0 13px 5px 0;font-size:1.7rem}.overlay-banner-mini .frb-message-icon{position:relative;top:0;margin-right:3px;flex:0 0 30px}.overlay-banner-mini .frb-message-icon circle{fill:#fefd34}.overlay-banner-mini .frb-message-icon path{fill:#000}.overlay-banner-mini .frb-submit{position:relative;display:inline-block;padding:10px 15px;margin:0;width:240px;background-color:#36c;border-color:#36c;color:#fff;border-radius:2px;text-align:center;font-weight:700;font-size:2rem;cursor:pointer;transition:background-color .5s ease}.overlay-banner-mini .frb-submit:hover{background:#049dff;border-color:#049dff;color:#000}.overlay-banner-mini .frb-submit:focus{border-color:var(--border-color-progressive--focus);box-shadow:var(--box-shadow-inset-small) var(--box-shadow-color-progressive--focus),var(--box-shadow-inset-medium) var(--box-shadow-color-inverted)}@media (max-width:660px){.overlay-banner-mini-message h3{font-size:2rem}.overlay-banner-mini-message p{font-size:1.3rem}.overlay-banner-mini .frb-submit{width:100%}}.overlay-banner-main-header-divider{position:relative;top:10px;opacity:.5}.frb-iad-dialog{border:1px solid #a2a9b1;box-shadow:3px 3px 10px rgba(0,0,0,.25);padding:60px 40px 40px;margin:auto;max-width:500px;text-align:left}.frb-iad-dialog:before{content:"";width:100%;height:100%;position:absolute;top:0;right:0;z-index:-1;opacity:.35;background-repeat:no-repeat;background-position:100% 0;background-size:contain;background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 280.27 594.55'%3E%3Cdefs%3E%3Cstyle%3E.st0{fill:%23e679a6}%3C/style%3E%3C/defs%3E%3Cg id='Layer_1_copy_2'%3E%3Cpath d='M16.7 197.51h21.56c.99 0 1.85.57 2.24 1.47.39.91.22 1.93-.46 2.65l-.23.26c-1.11 1.29-1.68 2.75-1.68 4.25 0 2.16 1.2 4.18 3.22 5.67 2.03 1.49 4.85 2.43 7.99 2.43s5.97-.94 7.99-2.43c2.03-1.49 3.22-3.5 3.22-5.67 0-1.6-.64-3.16-1.91-4.51l-.12-.14a2.45 2.45 0 01-.34-2.51c.39-.91 1.26-1.47 2.25-1.47h21.46v-21.56c0-.99-.83-1.62-1.63-1.62-.39 0-.76.14-1.07.42-1.47 1.35-3.2 2.08-5.02 2.08-2.53 0-4.77-1.42-6.36-3.6-1.59-2.19-2.56-5.18-2.56-8.46s.97-6.27 2.56-8.46c1.59-2.19 3.83-3.6 6.36-3.6 1.82 0 3.56.74 5.02 2.08.31.28.67.42 1.07.42.79 0 1.63-.63 1.63-1.62v-21.37H60.32c-.6.05-1.11.41-1.36.97-.26.6-.15 1.25.29 1.73 1.35 1.47 2.09 3.21 2.09 5.03 0 2.53-1.42 4.78-3.6 6.37-2.19 1.59-5.18 2.56-8.45 2.56s-6.26-.97-8.45-2.56c-2.19-1.59-3.6-3.84-3.6-6.37 0-1.82.74-3.57 2.09-5.03.44-.48.55-1.13.29-1.73-.26-.6-.83-.97-1.48-.97H16.69v21.52c0 1.54-1.27 2.45-2.46 2.45-.62 0-1.2-.23-1.66-.66-1.35-1.26-2.9-1.9-4.5-1.9-2.16 0-4.17 1.2-5.66 3.23-1.49 2.03-2.43 4.86-2.43 8s.94 5.97 2.43 8c1.4 1.9 3.25 3.07 5.26 3.21h.4c1.59.01 3.15-.63 4.49-1.89.46-.43 1.03-.66 1.66-.66s1.24.24 1.7.67l.18.18c.38.44.59 1 .59 1.6v21.52zm41.24 333.27c0-.63.25-1.24.67-1.7.46-.49 1.1-.76 1.78-.76h21.5v-21.58c0-.99.57-1.85 1.47-2.25.91-.39 1.93-.22 2.65.46 1.35 1.26 2.91 1.91 4.5 1.91 2.16 0 4.17-1.2 5.66-3.23 1.49-2.03 2.43-4.86 2.43-8s-.94-5.97-2.43-8c-1.47-2.01-3.46-3.2-5.6-3.23h-.06c-1.6 0-3.15.64-4.5 1.91-.72.68-1.74.85-2.65.46-.9-.39-1.47-1.26-1.47-2.25v-21.48H60.35c-.99 0-1.62.83-1.62 1.63 0 .39.14.76.42 1.07 1.35 1.47 2.08 3.21 2.08 5.03 0 2.53-1.42 4.78-3.6 6.37-2.19 1.59-5.18 2.56-8.45 2.56s-6.27-.97-8.45-2.56c-2.19-1.59-3.6-3.84-3.6-6.37 0-1.82.73-3.56 2.08-5.03.28-.31.42-.67.42-1.07 0-.8-.63-1.63-1.62-1.63H16.66v21.47c0 .66.37 1.22.97 1.48s1.25.15 1.73-.29c1.47-1.35 3.21-2.09 5.03-2.09 2.53 0 4.77 1.42 6.36 3.6 1.59 2.19 2.56 5.18 2.56 8.46s-.97 6.27-2.56 8.46c-1.59 2.19-3.84 3.6-6.36 3.6-1.82 0-3.56-.74-5.03-2.09-.48-.44-1.13-.55-1.73-.29-.6.26-.97.83-.97 1.48v21.47h21.5c1.54 0 2.45 1.27 2.45 2.46 0 .62-.23 1.2-.66 1.66l-.23.26c-1.11 1.29-1.67 2.75-1.67 4.24 0 2.17 1.2 4.18 3.22 5.67 2.03 1.49 4.85 2.43 7.99 2.43s5.97-.94 7.99-2.43c2.03-1.49 3.23-3.5 3.23-5.67 0-1.59-.64-3.15-1.9-4.5-.43-.46-.66-1.04-.66-1.66z' class='st0'/%3E%3Cpath d='M58.21 66.59c.38-.87 1.19-1.41 2.12-1.45h22.56v22.32c0 .99.83 1.62 1.63 1.62.39 0 .76-.14 1.07-.42 1.47-1.35 3.2-2.08 5.02-2.08 2.53 0 4.77 1.42 6.37 3.6 1.59 2.19 2.56 5.18 2.56 8.46s-.97 6.27-2.56 8.46c-1.59 2.19-3.84 3.6-6.37 3.6-1.82 0-3.56-.74-5.02-2.08-.31-.28-.67-.42-1.07-.42-.79 0-1.63.63-1.63 1.62v21.37h21.45c.65 0 1.22-.37 1.48-.97l.04-.11c.2-.57.08-1.17-.33-1.62-1.35-1.47-2.09-3.21-2.09-5.03 0-2.53 1.41-4.78 3.6-6.37 2.19-1.59 5.18-2.56 8.45-2.56s6.26.97 8.45 2.56c2.19 1.59 3.6 3.84 3.6 6.37 0 1.83-.74 3.57-2.09 5.03-.44.48-.55 1.13-.29 1.73l.05.11c.28.54.81.86 1.43.86h22.18v22.74c-.09 1.44-1.3 2.29-2.44 2.29-.62 0-1.2-.23-1.66-.66-1.35-1.26-2.9-1.9-4.49-1.9-2.16 0-4.17 1.2-5.66 3.23-1.49 2.03-2.43 4.86-2.43 8s.94 5.97 2.43 8c1.4 1.9 3.25 3.07 5.26 3.21h.4c1.59.01 3.15-.63 4.49-1.89.46-.43 1.03-.66 1.66-.66s1.24.24 1.7.67l.17.18c.38.44.59 1 .59 1.6v5.57h-.02v16.73h-22.29c-.99 0-1.85-.57-2.24-1.47-.39-.91-.22-1.93.46-2.65 1.26-1.35 1.91-2.91 1.91-4.51 0-2.16-1.2-4.18-3.22-5.67-2.03-1.49-4.85-2.43-7.99-2.43s-5.97.94-7.99 2.43c-2.03 1.49-3.23 3.5-3.23 5.67 0 1.6.65 3.16 1.91 4.51.67.72.85 1.74.46 2.65-.39.91-1.26 1.47-2.25 1.47H82.89v21.56c0 .99.83 1.62 1.63 1.62.39 0 .76-.14 1.07-.42 1.47-1.35 3.2-2.08 5.02-2.08 2.53 0 4.77 1.42 6.37 3.6 1.59 2.19 2.56 5.18 2.56 8.46s-.97 6.27-2.56 8.46c-1.59 2.19-3.84 3.6-6.37 3.6-1.82 0-3.56-.74-5.02-2.08-.31-.28-.67-.42-1.07-.42-.79 0-1.63.63-1.63 1.62v21.37h21.45c.65 0 1.22-.37 1.48-.97l.04-.11c.2-.57.08-1.17-.33-1.62-1.35-1.47-2.09-3.21-2.09-5.03 0-2.53 1.41-4.78 3.6-6.37 2.19-1.59 5.18-2.56 8.45-2.56s6.26.97 8.45 2.56c2.19 1.59 3.6 3.84 3.6 6.37 0 1.82-.74 3.57-2.09 5.03-.44.48-.55 1.13-.29 1.73l.05.11c.28.54.81.86 1.43.86h21.45v-.02h22.23c1.54 0 2.45 1.27 2.45 2.46 0 .62-.23 1.2-.66 1.66l-.23.26c-1.11 1.29-1.67 2.75-1.67 4.25 0 2.16 1.2 4.18 3.22 5.67 2.03 1.49 4.85 2.43 7.99 2.43s5.96-.94 7.99-2.43c2.03-1.49 3.22-3.5 3.22-5.67 0-1.59-.64-3.15-1.9-4.5-.43-.46-.66-1.03-.66-1.66s.24-1.24.67-1.7c.46-.49 1.1-.76 1.78-.76h21.5V242c0-.99.57-1.85 1.47-2.25.91-.39 1.93-.22 2.65.46 1.35 1.26 2.91 1.91 4.5 1.91 2.16 0 4.17-1.2 5.66-3.23 1.49-2.03 2.43-4.86 2.43-8s-.94-5.97-2.43-8c-1.47-2.01-3.46-3.2-5.6-3.23h-.06c-1.6 0-3.15.64-4.51 1.91-.72.68-1.74.85-2.65.46-.9-.39-1.47-1.26-1.47-2.25V198.3h-.04v-.75h22.59c.98 0 1.62-.83 1.62-1.63 0-.4-.14-.76-.42-1.07-1.35-1.47-2.08-3.21-2.08-5.03 0-2.53 1.41-4.78 3.6-6.37 2.19-1.59 5.18-2.56 8.45-2.56s6.27.97 8.45 2.56c2.19 1.59 3.6 3.84 3.6 6.37 0 1.82-.74 3.56-2.08 5.03-.28.31-.42.67-.42 1.07 0 .8.63 1.63 1.62 1.63h21.35V0H16.7v21.36c0 1.54-1.27 2.45-2.46 2.45-.62 0-1.2-.23-1.66-.66-1.35-1.26-2.9-1.9-4.5-1.9-2.16 0-4.17 1.2-5.66 3.23-1.49 2.03-2.43 4.86-2.43 8s.94 5.97 2.43 8c1.4 1.9 3.25 3.07 5.26 3.21h.4c1.59.01 3.15-.63 4.49-1.89.46-.43 1.03-.66 1.66-.66s1.24.25 1.7.67l.18.18c.38.44.59 1 .59 1.6v21.54h21.69c.93.05 1.74.59 2.12 1.45.39.91.22 1.93-.46 2.65l-.23.26c-1.11 1.29-1.68 2.75-1.68 4.25 0 2.16 1.2 4.18 3.22 5.67 2.03 1.49 4.85 2.43 7.99 2.43s5.97-.94 7.99-2.43c2.03-1.49 3.22-3.5 3.22-5.67 0-1.6-.64-3.16-1.91-4.51-.67-.72-.85-1.74-.46-2.65zm200.56 198.05c-1.54 0-2.45-1.27-2.45-2.46 0-.62.23-1.2.66-1.66l.23-.25c1.11-1.29 1.67-2.75 1.67-4.25 0-2.16-1.2-4.18-3.22-5.67-2.03-1.49-4.85-2.43-7.99-2.43s-5.96.94-7.99 2.43c-2.03 1.49-3.22 3.5-3.22 5.67 0 1.59.64 3.15 1.9 4.5.43.46.66 1.04.66 1.66s-.24 1.24-.67 1.7c-.46.49-1.1.76-1.78.76h-21.5v21.58c0 .99-.57 1.85-1.47 2.25l-.17.07c-.86.3-1.8.11-2.48-.53-1.35-1.26-2.91-1.91-4.5-1.91-2.16 0-4.17 1.2-5.66 3.23-1.49 2.03-2.43 4.86-2.43 8 0 3.14.94 5.97 2.43 8 1.47 2.01 3.46 3.2 5.6 3.22h.06c1.59 0 3.15-.64 4.5-1.91l.14-.12c.71-.57 1.66-.71 2.51-.34.9.39 1.47 1.26 1.47 2.25v21.48h21.54c.98 0 1.62-.83 1.62-1.63 0-.39-.14-.76-.42-1.07-1.35-1.47-2.08-3.21-2.08-5.03 0-2.53 1.41-4.78 3.6-6.37 2.19-1.59 5.18-2.56 8.45-2.56s6.27.97 8.45 2.56c2.19 1.59 3.6 3.84 3.6 6.37 0 1.82-.74 3.56-2.08 5.03-.28.31-.42.67-.42 1.07 0 .8.63 1.63 1.62 1.63h21.35v-65.27h-21.5zM104.41 529.42h-21.5V551c0 .99-.57 1.85-1.47 2.25l-.17.07c-.86.3-1.8.11-2.48-.53-1.35-1.26-2.91-1.91-4.5-1.91-2.16 0-4.17 1.2-5.66 3.23-1.49 2.03-2.43 4.86-2.43 8s.94 5.97 2.43 8c1.47 2.01 3.46 3.2 5.6 3.23h.06c1.6 0 3.15-.64 4.5-1.91l.14-.12c.71-.57 1.66-.71 2.51-.34.9.39 1.47 1.26 1.47 2.25v21.34h197.36V397.04h-21.5c-1.54 0-2.45-1.27-2.45-2.46 0-.62.23-1.2.66-1.66l.23-.26c1.11-1.29 1.67-2.75 1.67-4.25 0-2.16-1.2-4.18-3.22-5.67-2.03-1.49-4.85-2.43-7.99-2.43s-5.96.94-7.99 2.43c-2.03 1.49-3.22 3.5-3.22 5.67 0 1.59.64 3.15 1.9 4.5.43.46.66 1.03.66 1.66s-.24 1.24-.67 1.7c-.46.49-1.1.76-1.78.76H231v-.02h-16.92v-16.7h-.02v-5.97c0-.99.57-1.85 1.47-2.25.91-.39 1.93-.22 2.65.46 1.35 1.26 2.91 1.91 4.5 1.91 2.16 0 4.17-1.2 5.66-3.23 1.49-2.03 2.43-4.86 2.43-8s-.94-5.97-2.43-8c-1.47-2.01-3.46-3.2-5.6-3.22h-.06c-1.6 0-3.15.64-4.51 1.91-.72.68-1.74.85-2.65.46-.9-.39-1.47-1.26-1.47-2.25v-21.48h-21.72c-.88.1-1.44.88-1.44 1.63 0 .39.14.76.42 1.07 1.35 1.47 2.08 3.21 2.08 5.03 0 2.53-1.42 4.78-3.6 6.37-2.19 1.59-5.18 2.56-8.45 2.56s-6.27-.97-8.45-2.56c-2.19-1.59-3.6-3.84-3.6-6.37 0-1.82.73-3.56 2.08-5.03.28-.31.42-.67.42-1.07 0-.8-.63-1.63-1.62-1.63h-21.35v21.47c0 .66.37 1.22.97 1.48s1.25.15 1.73-.29c1.47-1.35 3.21-2.09 5.03-2.09 2.53 0 4.77 1.42 6.36 3.6 1.59 2.19 2.56 5.18 2.56 8.46s-.97 6.27-2.56 8.46c-1.59 2.19-3.83 3.6-6.36 3.6-1.82 0-3.56-.74-5.03-2.09-.48-.44-1.13-.55-1.73-.29-.6.26-.97.83-.97 1.48v22.55h-18.05v.02h-4.16c-1.54 0-2.45-1.27-2.45-2.46 0-.62.23-1.2.66-1.66l.23-.26c1.11-1.29 1.67-2.75 1.67-4.25 0-2.16-1.2-4.18-3.22-5.67-2.03-1.49-4.85-2.43-7.99-2.43s-5.97.94-7.99 2.43c-2.03 1.49-3.22 3.5-3.22 5.67 0 1.59.64 3.15 1.9 4.5.43.46.66 1.03.66 1.66s-.25 1.24-.67 1.7c-.46.49-1.1.76-1.78.76h-21.5v21.58c0 .99-.57 1.85-1.47 2.25l-.17.07c-.86.3-1.8.11-2.48-.52-1.35-1.26-2.91-1.91-4.5-1.91-2.16 0-4.17 1.2-5.66 3.23-1.49 2.03-2.43 4.86-2.43 8s.94 5.97 2.43 8c1.47 2.01 3.46 3.2 5.6 3.22h.06c1.6 0 3.15-.64 4.5-1.91l.14-.12c.71-.57 1.66-.7 2.51-.34l.16.08c.81.42 1.31 1.24 1.31 2.17v21.48h21.54c.99 0 1.62-.83 1.62-1.63 0-.4-.14-.76-.42-1.07-1.35-1.47-2.08-3.21-2.08-5.03 0-2.53 1.41-4.78 3.6-6.37 2.19-1.59 5.18-2.56 8.45-2.56s6.26.97 8.45 2.56c2.19 1.59 3.6 3.84 3.6 6.37 0 1.82-.74 3.56-2.08 5.03-.28.31-.42.67-.42 1.07 0 .8.63 1.63 1.62 1.63h22.06v22.22c0 .66.37 1.22.97 1.48s1.25.15 1.73-.29c1.47-1.35 3.21-2.09 5.03-2.09 2.53 0 4.77 1.42 6.36 3.6 1.59 2.19 2.56 5.18 2.56 8.46s-.97 6.27-2.56 8.46c-1.59 2.19-3.83 3.6-6.36 3.6-1.82 0-3.56-.74-5.03-2.09-.48-.44-1.13-.55-1.73-.29-.6.26-.97.83-.97 1.48v22.57h-22.21c-1.54 0-2.45-1.27-2.45-2.46 0-.62.23-1.2.66-1.66l.23-.25c1.11-1.29 1.67-2.75 1.67-4.25 0-2.16-1.2-4.18-3.22-5.67-2.03-1.49-4.85-2.43-7.99-2.43s-5.97.94-7.99 2.43c-2.03 1.49-3.22 3.5-3.22 5.67 0 1.59.64 3.15 1.9 4.5.43.46.66 1.04.66 1.66s-.24 1.24-.67 1.7c-.46.49-1.1.76-1.78.76z' class='st0'/%3E%3C/g%3E%3C/svg%3E")}.frb-w25-logo{position:absolute;top:10px;right:10px;width:80px}.frb-w25-logo svg{width:100%}.frb-dialog-back{border:0;background:none;margin:0;padding:0;cursor:pointer;position:absolute;top:20px;left:20px;width:20px;height:20px;opacity:.5}.frb-dialog-back:focus,.frb-dialog-back:hover{opacity:1}.frb-dialog-title{font-size:1.8rem;font-weight:700}.frb-iad-dialog-buttons{text-align:center}.frb-iad-dialog .frb-dialog-action{width:auto;margin:0 0 8px;padding:10px 15px;display:inline-block;border-radius:2px;border:1px solid #e679a6;background-color:#e679a6;font-size:1.6rem;font-weight:700;color:#000;cursor:pointer}.frb-iad-dialog .frb-iad-dialog-close{color:#36c;border:0!important;background:0!important;text-decoration:underline;font-size:1.4rem!important}.frb-iad-dialog::-webkit-backdrop{background:hsla(0,0%,100%,.65098)}.frb-iad-dialog::backdrop{background:hsla(0,0%,100%,.65098)}.frb-decoration{position:absolute;z-index:1;opacity:.5}.frb-decoration svg{width:100%;height:auto}.frb-decoration.frb-decoration-bottom-left{bottom:0;left:0;border-radius:0 0 0 1.5em;overflow:hidden;width:235px}.frb-decoration.frb-decoration-bottom-left svg{position:relative;top:8px}.frb-decoration.frb-decoration-top-right{top:0;right:0;border-radius:0 1.5em 0 0;overflow:hidden;width:212px}.sr-only{border:0!important;clip:rect(1px,1px,1px,1px)!important;-webkit-clip-path:inset(50%)!important;clip-path:inset(50%)!important;height:1px!important;margin:-1px!important;overflow:hidden!important;padding:0!important;position:absolute!important;width:1px!important;white-space:nowrap!important}@media (prefers-color-scheme:dark){.overlay-banner-main,.overlay-banner-main .frb-header-minimize{background-color:#121212;border-color:#7f7b74}.frb-header-minimize.overlay-banner-toggle{border:1px solid #7f7b74;border-bottom:0}.overlay-banner-main-header a{color:#fc0}.overlay-banner-main-message-subheading{color:#ffe8a2}.overlay-banner-main-message{background-color:#3f3f3f;color:#fff}.overlay-banner-main-amounts,.overlay-banner-main-frequency{background-color:#282828}.overlay-banner-main .banner-button{color:#000;background-color:#8b8b8b;border:1px solid #8b8b8b}.overlay-banner-main .banner-button:focus,.overlay-banner-main .banner-button:hover{color:#000;background-color:#ffd13b;border:1px solid #ffd13b}.overlay-banner-main .banner-button:focus,.overlay-banner-main .banner-button:focus-within{border-color:#fff;box-shadow:inset 0 0 0 1px #fff,inset 0 0 0 2px #fff;outline:0}.overlay-banner-main .banner-button.selected{background-color:#fc0;border-color:#fc0;color:#000}.overlay-banner-main-footer-identity{color:#ffe8a2}.overlay-banner-main-footer-identity img{filter:url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg"><filter id="filter"><feComponentTransfer color-interpolation-filters="sRGB"><feFuncR type="table" tableValues="1 0" /><feFuncG type="table" tableValues="1 0" /><feFuncB type="table" tableValues="1 0" /></feComponentTransfer></filter></svg>#filter');-webkit-filter:invert(1);filter:invert(1)}.overlay-banner-main .button-collapse{color:#fc0}.overlay-banner-mini{background-color:#121212;border-color:#7f7b74}.overlay-banner-mini-message h3{color:#ffe8a2}.overlay-banner-mini-message p{color:#fff}.overlay-banner-mini .frb-message-icon circle{fill:#fc0}.overlay-banner-mini .frb-message-icon path{fill:#000}.overlay-banner-mini .frb-submit{color:#000;background-color:#8b8b8b;border:1px solid #8b8b8b}.overlay-banner-mini .frb-submit:focus,.overlay-banner-mini .frb-submit:hover{color:#000;background-color:#ffd13b;border:1px solid #ffd13b}.overlay-banner-mini .frb-submit:focus,.overlay-banner-mini .frb-submit:focus-within{border-color:#fff;box-shadow:inset 0 0 0 1px #fff,inset 0 0 0 2px #fff;outline:0}.overlay-banner-mini.visible .frb-conversation-close,.overlay-banner-mini.visible .frb-conversation-open{border:1px solid #7f7b74;border-bottom-color:#121212;background-color:#121212;top:-48px}.overlay-banner-main-footer-cta{background:#5a1e2d;color:#fff}.overlay-banner-main-footer-identity-logo svg path:first-child{fill:#fff}.overlay-banner-main-footer-identity p{color:#fff}.frb-iad-dialog{background-color:#121212;border-color:#7f7b74}.frb-dialog-title{color:#f9dde9}.frb-dialog-text{color:#fff}.frb-iad-dialog .frb-iad-dialog-close{color:#f9dde9}.frb-iad-dialog .frb-iad-dialog-close:focus,.frb-iad-dialog .frb-iad-dialog-close:hover{color:#fff}.frb-dialog-back{filter:url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg"><filter id="filter"><feComponentTransfer color-interpolation-filters="sRGB"><feFuncR type="table" tableValues="1 0" /><feFuncG type="table" tableValues="1 0" /><feFuncB type="table" tableValues="1 0" /></feComponentTransfer></filter></svg>#filter');-webkit-filter:invert(1);filter:invert(1)}.frb-iad-dialog::-webkit-backdrop{background:rgba(0,0,0,.65098)}.frb-iad-dialog::backdrop{background:rgba(0,0,0,.65098)}.frb-decoration{opacity:.15}.frb-w25-logo{filter:url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg"><filter id="filter"><feComponentTransfer color-interpolation-filters="sRGB"><feFuncR type="table" tableValues="1 0" /><feFuncG type="table" tableValues="1 0" /><feFuncB type="table" tableValues="1 0" /></feComponentTransfer></filter></svg>#filter');-webkit-filter:invert(1);filter:invert(1)}}
+</style>
+<link rel="preconnect" href="//upload.wikimedia.org">
+<link rel="me" href="https://wikis.world/@wikipedia">
+<meta property="og:url" content>
+<meta property="og:title" content="Wikipedia, the free encyclopedia">
+<meta property="og:type" content="website">
+<meta property="og:description" content="Wikipedia is a free online encyclopedia, created and edited by volunteers around the world and hosted by the Wikimedia Foundation.">
+<meta property="og:image" content="https://upload.wikimedia.org/wikipedia/en/thumb/8/80/Wikipedia-logo-v2.svg/2244px-Wikipedia-logo-v2.svg.png">
+</head>
+<body id="www-wikipedia-org">
+<main>
+<div class="central-textlogo">
+<img class="central-featured-logo" src="assets/75038605ff9e35cc393e0ed820006960.png" srcset="assets/4f132fa443416f4d9433663b89b8a1bc.png 1.5x, assets/fcc863f51b6e3372ebaf8aa52da11b93.png 2x" width="200" height="183" alt>
+<h1 class="central-textlogo-wrapper">
+<span class="central-textlogo__image sprite svg-Wikipedia_wordmark">
+Wikipedia
+</span>
+<strong class="jsl10n localized-slogan" data-jsl10n="portal.slogan">The Free Encyclopedia</strong>
+</h1>
+</div>
+<nav data-jsl10n="top-ten-nav-label" aria-label="Top languages" class="central-featured" data-el-section="primary links">
+<!-- #1. en.wikipedia.org - 1,573,707,000 views/day -->
+<div class="central-featured-lang lang1" lang="en" dir="ltr">
+<a id="js-link-box-en" href="//en.wikipedia.org/" title="English — Wikipedia — The Free Encyclopedia" class="link-box" data-slogan="The Free Encyclopedia">
+<strong>English</strong>
+<small>7,102,000+ <span>articles</span></small>
+</a>
+</div>
+<!-- #2. ja.wikipedia.org - 196,242,000 views/day -->
+<div class="central-featured-lang lang2" lang="ja" dir="ltr">
+<a id="js-link-box-ja" href="//ja.wikipedia.org/" title="Nihongo — ウィキペディア — フリー百科事典" class="link-box" data-slogan="フリー百科事典">
+<strong>日本語</strong>
+<small>1,483,000+ <span>記事</span></small>
+</a>
+</div>
+<!-- #3. ru.wikipedia.org - 166,171,000 views/day -->
+<div class="central-featured-lang lang3" lang="ru" dir="ltr">
+<a id="js-link-box-ru" href="//ru.wikipedia.org/" title="Russkiy — Википедия — Свободная энциклопедия" class="link-box" data-slogan="Свободная энциклопедия">
+<strong>Русский</strong>
+<small>2 074 000+ <span>статей</span></small>
+</a>
+</div>
+<!-- #4. de.wikipedia.org - 163,887,000 views/day -->
+<div class="central-featured-lang lang4" lang="de" dir="ltr">
+<a id="js-link-box-de" href="//de.wikipedia.org/" title="Deutsch — Wikipedia — Die freie Enzyklopädie" class="link-box" data-slogan="Die freie Enzyklopädie">
+<strong>Deutsch</strong>
+<small>3.075.000+ <span>Artikel</span></small>
+</a>
+</div>
+<!-- #5. fr.wikipedia.org - 145,355,000 views/day -->
+<div class="central-featured-lang lang5" lang="fr" dir="ltr">
+<a id="js-link-box-fr" href="//fr.wikipedia.org/" title="Français — Wikipédia — L’encyclopédie libre" class="link-box" data-slogan="L’encyclopédie libre">
+<strong>Français</strong>
+<small>2 724 000+ <span>articles</span></small>
+</a>
+</div>
+<!-- #6. es.wikipedia.org - 128,206,000 views/day -->
+<div class="central-featured-lang lang6" lang="es" dir="ltr">
+<a id="js-link-box-es" href="//es.wikipedia.org/" title="Español — Wikipedia — La enciclopedia libre" class="link-box" data-slogan="La enciclopedia libre">
+<strong>Español</strong>
+<small>2.078.000+ <span>artículos</span></small>
+</a>
+</div>
+<!-- #7. zh.wikipedia.org - 101,185,000 views/day -->
+<div class="central-featured-lang lang7" lang="zh" dir="ltr">
+<a id="js-link-box-zh" href="//zh.wikipedia.org/" title="Zhōngwén — 维基百科 / 維基百科 — 自由的百科全书 / 自由的百科全書" class="link-box localize-variant" data-slogan="自由的百科全书 / 自由的百科全書">
+<strong>中文</strong>
+<small>1,514,000+ <span>条目 / 條目</span></small>
+</a>
+</div>
+<!-- #8. it.wikipedia.org - 94,510,000 views/day -->
+<div class="central-featured-lang lang8" lang="it" dir="ltr">
+<a id="js-link-box-it" href="//it.wikipedia.org/" title="Italiano — Wikipedia — L&#x27;enciclopedia libera" class="link-box" data-slogan="L&#x27;enciclopedia libera">
+<strong>Italiano</strong>
+<small>1.947.000+ <span>voci</span></small>
+</a>
+</div>
+<!-- #9. pl.wikipedia.org - 49,064,000 views/day -->
+<div class="central-featured-lang lang9" lang="pl" dir="ltr">
+<a id="js-link-box-pl" href="//pl.wikipedia.org/" title="Polski — Wikipedia — Wolna encyklopedia" class="link-box" data-slogan="Wolna encyklopedia">
+<strong>Polski</strong>
+<small>1 677 000+ <span>haseł</span></small>
+</a>
+</div>
+<!-- #10. pt.wikipedia.org - 43,524,000 views/day -->
+<div class="central-featured-lang lang10" lang="pt" dir="ltr">
+<a id="js-link-box-pt" href="//pt.wikipedia.org/" title="Português — Wikipédia — A Enciclopédia Livre" class="link-box" data-slogan="A Enciclopédia Livre">
+<strong>Português</strong>
+<small>1.161.000+ <span>artigos</span></small>
+</a>
+</div>
+</nav>
+<div role="search" class="search-container">
+<form class="pure-form" id="search-form" action="//www.wikipedia.org/search-redirect.php" data-el-section="search">
+<fieldset>
+<input type="hidden" name="family" value="wikipedia">
+<div class="search-input" id="search-input">
+<label for="searchInput" class="screen-reader-text" data-jsl10n="portal.search-input-label">Search Wikipedia</label>
+<input id="searchInput" name="search" type="search" size="20" autofocus="autofocus" accesskey="F" dir="auto" autocomplete="off">
+<div class="styled-select no-js">
+<div class="hide-arrow">
+<select id="searchLanguage" name="language">
+<option value="af" lang="af">Afrikaans</option>
+<option value="sq" lang="sq">Shqip</option><!-- Anglisht -->
+<option value="ar" lang="ar">العربية</option><!-- Al-ʿArabīyah -->
+<option value="ast" lang="ast">Asturianu</option>
+<option value="az" lang="az">Azərbaycanca</option>
+<option value="bg" lang="bg">Български</option><!-- Bǎlgarski -->
+<option value="nan" lang="nan">閩南語 / Bân-lâm-gú</option><!-- Bân-lâm-gú -->
+<option value="bn" lang="bn">বাংলা</option><!-- Bangla -->
+<option value="be" lang="be">Беларуская</option><!-- Belaruskaya -->
+<option value="ca" lang="ca">Català</option>
+<option value="cs" lang="cs">Čeština</option>
+<option value="cy" lang="cy">Cymraeg</option>
+<option value="da" lang="da">Dansk</option>
+<option value="de" lang="de">Deutsch</option>
+<option value="et" lang="et">Eesti</option>
+<option value="el" lang="el">Ελληνικά</option><!-- Ellīniká -->
+<option value="en" lang="en" selected=selected>English</option><!-- English -->
+<option value="es" lang="es">Español</option><!-- Español -->
+<option value="eo" lang="eo">Esperanto</option>
+<option value="eu" lang="eu">Euskara</option>
+<option value="fa" lang="fa">فارسی</option><!-- Fārsi -->
+<option value="fr" lang="fr">Français</option>
+<option value="gl" lang="gl">Galego</option><!-- Galego -->
+<option value="ko" lang="ko">한국어</option><!-- Hangugeo -->
+<option value="hy" lang="hy">Հայերեն</option><!-- Hayeren -->
+<option value="hi" lang="hi">हिन्दी</option><!-- Hindī -->
+<option value="hr" lang="hr">Hrvatski</option>
+<option value="id" lang="id">Bahasa Indonesia</option>
+<option value="it" lang="it">Italiano</option>
+<option value="he" lang="he">עברית</option><!-- Ivrit -->
+<option value="ka" lang="ka">ქართული</option><!-- Kartuli -->
+<option value="lld" lang="lld">Ladin</option>
+<option value="la" lang="la">Latina</option>
+<option value="lv" lang="lv">Latviešu</option>
+<option value="lt" lang="lt">Lietuvių</option>
+<option value="hu" lang="hu">Magyar</option>
+<option value="mk" lang="mk">Македонски</option><!-- Makedonski -->
+<option value="mg" lang="mg">Malagasy</option>
+<option value="mr" lang="mr">मराठी</option><!-- Marathi -->
+<option value="arz" lang="arz">مصرى</option><!-- Maṣrī -->
+<option value="ms" lang="ms">Bahasa Melayu</option><!-- Bahasa Melayu -->
+<option value="min" lang="min">Bahaso Minangkabau</option>
+<option value="my" lang="my">မြန်မာဘာသာ</option><!-- Myanmarsar -->
+<option value="nl" lang="nl">Nederlands</option>
+<option value="ja" lang="ja">日本語</option><!-- Nihongo -->
+<option value="no" lang="nb">Norsk (bokmål)</option>
+<option value="nn" lang="nn">Norsk (nynorsk)</option>
+<option value="ce" lang="ce">Нохчийн</option><!-- Noxçiyn -->
+<option value="uz" lang="uz">Oʻzbekcha / Ўзбекча</option>
+<option value="pl" lang="pl">Polski</option>
+<option value="pt" lang="pt">Português</option>
+<option value="kk" lang="kk">Қазақша / Qazaqşa / قازاقشا</option>
+<option value="ro" lang="ro">Română</option>
+<option value="simple" lang="en">Simple English</option>
+<option value="ceb" lang="ceb">Sinugboanong Binisaya</option>
+<option value="sk" lang="sk">Slovenčina</option>
+<option value="sl" lang="sl">Slovenščina</option><!-- Slovenščina -->
+<option value="sr" lang="sr">Српски / Srpski</option>
+<option value="sh" lang="sh">Srpskohrvatski / Српскохрватски</option>
+<option value="fi" lang="fi">Suomi</option>
+<option value="sv" lang="sv">Svenska</option>
+<option value="sw" lang="sw">Kiswahili</option>
+<option value="ta" lang="ta">தமிழ்</option><!-- Tamiḻ -->
+<option value="tt" lang="tt">Татарча / Tatarça</option>
+<option value="te" lang="te">తెలుగు</option><!-- Telugu -->
+<option value="th" lang="th">ภาษาไทย</option><!-- Phasa Thai -->
+<option value="tg" lang="tg">Тоҷикӣ</option><!-- Tojikī -->
+<option value="azb" lang="azb">تۆرکجه</option><!-- Türkce -->
+<option value="tr" lang="tr">Türkçe</option><!-- Türkçe -->
+<option value="uk" lang="uk">Українська</option><!-- Ukrayins’ka -->
+<option value="ur" lang="ur">اردو</option><!-- Urdu -->
+<option value="vi" lang="vi">Tiếng Việt</option>
+<option value="war" lang="war">Winaray</option>
+<option value="zh" lang="zh">中文</option><!-- Zhōngwén -->
+<option value="ru" lang="ru">Русский</option><!-- Russkiy -->
+<option value="yue" lang="yue">粵語</option>
+</select>
+<div class="styled-select-active-helper"></div>
+</div>
+<i class="sprite svg-arrow-down"></i>
+</div>
+</div>
+<button class="pure-button pure-button-primary-progressive" type="submit">
+<i class="sprite svg-search-icon" data-jsl10n="search-input-button">Search</i>
+</button>
+<input type="hidden" value="Go" name="go">
+</fieldset>
+</form>
+</div>
+<nav data-jsl10n="all-languages-nav-label" aria-label="All languages">
+<div class="lang-list-button-wrapper">
+<button id="js-lang-list-button" aria-expanded="false" aria-controls="js-lang-lists" class="lang-list-button">
+<i class="sprite svg-language-icon"></i>
+<span class="lang-list-button-text jsl10n" data-jsl10n="portal.language-button-text">Read Wikipedia in your language </span>
+<i class="sprite svg-arrow-down-blue"></i>
+</button>
+</div>
+<div class="lang-list-border"></div>
+<div class="lang-list-container">
+<div id="js-lang-lists" class="lang-list-content">
+<h2 class="bookshelf-container">
+<span class="bookshelf">
+<span class="text">
+<bdi dir="ltr">
+1,000,000+
+</bdi>
+<span class="jsl10n" data-jsl10n="entries">
+articles
+</span>
+</span>
+</span>
+</h2>
+<div class="langlist langlist-large hlist" data-el-section="secondary links">
+<ul>
+<li><a href="//ar.wikipedia.org/" lang="ar" title="Al-ʿArabīyah"><bdi dir="rtl">العربية</bdi></a></li>
+<li><a href="//de.wikipedia.org/" lang="de">Deutsch</a></li>
+<li><a href="//en.wikipedia.org/" lang="en" title="English">English</a></li>
+<li><a href="//es.wikipedia.org/" lang="es" title="Español">Español</a></li>
+<li><a href="//fa.wikipedia.org/" lang="fa" title="Fārsi"><bdi dir="rtl">فارسی</bdi></a></li>
+<li><a href="//fr.wikipedia.org/" lang="fr">Français</a></li>
+<li><a href="//it.wikipedia.org/" lang="it">Italiano</a></li>
+<li><a href="//arz.wikipedia.org/" lang="arz" title="Maṣrī"><bdi dir="rtl">مصرى</bdi></a></li>
+<li><a href="//nl.wikipedia.org/" lang="nl">Nederlands</a></li>
+<li><a href="//ja.wikipedia.org/" lang="ja" title="Nihongo">日本語</a></li>
+<li><a href="//pl.wikipedia.org/" lang="pl">Polski</a></li>
+<li><a href="//pt.wikipedia.org/" lang="pt">Português</a></li>
+<li><a href="//ceb.wikipedia.org/" lang="ceb">Sinugboanong Binisaya</a></li>
+<li><a href="//sv.wikipedia.org/" lang="sv">Svenska</a></li>
+<li><a href="//uk.wikipedia.org/" lang="uk" title="Ukrayins’ka">Українська</a></li>
+<li><a href="//vi.wikipedia.org/" lang="vi">Tiếng Việt</a></li>
+<li><a href="//war.wikipedia.org/" lang="war">Winaray</a></li>
+<li><a href="//zh.wikipedia.org/" lang="zh" title="Zhōngwén">中文</a></li>
+<li><a href="//ru.wikipedia.org/" lang="ru" title="Russkiy">Русский</a></li>
+</ul>
+</div>
+<h2 class="bookshelf-container">
+<span class="bookshelf">
+<span class="text">
+<bdi dir="ltr">
+100,000+
+</bdi>
+<span class="jsl10n" data-jsl10n="portal.entries">
+articles
+</span>
+</span>
+</span>
+</h2>
+<div class="langlist langlist-large hlist" data-el-section="secondary links">
+<ul>
+<li><a href="//af.wikipedia.org/" lang="af">Afrikaans</a></li>
+<li><a href="//sq.wikipedia.org/" lang="sq" title="Anglisht">Shqip</a></li>
+<li><a href="//ast.wikipedia.org/" lang="ast">Asturianu</a></li>
+<li><a href="//az.wikipedia.org/" lang="az">Azərbaycanca</a></li>
+<li><a href="//bg.wikipedia.org/" lang="bg" title="Bǎlgarski">Български</a></li>
+<li><a href="//zh-min-nan.wikipedia.org/" lang="nan" title="Bân-lâm-gú">閩南語 / Bân-lâm-gú</a></li>
+<li><a href="//bn.wikipedia.org/" lang="bn" title="Bangla">বাংলা</a></li>
+<li><a href="//be.wikipedia.org/" lang="be" title="Belaruskaya">Беларуская</a></li>
+<li><a href="//ca.wikipedia.org/" lang="ca">Català</a></li>
+<li><a href="//cs.wikipedia.org/" lang="cs">Čeština</a></li>
+<li><a href="//cy.wikipedia.org/" lang="cy">Cymraeg</a></li>
+<li><a href="//da.wikipedia.org/" lang="da">Dansk</a></li>
+<li><a href="//et.wikipedia.org/" lang="et">Eesti</a></li>
+<li><a href="//el.wikipedia.org/" lang="el" title="Ellīniká">Ελληνικά</a></li>
+<li><a href="//eo.wikipedia.org/" lang="eo">Esperanto</a></li>
+<li><a href="//eu.wikipedia.org/" lang="eu">Euskara</a></li>
+<li><a href="//gl.wikipedia.org/" lang="gl" title="Galego">Galego</a></li>
+<li><a href="//ko.wikipedia.org/" lang="ko" title="Hangugeo">한국어</a></li>
+<li><a href="//hy.wikipedia.org/" lang="hy" title="Hayeren">Հայերեն</a></li>
+<li><a href="//hi.wikipedia.org/" lang="hi" title="Hindī">हिन्दी</a></li>
+<li><a href="//hr.wikipedia.org/" lang="hr">Hrvatski</a></li>
+<li><a href="//id.wikipedia.org/" lang="id">Bahasa Indonesia</a></li>
+<li><a href="//he.wikipedia.org/" lang="he" title="Ivrit"><bdi dir="rtl">עברית</bdi></a></li>
+<li><a href="//ka.wikipedia.org/" lang="ka" title="Kartuli">ქართული</a></li>
+<li><a href="//lld.wikipedia.org/" lang="lld">Ladin</a></li>
+<li><a href="//la.wikipedia.org/" lang="la">Latina</a></li>
+<li><a href="//lv.wikipedia.org/" lang="lv">Latviešu</a></li>
+<li><a href="//lt.wikipedia.org/" lang="lt">Lietuvių</a></li>
+<li><a href="//hu.wikipedia.org/" lang="hu">Magyar</a></li>
+<li><a href="//mk.wikipedia.org/" lang="mk" title="Makedonski">Македонски</a></li>
+<li><a href="//mg.wikipedia.org/" lang="mg">Malagasy</a></li>
+<li><a href="//mr.wikipedia.org/" lang="mr" title="Marathi">मराठी</a></li>
+<li><a href="//ms.wikipedia.org/" lang="ms" title="Bahasa Melayu">Bahasa Melayu</a></li>
+<li><a href="//min.wikipedia.org/" lang="min">Bahaso Minangkabau</a></li>
+<li><a href="//my.wikipedia.org/" lang="my" title="Myanmarsar">မြန်မာဘာသာ</a></li>
+<li lang="no">Norsk<ul><li><a href="//no.wikipedia.org/" lang="nb">bokmål</a></li><li><a href="//nn.wikipedia.org/" lang="nn">nynorsk</a></li></ul></li>
+<li><a href="//ce.wikipedia.org/" lang="ce" title="Noxçiyn">Нохчийн</a></li>
+<li><a href="//uz.wikipedia.org/" lang="uz">Oʻzbekcha / Ўзбекча</a></li>
+<li><a href="//kk.wikipedia.org/" lang="kk"><span lang="kk-Cyrl">Қазақша</span> / <span lang="kk-Latn">Qazaqşa</span> / <bdi lang="kk-Arab" dir="rtl">قازاقشا</bdi></a></li>
+<li><a href="//ro.wikipedia.org/" lang="ro">Română</a></li>
+<li><a href="//simple.wikipedia.org/" lang="en">Simple English</a></li>
+<li><a href="//sk.wikipedia.org/" lang="sk">Slovenčina</a></li>
+<li><a href="//sl.wikipedia.org/" lang="sl" title="Slovenščina">Slovenščina</a></li>
+<li><a href="//sr.wikipedia.org/" lang="sr">Српски / Srpski</a></li>
+<li><a href="//sh.wikipedia.org/" lang="sh">Srpskohrvatski / Српскохрватски</a></li>
+<li><a href="//fi.wikipedia.org/" lang="fi">Suomi</a></li>
+<li><a href="//sw.wikipedia.org/" lang="sw">Kiswahili</a></li>
+<li><a href="//ta.wikipedia.org/" lang="ta" title="Tamiḻ">தமிழ்</a></li>
+<li><a href="//tt.wikipedia.org/" lang="tt">Татарча / Tatarça</a></li>
+<li><a href="//te.wikipedia.org/" lang="te" title="Telugu">తెలుగు</a></li>
+<li><a href="//th.wikipedia.org/" lang="th" title="Phasa Thai">ภาษาไทย</a></li>
+<li><a href="//tg.wikipedia.org/" lang="tg" title="Tojikī">Тоҷикӣ</a></li>
+<li><a href="//azb.wikipedia.org/" lang="azb" title="Türkce"><bdi dir="rtl">تۆرکجه</bdi></a></li>
+<li><a href="//tr.wikipedia.org/" lang="tr" title="Türkçe">Türkçe</a></li>
+<li><a href="//ur.wikipedia.org/" lang="ur" title="Urdu"><bdi dir="rtl">اردو</bdi></a></li>
+<li><a href="//zh-yue.wikipedia.org/" lang="yue">粵語</a></li>
+</ul>
+</div>
+<h2 class="bookshelf-container">
+<span class="bookshelf">
+<span class="text">
+<bdi dir="ltr">
+10,000+
+</bdi>
+<span class="jsl10n" data-jsl10n="portal.entries">
+articles
+</span>
+</span>
+</span>
+</h2>
+<div class="langlist hlist" data-el-section="secondary links">
+<ul>
+<li><a href="//ace.wikipedia.org/" lang="ace">Bahsa Acèh</a></li>
+<li><a href="//als.wikipedia.org/" lang="gsw">Alemannisch</a></li>
+<li><a href="//am.wikipedia.org/" lang="am" title="Āmariññā">አማርኛ</a></li>
+<li><a href="//an.wikipedia.org/" lang="an">Aragonés</a></li>
+<li><a href="//hyw.wikipedia.org/" lang="hyw" title="Arevmdahayeren">Արեւմտահայերէն</a></li>
+<li><a href="//gor.wikipedia.org/" lang="gor">Bahasa Hulontalo</a></li>
+<li><a href="//ban.wikipedia.org/" lang="ban" title="Basa Bali">Basa Bali</a></li>
+<li><a href="//bjn.wikipedia.org/" lang="bjn">Bahasa Banjar</a></li>
+<li><a href="//map-bms.wikipedia.org/" lang="map-x-bms">Basa Banyumasan</a></li>
+<li><a href="//ba.wikipedia.org/" lang="ba" title="Başqortsa">Башҡортса</a></li>
+<li><a href="//be-tarask.wikipedia.org/" lang="be-tarask" title="Bielaruskaja (taraškievica)">Беларуская (тарашкевіца)</a></li>
+<li><a href="//bcl.wikipedia.org/" lang="bcl">Bikol Central</a></li>
+<li><a href="//bpy.wikipedia.org/" lang="bpy" title="Bishnupriya Manipuri">বিষ্ণুপ্রিয়া মণিপুরী</a></li>
+<li><a href="//bar.wikipedia.org/" lang="bar">Boarisch</a></li>
+<li><a href="//bs.wikipedia.org/" lang="bs">Bosanski</a></li>
+<li><a href="//br.wikipedia.org/" lang="br">Brezhoneg</a></li>
+<li><a href="//cv.wikipedia.org/" lang="cv" title="Čăvašla">Чӑвашла</a></li>
+<li><a href="//dag.wikipedia.org/" lang="dag">Dagbanli</a></li>
+<li><a href="//ary.wikipedia.org/" lang="ary" title="Darija"><bdi dir="rtl">الدارجة</bdi></a></li>
+<li><a href="//nv.wikipedia.org/" lang="nv">Diné Bizaad</a></li>
+<li><a href="//eml.wikipedia.org/" lang="roa-x-eml">Emigliàn–Rumagnòl</a></li>
+<li><a href="//hif.wikipedia.org/" lang="hif">Fiji Hindi</a></li>
+<li><a href="//fo.wikipedia.org/" lang="fo">Føroyskt</a></li>
+<li><a href="//fy.wikipedia.org/" lang="fy">Frysk</a></li>
+<li><a href="//ff.wikipedia.org/" lang="ff">Fulfulde</a></li>
+<li><a href="//ga.wikipedia.org/" lang="ga">Gaeilge</a></li>
+<li><a href="//gd.wikipedia.org/" lang="gd">Gàidhlig</a></li>
+<li><a href="//glk.wikipedia.org/" lang="glk" title="Giləki"><bdi dir="rtl">گیلکی</bdi></a></li>
+<li><a href="//gu.wikipedia.org/" lang="gu" title="Gujarati">ગુજરાતી</a></li>
+<li><a href="//hak.wikipedia.org/" lang="hak">Hak-kâ-ngî / 客家語</a></li>
+<li><a href="//ha.wikipedia.org/" lang="ha">Hausa</a></li>
+<li><a href="//hsb.wikipedia.org/" lang="hsb">Hornjoserbsce</a></li>
+<li><a href="//io.wikipedia.org/" lang="io">Ido</a></li>
+<li><a href="//ig.wikipedia.org/" lang="ig">Igbo</a></li>
+<li><a href="//ilo.wikipedia.org/" lang="ilo">Ilokano</a></li>
+<li><a href="//ia.wikipedia.org/" lang="ia">Interlingua</a></li>
+<li><a href="//ie.wikipedia.org/" lang="ie">Interlingue</a></li>
+<li><a href="//os.wikipedia.org/" lang="os" title="Iron">Ирон</a></li>
+<li><a href="//is.wikipedia.org/" lang="is">Íslenska</a></li>
+<li><a href="//jv.wikipedia.org/" lang="jv">Jawa</a></li>
+<li><a href="//kn.wikipedia.org/" lang="kn" title="Kannada">ಕನ್ನಡ</a></li>
+<li><a href="//pam.wikipedia.org/" lang="pam">Kapampangan</a></li>
+<li><a href="//km.wikipedia.org/" lang="km" title="Phéasa Khmér">ភាសាខ្មែរ</a></li>
+<li><a href="//avk.wikipedia.org/" lang="avk">Kotava</a></li>
+<li><a href="//ht.wikipedia.org/" lang="ht">Kreyòl Ayisyen</a></li>
+<li><a href="//ku.wikipedia.org/" lang="ku"><span lang="ku-Latn">Kurdî</span> / <bdi lang="ku-Arab" dir="rtl">كوردی</bdi></a></li>
+<li><a href="//ckb.wikipedia.org/" lang="ckb" title="Kurdîy Nawendî"><bdi dir="rtl">کوردیی ناوەندی</bdi></a></li>
+<li><a href="//ky.wikipedia.org/" lang="ky" title="Kyrgyzča">Кыргызча</a></li>
+<li><a href="//mrj.wikipedia.org/" lang="mjr" title="Kyryk Mary">Кырык мары</a></li>
+<li><a href="//lb.wikipedia.org/" lang="lb">Lëtzebuergesch</a></li>
+<li><a href="//lij.wikipedia.org/" lang="lij">Lìgure</a></li>
+<li><a href="//li.wikipedia.org/" lang="li">Limburgs</a></li>
+<li><a href="//lmo.wikipedia.org/" lang="lmo">Lombard</a></li>
+<li><a href="//mai.wikipedia.org/" lang="mai" title="Maithilī">मैथिली</a></li>
+<li><a href="//ml.wikipedia.org/" lang="ml" title="Malayalam">മലയാളം</a></li>
+<li><a href="//xmf.wikipedia.org/" lang="xmf" title="Margaluri">მარგალური</a></li>
+<li><a href="//mzn.wikipedia.org/" lang="mzn" title="Mäzeruni"><bdi dir="rtl">مازِرونی</bdi></a></li>
+<li><a href="//cdo.wikipedia.org/" lang="cdo" title="Ming-deng-ngu">Mìng-dĕ̤ng-ngṳ̄ / 閩東語</a></li>
+<li><a href="//mn.wikipedia.org/" lang="mn" title="Mongol">Монгол</a></li>
+<li><a href="//nap.wikipedia.org/" lang="nap">Napulitano</a></li>
+<li><a href="//new.wikipedia.org/" lang="new" title="Nepal Bhasa">नेपाल भाषा</a></li>
+<li><a href="//frr.wikipedia.org/" lang="frr">Nordfriisk</a></li>
+<li><a href="//oc.wikipedia.org/" lang="oc">Occitan</a></li>
+<li><a href="//mhr.wikipedia.org/" lang="mhr" title="Olyk Marij">Олык марий</a></li>
+<li><a href="//or.wikipedia.org/" lang="or" title="Oṛiā">ଓଡି଼ଆ</a></li>
+<li><a href="//as.wikipedia.org/" lang="as" title="Ôxômiya">অসমীযা়</a></li>
+<li><a href="//pa.wikipedia.org/" lang="pa" title="Pañjābī (Gurmukhī)">ਪੰਜਾਬੀ</a></li>
+<li><a href="//pnb.wikipedia.org/" lang="pnb" title="Pañjābī (Shāhmukhī)"><bdi dir="rtl">پنجابی (شاہ مکھی)</bdi></a></li>
+<li><a href="//ps.wikipedia.org/" lang="ps" title="Paʂto"><bdi dir="rtl">پښتو</bdi></a></li>
+<li><a href="//pms.wikipedia.org/" lang="pms">Piemontèis</a></li>
+<li><a href="//nds.wikipedia.org/" lang="nds">Plattdüütsch</a></li>
+<li><a href="//kaa.wikipedia.org/" lang="kaa">Qaraqalpaqsha</a></li>
+<li><a href="//crh.wikipedia.org/" lang="crh">Qırımtatarca</a></li>
+<li><a href="//qu.wikipedia.org/" lang="qu">Runa Simi</a></li>
+<li><a href="//rue.wikipedia.org/" lang="rue" title="Rusin’skyj">Русиньскый</a></li>
+<li><a href="//sa.wikipedia.org/" lang="sa" title="Saṃskṛtam">संस्कृतम्</a></li>
+<li><a href="//sat.wikipedia.org/" lang="sat" title="Santali">ᱥᱟᱱᱛᱟᱲᱤ</a></li>
+<li><a href="//skr.wikipedia.org/" lang="skr" title="Saraiki">سرائیکی</a></li>
+<li><a href="//sah.wikipedia.org/" lang="sah" title="Saxa Tyla">Саха Тыла</a></li>
+<li><a href="//sco.wikipedia.org/" lang="sco">Scots</a></li>
+<li><a href="//sn.wikipedia.org/" lang="sn">ChiShona</a></li>
+<li><a href="//scn.wikipedia.org/" lang="scn">Sicilianu</a></li>
+<li><a href="//si.wikipedia.org/" lang="si" title="Siṃhala">සිංහල</a></li>
+<li><a href="//sd.wikipedia.org/" lang="sd" title="Sindhī"><bdi dir="rtl">سنڌي</bdi></a></li>
+<li><a href="//szl.wikipedia.org/" lang="szl">Ślůnski</a></li>
+<li><a href="//su.wikipedia.org/" lang="su">Basa Sunda</a></li>
+<li><a href="//shi.wikipedia.org/" lang="shi">Taclḥit</a></li>
+<li><a href="//tl.wikipedia.org/" lang="tl">Tagalog</a></li>
+<li><a href="//shn.wikipedia.org/" lang="shn">ၽႃႇသႃႇတႆး</a></li>
+<li><a href="//zgh.wikipedia.org/" lang="zgh" title="Tamazight tanawayt">ⵜⴰⵎⴰⵣⵉⵖⵜ ⵜⴰⵏⴰⵡⴰⵢⵜ</a></li>
+<li><a href="//tly.wikipedia.org/" lang="tly">tolışi</a></li>
+<li><a href="//tum.wikipedia.org/" lang="tum">chiTumbuka</a></li>
+<li><a href="//bug.wikipedia.org/" lang="bug">Basa Ugi</a></li>
+<li><a href="//vec.wikipedia.org/" lang="vec">Vèneto</a></li>
+<li><a href="//vo.wikipedia.org/" lang="vo">Volapük</a></li>
+<li><a href="//wa.wikipedia.org/" lang="wa">Walon</a></li>
+<li><a href="//zh-classical.wikipedia.org/" lang="lzh" title="Wényán">文言</a></li>
+<li><a href="//wuu.wikipedia.org/" lang="wuu" title="Wúyǔ">吴语</a></li>
+<li><a href="//yi.wikipedia.org/" lang="yi" title="Yidiš"><bdi dir="rtl">ייִדיש</bdi></a></li>
+<li><a href="//yo.wikipedia.org/" lang="yo">Yorùbá</a></li>
+<li><a href="//diq.wikipedia.org/" lang="diq">Zazaki</a></li>
+<li><a href="//bat-smg.wikipedia.org/" lang="sgs">žemaitėška</a></li>
+<li><a href="//zu.wikipedia.org/" lang="zu">isiZulu</a></li>
+<li><a href="//ne.wikipedia.org/" lang="ne" title="Nepālī">नेपाली</a></li>
+<li><a href="//mni.wikipedia.org/" lang="mni">ꯃꯤꯇꯩ ꯂꯣꯟ</a></li>
+</ul>
+</div>
+<h2 class="bookshelf-container">
+<span class="bookshelf">
+<span class="text">
+<bdi dir="ltr">
+1,000+
+</bdi>
+<span class="jsl10n" data-jsl10n="portal.entries">
+articles
+</span>
+</span>
+</span>
+</h2>
+<div class="langlist hlist" data-el-section="secondary links">
+<ul>
+<li><a href="//lad.wikipedia.org/" lang="lad"><span lang="lad-Latn">Dzhudezmo</span> / <bdi lang="lad-Hebr" dir="rtl">לאדינו</bdi></a></li>
+<li><a href="//kbd.wikipedia.org/" lang="kbd" title="Adighabze">Адыгэбзэ</a></li>
+<li><a href="//ang.wikipedia.org/" lang="ang">Ænglisc</a></li>
+<li><a href="//smn.wikipedia.org/" lang="smn" title="Anarâškielâ">Anarâškielâ</a></li>
+<li><a href="//anp.wikipedia.org/" lang="anp" title="Angika">अंगिका</a></li>
+<li><a href="//ab.wikipedia.org/" lang="ab" title="Aṗsshwa">Аԥсшәа</a></li>
+<li><a href="//roa-rup.wikipedia.org/" lang="rup">armãneashti</a></li>
+<li><a href="//frp.wikipedia.org/" lang="frp">Arpitan</a></li>
+<li><a href="//atj.wikipedia.org/" lang="atj">atikamekw</a></li>
+<li><a href="//arc.wikipedia.org/" lang="arc" title="Ātûrāyâ"><bdi dir="rtl">ܐܬܘܪܝܐ</bdi></a></li>
+<li><a href="//gn.wikipedia.org/" lang="gn">Avañe’ẽ</a></li>
+<li><a href="//av.wikipedia.org/" lang="av" title="Avar">Авар</a></li>
+<li><a href="//ay.wikipedia.org/" lang="ay">Aymar</a></li>
+<li><a href="//bbc.wikipedia.org/" lang="bbc">Batak Toba</a></li>
+<li><a href="//bew.wikipedia.org/" lang="bew">Betawi</a></li>
+<li><a href="//bh.wikipedia.org/" lang="bh" title="Bhōjapurī">भोजपुरी</a></li>
+<li><a href="//bi.wikipedia.org/" lang="bi">Bislama</a></li>
+<li><a href="//bo.wikipedia.org/" lang="bo" title="Bod Skad">བོད་ཡིག</a></li>
+<li><a href="//bxr.wikipedia.org/" lang="bxr" title="Buryad">Буряад</a></li>
+<li><a href="//cbk-zam.wikipedia.org/" lang="cbk-x-zam">Chavacano de Zamboanga</a></li>
+<li><a href="//ny.wikipedia.org/" lang="ny">Chichewa</a></li>
+<li><a href="//co.wikipedia.org/" lang="co">Corsu</a></li>
+<li><a href="//za.wikipedia.org/" lang="za">Vahcuengh / 話僮</a></li>
+<li><a href="//dga.wikipedia.org/" lang="dga">Dagaare</a></li>
+<li><a href="//se.wikipedia.org/" lang="se" title="Davvisámegiella">Davvisámegiella</a></li>
+<li><a href="//pdc.wikipedia.org/" lang="pdc">Deitsch</a></li>
+<li><a href="//dv.wikipedia.org/" lang="dv" title="Divehi"><bdi dir="rtl">ދިވެހިބަސް</bdi></a></li>
+<li><a href="//dsb.wikipedia.org/" lang="dsb">Dolnoserbski</a></li>
+<li><a href="//dtp.wikipedia.org/" lang="dtp">Dusun Bundu-liwan</a></li>
+<li><a href="//myv.wikipedia.org/" lang="myv" title="Erzjanj">Эрзянь</a></li>
+<li><a href="//ext.wikipedia.org/" lang="ext">Estremeñu</a></li>
+<li><a href="//ee.wikipedia.org/" lang="ee">Eʋegbe</a></li>
+<li><a href="//gur.wikipedia.org/" lang="gur">Farefare</a></li>
+<li><a href="//fon.wikipedia.org/" lang="fon">Fɔ̀ngbè</a></li>
+<li><a href="//fur.wikipedia.org/" lang="fur">Furlan</a></li>
+<li><a href="//gv.wikipedia.org/" lang="gv">Gaelg</a></li>
+<li><a href="//gag.wikipedia.org/" lang="gag">Gagauz</a></li>
+<li><a href="//inh.wikipedia.org/" lang="inh" title="Ghalghai">ГӀалгӀай</a></li>
+<li><a href="//gpe.wikipedia.org/" lang="gpe">Ghanaian Pidgin</a></li>
+<li><a href="//ki.wikipedia.org/" lang="ki">Gĩkũyũ</a></li>
+<li><a href="//gan.wikipedia.org/" lang="gan" title="Gon ua" data-hans="赣语" data-hant="贛語" class="jscnconv">赣语 / 贛語</a></li>
+<li><a href="//guw.wikipedia.org/" lang="guw">Gungbe</a></li>
+<li><a href="//xal.wikipedia.org/" lang="xal" title="Halʹmg">Хальмг</a></li>
+<li><a href="//haw.wikipedia.org/" lang="haw">ʻŌlelo Hawaiʻi</a></li>
+<li><a href="//rw.wikipedia.org/" lang="rw">Ikinyarwanda</a></li>
+<li><a href="//iba.wikipedia.org/" lang="iba">Jaku Iban</a></li>
+<li><a href="//kbp.wikipedia.org/" lang="kbp">Kabɩyɛ</a></li>
+<li><a href="//knc.wikipedia.org/" lang="knc">Yerwa Kanuri</a></li>
+<li><a href="//csb.wikipedia.org/" lang="csb">Kaszëbsczi</a></li>
+<li><a href="//kw.wikipedia.org/" lang="kw">Kernewek</a></li>
+<li><a href="//kv.wikipedia.org/" lang="kv" title="Komi">Коми</a></li>
+<li><a href="//koi.wikipedia.org/" lang="koi" title="Perem Komi">Перем коми</a></li>
+<li><a href="//kg.wikipedia.org/" lang="kg">Kongo</a></li>
+<li><a href="//gom.wikipedia.org/" lang="gom">कोंकणी / Konknni</a></li>
+<li><a href="//ks.wikipedia.org/" lang="ks" title="Koshur"><bdi dir="rtl">كٲشُر</bdi></a></li>
+<li><a href="//gcr.wikipedia.org/" lang="gcr">Kriyòl Gwiyannen</a></li>
+<li><a href="//kge.wikipedia.org/" lang="kge">Kumoring</a></li>
+<li><a href="//kus.wikipedia.org/" lang="kus">Kʋsaal</a></li>
+<li><a href="//lo.wikipedia.org/" lang="lo" title="Phaasaa Laao">ພາສາລາວ</a></li>
+<li><a href="//lbe.wikipedia.org/" lang="lbe" title="Lakku">Лакку</a></li>
+<li><a href="//ltg.wikipedia.org/" lang="ltg">Latgaļu</a></li>
+<li><a href="//lez.wikipedia.org/" lang="lez" title="Lezgi">Лезги</a></li>
+<li><a href="//nia.wikipedia.org/" lang="nia">Li Niha</a></li>
+<li><a href="//ln.wikipedia.org/" lang="ln">Lingála</a></li>
+<li><a href="//lfn.wikipedia.org/" lang="lfn">Lingua Franca Nova</a></li>
+<li><a href="//olo.wikipedia.org/" lang="olo">livvinkarjala</a></li>
+<li><a href="//jbo.wikipedia.org/" lang="jbo">lojban</a></li>
+<li><a href="//lg.wikipedia.org/" lang="lg">Luganda</a></li>
+<li><a href="//mad.wikipedia.org/" lang="mad">Madhurâ</a></li>
+<li><a href="//mt.wikipedia.org/" lang="mt">Malti</a></li>
+<li><a href="//btm.wikipedia.org/" lang="btm">Mandailing</a></li>
+<li><a href="//mi.wikipedia.org/" lang="mi">Māori</a></li>
+<li><a href="//fat.wikipedia.org/" lang="fat">Mfantse</a></li>
+<li><a href="//mwl.wikipedia.org/" lang="mwl">Mirandés</a></li>
+<li><a href="//mdf.wikipedia.org/" lang="mdf" title="Mokšenj">Мокшень</a></li>
+<li><a href="//mnw.wikipedia.org/" lang="mnw">ဘာသာ မန်</a></li>
+<li><a href="//mos.wikipedia.org/" lang="mos">Moore</a></li>
+<li><a href="//nqo.wikipedia.org/" lang="nqo" title="N&#x27;Ko">ߒߞߏ</a></li>
+<li><a href="//fj.wikipedia.org/" lang="fj">Na Vosa Vaka-Viti</a></li>
+<li><a href="//nah.wikipedia.org/" lang="nah">Nāhuatlahtōlli</a></li>
+<li><a href="//pcm.wikipedia.org/" lang="pcm">Naijá</a></li>
+<li><a href="//nds-nl.wikipedia.org/" lang="nds-nl">Nedersaksisch</a></li>
+<li><a href="//nrm.wikipedia.org/" lang="roa-x-nrm">Nouormand / Normaund</a></li>
+<li><a href="//nov.wikipedia.org/" lang="nov">Novial</a></li>
+<li><a href="//om.wikipedia.org/" lang="om">Afaan Oromoo</a></li>
+<li><a href="//blk.wikipedia.org/" lang="blk">ပအိုဝ်ႏဘာႏသာႏ</a></li>
+<li><a href="//pag.wikipedia.org/" lang="pag">Pangasinán</a></li>
+<li><a href="//ami.wikipedia.org/" lang="ami">Pangcah</a></li>
+<li><a href="//pap.wikipedia.org/" lang="pap">Papiamentu</a></li>
+<li><a href="//jam.wikipedia.org/" lang="jam">Patois</a></li>
+<li><a href="//pfl.wikipedia.org/" lang="pfl">Pfälzisch</a></li>
+<li><a href="//pcd.wikipedia.org/" lang="pcd">Picard</a></li>
+<li><a href="//krc.wikipedia.org/" lang="krc" title="Qaraçay–Malqar">Къарачай–малкъар</a></li>
+<li><a href="//ksh.wikipedia.org/" lang="ksh">Ripoarisch</a></li>
+<li><a href="//rm.wikipedia.org/" lang="rm">Rumantsch</a></li>
+<li><a href="//rsk.wikipedia.org/" lang="rsk" title="Ruski">руски</a></li>
+<li><a href="//szy.wikipedia.org/" lang="szy">Sakizaya</a></li>
+<li><a href="//sm.wikipedia.org/" lang="sm">Gagana Sāmoa</a></li>
+<li><a href="//sc.wikipedia.org/" lang="sc">Sardu</a></li>
+<li><a href="//trv.wikipedia.org/" lang="trv">Seediq</a></li>
+<li><a href="//stq.wikipedia.org/" lang="stq">Seeltersk</a></li>
+<li><a href="//st.wikipedia.org/" lang="st">Sesotho</a></li>
+<li><a href="//nso.wikipedia.org/" lang="nso">Sesotho sa Leboa</a></li>
+<li><a href="//tn.wikipedia.org/" lang="tn">Setswana</a></li>
+<li><a href="//syl.wikipedia.org/" lang="syl" title="Silôṭi">ꠍꠤꠟꠐꠤ</a></li>
+<li><a href="//cu.wikipedia.org/" lang="cu" title="Slověnĭskŭ">Словѣ́ньскъ / ⰔⰎⰑⰂⰡⰐⰠⰔⰍⰟ</a></li>
+<li><a href="//so.wikipedia.org/" lang="so">Soomaaliga</a></li>
+<li><a href="//srn.wikipedia.org/" lang="srn">Sranantongo</a></li>
+<li><a href="//ss.wikipedia.org/" lang="ss">SiSwati</a></li>
+<li><a href="//ty.wikipedia.org/" lang="ty">Reo tahiti</a></li>
+<li><a href="//kab.wikipedia.org/" lang="kab" title="Taqbaylit">Taqbaylit</a></li>
+<li><a href="//roa-tara.wikipedia.org/" lang="roa">Tarandíne</a></li>
+<li><a href="//tay.wikipedia.org/" lang="tay">Tayal</a></li>
+<li><a href="//tet.wikipedia.org/" lang="tet">Tetun</a></li>
+<li><a href="//tpi.wikipedia.org/" lang="tpi">Tok Pisin</a></li>
+<li><a href="//tok.wikipedia.org/" lang="tok" title="toki pona">toki pona</a></li>
+<li><a href="//to.wikipedia.org/" lang="to">faka Tonga</a></li>
+<li><a href="//chr.wikipedia.org/" lang="chr" title="Tsalagi">ᏣᎳᎩ</a></li>
+<li><a href="//tk.wikipedia.org/" lang="tk">Türkmençe</a></li>
+<li><a href="//tw.wikipedia.org/" lang="tw">Twi</a></li>
+<li><a href="//kcg.wikipedia.org/" lang="kcg">Tyap</a></li>
+<li><a href="//tyv.wikipedia.org/" lang="tyv" title="Tyva dyl">Тыва дыл</a></li>
+<li><a href="//udm.wikipedia.org/" lang="udm" title="Udmurt">Удмурт</a></li>
+<li><a href="//ug.wikipedia.org/" lang="ug"><bdi dir="rtl">ئۇيغۇرچه</bdi></a></li>
+<li><a href="//vep.wikipedia.org/" lang="vep">Vepsän</a></li>
+<li><a href="//fiu-vro.wikipedia.org/" lang="vro">võro</a></li>
+<li><a href="//vls.wikipedia.org/" lang="vls">West-Vlams</a></li>
+<li><a href="//wo.wikipedia.org/" lang="wo">Wolof</a></li>
+<li><a href="//xh.wikipedia.org/" lang="xh">isiXhosa</a></li>
+<li><a href="//zea.wikipedia.org/" lang="zea">Zeêuws</a></li>
+<li><a href="//alt.wikipedia.org/" lang="alt">алтай тил</a></li>
+<li><a href="//awa.wikipedia.org/" lang="awa">अवधी</a></li>
+<li><a href="//dty.wikipedia.org/" lang="dty">डोटेली</a></li>
+<li><a href="//tcy.wikipedia.org/" lang="tcy">ತುಳು</a></li>
+<li><a href="//rki.wikipedia.org/" lang="rki">ရခိုင်</a></li>
+</ul>
+</div>
+<h2 class="bookshelf-container">
+<span class="bookshelf">
+<span class="text">
+<bdi dir="ltr">
+100+
+</bdi>
+<span class="jsl10n" data-jsl10n="portal.entries">
+articles
+</span>
+</span>
+</span>
+</h2>
+<div class="langlist langlist-tiny hlist" data-el-section="secondary links">
+<ul>
+<li><a href="//bdr.wikipedia.org/" lang="bdr">Bajau Sama</a></li>
+<li><a href="//bm.wikipedia.org/" lang="bm">Bamanankan</a></li>
+<li><a href="//ch.wikipedia.org/" lang="ch">Chamoru</a></li>
+<li><a href="//dz.wikipedia.org/" lang="dz" title="Rdzong-Kha">རྫོང་ཁ</a></li>
+<li><a href="//got.wikipedia.org/" lang="got" title="Gutisk">𐌲𐌿𐍄𐌹𐍃𐌺</a></li>
+<li><a href="//igl.wikipedia.org/" lang="igl">Igala</a></li>
+<li><a href="//iu.wikipedia.org/" lang="iu">ᐃᓄᒃᑎᑐᑦ / Inuktitut</a></li>
+<li><a href="//ik.wikipedia.org/" lang="ik">Iñupiak</a></li>
+<li><a href="//nr.wikipedia.org/" lang="nr" title="isiNdebele seSewula">isiNdebele seSewula</a></li>
+<li><a href="//nup.wikipedia.org/" lang="nup">Nupe</a></li>
+<li><a href="//ann.wikipedia.org/" lang="ann">Obolo</a></li>
+<li><a href="//pi.wikipedia.org/" lang="pi" title="Pāḷi">पालि</a></li>
+<li><a href="//pwn.wikipedia.org/" lang="pwn">pinayuanan</a></li>
+<li><a href="//pnt.wikipedia.org/" lang="pnt" title="Pontiaká">Ποντιακά</a></li>
+<li><a href="//rmy.wikipedia.org/" lang="rmy">romani čhib</a></li>
+<li><a href="//rn.wikipedia.org/" lang="rn">Ikirundi</a></li>
+<li><a href="//sg.wikipedia.org/" lang="sg">Sängö</a></li>
+<li><a href="//tdd.wikipedia.org/" lang="tdd" title="Tai taɯ xoŋ">ᥖᥭᥰᥖᥬᥳᥑᥨᥒᥰ</a></li>
+<li><a href="//ti.wikipedia.org/" lang="ti" title="Təgərəña">ትግርኛ</a></li>
+<li><a href="//din.wikipedia.org/" lang="din">Thuɔŋjäŋ</a></li>
+<li><a href="//chy.wikipedia.org/" lang="chy">Tsėhesenėstsestotse</a></li>
+<li><a href="//ts.wikipedia.org/" lang="ts">Xitsonga</a></li>
+<li><a href="//ve.wikipedia.org/" lang="ve">Tshivenḓa</a></li>
+<li><a href="//guc.wikipedia.org/" lang="guc">Wayuunaiki</a></li>
+<li><a href="//ady.wikipedia.org/" lang="ady">адыгабзэ</a></li>
+</ul>
+</div>
+<div class="langlist langlist-others hlist" data-el-section="other languages">
+<a class="jsl10n" href="https://meta.wikimedia.org/wiki/Special:MyLanguage/List_of_Wikipedias" lang data-jsl10n="other-languages-label">Other languages</a>
+</div></div>
+</div>
+</nav>
+<hr>
+<div class="banner banner-overlay" id="portalBanner_en6C_2526_1208_currentBest">
+<div class="overlay-banner">
+<div class="overlay-banner-main">
+<button class="frb-header-minimize overlay-banner-toggle" aria-label="minimize">
+<span class="frb-header-minimize-icon">
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><g><path d="m17.5 4.75-7.5 7.5-7.5-7.5L1 6.25l9 9 9-9z"/></g></svg>
+</span>
+</button>
+<div class="overlay-banner-main-header">
+<a href="#" class="frb-donate">Donate now</a>
+<span class="overlay-banner-main-header-divider">|</span>
+<a href="#" class="frb-iad">I already donated</a>
+</div>
+<div class="overlay-banner-main-scroll">
+<div class="overlay-banner-main-message overlay-banner-control">
+<div class="overlay-banner-main-message-greeting">We owe you an explanation.</div>
+<p class="overlay-banner-main-message-subheading">An important update for readers in <span class="banner__country">the United States</span>.</p>
+<p>
+Please don't skip this 1-minute read. This fundraiser will soon be over, but we haven't yet hit our goal. If you're like us, you've used Wikipedia countless times. To settle an argument with a friend. To satisfy a curiosity. Whether it's 3 in the morning or afternoon, Wikipedia is useful in your life. Please give <span class="banner__amount1">$2.75</span>.
+</p>
+<p>
+After nearly 25 years, Wikipedia is still the internet we were promised—created by people, not by machines. It's not perfect, but it's not here to push a point of view. It's owned by a nonprofit, not a giant technology company or a billionaire.
+</p>
+<p>
+Just 2% of our readers donate, so if you have given in the past and Wikipedia still provides you with <span class="banner__amount1">$2.75</span> worth of knowledge, donate today. If you are undecided, remember any contribution helps.
+</p>
+<div class="frb-decoration frb-decoration-bottom-left">
+<svg width="235" height="177" viewBox="0 0 235 177" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M109.676 39.8403C111.228 39.8403 112.722 39.2119 113.998 38.0226C114.314 37.7271 114.703 37.571 115.122 37.571C115.548 37.571 115.972 37.739 116.285 38.0323C116.618 38.3446 116.801 38.7748 116.801 39.2437V58.7981H136.393C137.068 58.7981 137.654 59.1828 137.922 59.8014C138.191 60.4212 138.071 61.1128 137.61 61.6072C136.419 62.8845 135.789 64.3827 135.789 65.9399C135.789 70.1683 140.468 73.6086 146.22 73.6086C151.971 73.6086 156.651 70.1683 156.651 65.9399C156.651 64.3827 156.021 62.885 154.829 61.6072C154.368 61.1133 154.248 60.4212 154.517 59.8014C154.785 59.1828 155.372 58.7981 156.046 58.7981H175.546V39.2097C175.546 38.014 174.539 37.2743 173.606 37.2743C173.129 37.2743 172.685 37.4499 172.324 37.7828C171.105 38.9039 169.685 39.4961 168.215 39.4961C164.134 39.4961 160.813 34.9288 160.813 29.315C160.813 23.7012 164.134 19.134 168.215 19.134C169.685 19.134 171.106 19.7267 172.324 20.8473C172.685 21.1801 173.129 21.3557 173.606 21.3557C174.539 21.3557 175.546 20.6155 175.546 19.4203V0H156.051C155.273 0 154.597 0.443564 154.283 1.15785C153.972 1.86728 154.104 2.661 154.628 3.22886C155.752 4.44888 156.346 5.87311 156.346 7.34708C156.346 11.4324 151.782 14.7564 146.174 14.7564C140.566 14.7564 136.002 11.4324 136.002 7.34708C136.002 5.87311 136.596 4.44888 137.72 3.22886C138.243 2.66046 138.375 1.86674 138.065 1.15785C137.752 0.443564 137.075 0 136.297 0H116.801V19.5548C116.801 20.602 115.948 21.2277 115.123 21.2277C114.704 21.2277 114.314 21.0715 113.998 20.7759C112.724 19.5867 111.229 18.9584 109.676 18.9584C105.452 18.9584 102.015 23.6418 102.015 29.3988C102.015 35.1558 105.452 39.8392 109.676 39.8392L109.676 39.8403Z" fill="#F0BC00"/>
+<path d="M124.266 77.4505C122.714 77.4505 121.219 78.0789 119.944 79.2681C119.627 79.5636 119.239 79.7198 118.82 79.7198C118.393 79.7198 117.97 79.5517 117.657 79.2583C117.324 78.946 117.141 78.516 117.141 78.047V58.4926H97.5487C96.874 58.4926 96.2882 58.108 96.02 57.4893C95.7511 56.8696 95.8704 56.178 96.3314 55.6836C97.5234 54.4063 98.1533 52.908 98.1533 51.3508C98.1533 47.1223 93.4736 43.6822 87.7223 43.6822C81.9711 43.6822 77.2913 47.1223 77.2913 51.3508C77.2913 52.908 77.9213 54.4057 79.1132 55.6836C79.5743 56.1774 79.6936 56.8696 79.4247 57.4893C79.1564 58.108 78.5702 58.4926 77.8954 58.4926H58.3954V78.081C58.3954 79.2767 59.4027 80.0164 60.3355 80.0164C60.8133 80.0164 61.2564 79.8408 61.6181 79.508C62.8365 78.3868 64.2568 77.7946 65.7267 77.7946C69.8083 77.7946 73.1293 82.3619 73.1293 87.9757C73.1293 93.5895 69.8083 98.1568 65.7267 98.1568C64.2568 98.1568 62.836 97.564 61.6181 96.4434C61.2564 96.1106 60.8133 95.935 60.3355 95.935C59.4027 95.935 58.3954 96.6752 58.3954 97.8704V117.291H77.8905C78.6684 117.291 79.3454 116.847 79.659 116.133C79.9694 115.423 79.8377 114.63 79.3141 114.062C78.1902 112.842 77.5963 111.418 77.5963 109.944C77.5963 105.858 82.1595 102.534 87.7677 102.534C93.3759 102.534 97.9396 105.858 97.9396 109.944C97.9396 111.418 97.3458 112.842 96.2218 114.062C95.6988 114.63 95.5665 115.424 95.8769 116.133C96.19 116.847 96.8669 117.291 97.6448 117.291H117.141V97.7358C117.141 96.6887 117.994 96.0631 118.819 96.0631C119.238 96.0631 119.627 96.2192 119.944 96.5147C121.218 97.704 122.713 98.3323 124.266 98.3323C128.49 98.3323 131.927 93.6489 131.927 87.8919C131.927 82.1349 128.49 77.4515 124.266 77.4515L124.266 77.4505Z" fill="#F0BC00"/>
+<path d="M51.2761 157.132C52.8319 157.132 54.3283 156.502 55.6049 155.309C56.0983 154.847 56.7899 154.728 57.409 154.997C58.0271 155.265 58.4115 155.852 58.4115 156.527V176.045H77.9822C79.1768 176.045 79.9159 175.037 79.9159 174.103C79.9159 173.625 79.7404 173.181 79.4079 172.819C78.2878 171.6 77.6961 170.178 77.6961 168.707C77.6961 164.622 82.2592 161.298 87.868 161.298C93.4768 161.298 98.0399 164.621 98.0399 168.707C98.0399 170.178 97.4477 171.6 96.3281 172.819C95.9956 173.181 95.8201 173.625 95.8201 174.103C95.8201 175.037 96.5597 176.045 97.7538 176.045H117.157V156.532C117.157 155.754 116.713 155.076 116 154.763C115.291 154.452 114.498 154.584 113.931 155.107C112.712 156.232 111.289 156.827 109.816 156.827C105.735 156.827 102.414 152.26 102.414 146.646C102.414 141.033 105.735 136.465 109.816 136.465C111.289 136.465 112.712 137.06 113.931 138.184C114.499 138.708 115.292 138.84 116 138.53C116.713 138.216 117.157 137.539 117.157 136.76V117.247H97.6194C96.5732 117.247 95.9481 116.393 95.9481 115.567C95.9481 115.147 96.1041 114.758 96.3994 114.442C97.5875 113.165 98.2153 111.67 98.2153 110.116C98.2153 105.887 93.5361 102.447 87.7843 102.447C82.0325 102.447 77.3533 105.887 77.3533 110.116C77.3533 111.67 77.9811 113.165 79.1693 114.442C79.4646 114.759 79.6206 115.148 79.6206 115.567C79.6206 115.994 79.4527 116.418 79.1596 116.731C78.8476 117.064 78.4179 117.247 77.9493 117.247H58.4126V136.857C58.4126 137.533 58.0282 138.119 57.4101 138.388C56.7909 138.657 56.1 138.538 55.606 138.076C54.3299 136.883 52.833 136.253 51.2772 136.253C47.0525 136.253 43.6155 140.936 43.6155 146.693C43.6155 152.45 47.0525 157.134 51.2772 157.134L51.2761 157.132Z" fill="#F0BC00"/>
+<path d="M168.291 157.132C169.846 157.132 171.343 156.502 172.62 155.309C173.113 154.847 173.804 154.728 174.424 154.997C175.042 155.265 175.426 155.852 175.426 156.527V176.045H194.997C196.191 176.045 196.93 175.037 196.93 174.103C196.93 173.625 196.755 173.181 196.422 172.819C195.302 171.6 194.711 170.178 194.711 168.707C194.711 164.622 199.274 161.298 204.883 161.298C210.491 161.298 215.054 164.621 215.054 168.707C215.054 170.178 214.462 171.6 213.343 172.819C213.01 173.181 212.835 173.625 212.835 174.103C212.835 175.037 213.574 176.045 214.768 176.045H234.171V156.532C234.171 155.754 233.728 155.076 233.014 154.763C232.306 154.452 231.513 154.584 230.945 155.107C229.726 156.232 228.303 156.827 226.831 156.827C222.749 156.827 219.428 152.26 219.428 146.646C219.428 141.033 222.749 136.465 226.831 136.465C228.303 136.465 229.726 137.06 230.945 138.184C231.513 138.708 232.306 138.84 233.014 138.53C233.728 138.216 234.171 137.539 234.171 136.76V117.247H214.634C213.588 117.247 212.963 116.393 212.963 115.567C212.963 115.147 213.119 114.758 213.414 114.442C214.602 113.165 215.23 111.67 215.23 110.116C215.23 105.887 210.551 102.447 204.799 102.447C199.047 102.447 194.368 105.887 194.368 110.116C194.368 111.67 194.996 113.165 196.184 114.442C196.479 114.759 196.635 115.148 196.635 115.567C196.635 115.994 196.467 116.418 196.174 116.731C195.862 117.064 195.432 117.247 194.964 117.247H175.427V136.857C175.427 137.533 175.043 138.119 174.425 138.388C173.806 138.657 173.115 138.538 172.621 138.076C171.344 136.883 169.848 136.253 168.292 136.253C164.067 136.253 160.63 140.936 160.63 146.693C160.63 152.45 164.067 157.134 168.292 157.134L168.291 157.132Z" fill="#F0BC00"/>
+<path d="M19.2822 117.228C20.0601 117.228 20.7377 117.671 21.0508 118.385C21.3612 119.094 21.2282 119.888 20.7051 120.456C19.5813 121.676 18.9873 123.1 18.9873 124.574C18.9873 128.66 23.5519 131.983 29.1602 131.983C34.7682 131.983 39.3311 128.659 39.3311 124.574C39.331 123.1 38.7372 121.676 37.6133 120.456C37.0897 119.888 36.9582 119.094 37.2686 118.385C37.5822 117.671 38.2593 117.228 39.0371 117.228H58.5322V136.647C58.5322 137.843 57.5246 138.583 56.5918 138.583C56.1141 138.583 55.6712 138.407 55.3096 138.074C54.0917 136.954 52.6701 136.361 51.2002 136.361C47.1188 136.362 43.7979 140.928 43.7979 146.542C43.7979 152.156 47.1188 156.723 51.2002 156.724C52.6701 156.724 54.0912 156.131 55.3096 155.01C55.6712 154.677 56.1142 154.501 56.5918 154.501C57.5245 154.501 58.5321 155.241 58.5322 156.437V176H0V117.228H19.2822Z" fill="#F0BC00"/>
+<path d="M136.297 117.228C137.075 117.228 137.752 117.67 138.065 118.385C138.376 119.094 138.243 119.888 137.72 120.456C136.596 121.676 136.002 123.1 136.002 124.574C136.002 128.659 140.566 131.983 146.174 131.983C151.782 131.983 156.346 128.66 156.346 124.574C156.346 123.1 155.752 121.676 154.628 120.456C154.104 119.888 153.973 119.094 154.283 118.385C154.597 117.671 155.274 117.228 156.052 117.228H175.547V136.647C175.547 137.843 174.539 138.583 173.606 138.583C173.129 138.583 172.686 138.407 172.324 138.074C171.106 136.954 169.685 136.361 168.215 136.361C164.133 136.362 160.813 140.928 160.812 146.542C160.812 152.156 164.133 156.723 168.215 156.724C169.685 156.724 171.106 156.131 172.324 155.01C172.686 154.677 173.129 154.501 173.606 154.501C174.539 154.501 175.547 155.241 175.547 156.437V176H116.801V156.471C116.801 156.002 116.618 155.572 116.285 155.26C115.973 154.966 115.548 154.798 115.122 154.798C114.703 154.798 114.314 154.954 113.997 155.25C112.722 156.439 111.228 157.067 109.676 157.067V157.066C105.451 157.066 102.015 152.383 102.015 146.626C102.015 140.869 105.451 136.186 109.676 136.186C111.228 136.186 112.724 136.814 113.998 138.003C114.314 138.298 114.703 138.455 115.122 138.455C115.947 138.455 116.802 137.829 116.802 136.782V117.228H136.297Z" fill="#F0BC00"/>
+</svg>
+</div>
+<div class="frb-decoration frb-decoration-top-right">
+<svg width="191" height="235" viewBox="0 0 191 235" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M7.66062 98.6543C9.21638 98.6543 10.7128 98.0237 11.9894 96.8307C12.4828 96.3693 13.1743 96.2499 13.7935 96.519C14.4116 96.7875 14.796 97.3743 14.796 98.0497V117.567H34.3668C35.5614 117.567 36.3004 116.559 36.3004 115.625C36.3004 115.147 36.125 114.703 35.7924 114.342C34.6723 113.122 34.0806 111.701 34.0806 110.229C34.0806 106.144 38.6438 102.82 44.2525 102.82C49.8613 102.82 54.4244 106.144 54.4244 110.229C54.4244 111.701 53.8322 113.123 52.7126 114.342C52.3801 114.703 52.2046 115.147 52.2046 115.625C52.2046 116.56 52.9442 117.567 54.1383 117.567H73.5411V98.0545C73.5411 97.2759 73.0979 96.5978 72.3843 96.285C71.6755 95.9743 70.8825 96.1062 70.3151 96.6297C69.0962 97.7546 67.6733 98.349 66.2006 98.349C62.119 98.349 58.798 93.7818 58.798 88.1685C58.798 82.5552 62.119 77.9874 66.2006 77.9874C67.6733 77.9874 69.0962 78.5823 70.3151 79.7067C70.883 80.2302 71.676 80.3626 72.3843 80.0519C73.0979 79.7386 73.5411 79.061 73.5411 78.2824V58.7697H54.0039C52.9577 58.7697 52.3326 57.9155 52.3326 57.0893C52.3326 56.6695 52.4886 56.2805 52.7839 55.9639C53.972 54.6877 54.5998 53.1921 54.5998 51.6382C54.5998 47.4097 49.9207 43.9695 44.1688 43.9695C38.417 43.9695 33.7378 47.4097 33.7378 51.6382C33.7378 53.1921 34.3657 54.6877 35.5538 55.9639C35.8491 56.281 36.0051 56.6701 36.0051 57.0893C36.0051 57.5162 35.8372 57.9403 35.5441 58.2532C35.232 58.586 34.8024 58.7697 34.3338 58.7697H14.7971V78.3797C14.7971 79.0551 14.4127 79.6413 13.7946 79.9104C13.1754 80.1795 12.4845 80.06 11.9905 79.5986C10.7144 78.4056 9.21747 77.7751 7.6617 77.7751C3.43705 77.7751 0 82.4585 0 88.2155C0 93.9725 3.43705 98.6559 7.6617 98.6559L7.66062 98.6543Z" fill="#F0BC00"/>
+<path d="M139.051 18.913C137.496 18.913 135.999 19.5435 134.723 20.7365C134.229 21.198 133.538 21.3174 132.919 21.0483C132.3 20.7798 131.916 20.193 131.916 19.5176V0H112.345C111.151 0 110.412 1.00821 110.412 1.94187C110.412 2.42004 110.587 2.86418 110.92 3.22565C112.04 4.44513 112.631 5.86668 112.631 7.33794C112.631 11.4232 108.068 14.7472 102.46 14.7472C96.8508 14.7472 92.2877 11.4238 92.2877 7.33794C92.2877 5.86668 92.8799 4.44459 93.9995 3.22565C94.332 2.86418 94.5075 2.42004 94.5075 1.94187C94.5075 1.00767 93.7679 0 92.5738 0H73.171V19.5127C73.171 20.2913 73.6141 20.9694 74.3278 21.2823C75.0366 21.5929 75.8296 21.4611 76.3969 20.9375C77.6158 19.8126 79.0388 19.2183 80.5115 19.2183C84.5931 19.2183 87.9141 23.7855 87.9141 29.3988C87.9141 35.0121 84.5931 39.5798 80.5115 39.5798C79.0388 39.5798 77.6158 38.985 76.3969 37.8606C75.829 37.337 75.036 37.2046 74.3278 37.5153C73.6141 37.8287 73.171 38.5062 73.171 39.2848V58.7976H92.7082C93.7544 58.7976 94.3795 59.6518 94.3795 60.4779C94.3795 60.8977 94.2235 61.2868 93.9282 61.6034C92.7401 62.8796 92.1123 64.3752 92.1123 65.9291C92.1123 70.1576 96.7915 73.5977 102.543 73.5977C108.295 73.5977 112.974 70.1576 112.974 65.9291C112.974 64.3752 112.346 62.8796 111.158 61.6034C110.863 61.2862 110.707 60.8972 110.707 60.4779C110.707 60.0511 110.875 59.6269 111.168 59.3141C111.48 58.9813 111.91 58.7976 112.378 58.7976H131.915V39.1876C131.915 38.5122 132.299 37.9259 132.917 37.6569C133.537 37.3878 134.228 37.5072 134.722 37.9686C135.998 39.1616 137.495 39.7922 139.05 39.7922C143.275 39.7922 146.712 35.1088 146.712 29.3518C146.712 23.5948 143.275 18.9114 139.05 18.9114L139.051 18.913Z" fill="#F0BC00"/>
+<path d="M124.675 98.6543C126.231 98.6543 127.727 98.0237 129.004 96.8307C129.497 96.3693 130.189 96.2499 130.808 96.519C131.426 96.7875 131.81 97.3743 131.81 98.0497V117.567H151.381C152.576 117.567 153.315 116.559 153.315 115.625C153.315 115.147 153.139 114.703 152.807 114.342C151.687 113.122 151.095 111.701 151.095 110.229C151.095 106.144 155.658 102.82 161.267 102.82C166.876 102.82 171.439 106.144 171.439 110.229C171.439 111.701 170.847 113.123 169.727 114.342C169.395 114.703 169.219 115.147 169.219 115.625C169.219 116.56 169.959 117.567 171.153 117.567H190.556V98.0545C190.556 97.2759 190.112 96.5978 189.399 96.285C188.69 95.9743 187.897 96.1062 187.33 96.6297C186.111 97.7546 184.688 98.349 183.215 98.349C179.134 98.349 175.813 93.7818 175.813 88.1685C175.813 82.5552 179.134 77.9874 183.215 77.9874C184.688 77.9874 186.111 78.5823 187.33 79.7067C187.898 80.2302 188.691 80.3626 189.399 80.0519C190.112 79.7386 190.556 79.061 190.556 78.2824V58.7697H171.018C169.972 58.7697 169.347 57.9155 169.347 57.0893C169.347 56.6695 169.503 56.2805 169.798 55.9639C170.987 54.6877 171.614 53.1921 171.614 51.6382C171.614 47.4097 166.935 43.9695 161.183 43.9695C155.432 43.9695 150.752 47.4097 150.752 51.6382C150.752 53.1921 151.38 54.6877 152.568 55.9639C152.864 56.281 153.02 56.6701 153.02 57.0893C153.02 57.5162 152.852 57.9403 152.559 58.2532C152.247 58.586 151.817 58.7697 151.348 58.7697H131.812V78.3797C131.812 79.0551 131.427 79.6413 130.809 79.9104C130.19 80.1795 129.499 80.06 129.005 79.5986C127.729 78.4056 126.232 77.7751 124.676 77.7751C120.452 77.7751 117.015 82.4585 117.015 88.2155C117.015 93.9725 120.452 98.6559 124.676 98.6559L124.675 98.6543Z" fill="#F0BC00"/>
+<path d="M139.051 136.14C137.496 136.14 135.999 136.771 134.723 137.964C134.229 138.425 133.538 138.544 132.919 138.275C132.3 138.007 131.916 137.42 131.916 136.745V117.227H112.345C111.151 117.227 110.412 118.235 110.412 119.169C110.412 119.647 110.587 120.091 110.92 120.453C112.04 121.672 112.631 123.094 112.631 124.565C112.631 128.65 108.068 131.974 102.46 131.974C96.8508 131.974 92.2877 128.651 92.2877 124.565C92.2877 123.094 92.8799 121.672 93.9995 120.453C94.332 120.091 94.5075 119.647 94.5075 119.169C94.5075 118.235 93.7679 117.227 92.5738 117.227H73.171V136.74C73.171 137.518 73.6141 138.197 74.3278 138.509C75.0366 138.82 75.8296 138.688 76.3969 138.165C77.6158 137.04 79.0388 136.445 80.5115 136.445C84.5931 136.445 87.9141 141.013 87.9141 146.626C87.9141 152.239 84.5931 156.807 80.5115 156.807C79.0388 156.807 77.6158 156.212 76.3969 155.088C75.829 154.564 75.036 154.432 74.3278 154.742C73.6141 155.056 73.171 155.733 73.171 156.512V176.025H92.7082C93.7544 176.025 94.3795 176.879 94.3795 177.705C94.3795 178.125 94.2235 178.514 93.9282 178.831C92.7401 180.107 92.1123 181.602 92.1123 183.156C92.1123 187.385 96.7915 190.825 102.543 190.825C108.295 190.825 112.974 187.385 112.974 183.156C112.974 181.602 112.346 180.107 111.158 178.831C110.863 178.513 110.707 178.124 110.707 177.705C110.707 177.278 110.875 176.854 111.168 176.541C111.48 176.208 111.91 176.025 112.378 176.025H131.915V156.415C131.915 155.739 132.299 155.153 132.917 154.884C133.537 154.615 134.228 154.734 134.722 155.196C135.998 156.389 137.495 157.019 139.05 157.019C143.275 157.019 146.712 152.336 146.712 146.579C146.712 140.822 143.275 136.138 139.05 136.138L139.051 136.14Z" fill="#F0BC00"/>
+<path d="M124.675 215.881C126.231 215.881 127.727 215.251 129.004 214.058C129.497 213.596 130.189 213.477 130.808 213.746C131.426 214.015 131.81 214.601 131.81 215.277V234.794H151.381C152.576 234.794 153.315 233.786 153.315 232.852C153.315 232.374 153.139 231.93 152.807 231.569C151.687 230.349 151.095 228.928 151.095 227.456C151.095 223.371 155.658 220.047 161.267 220.047C166.876 220.047 171.439 223.371 171.439 227.456C171.439 228.928 170.847 230.35 169.727 231.569C169.395 231.93 169.219 232.374 169.219 232.852C169.219 233.787 169.959 234.794 171.153 234.794H190.556V215.282C190.556 214.503 190.112 213.825 189.399 213.512C188.69 213.201 187.897 213.333 187.33 213.857C186.111 214.982 184.688 215.576 183.215 215.576C179.134 215.576 175.813 211.009 175.813 205.396C175.813 199.782 179.134 195.215 183.215 195.215C184.688 195.215 186.111 195.809 187.33 196.934C187.898 197.457 188.691 197.59 189.399 197.279C190.112 196.966 190.556 196.288 190.556 195.51V175.997H171.018C169.972 175.997 169.347 175.143 169.347 174.316C169.347 173.897 169.503 173.508 169.798 173.191C170.987 171.915 171.614 170.419 171.614 168.865C171.614 164.637 166.935 161.197 161.183 161.197C155.432 161.197 150.752 164.637 150.752 168.865C150.752 170.419 151.38 171.915 152.568 173.191C152.864 173.508 153.02 173.897 153.02 174.316C153.02 174.743 152.852 175.167 152.559 175.48C152.247 175.813 151.817 175.997 151.348 175.997H131.812V195.607C131.812 196.282 131.427 196.868 130.809 197.137C130.19 197.407 129.499 197.287 129.005 196.826C127.729 195.633 126.232 195.002 124.676 195.002C120.452 195.002 117.015 199.686 117.015 205.443C117.015 211.2 120.452 215.883 124.676 215.883L124.675 215.881Z" fill="#F0BC00"/>
+<path d="M73.5254 19.5736C73.5255 20.0424 73.709 20.4723 74.042 20.7845C74.3545 21.0777 74.7778 21.2454 75.2041 21.2455C75.623 21.2455 76.0122 21.0899 76.3291 20.7943C77.6041 19.6052 79.098 18.977 80.6504 18.9769V18.9779C84.8749 18.9782 88.3115 23.6615 88.3115 29.4183C88.3114 35.1751 84.8748 39.8585 80.6504 39.8588C79.0979 39.8588 77.6026 39.2305 76.3281 38.0414C76.0119 37.7459 75.6229 37.5893 75.2041 37.5892C74.3787 37.5892 73.5254 38.215 73.5254 39.2621V58.8168H54.0293C53.2514 58.8168 52.5748 58.3729 52.2617 57.6586C51.9515 56.9498 52.0834 56.1566 52.6064 55.5883C53.7303 54.3683 54.3241 52.944 54.3242 51.4701C54.3242 47.3849 49.7604 44.061 44.1523 44.0609C38.5441 44.0609 33.9805 47.3848 33.9805 51.4701C33.9805 52.944 34.5744 54.3683 35.6982 55.5883C36.2218 56.1561 36.3532 56.9492 36.043 57.6586C35.7294 58.3727 35.0531 58.8166 34.2754 58.8168H14.7803V39.3969C14.7803 38.2018 15.787 37.4614 16.7197 37.4613C17.1975 37.4613 17.6412 37.6373 18.0029 37.9701C19.2207 39.0904 20.6416 39.683 22.1113 39.683C26.1927 39.6828 29.5135 35.1158 29.5137 29.5023C29.5137 23.8886 26.1928 19.3208 22.1113 19.3207C20.6414 19.3207 19.2213 19.9134 18.0029 21.0345C17.6412 21.3674 17.1975 21.5424 16.7197 21.5424C15.787 21.5423 14.7803 20.8024 14.7803 19.6068V0.208374H73.5254V19.5736Z" fill="#F0BC00"/>
+<path d="M190.54 39.2621L190.539 58.8168H171.044C170.266 58.8168 169.589 58.3729 169.276 57.6586C168.966 56.9497 169.098 56.1566 169.621 55.5883C170.745 54.3683 171.339 52.944 171.339 51.4701C171.339 47.3849 166.775 44.061 161.167 44.0609C155.559 44.0609 150.995 47.3848 150.995 51.4701C150.995 52.944 151.589 54.3683 152.713 55.5883C153.236 56.1561 153.368 56.9492 153.058 57.6586C152.744 58.3729 152.067 58.8168 151.289 58.8168H131.794V39.3969C131.794 38.2017 132.802 37.4614 133.734 37.4613C134.212 37.4613 134.656 37.6373 135.018 37.9701C136.235 39.0904 137.656 39.683 139.126 39.683C143.207 39.6828 146.528 35.1158 146.528 29.5023C146.528 23.8886 143.207 19.3209 139.126 19.3207C137.656 19.3207 136.236 19.9134 135.018 21.0345C134.656 21.3674 134.212 21.5424 133.734 21.5424C132.802 21.5423 131.794 20.8025 131.794 19.6068V0.208374H190.54V39.2621Z" fill="#F0BC00"/>
+</svg>
+</div>
+</div>
+<div class="overlay-banner-main-amounts">
+<div class="frb-message frb-message-amount">
+<span class="error-highlight">Please select an amount (<span class="banner__currency">USD</span>)</span>.
+<span class="frb-explanation">The average donation in <span class="banner__country">the United States</span> is around <span class="banner__average">$13</span>. Many first-time donors give <span class="banner__amount1">$2.75</span>. All that matters is that you're choosing to stand up for free, open information; and for that, you have our gratitude.</span>
+</div>
+<div id="amountsGrid" class="button-grid">
+<label class="banner-button button-33"><input type="radio" name="amount" value="2.75" class="sr-only"><span class="banner__amount1"></span></label>
+<label class="banner-button button-33"><input type="radio" name="amount" value="5" class="sr-only"><span class="banner__currency"></span>5</label>
+<label class="banner-button button-33"><input type="radio" name="amount" value="10" class="sr-only"><span class="banner__currency"></span>10</label>
+<label class="banner-button button-33"><input type="radio" name="amount" value="20" class="sr-only"><span class="banner__currency"></span>20</label>
+<label class="banner-button button-33"><input type="radio" name="amount" value="30" class="sr-only"><span class="banner__currency"></span>30</label>
+<label class="banner-button button-33"><input type="radio" name="amount" value="50" class="sr-only"><span class="banner__currency"></span>50</label>
+<label class="banner-button button-33"><input type="radio" name="amount" value="100" class="sr-only"><span class="banner__currency"></span>100</label>
+<label class="banner-button button-67"><input type="radio" name="amount" value="Other" class="sr-only">Other</label>
+</div>
+</div>
+<div class="overlay-banner-main-frequency button-grid">
+<div class="frb-message error-highlight">How often would you like to donate?</div>
+<div id="frequencyGrid" class="button-grid">
+<label class="banner-button button-50"><input type="radio" name="monthly" value="0" class="sr-only">One time</label>
+<label class="banner-button button-50"><input type="radio" name="monthly" value="1" class="sr-only">Give monthly</label>
+</div>
+</div>
+<a href="#" id="frb-donate" class="frb-submit banner-button banner-button-disabled frb-donate">Donate now</a>
+<div class="overlay-banner-main-footer">
+<div class="overlay-banner-main-footer-cta">
+<svg class="frb-message-icon" aria-hidden="true" width="20" height="20" viewBox="0 0 25 25" xmlns="http://www.w3.org/2000/svg"><g fill-rule="nonzero" fill="none"><circle cx="10.492" cy="14.492" r="10.492"/><path d="M12.681 11.754l-2.267 7.864c-.125.45-.188.745-.188.885 0 .08.033.156.1.226.066.07.136.105.21.105.125 0 .25-.055.376-.165.332-.273.73-.767 1.194-1.482l.376.22c-1.113 1.94-2.296 2.91-3.55 2.91-.48 0-.86-.135-1.144-.404a1.349 1.349 0 0 1-.426-1.023c0-.273.062-.62.188-1.04l1.537-5.286c.147-.51.221-.892.221-1.15a.566.566 0 0 0-.21-.432c-.14-.125-.332-.188-.575-.188-.11 0-.243.004-.398.011l.144-.442 3.749-.609h.663zm-.685-5.087c.457 0 .842.159 1.156.475.313.318.47.701.47 1.15 0 .45-.16.834-.476 1.15-.317.318-.7.476-1.15.476-.443 0-.822-.158-1.14-.475a1.566 1.566 0 0 1-.475-1.15c0-.45.157-.833.47-1.15a1.549 1.549 0 0 1 1.145-.476z"/></g></svg>
+We ask you, sincerely: don't skip this, join the 2% of readers who give.
+</div>
+<div class="overlay-banner-main-footer-identity">
+<div class="overlay-banner-main-footer-identity-logo">
+<svg viewBox="0 0 433 186" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M234.124 2.56165C234.124 3.39471 233.832 4.14445 233.29 4.85255C232.789 5.56065 232.247 5.89387 231.621 5.89387C226.489 6.39371 222.296 8.03902 219.021 10.8923C215.766 13.6622 212.387 18.9938 208.903 26.9078L155.77 146.389C155.436 147.514 154.435 148.056 152.849 148.056C151.598 148.056 150.638 147.514 149.929 146.389L120.139 84.2015L85.8643 146.389C85.155 147.514 84.1954 148.056 82.9437 148.056C81.4 148.056 80.3987 147.514 79.9189 146.389L27.7244 26.887C24.4701 19.4519 21.028 14.3078 17.3982 11.3921C13.7892 8.41388 8.7408 6.58116 2.29472 5.87306C1.75233 5.87306 1.20994 5.5815 0.730135 5.04001C0.229469 4.41521 0 3.70711 0 2.95736C0 1.02049 0.542395 0.0416301 1.66889 0.0416301C6.32092 0.0416301 11.1815 0.249901 16.2508 0.666431C20.9654 1.08296 25.4088 1.29123 29.581 1.29123C33.7533 1.29123 38.8225 1.08296 44.5802 0.666431C50.609 0.249901 55.9703 0.0416301 60.6224 0.0416301C61.7489 0.0416301 62.2912 0.999668 62.2912 2.95736C62.2912 4.91505 61.9575 5.87306 61.2482 5.87306C56.5962 6.20628 52.9246 7.41421 50.2127 9.41356C47.5842 11.4129 46.249 14.0579 46.249 17.3068C46.249 18.9729 46.7914 21.0556 47.9179 23.5339L91.0378 120.752L115.508 74.5797L92.7067 26.8454C88.6179 18.3273 85.2593 12.8499 82.5891 10.4132C79.9606 7.91407 75.9552 6.39371 70.6148 5.83139C70.1141 5.83139 69.6552 5.53984 69.1545 4.99835C68.7373 4.37355 68.5287 3.66545 68.5287 2.9157C68.5287 0.978833 69.0294 0 69.989 0C74.641 0 78.8967 0.20824 82.7977 0.62477C86.5527 1.0413 90.5372 1.24957 94.772 1.24957C99.0068 1.24957 103.346 1.0413 107.998 0.62477C112.796 0.20824 117.511 0 122.163 0C123.289 0 123.831 0.958006 123.831 2.9157C123.831 4.87339 123.498 5.83139 122.788 5.83139C113.484 6.45619 108.832 9.08035 108.832 13.7247C108.832 15.8073 109.917 19.0354 112.066 23.409L127.169 53.9823L142.168 26.0123C144.255 22.0552 145.298 18.7438 145.298 16.0364C145.298 9.66349 140.646 6.26877 131.341 5.85224C130.507 5.85224 130.09 4.8942 130.09 2.93651C130.09 2.22841 130.298 1.5828 130.716 0.958001C131.133 0.333206 131.55 0.0208151 131.967 0.0208151C135.305 0.0208151 139.415 0.229086 144.255 0.645616C148.907 1.06215 152.745 1.27039 155.707 1.27039C157.856 1.27039 161.027 1.10377 165.199 0.749723C170.477 0.249887 174.899 0.0208151 178.425 0.0208151C179.259 0.0208151 179.677 0.853869 179.677 2.51999C179.677 4.7276 178.926 5.85224 177.382 5.85224C171.979 6.39373 167.598 7.89323 164.26 10.3299C161.006 12.7458 156.896 18.2648 151.973 26.8662L131.967 63.7915L159.045 118.919L199.036 26.0539C200.413 22.6592 201.122 19.5352 201.122 16.7028C201.122 9.91339 196.47 6.3104 187.166 5.89387C186.331 5.89387 185.914 4.93586 185.914 2.97817C185.914 1.02048 186.54 0.062477 187.792 0.062477C191.192 0.062477 195.239 0.270717 199.87 0.687247C204.168 1.10378 207.777 1.31205 210.697 1.31205C213.618 1.31205 217.289 1.10378 221.315 0.687247C225.488 0.270717 229.222 0.062477 232.559 0.062477C233.519 0.062477 234.02 0.895531 234.02 2.56165H234.124Z" fill="black"/>
+<path d="M413.025 47.7996C409.124 47.7996 405.349 49.3616 402.115 52.3606C401.322 53.0896 400.342 53.5061 399.278 53.5061C398.214 53.5061 397.129 53.0896 396.337 52.3606C395.502 51.5692 395.022 50.4862 395.022 49.32V0.106934H345.728C344.559 0.106934 343.475 0.565127 342.682 1.41901C341.952 2.21042 341.534 3.27258 341.534 4.35556C341.534 5.43853 341.931 6.37573 342.682 7.18796C345.686 10.4161 347.25 14.1648 347.25 18.0802C347.25 28.7226 335.443 37.3864 320.945 37.3864C306.446 37.3864 294.639 28.7226 294.639 18.0802C294.639 14.1857 296.203 10.4161 299.228 7.18796C299.958 6.39655 300.376 5.41771 300.376 4.35556C300.376 3.29341 299.958 2.21042 299.228 1.41901C298.435 0.585953 297.351 0.106934 296.182 0.106934H246.888V49.32C246.888 50.4862 247.367 51.5692 248.202 52.3606C248.995 53.0896 250.059 53.5061 251.143 53.5061C252.228 53.5061 253.167 53.1104 253.98 52.3606C257.214 49.3616 260.969 47.7996 264.891 47.7996C275.551 47.7996 284.229 59.5874 284.229 74.0618C284.229 88.5363 275.551 100.324 264.891 100.324C260.99 100.324 257.214 98.7621 253.98 95.7631C253.188 95.0341 252.207 94.6176 251.143 94.6176C250.079 94.6176 248.995 95.0341 248.202 95.7631C247.367 96.5545 246.888 97.6374 246.888 98.8037V148.017H296.182C297.351 148.017 298.435 148.496 299.228 149.329C299.958 150.12 300.376 151.182 300.376 152.265C300.376 153.348 299.979 154.286 299.228 155.098C296.224 158.326 294.66 162.075 294.66 165.99C294.66 176.632 306.467 185.296 320.965 185.296C335.464 185.296 347.271 176.632 347.271 165.99C347.271 162.095 345.686 158.326 342.682 155.098C341.952 154.306 341.534 153.327 341.534 152.265C341.534 151.203 341.952 150.12 342.682 149.329C343.475 148.496 344.559 148.017 345.728 148.017H395.022V98.8037C395.022 97.6374 395.502 96.5545 396.337 95.7631C397.129 95.0341 398.193 94.6176 399.278 94.6176C400.363 94.6176 401.302 95.0133 402.115 95.7631C405.349 98.7621 409.104 100.324 413.025 100.324C423.686 100.324 432.364 88.5363 432.364 74.0618C432.364 59.5874 423.686 47.7996 413.025 47.7996ZM294.639 111.758L294.91 108.842C295.327 107.509 296.516 105.822 298.519 103.76C300.501 101.719 304.506 98.1789 310.556 93.1597L319.401 85.808C320.84 84.6001 322.113 83.3713 323.177 82.1217C324.241 80.8721 325.138 79.4975 325.868 78.0397C326.598 76.5818 327.14 74.999 327.474 73.3329C327.829 71.6668 327.996 69.8549 327.996 67.8972C327.996 65.7937 327.474 63.9818 326.41 62.4407C325.346 60.8995 324.011 60.1289 322.405 60.1289C320.486 60.1289 318.65 60.7329 316.918 61.92C315.187 63.1071 314.206 64.315 313.956 65.4813C313.81 66.2102 313.81 67.0016 313.956 67.8347C314.06 68.7719 314.06 69.4384 313.998 69.8341C313.789 70.7504 313.372 71.5835 312.725 72.2916C312.079 73.0205 311.348 73.562 310.514 73.9577C309.68 74.3326 308.824 74.52 308.011 74.52C307.197 74.52 306.404 74.3117 305.779 73.916C305.153 73.5203 304.673 72.9997 304.381 72.3749C304.068 71.7501 303.943 71.1045 303.943 70.4172C303.943 69.3551 304.214 68.2513 304.715 67.1683C305.236 66.0645 305.945 65.0023 306.842 64.0026C307.76 63.003 308.803 62.045 310.013 61.1702C311.223 60.2747 312.538 59.5041 313.956 58.8168C317.398 57.1924 321.111 56.3801 325.159 56.3801C329.206 56.3801 332.356 57.3382 335.005 59.275C337.654 61.2119 339.01 63.9818 339.01 67.5431C339.01 69.0843 338.885 70.5005 338.593 71.8126C338.301 73.1246 337.759 74.4367 336.903 75.7696C336.069 77.1233 335.255 78.2896 334.483 79.2893C333.712 80.289 332.481 81.5802 330.728 83.1214C328.997 84.6833 327.474 85.9746 326.202 87.0159C324.908 88.0573 322.968 89.6192 320.423 91.6602L314.332 96.492C311.495 98.7412 309.596 101.428 308.637 104.552H319.735C321.696 104.552 323.448 103.885 325.054 102.552C326.014 101.74 326.994 100.595 327.954 99.1369C327.808 99.2411 332.084 101.136 332.022 101.095C330.436 105.572 328.976 109.134 327.662 111.737H294.66H294.701L294.639 111.758ZM371.22 80.5389C370.427 80.6014 369.342 80.6638 367.986 80.7888C366.63 80.8929 365.754 80.9554 365.295 80.9971C364.857 81.0387 364.252 81.0595 363.501 81.1012C362.75 81.1428 361.999 81.1428 361.269 81.1428C356.033 81.1428 351.944 80.9762 348.982 80.643C348.398 82.1633 346.979 86.162 344.81 92.6599C345.915 92.3891 347.584 92.1392 349.816 91.8685C352.069 91.5977 353.843 91.4728 355.157 91.4728C359.35 91.4728 362.604 92.5766 364.941 94.7634C367.256 96.9502 368.424 99.8659 368.424 103.469C368.424 110.487 365.441 116.673 359.517 122.088C355.073 126.107 350.171 128.107 344.789 128.107C339.407 128.107 335.422 127.274 332.773 125.587C331.125 124.524 330.29 123.171 330.29 121.505C330.29 120.193 330.812 119.047 331.834 118.027C332.856 117.006 334.129 116.485 335.631 116.485C338.468 116.485 340.366 117.652 341.326 120.026C342.39 122.754 343.662 124.108 345.143 124.108C347.584 124.108 349.795 122.817 351.715 120.234C352.987 118.526 354.135 116.048 355.178 112.82C356.221 109.592 356.742 106.551 356.742 103.656C356.742 102.073 356.471 100.699 355.95 99.5951C355.428 98.4913 354.74 97.6999 353.905 97.2209C353.071 96.7419 352.132 96.5128 351.11 96.5128C349.065 96.5128 347.313 96.7002 345.874 97.0751C344.434 97.45 337.967 98.8454 337.967 98.8454L347.146 71.8126C348.147 71.9167 349.879 72.0833 352.341 72.3332C354.781 72.5832 356.701 72.7081 358.077 72.7081C359.287 72.7081 360.518 72.6664 361.749 72.604C363.001 72.5207 364.023 72.4582 364.857 72.3749C365.692 72.2916 366.964 72.1666 368.675 71.9792C370.385 71.7918 371.783 71.6459 372.847 71.5626L374.537 72.7081L371.262 80.518L371.22 80.5389Z" fill="#0E65C0"/>
+</svg>
+</div>
+<p>25 years of the internet at its <strong>best</strong></p>
+</div>
+<button type="button" class="button-center button-collapse overlay-banner-toggle">Collapse</button>
+</div>
+</div>
+</div>
+<div class="overlay-banner-mini">
+<div class="frb-conversation-open frb-bubble-message-close overlay-banner-toggle" aria-label="open" style>
+<span class="frb-conversation-open-icon">
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><g><path d="m17.5 4.75-7.5 7.5-7.5-7.5L1 6.25l9 9 9-9z"/></g></svg>
+</span>
+</div>
+<div class="frb-conversation-close frb-bubble-message-close overlay-banner-close" aria-label="close" style>
+<span class="frb-conversation-close-icon"></span>
+</div>
+<div class="overlay-banner-mini-message">
+<div class="overlay-banner-mini-message-text overlay-banner-control">
+<h3>
+<svg class="frb-message-icon" aria-hidden="true" width="20" height="20" viewBox="0 0 25 25" xmlns="http://www.w3.org/2000/svg"><g fill-rule="nonzero" fill="none"><circle cx="10.492" cy="14.492" r="10.492"/><path d="M12.681 11.754l-2.267 7.864c-.125.45-.188.745-.188.885 0 .08.033.156.1.226.066.07.136.105.21.105.125 0 .25-.055.376-.165.332-.273.73-.767 1.194-1.482l.376.22c-1.113 1.94-2.296 2.91-3.55 2.91-.48 0-.86-.135-1.144-.404a1.349 1.349 0 0 1-.426-1.023c0-.273.062-.62.188-1.04l1.537-5.286c.147-.51.221-.892.221-1.15a.566.566 0 0 0-.21-.432c-.14-.125-.332-.188-.575-.188-.11 0-.243.004-.398.011l.144-.442 3.749-.609h.663zm-.685-5.087c.457 0 .842.159 1.156.475.313.318.47.701.47 1.15 0 .45-.16.834-.476 1.15-.317.318-.7.476-1.15.476-.443 0-.822-.158-1.14-.475a1.566 1.566 0 0 1-.475-1.15c0-.45.157-.833.47-1.15a1.549 1.549 0 0 1 1.145-.476z"/></g></svg>
+Sorry to interrupt, but we're short on time to hit our goal.
+</h3>
+<p>Today, we ask you to join the 2% of readers who give. If everyone reading this right now gave just <span class="banner__amount1">$2.75</span>, we'd hit our goal quickly. <span class="banner__amount1">$2.75</span> is all we ask.</p>
+<p>— <em>The Wikimedia Foundation, host of Wikipedia and other free knowledge projects</em>.</p>
+</div>
+<div class="overlay-banner-mini-message-actions">
+<a href="#" class="banner__button banner__button--progressive frb-submit frb-donate">
+Donate now
+</a>
+</div>
+</div>
+</div>
+</div>
+</div>
+<dialog class="frb-iad-dialog">
+<button class="frb-iad-dialog-close frb-dialog-back skin-invert">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 16"><g fill="none" fill-rule="evenodd" transform="translate(1 1)"><path stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.778" d="M7.181 13.285L.753 7 7.181.715"/><rect fill="#000" width="18.182" height="1.778" x=".818" y="6.111" rx=".889"/></g></svg>
+</button>
+<div class="frb-w25-logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 253.9 108.81"><path d="M137.48 1.5c0 .49-.17.93-.49 1.35-.29.42-.61.61-.98.61-3.01.29-5.48 1.26-7.4 2.93-1.91 1.63-3.9 4.76-5.94 9.4l-31.2 70.16c-.2.66-.78.98-1.72.98-.73 0-1.3-.32-1.72-.98L70.54 49.43 50.41 85.95c-.42.66-.98.98-1.71.98-.91 0-1.49-.32-1.78-.98L16.28 15.79c-1.91-4.37-3.93-7.39-6.06-9.1C8.1 4.94 5.14 3.86 1.35 3.45c-.32 0-.64-.17-.92-.49C.14 2.59 0 2.18 0 1.74 0 .6.32.02.98.02c2.73 0 5.59.13 8.56.37 2.77.24 5.38.37 7.83.37S22.8.64 26.18.39C29.72.15 32.87.02 35.6.02c.66 0 .98.56.98 1.71s-.2 1.71-.61 1.71c-2.73.2-4.89.9-6.48 2.08-1.54 1.17-2.33 2.73-2.33 4.64 0 .98.32 2.2.98 3.66l25.32 57.09L67.83 43.8 54.44 15.77c-2.4-5-4.37-8.22-5.94-9.65-1.54-1.47-3.9-2.36-7.03-2.69-.29 0-.56-.17-.86-.49-.24-.37-.37-.78-.37-1.22 0-1.14.29-1.71.86-1.71 2.73 0 5.23.12 7.52.37 2.2.24 4.55.37 7.03.37s5.04-.12 7.77-.37a98.1 98.1 0 0 1 8.32-.37c.66 0 .98.56.98 1.71s-.2 1.71-.61 1.71c-5.46.37-8.2 1.91-8.2 4.64 0 1.22.64 3.12 1.9 5.69l8.87 17.95 8.81-16.42c1.23-2.32 1.84-4.27 1.84-5.86 0-3.74-2.73-5.73-8.2-5.98-.49 0-.73-.56-.73-1.71 0-.42.12-.8.37-1.16.24-.37.49-.55.73-.55 1.96 0 4.37.12 7.22.37 2.73.24 4.99.37 6.72.37 1.26 0 3.12-.1 5.57-.3 3.1-.29 5.7-.43 7.77-.43.49 0 .73.49.73 1.47 0 1.3-.44 1.96-1.35 1.96-3.17.32-5.74 1.2-7.71 2.63-1.91 1.42-4.32 4.66-7.22 9.71L77.48 37.49l15.9 32.37 23.48-54.53c.81-1.99 1.22-3.83 1.22-5.49 0-3.99-2.73-6.1-8.2-6.35-.49 0-.73-.56-.73-1.71s.37-1.71 1.1-1.71c2 0 4.37.12 7.09.37 2.52.24 4.64.37 6.36.37s3.87-.12 6.23-.37c2.45-.24 4.64-.37 6.6-.37.56 0 .86.49.86 1.47h.06ZM242.54 28.07c-2.29 0-4.51.92-6.41 2.68-.47.43-1.04.67-1.67.67s-1.26-.24-1.73-.67c-.49-.47-.77-1.1-.77-1.79V.06h-28.95c-.69 0-1.32.27-1.79.77-.43.46-.67 1.09-.67 1.72s.23 1.19.67 1.66c1.76 1.9 2.68 4.1 2.68 6.4 0 6.25-6.93 11.34-15.45 11.34S173 16.86 173 10.61c0-2.29.92-4.5 2.7-6.4.43-.46.67-1.04.67-1.66s-.25-1.26-.67-1.72c-.47-.49-1.1-.77-1.79-.77h-28.95v28.9c0 .68.28 1.32.77 1.79.47.43 1.09.67 1.73.67s1.19-.23 1.67-.67c1.9-1.76 4.1-2.68 6.41-2.68 6.26 0 11.36 6.92 11.36 15.42s-5.1 15.42-11.36 15.42c-2.29 0-4.51-.92-6.41-2.68-.47-.43-1.04-.67-1.67-.67s-1.26.24-1.73.67c-.49.47-.77 1.1-.77 1.78v28.9h28.95c.69 0 1.32.28 1.79.77.43.47.67 1.09.67 1.72s-.23 1.19-.67 1.66c-1.76 1.9-2.68 4.1-2.68 6.4 0 6.25 6.93 11.34 15.45 11.34s15.45-5.09 15.45-11.34c0-2.29-.93-4.5-2.7-6.4-.43-.47-.67-1.04-.67-1.66s.24-1.26.67-1.72c.47-.49 1.1-.77 1.79-.77h28.95v-28.9c0-.68.28-1.32.77-1.78.47-.43 1.09-.67 1.73-.67s1.19.23 1.67.67c1.9 1.76 4.1 2.68 6.41 2.68 6.26 0 11.36-6.92 11.36-15.42s-5.1-15.42-11.36-15.42Zm-69.48 37.54h-.04l.16-1.7c.24-.78.94-1.77 2.12-2.98 1.16-1.2 3.52-3.28 7.07-6.22l5.19-4.32a19.9 19.9 0 0 0 2.22-2.16 12 12 0 0 0 1.58-2.4c.43-.86.75-1.78.94-2.76.21-.98.31-2.04.31-3.19 0-1.24-.31-2.3-.93-3.21-.62-.91-1.41-1.36-2.35-1.36-1.13 0-2.21.35-3.22 1.05-1.02.7-1.59 1.41-1.74 2.09-.09.43-.09.89 0 1.38.06.55.06.94.03 1.17-.12.54-.37 1.03-.75 1.44-.38.43-.81.75-1.3.98-.49.22-.99.33-1.47.33s-.94-.12-1.31-.35a2.11 2.11 0 0 1-.82-.91c-.18-.37-.26-.75-.26-1.15 0-.62.16-1.27.45-1.91.31-.65.72-1.27 1.25-1.86.54-.59 1.15-1.15 1.86-1.66.71-.53 1.48-.98 2.32-1.38 2.02-.95 4.2-1.43 6.58-1.43s4.23.56 5.78 1.7c1.56 1.14 2.35 2.76 2.35 4.85 0 .91-.07 1.74-.24 2.51-.17.77-.49 1.54-.99 2.32-.49.79-.97 1.48-1.42 2.07-.45.59-1.18 1.34-2.21 2.25-1.02.92-1.91 1.67-2.66 2.29-.76.61-1.9 1.53-3.39 2.73l-3.58 2.84c-1.67 1.32-2.78 2.9-3.34 4.73h6.52c1.15 0 2.18-.39 3.12-1.17.56-.48 1.14-1.15 1.7-2.01-.09.06 2.42 1.17 2.39 1.15-.93 2.63-1.79 4.72-2.56 6.25h-19.36Zm44.96-18.33h-.03c-.47.05-1.1.09-1.9.16l-1.58.12c-.26.02-.61.04-1.05.06-.44.02-.88.02-1.31.02-3.08 0-5.48-.1-7.22-.29-.34.89-1.18 3.24-2.45 7.06.65-.16 1.63-.3 2.94-.46 1.32-.16 2.36-.23 3.14-.23 2.46 0 4.37.65 5.74 1.93 1.36 1.28 2.04 3 2.04 5.11 0 4.12-1.75 7.75-5.23 10.93-2.61 2.36-5.49 3.53-8.65 3.53s-5.5-.49-7.06-1.48c-.97-.62-1.46-1.42-1.46-2.4 0-.77.31-1.44.91-2.04s1.35-.91 2.23-.91c1.67 0 2.78.68 3.34 2.08.62 1.6 1.37 2.4 2.24 2.4 1.43 0 2.73-.76 3.86-2.27.75-1 1.42-2.46 2.03-4.35.61-1.9.92-3.68.92-5.38 0-.93-.16-1.74-.47-2.38-.31-.65-.71-1.11-1.2-1.4-.49-.28-1.04-.42-1.64-.42-1.2 0-2.23.11-3.08.33-.85.22-4.64 1.04-4.64 1.04l5.39-15.87c.59.06 1.6.16 3.05.31 1.43.15 2.56.22 3.37.22.71 0 1.43-.02 2.16-.06.73-.05 1.34-.09 1.83-.13.49-.05 1.24-.12 2.24-.23 1-.11 1.83-.2 2.45-.24l.99.67L218 47.3Z" class="stw0"/></svg>
+</div>
+<div class="frb-dialog-title">🎉 Thank you for donating recently! 🎉</div>
+<p class="frb-dialog-text">Your support means the world to us. We'll hide banners in this browser for the rest of our campaign.</p>
+<p class="frb-dialog-text">Want to show off your support? <strong>Donors get 20% off Wikipedia Store merchandise automatically applied at checkout.</strong> Click the button below to shop hats, tees, and more!</p>
+<div class="frb-iad-dialog-buttons">
+<button autofocus class="frb-dialog-action">Go to the Wikipedia Store</button>
+<br>
+<button class="frb-iad-dialog-close">Close</button>
+</div>
+</dialog>
+</main>
+<footer class="footer" data-el-section="other projects">
+<div class="footer-sidebar">
+<div class="footer-sidebar-content">
+<div class="footer-sidebar-icon sprite svg-Wikimedia-logo_black">
+</div>
+<div class="footer-sidebar-text jsl10n" data-jsl10n="portal.footer-description">
+Wikipedia is hosted by the Wikimedia Foundation, a non-profit organization that also hosts a range of other projects.
+</div>
+<div class="footer-sidebar-text">
+<a href="https://donate.wikimedia.org/?wmf_medium=portal&wmf_campaign=portalFooter&wmf_source=portalFooter" target="_blank">
+<span class="jsl10n" data-jsl10n="footer-donate">You can support our work with a donation.</span>
+</a>
+</div>
+</div>
+</div>
+<div class="footer-sidebar app-badges">
+<div class="footer-sidebar-content">
+<div class="footer-sidebar-text">
+<div class="footer-sidebar-icon sprite svg-wikipedia_app_tile"></div>
+<strong class="jsl10n" data-jsl10n="portal.app-links.title">
+<a class="jsl10n" data-jsl10n="portal.app-links.url" href="https://en.wikipedia.org/wiki/List_of_Wikipedia_mobile_applications">
+Download Wikipedia for Android or iOS
+</a>
+</strong>
+<p class="jsl10n" data-jsl10n="portal.app-links.description">
+Save your favorite articles to read offline, sync your reading lists across devices and customize your reading experience with the official Wikipedia app.
+</p>
+<ul>
+<li class="app-badge app-badge-android">
+<a target="_blank" rel="noreferrer" href="https://play.google.com/store/apps/details?id=org.wikipedia&referrer=utm_source%3Dportal%26utm_medium%3Dbutton%26anid%3Dadmob">
+<span class="jsl10n sprite svg-badge_google_play_store" data-jsl10n="portal.app-links.google-store">Google Play Store</span>
+</a>
+</li>
+<li class="app-badge app-badge-ios">
+<a target="_blank" rel="noreferrer" href="https://itunes.apple.com/app/apple-store/id324715238?pt=208305&ct=portal&mt=8">
+<span class="jsl10n sprite svg-badge_ios_app_store" data-jsl10n="portal.app-links.apple-store">Apple App Store</span>
+</a>
+</li>
+</ul>
+</div>
+</div>
+</div>
+<nav data-jsl10n="other-projects-nav-label" aria-label="Other projects" class="other-projects">
+<div class="other-project">
+<a class="other-project-link" href="//commons.wikimedia.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Commons-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="commons.name">Commons</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="commons.slogan">Free media collection</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikivoyage.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikivoyage-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikivoyage.name">Wikivoyage</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikivoyage.slogan">Free travel guide</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wiktionary.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wiktionary-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wiktionary.name">Wiktionary</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wiktionary.slogan">Free dictionary</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikibooks.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikibooks-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikibooks.name">Wikibooks</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikibooks.slogan">Free textbooks</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikinews.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikinews-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikinews.name">Wikinews</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikinews.slogan">Free news source</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikidata.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikidata-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikidata.name">Wikidata</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikidata.slogan">Free knowledge base</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikiversity.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikiversity-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikiversity.name">Wikiversity</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikiversity.slogan">Free learning resources</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikiquote.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikiquote-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikiquote.name">Wikiquote</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikiquote.slogan">Free quote compendium</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.mediawiki.org/">
+<div class="other-project-icon">
+<div class="sprite svg-MediaWiki-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="mediawiki.name">MediaWiki</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="mediawiki.slogan">Free &amp; open wiki software</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikisource.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikisource-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikisource.name">Wikisource</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikisource.slogan">Free content library</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//species.wikimedia.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikispecies-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikispecies.name">Wikispecies</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikispecies.slogan">Free species directory</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//www.wikifunctions.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Wikifunctions-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="wikifunctions.name">Wikifunctions</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="wikifunctions.slogan">Free function library</span>
+</div>
+</a>
+</div>
+<div class="other-project">
+<a class="other-project-link" href="//meta.wikimedia.org/">
+<div class="other-project-icon">
+<div class="sprite svg-Meta-Wiki-logo_sister"></div>
+</div>
+<div class="other-project-text">
+<span class="other-project-title jsl10n" data-jsl10n="metawiki.name">Meta-Wiki</span>
+<span class="other-project-tagline jsl10n" data-jsl10n="metawiki.slogan">Community coordination &amp; documentation</span>
+</div>
+</a>
+</div>
+</nav>
+<hr>
+<p class="site-license">
+<small class="jsl10n" data-jsl10n="license">This page is available under the <a href="https://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike License</a></small>
+<small class="jsl10n" data-jsl10n="terms"><a href="https://foundation.wikimedia.org/wiki/Special:MyLanguage/Policy:Terms_of_Use">Terms of Use</a></small>
+<small class="jsl10n" data-jsl10n="privacy-policy"><a href="https://foundation.wikimedia.org/wiki/Special:MyLanguage/Policy:Privacy_policy">Privacy Policy</a></small>
+</p>
+</footer>
+<script>
+var rtlLangs = ['ar','arc','ary','arz','bcc','bgn','bqi','ckb','dv','fa','glk','he','kk-cn','kk-arab','khw','ks','ku-arab','lki','luz','mzn','nqo','pnb','ps','sd','sdh','skr','ug','ur','yi'],
+    translationsHash = 'e445ed4d',
+    /**
+     * This variable is used to convert the generic "portal" keyword in the data-jsl10n attributes
+     * e.g. 'data-jsl10n="portal.footer-description"' into a portal-specific key, e.g. "wiki"
+     * for the Wikipedia portal.
+     */
+    translationsPortalKey = 'wiki';
+    /**
+     * The wm-typeahead.js feature is used for search,and it uses domain name for searching. We want domain
+     * name to be portal Specific (different for every portal).So by declaring variable 'portalSearchDomain'
+     * in index.handlebars we will make this portal Specific.
+    **/
+    portalSearchDomain = 'wikipedia.org'
+    /*
+     This object is used by l10n scripts (page-localized.js, topten-localized.js)
+     to reveal the page content after l10n json is loaded.
+     A timer is also set to prevent JS from hiding page content indefinitelty.
+     This script is inlined to safeguard againt script loading errors and placed
+     at the top of the page to safeguard against any HTML loading/parsing errors.
+    */
+    wmL10nVisible = {
+        ready: false,
+        makeVisible: function(){
+            if ( !wmL10nVisible.ready ) {
+                wmL10nVisible.ready = true;
+                document.body.className += ' jsl10n-visible';
+            }
+        }
+    };
+    window.setTimeout( wmL10nVisible.makeVisible, 1000 )
+</script>
+<script src="portal/wikipedia.org/assets/js/index-d16c99e071.js"></script>
+<script src="portal/wikipedia.org/assets/js/gt-ie9-38c8b5f74a.js"></script>
+<style>
+.styled-select {
+        display: block;
+    }
+</style>
+</body>
+</html>
