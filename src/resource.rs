@@ -1410,18 +1410,39 @@ where
   }
 }
 
+/// Returns true if the provided URL starts with the `data:` scheme (case-insensitive).
+pub fn is_data_url(url: &str) -> bool {
+  url
+    .as_bytes()
+    .get(.."data:".len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(b"data:"))
+    .unwrap_or(false)
+}
+
 fn classify_scheme(url: &str) -> ResourceScheme {
-  let lower = url.to_ascii_lowercase();
-  if lower.starts_with("data:") {
+  let bytes = url.as_bytes();
+  if is_data_url(url) {
     return ResourceScheme::Data;
   }
-  if lower.starts_with("file://") {
+  if bytes
+    .get(.."file://".len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(b"file://"))
+    .unwrap_or(false)
+  {
     return ResourceScheme::File;
   }
-  if lower.starts_with("http://") {
+  if bytes
+    .get(.."http://".len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(b"http://"))
+    .unwrap_or(false)
+  {
     return ResourceScheme::Http;
   }
-  if lower.starts_with("https://") {
+  if bytes
+    .get(.."https://".len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(b"https://"))
+    .unwrap_or(false)
+  {
     return ResourceScheme::Https;
   }
 
@@ -6266,12 +6287,7 @@ fn guess_content_type_from_path(path: &str) -> Option<String> {
 
 /// Decode a data: URL into bytes
 fn decode_data_url(url: &str) -> Result<FetchedResource> {
-  const DATA_URL_PREFIX: &str = "data:";
-  if !url
-    .get(..DATA_URL_PREFIX.len())
-    .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-    .unwrap_or(false)
-  {
+  if !is_data_url(url) {
     return Err(Error::Image(ImageError::InvalidDataUrl {
       reason: "URL does not start with 'data:'".to_string(),
     }));
@@ -7265,6 +7281,13 @@ mod tests {
       Some("text/css".to_string())
     );
     assert_eq!(guess_content_type_from_path("/path/to/file"), None);
+  }
+
+  #[test]
+  fn is_data_url_matches_case_insensitively() {
+    assert!(is_data_url("data:text/plain,hello"));
+    assert!(is_data_url("DATA:text/plain,hello"));
+    assert!(!is_data_url("https://example.com/"));
   }
 
   #[test]

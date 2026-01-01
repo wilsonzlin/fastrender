@@ -495,11 +495,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn should_skip_disk(&self, url: &str) -> bool {
-    const DATA_URL_PREFIX: &str = "data:";
-    url
-      .get(..DATA_URL_PREFIX.len())
-      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-      .unwrap_or(false)
+    super::is_data_url(url)
   }
 
   fn disk_writeback_disabled(&self) -> bool {

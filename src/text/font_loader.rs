@@ -3155,6 +3155,14 @@ mod tests {
     assert!(loaded.is_some());
   }
 
+  #[test]
+  fn fetch_font_bytes_decodes_uppercase_data_url() {
+    let url = "DATA:font/woff;base64,aGk=";
+    let (bytes, mime) = fetch_font_bytes(url).expect("decode data url");
+    assert_eq!(bytes, b"hi");
+    assert_eq!(mime.as_deref(), Some("font/woff"));
+  }
+
   #[cfg(debug_assertions)]
   #[test]
   fn web_font_supports_char_uses_face_cache() {

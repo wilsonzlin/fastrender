@@ -35,8 +35,8 @@ mod disk_cache_main {
   use fastrender::html::images::ImageSelectionContext;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
-    CachingFetcherConfig, DiskCachingFetcher, FetchDestination, FetchRequest, FetchedResource,
-    ResourceFetcher,
+    is_data_url, CachingFetcherConfig, DiskCachingFetcher, FetchDestination, FetchRequest,
+    FetchedResource, ResourceFetcher,
     DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
@@ -268,12 +268,7 @@ mod disk_cache_main {
     if trimmed.is_empty() || trimmed.starts_with('#') {
       return None;
     }
-    const DATA_URL_PREFIX: &str = "data:";
-    if trimmed
-      .get(..DATA_URL_PREFIX.len())
-      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-      .unwrap_or(false)
-    {
+    if is_data_url(trimmed) {
       return None;
     }
 
@@ -1047,12 +1042,7 @@ mod disk_cache_main {
         let Some(resolved) = resolve_href(css_base_url, &url_source.url) else {
           continue;
         };
-        const DATA_URL_PREFIX: &str = "data:";
-        if resolved
-          .get(..DATA_URL_PREFIX.len())
-          .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-          .unwrap_or(false)
-        {
+        if is_data_url(&resolved) {
           continue;
         }
         if !seen_fonts.insert(resolved.clone()) {

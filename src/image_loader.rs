@@ -1584,12 +1584,7 @@ impl ImageCache {
     }
 
     // Absolute or data URLs can be returned directly.
-    const DATA_URL_PREFIX: &str = "data:";
-    if url
-      .get(..DATA_URL_PREFIX.len())
-      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-      .unwrap_or(false)
-    {
+    if crate::resource::is_data_url(url) {
       return url.to_string();
     }
     if let Ok(parsed) = url::Url::parse(url) {
@@ -1914,14 +1909,7 @@ impl ImageCache {
         }
 
         let href = attr.value().trim();
-        const DATA_URL_PREFIX: &str = "data:";
-        if href.is_empty()
-          || href.starts_with('#')
-          || href
-            .get(..DATA_URL_PREFIX.len())
-            .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-            .unwrap_or(false)
-        {
+        if href.is_empty() || href.starts_with('#') || crate::resource::is_data_url(href) {
           continue;
         }
 

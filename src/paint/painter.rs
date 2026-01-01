@@ -9078,12 +9078,7 @@ struct EmbeddedImportFetcher {
 
 impl EmbeddedImportFetcher {
   fn resolve_url(&self, href: &str) -> Option<Url> {
-    const DATA_URL_PREFIX: &str = "data:";
-    if href
-      .get(..DATA_URL_PREFIX.len())
-      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-      .unwrap_or(false)
-    {
+    if crate::resource::is_data_url(href) {
       return None;
     }
 
@@ -9111,12 +9106,7 @@ impl EmbeddedImportFetcher {
 
 impl css::types::CssImportLoader for EmbeddedImportFetcher {
   fn load(&self, url: &str) -> Result<String> {
-    const DATA_URL_PREFIX: &str = "data:";
-    if url
-      .get(..DATA_URL_PREFIX.len())
-      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-      .unwrap_or(false)
-    {
+    if crate::resource::is_data_url(url) {
       return decode_data_url_to_string(url);
     }
 

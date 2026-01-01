@@ -10,6 +10,7 @@ use crate::css::parser::tokenize_rel_list;
 use crate::dom::{DomNode, HTML_NAMESPACE};
 use crate::html::image_attrs::{parse_sizes, parse_srcset};
 use crate::html::images::{image_sources_with_fallback, ImageSelectionContext};
+use crate::resource::is_data_url;
 use crate::style::media::MediaQuery;
 use crate::tree::box_tree::PictureSource;
 use std::collections::HashSet;
@@ -80,12 +81,7 @@ fn is_inert_template(node: &DomNode) -> bool {
 
 fn resolve_prefetch_url(ctx: ImageSelectionContext<'_>, raw: &str) -> Option<String> {
   let resolved = resolve_href_with_base(ctx.base_url, raw)?;
-  const DATA_URL_PREFIX: &str = "data:";
-  if resolved
-    .get(..DATA_URL_PREFIX.len())
-    .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-    .unwrap_or(false)
-  {
+  if is_data_url(&resolved) {
     return None;
   }
   Some(resolved)

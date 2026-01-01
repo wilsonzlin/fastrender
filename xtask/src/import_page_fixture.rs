@@ -4,6 +4,7 @@ use fastrender::css::loader::resolve_href;
 use fastrender::resource::bundle::{Bundle, BundledFetcher, BundledResourceInfo};
 use fastrender::resource::FetchedResource;
 use fastrender::resource::ResourceFetcher;
+use fastrender::resource::is_data_url;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -661,7 +662,7 @@ fn rewrite_reference(
   if trimmed.is_empty()
     || trimmed.starts_with('#')
     || trimmed.to_ascii_lowercase().starts_with("javascript:")
-    || trimmed.to_ascii_lowercase().starts_with("data:")
+    || is_data_url(trimmed)
     || trimmed.to_ascii_lowercase().starts_with("about:")
     || trimmed.to_ascii_lowercase().starts_with("mailto:")
     || trimmed.to_ascii_lowercase().starts_with("tel:")
@@ -677,12 +678,7 @@ fn rewrite_reference(
     bail!("could not resolve URL '{trimmed}' against base {base_url}");
   };
 
-  const DATA_URL_PREFIX: &str = "data:";
-  if resolved
-    .get(..DATA_URL_PREFIX.len())
-    .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
-    .unwrap_or(false)
-  {
+  if is_data_url(&resolved) {
     return Ok(None);
   }
 
