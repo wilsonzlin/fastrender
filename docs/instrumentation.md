@@ -35,6 +35,17 @@ unreadable, it falls back to a best-effort mapping from `RenderDiagnostics.stats
 `diagnostics.stats.timings.text_shape_cpu_ms`, `text_fallback_cpu_ms`, and `text_rasterize_cpu_ms`
 can overlap with stage wall timers (layout/paint) and are kept separate for analysis.
 
+Text shaping also exposes lightweight cache effectiveness counters under `diagnostics.stats.counts`
+when diagnostics are enabled:
+
+- `shaping_cache_hits` / `shaping_cache_misses`: number of shaped runs served from the shaping cache
+  vs computed from scratch.
+- `shaping_cache_evictions`: number of cache entries evicted (pressure signal).
+- `shaping_cache_entries`: approximate entry count snapshot taken for the render.
+
+High `shaping_cache_evictions` typically implies cache pressure; raise `FASTR_TEXT_SHAPING_CACHE_CAPACITY`
+to reduce churn.
+
 Stage buckets:
 
 - `fetch`: html decode + DOM parse/setup (viewport meta, DOM clone, top-layer plumbing)
