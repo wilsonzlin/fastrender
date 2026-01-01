@@ -1653,6 +1653,7 @@ mod tests {
   use crate::text::font_db::{FontStretch, FontStyle, FontWeight};
   use crate::text::font_loader::FontContext;
   use std::path::PathBuf;
+  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::time::Duration;
 
   fn get_test_font() -> Option<LoadedFont> {
@@ -1834,6 +1835,74 @@ mod tests {
         y_advance: 0.0,
       })
       .collect();
+
+    let checks = Arc::new(AtomicUsize::new(0));
+    let checks_for_cb = Arc::clone(&checks);
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(move || {
+      let prev = checks_for_cb.fetch_add(1, Ordering::SeqCst);
+      prev >= 1
+    });
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let mut rasterizer = TextRasterizer::new();
+    let mut pixmap = new_pixmap(4, 4).unwrap();
+
+    let result = with_deadline(Some(&deadline), || {
+      rasterizer.render_glyph_run(
+        &glyphs,
+        &font,
+        16.0,
+        0.0,
+        0.0,
+        0,
+        &[],
+        0,
+        &[],
+        None,
+        0.0,
+        0.0,
+        Rgba::BLACK,
+        TextRenderState::default(),
+        &mut pixmap,
+      )
+    });
+
+    assert!(
+      checks.load(Ordering::SeqCst) >= 2,
+      "expected render deadline to be checked more than once (entry + periodic), got {}",
+      checks.load(Ordering::SeqCst)
+    );
+    assert!(
+      matches!(
+        result,
+        Err(Error::Render(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        }))
+      ),
+      "expected paint-stage timeout, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn text_rasterize_times_out_immediately_when_deadline_already_expired() {
+    let font = FontContext::new()
+      .get_sans_serif()
+      .expect("expected bundled sans-serif font for tests");
+    let face = font.as_ttf_face().expect("parse test font");
+    let glyph_id = face
+      .glyph_index(' ')
+      .or_else(|| face.glyph_index('A'))
+      .expect("resolve glyph for deadline timeout test")
+      .0 as u32;
+
+    let glyphs = [GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 0.0,
+      y_advance: 0.0,
+    }];
 
     let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
     let mut rasterizer = TextRasterizer::new();
