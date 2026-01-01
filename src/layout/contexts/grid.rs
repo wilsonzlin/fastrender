@@ -73,7 +73,7 @@ use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -117,6 +117,8 @@ fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
   }
   Ok(())
 }
+
+type FingerprintHasher = FxHasher;
 
 #[derive(Clone, Copy)]
 enum Axis {
@@ -2739,8 +2741,7 @@ fn grid_child_fingerprint(
 ) -> Result<u64, LayoutError> {
   use std::hash::Hash;
   use std::hash::Hasher;
-
-  let mut h = std::collections::hash_map::DefaultHasher::new();
+  let mut h = FingerprintHasher::default();
   children.len().hash(&mut h);
   for child in children {
     check_layout_deadline(deadline_counter)?;

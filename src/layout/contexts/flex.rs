@@ -86,10 +86,9 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::{error::RenderError, error::RenderStage};
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -104,6 +103,8 @@ static LOG_CHILD_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new
 use taffy::prelude::*;
 use taffy::style::Overflow as TaffyOverflow;
 use taffy::TaffyTree;
+
+type FingerprintHasher = FxHasher;
 
 #[cfg(test)]
 thread_local! {
@@ -2658,11 +2659,11 @@ fn measure_cache_key(
   (width.map(f32::to_bits), height.map(f32::to_bits))
 }
 
-fn hash_enum_discriminant<T>(value: &T, hasher: &mut DefaultHasher) {
+fn hash_enum_discriminant<T>(value: &T, hasher: &mut FingerprintHasher) {
   mem::discriminant(value).hash(hasher);
 }
 
-fn hash_length(len: &Length, hasher: &mut DefaultHasher) {
+fn hash_length(len: &Length, hasher: &mut FingerprintHasher) {
   hash_enum_discriminant(&len.unit, hasher);
   len.value.to_bits().hash(hasher);
   // Treat calc lengths as distinct from raw by hashing a marker.
@@ -2673,7 +2674,7 @@ fn hash_length(len: &Length, hasher: &mut DefaultHasher) {
   }
 }
 
-fn hash_option_length(len: &Option<Length>, hasher: &mut DefaultHasher) {
+fn hash_option_length(len: &Option<Length>, hasher: &mut FingerprintHasher) {
   match len {
     Some(l) => {
       1u8.hash(hasher);
@@ -2683,7 +2684,7 @@ fn hash_option_length(len: &Option<Length>, hasher: &mut DefaultHasher) {
   }
 }
 
-fn hash_flex_basis(basis: &crate::style::types::FlexBasis, hasher: &mut DefaultHasher) {
+fn hash_flex_basis(basis: &crate::style::types::FlexBasis, hasher: &mut FingerprintHasher) {
   match basis {
     crate::style::types::FlexBasis::Auto => 0u8.hash(hasher),
     crate::style::types::FlexBasis::Length(l) => {
@@ -2694,7 +2695,7 @@ fn hash_flex_basis(basis: &crate::style::types::FlexBasis, hasher: &mut DefaultH
 }
 
 fn flex_style_fingerprint(style: &ComputedStyle) -> u64 {
-  let mut h = DefaultHasher::new();
+  let mut h = FingerprintHasher::default();
   hash_enum_discriminant(&style.display, &mut h);
   hash_enum_discriminant(&style.position, &mut h);
   hash_enum_discriminant(&style.box_sizing, &mut h);
@@ -2751,7 +2752,7 @@ fn flex_style_fingerprint(style: &ComputedStyle) -> u64 {
 }
 
 fn flex_cache_key(box_node: &BoxNode) -> u64 {
-  let mut h = DefaultHasher::new();
+  let mut h = FingerprintHasher::default();
   box_node.styled_node_id.hash(&mut h);
   // Anonymous boxes (no originating styled node) must not share cached fragments across
   // different instances: their descendants may differ (e.g. different `<img src>`), and
@@ -2809,7 +2810,7 @@ fn flex_child_fingerprint(
   children: &[&BoxNode],
   deadline_counter: &mut usize,
 ) -> Result<u64, LayoutError> {
-  let mut h = DefaultHasher::new();
+  let mut h = FingerprintHasher::default();
   children.len().hash(&mut h);
   for child in children {
     check_layout_deadline(deadline_counter)?;
