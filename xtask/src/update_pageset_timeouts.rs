@@ -235,9 +235,14 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
 
     // Backwards compatibility: keep the historical pageset_timeouts.json in sync as a plain file
     // (no symlink; Windows-friendly).
-    if args.manifest == PathBuf::from(DEFAULT_MANIFEST_PATH) {
-      fs::write(LEGACY_MANIFEST_PATH, format!("{json}\n"))
+    let default_manifest = PathBuf::from(DEFAULT_MANIFEST_PATH);
+    let legacy_manifest = PathBuf::from(LEGACY_MANIFEST_PATH);
+    if args.manifest == default_manifest {
+      fs::write(&legacy_manifest, format!("{json}\n"))
         .context("failed to write legacy pageset_timeouts manifest copy")?;
+    } else if args.manifest == legacy_manifest {
+      fs::write(&default_manifest, format!("{json}\n"))
+        .context("failed to write pageset_guardrails manifest copy")?;
     }
   }
 
