@@ -473,16 +473,6 @@
       "budget_ms": 20000.0
     },
     {
-      "name": "debian.org",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 20000.0
-    },
-    {
       "name": "yahoo.com",
       "viewport": [
         1200,
@@ -501,6 +491,16 @@
       "dpr": 1.0,
       "media": "screen",
       "budget_ms": 20000.0
+    },
+    {
+      "name": "sqlite.org",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
     }
   ]
 }
