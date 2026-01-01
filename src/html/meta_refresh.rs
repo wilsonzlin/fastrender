@@ -489,17 +489,68 @@ fn parse_refresh_content(content: &str) -> Option<String> {
 }
 
 fn decode_refresh_entities(content: &str) -> String {
-  content
-    .replace("&quot;", "\"")
-    .replace("&QUOT;", "\"")
-    .replace("&#34;", "\"")
-    .replace("&amp;", "&")
-    .replace("&AMP;", "&")
-    .replace("&#39;", "'")
-    .replace("&#x27;", "'")
-    .replace("&#X27;", "'")
-    .replace("&apos;", "'")
-    .replace("&APOS;", "'")
+  if !content.contains('&') {
+    return content.to_string();
+  }
+
+  let mut out = String::with_capacity(content.len());
+  let bytes = content.as_bytes();
+  let mut i = 0usize;
+  while i < bytes.len() {
+    if bytes[i] != b'&' {
+      out.push(bytes[i] as char);
+      i += 1;
+      continue;
+    }
+
+    let start = i;
+    i += 1;
+    let mut j = i;
+    while j < bytes.len() && j - start <= 16 && bytes[j] != b';' {
+      j += 1;
+    }
+    if j >= bytes.len() || bytes[j] != b';' {
+      out.push('&');
+      continue;
+    }
+
+    let raw_entity = &content[i..j];
+    let entity = raw_entity.trim();
+    let decoded = if let Some(num) = entity.strip_prefix('#') {
+      let trimmed = num.trim();
+      let parsed = if let Some(hex) = trimmed.strip_prefix(['x', 'X']) {
+        u32::from_str_radix(hex, 16).ok()
+      } else {
+        trimmed.parse::<u32>().ok()
+      };
+      // Keep numeric entity decoding conservative to avoid turning escaped markup into actual tags
+      // (e.g. `&#60;meta ...` -> `<meta ...`).
+      match parsed {
+        Some(34) => Some('"'),
+        Some(38) => Some('&'),
+        Some(39) => Some('\''),
+        _ => None,
+      }
+    } else {
+      let lowered = entity.to_ascii_lowercase();
+      match lowered.as_str() {
+        "quot" => Some('"'),
+        "amp" => Some('&'),
+        "apos" => Some('\''),
+        _ => None,
+      }
+    };
+
+    if let Some(ch) = decoded {
+      out.push(ch);
+      i = j + 1;
+    } else {
+      out.push_str(&content[start..=j]);
+      i = j + 1;
+    }
+  }
+
+  out
 }
 
 fn slice_until_unquoted_semicolon(s: &str, start: usize) -> &str {
@@ -694,6 +745,21 @@ mod tests {
   }
 
   #[test]
+  fn decodes_numeric_entities_in_refresh_url() {
+    let html = r#"<meta http-equiv="refresh" content="0; url=/next?a=1&#38;b=2">"#;
+    assert_eq!(
+      extract_meta_refresh_url(html),
+      Some("/next?a=1&b=2".to_string())
+    );
+
+    let html = r#"<meta http-equiv="refresh" content="0; url=/hex?a=1&#x26;b=2">"#;
+    assert_eq!(
+      extract_meta_refresh_url(html),
+      Some("/hex?a=1&b=2".to_string())
+    );
+  }
+
+  #[test]
   fn extracts_js_location_href() {
     let html = "<script>window.location.href = 'https://example.com/next';</script>";
     assert_eq!(
@@ -708,6 +774,15 @@ mod tests {
     assert_eq!(
       extract_js_location_redirect(html),
       Some("/entity/path".to_string())
+    );
+  }
+
+  #[test]
+  fn decodes_numeric_entities_in_js_redirect() {
+    let html = "<script>location.href='/entity?a=1&#38;b=2';</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/entity?a=1&b=2".to_string())
     );
   }
 
