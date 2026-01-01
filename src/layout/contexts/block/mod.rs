@@ -3812,9 +3812,18 @@ impl FormattingContext for BlockFormattingContext {
       let fc_type = child
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
-      let child_width = factory
-        .get(fc_type)
-        .compute_intrinsic_inline_size(child, mode)?;
+      // Avoid going through `factory.get(FormattingContextType::Block)` for block children:
+      // `FormattingContextFactory::block_context` constructs a BlockFormattingContext backed by a
+      // `detached()` factory clone (to avoid factory↔cached-FC Arc cycles). If we used `get(Block)`
+      // recursively we'd create a new detached factory per block depth during intrinsic sizing,
+      // which is exactly the kind of allocation churn tables can amplify.
+      let child_width = if fc_type == FormattingContextType::Block {
+        self.compute_intrinsic_inline_size(child, mode)?
+      } else {
+        factory
+          .get(fc_type)
+          .compute_intrinsic_inline_size(child, mode)?
+      };
       block_child_width = block_child_width.max(child_width);
       if log_children {
         let sel = child
