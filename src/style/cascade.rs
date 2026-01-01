@@ -8877,11 +8877,21 @@ mod tests {
     };
 
     assert!(
-      !desc.matches(node_selector_keys(&node_missing, &mut class_keys, &mut attr_keys)),
+      !desc.matches(node_selector_keys(
+        &node_missing,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
       "fast reject should require both .a and .b"
     );
     assert!(
-      desc.matches(node_selector_keys(&node_present, &mut class_keys, &mut attr_keys)),
+      desc.matches(node_selector_keys(
+        &node_present,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
       "fast reject should ignore :has() while still checking required keys"
     );
   }
@@ -8946,7 +8956,12 @@ mod tests {
       children: vec![],
     };
     assert!(
-      desc.matches(node_selector_keys(&node, &mut class_keys, &mut attr_keys)),
+      desc.matches(node_selector_keys(
+        &node,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
       "fast reject should pass when all stored required classes are present"
     );
 
@@ -8965,7 +8980,12 @@ mod tests {
         children: vec![],
       };
       assert!(
-        !desc.matches(node_selector_keys(&node, &mut class_keys, &mut attr_keys)),
+        !desc.matches(node_selector_keys(
+          &node,
+          QuirksMode::NoQuirks,
+          &mut class_keys,
+          &mut attr_keys,
+        )),
         "fast reject should fail when stored required class .{missing} is missing"
       );
     }
