@@ -409,6 +409,22 @@ mod tests {
   }
 
   #[test]
+  fn discovers_preload_imagesrcset_without_href() {
+    let html = r#"<link rel="preload" as="image" imagesrcset="a1.png 1x, a2.png 2x">"#;
+    let out = discover_html_asset_urls(html, "https://example.com/base/page.html");
+    assert_eq!(
+      out.images,
+      vec![
+        "https://example.com/base/a1.png",
+        "https://example.com/base/a2.png",
+      ]
+      .into_iter()
+      .map(str::to_string)
+      .collect::<Vec<_>>()
+    );
+  }
+
+  #[test]
   fn does_not_match_data_attributes() {
     let html = r#"
       <img data-src="lazy.png">
