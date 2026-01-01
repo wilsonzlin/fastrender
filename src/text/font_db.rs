@@ -717,7 +717,7 @@ pub fn font_has_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
   .unwrap_or(false)
 }
 
-fn face_has_color_tables(face: &ttf_parser::Face<'_>) -> bool {
+pub(crate) fn face_has_color_tables(face: &ttf_parser::Face<'_>) -> bool {
   let raw = face.raw_face();
   let has_colr = raw.table(ttf_parser::Tag::from_bytes(b"COLR")).is_some();
   let has_cpal = raw.table(ttf_parser::Tag::from_bytes(b"CPAL")).is_some();
@@ -947,6 +947,8 @@ pub struct FontDatabase {
   cache: RwLock<HashMap<ID, Arc<Vec<u8>>>>,
   /// Cached list of math-capable fonts (IDs with a MATH table)
   math_fonts: RwLock<Option<Vec<ID>>>,
+  /// Cached list of emoji-capable fonts (IDs likely to contain emoji glyphs)
+  emoji_fonts: RwLock<Option<Vec<ID>>>,
   /// Glyph coverage cache to avoid repeated face parsing
   glyph_coverage: GlyphCoverageCache,
 }
@@ -985,6 +987,7 @@ impl FontDatabase {
       db: Arc::new(FontDbDatabase::new()),
       cache: RwLock::new(HashMap::new()),
       math_fonts: RwLock::new(None),
+      emoji_fonts: RwLock::new(None),
       glyph_coverage: GlyphCoverageCache::new(GLYPH_COVERAGE_CACHE_SIZE),
     };
 
@@ -1054,6 +1057,7 @@ impl FontDatabase {
       db,
       cache: RwLock::new(HashMap::new()),
       math_fonts: RwLock::new(None),
+      emoji_fonts: RwLock::new(None),
       glyph_coverage: GlyphCoverageCache::new(cache.glyph_coverage_cache_size),
     }
   }
@@ -1074,6 +1078,9 @@ impl FontDatabase {
   pub fn load_fonts_dir<P: AsRef<Path>>(&mut self, path: P) {
     Arc::make_mut(&mut self.db).load_fonts_dir(path);
     if let Ok(mut cached) = self.math_fonts.write() {
+      *cached = None;
+    }
+    if let Ok(mut cached) = self.emoji_fonts.write() {
       *cached = None;
     }
   }
@@ -1181,6 +1188,9 @@ impl FontDatabase {
 
     Arc::make_mut(&mut self.db).load_font_data(data);
     if let Ok(mut cached) = self.math_fonts.write() {
+      *cached = None;
+    }
+    if let Ok(mut cached) = self.emoji_fonts.write() {
       *cached = None;
     }
     Ok(())
@@ -1398,6 +1408,9 @@ impl FontDatabase {
     if let Ok(mut cached) = self.math_fonts.write() {
       *cached = None;
     }
+    if let Ok(mut cached) = self.emoji_fonts.write() {
+      *cached = None;
+    }
   }
 
   /// Returns the number of cached fonts
@@ -1496,6 +1509,12 @@ impl FontDatabase {
   ///
   /// Returns font IDs for fonts that are likely to contain emoji glyphs.
   pub fn find_emoji_fonts(&self) -> Vec<ID> {
+    if let Ok(cache) = self.emoji_fonts.read() {
+      if let Some(list) = &*cache {
+        return list.clone();
+      }
+    }
+
     let mut emoji_fonts = Vec::new();
 
     for face in self.db.faces() {
@@ -1515,6 +1534,9 @@ impl FontDatabase {
       }
     }
 
+    if let Ok(mut cache) = self.emoji_fonts.write() {
+      *cache = Some(emoji_fonts.clone());
+    }
     emoji_fonts
   }
 

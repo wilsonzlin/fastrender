@@ -3335,30 +3335,27 @@ fn font_is_emoji_font(db: &FontDatabase, id: Option<fontdb::ID>, font: &LoadedFo
   FontDatabase::family_name_is_emoji_font(&font.family)
 }
 
-fn font_id_is_emoji_font(db: &FontDatabase, id: fontdb::ID) -> bool {
-  if let Some(is_color) = db.is_color_capable_font(id) {
-    return is_color;
-  }
-
-  db.inner().face(id).is_some_and(|face| {
-    face
-      .families
-      .iter()
-      .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name))
-  })
-}
-
 fn consider_local_font_candidate(
   db: &FontDatabase,
   picker: &mut FontPreferencePicker,
   id: fontdb::ID,
+  cached_face: Option<&crate::text::face_cache::CachedFace>,
   covers: bool,
 ) -> Option<Arc<LoadedFont>> {
   if !covers && picker.first_emoji_any.is_some() && picker.first_text_any.is_some() {
     return None;
   }
 
-  let is_emoji_font = font_id_is_emoji_font(db, id);
+  let is_emoji_font = if let Some(face) = cached_face {
+    crate::text::font_db::face_has_color_tables(face.face())
+  } else {
+    db.inner().face(id).is_some_and(|face| {
+      face
+        .families
+        .iter()
+        .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name))
+    })
+  };
   if covers {
     if is_emoji_font {
       if picker.avoid_emoji && picker.first_emoji.is_some() {
@@ -3605,6 +3602,11 @@ fn resolve_font_for_char_with_preferences(
   let is_emoji = emoji::is_emoji(ch);
   let mut math_families_storage: Option<Vec<String>> = None;
   let mut math_families_ref: &[String] = math_families.unwrap_or(&[]);
+  let glyph_face_and_covers = |id: fontdb::ID| {
+    let cached_face = db.cached_face(id);
+    let covers = cached_face.as_ref().is_some_and(|face| face.has_glyph(ch));
+    (cached_face, covers)
+  };
   for entry in families {
     if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
       if math_families_ref.is_empty() && math_families.is_none() {
@@ -3633,11 +3635,13 @@ fn resolve_font_for_char_with_preferences(
                 families: &[Family::Name(family.as_str())],
                 weight: fontdb::Weight(*weight_choice),
                 stretch: (*stretch_choice).into(),
-                style: (*slope).into(),
+               style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                let covers = db.has_glyph_cached(id, ch);
-                if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+                let (cached_face, covers) = glyph_face_and_covers(id);
+                if let Some(font) =
+                  consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
+                {
                   return Some(font);
                 }
               }
@@ -3684,8 +3688,10 @@ fn resolve_font_for_char_with_preferences(
           };
 
           if let Some(id) = db.inner().query(&query) {
-            let covers = db.has_glyph_cached(id, ch);
-            if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+            let (cached_face, covers) = glyph_face_and_covers(id);
+            if let Some(font) =
+              consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
+            {
               return Some(font);
             }
           }
@@ -3702,11 +3708,13 @@ fn resolve_font_for_char_with_preferences(
                 families: &[Family::Name(name)],
                 weight: fontdb::Weight(*weight_choice),
                 stretch: (*stretch_choice).into(),
-                style: (*slope).into(),
+               style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                let covers = db.has_glyph_cached(id, ch);
-                if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+                let (cached_face, covers) = glyph_face_and_covers(id);
+                if let Some(font) =
+                  consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
+                {
                   return Some(font);
                 }
               }
@@ -3719,8 +3727,10 @@ fn resolve_font_for_char_with_preferences(
 
   if is_emoji && !picker.avoid_emoji {
     for id in db.find_emoji_fonts() {
-      let covers = db.has_glyph_cached(id, ch);
-      if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+      let (cached_face, covers) = glyph_face_and_covers(id);
+      if let Some(font) =
+        consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
+      {
         return Some(font);
       }
     }
@@ -3734,11 +3744,13 @@ fn resolve_font_for_char_with_preferences(
             families: &[Family::Name(family)],
             weight: fontdb::Weight(*weight_choice),
             stretch: (*stretch_choice).into(),
-            style: (*slope).into(),
+           style: (*slope).into(),
           };
           if let Some(id) = db.inner().query(&query) {
-            let covers = db.has_glyph_cached(id, ch);
-            if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+            let (cached_face, covers) = glyph_face_and_covers(id);
+            if let Some(font) =
+              consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
+            {
               return Some(font);
             }
           }
@@ -3748,8 +3760,10 @@ fn resolve_font_for_char_with_preferences(
   }
 
   for face in db.faces() {
-    let covers = db.has_glyph_cached(face.id, ch);
-    if let Some(font) = consider_local_font_candidate(db, picker, face.id, covers) {
+    let (cached_face, covers) = glyph_face_and_covers(face.id);
+    if let Some(font) =
+      consider_local_font_candidate(db, picker, face.id, cached_face.as_deref(), covers)
+    {
       return Some(font);
     }
   }
@@ -3824,14 +3838,13 @@ fn resolve_font_for_cluster_with_preferences(
   let mut math_families_ref: &[String] = math_families.unwrap_or(&[]);
   let mut picker = FontPreferencePicker::new(emoji_pref);
 
-  let covers_needed = |id: fontdb::ID| {
-    if coverage_chars.is_empty() {
-      return true;
-    }
-    let Some(face) = db.cached_face(id) else {
-      return false;
-    };
-    coverage_chars.iter().all(|c| face.has_glyph(*c))
+  let face_and_covers_needed = |id: fontdb::ID| {
+    let cached_face = db.cached_face(id);
+    let covers = coverage_chars.is_empty()
+      || cached_face
+        .as_ref()
+        .is_some_and(|face| coverage_chars.iter().all(|c| face.has_glyph(*c)));
+    (cached_face, covers)
   };
 
   for entry in families {
@@ -3868,8 +3881,10 @@ fn resolve_font_for_cluster_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                let covers = covers_needed(id);
-                if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+                let (cached_face, covers) = face_and_covers_needed(id);
+                if let Some(font) =
+                  consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
+                {
                   return Some(font);
                 }
               }
@@ -3919,8 +3934,10 @@ fn resolve_font_for_cluster_with_preferences(
           };
 
           if let Some(id) = db.inner().query(&query) {
-            let covers = covers_needed(id);
-            if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+            let (cached_face, covers) = face_and_covers_needed(id);
+            if let Some(font) =
+              consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
+            {
               return Some(font);
             }
           }
@@ -3940,8 +3957,10 @@ fn resolve_font_for_cluster_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                let covers = covers_needed(id);
-                if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+                let (cached_face, covers) = face_and_covers_needed(id);
+                if let Some(font) =
+                  consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
+                {
                   return Some(font);
                 }
               }
@@ -3954,8 +3973,10 @@ fn resolve_font_for_cluster_with_preferences(
 
   if is_emoji && !picker.avoid_emoji {
     for id in db.find_emoji_fonts() {
-      let covers = covers_needed(id);
-      if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+      let (cached_face, covers) = face_and_covers_needed(id);
+      if let Some(font) =
+        consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
+      {
         return Some(font);
       }
     }
@@ -3972,8 +3993,10 @@ fn resolve_font_for_cluster_with_preferences(
             style: (*slope).into(),
           };
           if let Some(id) = db.inner().query(&query) {
-            let covers = covers_needed(id);
-            if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+            let (cached_face, covers) = face_and_covers_needed(id);
+            if let Some(font) =
+              consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
+            {
               return Some(font);
             }
           }
@@ -3983,8 +4006,14 @@ fn resolve_font_for_cluster_with_preferences(
   }
 
   for face in db.faces() {
-    let covers = covers_needed(face.id);
-    if let Some(font) = consider_local_font_candidate(db, &mut picker, face.id, covers) {
+    let (cached_face, covers) = face_and_covers_needed(face.id);
+    if let Some(font) = consider_local_font_candidate(
+      db,
+      &mut picker,
+      face.id,
+      cached_face.as_deref(),
+      covers,
+    ) {
       return Some(font);
     }
   }
