@@ -249,6 +249,28 @@ fn bench_css_parse(c: &mut Criterion) {
     b.iter(|| common::parse_stylesheet_text(black_box(&synthetic_css)))
   });
 
+  // Micro-benchmark: gradient-heavy stylesheet to catch regressions in gradient parsing.
+  //
+  // Real-world pages can have hundreds of gradients (e.g. Discord has 300+ linear gradients),
+  // and gradient parsing should avoid allocating/copying the entire function text per occurrence.
+  fn synthetic_gradient_stylesheet(declarations: usize) -> String {
+    const GRADIENT: &str = "linear-gradient(to right, rgba(0,0,0,0) 0%, rgba(255,0,0,0.5) 25%, rgba(0,255,0,0.5) 50%, rgba(0,0,255,0.5) 75%, rgba(0,0,0,0) 100%)";
+    let mut css = String::with_capacity(declarations.saturating_mul(GRADIENT.len() + 32));
+    css.push_str(".synthetic{");
+    for _ in 0..declarations {
+      css.push_str("background-image:");
+      css.push_str(GRADIENT);
+      css.push(';');
+    }
+    css.push_str("}\n");
+    css
+  }
+
+  let gradient_css = synthetic_gradient_stylesheet(1_000);
+  group.bench_function("synthetic_linear_gradient_1k_decls", |b| {
+    b.iter(|| common::parse_stylesheet_text(black_box(&gradient_css)))
+  });
+
   group.finish();
 }
 

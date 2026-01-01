@@ -1717,6 +1717,12 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
 }
 
 fn parse_gradient(value: &str) -> Option<PropertyValue> {
+  fn extract_function_inner<'a>(trimmed: &'a str, name_len: usize) -> Option<&'a str> {
+    // `is_single_function_call` validates that `trimmed` is exactly `name(<inner>)` with the outer
+    // closing `)` at the end of the string, so slicing by byte offsets is safe.
+    trimmed.get(name_len + 1..trimmed.len().saturating_sub(1))
+  }
+
   fn is_single_function_call(trimmed: &str, name: &str) -> bool {
     let name_len = name.len();
     let Some(prefix) = trimmed.get(..name_len) else {
@@ -1770,55 +1776,33 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
     return None;
   }
   if is_single_function_call(trimmed, "linear-gradient") {
-    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
-      let lower = trimmed.to_ascii_lowercase();
-      return parse_linear_gradient(&lower, false);
-    }
-    return parse_linear_gradient(trimmed, false);
+    let inner = extract_function_inner(trimmed, "linear-gradient".len())?;
+    return parse_linear_gradient(inner, false);
   }
   if is_single_function_call(trimmed, "radial-gradient") {
-    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
-      let lower = trimmed.to_ascii_lowercase();
-      return parse_radial_gradient(&lower, false);
-    }
-    return parse_radial_gradient(trimmed, false);
+    let inner = extract_function_inner(trimmed, "radial-gradient".len())?;
+    return parse_radial_gradient(inner, false);
   }
   if is_single_function_call(trimmed, "repeating-linear-gradient") {
-    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
-      let lower = trimmed.to_ascii_lowercase();
-      return parse_linear_gradient(&lower, true);
-    }
-    return parse_linear_gradient(trimmed, true);
+    let inner = extract_function_inner(trimmed, "repeating-linear-gradient".len())?;
+    return parse_linear_gradient(inner, true);
   }
   if is_single_function_call(trimmed, "repeating-radial-gradient") {
-    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
-      let lower = trimmed.to_ascii_lowercase();
-      return parse_radial_gradient(&lower, true);
-    }
-    return parse_radial_gradient(trimmed, true);
+    let inner = extract_function_inner(trimmed, "repeating-radial-gradient".len())?;
+    return parse_radial_gradient(inner, true);
   }
   if is_single_function_call(trimmed, "conic-gradient") {
-    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
-      let lower = trimmed.to_ascii_lowercase();
-      return parse_conic_gradient(&lower, false);
-    }
-    return parse_conic_gradient(trimmed, false);
+    let inner = extract_function_inner(trimmed, "conic-gradient".len())?;
+    return parse_conic_gradient(inner, false);
   }
   if is_single_function_call(trimmed, "repeating-conic-gradient") {
-    if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
-      let lower = trimmed.to_ascii_lowercase();
-      return parse_conic_gradient(&lower, true);
-    }
-    return parse_conic_gradient(trimmed, true);
+    let inner = extract_function_inner(trimmed, "repeating-conic-gradient".len())?;
+    return parse_conic_gradient(inner, true);
   }
   None
 }
 
-fn parse_linear_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
-  let inner = value
-    .strip_prefix("linear-gradient(")
-    .or_else(|| value.strip_prefix("repeating-linear-gradient("))?
-    .strip_suffix(')')?;
+fn parse_linear_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
   let parts = split_top_level_commas(inner);
   if parts.len() < 2 {
     return None;
@@ -1854,11 +1838,26 @@ fn parse_linear_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
   }
 }
 
-fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
-  let inner = value
-    .strip_prefix("radial-gradient(")
-    .or_else(|| value.strip_prefix("repeating-radial-gradient("))?
-    .strip_suffix(')')?;
+fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
+  fn find_at_separator(text: &str) -> Option<usize> {
+    // Radial gradients use `... at <position>` in the prelude. We need to find the `" at "`
+    // separator case-insensitively without allocating a lowercased copy.
+    let bytes = text.as_bytes();
+    if bytes.len() < 4 {
+      return None;
+    }
+    for idx in 0..=bytes.len() - 4 {
+      if bytes[idx] == b' '
+        && bytes[idx + 3] == b' '
+        && bytes[idx + 1].to_ascii_lowercase() == b'a'
+        && bytes[idx + 2].to_ascii_lowercase() == b't'
+      {
+        return Some(idx);
+      }
+    }
+    None
+  }
+
   let parts = split_top_level_commas(inner);
   if parts.len() < 2 {
     return None;
@@ -1883,8 +1882,11 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
     stops.extend(cs);
   } else {
     start_idx = 1;
-    let (prelude, pos_part) = match parts[0].find(" at ") {
-      Some(idx) => (parts[0].get(..idx)?.trim(), Some(parts[0].get(idx + 4..)?)),
+    let (prelude, pos_part) = match find_at_separator(parts[0]) {
+      Some(idx) => (
+        parts[0].get(..idx)?.trim(),
+        Some(parts[0].get(idx + 4..)?.trim()),
+      ),
       None => (parts[0], None),
     };
 
@@ -1896,20 +1898,22 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
 
     let mut explicit_sizes = Vec::new();
     for token in prelude.split_whitespace() {
-      match token {
-        "circle" => shape = RadialGradientShape::Circle,
-        "ellipse" => shape = RadialGradientShape::Ellipse,
-        "closest-side" => size = RadialGradientSize::ClosestSide,
-        "farthest-side" => size = RadialGradientSize::FarthestSide,
-        "closest-corner" => size = RadialGradientSize::ClosestCorner,
-        "farthest-corner" => size = RadialGradientSize::FarthestCorner,
-        _ => {
-          if let Some(len) = parse_length_token(token) {
-            explicit_sizes.push(len);
-          } else {
-            return None;
-          }
-        }
+      if token.eq_ignore_ascii_case("circle") {
+        shape = RadialGradientShape::Circle;
+      } else if token.eq_ignore_ascii_case("ellipse") {
+        shape = RadialGradientShape::Ellipse;
+      } else if token.eq_ignore_ascii_case("closest-side") {
+        size = RadialGradientSize::ClosestSide;
+      } else if token.eq_ignore_ascii_case("farthest-side") {
+        size = RadialGradientSize::FarthestSide;
+      } else if token.eq_ignore_ascii_case("closest-corner") {
+        size = RadialGradientSize::ClosestCorner;
+      } else if token.eq_ignore_ascii_case("farthest-corner") {
+        size = RadialGradientSize::FarthestCorner;
+      } else if let Some(len) = parse_length_token(token) {
+        explicit_sizes.push(len);
+      } else {
+        return None;
       }
     }
 
@@ -2115,11 +2119,7 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
   Some(GradientPosition { x, y })
 }
 
-fn parse_conic_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
-  let inner = value
-    .strip_prefix("conic-gradient(")
-    .or_else(|| value.strip_prefix("repeating-conic-gradient("))?
-    .strip_suffix(')')?;
+fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
   let parts = split_top_level_commas(inner);
   if parts.len() < 2 {
     return None;
@@ -2146,24 +2146,25 @@ fn parse_conic_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
     let tokens: Vec<&str> = prelude.split_whitespace().collect();
     let mut idx = 0;
     while idx < tokens.len() {
-      match tokens[idx] {
-        "from" if idx + 1 < tokens.len() => {
-          if let Some(angle) = parse_stop_angle(tokens[idx + 1]) {
-            from_angle = angle;
-          }
-          idx += 2;
+      let token = tokens[idx];
+      if token.eq_ignore_ascii_case("from") && idx + 1 < tokens.len() {
+        if let Some(angle) = parse_stop_angle(tokens[idx + 1]) {
+          from_angle = angle;
         }
-        "at" if idx + 1 < tokens.len() => {
-          let pos_text = tokens[idx + 1..].join(" ");
-          if let Some(pos) = parse_radial_position(&pos_text) {
-            position = pos;
-            idx = tokens.len();
-          } else {
-            idx += 1;
-          }
-        }
-        _ => idx += 1,
+        idx += 2;
+        continue;
       }
+      if token.eq_ignore_ascii_case("at") && idx + 1 < tokens.len() {
+        let pos_text = tokens[idx + 1..].join(" ");
+        if let Some(pos) = parse_radial_position(&pos_text) {
+          position = pos;
+          idx = tokens.len();
+        } else {
+          idx += 1;
+        }
+        continue;
+      }
+      idx += 1;
     }
   }
 
@@ -2244,67 +2245,68 @@ fn parse_angle_expression(token: &str) -> Option<f32> {
   calc_component_to_angle(component)
 }
 
+fn strip_suffix_ignore_ascii_case<'a>(s: &'a str, suffix: &str) -> Option<&'a str> {
+  if s.len() < suffix.len() {
+    return None;
+  }
+  let start = s.len() - suffix.len();
+  let tail = s.get(start..)?;
+  if tail.eq_ignore_ascii_case(suffix) {
+    s.get(..start)
+  } else {
+    None
+  }
+}
+
 fn parse_gradient_angle(token: &str) -> Option<f32> {
   let token = token.trim();
-  if token.starts_with("to ") {
-    let dirs: Vec<&str> = token["to ".len()..].split_whitespace().collect();
-    let mut dx = 0i32;
-    let mut dy = 0i32;
-    for dir in dirs {
-      match dir {
-        "left" => dx -= 1,
-        "right" => dx += 1,
-        "top" => dy -= 1,
-        "bottom" => dy += 1,
-        _ => {}
+  let mut words = token.split_whitespace();
+  if let Some(first) = words.next() {
+    if first.eq_ignore_ascii_case("to") {
+      let mut dx = 0i32;
+      let mut dy = 0i32;
+      for dir in words {
+        if dir.eq_ignore_ascii_case("left") {
+          dx -= 1;
+        } else if dir.eq_ignore_ascii_case("right") {
+          dx += 1;
+        } else if dir.eq_ignore_ascii_case("top") {
+          dy -= 1;
+        } else if dir.eq_ignore_ascii_case("bottom") {
+          dy += 1;
+        }
       }
+      if dx == 0 && dy == 0 {
+        return None;
+      }
+      let angle = match (dx.signum(), dy.signum()) {
+        (1, 0) => 90.0,
+        (-1, 0) => 270.0,
+        (0, 1) => 180.0,
+        (0, -1) => 0.0,
+        (1, -1) => 45.0,
+        (1, 1) => 135.0,
+        (-1, 1) => 225.0,
+        (-1, -1) => 315.0,
+        _ => 180.0,
+      };
+      return Some(angle);
     }
-    if dx == 0 && dy == 0 {
-      return None;
-    }
-    let angle = match (dx.signum(), dy.signum()) {
-      (1, 0) => 90.0,
-      (-1, 0) => 270.0,
-      (0, 1) => 180.0,
-      (0, -1) => 0.0,
-      (1, -1) => 45.0,
-      (1, 1) => 135.0,
-      (-1, 1) => 225.0,
-      (-1, -1) => 315.0,
-      _ => 180.0,
-    };
-    return Some(angle);
   }
 
-  if let Some(angle) = parse_angle_expression(token) {
-    return Some(angle);
-  }
-
-  parse_angle(token)
+  parse_angle(token).or_else(|| parse_angle_expression(token))
 }
 
 fn parse_angle(token: &str) -> Option<f32> {
   let token = token.trim();
-  if token.ends_with("deg") {
-    token[..token.len() - 3].trim().parse::<f32>().ok()
-  } else if token.ends_with("rad") {
-    token[..token.len() - 3]
-      .trim()
-      .parse::<f32>()
-      .ok()
-      .map(|r| r.to_degrees())
-  } else if token.ends_with("turn") {
-    token[..token.len() - 4]
-      .trim()
-      .parse::<f32>()
-      .ok()
-      .map(|t| t * 360.0)
-  } else if token.ends_with("grad") {
-    token[..token.len() - 4]
-      .trim()
-      .parse::<f32>()
-      .ok()
-      .map(|g| g * 0.9)
+  if let Some(num) = strip_suffix_ignore_ascii_case(token, "deg") {
+    num.trim().parse::<f32>().ok()
+  } else if let Some(num) = strip_suffix_ignore_ascii_case(token, "rad") {
+    num.trim().parse::<f32>().ok().map(|r| r.to_degrees())
+  } else if let Some(num) = strip_suffix_ignore_ascii_case(token, "turn") {
+    num.trim().parse::<f32>().ok().map(|t| t * 360.0)
+  } else if let Some(num) = strip_suffix_ignore_ascii_case(token, "grad") {
+    num.trim().parse::<f32>().ok().map(|g| g * 0.9)
   } else {
     None
   }
@@ -2408,22 +2410,14 @@ fn parse_stop_position(token: &str) -> Option<f32> {
 
 fn parse_stop_angle(token: &str) -> Option<f32> {
   let t = token.trim();
-  if t.ends_with("deg") {
-    t[..t.len() - 3].trim().parse::<f32>().ok()
-  } else if t.ends_with("turn") {
-    t[..t.len() - 4]
-      .trim()
-      .parse::<f32>()
-      .ok()
-      .map(|v| v * 360.0)
-  } else if t.ends_with("rad") {
-    t[..t.len() - 3]
-      .trim()
-      .parse::<f32>()
-      .ok()
-      .map(|v| v.to_degrees())
-  } else if t.ends_with("grad") {
-    t[..t.len() - 4].trim().parse::<f32>().ok().map(|v| v * 0.9)
+  if let Some(num) = strip_suffix_ignore_ascii_case(t, "deg") {
+    num.trim().parse::<f32>().ok()
+  } else if let Some(num) = strip_suffix_ignore_ascii_case(t, "turn") {
+    num.trim().parse::<f32>().ok().map(|v| v * 360.0)
+  } else if let Some(num) = strip_suffix_ignore_ascii_case(t, "rad") {
+    num.trim().parse::<f32>().ok().map(|v| v.to_degrees())
+  } else if let Some(num) = strip_suffix_ignore_ascii_case(t, "grad") {
+    num.trim().parse::<f32>().ok().map(|v| v * 0.9)
   } else {
     None
   }
@@ -2686,6 +2680,92 @@ mod tests {
     assert!((position.x.alignment - 0.5).abs() < 1e-6);
     assert_eq!(stops.len(), 2);
     assert_eq!(stops[1].position, Some(0.75));
+  }
+
+  #[test]
+  fn parses_mixed_case_linear_gradient_function_and_keywords() {
+    let mixed = "Linear-Gradient(TO RIGHT, red, blue)";
+    let lower = "linear-gradient(to right, red, blue)";
+
+    let PropertyValue::LinearGradient {
+      angle: mixed_angle,
+      stops: mixed_stops,
+    } = parse_property_value("background-image", mixed).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+    let PropertyValue::LinearGradient {
+      angle: lower_angle,
+      stops: lower_stops,
+    } = parse_property_value("background-image", lower).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+
+    assert!((mixed_angle - 90.0).abs() < 0.01);
+    assert!((mixed_angle - lower_angle).abs() < 1e-6);
+    assert_eq!(mixed_stops, lower_stops);
+  }
+
+  #[test]
+  fn parses_mixed_case_radial_gradient_function_and_keywords() {
+    let mixed = "Radial-Gradient(CIRCLE AT CENTER, red, blue)";
+    let lower = "radial-gradient(circle at center, red, blue)";
+
+    let PropertyValue::RadialGradient {
+      shape: mixed_shape,
+      size: mixed_size,
+      position: mixed_position,
+      stops: mixed_stops,
+    } = parse_property_value("background-image", mixed).expect("gradient")
+    else {
+      panic!("expected radial gradient");
+    };
+    let PropertyValue::RadialGradient {
+      shape: lower_shape,
+      size: lower_size,
+      position: lower_position,
+      stops: lower_stops,
+    } = parse_property_value("background-image", lower).expect("gradient")
+    else {
+      panic!("expected radial gradient");
+    };
+
+    assert!(matches!(mixed_shape, RadialGradientShape::Circle));
+    assert!((mixed_position.x.alignment - 0.5).abs() < 1e-6);
+    assert!((mixed_position.y.alignment - 0.5).abs() < 1e-6);
+    assert_eq!(mixed_shape, lower_shape);
+    assert_eq!(mixed_size, lower_size);
+    assert_eq!(mixed_position, lower_position);
+    assert_eq!(mixed_stops, lower_stops);
+  }
+
+  #[test]
+  fn parses_mixed_case_conic_gradient_keywords() {
+    let mixed = "Conic-Gradient(FROM 90deg AT CENTER, red, blue)";
+    let lower = "conic-gradient(from 90deg at center, red, blue)";
+
+    let PropertyValue::ConicGradient {
+      from_angle: mixed_from,
+      position: mixed_position,
+      stops: mixed_stops,
+    } = parse_property_value("background-image", mixed).expect("gradient")
+    else {
+      panic!("expected conic gradient");
+    };
+    let PropertyValue::ConicGradient {
+      from_angle: lower_from,
+      position: lower_position,
+      stops: lower_stops,
+    } = parse_property_value("background-image", lower).expect("gradient")
+    else {
+      panic!("expected conic gradient");
+    };
+
+    assert!((mixed_from - 90.0).abs() < 0.01);
+    assert!((mixed_from - lower_from).abs() < 1e-6);
+    assert_eq!(mixed_position, lower_position);
+    assert_eq!(mixed_stops, lower_stops);
   }
 
   #[test]
