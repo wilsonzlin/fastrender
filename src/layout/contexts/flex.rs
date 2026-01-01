@@ -100,6 +100,28 @@ use std::sync::OnceLock;
 
 static LOG_CHILD_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
 
+#[cfg(test)]
+thread_local! {
+  // Sorting can happen during many unrelated tests, so keep this counter thread-local to avoid
+  // cross-test races when the test runner executes tests in parallel.
+  static FLEX_ORDER_SORT_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_flex_order_sort_calls() {
+  FLEX_ORDER_SORT_CALLS.with(|cell| cell.set(0));
+}
+
+#[cfg(test)]
+fn flex_order_sort_calls() -> usize {
+  FLEX_ORDER_SORT_CALLS.with(|cell| cell.get())
+}
+
+#[cfg(test)]
+fn record_flex_order_sort_call() {
+  FLEX_ORDER_SORT_CALLS.with(|cell| cell.set(cell.get() + 1));
+}
+
 use taffy::prelude::*;
 use taffy::style::Overflow as TaffyOverflow;
 use taffy::TaffyTree;
@@ -539,6 +561,8 @@ impl FormattingContext for FlexFormattingContext {
     let mut in_flow_children: Vec<(usize, &BoxNode)> = Vec::new();
     let mut positioned_children: Vec<&BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
+    let mut in_flow_children_need_sort = false;
+    let mut last_in_flow_order: Option<i32> = None;
     for (idx, child) in box_node.children.iter().enumerate() {
       check_layout_deadline(&mut deadline_counter)?;
       if child.style.running_position.is_some() {
@@ -551,15 +575,35 @@ impl FormattingContext for FlexFormattingContext {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
           positioned_children.push(child);
         }
-        _ => in_flow_children.push((idx, child)),
+        _ => {
+          if let Some(prev) = last_in_flow_order {
+            if child.style.order < prev {
+              in_flow_children_need_sort = true;
+            }
+          }
+          last_in_flow_order = Some(child.style.order);
+          in_flow_children.push((idx, child))
+        }
       }
     }
-    in_flow_children.sort_by(|(a_idx, a), (b_idx, b)| {
-      a.style
-        .order
-        .cmp(&b.style.order)
-        .then_with(|| a_idx.cmp(b_idx))
-    });
+    if in_flow_children_need_sort {
+      // `check_layout_deadline()` is periodic; ensure we still perform a definite check before doing
+      // potentially expensive sort work.
+      if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+        return Err(LayoutError::Timeout { elapsed });
+      }
+      #[cfg(test)]
+      record_flex_order_sort_call();
+      in_flow_children.sort_by(|(a_idx, a), (b_idx, b)| {
+        a.style
+          .order
+          .cmp(&b.style.order)
+          .then_with(|| a_idx.cmp(b_idx))
+      });
+      if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+        return Err(LayoutError::Timeout { elapsed });
+      }
+    }
     let in_flow_children: Vec<&BoxNode> = in_flow_children
       .into_iter()
       .map(|(_, child)| child)
@@ -5738,6 +5782,115 @@ mod tests {
       Err(LayoutError::Timeout { elapsed }) => assert!(elapsed >= Duration::from_secs(0)),
       other => panic!("expected LayoutError::Timeout from running scan, got {other:?}"),
     }
+  }
+
+  #[test]
+  fn flex_order_sort_is_skipped_when_children_are_already_sorted() {
+    reset_flex_order_sort_calls();
+
+    let mut style_a = ComputedStyle::default();
+    style_a.width = Some(Length::px(10.0));
+    style_a.height = Some(Length::px(10.0));
+    style_a.order = 0;
+
+    let mut style_b = ComputedStyle::default();
+    style_b.width = Some(Length::px(10.0));
+    style_b.height = Some(Length::px(10.0));
+    style_b.order = 1;
+
+    let children = vec![
+      BoxNode::new_block(Arc::new(style_a), FormattingContextType::Block, vec![]),
+      BoxNode::new_block(Arc::new(style_b), FormattingContextType::Block, vec![]),
+    ];
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let fc = FlexFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+    fc.layout(&container, &constraints).expect("layout should succeed");
+
+    assert_eq!(
+      flex_order_sort_calls(),
+      0,
+      "expected already-sorted flex items to bypass the order sort",
+    );
+  }
+
+  #[test]
+  fn flex_order_sort_runs_when_children_are_out_of_order() {
+    reset_flex_order_sort_calls();
+
+    let mut style_a = ComputedStyle::default();
+    style_a.width = Some(Length::px(10.0));
+    style_a.height = Some(Length::px(10.0));
+    style_a.order = 1;
+
+    let mut style_b = ComputedStyle::default();
+    style_b.width = Some(Length::px(10.0));
+    style_b.height = Some(Length::px(10.0));
+    style_b.order = 0;
+
+    let children = vec![
+      BoxNode::new_block(Arc::new(style_a), FormattingContextType::Block, vec![]),
+      BoxNode::new_block(Arc::new(style_b), FormattingContextType::Block, vec![]),
+    ];
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let fc = FlexFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+    fc.layout(&container, &constraints).expect("layout should succeed");
+
+    assert_eq!(
+      flex_order_sort_calls(),
+      1,
+      "expected out-of-order flex items to trigger exactly one order sort",
+    );
+  }
+
+  #[test]
+  fn flex_order_sort_checks_deadline_before_sorting() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    reset_flex_order_sort_calls();
+
+    let mut style_a = ComputedStyle::default();
+    style_a.width = Some(Length::px(10.0));
+    style_a.height = Some(Length::px(10.0));
+    style_a.order = 1;
+
+    let mut style_b = ComputedStyle::default();
+    style_b.width = Some(Length::px(10.0));
+    style_b.height = Some(Length::px(10.0));
+    style_b.order = 0;
+
+    let children = vec![
+      BoxNode::new_block(Arc::new(style_a), FormattingContextType::Block, vec![]),
+      BoxNode::new_block(Arc::new(style_b), FormattingContextType::Block, vec![]),
+    ];
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    // Allow the initial check_active() at the start of flex layout to pass, then abort on the next
+    // check_active() that runs before sorting.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let deadline = RenderDeadline::new(
+      None,
+      Some(Arc::new(move || {
+        let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
+        prev == 1
+      })),
+    );
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let fc = FlexFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+    let result = fc.layout(&container, &constraints);
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+    assert_eq!(
+      flex_order_sort_calls(),
+      0,
+      "expected deadline to abort flex layout before performing the order sort",
+    );
   }
 
   #[test]
