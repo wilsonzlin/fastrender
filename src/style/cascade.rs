@@ -1411,6 +1411,8 @@ struct DomSelectorKeyEntry {
   class_len: u32,
   attr_start: u32,
   attr_len: u32,
+  attr_value_start: u32,
+  attr_value_len: u32,
 }
 
 #[derive(Debug, Default)]
@@ -1418,6 +1420,7 @@ struct DomSelectorKeyCache {
   nodes: Vec<DomSelectorKeyEntry>,
   class_keys: Vec<SelectorBucketKey>,
   attr_keys: Vec<SelectorBucketKey>,
+  attr_value_keys: Vec<SelectorBucketKey>,
 }
 
 #[derive(Clone, Copy)]
@@ -1426,6 +1429,7 @@ struct NodeSelectorKeys<'a> {
   id_key: Option<SelectorBucketKey>,
   class_keys: &'a [SelectorBucketKey],
   attr_keys: &'a [SelectorBucketKey],
+  attr_value_keys: &'a [SelectorBucketKey],
 }
 
 impl DomSelectorKeyCache {
@@ -1437,6 +1441,7 @@ impl DomSelectorKeyCache {
       nodes,
       class_keys: Vec::new(),
       attr_keys: Vec::new(),
+      attr_value_keys: Vec::new(),
     }
   }
 
@@ -1455,11 +1460,17 @@ impl DomSelectorKeyCache {
     let class_end = class_start + entry.class_len as usize;
     let attr_start = entry.attr_start as usize;
     let attr_end = attr_start + entry.attr_len as usize;
+    let attr_value_start = entry.attr_value_start as usize;
+    let attr_value_end = attr_value_start + entry.attr_value_len as usize;
     NodeSelectorKeys {
       tag_key: entry.tag_key,
       id_key: entry.has_id.then_some(entry.id_key),
       class_keys: self.class_keys.get(class_start..class_end).unwrap_or(&[]),
       attr_keys: self.attr_keys.get(attr_start..attr_end).unwrap_or(&[]),
+      attr_value_keys: self
+        .attr_value_keys
+        .get(attr_value_start..attr_value_end)
+        .unwrap_or(&[]),
     }
   }
 }
@@ -1512,10 +1523,17 @@ impl DomMaps {
         let class_len = selector_keys.class_keys.len() - class_start;
 
         let attr_start = selector_keys.attr_keys.len();
-        for (name, _) in node.attributes_iter() {
+        let attr_value_start = selector_keys.attr_value_keys.len();
+        for (name, value) in node.attributes_iter() {
           selector_keys.attr_keys.push(selector_bucket_attr(name));
+          if value.len() <= ATTR_VALUE_INDEX_MAX_LEN {
+            selector_keys
+              .attr_value_keys
+              .push(selector_bucket_attr_value(name, value));
+          }
         }
         let attr_len = selector_keys.attr_keys.len() - attr_start;
+        let attr_value_len = selector_keys.attr_value_keys.len() - attr_value_start;
 
         selector_keys.set_node_keys(
           id,
@@ -1527,6 +1545,8 @@ impl DomMaps {
             class_len: u32::try_from(class_len).expect("selector key cache overflow"),
             attr_start: u32::try_from(attr_start).expect("selector key cache overflow"),
             attr_len: u32::try_from(attr_len).expect("selector key cache overflow"),
+            attr_value_start: u32::try_from(attr_value_start).expect("selector key cache overflow"),
+            attr_value_len: u32::try_from(attr_value_len).expect("selector key cache overflow"),
           },
         );
       }
@@ -1820,7 +1840,7 @@ struct RightmostFastReject {
   tag_key: SelectorBucketKey,
   id_key: SelectorBucketKey,
   // First `class_len` entries are required classes; the following `attr_len` entries are required
-  // attribute names.
+  // attribute names / `[attr="value"]` equality keys.
   keys: [SelectorBucketKey; RIGHTMOST_FAST_REJECT_MAX_KEYS],
   class_len: u8,
   attr_len: u8,
@@ -1858,7 +1878,9 @@ impl RightmostFastReject {
     }
     let attr_end = class_len + self.attr_len as usize;
     for required in &self.keys[class_len..attr_end] {
-      if !node_keys.attr_keys.iter().any(|key| key == required) {
+      if !node_keys.attr_keys.iter().any(|key| key == required)
+        && !node_keys.attr_value_keys.iter().any(|key| key == required)
+      {
         return false;
       }
     }
@@ -1899,6 +1921,14 @@ type SelectorBucketKey = u64;
 // so correctness does not depend on the hash being collision-free.
 const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
 const FNV_PRIME: u64 = 1099511628211;
+// Upper bound on attribute values hashed into selector key indices.
+//
+// Many elements have very long attribute values (e.g. inline `style`, `href` URLs, serialized
+// JSON blobs). Hashing all of them eagerly would add noticeable overhead to the DOM selector-key
+// cache construction. We only index short `[attr="value"]` selectors (exact match) and only
+// pre-hash node attribute values up to this length; longer attribute-equality selectors fall back
+// to the attribute-name bucket.
+const ATTR_VALUE_INDEX_MAX_LEN: usize = 64;
 
 #[inline]
 fn selector_hash_bytes(bytes: &[u8]) -> SelectorBucketKey {
@@ -1969,6 +1999,33 @@ fn selector_bucket_attr(value: &str) -> SelectorBucketKey {
 }
 
 #[inline]
+fn selector_bucket_attr_value(name: &str, value: &str) -> SelectorBucketKey {
+  let mut hash = FNV_OFFSET_BASIS;
+  for byte in name.bytes() {
+    let folded = if byte.is_ascii_uppercase() {
+      byte + 32
+    } else {
+      byte
+    };
+    hash ^= folded as u64;
+    hash = hash.wrapping_mul(FNV_PRIME);
+  }
+  // Separator to reduce accidental collisions between (name,value) concatenations.
+  hash ^= 0u64;
+  hash = hash.wrapping_mul(FNV_PRIME);
+  for byte in value.bytes() {
+    let folded = if byte.is_ascii_uppercase() {
+      byte + 32
+    } else {
+      byte
+    };
+    hash ^= folded as u64;
+    hash = hash.wrapping_mul(FNV_PRIME);
+  }
+  hash
+}
+
+#[inline]
 fn selector_bucket_part(value: &str) -> SelectorBucketKey {
   selector_hash_str(value)
 }
@@ -2005,6 +2062,7 @@ type SelectorBucketMap<V> = HashMap<SelectorBucketKey, V, SelectorBucketBuildHas
 struct PseudoBuckets {
   by_id: SelectorBucketMap<Vec<usize>>,
   by_class: SelectorBucketMap<Vec<usize>>,
+  by_attr_value: SelectorBucketMap<Vec<usize>>,
   by_tag: SelectorBucketMap<Vec<usize>>,
   by_attr: SelectorBucketMap<Vec<usize>>,
   universal: Vec<usize>,
@@ -2015,6 +2073,7 @@ impl PseudoBuckets {
     Self {
       by_id: SelectorBucketMap::default(),
       by_class: SelectorBucketMap::default(),
+      by_attr_value: SelectorBucketMap::default(),
       by_tag: SelectorBucketMap::default(),
       by_attr: SelectorBucketMap::default(),
       universal: Vec::new(),
@@ -2025,6 +2084,7 @@ impl PseudoBuckets {
 struct SlottedBuckets {
   by_id: SelectorBucketMap<Vec<usize>>,
   by_class: SelectorBucketMap<Vec<usize>>,
+  by_attr_value: SelectorBucketMap<Vec<usize>>,
   by_tag: SelectorBucketMap<Vec<usize>>,
   by_attr: SelectorBucketMap<Vec<usize>>,
   universal: Vec<usize>,
@@ -2035,6 +2095,7 @@ impl SlottedBuckets {
     Self {
       by_id: SelectorBucketMap::default(),
       by_class: SelectorBucketMap::default(),
+      by_attr_value: SelectorBucketMap::default(),
       by_tag: SelectorBucketMap::default(),
       by_attr: SelectorBucketMap::default(),
       universal: Vec::new(),
@@ -2054,6 +2115,7 @@ struct RuleIndex<'a> {
   fast_rejects: Vec<RightmostFastReject>,
   by_id: SelectorBucketMap<Vec<usize>>,
   by_class: SelectorBucketMap<Vec<usize>>,
+  by_attr_value: SelectorBucketMap<Vec<usize>>,
   by_tag: SelectorBucketMap<Vec<usize>>,
   by_attr: SelectorBucketMap<Vec<usize>>,
   universal: Vec<usize>,
@@ -2545,6 +2607,7 @@ impl CandidateStats {
 enum CandidateBucket {
   Id,
   Class,
+  AttrValue,
   Tag,
   Attr,
   Universal,
@@ -2555,9 +2618,10 @@ impl CandidateBucket {
     match self {
       CandidateBucket::Id => 0,
       CandidateBucket::Class => 1,
-      CandidateBucket::Tag => 2,
-      CandidateBucket::Attr => 3,
-      CandidateBucket::Universal => 4,
+      CandidateBucket::AttrValue => 2,
+      CandidateBucket::Tag => 3,
+      CandidateBucket::Attr => 4,
+      CandidateBucket::Universal => 5,
     }
   }
 }
@@ -2916,6 +2980,25 @@ fn collect_sequence_keys(
           push_key(&mut mandatory_keys, key);
         }
       }
+      Component::AttributeInNoNamespace {
+        local_name,
+        operator: selectors::attr::AttrSelectorOperator::Equal,
+        value,
+        ..
+      } => {
+        if matches!(polarity, SelectorKeyPolarity::Matches) {
+          let key = if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN {
+            SelectorKey::AttrValue(selector_bucket_attr_value(
+              local_name.as_str(),
+              value.as_str(),
+            ))
+          } else {
+            SelectorKey::Attribute(selector_bucket_attr(local_name.as_str()))
+          };
+          push_key(&mut all_keys, key);
+          push_key(&mut mandatory_keys, key);
+        }
+      }
       Component::AttributeInNoNamespace { local_name, .. } => {
         if matches!(polarity, SelectorKeyPolarity::Matches) {
           let key = SelectorKey::Attribute(selector_bucket_attr(local_name.as_str()));
@@ -2925,14 +3008,29 @@ fn collect_sequence_keys(
       }
       Component::AttributeOther(other) => {
         if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
-          let key = SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str()));
+          let key = match &other.operation {
+            selectors::attr::ParsedAttrSelectorOperation::WithValue {
+              operator: selectors::attr::AttrSelectorOperator::Equal,
+              value,
+              ..
+            } if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN => SelectorKey::AttrValue(
+              selector_bucket_attr_value(other.local_name_lower.as_str(), value.as_str()),
+            ),
+            _ => SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str())),
+          };
           push_key(&mut all_keys, key);
           push_key(&mut mandatory_keys, key);
         }
       }
       Component::NthOf(nth) => {
         if all_keys.is_empty()
-          && merge_nested_keys(nth.selectors().iter(), quirks_mode, polarity, true, &mut all_keys)
+          && merge_nested_keys(
+            nth.selectors().iter(),
+            quirks_mode,
+            polarity,
+            true,
+            &mut all_keys,
+          )
         {
           required_and = false;
         }
@@ -2979,6 +3077,25 @@ fn collect_sequence_keys(
                 push_key(&mut mandatory_keys, key);
               }
             }
+            Component::AttributeInNoNamespace {
+              local_name,
+              operator: selectors::attr::AttrSelectorOperator::Equal,
+              value,
+              ..
+            } => {
+              if matches!(polarity, SelectorKeyPolarity::Matches) {
+                let key = if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN {
+                  SelectorKey::AttrValue(selector_bucket_attr_value(
+                    local_name.as_str(),
+                    value.as_str(),
+                  ))
+                } else {
+                  SelectorKey::Attribute(selector_bucket_attr(local_name.as_str()))
+                };
+                push_key(&mut all_keys, key);
+                push_key(&mut mandatory_keys, key);
+              }
+            }
             Component::AttributeInNoNamespace { local_name, .. } => {
               if matches!(polarity, SelectorKeyPolarity::Matches) {
                 let key = SelectorKey::Attribute(selector_bucket_attr(local_name.as_str()));
@@ -2988,8 +3105,18 @@ fn collect_sequence_keys(
             }
             Component::AttributeOther(other) => {
               if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
-                let key =
-                  SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str()));
+                let key = match &other.operation {
+                  selectors::attr::ParsedAttrSelectorOperation::WithValue {
+                    operator: selectors::attr::AttrSelectorOperator::Equal,
+                    value,
+                    ..
+                  } if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN => SelectorKey::AttrValue(
+                    selector_bucket_attr_value(other.local_name_lower.as_str(), value.as_str()),
+                  ),
+                  _ => {
+                    SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str()))
+                  }
+                };
                 push_key(&mut all_keys, key);
                 push_key(&mut mandatory_keys, key);
               }
@@ -3001,14 +3128,26 @@ fn collect_sequence_keys(
       Component::NonTSPseudoClass(pc) => match pc {
         PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
           if all_keys.is_empty()
-            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut all_keys)
+            && merge_nested_keys(
+              list.slice().iter(),
+              quirks_mode,
+              polarity,
+              true,
+              &mut all_keys,
+            )
           {
             required_and = false;
           }
         }
         PseudoClass::Host(Some(list)) => {
           if all_keys.is_empty()
-            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut all_keys)
+            && merge_nested_keys(
+              list.slice().iter(),
+              quirks_mode,
+              polarity,
+              true,
+              &mut all_keys,
+            )
           {
             required_and = false;
           }
@@ -3190,6 +3329,29 @@ fn selector_compound_fast_reject_from_iter(
         attr_keys[attr_len] = key;
         attr_len += 1;
       }
+      Component::AttributeInNoNamespace {
+        local_name,
+        operator: selectors::attr::AttrSelectorOperator::Equal,
+        value,
+        ..
+      } => {
+        let key = if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN {
+          selector_bucket_attr_value(local_name.as_str(), value.as_str())
+        } else {
+          selector_bucket_attr(local_name.as_str())
+        };
+        if attr_keys[..attr_len]
+          .iter()
+          .any(|existing| *existing == key)
+        {
+          continue;
+        }
+        if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+          continue;
+        }
+        attr_keys[attr_len] = key;
+        attr_len += 1;
+      }
       Component::AttributeInNoNamespace { local_name, .. } => {
         let key = selector_bucket_attr(local_name.as_str());
         if attr_keys[..attr_len]
@@ -3208,7 +3370,16 @@ fn selector_compound_fast_reject_from_iter(
         if other.namespace.is_some() {
           return None;
         }
-        let key = selector_bucket_attr(other.local_name_lower.as_str());
+        let key = match &other.operation {
+          selectors::attr::ParsedAttrSelectorOperation::WithValue {
+            operator: selectors::attr::AttrSelectorOperator::Equal,
+            value,
+            ..
+          } if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN => {
+            selector_bucket_attr_value(other.local_name_lower.as_str(), value.as_str())
+          }
+          _ => selector_bucket_attr(other.local_name_lower.as_str()),
+        };
         if attr_keys[..attr_len]
           .iter()
           .any(|existing| *existing == key)
@@ -3261,7 +3432,10 @@ fn selector_compound_fast_reject_from_iter(
                 id_key = key;
               }
               SelectorKey::Class(key) => {
-                if class_keys[..class_len].iter().any(|existing| *existing == key) {
+                if class_keys[..class_len]
+                  .iter()
+                  .any(|existing| *existing == key)
+                {
                   continue;
                 }
                 if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3277,8 +3451,11 @@ fn selector_compound_fast_reject_from_iter(
                 has_tag = true;
                 tag_key = key;
               }
-              SelectorKey::Attribute(key) => {
-                if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+              SelectorKey::AttrValue(key) | SelectorKey::Attribute(key) => {
+                if attr_keys[..attr_len]
+                  .iter()
+                  .any(|existing| *existing == key)
+                {
                   continue;
                 }
                 if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3352,6 +3529,29 @@ fn selector_compound_fast_reject_from_iter(
               attr_keys[attr_len] = key;
               attr_len += 1;
             }
+            Component::AttributeInNoNamespace {
+              local_name,
+              operator: selectors::attr::AttrSelectorOperator::Equal,
+              value,
+              ..
+            } => {
+              let key = if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN {
+                selector_bucket_attr_value(local_name.as_str(), value.as_str())
+              } else {
+                selector_bucket_attr(local_name.as_str())
+              };
+              if attr_keys[..attr_len]
+                .iter()
+                .any(|existing| *existing == key)
+              {
+                continue;
+              }
+              if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+                continue;
+              }
+              attr_keys[attr_len] = key;
+              attr_len += 1;
+            }
             Component::AttributeInNoNamespace { local_name, .. } => {
               let key = selector_bucket_attr(local_name.as_str());
               if attr_keys[..attr_len]
@@ -3370,7 +3570,16 @@ fn selector_compound_fast_reject_from_iter(
               if other.namespace.is_some() {
                 return None;
               }
-              let key = selector_bucket_attr(other.local_name_lower.as_str());
+              let key = match &other.operation {
+                selectors::attr::ParsedAttrSelectorOperation::WithValue {
+                  operator: selectors::attr::AttrSelectorOperator::Equal,
+                  value,
+                  ..
+                } if value.as_str().len() <= ATTR_VALUE_INDEX_MAX_LEN => {
+                  selector_bucket_attr_value(other.local_name_lower.as_str(), value.as_str())
+                }
+                _ => selector_bucket_attr(other.local_name_lower.as_str()),
+              };
               if attr_keys[..attr_len]
                 .iter()
                 .any(|existing| *existing == key)
@@ -3440,7 +3649,10 @@ fn selector_compound_fast_reject_from_iter(
                 id_key = key;
               }
               SelectorKey::Class(key) => {
-                if class_keys[..class_len].iter().any(|existing| *existing == key) {
+                if class_keys[..class_len]
+                  .iter()
+                  .any(|existing| *existing == key)
+                {
                   continue;
                 }
                 if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3456,8 +3668,11 @@ fn selector_compound_fast_reject_from_iter(
                 has_tag = true;
                 tag_key = key;
               }
-              SelectorKey::Attribute(key) => {
-                if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+              SelectorKey::AttrValue(key) | SelectorKey::Attribute(key) => {
+                if attr_keys[..attr_len]
+                  .iter()
+                  .any(|existing| *existing == key)
+                {
                   continue;
                 }
                 if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3716,6 +3931,7 @@ fn parse_slotted_prelude(
 enum SelectorKey {
   Id(SelectorBucketKey),
   Class(SelectorBucketKey),
+  AttrValue(SelectorBucketKey),
   Tag(SelectorBucketKey),
   Attribute(SelectorBucketKey),
   Universal,
@@ -3725,9 +3941,10 @@ fn selector_key_type_rank(key: SelectorKey) -> u8 {
   match key {
     SelectorKey::Id(_) => 0,
     SelectorKey::Class(_) => 1,
-    SelectorKey::Attribute(_) => 2,
-    SelectorKey::Tag(_) => 3,
-    SelectorKey::Universal => 4,
+    SelectorKey::AttrValue(_) => 2,
+    SelectorKey::Attribute(_) => 3,
+    SelectorKey::Tag(_) => 4,
+    SelectorKey::Universal => 5,
   }
 }
 
@@ -3774,6 +3991,7 @@ impl<'a> RuleIndex<'a> {
       fast_rejects: Vec::new(),
       by_id: SelectorBucketMap::default(),
       by_class: SelectorBucketMap::default(),
+      by_attr_value: SelectorBucketMap::default(),
       by_tag: SelectorBucketMap::default(),
       by_attr: SelectorBucketMap::default(),
       universal: Vec::new(),
@@ -3992,6 +4210,11 @@ impl<'a> RuleIndex<'a> {
         match anchor {
           SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
           SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::AttrValue(attr) => index
+            .by_attr_value
+            .entry(attr)
+            .or_default()
+            .push(selector_idx),
           SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
           SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
           SelectorKey::Universal => index.universal.push(selector_idx),
@@ -4001,6 +4224,11 @@ impl<'a> RuleIndex<'a> {
         match anchor {
           SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
           SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::AttrValue(attr) => index
+            .by_attr_value
+            .entry(attr)
+            .or_default()
+            .push(selector_idx),
           SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
           SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
           SelectorKey::Universal => index.universal.push(selector_idx),
@@ -4010,6 +4238,11 @@ impl<'a> RuleIndex<'a> {
           match key {
             SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
             SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
+            SelectorKey::AttrValue(attr) => index
+              .by_attr_value
+              .entry(attr)
+              .or_default()
+              .push(selector_idx),
             SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
             SelectorKey::Attribute(attr) => {
               index.by_attr.entry(attr).or_default().push(selector_idx)
@@ -4037,6 +4270,11 @@ impl<'a> RuleIndex<'a> {
         match anchor {
           SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
           SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::AttrValue(attr) => bucket
+            .by_attr_value
+            .entry(attr)
+            .or_default()
+            .push(selector_idx),
           SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
           SelectorKey::Attribute(attr) => {
             bucket.by_attr.entry(attr).or_default().push(selector_idx)
@@ -4048,6 +4286,11 @@ impl<'a> RuleIndex<'a> {
         match anchor {
           SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
           SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::AttrValue(attr) => bucket
+            .by_attr_value
+            .entry(attr)
+            .or_default()
+            .push(selector_idx),
           SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
           SelectorKey::Attribute(attr) => {
             bucket.by_attr.entry(attr).or_default().push(selector_idx)
@@ -4059,6 +4302,11 @@ impl<'a> RuleIndex<'a> {
           match key {
             SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
             SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+            SelectorKey::AttrValue(attr) => bucket
+              .by_attr_value
+              .entry(attr)
+              .or_default()
+              .push(selector_idx),
             SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
             SelectorKey::Attribute(attr) => {
               bucket.by_attr.entry(attr).or_default().push(selector_idx)
@@ -4105,6 +4353,12 @@ impl<'a> RuleIndex<'a> {
             .entry(cls)
             .or_default()
             .push(selector_idx),
+          SelectorKey::AttrValue(attr) => index
+            .slotted_buckets
+            .by_attr_value
+            .entry(attr)
+            .or_default()
+            .push(selector_idx),
           SelectorKey::Tag(tag) => index
             .slotted_buckets
             .by_tag
@@ -4148,6 +4402,9 @@ impl<'a> RuleIndex<'a> {
     for list in self.by_class.values_mut() {
       sort_bucket(list, selectors);
     }
+    for list in self.by_attr_value.values_mut() {
+      sort_bucket(list, selectors);
+    }
     for list in self.by_tag.values_mut() {
       sort_bucket(list, selectors);
     }
@@ -4169,6 +4426,9 @@ impl<'a> RuleIndex<'a> {
       sort_slotted_bucket(list, slotted_selectors);
     }
     for list in self.slotted_buckets.by_class.values_mut() {
+      sort_slotted_bucket(list, slotted_selectors);
+    }
+    for list in self.slotted_buckets.by_attr_value.values_mut() {
       sort_slotted_bucket(list, slotted_selectors);
     }
     for list in self.slotted_buckets.by_tag.values_mut() {
@@ -4255,6 +4515,14 @@ impl<'a> RuleIndex<'a> {
       }
     }
 
+    if !self.by_attr_value.is_empty() {
+      for key in node_keys.attr_value_keys {
+        if let Some(list) = self.by_attr_value.get(key) {
+          push_list(list.as_slice(), CandidateBucket::AttrValue);
+        }
+      }
+    }
+
     if !self.by_tag.is_empty() {
       let key = node_keys.tag_key;
       if let Some(list) = self.by_tag.get(&key) {
@@ -4297,6 +4565,7 @@ impl<'a> RuleIndex<'a> {
         match cursor.bucket {
           CandidateBucket::Id => stats.by_id += 1,
           CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::AttrValue => stats.by_attr += 1,
           CandidateBucket::Tag => stats.by_tag += 1,
           CandidateBucket::Attr => stats.by_attr += 1,
           CandidateBucket::Universal => stats.universal += 1,
@@ -4339,6 +4608,7 @@ impl<'a> RuleIndex<'a> {
       match cursor.bucket {
         CandidateBucket::Id => stats.by_id += 1,
         CandidateBucket::Class => stats.by_class += 1,
+        CandidateBucket::AttrValue => stats.by_attr += 1,
         CandidateBucket::Tag => stats.by_tag += 1,
         CandidateBucket::Attr => stats.by_attr += 1,
         CandidateBucket::Universal => stats.universal += 1,
@@ -4399,6 +4669,14 @@ impl<'a> RuleIndex<'a> {
       }
     }
 
+    if !self.slotted_buckets.by_attr_value.is_empty() {
+      for key in node_keys.attr_value_keys {
+        if let Some(list) = self.slotted_buckets.by_attr_value.get(key) {
+          push_list(list.as_slice(), CandidateBucket::AttrValue);
+        }
+      }
+    }
+
     if !self.slotted_buckets.by_tag.is_empty() {
       let key = node_keys.tag_key;
       if let Some(list) = self.slotted_buckets.by_tag.get(&key) {
@@ -4444,6 +4722,7 @@ impl<'a> RuleIndex<'a> {
         match cursor.bucket {
           CandidateBucket::Id => stats.by_id += 1,
           CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::AttrValue => stats.by_attr += 1,
           CandidateBucket::Tag => stats.by_tag += 1,
           CandidateBucket::Attr => stats.by_attr += 1,
           CandidateBucket::Universal => stats.universal += 1,
@@ -4486,6 +4765,7 @@ impl<'a> RuleIndex<'a> {
       match cursor.bucket {
         CandidateBucket::Id => stats.by_id += 1,
         CandidateBucket::Class => stats.by_class += 1,
+        CandidateBucket::AttrValue => stats.by_attr += 1,
         CandidateBucket::Tag => stats.by_tag += 1,
         CandidateBucket::Attr => stats.by_attr += 1,
         CandidateBucket::Universal => stats.universal += 1,
@@ -4552,6 +4832,16 @@ impl<'a> RuleIndex<'a> {
       }
     }
 
+    if !bucket.by_attr_value.is_empty() {
+      for key in node_keys.attr_value_keys {
+        if let Some(list) = bucket.by_attr_value.get(key) {
+          for idx in list {
+            consider_candidate(*idx, &mut stats.by_attr);
+          }
+        }
+      }
+    }
+
     if !bucket.by_tag.is_empty() {
       let key = node_keys.tag_key;
       if let Some(list) = bucket.by_tag.get(&key) {
@@ -4598,6 +4888,7 @@ pub struct SelectorCandidateBench<'a, 'dom> {
   merge: CandidateMergeScratch,
   tmp_class_keys: Vec<SelectorBucketKey>,
   tmp_attr_keys: Vec<SelectorBucketKey>,
+  tmp_attr_value_keys: Vec<SelectorBucketKey>,
   quirks_mode: QuirksMode,
   _dom: std::marker::PhantomData<&'dom DomNode>,
 }
@@ -4657,6 +4948,7 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
       merge: CandidateMergeScratch::default(),
       tmp_class_keys: Vec::new(),
       tmp_attr_keys: Vec::new(),
+      tmp_attr_value_keys: Vec::new(),
       quirks_mode,
       _dom: std::marker::PhantomData,
     }
@@ -4701,6 +4993,7 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
 
         self.tmp_class_keys.clear();
         self.tmp_attr_keys.clear();
+        self.tmp_attr_value_keys.clear();
         let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
         let id_key = node
           .get_attribute_ref("id")
@@ -4712,14 +5005,20 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
               .push(selector_bucket_class_for_mode(cls, self.quirks_mode));
           }
         }
-        for (name, _) in node.attributes_iter() {
+        for (name, value) in node.attributes_iter() {
           self.tmp_attr_keys.push(selector_bucket_attr(name));
+          if value.len() <= ATTR_VALUE_INDEX_MAX_LEN {
+            self
+              .tmp_attr_value_keys
+              .push(selector_bucket_attr_value(name, value));
+          }
         }
         let node_keys = NodeSelectorKeys {
           tag_key,
           id_key,
           class_keys: &self.tmp_class_keys,
           attr_keys: &self.tmp_attr_keys,
+          attr_value_keys: &self.tmp_attr_value_keys,
         };
 
         self.stats.reset();
@@ -5441,8 +5740,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     );
     let mut rules: Vec<CascadeRule<'_>> = Vec::new();
     let mut host_rules: Vec<CascadeRule<'_>> = Vec::new();
-    let host_layer_order = layer_order_interner
-      .intern_prefixed(&[], tree_scope_prefix_for_node(&dom_maps, *host));
+    let host_layer_order =
+      layer_order_interner.intern_prefixed(&[], tree_scope_prefix_for_node(&dom_maps, *host));
 
     for (idx, rule) in collected.iter().enumerate() {
       let cascade_rule = CascadeRule {
@@ -5965,8 +6264,8 @@ impl<'a> PreparedCascade<'a> {
       );
       let mut rules: Vec<CascadeRule<'a>> = Vec::new();
       let mut host_rules: Vec<CascadeRule<'a>> = Vec::new();
-      let host_layer_order = layer_order_interner
-        .intern_prefixed(&[], tree_scope_prefix_for_node(&dom_maps, *host));
+      let host_layer_order =
+        layer_order_interner.intern_prefixed(&[], tree_scope_prefix_for_node(&dom_maps, *host));
 
       for (idx, rule) in collected.iter().enumerate() {
         let cascade_rule = CascadeRule {
@@ -8551,9 +8850,11 @@ mod tests {
     quirks_mode: QuirksMode,
     class_keys: &'a mut Vec<SelectorBucketKey>,
     attr_keys: &'a mut Vec<SelectorBucketKey>,
+    attr_value_keys: &'a mut Vec<SelectorBucketKey>,
   ) -> NodeSelectorKeys<'a> {
     class_keys.clear();
     attr_keys.clear();
+    attr_value_keys.clear();
     let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
     let id_key = node
       .get_attribute_ref("id")
@@ -8563,14 +8864,18 @@ mod tests {
         class_keys.push(selector_bucket_class_for_mode(cls, quirks_mode));
       }
     }
-    for (name, _) in node.attributes_iter() {
+    for (name, value) in node.attributes_iter() {
       attr_keys.push(selector_bucket_attr(name));
+      if value.len() <= ATTR_VALUE_INDEX_MAX_LEN {
+        attr_value_keys.push(selector_bucket_attr_value(name, value));
+      }
     }
     NodeSelectorKeys {
       tag_key,
       id_key,
       class_keys: class_keys.as_slice(),
       attr_keys: attr_keys.as_slice(),
+      attr_value_keys: attr_value_keys.as_slice(),
     }
   }
 
@@ -9248,6 +9553,7 @@ mod tests {
     };
     let total_occurrences = count_bucket_occurrences(&index.by_id)
       + count_bucket_occurrences(&index.by_class)
+      + count_bucket_occurrences(&index.by_attr_value)
       + count_bucket_occurrences(&index.by_tag)
       + count_bucket_occurrences(&index.by_attr)
       + index.universal.iter().filter(|&&i| i == 0).count();
@@ -9270,8 +9576,14 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys =
-      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     index.selector_candidates(
       &node,
       node_keys,
@@ -9344,7 +9656,14 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     index.selector_candidates(
       &node,
       node_keys,
@@ -9417,7 +9736,14 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys = node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     index.selector_candidates(
       &node,
       node_keys,
@@ -9497,8 +9823,14 @@ mod tests {
       let mut merge = CandidateMergeScratch::default();
       let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
       let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-      let node_keys =
-        node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+      let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+      let node_keys = node_selector_keys(
+        &node,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+        &mut attr_value_keys,
+      );
       index.selector_candidates(
         &node,
         node_keys,
@@ -9518,6 +9850,147 @@ mod tests {
   }
 
   #[test]
+  fn rule_index_indexes_attr_equal_selectors_by_attr_value_key() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        [data-test="a"] { color: red; }
+        [data-test="b"] { color: blue; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 2);
+
+    let key_a = selector_bucket_attr_value("data-test", "a");
+    let key_b = selector_bucket_attr_value("data-test", "b");
+    assert_eq!(
+      index
+        .by_attr_value
+        .get(&key_a)
+        .expect("value a bucket")
+        .as_slice(),
+      &[0usize]
+    );
+    assert_eq!(
+      index
+        .by_attr_value
+        .get(&key_b)
+        .expect("value b bucket")
+        .as_slice(),
+      &[1usize]
+    );
+
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node_a = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("DATA-TEST".to_string(), "a".to_string())],
+      },
+      children: vec![],
+    };
+    let node_keys = node_selector_keys(
+      &node_a,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+    index.selector_candidates(
+      &node_a,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates.as_slice(), &[0usize]);
+
+    let node_b = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("data-test".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let node_keys = node_selector_keys(
+      &node_b,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+    index.selector_candidates(
+      &node_b,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates.as_slice(), &[1usize]);
+
+    let node_c = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("data-test".to_string(), "c".to_string())],
+      },
+      children: vec![],
+    };
+    let node_keys = node_selector_keys(
+      &node_c,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+    index.selector_candidates(
+      &node_c,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert!(candidates.is_empty());
+  }
+
+  #[test]
   fn rule_index_indexes_is_selector_list_multi_key_branches_under_branch_anchor_keys() {
     let stylesheet = parse_stylesheet(":is(.a.b, .c.d) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
@@ -9530,7 +10003,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9595,8 +10071,14 @@ mod tests {
       let mut merge = CandidateMergeScratch::default();
       let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
       let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-      let node_keys =
-        node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+      let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+      let node_keys = node_selector_keys(
+        &node,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+        &mut attr_value_keys,
+      );
       index.selector_candidates(
         &node,
         node_keys,
@@ -9634,7 +10116,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9718,6 +10203,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node_missing = DomNode {
       node_type: DomNodeType::Element {
@@ -9742,6 +10228,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should require both .a and .b"
     );
@@ -9751,6 +10238,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should pass when required classes are present"
     );
@@ -9792,6 +10280,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node_missing = DomNode {
       node_type: DomNodeType::Element {
@@ -9816,6 +10305,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should require .a even though selector is union-bucketed by :is() keys"
     );
@@ -9825,6 +10315,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should pass when required class is present"
     );
@@ -9866,6 +10357,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node_missing = DomNode {
       node_type: DomNodeType::Element {
@@ -9890,6 +10382,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should require shared .a key from :is() selector list"
     );
@@ -9899,6 +10392,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should pass when shared .a key is present"
     );
@@ -9906,8 +10400,7 @@ mod tests {
 
   #[test]
   fn rightmost_fast_reject_extracts_common_keys_from_nth_of_selector_list() {
-    let stylesheet =
-      parse_stylesheet(".x:nth-child(2n of .a.b, .a.c) { color: red; }").unwrap();
+    let stylesheet = parse_stylesheet(".x:nth-child(2n of .a.b, .a.c) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
     let collected = stylesheet.collect_style_rules(&media_ctx);
 
@@ -9941,6 +10434,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node_missing = DomNode {
       node_type: DomNodeType::Element {
@@ -9965,6 +10459,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should require shared .a key from :nth-child(... of ...) selector list"
     );
@@ -9974,6 +10469,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should pass when shared .a key is present"
     );
@@ -9981,8 +10477,7 @@ mod tests {
 
   #[test]
   fn rightmost_fast_reject_allows_single_key_with_nth_of_selector_list() {
-    let stylesheet =
-      parse_stylesheet(":nth-child(2n of .a.b, .a.c) { color: red; }").unwrap();
+    let stylesheet = parse_stylesheet(":nth-child(2n of .a.b, .a.c) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
     let collected = stylesheet.collect_style_rules(&media_ctx);
 
@@ -10016,6 +10511,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node_missing = DomNode {
       node_type: DomNodeType::Element {
@@ -10040,6 +10536,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should require shared .a key from :nth-child(of ...) selector list"
     );
@@ -10049,6 +10546,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should pass when shared .a key is present"
     );
@@ -10090,6 +10588,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node_missing = DomNode {
       node_type: DomNodeType::Element {
@@ -10114,6 +10613,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should require both .a and .b from the :host() argument"
     );
@@ -10123,6 +10623,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should pass when :host() argument keys are present"
     );
@@ -10189,6 +10690,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node_missing = DomNode {
       node_type: DomNodeType::Element {
@@ -10213,6 +10715,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should require both .a and .b"
     );
@@ -10222,6 +10725,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should ignore :has() while still checking required keys"
     );
@@ -10279,6 +10783,7 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
 
     let node = DomNode {
       node_type: DomNodeType::Element {
@@ -10294,6 +10799,7 @@ mod tests {
         QuirksMode::NoQuirks,
         &mut class_keys,
         &mut attr_keys,
+        &mut attr_value_keys,
       )),
       "fast reject should pass when all stored required classes are present"
     );
@@ -10318,6 +10824,7 @@ mod tests {
           QuirksMode::NoQuirks,
           &mut class_keys,
           &mut attr_keys,
+          &mut attr_value_keys,
         )),
         "fast reject should fail when stored required class .{missing} is missing"
       );
@@ -10389,8 +10896,14 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys =
-      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     index.selector_candidates(
       &node,
       node_keys,
@@ -10480,8 +10993,14 @@ mod tests {
     let mut stats = CandidateStats::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys =
-      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     index.pseudo_candidates(
       &node,
       &PseudoElement::Before,
@@ -10580,8 +11099,14 @@ mod tests {
     let mut stats = CandidateStats::default();
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys =
-      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     index.pseudo_candidates(
       &node,
       &PseudoElement::Before,
@@ -10893,8 +11418,14 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys =
-      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
@@ -11024,8 +11555,14 @@ mod tests {
 
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-    let node_keys =
-      node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
@@ -11171,8 +11708,14 @@ mod tests {
       let cached_keys = dom_maps.selector_keys(node_id);
       let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
       let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
-      let uncached_keys =
-        node_selector_keys(node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+      let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+      let uncached_keys = node_selector_keys(
+        node,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+        &mut attr_value_keys,
+      );
 
       let mut cached: Vec<usize> = Vec::new();
       let mut uncached: Vec<usize> = Vec::new();
@@ -16873,11 +17416,13 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let mut scratch = CascadeScratch::new(rule_index.rules.len());
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
     let node_keys = node_selector_keys(
       &dom.children[0],
       QuirksMode::NoQuirks,
       &mut class_keys,
       &mut attr_keys,
+      &mut attr_value_keys,
     );
     let marker_matches = find_pseudo_element_rules(
       &dom.children[0],
@@ -17706,7 +18251,8 @@ fn resolve_scopes<'a>(
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &ancestors[..idx]);
         let root_candidate = idx == root_index;
-        let root_candidate_has_no_element_parent = root_candidate && candidate_ref.parent_element().is_none();
+        let root_candidate_has_no_element_parent =
+          root_candidate && candidate_ref.parent_element().is_none();
         let matches = context.nest_for_scope_condition(Some(base_ref.opaque()), |ctx| {
           start_selectors.iter().any(|sel| {
             let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
@@ -18089,14 +18635,14 @@ fn find_matching_rules<'a>(
               let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                    ctx.with_allow_featureless_host_traversal(true, |ctx| {
-                      let prev_bloom_filter = ctx.bloom_filter;
-                      ctx.bloom_filter = None;
-                      let matched = matches_selector_cascade_counted(
-                        selector,
-                        Some(&indexed.ancestor_hashes),
-                        &element_ref,
-                        ctx,
+                  ctx.with_allow_featureless_host_traversal(true, |ctx| {
+                    let prev_bloom_filter = ctx.bloom_filter;
+                    ctx.bloom_filter = None;
+                    let matched = matches_selector_cascade_counted(
+                      selector,
+                      Some(&indexed.ancestor_hashes),
+                      &element_ref,
+                      ctx,
                     );
                     ctx.bloom_filter = prev_bloom_filter;
                     matched
