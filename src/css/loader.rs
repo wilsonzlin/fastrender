@@ -296,6 +296,7 @@ pub fn absolutize_css_urls_cow<'a>(
     let mut out: Option<String> = None;
     let mut last_emitted = start_pos;
 
+    check_active(RenderStage::Css)?;
     while !parser.is_exhausted() {
       check_active_periodic(deadline_counter, 256, RenderStage::Css)?;
       let token_start = parser.position();
@@ -382,15 +383,14 @@ pub fn absolutize_css_urls_cow<'a>(
           let mut nested_error: Option<RenderError> = None;
           let parse_result = parser.parse_nested_block(|nested| {
             let start = nested.position();
+            let rewritten = match rewrite_urls_in_parser(nested, base_url, 0, deadline_counter) {
+              Ok(r) => r,
+              Err(err) => {
+                nested_error = Some(err);
+                return Err(nested.new_custom_error(()));
+              }
+            };
             let original = nested.slice_from(start);
-            let rewritten =
-              match rewrite_urls_in_parser(nested, base_url, original.len(), deadline_counter) {
-                Ok(r) => r,
-                Err(err) => {
-                  nested_error = Some(err);
-                  return Err(nested.new_custom_error(()));
-                }
-              };
             let changed = matches!(rewritten, Cow::Owned(_));
             Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, original.len(), changed))
           });
@@ -1961,7 +1961,10 @@ mod tests {
     let css = "body { background: url(\"images/bg.png\"); }";
     let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
     assert!(matches!(out, Cow::Owned(_)));
-    assert!(out.contains("https://example.com/styles/images/bg.png"));
+    assert_eq!(
+      out.as_ref(),
+      "body { background: url(\"https://example.com/styles/images/bg.png\"); }"
+    );
   }
 
   #[test]
@@ -1982,7 +1985,10 @@ mod tests {
     let css = "@media screen { body { background: url(images/bg.png); } }";
     let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
     assert!(matches!(out, Cow::Owned(_)));
-    assert!(out.contains("https://example.com/styles/images/bg.png"));
+    assert_eq!(
+      out.as_ref(),
+      "@media screen { body { background: url(\"https://example.com/styles/images/bg.png\"); } }"
+    );
   }
 
   #[test]
