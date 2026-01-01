@@ -198,6 +198,16 @@ pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()
       FixtureCaptureMode::Render => "",
       FixtureCaptureMode::Crawl => " --no-render",
     };
+    let overwrite_flag = if args.overwrite_fixtures {
+      " --overwrite"
+    } else {
+      ""
+    };
+    let allow_missing_flag = if args.allow_missing_resources {
+      " --allow-missing"
+    } else {
+      ""
+    };
     eprintln!("  - {} ({})", entry.name, entry.url);
     eprintln!("    Create it with:");
     eprintln!(
@@ -210,10 +220,12 @@ pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()
       entry.dpr
     );
     eprintln!(
-      "      cargo xtask import-page-fixture '{}' '{}' --output-root '{}'",
+      "      cargo xtask import-page-fixture '{}' '{}' --output-root '{}'{}{}",
       bundle_path.display(),
       entry.name,
-      args.fixtures_root.display()
+      args.fixtures_root.display(),
+      overwrite_flag,
+      allow_missing_flag
     );
     eprintln!(
       "    Expected output: {}",
