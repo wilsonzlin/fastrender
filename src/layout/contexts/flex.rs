@@ -536,7 +536,7 @@ impl FormattingContext for FlexFormattingContext {
       .collect();
 
     // Phase 1: Build Taffy tree from in-flow children
-    let mut node_map: HashMap<*const BoxNode, NodeId> = HashMap::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
     let root_node = self.build_taffy_tree_children(
       &mut taffy_tree,
       box_node,
@@ -2226,7 +2226,7 @@ impl FormattingContext for FlexFormattingContext {
     }
 
     if !running_children.is_empty() {
-      let mut id_to_bounds: HashMap<usize, Rect> = HashMap::new();
+      let mut id_to_bounds: FxHashMap<usize, Rect> = FxHashMap::default();
       let mut deadline_counter = 0usize;
       for child in fragment.children.iter() {
         check_layout_deadline(&mut deadline_counter)?;
@@ -2697,7 +2697,7 @@ impl FlexFormattingContext {
     taffy_tree: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
-    node_map: &mut HashMap<*const BoxNode, NodeId>,
+    node_map: &mut FxHashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
     let children: Vec<&BoxNode> = box_node.children.iter().collect();
     self.build_taffy_tree_children(taffy_tree, box_node, &children, constraints, node_map)
@@ -2711,7 +2711,7 @@ impl FlexFormattingContext {
     box_node: &BoxNode,
     root_children: &[&BoxNode],
     _constraints: &LayoutConstraints,
-    node_map: &mut HashMap<*const BoxNode, NodeId>,
+    node_map: &mut FxHashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
     let mut deadline_counter = 0usize;
     let child_fingerprint = flex_child_fingerprint(root_children);
@@ -2781,7 +2781,7 @@ impl FlexFormattingContext {
     &self,
     taffy_tree: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
-    node_map: &mut HashMap<*const BoxNode, NodeId>,
+    node_map: &mut FxHashMap<*const BoxNode, NodeId>,
     is_root: bool,
     containing_flex: Option<&ComputedStyle>,
     root_children: Option<&[&BoxNode]>,
@@ -3079,7 +3079,7 @@ impl FlexFormattingContext {
     taffy_node: NodeId,
     root_id: NodeId,
     box_node: &BoxNode,
-    node_map: &HashMap<*const BoxNode, NodeId>,
+    node_map: &FxHashMap<*const BoxNode, NodeId>,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     // Get layout from Taffy
@@ -4031,8 +4031,7 @@ impl FlexFormattingContext {
         let mut total_main = 0.0;
         let mut total_weight = 0.0;
         let mut child_count = 0usize;
-        let mut box_lookup: std::collections::HashMap<usize, &BoxNode> =
-          std::collections::HashMap::new();
+        let mut box_lookup: FxHashMap<usize, &BoxNode> = FxHashMap::default();
         for child in &box_node.children {
           check_layout_deadline(&mut deadline_counter)?;
           box_lookup.insert(child.id, child);
@@ -4776,13 +4775,13 @@ impl FlexFormattingContext {
     _in_flow_children: &[&BoxNode],
     positioned: &[PositionedCandidate],
     padding_origin: Point,
-  ) -> Result<HashMap<usize, Point>, LayoutError> {
-    let mut positions = HashMap::new();
+  ) -> Result<FxHashMap<usize, Point>, LayoutError> {
+    let mut positions: FxHashMap<usize, Point> = FxHashMap::default();
     if positioned.is_empty() {
       return Ok(positions);
     }
 
-    let mut inflow_sizes: HashMap<usize, Size> = HashMap::new();
+    let mut inflow_sizes: FxHashMap<usize, Size> = FxHashMap::default();
     for child in fragment.children.iter() {
       if let Some(box_id) = match &child.content {
         FragmentContent::Block { box_id }
@@ -4795,14 +4794,14 @@ impl FlexFormattingContext {
       }
     }
 
-    let mut positioned_index: HashMap<usize, usize> = HashMap::new();
+    let mut positioned_index: FxHashMap<usize, usize> = FxHashMap::default();
     for (idx, candidate) in positioned.iter().enumerate() {
       positioned_index.insert(candidate.child_id, idx);
     }
 
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
     let mut child_nodes = Vec::new();
-    let mut node_lookup: HashMap<usize, NodeId> = HashMap::new();
+    let mut node_lookup: FxHashMap<usize, NodeId> = FxHashMap::default();
 
     let mut ordered_children: Vec<(i32, usize)> = Vec::new();
     for (idx, child) in box_node.children.iter().enumerate() {

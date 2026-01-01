@@ -73,10 +73,10 @@ use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use taffy::geometry::Line;
@@ -582,7 +582,7 @@ impl GridFormattingContext {
     taffy: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
-    positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
+    positioned_children: &mut FxHashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
     let root_children: Vec<&BoxNode> = box_node.children.iter().collect();
     self.build_taffy_tree_children(
@@ -601,7 +601,7 @@ impl GridFormattingContext {
     box_node: &BoxNode,
     root_children: &[&BoxNode],
     _constraints: &LayoutConstraints,
-    positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
+    positioned_children: &mut FxHashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
     let mut deadline_counter = 0usize;
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
@@ -710,7 +710,7 @@ impl GridFormattingContext {
     is_root: bool,
     containing_grid: Option<&ComputedStyle>,
     children_override: Option<Vec<&BoxNode>>,
-    positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
+    positioned_children: &mut FxHashMap<TaffyNodeId, Vec<BoxNode>>,
     deadline_counter: &mut usize,
   ) -> Result<TaffyNodeId, LayoutError> {
     let mut children_iter: Vec<&BoxNode> = Vec::new();
@@ -1520,7 +1520,7 @@ impl GridFormattingContext {
   }
 
   fn take_matching_measured_fragment(
-    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
+    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
     keys: &[MeasureKey],
     width: f32,
     height: f32,
@@ -1543,8 +1543,8 @@ impl GridFormattingContext {
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
     in_flow_children: &[&BoxNode],
-    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
-    measured_node_keys: &HashMap<TaffyNodeId, Vec<MeasureKey>>,
+    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
+    measured_node_keys: &FxHashMap<TaffyNodeId, Vec<MeasureKey>>,
   ) -> Option<Result<FragmentNode, LayoutError>> {
     let child_ids = match taffy.children(root_id) {
       Ok(children) => children,
@@ -1753,9 +1753,9 @@ impl GridFormattingContext {
     node_id: TaffyNodeId,
     root_id: TaffyNodeId,
     constraints: &LayoutConstraints,
-    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
-    measured_node_keys: &HashMap<TaffyNodeId, Vec<MeasureKey>>,
-    positioned_children: &HashMap<TaffyNodeId, Vec<BoxNode>>,
+    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
+    measured_node_keys: &FxHashMap<TaffyNodeId, Vec<MeasureKey>>,
+    positioned_children: &FxHashMap<TaffyNodeId, Vec<BoxNode>>,
     deadline_counter: &mut usize,
   ) -> Result<FragmentNode, LayoutError> {
     let layout = taffy
@@ -2266,8 +2266,8 @@ impl GridFormattingContext {
       );
     }
 
-    let mut row_groups: HashMap<u16, Vec<BaselineItem>> = HashMap::new();
-    let mut col_groups: HashMap<u16, Vec<BaselineItem>> = HashMap::new();
+    let mut row_groups: FxHashMap<u16, Vec<BaselineItem>> = FxHashMap::default();
+    let mut col_groups: FxHashMap<u16, Vec<BaselineItem>> = FxHashMap::default();
 
     for (idx, ((child_id, item_info), child_fragment)) in child_ids
       .iter()
@@ -2379,7 +2379,7 @@ impl GridFormattingContext {
     }
 
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut positioned_children: HashMap<TaffyNodeId, Vec<BoxNode>> = HashMap::new();
+    let mut positioned_children: FxHashMap<TaffyNodeId, Vec<BoxNode>> = FxHashMap::default();
     let intrinsic_constraints = LayoutConstraints::new(
       match mode {
         IntrinsicSizingMode::MinContent => CrateAvailableSpace::MinContent,
@@ -2420,7 +2420,7 @@ impl GridFormattingContext {
       {
         let factory = self.factory.clone();
         let viewport_size = self.viewport_size;
-        let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
+        let mut cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
         move |known_dimensions,
               available_space,
               node_id,
@@ -2503,9 +2503,9 @@ impl GridFormattingContext {
     parent_inline_base: Option<f32>,
     container_justify_items: AlignItems,
     factory: &crate::layout::contexts::factory::FormattingContextFactory,
-    measure_cache: &Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>>,
-    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
-    measured_node_keys: &Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>>,
+    measure_cache: &Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>>,
+    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
+    measured_node_keys: &Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>>,
   ) -> taffy::geometry::Size<f32> {
     let box_node = unsafe { &*node_ptr };
     let fallback_size = |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
@@ -3035,7 +3035,7 @@ impl FormattingContext for GridFormattingContext {
 
     // Create fresh Taffy tree for this layout
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut positioned_children_map: HashMap<TaffyNodeId, Vec<BoxNode>> = HashMap::new();
+    let mut positioned_children_map: FxHashMap<TaffyNodeId, Vec<BoxNode>> = FxHashMap::default();
 
     // Partition children into in-flow vs. out-of-flow positioned.
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
@@ -3145,12 +3145,12 @@ impl FormattingContext for GridFormattingContext {
     let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
       .filter(|deadline| deadline.is_enabled())
       .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
-    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
+    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
     let compute_result = taffy.compute_layout_with_measure_and_cancel(
       root_id,
       available_space,
@@ -3408,7 +3408,7 @@ impl FormattingContext for GridFormattingContext {
         self.nearest_positioned_cb
       };
 
-      let mut static_positions: HashMap<usize, Point> = HashMap::new();
+      let mut static_positions: FxHashMap<usize, Point> = FxHashMap::default();
       if let DetailedLayoutInfo::Grid(info) = taffy.detailed_layout_info(root_id) {
         if let Ok(container_style) = taffy.style(root_id) {
           let row_offsets = compute_track_offsets(
@@ -3723,7 +3723,8 @@ mod tests {
     );
 
     let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut positioned_children: HashMap<taffy::prelude::NodeId, Vec<BoxNode>> = HashMap::new();
+    let mut positioned_children: FxHashMap<taffy::prelude::NodeId, Vec<BoxNode>> =
+      FxHashMap::default();
     let constraints = LayoutConstraints::definite(200.0, 200.0);
     gc.build_taffy_tree_children(
       &mut taffy_tree,
@@ -3757,7 +3758,8 @@ mod tests {
     );
 
     let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut positioned_children: HashMap<taffy::prelude::NodeId, Vec<BoxNode>> = HashMap::new();
+    let mut positioned_children: FxHashMap<taffy::prelude::NodeId, Vec<BoxNode>> =
+      FxHashMap::default();
     gc.build_taffy_tree_children(
       &mut taffy_tree,
       &container_b,
@@ -3799,7 +3801,7 @@ mod tests {
     let gc = GridFormattingContext::new();
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
     let root_children: Vec<&BoxNode> = container.children.iter().collect();
-    let mut positioned_children = HashMap::new();
+    let mut positioned_children = FxHashMap::default();
     let result = gc.build_taffy_tree_children(
       &mut taffy,
       &container,
@@ -3899,12 +3901,12 @@ mod tests {
 
     let gc = GridFormattingContext::new();
     let factory = gc.factory.clone();
-    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
+    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
 
     let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
     let node_ptr = &node as *const _;
@@ -3959,12 +3961,12 @@ mod tests {
 
     let gc = GridFormattingContext::new();
     let factory = gc.factory.clone();
-    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
+    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
 
     reset_grid_measure_layout_calls();
 
@@ -4022,12 +4024,12 @@ mod tests {
         gc.viewport_size,
         gc.nearest_positioned_cb,
       );
-    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
+    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
+    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(FxHashMap::default()));
 
     for (probe_height, label) in [
       (AvailableSpace::MinContent, "min-content"),
@@ -4188,7 +4190,7 @@ mod tests {
         &mut TaffyTree::new(),
         &parent,
         &constraints,
-        &mut HashMap::new(),
+        &mut FxHashMap::default(),
       )
       .expect("grid conversion");
     // If the fast path is taken, the parent container style should have been converted to block.
@@ -4289,7 +4291,8 @@ mod tests {
         let constraints = LayoutConstraints::definite(180.0, 100.0);
 
         let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
-        let mut positioned_children_map: HashMap<TaffyNodeId, Vec<BoxNode>> = HashMap::new();
+        let mut positioned_children_map: FxHashMap<TaffyNodeId, Vec<BoxNode>> =
+          FxHashMap::default();
         let in_flow_children: Vec<&BoxNode> = grid.children.iter().collect();
         let root_id = fc
           .build_taffy_tree_children(
@@ -4301,12 +4304,12 @@ mod tests {
           )
           .expect("build taffy tree");
 
-        let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-          Rc::new(RefCell::new(HashMap::new()));
-        let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
-          Rc::new(RefCell::new(HashMap::new()));
-        let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-          Rc::new(RefCell::new(HashMap::new()));
+        let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+          Rc::new(RefCell::new(FxHashMap::default()));
+        let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
+          Rc::new(RefCell::new(FxHashMap::default()));
+        let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+          Rc::new(RefCell::new(FxHashMap::default()));
 
         let available_space = taffy::geometry::Size {
           width: taffy::style::AvailableSpace::Definite(constraints.width().unwrap()),
