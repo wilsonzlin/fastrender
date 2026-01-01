@@ -149,12 +149,14 @@ use image::ColorType;
 use image::ImageEncoder;
 use percent_encoding::percent_decode;
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 #[cfg(test)]
 use std::fs;
 use std::io::Read;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -279,30 +281,74 @@ pub struct PaintDiagnosticsSummary {
   pub blur_cancellations: u64,
 }
 
+static PAINT_DIAGNOSTICS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PAINT_DIAGNOSTICS: Mutex<Option<PaintDiagnosticsSummary>> = Mutex::new(None);
+
 thread_local! {
-  static PAINT_DIAGNOSTICS: RefCell<Option<PaintDiagnosticsSummary>> = RefCell::new(None);
+  static PAINT_DIAGNOSTICS_THREAD_ENABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Temporarily enables paint diagnostics collection for the current thread.
+///
+/// Paint work can execute on rayon worker threads (e.g., parallel tiling). The render thread must
+/// explicitly opt worker threads into collection so thread-local `paint_diagnostics_enabled()`
+/// checks remain cheap and so unrelated work running on other threads isn't counted.
+pub(crate) struct PaintDiagnosticsThreadGuard {
+  prev: bool,
+}
+
+impl PaintDiagnosticsThreadGuard {
+  pub(crate) fn enter() -> Self {
+    let prev = PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| {
+      let prev = cell.get();
+      cell.set(true);
+      prev
+    });
+    Self { prev }
+  }
+}
+
+impl Drop for PaintDiagnosticsThreadGuard {
+  fn drop(&mut self) {
+    PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.set(self.prev));
+  }
 }
 
 pub(crate) fn enable_paint_diagnostics() {
-  PAINT_DIAGNOSTICS.with(|cell| {
-    *cell.borrow_mut() = Some(PaintDiagnosticsSummary::default());
-  });
+  PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.set(true));
+  PAINT_DIAGNOSTICS_ACTIVE.store(true, Ordering::Relaxed);
+  let mut guard = PAINT_DIAGNOSTICS
+    .lock()
+    .expect("paint diagnostics lock poisoned");
+  *guard = Some(PaintDiagnosticsSummary::default());
 }
 
 pub(crate) fn take_paint_diagnostics() -> Option<PaintDiagnosticsSummary> {
-  PAINT_DIAGNOSTICS.with(|cell| cell.borrow_mut().take())
+  PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.set(false));
+  PAINT_DIAGNOSTICS_ACTIVE.store(false, Ordering::Relaxed);
+  PAINT_DIAGNOSTICS
+    .lock()
+    .expect("paint diagnostics lock poisoned")
+    .take()
 }
 
 pub(crate) fn paint_diagnostics_enabled() -> bool {
-  PAINT_DIAGNOSTICS.with(|cell| cell.borrow().is_some())
+  if !PAINT_DIAGNOSTICS_ACTIVE.load(Ordering::Relaxed) {
+    return false;
+  }
+  PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.get())
 }
 
 pub(crate) fn with_paint_diagnostics<F: FnOnce(&mut PaintDiagnosticsSummary)>(f: F) {
-  PAINT_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      f(stats);
-    }
-  });
+  if !paint_diagnostics_enabled() {
+    return;
+  }
+  let mut guard = PAINT_DIAGNOSTICS
+    .lock()
+    .expect("paint diagnostics lock poisoned");
+  if let Some(stats) = guard.as_mut() {
+    f(stats);
+  }
 }
 
 #[derive(Copy, Clone)]

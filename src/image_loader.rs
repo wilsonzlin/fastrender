@@ -38,7 +38,6 @@ use image::RgbaImage;
 use lru::LruCache;
 use roxmltree::Document;
 use std::borrow::Borrow;
-use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -46,6 +45,8 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
@@ -57,7 +58,7 @@ fn image_profile_threshold_ms() -> Option<f64> {
   runtime::runtime_toggles().f64("FASTR_IMAGE_PROFILE_MS")
 }
 
-/// Per-thread image cache diagnostics collection.
+/// Image cache diagnostics collection.
 #[derive(Debug, Default, Clone)]
 pub struct ImageCacheDiagnostics {
   pub requests: usize,
@@ -70,76 +71,68 @@ pub struct ImageCacheDiagnostics {
   pub raster_pixmap_cache_bytes: usize,
 }
 
-thread_local! {
-  static IMAGE_CACHE_DIAGNOSTICS: RefCell<Option<ImageCacheDiagnostics>> = RefCell::new(None);
-}
+static IMAGE_CACHE_DIAGNOSTICS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static IMAGE_CACHE_DIAGNOSTICS: Mutex<Option<ImageCacheDiagnostics>> = Mutex::new(None);
 
 pub(crate) fn enable_image_cache_diagnostics() {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    *cell.borrow_mut() = Some(ImageCacheDiagnostics::default());
-  });
+  IMAGE_CACHE_DIAGNOSTICS_ACTIVE.store(true, Ordering::Relaxed);
+  let mut guard = IMAGE_CACHE_DIAGNOSTICS
+    .lock()
+    .expect("image cache diagnostics lock poisoned");
+  *guard = Some(ImageCacheDiagnostics::default());
 }
 
 pub(crate) fn take_image_cache_diagnostics() -> Option<ImageCacheDiagnostics> {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| cell.borrow_mut().take())
+  IMAGE_CACHE_DIAGNOSTICS_ACTIVE.store(false, Ordering::Relaxed);
+  IMAGE_CACHE_DIAGNOSTICS
+    .lock()
+    .expect("image cache diagnostics lock poisoned")
+    .take()
+}
+
+#[inline]
+fn with_image_cache_diagnostics<F: FnOnce(&mut ImageCacheDiagnostics)>(f: F) {
+  if !IMAGE_CACHE_DIAGNOSTICS_ACTIVE.load(Ordering::Relaxed) {
+    return;
+  }
+  let mut guard = IMAGE_CACHE_DIAGNOSTICS
+    .lock()
+    .expect("image cache diagnostics lock poisoned");
+  if let Some(stats) = guard.as_mut() {
+    f(stats);
+  }
 }
 
 fn record_image_cache_request() {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.requests += 1;
-    }
-  });
+  with_image_cache_diagnostics(|stats| stats.requests += 1);
 }
 
 fn record_image_cache_hit() {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.cache_hits += 1;
-    }
-  });
+  with_image_cache_diagnostics(|stats| stats.cache_hits += 1);
 }
 
 fn record_image_cache_miss() {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.cache_misses += 1;
-    }
-  });
+  with_image_cache_diagnostics(|stats| stats.cache_misses += 1);
 }
 
 fn record_image_decode_ms(duration_ms: f64) {
   if !duration_ms.is_finite() || duration_ms <= 0.0 {
     return;
   }
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.decode_ms += duration_ms;
-    }
-  });
+  with_image_cache_diagnostics(|stats| stats.decode_ms += duration_ms);
 }
 
 fn record_raster_pixmap_cache_hit() {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.raster_pixmap_cache_hits += 1;
-    }
-  });
+  with_image_cache_diagnostics(|stats| stats.raster_pixmap_cache_hits += 1);
 }
 
 fn record_raster_pixmap_cache_miss() {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.raster_pixmap_cache_misses += 1;
-    }
-  });
+  with_image_cache_diagnostics(|stats| stats.raster_pixmap_cache_misses += 1);
 }
 
 fn record_raster_pixmap_cache_bytes(bytes: usize) {
-  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.raster_pixmap_cache_bytes = stats.raster_pixmap_cache_bytes.max(bytes);
-    }
+  with_image_cache_diagnostics(|stats| {
+    stats.raster_pixmap_cache_bytes = stats.raster_pixmap_cache_bytes.max(bytes);
   });
 }
 

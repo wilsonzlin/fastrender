@@ -63,7 +63,7 @@ use crate::paint::gradient::{
 };
 use crate::paint::homography::Homography;
 use crate::paint::optimize::DisplayListOptimizer;
-use crate::paint::painter::paint_diagnostics_enabled;
+use crate::paint::painter::{paint_diagnostics_enabled, PaintDiagnosticsThreadGuard};
 use crate::paint::pixmap::new_pixmap;
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::{estimate_box_shadow_work_pixels, render_box_shadow_cached, BoxShadow};
@@ -4877,6 +4877,7 @@ impl DisplayListRenderer {
         chunks
           .into_par_iter()
           .map(|chunk| {
+            let _diagnostics_guard = diagnostics_enabled.then(PaintDiagnosticsThreadGuard::enter);
             with_deadline(deadline.as_ref(), || {
               let mut out = Vec::with_capacity(chunk.len());
               for work in chunk {

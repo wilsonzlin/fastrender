@@ -94,7 +94,9 @@ use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
-use crate::paint::painter::{paint_diagnostics_enabled, with_paint_diagnostics};
+use crate::paint::painter::{
+  paint_diagnostics_enabled, with_paint_diagnostics, PaintDiagnosticsThreadGuard,
+};
 use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter::SvgFilterResolver;
@@ -3178,12 +3180,15 @@ impl DisplayListBuilder {
     if let Some(plan) = self.plan_parallel(fragments.len(), threads) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
+      let diagnostics_enabled = paint_diagnostics_enabled();
       let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
         fragments
           .par_chunks(plan.chunk_size)
           .enumerate()
           .map(|(chunk_idx, chunk)| {
             let chunk_offset = chunk_idx * plan.chunk_size;
+            let _diagnostics_guard =
+              diagnostics_enabled.then(PaintDiagnosticsThreadGuard::enter);
             with_deadline(deadline.as_ref(), || {
               let mut builder = self.fork();
               let mut counter = 0usize;
@@ -3243,12 +3248,15 @@ impl DisplayListBuilder {
     if let Some(plan) = self.plan_parallel(fragments.len(), threads) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
+      let diagnostics_enabled = paint_diagnostics_enabled();
       let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
         fragments
           .par_chunks(plan.chunk_size)
           .enumerate()
           .map(|(chunk_idx, chunk)| {
             let chunk_offset = chunk_idx * plan.chunk_size;
+            let _diagnostics_guard =
+              diagnostics_enabled.then(PaintDiagnosticsThreadGuard::enter);
             with_deadline(deadline.as_ref(), || {
               let mut builder = self.fork();
               let mut counter = 0usize;

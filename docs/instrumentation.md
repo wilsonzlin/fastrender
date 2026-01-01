@@ -69,6 +69,11 @@ disk cache reads, single-flight inflight waits, and total network fetch time). T
 `pageset_progress report --verbose-stats` and stored under `diagnostics.stats` in the per-page JSON
 when present.
 
+Paint and image-cache diagnostics are aggregated across rayon worker threads (parallel display-list
+build + parallel raster tiling). Diagnostics-enabled renders are serialized (see
+`DiagnosticsSessionGuard` in `src/api.rs`) because the underlying collectors use process-global
+state.
+
 For cascade hotspots, `RenderDiagnostics.stats.cascade` is normally sparse unless cascade profiling
 is enabled. You can opt in to selector-level counters (rule candidates/matches, bloom fast rejects,
 selector/declaration/pseudo time splits, plus `:has()` counters) via:
