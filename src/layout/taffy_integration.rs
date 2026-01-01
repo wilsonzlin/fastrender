@@ -94,6 +94,10 @@ impl TaffyPerfCountersGuard {
     let previous = TAFFY_PERF_ENABLED.swap(true, Ordering::Relaxed);
     if !previous {
       TAFFY_PERF_RESET_REQUESTED.store(true, Ordering::Relaxed);
+      // Reset immediately so per-render captures start from a clean slate even if the first layout
+      // work isn't routed through `LayoutEngine::layout_tree_inner` (which also calls the reset
+      // hook at the start of each run).
+      reset_taffy_perf_counters();
     }
     Self { previous }
   }
