@@ -290,12 +290,20 @@ fn push_unique<'a>(
   candidate: SelectedImageSource<'a>,
   base_url: Option<&str>,
 ) {
+  fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    value
+      .as_bytes()
+      .get(..prefix.len())
+      .map(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+      .unwrap_or(false)
+  }
+
   let trimmed = candidate.url.trim();
   if trimmed.is_empty()
     || trimmed.starts_with('#')
-    || trimmed.to_ascii_lowercase().starts_with("javascript:")
-    || trimmed.to_ascii_lowercase().starts_with("vbscript:")
-    || trimmed.to_ascii_lowercase().starts_with("mailto:")
+    || starts_with_ignore_ascii_case(trimmed, "javascript:")
+    || starts_with_ignore_ascii_case(trimmed, "vbscript:")
+    || starts_with_ignore_ascii_case(trimmed, "mailto:")
   {
     return;
   }
