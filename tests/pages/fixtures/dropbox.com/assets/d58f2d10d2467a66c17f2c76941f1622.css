@@ -1,0 +1,63 @@
+/** @generated -- This file is automatically synced from @dropbox/dig-fonts@2.2.1. DO NOT MODIFY! **/
+
+/**
+  This file should not be imported into your CSS or SASS files - the CSS variables will be available on the page for you to use.
+  (SEE #design-systems ON SLACK if you have questions)
+**/
+
+/**
+ * Sharp Grotesk 23 is not a sanctioned DIG font. Usage is solely approved for logged out web. If you find
+ * yourself needing Sharp Grotesk 23 for any other purpose, please consult #design-systems.
+ */
+
+/**
+ * Font: Sharp Grotesk 23 (Cyrillic supported)
+ */
+@font-face {
+  font-family: 'Sharp Grotesk 23';
+  src: url('missing_ebe74f9312513387d372170506a6909c.bin')
+      format('woff2'),
+    url('missing_39328539869b9f40597f93847741d591.bin')
+      format('woff'),
+    url('missing_93ac08455b46b02ecd8c0b4d3e25f0c9.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Sharp Grotesk 23';
+  src: url('missing_3f752535b3c8568b7537a3a3ab0ae75c.bin')
+      format('woff2'),
+    url('missing_e52027972f2af3ba7e6b313a5aaec13d.bin')
+      format('woff'),
+    url('missing_054747846461adb9f58f84b2c96e8efe.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: italic;
+}
+
+/* Korean Support - Does not support italics */
+@font-face {
+  font-family: 'Sharp Grotesk 23 KR';
+  src: url('missing_02406723569c2cbd86b734644c20f1a2.bin')
+      format('woff2'),
+    url('missing_cdbe5d3e0fc105cdffde104316ebfb1f.bin')
+      format('woff');
+  font-weight: 400;
+  font-style: normal;
+}
+
+/**
+  * Thai language support
+  */
+@font-face {
+  font-family: 'Sharp Grotesk 23 Thai';
+  src: url('missing_490f15fe99e12c3e5f5a4bcd3e37e2a2.bin')
+      format('woff2'),
+    url('missing_0922dd141bc7766e47fd9e1c493660a3.bin')
+      format('woff'),
+    url('missing_210e93a1512c9bdb56226e536c5f28eb.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}

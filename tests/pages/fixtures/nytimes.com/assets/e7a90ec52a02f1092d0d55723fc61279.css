@@ -1,0 +1,2106 @@
+@font-face {
+  font-family: 'nyt-athletic-slab';
+  src: url('a008d4a2e05a2333bcbf803e809ddba5.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('0742aa95e09f08f24e7e44b9f2d584c3.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('bac1e4d02d394874aff1c0eed402932a.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('d3a408bd4b43b49614538306cd1dfd1d.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('66279e1130c6ae0a3c26ae28c98cf093.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('2ccd0ce11738369585c6f39ed2cde7b3.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('681dd3e992633c4ee7157c2b5f09c8c6.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('4f837869b80c34ed1a128362a6ed24ff.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('missing_321bd24fc4117d361cf70fc2ac3dce5c.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('missing_3f21c8b907ce8fc6604cd53963cdc2d3.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('missing_a120864bc2565bd6c5c34573eff46647.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('missing_f845f117764d509e149dd5c4c48e3212.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham';
+  src: url('missing_7ac7819094070d29e32ace94d07f0398.bin') format('woff2');
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-cond';
+  src: url('missing_428ab722bbbaf98521734d96e254580a.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-cond';
+  src: url('missing_012102aa1c07cf36e509f37c43ea9418.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-cond';
+  src: url('missing_9d13c3f2b56ad6299db254fded274c2a.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-scaps';
+  src: url('missing_563e39a690f8b1c3689177b04415a870.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-small';
+  src: url('missing_243c8356fa7d0d0c251a7488f0f4ac96.bin') format('woff2');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-small';
+  src: url('missing_9f3bc1714a997569760fdb552e070316.bin') format('woff2');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-small';
+  src: url('missing_665632c1bf5939d98b471fa826eb1404.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-small';
+  src: url('missing_c6e25de5945b8ae2dbdf7691773d9bbf.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-text-cond';
+  src: url('missing_b08db7d34533f6e33e33c38a6eae74f4.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-wide';
+  src: url('missing_faa1ab1545d8a8c636f2ab2bd6018b49.bin') format('woff2');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-wide';
+  src: url('missing_e45e3c0de73e93323234dadf77ba15a1.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-cheltenham-xcond';
+  src: url('missing_6bd0baa85e2c17dde6ba2d7931bd6e8b.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact';
+  src: url('missing_088faa16faac997998835ab1671d9fc3.bin') format('woff2');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact';
+  src: url('missing_0df875323b22efd945b4d494607e5325.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact';
+  src: url('missing_9a93dc6433a5f810d59557c972e2a597.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-deck';
+  src: url('missing_10e2abfcd36af7a82d872c57987bfb72.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-deck';
+  src: url('missing_3c8e5478672ccc7a93d1c4844e577e4c.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-deck';
+  src: url('missing_32493012ead801ee9082d6a7f8a0b93b.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-deck-condensed';
+  src: url('missing_1542caec53743c0950754b832291b970.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-deck-condensed';
+  src: url('missing_9d93c9e83abddea24a91a37c6bb5b8dc.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-deck-condensed';
+  src: url('missing_64acb3f3092acb89671221ac8ef03968.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display';
+  src: url('missing_31ab416145760eab8a2562e6486de64f.bin') format('woff2');
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display';
+  src: url('missing_8dacaa8c799e261211a6f84b783dd84f.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display';
+  src: url('missing_7f616722ba375c8c19e7b3402143683e.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display';
+  src: url('missing_4527dca5dd692ec7ff40f8d4d3a3e7ed.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display';
+  src: url('missing_3deb5f1327ec10a532ff452c4f56074f.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display';
+  src: url('missing_98343147dbf087dd7451153cf1688499.bin') format('woff2');
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display-condensed';
+  src: url('missing_6367dab4b7f40673d26d35c8a6dc7b3e.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display-condensed';
+  src: url('missing_6acba148ba85f1cf9a7299eb5878d250.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display-condensed';
+  src: url('missing_cd7f96e33bc9ff9cccb6d7acfcca7372.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-fact-display-condensed';
+  src: url('missing_24048eb56367d3809159808ca0614e6c.bin') format('woff2');
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_343a3aa87653d6412d7a98aadc5a6198.bin') format('woff2');
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_14bb8bd3e2a58b5bd6f29c8603d0ba74.bin') format('woff2');
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_f79b67a89bb95e4ff5369a48ce1d9927.bin') format('woff2');
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_62e406a7a1570409dd46bdc767a9225f.bin') format('woff2');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_f58f49ac2655c33567d4f164c22ebb56.bin') format('woff2');
+  font-style: italic;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_d580506cdb138fb3ea92b9c16f59876d.bin') format('woff2');
+  font-style: italic;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_69094549986440d52b94a7666993e5f6.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_823c17abe7e03871f168e189faa215cb.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_c703732e45a04e943eb928ffdc6ad45a.bin') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_2a41c16bac30a20edb1fd2b4777b71a5.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_a2823d4d9f0a01d80dcd78ca1e9abe0f.bin') format('woff2');
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin';
+  src: url('missing_4c9ecdb719a0475869b78c9f9475bf2b.bin') format('woff2');
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin-cword';
+  src: url('missing_99dd7e422c89d560731d330b9188d621.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin-small';
+  src: url('missing_5ddb59860497dc1b3f36d99ad02f7355.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin-small';
+  src: url('missing_e68fb0d57e63b7139a082e0f20bce2c9.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin-tv';
+  src: url('missing_b36b6d2d749ffeae8c25348cc1aa930c.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin-tv';
+  src: url('missing_c332571ed0f381b170c866d9c7e7c21c.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin-tv';
+  src: url('missing_cd68e54c13874ed244617dbc15e68713.bin') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-franklin-tv';
+  src: url('missing_23c02b340add20f5a1fedf5d9fb6454b.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-ibm-plex';
+  src: url('missing_9890d1112e19ef4e64c0aa7b863dfa71.bin') format('woff2');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-ibm-plex';
+  src: url('missing_4317ed6f1c22d313ba3439b94e31d713.bin') format('woff2');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-ibm-plex';
+  src: url('missing_f9a85128433c68428c7c58609fd67fd3.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-ibm-plex';
+  src: url('missing_c817da7a4cf4ed2ed234cdc12428e4ac.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-imperial';
+  src: url('missing_c0a9009811c35e2a8888019d05cc88b4.bin') format('woff2');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-imperial';
+  src: url('missing_cec142d821b06ee006857700b6418876.bin') format('woff2');
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-imperial';
+  src: url('missing_2ec13655b390ba58a670cfea1c0ca873.bin') format('woff2');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-imperial';
+  src: url('missing_57236bc9ce5ab0893146900fee2da7fd.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-imperial';
+  src: url('missing_c3c6fa4caea35f9547caa07f9206cfe8.bin') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-imperial';
+  src: url('missing_9d03996ea0a1fa2a18478d54ae861645.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_25eea5a8a6694b4277a4728a5c4e87fa.bin') format('woff2');
+  font-style: cursive;
+  font-weight: 100;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_c962dbfc3882c8968fdd31c2905552a0.bin') format('woff2');
+  font-style: cursive;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_c48fe32c51e9272f30aff2ff10275c1b.bin') format('woff2');
+  font-style: cursive;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_9c5705ec2bf953f14ce49b57d77f8053.bin') format('woff2');
+  font-style: cursive;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_f31878562c1b1ccda83056d062f74682.bin') format('woff2');
+  font-style: cursive;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_d36c6042a06cf941e748afd247a60ea9.bin') format('woff2');
+  font-style: cursive;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_0342aee13c2996662fc5afe9ddfa2945.bin') format('woff2');
+  font-style: cursive;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_fec411cdc9c9ae9413158cd3b14dac93.bin') format('woff2');
+  font-style: italic;
+  font-weight: 100;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_ce9b8b07ddf98d486c534f32f9d84b3d.bin') format('woff2');
+  font-style: italic;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_1be8af448d25668ab96fbb0e09342cb8.bin') format('woff2');
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_6e16934c9e2ae6720bd2f30d91283654.bin') format('woff2');
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_a8081dc3101943d840df8758c255e1c1.bin') format('woff2');
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_3c3aa8b2d5a8af17996b5114c4aa3a27.bin') format('woff2');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_dd0ee52db06885f66f90405f784ff0cb.bin') format('woff2');
+  font-style: italic;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_bbe208039c8c18d070ff43f9ad4ce1d7.bin') format('woff2');
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_764d3a6b708c08b8f8263f916aea6ea4.bin') format('woff2');
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_e3396bf93547a333fa6e49abb0300670.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_2672bf6dc8f262e545f5dfcc78e73dcd.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_71ce542052c77e09e9240bc621e007fc.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_7e1c5ba7645cb5f957cdf21e68589e56.bin') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_cfff98eeccaaf55f7455c55a91d68d1e.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak';
+  src: url('missing_f35eada5feb6f9c66694715d429d8d6f.bin') format('woff2');
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_eef3770e6c1f071f8a9776acae8f8050.bin') format('woff2');
+  font-style: italic;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_6ac9ff7a1fe4a729ae4457ef00ed5a67.bin') format('woff2');
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_762ac4ce9ff8612e86e72eccc6b3c6ff.bin') format('woff2');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_9b8397ccf4646b40fc375590f79dcc35.bin') format('woff2');
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_fbb88f5133aa2c81fe45c14faba1419c.bin') format('woff2');
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_b094c424f06d50f816ee6262b1e22fd6.bin') format('woff2');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_d419b0ad541600e36642548b28b0ad6c.bin') format('woff2');
+  font-style: italic;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_5521a909c6864022cecae447f9f5f56b.bin') format('woff2');
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_e8f040a5ecb5c730451b58c61eb47122.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_81727c623179f2658d2edd7ca7932991.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_c9d22f45817d3bebe4808f0f3b217900.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_e3e2496fe02b4602584c2c331ce40a4c.bin') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_658108fc2f15ec2c5ccbce8ea6636675.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-cond';
+  src: url('missing_d07a19a7a41e6a6cbc104240cff480ed.bin') format('woff2');
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-small';
+  src: url('missing_78b88c66d52b0daed8d2efcaf66b9dcc.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-karnak-small';
+  src: url('missing_8b838940e3a7d891a36f39105069a5ce.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger';
+  src: url('missing_4f012dc3b8b91314c729c90c05430286.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger';
+  src: url('missing_29adb3390c955f354fe7a2162469ecc2.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger';
+  src: url('missing_d93cee7a269579e28a1625e7d7c786bb.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger';
+  src: url('missing_33f6fd1965d93bfc9a9fd1bfb63477df.bin') format('woff2');
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger-condensed';
+  src: url('missing_9199956fecfe39d40baf42f83ebc2817.bin') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger-condensed';
+  src: url('missing_68d564bb7a8b4a3e669d6a8202bc1cbf.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger-condensed';
+  src: url('missing_e51a109e9f2e1455a989f81edd843f3a.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger-condensed';
+  src: url('missing_4edbb2e783dc9e8421c5706ab379bc04.bin') format('woff2');
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger-poster';
+  src: url('missing_fab77f1762257a28d9eea7ff4d3d4cce.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-kippenberger-poster';
+  src: url('missing_3761ab319338087bf59fb0f2be89a498.bin') format('woff2');
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-magsans';
+  src: url('missing_270102961c6c26670ab5c4a6383f6e57.bin') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-magsans';
+  src: url('missing_57e976f0a8037b84000f4d658622114f.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-magserif';
+  src: url('missing_a2095f621bb16d9bd1009e59531690cb.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-magslab';
+  src: url('missing_c4f45debed2fa23bc3c25ce4d4e0a4da.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-schnyder-s';
+  src: url('missing_e48ece5d4bfe8ea0678f1a6e4f71467f.bin') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-schnyder-s';
+  src: url('missing_d5c3054df046be2c325f2d42a94af28d.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-schnyder-scond';
+  src: url('missing_07a5181c672c1d4e8f26d4af1fec5fb8.bin') format('woff2');
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-schnyder-scond';
+  src: url('missing_41fdd720280b685b7d50ed10e1ed926e.bin') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'nyt-schnyder-scond';
+  src: url('missing_9f80b712256a01fef085b486674a19a3.bin') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: italic;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 104.54%;
+  descent-override: 36.1%;
+  line-gap-override: 36.1%;
+  size-adjust: 85.33%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 101.15%;
+  descent-override: 34.93%;
+  line-gap-override: 34.93%;
+  size-adjust: 88.18%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 103.14%;
+  descent-override: 35.61%;
+  line-gap-override: 35.61%;
+  size-adjust: 86.49%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 102.1%;
+  descent-override: 35.25%;
+  line-gap-override: 35.25%;
+  size-adjust: 87.37%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 140.04%;
+  descent-override: 33.85%;
+  line-gap-override: 33.85%;
+  size-adjust: 73.71%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: italic;
+  font-weight: 800;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 115.39%;
+  descent-override: 39.84%;
+  line-gap-override: 39.84%;
+  size-adjust: 77.3%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 116.16%;
+  descent-override: 28.08%;
+  line-gap-override: 28.08%;
+  size-adjust: 88.87%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-noto";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 127.41%;
+  descent-override: 30.8%;
+  line-gap-override: 30.8%;
+  size-adjust: 81.02%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 112.89%;
+  descent-override: 27.29%;
+  line-gap-override: 27.29%;
+  size-adjust: 91.44%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-noto";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 123.82%;
+  descent-override: 29.93%;
+  line-gap-override: 29.93%;
+  size-adjust: 83.36%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 104.42%;
+  descent-override: 27.42%;
+  line-gap-override: 27.42%;
+  size-adjust: 90.99%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-noto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 114.54%;
+  descent-override: 30.08%;
+  line-gap-override: 30.08%;
+  size-adjust: 82.96%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 104.47%;
+  descent-override: 26.52%;
+  line-gap-override: 26.52%;
+  size-adjust: 94.09%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-noto";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 114.59%;
+  descent-override: 29.09%;
+  line-gap-override: 29.09%;
+  size-adjust: 85.78%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 123.05%;
+  descent-override: 31.24%;
+  line-gap-override: 31.24%;
+  size-adjust: 79.88%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 115.74%;
+  descent-override: 29.38%;
+  line-gap-override: 29.38%;
+  size-adjust: 84.93%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-georgia";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 110.65%;
+  descent-override: 38.21%;
+  line-gap-override: 38.21%;
+  size-adjust: 80.61%;
+}
+@font-face {
+  font-family: "cheltenham-fallback-noto";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 104.08%;
+  descent-override: 35.94%;
+  line-gap-override: 35.94%;
+  size-adjust: 85.71%;
+}
+@font-face {
+  font-family: "cheltenham-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 135.35%;
+  descent-override: 35.54%;
+  line-gap-override: 35.54%;
+  size-adjust: 70.2%;
+}
+@font-face {
+  font-family: "cheltenham-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 148.47%;
+  descent-override: 38.99%;
+  line-gap-override: 38.99%;
+  size-adjust: 64%;
+}
+@font-face {
+  font-family: "cheltenham-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 126.21%;
+  descent-override: 43.58%;
+  line-gap-override: 43.58%;
+  size-adjust: 70.68%;
+}
+@font-face {
+  font-family: "cheltenham-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 138.43%;
+  descent-override: 47.8%;
+  line-gap-override: 47.8%;
+  size-adjust: 64.44%;
+}
+@font-face {
+  font-family: "cheltenham-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 158.54%;
+  descent-override: 54.74%;
+  line-gap-override: 54.74%;
+  size-adjust: 56.26%;
+}
+@font-face {
+  font-family: "cheltenham-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 149.12%;
+  descent-override: 51.49%;
+  line-gap-override: 51.49%;
+  size-adjust: 59.82%;
+}
+@font-face {
+  font-family: "cheltenham-scaps-fallback-georgia";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 77.62%;
+  descent-override: 26.8%;
+  line-gap-override: 26.8%;
+  size-adjust: 114.91%;
+}
+@font-face {
+  font-family: "cheltenham-scaps-fallback-noto";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 85.14%;
+  descent-override: 29.4%;
+  line-gap-override: 29.4%;
+  size-adjust: 104.77%;
+}
+@font-face {
+  font-family: "cheltenham-small-fallback-georgia";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 103.41%;
+  descent-override: 23.28%;
+  line-gap-override: 23.28%;
+  size-adjust: 95.42%;
+}
+@font-face {
+  font-family: "cheltenham-small-fallback-georgia";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 116.16%;
+  descent-override: 26.15%;
+  line-gap-override: 26.15%;
+  size-adjust: 84.95%;
+}
+@font-face {
+  font-family: "cheltenham-small-fallback-georgia";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 97.71%;
+  descent-override: 22%;
+  line-gap-override: 22%;
+  size-adjust: 100.99%;
+}
+@font-face {
+  font-family: "cheltenham-small-fallback-noto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 107.18%;
+  descent-override: 24.13%;
+  line-gap-override: 24.13%;
+  size-adjust: 92.07%;
+}
+@font-face {
+  font-family: "cheltenham-small-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 113.04%;
+  descent-override: 25.45%;
+  line-gap-override: 25.45%;
+  size-adjust: 87.3%;
+}
+@font-face {
+  font-family: "cheltenham-small-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 106.32%;
+  descent-override: 23.94%;
+  line-gap-override: 23.94%;
+  size-adjust: 92.82%;
+}
+@font-face {
+  font-family: "cheltenham-text-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 124.77%;
+  descent-override: 27.57%;
+  line-gap-override: 27.57%;
+  size-adjust: 65.64%;
+}
+@font-face {
+  font-family: "cheltenham-text-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 117.35%;
+  descent-override: 25.93%;
+  line-gap-override: 25.93%;
+  size-adjust: 69.79%;
+}
+@font-face {
+  font-family: "cheltenham-xcond-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 180.3%;
+  descent-override: 62.26%;
+  line-gap-override: 62.26%;
+  size-adjust: 49.47%;
+}
+@font-face {
+  font-family: "cheltenham-xcond-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 169.59%;
+  descent-override: 58.56%;
+  line-gap-override: 58.56%;
+  size-adjust: 52.6%;
+}
+@font-face {
+  font-family: "fact-display-fallback-georgia";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 111.47%;
+  descent-override: 22.47%;
+  line-gap-override: 22.47%;
+  size-adjust: 91.24%;
+}
+@font-face {
+  font-family: "fact-display-fallback-noto";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 122.26%;
+  descent-override: 24.64%;
+  line-gap-override: 24.64%;
+  size-adjust: 83.18%;
+}
+@font-face {
+  font-family: "fact-display-fallback-georgia";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 109.9%;
+  descent-override: 22.15%;
+  line-gap-override: 22.15%;
+  size-adjust: 92.54%;
+}
+@font-face {
+  font-family: "fact-display-fallback-noto";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 120.55%;
+  descent-override: 24.3%;
+  line-gap-override: 24.3%;
+  size-adjust: 84.36%;
+}
+@font-face {
+  font-family: "fact-display-fallback-georgia";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 108.49%;
+  descent-override: 21.87%;
+  line-gap-override: 21.87%;
+  size-adjust: 93.74%;
+}
+@font-face {
+  font-family: "fact-display-fallback-noto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 119%;
+  descent-override: 23.99%;
+  line-gap-override: 23.99%;
+  size-adjust: 85.46%;
+}
+@font-face {
+  font-family: "fact-display-fallback-georgia";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 105.13%;
+  descent-override: 21.19%;
+  line-gap-override: 21.19%;
+  size-adjust: 96.73%;
+}
+@font-face {
+  font-family: "fact-display-fallback-noto";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 115.32%;
+  descent-override: 23.25%;
+  line-gap-override: 23.25%;
+  size-adjust: 88.19%;
+}
+@font-face {
+  font-family: "fact-display-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 118.96%;
+  descent-override: 23.98%;
+  line-gap-override: 23.98%;
+  size-adjust: 85.49%;
+}
+@font-face {
+  font-family: "fact-display-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 111.89%;
+  descent-override: 22.55%;
+  line-gap-override: 22.55%;
+  size-adjust: 90.89%;
+}
+@font-face {
+  font-family: "fact-display-fallback-georgia";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 116%;
+  descent-override: 23.38%;
+  line-gap-override: 23.38%;
+  size-adjust: 87.67%;
+}
+@font-face {
+  font-family: "fact-display-fallback-noto";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 109.11%;
+  descent-override: 21.99%;
+  line-gap-override: 21.99%;
+  size-adjust: 93.21%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: italic;
+  font-weight: 100;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 105.59%;
+  descent-override: 29.93%;
+  line-gap-override: 29.93%;
+  size-adjust: 88.55%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: italic;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 106.39%;
+  descent-override: 26.6%;
+  line-gap-override: 26.6%;
+  size-adjust: 90.23%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 100.93%;
+  descent-override: 31.15%;
+  line-gap-override: 31.15%;
+  size-adjust: 90.86%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 99.63%;
+  descent-override: 30.75%;
+  line-gap-override: 30.75%;
+  size-adjust: 92.04%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 109.11%;
+  descent-override: 33.67%;
+  line-gap-override: 33.67%;
+  size-adjust: 84.04%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 101.03%;
+  descent-override: 31.18%;
+  line-gap-override: 31.18%;
+  size-adjust: 90.76%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: italic;
+  font-weight: 900;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 98.12%;
+  descent-override: 27.81%;
+  line-gap-override: 27.81%;
+  size-adjust: 95.29%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 100.34%;
+  descent-override: 28.44%;
+  line-gap-override: 28.44%;
+  size-adjust: 93.18%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 110.07%;
+  descent-override: 31.2%;
+  line-gap-override: 31.2%;
+  size-adjust: 84.95%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 101.27%;
+  descent-override: 25.32%;
+  line-gap-override: 25.32%;
+  size-adjust: 94.79%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 111.08%;
+  descent-override: 27.77%;
+  line-gap-override: 27.77%;
+  size-adjust: 86.42%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 95.64%;
+  descent-override: 29.52%;
+  line-gap-override: 29.52%;
+  size-adjust: 95.88%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 104.91%;
+  descent-override: 32.38%;
+  line-gap-override: 32.38%;
+  size-adjust: 87.41%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 78.31%;
+  descent-override: 22.2%;
+  line-gap-override: 22.2%;
+  size-adjust: 119.39%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 85.9%;
+  descent-override: 24.35%;
+  line-gap-override: 24.35%;
+  size-adjust: 108.85%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 94.41%;
+  descent-override: 29.14%;
+  line-gap-override: 29.14%;
+  size-adjust: 97.13%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 103.56%;
+  descent-override: 31.96%;
+  line-gap-override: 31.96%;
+  size-adjust: 88.55%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 104.59%;
+  descent-override: 32.28%;
+  line-gap-override: 32.28%;
+  size-adjust: 87.68%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 98.37%;
+  descent-override: 30.36%;
+  line-gap-override: 30.36%;
+  size-adjust: 93.22%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 98.3%;
+  descent-override: 30.34%;
+  line-gap-override: 30.34%;
+  size-adjust: 93.28%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 92.46%;
+  descent-override: 28.53%;
+  line-gap-override: 28.53%;
+  size-adjust: 99.18%;
+}
+@font-face {
+  font-family: "karnak-fallback-georgia";
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 94.98%;
+  descent-override: 26.92%;
+  line-gap-override: 26.92%;
+  size-adjust: 98.44%;
+}
+@font-face {
+  font-family: "karnak-fallback-noto";
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 89.33%;
+  descent-override: 25.32%;
+  line-gap-override: 25.32%;
+  size-adjust: 104.66%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: italic;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 131.94%;
+  descent-override: 32.98%;
+  line-gap-override: 32.98%;
+  size-adjust: 72.76%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 128.89%;
+  descent-override: 32.73%;
+  line-gap-override: 32.73%;
+  size-adjust: 74.25%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 102.54%;
+  descent-override: 29.06%;
+  line-gap-override: 29.06%;
+  size-adjust: 91.18%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 124.44%;
+  descent-override: 32.25%;
+  line-gap-override: 32.25%;
+  size-adjust: 76.58%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 137.02%;
+  descent-override: 36.79%;
+  line-gap-override: 36.79%;
+  size-adjust: 69.04%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 129.39%;
+  descent-override: 35.96%;
+  line-gap-override: 35.96%;
+  size-adjust: 72.57%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: italic;
+  font-weight: 900;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 119.54%;
+  descent-override: 33.88%;
+  line-gap-override: 33.88%;
+  size-adjust: 78.22%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 127.15%;
+  descent-override: 31.79%;
+  line-gap-override: 31.79%;
+  size-adjust: 75.5%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 139.47%;
+  descent-override: 34.87%;
+  line-gap-override: 34.87%;
+  size-adjust: 68.83%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 123.51%;
+  descent-override: 31.69%;
+  line-gap-override: 31.69%;
+  size-adjust: 77.32%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 135.48%;
+  descent-override: 34.76%;
+  line-gap-override: 34.76%;
+  size-adjust: 70.49%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 95.92%;
+  descent-override: 27.19%;
+  line-gap-override: 27.19%;
+  size-adjust: 97.48%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 105.21%;
+  descent-override: 29.82%;
+  line-gap-override: 29.82%;
+  size-adjust: 88.87%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 117.93%;
+  descent-override: 31.66%;
+  line-gap-override: 31.66%;
+  size-adjust: 80.22%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 129.35%;
+  descent-override: 34.73%;
+  line-gap-override: 34.73%;
+  size-adjust: 73.14%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 127.94%;
+  descent-override: 36.79%;
+  line-gap-override: 36.79%;
+  size-adjust: 72.85%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 120.33%;
+  descent-override: 34.6%;
+  line-gap-override: 34.6%;
+  size-adjust: 77.45%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 118.78%;
+  descent-override: 36.66%;
+  line-gap-override: 36.66%;
+  size-adjust: 77.2%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 111.72%;
+  descent-override: 34.48%;
+  line-gap-override: 34.48%;
+  size-adjust: 82.08%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-georgia";
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 111.83%;
+  descent-override: 31.7%;
+  line-gap-override: 31.7%;
+  size-adjust: 83.61%;
+}
+@font-face {
+  font-family: "karnak-cond-fallback-noto";
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 105.18%;
+  descent-override: 29.81%;
+  line-gap-override: 29.81%;
+  size-adjust: 88.89%;
+}
+@font-face {
+  font-family: "karnak-small-fallback-georgia";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 75.89%;
+  descent-override: 23.54%;
+  line-gap-override: 23.54%;
+  size-adjust: 120.7%;
+}
+@font-face {
+  font-family: "karnak-small-fallback-noto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 83.24%;
+  descent-override: 25.82%;
+  line-gap-override: 25.82%;
+  size-adjust: 110.04%;
+}
+@font-face {
+  font-family: "karnak-small-fallback-georgia";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Georgia");
+  ascent-override: 74.32%;
+  descent-override: 23.06%;
+  line-gap-override: 23.06%;
+  size-adjust: 102.69%;
+}
+@font-face {
+  font-family: "karnak-small-fallback-noto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Noto Serif");
+  ascent-override: 69.9%;
+  descent-override: 21.69%;
+  line-gap-override: 21.69%;
+  size-adjust: 109.18%;
+}
+@font-face {
+  font-family: "magslab-fallback-tnr";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Times New Roman");
+  ascent-override: 111.88%;
+  descent-override: 37.29%;
+  line-gap-override: 37.29%;
+  size-adjust: 67.04%;
+}

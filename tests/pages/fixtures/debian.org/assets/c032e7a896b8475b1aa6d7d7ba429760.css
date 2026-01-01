@@ -1,0 +1,204 @@
+/*
+	https://www.debian.org Homepage Stylesheet
+
+	Copyright 2011 Kalle Söderman
+
+	This stylesheet is free software; you can redistribute it and/or modify it
+	under the terms of the GNU General Public License, version 2, as published by
+	the Free Software Foundation.
+
+	This program is distributed in the hope that it will be useful, but WITHOUT ANY
+	WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+	PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License along with
+	this program; if not, write to the Free Software Foundation, Inc., 51 Franklin
+	Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+	The license text can also be found at https://www.gnu.org/copyleft/gpl.html and
+	/usr/share/common-licenses/GPL-2 on Debian.
+*/
+
+@import url("c63ccc983ab22b239286b58b0fc8838d.css");
+/* Try and force clients that can to get the HSTS header */
+@import url("missing_43675b0c2fb6dc8737b24b5b638b3b59.bin");
+
+#splash, #splash h1 {
+	background-position: top center;
+	background-repeat: no-repeat;
+	text-align: center;
+	overflow: hidden;
+}
+#splash {
+    background-color: #26475bff;
+	background-size: cover;
+	margin-top: 0;
+	margin-bottom: 1.5em;
+	height: 120px;
+}
+#splash h1 {
+	background-image: url('36c763725d2be979500bec0d03fca320.svg');
+	background-position-x: center;
+	padding-top: 130px;
+	display: block;
+	margin: 0;
+	height: 0;
+}
+
+span.download {
+	display: block;
+	font-size: 0.75em;
+	line-height: 2;
+	background-color: green;
+	margin-top: 10px;
+}
+span.download a {
+	color: #fff;
+	font-weight: bold;
+	text-decoration: none;
+	border: 0.15em solid #339900;
+	display: block;
+	padding-left: 30px;
+	padding-right: 1em;
+}
+span.download a:hover {
+	text-decoration: none;
+	color: #fff;
+	background-color: #339900;
+}
+span.download a em {
+	font-size: 0.75em;
+	font-weight: normal;
+	clear: right;
+	color: #339900;
+	line-height: 0.5em;
+	font-style: normal;
+	display: block;
+	margin-bottom: 1em;
+}
+span.download a:hover em {
+	color: #fff; 
+	background-color: #339900;
+}
+#announce {
+	text-align: center;
+	float: left;
+	width: 41%;
+	min-width: 260px;
+	margin-bottom: 1.5em;
+}
+#intro {
+	padding-top: 0;
+}
+#intro p {
+	margin-top: 0;
+	padding: 0;
+}
+
+/* Homepage Links */
+#hometoc {
+	list-style: none;
+	margin: 0 0 2em;
+	padding: 0;
+	width: 100%;
+	font-size: 0.75em;
+	overflow: hidden;
+	line-height: 1.5em;
+	border: 0;
+}
+#hometoc a {
+	text-decoration: none;
+}
+#hometoc a:hover {
+	text-decoration: underline;
+}
+ul#hometoc-cola a, ul#hometoc-colb a, ul#hometoc-colc a, ul#hometoc-cold a, ul#hometoc-cole a {
+	padding-left: 5px;
+	display: block;
+}
+ul#hometoc-cola, ul#hometoc-colb,ul#hometoc-colc, ul#hometoc-cold, ul#hometoc-cole {
+	float: left;
+	width: 19.2%;
+	min-width: 11em;
+	min-height: 15em;	/* Update when adding items */
+	margin: 0 1% 0 0;
+	padding: 0;
+	border-bottom: dotted red;
+	border-width: 1px;
+	list-style: none;
+}
+ul#hometoc-cole {
+	width: 18.9%;
+	margin-right: 0;
+}
+#hometoc-wrap {
+	padding: 1em;
+	border-top: 1px solid #fff;
+}
+#hometoc a {
+	margin: 0;
+}
+#hometoc ul{
+	list-style: none;
+	padding: 0;
+}
+#hometoc ul ul {
+	padding: 0;
+}
+#hometoc li {
+	text-indent: 0;
+	background-color: transparent;
+	font-weight: bold;
+}
+#hometoc li ul {
+	margin: 0;
+	padding: 0;
+}
+#hometoc li li {
+	margin: 0;
+	text-indent: 0;
+	padding: 0;
+	margin-left: 1em;
+	font-weight: normal;
+	border: 0;
+	background-image: none;
+	background-color: transparent;
+}
+#hometoc li li a:before {
+	content: "» ";
+	width: 1em;
+}
+#hometoc li li a {
+	text-indent: -1em;
+}
+li.frontbutton {
+	padding-top: 1.25em; 
+	text-align: left; 
+	display: block;
+	width: 100%;
+	border-top: dotted grey;
+	border-width: 1px; 
+}
+.infobar {
+	margin: 0 0 2em;
+	padding: 0 0 2em;
+	line-height: 1em;
+	font-size: 0.75em;
+	border-bottom: dotted grey;
+	border-width: 1px;
+	clear: both;
+}
+
+/* For small screens */
+@media only screen and (max-width: 38em) {
+	div#content {
+		background-image: none;
+	}
+	span.download {
+		display: block;
+		position: relative;
+		left: 0;
+		right: 0;
+		margin: 0;
+	}
+}

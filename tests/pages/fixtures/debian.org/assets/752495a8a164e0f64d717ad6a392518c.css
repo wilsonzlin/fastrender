@@ -1,0 +1,31 @@
+/* Debian language css file for english - en */
+/* please do not touch for now! - Jutta Wrage 2005 */
+
+html[lang|=en] #serverselect {}
+html[lang|=en] #maincol {}
+html[lang|=en] #leftcol ul.cdmenu {
+	width: 10em;
+}
+q { font-style: italic; }
+
+/* quotes */
+html[lang|=en] q:before { content: "\201C"; }
+html[lang|=en] q:after { content: "\201D"; } 
+html[lang|=en] q q:before { content: "\2018"; }
+html[lang|=en] q q:after { content: "\2019"; }
+
+/* html[lang|=en] blockquote p:first-child:before { content: "\201C"; }
+html[lang|=en] blockquote p.notlast:after { content: ""; }
+html[lang|=en] blockquote p:after { content: "\201D"; }
+
+html[lang|=en] blockquote.question p:before { content: ""; }
+html[lang|=en] blockquote.question p:after, blockquote.documentquote p:after{ content: ""; }
+html[lang|=en] blockquote { font-style: italic; }
+*/
+
+/*
+html[lang=en] .en2 q:before { content: "\2018"; }
+html[lang=en] .en2 q:after { content: "\2019"; }
+html[lang=en] .en2 q q:before { content: "\201C"; }
+html[lang=en] .en2 q q:after { content: "\201D"; } 
+*/

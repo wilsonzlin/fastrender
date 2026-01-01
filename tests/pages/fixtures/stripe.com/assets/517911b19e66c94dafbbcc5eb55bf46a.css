@@ -1,0 +1,1 @@
+.CodeEditorCursor{position:absolute;width:calc(var(--codeEditorSingleCharWidth)*1px);height:16px;border:1px solid var(--codeEditorBaseColor);top:calc(var(--codeEditorVerticalPadding) + 4px);left:var(--codeEditorHorizontalPadding)}.CodeEditor--insertMode .CodeEditorCursor{width:2px}.CodeEditor--focused .CodeEditorCursor{background-color:var(--codeEditorBaseColor);border:none}

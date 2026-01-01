@@ -1,0 +1,284 @@
+// new fonts for rebrand:
+// 'SharpGroteskCondensed' (SharpGrotesk13) condensed, no italic style
+// 'SharpGrotesk' (SharpGrotesk20) includes an italic style
+// 'SharpGroteskWide' (SharpGrotesk22) stretched, no italic style
+
+$font_weight_book: 400;
+$font_weight_medium: 500;
+$font_weight_semibold: 600;
+$SharpGrotesk11: 'SharpGroteskSuperCondensed';
+$SharpGrotesk13: 'SharpGroteskCondensed';
+$SharpGrotesk20: 'SharpGrotesk';
+$SharpGrotesk22: 'SharpGroteskWide';
+
+$no-sharp-grotesk: false !default;
+@if $no-sharp-grotesk {
+    /* no-op */
+} @else {
+    /*
+  SharpGrotesk (SuperCondensed)
+  */
+    @font-face {
+        font-family: 'SharpGroteskSuperCondensed';
+        font-display: swap;
+        src: url('missing_f3cd93ef47e1bd0391ae001dfdb527bb.bin');
+        src:
+            url('missing_f3cd93ef47e1bd0391ae001dfdb527bb.bin')
+                format('embedded-opentype'),
+            url('missing_4a36dd5be48dad6f99fa04bf6cbf31c8.bin')
+                format('woff2'),
+            url('missing_2f2aae6052239ed5c147e04697624bec.bin')
+                format('woff'),
+            url('missing_97ad6294f3dbc17ab504ee0fb17e7890.bin')
+                format('truetype');
+        font-weight: $font_weight_book;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGroteskSuperCondensed';
+        font-display: swap;
+        src: url('missing_b1c2bf97274f25f0e043c99d206487bf.bin');
+        src:
+            url('missing_b1c2bf97274f25f0e043c99d206487bf.bin')
+                format('embedded-opentype'),
+            url('missing_8f433d8ce77f2dd37b50e5531f0b07b1.bin')
+                format('woff2'),
+            url('missing_163ea2a7c08aedf0f141a1a550ef65ca.bin')
+                format('woff'),
+            url('missing_a55eeae46f98e4f06d6fd6f2a225419f.bin')
+                format('truetype');
+        font-weight: $font_weight_medium;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGroteskSuperCondensed';
+        font-display: swap;
+        src: url('missing_96a99d3566984b1bef2016ac803a90f7.bin');
+        src:
+            url('missing_96a99d3566984b1bef2016ac803a90f7.bin')
+                format('embedded-opentype'),
+            url('missing_db23c77e856b5211b6fd4a10321a1c4b.bin')
+                format('woff2'),
+            url('missing_49b43e2514bad80ffc046bb22337c315.bin')
+                format('woff'),
+            url('missing_72a76d51ff34040bcc462c0d0ee0b42d.bin')
+                format('truetype');
+        font-weight: $font_weight_semibold;
+        font-style: normal;
+    }
+
+    /*
+  SharpGrotesk (Condensed)
+  */
+    @font-face {
+        font-family: 'SharpGroteskCondensed';
+        font-display: swap;
+        src: url('missing_ea4410886e58f6e6c351da083ea0f147.bin');
+        src:
+            url('missing_ea4410886e58f6e6c351da083ea0f147.bin')
+                format('embedded-opentype'),
+            url('missing_195639d0cf481b5099f11b6dce647fae.bin')
+                format('woff2'),
+            url('missing_47cd6b52c079d4288f95985a77654d19.bin')
+                format('woff'),
+            url('missing_9e27928a630cd010074c9988515ae554.bin')
+                format('truetype');
+        font-weight: $font_weight_book;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGroteskCondensed';
+        font-display: swap;
+        src: url('missing_d4d881886297286943f4e735292c8da8.bin');
+        src:
+            url('missing_d4d881886297286943f4e735292c8da8.bin')
+                format('embedded-opentype'),
+            url('missing_0ca27fd3d34e93afba4d3f6be95c1ba6.bin')
+                format('woff2'),
+            url('missing_42dfc5a17dff83cfcbd698371d576fc2.bin')
+                format('woff'),
+            url('missing_52a1d93b07bc43bc4cff8c38fef3c539.bin')
+                format('truetype');
+        font-weight: $font_weight_medium;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGroteskCondensed';
+        font-display: swap;
+        src: url('missing_c8613372ff1fd3df2b42e655e5b12f03.bin');
+        src:
+            url('missing_c8613372ff1fd3df2b42e655e5b12f03.bin')
+                format('embedded-opentype'),
+            url('missing_49350847dc7abb150833fd65f867a7a7.bin')
+                format('woff2'),
+            url('missing_f543a6c4bede061b1a8c0255520d818c.bin')
+                format('woff'),
+            url('missing_b25ce8171a68c07a5d23853ee450e4a7.bin')
+                format('truetype');
+        font-weight: $font_weight_semibold;
+        font-style: normal;
+    }
+
+    /*
+  SharpGrotesk (Book)
+  */
+    @font-face {
+        font-family: 'SharpGrotesk';
+        font-display: swap;
+        src: url('missing_947f6944d109cb7fc7215104e2983155.bin');
+        src:
+            url('missing_947f6944d109cb7fc7215104e2983155.bin')
+                format('embedded-opentype'),
+            url('missing_fc3972b68b90da971755c43e409d656d.bin')
+                format('woff2'),
+            url('missing_7774541676480c723778f80cd0236dc9.bin')
+                format('woff'),
+            url('missing_adf56c5610e74b13090e01164d0224a5.bin')
+                format('truetype');
+        font-weight: $font_weight_book;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGrotesk';
+        font-display: swap;
+        src: url('missing_e1d5a2e5be0090eeb3d3cf9cf99ad988.bin');
+        src:
+            url('missing_e1d5a2e5be0090eeb3d3cf9cf99ad988.bin')
+                format('embedded-opentype'),
+            url('missing_ff2c4ddef3c978ffc87045648acc264b.bin')
+                format('woff2'),
+            url('missing_7b0e0af683c9996640b0ec8d1d290104.bin')
+                format('woff'),
+            url('missing_7c7799291ab18b8bd154ddf4b1a20a75.bin')
+                format('truetype');
+        font-weight: $font_weight_book;
+        font-style: italic;
+    }
+
+    @font-face {
+        font-family: 'SharpGrotesk';
+        font-display: swap;
+        src: url('missing_fae73e27a2e19a66ad210d55f2f37779.bin');
+        src:
+            url('missing_fae73e27a2e19a66ad210d55f2f37779.bin')
+                format('embedded-opentype'),
+            url('missing_aed0697a061cf0670ee601f1b8f89a5a.bin')
+                format('woff2'),
+            url('missing_d4c97493149257ef84d08aa90478506a.bin')
+                format('woff'),
+            url('missing_b3a9bfaa8652d467c5dee03fcb292d4a.bin')
+                format('truetype');
+        font-weight: $font_weight_medium;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGrotesk';
+        font-display: swap;
+        src: url('missing_11f54086b9ad3c90998fcf3a4d9094e4.bin');
+        src:
+            url('missing_11f54086b9ad3c90998fcf3a4d9094e4.bin')
+                format('embedded-opentype'),
+            url('missing_003074560f141e75b8a0f520ab8e1e11.bin')
+                format('woff2'),
+            url('missing_fdae24cfd022cb965b6dfa597bb60ddd.bin')
+                format('woff'),
+            url('missing_39d52628d2c213be6878f20ba2b63c98.bin')
+                format('truetype');
+        font-weight: $font_weight_medium;
+        font-style: italic;
+    }
+
+    @font-face {
+        font-family: 'SharpGrotesk';
+        font-display: swap;
+        src: url('missing_d17b8c325468206f0e255f1860d55f24.bin');
+        src:
+            url('missing_d17b8c325468206f0e255f1860d55f24.bin')
+                format('embedded-opentype'),
+            url('missing_93b2c205d6ea0349b46e602e315e1995.bin')
+                format('woff2'),
+            url('missing_1e52fdc0b4679869117b82cff6a65bc3.bin')
+                format('woff'),
+            url('missing_2d5318787434764b6a895c84bb2bfb05.bin')
+                format('truetype');
+        font-weight: $font_weight_semibold;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGrotesk';
+        font-display: swap;
+        src: url('missing_951616e9ec606c7b18e5c2bdd1bcc674.bin');
+        src:
+            url('missing_951616e9ec606c7b18e5c2bdd1bcc674.bin')
+                format('embedded-opentype'),
+            url('missing_c6f1f77583f246bbab4362a9dfa80e13.bin')
+                format('woff2'),
+            url('missing_0549e4e27c35dd5f47147e19eab81025.bin')
+                format('woff'),
+            url('missing_47bcbe6d9ec591ddc0126bef0fe2a73a.bin')
+                format('truetype');
+        font-weight: $font_weight_semibold;
+        font-style: italic;
+    }
+
+    /*
+  SharpGrotesk (Wide)
+  */
+    @font-face {
+        font-family: 'SharpGroteskWide';
+        font-display: swap;
+        src: url('missing_297e2405bf0ecd55965818116c686bdc.bin');
+        src:
+            url('missing_297e2405bf0ecd55965818116c686bdc.bin')
+                format('embedded-opentype'),
+            url('missing_c3990cfc1624ef2be86c496fbb28f73f.bin')
+                format('woff2'),
+            url('missing_93553478d451e2ad2a53bbbbe8d2cf0a.bin')
+                format('woff'),
+            url('missing_106f78f2de765457bee0be1c59f833d0.bin')
+                format('truetype');
+        font-weight: $font_weight_book;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGroteskWide';
+        font-display: swap;
+        src: url('missing_62774a40160c343da9423b2c644ae5c9.bin');
+        src:
+            url('missing_62774a40160c343da9423b2c644ae5c9.bin')
+                format('embedded-opentype'),
+            url('missing_865ad4ae0ffe965cff918b508ae7a93f.bin')
+                format('woff2'),
+            url('missing_c5741e459fd6cad14a15015b1811394e.bin')
+                format('woff'),
+            url('missing_232900e67cdde857dda3b5087c8ac66d.bin')
+                format('truetype');
+        font-weight: $font_weight_medium;
+        font-style: normal;
+    }
+
+    @font-face {
+        font-family: 'SharpGroteskWide';
+        font-display: swap;
+        src: url('missing_cb960fd21d120ee04c1a66ee1d0a9f3a.bin');
+        src:
+            url('missing_cb960fd21d120ee04c1a66ee1d0a9f3a.bin')
+                format('embedded-opentype'),
+            url('missing_e25eefcf2bf620cfc928e7e9a520e8e5.bin')
+                format('woff2'),
+            url('missing_3861821d5da0eefdf2967379fadf7a28.bin')
+                format('woff'),
+            url('missing_fc55a78ea88965aef949fdbedd465d97.bin')
+                format('truetype');
+        font-weight: $font_weight_semibold;
+        font-style: normal;
+    }
+}

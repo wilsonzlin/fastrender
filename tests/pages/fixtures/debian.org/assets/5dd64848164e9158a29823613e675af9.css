@@ -1,0 +1,396 @@
+/*
+  This stylesheet file is used within the intro website.
+
+  https://www.debian.org Stylesheet
+
+  Copyright Debian WebTeam 2019
+
+  This stylesheet is free software; you can redistribute it and/or modify it
+  under the terms of the GNU General Public License, version 2, as published by
+  the Free Software Foundation.
+
+  This program is distributed in the hope that it will be useful, but WITHOUT ANY
+  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+  PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License along with
+  this program; if not, write to the Free Software Foundation, Inc., 51 Franklin
+  Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+  The license text can also be found at http://www.gnu.org/copyleft/gpl.html and
+  /usr/share/common-licenses/GPL-2 on Debian.
+*/
+
+html {
+	font-size: 16px;
+}
+h1 {
+	font-size: 2.2em;
+}
+hr {
+	margin: 1em;
+}
+
+/* 
+	Basically taken from https://www.yudiz.com/3-easiest-ways-to-make-equal-height-blocks-using-css/
+	Method 3: Using CSS Flex Box
+	and https://dev.to/drews256/ridiculously-easy-row-and-column-layouts-with-flexbox-1k01
+*/
+.row {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	width: 100%;
+}
+.column {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	padding: 20px;
+	border: 1px solid #fff;
+	transition: all .2s ease-in-out;
+	width: 50%;
+}
+@media only screen and (max-width: 768px) {
+	.column {
+		flex-basis: 100%;
+	}
+}
+.column-left, .column-right {
+	/* Currently not used and empty. */
+}
+
+/* 
+	CSS classes for columns greater than 50%.
+  Only useful in combination with the base class 'column'.
+*/
+.column-2-parts {
+	display: flex;
+	flex-direction: column;
+	flex-basis: 100%;
+	flex: 2;
+}
+.column-3-parts {
+	display: flex;
+	flex-direction: column;
+	flex-basis: 100%;
+	flex: 3;
+}
+.column-4-parts {
+	display: flex;
+	flex-direction: column;
+	flex-basis: 100%;
+	flex: 4;
+}
+.community img {
+	height: 60px;
+}
+div .community {
+	padding: 10px 0;
+	color: #fff;
+}
+.column-2-parts > h2,
+.column-3-parts > h2,
+.column-4-parts > h2 {
+	padding-top: 20px;
+}
+.column-2-parts > p,
+.column-3-parts > p,
+.column-4-parts > p {
+	margin-top: 10px;
+}
+.community.column:focus img {
+	border: none;
+	outline: 0;
+}
+.community.column:hover {
+	border: 1px solid #fcfcfc;
+}
+.column:hover {
+	border: 1px solid #e2e2e2;
+	background: #fcfcfc;
+}
+.column h1 {
+	text-transform: uppercase;
+	text-align: center;
+	letter-spacing: 0.08em;
+	font-weight: bold;
+}
+.column h2 {
+	margin: .2em;
+}
+.column img {
+	object-fit: contain;
+	max-width: 96%;
+	max-height: 400px;
+	padding: 10px 0;
+}
+
+/* Classes used within 'The Operating System' */
+.os-img-container {
+	position: relative;
+	width: 100%;
+}
+.os-img-container img {
+	max-width: 100%;
+	height: auto;
+}
+.os-dl-btn {
+	width: 8em;
+	text-decoration: none;
+}
+
+/* 
+	Unfortunately the 'backdrop-filter' element isn't working even in FF >= 60.x,
+	which would be a nice use case here, using the classical CSS button method then.
+	For more info see: https://webkit.org/blog/3632/introducing-backdrop-filters/ 
+*/
+.os-img-container .os-dl-btn {
+	position: absolute;
+	top: 82%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	-ms-transform: translate(-50%, -50%);
+	background-color: #090909C0;
+	color: #fff;
+	font-size: 2.3em;
+	padding: 10px 40px;
+	border: none;
+	cursor: pointer;
+	border-radius: 10px;
+	text-decoration: none;
+}
+.os-img-container .os-dl-btn:hover {
+	background-color: #000;
+	color: #fff;
+}
+
+.os-img-container .os-other-download {
+	position: absolute;
+        top: 95%;
+        width: 100%;
+        display: block;
+        text-align: center;
+}
+/* END Classes used within 'The Operating System' */
+
+.styled-href-blue a,
+.project-news-content a,
+.styled-href-blue a:hover,
+.project-news-content a:hover {
+	text-decoration: none;
+	position: relative;
+	color: #3366FF;
+}
+.styled-href-blue a::after,
+.project-news-content a::after {
+	content: '';
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	width: 0;
+	border-bottom: 2px solid currentColor;
+	transition: 0.35s;
+}
+.styled-href-blue a:focus::after,
+.styled-href-blue a:hover::after,
+.project-news-content a:focus::after,
+.project-news-content a:hover::after {
+	width: 100%;
+}
+
+/* Classes used within 'Project News' */
+.project-news {
+	margin-left: 15%;
+	padding: 20px;
+}
+.project-news-content {
+	padding-left: 110px;
+	margin-top: -40px;
+	font-size: 1.1em;
+}
+.project-news-content-end {
+	position: relative;
+	top: 38px;
+	margin-bottom: 25px;
+}
+.end-of-list-arrow {
+	width: 0;
+	height: 0;
+	-webkit-transform: rotate(360deg);
+	-moz-transform: rotate(360deg);
+	border-style: solid;
+	border-width: 15px 0 15px 26px;
+	border-color: transparent transparent transparent #999;
+	position: relative;
+	left: 3.5em;
+	top: 24px;
+}
+
+/*
+	The following rules are taken from https://codepen.io/denilsonsa/pen/Etrba
+	but are modified to fit better into our design. 
+*/
+.date-as-calendar {
+	font-variant: normal;
+	font-style: normal;
+	font-weight: normal;
+	font-family: "Helvetica", "Arial", sans-serif;
+	/* It seems vertical-align: baseline does not work correctly with display: inline-flex. */
+	vertical-align: top;
+	color: #000;
+	background: #fff;
+	background: linear-gradient(to bottom right, #fff 0%, #eee 100%);
+	border: 1px solid #888;
+	border-radius: 3px;
+	overflow: hidden;
+	box-shadow: 2px 2px 2px -2px #000;
+}
+.date-as-calendar .day,
+.date-as-calendar .month,
+.date-as-calendar .year {
+	text-align: center;
+	line-height: 1.0;
+}
+.date-as-calendar .month {
+	font-family: "Oswald", sans-serif;
+	text-transform: uppercase;
+	background: #a00;
+	background: linear-gradient(to bottom right, #b60109 0%, #a00 100%);
+	color: #fff;
+}
+
+/* Layout rules using position: absolute and relative dimensions using em. */
+.position-em.date-as-calendar {
+	display: inline-block;
+	position: relative;
+	width: 4.4em;
+	height: 2.6em;
+}
+.position-em.date-as-calendar .day,
+.position-em.date-as-calendar .month,
+.position-em.date-as-calendar .year {
+	display: block;
+	position: absolute;
+	left: 0;
+	right: 0;
+	width: 100%;
+	height: 1em;
+}
+.position-em.date-as-calendar .month {
+	top: 0;
+	font-size: 0.6em;
+	padding: 0.2em 0;
+	margin-top: -0.1em;
+	line-height: 1.1em;
+}
+.position-em.date-as-calendar .day {
+	top: .6em;
+	font-size: 1.2em;
+	margin-top: 0.1em;
+}
+.position-em.date-as-calendar .year {
+	bottom: 0;
+	font-size: 0.6em;
+}
+
+/* Multiple sizes. */
+.date-as-calendar.size0_5x {
+	font-size: 8px;
+}
+.date-as-calendar.size0_75x {
+	font-size: 12px;
+}
+.date-as-calendar.size1x {
+	font-size: 16px;
+}
+.date-as-calendar.size1_25x {
+	font-size: 20px;
+}
+.date-as-calendar.size1_5x {
+	font-size: 24px;
+}
+.date-as-calendar.size1_75x {
+	font-size: 28px;
+}
+.date-as-calendar.size2x {
+	font-size: 32px;
+}
+.date-as-calendar.size3x {
+	font-size: 48px;
+}
+/* END Classes used within 'Project News' */
+
+/* Classes used within 'Why Debian' */
+ol.why-debian {
+	list-style-type: none;
+	list-style-type: decimal !ie; /*IE 7- hack*/
+	margin: 0;
+	font-size: 1.1em;
+	padding-left: 15%;
+	counter-reset: li-counter;
+}
+ol.why-debian > li {
+	position: relative;
+	margin: 1.5em 0 2.5em;
+	padding: 1.3em;
+	background-color: #eaeaea;
+	max-width: 75%;
+}
+
+ol.why-debian > li:before {
+	position: absolute;
+	top: -0.5em;
+	left: -0.8em;
+	width: 1.8em;
+	height: 1.2em;
+	font-size: 2em;
+	line-height: 1.2;
+	font-weight: bold;
+	text-align: center;
+	color: #fff;
+	background-color: #a80030;	/* The color of the swirl. */
+	transform: rotate(-15deg);
+	-ms-transform: rotate(-15deg);
+	-webkit-transform: rotate(-15deg);
+	z-index: 99;
+	overflow: hidden;
+	content: counter(li-counter);
+	counter-increment: li-counter;
+}
+/* END Classes used within 'Why Debian' */
+
+@media screen and (min-width: 800px) {
+	.column {
+		flex: 1;
+	}
+	.column-2-parts {
+		flex: 2;
+	}
+	.column-3-parts {
+		flex: 3;
+	}
+	.column-4-parts {
+		flex: 4;
+	}
+}
+@media(max-width: 1580px) {
+	html {
+		font-size: 15px;
+	}
+}
+@media(max-width: 1250px) {
+	html {
+		font-size: 14px;
+	}
+}
+@media(max-width: 980px) {
+	html {
+		font-size: 13px;
+	}
+}
+@media(max-width: 800px) {
+	html {
+		font-size: 12px;
+	}
+}

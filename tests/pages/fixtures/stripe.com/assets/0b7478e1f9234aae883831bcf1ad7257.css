@@ -1,0 +1,1 @@
+.AnimatedIcon{--iconSize:40px;--svgSize:96px;width:var(--iconSize);height:var(--iconSize)}.AnimatedIcon__iconContainer{position:relative;left:calc(var(--columnPaddingNormal)*-1)}.AnimatedIcon__icon{position:absolute;top:calc(var(--svgSize)*-1/2 - var(--iconSize)*-1/2);left:0;display:block;pointer-events:none}

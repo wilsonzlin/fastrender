@@ -1,0 +1,472 @@
+html,
+body,
+div,
+span,
+applet,
+object,
+iframe,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+blockquote,
+pre,
+a,
+abbr,
+acronym,
+address,
+big,
+cite,
+code,
+del,
+dfn,
+em,
+img,
+ins,
+kbd,
+q,
+s,
+samp,
+small,
+strike,
+strong,
+sub,
+sup,
+tt,
+var,
+b,
+u,
+i,
+center,
+dl,
+dt,
+dd,
+ol,
+ul,
+li,
+fieldset,
+form,
+label,
+legend,
+table,
+caption,
+tbody,
+tfoot,
+thead,
+tr,
+th,
+td,
+article,
+aside,
+canvas,
+details,
+embed,
+figure,
+figcaption,
+footer,
+header,
+hgroup,
+menu,
+nav,
+output,
+ruby,
+section,
+summary,
+time,
+mark,
+audio,
+video {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 100%;
+
+  /* Prevent font scaling in landscape while allowing user zoom */
+  text-size-adjust: 100%;
+  font: inherit;
+  vertical-align: baseline;
+}
+
+/* HTML5 display-role reset for older browsers */
+article,
+aside,
+details,
+figcaption,
+figure,
+footer,
+header,
+hgroup,
+menu,
+nav,
+section,
+summary,
+main {
+  display: block;
+}
+
+body {
+  line-height: 1;
+}
+
+ol,
+ul {
+  list-style: none;
+}
+
+blockquote,
+q {
+  quotes: none;
+}
+
+blockquote::before,
+blockquote::after,
+q::before,
+q::after {
+  content: '';
+  content: none;
+}
+
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/* end css reset */
+
+body {
+  color: #363636;
+  background-color: white;
+}
+
+body.dark {
+  color: #DFDFDF;
+  background-color: black;
+}
+
+body.transparent {
+  color: white;
+  background-color: deeppink;
+}
+
+audio,
+canvas,
+video {
+  display: inline-block;
+}
+
+/* prevents modern browsers from displaying 'audio' without controls */
+audio:not([controls]) {
+  display: none;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+figure {
+  margin: 0;
+}
+
+img {
+  height: auto;
+  max-width: 100%;
+  -ms-interpolation-mode: bicubic;
+}
+
+.image > img {
+  display: block;
+}
+
+a img {
+  border: none;
+}
+
+a {
+  text-decoration: none;
+  color: black;
+}
+
+iframe {
+  border: none;
+}
+
+/* forms */
+
+form {
+  margin: 0;
+}
+
+fieldset {
+  border: none;
+  padding: 0;
+}
+
+button,
+input,
+label,
+select,
+textarea {
+  color: black;
+  font-family: nyt-franklin, helvetica, arial, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  margin: 0;
+  font-size: 100%;
+}
+
+button,
+input,
+select {
+  vertical-align: middle;
+}
+
+button,
+input {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border: none;
+  line-height: normal; /* ff3 and 4 have !important on line-height in ua stylesheet */
+}
+
+button::-moz-focus-inner,
+input::-moz-focus-inner {
+  /* inner padding and border oddities in ff3/4 */
+  padding: 0;
+  border: 0;
+}
+
+button:-moz-focusring {
+  outline: 1px dotted; /* restores outline on focus moz bug 140562 */
+}
+
+button,
+input[type='button'],
+input[type='reset'],
+input[type='submit'] {
+  cursor: pointer; /* cursors on all buttons applied consistently */
+  appearance: button; /* style clickable inputs in ios */
+}
+
+textarea {
+  padding: 6px 10px;
+  overflow: auto; /* remove vertical scrollbar in ie6-9 */
+  vertical-align: top; /* readability and alignment cross-browser */
+}
+
+input[type='text'],
+input[type='password'],
+input[type='email'],
+textarea {
+  border-radius: 3px;
+  box-sizing: border-box;
+  border: 0;
+}
+
+input[type='text']:focus,
+input[type='password']:focus,
+input[type='email']:focus,
+textarea:focus {
+  /* box-shadow: inset 2px 3px 3px rgba(0, 0, 0, 0.1); */
+  box-shadow: none;
+  outline: none;
+}
+
+input[type='password'] {
+  letter-spacing: 3px;
+}
+
+input[type='search'] {
+  /* appearance in safari/chrome */
+  box-sizing: content-box;
+}
+
+::-ms-clear {
+  display: none; /* removes clear icon ie10 adds to text inputs on focus */
+}
+
+/* using modernizr - some browsers will show a broken image icon if they dont support svg so lets hide them */
+.hasNoSvg img[src *= '.svg'] {
+  /* performance ? */
+  display: none !important;
+}
+
+html,
+body,
+main {
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  font: -apple-system-body;
+  font-size: 100%;
+  scroll-padding-top: 50px;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.NYTApp .NYTAppHideMasthead {
+  display: none;
+}
+
+@media (max-width: 1040px) {
+  .ReactModal__Body--open {
+    overflow: hidden;
+  }
+}
+
+/* Print styles */
+
+@media print {
+  *,
+  *::before,
+  *::after {
+    background: transparent !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  p,
+  h2,
+  h3 {
+    orphans: 3;
+    widows: 3;
+  }
+
+  h2,
+  h3 {
+    page-break-after: avoid;
+  }
+
+  a,
+  a:visited {
+    text-decoration: none !important;
+  }
+
+  abbr[title]::after {
+    content: ' (' attr(title) ')';
+  }
+
+  a[href^='#']::after,
+  a[href^='javascript:']::after {
+    content: '';
+  }
+
+  pre,
+  blockquote {
+    page-break-inside: avoid;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr,
+  img {
+    page-break-inside: avoid;
+  }
+
+  img {
+    max-width: 100% !important;
+  }
+}
+
+
+.ANDROID[data-base-font-size='1'] {
+  font-size: 14px;
+}
+
+.ANDROID[data-base-font-size='2'] {
+  font-size: 16px;
+}
+
+.ANDROID[data-base-font-size='3'] {
+  font-size: 21px;
+}
+
+.ANDROID[data-base-font-size='4'] {
+  font-size: 24px;
+}
+
+.ANDROID[data-base-font-size='5'] {
+  font-size: 28px;
+}
+
+.ANDROID[data-base-font-size='6'] {
+  font-size: 33px;
+}
+
+.IOS[data-base-font-size='1'] {
+  font-size: 13px;
+}
+
+.IOS[data-base-font-size='2'] {
+  font-size: 14px;
+}
+
+.IOS[data-base-font-size='3'] {
+  font-size: 15px;
+}
+
+.IOS[data-base-font-size='4'] {
+  font-size: 16px;
+}
+
+.IOS[data-base-font-size='5'] {
+  font-size: 17px;
+}
+
+.IOS[data-base-font-size='6'] {
+  font-size: 19px;
+}
+
+.IOS[data-base-font-size='7'] {
+  font-size: 21px;
+}
+
+.IOS[data-base-font-size='8'] {
+  font-size: 25px;
+}
+
+.IOS[data-base-font-size='9'] {
+  font-size: 26px;
+}
+
+.IOS[data-base-font-size='10'] {
+  font-size: 28px;
+}
+
+.IOS[data-base-font-size='11'] {
+  font-size: 30px;
+}
+
+.IOS[data-base-font-size='12'] {
+  font-size: 33px;
+}
+
+/* Focus outline workaround for improperly nested elements:
+ * .tpl-temp-focus-fix raises the specificity of the selector
+ * and helps to override focus ring styles in improperly nested elements.
+ * Do not apply .tpl-temp-focus-fix to any element. More broadly, this focus outline
+ * issue is caused by a bug in how browsers implement CSS and how they render
+ * outline-style: solid; around focused inline elements with block level children.
+*/
+a:focus-visible:has(p, div, .tpl-temp-focus-fix) {
+  outline-style: auto;
+}
+
+@view-transition {
+  navigation: auto;
+}

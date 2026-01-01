@@ -1,0 +1,158 @@
+/** @generated -- This file is automatically synced from @dropbox/dig-fonts@2.2.1. DO NOT MODIFY! **/
+
+/**
+  This file should not be imported into your CSS or SASS files - the CSS variables will be available on the page for you to use.
+  (SEE #design-systems ON SLACK if you have questions)
+**/
+
+/**
+* This file is needed to comply with metaserver's CSP:
+* https://sourcegraph.pp.dropbox.com/server/-/blob/configs/security/csp/metaserver.yaml#L202
+* if a way around this can be found, then this can be removed and migrated to the index.css file.
+*/
+
+/**
+ * Font: Atlas Grotesk Grotesk
+ */
+@font-face {
+  font-family: 'Atlas Grotesk Web';
+  src: url('43693f7bdd6146e783fab3f75ba0a51a.woff2')
+      format('woff2'),
+    url('missing_21a00dd1b78d97637e4e1abbbb3016bf.bin')
+      format('woff'),
+    url('missing_60a982973e4406046c10ff4064c423b1.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Atlas Grotesk Web';
+  src: url('39e1b683885a862832eb9f30c6626b7e.woff2')
+      format('woff2'),
+    url('missing_2072b295cc217c060e3b6bd73bf294fa.bin')
+      format('woff'),
+    url('missing_a5fe484fe96e3272aa26d38b32c82ef2.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'Atlas Grotesk Web';
+  src: url('b5db3e633ec765fc01a19c06b0955d56.woff2')
+      format('woff2'),
+    url('missing_644cceeee66759beb5e8fda73865e551.bin')
+      format('woff'),
+    url('missing_2cf34c8345860027ef3e7f84374cdbf0.bin')
+      format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Atlas Grotesk Web';
+  src: url('f7585530fdf34416263929cac08c2be8.woff2')
+      format('woff2'),
+    url('missing_4f8188261aa85e998f79845582952e06.bin')
+      format('woff'),
+    url('missing_5372a0b21d67fc6a04f25530063363f1.bin')
+      format('truetype');
+  font-weight: 500;
+  font-style: italic;
+}
+
+/**
+   * Font: Sharp Grotesk (Cyrillic supported)
+   */
+@font-face {
+  font-family: 'Sharp Grotesk';
+  src: url('00f90db31f42975fcdc5fa1f70660568.woff2')
+      format('woff2'),
+    url('missing_1e6c261f87c8d4b4628437b0cccb29b5.bin')
+      format('woff'),
+    url('missing_f6a3d035f002223a655f51ee7440ee51.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Sharp Grotesk';
+  src: url('c1f83c1f73078843f8c57b38a304d84d.woff2')
+      format('woff2'),
+    url('missing_8af33a4956e474e8b89c33c6f624f74c.bin')
+      format('woff'),
+    url('missing_e5fa98d177c188d602c9a79112b73076.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'Sharp Grotesk';
+  src: url('40d852f2a2082060963bf762ef7e69a9.woff2')
+      format('woff2'),
+    url('missing_9e965122bb7b27bd8f21c23924412e7d.bin')
+      format('woff'),
+    url('missing_54fa9b13efcc35576500798a8767c09c.bin')
+      format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Sharp Grotesk';
+  src: url('d26f74e926b56ce2cf3b4db9abcf6f9b.woff2')
+      format('woff2'),
+    url('missing_32cbfe28e8003112ed84505d29c37699.bin')
+      format('woff'),
+    url('missing_88ec1b791bc2fa62c22c6af12cfe3124.bin')
+      format('truetype');
+  font-weight: 500;
+  font-style: italic;
+}
+
+/* Korean Support - Does not support italics */
+@font-face {
+  font-family: 'Sharp Grotesk KR';
+  src: url('missing_fb7b3ea899e70ba3e08dc66d29c99e3a.bin')
+      format('woff2'),
+    url('missing_f69c447faa7e04fff8a8664e71aff734.bin')
+      format('woff'),
+    url('missing_5f2a7087f1979136e3ca4430b67e2ab2.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Sharp Grotesk KR';
+  src: url('missing_b3497a5a5714cb936813f84fca578db9.bin')
+      format('woff2'),
+    url('missing_9da45157c56a69532b7e5e1bd91762ec.bin')
+      format('woff'),
+    url('missing_0799d20ea2d5d212c09f8c2ea093a149.bin')
+      format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}
+
+/**
+    * Thai language support
+    */
+@font-face {
+  font-family: 'Sharp Grotesk Thai';
+  src: url('missing_1d2ed0a628c9e492a73eeb0ec632c9f0.bin')
+      format('woff2'),
+    url('missing_cb25cc0f0cb02358609b335c27900855.bin')
+      format('woff'),
+    url('missing_68b46c4ba35b6111205dc9a4d8da8aef.bin')
+      format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Sharp Grotesk Thai';
+  src: url('missing_1205bb58eff5c9d82274832d624f0581.bin')
+      format('woff2'),
+    url('missing_0bf22c3d048c30da3861885b6945eb54.bin')
+      format('woff'),
+    url('missing_247e97bc3b2f3d78ca7823b009d22cca.bin')
+      format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}

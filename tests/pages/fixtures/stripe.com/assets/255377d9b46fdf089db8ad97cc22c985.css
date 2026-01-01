@@ -1,0 +1,1 @@
+.GraphicFormFieldInputGrid{position:relative;display:grid;grid:auto/repeat(2,1fr);gap:var(--graphicFormFieldInputGridGap,0)}
