@@ -143,31 +143,113 @@ pub fn build_http_fetcher(
   fetcher
 }
 
-/// Compute a stable namespace for the disk-backed subresource cache based on request headers.
-///
-/// The disk cache is keyed by URL only by default; callers that vary headers between runs
-/// (e.g. `User-Agent` or `Accept-Language`) should provide a namespace to avoid cross-contaminating
-/// variants. This also includes opt-out debug toggles like `FASTR_HTTP_BROWSER_HEADERS=0`, which
-/// changes per-resource `Accept` + `Sec-Fetch-*` headers and can alter server behavior.
 #[cfg(feature = "disk_cache")]
-pub fn disk_cache_namespace(user_agent: &str, accept_language: &str) -> String {
-  let ua = fastrender::resource::normalize_user_agent_for_log(user_agent).trim();
-  let lang = accept_language.trim();
-  let browser_headers_enabled = std::env::var("FASTR_HTTP_BROWSER_HEADERS")
-    .ok()
+const DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER: &str = "fetch-profile:contextual-v1";
+
+#[cfg(feature = "disk_cache")]
+fn browser_headers_enabled_from_env(raw: Option<&str>) -> bool {
+  raw
     .map(|raw| {
       !matches!(
         raw.trim().to_ascii_lowercase().as_str(),
         "0" | "false" | "no" | "off"
       )
     })
-    .unwrap_or(true);
+    .unwrap_or(true)
+}
+
+#[cfg(feature = "disk_cache")]
+fn disk_cache_namespace_for_browser_headers(
+  user_agent: &str,
+  accept_language: &str,
+  browser_headers_enabled: bool,
+) -> String {
+  let ua = fastrender::resource::normalize_user_agent_for_log(user_agent).trim();
+  let lang = accept_language.trim();
   if browser_headers_enabled {
-    format!("fetch-profile:contextual-v1\nuser-agent:{ua}\naccept-language:{lang}")
+    format!(
+      "{DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER}\nuser-agent:{ua}\naccept-language:{lang}"
+    )
   } else {
     format!(
-      "fetch-profile:contextual-v1\nuser-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0"
+      "{DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER}\nuser-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0"
     )
+  }
+}
+
+/// Compute a stable namespace for the disk-backed subresource cache based on request headers.
+///
+/// The disk cache is keyed by URL only by default; callers that vary headers between runs
+/// (e.g. `User-Agent` or `Accept-Language`) should provide a namespace to avoid cross-contaminating
+/// variants. This also includes opt-out debug toggles like `FASTR_HTTP_BROWSER_HEADERS=0`, which
+/// changes per-resource `Accept` + `Sec-Fetch-*` headers and can alter server behavior.
+///
+/// Note: The returned value is intentionally *not* backwards compatible with legacy pageset runs
+/// when browser headers are enabled (the default). We include a stable `fetch-profile:*` marker so
+/// that existing disk caches populated without contextual `Accept`/`Sec-Fetch-*`/`Referer` request
+/// headers don't remain sticky forever (pageset runs can pin entries indefinitely via
+/// `FASTR_DISK_CACHE_MAX_AGE_SECS=0`).
+#[cfg(feature = "disk_cache")]
+pub fn disk_cache_namespace(user_agent: &str, accept_language: &str) -> String {
+  let raw = std::env::var("FASTR_HTTP_BROWSER_HEADERS").ok();
+  let browser_headers_enabled = browser_headers_enabled_from_env(raw.as_deref());
+  disk_cache_namespace_for_browser_headers(user_agent, accept_language, browser_headers_enabled)
+}
+
+#[cfg(all(test, feature = "disk_cache"))]
+mod disk_cache_namespace_tests {
+  use super::*;
+  use fastrender::resource::{DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
+
+  #[test]
+  fn disk_cache_namespace_includes_fetch_profile_marker_and_partitions_opt_out() {
+    let enabled = disk_cache_namespace_for_browser_headers(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      true,
+    );
+    assert!(
+      enabled.contains(DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER),
+      "namespace should include fetch profile marker when browser headers are enabled: {enabled}"
+    );
+
+    let disabled = disk_cache_namespace_for_browser_headers(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      false,
+    );
+    assert_ne!(
+      enabled, disabled,
+      "disabling browser headers should produce a distinct disk cache namespace"
+    );
+    assert!(
+      disabled.contains("http-browser-headers:0"),
+      "opt-out namespace should keep the legacy marker: {disabled}"
+    );
+
+    let raw = std::env::var("FASTR_HTTP_BROWSER_HEADERS").ok();
+    let browser_headers_enabled = browser_headers_enabled_from_env(raw.as_deref());
+    let from_env = disk_cache_namespace(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE);
+    let expected = disk_cache_namespace_for_browser_headers(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      browser_headers_enabled,
+    );
+    assert_eq!(
+      from_env, expected,
+      "disk_cache_namespace should respect FASTR_HTTP_BROWSER_HEADERS when selecting the namespace"
+    );
+    if browser_headers_enabled {
+      assert!(
+        from_env.contains(DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER),
+        "default namespace should include fetch profile marker: {from_env}"
+      );
+    } else {
+      assert!(
+        from_env.contains("http-browser-headers:0"),
+        "opt-out namespace should include the legacy marker: {from_env}"
+      );
+    }
   }
 }
 
