@@ -28,7 +28,7 @@ mod disk_cache_main {
   use fastrender::css::types::CssImportLoader;
   use fastrender::css::types::{FontFaceSource, StyleSheet};
   use fastrender::debug::runtime;
-  use fastrender::dom::{parse_html, DomNode};
+  use fastrender::dom::{parse_html, DomNode, HTML_NAMESPACE};
   use fastrender::geometry::Size;
   use fastrender::html::asset_discovery::discover_html_asset_urls;
   use fastrender::html::image_prefetch::{discover_image_prefetch_urls, ImagePrefetchLimits};
@@ -285,6 +285,32 @@ mod disk_cache_main {
     }
   }
 
+  fn is_inert_template(node: &DomNode) -> bool {
+    // Template contents are inert unless the template declares a shadow root.
+    if !node
+      .tag_name()
+      .map(|tag| tag.eq_ignore_ascii_case("template"))
+      .unwrap_or(false)
+    {
+      return false;
+    }
+
+    if let Some(namespace) = node.namespace() {
+      if !(namespace.is_empty() || namespace == HTML_NAMESPACE) {
+        return true;
+      }
+    }
+
+    let Some(mode_attr) = node
+      .get_attribute_ref("shadowroot")
+      .or_else(|| node.get_attribute_ref("shadowrootmode"))
+    else {
+      return true;
+    };
+
+    !(mode_attr.eq_ignore_ascii_case("open") || mode_attr.eq_ignore_ascii_case("closed"))
+  }
+
   fn looks_like_css_url(url: &str) -> bool {
     url::Url::parse(url)
       .ok()
@@ -438,6 +464,9 @@ mod disk_cache_main {
         }
       }
 
+      if is_inert_template(node) {
+        continue;
+      }
       for child in node.children.iter().rev() {
         stack.push(child);
       }
@@ -588,6 +617,9 @@ mod disk_cache_main {
         }
       }
 
+      if is_inert_template(node) {
+        continue;
+      }
       for child in node.children.iter().rev() {
         stack.push(child);
       }
@@ -667,6 +699,9 @@ mod disk_cache_main {
         }
       }
 
+      if is_inert_template(node) {
+        continue;
+      }
       for child in node.children.iter().rev() {
         stack.push(child);
       }
@@ -766,6 +801,9 @@ mod disk_cache_main {
         }
       }
 
+      if is_inert_template(node) {
+        continue;
+      }
       for child in node.children.iter().rev() {
         stack.push(child);
       }
@@ -882,6 +920,9 @@ mod disk_cache_main {
         }
       }
 
+      if is_inert_template(node) {
+        continue;
+      }
       for child in node.children.iter().rev() {
         stack.push((child, child_flags));
       }
@@ -1686,6 +1727,31 @@ mod disk_cache_main {
       assert_eq!(all.borrow().len(), 2);
       assert_eq!(image_urls.len(), 1);
       assert_eq!(document_urls.len(), 1);
+    }
+
+    #[test]
+    fn inert_templates_are_skipped_during_dom_discovery() {
+      let dom = parse_html(
+        "<!doctype html><html><body>\
+          <template><iframe src=\"/frame.html\"></iframe></template>\
+        </body></html>",
+      )
+      .expect("parse dom");
+      let all = RefCell::new(BTreeSet::<String>::new());
+      let mut document_urls = BTreeSet::<String>::new();
+
+      record_iframe_document_candidates(
+        &all,
+        &dom,
+        "https://example.com/",
+        &mut document_urls,
+        100,
+      );
+
+      assert!(
+        document_urls.is_empty(),
+        "iframe inside inert <template> should not be prefetched"
+      );
     }
 
     #[test]
