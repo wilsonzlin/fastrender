@@ -29,7 +29,9 @@ fn regex(pattern: &'static str, desc: &'static str) -> Regex {
 }
 
 fn capture_first<'t>(caps: &regex::Captures<'t>, groups: &[usize]) -> Option<&'t str> {
-  groups.iter().find_map(|idx| caps.get(*idx).map(|m| m.as_str()))
+  groups
+    .iter()
+    .find_map(|idx| caps.get(*idx).map(|m| m.as_str()))
 }
 
 fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<&str> {
@@ -55,10 +57,7 @@ fn link_rel_is_icon_or_manifest(rel_value: &str) -> bool {
   rel_value.split_whitespace().any(|token| {
     matches!(
       token.to_ascii_lowercase().as_str(),
-      "icon"
-        | "apple-touch-icon"
-        | "apple-touch-icon-precomposed"
-        | "manifest"
+      "icon" | "apple-touch-icon" | "apple-touch-icon-precomposed" | "manifest"
     )
   })
 }
@@ -82,56 +81,56 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
 
   let img_src = IMG_SRC.get_or_init(|| {
     regex(
-      "(?is)<img[^>]*\\bsrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "(?is)<img[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "img src",
     )
   });
   let img_srcset = IMG_SRCSET.get_or_init(|| {
     regex(
-      "(?is)<img[^>]*\\bsrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')",
+      "(?is)<img[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')",
       "img srcset",
     )
   });
   let source_srcset = SOURCE_SRCSET.get_or_init(|| {
     regex(
-      "(?is)<source[^>]*\\bsrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')",
+      "(?is)<source[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')",
       "source srcset",
     )
   });
   let video_poster = VIDEO_POSTER.get_or_init(|| {
     regex(
-      "(?is)<video[^>]*\\bposter\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "(?is)<video[^>]*\\sposter\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "video poster",
     )
   });
   let iframe_src = IFRAME_SRC.get_or_init(|| {
     regex(
-      "(?is)<iframe[^>]*\\bsrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "(?is)<iframe[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "iframe src",
     )
   });
   let object_data = OBJECT_DATA.get_or_init(|| {
     regex(
-      "(?is)<object[^>]*\\bdata\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "(?is)<object[^>]*\\sdata\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "object data",
     )
   });
   let embed_src = EMBED_SRC.get_or_init(|| {
     regex(
-      "(?is)<embed[^>]*\\bsrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "(?is)<embed[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "embed src",
     )
   });
   let link_tag = LINK_TAG.get_or_init(|| regex("(?is)<link\\b[^>]*>", "link tag"));
   let attr_rel = ATTR_REL.get_or_init(|| {
     regex(
-      "(?is)\\brel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "(?is)(?:^|\\s)rel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "rel attr",
     )
   });
   let attr_href = ATTR_HREF.get_or_init(|| {
     regex(
-      "(?is)\\bhref\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "(?is)(?:^|\\s)href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "href attr",
     )
   });
@@ -302,7 +301,10 @@ mod tests {
   fn discovers_video_posters() {
     let html = r#"<video poster="/poster.jpg"></video>"#;
     let out = discover_html_asset_urls(html, "https://example.com/page.html");
-    assert_eq!(out.images, vec!["https://example.com/poster.jpg".to_string()]);
+    assert_eq!(
+      out.images,
+      vec!["https://example.com/poster.jpg".to_string()]
+    );
   }
 
   #[test]
@@ -326,6 +328,24 @@ mod tests {
       .into_iter()
       .map(str::to_string)
       .collect::<Vec<_>>()
+    );
+  }
+
+  #[test]
+  fn does_not_match_data_attributes() {
+    let html = r#"
+      <img data-src="lazy.png">
+      <iframe data-src="frame.html"></iframe>
+      <link data-href="bad.ico" rel="icon" href="good.ico">
+    "#;
+    let out = discover_html_asset_urls(html, "https://example.com/base/");
+    assert_eq!(
+      out.images,
+      vec!["https://example.com/base/good.ico".to_string()]
+    );
+    assert!(
+      out.documents.is_empty(),
+      "data-src iframe should not be discovered"
     );
   }
 }

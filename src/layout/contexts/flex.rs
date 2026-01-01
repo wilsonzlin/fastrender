@@ -86,11 +86,11 @@ use crate::tree::fragment_tree::FragmentNode;
 use crate::{error::RenderError, error::RenderStage};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-#[cfg(test)]
-use std::cell::Cell;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::mem;
@@ -6981,7 +6981,8 @@ mod tests {
     );
     item.id = 65001;
 
-    let mut container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![item]);
+    let mut container =
+      BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![item]);
     container.id = 65000;
 
     let constraints = LayoutConstraints::definite(200.0, 200.0);

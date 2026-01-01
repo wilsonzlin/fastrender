@@ -44,11 +44,11 @@ pub fn extract_inline_css_chunks(html: &str) -> Vec<String> {
 ///
 /// URLs are resolved against `base_url` using [`resolve_href`].
 pub fn discover_html_image_urls(html: &str, base_url: &str) -> Vec<String> {
-  let img_src = Regex::new("(?is)<img[^>]*\\bsrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+  let img_src = Regex::new("(?is)<img[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
     .expect("img src regex");
-  let img_srcset = Regex::new("(?is)<img[^>]*\\bsrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
+  let img_srcset = Regex::new("(?is)<img[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     .expect("img srcset regex");
-  let source_srcset = Regex::new("(?is)<source[^>]*\\bsrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
+  let source_srcset = Regex::new("(?is)<source[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     .expect("source srcset regex");
 
   let mut urls = Vec::new();
