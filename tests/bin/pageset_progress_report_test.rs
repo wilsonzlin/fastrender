@@ -271,3 +271,60 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "missing slowdown failure reason"
   );
 }
+
+#[test]
+fn pageset_progress_report_fail_on_slow_ok_ms_exits_non_zero() {
+  let dir = tempdir().expect("progress dir");
+  let progress = json!({
+    "url": "https://slow_ok.example.com/",
+    "status": "ok",
+    "total_ms": 6000.0,
+    "stages_ms": {
+      "fetch": 100.0,
+      "css": 200.0,
+      "cascade": 300.0,
+      "layout": 4000.0,
+      "paint": 1400.0
+    },
+    "notes": "",
+    "hotspot": "layout",
+    "last_good_commit": "",
+    "last_regression_commit": ""
+  });
+  fs::write(
+    dir.path().join("slow_ok.json"),
+    serde_json::to_string_pretty(&progress).unwrap(),
+  )
+  .expect("write progress json");
+
+  let baseline = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args(["report", "--progress-dir", dir.path().to_str().unwrap()])
+    .output()
+    .expect("run pageset_progress report");
+  assert!(
+    baseline.status.success(),
+    "expected report to succeed without --fail-on-slow-ok-ms"
+  );
+
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      dir.path().to_str().unwrap(),
+      "--fail-on-slow-ok-ms",
+      "5000",
+    ])
+    .output()
+    .expect("run pageset_progress report --fail-on-slow-ok-ms");
+  assert!(
+    !output.status.success(),
+    "expected non-zero exit for ok page exceeding threshold"
+  );
+  let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
+  assert!(stderr.contains("slow_ok"), "missing offending stem");
+  assert!(
+    stderr.contains("total=6000.00ms"),
+    "missing offending total_ms"
+  );
+  assert!(stderr.contains("hotspot=layout"), "missing offending hotspot");
+}

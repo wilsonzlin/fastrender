@@ -1514,7 +1514,7 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
     let name_len = name.len();
     let Some(prefix) = trimmed.get(..name_len) else {
       return false;
-    }
+    };
     if !prefix.eq_ignore_ascii_case(name) {
       return false;
     }

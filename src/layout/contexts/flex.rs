@@ -33,7 +33,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::flex_cache::{
-  find_layout_cache_fragment, ShardedFlexCache,
+  find_layout_cache_fragment, FlexCacheEntry, ShardedFlexCache,
 };
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutParallelism;
@@ -525,10 +525,7 @@ impl FormattingContext for FlexFormattingContext {
       .with_parallelism(self.parallelism),
     );
     let this = self.clone();
-    let mut pass_cache: HashMap<
-      u64,
-      HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>,
-    > = HashMap::new();
+    let mut pass_cache: HashMap<u64, FlexCacheEntry> = HashMap::new();
     let compute_timer = flex_profile::timer();
     let log_root = toggles.truthy("FASTR_LOG_FLEX_ROOT");
     if log_root {

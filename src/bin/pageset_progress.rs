@@ -433,6 +433,10 @@ struct ReportArgs {
   /// Exit non-zero when ok entries have `total_ms` but no per-stage timings (all stage buckets are zero)
   #[arg(long)]
   fail_on_missing_stage_timings: bool,
+
+  /// Exit non-zero when ok entries exceed this total render time threshold (ms)
+  #[arg(long, value_name = "MS")]
+  fail_on_slow_ok_ms: Option<f64>,
 }
 
 #[derive(Args, Debug)]
@@ -3284,11 +3288,14 @@ const REPORT_OFFENDING_STEMS_LIMIT: usize = 25;
 struct ReportError {
   missing_stages: Vec<String>,
   missing_stage_timings: Vec<String>,
+  slow_ok: Vec<String>,
 }
 
 impl ReportError {
   fn is_empty(&self) -> bool {
-    self.missing_stages.is_empty() && self.missing_stage_timings.is_empty()
+    self.missing_stages.is_empty()
+      && self.missing_stage_timings.is_empty()
+      && self.slow_ok.is_empty()
   }
 }
 
@@ -3299,6 +3306,7 @@ fn evaluate_report_checks(
   let mut error = ReportError {
     missing_stages: Vec::new(),
     missing_stage_timings: Vec::new(),
+    slow_ok: Vec::new(),
   };
 
   if args.fail_on_missing_stages {
@@ -3324,6 +3332,20 @@ fn evaluate_report_checks(
     }
   }
 
+  if let Some(threshold_ms) = args.fail_on_slow_ok_ms {
+    for entry in progresses {
+      if entry.progress.status != ProgressStatus::Ok {
+        continue;
+      }
+      let Some(total_ms) = entry.progress.total_ms else {
+        continue;
+      };
+      if total_ms > threshold_ms {
+        error.slow_ok.push(entry.stem.clone());
+      }
+    }
+  }
+
   if error.is_empty() {
     return Ok(());
   }
@@ -3332,6 +3354,8 @@ fn evaluate_report_checks(
   error.missing_stages.dedup();
   error.missing_stage_timings.sort();
   error.missing_stage_timings.dedup();
+  error.slow_ok.sort();
+  error.slow_ok.dedup();
 
   Err(error)
 }
@@ -3350,6 +3374,34 @@ fn eprint_offending_stems(stems: &[String]) {
   }
 }
 
+fn eprint_offending_slow_ok(progresses: &[LoadedProgress], stems: &[String]) {
+  let mut offenders: Vec<(String, f64, String)> = stems
+    .iter()
+    .filter_map(|stem| {
+      let entry = progresses.iter().find(|p| &p.stem == stem)?;
+      Some((
+        stem.clone(),
+        entry.progress.total_ms.unwrap_or(0.0),
+        normalize_hotspot(&entry.progress.hotspot),
+      ))
+    })
+    .collect();
+  offenders.sort_by(|(a_stem, a_ms, _), (b_stem, b_ms, _)| {
+    b_ms.total_cmp(a_ms).then_with(|| a_stem.cmp(b_stem))
+  });
+  let shown = offenders.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+  for (stem, total_ms, hotspot) in offenders.iter().take(shown) {
+    eprintln!("  {stem} total={total_ms:.2}ms hotspot={hotspot}");
+  }
+  if offenders.len() > shown {
+    eprintln!(
+      "  {} and {} more",
+      PROGRESS_NOTE_ELLIPSIS,
+      offenders.len() - shown
+    );
+  }
+}
+
 fn report(args: ReportArgs) -> io::Result<()> {
   if args.fail_on_regression && args.compare.is_none() {
     eprintln!("--fail-on-regression requires --compare");
@@ -3358,6 +3410,12 @@ fn report(args: ReportArgs) -> io::Result<()> {
   if args.regression_threshold_percent < 0.0 {
     eprintln!("regression threshold must be >= 0");
     std::process::exit(2);
+  }
+  if let Some(ms) = args.fail_on_slow_ok_ms {
+    if ms < 0.0 {
+      eprintln!("--fail-on-slow-ok-ms must be >= 0");
+      std::process::exit(2);
+    }
   }
 
   let progresses = read_progress_dir(&args.progress_dir)?;
@@ -4109,6 +4167,20 @@ fn report(args: ReportArgs) -> io::Result<()> {
         err.missing_stage_timings.len()
       );
       eprint_offending_stems(&err.missing_stage_timings);
+      printed_any = true;
+    }
+    if !err.slow_ok.is_empty() {
+      if printed_any {
+        eprintln!();
+      }
+      let threshold_ms = args
+        .fail_on_slow_ok_ms
+        .expect("slow_ok gate should only run when threshold is set");
+      eprintln!(
+        "Failing due to {} ok page(s) exceeding {threshold_ms}ms:",
+        err.slow_ok.len()
+      );
+      eprint_offending_slow_ok(&progresses, &err.slow_ok);
     }
     std::process::exit(1);
   }
@@ -5225,6 +5297,7 @@ mod tests {
       verbose: false,
       fail_on_missing_stages: false,
       fail_on_missing_stage_timings: false,
+      fail_on_slow_ok_ms: None,
     }
   }
 

@@ -160,6 +160,17 @@ struct PagesetDiffArgs {
   )]
   no_fail_on_missing_stage_timings: bool,
 
+  /// Exit non-zero when ok pages exceed this total_ms threshold (ms)
+  ///
+  /// When `--fail-on-regression` is set, this gate defaults to 5000ms unless explicitly disabled
+  /// with `--no-fail-on-slow-ok`.
+  #[arg(long, value_name = "MS")]
+  fail_on_slow_ok_ms: Option<u64>,
+
+  /// Disable the implicit `--fail-on-slow-ok-ms=5000` gate enabled by `--fail-on-regression`
+  #[arg(long = "no-fail-on-slow-ok", conflicts_with = "fail_on_slow_ok_ms")]
+  no_fail_on_slow_ok: bool,
+
   #[command(flatten)]
   pageset: PagesetArgs,
 }
@@ -624,6 +635,15 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
   let fail_on_missing_stage_timings = (args.fail_on_missing_stage_timings
     || args.fail_on_regression)
     && !args.no_fail_on_missing_stage_timings;
+  let fail_on_slow_ok_ms = if args.no_fail_on_slow_ok {
+    None
+  } else if let Some(ms) = args.fail_on_slow_ok_ms {
+    Some(ms)
+  } else if args.fail_on_regression {
+    Some(5000)
+  } else {
+    None
+  };
 
   let mut cmd = Command::new("cargo");
   cmd
@@ -645,18 +665,23 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
   if fail_on_missing_stage_timings {
     cmd.arg("--fail-on-missing-stage-timings");
   }
+  if let Some(ms) = fail_on_slow_ok_ms {
+    cmd.arg("--fail-on-slow-ok-ms").arg(ms.to_string());
+  }
 
   print_command(&cmd);
   let status = cmd
     .status()
     .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
   if !status.success() {
-    if status.code() == Some(2) && (fail_on_missing_stages || fail_on_missing_stage_timings) {
+    if status.code() == Some(2)
+      && (fail_on_missing_stages || fail_on_missing_stage_timings || fail_on_slow_ok_ms.is_some())
+    {
       bail!(
         "pageset_progress report failed with status {status}. \
          If the error above mentions an unexpected argument, ensure pageset_progress includes \
-         the report diagnostic gates (Task 44) or re-run with \
-         --no-fail-on-missing-stages/--no-fail-on-missing-stage-timings."
+         the report diagnostic gates or re-run with \
+         --no-fail-on-missing-stages/--no-fail-on-missing-stage-timings/--no-fail-on-slow-ok."
       );
     }
     bail!("command failed with status {status}");
