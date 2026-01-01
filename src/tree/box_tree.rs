@@ -693,6 +693,19 @@ pub struct BoxNode {
   pub first_letter_style: Option<Arc<ComputedStyle>>,
 }
 
+impl Drop for BoxNode {
+  fn drop(&mut self) {
+    if self.children.is_empty() {
+      return;
+    }
+
+    let mut stack: Vec<BoxNode> = std::mem::take(&mut self.children);
+    while let Some(mut node) = stack.pop() {
+      stack.append(&mut node.children);
+    }
+  }
+}
+
 impl BoxNode {
   /// Creates a new block box
   ///

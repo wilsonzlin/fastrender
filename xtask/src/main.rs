@@ -12,6 +12,7 @@ use walkdir::WalkDir;
 
 mod import_page_fixture;
 mod recapture_page_fixtures;
+mod update_pageset_timeout_budgets;
 mod update_pageset_timeouts;
 
 fn main() -> Result<()> {
@@ -30,6 +31,9 @@ fn main() -> Result<()> {
     }
     Commands::UpdatePagesetGuardrails(args) => {
       update_pageset_timeouts::run_update_pageset_timeouts(args)
+    }
+    Commands::UpdatePagesetTimeoutBudgets(args) => {
+      update_pageset_timeout_budgets::run_update_pageset_timeout_budgets(args)
     }
     Commands::PerfSmoke(args) => run_perf_smoke(args),
   }
@@ -68,6 +72,8 @@ enum Commands {
   /// Update `tests/pages/pageset_guardrails.json` based on `progress/pages/*.json`
   #[command(alias = "update-pageset-timeouts")]
   UpdatePagesetGuardrails(update_pageset_timeouts::UpdatePagesetTimeoutsArgs),
+  /// Update `budget_ms` entries in `tests/pages/pageset_timeouts.json` based on offline `perf_smoke` timings
+  UpdatePagesetTimeoutBudgets(update_pageset_timeout_budgets::UpdatePagesetTimeoutBudgetsArgs),
   /// Run the offline perf smoke harness (`perf_smoke` binary) over curated fixtures
   PerfSmoke(PerfSmokeArgs),
 }

@@ -44,7 +44,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 80000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "apnews.com",
@@ -55,7 +55,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 120000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "linkedin.com",
@@ -66,7 +66,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 25000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "techcrunch.com",
@@ -77,7 +77,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 35000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "msnbc.com",
@@ -88,7 +88,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 25000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "foxnews.com",
@@ -99,7 +99,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 7100.0
     },
     {
       "name": "stackoverflow.com",
@@ -110,7 +110,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "cbsnews.com",
@@ -121,7 +121,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 35000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "abcnews.go.com",
@@ -132,7 +132,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 25000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "bbc.com",
@@ -143,7 +143,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 200000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "cnn.com",
@@ -154,7 +154,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 60000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "dailymail.co.uk",
@@ -165,7 +165,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "developer.mozilla.org_en-US_docs_Web_CSS_writing-mode",
@@ -176,7 +176,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "discord.com",
@@ -187,7 +187,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 10000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "dropbox.com",
@@ -198,7 +198,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "ebay.com",
@@ -209,7 +209,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 10000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "espn.com",
@@ -220,7 +220,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "forbes.com",
@@ -231,7 +231,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 25000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "ft.com",
@@ -242,7 +242,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "github.com",
@@ -253,7 +253,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "imdb.com",
@@ -264,7 +264,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 35000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "nationalgeographic.com",
@@ -275,7 +275,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "nbcnews.com",
@@ -286,7 +286,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 15000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "newsweek.com",
@@ -297,7 +297,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "newyorker.com",
@@ -308,7 +308,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 30000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "nytimes.com",
@@ -319,7 +319,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 40000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "sina.com.cn",
@@ -330,7 +330,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 80000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "stackexchange.com",
@@ -341,7 +341,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 11100.0
     },
     {
       "name": "stripe.com",
@@ -352,7 +352,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 40000.0
+      "budget_ms": 16900.0
     },
     {
       "name": "theguardian.com",
@@ -363,7 +363,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 35000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "theverge.com",
@@ -374,7 +374,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 40000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "vogue.com",
@@ -385,7 +385,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "vox.com",
@@ -429,7 +429,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "apple.com",
@@ -440,7 +440,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "developer.apple.com",
@@ -462,7 +462,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "developer.mozilla.org_en-US_docs_Web_CSS_text-combine-upright",
@@ -473,7 +473,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "developer.mozilla.org_en-US_docs_Web_CSS_transform",
@@ -495,7 +495,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 20000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "debian.org",
