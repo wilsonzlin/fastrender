@@ -30,6 +30,7 @@ mod pageset_progress_stage_fields_test;
 mod pageset_progress_stale_progress_test;
 mod pageset_progress_sync_test;
 mod pageset_progress_worker_diagnostics_test;
+mod pageset_progress_worker_abort_overwrites_stale_progress_test;
 mod pageset_progress_worker_fast_exit_test;
 mod pageset_progress_worker_stack_size_test;
 mod pageset_progress_worker_timeout_test;

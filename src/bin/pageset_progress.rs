@@ -5837,9 +5837,8 @@ fn run_queue(
           let exit_str = format_exit_status(exit_summary);
           let entry = running.swap_remove(i);
           let progress_written = progress_sentinel_path(&entry.item.stage_path).exists();
-          let fresh_progress =
-            progress_written.then(|| read_progress(&entry.item.progress_path)).flatten();
-          if let Some(p) = fresh_progress {
+          if progress_written {
+            if let Some(p) = read_progress(&entry.item.progress_path) {
             if p.status != ProgressStatus::Ok {
               let note = if p.auto_notes.trim().is_empty() {
                 p.notes.as_str()
@@ -5850,6 +5849,39 @@ fn run_queue(
               eprintln!(
                 "FAIL {} {:?}: {} (exit: {})",
                 entry.item.cache_stem, p.status, short, exit_str
+              );
+            }
+            } else {
+              // Sentinel says the worker wrote progress, but the file isn't readable.
+              let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
+              let mut progress = PageProgress::new(entry.item.url.clone());
+              progress.status = ProgressStatus::Panic;
+              progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
+              progress.auto_notes = "progress sentinel present but progress file unreadable".to_string();
+              progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
+              if let Some(stage) = heartbeat_stage {
+                ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+                progress.hotspot = stage.hotspot().to_string();
+              }
+              if progress.hotspot.trim().is_empty() {
+                progress.hotspot = "unknown".to_string();
+              }
+              if let Some(tail) = stderr_tail(&entry.item.stderr_path, 2048, 20) {
+                ensure_auto_note_includes(
+                  &mut progress,
+                  &format!(
+                    "stderr tail ({}):\n{}",
+                    entry.item.stderr_path.display(),
+                    tail
+                  ),
+                );
+              }
+              let previous = read_progress(&entry.item.progress_path);
+              let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+              let _ = write_progress(&entry.item.progress_path, &progress);
+              eprintln!(
+                "PANIC {} (sentinel present but progress unreadable, exit: {})",
+                entry.item.cache_stem, exit_str
               );
             }
           } else {
