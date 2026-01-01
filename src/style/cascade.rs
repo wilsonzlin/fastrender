@@ -2834,6 +2834,9 @@ where
   let mut inserted = false;
   for selector in selectors {
     let nested = selector_keys_with_polarity(selector, quirks_mode, polarity);
+    if nested.keys.is_empty() {
+      continue;
+    }
     if nested.keys.len() == 1
       && matches!(nested.keys[0], SelectorKey::Universal)
       && !allow_universal
@@ -2842,6 +2845,23 @@ where
       // guarantees a more specific key (e.g., div:is(:not(.a))).
       continue;
     }
+
+    if nested.required_and && nested.keys.len() > 1 {
+      let mut best = nested.keys[0];
+      let mut best_rank = selector_key_type_rank(best);
+      let mut best_pos = 0usize;
+      for (pos, &key) in nested.keys.iter().enumerate().skip(1) {
+        let rank = selector_key_type_rank(key);
+        if rank < best_rank || (rank == best_rank && pos > best_pos) {
+          best = key;
+          best_rank = rank;
+          best_pos = pos;
+        }
+      }
+      inserted |= push_key(out, best);
+      continue;
+    }
+
     for key in nested.keys {
       inserted |= push_key(out, key);
     }
@@ -8881,6 +8901,104 @@ mod tests {
         candidates.as_slice(),
         &[0usize],
         "selector should match .{cls}"
+      );
+    }
+  }
+
+  #[test]
+  fn rule_index_indexes_is_selector_list_multi_key_branches_under_branch_anchor_keys() {
+    let stylesheet = parse_stylesheet(":is(.a.b, .c.d) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    assert!(
+      index.universal.is_empty(),
+      ":is(.a.b, .c.d) selector should not fall back to the universal bucket"
+    );
+
+    let class_b = selector_bucket_class("b");
+    let class_d = selector_bucket_class("d");
+    assert_eq!(
+      index
+        .by_class
+        .get(&class_b)
+        .expect("class b bucket")
+        .as_slice(),
+      &[0usize]
+    );
+    assert_eq!(
+      index
+        .by_class
+        .get(&class_d)
+        .expect("class d bucket")
+        .as_slice(),
+      &[0usize]
+    );
+
+    // We intentionally index multi-key conjunction branches under a single representative key to
+    // keep union-bucket candidate lists smaller.
+    for cls in ["a", "c"] {
+      let key = selector_bucket_class(cls);
+      let contains = index
+        .by_class
+        .get(&key)
+        .map(|list| list.contains(&0usize))
+        .unwrap_or(false);
+      assert!(
+        !contains,
+        "expected :is(.a.b, .c.d) selector not to be indexed under .{cls}"
+      );
+    }
+
+    for cls in ["a b", "c d"] {
+      let node = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), cls.to_string())],
+        },
+        children: vec![],
+      };
+      let mut candidates = Vec::new();
+      let mut seen = CandidateSet::new(index.selectors.len());
+      let mut stats = CandidateStats::default();
+      let mut merge = CandidateMergeScratch::default();
+      let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+      let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+      let node_keys =
+        node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+      index.selector_candidates(
+        &node,
+        node_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut candidates,
+        &mut seen,
+        &mut stats,
+        &mut merge,
+      );
+      assert_eq!(
+        candidates.as_slice(),
+        &[0usize],
+        "selector should match class=\"{cls}\""
       );
     }
   }
