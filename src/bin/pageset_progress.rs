@@ -1660,6 +1660,23 @@ pub(crate) fn populate_timeout_progress(
   progress.timeout_stage = Some(stage.into());
 }
 
+fn populate_timeout_progress_with_heartbeat(
+  progress: &mut PageProgress,
+  stage: RenderStage,
+  elapsed: Duration,
+  heartbeat_stage: Option<StageHeartbeat>,
+) {
+  populate_timeout_progress(progress, stage, elapsed);
+  let Some(heartbeat_stage) = heartbeat_stage else {
+    return;
+  };
+  ensure_auto_note_includes(progress, &format!("stage: {}", heartbeat_stage.as_str()));
+  if let Some(mapped_stage) = progress_stage_from_heartbeat(heartbeat_stage) {
+    progress.timeout_stage = Some(mapped_stage);
+    progress.hotspot = hotspot_from_progress_stage(mapped_stage).to_string();
+  }
+}
+
 fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let _cleanup_delay_guard = WorkerCleanupDelayGuard::from_env();
   let heartbeat = StageHeartbeatWriter::new(args.stage_path.clone());
@@ -1953,7 +1970,12 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     Ok(Err(err)) => {
       match &err {
         fastrender::Error::Render(RenderError::Timeout { stage, elapsed }) => {
-          populate_timeout_progress(&mut progress, *stage, *elapsed);
+          populate_timeout_progress_with_heartbeat(
+            &mut progress,
+            *stage,
+            *elapsed,
+            heartbeat.last_stage(),
+          );
         }
         _ => {
           progress.status = ProgressStatus::Error;
@@ -7275,6 +7297,26 @@ mod tests {
     assert_eq!(
       progress_stage_from_heartbeat(StageHeartbeat::BoxTree),
       Some(ProgressStage::Cascade)
+    );
+  }
+
+  #[test]
+  fn cooperative_timeout_includes_box_tree_stage_note() {
+    let mut progress = PageProgress::new("https://timeout.test/".to_string());
+
+    populate_timeout_progress_with_heartbeat(
+      &mut progress,
+      RenderStage::Cascade,
+      Duration::from_millis(1500),
+      Some(StageHeartbeat::BoxTree),
+    );
+
+    assert_eq!(progress.status, ProgressStatus::Timeout);
+    assert_eq!(progress.timeout_stage, Some(ProgressStage::Cascade));
+    assert!(
+      progress.auto_notes.contains("stage: box_tree"),
+      "expected box_tree stage note in auto_notes, got: {}",
+      progress.auto_notes
     );
   }
 
