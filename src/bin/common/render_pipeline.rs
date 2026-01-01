@@ -100,13 +100,13 @@ pub fn build_render_configs(surface: &RenderSurface) -> RenderConfigBundle {
 pub fn build_http_fetcher(
   user_agent: &str,
   accept_language: &str,
-  timeout_secs: Option<u64>,
+  timeout_budget: Option<Duration>,
 ) -> HttpFetcher {
   let mut fetcher = HttpFetcher::new()
     .with_user_agent(user_agent.to_string())
     .with_accept_language(accept_language.to_string());
-  if let Some(secs) = timeout_secs {
-    fetcher = fetcher.with_timeout_budget(Duration::from_secs(secs));
+  if let Some(timeout) = timeout_budget {
+    fetcher = fetcher.with_timeout_budget(timeout);
   }
   // CLI knobs for retry behavior without growing the flag surface area.
   // - `FASTR_HTTP_MAX_ATTEMPTS=1` disables retries.

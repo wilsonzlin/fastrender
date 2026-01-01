@@ -265,7 +265,7 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
   let http = Arc::new(build_http_fetcher(
     DEFAULT_USER_AGENT,
     DEFAULT_ACCEPT_LANGUAGE,
-    args.fetch_timeout_secs,
+    args.fetch_timeout_secs.map(std::time::Duration::from_secs),
   ));
   let recording = RecordingFetcher::new(http);
   let (prepared, document_resource) = fetch_document(&recording, &args.url)?;

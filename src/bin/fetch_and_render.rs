@@ -263,7 +263,11 @@ fn try_main(args: Args) -> Result<()> {
     dom_compat_mode: args.compat.dom_compat_mode(),
   });
 
-  let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);
+  let http = build_http_fetcher(
+    &args.user_agent,
+    &args.accept_language,
+    timeout_secs.map(Duration::from_secs),
+  );
   let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
   let memory_config = CachingFetcherConfig {
     honor_http_cache_freshness: honor_http_freshness,

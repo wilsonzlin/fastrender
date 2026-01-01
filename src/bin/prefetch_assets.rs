@@ -1137,7 +1137,11 @@ mod disk_cache_main {
     )
     .with_device_pixel_ratio(args.viewport.dpr)
     .with_env_overrides();
-    let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);
+    let http = build_http_fetcher(
+      &args.user_agent,
+      &args.accept_language,
+      timeout_secs.map(Duration::from_secs),
+    );
     let mut disk_config = args.disk_cache.to_config();
     let lock_stale_after = disk_config.lock_stale_after;
     disk_config.namespace = Some(disk_cache_namespace(

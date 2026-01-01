@@ -255,7 +255,7 @@ fn main() {
   let fetcher = Arc::new(build_http_fetcher(
     &args.user_agent,
     &args.accept_language,
-    timeout_secs,
+    timeout_secs.map(std::time::Duration::from_secs),
   ));
 
   let success = Arc::new(AtomicUsize::new(0));
@@ -625,7 +625,11 @@ mod tests {
     });
 
     let url = format!("http://{}/start", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Some(std::time::Duration::from_secs(5)),
+    );
     let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
@@ -669,7 +673,11 @@ mod tests {
     });
 
     let url = format!("http://{}", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Some(std::time::Duration::from_secs(5)),
+    );
     let result = fetch_page(&fetcher, &url, false);
     assert!(
       result.is_err(),
@@ -707,7 +715,11 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, "es-MX,es;q=0.8", Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      "es-MX,es;q=0.8",
+      Some(std::time::Duration::from_secs(5)),
+    );
     let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
@@ -763,7 +775,11 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Some(std::time::Duration::from_secs(5)),
+    );
     let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
@@ -821,7 +837,11 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Some(std::time::Duration::from_secs(5)),
+    );
     let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
@@ -877,7 +897,11 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Some(std::time::Duration::from_secs(5)),
+    );
     let res = fetch_page(&fetcher, &url, false).expect("fetch succeeds");
     handle.join().unwrap();
 
@@ -916,7 +940,11 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Some(std::time::Duration::from_secs(5)),
+    );
     let err = fetch_page(&fetcher, &url, false).unwrap_err();
     handle.join().unwrap();
 
@@ -961,7 +989,11 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let fetcher = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(5));
+    let fetcher = build_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Some(std::time::Duration::from_secs(5)),
+    );
     let res = fetch_page(&fetcher, &url, true).expect("fetch succeeds with allow flag");
     handle.join().unwrap();
 

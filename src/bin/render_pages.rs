@@ -642,7 +642,11 @@ fn build_render_shared(
   soft_timeout_ms: Option<u64>,
 ) -> RenderShared {
   // Create shared caching fetcher
-  let http = build_http_fetcher(&args.user_agent, &args.accept_language, fetch_timeout_secs);
+  let http = build_http_fetcher(
+    &args.user_agent,
+    &args.accept_language,
+    fetch_timeout_secs.map(Duration::from_secs),
+  );
   let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
   let memory_config = CachingFetcherConfig {
     honor_http_cache_freshness: honor_http_freshness,

@@ -18,9 +18,9 @@ use common::args::{
   LayoutParallelModeArg, ResourceAccessArgs,
 };
 use common::render_pipeline::{
-  build_render_configs, follow_client_redirects, format_error_with_chain, log_layout_parallelism,
-  read_cached_document, render_document, render_document_with_artifacts, PreparedDocument,
-  RenderConfigBundle, RenderSurface, CLI_RENDER_STACK_SIZE,
+  build_http_fetcher, build_render_configs, follow_client_redirects, format_error_with_chain,
+  log_layout_parallelism, read_cached_document, render_document, render_document_with_artifacts,
+  PreparedDocument, RenderConfigBundle, RenderSurface, CLI_RENDER_STACK_SIZE,
 };
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
@@ -785,6 +785,16 @@ fn compute_fetch_timeout(hard_timeout: Duration, soft_timeout_ms: Option<u64>) -
     }
   }
   hard_timeout
+}
+
+fn build_worker_http_fetcher(
+  user_agent: &str,
+  accept_language: &str,
+  fetch_timeout: Duration,
+) -> HttpFetcher {
+  // Use a *total* HTTP timeout budget so pre-render fetches (e.g. client redirect following)
+  // cannot spend `max_attempts × timeout + backoff` wall time outside the render deadline.
+  build_http_fetcher(user_agent, accept_language, Some(fetch_timeout))
 }
 
 fn normalize_hotspot(h: &str) -> String {
@@ -2025,10 +2035,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   ));
   flush_log(&log, &args.log_path);
 
-  let http = HttpFetcher::new()
-    .with_timeout(fetch_timeout)
-    .with_user_agent(args.user_agent.clone())
-    .with_accept_language(args.accept_language.clone());
+  let http = build_worker_http_fetcher(&args.user_agent, &args.accept_language, fetch_timeout);
   let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
   let memory_config = CachingFetcherConfig {
     honor_http_cache_freshness: honor_http_freshness,
@@ -6633,7 +6640,11 @@ mod tests {
   use std::collections::{HashSet, VecDeque};
   use std::fs;
   use std::io;
+  use std::net::{SocketAddr, TcpListener};
   use std::path::{Path, PathBuf};
+  use std::sync::atomic::{AtomicBool, Ordering};
+  use std::sync::Arc;
+  use std::thread::JoinHandle;
   use std::time::Duration;
   use tempfile::tempdir;
 
@@ -6683,6 +6694,81 @@ mod tests {
       set.insert(*status);
     }
     set
+  }
+
+  struct HangingHttpServer {
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+  }
+
+  impl HangingHttpServer {
+    fn start() -> Self {
+      let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+      listener
+        .set_nonblocking(true)
+        .expect("set listener nonblocking");
+      let addr = listener.local_addr().expect("listener addr");
+      let stop = Arc::new(AtomicBool::new(false));
+      let stop_thread = Arc::clone(&stop);
+      let handle = std::thread::spawn(move || {
+        // Hold on to connections so the client times out waiting for a response.
+        let mut connections = Vec::new();
+        while !stop_thread.load(Ordering::Relaxed) {
+          match listener.accept() {
+            Ok((stream, _)) => connections.push(stream),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+              std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(_) => break,
+          }
+        }
+      });
+      Self {
+        addr,
+        stop,
+        handle: Some(handle),
+      }
+    }
+
+    fn url(&self) -> String {
+      format!("http://{}/", self.addr)
+    }
+  }
+
+  impl Drop for HangingHttpServer {
+    fn drop(&mut self) {
+      self.stop.store(true, Ordering::Relaxed);
+      if let Some(handle) = self.handle.take() {
+        let _ = handle.join();
+      }
+    }
+  }
+
+  #[test]
+  fn worker_http_fetcher_uses_total_timeout_budget() {
+    let server = HangingHttpServer::start();
+    let fetcher = build_worker_http_fetcher(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+      Duration::from_millis(60),
+    )
+    // Ensure deterministic retry behavior for this test regardless of env overrides.
+    .with_retry_policy(fastrender::resource::HttpRetryPolicy {
+      max_attempts: 6,
+      backoff_base: Duration::ZERO,
+      backoff_cap: Duration::ZERO,
+      respect_retry_after: false,
+    });
+
+    let err = fetcher
+      .fetch(&server.url())
+      .expect_err("fetch should time out");
+    let msg = err.to_string();
+    assert!(
+      msg.contains("overall HTTP timeout budget exceeded"),
+      "expected timeout budget error, got: {msg}"
+    );
   }
 
   #[test]
