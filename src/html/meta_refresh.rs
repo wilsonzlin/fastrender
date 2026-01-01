@@ -165,15 +165,40 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         }
       }
 
-      if i < lower.len() && (lower.as_bytes()[i] == b'"' || lower.as_bytes()[i] == b'\'') {
+      if i < lower.len()
+        && (lower.as_bytes()[i] == b'"'
+          || lower.as_bytes()[i] == b'\''
+          || lower.as_bytes()[i] == b'`')
+      {
         let quote = lower.as_bytes()[i];
         i += 1;
         let start = i;
-        while i < lower.len() && lower.as_bytes()[i] != quote {
+        let mut has_interpolation = false;
+        while i < lower.len() {
+          let b = lower.as_bytes()[i];
+
+          if quote == b'`' && b == b'$' && lower.as_bytes().get(i + 1) == Some(&b'{') {
+            has_interpolation = true;
+          }
+
+          if b == b'\\' {
+            i += 1;
+            if i < lower.len() {
+              i += 1;
+            }
+            continue;
+          }
+
+          if b == quote {
+            break;
+          }
           i += 1;
         }
         let end = i.min(decoded.len());
         let candidate = decoded[start..end].trim();
+        if quote == b'`' && has_interpolation {
+          continue;
+        }
         if !candidate.is_empty() && candidate.len() <= MAX_REDIRECT_LEN {
           return Some(unescape_js_literal(candidate));
         }
@@ -701,6 +726,30 @@ mod tests {
     assert_eq!(
       extract_js_location_redirect(html),
       Some("https://example.com/self-assign".to_string())
+    );
+  }
+
+  #[test]
+  fn extracts_js_location_backtick_literal() {
+    let html = "<script>window.location = `/backtick`;</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/backtick".to_string())
+    );
+  }
+
+  #[test]
+  fn ignores_js_template_literal_interpolation() {
+    let html = "<script>location = `/next?x=${y}`;</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
+  }
+
+  #[test]
+  fn handles_escaped_quotes_in_js_string_literals() {
+    let html = r#"<script>location.href = "https://example.com/with\"quote";</script>"#;
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("https://example.com/with\"quote".to_string())
     );
   }
 
