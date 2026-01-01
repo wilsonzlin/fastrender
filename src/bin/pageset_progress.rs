@@ -462,10 +462,18 @@ struct ReportArgs {
   /// Exit non-zero when ok entries have `total_ms` but no per-stage timings (all stage buckets are zero)
   #[arg(long)]
   fail_on_missing_stage_timings: bool,
-
+ 
   /// Exit non-zero when ok entries exceed this total render time threshold (ms)
   #[arg(long, value_name = "MS")]
   fail_on_slow_ok_ms: Option<f64>,
+
+  /// Exit non-zero when ok entries have `failure_stage` set (subresource failures despite status=ok)
+  #[arg(long)]
+  fail_on_ok_with_failures: bool,
+
+  /// Exit non-zero when a page was ok with no failures in the baseline but is now ok with `failure_stage` set
+  #[arg(long, requires = "compare")]
+  fail_on_new_ok_failures: bool,
 }
 
 #[derive(Args, Debug)]
@@ -3580,6 +3588,7 @@ struct ReportError {
   missing_stages: Vec<String>,
   missing_stage_timings: Vec<String>,
   slow_ok: Vec<String>,
+  ok_with_failures: Vec<String>,
 }
 
 impl ReportError {
@@ -3587,6 +3596,7 @@ impl ReportError {
     self.missing_stages.is_empty()
       && self.missing_stage_timings.is_empty()
       && self.slow_ok.is_empty()
+      && self.ok_with_failures.is_empty()
   }
 }
 
@@ -3598,6 +3608,7 @@ fn evaluate_report_checks(
     missing_stages: Vec::new(),
     missing_stage_timings: Vec::new(),
     slow_ok: Vec::new(),
+    ok_with_failures: Vec::new(),
   };
 
   if args.fail_on_missing_stages {
@@ -3637,6 +3648,14 @@ fn evaluate_report_checks(
     }
   }
 
+  if args.fail_on_ok_with_failures {
+    for entry in progresses {
+      if entry.progress.status == ProgressStatus::Ok && entry.progress.failure_stage.is_some() {
+        error.ok_with_failures.push(entry.stem.clone());
+      }
+    }
+  }
+
   if error.is_empty() {
     return Ok(());
   }
@@ -3647,6 +3666,8 @@ fn evaluate_report_checks(
   error.missing_stage_timings.dedup();
   error.slow_ok.sort();
   error.slow_ok.dedup();
+  error.ok_with_failures.sort();
+  error.ok_with_failures.dedup();
 
   Err(error)
 }
@@ -3698,6 +3719,10 @@ fn report(args: ReportArgs) -> io::Result<()> {
     eprintln!("--fail-on-regression requires --compare");
     std::process::exit(2);
   }
+  if args.fail_on_new_ok_failures && args.compare.is_none() {
+    eprintln!("--fail-on-new-ok-failures requires --compare");
+    std::process::exit(2);
+  }
   if args.regression_threshold_percent < 0.0 {
     eprintln!("regression threshold must be >= 0");
     std::process::exit(2);
@@ -3719,6 +3744,75 @@ fn report(args: ReportArgs) -> io::Result<()> {
   println!("  panic: {}", status_counts.panic);
   println!("  error: {}", status_counts.error);
   println!();
+
+  let ok_with_failures: Vec<&LoadedProgress> = progresses
+    .iter()
+    .filter(|p| p.progress.status == ProgressStatus::Ok && p.progress.failure_stage.is_some())
+    .collect();
+  println!(
+    "Ok pages with failures (failure_stage set): {}",
+    ok_with_failures.len()
+  );
+  if ok_with_failures.is_empty() {
+    println!("  (none)");
+    println!();
+  } else {
+    let mut stage_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for entry in &ok_with_failures {
+      let stage = entry
+        .progress
+        .failure_stage
+        .expect("failure_stage should be present for ok-with-failures pages");
+      *stage_counts.entry(stage.as_str().to_string()).or_default() += 1;
+    }
+    for label in ["css", "layout", "paint"] {
+      println!("  {label}: {}", stage_counts.get(label).copied().unwrap_or(0));
+    }
+    for (label, count) in stage_counts {
+      if matches!(label.as_str(), "css" | "layout" | "paint") {
+        continue;
+      }
+      println!("  {label}: {count}");
+    }
+
+    let mut ok_with_failures_timed: Vec<&LoadedProgress> = ok_with_failures
+      .iter()
+      .copied()
+      .filter(|p| p.progress.total_ms.is_some())
+      .collect();
+    ok_with_failures_timed.sort_by(|a, b| {
+      let a_total = a.progress.total_ms.unwrap_or(0.0);
+      let b_total = b.progress.total_ms.unwrap_or(0.0);
+      b_total
+        .total_cmp(&a_total)
+        .then_with(|| a.stem.cmp(&b.stem))
+    });
+    let timed_count = ok_with_failures_timed.len();
+    let top_n = args.top.min(timed_count);
+    println!(
+      "Slowest ok pages with failures (top {top_n} of {timed_count} with timings):"
+    );
+    if top_n == 0 {
+      println!("  (none)");
+    } else {
+      for (idx, entry) in ok_with_failures_timed.iter().take(top_n).enumerate() {
+        let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+        let failure_stage = entry
+          .progress
+          .failure_stage
+          .expect("failure_stage should be present for ok-with-failures pages")
+          .as_str();
+        println!(
+          "  {}. {} total={total_ms:.2}ms hotspot={} failure_stage={failure_stage} url={}",
+          idx + 1,
+          entry.stem,
+          normalize_hotspot(&entry.progress.hotspot),
+          entry.progress.url
+        );
+      }
+    }
+    println!();
+  }
 
   let mut timed: Vec<&LoadedProgress> = progresses
     .iter()
@@ -4546,11 +4640,41 @@ fn report(args: ReportArgs) -> io::Result<()> {
     }
     println!();
 
+    let mut new_ok_failures: Vec<String> = Vec::new();
+    if args.fail_on_new_ok_failures {
+      let current_map: HashMap<&str, &LoadedProgress> = progresses
+        .iter()
+        .map(|entry| (entry.stem.as_str(), entry))
+        .collect();
+      let baseline_map: HashMap<&str, &LoadedProgress> =
+        baseline.iter().map(|entry| (entry.stem.as_str(), entry)).collect();
+
+      for (stem, baseline_entry) in baseline_map {
+        let Some(current_entry) = current_map.get(stem) else {
+          continue;
+        };
+        if baseline_entry.progress.status != ProgressStatus::Ok {
+          continue;
+        }
+        if baseline_entry.progress.failure_stage.is_some() {
+          continue;
+        }
+        if current_entry.progress.status != ProgressStatus::Ok {
+          continue;
+        }
+        if current_entry.progress.failure_stage.is_some() {
+          new_ok_failures.push(stem.to_string());
+        }
+      }
+      new_ok_failures.sort();
+      new_ok_failures.dedup();
+    }
+
+    let mut regression_reasons = Vec::new();
     if args.fail_on_regression {
       let mut failed_stems: HashSet<String> = HashSet::new();
-      let mut reasons = Vec::new();
       for (stem, from, to) in &comparison.ok_to_bad {
-        reasons.push(format!(
+        regression_reasons.push(format!(
           "{stem}: {} -> {}",
           status_label(Some(*from)),
           status_label(Some(*to))
@@ -4569,7 +4693,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
         }
         if let Some(percent) = delta.percent_delta {
           if percent > args.regression_threshold_percent {
-            reasons.push(format!(
+            regression_reasons.push(format!(
               "{}: Δtotal={:+.2}ms ({:+.2}%)",
               delta.stem, delta.delta_ms, percent
             ));
@@ -4577,13 +4701,29 @@ fn report(args: ReportArgs) -> io::Result<()> {
           }
         }
       }
-      if !reasons.is_empty() {
+    }
+
+    if !new_ok_failures.is_empty() || !regression_reasons.is_empty() {
+      let mut printed_any = false;
+      if !new_ok_failures.is_empty() {
+        eprintln!(
+          "Failing due to {} ok page(s) gaining failure_stage vs {}:",
+          new_ok_failures.len(),
+          compare_dir.display()
+        );
+        eprint_offending_stems(&new_ok_failures);
+        printed_any = true;
+      }
+      if !regression_reasons.is_empty() {
+        if printed_any {
+          eprintln!();
+        }
         eprintln!("Failing due to regressions vs {}:", compare_dir.display());
-        for reason in reasons {
+        for reason in regression_reasons {
           eprintln!("  {reason}");
         }
-        std::process::exit(1);
       }
+      std::process::exit(1);
     }
   }
 
@@ -4663,6 +4803,17 @@ fn report(args: ReportArgs) -> io::Result<()> {
         err.slow_ok.len()
       );
       eprint_offending_slow_ok(&progresses, &err.slow_ok);
+      printed_any = true;
+    }
+    if !err.ok_with_failures.is_empty() {
+      if printed_any {
+        eprintln!();
+      }
+      eprintln!(
+        "Failing due to {} ok page(s) with failure_stage set:",
+        err.ok_with_failures.len()
+      );
+      eprint_offending_stems(&err.ok_with_failures);
     }
     std::process::exit(1);
   }
@@ -5986,6 +6137,8 @@ mod tests {
       fail_on_missing_stages: false,
       fail_on_missing_stage_timings: false,
       fail_on_slow_ok_ms: None,
+      fail_on_ok_with_failures: false,
+      fail_on_new_ok_failures: false,
     }
   }
 

@@ -18,8 +18,9 @@ fn write_progress(
   status: &str,
   total_ms: Option<f64>,
   stages: (f64, f64, f64, f64, f64),
+  failure_stage: Option<&str>,
 ) {
-  let progress = json!({
+  let mut progress = json!({
     "url": format!("https://{stem}.example.com/"),
     "status": status,
     "total_ms": total_ms,
@@ -35,6 +36,12 @@ fn write_progress(
     "last_good_commit": "",
     "last_regression_commit": ""
   });
+  if let Some(stage) = failure_stage {
+    progress
+      .as_object_mut()
+      .expect("progress is object")
+      .insert("failure_stage".to_string(), json!(stage));
+  }
   let path = dir.join(format!("{stem}.json"));
   fs::write(&path, serde_json::to_string_pretty(&progress).unwrap())
     .unwrap_or_else(|_| panic!("write {}", path.display()));
@@ -159,6 +166,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(100.0),
     (10.0, 10.0, 20.0, 40.0, 20.0),
+    None,
   );
   write_progress(
     baseline.path(),
@@ -166,6 +174,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(80.0),
     (10.0, 10.0, 20.0, 20.0, 20.0),
+    None,
   );
   write_progress(
     baseline.path(),
@@ -173,6 +182,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(300.0),
     (50.0, 50.0, 70.0, 80.0, 50.0),
+    None,
   );
   write_progress(
     baseline.path(),
@@ -180,6 +190,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(120.0),
     (20.0, 20.0, 20.0, 40.0, 20.0),
+    None,
   );
 
   write_progress(
@@ -188,6 +199,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(160.0),
     (10.0, 20.0, 40.0, 60.0, 30.0),
+    None,
   );
   write_progress(
     current.path(),
@@ -195,6 +207,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "timeout",
     Some(5000.0),
     (1000.0, 1000.0, 1000.0, 1000.0, 1000.0),
+    None,
   );
   write_progress(
     current.path(),
@@ -202,6 +215,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(150.0),
     (20.0, 30.0, 30.0, 40.0, 30.0),
+    None,
   );
   write_progress(
     current.path(),
@@ -209,6 +223,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(70.0),
     (20.0, 10.0, 10.0, 20.0, 10.0),
+    None,
   );
 
   let comparison = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
@@ -348,4 +363,66 @@ fn pageset_progress_report_fail_on_slow_ok_ms_exits_non_zero() {
     "missing offending total_ms"
   );
   assert!(stderr.contains("hotspot=layout"), "missing offending hotspot");
+}
+
+#[test]
+fn pageset_progress_report_surfaces_ok_pages_with_failure_stage_and_can_gate() {
+  let dir = tempdir().expect("progress dir");
+  write_progress(
+    dir.path(),
+    "ok_with_failure_stage",
+    "ok",
+    Some(123.0),
+    (10.0, 20.0, 30.0, 40.0, 23.0),
+    Some("paint"),
+  );
+
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      dir.path().to_str().unwrap(),
+      "--top",
+      "5",
+    ])
+    .output()
+    .expect("run pageset_progress report with ok failure stage");
+  assert!(output.status.success(), "expected success for report");
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(
+    stdout.contains("Ok pages with failures (failure_stage set): 1"),
+    "missing ok-with-failures summary section"
+  );
+  assert!(stdout.contains("paint: 1"), "missing failure stage breakdown");
+  assert!(
+    stdout.contains("ok_with_failure_stage total=123.00ms"),
+    "missing ok-with-failures listing"
+  );
+  assert!(
+    stdout.contains("failure_stage=paint"),
+    "missing failure_stage in listing"
+  );
+
+  let failure = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      dir.path().to_str().unwrap(),
+      "--fail-on-ok-with-failures",
+    ])
+    .output()
+    .expect("run pageset_progress report --fail-on-ok-with-failures");
+  assert!(
+    !failure.status.success(),
+    "expected non-zero exit for ok pages with failure_stage when --fail-on-ok-with-failures is set"
+  );
+  let stderr = String::from_utf8(failure.stderr).expect("stderr is utf-8");
+  assert!(
+    stderr.contains("ok page(s) with failure_stage set"),
+    "missing ok-with-failures gate message"
+  );
+  assert!(
+    stderr.contains("ok_with_failure_stage"),
+    "missing offender stem in ok-with-failures gate output"
+  );
 }

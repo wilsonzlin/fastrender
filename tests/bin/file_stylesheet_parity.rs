@@ -1,3 +1,4 @@
+use crate::test_support::net::try_bind_localhost;
 use std::io::Read;
 use std::io::Write;
 use std::process::Command;
