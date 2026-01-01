@@ -448,20 +448,25 @@ fn collect_subgrid_virtual_items<
 
     #[cfg(all(feature = "std", debug_assertions))]
     {
-      eprintln!(
-        "[subgrid-debug] node={:?} row_span={} col_span={} row_explicit={} col_explicit={} items={}",
-        item.node,
-        row_span,
-        col_span,
-        row_explicit,
-        col_explicit,
-        subgrid_items.len()
-      );
-      for (idx, sub_item) in subgrid_items.iter().enumerate() {
+      if std::env::var("FASTR_DEBUG_SUBGRID").is_ok() {
         eprintln!(
-          "  item {idx}: row=({},{}) col=({},{})",
-          sub_item.row.start.0, sub_item.row.end.0, sub_item.column.start.0, sub_item.column.end.0
+          "[subgrid-debug] node={:?} row_span={} col_span={} row_explicit={} col_explicit={} items={}",
+          item.node,
+          row_span,
+          col_span,
+          row_explicit,
+          col_explicit,
+          subgrid_items.len()
         );
+        for (idx, sub_item) in subgrid_items.iter().enumerate() {
+          eprintln!(
+            "  item {idx}: row=({},{}) col=({},{})",
+            sub_item.row.start.0,
+            sub_item.row.end.0,
+            sub_item.column.start.0,
+            sub_item.column.end.0
+          );
+        }
       }
     }
 

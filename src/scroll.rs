@@ -563,12 +563,14 @@ fn collect_scroll_metadata(
   stack: &mut Vec<PendingContainer>,
   metadata: &mut ScrollMetadata,
   root_viewport: Size,
+  viewport_container: Option<Option<usize>>,
 ) {
   let style = node.style.clone();
 
   let mut pushed = false;
   if let Some(style) = style.as_ref() {
-    let uses_viewport_scroll = stack.is_empty();
+    let uses_viewport_scroll =
+      stack.is_empty() && viewport_container == Some(fragment_box_id(node));
     let viewport = if uses_viewport_scroll {
       root_viewport
     } else {
@@ -596,7 +598,14 @@ fn collect_scroll_metadata(
 
   for child in node.children_mut() {
     let child_origin = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
-    collect_scroll_metadata(child, child_origin, stack, metadata, root_viewport);
+    collect_scroll_metadata(
+      child,
+      child_origin,
+      stack,
+      metadata,
+      root_viewport,
+      viewport_container,
+    );
   }
 
   if pushed {
@@ -626,10 +635,18 @@ fn merge_containers(containers: Vec<ScrollSnapContainer>) -> Vec<ScrollSnapConta
         existing.uses_viewport_scroll,
         container.uses_viewport_scroll
       );
-      debug_assert_eq!(existing.strictness, container.strictness);
-      debug_assert_eq!(existing.behavior, container.behavior);
-      debug_assert_eq!(existing.snap_x, container.snap_x);
-      debug_assert_eq!(existing.snap_y, container.snap_y);
+      existing.strictness = match (existing.strictness, container.strictness) {
+        (ScrollSnapStrictness::Mandatory, _) | (_, ScrollSnapStrictness::Mandatory) => {
+          ScrollSnapStrictness::Mandatory
+        }
+        _ => ScrollSnapStrictness::Proximity,
+      };
+      existing.behavior = match (existing.behavior, container.behavior) {
+        (ScrollBehavior::Smooth, _) | (_, ScrollBehavior::Smooth) => ScrollBehavior::Smooth,
+        _ => ScrollBehavior::Auto,
+      };
+      existing.snap_x |= container.snap_x;
+      existing.snap_y |= container.snap_y;
       existing.viewport = Size::new(
         existing.viewport.width.max(container.viewport.width),
         existing.viewport.height.max(container.viewport.height),
@@ -662,6 +679,30 @@ fn merge_containers(containers: Vec<ScrollSnapContainer>) -> Vec<ScrollSnapConta
 
 /// Computes scrollable overflow areas and snap target lists for a fragment tree.
 pub(crate) fn build_scroll_metadata(tree: &mut FragmentTree) -> ScrollMetadata {
+  let is_snap_container = |node: &FragmentNode| {
+    node
+      .style
+      .as_ref()
+      .map(|style| {
+        let inline_vertical = is_vertical_writing_mode(style.writing_mode);
+        let (snap_x, snap_y) = snap_axis_flags(style.scroll_snap_type.axis, inline_vertical);
+        snap_x || snap_y
+      })
+      .unwrap_or(false)
+  };
+
+  // The viewport scroll snap container is determined by the document's root scrolling element.
+  // This is typically the root fragment, but some pages apply `scroll-snap-type` to the body.
+  // Restricting the viewport entry to these early roots avoids accidentally treating unrelated
+  // element scrollers as viewport-level snap containers (especially across fragmented roots).
+  let viewport_container = if is_snap_container(&tree.root) {
+    Some(fragment_box_id(&tree.root))
+  } else if let Some(child) = tree.root.children.iter().next() {
+    is_snap_container(child).then_some(fragment_box_id(child))
+  } else {
+    None
+  };
+
   annotate_overflow(&mut tree.root);
   for fragment in &mut tree.additional_fragments {
     annotate_overflow(fragment);
@@ -676,6 +717,7 @@ pub(crate) fn build_scroll_metadata(tree: &mut FragmentTree) -> ScrollMetadata {
     &mut stack,
     &mut metadata,
     root_viewport,
+    viewport_container,
   );
 
   for fragment in &mut tree.additional_fragments {
@@ -685,6 +727,7 @@ pub(crate) fn build_scroll_metadata(tree: &mut FragmentTree) -> ScrollMetadata {
       &mut stack,
       &mut metadata,
       root_viewport,
+      viewport_container,
     );
   }
 
@@ -1403,6 +1446,123 @@ mod tests {
     style.scroll_snap_align.inline = inline;
     style.scroll_snap_align.block = block;
     Arc::new(style)
+  }
+
+  #[test]
+  fn merge_containers_combines_flags() {
+    let first = ScrollSnapContainer {
+      box_id: Some(42),
+      viewport: Size::new(100.0, 80.0),
+      strictness: ScrollSnapStrictness::Proximity,
+      behavior: ScrollBehavior::Auto,
+      snap_x: true,
+      snap_y: false,
+      padding_x: (0.0, 2.0),
+      padding_y: (1.0, 0.0),
+      scroll_bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      targets_x: vec![ScrollSnapTarget {
+        position: 1.0,
+        stop: ScrollSnapStop::Normal,
+      }],
+      targets_y: vec![],
+      uses_viewport_scroll: false,
+    };
+
+    let second = ScrollSnapContainer {
+      box_id: Some(42),
+      viewport: Size::new(120.0, 100.0),
+      strictness: ScrollSnapStrictness::Mandatory,
+      behavior: ScrollBehavior::Smooth,
+      snap_x: false,
+      snap_y: true,
+      padding_x: (5.0, 1.0),
+      padding_y: (0.5, 4.0),
+      scroll_bounds: Rect::from_xywh(5.0, 5.0, 10.0, 10.0),
+      targets_x: vec![],
+      targets_y: vec![ScrollSnapTarget {
+        position: 2.0,
+        stop: ScrollSnapStop::Always,
+      }],
+      uses_viewport_scroll: false,
+    };
+
+    let merged = merge_containers(vec![first, second]);
+    assert_eq!(merged.len(), 1);
+    let container = &merged[0];
+    assert_eq!(container.box_id, Some(42));
+    assert_eq!(container.strictness, ScrollSnapStrictness::Mandatory);
+    assert_eq!(container.behavior, ScrollBehavior::Smooth);
+    assert!(container.snap_x);
+    assert!(container.snap_y);
+    assert_eq!(container.viewport, Size::new(120.0, 100.0));
+    assert_eq!(container.padding_x, (5.0, 2.0));
+    assert_eq!(container.padding_y, (1.0, 4.0));
+    assert_eq!(container.scroll_bounds, Rect::from_xywh(0.0, 0.0, 15.0, 15.0));
+    assert_eq!(container.targets_x.len(), 1);
+    assert_eq!(container.targets_y.len(), 1);
+  }
+
+  #[test]
+  fn build_scroll_metadata_does_not_promote_element_scrollers_to_viewport() {
+    let root_style = Arc::new(ComputedStyle::default());
+    let body_style = Arc::new(ComputedStyle::default());
+
+    let mut first_style = ComputedStyle::default();
+    first_style.scroll_snap_type.axis = ScrollSnapAxis::X;
+    first_style.scroll_snap_type.strictness = ScrollSnapStrictness::Mandatory;
+    first_style.scroll_behavior = ScrollBehavior::Smooth;
+    let first_style = Arc::new(first_style);
+
+    let mut second_style = ComputedStyle::default();
+    second_style.scroll_snap_type.axis = ScrollSnapAxis::X;
+    second_style.scroll_snap_type.strictness = ScrollSnapStrictness::Mandatory;
+    second_style.scroll_behavior = ScrollBehavior::Auto;
+    let second_style = Arc::new(second_style);
+
+    let mut first_container =
+      FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![], first_style);
+    if let FragmentContent::Block { box_id } = &mut first_container.content {
+      *box_id = Some(10);
+    }
+
+    let mut second_container = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![],
+      second_style,
+    );
+    if let FragmentContent::Block { box_id } = &mut second_container.content {
+      *box_id = Some(11);
+    }
+
+    let root_first = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        vec![first_container],
+        body_style.clone(),
+      )],
+      root_style.clone(),
+    );
+
+    let root_second = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 120.0, 100.0, 100.0),
+      vec![FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        vec![second_container],
+        body_style,
+      )],
+      root_style,
+    );
+
+    let mut tree = FragmentTree::with_viewport(root_first, Size::new(100.0, 100.0));
+    tree.additional_fragments.push(root_second);
+
+    let metadata = build_scroll_metadata(&mut tree);
+    assert_eq!(metadata.containers.len(), 2);
+    assert!(
+      metadata.containers.iter().all(|c| !c.uses_viewport_scroll),
+      "only the root scroll snap container should map to viewport scroll"
+    );
   }
 
   #[test]
