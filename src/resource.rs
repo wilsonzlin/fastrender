@@ -5647,6 +5647,16 @@ mod tests {
       req.contains("sec-fetch-site: same-origin"),
       "expected Sec-Fetch-Site same-origin for font, got: {req}"
     );
+    let expected_origin = format!("origin: http://{}", addr).to_ascii_lowercase();
+    assert!(
+      req.contains(&expected_origin),
+      "expected Origin header for font, got: {req}"
+    );
+    let expected_referer = format!("referer: http://{}/", addr).to_ascii_lowercase();
+    assert!(
+      req.contains(&expected_referer),
+      "expected Referer header for font, got: {req}"
+    );
     assert!(
       req.contains("accept-encoding: gzip, deflate, br"),
       "expected Accept-Encoding for font, got: {req}"
