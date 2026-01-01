@@ -60,6 +60,8 @@ pub use crate::text::face_cache::FaceParseCountGuard;
 pub use crate::text::face_cache::{face_parse_count, reset_face_parse_counter_for_tests};
 
 const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
+const GLYPH_COVERAGE_CACHE_SHARD_TARGET: usize = 32;
+const GLYPH_COVERAGE_CACHE_SHARD_LIMIT: usize = 16;
 type GlyphCoverageCacheHasher = BuildHasherDefault<FxHasher>;
 
 #[derive(Clone, Copy)]
@@ -357,26 +359,60 @@ fn parse_face_with_counter<'a>(
 
 #[derive(Clone)]
 struct GlyphCoverageCache {
-  inner: Arc<Mutex<LruCache<ID, Arc<CachedFace>, GlyphCoverageCacheHasher>>>,
+  inner: Arc<GlyphCoverageCacheInner>,
+}
+
+#[derive(Debug)]
+struct GlyphCoverageCacheInner {
+  shards: Vec<Mutex<LruCache<ID, Arc<CachedFace>, GlyphCoverageCacheHasher>>>,
+  shard_mask: usize,
 }
 
 impl GlyphCoverageCache {
   fn new(capacity: usize) -> Self {
-    let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
-    Self {
-      inner: Arc::new(Mutex::new(LruCache::with_hasher(
+    let capacity = capacity.max(1);
+    let desired_shards =
+      (capacity / GLYPH_COVERAGE_CACHE_SHARD_TARGET).clamp(1, GLYPH_COVERAGE_CACHE_SHARD_LIMIT);
+    let shard_count = desired_shards
+      .next_power_of_two()
+      .min(GLYPH_COVERAGE_CACHE_SHARD_LIMIT)
+      .max(1);
+    let shard_mask = shard_count - 1;
+
+    let base = capacity / shard_count;
+    let rem = capacity % shard_count;
+    let mut shards = Vec::with_capacity(shard_count);
+    for idx in 0..shard_count {
+      let shard_cap = base + usize::from(idx < rem);
+      let cap = NonZeroUsize::new(shard_cap.max(1)).unwrap();
+      shards.push(Mutex::new(LruCache::with_hasher(
         cap,
         GlyphCoverageCacheHasher::default(),
-      ))),
+      )));
     }
+
+    Self {
+      inner: Arc::new(GlyphCoverageCacheInner { shards, shard_mask }),
+    }
+  }
+
+  #[inline]
+  fn shard_index(&self, id: &ID) -> usize {
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    let mut hasher = FxHasher::default();
+    id.hash(&mut hasher);
+    (hasher.finish() as usize) & self.inner.shard_mask
   }
 
   fn get_or_put<F>(&self, id: ID, loader: F) -> Option<Arc<CachedFace>>
   where
     F: FnOnce() -> Option<Arc<CachedFace>>,
   {
+    let shard_idx = self.shard_index(&id);
     {
-      let mut cache = self.inner.lock();
+      let mut cache = self.inner.shards[shard_idx].lock();
       if let Some(face) = cache.get(&id) {
         return Some(face.clone());
       }
@@ -385,7 +421,7 @@ impl GlyphCoverageCache {
     let loaded = loader()?;
 
     {
-      let mut cache = self.inner.lock();
+      let mut cache = self.inner.shards[shard_idx].lock();
       if let Some(face) = cache.get(&id) {
         return Some(face.clone());
       }
@@ -396,7 +432,9 @@ impl GlyphCoverageCache {
   }
 
   fn clear(&self) {
-    self.inner.lock().clear();
+    for shard in &self.inner.shards {
+      shard.lock().clear();
+    }
   }
 }
 
