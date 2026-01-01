@@ -8450,6 +8450,35 @@ impl InlineFormattingContext {
       let font_context = self.font_context.clone();
       let base_factory = self.factory.clone();
       let viewport_size = self.viewport_size;
+      let viewport_cb = ContainingBlock::viewport(viewport_size);
+      let abs_factory = if cb == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(cb)
+      };
+      let fixed_factory = if viewport_cb == cb {
+        abs_factory.clone()
+      } else if viewport_cb == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(viewport_cb)
+      };
+      let mut custom_factories: HashMap<usize, FormattingContextFactory> = HashMap::new();
+      for positioned_child in &positioned_children {
+        let Some(id) = positioned_child.containing_block_id else {
+          continue;
+        };
+        if custom_factories.contains_key(&id) {
+          continue;
+        }
+        let Some(custom_cb) = positioned_containing_blocks.get(&id).copied() else {
+          continue;
+        };
+        if custom_cb == cb || custom_cb == viewport_cb {
+          continue;
+        }
+        custom_factories.insert(id, base_factory.with_positioned_cb(custom_cb));
+      }
       let layout_positioned_child = |positioned_child: &PositionedChild| {
         let PositionedChild {
           node: child,
@@ -8494,7 +8523,15 @@ impl InlineFormattingContext {
         child_style.left = None;
         layout_child.style = Arc::new(child_style);
 
-        let factory = base_factory.with_positioned_cb(child_cb);
+        let factory = if child_cb == viewport_cb {
+          &fixed_factory
+        } else if child_cb == cb {
+          &abs_factory
+        } else if let Some(id) = containing_block_id {
+          custom_factories.get(&id).unwrap_or(&abs_factory)
+        } else {
+          &abs_factory
+        };
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
