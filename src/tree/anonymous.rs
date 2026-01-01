@@ -41,7 +41,7 @@
 //! ```
 
 use crate::error::{RenderStage, Result};
-use crate::render_control::{active_deadline, RenderDeadline};
+use crate::render_control::active_deadline;
 use crate::style::display::Display;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::AnonymousBox;
@@ -67,6 +67,11 @@ use std::sync::Arc;
 pub struct AnonymousBoxCreator;
 
 const ANON_FIXUP_DEADLINE_STRIDE: usize = 256;
+
+enum InlineSplitOutcome {
+  Unchanged(BoxNode),
+  Split(Vec<BoxNode>),
+}
 
 impl AnonymousBoxCreator {
   /// Fixes up a box tree by inserting anonymous boxes
@@ -119,17 +124,7 @@ impl AnonymousBoxCreator {
     deadline_counter: &mut usize,
   ) -> Result<BoxNode> {
     let deadline = active_deadline();
-    let mut box_node = box_node;
-    Self::fixup_tree_with_parent_in_place(&mut box_node, None, deadline_counter, deadline.as_ref())?;
-    Ok(box_node)
-  }
-
-  fn fixup_tree_with_parent_in_place(
-    box_node: &mut BoxNode,
-    parent_style: Option<&Arc<ComputedStyle>>,
-    deadline_counter: &mut usize,
-    deadline: Option<&RenderDeadline>,
-  ) -> Result<()> {
+    let deadline = deadline.as_ref();
     if let Some(deadline) = deadline {
       deadline.check_periodic(
         deadline_counter,
@@ -138,23 +133,59 @@ impl AnonymousBoxCreator {
       )?;
     }
 
-    if box_node.children.is_empty() {
-      return Ok(());
-    }
-    // First, recursively fix children (bottom-up traversal) without moving them out of the Vec.
-    // This avoids per-child placeholder cloning (via `mem::replace`) and keeps the original
-    // children Vec allocation intact.
-    let style = &box_node.style;
-    for child in &mut box_node.children {
-      Self::fixup_tree_with_parent_in_place(child, Some(style), deadline_counter, deadline)?;
+    // Bottom-up fixup needs post-order traversal (children first, then parent). The previous
+    // implementation used recursion, which can overflow the stack on pathological DOMs with
+    // tens of thousands of nodes. Walk the tree iteratively with an explicit stack.
+    struct Frame {
+      node: *mut BoxNode,
+      parent_style: Option<*const Arc<ComputedStyle>>,
+      next_child_idx: usize,
     }
 
-    // Then fix this node's children based on its type
-    let children = std::mem::take(&mut box_node.children);
-    box_node.children =
-      Self::fixup_children(children, &box_node.box_type, parent_style.unwrap_or(&box_node.style));
+    let mut root = box_node;
+    let mut stack = vec![Frame {
+      node: &mut root as *mut BoxNode,
+      parent_style: None,
+      next_child_idx: 0,
+    }];
 
-    Ok(())
+    while let Some(frame) = stack.last_mut() {
+      // SAFETY: `BoxNode`s aren't moved while they have active frames on the stack. We only
+      // replace a node's `children` Vec after all child frames have been popped, so there are
+      // no outstanding pointers into that Vec at mutation time.
+      let node = unsafe { &mut *frame.node };
+
+      if frame.next_child_idx < node.children.len() {
+        let idx = frame.next_child_idx;
+        frame.next_child_idx += 1;
+
+        if let Some(deadline) = deadline {
+          deadline.check_periodic(
+            deadline_counter,
+            ANON_FIXUP_DEADLINE_STRIDE,
+            RenderStage::Cascade,
+          )?;
+        }
+
+        let child_ptr = &mut node.children[idx] as *mut BoxNode;
+        stack.push(Frame {
+          node: child_ptr,
+          parent_style: Some(&node.style as *const Arc<ComputedStyle>),
+          next_child_idx: 0,
+        });
+        continue;
+      }
+
+      let parent_style = match frame.parent_style {
+        Some(style) => unsafe { &*style },
+        None => &node.style,
+      };
+      let children = std::mem::take(&mut node.children);
+      node.children = Self::fixup_children(children, &node.box_type, parent_style);
+      stack.pop();
+    }
+
+    Ok(root)
   }
 
   /// Fixes up children based on parent box type
@@ -226,80 +257,139 @@ impl AnonymousBoxCreator {
       return false;
     }
 
-    node.children.iter().any(|child| {
-      if Self::is_block_level_child(child) {
-        true
-      } else if Self::is_inline_level_child(child) && child.formatting_context().is_none() {
-        Self::inline_contains_block_descendants(child)
-      } else {
-        false
+    let mut stack: Vec<&BoxNode> = Vec::new();
+    stack.push(node);
+    while let Some(current) = stack.pop() {
+      for child in &current.children {
+        if Self::is_block_level_child(child) {
+          return true;
+        }
+        if Self::is_inline_level_child(child)
+          && child.formatting_context().is_none()
+          && !child.children.is_empty()
+        {
+          stack.push(child);
+        }
       }
-    })
+    }
+
+    false
   }
 
-  /// Splits an inline box around any block-level descendants, returning a list of boxes
-  /// that should replace the original inline in its parent.
+  /// Splits an inline box around any block-level descendants, returning either the original
+  /// box (when no split is required) or a list of boxes that should replace the original
+  /// inline in its parent.
   ///
   /// Inline fragments preserve the original inline's style/debug info; block descendants
   /// are lifted into the returned list so callers can place them directly in the block
   /// formatting context.
-  fn split_inline_with_blocks(inline: BoxNode) -> Vec<BoxNode> {
-    let BoxNode {
-      style,
-      starting_style,
-      box_type,
-      debug_info,
-      styled_node_id,
-      children,
-      ..
-    } = inline;
-
-    let mut result = Vec::with_capacity(children.len());
-    let mut inline_run: Vec<BoxNode> = Vec::new();
-
-    let flush_run = |run: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
-      if run.is_empty() {
-        return;
-      }
-      let fragment = Self::clone_inline_fragment(
-        &style,
-        starting_style.clone(),
-        &box_type,
-        debug_info.as_ref(),
-        styled_node_id,
-        std::mem::take(run),
-      );
-      out.push(fragment);
-    };
-
-    for child in children {
-      if Self::is_block_level_child(&child) {
-        flush_run(&mut inline_run, &mut result);
-        result.push(child);
-        continue;
-      }
-
-      if Self::is_inline_level_child(&child)
-        && child.formatting_context().is_none()
-        && Self::inline_contains_block_descendants(&child)
-      {
-        let pieces = Self::split_inline_with_blocks(child);
-        for piece in pieces {
-          if Self::is_block_level_child(&piece) {
-            flush_run(&mut inline_run, &mut result);
-            result.push(piece);
-          } else {
-            inline_run.push(piece);
-          }
-        }
-        continue;
-      }
-
-      inline_run.push(child);
+  fn split_inline_with_blocks(inline: BoxNode) -> InlineSplitOutcome {
+    // Fast path: nothing under this inline can violate the "no blocks inside inlines" rule.
+    // This avoids allocating replacement vectors for the overwhelmingly common case.
+    if inline.formatting_context().is_some()
+      || inline.children.is_empty()
+      || !Self::inline_contains_block_descendants(&inline)
+    {
+      return InlineSplitOutcome::Unchanged(inline);
     }
 
-    flush_run(&mut inline_run, &mut result);
-    result
+    struct Frame {
+      node: BoxNode,
+      children: std::vec::IntoIter<BoxNode>,
+      inline_run: Vec<BoxNode>,
+      out: Vec<BoxNode>,
+      had_block: bool,
+    }
+
+    impl Frame {
+      fn new(mut node: BoxNode) -> Self {
+        let children_vec = std::mem::take(&mut node.children);
+        let inline_run = Vec::with_capacity(children_vec.len());
+        let children = children_vec.into_iter();
+        Self {
+          node,
+          children,
+          inline_run,
+          out: Vec::new(),
+          had_block: false,
+        }
+      }
+
+      fn flush_inline_run(&mut self) {
+        if self.inline_run.is_empty() {
+          return;
+        }
+        let fragment = AnonymousBoxCreator::clone_inline_fragment(
+          &self.node.style,
+          self.node.starting_style.clone(),
+          &self.node.box_type,
+          self.node.debug_info.as_ref(),
+          self.node.styled_node_id,
+          std::mem::take(&mut self.inline_run),
+        );
+        self.out.push(fragment);
+      }
+
+      fn push_piece(&mut self, piece: BoxNode) {
+        if AnonymousBoxCreator::is_block_level_child(&piece) {
+          self.had_block = true;
+          self.flush_inline_run();
+          self.out.push(piece);
+        } else {
+          self.inline_run.push(piece);
+        }
+      }
+    }
+
+    let mut stack: Vec<Frame> = Vec::new();
+    stack.push(Frame::new(inline));
+
+    loop {
+      let Some(top) = stack.last_mut() else {
+        unreachable!("split stack always returns from within the loop");
+      };
+
+      if let Some(child) = top.children.next() {
+        if Self::is_block_level_child(&child) {
+          top.had_block = true;
+          top.flush_inline_run();
+          top.out.push(child);
+          continue;
+        }
+
+        if Self::is_inline_level_child(&child)
+          && child.formatting_context().is_none()
+          && !child.children.is_empty()
+        {
+          stack.push(Frame::new(child));
+          continue;
+        }
+
+        top.inline_run.push(child);
+        continue;
+      }
+
+      let mut finished = stack.pop().expect("frame popped");
+      if finished.had_block {
+        finished.flush_inline_run();
+        let pieces = finished.out;
+        if let Some(parent) = stack.last_mut() {
+          for piece in pieces {
+            parent.push_piece(piece);
+          }
+          continue;
+        }
+        return InlineSplitOutcome::Split(pieces);
+      }
+
+      finished.node.children = finished.inline_run;
+      let node = finished.node;
+      if let Some(parent) = stack.last_mut() {
+        parent.inline_run.push(node);
+        continue;
+      }
+      return InlineSplitOutcome::Unchanged(node);
+    }
   }
 
   /// Splits inline-level children that contain block-level descendants so that block
@@ -323,14 +413,20 @@ impl AnonymousBoxCreator {
       .next()
       .expect("first_split_idx should point at an in-bounds child");
     // We already proved the first child needs splitting.
-    result.extend(Self::split_inline_with_blocks(first_child));
+    match Self::split_inline_with_blocks(first_child) {
+      InlineSplitOutcome::Unchanged(node) => result.push(node),
+      InlineSplitOutcome::Split(pieces) => result.extend(pieces),
+    }
 
     for child in iter {
       if Self::is_inline_level_child(&child)
         && child.formatting_context().is_none()
         && Self::inline_contains_block_descendants(&child)
       {
-        result.extend(Self::split_inline_with_blocks(child));
+        match Self::split_inline_with_blocks(child) {
+          InlineSplitOutcome::Unchanged(node) => result.push(node),
+          InlineSplitOutcome::Split(pieces) => result.extend(pieces),
+        }
       } else {
         result.push(child);
       }
@@ -402,7 +498,13 @@ impl AnonymousBoxCreator {
   fn fixup_block_children(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
     // First, split any inline boxes that illegally contain block-level descendants
     // so the block descendants participate directly in the block formatting context.
-    let children = Self::split_inline_children_with_block_descendants(children);
+    // Fast path: if there are no inline-level children, there can't be any illegal
+    // "inline contains block" situations either.
+    let mut children = children;
+    if !children.iter().any(Self::is_inline_level_child) {
+      return children;
+    }
+    children = Self::split_inline_children_with_block_descendants(children);
 
     // Determine what kind of content we have after splitting
     let mut has_block = false;
@@ -515,8 +617,7 @@ impl AnonymousBoxCreator {
         style.display = Display::Block;
         Arc::new(style)
       });
-      let anon_block =
-        Self::create_anonymous_block(style.clone(), std::mem::take(&mut inline_run));
+      let anon_block = Self::create_anonymous_block(style.clone(), std::mem::take(&mut inline_run));
       result.push(anon_block);
     }
 
@@ -772,6 +873,7 @@ pub(crate) fn inherited_style(parent: &ComputedStyle) -> ComputedStyle {
 mod tests {
   use super::*;
   use crate::style::display::FormattingContextType;
+  use crate::tree::table_fixup::TableStructureFixer;
 
   fn default_style() -> Arc<ComputedStyle> {
     Arc::new(ComputedStyle::default())
@@ -779,6 +881,42 @@ mod tests {
 
   fn fixup_tree(node: BoxNode) -> BoxNode {
     super::AnonymousBoxCreator::fixup_tree(node).expect("anonymous fixup")
+  }
+
+  #[test]
+  fn test_fixup_deep_tree_stack_safe() {
+    // This used to be recursive (both anonymous fixup and table fixup). Deep trees triggered
+    // stack overflows in real-world pages; keep this test large enough to fail with recursion.
+    let style = default_style();
+    let mut node = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    for _ in 0..30_000 {
+      node = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![node]);
+    }
+
+    let fixed = AnonymousBoxCreator::fixup_tree(node).expect("anonymous fixup");
+    let fixed = TableStructureFixer::fixup_tree_internals(fixed).expect("table fixup");
+    assert!(fixed.is_block_level());
+    // Dropping a deeply nested `BoxNode` is itself recursive (via field drop order) and can
+    // overflow the stack. The fixup passes should be stack-safe regardless, so avoid testing
+    // the drop implementation here.
+    std::mem::forget(fixed);
+  }
+
+  #[test]
+  fn test_split_inline_with_blocks_stack_safe() {
+    // Deeply nested inlines containing a block used to recurse both in the "contains block"
+    // detection and in the splitting logic.
+    let style = default_style();
+    let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    let mut inline = BoxNode::new_inline(style.clone(), vec![block]);
+    for _ in 0..20_000 {
+      inline = BoxNode::new_inline(style.clone(), vec![inline]);
+    }
+
+    let root = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![inline]);
+    let fixed = fixup_tree(root);
+    assert_eq!(fixed.children.len(), 1);
+    assert!(fixed.children[0].is_block_level());
   }
 
   #[test]

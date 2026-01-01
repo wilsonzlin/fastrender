@@ -52,7 +52,7 @@
 //! ```
 
 use crate::error::{RenderStage, Result};
-use crate::render_control::check_active_periodic;
+use crate::render_control::{active_deadline, check_active_periodic};
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::types::CaptionSide;
@@ -423,7 +423,7 @@ impl TableStructureFixer {
     parent_style: &ComputedStyle,
     deadline_counter: &mut usize,
   ) -> Result<Vec<BoxNode>> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(children.len());
     let mut loose_cells: Vec<BoxNode> = Vec::new();
     let mut anonymous_row_style: Option<Arc<ComputedStyle>> = None;
     let mut anonymous_cell_style: Option<Arc<ComputedStyle>> = None;
@@ -440,13 +440,10 @@ impl TableStructureFixer {
       } else if Self::is_table_row_group(&child) {
         // Flush loose cells first
         if !loose_cells.is_empty() {
-          let style = anonymous_row_style.get_or_insert_with(|| {
-            Self::inherited_table_style(parent_style, Display::TableRow)
-          });
-          let anon_row = Self::create_anonymous_row_with_style(
-            std::mem::take(&mut loose_cells),
-            style.clone(),
-          );
+          let style = anonymous_row_style
+            .get_or_insert_with(|| Self::inherited_table_style(parent_style, Display::TableRow));
+          let anon_row =
+            Self::create_anonymous_row_with_style(std::mem::take(&mut loose_cells), style.clone());
           result.push(anon_row);
         }
 
@@ -456,13 +453,10 @@ impl TableStructureFixer {
       } else if Self::is_table_row(&child) {
         // Flush loose cells
         if !loose_cells.is_empty() {
-          let style = anonymous_row_style.get_or_insert_with(|| {
-            Self::inherited_table_style(parent_style, Display::TableRow)
-          });
-          let anon_row = Self::create_anonymous_row_with_style(
-            std::mem::take(&mut loose_cells),
-            style.clone(),
-          );
+          let style = anonymous_row_style
+            .get_or_insert_with(|| Self::inherited_table_style(parent_style, Display::TableRow));
+          let anon_row =
+            Self::create_anonymous_row_with_style(std::mem::take(&mut loose_cells), style.clone());
           result.push(anon_row);
         }
         result.push(Self::fixup_row(child, deadline_counter)?);
@@ -472,21 +466,17 @@ impl TableStructureFixer {
       {
         // Caption, colgroup, col - pass through (flush loose cells first)
         if !loose_cells.is_empty() {
-          let style = anonymous_row_style.get_or_insert_with(|| {
-            Self::inherited_table_style(parent_style, Display::TableRow)
-          });
-          let anon_row = Self::create_anonymous_row_with_style(
-            std::mem::take(&mut loose_cells),
-            style.clone(),
-          );
+          let style = anonymous_row_style
+            .get_or_insert_with(|| Self::inherited_table_style(parent_style, Display::TableRow));
+          let anon_row =
+            Self::create_anonymous_row_with_style(std::mem::take(&mut loose_cells), style.clone());
           result.push(anon_row);
         }
         result.push(child);
       } else {
         // Other non-table content - wrap in anonymous cell first
-        let style = anonymous_cell_style.get_or_insert_with(|| {
-          Self::inherited_table_style(parent_style, Display::TableCell)
-        });
+        let style = anonymous_cell_style
+          .get_or_insert_with(|| Self::inherited_table_style(parent_style, Display::TableCell));
         let anon_cell = Self::create_anonymous_cell_with_style(vec![child], style.clone());
         loose_cells.push(anon_cell);
       }
@@ -494,9 +484,8 @@ impl TableStructureFixer {
 
     // Flush remaining loose cells
     if !loose_cells.is_empty() {
-      let style = anonymous_row_style.unwrap_or_else(|| {
-        Self::inherited_table_style(parent_style, Display::TableRow)
-      });
+      let style = anonymous_row_style
+        .unwrap_or_else(|| Self::inherited_table_style(parent_style, Display::TableRow));
       let anon_row = Self::create_anonymous_row_with_style(loose_cells, style);
       result.push(anon_row);
     }
@@ -511,7 +500,7 @@ impl TableStructureFixer {
     }
 
     let children = std::mem::take(&mut group.children);
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(children.len());
     let mut loose_cells: Vec<BoxNode> = Vec::new();
     let mut anonymous_row_style: Option<Arc<ComputedStyle>> = None;
     let mut anonymous_cell_style: Option<Arc<ComputedStyle>> = None;
@@ -526,41 +515,33 @@ impl TableStructureFixer {
         loose_cells.push(child);
       } else if Self::is_table_row(&child) {
         if !loose_cells.is_empty() {
-          let style = anonymous_row_style.get_or_insert_with(|| {
-            Self::inherited_table_style(&group.style, Display::TableRow)
-          });
-          let anon_row = Self::create_anonymous_row_with_style(
-            std::mem::take(&mut loose_cells),
-            style.clone(),
-          );
+          let style = anonymous_row_style
+            .get_or_insert_with(|| Self::inherited_table_style(&group.style, Display::TableRow));
+          let anon_row =
+            Self::create_anonymous_row_with_style(std::mem::take(&mut loose_cells), style.clone());
           result.push(anon_row);
         }
         result.push(Self::fixup_row(child, deadline_counter)?);
       } else {
         // Unexpected content - wrap in anonymous cell then add to loose cells
         if !loose_cells.is_empty() {
-          let style = anonymous_row_style.get_or_insert_with(|| {
-            Self::inherited_table_style(&group.style, Display::TableRow)
-          });
-          let anon_row = Self::create_anonymous_row_with_style(
-            std::mem::take(&mut loose_cells),
-            style.clone(),
-          );
+          let style = anonymous_row_style
+            .get_or_insert_with(|| Self::inherited_table_style(&group.style, Display::TableRow));
+          let anon_row =
+            Self::create_anonymous_row_with_style(std::mem::take(&mut loose_cells), style.clone());
           result.push(anon_row);
         }
 
-        let style = anonymous_cell_style.get_or_insert_with(|| {
-          Self::inherited_table_style(&group.style, Display::TableCell)
-        });
+        let style = anonymous_cell_style
+          .get_or_insert_with(|| Self::inherited_table_style(&group.style, Display::TableCell));
         let anon_cell = Self::create_anonymous_cell_with_style(vec![child], style.clone());
         loose_cells.push(anon_cell);
       }
     }
 
     if !loose_cells.is_empty() {
-      let style = anonymous_row_style.unwrap_or_else(|| {
-        Self::inherited_table_style(&group.style, Display::TableRow)
-      });
+      let style = anonymous_row_style
+        .unwrap_or_else(|| Self::inherited_table_style(&group.style, Display::TableRow));
       let anon_row = Self::create_anonymous_row_with_style(loose_cells, style);
       result.push(anon_row);
     }
@@ -576,7 +557,7 @@ impl TableStructureFixer {
     }
 
     let children = std::mem::take(&mut row.children);
-    let mut fixed_children = Vec::new();
+    let mut fixed_children = Vec::with_capacity(children.len());
     let mut pending_non_cells: Vec<BoxNode> = Vec::new();
     let anonymous_cell_style = Self::inherited_table_style(&row.style, Display::TableCell);
     for child in children {
@@ -631,7 +612,7 @@ impl TableStructureFixer {
     parent_style: &ComputedStyle,
     deadline_counter: &mut usize,
   ) -> Result<Vec<BoxNode>> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(children.len());
     let mut loose_rows: Vec<BoxNode> = Vec::new();
     let anonymous_row_group_style =
       Self::inherited_table_style(parent_style, Display::TableRowGroup);
@@ -742,7 +723,7 @@ impl TableStructureFixer {
     let parent_style = table.style.clone();
     let mut top_captions = Vec::new();
     let mut bottom_captions = Vec::new();
-    let mut grid_children = Vec::new();
+    let mut grid_children = Vec::with_capacity(table.children.len());
 
     for child in std::mem::take(&mut table.children) {
       check_active_periodic(
@@ -789,11 +770,8 @@ impl TableStructureFixer {
     Self::fixup_tree_with_deadline(root, &mut deadline_counter)
   }
 
-  /// Recursively fixes up all table boxes while checking deadlines.
-  pub fn fixup_tree_with_deadline(
-    mut root: BoxNode,
-    deadline_counter: &mut usize,
-  ) -> Result<BoxNode> {
+  /// Fixes up all table boxes while checking deadlines.
+  pub fn fixup_tree_with_deadline(mut root: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
     Self::fixup_tree_tables_in_place_with_deadline(
       &mut root,
       deadline_counter,
@@ -813,9 +791,10 @@ impl TableStructureFixer {
 
   /// Recursively fixes up table boxes without creating wrappers while checking deadlines.
   pub fn fixup_tree_internals_with_deadline(
-    mut root: BoxNode,
+    root: BoxNode,
     deadline_counter: &mut usize,
   ) -> Result<BoxNode> {
+    let mut root = root;
     Self::fixup_tree_tables_in_place_with_deadline(
       &mut root,
       deadline_counter,
@@ -825,26 +804,41 @@ impl TableStructureFixer {
   }
 
   fn fixup_tree_tables_in_place_with_deadline(
-    node: &mut BoxNode,
+    root: &mut BoxNode,
     deadline_counter: &mut usize,
     fix_table: fn(BoxNode, &mut usize) -> Result<BoxNode>,
   ) -> Result<()> {
-    check_active_periodic(
-      deadline_counter,
-      TABLE_FIXUP_DEADLINE_STRIDE,
-      RenderStage::Cascade,
-    )?;
-    if Self::is_table_box(node) {
-      // Table fixup takes ownership of the box. Avoid per-child placeholder cloning by only
-      // creating a cheap placeholder for table nodes that need to be replaced in-place.
-      let placeholder = BoxNode::new_text(node.style.clone(), String::new());
-      let table_node = std::mem::replace(node, placeholder);
-      *node = fix_table(table_node, deadline_counter)?;
-      return Ok(());
-    }
+    // Avoid repeated thread-local lookups by capturing the active deadline once per traversal.
+    let deadline = active_deadline();
+    let deadline = deadline.as_ref();
 
-    for child in &mut node.children {
-      Self::fixup_tree_tables_in_place_with_deadline(child, deadline_counter, fix_table)?;
+    let mut stack = vec![root as *mut BoxNode];
+    while let Some(node_ptr) = stack.pop() {
+      // SAFETY: Nodes are only replaced in-place when they are table roots, and table roots are
+      // treated as traversal leaves (their descendants are handled by `fix_table`). For other
+      // nodes, we never mutate their `children` Vec after pushing pointers into it.
+      let node = unsafe { &mut *node_ptr };
+
+      if let Some(deadline) = deadline {
+        deadline.check_periodic(
+          deadline_counter,
+          TABLE_FIXUP_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        )?;
+      }
+
+      if Self::is_table_box(node) {
+        // Table fixup takes ownership of the box. Avoid per-child placeholder cloning by only
+        // creating a cheap placeholder for table nodes that need to be replaced in-place.
+        let placeholder = BoxNode::new_text(node.style.clone(), String::new());
+        let table_node = std::mem::replace(node, placeholder);
+        *node = fix_table(table_node, deadline_counter)?;
+        continue;
+      }
+
+      for child in node.children.iter_mut().rev() {
+        stack.push(child as *mut BoxNode);
+      }
     }
 
     Ok(())
