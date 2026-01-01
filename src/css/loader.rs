@@ -480,11 +480,10 @@ pub fn absolutize_css_urls_cow<'a>(
             let open_len = parser.slice_from(token_start).len();
             let mut nested_error: Option<RenderError> = None;
             let parse_result = parser.parse_nested_block(|nested| {
-              let nested_capacity_hint = nested.slice_from(nested.position()).len();
               let rewritten = match rewrite_urls_in_parser(
                 nested,
                 base_url,
-                nested_capacity_hint,
+                0,
                 deadline_counter,
               ) {
                 Ok(r) => r,
