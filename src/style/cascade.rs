@@ -3248,6 +3248,9 @@ fn selector_compound_fast_reject_from_iter(
         }
 
         if let Some(shared) = shared {
+          if !shared.is_empty() {
+            allow_single_key = true;
+          }
           for key in shared {
             match key {
               SelectorKey::Id(key) => {
@@ -9964,6 +9967,81 @@ mod tests {
         &mut attr_keys,
       )),
       "fast reject should require shared .a key from :nth-child(... of ...) selector list"
+    );
+    assert!(
+      desc.matches(node_selector_keys(
+        &node_present,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should pass when shared .a key is present"
+    );
+  }
+
+  #[test]
+  fn rightmost_fast_reject_allows_single_key_with_nth_of_selector_list() {
+    let stylesheet =
+      parse_stylesheet(":nth-child(2n of .a.b, .a.c) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    let fast_reject_id = index.selectors[0].fast_reject;
+    assert_ne!(
+      fast_reject_id, 0,
+      "expected fast-reject descriptor for :nth-child(of ...) selector with shared mandatory key"
+    );
+    let desc = index.fast_reject(fast_reject_id).expect("fast reject");
+
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node_missing = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let node_present = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b".to_string())],
+      },
+      children: vec![],
+    };
+
+    assert!(
+      !desc.matches(node_selector_keys(
+        &node_missing,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should require shared .a key from :nth-child(of ...) selector list"
     );
     assert!(
       desc.matches(node_selector_keys(
