@@ -1,17 +1,17 @@
 {
   "url": "https://www.wired.com/",
   "status": "ok",
-  "total_ms": 3911.9069990000003,
+  "total_ms": 3911.906999,
   "stages_ms": {
-    "fetch": 429.9897774974438,
-    "css": 252.99398536477506,
-    "cascade": 2018.9520017845093,
-    "layout": 1209.9712343532722,
-    "paint": 0.0
+    "fetch": 8.12239247513261,
+    "css": 196.21413670053232,
+    "cascade": 2349.047854461219,
+    "layout": 1352.3016030645783,
+    "paint": 6.22101229853769
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=44 (img=44)",
-  "hotspot": "cascade",
+  "hotspot": "box_tree",
   "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "9e60749da12a6145667005001415fc38c583f418",
@@ -31,7 +31,7 @@
         "css_inlining_ms": 83.85,
         "css_parse_ms": 85.497857,
         "cascade_ms": 182.847301,
-        "box_tree_ms": 1844.5612580000002,
+        "box_tree_ms": 1844.561258,
         "layout_ms": 1167.140056,
         "text_fallback_cpu_ms": 8.258650000000008,
         "text_shape_cpu_ms": 15.313560999999984,

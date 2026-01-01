@@ -26,7 +26,8 @@ use common::render_pipeline::{
 };
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
-  RenderArtifacts, RenderCounts, RenderDiagnostics, RenderStats, ResourceDiagnostics, ResourceKind,
+  RenderArtifacts, RenderCounts, RenderDiagnostics, RenderStageTimings, RenderStats,
+  ResourceDiagnostics, ResourceKind,
 };
 use fastrender::debug::snapshot;
 use fastrender::error::{RenderError, RenderStage};
@@ -1556,17 +1557,17 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
     // `migrate` can update committed progress artifacts without requiring a rerender.
     if let Some(total_ms) = progress.total_ms {
       if progress.status == ProgressStatus::Ok {
-        if let Some(stats) = progress
+        let stats = progress
           .diagnostics
           .as_ref()
-          .and_then(|diag| diag.stats.as_ref())
-        {
+          .and_then(|diag| diag.stats.as_ref());
+        if let Some(stats) = stats {
           progress.stages_ms = buckets_from_stats(stats);
         }
         if progress.stages_ms.sum() > 0.0 {
           progress.stages_ms.rescale_to_total(total_ms);
         }
-        progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
+        progress.hotspot = infer_hotspot(stats, &progress.stages_ms).to_string();
       } else if progress.stages_ms.sum() > 0.0 {
         progress.stages_ms.rescale_to_total(total_ms);
       } else if let Some(stage) = progress.timeout_stage.or(progress.failure_stage) {
@@ -1714,6 +1715,55 @@ fn guess_hotspot(buckets: &StageBuckets) -> &'static str {
     }
   }
   best.0
+}
+
+fn guess_hotspot_from_timings(timings: &RenderStageTimings) -> Option<&'static str> {
+  // Use the renderer-reported stage wall timers when available so the hotspot classification
+  // reflects the true dominant subsystem (not the coarse `stages_ms` buckets which intentionally
+  // fold the box tree build into the cascade bucket).
+  let fetch = timings.html_decode_ms.unwrap_or(0.0)
+    + timings.dom_parse_ms.unwrap_or(0.0)
+    + timings.dom_meta_viewport_ms.unwrap_or(0.0)
+    + timings.dom_clone_ms.unwrap_or(0.0)
+    + timings.dom_top_layer_ms.unwrap_or(0.0);
+  let css = timings.css_inlining_ms.unwrap_or(0.0) + timings.css_parse_ms.unwrap_or(0.0);
+  let cascade = timings.cascade_ms.unwrap_or(0.0);
+  let box_tree = timings.box_tree_ms.unwrap_or(0.0);
+  let layout = timings.layout_ms.unwrap_or(0.0);
+  let paint = timings.paint_build_ms.unwrap_or(0.0)
+    + timings.paint_optimize_ms.unwrap_or(0.0)
+    + timings.paint_rasterize_ms.unwrap_or(0.0)
+    + timings.encode_ms.unwrap_or(0.0);
+
+  let mut best = ("unknown", 0.0f64);
+  for (name, value) in [
+    ("fetch", fetch),
+    ("css", css),
+    ("cascade", cascade),
+    ("box_tree", box_tree),
+    ("layout", layout),
+    ("paint", paint),
+  ] {
+    if value > best.1 {
+      best = (name, value);
+    }
+  }
+
+  if best.0 == "unknown" || best.1 <= 0.0 {
+    None
+  } else {
+    Some(best.0)
+  }
+}
+
+fn guess_hotspot_from_stats(stats: &RenderStats) -> Option<&'static str> {
+  guess_hotspot_from_timings(&stats.timings)
+}
+
+fn infer_hotspot(stats: Option<&RenderStats>, buckets: &StageBuckets) -> &'static str {
+  stats
+    .and_then(guess_hotspot_from_stats)
+    .unwrap_or_else(|| guess_hotspot(buckets))
 }
 
 pub(crate) fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
@@ -2138,7 +2188,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
           "Stage timings unavailable (no timeline or render stats); stages_ms left at 0ms.\n",
         );
       }
-      progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
+      progress.hotspot =
+        infer_hotspot(result.diagnostics.stats.as_ref(), &progress.stages_ms).to_string();
       if progress.failure_stage.is_some() || fetch_error_summary.is_some() {
         let mut note = String::from("ok with failures: ");
         let mut parts: Vec<String> = Vec::new();
@@ -2254,7 +2305,11 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     };
   }
   if progress.hotspot.trim().is_empty() {
-    progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
+    let stats = progress
+      .diagnostics
+      .as_ref()
+      .and_then(|d| d.stats.as_ref());
+    progress.hotspot = infer_hotspot(stats, &progress.stages_ms).to_string();
   }
 
   let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
@@ -4712,6 +4767,10 @@ fn report(args: ReportArgs) -> io::Result<()> {
     stat_ranking_ms!("paint.gradient_ms", |stats: &RenderStats| stats
       .paint
       .gradient_ms);
+    stat_ranking_ms!("paint.blur_ms", |stats: &RenderStats| stats.paint.blur_ms);
+    stat_ranking_ms!("paint.image_pixmap_ms", |stats: &RenderStats| stats
+      .paint
+      .image_pixmap_ms);
 
     stat_ranking_count!("layout.taffy_grid_measure_calls", |stats: &RenderStats| {
       stats.layout.taffy_grid_measure_calls
@@ -7252,6 +7311,27 @@ mod tests {
       paint: 4.0,
     };
     assert_eq!(guess_hotspot(&buckets), "fetch");
+  }
+
+  #[test]
+  fn hotspot_inference_uses_box_tree_ms_when_it_dominates() {
+    let stats = RenderStats {
+      timings: RenderStageTimings {
+        cascade_ms: Some(10.0),
+        box_tree_ms: Some(250.0),
+        layout_ms: Some(20.0),
+        ..RenderStageTimings::default()
+      },
+      ..RenderStats::default()
+    };
+    let buckets = StageBuckets {
+      // Legacy `stages_ms.cascade` folds in the box-tree time, so a naive "largest stage bucket"
+      // heuristic would incorrectly report `cascade` here.
+      cascade: 260.0,
+      layout: 20.0,
+      ..StageBuckets::default()
+    };
+    assert_eq!(infer_hotspot(Some(&stats), &buckets), "box_tree");
   }
 
   #[test]

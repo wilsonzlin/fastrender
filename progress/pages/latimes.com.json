@@ -1,13 +1,13 @@
 {
   "url": "https://www.latimes.com/",
   "status": "ok",
-  "total_ms": 1878.4031519999999,
+  "total_ms": 1878.403152,
   "stages_ms": {
-    "fetch": 386.0828629776357,
-    "css": 191.04100214696481,
-    "cascade": 937.2011466581467,
-    "layout": 280.0601078594249,
-    "paint": 84.01803235782747
+    "fetch": 32.688060696143424,
+    "css": 128.48514566844412,
+    "cascade": 1395.19303299967,
+    "layout": 282.265139801015,
+    "paint": 39.77177283472758
   },
   "notes": "",
   "hotspot": "cascade",
@@ -20,7 +20,7 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 22.764339000000003,
-        "dom_html5ever_ms": 13.876562999999999,
+        "dom_html5ever_ms": 13.876563,
         "dom_convert_ms": 6.393698,
         "dom_shadow_attach_ms": 0.5682229999999999,
         "dom_compat_ms": 0.0,
@@ -28,15 +28,15 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 43.398338,
-        "css_parse_ms": 46.149761999999996,
+        "css_parse_ms": 46.149762,
         "cascade_ms": 721.387166,
         "box_tree_ms": 250.99672,
-        "layout_ms": 196.72551900000002,
+        "layout_ms": 196.725519,
         "text_fallback_cpu_ms": 17.178299000000013,
         "text_shape_cpu_ms": 30.60724100000001,
         "paint_build_ms": 12.211884,
         "paint_optimize_ms": 0.06451100000000001,
-        "paint_rasterize_ms": 15.442658999999999,
+        "paint_rasterize_ms": 15.442659,
         "text_rasterize_cpu_ms": 2.190962,
         "encode_ms": null
       },

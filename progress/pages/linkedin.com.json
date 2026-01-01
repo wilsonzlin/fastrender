@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1132.549567,
   "stages_ms": {
-    "fetch": 304.87874486760813,
-    "css": 201.91969332215356,
-    "cascade": 439.8250745631068,
-    "layout": 96.96143689232127,
-    "paint": 88.96461735481023
+    "fetch": 6.062236877229591,
+    "css": 306.8679601763566,
+    "cascade": 693.1652269262682,
+    "layout": 75.98167730311023,
+    "paint": 50.47246571703553
   },
   "notes": "",
   "hotspot": "cascade",
@@ -29,7 +29,7 @@
         "dom_top_layer_ms": null,
         "css_inlining_ms": 102.47461,
         "css_parse_ms": 102.979382,
-        "cascade_ms": 423.25688099999996,
+        "cascade_ms": 423.256881,
         "box_tree_ms": 40.830549,
         "layout_ms": 50.871192,
         "text_fallback_cpu_ms": 2.9140300000000012,

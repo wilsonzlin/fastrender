@@ -3,14 +3,14 @@
   "status": "ok",
   "total_ms": 2114.410147,
   "stages_ms": {
-    "fetch": 730.141630704825,
-    "css": 252.04889169536426,
-    "cascade": 503.0975893760644,
-    "layout": 625.12125916509,
-    "paint": 4.000776058656576
+    "fetch": 29.952412235439677,
+    "css": 306.1759201432404,
+    "cascade": 868.4246624377557,
+    "layout": 814.2102325364563,
+    "paint": 95.64691964710808
   },
   "notes": "",
-  "hotspot": "fetch",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "c8efddc3426ee9e8c4e3df9cb499e3ee1e9bb12b",
@@ -22,22 +22,22 @@
         "dom_parse_ms": 17.859303,
         "dom_html5ever_ms": 13.678547,
         "dom_convert_ms": 3.291837,
-        "dom_shadow_attach_ms": 0.21426499999999998,
+        "dom_shadow_attach_ms": 0.214265,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.006251,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 90.278712,
         "css_parse_ms": 92.34439,
-        "cascade_ms": 376.23537699999997,
+        "cascade_ms": 376.235377,
         "box_tree_ms": 141.749204,
-        "layout_ms": 485.64759200000003,
-        "text_fallback_cpu_ms": 14.965557000000015,
+        "layout_ms": 485.647592,
+        "text_fallback_cpu_ms": 14.965557000000016,
         "text_shape_cpu_ms": 23.454797,
-        "paint_build_ms": 44.923531000000004,
+        "paint_build_ms": 44.923531,
         "paint_optimize_ms": 0.031951,
         "paint_rasterize_ms": 12.094521,
-        "text_rasterize_cpu_ms": 1.2503790000000001,
+        "text_rasterize_cpu_ms": 1.250379,
         "encode_ms": null
       },
       "counts": {
@@ -188,7 +188,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 1.9248640000000001
+        "image_decode_ms": 1.924864
       }
     }
   }

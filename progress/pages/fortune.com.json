@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1134.570825,
   "stages_ms": {
-    "fetch": 237.91000559471365,
-    "css": 139.94706211453746,
-    "cascade": 350.8672771585903,
-    "layout": 236.91038372246697,
-    "paint": 168.93609640969163
+    "fetch": 22.475110668466833,
+    "css": 15.01740062601296,
+    "cascade": 615.4621909247448,
+    "layout": 274.9520870181951,
+    "paint": 206.66403576258028
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,7 +19,7 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 12.101379000000001,
+        "dom_parse_ms": 12.101379,
         "dom_html5ever_ms": 8.055945999999999,
         "dom_convert_ms": 3.267645,
         "dom_shadow_attach_ms": 0.182374,
@@ -28,7 +28,7 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 6.496039000000001,
-        "css_parse_ms": 1.6013570000000001,
+        "css_parse_ms": 1.601357,
         "cascade_ms": 297.073979,
         "box_tree_ms": 34.783791,
         "layout_ms": 148.254414,

@@ -1,13 +1,13 @@
 {
   "url": "https://techcrunch.com/",
   "status": "ok",
-  "total_ms": 2890.8540199999998,
+  "total_ms": 2890.85402,
   "stages_ms": {
-    "fetch": 483.9755605949498,
-    "css": 284.98560902801796,
-    "cascade": 876.9557162020061,
-    "layout": 775.960816160498,
-    "paint": 468.9763180145278
+    "fetch": 10.684331151587703,
+    "css": 233.1921888322179,
+    "cascade": 1221.1457901593446,
+    "layout": 880.5257809707102,
+    "paint": 545.3059288861398
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=1 (img=1)",

@@ -153,6 +153,14 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains(
     "1. stats_ok paint.gradient_ms=45.67ms total=1800.00ms hotspot=layout url=https://stats.test/"
   ));
+  assert!(stdout.contains("Top paint.blur_ms (top 1 of 1 with stats):"));
+  assert!(stdout.contains(
+    "1. stats_ok paint.blur_ms=12.34ms total=1800.00ms hotspot=layout url=https://stats.test/"
+  ));
+  assert!(stdout.contains("Top paint.image_pixmap_ms (top 1 of 1 with stats):"));
+  assert!(stdout.contains(
+    "1. stats_ok paint.image_pixmap_ms=56.78ms total=1800.00ms hotspot=layout url=https://stats.test/"
+  ));
   assert!(stdout.contains("Top layout.taffy_grid_measure_calls (top 1 of 1 with stats):"));
   assert!(stdout.contains(
     "1. stats_ok layout.taffy_grid_measure_calls=9012 total=1800.00ms hotspot=layout url=https://stats.test/"

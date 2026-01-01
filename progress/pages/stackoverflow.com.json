@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1335.250664,
   "stages_ms": {
-    "fetch": 141.02647462471907,
-    "css": 100.018776329588,
-    "cascade": 648.1216706157302,
-    "layout": 190.0356750262172,
-    "paint": 256.0480674037453
+    "fetch": 8.038710280193266,
+    "css": 52.38318196151208,
+    "cascade": 853.321524254368,
+    "layout": 188.99628595399736,
+    "paint": 232.51096154992933
   },
   "notes": "No longer a layout timeout after the float sweep event-heap refactor (see docs/notes/layout-timeouts-profiling.md). Now renders under 5s; current largest stage is cascade.",
   "hotspot": "cascade",
@@ -28,7 +28,7 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 38.704550999999995,
-        "css_parse_ms": 0.9368519999999999,
+        "css_parse_ms": 0.936852,
         "cascade_ms": 612.466633,
         "box_tree_ms": 33.291436,
         "layout_ms": 143.024491,

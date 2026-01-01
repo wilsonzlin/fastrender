@@ -11,7 +11,7 @@
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=1 (img=1)",
-  "hotspot": "cascade",
+  "hotspot": "box_tree",
   "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",

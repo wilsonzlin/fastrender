@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 4587.6832030000005,
   "stages_ms": {
-    "fetch": 397.9725184816914,
-    "css": 285.98025197428075,
-    "cascade": 336.97673047319097,
-    "layout": 3447.7619189067136,
-    "paint": 118.99178316412382
+    "fetch": 10.784406471255831,
+    "css": 222.01727626998135,
+    "cascade": 389.40800098655876,
+    "layout": 3803.4592929686155,
+    "paint": 162.01422630358886
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,7 +19,7 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 9.599167000000001,
+        "dom_parse_ms": 9.599167,
         "dom_html5ever_ms": 6.891125,
         "dom_convert_ms": 2.221791,
         "dom_shadow_attach_ms": 0.058981000000000006,
@@ -27,10 +27,10 @@
         "dom_meta_viewport_ms": 0.003561,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
-        "css_inlining_ms": 90.27109399999999,
+        "css_inlining_ms": 90.271094,
         "css_parse_ms": 107.41911,
         "cascade_ms": 232.702275,
-        "box_tree_ms": 114.03716999999999,
+        "box_tree_ms": 114.03717,
         "layout_ms": 3386.7033060000003,
         "text_fallback_cpu_ms": 30.776558999999985,
         "text_shape_cpu_ms": 29.607513000000065,

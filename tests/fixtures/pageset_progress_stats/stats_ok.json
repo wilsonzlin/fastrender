@@ -90,7 +90,9 @@
         "display_items": 800,
         "optimized_items": 500,
         "culled_items": 120,
-        "gradient_ms": 45.67
+        "gradient_ms": 45.67,
+        "image_pixmap_ms": 56.78,
+        "blur_ms": 12.34
       },
       "resources": {
         "fetch_counts": {

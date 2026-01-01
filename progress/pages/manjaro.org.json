@@ -3,14 +3,14 @@
   "status": "ok",
   "total_ms": 1882.132253,
   "stages_ms": {
-    "fetch": 408.02867121360254,
-    "css": 668.0469420850159,
-    "cascade": 744.0522828012752,
-    "layout": 62.004356900106266,
-    "paint": 0.0
+    "fetch": 1.1968353706951669,
+    "css": 1003.0591549490705,
+    "cascade": 768.0267982263197,
+    "layout": 70.51596181326569,
+    "paint": 39.3335026406486
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "css",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -27,8 +27,8 @@
         "dom_meta_viewport_ms": 0.016390000000000002,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
-        "css_inlining_ms": 471.77695400000005,
-        "css_parse_ms": 471.97927899999996,
+        "css_inlining_ms": 471.7769540000001,
+        "css_parse_ms": 471.979279,
         "cascade_ms": 110.364381,
         "box_tree_ms": 612.255092,
         "layout_ms": 66.34691299999999,
@@ -37,7 +37,7 @@
         "paint_build_ms": 21.284432,
         "paint_optimize_ms": 0.01381,
         "paint_rasterize_ms": 15.709783000000002,
-        "text_rasterize_cpu_ms": 0.9849850000000001,
+        "text_rasterize_cpu_ms": 0.984985,
         "encode_ms": null
       },
       "counts": {

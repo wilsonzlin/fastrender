@@ -3,14 +3,14 @@
   "status": "ok",
   "total_ms": 765.832261,
   "stages_ms": {
-    "fetch": 247.94569285639687,
-    "css": 159.96496313315927,
-    "cascade": 170.96255434856397,
-    "layout": 161.96452517232376,
-    "paint": 24.994525489556136
+    "fetch": 7.857561565218122,
+    "css": 10.788271620173804,
+    "cascade": 404.63351133212467,
+    "layout": 293.329192920433,
+    "paint": 49.22372356205039
   },
   "notes": "Bundled fonts still miss some homepage scripts; remaining last-resort samples: U+0525, U+0540, U+0F44, U+0F62 U+0FAB U+0F7C, U+12A0, U+121B, U+1EBF, U+1EC7.",
-  "hotspot": "fetch",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,7 +19,7 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.4806500000000002,
+        "dom_parse_ms": 3.48065,
         "dom_html5ever_ms": 2.353634,
         "dom_convert_ms": 0.930121,
         "dom_shadow_attach_ms": 0.033171,
@@ -32,11 +32,11 @@
         "cascade_ms": 131.142064,
         "box_tree_ms": 50.796731,
         "layout_ms": 131.892091,
-        "text_fallback_cpu_ms": 102.99791399999995,
-        "text_shape_cpu_ms": 15.130386999999997,
+        "text_fallback_cpu_ms": 102.99791399999997,
+        "text_shape_cpu_ms": 15.130386999999995,
         "paint_build_ms": 12.829696,
-        "paint_optimize_ms": 0.041641000000000004,
-        "paint_rasterize_ms": 9.261543000000001,
+        "paint_optimize_ms": 0.041641,
+        "paint_rasterize_ms": 9.261543,
         "text_rasterize_cpu_ms": 2.571289000000001,
         "encode_ms": null
       },

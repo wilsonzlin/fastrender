@@ -1,17 +1,17 @@
 {
   "url": "https://www.cnn.com/account/log-in/tv",
   "status": "ok",
-  "total_ms": 984.5539789999999,
+  "total_ms": 984.553979,
   "stages_ms": {
-    "fetch": 443.79895094010146,
-    "css": 268.8781932497462,
-    "cascade": 143.93479489949237,
-    "layout": 109.95019054822335,
-    "paint": 17.991849362436547
+    "fetch": 21.177234828254377,
+    "css": 534.2525285499053,
+    "cascade": 324.9119883396152,
+    "layout": 18.721145767961172,
+    "paint": 85.49108151426385
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=3 (img=3)",
-  "hotspot": "fetch",
+  "hotspot": "css",
   "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "199250cd4a9354e60b8c1617e83d46328f1633e9",
@@ -189,7 +189,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 1.4451939999999999
+        "image_decode_ms": 1.445194
       }
     },
     "fetch_error_summary": {

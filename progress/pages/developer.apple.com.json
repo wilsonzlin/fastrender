@@ -3,15 +3,15 @@
   "status": "ok",
   "total_ms": 2081.969024,
   "stages_ms": {
-    "fetch": 535.9920253909702,
-    "css": 514.9923378290106,
-    "cascade": 241.99639952353505,
-    "layout": 336.9949861133525,
-    "paint": 451.9932751431316
+    "fetch": 37.511366900260704,
+    "css": 860.0044490230208,
+    "cascade": 316.6716974366165,
+    "layout": 331.8898807643144,
+    "paint": 535.8916298757874
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=css fetch_errors=4 (css=4)",
-  "hotspot": "fetch",
+  "hotspot": "css",
   "failure_stage": "css",
   "timeout_stage": null,
   "last_good_commit": "c8efddc3426ee9e8c4e3df9cb499e3ee1e9bb12b",
@@ -169,7 +169,7 @@
         "blur_cache_misses": 1,
         "blur_tiles": 0,
         "blur_calls": 1,
-        "blur_ms": 13.829640000000001,
+        "blur_ms": 13.82964,
         "blur_pixels": 247200,
         "blur_bytes": 988800,
         "blur_cancellations": 0

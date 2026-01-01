@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 2180.60584,
   "stages_ms": {
-    "fetch": 557.8991557634114,
-    "css": 618.8881315726732,
-    "cascade": 376.9318668867492,
-    "layout": 139.97469857863368,
-    "paint": 486.9119871985328
+    "fetch": 37.67324224275646,
+    "css": 1043.0595509815564,
+    "cascade": 429.6499403534673,
+    "layout": 87.19354212248511,
+    "paint": 583.0295642997347
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=css fetch_errors=7 (font=7)",
@@ -28,7 +28,7 @@
         "dom_meta_viewport_ms": 0.01684,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
-        "css_inlining_ms": 431.74898299999995,
+        "css_inlining_ms": 431.7489829999999,
         "css_parse_ms": 476.52625,
         "cascade_ms": 190.833382,
         "box_tree_ms": 183.297126,

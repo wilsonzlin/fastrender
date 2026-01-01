@@ -3,14 +3,14 @@
   "status": "ok",
   "total_ms": 1628.8743459999998,
   "stages_ms": {
-    "fetch": 510.96058367464695,
-    "css": 245.98102462615097,
-    "cascade": 392.9696856832412,
-    "layout": 339.973773873542,
-    "paint": 138.98927814241864
+    "fetch": 14.353959598679255,
+    "css": 445.70664085498134,
+    "cascade": 703.3709228594101,
+    "layout": 337.63342550575913,
+    "paint": 127.80939718117
   },
   "notes": "",
-  "hotspot": "fetch",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "199250cd4a9354e60b8c1617e83d46328f1633e9",
@@ -28,14 +28,14 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 125.476295,
-        "css_parse_ms": 126.77993500000001,
+        "css_parse_ms": 126.779935,
         "cascade_ms": 319.135193,
         "box_tree_ms": 78.95108400000001,
-        "layout_ms": 191.09011900000002,
+        "layout_ms": 191.090119,
         "text_fallback_cpu_ms": 5.444023999999998,
         "text_shape_cpu_ms": 21.24854500000002,
         "paint_build_ms": 48.426425,
-        "paint_optimize_ms": 0.047392000000000004,
+        "paint_optimize_ms": 0.047392,
         "paint_rasterize_ms": 23.862365,
         "text_rasterize_cpu_ms": 2.385156,
         "encode_ms": null
@@ -195,7 +195,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 14.426863000000003
+        "image_decode_ms": 14.426863000000004
       }
     }
   }

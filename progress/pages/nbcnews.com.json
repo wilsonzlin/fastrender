@@ -1,13 +1,13 @@
 {
   "url": "https://www.nbcnews.com/",
   "status": "ok",
-  "total_ms": 1992.7482969999999,
+  "total_ms": 1992.748297,
   "stages_ms": {
-    "fetch": 390.95061923080783,
-    "css": 280.96451151881587,
-    "cascade": 753.9047746803814,
-    "layout": 381.9517558725539,
-    "paint": 184.97663569744105
+    "fetch": 10.530494692829773,
+    "css": 454.05697401162587,
+    "cascade": 1015.3842618046949,
+    "layout": 309.52278604167964,
+    "paint": 203.25378044917002
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=5 (img=5)",
@@ -25,7 +25,7 @@
         "dom_convert_ms": 2.1432,
         "dom_shadow_attach_ms": 0.204845,
         "dom_compat_ms": 0.0,
-        "dom_meta_viewport_ms": 0.009439999999999999,
+        "dom_meta_viewport_ms": 0.00944,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 169.338563,
@@ -34,7 +34,7 @@
         "box_tree_ms": 226.963482,
         "layout_ms": 233.62828700000003,
         "text_fallback_cpu_ms": 8.05026699999998,
-        "text_shape_cpu_ms": 13.622529999999985,
+        "text_shape_cpu_ms": 13.622529999999983,
         "paint_build_ms": 140.819421,
         "paint_optimize_ms": 0.07619200000000001,
         "paint_rasterize_ms": 12.520661,

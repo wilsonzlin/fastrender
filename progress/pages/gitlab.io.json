@@ -1,16 +1,16 @@
 {
   "url": "https://about.gitlab.com/",
   "status": "ok",
-  "total_ms": 1746.6272510000001,
+  "total_ms": 1746.627251,
   "stages_ms": {
-    "fetch": 315.9587182972252,
-    "css": 480.9283145763074,
-    "cascade": 363.49233078441836,
-    "layout": 255.3766631664888,
-    "paint": 330.8712241755603
+    "fetch": 10.449477834418698,
+    "css": 320.38525531128124,
+    "cascade": 685.3336241462845,
+    "layout": 320.2941089463654,
+    "paint": 410.1647847616499
   },
   "notes": "",
-  "hotspot": "css",
+  "hotspot": "box_tree",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
@@ -21,18 +21,18 @@
         "html_decode_ms": null,
         "dom_parse_ms": 6.4822489999999995,
         "dom_html5ever_ms": 4.3672010000000006,
-        "dom_convert_ms": 1.7739800000000001,
+        "dom_convert_ms": 1.77398,
         "dom_shadow_attach_ms": 0.075082,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.0195,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 198.398476,
-        "css_parse_ms": 0.9478019999999999,
+        "css_parse_ms": 0.947802,
         "cascade_ms": 161.13352,
         "box_tree_ms": 265.286563,
         "layout_ms": 199.289566,
-        "text_fallback_cpu_ms": 24.740664000000034,
+        "text_fallback_cpu_ms": 24.74066400000003,
         "text_shape_cpu_ms": 15.28149800000001,
         "paint_build_ms": 4.420302,
         "paint_optimize_ms": 0.037652,
@@ -137,7 +137,7 @@
         "transparent_removed": 0,
         "noop_removed": 28,
         "merged_items": 0,
-        "gradient_ms": 104.37152800000001,
+        "gradient_ms": 104.371528,
         "gradient_pixels": 9113384,
         "image_pixmap_cache_misses": 1,
         "image_pixmap_ms": 0.00151,
@@ -196,7 +196,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 0.20428500000000002
+        "image_decode_ms": 0.204285
       }
     }
   }

@@ -1,13 +1,13 @@
 {
   "url": "https://www.theverge.com/",
   "status": "ok",
-  "total_ms": 2515.0347150000002,
+  "total_ms": 2515.034715,
   "stages_ms": {
-    "fetch": 436.0060181868788,
-    "css": 309.00426518290266,
-    "cascade": 970.0133890854872,
-    "layout": 488.00673595228636,
-    "paint": 312.0043065924454
+    "fetch": 41.920123092801646,
+    "css": 364.89285910279796,
+    "cascade": 1306.7380727588559,
+    "layout": 515.1776402321732,
+    "paint": 286.30601981337117
   },
   "notes": "",
   "hotspot": "cascade",
@@ -24,7 +24,7 @@
         "dom_convert_ms": 9.741876,
         "dom_shadow_attach_ms": 0.87676,
         "dom_compat_ms": 0.0,
-        "dom_meta_viewport_ms": 0.053690999999999996,
+        "dom_meta_viewport_ms": 0.053691,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 135.2608,

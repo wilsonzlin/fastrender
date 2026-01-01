@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 3459.948688,
   "stages_ms": {
-    "fetch": 411.8070184827586,
-    "css": 128.93023475862068,
-    "cascade": 420.46651186206896,
-    "layout": 293.4606089655172,
-    "paint": 2205.2843139310344
+    "fetch": 25.438047552642352,
+    "css": 20.200308518204213,
+    "cascade": 564.2622417000454,
+    "layout": 321.84741427274173,
+    "paint": 2528.2006759563665
   },
   "notes": "",
   "hotspot": "paint",
@@ -20,7 +20,7 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 19.678733,
-        "dom_html5ever_ms": 15.109331000000001,
+        "dom_html5ever_ms": 15.109331,
         "dom_convert_ms": 3.844194,
         "dom_shadow_attach_ms": 0.091222,
         "dom_compat_ms": 0.0,
@@ -137,7 +137,7 @@
         "transparent_removed": 0,
         "noop_removed": 50,
         "merged_items": 0,
-        "gradient_ms": 1224.9625879999999,
+        "gradient_ms": 1224.962588,
         "gradient_pixels": 462633044,
         "image_pixmap_cache_misses": 2,
         "image_pixmap_ms": 0.039351,

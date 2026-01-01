@@ -10,7 +10,7 @@
     "paint": 26.792589013150604
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "box_tree",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "3eee3412c1c4b525b19005a000df4a3f8470e0e6",

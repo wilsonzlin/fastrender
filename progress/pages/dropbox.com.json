@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 2873.578717,
   "stages_ms": {
-    "fetch": 509.92524205636744,
-    "css": 487.92846690883783,
-    "cascade": 322.95265330236606,
-    "layout": 1517.7774851795407,
-    "paint": 34.99486955288796
+    "fetch": 8.966988275707413,
+    "css": 737.5294614227752,
+    "cascade": 365.99528999683446,
+    "layout": 1671.0645226917497,
+    "paint": 90.02245461293316
   },
   "notes": "",
   "hotspot": "layout",
@@ -147,7 +147,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 120.82792799999999,
+        "serial_ms": 120.827928,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,

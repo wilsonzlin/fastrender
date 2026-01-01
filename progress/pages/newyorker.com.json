@@ -3,15 +3,15 @@
   "status": "ok",
   "total_ms": 4466.379314,
   "stages_ms": {
-    "fetch": 398.0338036211375,
-    "css": 154.01307979310346,
-    "cascade": 2716.230679987461,
-    "layout": 335.0284527966861,
-    "paint": 863.0732978016123
+    "fetch": 11.291288515310878,
+    "css": 89.1898817524708,
+    "cascade": 3135.2561202916436,
+    "layout": 321.2818206519452,
+    "paint": 909.3602027886286
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=67 (img=67)",
-  "hotspot": "cascade",
+  "hotspot": "box_tree",
   "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "199250cd4a9354e60b8c1617e83d46328f1633e9",
@@ -33,12 +33,12 @@
         "cascade_ms": 214.125934,
         "box_tree_ms": 2509.483738,
         "layout_ms": 279.098817,
-        "text_fallback_cpu_ms": 11.320306999999973,
+        "text_fallback_cpu_ms": 11.320306999999971,
         "text_shape_cpu_ms": 18.274684000000004,
         "paint_build_ms": 509.468907,
         "paint_optimize_ms": 0.188324,
         "paint_rasterize_ms": 280.307655,
-        "text_rasterize_cpu_ms": 15.131896000000003,
+        "text_rasterize_cpu_ms": 15.131896000000005,
         "encode_ms": null
       },
       "counts": {
@@ -185,7 +185,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 391.19973100000004
+        "image_decode_ms": 391.199731
       }
     },
     "fetch_error_summary": {
