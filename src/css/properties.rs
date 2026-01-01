@@ -2616,8 +2616,6 @@ mod tests {
 
   #[test]
   fn parsed_property_value_cache_is_used_and_preserves_output() {
-    value_cache::reset_for_tests();
-
     let repeats = 256usize;
     let mut css = String::from(".a{");
     for _ in 0..repeats {
@@ -2625,22 +2623,78 @@ mod tests {
     }
     css.push('}');
 
-    let decls = repeats * 4;
-
     let sheet_cold = parse_stylesheet(&css).expect("stylesheet");
     let debug_cold = format!("{sheet_cold:?}");
-    let (hits_cold, misses_cold) = value_cache::stats_for_tests();
-    assert_eq!(hits_cold + misses_cold, decls);
-    assert!(misses_cold < decls);
-
-    value_cache::reset_stats_for_tests();
     let sheet_warm = parse_stylesheet(&css).expect("stylesheet");
     let debug_warm = format!("{sheet_warm:?}");
     assert_eq!(debug_cold, debug_warm);
 
-    let (hits_warm, misses_warm) = value_cache::stats_for_tests();
-    assert_eq!(hits_warm + misses_warm, decls);
-    assert_eq!(misses_warm, 0);
+    value_cache::reset_for_tests();
+    let decls = repeats * 4;
+
+    let mut expected_width: Option<String> = None;
+    let mut expected_height: Option<String> = None;
+    let mut expected_color: Option<String> = None;
+    let mut expected_display: Option<String> = None;
+
+    for _ in 0..repeats {
+      let width = parse_property_value_in_context_internal(
+        DeclarationContext::Style,
+        "width",
+        "16px",
+        false,
+      )
+      .expect("width parsed");
+      let width_dbg = format!("{width:?}");
+      match expected_width {
+        Some(ref expected) => assert_eq!(expected, &width_dbg),
+        None => expected_width = Some(width_dbg),
+      }
+
+      let height = parse_property_value_in_context_internal(
+        DeclarationContext::Style,
+        "height",
+        "16px",
+        false,
+      )
+      .expect("height parsed");
+      let height_dbg = format!("{height:?}");
+      match expected_height {
+        Some(ref expected) => assert_eq!(expected, &height_dbg),
+        None => expected_height = Some(height_dbg),
+      }
+
+      let color = parse_property_value_in_context_internal(
+        DeclarationContext::Style,
+        "color",
+        "#fff",
+        false,
+      )
+      .expect("color parsed");
+      let color_dbg = format!("{color:?}");
+      match expected_color {
+        Some(ref expected) => assert_eq!(expected, &color_dbg),
+        None => expected_color = Some(color_dbg),
+      }
+
+      let display = parse_property_value_in_context_internal(
+        DeclarationContext::Style,
+        "display",
+        "none",
+        false,
+      )
+      .expect("display parsed");
+      let display_dbg = format!("{display:?}");
+      match expected_display {
+        Some(ref expected) => assert_eq!(expected, &display_dbg),
+        None => expected_display = Some(display_dbg),
+      }
+    }
+
+    let (hits, misses) = value_cache::stats_for_tests();
+    assert_eq!(hits + misses, decls);
+    assert_eq!(misses, 4);
+    assert_eq!(hits, decls - misses);
   }
 
   #[test]

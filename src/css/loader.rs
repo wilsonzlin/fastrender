@@ -467,9 +467,9 @@ pub fn absolutize_css_urls_cow<'a>(
         | Token::ParenthesisBlock
         | Token::SquareBracketBlock
         | Token::CurlyBracketBlock => {
+          let open_len = parser.slice_from(token_start).len();
           let mut nested_error: Option<RenderError> = None;
           let parse_result = parser.parse_nested_block(|nested| {
-            let start = nested.position();
             let rewritten = match rewrite_urls_in_parser(nested, base_url, 0, deadline_counter) {
               Ok(r) => r,
               Err(err) => {
@@ -477,15 +477,14 @@ pub fn absolutize_css_urls_cow<'a>(
                 return Err(nested.new_custom_error(()));
               }
             };
-            let original = nested.slice_from(start);
             let changed = matches!(rewritten, Cow::Owned(_));
-            Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, original.len(), changed))
+            Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, changed))
           });
 
           if let Some(err) = nested_error {
             return Err(err);
           }
-          let Ok((inner_rewritten, inner_len, changed)) = parse_result else {
+          let Ok((inner_rewritten, changed)) = parse_result else {
             continue;
           };
           if !changed {
@@ -494,11 +493,7 @@ pub fn absolutize_css_urls_cow<'a>(
 
           let block_text = parser.slice_from(token_start);
           const CLOSING_LEN: usize = 1;
-          if block_text.len() < inner_len + CLOSING_LEN {
-            continue;
-          }
-          let open_len = block_text.len() - inner_len - CLOSING_LEN;
-          if open_len > block_text.len() {
+          if block_text.len() < open_len + CLOSING_LEN {
             continue;
           }
 
@@ -507,9 +502,8 @@ pub fn absolutize_css_urls_cow<'a>(
           let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
           out.push_str(&chunk[..prefix_len]);
 
-          let (open_part, _) = block_text.split_at(open_len);
           let close_part = &block_text[block_text.len() - CLOSING_LEN..];
-          out.push_str(open_part);
+          out.push_str(&block_text[..open_len]);
           out.push_str(inner_rewritten.as_ref());
           out.push_str(close_part);
 
