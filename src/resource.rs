@@ -3637,17 +3637,6 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let mut validators = validators;
     let client = &self.reqwest_client;
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-    {
-      1
-    } else if auto_fallback {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
-    };
     let timeout_budget = if deadline.is_none()
       && self.policy.request_timeout_is_total_budget
       && !self.policy.request_timeout.is_zero()
@@ -3655,6 +3644,17 @@ impl HttpFetcher {
       Some(self.policy.request_timeout)
     } else {
       None
+    };
+    let max_attempts = if deadline
+      .as_ref()
+      .and_then(render_control::RenderDeadline::timeout_limit)
+      .is_some()
+    {
+      1
+    } else if auto_fallback && timeout_budget.is_some() {
+      1
+    } else {
+      self.retry_policy.max_attempts.max(1)
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
