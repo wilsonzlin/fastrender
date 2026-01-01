@@ -84,6 +84,15 @@ def regional_indicator_s_glyph():
   return pen.glyph()
 
 
+def regional_indicator_generic_mark_glyph():
+  pen = TTGlyphPen(None)
+  # A simple plus sign to indicate "some flag/regional indicator" without trying to
+  # perfectly render every flag sequence.
+  rect(pen, 460, 260, 540, 580)
+  rect(pen, 340, 380, 660, 460)
+  return pen.glyph()
+
+
 def flag_stripes_glyph():
   pen = TTGlyphPen(None)
   # Three red stripes (leave implicit white stripes via the background layer).
@@ -109,6 +118,9 @@ def main() -> None:
     "thumb",
     "thumb.layer1",
     "thumb.layer2",
+    "ri_generic",
+    "ri_generic.layer1",
+    "ri_generic.layer2",
     "ri_u",
     "ri_s",
     "flag_us",
@@ -119,16 +131,64 @@ def main() -> None:
 
   fb = FontBuilder(upem, isTTF=True)
   fb.setupGlyphOrder(glyph_order)
-  fb.setupCharacterMap(
-    {
-      0x0020: "space",
-      0x1F600: "grin",
-      0x2764: "heart",
-      0x1F44D: "thumb",
-      0x1F1FA: "ri_u",
-      0x1F1F8: "ri_s",
-    }
-  )
+  cmap = {
+    0x0020: "space",
+    0x1F600: "grin",
+    0x2764: "heart",
+    0x1F44D: "thumb",
+    # Regional indicator letters needed for pageset flags.
+    0x1F1EB: "ri_generic",  # 🇫
+    0x1F1EE: "ri_generic",  # 🇮
+    0x1F1FA: "ri_u",
+    0x1F1F8: "ri_s",
+  }
+  # Pageset-derived emoji (from `bundled_font_coverage`) mapped onto the existing fixture glyphs
+  # so bundled-font runs avoid missing-emoji tofu.
+  for codepoint in [
+    0x1F30E,  # 🌎
+    0x1F381,  # 🎁
+    0x1F382,  # 🎂
+    0x1F386,  # 🎆
+    0x1F389,  # 🎉
+    0x1F38A,  # 🎊
+    0x1F3C6,  # 🏆
+    0x1F3C8,  # 🏈
+    0x1F3DF,  # 🏟
+    0x1F3E0,  # 🏠
+    0x1F414,  # 🐔
+    0x1F41F,  # 🐟
+    0x1F42E,  # 🐮
+    0x1F437,  # 🐷
+    0x1F440,  # 👀
+    0x1F447,  # 👇
+    0x1F44B,  # 👋
+    0x1F45C,  # 👜
+    0x1F4A5,  # 💥
+    0x1F4C5,  # 📅
+    0x1F4CC,  # 📌
+    0x1F4CD,  # 📍
+    0x1F58C,  # 🖌
+    0x1F602,  # 😂
+    0x1F621,  # 😡
+    0x1F62C,  # 😬
+    0x1F62D,  # 😭
+    0x1F644,  # 🙄
+    0x1F680,  # 🚀
+    0x1F914,  # 🤔
+    0x1F929,  # 🤩
+    0x1F92F,  # 🤯
+    0x1F9C3,  # 🧃
+  ]:
+    cmap[codepoint] = "grin"
+  for codepoint in [
+    0x1F4AA,  # 💪
+    0x1F937,  # 🤷
+  ]:
+    cmap[codepoint] = "thumb"
+  cmap[0x1F497] = "heart"  # 💗
+  cmap[0x1F525] = "heart"  # 🔥
+  cmap[0x1F3FB] = "space"  # 🏻 (emoji modifier)
+  fb.setupCharacterMap(cmap)
 
   glyphs = {
     ".notdef": rect_glyph(100, 0, 900, 800),
@@ -144,6 +204,10 @@ def main() -> None:
     "thumb": rect_glyph(0, 0, 0, 0),
     "thumb.layer1": rect_glyph(260, 140, 740, 720),
     "thumb.layer2": thumb_outline_glyph(),
+    # Generic tile used for pageset flags outside 🇺🇸 (e.g. 🇫🇮).
+    "ri_generic": rect_glyph(0, 0, 0, 0),
+    "ri_generic.layer1": rect_glyph(220, 120, 780, 720),
+    "ri_generic.layer2": regional_indicator_generic_mark_glyph(),
     # Regional indicators used for 🇺🇸.
     "ri_u": regional_indicator_u_glyph(),
     "ri_s": regional_indicator_s_glyph(),
@@ -198,6 +262,7 @@ def main() -> None:
       "grin": [("grin.layer1", 0), ("grin.layer2", 1)],
       "heart": [("heart.layer1", 2)],
       "thumb": [("thumb.layer1", 3), ("thumb.layer2", 1)],
+      "ri_generic": [("ri_generic.layer1", 4), ("ri_generic.layer2", 5)],
       "flag_us": [
         ("flag_us.layer1", 4),
         ("flag_us.layer2", 2),
@@ -214,9 +279,9 @@ def main() -> None:
     """
 languagesystem DFLT dflt;
 
-feature liga {
+feature ccmp {
   sub ri_u ri_s by flag_us;
-} liga;
+} ccmp;
 """,
   )
 

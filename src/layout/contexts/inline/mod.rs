@@ -136,7 +136,6 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use unicode_general_category::get_general_category;
 use unicode_segmentation::UnicodeSegmentation;
@@ -3718,22 +3717,12 @@ impl InlineFormattingContext {
   }
 
   fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
-    static METRICS_CACHE: OnceLock<Mutex<HashMap<usize, Option<ScaledMetrics>>>> = OnceLock::new();
-    let cache = METRICS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = style as *const ComputedStyle as usize;
-
-    if let Ok(cache) = cache.lock() {
-      if let Some(cached) = cache.get(&key) {
-        return cached.clone();
-      }
-    }
-
     let italic = matches!(style.font_style, FontStyle::Italic);
     let oblique = matches!(style.font_style, FontStyle::Oblique(_));
     let stretch =
       crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
     let preferred_aspect = preferred_font_aspect(style, &self.font_context);
-    let resolved = self
+    self
       .font_context
       .get_font_full(
         &style.font_family,
@@ -3754,12 +3743,7 @@ impl InlineFormattingContext {
           .metrics()
           .ok()
           .map(|metrics| metrics.scale(used_font_size))
-      });
-
-    if let Ok(mut cache) = cache.lock() {
-      cache.insert(key, resolved.clone());
-    }
-    resolved
+      })
   }
 
   fn compute_strut_metrics(&self, style: &ComputedStyle) -> BaselineMetrics {

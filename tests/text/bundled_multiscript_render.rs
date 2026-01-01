@@ -19,7 +19,9 @@ fn bundled_fonts_render_common_scripts() {
     ("devanagari", "नमस्ते"),
     ("bengali", "বাংলা"),
     ("tamil", "தமிழ்"),
+    ("telugu", "తెలుగు"),
     ("thai", "สวัสดี"),
+    ("myanmar", "မြန်မာ"),
     ("cjk", "界面元素テスト日本語韓国어"),
     ("symbols", "←→↔✓✕★⚠"),
   ];

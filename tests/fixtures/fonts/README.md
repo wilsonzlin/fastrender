@@ -17,19 +17,20 @@ pip install -r tests/fixtures/fonts/requirements.txt
 
 ### Bundled text/script coverage (Noto subsets + math)
 - **Sources:** [Noto Sans families](https://github.com/google/fonts/tree/main/ofl) (OFL, see `Noto-LICENSE-OFL.txt`),
-   [STIX Math v2.0.0](https://github.com/stipub/stixfonts) (OFL, see `STIXTwoMath-OFL.txt`),
-   and `FastRenderEmoji.ttf` (CC0) for color emoji.
+    [STIX Math v2.0.0](https://github.com/stipub/stixfonts) (OFL, see `STIXTwoMath-OFL.txt`),
+    and `FastRenderEmoji.ttf` (CC0) for a tiny COLR emoji fallback used in hermetic runs.
 - **Regeneration:** From the repository root:
   ```bash
   python3 -m venv .venv && . .venv/bin/activate
   pip install -r tests/fixtures/fonts/requirements.txt
   python tests/fixtures/fonts/generate_bundled_noto_subsets.py
+  python tests/fixtures/fonts/generate_fastrender_emoji_font.py
   ```
   (pins deterministic timestamps and instantiates the CJK faces at `wght=400` before subsetting).
 - **Coverage:**
   - `NotoSans-subset.ttf` / `NotoSerif-subset.ttf`: Basic + Extended Latin plus IPA/modifier-letter support
-    (U+0250–02FF, U+1D00–1D7F), combining marks, Greek, Cyrillic, and punctuation (U+2000–206F) for bundled
-    serif/sans fallbacks.
+    (U+0250–02FF, U+1D00–1D7F), Latin Extended Additional (U+1E00–1EFF), Cyrillic Supplement (U+0500–052F),
+    combining marks, Greek, Cyrillic, and punctuation (U+2000–206F) for bundled serif/sans fallbacks.
   - `NotoSansMono-subset.ttf`: ASCII, punctuation, arrows, and box-drawing glyphs for monospace fallback.
   - `NotoSansArabic-subset.ttf`: Arabic + Supplement/Extended ranges, presentation forms, ZWNJ/ZWJ, and combining marks
     (U+0300–036F) for mixed clusters.
@@ -51,6 +52,10 @@ pip install -r tests/fixtures/fonts/requirements.txt
     and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
   - `NotoSansSymbols-subset.ttf` / `NotoSansSymbols2-subset.ttf`: UI arrows, checkmarks, stars, alerts, and related
     symbol glyphs used by fallback chains.
+  - `FastRenderEmoji.ttf`: COLR/CPAL emoji fixture that covers 😀 (U+1F600), ❤ (U+2764), 👍 (U+1F44D), and 🇺🇸
+    (U+1F1FA U+1F1F8 via a GSUB ligature). Pageset-derived emoji codepoints (including the Finland flag regional
+    indicator letters U+1F1EB/U+1F1EE) are mapped onto the fixture glyphs so hermetic runs avoid missing-emoji tofu; see
+    `generate_fastrender_emoji_font.py` for the authoritative list.
   - `STIXTwoMath-Regular.otf`: Math operators and alphanumeric symbols preserved with the `MATH` table intact so math
     layout has a bundled fallback in hermetic runs.
 
@@ -356,13 +361,15 @@ pip install -r tests/fixtures/fonts/requirements.txt
 ### `FastRenderEmoji.ttf`
 - **Source:** Generated in-repo with `fontTools` 4.61.1 via `generate_fastrender_emoji_font.py`.
 - **License:** Public Domain / CC0.
-- **Glyphs:** U+1F600 (😀), U+2764 (❤), U+1F44D (👍), U+1F1FA/U+1F1F8 (🇺🇸 regional indicators), and U+0020 (space).
-  A tiny `GSUB` ligature maps 🇺🇸 to a single `flag_us` glyph so flag sequences render as a single emoji glyph.
-  The shapes are intentionally simple to keep CI emoji renders deterministic when bundled fonts are used.
-  - **Regeneration:** From the repository root:
-    ```bash
-    python tests/fixtures/fonts/generate_fastrender_emoji_font.py
-    ```
+- **Glyphs:** Base emoji glyphs are U+1F600 (😀), U+2764 (❤), and U+1F44D (👍), plus a few regional indicator tiles
+  (including the 🇺🇸 codepoints U+1F1FA/U+1F1F8 and the 🇫🇮 codepoints U+1F1EB/U+1F1EE) and U+0020 (space).
+  A tiny GSUB ligature maps 🇺🇸 to a single `flag_us` glyph so flag sequences render as a single emoji glyph.
+  Additional pageset-derived emoji codepoints are mapped onto the existing fixture glyphs so bundled-font runs avoid
+  missing-emoji tofu; see the generator script for the authoritative list.
+- **Regeneration:** From the repository root:
+  ```bash
+  python tests/fixtures/fonts/generate_fastrender_emoji_font.py
+  ```
 
 ### `DejaVuSans-subset.ttf` / `DejaVuSans-subset.woff2`
 - **Source:** Subset of the DejaVu Sans family bundled for deterministic text rendering during tests.

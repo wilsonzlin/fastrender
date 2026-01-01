@@ -1557,9 +1557,6 @@ fn node_is_hidden(attributes: &[(String, String)]) -> bool {
     if name.eq_ignore_ascii_case("hidden") {
       return true;
     }
-    if name.eq_ignore_ascii_case("aria-hidden") {
-      return value.is_empty() || value.eq_ignore_ascii_case("true");
-    }
     if name.eq_ignore_ascii_case("data-fastr-hidden") {
       return value.eq_ignore_ascii_case("true");
     }

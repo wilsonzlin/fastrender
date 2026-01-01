@@ -1,7 +1,7 @@
 use fastrender::{FontConfig, FontDatabase, FontStyleDb as FontStyle, FontWeightDb as FontWeight};
 
 #[test]
-fn bundled_fonts_cover_thaana_syriac_and_nko() {
+fn bundled_fonts_cover_pageset_script_fallback_faces() {
   let db = FontDatabase::with_config(&FontConfig::bundled_only());
 
   let thaana = db
@@ -34,5 +34,21 @@ fn bundled_fonts_cover_thaana_syriac_and_nko() {
   assert!(
     db.has_glyph(nko, '߫'),
     "bundled Noto Sans NKo should cover U+07EB (߫)"
+  );
+
+  let myanmar = db
+    .query("Noto Sans Myanmar", FontWeight::NORMAL, FontStyle::Normal)
+    .expect("bundled Noto Sans Myanmar should be present");
+  assert!(
+    db.has_glyph(myanmar, 'မ'),
+    "bundled Noto Sans Myanmar should cover U+1019 (မ)"
+  );
+
+  let telugu = db
+    .query("Noto Sans Telugu", FontWeight::NORMAL, FontStyle::Normal)
+    .expect("bundled Noto Sans Telugu should be present");
+  assert!(
+    db.has_glyph(telugu, 'త'),
+    "bundled Noto Sans Telugu should cover U+0C24 (త)"
   );
 }

@@ -557,6 +557,8 @@ fn script_from_u8(value: u8) -> Option<Script> {
     v if v == Script::Devanagari as u8 => Script::Devanagari,
     v if v == Script::Bengali as u8 => Script::Bengali,
     v if v == Script::Tamil as u8 => Script::Tamil,
+    v if v == Script::Myanmar as u8 => Script::Myanmar,
+    v if v == Script::Telugu as u8 => Script::Telugu,
     v if v == Script::Thai as u8 => Script::Thai,
     v if v == Script::Javanese as u8 => Script::Javanese,
     v if v == Script::Han as u8 => Script::Han,
@@ -1027,8 +1029,8 @@ impl Script {
 
     // Myanmar
     if (0x1000..=0x109f).contains(&cp)
-      || (0xaa60..=0xaa7f).contains(&cp)
       || (0xa9e0..=0xa9ff).contains(&cp)
+      || (0xaa60..=0xaa7f).contains(&cp)
     {
       return Self::Myanmar;
     }

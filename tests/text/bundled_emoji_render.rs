@@ -95,3 +95,27 @@ fn generic_fallback_uses_text_font_when_emoji_bundled() {
   );
   assert!(db.has_glyph(primary, 'A'));
 }
+
+#[test]
+fn bundled_us_flag_emoji_shapes_as_single_glyph() {
+  let mut pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["emoji".to_string(), "sans-serif".to_string()].into();
+  style.font_size = 64.0;
+
+  let text = "\u{1F1FA}\u{1F1F8}";
+  let runs = pipeline.shape(text, &style, &font_ctx).expect("emoji flag should shape");
+  assert!(!runs.is_empty());
+
+  let glyphs: Vec<_> = runs.iter().flat_map(|run| run.glyphs.iter()).collect();
+  assert!(
+    glyphs.iter().all(|glyph| glyph.glyph_id != 0),
+    "flag emoji should not shape with .notdef glyphs"
+  );
+  assert_eq!(
+    glyphs.len(),
+    1,
+    "flag emoji should shape as a single glyph (ligature)"
+  );
+}
