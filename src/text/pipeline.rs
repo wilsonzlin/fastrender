@@ -3772,9 +3772,7 @@ fn resolve_font_for_cluster_with_preferences(
   let mut math_families_storage: Option<Vec<String>> = None;
   let mut math_families_ref: &[String] = math_families.unwrap_or(&[]);
   let mut picker = FontPreferencePicker::new(emoji_pref);
-  let require_base_glyph = !is_non_rendering_for_coverage(base_char);
 
-  let base_supported = |id: fontdb::ID| !require_base_glyph || db.has_glyph_cached(id, base_char);
   let covers_needed = |id: fontdb::ID| coverage_chars.iter().all(|c| db.has_glyph_cached(id, *c));
 
   for entry in families {
@@ -3795,8 +3793,7 @@ fn resolve_font_for_cluster_with_preferences(
           let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
           let idx = picker.bump_order();
           picker.record_any(&font, is_emoji_font, idx);
-          let base_ok = !require_base_glyph || font_supports_all_chars(font.as_ref(), &[base_char]);
-          if base_ok && font_supports_all_chars(font.as_ref(), coverage_chars) {
+          if font_supports_all_chars(font.as_ref(), coverage_chars) {
             if let Some(font) = picker.consider(font, is_emoji_font, idx) {
               return Some(font);
             }
@@ -3817,7 +3814,7 @@ fn resolve_font_for_cluster_with_preferences(
                   let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
-                  if base_supported(id) && covers_needed(id) {
+                  if covers_needed(id) {
                     if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                       return Some(font);
                     }
@@ -3840,8 +3837,7 @@ fn resolve_font_for_cluster_with_preferences(
         let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
         let idx = picker.bump_order();
         picker.record_any(&font, is_emoji_font, idx);
-        let base_ok = !require_base_glyph || font_supports_all_chars(font.as_ref(), &[base_char]);
-        if base_ok && font_supports_all_chars(font.as_ref(), coverage_chars) {
+        if font_supports_all_chars(font.as_ref(), coverage_chars) {
           if let Some(font) = picker.consider(font, is_emoji_font, idx) {
             return Some(font);
           }
@@ -3876,7 +3872,7 @@ fn resolve_font_for_cluster_with_preferences(
               let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
-              if base_supported(id) && covers_needed(id) {
+              if covers_needed(id) {
                 if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                   return Some(font);
                 }
@@ -3904,7 +3900,7 @@ fn resolve_font_for_cluster_with_preferences(
                   let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
-                  if base_supported(id) && covers_needed(id) {
+                  if covers_needed(id) {
                     if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                       return Some(font);
                     }
@@ -3924,7 +3920,7 @@ fn resolve_font_for_cluster_with_preferences(
         let idx = picker.bump_order();
         let font = Arc::new(font);
         picker.record_any(&font, true, idx);
-        if base_supported(id) && covers_needed(id) {
+        if covers_needed(id) {
           if let Some(font) = picker.consider(font, true, idx) {
             return Some(font);
           }
@@ -3949,7 +3945,7 @@ fn resolve_font_for_cluster_with_preferences(
               let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
-              if base_supported(id) && covers_needed(id) {
+              if covers_needed(id) {
                 if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                   return Some(font);
                 }
@@ -3967,7 +3963,7 @@ fn resolve_font_for_cluster_with_preferences(
       let is_emoji_font = font_is_emoji_font(db, Some(face.id), font.as_ref());
       let idx = picker.bump_order();
       picker.record_any(&font, is_emoji_font, idx);
-      if base_supported(face.id) && covers_needed(face.id) {
+      if covers_needed(face.id) {
         if let Some(font) = picker.consider(font, is_emoji_font, idx) {
           return Some(font);
         }
