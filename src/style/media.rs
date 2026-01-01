@@ -2750,6 +2750,12 @@ struct MediaQueryParser<'a> {
   pos: usize,
 }
 
+#[derive(Debug)]
+enum RangeParseOutput {
+  One(MediaFeature),
+  Two(MediaFeature, MediaFeature),
+}
+
 impl<'a> MediaQueryParser<'a> {
   fn new(input: &'a str) -> Self {
     Self { input, pos: 0 }
@@ -2823,8 +2829,7 @@ impl<'a> MediaQueryParser<'a> {
 
       // Parse feature: (name: value) or (range syntax) or (name)
       if self.peek() == Some('(') {
-        let feature_list = self.parse_feature()?;
-        features.extend(feature_list);
+        self.parse_feature(&mut features)?;
       } else {
         break;
       }
@@ -2842,7 +2847,7 @@ impl<'a> MediaQueryParser<'a> {
     })
   }
 
-  fn parse_feature(&mut self) -> Result<Vec<MediaFeature>, MediaParseError> {
+  fn parse_feature(&mut self, features: &mut Vec<MediaFeature>) -> Result<(), MediaParseError> {
     // Consume '('
     if self.peek() != Some('(') {
       return Err(MediaParseError::ExpectedOpenParen);
@@ -2860,7 +2865,14 @@ impl<'a> MediaQueryParser<'a> {
             return Err(MediaParseError::ExpectedCloseParen);
           }
           self.advance();
-          return result;
+          match result? {
+            RangeParseOutput::One(feature) => features.push(feature),
+            RangeParseOutput::Two(first, second) => {
+              features.push(first);
+              features.push(second);
+            }
+          }
+          return Ok(());
         }
       }
     }
@@ -2895,10 +2907,12 @@ impl<'a> MediaQueryParser<'a> {
     }
     self.advance();
 
-    MediaFeature::parse(name, value).map(|f| vec![f])
+    let feature = MediaFeature::parse(name, value)?;
+    features.push(feature);
+    Ok(())
   }
 
-  fn parse_range_feature_expr(input: &str) -> Option<Result<Vec<MediaFeature>, MediaParseError>> {
+  fn parse_range_feature_expr(input: &str) -> Option<Result<RangeParseOutput, MediaParseError>> {
     #[derive(Debug)]
     enum RangeToken {
       Atom(String),
@@ -3027,10 +3041,10 @@ impl<'a> MediaQueryParser<'a> {
       [RangeToken::Atom(a), RangeToken::Op(op), RangeToken::Atom(b)] => {
         // Either `feature <value` or `<value> < feature`
         if let Some(feature) = parse_feature_kind(a) {
-          Some(build_feature(feature, *op, b).map(|f| vec![f]))
+          Some(build_feature(feature, *op, b).map(RangeParseOutput::One))
         } else if let Some(feature) = parse_feature_kind(b) {
           let flipped = invert_op(*op);
-          Some(build_feature(feature, flipped, a).map(|f| vec![f]))
+          Some(build_feature(feature, flipped, a).map(RangeParseOutput::One))
         } else {
           Some(Err(MediaParseError::InvalidValue {
             feature: "range".to_string(),
@@ -3044,7 +3058,7 @@ impl<'a> MediaQueryParser<'a> {
           let first = build_feature(feature, left_op, a);
           let second = build_feature(feature, *op2, b);
           match (first, second) {
-            (Ok(f1), Ok(f2)) => Some(Ok(vec![f1, f2])),
+            (Ok(f1), Ok(f2)) => Some(Ok(RangeParseOutput::Two(f1, f2))),
             (Err(e), _) => Some(Err(e)),
             (_, Err(e)) => Some(Err(e)),
           }
