@@ -328,11 +328,32 @@ pub fn absolutize_css_urls_cow<'a>(
     }
   }
 
-  fn resolve_css_url(
-    base_url: &str,
-    base_url_parsed: Option<&Url>,
-    href: &str,
-  ) -> Option<ResolvedCssUrl> {
+  struct BaseUrlJoinCache<'a> {
+    raw: &'a str,
+    parsed: Option<Url>,
+    attempted: bool,
+  }
+
+  impl<'a> BaseUrlJoinCache<'a> {
+    fn new(raw: &'a str) -> Self {
+      Self {
+        raw,
+        parsed: None,
+        attempted: false,
+      }
+    }
+
+    fn parsed(&mut self) -> Option<&Url> {
+      if self.attempted {
+        return self.parsed.as_ref();
+      }
+      self.attempted = true;
+      self.parsed = parse_base_url_for_join(self.raw);
+      self.parsed.as_ref()
+    }
+  }
+
+  fn resolve_css_url(base: &mut BaseUrlJoinCache<'_>, href: &str) -> Option<ResolvedCssUrl> {
     let href = unescape_js_escapes(href);
     let href = href.trim();
     if href.is_empty() {
@@ -345,16 +366,15 @@ pub fn absolutize_css_urls_cow<'a>(
       Cow::Borrowed(href)
     };
 
-    match base_url_parsed {
+    match base.parsed() {
       Some(base) => base.join(href.as_ref()).ok().map(ResolvedCssUrl::Joined),
-      None => resolve_href(base_url, href.as_ref()).map(ResolvedCssUrl::Owned),
+      None => resolve_href(base.raw, href.as_ref()).map(ResolvedCssUrl::Owned),
     }
   }
 
   fn rewrite_urls_in_parser<'i, 't>(
     parser: &mut Parser<'i, 't>,
-    base_url: &str,
-    base_url_parsed: Option<&Url>,
+    base_url: &mut BaseUrlJoinCache<'_>,
     capacity_hint: usize,
     deadline_counter: &mut usize,
   ) -> std::result::Result<Cow<'i, str>, RenderError> {
@@ -377,7 +397,7 @@ pub fn absolutize_css_urls_cow<'a>(
           if !should_resolve_css_url(url_value) {
             continue;
           }
-          let Some(resolved) = resolve_css_url(base_url, base_url_parsed, url_value) else {
+          let Some(resolved) = resolve_css_url(base_url, url_value) else {
             continue;
           };
 
@@ -424,7 +444,7 @@ pub fn absolutize_css_urls_cow<'a>(
           if !should_resolve_css_url(url_arg) {
             continue;
           }
-          let Some(resolved) = resolve_css_url(base_url, base_url_parsed, url_arg) else {
+          let Some(resolved) = resolve_css_url(base_url, url_arg) else {
             continue;
           };
 
@@ -447,13 +467,7 @@ pub fn absolutize_css_urls_cow<'a>(
           let mut nested_error: Option<RenderError> = None;
           let parse_result = parser.parse_nested_block(|nested| {
             let start = nested.position();
-            let rewritten = match rewrite_urls_in_parser(
-              nested,
-              base_url,
-              base_url_parsed,
-              0,
-              deadline_counter,
-            ) {
+            let rewritten = match rewrite_urls_in_parser(nested, base_url, 0, deadline_counter) {
               Ok(r) => r,
               Err(err) => {
                 nested_error = Some(err);
@@ -514,18 +528,11 @@ pub fn absolutize_css_urls_cow<'a>(
     return Ok(Cow::Borrowed(css));
   }
 
-  let base_url_parsed = parse_base_url_for_join(base_url);
-  let base_url_parsed = base_url_parsed.as_ref();
+  let mut base_url = BaseUrlJoinCache::new(base_url);
   let mut input = ParserInput::new(css);
   let mut parser = Parser::new(&mut input);
   let mut deadline_counter = 0usize;
-  rewrite_urls_in_parser(
-    &mut parser,
-    base_url,
-    base_url_parsed,
-    css.len(),
-    &mut deadline_counter,
-  )
+  rewrite_urls_in_parser(&mut parser, &mut base_url, css.len(), &mut deadline_counter)
 }
 
 pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<String, RenderError> {
