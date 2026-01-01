@@ -293,16 +293,33 @@ impl AnonymousBoxCreator {
 
   /// Splits inline-level children that contain block-level descendants so that block
   /// boxes participate directly in the parent's block formatting context.
-  fn split_inline_children_with_block_descendants(children: Vec<BoxNode>) -> Vec<BoxNode> {
-    let mut result = Vec::new();
+  fn split_inline_children_with_block_descendants(mut children: Vec<BoxNode>) -> Vec<BoxNode> {
+    // Fast path: if no inline-level child contains block descendants, return the original Vec to
+    // preserve its allocation.
+    let Some(first_split_idx) = children.iter().position(|child| {
+      Self::is_inline_level_child(child)
+        && child.formatting_context().is_none()
+        && Self::inline_contains_block_descendants(child)
+    }) else {
+      return children;
+    };
 
-    for child in children {
+    let mut result = Vec::with_capacity(children.len());
+    result.extend(children.drain(..first_split_idx));
+
+    let mut iter = children.into_iter();
+    let first_child = iter
+      .next()
+      .expect("first_split_idx should point at an in-bounds child");
+    // We already proved the first child needs splitting.
+    result.extend(Self::split_inline_with_blocks(first_child));
+
+    for child in iter {
       if Self::is_inline_level_child(&child)
         && child.formatting_context().is_none()
         && Self::inline_contains_block_descendants(&child)
       {
-        let pieces = Self::split_inline_with_blocks(child);
-        result.extend(pieces);
+        result.extend(Self::split_inline_with_blocks(child));
       } else {
         result.push(child);
       }
