@@ -554,7 +554,7 @@ struct ResolutionKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct MediaContextFingerprint {
+pub(crate) struct MediaContextFingerprint {
   media_type: MediaType,
   viewport_width_bits: u32,
   viewport_height_bits: u32,
@@ -1818,7 +1818,7 @@ pub struct MediaContext {
 }
 
 impl MediaContext {
-  fn fingerprint(&self) -> MediaContextFingerprint {
+  pub(crate) fn fingerprint(&self) -> MediaContextFingerprint {
     MediaContextFingerprint {
       media_type: self.media_type,
       viewport_width_bits: self.viewport_width.to_bits(),

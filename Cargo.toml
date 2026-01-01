@@ -140,6 +140,10 @@ harness = false
 name = "html_parse_bench"
 harness = false
 
+[[bench]]
+name = "css_parse_pageset"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true

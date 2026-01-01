@@ -67,7 +67,8 @@ use crate::css::loader::{
   resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
 };
 use crate::css::parser::{
-  extract_css_sources, extract_scoped_css_sources, parse_stylesheet, CssTreeScope, StylesheetSource,
+  extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_media_cached_shared,
+  CssTreeScope, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug;
@@ -5218,7 +5219,12 @@ impl FastRender {
 
         match self {
           StylesheetTask::Inline { css } => {
-            let sheet = parse_stylesheet(&css)?;
+            let sheet = parse_stylesheet_with_media_cached_shared(
+              &css,
+              document_base_url.as_deref(),
+              media_ctx,
+              Some(&mut local_media_cache),
+            )?;
             let loader = CssImportFetcher::new(
               document_base_url.clone(),
               Arc::clone(fetcher),
@@ -5267,7 +5273,12 @@ impl FastRender {
             let mut css_text = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
             css_text = absolutize_css_urls(&css_text, &sheet_base)?;
 
-            let sheet = parse_stylesheet(&css_text)?;
+            let sheet = parse_stylesheet_with_media_cached_shared(
+              &css_text,
+              Some(&sheet_base),
+              media_ctx,
+              Some(&mut local_media_cache),
+            )?;
             let loader = CssImportFetcher::new(
               Some(sheet_base.clone()),
               Arc::clone(fetcher),
@@ -5465,7 +5476,12 @@ impl FastRender {
             continue;
           }
 
-          let sheet = parse_stylesheet(&inline.css)?;
+          let sheet = parse_stylesheet_with_media_cached_shared(
+            &inline.css,
+            self.base_url.as_deref(),
+            media_ctx,
+            Some(media_query_cache),
+          )?;
           let resolved = sheet.resolve_imports_with_cache(
             &inline_loader,
             self.base_url.as_deref(),
@@ -5532,7 +5548,12 @@ impl FastRender {
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
               css_text = absolutize_css_urls(&css_text, &stylesheet_url)?;
 
-              let sheet = parse_stylesheet(&css_text)?;
+              let sheet = parse_stylesheet_with_media_cached_shared(
+                &css_text,
+                Some(&stylesheet_url),
+                media_ctx,
+                Some(media_query_cache),
+              )?;
               let loader = CssImportFetcher::new(
                 Some(stylesheet_url.clone()),
                 Arc::clone(&fetcher),

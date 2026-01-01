@@ -2275,7 +2275,12 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         match loader.load(&resolved_href) {
           Ok(css_text) => {
             seen.insert(resolved_href.clone());
-            let sheet = match crate::css::parser::parse_stylesheet(&css_text) {
+            let sheet = match crate::css::parser::parse_stylesheet_with_media_cached_shared(
+              &css_text,
+              Some(&resolved_href),
+              media_ctx,
+              cache.as_deref_mut(),
+            ) {
               Ok(sheet) => sheet,
               Err(Error::Render(err)) => return Err(err),
               Err(_) => continue,
