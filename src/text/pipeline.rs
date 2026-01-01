@@ -2130,6 +2130,42 @@ impl ClusterCharBuf {
   }
 }
 
+/// Small inline set for deduplicating local fontdb query results.
+///
+/// Font matching often tries many different weight/style/stretch combinations, but `fontdb::Database`
+/// can return the same face ID for several adjacent queries due to fuzzy matching. Tracking a small
+/// number of seen IDs avoids redundant cached-face lookups + `LoadedFont` construction without
+/// allocating on the hot path.
+struct SeenFontIds {
+  ids: [Option<fontdb::ID>; 16],
+  len: usize,
+}
+
+impl SeenFontIds {
+  #[inline]
+  fn new() -> Self {
+    Self {
+      ids: [None; 16],
+      len: 0,
+    }
+  }
+
+  /// Returns `true` if the ID was already present, otherwise records it and returns `false`.
+  #[inline]
+  fn contains_or_insert(&mut self, id: fontdb::ID) -> bool {
+    for existing in &self.ids[..self.len] {
+      if *existing == Some(id) {
+        return true;
+      }
+    }
+    if self.len < self.ids.len() {
+      self.ids[self.len] = Some(id);
+      self.len += 1;
+    }
+    false
+  }
+}
+
 fn cluster_signature(text: &str) -> u64 {
   use std::hash::Hash;
   use std::hash::Hasher;
@@ -3628,6 +3664,7 @@ fn resolve_font_for_char_with_preferences(
           let idx = picker.bump_order();
           picker.record_any(&font, is_emoji_font, idx);
         }
+        let mut seen_ids = SeenFontIds::new();
         for stretch_choice in stretch_preferences {
           for slope in slope_preferences {
             for weight_choice in weight_preferences {
@@ -3638,6 +3675,9 @@ fn resolve_font_for_char_with_preferences(
                style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
+                if seen_ids.contains_or_insert(id) {
+                  continue;
+                }
                 let (cached_face, covers) = glyph_face_and_covers(id);
                 if let Some(font) =
                   consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
@@ -3669,6 +3709,7 @@ fn resolve_font_for_char_with_preferences(
       }
     }
 
+    let mut seen_ids = SeenFontIds::new();
     for stretch_choice in stretch_preferences {
       for slope in slope_preferences {
         for weight_choice in weight_preferences {
@@ -3688,6 +3729,9 @@ fn resolve_font_for_char_with_preferences(
           };
 
           if let Some(id) = db.inner().query(&query) {
+            if seen_ids.contains_or_insert(id) {
+              continue;
+            }
             let (cached_face, covers) = glyph_face_and_covers(id);
             if let Some(font) =
               consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
@@ -3701,6 +3745,7 @@ fn resolve_font_for_char_with_preferences(
 
     if let FamilyEntry::Generic(generic) = entry {
       for name in generic.fallback_families() {
+        let mut seen_fallback_ids = SeenFontIds::new();
         for weight_choice in weight_preferences {
           for slope in slope_preferences {
             for stretch_choice in stretch_preferences {
@@ -3711,6 +3756,9 @@ fn resolve_font_for_char_with_preferences(
                style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
+                if seen_ids.contains_or_insert(id) || seen_fallback_ids.contains_or_insert(id) {
+                  continue;
+                }
                 let (cached_face, covers) = glyph_face_and_covers(id);
                 if let Some(font) =
                   consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
@@ -3737,6 +3785,7 @@ fn resolve_font_for_char_with_preferences(
   }
 
   for family in script_fallback::preferred_families(script, language) {
+    let mut seen_ids = SeenFontIds::new();
     for stretch_choice in stretch_preferences {
       for slope in slope_preferences {
         for weight_choice in weight_preferences {
@@ -3747,6 +3796,9 @@ fn resolve_font_for_char_with_preferences(
            style: (*slope).into(),
           };
           if let Some(id) = db.inner().query(&query) {
+            if seen_ids.contains_or_insert(id) {
+              continue;
+            }
             let (cached_face, covers) = glyph_face_and_covers(id);
             if let Some(font) =
               consider_local_font_candidate(db, picker, id, cached_face.as_deref(), covers)
@@ -3871,6 +3923,7 @@ fn resolve_font_for_cluster_with_preferences(
             }
           }
         }
+        let mut seen_ids = SeenFontIds::new();
         for stretch_choice in stretch_preferences {
           for slope in slope_preferences {
             for weight_choice in weight_preferences {
@@ -3881,6 +3934,9 @@ fn resolve_font_for_cluster_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
+                if seen_ids.contains_or_insert(id) {
+                  continue;
+                }
                 let (cached_face, covers) = face_and_covers_needed(id);
                 if let Some(font) =
                   consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
@@ -3915,6 +3971,7 @@ fn resolve_font_for_cluster_with_preferences(
       }
     }
 
+    let mut seen_ids = SeenFontIds::new();
     for stretch_choice in stretch_preferences {
       for slope in slope_preferences {
         for weight_choice in weight_preferences {
@@ -3934,6 +3991,9 @@ fn resolve_font_for_cluster_with_preferences(
           };
 
           if let Some(id) = db.inner().query(&query) {
+            if seen_ids.contains_or_insert(id) {
+              continue;
+            }
             let (cached_face, covers) = face_and_covers_needed(id);
             if let Some(font) =
               consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
@@ -3947,6 +4007,7 @@ fn resolve_font_for_cluster_with_preferences(
 
     if let FamilyEntry::Generic(generic) = entry {
       for name in generic.fallback_families() {
+        let mut seen_fallback_ids = SeenFontIds::new();
         for weight_choice in weight_preferences {
           for slope in slope_preferences {
             for stretch_choice in stretch_preferences {
@@ -3957,6 +4018,9 @@ fn resolve_font_for_cluster_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
+                if seen_ids.contains_or_insert(id) || seen_fallback_ids.contains_or_insert(id) {
+                  continue;
+                }
                 let (cached_face, covers) = face_and_covers_needed(id);
                 if let Some(font) =
                   consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
@@ -3983,6 +4047,7 @@ fn resolve_font_for_cluster_with_preferences(
   }
 
   for family in script_fallback::preferred_families(script, language) {
+    let mut seen_ids = SeenFontIds::new();
     for stretch_choice in stretch_preferences {
       for slope in slope_preferences {
         for weight_choice in weight_preferences {
@@ -3993,6 +4058,9 @@ fn resolve_font_for_cluster_with_preferences(
             style: (*slope).into(),
           };
           if let Some(id) = db.inner().query(&query) {
+            if seen_ids.contains_or_insert(id) {
+              continue;
+            }
             let (cached_face, covers) = face_and_covers_needed(id);
             if let Some(font) =
               consider_local_font_candidate(db, &mut picker, id, cached_face.as_deref(), covers)
