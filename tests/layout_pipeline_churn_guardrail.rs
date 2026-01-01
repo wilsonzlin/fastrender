@@ -30,6 +30,7 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
   // Reset churn counters after engine creation so we measure just the layout run.
   ShapingPipeline::debug_reset_new_call_count();
   FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
+  FormattingContextFactory::debug_reset_detached_call_count();
   InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
   InlineFormattingContext::debug_reset_with_factory_call_count();
 
@@ -71,6 +72,7 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
 
   let shaping_pipeline_news = ShapingPipeline::debug_new_call_count();
   let factory_news = FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count();
+  let detached_news = FormattingContextFactory::debug_detached_call_count();
   let inline_fc_news = InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count();
   let inline_fc_with_factory_news = InlineFormattingContext::debug_with_factory_call_count();
 
@@ -81,6 +83,10 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
   assert!(
     factory_news < 20,
     "layout should not rebuild formatting context factories in hot paths (got {factory_news})"
+  );
+  assert!(
+    detached_news < 50,
+    "layout should not churn detached factories in hot paths (got {detached_news})"
   );
   assert!(
     inline_fc_news < 20,
@@ -101,18 +107,25 @@ fn block_intrinsic_sizing_does_not_rebuild_shaping_pipeline_or_factory() {
   // Reset churn counters after initialization so we measure just the intrinsic sizing calls.
   ShapingPipeline::debug_reset_new_call_count();
   FormattingContextFactory::debug_reset_with_font_context_viewport_and_cb_call_count();
+  FormattingContextFactory::debug_reset_detached_call_count();
   InlineFormattingContext::debug_reset_with_font_context_viewport_and_cb_call_count();
   InlineFormattingContext::debug_reset_with_factory_call_count();
 
   let mut text_style = ComputedStyle::default();
   text_style.display = Display::Inline;
   let text_style = Arc::new(text_style);
-  let mut root = BoxNode::new_block(
-    Arc::new(ComputedStyle::default()),
+  let mut child_style = ComputedStyle::default();
+  child_style.display = Display::Block;
+  let mut child = BoxNode::new_block(
+    Arc::new(child_style),
     FormattingContextType::Block,
     vec![BoxNode::new_text(text_style, "hello world".to_string())],
   );
-  // Disable the intrinsic sizing cache so every call recomputes.
+  child.id = 0;
+  let mut root_style = ComputedStyle::default();
+  root_style.display = Display::Block;
+  let mut root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![child]);
+  // Disable the intrinsic sizing cache so every call recomputes (including for the nested block child).
   root.id = 0;
 
   for _ in 0..16 {
@@ -130,6 +143,11 @@ fn block_intrinsic_sizing_does_not_rebuild_shaping_pipeline_or_factory() {
     FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count(),
     0,
     "block intrinsic sizing should not construct new formatting context factories"
+  );
+  assert_eq!(
+    FormattingContextFactory::debug_detached_call_count(),
+    0,
+    "block intrinsic sizing should not churn detached factories via recursive BlockFC construction"
   );
   assert_eq!(
     InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count(),

@@ -46,6 +46,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(any(test, debug_assertions))]
 static FACTORY_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(any(test, debug_assertions))]
+static FACTORY_DETACHED_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
 struct CachedFormattingContexts {
@@ -127,6 +129,8 @@ impl FormattingContextFactory {
   ///
   /// `cached_contexts -> Arc<dyn FormattingContext> -> FormattingContextFactory -> cached_contexts`
   pub(crate) fn detached(&self) -> Self {
+    #[cfg(any(test, debug_assertions))]
+    FACTORY_DETACHED_CALLS.fetch_add(1, Ordering::Relaxed);
     let mut clone = self.clone();
     clone.reset_cached_contexts();
     clone
@@ -468,6 +472,16 @@ impl FormattingContextFactory {
   #[doc(hidden)]
   pub fn debug_reset_with_font_context_viewport_and_cb_call_count() {
     FACTORY_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.store(0, Ordering::Relaxed);
+  }
+
+  #[doc(hidden)]
+  pub fn debug_detached_call_count() -> usize {
+    FACTORY_DETACHED_CALLS.load(Ordering::Relaxed)
+  }
+
+  #[doc(hidden)]
+  pub fn debug_reset_detached_call_count() {
+    FACTORY_DETACHED_CALLS.store(0, Ordering::Relaxed);
   }
 }
 
