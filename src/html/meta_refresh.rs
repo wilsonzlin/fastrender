@@ -3,18 +3,30 @@
 //! Provides a lightweight extractor for `<meta http-equiv="refresh">` URLs so
 //! callers can follow scriptless redirects commonly used as `<noscript>` fallbacks.
 
+use memchr::memchr;
+use memchr::memchr2;
+
 /// Parses the first `<meta http-equiv="refresh">` URL in the provided HTML.
 ///
 /// Returns `Some(url)` when a refresh URL is found, otherwise `None`.
 pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
-  let lower = html.to_ascii_lowercase();
+  let bytes = html.as_bytes();
   let mut idx = 0usize;
-  while let Some(pos) = lower[idx..].find("<meta") {
+  while idx < bytes.len() {
+    let Some(pos) = memchr(b'<', &bytes[idx..]) else {
+      break;
+    };
     let start = idx + pos;
-    let end = html[start..]
-      .find('>')
+    if start + 5 > bytes.len() || !bytes[start..start + 5].eq_ignore_ascii_case(b"<meta") {
+      idx = start + 1;
+      continue;
+    }
+
+    let end = bytes[start..]
+      .iter()
+      .position(|b| *b == b'>')
       .map(|e| start + e + 1)
-      .unwrap_or_else(|| html.len());
+      .unwrap_or(bytes.len());
     let tag = &html[start..end];
     let attrs = parse_attributes(tag);
     let mut http_equiv: Option<String> = None;
@@ -40,7 +52,7 @@ pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
       }
     }
 
-    idx = end;
+    idx = end.max(start + 1);
   }
 
   None
@@ -52,7 +64,47 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
   const MAX_REDIRECT_LEN: usize = 2048;
 
   let decoded = decode_refresh_entities(html);
-  let lower = decoded.to_ascii_lowercase();
+  let bytes = decoded.as_bytes();
+
+  fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    value
+      .as_bytes()
+      .get(..prefix.len())
+      .map(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+      .unwrap_or(false)
+  }
+
+  fn find_case_insensitive(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    if start >= haystack.len() || needle.is_empty() {
+      return None;
+    }
+
+    let needle_len = needle.len();
+    if needle_len > haystack.len() - start {
+      return None;
+    }
+
+    let first = needle[0];
+    let first_lower = first.to_ascii_lowercase();
+    let first_upper = first_lower.to_ascii_uppercase();
+    let mut offset = start;
+    while offset + needle_len <= haystack.len() {
+      let Some(pos) = memchr2(first_lower, first_upper, &haystack[offset..]) else {
+        return None;
+      };
+      let idx = offset + pos;
+      if idx + needle_len > haystack.len() {
+        return None;
+      }
+      if haystack[idx..idx + needle_len].eq_ignore_ascii_case(needle) {
+        return Some(idx);
+      }
+      offset = idx + 1;
+    }
+
+    None
+  }
+
   #[derive(Clone, Copy)]
   enum PatternKind {
     Call,
@@ -93,22 +145,22 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
 
   for (pat, kind) in patterns.iter() {
     let mut search_start = 0usize;
-    while let Some(found) = lower[search_start..].find(pat) {
-      let idx = search_start + found;
-      search_start = idx + pat.len();
+    let needle = pat.as_bytes();
+    while let Some(idx) = find_case_insensitive(bytes, needle, search_start) {
+      search_start = idx + needle.len();
 
       // Require the match to start on a non-identifier boundary to avoid picking up attributes
       // like data-location="...".
       if idx > 0 {
-        let prev = lower.as_bytes()[idx - 1];
+        let prev = bytes[idx - 1];
         if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'-' {
           continue;
         }
       }
 
-      let after = idx + pat.len();
-      if after < lower.len() {
-        let next = lower.as_bytes()[after];
+      let after = idx + needle.len();
+      if after < bytes.len() {
+        let next = bytes[after];
         if next.is_ascii_alphanumeric() || next == b'_' {
           continue;
         }
@@ -116,50 +168,53 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
 
       // If we are matching an unqualified `location*` token, ensure it isn't a property access
       // (e.g. `foo.location = ...`).
-      if pat.starts_with("location") && idx > 0 && lower.as_bytes()[idx - 1] == b'.' {
+      if pat.starts_with("location") && idx > 0 && bytes[idx - 1] == b'.' {
         continue;
       }
 
       // Avoid misclassifying `var/let/const location = ...` as a navigation.
       if *pat == "location" {
         let mut j = idx;
-        while j > 0 && lower.as_bytes()[j - 1].is_ascii_whitespace() {
+        while j > 0 && bytes[j - 1].is_ascii_whitespace() {
           j -= 1;
         }
         let mut k = j;
         while k > 0
-          && (lower.as_bytes()[k - 1].is_ascii_alphanumeric() || lower.as_bytes()[k - 1] == b'_')
+          && (bytes[k - 1].is_ascii_alphanumeric() || bytes[k - 1] == b'_')
         {
           k -= 1;
         }
-        if let Some(word) = lower.get(k..j) {
-          if matches!(word, "var" | "let" | "const") {
+        if let Some(word) = decoded.get(k..j) {
+          if word.eq_ignore_ascii_case("var")
+            || word.eq_ignore_ascii_case("let")
+            || word.eq_ignore_ascii_case("const")
+          {
             continue;
           }
         }
       }
 
-      let mut i = idx + pat.len();
-      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+      let mut i = idx + needle.len();
+      while i < bytes.len() && bytes[i].is_ascii_whitespace() {
         i += 1;
       }
 
       match kind {
         PatternKind::Assign => {
-          if i >= lower.len() || lower.as_bytes()[i] != b'=' {
+          if i >= bytes.len() || bytes[i] != b'=' {
             continue;
           }
           i += 1;
-          while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+          while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
           }
         }
         PatternKind::Call => {
-          if i >= lower.len() || lower.as_bytes()[i] != b'(' {
+          if i >= bytes.len() || bytes[i] != b'(' {
             continue;
           }
           i += 1;
-          while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+          while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
           }
         }
@@ -167,25 +222,25 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
 
       // Allow redundant grouping parentheses like `location = ('/next')` or
       // `location.replace(('/next'))`.
-      while i < lower.len() && lower.as_bytes()[i] == b'(' {
+      while i < bytes.len() && bytes[i] == b'(' {
         i += 1;
-        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
           i += 1;
         }
       }
 
-      if let Some(url) = extract_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN) {
+      if let Some(url) = extract_js_string_literal(&decoded, i, MAX_REDIRECT_LEN) {
         return Some(url);
       }
 
-      if let Some(url) = extract_wrapped_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN) {
+      if let Some(url) = extract_wrapped_js_string_literal(&decoded, i, MAX_REDIRECT_LEN) {
         return Some(url);
       }
 
       {
         let start = i;
-        while i < lower.len() {
-          let b = lower.as_bytes()[i];
+        while i < bytes.len() {
+          let b = bytes[i];
           if b.is_ascii_whitespace() || b == b';' {
             break;
           }
@@ -195,7 +250,7 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
           let candidate = decoded[start..i].trim();
           if !candidate.is_empty()
             && candidate.len() <= MAX_REDIRECT_LEN
-            && (candidate.starts_with("http")
+            && (starts_with_ignore_ascii_case(candidate, "http")
               || candidate.starts_with("//")
               || candidate.starts_with('/')
               || candidate.starts_with("www."))
@@ -211,45 +266,45 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
   let url_decls = ["var url", "let url", "const url"];
   for decl in url_decls.iter() {
     let mut search_start = 0usize;
-    while let Some(found) = lower[search_start..].find(decl) {
-      let idx = search_start + found;
-      search_start = idx + decl.len();
+    let needle = decl.as_bytes();
+    while let Some(idx) = find_case_insensitive(bytes, needle, search_start) {
+      search_start = idx + needle.len();
 
       if idx > 0 {
-        let prev = lower.as_bytes()[idx - 1];
+        let prev = bytes[idx - 1];
         if prev.is_ascii_alphanumeric() || prev == b'_' {
           continue;
         }
       }
 
-      let after = idx + decl.len();
-      if after < lower.len() {
-        let next = lower.as_bytes()[after];
+      let after = idx + needle.len();
+      if after < bytes.len() {
+        let next = bytes[after];
         if next.is_ascii_alphanumeric() || next == b'_' {
           continue;
         }
       }
 
       let mut i = after;
-      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+      while i < bytes.len() && bytes[i].is_ascii_whitespace() {
         i += 1;
       }
-      if lower.as_bytes().get(i) != Some(&b'=') {
+      if bytes.get(i) != Some(&b'=') {
         continue;
       }
       i += 1;
-      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+      while i < bytes.len() && bytes[i].is_ascii_whitespace() {
         i += 1;
       }
-      while i < lower.len() && lower.as_bytes()[i] == b'(' {
+      while i < bytes.len() && bytes[i] == b'(' {
         i += 1;
-        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
           i += 1;
         }
       }
 
-      if let Some(mut url) = extract_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN)
-        .or_else(|| extract_wrapped_js_string_literal(&decoded, &lower, i, MAX_REDIRECT_LEN))
+      if let Some(mut url) = extract_js_string_literal(&decoded, i, MAX_REDIRECT_LEN)
+        .or_else(|| extract_wrapped_js_string_literal(&decoded, i, MAX_REDIRECT_LEN))
       {
         if url.starts_with("//") {
           url = format!("https:{}", url);
@@ -264,11 +319,10 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
 
 fn extract_js_string_literal(
   decoded: &str,
-  lower: &str,
   start_idx: usize,
   max_len: usize,
 ) -> Option<String> {
-  let bytes = lower.as_bytes();
+  let bytes = decoded.as_bytes();
   let quote = *bytes.get(start_idx)?;
   if quote != b'"' && quote != b'\'' && quote != b'`' {
     return None;
@@ -313,33 +367,37 @@ fn extract_js_string_literal(
 
 fn extract_wrapped_js_string_literal(
   decoded: &str,
-  lower: &str,
   start_idx: usize,
   max_len: usize,
 ) -> Option<String> {
   // Some redirects wrap a static string in common URL-decoding helpers.
+  let bytes = decoded.as_bytes();
   let wrappers = ["decodeuricomponent", "decodeuri", "unescape"];
-  let rest = lower.get(start_idx..)?;
+  let rest = decoded.get(start_idx..)?;
   for wrapper in wrappers.iter() {
-    if rest.starts_with(wrapper) {
+    if rest
+      .get(..wrapper.len())
+      .map(|head| head.eq_ignore_ascii_case(wrapper))
+      .unwrap_or(false)
+    {
       let mut i = start_idx + wrapper.len();
-      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+      while i < bytes.len() && bytes[i].is_ascii_whitespace() {
         i += 1;
       }
-      if lower.as_bytes().get(i) != Some(&b'(') {
+      if bytes.get(i) != Some(&b'(') {
         continue;
       }
       i += 1;
-      while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+      while i < bytes.len() && bytes[i].is_ascii_whitespace() {
         i += 1;
       }
-      while i < lower.len() && lower.as_bytes()[i] == b'(' {
+      while i < bytes.len() && bytes[i] == b'(' {
         i += 1;
-        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
           i += 1;
         }
       }
-      if let Some(url) = extract_js_string_literal(decoded, lower, i, max_len) {
+      if let Some(url) = extract_js_string_literal(decoded, i, max_len) {
         return Some(url);
       }
     }
