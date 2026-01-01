@@ -10353,6 +10353,7 @@ mod tests {
       (png_bytes, Some("image/png".to_string())),
     );
 
+    let fetcher = CachingFetcher::new(fetcher);
     let mut renderer = FastRender::builder()
       .font_sources(FontConfig::bundled_only())
       .fetcher(Arc::new(fetcher))
@@ -10497,6 +10498,17 @@ mod tests {
       stats2.resources.fetch_counts.is_empty(),
       "expected no subresource fetch counts in second render, got {:?}",
       stats2.resources.fetch_counts
+    );
+
+    assert!(
+      stats1.resources.resource_cache_misses.unwrap_or(0) > 0,
+      "expected resource cache misses > 0 in first render, got {:?}",
+      stats1.resources.resource_cache_misses
+    );
+    assert_eq!(
+      stats2.resources.resource_cache_misses,
+      Some(0),
+      "expected resource cache misses to reset for second render"
     );
   }
 
