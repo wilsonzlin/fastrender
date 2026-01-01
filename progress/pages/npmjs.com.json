@@ -4,7 +4,7 @@
   "total_ms": 869.177429,
   "stages_ms": {
     "fetch": 0.5859840000000001,
-    "css": 108.82412199999999,
+    "css": 108.824122,
     "cascade": 80.294253,
     "layout": 42.60201,
     "paint": 409.985532
@@ -20,14 +20,21 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 0.5859840000000001,
+        "dom_html5ever_ms": null,
+        "dom_convert_ms": null,
+        "dom_shadow_attach_ms": null,
+        "dom_compat_ms": null,
+        "dom_meta_viewport_ms": null,
+        "dom_clone_ms": null,
+        "dom_top_layer_ms": null,
         "css_inlining_ms": null,
-        "css_parse_ms": 108.82412199999999,
+        "css_parse_ms": 108.824122,
         "cascade_ms": 28.430356,
         "box_tree_ms": 51.863897,
         "layout_ms": 38.052478,
         "text_fallback_ms": 26.152587000000008,
         "text_shape_ms": 4.549531999999999,
-        "paint_build_ms": 387.81001999999995,
+        "paint_build_ms": 387.8100199999999,
         "paint_optimize_ms": 0.044591,
         "paint_rasterize_ms": 16.245435,
         "text_rasterize_ms": 5.885485999999999,
@@ -63,6 +70,9 @@
         "rule_candidates_by_tag": null,
         "rule_candidates_by_attr": null,
         "rule_candidates_universal": null,
+        "selector_attempts_total": null,
+        "selector_attempts_after_bloom": null,
+        "selector_bloom_fast_rejects": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -80,6 +90,10 @@
         "block_intrinsic": 183,
         "flex_intrinsic": 3,
         "inline_intrinsic": 0,
+        "layout_parallel_work_items": null,
+        "layout_parallel_worker_threads": null,
+        "layout_parallel_enabled": null,
+        "layout_parallel_auto_activated": null,
         "table_cell_intrinsic_measurements": null,
         "table_cell_layouts": null,
         "layout_cache_lookups": 1,
@@ -112,7 +126,12 @@
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
         "blur_cache_misses": 0,
-        "blur_tiles": 0
+        "blur_tiles": 0,
+        "blur_calls": null,
+        "blur_ms": null,
+        "blur_pixels": null,
+        "blur_bytes": null,
+        "blur_cancellations": null
       },
       "resources": {
         "fetch_counts": {
@@ -124,7 +143,7 @@
         "resource_cache_misses": 2,
         "image_cache_hits": 0,
         "image_cache_misses": 5,
-        "image_decode_ms": 0.9025610000000001
+        "image_decode_ms": 0.902561
       }
     }
   }

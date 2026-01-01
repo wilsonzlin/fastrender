@@ -20,12 +20,19 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 2.921187,
+        "dom_html5ever_ms": null,
+        "dom_convert_ms": null,
+        "dom_shadow_attach_ms": null,
+        "dom_compat_ms": null,
+        "dom_meta_viewport_ms": null,
+        "dom_clone_ms": null,
+        "dom_top_layer_ms": null,
         "css_inlining_ms": null,
         "css_parse_ms": 10.092133,
         "cascade_ms": 70.738463,
-        "box_tree_ms": 37.145936999999996,
+        "box_tree_ms": 37.145937,
         "layout_ms": 626.58241,
-        "text_fallback_ms": 445.70082200000036,
+        "text_fallback_ms": 445.7008220000003,
         "text_shape_ms": 60.93462800000007,
         "paint_build_ms": 450.097427,
         "paint_optimize_ms": 0.073092,
@@ -63,6 +70,9 @@
         "rule_candidates_by_tag": null,
         "rule_candidates_by_attr": null,
         "rule_candidates_universal": null,
+        "selector_attempts_total": null,
+        "selector_attempts_after_bloom": null,
+        "selector_bloom_fast_rejects": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -80,6 +90,10 @@
         "block_intrinsic": 3115,
         "flex_intrinsic": 1247,
         "inline_intrinsic": 0,
+        "layout_parallel_work_items": null,
+        "layout_parallel_worker_threads": null,
+        "layout_parallel_enabled": null,
+        "layout_parallel_auto_activated": null,
         "table_cell_intrinsic_measurements": null,
         "table_cell_layouts": null,
         "layout_cache_lookups": 537,
@@ -112,7 +126,12 @@
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
         "blur_cache_misses": 0,
-        "blur_tiles": 0
+        "blur_tiles": 0,
+        "blur_calls": null,
+        "blur_ms": null,
+        "blur_pixels": null,
+        "blur_bytes": null,
+        "blur_cancellations": null
       },
       "resources": {
         "fetch_counts": {
@@ -123,7 +142,7 @@
         "resource_cache_misses": 3,
         "image_cache_hits": 1,
         "image_cache_misses": 8,
-        "image_decode_ms": 92.18069700000001
+        "image_decode_ms": 92.180697
       }
     }
   }

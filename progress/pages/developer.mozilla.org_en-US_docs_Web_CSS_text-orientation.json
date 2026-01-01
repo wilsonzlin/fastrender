@@ -29,7 +29,7 @@
         "dom_top_layer_ms": 0.083922,
         "css_inlining_ms": null,
         "css_parse_ms": 18.318195999999997,
-        "cascade_ms": 1015.0669839999999,
+        "cascade_ms": 1015.066984,
         "box_tree_ms": 174.535988,
         "layout_ms": 2824.746089,
         "text_fallback_ms": 244.44005000000055,
@@ -37,7 +37,7 @@
         "paint_build_ms": 309.765971,
         "paint_optimize_ms": 0.048621,
         "paint_rasterize_ms": 37.333149000000006,
-        "text_rasterize_ms": 0.20654499999999998,
+        "text_rasterize_ms": 0.206545,
         "encode_ms": null
       },
       "counts": {
@@ -138,7 +138,12 @@
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
         "blur_cache_misses": 0,
-        "blur_tiles": 0
+        "blur_tiles": 0,
+        "blur_calls": null,
+        "blur_ms": null,
+        "blur_pixels": null,
+        "blur_bytes": null,
+        "blur_cancellations": null
       },
       "resources": {
         "fetch_counts": {

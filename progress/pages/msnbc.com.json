@@ -9,7 +9,8 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: <omitted>, reason: \\\"No suitable font found for cluster 鑬\\\\u{7ef}\\\" })\")\nhard timeout after 5.00s\nstage: layout",
+  "notes": "",
+  "auto_notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: <omitted>, reason: \\\"No suitable font found for cluster 鑬\\\\u{7ef}\\\" })\")\nhard timeout after 5.00s\nstage: layout",
   "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": "cascade",

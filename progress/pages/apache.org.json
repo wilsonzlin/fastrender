@@ -1,12 +1,12 @@
 {
   "url": "https://apache.org/",
   "status": "ok",
-  "total_ms": 1774.9972870000001,
+  "total_ms": 1774.997287,
   "stages_ms": {
-    "fetch": 1.9290939999999999,
+    "fetch": 1.929094,
     "css": 79.877712,
     "cascade": 523.530501,
-    "layout": 948.8532260000001,
+    "layout": 948.853226,
     "paint": 12.066699
   },
   "notes": "",
@@ -19,13 +19,20 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.9290939999999999,
+        "dom_parse_ms": 1.929094,
+        "dom_html5ever_ms": null,
+        "dom_convert_ms": null,
+        "dom_shadow_attach_ms": null,
+        "dom_compat_ms": null,
+        "dom_meta_viewport_ms": null,
+        "dom_clone_ms": null,
+        "dom_top_layer_ms": null,
         "css_inlining_ms": null,
         "css_parse_ms": 79.877712,
         "cascade_ms": 140.752228,
         "box_tree_ms": 382.778273,
         "layout_ms": 913.449718,
-        "text_fallback_ms": 239.59987199999958,
+        "text_fallback_ms": 239.5998719999996,
         "text_shape_ms": 35.40350800000005,
         "paint_build_ms": 5.948038,
         "paint_optimize_ms": 0.011521,
@@ -63,6 +70,9 @@
         "rule_candidates_by_tag": null,
         "rule_candidates_by_attr": null,
         "rule_candidates_universal": null,
+        "selector_attempts_total": null,
+        "selector_attempts_after_bloom": null,
+        "selector_bloom_fast_rejects": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -80,6 +90,10 @@
         "block_intrinsic": 2687,
         "flex_intrinsic": 495,
         "inline_intrinsic": 0,
+        "layout_parallel_work_items": null,
+        "layout_parallel_worker_threads": null,
+        "layout_parallel_enabled": null,
+        "layout_parallel_auto_activated": null,
         "table_cell_intrinsic_measurements": null,
         "table_cell_layouts": null,
         "layout_cache_lookups": 321,
@@ -112,7 +126,12 @@
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
         "blur_cache_misses": 0,
-        "blur_tiles": 0
+        "blur_tiles": 0,
+        "blur_calls": null,
+        "blur_ms": null,
+        "blur_pixels": null,
+        "blur_bytes": null,
+        "blur_cancellations": null
       },
       "resources": {
         "fetch_counts": {

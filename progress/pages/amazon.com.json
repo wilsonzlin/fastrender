@@ -9,7 +9,8 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "missing cache",
+  "notes": "",
+  "auto_notes": "missing cache",
   "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,

@@ -1,7 +1,7 @@
 {
   "url": "https://manjaro.org/",
   "status": "ok",
-  "total_ms": 1388.0593059999999,
+  "total_ms": 1388.059306,
   "stages_ms": {
     "fetch": 0.723197,
     "css": 33.904678000000004,
@@ -20,6 +20,13 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 0.723197,
+        "dom_html5ever_ms": null,
+        "dom_convert_ms": null,
+        "dom_shadow_attach_ms": null,
+        "dom_compat_ms": null,
+        "dom_meta_viewport_ms": null,
+        "dom_clone_ms": null,
+        "dom_top_layer_ms": null,
         "css_inlining_ms": null,
         "css_parse_ms": 33.904678000000004,
         "cascade_ms": 53.028957,
@@ -27,7 +34,7 @@
         "layout_ms": 104.701704,
         "text_fallback_ms": 27.251872000000017,
         "text_shape_ms": 28.89774400000002,
-        "paint_build_ms": 9.523079000000001,
+        "paint_build_ms": 9.523079,
         "paint_optimize_ms": 0.02405,
         "paint_rasterize_ms": 7.121734,
         "text_rasterize_ms": 0.6147730000000001,
@@ -63,6 +70,9 @@
         "rule_candidates_by_tag": null,
         "rule_candidates_by_attr": null,
         "rule_candidates_universal": null,
+        "selector_attempts_total": null,
+        "selector_attempts_after_bloom": null,
+        "selector_bloom_fast_rejects": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -80,6 +90,10 @@
         "block_intrinsic": 435,
         "flex_intrinsic": 91,
         "inline_intrinsic": 0,
+        "layout_parallel_work_items": null,
+        "layout_parallel_worker_threads": null,
+        "layout_parallel_enabled": null,
+        "layout_parallel_auto_activated": null,
         "table_cell_intrinsic_measurements": null,
         "table_cell_layouts": null,
         "layout_cache_lookups": 95,
@@ -112,7 +126,12 @@
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
         "blur_cache_misses": 0,
-        "blur_tiles": 0
+        "blur_tiles": 0,
+        "blur_calls": null,
+        "blur_ms": null,
+        "blur_pixels": null,
+        "blur_bytes": null,
+        "blur_cancellations": null
       },
       "resources": {
         "fetch_counts": {

@@ -5,7 +5,7 @@
   "stages_ms": {
     "fetch": 7.923810000000001,
     "css": 18.395438,
-    "cascade": 1232.0286449999999,
+    "cascade": 1232.028645,
     "layout": 3074.356854000002,
     "paint": 322.693876
   },
@@ -24,7 +24,7 @@
         "dom_convert_ms": 1.566426,
         "dom_shadow_attach_ms": 0.158644,
         "dom_compat_ms": 0.0,
-        "dom_meta_viewport_ms": 0.011420000000000001,
+        "dom_meta_viewport_ms": 0.01142,
         "dom_clone_ms": null,
         "dom_top_layer_ms": 0.082582,
         "css_inlining_ms": null,
@@ -138,7 +138,12 @@
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
         "blur_cache_misses": 0,
-        "blur_tiles": 0
+        "blur_tiles": 0,
+        "blur_calls": null,
+        "blur_ms": null,
+        "blur_pixels": null,
+        "blur_bytes": null,
+        "blur_cancellations": null
       },
       "resources": {
         "fetch_counts": {
