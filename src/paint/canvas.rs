@@ -1596,6 +1596,7 @@ impl BlendModeExt for BlendMode {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::pixmap::new_pixmap;
   use crate::paint::pixmap::NewPixmapAllocRecorder;
   use crate::paint::pixmap::new_pixmap;
   use tiny_skia::MaskType;
