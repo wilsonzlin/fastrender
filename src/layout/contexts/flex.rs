@@ -2404,7 +2404,13 @@ fn measure_cache_key(
     // while keeping typical sizes precise. Thresholds favor tighter precision for small
     // items while aggressively merging large, near-identical probes common on wide carousels.
     let abs = val.abs();
-    let step = if abs > 4096.0 {
+    let step = if abs > 32768.0 {
+      512.0
+    } else if abs > 16384.0 {
+      256.0
+    } else if abs > 8192.0 {
+      128.0
+    } else if abs > 4096.0 {
       64.0
     } else if abs > 2048.0 {
       32.0
@@ -2420,19 +2426,41 @@ fn measure_cache_key(
     (val / step).round() * step
   }
 
-  fn normalize_available(space: AvailableSpace) -> AvailableSpace {
+  fn clamp_width_for_constraints(w: f32, viewport: Size) -> f32 {
+    // Match `constraints_from_taffy`, which clamps all definite inline sizes to the viewport.
+    // This means any `AvailableSpace::Definite(w)` above the viewport will produce the same
+    // downstream layout result, so we can safely coalesce cache keys for those probes.
+    w.min(viewport.width.max(0.0))
+  }
+
+  fn normalize_available_width(space: AvailableSpace, viewport: Size) -> AvailableSpace {
     match space {
       AvailableSpace::Definite(w) if w <= 1.0 => AvailableSpace::MaxContent,
-      AvailableSpace::Definite(w) => AvailableSpace::Definite(quantize(w)),
+      AvailableSpace::Definite(w) => {
+        AvailableSpace::Definite(quantize(clamp_width_for_constraints(w, viewport)))
+      }
+      other => other,
+    }
+  }
+
+  fn normalize_available_height(space: AvailableSpace) -> AvailableSpace {
+    match space {
+      AvailableSpace::Definite(h) if h <= 1.0 => AvailableSpace::MaxContent,
+      AvailableSpace::Definite(h) => AvailableSpace::Definite(quantize(h)),
       other => other,
     }
   }
 
   let mut known = known.clone();
   let avail = taffy::geometry::Size {
-    width: normalize_available(avail.width),
-    height: normalize_available(avail.height),
+    width: normalize_available_width(avail.width, viewport),
+    height: normalize_available_height(avail.height),
   };
+  if let Some(w) = known.width {
+    if w > 1.0 {
+      known.width = Some(clamp_width_for_constraints(w, viewport));
+    }
+  }
   if let Some(w) = known.width {
     if w <= 1.0 && matches!(avail.width, AvailableSpace::MaxContent) {
       known.width = None;
@@ -5670,6 +5698,104 @@ mod tests {
       false,
     );
     assert_eq!(key_a.0, key_c.0);
+  }
+
+  #[test]
+  fn measure_cache_clamps_definite_widths_at_viewport() {
+    use crate::geometry::Size as GeoSize;
+    use taffy::style::AvailableSpace;
+
+    let viewport = GeoSize::new(1200.0, 800.0);
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+
+    let key_viewport = super::measure_cache_key(
+      &known,
+      &taffy::geometry::Size {
+        width: AvailableSpace::Definite(1200.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      viewport,
+      false,
+    );
+
+    // Any available width larger than the viewport is clamped by `constraints_from_taffy`, so it
+    // should also share the same cache key.
+    let key_wider = super::measure_cache_key(
+      &known,
+      &taffy::geometry::Size {
+        width: AvailableSpace::Definite(1700.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      viewport,
+      false,
+    );
+    assert_eq!(key_viewport, key_wider);
+
+    // Known dimensions should receive the same clamping treatment.
+    let key_known_wider = super::measure_cache_key(
+      &taffy::geometry::Size {
+        width: Some(1700.0),
+        height: None,
+      },
+      &taffy::geometry::Size {
+        width: AvailableSpace::Definite(1700.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      viewport,
+      false,
+    );
+    let key_known_viewport = super::measure_cache_key(
+      &taffy::geometry::Size {
+        width: Some(1200.0),
+        height: None,
+      },
+      &taffy::geometry::Size {
+        width: AvailableSpace::Definite(1200.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      viewport,
+      false,
+    );
+    assert_eq!(key_known_wider, key_known_viewport);
+  }
+
+  #[test]
+  fn measure_cache_key_unique_count_is_bounded_for_jittery_large_widths() {
+    use crate::geometry::Size as GeoSize;
+    use std::collections::HashSet;
+    use taffy::style::AvailableSpace;
+
+    let viewport = GeoSize::new(1200.0, 800.0);
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+
+    // Simulate a series of measurement probes where the available width fluctuates slightly
+    // above the viewport width (common when Taffy propagates intermediate, over-large widths).
+    let mut keys = HashSet::new();
+    for i in 0..256u32 {
+      let w = 1200.0 + (i as f32) * 1.0;
+      let key = super::measure_cache_key(
+        &known,
+        &taffy::geometry::Size {
+          width: AvailableSpace::Definite(w),
+          height: AvailableSpace::Definite(200.0),
+        },
+        viewport,
+        false,
+      );
+      keys.insert(key);
+    }
+
+    assert_eq!(
+      keys.len(),
+      1,
+      "expected jittery widths above the viewport to coalesce into a single cache key"
+    );
   }
 
   #[test]
