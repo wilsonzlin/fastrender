@@ -1728,6 +1728,9 @@ pub struct LayoutDiagnostics {
   pub layout_cache_stores: Option<usize>,
   pub layout_cache_evictions: Option<usize>,
   pub layout_cache_clones: Option<usize>,
+  pub inline_reshape_lookups: Option<usize>,
+  pub inline_reshape_hits: Option<usize>,
+  pub inline_reshape_stores: Option<usize>,
   pub flex_cache_clones: Option<usize>,
   pub taffy_nodes_built: Option<usize>,
   pub taffy_nodes_reused: Option<usize>,
@@ -1988,6 +1991,16 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
     stats.counts.color_glyph_cache_misses = Some(text.color_glyph_cache.misses);
     stats.counts.color_glyph_cache_evictions = Some(text.color_glyph_cache.evictions);
     stats.counts.color_glyph_cache_bytes = Some(text.color_glyph_cache.bytes);
+  }
+}
+
+fn merge_inline_reshape_cache_diagnostics(stats: &mut RenderStats) {
+  if let Some((lookups, hits, stores)) =
+    crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics()
+  {
+    stats.layout.inline_reshape_lookups = Some(lookups);
+    stats.layout.inline_reshape_hits = Some(hits);
+    stats.layout.inline_reshape_stores = Some(stores);
   }
 }
 
@@ -3600,6 +3613,7 @@ impl FastRender {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
+      crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
       crate::dom::enable_dom_parse_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
@@ -3623,6 +3637,7 @@ impl FastRender {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
+          let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
           let _ = crate::dom::take_dom_parse_diagnostics();
         }
         if let Some(previous) = restore_cascade_profile {
@@ -3636,6 +3651,7 @@ impl FastRender {
       let mut stats = recorder.finish();
       merge_dom_parse_diagnostics(&mut stats);
       merge_text_diagnostics(&mut stats);
+      merge_inline_reshape_cache_diagnostics(&mut stats);
       merge_image_cache_diagnostics(&mut stats);
       merge_resource_cache_diagnostics(&mut stats);
       if let Ok(mut guard) = diagnostics.lock() {
@@ -4688,6 +4704,7 @@ impl FastRender {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
+      crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
       crate::dom::enable_dom_parse_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
@@ -4716,6 +4733,7 @@ impl FastRender {
                 let mut stats = recorder.finish();
                 merge_dom_parse_diagnostics(&mut stats);
                 merge_text_diagnostics(&mut stats);
+                merge_inline_reshape_cache_diagnostics(&mut stats);
                 merge_image_cache_diagnostics(&mut stats);
                 merge_resource_cache_diagnostics(&mut stats);
                 let _ = crate::paint::painter::take_paint_diagnostics();
@@ -4755,6 +4773,7 @@ impl FastRender {
         let mut stats = recorder.finish();
         merge_dom_parse_diagnostics(&mut stats);
         merge_text_diagnostics(&mut stats);
+        merge_inline_reshape_cache_diagnostics(&mut stats);
         merge_image_cache_diagnostics(&mut stats);
         merge_resource_cache_diagnostics(&mut stats);
         if let Ok(mut guard) = diagnostics.lock() {
@@ -4774,6 +4793,7 @@ impl FastRender {
       let _ = crate::image_loader::take_image_cache_diagnostics();
       let _ = crate::paint::painter::take_paint_diagnostics();
       let _ = crate::text::pipeline::take_text_diagnostics();
+      let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
       let _ = crate::dom::take_dom_parse_diagnostics();
     }
     drop(_root_span);
@@ -4861,6 +4881,7 @@ impl FastRender {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
+      crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
       crate::dom::enable_dom_parse_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
@@ -4908,6 +4929,7 @@ impl FastRender {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
+          let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
           let _ = crate::dom::take_dom_parse_diagnostics();
         }
         return Err(err);
@@ -4925,6 +4947,7 @@ impl FastRender {
       let mut finished = recorder.finish();
       merge_dom_parse_diagnostics(&mut finished);
       merge_text_diagnostics(&mut finished);
+      merge_inline_reshape_cache_diagnostics(&mut finished);
       merge_image_cache_diagnostics(&mut finished);
       merge_resource_cache_diagnostics(&mut finished);
       report.diagnostics.stats = Some(finished);
@@ -4980,6 +5003,7 @@ impl FastRender {
         crate::image_loader::enable_image_cache_diagnostics();
         crate::paint::painter::enable_paint_diagnostics();
         crate::text::pipeline::enable_text_diagnostics();
+        crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
         crate::dom::enable_dom_parse_diagnostics();
         intrinsic_cache_reset_counters();
         crate::layout::formatting_context::layout_cache_reset_counters();
@@ -5030,6 +5054,7 @@ impl FastRender {
             let mut stats = recorder.finish();
             merge_dom_parse_diagnostics(&mut stats);
             merge_text_diagnostics(&mut stats);
+            merge_inline_reshape_cache_diagnostics(&mut stats);
             merge_image_cache_diagnostics(&mut stats);
             merge_resource_cache_diagnostics(&mut stats);
             if let Ok(mut guard) = diagnostics.lock() {
@@ -5042,6 +5067,7 @@ impl FastRender {
             let _ = crate::image_loader::take_image_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
             let _ = crate::text::pipeline::take_text_diagnostics();
+            let _ = crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
             let _ = crate::dom::take_dom_parse_diagnostics();
           }
         }

@@ -144,6 +144,10 @@ harness = false
 name = "css_parse_pageset"
 harness = false
 
+[[bench]]
+name = "reshape_cache_bench"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true

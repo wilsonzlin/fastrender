@@ -58,12 +58,13 @@ use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use unicode_bidi::BidiInfo;
 use unicode_bidi::Level;
 
@@ -329,9 +330,47 @@ struct ClusterBoundary {
   run_advance: f32,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct ReshapeCache {
-  runs: HashMap<ReshapeCacheKey, Arc<Vec<ShapedRun>>>,
+static INLINE_RESHAPE_CACHE_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
+static INLINE_RESHAPE_CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
+static INLINE_RESHAPE_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
+static INLINE_RESHAPE_CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn enable_inline_reshape_cache_diagnostics() {
+  INLINE_RESHAPE_CACHE_LOOKUPS.store(0, Ordering::Relaxed);
+  INLINE_RESHAPE_CACHE_HITS.store(0, Ordering::Relaxed);
+  INLINE_RESHAPE_CACHE_STORES.store(0, Ordering::Relaxed);
+  INLINE_RESHAPE_CACHE_DIAGNOSTICS_ENABLED.store(true, Ordering::Release);
+}
+
+pub(crate) fn take_inline_reshape_cache_diagnostics() -> Option<(usize, usize, usize)> {
+  if !INLINE_RESHAPE_CACHE_DIAGNOSTICS_ENABLED.swap(false, Ordering::AcqRel) {
+    return None;
+  }
+
+  Some((
+    INLINE_RESHAPE_CACHE_LOOKUPS.load(Ordering::Relaxed),
+    INLINE_RESHAPE_CACHE_HITS.load(Ordering::Relaxed),
+    INLINE_RESHAPE_CACHE_STORES.load(Ordering::Relaxed),
+  ))
+}
+
+fn inline_reshape_cache_diagnostics_enabled() -> bool {
+  INLINE_RESHAPE_CACHE_DIAGNOSTICS_ENABLED.load(Ordering::Acquire)
+}
+
+#[derive(Debug)]
+pub struct ReshapeCache {
+  runs: FxHashMap<ReshapeCacheKey, Arc<Vec<ShapedRun>>>,
+  diagnostics_enabled: bool,
+}
+
+impl Default for ReshapeCache {
+  fn default() -> Self {
+    Self {
+      runs: FxHashMap::default(),
+      diagnostics_enabled: inline_reshape_cache_diagnostics_enabled(),
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1155,7 +1194,7 @@ impl TextItem {
   }
 
   fn hash_text(text: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text.hash(&mut hasher);
     hasher.finish()
   }
@@ -1249,7 +1288,7 @@ impl ReshapeCache {
     self.runs.clear();
   }
 
-  fn shape(
+  pub fn shape(
     &mut self,
     item: &TextItem,
     range: Range<usize>,
@@ -1271,7 +1310,14 @@ impl ReshapeCache {
       word_spacing_bits: item.style.word_spacing.to_bits(),
     };
 
+    if self.diagnostics_enabled {
+      INLINE_RESHAPE_CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
+    }
+
     if let Some(cached) = self.runs.get(&key) {
+      if self.diagnostics_enabled {
+        INLINE_RESHAPE_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+      }
       return Some((**cached).clone());
     }
 
@@ -1291,6 +1337,9 @@ impl ReshapeCache {
       item.style.word_spacing,
     );
     self.runs.insert(key, Arc::new(runs.clone()));
+    if self.diagnostics_enabled {
+      INLINE_RESHAPE_CACHE_STORES.fetch_add(1, Ordering::Relaxed);
+    }
     Some(runs)
   }
 }
@@ -2773,7 +2822,7 @@ fn reorder_paragraph(
       }
     }
 
-    let mut box_positions: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut box_positions: FxHashMap<usize, (usize, usize)> = FxHashMap::default();
     for (vis_pos, frag) in visual_fragments.iter().enumerate() {
       for ctx in &frag.box_stack {
         box_positions
