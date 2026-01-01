@@ -1840,11 +1840,30 @@ fn populate_timeout_progress_with_heartbeat(
   }
 }
 
+fn maybe_abort_worker_for_test(stem: &str) {
+  let Some(ms) = std::env::var("FASTR_TEST_WORKER_ABORT_AFTER_MS")
+    .ok()
+    .and_then(|raw| raw.parse::<u64>().ok())
+  else {
+    return;
+  };
+  let should_abort = match std::env::var("FASTR_TEST_WORKER_ABORT_STEM").ok() {
+    Some(filter) => filter.trim() == stem,
+    None => true,
+  };
+  if !should_abort {
+    return;
+  }
+  std::thread::sleep(Duration::from_millis(ms));
+  std::process::abort();
+}
+
 fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let _cleanup_delay_guard = WorkerCleanupDelayGuard::from_env();
   let heartbeat = StageHeartbeatWriter::new(args.stage_path.clone());
   let _heartbeat_guard = StageListenerGuard::new(heartbeat.listener());
   record_stage(StageHeartbeat::ReadCache);
+  maybe_abort_worker_for_test(&args.stem);
   common::render_pipeline::apply_test_render_delay(Some(&args.stem));
   let started = Instant::now();
   let mut log = String::new();
@@ -2872,6 +2891,35 @@ fn format_exit_status(status: ExitStatusSummary) -> String {
     (Some(code), None) => format!("code {code}"),
     (None, Some(signal)) => format!("signal {signal}"),
     (None, None) => "unknown status".to_string(),
+  }
+}
+
+#[cfg(unix)]
+const EXPECTED_HARD_TIMEOUT_SIGNAL: i32 = 9; // SIGKILL
+
+fn hard_timeout_exit_indicates_crash(
+  exit: ExitStatusSummary,
+  kill_result: &io::Result<()>,
+) -> bool {
+  #[cfg(unix)]
+  {
+    let _ = kill_result;
+    if let Some(signal) = exit.signal {
+      return signal != EXPECTED_HARD_TIMEOUT_SIGNAL;
+    }
+    if let Some(code) = exit.code {
+      return code != 0;
+    }
+    return false;
+  }
+  #[cfg(not(unix))]
+  {
+    // Without signal information, treat exits as crashes only when we failed to send the kill and
+    // still observed a non-zero exit code.
+    if kill_result.is_ok() {
+      return false;
+    }
+    exit.code.unwrap_or(0) != 0
   }
 }
 
@@ -5483,6 +5531,11 @@ fn run_queue(
 ) -> io::Result<()> {
   let mut running: Vec<RunningChild> = Vec::new();
   let current_sha = current_git_sha();
+  let poll_interval = std::env::var("FASTR_TEST_PAGESET_POLL_INTERVAL_MS")
+    .ok()
+    .and_then(|raw| raw.parse::<u64>().ok())
+    .map(Duration::from_millis)
+    .unwrap_or_else(|| Duration::from_millis(20));
 
   while !queue.is_empty() || !running.is_empty() {
     while running.len() < jobs {
@@ -5523,8 +5576,16 @@ fn run_queue(
 
       if timed_out {
         let mut entry = running.swap_remove(i);
-        let _ = entry.child.kill();
-        let _ = entry.child.wait();
+        let kill_result = entry.child.kill();
+        let waited = entry.child.wait();
+        let exit_summary = waited
+          .as_ref()
+          .ok()
+          .map(summarize_exit_status)
+          .unwrap_or(ExitStatusSummary {
+            code: None,
+            signal: None,
+          });
         let progress_written = progress_sentinel_path(&entry.item.stage_path).exists();
         if progress_written {
           // The worker already committed progress and is now likely stuck in optional dump capture.
@@ -5544,32 +5605,64 @@ fn run_queue(
         let timeout_stage = infer_hard_timeout_stage(heartbeat_stage, previous.as_ref());
         let timeout_hotspot = hotspot_from_progress_stage(timeout_stage).to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
-        progress.status = ProgressStatus::Timeout;
+        let crash_at_timeout = hard_timeout_exit_indicates_crash(exit_summary, &kill_result);
+        progress.status = if crash_at_timeout {
+          ProgressStatus::Panic
+        } else {
+          ProgressStatus::Timeout
+        };
         let total_ms = worker_timeout.as_millis() as u64;
         progress.total_ms = Some(total_ms as f64);
-        progress.stages_ms =
-          stage_buckets_from_timeline(&entry.item.stage_path, total_ms).unwrap_or_default();
+        progress.stages_ms = stage_buckets_from_timeline(&entry.item.stage_path, total_ms)
+          .filter(|buckets| buckets.sum() > 0.0)
+          .unwrap_or_else(|| stage_buckets_for_progress_stage(timeout_stage, total_ms as f64));
+        progress.stages_ms.rescale_to_total(total_ms as f64);
         progress.auto_notes = format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64());
         if let Some(stage) = heartbeat_stage {
           progress.auto_notes = format!("{}\nstage: {}", progress.auto_notes, stage.as_str());
         }
+        progress.auto_notes = format!(
+          "{}\nexit: {}",
+          progress.auto_notes,
+          format_exit_status(exit_summary)
+        );
         progress.hotspot = timeout_hotspot.clone();
-        progress.timeout_stage = Some(timeout_stage);
+        if crash_at_timeout {
+          progress.failure_stage = heartbeat_stage
+            .and_then(progress_stage_from_heartbeat)
+            .or(Some(timeout_stage));
+          progress.timeout_stage = None;
+        } else {
+          progress.timeout_stage = Some(timeout_stage);
+        }
         let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
         progress.hotspot = timeout_hotspot;
-        progress.timeout_stage = Some(timeout_stage);
+        if crash_at_timeout {
+          progress.failure_stage = heartbeat_stage
+            .and_then(progress_stage_from_heartbeat)
+            .or(Some(timeout_stage));
+          progress.timeout_stage = None;
+        } else {
+          progress.timeout_stage = Some(timeout_stage);
+        }
         let _ = write_progress(&entry.item.progress_path, &progress);
 
         let _ = write_text_file(
           &entry.item.log_path,
           &format!(
-            "=== {} ===\nStatus: TIMEOUT\nKilled after {:.2}s\n",
+            "=== {} ===\nStatus: {}\nKilled after {:.2}s\nExit: {}\n",
             entry.item.cache_stem,
-            worker_timeout.as_secs_f64()
+            if crash_at_timeout { "PANIC" } else { "TIMEOUT" },
+            worker_timeout.as_secs_f64(),
+            format_exit_status(exit_summary)
           ),
         );
 
-        eprintln!("TIMEOUT {}", entry.item.cache_stem);
+        if crash_at_timeout {
+          eprintln!("PANIC {} (crashed at hard timeout)", entry.item.cache_stem);
+        } else {
+          eprintln!("TIMEOUT {}", entry.item.cache_stem);
+        }
         if let Some(trace_out) = &entry.item.trace_out {
           if let Some(msg) = trace_issue_message(
             trace_out,
@@ -5696,7 +5789,9 @@ fn run_queue(
       }
     }
 
-    std::thread::sleep(Duration::from_millis(20));
+    if !queue.is_empty() || !running.is_empty() {
+      std::thread::sleep(poll_interval);
+    }
   }
 
   Ok(())
