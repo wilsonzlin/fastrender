@@ -6125,6 +6125,7 @@ impl FastRender {
     // render runners can attribute stalls/timeouts correctly.
     record_stage(StageHeartbeat::CssInline);
     let css_parse_timer = stats.as_deref().and_then(|rec| rec.timer());
+    let css_inlining_timer = css_parse_timer.clone();
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
     record_stage(StageHeartbeat::CssParse);
@@ -6140,6 +6141,9 @@ impl FastRender {
     let mut stylesheet = style_set.document.clone();
     for sheet in style_set.shadows.values() {
       stylesheet.rules.extend(sheet.rules.clone());
+    }
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(&mut rec.stats.timings.css_inlining_ms, css_inlining_timer);
     }
     if let Some(start) = css_parse_start {
       eprintln!("timing:css_parse {:?}", start.elapsed());
@@ -10660,6 +10664,7 @@ mod tests {
       .stats
       .as_ref()
       .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_inlining_ms.is_some());
     assert!(stats.timings.css_parse_ms.is_some());
     assert!(stats.timings.cascade_ms.is_some());
     assert!(stats.timings.box_tree_ms.is_some());
@@ -10683,6 +10688,7 @@ mod tests {
       .stats
       .as_ref()
       .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_inlining_ms.is_some());
     assert!(stats.timings.css_parse_ms.is_some());
     assert!(stats.timings.cascade_ms.is_some());
     assert!(stats.timings.box_tree_ms.is_some());
@@ -10724,6 +10730,7 @@ mod tests {
       .stats
       .as_ref()
       .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_inlining_ms.is_some());
     assert!(stats.timings.css_parse_ms.is_some());
     assert!(stats.timings.cascade_ms.is_some());
     assert!(stats.timings.box_tree_ms.is_some());
@@ -10780,6 +10787,7 @@ mod tests {
       .stats
       .as_ref()
       .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_inlining_ms.is_some());
     assert!(stats.timings.css_parse_ms.is_some());
     assert!(stats.timings.cascade_ms.is_some());
     assert!(stats.timings.box_tree_ms.is_some());
@@ -10837,6 +10845,7 @@ mod tests {
       .stats
       .as_ref()
       .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_inlining_ms.is_some());
     assert!(stats.timings.css_parse_ms.is_some());
     assert!(stats.timings.cascade_ms.is_some());
     assert!(stats.timings.box_tree_ms.is_some());
@@ -12689,6 +12698,10 @@ mod tests {
     assert_eq!(
       stylesheet_fetches, 2,
       "expected one external stylesheet + one @import load"
+    );
+    assert!(
+      stats.timings.css_inlining_ms.is_some(),
+      "css_inlining_ms should be populated"
     );
     assert!(
       stats.timings.css_parse_ms.is_some(),
