@@ -3756,6 +3756,7 @@ impl FormattingContext for BlockFormattingContext {
 
     let mut inline_child_debug: Vec<(usize, Display)> = Vec::new();
     let mut deadline_counter = 0usize;
+    let mut block_child_width = 0.0f32;
     for child in &box_node.children {
       if let Err(RenderError::Timeout { elapsed, .. }) =
         check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
@@ -3784,6 +3785,36 @@ impl FormattingContext for BlockFormattingContext {
           &mut inline_run_fingerprint,
           &mut inline_width,
         )?;
+
+        // Block-level in-flow children contribute their own intrinsic widths.
+        let fc_type = child
+          .formatting_context()
+          .unwrap_or(FormattingContextType::Block);
+        // Avoid going through `factory.get(FormattingContextType::Block)` for block children:
+        // `FormattingContextFactory::block_context` constructs a BlockFormattingContext backed by a
+        // `detached()` factory clone (to avoid factory↔cached-FC Arc cycles). If we used `get(Block)`
+        // recursively we'd create a new detached factory per block depth during intrinsic sizing,
+        // which is exactly the kind of allocation churn tables can amplify.
+        let child_width = if fc_type == FormattingContextType::Block {
+          self.compute_intrinsic_inline_size(child, mode)?
+        } else {
+          factory
+            .get(fc_type)
+            .compute_intrinsic_inline_size(child, mode)?
+        };
+        block_child_width = block_child_width.max(child_width);
+        if log_children {
+          let sel = child
+            .debug_info
+            .as_ref()
+            .map(|d| d.to_selector())
+            .unwrap_or_else(|| "<anon>".to_string());
+          let disp = child.style.display;
+          eprintln!(
+            "[intrinsic-child] parent_id={} child_id={} selector={} display={:?} mode={:?} width={:.2}",
+            box_node.id, child.id, sel, disp, mode, child_width
+          );
+        }
       } else {
         if log_children {
           inline_child_debug.push((child.id, child.style.display));
@@ -3800,53 +3831,6 @@ impl FormattingContext for BlockFormattingContext {
       &mut inline_run_fingerprint,
       &mut inline_width,
     )?;
-
-    // Block-level in-flow children contribute their own intrinsic widths
-    let mut block_child_width = 0.0f32;
-    for child in &box_node.children {
-      if let Err(RenderError::Timeout { elapsed, .. }) =
-        check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
-      {
-        return Err(LayoutError::Timeout { elapsed });
-      }
-      if !child.is_block_level() || is_out_of_flow(child) {
-        continue;
-      }
-
-      // Ignore floats when computing intrinsic inline sizes; they are out-of-flow.
-      if child.style.float.is_floating() {
-        continue;
-      }
-
-      let fc_type = child
-        .formatting_context()
-        .unwrap_or(FormattingContextType::Block);
-      // Avoid going through `factory.get(FormattingContextType::Block)` for block children:
-      // `FormattingContextFactory::block_context` constructs a BlockFormattingContext backed by a
-      // `detached()` factory clone (to avoid factory↔cached-FC Arc cycles). If we used `get(Block)`
-      // recursively we'd create a new detached factory per block depth during intrinsic sizing,
-      // which is exactly the kind of allocation churn tables can amplify.
-      let child_width = if fc_type == FormattingContextType::Block {
-        self.compute_intrinsic_inline_size(child, mode)?
-      } else {
-        factory
-          .get(fc_type)
-          .compute_intrinsic_inline_size(child, mode)?
-      };
-      block_child_width = block_child_width.max(child_width);
-      if log_children {
-        let sel = child
-          .debug_info
-          .as_ref()
-          .map(|d| d.to_selector())
-          .unwrap_or_else(|| "<anon>".to_string());
-        let disp = child.style.display;
-        eprintln!(
-                    "[intrinsic-child] parent_id={} child_id={} selector={} display={:?} mode={:?} width={:.2}",
-                    box_node.id, child.id, sel, disp, mode, child_width
-                );
-      }
-    }
 
     let content_width = inline_width.max(block_child_width);
 
