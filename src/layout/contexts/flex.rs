@@ -3028,10 +3028,42 @@ impl FlexFormattingContext {
           if min_width_dimension == Dimension::AUTO
             && matches!(style.overflow_x, CssOverflow::Visible)
           {
-            match item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent) {
-              Ok(min_content) => {
-                if min_content.is_finite() && min_content > 0.0 {
-                  min_width_dimension = Dimension::length(min_content);
+            let specified_size_suggestion = style.width.as_ref().and_then(|len| {
+              let px = self.resolve_length_px(len, style)?;
+              if px <= 0.0 {
+                return None;
+              }
+              let mut value = px;
+              if style.box_sizing == BoxSizing::ContentBox {
+                value += self.horizontal_edges_px(style)?;
+              }
+              Some(value.max(0.0))
+            });
+
+            // `compute_intrinsic_inline_size` for block formatting contexts respects authored widths.
+            // For flexbox auto minimum sizing we want the *content size suggestion* instead, which
+            // ignores the preferred size (CSS Flexbox §4.5). When a definite preferred size exists,
+            // the content-based minimum is the smaller of the preferred size suggestion and the
+            // content size suggestion.
+            let mut intrinsic_box_storage: Option<BoxNode> = None;
+            let intrinsic_box: &BoxNode = if specified_size_suggestion.is_some() && style.width.is_some() {
+              let mut cloned = box_node.clone();
+              let mut cloned_style: ComputedStyle = (*box_node.style).clone();
+              cloned_style.width = None;
+              cloned.style = Arc::new(cloned_style);
+              intrinsic_box_storage.insert(cloned)
+            } else {
+              box_node
+            };
+
+            match item_fc.compute_intrinsic_inline_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
+              Ok(content_size_suggestion) => {
+                let mut min_candidate = content_size_suggestion;
+                if let Some(specified) = specified_size_suggestion {
+                  min_candidate = min_candidate.min(specified);
+                }
+                if min_candidate.is_finite() && min_candidate > 0.0 {
+                  min_width_dimension = Dimension::length(min_candidate);
                 }
               }
               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
@@ -3041,10 +3073,38 @@ impl FlexFormattingContext {
         } else if min_height_dimension == Dimension::AUTO
           && matches!(style.overflow_y, CssOverflow::Visible)
         {
-          match item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent) {
-            Ok(min_content) => {
-              if min_content.is_finite() && min_content > 0.0 {
-                min_height_dimension = Dimension::length(min_content);
+          let specified_size_suggestion = style.height.as_ref().and_then(|len| {
+            let px = self.resolve_length_px(len, style)?;
+            if px <= 0.0 {
+              return None;
+            }
+            let mut value = px;
+            if style.box_sizing == BoxSizing::ContentBox {
+              value += self.vertical_edges_px(style)?;
+            }
+            Some(value.max(0.0))
+          });
+
+          let mut intrinsic_box_storage: Option<BoxNode> = None;
+          let intrinsic_box: &BoxNode =
+            if specified_size_suggestion.is_some() && style.height.is_some() {
+              let mut cloned = box_node.clone();
+              let mut cloned_style: ComputedStyle = (*box_node.style).clone();
+              cloned_style.height = None;
+              cloned.style = Arc::new(cloned_style);
+              intrinsic_box_storage.insert(cloned)
+            } else {
+              box_node
+            };
+
+          match item_fc.compute_intrinsic_block_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
+            Ok(content_size_suggestion) => {
+              let mut min_candidate = content_size_suggestion;
+              if let Some(specified) = specified_size_suggestion {
+                min_candidate = min_candidate.min(specified);
+              }
+              if min_candidate.is_finite() && min_candidate > 0.0 {
+                min_height_dimension = Dimension::length(min_candidate);
               }
             }
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
@@ -3666,12 +3726,6 @@ impl FlexFormattingContext {
     let mut manual_col_positions = false;
     let mut unordered_children: Vec<(i32, usize, FragmentNode)> =
       Vec::with_capacity(box_node.children.len());
-    #[cfg(test)]
-    eprintln!(
-      "[flex-debug-node-map-len] box_id={} node_map_len={}",
-      box_node.id,
-      node_map.len()
-    );
 
     // Sequential assembly: apply placement/fallback logic in DOM order, but reuse/compute child
     // fragments using the results from the parallel stage above.
@@ -3679,13 +3733,6 @@ impl FlexFormattingContext {
       check_layout_deadline(&mut deadline_counter)?;
       let plan = mem::replace(&mut child_plans[dom_idx], ChildPlan::Skip);
       let Some(metrics) = child_metrics[dom_idx] else {
-        #[cfg(test)]
-        if node_map.get(&(child_box as *const BoxNode)).is_none() {
-          eprintln!(
-            "[flex-debug-missing-child] box_id={} child_ptr={:p}",
-            box_node.id, child_box
-          );
-        }
         continue;
       };
 
