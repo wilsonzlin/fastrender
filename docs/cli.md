@@ -39,7 +39,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
-- Perf smoke: `cargo xtask perf-smoke [--top 5 --baseline baseline.json --fail-on-regression]` (offline fixtures, bundled fonts, JSON summary at `target/perf_smoke.json`). Use `cargo run --release --bin perf_smoke -- --suite pageset-timeouts --top 5` to time the captured pageset timeout fixtures offline; missing fixtures are skipped so the suite still runs when only a subset is available.
+- Perf smoke: `cargo xtask perf-smoke [--suite core|pageset-timeouts|all] [--only flex_dashboard,grid_news] [--top 5 --baseline baseline.json --threshold 0.05 --fail-on-regression]` (offline fixtures, bundled fonts, JSON summary at `target/perf_smoke.json`). Use `--suite pageset-timeouts` to time the captured pageset timeout fixtures offline; missing fixtures are skipped so the suite still runs when only a subset is available.
 
 `render-page` wraps `fetch_and_render` in release mode by default (add `--debug` to keep a debug build).
 

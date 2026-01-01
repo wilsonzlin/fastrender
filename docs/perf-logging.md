@@ -42,22 +42,22 @@ Run a quick offline perf pass against the curated pages fixtures with bundled fo
 machine-readable timings:
 
 ```
-cargo xtask perf-smoke [--top 5] [--output target/perf-smoke.json]
+cargo xtask perf-smoke [--suite core|pageset-timeouts|all] [--top 5] [--output target/perf_smoke.json]
 ```
 
 The command renders the HTML under `tests/pages/fixtures/*`, captures `DiagnosticsLevel::Basic`
-stats, and writes `target/perf-smoke.json` with per-fixture stage timings/counters plus aggregate
-wall-clock totals. The JSON includes `stage_ms` buckets (`fetch`, `css`, `cascade`, `layout`,
-`paint`) derived from `RenderStats` so regressions can be attributed to a single pipeline stage.
+stats, and writes `target/perf_smoke.json` with per-fixture totals and stage timings/counters. The
+JSON includes `stage_ms` buckets (`fetch`, `css`, `cascade`, `layout`, `paint`) derived from
+`RenderStats` so regressions can be attributed to a single pipeline stage.
 Compare against a saved baseline to flag obvious regressions:
 
 ```
-cargo xtask perf-smoke --baseline ../baseline/perf-smoke.json --threshold 0.05
+cargo xtask perf-smoke --baseline ../baseline/perf_smoke.json --threshold 0.05 --fail-on-regression
 ```
 
-`--top N` prints the slowest fixtures. Baseline comparisons fail the run when any fixture (or the
-overall render wall time) exceeds the relative threshold, making the output suitable for lightweight
-CI or local preflight checks.
+`--top N` prints the slowest fixtures. With `--fail-on-regression`, baseline comparisons fail the
+run when any fixture metric exceeds the relative threshold, making the output suitable for
+lightweight CI or local preflight checks.
 
 ## Pipeline benchmarks (Criterion)
 

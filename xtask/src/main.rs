@@ -2,18 +2,10 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use fastrender::style::media::MediaType;
-use fastrender::{
-  DiagnosticsLevel, FastRender, FastRenderConfig, FontConfig, RenderOptions, RenderStageTimings,
-  RenderStats, ResourceKind, ResourcePolicy,
-};
 use image::{Rgba, RgbaImage};
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
 use tempfile::TempDir;
 use url::Url;
 use walkdir::WalkDir;
@@ -69,7 +61,7 @@ enum Commands {
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
   /// Update `tests/pages/pageset_timeouts.json` based on `progress/pages/*.json`
   UpdatePagesetTimeouts(update_pageset_timeouts::UpdatePagesetTimeoutsArgs),
-  /// Run the offline perf smoke harness over a curated fixture set
+  /// Run the offline perf smoke harness (`perf_smoke` binary) over curated fixtures
   PerfSmoke(PerfSmokeArgs),
 }
 
@@ -287,6 +279,14 @@ struct DiffRendersArgs {
 
 #[derive(Args)]
 struct PerfSmokeArgs {
+  /// Which fixture suite to run (core/pageset-timeouts/all)
+  #[arg(long, value_enum, default_value_t = PerfSmokeSuite::Core)]
+  suite: PerfSmokeSuite,
+
+  /// Only run fixtures matching these names (comma-separated)
+  #[arg(long, value_delimiter = ',')]
+  only: Option<Vec<String>>,
+
   /// Print the slowest N fixtures
   #[arg(long)]
   top: Option<usize>,
@@ -300,16 +300,33 @@ struct PerfSmokeArgs {
   threshold: f64,
 
   /// Where to write the perf smoke JSON report
-  #[arg(long, default_value = "target/perf-smoke.json")]
+  #[arg(long, default_value = "target/perf_smoke.json")]
   output: PathBuf,
 
-  /// Fail when regressions are detected (enabled automatically when --baseline is provided)
+  /// Fail when regressions are detected
   #[arg(long)]
   fail_on_regression: bool,
 
   /// Run the perf smoke harness in debug mode instead of release
   #[arg(long)]
   debug: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum PerfSmokeSuite {
+  Core,
+  PagesetTimeouts,
+  All,
+}
+
+impl PerfSmokeSuite {
+  fn as_cli_value(self) -> &'static str {
+    match self {
+      Self::Core => "core",
+      Self::PagesetTimeouts => "pageset-timeouts",
+      Self::All => "all",
+    }
+  }
 }
 
 struct DiffOutcome {
@@ -770,309 +787,39 @@ impl DiskCacheFeatureExt for Command {
     self
   }
 }
-
-const PERF_SMOKE_REPORT_VERSION: u32 = 1;
-
-#[derive(Clone, Copy)]
-struct PerfFixture {
-  name: &'static str,
-  html: &'static str,
-  shots: &'static [PerfShot],
-}
-
-#[derive(Clone, Copy)]
-struct PerfShot {
-  label: &'static str,
-  viewport: (u32, u32),
-  dpr: f32,
-  media: MediaType,
-}
-
-const DEFAULT_SHOT: PerfShot = PerfShot {
-  label: "default",
-  viewport: (1040, 1240),
-  dpr: 1.0,
-  media: MediaType::Screen,
-};
-
-const PRINT_SHOT: PerfShot = PerfShot {
-  label: "print",
-  viewport: (920, 1180),
-  dpr: 1.0,
-  media: MediaType::Print,
-};
-
-const DEFAULT_SHOTS: &[PerfShot] = &[DEFAULT_SHOT];
-const PRINT_SHOTS: &[PerfShot] = &[PRINT_SHOT];
-
-const PERF_FIXTURES: &[PerfFixture] = &[
-  PerfFixture {
-    name: "flex_dashboard",
-    html: "flex_dashboard/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "grid_news",
-    html: "grid_news/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "table_financial",
-    html: "table_financial/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "multicol_article",
-    html: "multicol_article/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "paginated_report",
-    html: "paginated_report/index.html",
-    shots: PRINT_SHOTS,
-  },
-  PerfFixture {
-    name: "fragmentation_showcase",
-    html: "fragmentation_showcase/index.html",
-    shots: PRINT_SHOTS,
-  },
-  PerfFixture {
-    name: "mask_filter_showcase",
-    html: "mask_filter_showcase/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "svg_embed",
-    html: "svg_embed/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "writing_modes",
-    html: "writing_modes/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "subgrid_showcase",
-    html: "subgrid_showcase/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "subgrid_alignment",
-    html: "subgrid_alignment/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "subgrid_writing_mode_gap",
-    html: "subgrid_writing_mode_gap/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "subgrid_vertical_inheritance",
-    html: "subgrid_vertical_inheritance/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "subgrid_vertical_stack",
-    html: "subgrid_vertical_stack/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "subgrid_nested_axes",
-    html: "subgrid_nested_axes/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "form_controls",
-    html: "form_controls/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "positioned_badge_regression",
-    html: "positioned_badge_regression/index.html",
-    shots: DEFAULT_SHOTS,
-  },
-  PerfFixture {
-    name: "running_elements",
-    html: "running_elements/index.html",
-    shots: PRINT_SHOTS,
-  },
-];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PerfSmokeReport {
-  version: u32,
-  totals: PerfSmokeTotals,
-  fixtures: Vec<FixtureReport>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PerfSmokeTotals {
-  fixtures: usize,
-  wall_time_ms: f64,
-  render_wall_time_ms: f64,
-  stage_time_ms: RenderStageTimings,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FixtureReport {
-  id: String,
-  fixture: String,
-  shot: String,
-  html: String,
-  viewport: (u32, u32),
-  dpr: f32,
-  media: String,
-  wall_time_ms: f64,
-  stage_total_ms: Option<f64>,
-  stats: SerializableRenderStats,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SerializableRenderStats {
-  timings: RenderStageTimings,
-  counts: fastrender::RenderCounts,
-  cascade: fastrender::CascadeDiagnostics,
-  layout: fastrender::LayoutDiagnostics,
-  paint: fastrender::PaintDiagnostics,
-  resources: SerializableResourceDiagnostics,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SerializableResourceDiagnostics {
-  fetch_counts: BTreeMap<String, usize>,
-  image_cache_hits: Option<usize>,
-  image_cache_misses: Option<usize>,
-}
-
 fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   if args.threshold < 0.0 {
     bail!("threshold must be >= 0");
   }
-  let fail_on_regression = args.fail_on_regression || args.baseline.is_some();
 
   // Keep renders deterministic across machines.
   std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
 
-  let fixtures_dir = perf_fixture_dir();
-  let output_path = if args.output.is_absolute() {
-    args.output.clone()
-  } else {
-    repo_root().join(&args.output)
-  };
-  let baseline_path = args.baseline.as_ref().map(|path| {
-    if path.is_absolute() {
-      path.clone()
-    } else {
-      repo_root().join(path)
-    }
-  });
-  let run_start = Instant::now();
-  let mut fixtures = Vec::new();
-  let mut render_wall_time_ms = 0.0f64;
-  let mut stage_totals = RenderStageTimings::default();
-
-  for fixture in PERF_FIXTURES {
-    let html_path = fixtures_dir.join(fixture.html);
-    let html = fs::read_to_string(&html_path)
-      .with_context(|| format!("read fixture HTML at {}", html_path.display()))?;
-    let base_url = fixture_base_url(&html_path)?;
-    let mut renderer = build_perf_renderer(&base_url)?;
-
-    for shot in fixture.shots {
-      let id = fixture_id(fixture, shot);
-      println!("Rendering perf fixture {id}...");
-
-      let options = RenderOptions::new()
-        .with_viewport(shot.viewport.0, shot.viewport.1)
-        .with_device_pixel_ratio(shot.dpr)
-        .with_media_type(shot.media)
-        .with_diagnostics_level(DiagnosticsLevel::Basic);
-
-      let render_start = Instant::now();
-      let render = renderer
-        .render_html_with_diagnostics(&html, options)
-        .with_context(|| format!("render fixture {id}"))?;
-      let wall_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-      render_wall_time_ms += wall_time_ms;
-
-      let stats = render
-        .diagnostics
-        .stats
-        .ok_or_else(|| anyhow!("RenderStats missing for {id}"))?;
-      let stage_total_ms = sum_timings(&stats.timings);
-      accumulate_timings(&mut stage_totals, &stats.timings);
-
-      fixtures.push(FixtureReport::from_components(
-        fixture,
-        shot,
-        wall_time_ms,
-        stage_total_ms,
-        stats,
-      ));
-    }
+  let mut cmd = Command::new("cargo");
+  cmd.arg("run");
+  if !args.debug {
+    cmd.arg("--release");
   }
-
-  let report = PerfSmokeReport {
-    version: PERF_SMOKE_REPORT_VERSION,
-    totals: PerfSmokeTotals {
-      fixtures: fixtures.len(),
-      wall_time_ms: run_start.elapsed().as_secs_f64() * 1000.0,
-      render_wall_time_ms,
-      stage_time_ms: stage_totals,
-    },
-    fixtures,
-  };
-
-  write_perf_smoke_report(&output_path, &report)?;
-  println!("Wrote perf smoke report to {}", output_path.display());
-
+  cmd.args(["--bin", "perf_smoke", "--"]);
+  cmd.args(["--suite", args.suite.as_cli_value()]);
+  cmd.arg("--output").arg(&args.output);
+  cmd.arg("--threshold").arg(args.threshold.to_string());
+  if let Some(only) = &args.only {
+    cmd.arg("--only").arg(only.join(","));
+  }
   if let Some(top) = args.top {
-    print_top_fixtures(&report, top);
+    cmd.arg("--top").arg(top.to_string());
+  }
+  if let Some(baseline) = &args.baseline {
+    cmd.arg("--baseline").arg(baseline);
+  }
+  if args.fail_on_regression {
+    cmd.arg("--fail-on-regression");
   }
 
-  if let Some(baseline) = &baseline_path {
-    let baseline_report = load_perf_smoke_report(baseline)?;
-    let regressions = compare_baseline(&report, &baseline_report, args.threshold, baseline)?;
-    if regressions.is_empty() {
-      println!(
-        "No perf regressions detected vs {} (threshold {:.2}%)",
-        baseline.display(),
-        args.threshold * 100.0
-      );
-    } else {
-      eprintln!(
-        "Perf regressions vs {} (threshold {:.2}%):",
-        baseline.display(),
-        args.threshold * 100.0
-      );
-      for entry in &regressions {
-        eprintln!("- {entry}");
-      }
-      if fail_on_regression {
-        bail!("perf-smoke regressions detected");
-      }
-    }
-  }
-
-  Ok(())
-}
-
-fn build_perf_renderer(base_url: &str) -> Result<FastRender> {
-  let policy = ResourcePolicy::default()
-    .allow_http(false)
-    .allow_https(false)
-    .allow_file(true)
-    .allow_data(true);
-
-  let config = FastRenderConfig::new()
-    .with_base_url(base_url.to_string())
-    .with_resource_policy(policy)
-    .with_font_sources(FontConfig::bundled_only());
-  Ok(FastRender::with_config(config)?)
-}
-
-fn perf_fixture_dir() -> PathBuf {
-  repo_root().join("tests/pages/fixtures")
+  cmd.current_dir(repo_root());
+  println!("Running perf_smoke...");
+  run_command(cmd)
 }
 
 fn repo_root() -> PathBuf {
@@ -1080,270 +827,6 @@ fn repo_root() -> PathBuf {
     .parent()
     .expect("xtask manifest should be in repository root")
     .to_path_buf()
-}
-
-fn fixture_base_url(html_path: &Path) -> Result<String> {
-  let Some(parent) = html_path.parent() else {
-    bail!("Fixture {} has no parent directory", html_path.display());
-  };
-  Url::from_directory_path(parent)
-    .map(|u| u.to_string())
-    .map_err(|_| anyhow!("Failed to build base URL for {}", html_path.display()))
-}
-
-fn fixture_id(fixture: &PerfFixture, shot: &PerfShot) -> String {
-  if shot.label == "default" {
-    fixture.name.to_string()
-  } else {
-    format!("{}_{}", fixture.name, shot.label)
-  }
-}
-
-fn media_label(media: MediaType) -> &'static str {
-  match media {
-    MediaType::All => "all",
-    MediaType::Screen => "screen",
-    MediaType::Print => "print",
-    MediaType::Speech => "speech",
-  }
-}
-
-fn accumulate_timings(target: &mut RenderStageTimings, timings: &RenderStageTimings) {
-  add_timing(&mut target.html_decode_ms, timings.html_decode_ms);
-  add_timing(&mut target.dom_parse_ms, timings.dom_parse_ms);
-  add_timing(&mut target.dom_html5ever_ms, timings.dom_html5ever_ms);
-  add_timing(&mut target.dom_convert_ms, timings.dom_convert_ms);
-  add_timing(
-    &mut target.dom_shadow_attach_ms,
-    timings.dom_shadow_attach_ms,
-  );
-  add_timing(&mut target.dom_compat_ms, timings.dom_compat_ms);
-  add_timing(
-    &mut target.dom_meta_viewport_ms,
-    timings.dom_meta_viewport_ms,
-  );
-  add_timing(&mut target.dom_clone_ms, timings.dom_clone_ms);
-  add_timing(&mut target.dom_top_layer_ms, timings.dom_top_layer_ms);
-  add_timing(&mut target.css_inlining_ms, timings.css_inlining_ms);
-  add_timing(&mut target.css_parse_ms, timings.css_parse_ms);
-  add_timing(&mut target.cascade_ms, timings.cascade_ms);
-  add_timing(&mut target.box_tree_ms, timings.box_tree_ms);
-  add_timing(&mut target.layout_ms, timings.layout_ms);
-  add_timing(&mut target.text_fallback_ms, timings.text_fallback_ms);
-  add_timing(&mut target.text_shape_ms, timings.text_shape_ms);
-  add_timing(&mut target.paint_build_ms, timings.paint_build_ms);
-  add_timing(&mut target.paint_optimize_ms, timings.paint_optimize_ms);
-  add_timing(&mut target.paint_rasterize_ms, timings.paint_rasterize_ms);
-  add_timing(&mut target.text_rasterize_ms, timings.text_rasterize_ms);
-  add_timing(&mut target.encode_ms, timings.encode_ms);
-}
-
-fn add_timing(target: &mut Option<f64>, value: Option<f64>) {
-  if let Some(value) = value {
-    *target = Some(target.unwrap_or(0.0) + value);
-  }
-}
-
-fn sum_timings(timings: &RenderStageTimings) -> Option<f64> {
-  let mut total = 0.0;
-  let mut has_value = false;
-
-  for value in [
-    timings.html_decode_ms,
-    timings.dom_parse_ms,
-    timings.dom_meta_viewport_ms,
-    timings.dom_clone_ms,
-    timings.dom_top_layer_ms,
-    timings.css_inlining_ms,
-    timings.css_parse_ms,
-    timings.cascade_ms,
-    timings.box_tree_ms,
-    timings.layout_ms,
-    timings.text_fallback_ms,
-    timings.text_shape_ms,
-    timings.paint_build_ms,
-    timings.paint_optimize_ms,
-    timings.paint_rasterize_ms,
-    timings.text_rasterize_ms,
-    timings.encode_ms,
-  ] {
-    if let Some(value) = value {
-      total += value;
-      has_value = true;
-    }
-  }
-
-  has_value.then_some(total)
-}
-
-fn write_perf_smoke_report(path: &Path, report: &PerfSmokeReport) -> Result<()> {
-  if let Some(parent) = path.parent() {
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-  }
-  let contents =
-    serde_json::to_string_pretty(report).context("serialize perf smoke report to JSON")?;
-  fs::write(path, contents).with_context(|| format!("write report to {}", path.display()))
-}
-
-fn load_perf_smoke_report(path: &Path) -> Result<PerfSmokeReport> {
-  let data = fs::read_to_string(path)
-    .with_context(|| format!("read baseline report at {}", path.display()))?;
-  serde_json::from_str(&data)
-    .with_context(|| format!("parse baseline report from {}", path.display()))
-}
-
-fn compare_baseline(
-  current: &PerfSmokeReport,
-  baseline: &PerfSmokeReport,
-  threshold: f64,
-  baseline_path: &Path,
-) -> Result<Vec<String>> {
-  if baseline.version != current.version {
-    bail!(
-      "Baseline version {} does not match current version {}",
-      baseline.version,
-      current.version
-    );
-  }
-
-  let mut baseline_fixtures = HashMap::new();
-  for fixture in &baseline.fixtures {
-    baseline_fixtures.insert(fixture.id.as_str(), fixture);
-  }
-
-  let mut regressions = Vec::new();
-  for fixture in &current.fixtures {
-    let Some(base) = baseline_fixtures.get(fixture.id.as_str()) else {
-      bail!(
-        "Baseline {} is missing fixture {} (fixtures changed?)",
-        baseline_path.display(),
-        fixture.id
-      );
-    };
-
-    if let Some(delta) = percent_change(
-      fixture.stage_total_ms.unwrap_or(fixture.wall_time_ms),
-      base.stage_total_ms.unwrap_or(base.wall_time_ms),
-    ) {
-      if delta > threshold {
-        regressions.push(format!(
-          "{}: +{:.2}% ({:.2}ms -> {:.2}ms)",
-          fixture.id,
-          delta * 100.0,
-          base.stage_total_ms.unwrap_or(base.wall_time_ms),
-          fixture.stage_total_ms.unwrap_or(fixture.wall_time_ms),
-        ));
-      }
-    }
-  }
-
-  if let Some(delta) = percent_change(
-    current.totals.render_wall_time_ms,
-    baseline.totals.render_wall_time_ms,
-  ) {
-    if delta > threshold {
-      regressions.push(format!(
-        "overall render wall time: +{:.2}% ({:.2}ms -> {:.2}ms)",
-        delta * 100.0,
-        baseline.totals.render_wall_time_ms,
-        current.totals.render_wall_time_ms
-      ));
-    }
-  }
-
-  Ok(regressions)
-}
-
-fn percent_change(current: f64, baseline: f64) -> Option<f64> {
-  if baseline <= 0.0 {
-    return (current > 0.0).then_some(f64::INFINITY);
-  }
-  Some((current - baseline) / baseline)
-}
-
-fn print_top_fixtures(report: &PerfSmokeReport, count: usize) {
-  if count == 0 {
-    return;
-  }
-  let mut fixtures = report.fixtures.clone();
-  fixtures.sort_by(|a, b| {
-    fixture_total_ms(b)
-      .total_cmp(&fixture_total_ms(a))
-      .then_with(|| a.id.cmp(&b.id))
-  });
-  println!("Slowest {} perf smoke render(s):", count);
-  for fixture in fixtures.into_iter().take(count) {
-    println!(
-      "- {}: {:.2}ms (wall {:.2}ms)",
-      fixture.id,
-      fixture.stage_total_ms.unwrap_or(fixture.wall_time_ms),
-      fixture.wall_time_ms
-    );
-  }
-}
-
-fn fixture_total_ms(fixture: &FixtureReport) -> f64 {
-  fixture.stage_total_ms.unwrap_or(fixture.wall_time_ms)
-}
-
-impl FixtureReport {
-  fn from_components(
-    fixture: &PerfFixture,
-    shot: &PerfShot,
-    wall_time_ms: f64,
-    stage_total_ms: Option<f64>,
-    stats: RenderStats,
-  ) -> Self {
-    Self {
-      id: fixture_id(fixture, shot),
-      fixture: fixture.name.to_string(),
-      shot: shot.label.to_string(),
-      html: fixture.html.to_string(),
-      viewport: shot.viewport,
-      dpr: shot.dpr,
-      media: media_label(shot.media).to_string(),
-      wall_time_ms,
-      stage_total_ms,
-      stats: stats.into(),
-    }
-  }
-}
-
-impl From<RenderStats> for SerializableRenderStats {
-  fn from(stats: RenderStats) -> Self {
-    Self {
-      timings: stats.timings,
-      counts: stats.counts,
-      cascade: stats.cascade,
-      layout: stats.layout,
-      paint: stats.paint,
-      resources: stats.resources.into(),
-    }
-  }
-}
-
-impl From<fastrender::ResourceDiagnostics> for SerializableResourceDiagnostics {
-  fn from(resources: fastrender::ResourceDiagnostics) -> Self {
-    let mut fetch_counts = BTreeMap::new();
-    for (kind, count) in resources.fetch_counts {
-      fetch_counts.insert(resource_kind_key(kind).to_string(), count);
-    }
-    Self {
-      fetch_counts,
-      image_cache_hits: resources.image_cache_hits,
-      image_cache_misses: resources.image_cache_misses,
-    }
-  }
-}
-
-fn resource_kind_key(kind: ResourceKind) -> &'static str {
-  match kind {
-    ResourceKind::Document => "document",
-    ResourceKind::Stylesheet => "stylesheet",
-    ResourceKind::Image => "image",
-    ResourceKind::Font => "font",
-    ResourceKind::Other => "other",
-  }
 }
 
 fn run_render_page(args: RenderPageArgs) -> Result<()> {
@@ -1718,246 +1201,4 @@ fn print_diff_summary(relative_path: &Path, outcome: &DiffOutcome) {
   }
 
   println!("{}", parts.join(" | "));
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use serde_json::json;
-  use std::collections::BTreeMap;
-
-  #[test]
-  fn perf_smoke_report_schema_is_stable() {
-    let mut fetch_counts = BTreeMap::new();
-    fetch_counts.insert("document".to_string(), 1);
-    fetch_counts.insert("image".to_string(), 2);
-
-    let report = PerfSmokeReport {
-      version: PERF_SMOKE_REPORT_VERSION,
-      totals: PerfSmokeTotals {
-        fixtures: 1,
-        wall_time_ms: 12.5,
-        render_wall_time_ms: 10.0,
-        stage_time_ms: RenderStageTimings {
-          html_decode_ms: Some(1.0),
-          dom_parse_ms: Some(2.0),
-          ..RenderStageTimings::default()
-        },
-      },
-      fixtures: vec![FixtureReport {
-        id: "demo".to_string(),
-        fixture: "demo".to_string(),
-        shot: "default".to_string(),
-        html: "demo/index.html".to_string(),
-        viewport: (800, 600),
-        dpr: 1.0,
-        media: "screen".to_string(),
-        wall_time_ms: 10.0,
-        stage_total_ms: Some(5.5),
-        stats: SerializableRenderStats {
-          timings: RenderStageTimings {
-            html_decode_ms: Some(1.0),
-            dom_parse_ms: Some(2.0),
-            cascade_ms: Some(2.5),
-            ..RenderStageTimings::default()
-          },
-          counts: fastrender::RenderCounts {
-            dom_nodes: Some(4),
-            styled_nodes: Some(3),
-            fragments: Some(5),
-            ..Default::default()
-          },
-          cascade: fastrender::CascadeDiagnostics {
-            nodes: Some(10),
-            rule_candidates: Some(4),
-            ..Default::default()
-          },
-          layout: fastrender::LayoutDiagnostics {
-            intrinsic_lookups: Some(1),
-            ..Default::default()
-          },
-          paint: fastrender::PaintDiagnostics {
-            display_items: Some(8),
-            ..Default::default()
-          },
-          resources: SerializableResourceDiagnostics {
-            fetch_counts,
-            image_cache_hits: None,
-            image_cache_misses: None,
-          },
-        },
-      }],
-    };
-
-    let serialized = serde_json::to_value(&report).expect("serialize report");
-    let expected = json!({
-      "version": PERF_SMOKE_REPORT_VERSION,
-      "totals": {
-        "fixtures": 1,
-        "wall_time_ms": 12.5,
-        "render_wall_time_ms": 10.0,
-        "stage_time_ms": {
-          "html_decode_ms": 1.0,
-          "dom_parse_ms": 2.0,
-          "dom_html5ever_ms": null,
-          "dom_convert_ms": null,
-          "dom_shadow_attach_ms": null,
-          "dom_compat_ms": null,
-          "dom_meta_viewport_ms": null,
-          "dom_clone_ms": null,
-          "dom_top_layer_ms": null,
-          "css_inlining_ms": null,
-          "css_parse_ms": null,
-          "cascade_ms": null,
-          "box_tree_ms": null,
-          "layout_ms": null,
-          "text_fallback_ms": null,
-          "text_shape_ms": null,
-          "paint_build_ms": null,
-          "paint_optimize_ms": null,
-          "paint_rasterize_ms": null,
-          "text_rasterize_ms": null,
-          "encode_ms": null
-        }
-      },
-      "fixtures": [
-        {
-          "id": "demo",
-          "fixture": "demo",
-          "shot": "default",
-          "html": "demo/index.html",
-          "viewport": [800, 600],
-          "dpr": 1.0,
-          "media": "screen",
-          "wall_time_ms": 10.0,
-          "stage_total_ms": 5.5,
-          "stats": {
-            "timings": {
-              "html_decode_ms": 1.0,
-              "dom_parse_ms": 2.0,
-              "dom_html5ever_ms": null,
-              "dom_convert_ms": null,
-              "dom_shadow_attach_ms": null,
-              "dom_compat_ms": null,
-              "dom_meta_viewport_ms": null,
-              "dom_clone_ms": null,
-              "dom_top_layer_ms": null,
-              "css_inlining_ms": null,
-              "css_parse_ms": null,
-              "cascade_ms": 2.5,
-              "box_tree_ms": null,
-              "layout_ms": null,
-              "text_fallback_ms": null,
-              "text_shape_ms": null,
-              "paint_build_ms": null,
-              "paint_optimize_ms": null,
-              "paint_rasterize_ms": null,
-              "text_rasterize_ms": null,
-              "encode_ms": null
-            },
-            "counts": {
-              "dom_nodes": 4,
-              "styled_nodes": 3,
-              "box_nodes": null,
-              "fragments": 5,
-              "shaped_runs": null,
-              "glyphs": null,
-              "color_glyph_rasters": null,
-              "fallback_cache_hits": null,
-              "fallback_cache_misses": null,
-              "last_resort_font_fallbacks": null,
-              "glyph_cache_hits": null,
-              "glyph_cache_misses": null,
-              "glyph_cache_evictions": null,
-              "glyph_cache_bytes": null,
-              "color_glyph_cache_hits": null,
-              "color_glyph_cache_misses": null,
-              "color_glyph_cache_evictions": null,
-              "color_glyph_cache_bytes": null
-            },
-            "cascade": {
-              "nodes": 10,
-              "rule_candidates": 4,
-              "rule_matches": null,
-              "rule_candidates_pruned": null,
-              "rule_candidates_by_id": null,
-              "rule_candidates_by_class": null,
-              "rule_candidates_by_tag": null,
-              "rule_candidates_by_attr": null,
-              "rule_candidates_universal": null,
-              "selector_attempts_total": null,
-              "selector_attempts_after_bloom": null,
-              "selector_bloom_fast_rejects": null,
-              "selector_time_ms": null,
-              "declaration_time_ms": null,
-              "pseudo_time_ms": null,
-              "has_evals": null,
-              "has_cache_hits": null,
-              "has_prunes": null,
-              "has_bloom_prunes": null,
-              "has_filter_prunes": null,
-              "has_evaluated": null
-            },
-            "layout": {
-              "intrinsic_lookups": 1,
-              "intrinsic_hits": null,
-              "intrinsic_stores": null,
-              "block_intrinsic": null,
-              "flex_intrinsic": null,
-              "inline_intrinsic": null,
-              "layout_parallel_work_items": null,
-              "layout_parallel_worker_threads": null,
-              "layout_parallel_enabled": null,
-              "layout_parallel_auto_activated": null,
-              "table_cell_intrinsic_measurements": null,
-              "table_cell_layouts": null,
-              "layout_cache_lookups": null,
-              "layout_cache_hits": null,
-              "layout_cache_stores": null,
-              "layout_cache_evictions": null,
-              "layout_cache_clones": null,
-              "flex_cache_clones": null,
-              "taffy_nodes_built": null,
-              "taffy_nodes_reused": null,
-              "taffy_style_cache_hits": null,
-              "taffy_style_cache_misses": null,
-              "fragment_deep_clones": null,
-              "fragment_traversed": null
-            },
-            "paint": {
-              "display_items": 8,
-              "optimized_items": null,
-              "culled_items": null,
-              "transparent_removed": null,
-              "noop_removed": null,
-              "merged_items": null,
-              "gradient_ms": null,
-              "gradient_pixels": null,
-              "parallel_tasks": null,
-              "parallel_threads": null,
-              "parallel_ms": null,
-              "serial_ms": null,
-              "filter_cache_hits": null,
-              "filter_cache_misses": null,
-              "blur_cache_hits": null,
-              "blur_cache_misses": null,
-              "blur_calls": null,
-              "blur_ms": null,
-              "blur_bytes": null,
-              "blur_pixels": null,
-              "blur_cancellations": null,
-              "blur_tiles": null
-            },
-            "resources": {
-              "fetch_counts": { "document": 1, "image": 2 },
-              "image_cache_hits": null,
-              "image_cache_misses": null
-            }
-          }
-        }
-      ]
-    });
-
-    assert_eq!(serialized, expected);
-  }
 }
