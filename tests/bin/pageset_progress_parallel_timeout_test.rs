@@ -19,6 +19,9 @@ fn pageset_progress_worker_times_out_cooperatively_under_parallel_layout_and_pai
 
   let mut cmd = Command::new(env!("CARGO_BIN_EXE_pageset_progress"));
   cmd
+    // Run in an isolated working directory so per-run scratch dirs like `fetches/assets` don't
+    // collide with other CLI tests (the worker uses relative cache paths by default).
+    .current_dir(temp.path())
     // Force Rayon fan-out so deadline propagation is exercised on worker threads.
     .env("RAYON_NUM_THREADS", "2")
     .env("FASTR_PAINT_THREADS", "2")

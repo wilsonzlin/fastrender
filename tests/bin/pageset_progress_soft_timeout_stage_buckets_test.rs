@@ -8,9 +8,16 @@ fn pageset_progress_soft_timeout_populates_stage_buckets() {
   let temp = TempDir::new().expect("tempdir");
   let html_dir = temp.path().join("fetches/html");
   fs::create_dir_all(&html_dir).expect("create html dir");
+  // Make DOM parsing reliably slower than the configured soft timeout so we deterministically
+  // time out in the `dom_parse` stage without relying on the unit-test-only
+  // `FASTR_TEST_RENDER_DELAY_MS` hook (which does not apply to CLI binaries).
+  let mut body = String::new();
+  for _ in 0..200_000 {
+    body.push_str("<div>slow</div>");
+  }
   fs::write(
     html_dir.join("soft_timeout.html"),
-    "<!doctype html><title>Soft timeout</title><body>slow</body>",
+    format!("<!doctype html><title>Soft timeout</title><body>{body}</body>"),
   )
   .expect("write html");
 
@@ -19,11 +26,6 @@ fn pageset_progress_soft_timeout_populates_stage_buckets() {
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .current_dir(temp.path())
-    // `FASTR_TEST_RENDER_DELAY_MS` is used both by the render deadline checks (to make timeouts
-    // deterministic in tests) and by the worker pre-render delay hook. Set the stem filter so the
-    // pre-render delay does not apply while keeping deadline checks slow.
-    .env("FASTR_TEST_RENDER_DELAY_MS", "50")
-    .env("FASTR_TEST_RENDER_DELAY_STEM", "no-match")
     .args([
       "run",
       "--jobs",
@@ -77,4 +79,3 @@ fn pageset_progress_soft_timeout_populates_stage_buckets() {
     "expected fetch bucket to dominate, got: {stages:?}"
   );
 }
-
