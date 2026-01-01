@@ -320,6 +320,18 @@ struct PerfSmokeArgs {
   #[arg(long, value_delimiter = ',')]
   only: Option<Vec<String>>,
 
+  /// Run each fixture in its own process to keep memory bounded.
+  ///
+  /// The `pageset-timeouts` suite enables this automatically (unless `--no-isolate` is set).
+  #[arg(long, conflicts_with = "no_isolate")]
+  isolate: bool,
+
+  /// Disable per-fixture isolation.
+  ///
+  /// Note: the underlying `perf_smoke` binary auto-enables isolation for `--suite pageset-timeouts`.
+  #[arg(long, conflicts_with = "isolate")]
+  no_isolate: bool,
+
   /// Print the slowest N fixtures
   #[arg(long)]
   top: Option<usize>,
@@ -343,6 +355,24 @@ struct PerfSmokeArgs {
   /// Fail when regressions are detected
   #[arg(long)]
   fail_on_regression: bool,
+
+  /// Fail when a pageset-timeouts manifest fixture is missing locally.
+  ///
+  /// When running `--suite pageset-timeouts` via `cargo xtask perf-smoke`, this gate is enabled by
+  /// default unless explicitly disabled with `--allow-missing-fixtures`.
+  #[arg(long, conflicts_with = "allow_missing_fixtures")]
+  fail_on_missing_fixtures: bool,
+
+  /// Allow missing pageset-timeouts fixtures (skip them instead of failing).
+  ///
+  /// This disables the default `--fail-on-missing-fixtures` behavior for the `pageset-timeouts`
+  /// suite when running via `cargo xtask perf-smoke`.
+  #[arg(long, conflicts_with = "fail_on_missing_fixtures")]
+  allow_missing_fixtures: bool,
+
+  /// Fail when any fixture exceeds its `budget_ms` (if provided).
+  #[arg(long)]
+  fail_on_budget: bool,
 
   /// Run the perf smoke harness in debug mode instead of release
   #[arg(long)]
@@ -951,6 +981,12 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
     }
   }
 
+  let fail_on_missing_fixtures = if args.allow_missing_fixtures {
+    false
+  } else {
+    args.fail_on_missing_fixtures || matches!(args.suite, PerfSmokeSuite::PagesetTimeouts)
+  };
+
   // Keep renders deterministic across machines.
   let mut cmd = Command::new("cargo");
   cmd.env("FASTR_USE_BUNDLED_FONTS", "1");
@@ -977,6 +1013,18 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   }
   if args.fail_on_regression {
     cmd.arg("--fail-on-regression");
+  }
+  if fail_on_missing_fixtures {
+    cmd.arg("--fail-on-missing-fixtures");
+  }
+  if args.fail_on_budget {
+    cmd.arg("--fail-on-budget");
+  }
+  if args.isolate {
+    cmd.arg("--isolate");
+  }
+  if args.no_isolate {
+    cmd.arg("--no-isolate");
   }
 
   cmd.args(&args.extra);
