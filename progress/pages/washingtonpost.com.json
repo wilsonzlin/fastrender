@@ -1,13 +1,13 @@
 {
   "url": "https://www.washingtonpost.com/",
   "status": "ok",
-  "total_ms": 1027.8270929999999,
+  "total_ms": 1027.827093,
   "stages_ms": {
-    "fetch": 309.9478587840467,
-    "css": 215.96366934630348,
-    "cascade": 393.933730196498,
-    "layout": 85.98553501750972,
-    "paint": 21.996299655642023
+    "fetch": 21.92875828238771,
+    "css": 5.5933057174844985,
+    "cascade": 871.6734549352542,
+    "layout": 101.81904487271873,
+    "paint": 26.812529192154955
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=1 (img=1)",
@@ -22,7 +22,7 @@
         "html_decode_ms": null,
         "dom_parse_ms": 10.181885,
         "dom_html5ever_ms": 7.032662,
-        "dom_convert_ms": 2.0835879999999998,
+        "dom_convert_ms": 2.083588,
         "dom_shadow_attach_ms": 0.170374,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.01543,

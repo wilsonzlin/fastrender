@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1415.7899650000002,
   "stages_ms": {
-    "fetch": 349.9480845692091,
-    "css": 205.9694440607345,
-    "cascade": 393.9415580579097,
-    "layout": 239.96440084745765,
-    "paint": 225.9664774646893
+    "fetch": 11.285203858515466,
+    "css": 4.225969263103252,
+    "cascade": 639.9009267530013,
+    "layout": 254.7917026747349,
+    "paint": 505.5861624506455
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=1 (img=1)",
@@ -22,7 +22,7 @@
         "html_decode_ms": null,
         "dom_parse_ms": 6.94491,
         "dom_html5ever_ms": 4.653417,
-        "dom_convert_ms": 1.8357130000000002,
+        "dom_convert_ms": 1.835713,
         "dom_shadow_attach_ms": 0.088232,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.01899,

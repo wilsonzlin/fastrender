@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1812.330251,
   "stages_ms": {
-    "fetch": 430.0783708222958,
-    "css": 182.03317090618103,
-    "cascade": 519.0945917599338,
-    "layout": 492.08967080132453,
-    "paint": 189.03444671026492
+    "fetch": 39.121790790738864,
+    "css": 148.86933783520416,
+    "cascade": 812.7439291919102,
+    "layout": 687.8307097524436,
+    "paint": 123.76448342970328
   },
   "notes": "See docs/notes/layout-timeouts-profiling.md; slow OK layout hotspot dominated by inline text/shaping; very sensitive to --layout-parallel (auto helps a lot).",
   "hotspot": "cascade",
@@ -20,7 +20,7 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 24.762709,
-        "dom_html5ever_ms": 15.805698999999999,
+        "dom_html5ever_ms": 15.805699,
         "dom_convert_ms": 6.790598,
         "dom_shadow_attach_ms": 0.589064,
         "dom_compat_ms": 0.0,
@@ -32,12 +32,12 @@
         "cascade_ms": 423.95525,
         "box_tree_ms": 91.124437,
         "layout_ms": 435.915439,
-        "text_fallback_cpu_ms": 9.589307999999981,
+        "text_fallback_cpu_ms": 9.58930799999998,
         "text_shape_cpu_ms": 61.89338399999995,
         "paint_build_ms": 52.050216000000006,
         "paint_optimize_ms": 0.079812,
         "paint_rasterize_ms": 26.306204,
-        "text_rasterize_cpu_ms": 1.1052760000000001,
+        "text_rasterize_cpu_ms": 1.105276,
         "encode_ms": null
       },
       "counts": {

@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1103.583239,
   "stages_ms": {
-    "fetch": 237.9101547844203,
-    "css": 184.93016233242756,
-    "cascade": 364.86221216938407,
-    "layout": 153.94186486050725,
-    "paint": 161.9388448532609
+    "fetch": 15.863603892500992,
+    "css": 2.7441338334662015,
+    "cascade": 671.3423537404799,
+    "layout": 231.198942553155,
+    "paint": 182.43420498039802
   },
   "notes": "",
   "hotspot": "cascade",
@@ -187,7 +187,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 3.9127810000000003
+        "image_decode_ms": 3.912781
       }
     }
   }

@@ -3,14 +3,14 @@
   "status": "ok",
   "total_ms": 764.1363319999999,
   "stages_ms": {
-    "fetch": 331.0590653036649,
-    "css": 188.03354766492146,
-    "cascade": 158.0281943141361,
-    "layout": 73.01302648691099,
-    "paint": 14.002498230366491
+    "fetch": 0.9629921125167555,
+    "css": 0.43070645529825924,
+    "cascade": 722.0550043093607,
+    "layout": 13.847808516167195,
+    "paint": 26.8398206066571
   },
   "notes": "",
-  "hotspot": "fetch",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "3eee3412c1c4b525b19005a000df4a3f8470e0e6",
@@ -35,7 +35,7 @@
         "text_fallback_cpu_ms": 0.052011,
         "text_shape_cpu_ms": 0.27115599999999995,
         "paint_build_ms": 3.030871,
-        "paint_optimize_ms": 0.013061000000000001,
+        "paint_optimize_ms": 0.013061,
         "paint_rasterize_ms": 1.29518,
         "text_rasterize_cpu_ms": 1.271759,
         "encode_ms": null
