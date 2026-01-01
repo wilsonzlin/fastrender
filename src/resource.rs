@@ -4033,11 +4033,21 @@ mod tests {
 
   static RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-  fn resource_cache_diagnostics_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK
+  struct ResourceCacheDiagnosticsTestLock {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _diagnostics_session: crate::api::DiagnosticsSessionGuard,
+  }
+
+  fn resource_cache_diagnostics_test_lock() -> ResourceCacheDiagnosticsTestLock {
+    let _diagnostics_session = crate::api::DiagnosticsSessionGuard::acquire();
+    let _lock = RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK
       .get_or_init(|| Mutex::new(()))
       .lock()
-      .unwrap()
+      .unwrap();
+    ResourceCacheDiagnosticsTestLock {
+      _lock,
+      _diagnostics_session,
+    }
   }
 
   struct ResourceCacheDiagnosticsGuard;

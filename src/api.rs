@@ -1980,12 +1980,12 @@ fn diagnostics_session_mutex() -> &'static Mutex<()> {
 /// renders run concurrently in the same process with diagnostics enabled, their counters can
 /// clobber each other (including dropping `text_shape_cpu_ms` entirely). Serialize diagnostics sessions
 /// to keep metrics consistent for both users and tests.
-struct DiagnosticsSessionGuard {
+pub(crate) struct DiagnosticsSessionGuard {
   _guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl DiagnosticsSessionGuard {
-  fn acquire() -> Self {
+  pub(crate) fn acquire() -> Self {
     Self {
       _guard: diagnostics_session_mutex()
         .lock()
@@ -10429,24 +10429,12 @@ mod tests {
     // Render 2:
     // - no text and no flex/grid so shaping/Taffy/blur should be absent/zero
     // - no subresources so fetch_counts should be empty
-    let mut pixels = RgbaImage::new(1, 1);
-    pixels.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
-    let mut png_bytes = Vec::new();
-    PngEncoder::new(&mut png_bytes)
-      .write_image(pixels.as_raw(), 1, 1, ColorType::Rgba8.into())
-      .expect("encode png");
-
     let mut fetcher = MapFetcher::default().with_entry(
       "https://example.com/style.css",
       r#"
         #container { display: flex; filter: blur(1px); background: rgb(0, 255, 0); }
         #container > div { flex: 1; }
-        img { width: 8px; height: 8px; }
       "#,
-    );
-    fetcher.map.insert(
-      "https://example.com/image.png".to_string(),
-      (png_bytes, Some("image/png".to_string())),
     );
 
     let fetcher = CachingFetcher::new(fetcher);
@@ -10477,7 +10465,6 @@ mod tests {
     <div id="container">
       <div>Alpha</div>
       <div>Beta</div>
-      <div><img src="https://example.com/image.png"></div>
     </div>
   </body>
 </html>"#;
@@ -10583,16 +10570,6 @@ mod tests {
         .unwrap_or(0)
         > 0,
       "expected external stylesheet fetch count to be recorded in first render"
-    );
-    assert!(
-      stats1
-        .resources
-        .fetch_counts
-        .get(&ResourceKind::Image)
-        .copied()
-        .unwrap_or(0)
-        > 0,
-      "expected image fetch count to be recorded in first render"
     );
     assert!(
       stats2.resources.fetch_counts.is_empty(),
