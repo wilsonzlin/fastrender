@@ -391,45 +391,14 @@ def _func_label(thread: Dict[str, Any], func_idx: int) -> str:
     return name
 
 
-def _build_children(prefixes: List[Any], n: int) -> List[List[int]]:
-    children: List[List[int]] = [[] for _ in range(n)]
-    for i in range(n):
-        p = prefixes[i] if i < len(prefixes) else None
-        pi = _to_index(p)
-        if pi is None:
-            continue
-        if pi >= n:
-            continue
-        children[pi].append(i)
-    return children
-
-
-def _postorder_subtree_weights(children: List[List[int]], leaf_weight: List[float]) -> List[float]:
-    n = len(children)
-    subtree = [0.0] * n
-    state = [0] * n  # 0=unvisited, 1=visiting, 2=done
-    for root in range(n):
-        if state[root] != 0:
-            continue
-        stack: List[Tuple[int, int]] = [(root, 0)]
-        while stack:
-            node, idx = stack[-1]
-            if state[node] == 0:
-                state[node] = 1
-            if idx < len(children[node]):
-                child = children[node][idx]
-                stack[-1] = (node, idx + 1)
-                if state[child] == 0:
-                    stack.append((child, 0))
-                continue
-            # finalize
-            w = leaf_weight[node]
-            for c in children[node]:
-                w += subtree[c]
-            subtree[node] = w
-            state[node] = 2
-            stack.pop()
-    return subtree
+def _func_table_len(thread: Dict[str, Any]) -> int:
+    func_table = thread.get("funcTable") or {}
+    n = func_table.get("length")
+    if isinstance(n, int) and n > 0:
+        return n
+    # Fall back to the name column length, which should match func count in all supported profiles.
+    names = func_table.get("name") or []
+    return len(names) if isinstance(names, list) else 0
 
 
 def _format_pct(x: float, total: float) -> str:
@@ -527,6 +496,7 @@ def main() -> int:
 
     frame_table = thread.get("frameTable") or {}
     frame_funcs = frame_table.get("func") or []
+    n_funcs = _func_table_len(thread)
 
     # leaf weights per stack entry
     leaf_stack_weight = [0.0] * n_stacks
@@ -540,11 +510,7 @@ def main() -> int:
             w = 1
         leaf_stack_weight[si] += float(w)
 
-    children = _build_children(prefixes, n_stacks)
-    subtree_weight = _postorder_subtree_weights(children, leaf_stack_weight)
-
     leaf_func = defaultdict(float)
-    inclusive_func = defaultdict(float)
 
     for si in range(n_stacks):
         frame_idx = frames[si] if si < len(frames) else None
@@ -558,13 +524,45 @@ def main() -> int:
         lw = leaf_stack_weight[si]
         if lw:
             leaf_func[fxi] += lw
-        sw = subtree_weight[si]
-        if sw:
-            inclusive_func[fxi] += sw
+
+    # Inclusive weight that counts each function at most once per sample stack.
+    # This avoids the common failure mode where recursive functions or repeated inlined frames make
+    # inclusive percentages exceed 100% and dominate the ranking.
+    inclusive_unique: List[float] = [0.0] * n_funcs
+    seen_marker: List[int] = [0] * n_funcs
+    for sample_i in range(n_samples):
+        s = sample_stacks[sample_i] if sample_i < len(sample_stacks) else None
+        cur = _to_index(s)
+        if cur is None or cur >= n_stacks:
+            continue
+        w = sample_weights[sample_i] if sample_i < len(sample_weights) else 1
+        if not isinstance(w, (int, float)):
+            w = 1
+        weight = float(w)
+        mark = sample_i + 1
+
+        while True:
+            frame_idx = frames[cur] if cur < len(frames) else None
+            fi = _to_index(frame_idx)
+            func_idx = _safe_get(frame_funcs, fi) if fi is not None else None
+            fxi = _to_index(func_idx)
+            if fxi is not None and fxi < n_funcs:
+                if seen_marker[fxi] != mark:
+                    seen_marker[fxi] = mark
+                    inclusive_unique[fxi] += weight
+
+            p = prefixes[cur] if cur < len(prefixes) else None
+            cur = _to_index(p)
+            if cur is None or cur >= n_stacks:
+                break
 
     # Determine which entries we are going to print so we can optionally symbolize addresses in one batch.
     top_leaf_items = sorted(leaf_func.items(), key=lambda kv: kv[1], reverse=True)[: args.top]
-    top_inclusive_items = sorted(inclusive_func.items(), key=lambda kv: kv[1], reverse=True)[: args.top]
+    top_inclusive_items = sorted(
+        [(i, w) for i, w in enumerate(inclusive_unique) if w > 0],
+        key=lambda kv: kv[1],
+        reverse=True,
+    )[: args.top]
     top_stack_entries = sorted(
         [(w, si) for si, w in enumerate(leaf_stack_weight) if w > 0],
         key=lambda x: x[0],
@@ -663,7 +661,7 @@ def main() -> int:
         print(f"  {_format_pct(w, total_weight)}  {w:10.0f}  {func_label(func_idx)}")
     print()
 
-    print("Top functions (INCLUSIVE / subtree samples):")
+    print("Top functions (INCLUSIVE / per-sample stacks, de-duped):")
     for func_idx, w in top_inclusive_items:
         print(f"  {_format_pct(w, total_weight)}  {w:10.0f}  {func_label(func_idx)}")
     print()

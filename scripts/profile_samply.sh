@@ -53,8 +53,20 @@ if [[ "${PROFILE_SAVE_BINARY:-1}" != "0" ]]; then
   fi
 fi
 
+set +e
 samply record --save-only --no-open -o "${OUT_FILE}" -- \
   "${BIN_PATH}" run --jobs 1 "${PAGE_ARGS[@]}"
+SAMP_STATUS=$?
+set -e
+
+if [[ ! -s "${OUT_FILE}" ]]; then
+  echo "samply failed (exit ${SAMP_STATUS}) and did not produce a profile: ${OUT_FILE}" >&2
+  exit "${SAMP_STATUS}"
+fi
+
+if [[ "${SAMP_STATUS}" -ne 0 ]]; then
+  echo "Note: samply / target exited with status ${SAMP_STATUS} (profile still written)." >&2
+fi
 
 echo "Wrote: ${OUT_FILE}"
 echo "To view later: samply load ${OUT_FILE}"

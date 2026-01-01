@@ -63,17 +63,18 @@ llvm-addr2line -f -C -i -a -e <profile-stem>.pageset_progress 0xDEADBEEF
 
 - The summary is **per-thread**; on pages where layout parallelism kicks in, CPU can be spread
   across many worker threads.
-- The “inclusive” percentages are derived from the stack table and can be misleading when
-  recursion/inlining repeats the same function multiple times in a stack. Treat them qualitatively
-  and confirm in the full Samply UI when needed.
+- The “inclusive” percentages in `scripts/samply_summary.py` are **de-duped per sample stack**
+  (each function counted at most once per sample). This avoids the most confusing failure mode
+  where recursion causes inclusive totals to exceed 100%, but inlining/dispatch can still make
+  rankings noisy — treat them qualitatively and confirm in the full Samply UI when needed.
 
 ## Results
 
 ### `nytimes.com` (timeout, layout)
 
-Dominant hotspots from the top inclusive stacks:
+Dominant hotspots from the top inclusive stacks include:
 
-- ~76%: `BlockFormattingContext::compute_intrinsic_inline_size` (`src/layout/contexts/block/mod.rs`)
+- `BlockFormattingContext::compute_intrinsic_inline_size` (`src/layout/contexts/block/mod.rs`)
 - Flex/grid intrinsic measurement also shows up prominently:
   - `FlexFormattingContext::compute_intrinsic_inline_size` (`src/layout/contexts/flex.rs`)
   - `GridFormattingContext::measure_grid_item` (`src/layout/contexts/grid.rs`)
@@ -87,14 +88,14 @@ Dominant hotspots from the top inclusive stacks:
 
 ### `stackoverflow.com` (timeout, layout)
 
-Dominant hotspots from the top inclusive stacks:
+Dominant hotspots from the top inclusive stacks include:
 
-- ~59%: `BlockFormattingContext::layout` / `BlockFormattingContext::layout_children` (`src/layout/contexts/block/mod.rs`)
-- ~42%: float placement:
+- `BlockFormattingContext::layout` / `BlockFormattingContext::layout_children` (`src/layout/contexts/block/mod.rs`)
+- Float placement:
   - `FloatContext::compute_float_position`
   - `FloatContext::{edges_in_range_min_width_with_state,next_float_boundary_after_internal}`
   (`src/layout/float_context.rs`)
-- ~33%: `BlockFormattingContext::compute_intrinsic_inline_size` (`src/layout/contexts/block/mod.rs`)
+- `BlockFormattingContext::compute_intrinsic_inline_size` (`src/layout/contexts/block/mod.rs`)
 
 **Interpretation / categorization:**
 - **Dominated by** block formatting + **float placement** scanning.
@@ -102,7 +103,7 @@ Dominant hotspots from the top inclusive stacks:
 
 ### `cnet.com` (slow OK, layout hotspot)
 
-Dominant hotspots from the top inclusive stacks:
+Dominant hotspots from the top inclusive stacks include:
 
 - ~28%: inline text item construction:
   - `InlineFormattingContext::create_text_items_with_combine`
@@ -120,7 +121,9 @@ Dominant hotspots from the top inclusive stacks:
   - `BlockFormattingContext::compute_intrinsic_inline_size` (`src/layout/contexts/block/mod.rs`)
 
 **Interpretation / categorization:**
-- **Dominated by** text shaping and inline line layout, with non-trivial flex/Taffy measure.
+- **Dominated by** text shaping and inline line layout, with non-trivial flex/Taffy measure. (On
+  very wide machines / high `RAYON_NUM_THREADS`, wall-time can drop enough that other work like
+  image decode becomes more visible in CPU profiles.)
 - **Not dominated by** tables.
 
 ## Actionable conclusions
