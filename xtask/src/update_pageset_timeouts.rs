@@ -783,4 +783,29 @@ mod tests {
     assert_eq!(parsed[0].total_ms, 123.0);
     assert_eq!(parsed[0].hotspot, None);
   }
+
+  #[test]
+  fn repo_manifest_covers_all_current_failures() {
+    let progress_dir = repo_root().join("progress/pages");
+    let manifest_path = repo_root().join("tests/pages/pageset_timeouts.json");
+    let progress = read_progress_entries(&progress_dir).expect("read progress/pages");
+    let manifest = load_manifest(&manifest_path).expect("load pageset_timeouts manifest");
+
+    let failing: BTreeSet<String> = progress
+      .iter()
+      .filter(|entry| entry.status.is_failure())
+      .map(|entry| entry.name.clone())
+      .collect();
+    let fixtures: BTreeSet<String> = manifest
+      .fixtures
+      .iter()
+      .map(|fixture| fixture.name.clone())
+      .collect();
+    let missing: Vec<String> = failing.difference(&fixtures).cloned().collect();
+    assert!(
+      missing.is_empty(),
+      "tests/pages/pageset_timeouts.json is missing failing pages from progress/pages: {}",
+      missing.join(", ")
+    );
+  }
 }
