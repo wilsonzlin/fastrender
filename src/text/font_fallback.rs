@@ -149,9 +149,10 @@ where
   fn put(&self, key: K, value: V) -> ShardedInsertOutcome {
     let idx = self.shard_index(&key);
     let mut cache = self.shards[idx].lock();
-    let inserted_new = cache.peek(&key).is_none();
-    let evicted = inserted_new && cache.len() >= cache.cap().get();
-    cache.put(key, value);
+    let len_before = cache.len();
+    let cap = cache.cap().get();
+    let inserted_new = cache.put(key, value).is_none();
+    let evicted = inserted_new && len_before >= cap;
     ShardedInsertOutcome { inserted_new, evicted }
   }
 
