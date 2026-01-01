@@ -2714,6 +2714,29 @@ fn selector_keys_with_polarity(
             );
           }
         }
+        Component::NthOf(nth) => {
+          if keys.is_empty() {
+            merge_nested_keys(nth.selectors().iter(), polarity, true, &mut keys);
+          }
+        }
+        Component::Host(Some(inner)) => {
+          if keys.is_empty() {
+            merge_nested_keys(std::iter::once(inner), polarity, true, &mut keys);
+          }
+        }
+        Component::NonTSPseudoClass(pc) => match pc {
+          PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
+            if keys.is_empty() {
+              merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
+            }
+          }
+          PseudoClass::Host(Some(list)) => {
+            if keys.is_empty() {
+              merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
+            }
+          }
+          _ => {}
+        },
         Component::Is(list) => {
           merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
         }
@@ -2822,6 +2845,29 @@ fn pseudo_selector_subject_keys(
           );
         }
       }
+      Component::NthOf(nth) => {
+        if keys.is_empty() {
+          merge_nested_keys(nth.selectors().iter(), polarity, true, &mut keys);
+        }
+      }
+      Component::Host(Some(inner)) => {
+        if keys.is_empty() {
+          merge_nested_keys(std::iter::once(inner), polarity, true, &mut keys);
+        }
+      }
+      Component::NonTSPseudoClass(pc) => match pc {
+        PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
+          if keys.is_empty() {
+            merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
+          }
+        }
+        PseudoClass::Host(Some(list)) => {
+          if keys.is_empty() {
+            merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
+          }
+        }
+        _ => {}
+      },
       Component::Is(list) => {
         merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
       }
@@ -8084,6 +8130,171 @@ mod tests {
       .map(|v| v.len())
       .unwrap_or(0);
     assert_eq!(class_bucket_len, 1);
+  }
+
+  #[test]
+  fn rule_index_indexes_nth_child_of_selector_list_by_subject_keys() {
+    let stylesheet = parse_stylesheet(":nth-child(odd of .a, .b) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    assert!(
+      index.universal.is_empty(),
+      ":nth-child(of …) selector should not fall back to the universal bucket"
+    );
+
+    let class_a = selector_bucket_class("a");
+    let class_b = selector_bucket_class("b");
+    assert_eq!(
+      index
+        .by_class
+        .get(&class_a)
+        .expect("class a bucket")
+        .as_slice(),
+      &[0usize]
+    );
+    assert_eq!(
+      index
+        .by_class
+        .get(&class_b)
+        .expect("class b bucket")
+        .as_slice(),
+      &[0usize]
+    );
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(stats.by_class, 1);
+    assert_eq!(stats.universal, 0);
+  }
+
+  #[test]
+  fn rule_index_indexes_nth_child_of_pseudo_element_subject_keys() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        :nth-child(odd of .a, .b)::before { content: "x"; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.pseudo_selectors.len(), 1);
+
+    let before_bucket = index
+      .pseudo_buckets
+      .get(&PseudoElement::Before)
+      .expect("::before bucket");
+    assert!(
+      before_bucket.universal.is_empty(),
+      "nth-child(of …)::before should not fall back to universal bucket"
+    );
+
+    let class_a = selector_bucket_class("a");
+    let class_b = selector_bucket_class("b");
+    assert_eq!(
+      before_bucket
+        .by_class
+        .get(&class_a)
+        .expect("class a bucket")
+        .as_slice(),
+      &[0usize]
+    );
+    assert_eq!(
+      before_bucket
+        .by_class
+        .get(&class_b)
+        .expect("class b bucket")
+        .as_slice(),
+      &[0usize]
+    );
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.pseudo_selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    index.pseudo_candidates(
+      &node,
+      &PseudoElement::Before,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+    );
+    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(stats.by_class, 1);
+    assert_eq!(stats.universal, 0);
   }
 
   #[test]
