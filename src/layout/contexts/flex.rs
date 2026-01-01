@@ -2473,7 +2473,7 @@ impl FormattingContext for FlexFormattingContext {
       let fc_type = child
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
-      let fc = factory.create(fc_type);
+      let fc = factory.get(fc_type);
       let child_inline = fc.compute_intrinsic_inline_size(child, mode)?;
 
       // Include horizontal margins when they resolve without a containing block.
