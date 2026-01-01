@@ -1948,6 +1948,7 @@ pub struct ResourceDiagnostics {
 
 /// Structured report describing a render.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RenderStats {
   pub timings: RenderStageTimings,
   pub counts: RenderCounts,
