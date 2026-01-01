@@ -3660,8 +3660,9 @@ impl FlexFormattingContext {
       let should_parallel_layout = self.parallelism.should_parallelize(layout_work_count)
         && layout_work_count >= self.parallelism.min_fanout;
       let deadline = active_deadline();
-      let run_layout =
-        |work: &ChildLayoutWorkItem<'_>| -> Result<(usize, ChildLayoutWorkOutput), LayoutError> {
+      let run_layout = |deadline_counter: &mut usize,
+                        work: &ChildLayoutWorkItem<'_>|
+       -> Result<(usize, ChildLayoutWorkOutput), LayoutError> {
           let fc = factory.get(work.fc_type);
           let layout_node: &BoxNode = work.layout_child_storage.as_ref().unwrap_or(work.child_box);
           let node_timer = flex_profile::node_timer();
@@ -3674,7 +3675,7 @@ impl FlexFormattingContext {
             selector_for_profile.as_deref(),
             node_timer,
           );
-          let intrinsic_size = Self::fragment_subtree_size(&child_fragment, &mut deadline_counter)?;
+          let intrinsic_size = Self::fragment_subtree_size(&child_fragment, deadline_counter)?;
 
           if !trace_flex_text_ids().is_empty() && trace_flex_text_ids().contains(&work.child_box.id)
           {
@@ -3746,7 +3747,7 @@ impl FlexFormattingContext {
                 );
                 let mc_fragment = mc_fragment;
                 let mut mc_size =
-                  Self::fragment_subtree_size(&mc_fragment, &mut deadline_counter)?;
+                  Self::fragment_subtree_size(&mc_fragment, deadline_counter)?;
                 if rect.width().is_finite() && rect.width() > 0.0 {
                   mc_size.width = mc_size.width.min(rect.width());
                 }
@@ -3773,17 +3774,17 @@ impl FlexFormattingContext {
       let outputs = if should_parallel_layout {
         layout_work
           .par_iter()
-          .map(|work| {
+          .map_init(|| 0usize, |thread_deadline_counter, work| {
             with_deadline(deadline.as_ref(), || {
               crate::layout::engine::debug_record_parallel_work();
-              run_layout(work)
+              run_layout(thread_deadline_counter, work)
             })
           })
           .collect::<Result<Vec<_>, LayoutError>>()?
       } else {
         layout_work
           .iter()
-          .map(run_layout)
+          .map(|work| run_layout(&mut deadline_counter, work))
           .collect::<Result<Vec<_>, LayoutError>>()?
       };
       for (dom_idx, output) in outputs {
