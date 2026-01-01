@@ -118,6 +118,8 @@ const FONT_RESOLUTION_CACHE_SIZE: usize = 131072;
 const TEXT_FALLBACK_CACHE_CAPACITY_ENV: &str = "FASTR_TEXT_FALLBACK_CACHE_CAPACITY";
 #[cfg(any(test, debug_assertions))]
 static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(any(test, debug_assertions))]
+static SHAPING_PIPELINE_NEW_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 type ShapingCacheHasher = BuildHasherDefault<FxHasher>;
 
@@ -3960,10 +3962,24 @@ impl ShapingCache {
 impl ShapingPipeline {
   /// Creates a new shaping pipeline.
   pub fn new() -> Self {
+    #[cfg(any(test, debug_assertions))]
+    SHAPING_PIPELINE_NEW_CALLS.fetch_add(1, Ordering::Relaxed);
     Self {
       cache: ShapingCache::new(SHAPING_CACHE_CAPACITY),
       font_cache: FallbackCache::new(fallback_cache_capacity()),
     }
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  #[doc(hidden)]
+  pub fn debug_new_call_count() -> usize {
+    SHAPING_PIPELINE_NEW_CALLS.load(Ordering::Relaxed)
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  #[doc(hidden)]
+  pub fn debug_reset_new_call_count() {
+    SHAPING_PIPELINE_NEW_CALLS.store(0, Ordering::Relaxed);
   }
 
   #[cfg(test)]

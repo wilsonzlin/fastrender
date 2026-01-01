@@ -38,6 +38,12 @@ use crate::tree::box_tree::BoxNode;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+#[cfg(any(test, debug_assertions))]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(any(test, debug_assertions))]
+static FACTORY_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Default)]
 struct CachedFormattingContexts {
   block: OnceLock<Arc<dyn FormattingContext>>,
@@ -195,6 +201,8 @@ impl FormattingContextFactory {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
   ) -> Self {
+    #[cfg(any(test, debug_assertions))]
+    FACTORY_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.fetch_add(1, Ordering::Relaxed);
     Self::with_font_context_viewport_cb_and_cache(
       font_context,
       viewport_size,
@@ -431,6 +439,19 @@ impl FormattingContextFactory {
   /// ```
   pub fn is_supported(&self, fc_type: FormattingContextType) -> bool {
     self.supported_types().contains(&fc_type)
+  }
+}
+
+#[cfg(any(test, debug_assertions))]
+impl FormattingContextFactory {
+  #[doc(hidden)]
+  pub fn debug_with_font_context_viewport_and_cb_call_count() -> usize {
+    FACTORY_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.load(Ordering::Relaxed)
+  }
+
+  #[doc(hidden)]
+  pub fn debug_reset_with_font_context_viewport_and_cb_call_count() {
+    FACTORY_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.store(0, Ordering::Relaxed);
   }
 }
 

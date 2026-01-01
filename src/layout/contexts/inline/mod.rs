@@ -141,6 +141,9 @@ use std::sync::OnceLock;
 use unicode_general_category::get_general_category;
 use unicode_segmentation::UnicodeSegmentation;
 
+#[cfg(any(test, debug_assertions))]
+static INLINE_FC_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS: AtomicUsize = AtomicUsize::new(0);
+
 /// Inline Formatting Context implementation
 ///
 /// Implements the FormattingContext trait for inline-level layout.
@@ -247,6 +250,8 @@ impl InlineFormattingContext {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
   ) -> Self {
+    #[cfg(any(test, debug_assertions))]
+    INLINE_FC_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.fetch_add(1, Ordering::Relaxed);
     Self::with_font_context_viewport_cb_and_pipeline(
       font_context,
       viewport_size,
@@ -274,6 +279,18 @@ impl InlineFormattingContext {
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
     self.parallelism = parallelism;
     self
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  #[doc(hidden)]
+  pub fn debug_with_font_context_viewport_and_cb_call_count() -> usize {
+    INLINE_FC_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.load(Ordering::Relaxed)
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  #[doc(hidden)]
+  pub fn debug_reset_with_font_context_viewport_and_cb_call_count() {
+    INLINE_FC_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.store(0, Ordering::Relaxed);
   }
 
   fn hyphenator_for(&self, language: &str) -> Option<Hyphenator> {
