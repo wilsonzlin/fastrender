@@ -25,6 +25,7 @@ mod pageset_progress_soft_timeout_stage_buckets_test;
 mod pageset_progress_sync_test;
 mod pageset_progress_worker_diagnostics_test;
 mod pageset_progress_worker_fast_exit_test;
+mod pageset_progress_worker_stack_size_test;
 mod pageset_progress_worker_timeout_test;
 mod perf_smoke_output_test;
 mod render_pages_diagnostics_test;

@@ -20,7 +20,7 @@ use common::args::{
 use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, log_layout_parallelism,
   read_cached_document, render_document, render_document_with_artifacts, PreparedDocument,
-  RenderConfigBundle, RenderSurface,
+  RenderConfigBundle, RenderSurface, CLI_RENDER_STACK_SIZE,
 };
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
@@ -6527,6 +6527,34 @@ fn run(args: RunArgs) -> io::Result<()> {
 }
 
 fn worker(args: WorkerArgs) -> io::Result<()> {
+  if args.cache_path.as_os_str().is_empty() {
+    return Ok(());
+  }
+
+  // The render pipeline can be deeply recursive (DOM/style/box tree). Run it on a large-stack
+  // thread, matching `render_pages` and `fetch_and_render`, to avoid stack overflow aborts.
+  let thread_name = format!("pageset-progress-worker-{}", args.stem);
+  let handle = std::thread::Builder::new()
+    .name(thread_name)
+    .stack_size(CLI_RENDER_STACK_SIZE)
+    .spawn(move || worker_on_large_stack(args))
+    .map_err(|err| {
+      io::Error::new(
+        io::ErrorKind::Other,
+        format!("failed to spawn render worker thread: {err}"),
+      )
+    })?;
+
+  match handle.join() {
+    Ok(res) => res,
+    Err(panic) => Err(io::Error::new(
+      io::ErrorKind::Other,
+      format!("render worker thread panicked: {}", panic_to_string(panic)),
+    )),
+  }
+}
+
+fn worker_on_large_stack(args: WorkerArgs) -> io::Result<()> {
   if args.cache_path.as_os_str().is_empty() {
     return Ok(());
   }

@@ -19,7 +19,7 @@ use common::media_prefs::MediaPreferences;
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, decode_html_resource, follow_client_redirects,
   format_error_with_chain, log_diagnostics, read_cached_document, render_document,
-  RenderConfigBundle, RenderSurface,
+  RenderConfigBundle, RenderSurface, CLI_RENDER_STACK_SIZE,
 };
 use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::image_output::encode_image;
@@ -42,8 +42,6 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-
-const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 #[cfg(feature = "disk_cache")]
 const ASSET_CACHE_DIR: &str = "fetches/assets";
 
@@ -308,7 +306,7 @@ fn try_main(args: Args) -> Result<()> {
 
   thread::Builder::new()
     .name("fetch_and_render-worker".to_string())
-    .stack_size(STACK_SIZE)
+    .stack_size(CLI_RENDER_STACK_SIZE)
     .spawn(move || {
       let res = render_page(
         &url_clone,

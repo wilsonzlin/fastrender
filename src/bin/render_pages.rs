@@ -16,7 +16,7 @@ use common::render_pipeline::{
   build_http_fetcher, build_render_configs, compute_soft_timeout_ms, configure_worker_stdio,
   follow_client_redirects, format_error_with_chain, format_exit_status, log_diagnostics,
   read_cached_document, render_document_with_artifacts, summarize_exit_status, ExitStatusSummary,
-  RenderConfigBundle, RenderSurface, WorkerCommonArgs,
+  RenderConfigBundle, RenderSurface, WorkerCommonArgs, CLI_RENDER_STACK_SIZE,
 };
 use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::debug::runtime::RuntimeToggles;
@@ -62,7 +62,6 @@ use std::time::Instant;
 
 const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
-const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum DumpMode {
@@ -857,7 +856,7 @@ fn render_entry_inner(shared: &RenderShared, entry: &CachedEntry) -> PageResult 
       let (tx, rx) = channel();
       thread::Builder::new()
         .name(format!("render-pages-worker-{worker_name}"))
-        .stack_size(RENDER_STACK_SIZE)
+        .stack_size(CLI_RENDER_STACK_SIZE)
         .spawn(move || {
           let result = std::panic::catch_unwind(AssertUnwindSafe(render_work));
           let _ = tx.send(result);
