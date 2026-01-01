@@ -112,6 +112,7 @@ pub(super) fn build_curl_args(
 ) -> Vec<String> {
   let mut args = Vec::new();
   args.push("-q".to_string());
+  args.push("--globoff".to_string());
   args.push("--silent".to_string());
   args.push("--show-error".to_string());
   args.push("--dump-header".to_string());
@@ -804,6 +805,7 @@ mod tests {
     assert!(args.contains(&"--silent".to_string()));
     assert!(args.contains(&"--show-error".to_string()));
     assert!(args.contains(&"--dump-header".to_string()));
+    assert!(args.contains(&"--globoff".to_string()));
     assert!(args.contains(&"--max-time".to_string()));
     assert!(args.iter().any(|a| a.contains("User-Agent:")));
     assert!(args.iter().any(|a| a == "--"));
