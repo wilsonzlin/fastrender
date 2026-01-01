@@ -198,10 +198,10 @@ fn last_resort_font_fallback_shapes_missing_scripts() {
   // is forced into last-resort font selection and emits `.notdef` glyphs.
   let db = font_ctx.database();
   let missing = [
-    '\u{10380}', // UGARITIC LETTER ALPA
-    '\u{103A0}', // OLD PERSIAN SIGN A
-    '\u{10400}', // DESERET CAPITAL LETTER LONG I
-    '\u{16A0}',  // RUNIC LETTER FEHU FEOH FE F
+    '\u{10380}',  // UGARITIC LETTER ALPA
+    '\u{103A0}',  // OLD PERSIAN SIGN A
+    '\u{10400}',  // DESERET CAPITAL LETTER LONG I
+    '\u{16A0}',   // RUNIC LETTER FEHU FEOH FE F
     '\u{10FFFF}', // highest Unicode scalar value (noncharacter)
   ]
   .into_iter()
@@ -231,6 +231,25 @@ fn last_resort_font_fallback_shapes_missing_scripts() {
 // ============================================================================
 
 #[test]
+fn atomic_clusters_split_ascii_by_byte() {
+  let text = "Hello";
+  let clusters = atomic_shaping_clusters(text);
+  let expected: Vec<(usize, usize)> = (0..text.len()).map(|idx| (idx, idx + 1)).collect();
+  assert_eq!(clusters, expected);
+}
+
+#[test]
+fn atomic_clusters_split_trivial_unicode_by_scalar() {
+  let text = "Hello—“world”";
+  let clusters = atomic_shaping_clusters(text);
+  let expected: Vec<(usize, usize)> = text
+    .char_indices()
+    .map(|(idx, ch)| (idx, idx + ch.len_utf8()))
+    .collect();
+  assert_eq!(clusters, expected);
+}
+
+#[test]
 fn atomic_clusters_do_not_split_combining_marks() {
   let text = "a\u{0301}";
   let clusters = atomic_shaping_clusters(text);
@@ -240,6 +259,20 @@ fn atomic_clusters_do_not_split_combining_marks() {
 #[test]
 fn atomic_clusters_do_not_split_zwj_sequences() {
   let text = "👨\u{200d}👩";
+  let clusters = atomic_shaping_clusters(text);
+  assert_eq!(clusters, vec![(0, text.len())]);
+}
+
+#[test]
+fn atomic_clusters_do_not_split_flag_sequences() {
+  let text = "🇺🇸";
+  let clusters = atomic_shaping_clusters(text);
+  assert_eq!(clusters, vec![(0, text.len())]);
+}
+
+#[test]
+fn atomic_clusters_do_not_split_emoji_modifier_sequences() {
+  let text = "👋🏽";
   let clusters = atomic_shaping_clusters(text);
   assert_eq!(clusters, vec![(0, text.len())]);
 }

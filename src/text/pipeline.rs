@@ -134,20 +134,18 @@ type ShapingCacheHasher = BuildHasherDefault<FxHasher>;
 
 fn fallback_cache_capacity() -> usize {
   static CAPACITY: OnceLock<usize> = OnceLock::new();
-  *CAPACITY.get_or_init(|| {
-    match std::env::var(TEXT_FALLBACK_CACHE_CAPACITY_ENV) {
-      Ok(raw) => {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-          return FONT_RESOLUTION_CACHE_SIZE;
-        }
-        match trimmed.parse::<usize>() {
-          Ok(0) | Err(_) => FONT_RESOLUTION_CACHE_SIZE,
-          Ok(value) => value,
-        }
+  *CAPACITY.get_or_init(|| match std::env::var(TEXT_FALLBACK_CACHE_CAPACITY_ENV) {
+    Ok(raw) => {
+      let trimmed = raw.trim();
+      if trimmed.is_empty() {
+        return FONT_RESOLUTION_CACHE_SIZE;
       }
-      Err(_) => FONT_RESOLUTION_CACHE_SIZE,
+      match trimmed.parse::<usize>() {
+        Ok(0) | Err(_) => FONT_RESOLUTION_CACHE_SIZE,
+        Ok(value) => value,
+      }
     }
+    Err(_) => FONT_RESOLUTION_CACHE_SIZE,
   })
 }
 
@@ -347,7 +345,10 @@ impl TextDiagnosticsState {
           if let Some(start) = self.shape_start.take() {
             self.diag.shape_ms += now.saturating_duration_since(start).as_secs_f64() * 1000.0;
           } else {
-            debug_assert!(false, "text diagnostics shape_start missing when closing stage");
+            debug_assert!(
+              false,
+              "text diagnostics shape_start missing when closing stage"
+            );
           }
         }
       }
@@ -722,9 +723,7 @@ pub(crate) fn record_fallback_cache_stats_delta(
       .cluster_misses
       .saturating_sub(before.cluster_misses)
       .saturating_add(after.glyph_misses.saturating_sub(before.glyph_misses));
-    let glyph_eviction_delta = after
-      .glyph_evictions
-      .saturating_sub(before.glyph_evictions);
+    let glyph_eviction_delta = after.glyph_evictions.saturating_sub(before.glyph_evictions);
     let cluster_eviction_delta = after
       .cluster_evictions
       .saturating_sub(before.cluster_evictions);
@@ -1690,6 +1689,98 @@ fn split_run_at(run: &ItemizedRun, split_offset: usize) -> Option<(ItemizedRun, 
 // Shaping Clusters
 // ============================================================================
 
+#[inline]
+fn is_hangul_jamo(cp: u32) -> bool {
+  // Hangul syllable composition rules (UAX#29 GB6-GB8) allow multiple Jamo codepoints
+  // to form a single extended grapheme cluster. Treat any Jamo codepoint as requiring
+  // full grapheme segmentation so we never split these clusters when doing font
+  // fallback/shaping.
+  (0x1100..=0x11ff).contains(&cp)
+    || (0xa960..=0xa97f).contains(&cp)
+    || (0xd7b0..=0xd7ff).contains(&cp)
+}
+
+#[inline]
+fn is_grapheme_prepend(cp: u32) -> bool {
+  // Grapheme_Cluster_Break=Prepend characters attach to the following cluster (UAX#29 GB9b).
+  // They are rare in the pageset, but misclassifying them as "cluster-trivial" can cause
+  // us to split clusters in the fallback pipeline.
+  matches!(
+    cp,
+    0x0600..=0x0605 | 0x06dd | 0x070f | 0x08e2 | 0x110bd | 0x110cd
+  )
+}
+
+#[inline]
+fn needs_nontrivial_grapheme_segmentation(text: &str) -> bool {
+  // Fast pre-scan: most real-world "Latin" text is cluster-trivial even when it contains a small
+  // amount of non-ASCII punctuation (curly quotes, dashes, etc). Only fall back to full
+  // grapheme clustering when we see codepoints that can participate in multi-scalar grapheme
+  // clusters (marks, joiners, variation selectors, flags, emoji modifiers, etc).
+  for ch in text.chars() {
+    if ch.is_ascii() {
+      continue;
+    }
+    let cp = ch as u32;
+
+    if is_unicode_mark(ch) {
+      return true;
+    }
+
+    // Join controls and variation selectors participate in the UAX#29 rules as "Extend"/"ZWJ"
+    // and must not be split into separate fallback/shaping clusters.
+    if matches!(cp, 0x200c | 0x200d)
+      || (0xfe00..=0xfe0f).contains(&cp)
+      || (0xe0100..=0xe01ef).contains(&cp)
+      || (0x180b..=0x180d).contains(&cp)
+    {
+      return true;
+    }
+
+    // Regional indicator symbols join into flag sequences.
+    if (0x1f1e0..=0x1f1ff).contains(&cp) {
+      return true;
+    }
+
+    // Emoji modifiers participate in emoji modifier sequences.
+    if (0x1f3fb..=0x1f3ff).contains(&cp) {
+      return true;
+    }
+
+    // Tag characters are used for emoji subdivision flags.
+    if (0xe0020..=0xe007f).contains(&cp) {
+      return true;
+    }
+
+    if is_hangul_jamo(cp) || is_grapheme_prepend(cp) {
+      return true;
+    }
+  }
+
+  false
+}
+
+fn atomic_shaping_clusters_by_char_boundaries(text: &str) -> Vec<(usize, usize)> {
+  let mut clusters = Vec::with_capacity(text.len());
+  let mut iter = text.char_indices().peekable();
+
+  while let Some((start, ch)) = iter.next() {
+    if ch == '\r' {
+      if let Some(&(next_start, next_ch)) = iter.peek() {
+        if next_ch == '\n' {
+          iter.next();
+          clusters.push((start, next_start + next_ch.len_utf8()));
+          continue;
+        }
+      }
+    }
+
+    clusters.push((start, start + ch.len_utf8()));
+  }
+
+  clusters
+}
+
 /// Returns byte spans for atomic shaping clusters within the text.
 ///
 /// Clusters combine extended grapheme clusters with emoji sequences so that
@@ -1715,6 +1806,13 @@ pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
       }
     }
     return clusters;
+  }
+
+  if !needs_nontrivial_grapheme_segmentation(text) {
+    // "Cluster-trivial" Unicode: iterate scalar boundaries (with CRLF folded) instead of running
+    // full grapheme segmentation. This is a large win for long Latin runs that include a small
+    // amount of non-ASCII punctuation but do not contain marks/emoji sequences.
+    return atomic_shaping_clusters_by_char_boundaries(text);
   }
 
   let mut boundaries: Vec<usize> = UnicodeSegmentation::grapheme_indices(text, true)
@@ -2334,7 +2432,9 @@ fn assign_fonts_internal(
   };
   let hb_language = {
     let tag = language.trim();
-    (!tag.is_empty()).then(|| HbLanguage::from_str(tag).ok()).flatten()
+    (!tag.is_empty())
+      .then(|| HbLanguage::from_str(tag).ok())
+      .flatten()
   };
   let language_signature = family_name_signature(language);
   let families_display =
@@ -2487,12 +2587,8 @@ fn assign_fonts_internal(
             if style.font_size > 0.0 {
               synthetic_bold *= used_font_size / style.font_size;
             }
-            let (position_scale, baseline_shift) = synthetic_position_adjustment(
-              style,
-              font_arc.as_ref(),
-              used_font_size,
-              font_context,
-            );
+            let (position_scale, baseline_shift) =
+              synthetic_position_adjustment(style, font_arc.as_ref(), used_font_size, font_context);
             let run_font_size = used_font_size * position_scale;
             push_font_run(
               &mut font_runs,
@@ -2513,7 +2609,7 @@ fn assign_fonts_internal(
             continue;
           }
         }
-      } else if run.text.len() >= 64 {
+      } else if run.text.len() >= 32 {
         // Many pages contain mostly Latin text plus a few non-ASCII punctuation characters
         // (e.g. curly quotes). For sufficiently long runs, the Unicode grapheme segmentation +
         // per-cluster coverage checks can dominate, even though a single font covers the entire run.
@@ -2526,7 +2622,16 @@ fn assign_fonts_internal(
           if ch.is_ascii_control() || is_bidi_control_char(ch) {
             continue;
           }
-          if emoji::is_emoji(ch) || is_unicode_mark(ch) || is_non_rendering_for_coverage(ch) {
+          // The goal is to quickly prove that a *single* font covers the whole run. Emoji that
+          // default to emoji presentation (or tag sequence components) need cluster-level
+          // emoji preference handling, so keep those on the slow path. Characters with the
+          // `Emoji` property but text presentation (e.g. ©, digits) are safe here as long as
+          // we bail out when selectors/modifiers are present.
+          if emoji::is_emoji_presentation(ch)
+            || emoji::is_tag_character(ch)
+            || is_unicode_mark(ch)
+            || is_non_rendering_for_coverage(ch)
+          {
             eligible = false;
             break;
           }
@@ -2942,7 +3047,11 @@ fn assign_fonts_internal(
         if let Some(font) = resolved.as_ref() {
           let base_supported = font
             .id
-            .map(|id| font_context.database().has_glyph_cached(id.inner(), base_char))
+            .map(|id| {
+              font_context
+                .database()
+                .has_glyph_cached(id.inner(), base_char)
+            })
             .unwrap_or_else(|| font_supports_all_chars(font.as_ref(), &[base_char]));
           if !base_supported {
             record_last_resort_fallback(cluster_text);
@@ -2974,7 +3083,8 @@ fn assign_fonts_internal(
         }
       })?;
 
-      let is_emoji_font = font_is_emoji_font(db, font_arc.id.map(|id| id.inner()), font_arc.as_ref());
+      let is_emoji_font =
+        font_is_emoji_font(db, font_arc.id.map(|id| id.inner()), font_arc.as_ref());
       if primary.is_none() {
         primary = Some(PrimaryFont {
           font: Arc::clone(&font_arc),
@@ -2991,27 +3101,28 @@ fn assign_fonts_internal(
         continue;
       }
 
-        if let Some(cur) = current.take() {
-          push_font_run(
-            &mut font_runs,
-            run,
-            cur.start,
-            cluster_start,
-            cur.font,
-            cur.synthetic_bold,
-            cur.synthetic_oblique,
-            cur.font_size,
-            cur.baseline_shift,
-            &hb_language,
-            &features,
-            &authored_variations,
-            style,
-            font_context,
-          );
-        }
+      if let Some(cur) = current.take() {
+        push_font_run(
+          &mut font_runs,
+          run,
+          cur.start,
+          cluster_start,
+          cur.font,
+          cur.synthetic_bold,
+          cur.synthetic_oblique,
+          cur.font_size,
+          cur.baseline_shift,
+          &hb_language,
+          &features,
+          &authored_variations,
+          style,
+          font_context,
+        );
+      }
 
       let used_font_size = compute_adjusted_font_size(style, font_arc.as_ref(), preferred_aspect);
-      let (mut synthetic_bold, synthetic_oblique) = compute_synthetic_styles(style, font_arc.as_ref());
+      let (mut synthetic_bold, synthetic_oblique) =
+        compute_synthetic_styles(style, font_arc.as_ref());
       if style.font_size > 0.0 {
         synthetic_bold *= used_font_size / style.font_size;
       }
@@ -3812,7 +3923,7 @@ fn resolve_font_for_char_with_preferences(
                 families: &[Family::Name(family.as_str())],
                 weight: fontdb::Weight(*weight_choice),
                 stretch: (*stretch_choice).into(),
-               style: (*slope).into(),
+                style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
                 if seen_ids.contains_or_insert(id) {
@@ -3897,7 +4008,7 @@ fn resolve_font_for_char_with_preferences(
                 families: &[Family::Name(name)],
                 weight: fontdb::Weight(*weight_choice),
                 stretch: (*stretch_choice).into(),
-               style: (*slope).into(),
+                style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
                 if seen_ids.contains_or_insert(id) || seen_fallback_ids.contains_or_insert(id) {
@@ -3937,7 +4048,7 @@ fn resolve_font_for_char_with_preferences(
             families: &[Family::Name(family)],
             weight: fontdb::Weight(*weight_choice),
             stretch: (*stretch_choice).into(),
-           style: (*slope).into(),
+            style: (*slope).into(),
           };
           if let Some(id) = db.inner().query(&query) {
             if seen_ids.contains_or_insert(id) {
@@ -4227,13 +4338,9 @@ fn resolve_font_for_cluster_with_preferences(
 
   for face in db.faces() {
     let (cached_face, covers) = face_and_covers_needed(face.id);
-    if let Some(font) = consider_local_font_candidate(
-      db,
-      &mut picker,
-      face.id,
-      cached_face.as_deref(),
-      covers,
-    ) {
+    if let Some(font) =
+      consider_local_font_candidate(db, &mut picker, face.id, cached_face.as_deref(), covers)
+    {
       return Some(font);
     }
   }
@@ -4705,8 +4812,12 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 
   let features = if run.vertical {
     let base = run.features.as_ref();
-    let need_vert = !base.iter().any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
-    let need_vrt2 = !base.iter().any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
+    let need_vert = !base
+      .iter()
+      .any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
+    let need_vrt2 = !base
+      .iter()
+      .any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
     if need_vert || need_vrt2 {
       let mut features = base.to_vec();
       if need_vert {
@@ -4788,19 +4899,15 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     None
   };
 
-  let bidi_control_mask = run
-    .text
-    .chars()
-    .any(is_bidi_control_char)
-    .then(|| {
-      let mut mask = vec![0u8; run.text.len().saturating_add(1)];
-      for (idx, ch) in run.text.char_indices() {
-        if is_bidi_control_char(ch) && idx < mask.len() {
-          mask[idx] = 1;
-        }
+  let bidi_control_mask = run.text.chars().any(is_bidi_control_char).then(|| {
+    let mut mask = vec![0u8; run.text.len().saturating_add(1)];
+    for (idx, ch) in run.text.char_indices() {
+      if is_bidi_control_char(ch) && idx < mask.len() {
+        mask[idx] = 1;
       }
-      mask
-    });
+    }
+    mask
+  });
 
   for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
     let cluster_in_shape = info.cluster as usize;
@@ -4818,12 +4925,12 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     if !is_bidi_control {
       if info.glyph_id == 0 {
         if let Some((clusters, can_suppress)) = suppress_optional_mark_notdefs.as_ref() {
-          let cluster_idx = match clusters.binary_search_by_key(&logical_cluster, |(start, _)| *start)
-          {
-            Ok(idx) => idx,
-            Err(0) => 0,
-            Err(idx) => idx.saturating_sub(1),
-          };
+          let cluster_idx =
+            match clusters.binary_search_by_key(&logical_cluster, |(start, _)| *start) {
+              Ok(idx) => idx,
+              Err(0) => 0,
+              Err(idx) => idx.saturating_sub(1),
+            };
           if can_suppress.get(cluster_idx).copied().unwrap_or(false) {
             continue;
           }
@@ -6277,16 +6384,13 @@ mod tests {
       "ASCII fast-path should keep a single font run"
     );
 
-    let slow = assign_fonts_internal(
-      &[run],
-      &style,
-      &ctx,
-      None,
-      ctx.font_generation(),
-      false,
-    )
-    .expect("assign fonts without ASCII fast path");
-    assert_eq!(slow.len(), 1, "slow path should also keep a single font run");
+    let slow = assign_fonts_internal(&[run], &style, &ctx, None, ctx.font_generation(), false)
+      .expect("assign fonts without ASCII fast path");
+    assert_eq!(
+      slow.len(),
+      1,
+      "slow path should also keep a single font run"
+    );
 
     assert_eq!(fast[0].text, text);
     assert_eq!(slow[0].text, text);
@@ -6350,16 +6454,13 @@ mod tests {
       "non-ASCII run fast path should keep a single font run"
     );
 
-    let slow = assign_fonts_internal(
-      &[run],
-      &style,
-      &ctx,
-      None,
-      ctx.font_generation(),
-      false,
-    )
-    .expect("assign fonts with run fast path disabled");
-    assert_eq!(slow.len(), 1, "slow path should also keep a single font run");
+    let slow = assign_fonts_internal(&[run], &style, &ctx, None, ctx.font_generation(), false)
+      .expect("assign fonts with run fast path disabled");
+    assert_eq!(
+      slow.len(),
+      1,
+      "slow path should also keep a single font run"
+    );
 
     assert_eq!(fast[0].text, text);
     assert_eq!(slow[0].text, text);
@@ -6643,7 +6744,11 @@ mod tests {
 
     assert!(Arc::ptr_eq(&got_hello, &runs_hello));
     assert!(Arc::ptr_eq(&got_world, &runs_world));
-    assert_eq!(cache.len(), 1, "hash collision bucket should share cache key");
+    assert_eq!(
+      cache.len(),
+      1,
+      "hash collision bucket should share cache key"
+    );
   }
 
   #[test]
@@ -8496,15 +8601,8 @@ mod tests {
     let db = ctx.database();
 
     let candidates = [
-      '\u{1AB0}',
-      '\u{1AB1}',
-      '\u{1AB2}',
-      '\u{1AB3}',
-      '\u{1AB4}',
-      '\u{1ABE}',
-      '\u{1AC0}',
-      '\u{1AC1}',
-      '\u{1AC2}',
+      '\u{1AB0}', '\u{1AB1}', '\u{1AB2}', '\u{1AB3}', '\u{1AB4}', '\u{1ABE}', '\u{1AC0}',
+      '\u{1AC1}', '\u{1AC2}',
     ];
 
     let missing_mark = candidates
