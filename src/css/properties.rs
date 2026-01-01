@@ -423,90 +423,126 @@ fn is_known_page_property(property: &str) -> bool {
     .contains(property)
 }
 
-fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
-  let mut tokens = Vec::new();
-  let mut current = String::new();
+fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> Vec<&'a str> {
+  #[inline]
+  fn trim_ascii_whitespace(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut start = 0usize;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+      start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+      end -= 1;
+    }
+    &s[start..end]
+  }
+
+  let mut tokens: Vec<&'a str> = Vec::new();
+  let mut token_start: Option<usize> = None;
   let mut paren = 0i32;
   let mut bracket = 0i32;
   let mut brace = 0i32;
-  let mut in_string: Option<char> = None;
+  let mut in_string: Option<u8> = None;
   let mut escape = false;
 
-  for ch in value_str.chars() {
+  let bytes = value_str.as_bytes();
+  let mut idx = 0usize;
+  while idx < bytes.len() {
+    let b = bytes[idx];
+
     if escape {
-      current.push(ch);
       escape = false;
+      idx += 1;
       continue;
     }
-    if ch == '\\' {
-      current.push(ch);
+
+    if b == b'\\' {
+      token_start.get_or_insert(idx);
       escape = true;
+      idx += 1;
       continue;
     }
 
     if let Some(q) = in_string {
-      current.push(ch);
-      if ch == q {
+      token_start.get_or_insert(idx);
+      if b == q {
         in_string = None;
       }
+      idx += 1;
       continue;
     }
 
-    match ch {
-      '"' | '\'' => {
-        in_string = Some(ch);
-        current.push(ch);
+    match b {
+      b'"' | b'\'' => {
+        token_start.get_or_insert(idx);
+        in_string = Some(b);
       }
-      '(' => {
+      b'(' => {
+        token_start.get_or_insert(idx);
         paren += 1;
-        current.push(ch);
       }
-      ')' => {
+      b')' => {
+        token_start.get_or_insert(idx);
         paren -= 1;
-        current.push(ch);
       }
-      '[' => {
+      b'[' => {
+        token_start.get_or_insert(idx);
         bracket += 1;
-        current.push(ch);
       }
-      ']' => {
+      b']' => {
+        token_start.get_or_insert(idx);
         bracket -= 1;
-        current.push(ch);
       }
-      '{' => {
+      b'{' => {
+        token_start.get_or_insert(idx);
         brace += 1;
-        current.push(ch);
       }
-      '}' => {
+      b'}' => {
+        token_start.get_or_insert(idx);
         brace -= 1;
-        current.push(ch);
       }
-      '/' if paren == 0 && bracket == 0 && brace == 0 => {
-        if !current.trim().is_empty() {
-          tokens.push(current.trim().to_string());
+      b'/' if paren == 0 && bracket == 0 && brace == 0 => {
+        if let Some(start) = token_start.take() {
+          let slice = trim_ascii_whitespace(&value_str[start..idx]);
+          if !slice.is_empty() {
+            tokens.push(slice);
+          }
         }
-        tokens.push("/".to_string());
-        current.clear();
+        tokens.push(&value_str[idx..idx + 1]);
       }
-      ',' if allow_commas && paren == 0 && bracket == 0 && brace == 0 => {
-        if !current.trim().is_empty() {
-          tokens.push(current.trim().to_string());
+      b',' if allow_commas && paren == 0 && bracket == 0 && brace == 0 => {
+        if let Some(start) = token_start.take() {
+          let slice = trim_ascii_whitespace(&value_str[start..idx]);
+          if !slice.is_empty() {
+            tokens.push(slice);
+          }
         }
-        tokens.push(",".to_string());
-        current.clear();
+        tokens.push(&value_str[idx..idx + 1]);
       }
-      ch if ch.is_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
-        if !current.trim().is_empty() {
-          tokens.push(current.trim().to_string());
+      b if b.is_ascii_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
+        if let Some(start) = token_start.take() {
+          let slice = trim_ascii_whitespace(&value_str[start..idx]);
+          if !slice.is_empty() {
+            tokens.push(slice);
+          }
         }
-        current.clear();
       }
-      _ => current.push(ch),
+      _ => {
+        token_start.get_or_insert(idx);
+      }
+    }
+
+    idx += 1;
+  }
+
+  if let Some(start) = token_start.take() {
+    let slice = trim_ascii_whitespace(&value_str[start..]);
+    if !slice.is_empty() {
+      tokens.push(slice);
     }
   }
-  if !current.trim().is_empty() {
-    tokens.push(current.trim().to_string());
-  }
+
   tokens
 }
 
@@ -958,45 +994,25 @@ fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
     return None;
   }
 
-  let mut layers: Vec<Vec<String>> = Vec::new();
-  let mut current: Vec<String> = Vec::new();
-  for token in tokens {
-    if token == "," {
-      if current.is_empty() {
-        return None;
-      }
-      layers.push(std::mem::take(&mut current));
-      continue;
-    }
-    current.push(token);
-  }
-  if current.is_empty() {
-    return None;
-  }
-  layers.push(current);
-
   let mut shadows = Vec::new();
-  for layer in layers {
-    let mut lengths = Vec::new();
-    let mut color = None;
+  let mut lengths = [Length::px(0.0); 3];
+  let mut length_count = 0usize;
+  let mut color: Option<Rgba> = None;
+  let mut has_tokens = false;
 
-    for token in layer {
-      if let Ok(parsed_color) = Color::parse(&token) {
-        color = Some(parsed_color.to_rgba(Rgba::BLACK));
-        continue;
-      }
-      if let Some(len) = parse_length(&token) {
-        lengths.push(len);
-        continue;
-      }
+  let finish_layer = |shadows: &mut Vec<TextShadow>,
+                      lengths: &[Length; 3],
+                      length_count: &mut usize,
+                      color: &mut Option<Rgba>,
+                      has_tokens: &mut bool|
+   -> Option<()> {
+    if !*has_tokens {
       return None;
     }
-
-    if lengths.len() < 2 || lengths.len() > 3 {
+    if *length_count < 2 || *length_count > 3 {
       return None;
     }
-
-    let blur = if lengths.len() == 3 {
+    let blur = if *length_count == 3 {
       lengths[2]
     } else {
       Length::px(0.0)
@@ -1005,10 +1021,49 @@ fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
       offset_x: lengths[0],
       offset_y: lengths[1],
       blur_radius: blur,
-      color,
+      color: *color,
     });
+    *length_count = 0;
+    *color = None;
+    *has_tokens = false;
+    Some(())
+  };
+
+  for token in tokens {
+    if token == "," {
+      finish_layer(
+        &mut shadows,
+        &lengths,
+        &mut length_count,
+        &mut color,
+        &mut has_tokens,
+      )?;
+      continue;
+    }
+
+    has_tokens = true;
+    if let Ok(parsed_color) = Color::parse(token) {
+      color = Some(parsed_color.to_rgba(Rgba::BLACK));
+      continue;
+    }
+    if let Some(len) = parse_length(token) {
+      if length_count >= lengths.len() {
+        return None;
+      }
+      lengths[length_count] = len;
+      length_count += 1;
+      continue;
+    }
+    return None;
   }
 
+  finish_layer(
+    &mut shadows,
+    &lengths,
+    &mut length_count,
+    &mut color,
+    &mut has_tokens,
+  )?;
   Some(shadows)
 }
 
@@ -1027,72 +1082,94 @@ fn parse_box_shadow_list(value_str: &str) -> Option<Vec<BoxShadow>> {
     return None;
   }
 
-  let mut layers: Vec<Vec<String>> = Vec::new();
-  let mut current: Vec<String> = Vec::new();
-  for token in tokens {
-    if token == "," {
-      if current.is_empty() {
-        return None;
-      }
-      layers.push(std::mem::take(&mut current));
-      continue;
-    }
-    current.push(token);
-  }
-  if current.is_empty() {
-    return None;
-  }
-  layers.push(current);
-
   let mut shadows = Vec::new();
-  for layer in layers {
-    let mut lengths = Vec::new();
-    let mut color: Option<Rgba> = None;
-    let mut inset = false;
+  let mut lengths = [Length::px(0.0); 4];
+  let mut length_count = 0usize;
+  let mut color: Option<Rgba> = None;
+  let mut inset = false;
+  let mut has_tokens = false;
 
-    for token in layer {
-      if token.eq_ignore_ascii_case("inset") {
-        inset = true;
-        continue;
-      }
-      if color.is_none() {
-        if let Ok(parsed_color) = Color::parse(&token) {
-          color = Some(parsed_color.to_rgba(Rgba::BLACK));
-          continue;
-        }
-      }
-      if let Some(len) = parse_length(&token) {
-        lengths.push(len);
-        continue;
-      }
+  let finish_layer = |shadows: &mut Vec<BoxShadow>,
+                      lengths: &[Length; 4],
+                      length_count: &mut usize,
+                      color: &mut Option<Rgba>,
+                      inset: &mut bool,
+                      has_tokens: &mut bool|
+   -> Option<()> {
+    if !*has_tokens {
       return None;
     }
-
-    if lengths.len() < 2 || lengths.len() > 4 {
+    if *length_count < 2 || *length_count > 4 {
       return None;
     }
-
-    let blur = if lengths.len() >= 3 {
+    let blur = if *length_count >= 3 {
       lengths[2]
     } else {
       Length::px(0.0)
     };
-    let spread = if lengths.len() >= 4 {
+    let spread = if *length_count >= 4 {
       lengths[3]
     } else {
       Length::px(0.0)
     };
-
     shadows.push(BoxShadow {
       offset_x: lengths[0],
       offset_y: lengths[1],
       blur_radius: blur,
       spread_radius: spread,
       color: color.unwrap_or(Rgba::BLACK),
-      inset,
+      inset: *inset,
     });
+    *length_count = 0;
+    *color = None;
+    *inset = false;
+    *has_tokens = false;
+    Some(())
+  };
+
+  for token in tokens {
+    if token == "," {
+      finish_layer(
+        &mut shadows,
+        &lengths,
+        &mut length_count,
+        &mut color,
+        &mut inset,
+        &mut has_tokens,
+      )?;
+      continue;
+    }
+
+    has_tokens = true;
+    if token.eq_ignore_ascii_case("inset") {
+      inset = true;
+      continue;
+    }
+    if color.is_none() {
+      if let Ok(parsed_color) = Color::parse(token) {
+        color = Some(parsed_color.to_rgba(Rgba::BLACK));
+        continue;
+      }
+    }
+    if let Some(len) = parse_length(token) {
+      if length_count >= lengths.len() {
+        return None;
+      }
+      lengths[length_count] = len;
+      length_count += 1;
+      continue;
+    }
+    return None;
   }
 
+  finish_layer(
+    &mut shadows,
+    &lengths,
+    &mut length_count,
+    &mut color,
+    &mut inset,
+    &mut has_tokens,
+  )?;
   Some(shadows)
 }
 
@@ -1162,7 +1239,7 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
   }
 
   // Tokenize respecting commas (for background layering) and spaces.
-  let tokens: Vec<String> = tokenize_property_value(value_str, allow_commas);
+  let tokens = tokenize_property_value(value_str, allow_commas);
 
   // Unitless zero should parse as a number for numeric-only properties (opacity, z-index, etc.).
   // Our tokenize helper produces "0" so ensure we don't fall through to length parsing for those.
@@ -1250,17 +1327,17 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         parts.push(PropertyValue::Keyword(",".to_string()));
         continue;
       }
-      if let Some(gradient) = parse_gradient(&token) {
+      if let Some(gradient) = parse_gradient(token) {
         parts.push(gradient);
-      } else if let Some(v) = parse_simple_value(&token) {
+      } else if let Some(v) = parse_simple_value(token) {
         parts.push(v);
-      } else if let Ok(color) = Color::parse(&token) {
+      } else if let Ok(color) = Color::parse(token) {
         match color {
           Color::CurrentColor => parts.push(PropertyValue::Keyword("currentColor".to_string())),
           _ => parts.push(PropertyValue::Color(color)),
         }
       } else {
-        parts.push(PropertyValue::Keyword(token));
+        parts.push(PropertyValue::Keyword(token.to_string()));
       }
     }
     if !parts.is_empty() {
@@ -1841,7 +1918,7 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
   let tokens = tokenize_property_value(text, false);
   let parsed_tokens: Vec<PropertyValue> = tokens
     .into_iter()
-    .filter_map(|t| parse_property_value("background-position", &t))
+    .filter_map(|t| parse_property_value("background-position", t))
     .collect();
   if parsed_tokens.is_empty() {
     return None;
@@ -2251,6 +2328,93 @@ mod tests {
   use crate::style::properties::supported_properties;
   use std::collections::BTreeSet;
 
+  fn tokenize_property_value_allocating(value_str: &str, allow_commas: bool) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
+    let mut in_string: Option<char> = None;
+    let mut escape = false;
+
+    for ch in value_str.chars() {
+      if escape {
+        current.push(ch);
+        escape = false;
+        continue;
+      }
+      if ch == '\\' {
+        current.push(ch);
+        escape = true;
+        continue;
+      }
+
+      if let Some(q) = in_string {
+        current.push(ch);
+        if ch == q {
+          in_string = None;
+        }
+        continue;
+      }
+
+      match ch {
+        '"' | '\'' => {
+          in_string = Some(ch);
+          current.push(ch);
+        }
+        '(' => {
+          paren += 1;
+          current.push(ch);
+        }
+        ')' => {
+          paren -= 1;
+          current.push(ch);
+        }
+        '[' => {
+          bracket += 1;
+          current.push(ch);
+        }
+        ']' => {
+          bracket -= 1;
+          current.push(ch);
+        }
+        '{' => {
+          brace += 1;
+          current.push(ch);
+        }
+        '}' => {
+          brace -= 1;
+          current.push(ch);
+        }
+        '/' if paren == 0 && bracket == 0 && brace == 0 => {
+          if !current.trim().is_empty() {
+            tokens.push(current.trim().to_string());
+          }
+          tokens.push("/".to_string());
+          current.clear();
+        }
+        ',' if allow_commas && paren == 0 && bracket == 0 && brace == 0 => {
+          if !current.trim().is_empty() {
+            tokens.push(current.trim().to_string());
+          }
+          tokens.push(",".to_string());
+          current.clear();
+        }
+        ch if ch.is_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
+          if !current.trim().is_empty() {
+            tokens.push(current.trim().to_string());
+          }
+          current.clear();
+        }
+        _ => current.push(ch),
+      }
+    }
+    if !current.trim().is_empty() {
+      tokens.push(current.trim().to_string());
+    }
+    tokens
+  }
+
   #[test]
   fn parses_space_separated_values_into_multiple() {
     let parsed = parse_property_value("object-position", "left 25%");
@@ -2638,10 +2802,16 @@ mod tests {
   #[test]
   fn does_not_split_slash_inside_functions() {
     let tokens = tokenize_property_value("url(data:image/svg+xml;base64,abc/def==)", true);
-    assert_eq!(
-      tokens,
-      vec!["url(data:image/svg+xml;base64,abc/def==)".to_string()]
-    );
+    assert_eq!(tokens, vec!["url(data:image/svg+xml;base64,abc/def==)"]);
+  }
+
+  #[test]
+  fn tokenizer_slice_impl_matches_old_allocating_impl() {
+    let value = r#"fn1(a, fn2("b, c", "d\"e"))/url(data:image/svg+xml;base64,abc/def==) e\ f, "g\"h" / i"#;
+    let old = tokenize_property_value_allocating(value, true);
+    let new = tokenize_property_value(value, true);
+    let old_slices: Vec<&str> = old.iter().map(String::as_str).collect();
+    assert_eq!(new, old_slices);
   }
 
   #[test]
@@ -2677,6 +2847,11 @@ mod tests {
 
     assert_eq!(parse_length("0"), Some(Length::px(0.0)));
     assert_eq!(parse_length("-0"), Some(Length::px(0.0)));
+  }
+
+  #[test]
+  fn parse_length_rejects_non_ascii_identifiers_without_panicking() {
+    assert_eq!(parse_length(""), None);
   }
 
   #[test]
@@ -2874,17 +3049,19 @@ pub fn parse_length(s: &str) -> Option<Length> {
     }
   }
 
-  let lower = s.to_ascii_lowercase();
   const MATH_PREFIXES: &[&str] = &[
     "calc(", "min(", "max(", "clamp(", "sin(", "cos(", "tan(", "asin(", "acos(", "atan(", "atan2(",
     "pow(", "sqrt(", "hypot(", "log(", "exp(", "sign(", "abs(", "round(", "mod(", "rem(",
     "clamped(",
   ];
-  if MATH_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+  if MATH_PREFIXES
+    .iter()
+    .any(|p| s.get(..p.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(p)))
+  {
     if let Some(len) = parse_function_length(s) {
       return Some(len);
     }
-    if lower == "calc(0)" {
+    if s.eq_ignore_ascii_case("calc(0)") {
       return Some(Length::px(0.0));
     }
   }
@@ -2911,10 +3088,21 @@ pub fn parse_length(s: &str) -> Option<Length> {
     ("in", LengthUnit::In),
     ("%", LengthUnit::Percent),
   ] {
-    if let Some(rest) = lower.strip_suffix(suffix) {
-      if let Ok(value) = rest.trim().parse::<f32>() {
-        return Some(Length::new(value, unit));
-      }
+    if s.len() < suffix.len() {
+      continue;
+    }
+    let split_idx = s.len() - suffix.len();
+    let Some(rest) = s.get(..split_idx) else {
+      continue;
+    };
+    let Some(actual_suffix) = s.get(split_idx..) else {
+      continue;
+    };
+    if !actual_suffix.eq_ignore_ascii_case(suffix) {
+      continue;
+    }
+    if let Ok(value) = rest.trim().parse::<f32>() {
+      return Some(Length::new(value, unit));
     }
   }
 
