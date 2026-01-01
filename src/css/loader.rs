@@ -2410,7 +2410,7 @@ mod tests {
       "FASTR_FETCH_ALTERNATE_STYLESHEETS".to_string(),
       "0".to_string(),
     )]));
-    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+    let urls = runtime::with_thread_runtime_toggles(Arc::new(toggles), || {
       extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen).unwrap()
     });
     assert!(urls.is_empty());
@@ -2596,7 +2596,7 @@ mod tests {
       "FASTR_EMBEDDED_CSS_MAX_CANDIDATES".to_string(),
       "5".to_string(),
     )]));
-    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+    let urls = runtime::with_thread_runtime_toggles(Arc::new(toggles), || {
       extract_embedded_css_urls(&html, "https://example.com/").unwrap()
     });
     assert_eq!(urls.len(), 5);
@@ -2638,7 +2638,7 @@ mod tests {
       "FASTR_FETCH_PRELOAD_STYLESHEETS".to_string(),
       "1".to_string(),
     )]));
-    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+    let urls = runtime::with_thread_runtime_toggles(Arc::new(toggles), || {
       extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert_eq!(urls, vec!["https://example.com/a.css".to_string()]);
@@ -2662,7 +2662,7 @@ mod tests {
       "FASTR_FETCH_PRELOAD_STYLESHEETS".to_string(),
       "0".to_string(),
     )]));
-    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+    let urls = runtime::with_thread_runtime_toggles(Arc::new(toggles), || {
       extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert!(urls.is_empty());
@@ -2677,7 +2677,7 @@ mod tests {
       "FASTR_FETCH_MODULEPRELOAD_STYLESHEETS".to_string(),
       "0".to_string(),
     )]));
-    let default_urls = runtime::with_runtime_toggles(Arc::new(disabled), || {
+    let default_urls = runtime::with_thread_runtime_toggles(Arc::new(disabled), || {
       extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert!(default_urls.is_empty());
@@ -2686,7 +2686,7 @@ mod tests {
       "FASTR_FETCH_MODULEPRELOAD_STYLESHEETS".to_string(),
       "1".to_string(),
     )]));
-    let enabled_urls = runtime::with_runtime_toggles(Arc::new(enabled), || {
+    let enabled_urls = runtime::with_thread_runtime_toggles(Arc::new(enabled), || {
       extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert_eq!(enabled_urls, vec!["https://example.com/a.css".to_string()]);

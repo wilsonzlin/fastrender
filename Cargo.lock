@@ -924,6 +924,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "skrifa",
+ "smallvec",
  "svgtypes",
  "taffy",
  "tar",

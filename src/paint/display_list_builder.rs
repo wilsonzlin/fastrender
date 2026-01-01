@@ -8430,7 +8430,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.image_rendering = ImageRendering::CrispEdges;
     style.background_color = Rgba::TRANSPARENT;
-    style.background_layers = vec![BackgroundLayer {
+    style.background_layers = smallvec::smallvec![BackgroundLayer {
       image: Some(BackgroundImage::Url(url)),
       repeat: BackgroundRepeat::no_repeat(),
       ..BackgroundLayer::default()
@@ -8462,7 +8462,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.image_rendering = ImageRendering::Pixelated;
     style.background_color = Rgba::TRANSPARENT;
-    style.background_layers = vec![BackgroundLayer {
+    style.background_layers = smallvec::smallvec![BackgroundLayer {
       image: Some(BackgroundImage::Url(url)),
       repeat: BackgroundRepeat::no_repeat(),
       ..BackgroundLayer::default()

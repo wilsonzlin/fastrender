@@ -4383,7 +4383,7 @@ mod tests {
     ] {
       let mut grid_style = ComputedStyle::default();
       grid_style.display = CssDisplay::Grid;
-      grid_style.grid_auto_rows = vec![track];
+      grid_style.grid_auto_rows = vec![track].into();
       let grid_style = Arc::new(grid_style);
 
       let item = make_text_item(
@@ -4522,7 +4522,7 @@ mod tests {
 
   #[test]
   fn measured_fragments_are_reused_without_cloning() {
-    runtime::with_runtime_toggles(
+    runtime::with_thread_runtime_toggles(
       Arc::new(runtime::RuntimeToggles::from_map(HashMap::from([(
         "FASTR_PROFILE_FRAGMENT_CLONES".to_string(),
         "1".to_string(),

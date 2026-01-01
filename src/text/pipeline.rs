@@ -2327,7 +2327,7 @@ fn assign_fonts_internal(
   let oblique_degrees = quantize_oblique_degrees(requested_oblique);
   let weight_value = style.font_weight.to_u16();
   let language = match &style.font_language_override {
-    FontLanguageOverride::Normal => style.language.as_str(),
+    FontLanguageOverride::Normal => style.language.as_ref(),
     FontLanguageOverride::Override(tag) => tag.as_str(),
   };
   let hb_language = {
@@ -6682,7 +6682,7 @@ mod tests {
   #[test]
   fn shaping_sets_language_from_style() {
     let mut style = ComputedStyle::default();
-    style.language = "tr-TR".to_string();
+    style.language = "tr-TR".into();
     let pipeline = ShapingPipeline::new();
     let font_ctx = FontContext::new();
 
@@ -7466,7 +7466,7 @@ mod tests {
     base_style.font_size = 16.0;
 
     let mut latin_style = base_style.clone();
-    latin_style.language = "en".to_string();
+    latin_style.language = "en".into();
     let latin_runs = pipeline
       .shape("Hello", &latin_style, &ctx)
       .expect("shape latin");
@@ -7474,21 +7474,21 @@ mod tests {
     assert_eq!(latin_runs[0].font.family, "Noto Sans");
 
     let mut devanagari_style = base_style.clone();
-    devanagari_style.language = "hi".to_string();
+    devanagari_style.language = "hi".into();
     let devanagari_runs = pipeline
       .shape("ह", &devanagari_style, &ctx)
       .expect("shape devanagari");
     assert_eq!(devanagari_runs[0].font.family, "Noto Sans Devanagari");
 
     let mut bengali_style = base_style.clone();
-    bengali_style.language = "bn".to_string();
+    bengali_style.language = "bn".into();
     let bengali_runs = pipeline
       .shape("আ", &bengali_style, &ctx)
       .expect("shape bengali");
     assert_eq!(bengali_runs[0].font.family, "Noto Sans Bengali");
 
     let mut arabic_style = base_style.clone();
-    arabic_style.language = "ar".to_string();
+    arabic_style.language = "ar".into();
     let arabic_runs = pipeline
       .shape("م", &arabic_style, &ctx)
       .expect("shape arabic");
@@ -7497,7 +7497,7 @@ mod tests {
     // CJK Han characters exist in multiple bundled faces. We prefer a language-specific
     // face, mirroring browser system fallback.
     let mut ja_style = base_style.clone();
-    ja_style.language = "ja".to_string();
+    ja_style.language = "ja".into();
     let ja_runs = pipeline
       .shape("漢、字", &ja_style, &ctx)
       .expect("shape japanese han");
@@ -7509,7 +7509,7 @@ mod tests {
     assert_eq!(ja_runs[0].font.family, "Noto Sans JP");
 
     let mut ko_style = base_style.clone();
-    ko_style.language = "ko".to_string();
+    ko_style.language = "ko".into();
     let ko_runs = pipeline
       .shape("漢、字", &ko_style, &ctx)
       .expect("shape korean han");
@@ -7521,7 +7521,7 @@ mod tests {
     assert_eq!(ko_runs[0].font.family, "Noto Sans KR");
 
     let mut zh_style = base_style.clone();
-    zh_style.language = "zh".to_string();
+    zh_style.language = "zh".into();
     let zh_runs = pipeline
       .shape("漢、字", &zh_style, &ctx)
       .expect("shape chinese han");
@@ -7542,7 +7542,7 @@ mod tests {
         continue;
       }
       let mut style = base_style.clone();
-      style.language = lang.to_string();
+      style.language = lang.into();
       let runs = pipeline
         .shape(sample, &style, &ctx)
         .expect("shape optional");

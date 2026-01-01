@@ -41,6 +41,7 @@ use counters::CounterProperties;
 use display::Display;
 use font_palette::FontPaletteRegistry;
 use position::Position;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use types::AccentColor;
@@ -459,13 +460,13 @@ pub struct ComputedStyle {
   /// Names of animations applied to this element.
   pub animation_names: Vec<String>,
   /// Properties that participate in transitions (empty disables transitions).
-  pub transition_properties: Vec<TransitionProperty>,
+  pub transition_properties: Arc<[TransitionProperty]>,
   /// Durations for transitions in milliseconds.
-  pub transition_durations: Vec<f32>,
+  pub transition_durations: Arc<[f32]>,
   /// Delays for transitions in milliseconds.
-  pub transition_delays: Vec<f32>,
+  pub transition_delays: Arc<[f32]>,
   /// Timing functions used by transitions.
-  pub transition_timing_functions: Vec<TransitionTimingFunction>,
+  pub transition_timing_functions: Arc<[TransitionTimingFunction]>,
   pub top: Option<Length>,
   pub right: Option<Length>,
   pub bottom: Option<Length>,
@@ -577,9 +578,9 @@ pub struct ComputedStyle {
   /// Parsed grid-template-areas rows (None for empty cells)
   pub grid_template_areas: Vec<Vec<Option<String>>>,
   /// Sizes for implicitly created rows
-  pub grid_auto_rows: Vec<GridTrack>,
+  pub grid_auto_rows: Arc<[GridTrack]>,
   /// Sizes for implicitly created columns
-  pub grid_auto_columns: Vec<GridTrack>,
+  pub grid_auto_columns: Arc<[GridTrack]>,
   /// Auto-placement direction/density
   pub grid_auto_flow: types::GridAutoFlow,
   pub grid_column_names: HashMap<String, Vec<usize>>, // Named grid lines for columns
@@ -674,7 +675,7 @@ pub struct ComputedStyle {
   /// Used to distinguish default UA values from explicit ones when applying table row fallbacks.
   pub vertical_align_specified: bool,
   /// BCP47 language tag inherited from DOM (lang/xml:lang)
-  pub language: String,
+  pub language: Arc<str>,
   pub list_style_type: ListStyleType,
   pub list_style_position: ListStylePosition,
   pub list_style_image: ListStyleImage,
@@ -693,25 +694,25 @@ pub struct ComputedStyle {
   pub color: Rgba,
   pub background_color: Rgba,
   /// Author-specified background values (lists preserved for layer repetition rules)
-  pub background_images: Vec<Option<BackgroundImage>>,
-  pub background_positions: Vec<BackgroundPosition>,
-  pub background_sizes: Vec<BackgroundSize>,
-  pub background_repeats: Vec<BackgroundRepeat>,
-  pub background_attachments: Vec<BackgroundAttachment>,
-  pub background_origins: Vec<BackgroundBox>,
-  pub background_clips: Vec<BackgroundBox>,
-  pub background_layers: Vec<BackgroundLayer>,
-  pub background_blend_modes: Vec<MixBlendMode>,
+  pub background_images: Arc<[Option<BackgroundImage>]>,
+  pub background_positions: Arc<[BackgroundPosition]>,
+  pub background_sizes: Arc<[BackgroundSize]>,
+  pub background_repeats: Arc<[BackgroundRepeat]>,
+  pub background_attachments: Arc<[BackgroundAttachment]>,
+  pub background_origins: Arc<[BackgroundBox]>,
+  pub background_clips: Arc<[BackgroundBox]>,
+  pub background_layers: SmallVec<[BackgroundLayer; 1]>,
+  pub background_blend_modes: Arc<[MixBlendMode]>,
   /// Author-specified mask values (lists preserved for layer repetition rules)
-  pub mask_images: Vec<Option<BackgroundImage>>,
-  pub mask_positions: Vec<BackgroundPosition>,
-  pub mask_sizes: Vec<BackgroundSize>,
-  pub mask_repeats: Vec<BackgroundRepeat>,
-  pub mask_modes: Vec<MaskMode>,
-  pub mask_origins: Vec<MaskOrigin>,
-  pub mask_clips: Vec<MaskClip>,
-  pub mask_composites: Vec<MaskComposite>,
-  pub mask_layers: Vec<MaskLayer>,
+  pub mask_images: Arc<[Option<BackgroundImage>]>,
+  pub mask_positions: Arc<[BackgroundPosition]>,
+  pub mask_sizes: Arc<[BackgroundSize]>,
+  pub mask_repeats: Arc<[BackgroundRepeat]>,
+  pub mask_modes: Arc<[MaskMode]>,
+  pub mask_origins: Arc<[MaskOrigin]>,
+  pub mask_clips: Arc<[MaskClip]>,
+  pub mask_composites: Arc<[MaskComposite]>,
+  pub mask_layers: SmallVec<[MaskLayer; 1]>,
   pub object_fit: ObjectFit,
   pub object_position: ObjectPosition,
   pub image_resolution: ImageResolution,
@@ -812,10 +813,10 @@ impl Default for ComputedStyle {
       animation_timelines: Vec::new(),
       animation_ranges: Vec::new(),
       animation_names: Vec::new(),
-      transition_properties: vec![TransitionProperty::All],
-      transition_durations: vec![0.0],
-      transition_delays: vec![0.0],
-      transition_timing_functions: vec![TransitionTimingFunction::Ease],
+      transition_properties: vec![TransitionProperty::All].into(),
+      transition_durations: vec![0.0].into(),
+      transition_delays: vec![0.0].into(),
+      transition_timing_functions: vec![TransitionTimingFunction::Ease].into(),
       top: None,
       right: None,
       bottom: None,
@@ -904,8 +905,8 @@ impl Default for ComputedStyle {
       subgrid_row_line_names: Vec::new(),
       subgrid_column_line_names: Vec::new(),
       grid_template_areas: Vec::new(),
-      grid_auto_rows: vec![GridTrack::Auto],
-      grid_auto_columns: vec![GridTrack::Auto],
+      grid_auto_rows: vec![GridTrack::Auto].into(),
+      grid_auto_columns: vec![GridTrack::Auto].into(),
       grid_auto_flow: types::GridAutoFlow::Row,
       grid_column_names: HashMap::new(),
       grid_row_names: HashMap::new(),
@@ -989,7 +990,7 @@ impl Default for ComputedStyle {
       overflow_wrap: OverflowWrap::Normal,
       vertical_align: VerticalAlign::Baseline,
       vertical_align_specified: false,
-      language: "en".to_string(),
+      language: "en".into(),
       list_style_type: ListStyleType::Disc,
       list_style_position: ListStylePosition::Outside,
       list_style_image: ListStyleImage::None,
@@ -1002,24 +1003,24 @@ impl Default for ComputedStyle {
       accent_color: AccentColor::Auto,
       color: Rgba::BLACK,
       background_color: Rgba::TRANSPARENT,
-      background_images: vec![default_layer.image.clone()],
-      background_positions: vec![default_layer.position.clone()],
-      background_sizes: vec![default_layer.size.clone()],
-      background_repeats: vec![default_layer.repeat],
-      background_attachments: vec![default_layer.attachment],
-      background_origins: vec![default_layer.origin],
-      background_clips: vec![default_layer.clip],
-      background_layers: vec![default_layer.clone()],
-      background_blend_modes: vec![default_layer.blend_mode],
-      mask_images: vec![mask_default.image.clone()],
-      mask_positions: vec![mask_default.position.clone()],
-      mask_sizes: vec![mask_default.size.clone()],
-      mask_repeats: vec![mask_default.repeat],
-      mask_modes: vec![mask_default.mode],
-      mask_origins: vec![mask_default.origin],
-      mask_clips: vec![mask_default.clip],
-      mask_composites: vec![mask_default.composite],
-      mask_layers: vec![mask_default],
+      background_images: vec![default_layer.image.clone()].into(),
+      background_positions: vec![default_layer.position.clone()].into(),
+      background_sizes: vec![default_layer.size.clone()].into(),
+      background_repeats: vec![default_layer.repeat].into(),
+      background_attachments: vec![default_layer.attachment].into(),
+      background_origins: vec![default_layer.origin].into(),
+      background_clips: vec![default_layer.clip].into(),
+      background_layers: smallvec::smallvec![default_layer.clone()],
+      background_blend_modes: vec![default_layer.blend_mode].into(),
+      mask_images: vec![mask_default.image.clone()].into(),
+      mask_positions: vec![mask_default.position.clone()].into(),
+      mask_sizes: vec![mask_default.size.clone()].into(),
+      mask_repeats: vec![mask_default.repeat].into(),
+      mask_modes: vec![mask_default.mode].into(),
+      mask_origins: vec![mask_default.origin].into(),
+      mask_clips: vec![mask_default.clip].into(),
+      mask_composites: vec![mask_default.composite].into(),
+      mask_layers: smallvec::smallvec![mask_default],
       object_fit: ObjectFit::Fill,
       object_position: ObjectPosition {
         x: types::PositionComponent::Keyword(types::PositionKeyword::Center),
@@ -1091,28 +1092,28 @@ impl ComputedStyle {
   fn ensure_background_lists(&mut self) {
     let defaults = BackgroundLayer::default();
     if self.background_images.is_empty() {
-      self.background_images.push(defaults.image.clone());
+      self.background_images = vec![defaults.image.clone()].into();
     }
     if self.background_positions.is_empty() {
-      self.background_positions.push(defaults.position.clone());
+      self.background_positions = vec![defaults.position.clone()].into();
     }
     if self.background_sizes.is_empty() {
-      self.background_sizes.push(defaults.size.clone());
+      self.background_sizes = vec![defaults.size.clone()].into();
     }
     if self.background_repeats.is_empty() {
-      self.background_repeats.push(defaults.repeat);
+      self.background_repeats = vec![defaults.repeat].into();
     }
     if self.background_attachments.is_empty() {
-      self.background_attachments.push(defaults.attachment);
+      self.background_attachments = vec![defaults.attachment].into();
     }
     if self.background_origins.is_empty() {
-      self.background_origins.push(defaults.origin);
+      self.background_origins = vec![defaults.origin].into();
     }
     if self.background_clips.is_empty() {
-      self.background_clips.push(defaults.clip);
+      self.background_clips = vec![defaults.clip].into();
     }
     if self.background_blend_modes.is_empty() {
-      self.background_blend_modes.push(defaults.blend_mode);
+      self.background_blend_modes = vec![defaults.blend_mode].into();
     }
   }
 
@@ -1154,43 +1155,50 @@ impl ComputedStyle {
     } else {
       layers
     };
-    self.background_images = normalized.iter().map(|l| l.image.clone()).collect();
-    self.background_positions = normalized.iter().map(|l| l.position.clone()).collect();
-    self.background_sizes = normalized.iter().map(|l| l.size.clone()).collect();
-    self.background_repeats = normalized.iter().map(|l| l.repeat).collect();
-    self.background_attachments = normalized.iter().map(|l| l.attachment).collect();
-    self.background_origins = normalized.iter().map(|l| l.origin).collect();
-    self.background_clips = normalized.iter().map(|l| l.clip).collect();
-    self.background_blend_modes = normalized.iter().map(|l| l.blend_mode).collect();
-    self.background_layers = normalized;
+    self.background_images = normalized.iter().map(|l| l.image.clone()).collect::<Vec<_>>().into();
+    self.background_positions = normalized
+      .iter()
+      .map(|l| l.position.clone())
+      .collect::<Vec<_>>()
+      .into();
+    self.background_sizes =
+      normalized.iter().map(|l| l.size.clone()).collect::<Vec<_>>().into();
+    self.background_repeats = normalized.iter().map(|l| l.repeat).collect::<Vec<_>>().into();
+    self.background_attachments =
+      normalized.iter().map(|l| l.attachment).collect::<Vec<_>>().into();
+    self.background_origins = normalized.iter().map(|l| l.origin).collect::<Vec<_>>().into();
+    self.background_clips = normalized.iter().map(|l| l.clip).collect::<Vec<_>>().into();
+    self.background_blend_modes =
+      normalized.iter().map(|l| l.blend_mode).collect::<Vec<_>>().into();
+    self.background_layers = SmallVec::from_vec(normalized);
   }
 
   /// Ensure mask property lists have at least one entry.
   fn ensure_mask_lists(&mut self) {
     let defaults = MaskLayer::default();
     if self.mask_images.is_empty() {
-      self.mask_images.push(defaults.image.clone());
+      self.mask_images = vec![defaults.image.clone()].into();
     }
     if self.mask_positions.is_empty() {
-      self.mask_positions.push(defaults.position.clone());
+      self.mask_positions = vec![defaults.position.clone()].into();
     }
     if self.mask_sizes.is_empty() {
-      self.mask_sizes.push(defaults.size.clone());
+      self.mask_sizes = vec![defaults.size.clone()].into();
     }
     if self.mask_repeats.is_empty() {
-      self.mask_repeats.push(defaults.repeat);
+      self.mask_repeats = vec![defaults.repeat].into();
     }
     if self.mask_modes.is_empty() {
-      self.mask_modes.push(defaults.mode);
+      self.mask_modes = vec![defaults.mode].into();
     }
     if self.mask_origins.is_empty() {
-      self.mask_origins.push(defaults.origin);
+      self.mask_origins = vec![defaults.origin].into();
     }
     if self.mask_clips.is_empty() {
-      self.mask_clips.push(defaults.clip);
+      self.mask_clips = vec![defaults.clip].into();
     }
     if self.mask_composites.is_empty() {
-      self.mask_composites.push(defaults.composite);
+      self.mask_composites = vec![defaults.composite].into();
     }
   }
 
@@ -1244,15 +1252,17 @@ impl ComputedStyle {
     } else {
       layers
     };
-    self.mask_images = normalized.iter().map(|l| l.image.clone()).collect();
-    self.mask_positions = normalized.iter().map(|l| l.position.clone()).collect();
-    self.mask_sizes = normalized.iter().map(|l| l.size.clone()).collect();
-    self.mask_repeats = normalized.iter().map(|l| l.repeat).collect();
-    self.mask_modes = normalized.iter().map(|l| l.mode).collect();
-    self.mask_origins = normalized.iter().map(|l| l.origin).collect();
-    self.mask_clips = normalized.iter().map(|l| l.clip).collect();
-    self.mask_composites = normalized.iter().map(|l| l.composite).collect();
-    self.mask_layers = normalized;
+    self.mask_images = normalized.iter().map(|l| l.image.clone()).collect::<Vec<_>>().into();
+    self.mask_positions =
+      normalized.iter().map(|l| l.position.clone()).collect::<Vec<_>>().into();
+    self.mask_sizes = normalized.iter().map(|l| l.size.clone()).collect::<Vec<_>>().into();
+    self.mask_repeats = normalized.iter().map(|l| l.repeat).collect::<Vec<_>>().into();
+    self.mask_modes = normalized.iter().map(|l| l.mode).collect::<Vec<_>>().into();
+    self.mask_origins = normalized.iter().map(|l| l.origin).collect::<Vec<_>>().into();
+    self.mask_clips = normalized.iter().map(|l| l.clip).collect::<Vec<_>>().into();
+    self.mask_composites =
+      normalized.iter().map(|l| l.composite).collect::<Vec<_>>().into();
+    self.mask_layers = SmallVec::from_vec(normalized);
   }
 
   /// Reset background color and layer properties to their initial values.

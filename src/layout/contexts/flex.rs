@@ -7873,7 +7873,7 @@ mod tests {
 
   #[test]
   fn flex_measure_inline_hint_only_computed_when_measure_logging_enabled() {
-    use crate::debug::runtime::{with_runtime_toggles, RuntimeToggles};
+    use crate::debug::runtime::{with_thread_runtime_toggles, RuntimeToggles};
     use std::collections::HashMap;
 
     let mut item_style = ComputedStyle::default();
@@ -7902,7 +7902,7 @@ mod tests {
     let constraints = LayoutConstraints::definite(200.0, 200.0);
 
     // Without any flex-measure logging, we should not do the extra intrinsic sizing work.
-    with_runtime_toggles(Arc::new(RuntimeToggles::from_map(HashMap::new())), || {
+    with_thread_runtime_toggles(Arc::new(RuntimeToggles::from_map(HashMap::new())), || {
       let guard = start_flex_measure_inline_hint_counter();
       let fc = FlexFormattingContext::new();
       fc.layout(&container, &constraints).unwrap();
@@ -7915,7 +7915,7 @@ mod tests {
     });
 
     // When measure logging is enabled for this node, compute the hint for log output.
-    with_runtime_toggles(
+    with_thread_runtime_toggles(
       Arc::new(RuntimeToggles::from_map(HashMap::from([(
         "FASTR_LOG_FLEX_MEASURE_IDS".to_string(),
         "65001".to_string(),

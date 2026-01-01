@@ -3,6 +3,7 @@ use crate::style::media::{
   LightLevel, MediaType, ReducedData, ReducedMotion, ReducedTransparency, Scripting,
   UpdateFrequency,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -156,11 +157,17 @@ fn matches_ignore_case(value: &str, candidates: &[&str]) -> bool {
 
 static DEFAULT_TOGGLES: OnceLock<Arc<RuntimeToggles>> = OnceLock::new();
 static ACTIVE_TOGGLES: OnceLock<RwLock<Arc<RuntimeToggles>>> = OnceLock::new();
+thread_local! {
+  static THREAD_TOGGLES: RefCell<Option<Arc<RuntimeToggles>>> = RefCell::new(None);
+}
 
 /// Returns the currently active runtime toggles.
 ///
 /// Defaults to `RuntimeToggles::from_env()` if no overrides are installed.
 pub fn runtime_toggles() -> Arc<RuntimeToggles> {
+  if let Some(toggles) = THREAD_TOGGLES.with(|cell| cell.borrow().clone()) {
+    return toggles;
+  }
   let lock = ACTIVE_TOGGLES.get_or_init(|| {
     let default = default_toggles();
     RwLock::new(default)
@@ -221,6 +228,33 @@ pub(crate) fn update_runtime_toggles(toggles: Arc<RuntimeToggles>) {
 /// Convenience helper to run a closure with a temporary toggles override.
 pub fn with_runtime_toggles<T>(toggles: Arc<RuntimeToggles>, f: impl FnOnce() -> T) -> T {
   let guard = set_runtime_toggles(toggles);
+  let result = f();
+  drop(guard);
+  result
+}
+
+/// Guard that restores the previous thread-local runtime toggles when dropped.
+pub struct ThreadRuntimeTogglesGuard {
+  previous: Option<Arc<RuntimeToggles>>,
+}
+
+impl Drop for ThreadRuntimeTogglesGuard {
+  fn drop(&mut self) {
+    THREAD_TOGGLES.with(|cell| {
+      *cell.borrow_mut() = self.previous.clone();
+    });
+  }
+}
+
+/// Install the provided toggles as the thread-local set for the duration of the returned guard.
+pub fn set_thread_runtime_toggles(toggles: Arc<RuntimeToggles>) -> ThreadRuntimeTogglesGuard {
+  let previous = THREAD_TOGGLES.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), Some(toggles)));
+  ThreadRuntimeTogglesGuard { previous }
+}
+
+/// Convenience helper to run a closure with a temporary thread-local toggles override.
+pub fn with_thread_runtime_toggles<T>(toggles: Arc<RuntimeToggles>, f: impl FnOnce() -> T) -> T {
+  let guard = set_thread_runtime_toggles(toggles);
   let result = f();
   drop(guard);
   result

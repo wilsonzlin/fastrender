@@ -168,12 +168,12 @@ fn nested_grid_items_preserve_measured_children() {
   let mut outer_style = ComputedStyle::default();
   outer_style.display = Display::Grid;
   outer_style.grid_auto_flow = fastrender::style::types::GridAutoFlow::Column;
-  outer_style.grid_auto_columns = vec![GridTrack::Fr(1.0)];
+  outer_style.grid_auto_columns = vec![GridTrack::Fr(1.0)].into();
 
   let mut inner_style = ComputedStyle::default();
   inner_style.display = Display::Grid;
   inner_style.grid_auto_flow = fastrender::style::types::GridAutoFlow::Row;
-  inner_style.grid_auto_rows = vec![GridTrack::Fr(1.0)];
+  inner_style.grid_auto_rows = vec![GridTrack::Fr(1.0)].into();
 
   let text_style = Arc::new(ComputedStyle::default());
   let text = BoxNode::new_text(text_style, "Nested grid child".to_string());

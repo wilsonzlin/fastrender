@@ -7271,7 +7271,7 @@ fn compute_base_styles<'a>(
     .or_else(|| node.get_attribute_ref("xml:lang"))
     .filter(|l| !l.is_empty())
   {
-    ua_styles.language = normalize_language_tag(lang);
+    ua_styles.language = normalize_language_tag(lang).into();
   }
 
   let is_root = is_root_element(ancestors);
@@ -7337,7 +7337,7 @@ fn compute_base_styles<'a>(
     .or_else(|| node.get_attribute_ref("xml:lang"))
     .filter(|l| !l.is_empty())
   {
-    styles.language = normalize_language_tag(lang);
+    styles.language = normalize_language_tag(lang).into();
   }
 
   // Finalize grid placement - resolve named grid lines

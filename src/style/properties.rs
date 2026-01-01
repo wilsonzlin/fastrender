@@ -3595,7 +3595,7 @@ fn apply_property_from_source(
         let BackgroundPosition::Position { y, .. } = source_pos;
         positions.push(BackgroundPosition::Position { x: x_comp, y });
       }
-      styles.background_positions = positions;
+      styles.background_positions = positions.into();
       styles.rebuild_background_layers();
     }
     "background-position-y" => {
@@ -3625,7 +3625,7 @@ fn apply_property_from_source(
         let BackgroundPosition::Position { x, .. } = source_pos;
         positions.push(BackgroundPosition::Position { x, y: y_comp });
       }
-      styles.background_positions = positions;
+      styles.background_positions = positions.into();
       styles.rebuild_background_layers();
     }
     "background-attachment" => {
@@ -6030,10 +6030,10 @@ pub fn apply_declaration_with_base(
             }
           }
           if let Some(rows) = parsed.auto_rows {
-            styles.grid_auto_rows = rows;
+            styles.grid_auto_rows = rows.into();
           }
           if let Some(cols) = parsed.auto_columns {
-            styles.grid_auto_columns = cols;
+            styles.grid_auto_columns = cols.into();
           }
           if let Some(flow) = parsed.auto_flow {
             styles.grid_auto_flow = flow;
@@ -6047,7 +6047,7 @@ pub fn apply_declaration_with_base(
       if let PropertyValue::Keyword(kw) = &resolved_value {
         let ParsedTracks { tracks, .. } = parse_track_list(kw);
         if !tracks.is_empty() {
-          styles.grid_auto_rows = tracks;
+          styles.grid_auto_rows = tracks.into();
         }
       }
     }
@@ -6055,7 +6055,7 @@ pub fn apply_declaration_with_base(
       if let PropertyValue::Keyword(kw) = &resolved_value {
         let ParsedTracks { tracks, .. } = parse_track_list(kw);
         if !tracks.is_empty() {
-          styles.grid_auto_columns = tracks;
+          styles.grid_auto_columns = tracks.into();
         }
       }
     }
@@ -7713,24 +7713,24 @@ pub fn apply_declaration_with_base(
       styles.animation_names = parse_animation_names(resolved_css_text_str);
     }
     "transition-property" => {
-      styles.transition_properties = parse_transition_property_list(resolved_css_text_str);
+      styles.transition_properties = parse_transition_property_list(resolved_css_text_str).into();
     }
     "transition-duration" => {
-      styles.transition_durations = parse_transition_time_list(resolved_css_text_str);
+      styles.transition_durations = parse_transition_time_list(resolved_css_text_str).into();
     }
     "transition-delay" => {
-      styles.transition_delays = parse_transition_time_list(resolved_css_text_str);
+      styles.transition_delays = parse_transition_time_list(resolved_css_text_str).into();
     }
     "transition-timing-function" => {
       styles.transition_timing_functions =
-        parse_transition_timing_function_list(resolved_css_text_str);
+        parse_transition_timing_function_list(resolved_css_text_str).into();
     }
     "transition" => {
       let (props, durations, delays, timings) = parse_transition_shorthand(resolved_css_text_str);
-      styles.transition_properties = props;
-      styles.transition_durations = durations;
-      styles.transition_delays = delays;
-      styles.transition_timing_functions = timings;
+      styles.transition_properties = props.into();
+      styles.transition_durations = durations.into();
+      styles.transition_delays = delays.into();
+      styles.transition_timing_functions = timings.into();
     }
     "scrollbar-gutter" => {
       let mut stable = false;
@@ -7900,13 +7900,13 @@ pub fn apply_declaration_with_base(
     // Background
     "background-image" => {
       if let Some(images) = parse_background_image_list(&resolved_value) {
-        styles.background_images = images;
+        styles.background_images = images.into();
         styles.rebuild_background_layers();
       }
     }
     "background-size" => {
       if let Some(sizes) = parse_layer_list(&resolved_value, parse_background_size) {
-        styles.background_sizes = sizes;
+        styles.background_sizes = sizes.into();
         styles.rebuild_background_layers();
       }
     }
@@ -7947,7 +7947,7 @@ pub fn apply_declaration_with_base(
           };
           sizes.push(explicit);
         }
-        styles.background_sizes = sizes;
+        styles.background_sizes = sizes.into();
         styles.rebuild_background_layers();
       }
     }
@@ -7988,19 +7988,19 @@ pub fn apply_declaration_with_base(
           };
           sizes.push(explicit);
         }
-        styles.background_sizes = sizes;
+        styles.background_sizes = sizes.into();
         styles.rebuild_background_layers();
       }
     }
     "background-repeat" => {
       if let Some(repeats) = parse_layer_list(&resolved_value, parse_background_repeat) {
-        styles.background_repeats = repeats;
+        styles.background_repeats = repeats.into();
         styles.rebuild_background_layers();
       }
     }
     "background-position" => {
       if let Some(positions) = parse_layer_list(&resolved_value, parse_background_position) {
-        styles.background_positions = positions;
+        styles.background_positions = positions.into();
         styles.rebuild_background_layers();
       }
     }
@@ -8024,7 +8024,7 @@ pub fn apply_declaration_with_base(
           let BackgroundPosition::Position { y, .. } = source;
           positions.push(BackgroundPosition::Position { x: x_comp, y });
         }
-        styles.background_positions = positions;
+        styles.background_positions = positions.into();
         styles.rebuild_background_layers();
       }
     }
@@ -8048,7 +8048,7 @@ pub fn apply_declaration_with_base(
           let BackgroundPosition::Position { x, .. } = source;
           positions.push(BackgroundPosition::Position { x, y: y_comp });
         }
-        styles.background_positions = positions;
+        styles.background_positions = positions.into();
         styles.rebuild_background_layers();
       }
     }
@@ -8079,7 +8079,7 @@ pub fn apply_declaration_with_base(
           }
           positions.push(BackgroundPosition::Position { x, y });
         }
-        styles.background_positions = positions;
+        styles.background_positions = positions.into();
         styles.rebuild_background_layers();
       }
     }
@@ -8110,7 +8110,7 @@ pub fn apply_declaration_with_base(
           }
           positions.push(BackgroundPosition::Position { x, y });
         }
-        styles.background_positions = positions;
+        styles.background_positions = positions.into();
         styles.rebuild_background_layers();
       }
     }
@@ -8125,19 +8125,19 @@ pub fn apply_declaration_with_base(
         _ => None,
       };
       if let Some(attachments) = parse_layer_list(&resolved_value, parse) {
-        styles.background_attachments = attachments;
+        styles.background_attachments = attachments.into();
         styles.rebuild_background_layers();
       }
     }
     "background-origin" => {
       if let Some(origins) = parse_layer_list(&resolved_value, parse_background_box) {
-        styles.background_origins = origins;
+        styles.background_origins = origins.into();
         styles.rebuild_background_layers();
       }
     }
     "background-clip" => {
       if let Some(clips) = parse_layer_list(&resolved_value, parse_background_box) {
-        styles.background_clips = clips;
+        styles.background_clips = clips.into();
         styles.rebuild_background_layers();
       }
     }
@@ -8147,7 +8147,7 @@ pub fn apply_declaration_with_base(
         _ => None,
       };
       if let Some(modes) = parse_layer_list(&resolved_value, parse) {
-        styles.background_blend_modes = modes;
+        styles.background_blend_modes = modes.into();
         styles.rebuild_background_layers();
       }
     }
@@ -8155,49 +8155,49 @@ pub fn apply_declaration_with_base(
     // Mask
     "mask-image" => {
       if let Some(images) = parse_background_image_list(&resolved_value) {
-        styles.mask_images = images;
+        styles.mask_images = images.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-position" => {
       if let Some(positions) = parse_layer_list(&resolved_value, parse_background_position) {
-        styles.mask_positions = positions;
+        styles.mask_positions = positions.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-size" => {
       if let Some(sizes) = parse_layer_list(&resolved_value, parse_background_size) {
-        styles.mask_sizes = sizes;
+        styles.mask_sizes = sizes.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-repeat" => {
       if let Some(repeats) = parse_layer_list(&resolved_value, parse_background_repeat) {
-        styles.mask_repeats = repeats;
+        styles.mask_repeats = repeats.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-mode" => {
       if let Some(modes) = parse_layer_list(&resolved_value, parse_mask_mode) {
-        styles.mask_modes = modes;
+        styles.mask_modes = modes.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-origin" => {
       if let Some(origins) = parse_layer_list(&resolved_value, parse_mask_origin) {
-        styles.mask_origins = origins;
+        styles.mask_origins = origins.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-clip" => {
       if let Some(clips) = parse_layer_list(&resolved_value, parse_mask_clip) {
-        styles.mask_clips = clips;
+        styles.mask_clips = clips.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-composite" => {
       if let Some(ops) = parse_layer_list(&resolved_value, parse_mask_composite) {
-        styles.mask_composites = ops;
+        styles.mask_composites = ops.into();
         styles.rebuild_mask_layers();
       }
     }

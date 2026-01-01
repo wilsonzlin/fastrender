@@ -274,7 +274,7 @@ fn build_grid(rows: usize, cols: usize) -> BoxTree {
   // Fixed implicit row sizing keeps Taffy from needing full child layout during track sizing when
   // the grid container itself is laid out with an indefinite inline size (shrink-to-fit style).
   // That pushes work into fragment conversion where we can parallelize per-item layout.
-  grid_style.grid_auto_rows = vec![GridTrack::Length(Length::px(48.0))];
+  grid_style.grid_auto_rows = vec![GridTrack::Length(Length::px(48.0))].into();
 
   let mut item_style = ComputedStyle::default();
   item_style.display = Display::Block;

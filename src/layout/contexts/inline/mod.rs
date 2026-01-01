@@ -16212,7 +16212,7 @@ mod tests {
   #[test]
   fn text_transform_uppercase_respects_turkish_i() {
     let mut style = ComputedStyle::default();
-    style.language = "tr".to_string();
+    style.language = "tr".into();
     style.text_transform = TextTransform::with_case(CaseTransform::Uppercase);
     let text = "iyi ıi";
 
@@ -16226,7 +16226,7 @@ mod tests {
   #[test]
   fn text_transform_lowercase_respects_turkish_i() {
     let mut style = ComputedStyle::default();
-    style.language = "tr".to_string();
+    style.language = "tr".into();
     style.text_transform = TextTransform::with_case(CaseTransform::Lowercase);
     let text = "IİI";
 
@@ -16240,7 +16240,7 @@ mod tests {
   #[test]
   fn text_transform_lowercase_uses_final_sigma_at_word_end() {
     let mut style = ComputedStyle::default();
-    style.language = "el".to_string();
+    style.language = "el".into();
     style.text_transform = TextTransform::with_case(CaseTransform::Lowercase);
     let text = "ΣΣ";
 
@@ -16254,7 +16254,7 @@ mod tests {
   #[test]
   fn text_transform_final_sigma_resets_at_word_boundaries() {
     let mut style = ComputedStyle::default();
-    style.language = "el".to_string();
+    style.language = "el".into();
     style.text_transform = TextTransform::with_case(CaseTransform::Lowercase);
     let text = "Σ Σ";
 

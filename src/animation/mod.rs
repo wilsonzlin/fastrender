@@ -1140,7 +1140,7 @@ fn interpolate_background_position_value(
 
 fn apply_background_position(style: &mut ComputedStyle, value: &AnimatedValue) {
   if let AnimatedValue::BackgroundPosition(pos) = value {
-    style.background_positions = pos.clone();
+    style.background_positions = pos.clone().into();
     style.rebuild_background_layers();
   }
 }
@@ -1173,7 +1173,7 @@ fn interpolate_background_size_value(
 
 fn apply_background_size(style: &mut ComputedStyle, value: &AnimatedValue) {
   if let AnimatedValue::BackgroundSize(sizes) = value {
-    style.background_sizes = sizes.clone();
+    style.background_sizes = sizes.clone().into();
     style.rebuild_background_layers();
   }
 }

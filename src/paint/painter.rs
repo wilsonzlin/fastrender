@@ -12977,7 +12977,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.image_rendering = ImageRendering::Pixelated;
     style.background_color = Rgba::WHITE;
-    style.background_layers = vec![BackgroundLayer {
+    style.background_layers = smallvec::smallvec![BackgroundLayer {
       image: Some(BackgroundImage::Url(url)),
       size: BackgroundSize::Explicit(
         BackgroundSizeComponent::Length(Length::px(5.0)),
@@ -13004,7 +13004,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.image_rendering = ImageRendering::CrispEdges;
     style.background_color = Rgba::WHITE;
-    style.background_layers = vec![BackgroundLayer {
+    style.background_layers = smallvec::smallvec![BackgroundLayer {
       image: Some(BackgroundImage::Url(url)),
       size: BackgroundSize::Explicit(
         BackgroundSizeComponent::Length(Length::px(5.0)),
@@ -15003,8 +15003,8 @@ mod tests {
   fn background_color_uses_first_layer_clip_value() {
     let mut style = ComputedStyle::default();
     style.background_color = Rgba::RED;
-    style.background_images = vec![None, None];
-    style.background_clips = vec![BackgroundBox::PaddingBox, BackgroundBox::BorderBox];
+    style.background_images = vec![None, None].into();
+    style.background_clips = vec![BackgroundBox::PaddingBox, BackgroundBox::BorderBox].into();
     style.rebuild_background_layers();
     style.border_top_width = Length::px(2.0);
     style.border_right_width = Length::px(2.0);
@@ -16632,7 +16632,7 @@ mod tests {
   #[test]
   fn gradient_background_respects_size_and_repeat() {
     let mut style = ComputedStyle::default();
-    style.background_layers = vec![BackgroundLayer {
+    style.background_layers = smallvec::smallvec![BackgroundLayer {
       image: Some(BackgroundImage::LinearGradient {
         angle: 90.0,
         stops: vec![
@@ -17323,7 +17323,7 @@ mod tests {
     style.padding_right = Length::px(4.0);
     style.padding_bottom = Length::px(4.0);
     style.padding_left = Length::px(4.0);
-    style.mask_layers = vec![
+    style.mask_layers = smallvec::smallvec![
       make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
       make_alpha_gradient_mask_layer(MaskClip::ContentBox, MaskComposite::Add, 1.0, 0.0),
     ];
@@ -17359,7 +17359,7 @@ mod tests {
     style.padding_right = Length::px(4.0);
     style.padding_bottom = Length::px(4.0);
     style.padding_left = Length::px(4.0);
-    style.mask_layers = vec![
+    style.mask_layers = smallvec::smallvec![
       make_alpha_gradient_mask_layer(MaskClip::ContentBox, MaskComposite::Intersect, 1.0, 1.0),
       make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
     ];
@@ -17411,7 +17411,7 @@ mod tests {
     style.padding_right = Length::px(4.0);
     style.padding_bottom = Length::px(4.0);
     style.padding_left = Length::px(4.0);
-    style.mask_layers = vec![
+    style.mask_layers = smallvec::smallvec![
       make_alpha_gradient_mask_layer(MaskClip::ContentBox, MaskComposite::Subtract, 1.0, 1.0),
       make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
     ];
@@ -17463,7 +17463,7 @@ mod tests {
     });
 
     let mut style = ComputedStyle::default();
-    style.mask_layers = vec![make_alpha_gradient_mask_layer(
+    style.mask_layers = smallvec::smallvec![make_alpha_gradient_mask_layer(
       MaskClip::BorderBox,
       MaskComposite::Add,
       0.0,
@@ -17507,7 +17507,7 @@ mod tests {
     let device_size = (64, 64);
 
     let mut border_style = ComputedStyle::default();
-    border_style.mask_layers = vec![make_alpha_gradient_mask_layer(
+    border_style.mask_layers = smallvec::smallvec![make_alpha_gradient_mask_layer(
       MaskClip::BorderBox,
       MaskComposite::Add,
       0.0,
@@ -17519,7 +17519,7 @@ mod tests {
     content_style.padding_right = Length::px(4.0);
     content_style.padding_bottom = Length::px(4.0);
     content_style.padding_left = Length::px(4.0);
-    content_style.mask_layers = vec![make_alpha_gradient_mask_layer(
+    content_style.mask_layers = smallvec::smallvec![make_alpha_gradient_mask_layer(
       MaskClip::ContentBox,
       MaskComposite::Add,
       1.0,
@@ -17560,7 +17560,7 @@ mod tests {
     });
 
     let mut style = ComputedStyle::default();
-    style.mask_layers = vec![
+    style.mask_layers = smallvec::smallvec![
       make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
       make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 1.0, 0.0),
     ];

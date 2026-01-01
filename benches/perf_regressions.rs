@@ -89,7 +89,7 @@ fn grid_intrinsic_sizing_tree(item_count: usize, columns: usize) -> BoxTree {
   let mut grid_style = ComputedStyle::default();
   grid_style.display = Display::Grid;
   grid_style.grid_template_columns = vec![GridTrack::MinContent; columns.max(1)];
-  grid_style.grid_auto_rows = vec![GridTrack::MinContent];
+  grid_style.grid_auto_rows = vec![GridTrack::MinContent].into();
   let grid_style = Arc::new(grid_style);
   let block_style = Arc::new(ComputedStyle::default());
   let inline_style = Arc::new(ComputedStyle::default());

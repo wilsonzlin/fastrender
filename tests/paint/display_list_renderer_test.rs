@@ -1953,7 +1953,7 @@ fn display_list_background_pixelated_uses_nearest_sampling() {
   let mut style = fastrender::ComputedStyle::default();
   style.image_rendering = ImageRendering::Pixelated;
   style.background_color = Rgba::WHITE;
-  style.background_layers = vec![BackgroundLayer {
+  style.background_layers = smallvec::smallvec![BackgroundLayer {
     image: Some(BackgroundImage::Url(url)),
     size: BackgroundSize::Explicit(
       BackgroundSizeComponent::Length(Length::px(5.0)),
@@ -1984,7 +1984,7 @@ fn display_list_background_smooth_blends_when_upscaled() {
   let mut style = fastrender::ComputedStyle::default();
   style.image_rendering = ImageRendering::Auto;
   style.background_color = Rgba::WHITE;
-  style.background_layers = vec![BackgroundLayer {
+  style.background_layers = smallvec::smallvec![BackgroundLayer {
     image: Some(BackgroundImage::Url(url)),
     size: BackgroundSize::Explicit(
       BackgroundSizeComponent::Length(Length::px(5.0)),
@@ -2017,7 +2017,7 @@ fn display_list_background_smooth_blends_when_upscaled() {
 #[test]
 fn display_list_linear_gradient_respects_background_size() {
   let mut style = fastrender::ComputedStyle::default();
-  style.background_layers = vec![BackgroundLayer {
+  style.background_layers = smallvec::smallvec![BackgroundLayer {
     image: Some(BackgroundImage::LinearGradient {
       angle: 0.0,
       stops: vec![
