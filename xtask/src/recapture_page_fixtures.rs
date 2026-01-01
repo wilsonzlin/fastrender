@@ -30,7 +30,7 @@ pub struct RecapturePageFixturesArgs {
   #[arg(long, default_value = DEFAULT_FIXTURES_ROOT)]
   pub fixtures_root: PathBuf,
 
-  /// Directory for writing intermediate `bundle_page fetch` archives.
+  /// Directory for writing intermediate `bundle_page` archives.
   #[arg(long, default_value = DEFAULT_BUNDLE_OUT_DIR)]
   pub bundle_out_dir: PathBuf,
 
@@ -82,6 +82,8 @@ pub enum CaptureMode {
   Render,
   /// Fetch and discover subresources by parsing HTML/CSS without rendering.
   Crawl,
+  /// Bundle a cached pageset entry (HTML + disk-backed assets) with no network access.
+  Cache,
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,20 +174,24 @@ pub fn run_recapture_page_fixtures(args: RecapturePageFixturesArgs) -> Result<()
       continue;
     }
 
-    let url = match resolve_fixture_url(&entry.fixture) {
-      Ok(url) => url,
-      Err(err) => {
-        failed += 1;
-        let message = err.to_string();
-        rows.push(FixtureReportRow {
-          name,
-          captured: StepResult::Failed(message.clone()),
-          imported: StepResult::Skipped("capture failed".to_string()),
-        });
-        if !args.keep_going {
-          break;
+    let url = if args.capture_mode == CaptureMode::Cache {
+      None
+    } else {
+      match resolve_fixture_url(&entry.fixture) {
+        Ok(url) => Some(url),
+        Err(err) => {
+          failed += 1;
+          let message = err.to_string();
+          rows.push(FixtureReportRow {
+            name,
+            captured: StepResult::Failed(message.clone()),
+            imported: StepResult::Skipped("capture failed".to_string()),
+          });
+          if !args.keep_going {
+            break;
+          }
+          continue;
         }
-        continue;
       }
     };
 
@@ -197,7 +203,7 @@ pub fn run_recapture_page_fixtures(args: RecapturePageFixturesArgs) -> Result<()
         .with_context(|| format!("failed to clear existing bundle {}", bundle_path.display()))?;
     }
 
-    let capture_result = capture_bundle(&args, &entry.fixture, &url, &bundle_path);
+    let capture_result = capture_bundle(&args, &entry.fixture, url.as_deref(), &bundle_path);
     let captured = match capture_result {
       Ok(()) => {
         captured_ok += 1;
@@ -412,7 +418,7 @@ fn resolve_fixture_url(fixture: &FixtureDefinition) -> Result<String> {
 fn capture_bundle(
   args: &RecapturePageFixturesArgs,
   fixture: &FixtureDefinition,
-  url: &str,
+  url: Option<&str>,
   bundle_path: &Path,
 ) -> Result<()> {
   let mut cmd = Command::new("cargo");
@@ -420,14 +426,37 @@ fn capture_bundle(
   if !args.debug {
     cmd.arg("--release");
   }
-  cmd.args(["--bin", "bundle_page", "--"]);
-  cmd.args(["fetch", url]);
-  cmd.args(["--out", bundle_path.to_string_lossy().as_ref()]);
-  if args.capture_mode == CaptureMode::Crawl {
-    cmd.arg("--no-render");
+  if args.capture_mode == CaptureMode::Cache {
+    use crate::DiskCacheFeatureExt;
+    cmd.apply_disk_cache_feature(true);
   }
+  cmd.args(["--bin", "bundle_page", "--"]);
+  match args.capture_mode {
+    CaptureMode::Render => {
+      let Some(url) = url else {
+        bail!("capture mode render requires a url (this is a bug)");
+      };
+      cmd.args(["fetch", url]);
+    }
+    CaptureMode::Crawl => {
+      let Some(url) = url else {
+        bail!("capture mode crawl requires a url (this is a bug)");
+      };
+      cmd.args(["fetch", url]);
+      cmd.arg("--no-render");
+    }
+    CaptureMode::Cache => {
+      cmd.args(["cache", &fixture.name]);
+      if args.allow_missing_resources {
+        cmd.arg("--allow-missing");
+      }
+    }
+  }
+  cmd.args(["--out", bundle_path.to_string_lossy().as_ref()]);
   if let Some(secs) = args.bundle_fetch_timeout_secs {
-    cmd.args(["--fetch-timeout-secs", &secs.to_string()]);
+    if args.capture_mode != CaptureMode::Cache {
+      cmd.args(["--fetch-timeout-secs", &secs.to_string()]);
+    }
   }
   cmd.args([
     "--viewport",

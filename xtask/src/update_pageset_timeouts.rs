@@ -35,9 +35,12 @@ pub struct UpdatePagesetTimeoutsArgs {
   #[arg(long, default_value = "tests/pages/fixtures")]
   pub fixtures_root: PathBuf,
 
-  /// Capture missing fixtures by running `bundle_page fetch` + `xtask import-page-fixture`
+  /// Capture missing fixtures by running `bundle_page` + `xtask import-page-fixture`
   ///
-  /// This is slow and requires network access; by default the command only prints instructions.
+  /// By default the command only prints instructions. When enabled:
+  /// - `--capture-mode render|crawl` fetches live subresources and requires network access.
+  /// - `--capture-mode cache` reads from warmed pageset caches (`fetches/html` + `fetches/assets`)
+  ///   and does not require network access.
   #[arg(long)]
   pub capture_missing_fixtures: bool,
 
@@ -90,6 +93,8 @@ pub enum FixtureCaptureMode {
   Render,
   /// Fetch the page and discover subresources by parsing HTML + CSS without rendering.
   Crawl,
+  /// Bundle a cached pageset entry (HTML + disk-backed assets) with no network access.
+  Cache,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -227,10 +232,6 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
   for entry in &missing {
     let fixture_dir = args.fixtures_root.join(&entry.name);
     let bundle_path = default_bundle_path(&entry.name);
-    let capture_flag = match args.capture_mode {
-      FixtureCaptureMode::Render => "",
-      FixtureCaptureMode::Crawl => " --no-render",
-    };
     let fetch_timeout_flag = args
       .bundle_fetch_timeout_secs
       .map(|secs| format!(" --fetch-timeout-secs {secs}"))
@@ -247,16 +248,41 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
     };
     eprintln!("  - {} ({})", entry.name, entry.url);
     eprintln!("    Create it with:");
-    eprintln!(
-      "      cargo run --release --bin bundle_page -- fetch '{}' --out '{}'{}{} --viewport {}x{} --dpr {}",
-      entry.url,
-      bundle_path.display(),
-      capture_flag,
-      fetch_timeout_flag,
-      entry.viewport[0],
-      entry.viewport[1],
-      entry.dpr
-    );
+    match args.capture_mode {
+      FixtureCaptureMode::Render => {
+        eprintln!(
+          "      cargo run --release --bin bundle_page -- fetch '{}' --out '{}'{} --viewport {}x{} --dpr {}",
+          entry.url,
+          bundle_path.display(),
+          fetch_timeout_flag,
+          entry.viewport[0],
+          entry.viewport[1],
+          entry.dpr
+        );
+      }
+      FixtureCaptureMode::Crawl => {
+        eprintln!(
+          "      cargo run --release --bin bundle_page -- fetch '{}' --out '{}' --no-render{} --viewport {}x{} --dpr {}",
+          entry.url,
+          bundle_path.display(),
+          fetch_timeout_flag,
+          entry.viewport[0],
+          entry.viewport[1],
+          entry.dpr
+        );
+      }
+      FixtureCaptureMode::Cache => {
+        eprintln!(
+          "      cargo run --release --features disk_cache --bin bundle_page -- cache '{}' --out '{}'{} --viewport {}x{} --dpr {}",
+          entry.name,
+          bundle_path.display(),
+          allow_missing_flag,
+          entry.viewport[0],
+          entry.viewport[1],
+          entry.dpr
+        );
+      }
+    }
     eprintln!(
       "      cargo xtask import-page-fixture '{}' '{}' --output-root '{}'{}{}",
       bundle_path.display(),
@@ -294,15 +320,31 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs)
     }
 
     let mut bundle_cmd = Command::new("cargo");
-    bundle_cmd
-      .args(["run", "--release", "--bin", "bundle_page", "--"])
-      .args(["fetch", &entry.url])
-      .args(["--out", bundle_path.to_string_lossy().as_ref()]);
-    if args.capture_mode == FixtureCaptureMode::Crawl {
-      bundle_cmd.arg("--no-render");
+    bundle_cmd.args(["run", "--release"]);
+    if args.capture_mode == FixtureCaptureMode::Cache {
+      use crate::DiskCacheFeatureExt;
+      bundle_cmd.apply_disk_cache_feature(true);
     }
+    bundle_cmd.args(["--bin", "bundle_page", "--"]);
+    match args.capture_mode {
+      FixtureCaptureMode::Render => {
+        bundle_cmd.args(["fetch", &entry.url]);
+      }
+      FixtureCaptureMode::Crawl => {
+        bundle_cmd.args(["fetch", &entry.url]).arg("--no-render");
+      }
+      FixtureCaptureMode::Cache => {
+        bundle_cmd.args(["cache", &entry.name]);
+        if args.allow_missing_resources {
+          bundle_cmd.arg("--allow-missing");
+        }
+      }
+    }
+    bundle_cmd.args(["--out", bundle_path.to_string_lossy().as_ref()]);
     if let Some(secs) = args.bundle_fetch_timeout_secs {
-      bundle_cmd.args(["--fetch-timeout-secs", &secs.to_string()]);
+      if args.capture_mode != FixtureCaptureMode::Cache {
+        bundle_cmd.args(["--fetch-timeout-secs", &secs.to_string()]);
+      }
     }
     bundle_cmd
       .args([
@@ -310,6 +352,7 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs)
         &format!("{}x{}", entry.viewport[0], entry.viewport[1]),
       ])
       .args(["--dpr", &entry.dpr.to_string()]);
+    bundle_cmd.current_dir(crate::repo_root());
     crate::run_command(bundle_cmd).with_context(|| format!("bundle {}", entry.name))?;
 
     crate::import_page_fixture::run_import_page_fixture(
