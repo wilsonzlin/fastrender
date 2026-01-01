@@ -184,9 +184,9 @@ use crate::tree::fragment_tree::{
 };
 use fontdb::Database as FontDbDatabase;
 use rayon::prelude::*;
+use rustc_hash::FxHasher as DefaultHasher;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -9812,7 +9812,7 @@ fn hash_transforms(transforms: &[crate::css::types::Transform], hasher: &mut Def
 }
 
 fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
-  let mut h = DefaultHasher::new();
+  let mut h = DefaultHasher::default();
   hash_enum_discriminant(&style.display, &mut h);
   hash_enum_discriminant(&style.container_type, &mut h);
   hash_string_vec(&style.container_name, &mut h);
