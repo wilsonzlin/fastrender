@@ -271,6 +271,7 @@ pub struct PaintDiagnosticsSummary {
   pub layer_alloc_bytes: u64,
   pub parallel_tasks: usize,
   pub parallel_threads: usize,
+  pub parallel_fallback_reason: Option<String>,
   pub parallel_ms: f64,
   pub serial_ms: f64,
   pub filter_cache_hits: usize,
@@ -12222,6 +12223,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       diag.layer_alloc_bytes += report.layer_alloc_bytes;
       diag.parallel_tasks += report.parallel_tasks;
       diag.parallel_threads = diag.parallel_threads.max(report.parallel_threads);
+      diag.parallel_fallback_reason = report.fallback_reason.clone();
       diag.parallel_ms += report.parallel_duration.as_secs_f64() * 1000.0;
       diag.serial_ms += report.serial_duration.as_secs_f64() * 1000.0;
     });

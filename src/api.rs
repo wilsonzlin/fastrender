@@ -1912,6 +1912,8 @@ pub struct PaintDiagnostics {
   pub layer_alloc_bytes: Option<u64>,
   pub parallel_tasks: Option<usize>,
   pub parallel_threads: Option<usize>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub parallel_fallback_reason: Option<String>,
   pub parallel_ms: Option<f64>,
   pub serial_ms: Option<f64>,
   pub filter_cache_hits: Option<usize>,
@@ -4465,6 +4467,7 @@ impl FastRender {
           }
           rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
           rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
+          rec.stats.paint.parallel_fallback_reason = diag.parallel_fallback_reason.clone();
           rec.stats.paint.parallel_ms = Some(diag.parallel_ms);
           rec.stats.paint.serial_ms = Some(diag.serial_ms);
           rec.stats.paint.filter_cache_hits = Some(diag.filter_cache_hits);
@@ -11663,6 +11666,25 @@ mod tests {
         .unwrap_or(0),
       2,
       "expected one external stylesheet + one @import load"
+    );
+  }
+
+  #[test]
+  fn diagnostics_surfaces_parallel_paint_fallback_reason() {
+    let mut renderer = FastRender::new().unwrap();
+    let html = r#"<!DOCTYPE html><div>Hello</div>"#;
+    let options = RenderOptions::new()
+      .with_viewport(64, 64)
+      .with_diagnostics_level(DiagnosticsLevel::Basic)
+      .with_paint_parallelism(PaintParallelism::disabled());
+    let result = renderer.render_html_with_diagnostics(html, options).unwrap();
+
+    assert!(result.diagnostics.stats.is_some());
+    let stats = result.diagnostics.stats.as_ref().unwrap();
+    assert_eq!(stats.paint.parallel_tasks, Some(0));
+    assert_eq!(
+      stats.paint.parallel_fallback_reason.as_deref(),
+      Some("parallel painting disabled")
     );
   }
 
