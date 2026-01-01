@@ -25,6 +25,7 @@ use selectors::context::QuirksMode;
 use selectors::matching::matches_selector;
 use selectors::matching::selector_may_match;
 use selectors::matching::MatchingContext;
+use selectors::parser::Selector;
 use selectors::parser::RelativeSelector;
 use selectors::relative_selector::cache::RelativeSelectorCachedMatch;
 use selectors::Element;
@@ -347,7 +348,11 @@ fn selector_bloom_hash_ascii_lowercase_known_upper(value: &str) -> u32 {
   }
 }
 
-fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
+fn add_selector_bloom_hashes_internal(
+  node: &DomNode,
+  quirks_mode: QuirksMode,
+  add: &mut impl FnMut(u32),
+) {
   if !node.is_element() {
     return;
   }
@@ -381,12 +386,20 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
   let mut saw_class = false;
   for (name, value) in node.attributes_iter() {
     if !saw_id && name.eq_ignore_ascii_case("id") {
-      add(selector_bloom_hash(value));
+      if matches!(quirks_mode, QuirksMode::Quirks) {
+        add(selector_bloom_hash_ascii_lowercase(value));
+      } else {
+        add(selector_bloom_hash(value));
+      }
       saw_id = true;
     }
     if !saw_class && name.eq_ignore_ascii_case("class") {
       for class in value.split_ascii_whitespace() {
-        add(selector_bloom_hash(class));
+        if matches!(quirks_mode, QuirksMode::Quirks) {
+          add(selector_bloom_hash_ascii_lowercase(class));
+        } else {
+          add(selector_bloom_hash(class));
+        }
       }
       saw_class = true;
     }
@@ -396,6 +409,10 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
       add(selector_bloom_hash_ascii_lowercase_known_upper(name));
     }
   }
+}
+
+fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
+  add_selector_bloom_hashes_internal(node, QuirksMode::NoQuirks, add);
 }
 
 pub(crate) fn for_each_ancestor_bloom_hash(
@@ -682,16 +699,20 @@ pub fn build_selector_bloom_store(
     return None;
   }
 
+  let quirks_mode = match &root.node_type {
+    DomNodeType::Document { quirks_mode } => *quirks_mode,
+    _ => QuirksMode::NoQuirks,
+  };
   let bits = selector_bloom_summary_bits();
   match bits {
     256 => Some(SelectorBloomStore::Bits256(
-      build_selector_bloom_store_impl::<4>(root, id_map),
+      build_selector_bloom_store_impl::<4>(root, id_map, quirks_mode),
     )),
     512 => Some(SelectorBloomStore::Bits512(
-      build_selector_bloom_store_impl::<8>(root, id_map),
+      build_selector_bloom_store_impl::<8>(root, id_map, quirks_mode),
     )),
     1024 => Some(SelectorBloomStore::Bits1024(
-      build_selector_bloom_store_impl::<16>(root, id_map),
+      build_selector_bloom_store_impl::<16>(root, id_map, quirks_mode),
     )),
     _ => unreachable!("selector bloom summary bits should be normalised: {bits}"),
   }
@@ -700,6 +721,7 @@ pub fn build_selector_bloom_store(
 fn build_selector_bloom_store_impl<const WORDS: usize>(
   root: &DomNode,
   id_map: &HashMap<*const DomNode, usize>,
+  quirks_mode: QuirksMode,
 ) -> SelectorBloomStoreImpl<WORDS> {
   // Keep index 0 unused so the 1-based `node_id` from `enumerate_dom_ids` can be used directly.
   //
@@ -709,22 +731,28 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
   let mut summaries: Vec<[u64; WORDS]> = Vec::with_capacity(id_map.len().saturating_add(1));
   summaries.push([0u64; WORDS]);
 
-  fn walk<const WORDS: usize>(node: &DomNode, out: &mut Vec<[u64; WORDS]>) -> [u64; WORDS] {
+  fn walk<const WORDS: usize>(
+    node: &DomNode,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<[u64; WORDS]>,
+  ) -> [u64; WORDS] {
     let is_element = node.is_element();
     let id = out.len();
     out.push([0u64; WORDS]);
 
     let mut summary = [0u64; WORDS];
     if is_element {
-      add_selector_bloom_hashes(node, &mut |hash| insert_summary_hash(&mut summary, hash));
+      add_selector_bloom_hashes_internal(node, quirks_mode, &mut |hash| {
+        insert_summary_hash(&mut summary, hash);
+      });
     }
 
     for child in node.children.iter() {
       let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
-        walk(child, out);
+        walk(child, quirks_mode, out);
         None
       } else {
-        Some(walk(child, out))
+        Some(walk(child, quirks_mode, out))
       };
       if is_element {
         if let Some(summary_child) = child_summary.as_ref() {
@@ -740,7 +768,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
     summary
   }
 
-  walk(root, &mut summaries);
+  walk(root, quirks_mode, &mut summaries);
   debug_assert_eq!(
     summaries.len(),
     id_map.len().saturating_add(1),
@@ -5092,11 +5120,43 @@ impl<'a> RelativeSelectorAncestorStack<'a> {
   }
 }
 
+const RELATIVE_SELECTOR_BLOOM_HASHES_MAX: usize = 8;
+
+fn append_relative_selector_quirks_id_class_hashes(
+  selector: &Selector<FastRenderSelectorImpl>,
+  out: &mut Vec<u32>,
+) {
+  use selectors::parser::Component;
+
+  for component in selector.iter_raw_parse_order_from(0) {
+    match component {
+      Component::ID(id) => out.push(selector_bloom_hash_ascii_lowercase(id.as_str())),
+      Component::Class(class) => out.push(selector_bloom_hash_ascii_lowercase(class.as_str())),
+      Component::Is(list) | Component::Where(list) => {
+        let slice = list.slice();
+        if slice.len() == 1 {
+          append_relative_selector_quirks_id_class_hashes(&slice[0], out);
+        }
+      }
+      _ => {}
+    }
+
+    if out.len() >= RELATIVE_SELECTOR_BLOOM_HASHES_MAX {
+      break;
+    }
+  }
+}
+
 pub(crate) fn relative_selector_bloom_hashes(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
-  quirks_mode: selectors::context::QuirksMode,
+  quirks_mode: QuirksMode,
 ) -> Vec<u32> {
-  selector.bloom_hashes.hashes_for_mode(quirks_mode).to_vec()
+  let mut hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode).to_vec();
+  if matches!(quirks_mode, QuirksMode::Quirks) && hashes.len() < RELATIVE_SELECTOR_BLOOM_HASHES_MAX {
+    append_relative_selector_quirks_id_class_hashes(&selector.selector, &mut hashes);
+    hashes.truncate(RELATIVE_SELECTOR_BLOOM_HASHES_MAX);
+  }
+  hashes
 }
 
 fn matches_has_relative(
@@ -5144,8 +5204,15 @@ fn matches_has_relative(
         let quirks_mode = ctx.quirks_mode();
         if selector.match_hint.is_descendant_direction() {
           if let Some(summary) = anchor_summary {
-            let hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode);
-            if !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash)) {
+            let should_prune = if matches!(quirks_mode, QuirksMode::Quirks) {
+              let hashes = relative_selector_bloom_hashes(selector, quirks_mode);
+              !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash))
+            } else {
+              let hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode);
+              !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash))
+            };
+
+            if should_prune {
               record_has_prune();
               ctx.selector_caches.relative_selector.add(
                 anchor.opaque(),
@@ -6100,6 +6167,103 @@ mod tests {
     assert!(
       matches_has_relative(&anchor, &selectors, &mut context),
       ":has should still evaluate when hashes are present"
+    );
+
+    let counters = capture_has_counters();
+    assert_eq!(counters.prunes, 0);
+    assert_eq!(counters.evaluated, 1);
+  }
+
+  #[test]
+  fn bloom_pruning_skips_expensive_evaluations_in_quirks_mode() {
+    reset_has_counters();
+    set_selector_bloom_enabled(true);
+    let dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::Quirks,
+      },
+      children: vec![element("div", vec![element("span", vec![])])],
+    };
+    let id_map = enumerate_dom_ids(&dom);
+    let bloom_store = build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
+
+    let anchor_node = dom.children.first().expect("anchor node exists");
+    let anchor_id = *id_map
+      .get(&(anchor_node as *const DomNode))
+      .expect("anchor node id");
+
+    let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::Quirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_store));
+
+    let mut input = ParserInput::new(".missing");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    let anchor = ElementRef::with_ancestors(anchor_node, &[]).with_node_id(anchor_id);
+
+    assert!(
+      !matches_has_relative(&anchor, &selectors, &mut context),
+      ":has should prune when bloom hash is absent (quirks mode)"
+    );
+
+    let counters = capture_has_counters();
+    assert_eq!(counters.prunes, 1);
+    assert_eq!(counters.evaluated, 0);
+  }
+
+  #[test]
+  fn bloom_pruning_preserves_matches_in_quirks_mode() {
+    reset_has_counters();
+    set_selector_bloom_enabled(true);
+    let dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::Quirks,
+      },
+      children: vec![element(
+        "div",
+        vec![element_with_attrs("span", vec![("class", "FOO")], vec![])],
+      )],
+    };
+    let id_map = enumerate_dom_ids(&dom);
+    let bloom_store = build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
+
+    let anchor_node = dom.children.first().expect("anchor node exists");
+    let anchor_id = *id_map
+      .get(&(anchor_node as *const DomNode))
+      .expect("anchor node id");
+
+    let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::Quirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_store));
+
+    let mut input = ParserInput::new(".foo");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    let anchor = ElementRef::with_ancestors(anchor_node, &[]).with_node_id(anchor_id);
+
+    assert!(
+      matches_has_relative(&anchor, &selectors, &mut context),
+      ":has should still match in quirks mode with case-insensitive class selectors"
     );
 
     let counters = capture_has_counters();

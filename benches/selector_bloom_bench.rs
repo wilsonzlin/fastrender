@@ -80,8 +80,8 @@ fn build_branching_tree_html(depth: usize, branching: usize, class_variants: usi
     let _ = write!(html, "</{tag}>", tag = tag);
   }
 
-  // Include a doctype so the DOM parses in standards mode; quirks mode disables
-  // some bloom hashes (notably class/ID) for :has() pruning.
+  // Include a doctype so the DOM parses in standards mode, keeping selector
+  // case-sensitivity stable for benchmarking.
   let mut html = String::from("<!doctype html><html><head></head><body>");
   build_level(&mut html, 0, depth, branching, class_variants);
   html.push_str("</body></html>");
@@ -297,8 +297,8 @@ fn build_has_tree_html_inner(
     html.push_str("</section>");
   }
 
-  // Include a doctype so the DOM parses in standards mode; quirks mode disables
-  // some bloom hashes (notably class/ID) for :has() pruning.
+  // Include a doctype so the DOM parses in standards mode, keeping selector
+  // case-sensitivity stable for benchmarking.
   let mut html = String::from("<!doctype html><html><head></head><body>");
   let mut counter = 0usize;
 
