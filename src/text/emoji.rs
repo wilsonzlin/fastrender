@@ -110,6 +110,9 @@ pub(crate) struct EmojiSequenceSpan {
 /// assert!(!is_emoji('A'));  // Regular letter
 /// ```
 pub fn is_emoji(c: char) -> bool {
+  if c.is_ascii() {
+    return matches!(c, '0'..='9' | '*' | '#');
+  }
   let cp = c as u32;
 
   // Check various emoji ranges based on Unicode 15.0 Emoji data
@@ -224,6 +227,9 @@ pub fn is_emoji(c: char) -> bool {
 /// assert!(!is_emoji_presentation('©'));  // Text by default
 /// ```
 pub fn is_emoji_presentation(c: char) -> bool {
+  if c.is_ascii() {
+    return false;
+  }
   let cp = c as u32;
 
   // Most emoji in these ranges default to emoji presentation
