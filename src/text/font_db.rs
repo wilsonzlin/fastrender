@@ -1521,15 +1521,35 @@ impl FontDatabase {
   }
 
   pub(crate) fn family_name_is_emoji_font(name: &str) -> bool {
-    let name_lower = name.to_lowercase();
-    name_lower.contains("emoji")
-      || name_lower.contains("color")
-      || name_lower.contains("twemoji")
-      || name_lower.contains("symbola")
-      || name_lower.contains("noto color")
-      || name_lower.contains("apple color")
-      || name_lower.contains("segoe ui emoji")
-      || name_lower.contains("segoe ui symbol")
+    // Called from hot font-fallback paths; avoid allocating (all needles are ASCII).
+    fn contains_ascii_ci(haystack: &str, needle_lower: &[u8]) -> bool {
+      let haystack = haystack.as_bytes();
+      if haystack.len() < needle_lower.len() {
+        return false;
+      }
+      for start in 0..=(haystack.len() - needle_lower.len()) {
+        let mut matches = true;
+        for (offset, &b) in needle_lower.iter().enumerate() {
+          if haystack[start + offset].to_ascii_lowercase() != b {
+            matches = false;
+            break;
+          }
+        }
+        if matches {
+          return true;
+        }
+      }
+      false
+    }
+
+    contains_ascii_ci(name, b"emoji")
+      || contains_ascii_ci(name, b"color")
+      || contains_ascii_ci(name, b"twemoji")
+      || contains_ascii_ci(name, b"symbola")
+      || contains_ascii_ci(name, b"noto color")
+      || contains_ascii_ci(name, b"apple color")
+      || contains_ascii_ci(name, b"segoe ui emoji")
+      || contains_ascii_ci(name, b"segoe ui symbol")
   }
 
   /// Checks if a character is an emoji.
@@ -1991,6 +2011,14 @@ mod tests {
       let font = font.unwrap();
       assert!(!font.data.is_empty());
     }
+  }
+
+  #[test]
+  fn test_family_name_is_emoji_font_case_insensitive() {
+    assert!(FontDatabase::family_name_is_emoji_font("Noto Color Emoji"));
+    assert!(FontDatabase::family_name_is_emoji_font("SEGOE UI EMOJI"));
+    assert!(FontDatabase::family_name_is_emoji_font("Twemoji Mozilla"));
+    assert!(!FontDatabase::family_name_is_emoji_font("Noto Sans"));
   }
 
   #[test]

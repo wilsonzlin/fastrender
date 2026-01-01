@@ -3512,15 +3512,19 @@ fn consider_local_font_candidate(
     return None;
   }
 
-  let is_emoji_font = if let Some(face) = cached_face {
-    crate::text::font_db::face_has_color_tables(face.face())
+  let is_emoji_font = if picker.prefer_emoji || picker.avoid_emoji {
+    if let Some(face) = cached_face {
+      crate::text::font_db::face_has_color_tables(face.face())
+    } else {
+      db.inner().face(id).is_some_and(|face| {
+        face
+          .families
+          .iter()
+          .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name))
+      })
+    }
   } else {
-    db.inner().face(id).is_some_and(|face| {
-      face
-        .families
-        .iter()
-        .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name))
-    })
+    false
   };
   if covers {
     if is_emoji_font {
@@ -3790,7 +3794,11 @@ fn resolve_font_for_char_with_preferences(
           font_context.match_web_font_for_family(family, weight, style, stretch, oblique_angle)
         {
           let font = Arc::new(font);
-          let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
+          let is_emoji_font = if picker.prefer_emoji || picker.avoid_emoji {
+            font_is_emoji_font(db, None, font.as_ref())
+          } else {
+            false
+          };
           let idx = picker.bump_order();
           picker.record_any(&font, is_emoji_font, idx);
         }
@@ -3830,7 +3838,11 @@ fn resolve_font_for_char_with_preferences(
         font_context.match_web_font_for_family(name, weight, style, stretch, oblique_angle)
       {
         let font = Arc::new(font);
-        let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
+        let is_emoji_font = if picker.prefer_emoji || picker.avoid_emoji {
+          font_is_emoji_font(db, None, font.as_ref())
+        } else {
+          false
+        };
         let idx = picker.bump_order();
         picker.record_any(&font, is_emoji_font, idx);
       }
@@ -4044,7 +4056,11 @@ fn resolve_font_for_cluster_with_preferences(
           });
         if let Some(font) = web_font {
           let font = Arc::new(font);
-          let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
+          let is_emoji_font = if picker.prefer_emoji || picker.avoid_emoji {
+            font_is_emoji_font(db, None, font.as_ref())
+          } else {
+            false
+          };
           let idx = picker.bump_order();
           picker.record_any(&font, is_emoji_font, idx);
           if font_supports_all_chars(font.as_ref(), coverage_chars) {
@@ -4087,7 +4103,11 @@ fn resolve_font_for_cluster_with_preferences(
         });
       if let Some(font) = web_font {
         let font = Arc::new(font);
-        let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
+        let is_emoji_font = if picker.prefer_emoji || picker.avoid_emoji {
+          font_is_emoji_font(db, None, font.as_ref())
+        } else {
+          false
+        };
         let idx = picker.bump_order();
         picker.record_any(&font, is_emoji_font, idx);
         if font_supports_all_chars(font.as_ref(), coverage_chars) {
