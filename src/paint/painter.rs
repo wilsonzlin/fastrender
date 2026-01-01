@@ -156,11 +156,12 @@ use std::fmt::Write as _;
 #[cfg(test)]
 use std::fs;
 use std::io::Read;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FilterQuality;
@@ -281,11 +282,17 @@ pub struct PaintDiagnosticsSummary {
   pub blur_cancellations: u64,
 }
 
-static PAINT_DIAGNOSTICS_ACTIVE: AtomicBool = AtomicBool::new(false);
-static PAINT_DIAGNOSTICS: Mutex<Option<PaintDiagnosticsSummary>> = Mutex::new(None);
+static PAINT_DIAGNOSTICS_ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+static PAINT_DIAGNOSTICS_NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+static PAINT_DIAGNOSTICS_SESSIONS: OnceLock<Mutex<HashMap<u64, PaintDiagnosticsSummary>>> =
+  OnceLock::new();
 
 thread_local! {
-  static PAINT_DIAGNOSTICS_THREAD_ENABLED: Cell<bool> = const { Cell::new(false) };
+  static PAINT_DIAGNOSTICS_SESSION_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+fn paint_diagnostics_sessions() -> &'static Mutex<HashMap<u64, PaintDiagnosticsSummary>> {
+  PAINT_DIAGNOSTICS_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Temporarily enables paint diagnostics collection for the current thread.
@@ -294,60 +301,123 @@ thread_local! {
 /// explicitly opt worker threads into collection so thread-local `paint_diagnostics_enabled()`
 /// checks remain cheap and so unrelated work running on other threads isn't counted.
 pub(crate) struct PaintDiagnosticsThreadGuard {
-  prev: bool,
+  prev_session_id: u64,
 }
 
 impl PaintDiagnosticsThreadGuard {
-  pub(crate) fn enter() -> Self {
-    let prev = PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| {
+  pub(crate) fn enter(session_id: u64) -> Self {
+    let prev_session_id = PAINT_DIAGNOSTICS_SESSION_ID.with(|cell| {
       let prev = cell.get();
-      cell.set(true);
+      cell.set(session_id);
       prev
     });
-    Self { prev }
+    Self { prev_session_id }
   }
 }
 
 impl Drop for PaintDiagnosticsThreadGuard {
   fn drop(&mut self) {
-    PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.set(self.prev));
+    PAINT_DIAGNOSTICS_SESSION_ID.with(|cell| cell.set(self.prev_session_id));
   }
+}
+
+pub(crate) fn paint_diagnostics_session_id() -> Option<u64> {
+  if PAINT_DIAGNOSTICS_ACTIVE_SESSIONS.load(Ordering::Relaxed) == 0 {
+    return None;
+  }
+  PAINT_DIAGNOSTICS_SESSION_ID.with(|cell| {
+    let id = cell.get();
+    (id != 0).then_some(id)
+  })
 }
 
 pub(crate) fn enable_paint_diagnostics() {
-  PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.set(true));
-  PAINT_DIAGNOSTICS_ACTIVE.store(true, Ordering::Relaxed);
-  let mut guard = PAINT_DIAGNOSTICS
+  let session_id = PAINT_DIAGNOSTICS_NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+  let prev_session_id = PAINT_DIAGNOSTICS_SESSION_ID.with(|cell| {
+    let prev = cell.get();
+    cell.set(session_id);
+    prev
+  });
+  let mut guard = paint_diagnostics_sessions()
     .lock()
     .expect("paint diagnostics lock poisoned");
-  *guard = Some(PaintDiagnosticsSummary::default());
+  if prev_session_id != 0 {
+    if guard.remove(&prev_session_id).is_some() {
+      PAINT_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_sub(1, Ordering::Relaxed);
+    }
+  }
+  guard.insert(session_id, PaintDiagnosticsSummary::default());
+  PAINT_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn take_paint_diagnostics() -> Option<PaintDiagnosticsSummary> {
-  PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.set(false));
-  PAINT_DIAGNOSTICS_ACTIVE.store(false, Ordering::Relaxed);
-  PAINT_DIAGNOSTICS
+  let session_id = PAINT_DIAGNOSTICS_SESSION_ID.with(|cell| {
+    let id = cell.get();
+    cell.set(0);
+    id
+  });
+  if session_id == 0 {
+    return None;
+  }
+  let mut guard = paint_diagnostics_sessions()
     .lock()
-    .expect("paint diagnostics lock poisoned")
-    .take()
+    .expect("paint diagnostics lock poisoned");
+  let stats = guard.remove(&session_id);
+  if stats.is_some() {
+    PAINT_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_sub(1, Ordering::Relaxed);
+  }
+  stats
 }
 
 pub(crate) fn paint_diagnostics_enabled() -> bool {
-  if !PAINT_DIAGNOSTICS_ACTIVE.load(Ordering::Relaxed) {
-    return false;
-  }
-  PAINT_DIAGNOSTICS_THREAD_ENABLED.with(|cell| cell.get())
+  paint_diagnostics_session_id().is_some()
 }
 
 pub(crate) fn with_paint_diagnostics<F: FnOnce(&mut PaintDiagnosticsSummary)>(f: F) {
-  if !paint_diagnostics_enabled() {
+  let Some(session_id) = paint_diagnostics_session_id() else {
     return;
-  }
-  let mut guard = PAINT_DIAGNOSTICS
+  };
+  let mut guard = paint_diagnostics_sessions()
     .lock()
     .expect("paint diagnostics lock poisoned");
-  if let Some(stats) = guard.as_mut() {
+  if let Some(stats) = guard.get_mut(&session_id) {
     f(stats);
+  }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+  use super::*;
+
+  #[test]
+  fn paint_diagnostics_sessions_are_thread_isolated() {
+    assert!(!paint_diagnostics_enabled());
+    assert!(take_paint_diagnostics().is_none());
+
+    enable_paint_diagnostics();
+    assert!(paint_diagnostics_enabled());
+    with_paint_diagnostics(|diag| diag.blur_calls = 1);
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    assert_eq!(stats.blur_calls, 1);
+    assert!(!paint_diagnostics_enabled());
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut handles = Vec::new();
+    for idx in 0..2u64 {
+      let barrier = barrier.clone();
+      handles.push(std::thread::spawn(move || {
+        assert!(!paint_diagnostics_enabled());
+        enable_paint_diagnostics();
+        with_paint_diagnostics(|diag| diag.blur_calls = idx + 1);
+        barrier.wait();
+        let stats = take_paint_diagnostics().expect("diagnostics enabled");
+        assert_eq!(stats.blur_calls, idx + 1);
+        assert!(!paint_diagnostics_enabled());
+      }));
+    }
+    for handle in handles {
+      handle.join().expect("thread should not panic");
+    }
   }
 }
 

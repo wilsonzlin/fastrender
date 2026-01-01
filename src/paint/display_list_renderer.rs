@@ -63,7 +63,9 @@ use crate::paint::gradient::{
 };
 use crate::paint::homography::Homography;
 use crate::paint::optimize::DisplayListOptimizer;
-use crate::paint::painter::{paint_diagnostics_enabled, PaintDiagnosticsThreadGuard};
+use crate::paint::painter::{
+  paint_diagnostics_enabled, paint_diagnostics_session_id, PaintDiagnosticsThreadGuard,
+};
 use crate::paint::pixmap::new_pixmap;
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::{estimate_box_shadow_work_pixels, render_box_shadow_cached, BoxShadow};
@@ -4852,6 +4854,7 @@ impl DisplayListRenderer {
     let glyph_cache = self.glyph_cache.clone();
     let gradient_cache = self.gradient_cache.clone();
     let diagnostics_enabled = self.diagnostics_enabled;
+    let diagnostics_session = paint_diagnostics_session_id();
     let image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
     let background_paint_diagnostics = self.background_paint_diagnostics.clone();
     let clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
@@ -4877,7 +4880,8 @@ impl DisplayListRenderer {
         chunks
           .into_par_iter()
           .map(|chunk| {
-            let _diagnostics_guard = diagnostics_enabled.then(PaintDiagnosticsThreadGuard::enter);
+            let _diagnostics_guard =
+              diagnostics_session.map(PaintDiagnosticsThreadGuard::enter);
             with_deadline(deadline.as_ref(), || {
               let mut out = Vec::with_capacity(chunk.len());
               for work in chunk {
