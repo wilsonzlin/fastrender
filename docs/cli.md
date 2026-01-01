@@ -130,6 +130,9 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
     - HTTP fetch tuning: `bundle_page fetch` honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
     - For pages that crash or time out during capture, add `--no-render` (alias `--crawl`) to discover subresources by parsing HTML + CSS instead of rendering.
     - Use `--fetch-timeout-secs <secs>` to bound per-request network time when crawling large pages.
+  - Cache (offline, from pageset caches): `cargo run --release --bin bundle_page -- cache <stem> --out <bundle_dir|.tar>`
+    - Reads HTML from `fetches/html/<stem>.html` (+ `.html.meta`) and subresources from the disk-backed cache under `fetches/assets/`.
+    - Fails if a discovered subresource is missing from the cache; pass `--allow-missing` to insert empty placeholders.
   - Render: `cargo run --release --bin bundle_page -- render <bundle> --out <png>`
     - `bundle_page render` is offline and ignores `FASTR_HTTP_*` env vars (it uses the bundle contents only).
 - Security: `--same-origin-subresources` (plus optional `--allow-subresource-origin`) applies both when capturing and replaying bundles to keep cross-origin assets out of offline artifacts.
@@ -177,6 +180,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 ## Offline / cached captures
 
 - Use `bundle_page fetch` to save a single reproducible capture (HTML bytes, content-type + final URL, all fetched CSS/image/font subresources with HTTP metadata, and a manifest mapping original URLs to bundle paths). Bundles can be directories or `.tar` archives and are deterministic.
+- Use `bundle_page cache <stem> --out <bundle>` to convert an already-warmed pageset cache entry (cached HTML + disk-backed assets) into a portable bundle **without network access**.
 - Replay with `bundle_page render <bundle> --out out.png` to render strictly from the bundle with zero network calls.
 - For larger batch workflows, offline captures are also available via the existing on-disk caches:
   - `fetch_pages` writes HTML under `fetches/html/` and a `*.html.meta` sidecar with the original content-type and final URL.

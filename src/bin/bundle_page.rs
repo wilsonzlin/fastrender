@@ -22,6 +22,10 @@ use fastrender::resource::{
   origin_from_url, FetchDestination, FetchRequest, FetchedResource, ResourceAccessPolicy,
   ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
+#[cfg(feature = "disk_cache")]
+use fastrender::resource::{
+  parse_cached_html_meta, CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher, ResourcePolicy,
+};
 use fastrender::style::media::MediaType;
 use fastrender::{OutputFormat, Result};
 use std::collections::{BTreeMap, HashMap};
@@ -46,6 +50,8 @@ struct Cli {
 enum Command {
   /// Fetch a page and its subresources into a deterministic bundle
   Fetch(FetchArgs),
+  /// Bundle a cached pageset entry (HTML + disk-backed assets) with no network access
+  Cache(CacheArgs),
   /// Render strictly from a bundle with no network access
   Render(RenderArgs),
 }
@@ -72,6 +78,62 @@ struct FetchArgs {
   /// HTTP client timeout.
   #[arg(long)]
   fetch_timeout_secs: Option<u64>,
+
+  /// Viewport size as WxH (e.g., 1200x800)
+  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
+  viewport: (u32, u32),
+
+  /// Device pixel ratio for media queries and srcset
+  #[arg(long, default_value = "1.0")]
+  dpr: f32,
+
+  /// Horizontal scroll offset in CSS px
+  #[arg(long, default_value = "0")]
+  scroll_x: f32,
+
+  /// Vertical scroll offset in CSS px
+  #[arg(long, default_value = "0")]
+  scroll_y: f32,
+
+  /// Expand render target to the full document height
+  #[arg(long, action = ArgAction::SetTrue)]
+  full_page: bool,
+
+  /// Restrict subresource loads to the document origin unless allowlisted.
+  #[arg(long)]
+  same_origin_subresources: bool,
+
+  /// Allow additional origins when blocking cross-origin subresources (repeatable).
+  #[arg(long, value_name = "ORIGIN")]
+  allow_subresource_origin: Vec<String>,
+
+  #[command(flatten)]
+  compat: CompatArgs,
+}
+
+#[derive(Args, Debug)]
+struct CacheArgs {
+  /// Cached HTML stem under `--html-dir` (e.g. `example.com` or `example.com--deadbeef`)
+  stem: String,
+
+  /// Output bundle path (directory or .tar)
+  #[arg(long)]
+  out: String,
+
+  /// Directory containing cached HTML (`*.html` + `*.html.meta`)
+  #[arg(long, default_value = "fetches/html")]
+  html_dir: PathBuf,
+
+  /// Disk-backed subresource cache directory (defaults to fetches/assets)
+  #[arg(long, default_value = "fetches/assets")]
+  asset_cache_dir: PathBuf,
+
+  /// Allow missing subresources by inserting empty placeholder bytes into the bundle.
+  ///
+  /// By default, cache capture fails when a required subresource is missing from the disk cache so
+  /// the resulting bundle is deterministic and self-contained.
+  #[arg(long, action = ArgAction::SetTrue)]
+  allow_missing: bool,
 
   /// Viewport size as WxH (e.g., 1200x800)
   #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
@@ -161,6 +223,12 @@ impl RecordingFetcher {
     Self {
       inner,
       recorded: Arc::new(Mutex::new(HashMap::new())),
+    }
+  }
+
+  fn record_override(&self, url: &str, resource: FetchedResource) {
+    if let Ok(mut map) = self.recorded.lock() {
+      map.insert(url.to_string(), resource);
     }
   }
 
@@ -259,6 +327,7 @@ fn main() -> Result<()> {
   let cli = Cli::parse();
   match cli.command {
     Command::Fetch(args) => fetch_bundle(args),
+    Command::Cache(args) => cache_bundle(args),
     Command::Render(args) => render_bundle(args),
   }
 }
@@ -294,7 +363,7 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
   let (prepared, document_resource) = fetch_document(&recording, &args.url)?;
 
   if args.no_render {
-    crawl_document(&recording, &prepared, &render)?;
+    crawl_document(&recording, &prepared, &render, CrawlMode::BestEffort)?;
 
     let recorded = recording.snapshot();
     let (manifest, resources, document_bytes) =
@@ -342,6 +411,137 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
 
   println!(
     "✓ Captured {} resources into {}",
+    manifest.resources.len(),
+    out_path.display()
+  );
+  Ok(())
+}
+
+fn cache_bundle(args: CacheArgs) -> Result<()> {
+  #[cfg(feature = "disk_cache")]
+  {
+    cache_bundle_disk_cache(args)
+  }
+  #[cfg(not(feature = "disk_cache"))]
+  {
+    let _ = args;
+    Err(fastrender::Error::Other(
+      "bundle_page cache requires the `disk_cache` cargo feature".to_string(),
+    ))
+  }
+}
+
+#[cfg(feature = "disk_cache")]
+fn cache_bundle_disk_cache(args: CacheArgs) -> Result<()> {
+  use std::path::Component;
+
+  let out_path = PathBuf::from(&args.out);
+  if out_path.exists() {
+    return Err(fastrender::Error::Other(format!(
+      "Output path already exists: {}",
+      out_path.display()
+    )));
+  }
+
+  // Prevent directory traversal when resolving `<html-dir>/<stem>.html`.
+  let stem_path = Path::new(&args.stem);
+  let mut components = stem_path.components();
+  let Some(first) = components.next() else {
+    return Err(fastrender::Error::Other(
+      "Cached HTML stem cannot be empty".to_string(),
+    ));
+  };
+  if components.next().is_some() || !matches!(first, Component::Normal(_)) {
+    return Err(fastrender::Error::Other(format!(
+      "Invalid cached HTML stem: {}",
+      args.stem
+    )));
+  }
+
+  let html_path = args.html_dir.join(format!("{}.html", args.stem));
+  if !html_path.exists() {
+    return Err(fastrender::Error::Other(format!(
+      "Cached HTML not found: {}",
+      html_path.display()
+    )));
+  }
+
+  let html_bytes = fs::read(&html_path)?;
+  let meta_path = cached_html_meta_path(&html_path);
+  let meta = fs::read_to_string(&meta_path).ok();
+  let parsed_meta = meta
+    .as_deref()
+    .map(parse_cached_html_meta)
+    .unwrap_or_default();
+
+  let base_hint = parsed_meta
+    .url
+    .clone()
+    .unwrap_or_else(|| format!("file://{}", html_path.display()));
+
+  let mut document_resource = FetchedResource::with_final_url(
+    html_bytes,
+    parsed_meta.content_type.clone(),
+    Some(base_hint.clone()),
+  );
+  document_resource.status = parsed_meta.status;
+
+  let prepared = decode_html_resource(&document_resource, &base_hint);
+
+  let render = BundleRenderConfig {
+    viewport: args.viewport,
+    device_pixel_ratio: args.dpr,
+    scroll_x: args.scroll_x,
+    scroll_y: args.scroll_y,
+    full_page: args.full_page,
+    same_origin_subresources: args.same_origin_subresources,
+    allowed_subresource_origins: args.allow_subresource_origin.clone(),
+    compat_profile: args.compat.compat_profile(),
+    dom_compat_mode: args.compat.dom_compat_mode(),
+  };
+  apply_full_page_env(render.full_page);
+
+  let offline_policy = ResourcePolicy::new().allow_http(false).allow_https(false);
+  let http = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, None)
+    .with_policy(offline_policy);
+
+  let memory_config = CachingFetcherConfig {
+    honor_http_cache_headers: false,
+    honor_http_cache_freshness: false,
+    allow_no_store: true,
+    ..CachingFetcherConfig::default()
+  };
+
+  let mut disk_config = DiskCacheConfig::default();
+  disk_config.allow_no_store = true;
+  disk_config.namespace = Some(common::render_pipeline::disk_cache_namespace(
+    DEFAULT_USER_AGENT,
+    DEFAULT_ACCEPT_LANGUAGE,
+  ));
+
+  let disk_fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
+    http,
+    args.asset_cache_dir,
+    memory_config,
+    disk_config,
+  ));
+
+  let recording = RecordingFetcher::new(disk_fetcher);
+  let crawl_mode = if args.allow_missing {
+    CrawlMode::AllowMissing
+  } else {
+    CrawlMode::Strict
+  };
+  crawl_document(&recording, &prepared, &render, crawl_mode)?;
+
+  let recorded = recording.snapshot();
+  let original_url = parsed_meta.url.unwrap_or(base_hint);
+  let (manifest, resources, document_bytes) =
+    build_manifest(original_url, render, document_resource, recorded);
+  write_bundle(&out_path, &manifest, &resources, &document_bytes)?;
+
+  println!(
+    "✓ Captured {} resources into {} (from cache)",
     manifest.resources.len(),
     out_path.display()
   );
@@ -642,6 +842,16 @@ fn extension_for_resource(res: &FetchedResource, url: &str) -> String {
   "bin".to_string()
 }
 
+fn cached_html_meta_path(html_path: &Path) -> PathBuf {
+  let mut meta_path = html_path.to_path_buf();
+  if let Some(ext) = meta_path.extension().and_then(|e| e.to_str()) {
+    meta_path.set_extension(format!("{ext}.meta"));
+  } else {
+    meta_path.set_extension("meta");
+  }
+  meta_path
+}
+
 fn fetch_document(
   fetcher: &RecordingFetcher,
   url: &str,
@@ -698,10 +908,21 @@ fn apply_full_page_env(full_page: bool) {
   }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CrawlMode {
+  /// Preserve historical behavior: warn and skip missing resources.
+  BestEffort,
+  /// Fail if any discovered subresource cannot be fetched.
+  Strict,
+  /// Insert empty placeholder bytes for missing resources.
+  AllowMissing,
+}
+
 fn crawl_document(
   fetcher: &RecordingFetcher,
   document: &common::render_pipeline::PreparedDocument,
   render: &BundleRenderConfig,
+  mode: CrawlMode,
 ) -> Result<()> {
   fn enqueue_unique(
     queue: &mut VecDeque<(String, FetchDestination)>,
@@ -739,6 +960,7 @@ fn crawl_document(
 
   let mut queue: VecDeque<(String, FetchDestination)> = VecDeque::new();
   let mut seen: HashSet<String> = HashSet::new();
+  let mut fetch_errors: Vec<(String, String)> = Vec::new();
 
   for css_url in fastrender::css::loader::extract_css_links(
     &document.html,
@@ -785,7 +1007,21 @@ fn crawl_document(
     let res = match fetcher.fetch_with_request(req) {
       Ok(res) => res,
       Err(err) => {
-        eprintln!("Warning: failed to fetch {url}: {err}");
+        match mode {
+          CrawlMode::BestEffort => {
+            eprintln!("Warning: failed to fetch {url}: {err}");
+          }
+          CrawlMode::Strict => {
+            fetch_errors.push((url, err.to_string()));
+          }
+          CrawlMode::AllowMissing => {
+            eprintln!("Warning: missing resource; inserting placeholder: {url}: {err}");
+            fetcher.record_override(
+              &url,
+              FetchedResource::with_final_url(Vec::new(), None, Some(url.clone())),
+            );
+          }
+        }
         continue;
       }
     };
@@ -836,6 +1072,23 @@ fn crawl_document(
         enqueue_unique(&mut queue, &mut seen, url, destination);
       }
     }
+  }
+
+  if matches!(mode, CrawlMode::Strict) && !fetch_errors.is_empty() {
+    fetch_errors.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut msg = format!(
+      "Cache capture failed: {} subresource(s) missing from cache",
+      fetch_errors.len()
+    );
+    msg.push_str("\n\nMissing resources:");
+    for (url, err) in fetch_errors.iter().take(50) {
+      msg.push_str(&format!("\n- {url}: {err}"));
+    }
+    if fetch_errors.len() > 50 {
+      msg.push_str(&format!("\n... and {} more", fetch_errors.len() - 50));
+    }
+    msg.push_str("\n\nTip: warm `fetches/assets/` by running `prefetch_assets` / `pageset_progress` online, or pass --allow-missing to capture placeholders.");
+    return Err(fastrender::Error::Other(msg));
   }
 
   Ok(())

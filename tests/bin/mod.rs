@@ -1,5 +1,6 @@
 //! CLI integration tests.
 
+mod bundle_page_cache_offline_test;
 mod bundle_page_test;
 mod bundled_font_coverage_test;
 mod diff_renders_test;
@@ -23,9 +24,9 @@ mod pageset_progress_migrate_test;
 mod pageset_progress_ok_stage_buckets_test;
 mod pageset_progress_parallel_timeout_test;
 mod pageset_progress_report_test;
-mod pageset_progress_stage_fields_test;
 mod pageset_progress_soft_timeout_stage_buckets_test;
 mod pageset_progress_soft_timeout_box_tree_stage_note_test;
+mod pageset_progress_stage_fields_test;
 mod pageset_progress_sync_test;
 mod pageset_progress_worker_diagnostics_test;
 mod pageset_progress_worker_fast_exit_test;
