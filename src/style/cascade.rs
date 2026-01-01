@@ -3077,6 +3077,14 @@ fn selector_compound_fast_reject_from_iter(
         _ => {}
       },
       Component::Nth(_) => {}
+      // Branching selector-lists (and negation) do not add *mandatory* simple-selector requirements
+      // on the element itself. Ignore them so we can still fast-reject based on any other required
+      // tag/id/class/attribute selectors in the compound.
+      //
+      // Examples where this helps:
+      // - `.a.b:not(.c)` still requires `.a` and `.b`.
+      // - `div.foo.bar:is(.x, .y)` still requires `div.foo.bar`.
+      Component::Is(_) | Component::Where(_) | Component::Negation(_) => {}
       // Branching constructs, or components we don't know how to treat soundly.
       _ => return None,
     }
@@ -8655,6 +8663,68 @@ mod tests {
       );
       assert_eq!(candidates.as_slice(), &[0usize], "selector should match .{cls}");
     }
+  }
+
+  #[test]
+  fn rightmost_fast_reject_ignores_is_where_and_not_components() {
+    let stylesheet =
+      parse_stylesheet(".a.b:where(.c, .d):not(.e):is(.f, .g) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    let fast_reject_id = index.selectors[0].fast_reject;
+    assert_ne!(
+      fast_reject_id, 0,
+      "expected fast-reject descriptor for multi-key selector with :where/:is/:not"
+    );
+    let desc = index.fast_reject(fast_reject_id).expect("fast reject");
+
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node_missing = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a".to_string())],
+      },
+      children: vec![],
+    };
+    let node_present = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b".to_string())],
+      },
+      children: vec![],
+    };
+
+    assert!(
+      !desc.matches(node_selector_keys(&node_missing, &mut class_keys, &mut attr_keys)),
+      "fast reject should require both .a and .b"
+    );
+    assert!(
+      desc.matches(node_selector_keys(&node_present, &mut class_keys, &mut attr_keys)),
+      "fast reject should pass when required classes are present"
+    );
   }
 
   #[test]
