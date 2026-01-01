@@ -883,6 +883,13 @@ mod tests {
     super::AnonymousBoxCreator::fixup_tree(node).expect("anonymous fixup")
   }
 
+  fn drop_box_node_iterative(root: BoxNode) {
+    let mut stack = vec![root];
+    while let Some(mut node) = stack.pop() {
+      stack.append(&mut node.children);
+    }
+  }
+
   #[test]
   fn test_fixup_deep_tree_stack_safe() {
     // This used to be recursive (both anonymous fixup and table fixup). Deep trees triggered
@@ -897,9 +904,9 @@ mod tests {
     let fixed = TableStructureFixer::fixup_tree_internals(fixed).expect("table fixup");
     assert!(fixed.is_block_level());
     // Dropping a deeply nested `BoxNode` is itself recursive (via field drop order) and can
-    // overflow the stack. The fixup passes should be stack-safe regardless, so avoid testing
-    // the drop implementation here.
-    std::mem::forget(fixed);
+    // overflow the stack. The fixup passes should be stack-safe regardless, so drop the result
+    // iteratively here.
+    drop_box_node_iterative(fixed);
   }
 
   #[test]
