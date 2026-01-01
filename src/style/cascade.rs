@@ -7731,6 +7731,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.font_variant_emoji = parent.font_variant_emoji;
   styles.font_stretch = parent.font_stretch;
   styles.font_kerning = parent.font_kerning;
+  styles.font_palette = parent.font_palette.clone();
   styles.line_height = parent.line_height.clone();
   styles.direction = parent.direction;
   styles.text_align = parent.text_align;
@@ -16093,33 +16094,40 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
       node_type: DomNodeType::Element {
         tag_name: "div".to_string(),
         namespace: HTML_NAMESPACE.to_string(),
-        attributes: vec![("class".to_string(), "outer".to_string())],
+        attributes: vec![],
       },
-      children: vec![
-        DomNode {
-          node_type: DomNodeType::Element {
-            tag_name: "p".to_string(),
-            namespace: HTML_NAMESPACE.to_string(),
-            attributes: vec![("class".to_string(), "target".to_string())],
-          },
-          children: vec![],
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), "outer".to_string())],
         },
-        DomNode {
-          node_type: DomNodeType::Element {
-            tag_name: "div".to_string(),
-            namespace: HTML_NAMESPACE.to_string(),
-            attributes: vec![("class".to_string(), "stop".to_string())],
-          },
-          children: vec![DomNode {
+        children: vec![
+          DomNode {
             node_type: DomNodeType::Element {
               tag_name: "p".to_string(),
               namespace: HTML_NAMESPACE.to_string(),
               attributes: vec![("class".to_string(), "target".to_string())],
             },
             children: vec![],
-          }],
-        },
-      ],
+          },
+          DomNode {
+            node_type: DomNodeType::Element {
+              tag_name: "div".to_string(),
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![("class".to_string(), "stop".to_string())],
+            },
+            children: vec![DomNode {
+              node_type: DomNodeType::Element {
+                tag_name: "p".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("class".to_string(), "target".to_string())],
+              },
+              children: vec![],
+            }],
+          },
+        ],
+      }],
     };
 
     let stylesheet = parse_stylesheet(
@@ -16136,9 +16144,9 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
 
     SCOPE_RESOLVE_MISSES.with(|counter| counter.set(0));
     let styled = apply_styles(&dom, &stylesheet);
-
-    let in_scope = styled.children.first().expect("in-scope node");
-    let blocked = styled
+    let outer = styled.children.first().expect("outer scope root");
+    let in_scope = outer.children.first().expect("in-scope node");
+    let blocked = outer
       .children
       .get(1)
       .and_then(|node| node.children.first())
