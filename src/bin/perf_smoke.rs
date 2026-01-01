@@ -263,7 +263,7 @@ const PAGESET_GUARDRAILS_MANIFEST_VERSION: u32 = 1;
 const PAGESET_GUARDRAILS_MANIFEST: &str = include_str!("../../tests/pages/pageset_guardrails.json");
 
 const PAGESET_GUARDRAILS_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_GUARDRAILS_MANIFEST";
-const PAGESET_TIMEOUT_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_TIMEOUT_MANIFEST";
+const LEGACY_PAGESET_TIMEOUT_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_TIMEOUT_MANIFEST";
 
 #[derive(Deserialize)]
 struct PagesetGuardrailsManifest {
@@ -1154,7 +1154,7 @@ fn find_budget_failures(fixtures: &[FixtureSummary]) -> Vec<BudgetFailure> {
 
 fn load_pageset_guardrails_manifest_contents() -> Result<String, Box<dyn std::error::Error>> {
   if let Some(path) = std::env::var_os(PAGESET_GUARDRAILS_MANIFEST_ENV)
-    .or_else(|| std::env::var_os(PAGESET_TIMEOUT_MANIFEST_ENV))
+    .or_else(|| std::env::var_os(LEGACY_PAGESET_TIMEOUT_MANIFEST_ENV))
   {
     let path = PathBuf::from(path);
     Ok(fs::read_to_string(&path).map_err(|e| {
