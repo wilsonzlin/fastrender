@@ -607,6 +607,7 @@ impl GridFormattingContext {
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
     let mut positioned: Vec<BoxNode> = Vec::new();
     for child in root_children {
+      check_layout_deadline(&mut deadline_counter)?;
       match child.style.position {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
           positioned.push((*child).clone())
@@ -3040,7 +3041,9 @@ impl FormattingContext for GridFormattingContext {
     // Partition children into in-flow vs. out-of-flow positioned.
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
     let mut positioned_children: Vec<BoxNode> = Vec::new();
+    let mut deadline_counter = 0usize;
     for child in &box_node.children {
+      check_layout_deadline(&mut deadline_counter)?;
       match child.style.position {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
           positioned_children.push(child.clone());

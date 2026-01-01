@@ -510,7 +510,9 @@ impl FormattingContext for FlexFormattingContext {
     let mut in_flow_children: Vec<(usize, &BoxNode)> = Vec::new();
     let mut positioned_children: Vec<&BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
+    let mut deadline_counter = 0usize;
     for (idx, child) in box_node.children.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       if child.style.running_position.is_some() {
         // Running elements do not participate in flex layout; instead, capture a snapshot at the
         // position the element would have occupied in flow.
@@ -2177,15 +2179,17 @@ impl FormattingContext for FlexFormattingContext {
         });
       }
 
-      let static_positions = self
-        .compute_static_positions_for_abs_children(
-          box_node,
-          &fragment,
-          &in_flow_children,
-          &positioned_candidates,
-          padding_origin,
-        )
-        .unwrap_or_default();
+      let static_positions = match self.compute_static_positions_for_abs_children(
+        box_node,
+        &fragment,
+        &in_flow_children,
+        &positioned_candidates,
+        padding_origin,
+      ) {
+        Ok(positions) => positions,
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => FxHashMap::default(),
+      };
 
       for mut candidate in positioned_candidates {
         check_layout_deadline(&mut deadline_counter)?;
@@ -4788,6 +4792,7 @@ impl FlexFormattingContext {
     positioned: &[PositionedCandidate],
     padding_origin: Point,
   ) -> Result<FxHashMap<usize, Point>, LayoutError> {
+    let mut deadline_counter = 0usize;
     if positioned.is_empty() {
       return Ok(FxHashMap::default());
     }
@@ -4797,6 +4802,7 @@ impl FlexFormattingContext {
     let mut inflow_sizes: FxHashMap<usize, Size> =
       FxHashMap::with_capacity_and_hasher(fragment.children.len(), Default::default());
     for child in fragment.children.iter() {
+      check_layout_deadline(&mut deadline_counter)?;
       if let Some(box_id) = match &child.content {
         FragmentContent::Block { box_id }
         | FragmentContent::Inline { box_id, .. }
@@ -4811,6 +4817,7 @@ impl FlexFormattingContext {
     let mut positioned_index: FxHashMap<usize, usize> =
       FxHashMap::with_capacity_and_hasher(positioned.len(), Default::default());
     for (idx, candidate) in positioned.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       positioned_index.insert(candidate.child_id, idx);
     }
 
@@ -4821,6 +4828,7 @@ impl FlexFormattingContext {
 
     let mut ordered_children: Vec<(i32, usize)> = Vec::new();
     for (idx, child) in box_node.children.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       if child.style.running_position.is_some() {
         continue;
       }
@@ -4831,6 +4839,7 @@ impl FlexFormattingContext {
     });
 
     for (_, child_idx) in ordered_children {
+      check_layout_deadline(&mut deadline_counter)?;
       let child = &box_node.children[child_idx];
       if let Some(&pos_idx) = positioned_index.get(&child.id) {
         let candidate = &positioned[pos_idx];
@@ -4890,6 +4899,7 @@ impl FlexFormattingContext {
       })?;
 
     for candidate in positioned {
+      check_layout_deadline(&mut deadline_counter)?;
       if let Some(node_id) = node_lookup.get(&candidate.child_id) {
         if let Ok(layout) = taffy.layout(*node_id) {
           positions.insert(
