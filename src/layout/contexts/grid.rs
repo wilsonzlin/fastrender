@@ -3145,12 +3145,24 @@ impl FormattingContext for GridFormattingContext {
     let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
       .filter(|deadline| deadline.is_enabled())
       .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
-    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
+    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> = Rc::new(
+      RefCell::new(FxHashMap::with_capacity_and_hasher(
+        in_flow_children.len(),
+        Default::default(),
+      )),
+    );
+    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> = Rc::new(
+      RefCell::new(FxHashMap::with_capacity_and_hasher(
+        in_flow_children.len(),
+        Default::default(),
+      )),
+    );
+    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> = Rc::new(
+      RefCell::new(FxHashMap::with_capacity_and_hasher(
+        in_flow_children.len(),
+        Default::default(),
+      )),
+    );
     let compute_result = taffy.compute_layout_with_measure_and_cancel(
       root_id,
       available_space,

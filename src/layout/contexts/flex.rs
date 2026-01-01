@@ -536,7 +536,10 @@ impl FormattingContext for FlexFormattingContext {
       .collect();
 
     // Phase 1: Build Taffy tree from in-flow children
-    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::with_capacity_and_hasher(
+      in_flow_children.len().saturating_add(1),
+      Default::default(),
+    );
     let root_node = self.build_taffy_tree_children(
       &mut taffy_tree,
       box_node,
@@ -572,7 +575,10 @@ impl FormattingContext for FlexFormattingContext {
         .with_parallelism(self.parallelism),
     );
     let this = self.clone();
-    let mut pass_cache: FxHashMap<u64, FlexCacheEntry> = FxHashMap::default();
+    let mut pass_cache: FxHashMap<u64, FlexCacheEntry> = FxHashMap::with_capacity_and_hasher(
+      in_flow_children.len(),
+      Default::default(),
+    );
     let compute_timer = flex_profile::timer();
     let log_root = toggles.truthy("FASTR_LOG_FLEX_ROOT");
     if log_root {
@@ -2226,7 +2232,10 @@ impl FormattingContext for FlexFormattingContext {
     }
 
     if !running_children.is_empty() {
-      let mut id_to_bounds: FxHashMap<usize, Rect> = FxHashMap::default();
+      let mut id_to_bounds: FxHashMap<usize, Rect> = FxHashMap::with_capacity_and_hasher(
+        fragment.children.len(),
+        Default::default(),
+      );
       let mut deadline_counter = 0usize;
       for child in fragment.children.iter() {
         check_layout_deadline(&mut deadline_counter)?;
@@ -4031,7 +4040,10 @@ impl FlexFormattingContext {
         let mut total_main = 0.0;
         let mut total_weight = 0.0;
         let mut child_count = 0usize;
-        let mut box_lookup: FxHashMap<usize, &BoxNode> = FxHashMap::default();
+        let mut box_lookup: FxHashMap<usize, &BoxNode> = FxHashMap::with_capacity_and_hasher(
+          box_node.children.len(),
+          Default::default(),
+        );
         for child in &box_node.children {
           check_layout_deadline(&mut deadline_counter)?;
           box_lookup.insert(child.id, child);
@@ -4776,12 +4788,14 @@ impl FlexFormattingContext {
     positioned: &[PositionedCandidate],
     padding_origin: Point,
   ) -> Result<FxHashMap<usize, Point>, LayoutError> {
-    let mut positions: FxHashMap<usize, Point> = FxHashMap::default();
     if positioned.is_empty() {
-      return Ok(positions);
+      return Ok(FxHashMap::default());
     }
+    let mut positions: FxHashMap<usize, Point> =
+      FxHashMap::with_capacity_and_hasher(positioned.len(), Default::default());
 
-    let mut inflow_sizes: FxHashMap<usize, Size> = FxHashMap::default();
+    let mut inflow_sizes: FxHashMap<usize, Size> =
+      FxHashMap::with_capacity_and_hasher(fragment.children.len(), Default::default());
     for child in fragment.children.iter() {
       if let Some(box_id) = match &child.content {
         FragmentContent::Block { box_id }
@@ -4794,14 +4808,16 @@ impl FlexFormattingContext {
       }
     }
 
-    let mut positioned_index: FxHashMap<usize, usize> = FxHashMap::default();
+    let mut positioned_index: FxHashMap<usize, usize> =
+      FxHashMap::with_capacity_and_hasher(positioned.len(), Default::default());
     for (idx, candidate) in positioned.iter().enumerate() {
       positioned_index.insert(candidate.child_id, idx);
     }
 
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
     let mut child_nodes = Vec::new();
-    let mut node_lookup: FxHashMap<usize, NodeId> = FxHashMap::default();
+    let mut node_lookup: FxHashMap<usize, NodeId> =
+      FxHashMap::with_capacity_and_hasher(positioned.len(), Default::default());
 
     let mut ordered_children: Vec<(i32, usize)> = Vec::new();
     for (idx, child) in box_node.children.iter().enumerate() {
