@@ -303,6 +303,29 @@ fn bench_css_parse_pageset(c: &mut Criterion) {
     });
   });
 
+  // Micro-benchmark: large stylesheet that repeats the same small set of property/value literals.
+  //
+  // This stresses the parsed-value memoization cache: the parser should avoid re-tokenizing and
+  // re-parsing identical values, while also keeping per-declaration cache lookup overhead low.
+  fn synthetic_repeat_values_stylesheet(repeats: usize) -> String {
+    let mut css = String::with_capacity(repeats.saturating_mul(64));
+    css.push_str(".synthetic_repeat{");
+    for _ in 0..repeats {
+      css.push_str("width:16px;height:16px;color:#fff;display:none;");
+    }
+    css.push_str("}\n");
+    css
+  }
+
+  // 4 declarations per repeat.
+  let repeat_values_css = synthetic_repeat_values_stylesheet(25_000 / 4);
+  group.bench_function("synthetic_repeat_values_25k_decls", |b| {
+    b.iter(|| {
+      let sheet = parse_stylesheet(black_box(&repeat_values_css)).expect("parse stylesheet");
+      black_box(sheet);
+    });
+  });
+
   let synthetic_import_css = format!("@import \"imported.css\";\n{synthetic_css}");
   let import_loader = StaticImportLoader;
   group.bench_function(

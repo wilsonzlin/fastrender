@@ -1011,7 +1011,6 @@ pub fn parse_property_value_after_var_resolution(
     value_str,
     true,
     false,
-    false,
   )
 }
 
@@ -1021,7 +1020,7 @@ pub fn parse_property_value_in_context(
   property: &str,
   value_str: &str,
 ) -> Option<PropertyValue> {
-  parse_property_value_in_context_internal(context, property, value_str, false, false, false)
+  parse_property_value_in_context_internal(context, property, value_str, false, false)
 }
 
 fn parse_property_value_in_context_internal(
@@ -1030,7 +1029,6 @@ fn parse_property_value_in_context_internal(
   value_str: &str,
   skip_var_guard: bool,
   skip_allowed_check: bool,
-  skip_value_cache: bool,
 ) -> Option<PropertyValue> {
   // Custom properties store their tokens verbatim (post !important stripping handled by caller).
   if property.starts_with("--") {
@@ -1062,26 +1060,25 @@ fn parse_property_value_in_context_internal(
   }
   let trimmed = trimmed.trim_end_matches("!important").trim();
 
+  let cache_key =
+    value_cache::ParsedPropertyValueCacheKey::new(context, property, trimmed, skip_var_guard);
+  if let Some(cached) = value_cache::get(&cache_key) {
+    return Some(cached);
+  }
+
   // If the value contains a CSS variable, keep the raw string so it can be resolved later during
-  // cascade/computed value resolution. This fast-path also skips the parsed-value cache because
-  // cloning the raw `String` on cache hits erases most of the benefit.
+  // cascade/computed value resolution.
+  //
+  // Note: this happens *after* the parsed-value cache lookup so repeated var-free values avoid
+  // paying the var() scan cost. Values containing `var()` are intentionally not cached because the
+  // cache would have to clone the raw `String` on hits, erasing most of the benefit.
   if !skip_var_guard && crate::style::var_resolution::contains_var(trimmed) {
     return Some(PropertyValue::Keyword(trimmed.to_string()));
   }
 
-  if !skip_value_cache {
-    let cache_key =
-      value_cache::ParsedPropertyValueCacheKey::new(context, property, trimmed, skip_var_guard);
-    if let Some(cached) = value_cache::get(&cache_key) {
-      return Some(cached);
-    }
-
-    let parsed = parse_known_property_value(property, value_str)?;
-    value_cache::put(cache_key, parsed.clone());
-    return Some(parsed);
-  }
-
-  parse_known_property_value(property, value_str)
+  let parsed = parse_known_property_value(property, value_str)?;
+  value_cache::put(cache_key, parsed.clone());
+  Some(parsed)
 }
 
 /// Parse a CSS property value when the property name has already been validated/interned.
@@ -1094,16 +1091,7 @@ pub(crate) fn parse_property_value_in_context_known_property(
   property: &str,
   value_str: &str,
 ) -> Option<PropertyValue> {
-  parse_property_value_in_context_internal(context, property, value_str, false, true, false)
-}
-
-pub(crate) fn parse_property_value_in_context_known_property_uncached(
-  context: DeclarationContext,
-  property: &str,
-  value_str: &str,
-  skip_var_guard: bool,
-) -> Option<PropertyValue> {
-  parse_property_value_in_context_internal(context, property, value_str, skip_var_guard, true, true)
+  parse_property_value_in_context_internal(context, property, value_str, false, true)
 }
 
 pub(crate) fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
@@ -3253,7 +3241,6 @@ mod tests {
         "16px",
         false,
         false,
-        false,
       )
       .expect("width parsed");
       let width_dbg = format!("{width:?}");
@@ -3266,7 +3253,6 @@ mod tests {
         DeclarationContext::Style,
         "height",
         "16px",
-        false,
         false,
         false,
       )
@@ -3283,7 +3269,6 @@ mod tests {
         "#fff",
         false,
         false,
-        false,
       )
       .expect("color parsed");
       let color_dbg = format!("{color:?}");
@@ -3296,7 +3281,6 @@ mod tests {
         DeclarationContext::Style,
         "display",
         "none",
-        false,
         false,
         false,
       )
