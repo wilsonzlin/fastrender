@@ -5408,7 +5408,7 @@ impl DisplayListRenderer {
           scene_item.bounds.y(),
           0.0,
         ));
-        self.warp_pixmap(&pixmap, &adjusted_transform);
+        self.warp_pixmap(&pixmap, &adjusted_transform)?;
       }
     }
 
@@ -5481,7 +5481,7 @@ impl DisplayListRenderer {
     pixmap: &Pixmap,
     homography: &Homography,
     dst_quad: &[(f32, f32); 4],
-  ) -> Option<Arc<WarpedPixmap>> {
+  ) -> RenderResult<Option<Arc<WarpedPixmap>>> {
     let target_size = (self.canvas.width(), self.canvas.height());
     let clip = self.canvas.clip_mask();
     warp_pixmap_cached(
@@ -5494,7 +5494,7 @@ impl DisplayListRenderer {
     )
   }
 
-  fn warp_pixmap(&mut self, pixmap: &Pixmap, transform: &Transform3D) {
+  fn warp_pixmap(&mut self, pixmap: &Pixmap, transform: &Transform3D) -> Result<()> {
     let mut paint = PixmapPaint::default();
     paint.blend_mode = self.canvas.blend_mode();
 
@@ -5513,13 +5513,13 @@ impl DisplayListRenderer {
         skia_transform,
         clip.as_ref(),
       );
-      return;
+      return Ok(());
     }
 
     let src_w = pixmap.width() as f32;
     let src_h = pixmap.height() as f32;
     if src_w <= 0.0 || src_h <= 0.0 {
-      return;
+      return Ok(());
     }
     let css_w = src_w / self.scale;
     let css_h = src_h / self.scale;
@@ -5549,10 +5549,15 @@ impl DisplayListRenderer {
       Point::new(src_w, src_h),
       Point::new(0.0, src_h),
     ];
-    let warped = valid
-      .then(|| Homography::from_quad_to_quad(src_quad, dst_quad_points))
-      .flatten()
-      .and_then(|h| self.projective_warp(pixmap, &h, &dst_quad));
+    let warped = if valid {
+      Homography::from_quad_to_quad(src_quad, dst_quad_points)
+        .map(|h| self.projective_warp(pixmap, &h, &dst_quad))
+        .transpose()
+        .map_err(Error::Render)?
+        .flatten()
+    } else {
+      None
+    };
 
     if let Some(warped) = warped {
       self.canvas.pixmap_mut().draw_pixmap(
@@ -5563,7 +5568,7 @@ impl DisplayListRenderer {
         Transform::identity(),
         None,
       );
-      return;
+      return Ok(());
     }
 
     // Fall back to the affine approximation when a stable projective warp can't be computed.
@@ -5578,6 +5583,7 @@ impl DisplayListRenderer {
       skia_transform,
       clip.as_ref(),
     );
+    Ok(())
   }
 
   fn render_table_collapsed_borders(&mut self, item: &TableCollapsedBordersItem) -> Result<()> {
@@ -6153,10 +6159,15 @@ impl DisplayListRenderer {
               dst_quad_points[i] = Point::new(dst_x, dst_y);
             }
 
-            let warped = valid
-              .then(|| Homography::from_quad_to_quad(src_quad, dst_quad_points))
-              .flatten()
-              .and_then(|homography| self.projective_warp(&layer, &homography, &dst_quad));
+            let warped = if valid {
+              Homography::from_quad_to_quad(src_quad, dst_quad_points)
+                .map(|homography| self.projective_warp(&layer, &homography, &dst_quad))
+                .transpose()
+                .map_err(Error::Render)?
+                .flatten()
+            } else {
+              None
+            };
 
             if let Some(warped) = warped {
               if let Some(mode) = record.manual_blend {

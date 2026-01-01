@@ -2959,7 +2959,7 @@ impl Painter {
           let target_size = (self.pixmap.width(), self.pixmap.height());
           if is_hsl_blend(blend_mode) && !isolated {
             if let Some(warped) =
-              warp_pixmap(&layer_pixmap, &homography, &dst_quad, target_size, None)
+              warp_pixmap(&layer_pixmap, &homography, &dst_quad, target_size, None)?
             {
               if let Some(mut transformed) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
                 if self.diagnostics_enabled {
@@ -2998,7 +2998,7 @@ impl Painter {
               }
             }
           } else if let Some(warped) =
-            warp_pixmap(&layer_pixmap, &homography, &dst_quad, target_size, None)
+            warp_pixmap(&layer_pixmap, &homography, &dst_quad, target_size, None)?
           {
             let mut paint = PixmapPaint::default();
             paint.opacity = opacity.min(1.0);

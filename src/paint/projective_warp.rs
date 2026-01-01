@@ -1,7 +1,8 @@
 use crate::geometry::Point;
+use crate::error::{RenderError, RenderStage};
 use crate::paint::homography::{quad_bounds, Homography};
 use crate::paint::pixmap::new_pixmap;
-use crate::render_control::{active_deadline, with_deadline};
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use lru::LruCache;
 use rayon::prelude::*;
 use std::num::NonZeroUsize;
@@ -9,6 +10,8 @@ use std::sync::Arc;
 use tiny_skia::Mask;
 use tiny_skia::Pixmap;
 use tiny_skia::PremultipliedColorU8;
+
+type RenderResult<T> = std::result::Result<T, RenderError>;
 
 pub struct WarpedPixmap {
   pub pixmap: Pixmap,
@@ -40,21 +43,22 @@ impl WarpCache {
   pub fn get_or_insert(
     &mut self,
     key: WarpCacheKey,
-    build: impl FnOnce() -> Option<WarpedPixmap>,
-  ) -> Option<Arc<WarpedPixmap>> {
+    build: impl FnOnce() -> RenderResult<Option<WarpedPixmap>>,
+  ) -> RenderResult<Option<Arc<WarpedPixmap>>> {
     if let Some(existing) = self.lru.get(&key) {
-      return Some(existing.clone());
+      return Ok(Some(existing.clone()));
     }
-    let Some(new) = build() else {
-      return None;
+    let Some(new) = build()? else {
+      return Ok(None);
     };
     let arc = Arc::new(new);
     self.lru.put(key, arc.clone());
-    Some(arc)
+    Ok(Some(arc))
   }
 }
 
 const PARALLEL_THRESHOLD: u32 = 2048;
+const WARP_DEADLINE_STRIDE: usize = 256;
 
 pub fn warp_cache_key(
   src: &Pixmap,
@@ -102,26 +106,29 @@ pub fn warp_pixmap(
   dst_quad: &[(f32, f32); 4],
   target_size: (u32, u32),
   clip: Option<&Mask>,
-) -> Option<WarpedPixmap> {
+) -> RenderResult<Option<WarpedPixmap>> {
+  check_active(RenderStage::Paint)?;
   if target_size.0 == 0 || target_size.1 == 0 {
-    return None;
+    return Ok(None);
   }
   if src.width() == 0 || src.height() == 0 {
-    return None;
+    return Ok(None);
   }
   if !homography.is_finite() {
-    return None;
+    return Ok(None);
   }
   if dst_quad
     .iter()
     .any(|(x, y)| !x.is_finite() || !y.is_finite())
   {
-    return None;
+    return Ok(None);
   }
   if quad_area(dst_quad).abs() < 1e-3 {
-    return None;
+    return Ok(None);
   }
-  let inv = homography.inverse()?;
+  let Some(inv) = homography.inverse() else {
+    return Ok(None);
+  };
   let dst_points: [Point; 4] = dst_quad.map(|(x, y)| Point::new(x, y));
   let bounds = quad_bounds(&dst_points);
   if bounds.width() <= 0.0
@@ -129,7 +136,7 @@ pub fn warp_pixmap(
     || !bounds.x().is_finite()
     || !bounds.y().is_finite()
   {
-    return None;
+    return Ok(None);
   }
 
   let (target_w, target_h) = target_size;
@@ -150,19 +157,25 @@ pub fn warp_pixmap(
   let width = max_x_i.saturating_sub(min_x_i) as u32;
   let height = max_y_i.saturating_sub(min_y_i) as u32;
   if width == 0 || height == 0 {
-    return None;
+    return Ok(None);
   }
 
   let src_w = src.width() as i32;
   let src_h = src.height() as i32;
 
-  let mut output = new_pixmap(width, height)?;
+  let mut output = match new_pixmap(width, height) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   let clip_data = clip.map(|m| (m.data(), m.width() as usize, m.height() as usize));
   let area = width.saturating_mul(height);
 
-  let process_row = |row_idx: usize, row: &mut [PremultipliedColorU8]| {
+  let process_row = |row_idx: usize, row: &mut [PremultipliedColorU8]| -> RenderResult<()> {
     let global_y = min_y_i + row_idx as i32;
     for (col_idx, dst_px) in row.iter_mut().enumerate() {
+      if col_idx % WARP_DEADLINE_STRIDE == 0 {
+        check_active(RenderStage::Paint)?;
+      }
       let global_x = min_x_i + col_idx as i32;
       let clip_alpha = clip_data
         .as_ref()
@@ -203,6 +216,7 @@ pub fn warp_pixmap(
       }
       *dst_px = sample;
     }
+    Ok(())
   };
 
   if area > PARALLEL_THRESHOLD {
@@ -211,17 +225,17 @@ pub fn warp_pixmap(
       .pixels_mut()
       .par_chunks_mut(width as usize)
       .enumerate()
-      .for_each(|(row_idx, row)| with_deadline(deadline.as_ref(), || process_row(row_idx, row)));
+      .try_for_each(|(row_idx, row)| with_deadline(deadline.as_ref(), || process_row(row_idx, row)))?;
   } else {
     for (row_idx, row) in output.pixels_mut().chunks_mut(width as usize).enumerate() {
-      process_row(row_idx, row);
+      process_row(row_idx, row)?;
     }
   }
 
-  Some(WarpedPixmap {
+  Ok(Some(WarpedPixmap {
     pixmap: output,
     offset: (min_x_i, min_y_i),
-  })
+  }))
 }
 
 pub fn warp_pixmap_cached(
@@ -231,7 +245,7 @@ pub fn warp_pixmap_cached(
   dst_quad: &[(f32, f32); 4],
   target_size: (u32, u32),
   clip: Option<&Mask>,
-) -> Option<Arc<WarpedPixmap>> {
+) -> RenderResult<Option<Arc<WarpedPixmap>>> {
   if let Some(cache) = cache {
     if let Some(key) = warp_cache_key(src, homography, dst_quad, target_size, clip) {
       return cache.get_or_insert(key, || {
@@ -239,7 +253,7 @@ pub fn warp_pixmap_cached(
       });
     }
   }
-  warp_pixmap(src, homography, dst_quad, target_size, clip).map(Arc::new)
+  warp_pixmap(src, homography, dst_quad, target_size, clip).map(|value| value.map(Arc::new))
 }
 
 fn quad_area(quad: &[(f32, f32); 4]) -> f32 {
@@ -338,6 +352,10 @@ fn sample_bilinear(src: &Pixmap, x: f32, y: f32) -> PremultipliedColorU8 {
 mod tests {
   use super::*;
   use crate::geometry::Point;
+  use crate::render_control::{with_deadline, RenderDeadline};
+  use rayon::ThreadPoolBuilder;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::Arc;
   use tiny_skia::MaskType;
 
   fn color(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
@@ -358,7 +376,9 @@ mod tests {
     src_pixels[3] = color(255, 255, 255, 255);
 
     let dst_quad = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
-    let warped = warp_pixmap(&src, &Homography::identity(), &dst_quad, (2, 2), None).expect("warp");
+    let warped = warp_pixmap(&src, &Homography::identity(), &dst_quad, (2, 2), None)
+      .expect("warp result")
+      .expect("warp output");
 
     assert_eq!(warped.offset, (0, 0));
     assert_eq!(warped.pixmap.width(), 2);
@@ -387,7 +407,9 @@ mod tests {
 
     let homography = Homography::from_quad_to_quad(src_points, dst_points).expect("homography");
 
-    let warped = warp_pixmap(&src, &homography, &dst_quad, (6, 6), None).expect("warp");
+    let warped = warp_pixmap(&src, &homography, &dst_quad, (6, 6), None)
+      .expect("warp result")
+      .expect("warp output");
     let inv = homography.invert().expect("invert");
 
     let expected_at = |x: i32, y: i32| {
@@ -438,7 +460,8 @@ mod tests {
       (3, 3),
       Some(&mask),
     )
-    .expect("warp");
+    .expect("warp result")
+    .expect("warp output");
 
     for y in 0..3 {
       for x in 0..3 {
@@ -451,5 +474,40 @@ mod tests {
         }
       }
     }
+  }
+
+  #[test]
+  fn warp_pixmap_respects_cancel_callback_in_parallel_tasks() {
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(2)
+      .build()
+      .expect("warp test pool");
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_cb = Arc::clone(&calls);
+    let cancel = Arc::new(move || calls_cb.fetch_add(1, Ordering::SeqCst) >= 1);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+
+    let mut src = new_pixmap(64, 64).expect("src pixmap");
+    src
+      .pixels_mut()
+      .fill(PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap());
+    let dst_quad = [(0.0, 0.0), (64.0, 0.0), (64.0, 64.0), (0.0, 64.0)];
+
+    let result = pool.install(|| {
+      with_deadline(Some(&deadline), || {
+        warp_pixmap(&src, &Homography::identity(), &dst_quad, (64, 64), None)
+      })
+    });
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout"
+    );
+    assert!(
+      calls.load(Ordering::SeqCst) >= 2,
+      "expected cancel callback to be queried more than once, got {}",
+      calls.load(Ordering::SeqCst)
+    );
   }
 }
