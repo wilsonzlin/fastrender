@@ -176,8 +176,10 @@ fn block_axis_sides(style: &ComputedStyle) -> (PhysicalSide, PhysicalSide) {
 pub struct BlockFormattingContext {
   /// Shared factory used to create child formatting contexts without losing shared caches.
   factory: FormattingContextFactory,
-  /// Shared inline formatting context used for intrinsic sizing, so repeated intrinsic measurements
-  /// don't rebuild inline contexts (and their hyphenator/pipeline wiring) in hot loops.
+  /// Shared inline formatting context used for intrinsic sizing (and for inline child layout when
+  /// the nearest positioned containing block matches this block context's).
+  ///
+  /// This avoids rebuilding inline contexts (and their hyphenator/pipeline wiring) in hot loops.
   intrinsic_inline_fc: Arc<InlineFormattingContext>,
   font_context: FontContext,
   viewport_size: crate::geometry::Size,
@@ -1514,9 +1516,16 @@ impl BlockFormattingContext {
       return result;
     }
 
-    let inline_fc = InlineFormattingContext::with_factory(self.child_factory_for_cb(
-      *nearest_positioned_cb,
-    ));
+    let inline_fc_owned = if *nearest_positioned_cb == self.nearest_positioned_cb {
+      None
+    } else {
+      Some(InlineFormattingContext::with_factory(
+        self.child_factory_for_cb(*nearest_positioned_cb),
+      ))
+    };
+    let inline_fc = inline_fc_owned
+      .as_ref()
+      .unwrap_or_else(|| self.intrinsic_inline_fc.as_ref());
 
     let flush_inline_buffer = |buffer: &mut Vec<BoxNode>,
                                fragments: &mut Vec<FragmentNode>,
