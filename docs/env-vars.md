@@ -75,6 +75,8 @@ HTTP timeouts are clamped so one request cannot take `max_attempts × timeout`.
 
 Because the pageset CLIs share `build_http_fetcher`, these env vars apply consistently to HTML fetches (`fetch_pages`) and subresource fetches (`prefetch_assets`, `render_pages`, `pageset_progress`, `fetch_and_render`) without adding new flags.
 
+Note: when rendering under a cooperative render timeout (e.g. `pageset_progress` soft timeouts), `HttpFetcher` disables retries to avoid extending past the deadline. Retry knobs primarily affect `fetch_pages`, `prefetch_assets`, and any fetches that happen outside a render deadline (such as client redirect following).
+
 Hard-site starting point (Akamai/CDN bot gating, empty bodies, HTTP/2 errors):
 
 ```bash
