@@ -2861,11 +2861,11 @@ impl FlexFormattingContext {
       for child in root_children {
         check_layout_deadline(&mut deadline_counter)?;
         child_styles.push(std::sync::Arc::new(SendSyncStyle(
-          self.computed_style_to_taffy(child, false, Some(&box_node.style))?,
+          self.computed_style_to_taffy_base(child, false, Some(&box_node.style))?,
         )));
       }
       let root_style = std::sync::Arc::new(SendSyncStyle(
-        self.computed_style_to_taffy(box_node, true, None)?,
+        self.computed_style_to_taffy_base(box_node, true, None)?,
       ));
       let template = std::sync::Arc::new(CachedTaffyTemplate {
         root_style,
@@ -2880,12 +2880,15 @@ impl FlexFormattingContext {
     let mut taffy_children = Vec::with_capacity(root_children.len());
     for (child_style, child) in template.child_styles.iter().zip(root_children.iter()) {
       check_layout_deadline(&mut deadline_counter)?;
+      let child = *child;
+      let mut resolved_style = child_style.0.clone();
+      self.apply_flex_auto_min_size(child, false, Some(&box_node.style), &mut resolved_style)?;
       let node = taffy_tree
-        .new_leaf_with_context(child_style.0.clone(), *child as *const BoxNode)
+        .new_leaf_with_context(resolved_style, child as *const BoxNode)
         .map_err(|e| {
           LayoutError::MissingContext(format!("Failed to create Taffy leaf: {:?}", e))
         })?;
-      node_map.insert(*child as *const BoxNode, node);
+      node_map.insert(child as *const BoxNode, node);
       taffy_children.push(node);
     }
 
@@ -2980,6 +2983,22 @@ impl FlexFormattingContext {
     is_root: bool,
     containing_flex: Option<&ComputedStyle>,
   ) -> Result<taffy::style::Style, LayoutError> {
+    let mut style = self.computed_style_to_taffy_base(box_node, is_root, containing_flex)?;
+    self.apply_flex_auto_min_size(box_node, is_root, containing_flex, &mut style)?;
+    Ok(style)
+  }
+
+  /// Converts our `ComputedStyle` to Taffy's `Style` without any content-dependent sizing work.
+  ///
+  /// In particular, this does **not** apply Flexbox's content-based automatic minimum size
+  /// (`min-width/height: auto` on flex items). That content-derived step must run per box instance
+  /// (e.g. when instantiating cached Taffy templates) so template caching remains correct.
+  fn computed_style_to_taffy_base(
+    &self,
+    box_node: &BoxNode,
+    is_root: bool,
+    containing_flex: Option<&ComputedStyle>,
+  ) -> Result<taffy::style::Style, LayoutError> {
     let style = &box_node.style;
     let inline_positive_container = self.inline_axis_positive(style);
     let block_positive_container = self.block_axis_positive(style);
@@ -3028,123 +3047,10 @@ impl FlexFormattingContext {
       CssOverflow::Clip => TaffyOverflow::Clip,
     };
 
-    let mut min_width_dimension =
+    let min_width_dimension =
       self.length_option_to_dimension_box_sizing(style.min_width.as_ref(), style, Axis::Horizontal);
-    let mut min_height_dimension =
+    let min_height_dimension =
       self.length_option_to_dimension_box_sizing(style.min_height.as_ref(), style, Axis::Vertical);
-
-    // Flexbox automatic minimum size (min-width/min-height: auto) applies on the flex item's *main*
-    // axis (driven by the containing flex container), not the item's own flex-direction. Taffy
-    // treats `auto` as zero, so compute the content-based minimum size to prevent shrink-to-zero
-    // flex items on real pages. Flexbox specifies that scroll containers use a 0 automatic minimum.
-    if !is_root {
-      if let Some(container) = containing_flex {
-        let container_inline_is_horizontal =
-          matches!(container.writing_mode, WritingMode::HorizontalTb);
-        let container_main_is_inline = matches!(
-          container.flex_direction,
-          FlexDirection::Row | FlexDirection::RowReverse
-        );
-        let container_main_is_horizontal = if container_inline_is_horizontal {
-          container_main_is_inline
-        } else {
-          !container_main_is_inline
-        };
-
-        let item_fc_type = box_node
-          .formatting_context()
-          .unwrap_or(FormattingContextType::Block);
-        let item_fc = self.factory.get(item_fc_type);
-
-        if container_main_is_horizontal {
-          if min_width_dimension == Dimension::AUTO
-            && matches!(style.overflow_x, CssOverflow::Visible)
-          {
-            let specified_size_suggestion = style.width.as_ref().and_then(|len| {
-              let px = self.resolve_length_px(len, style)?;
-              if px <= 0.0 {
-                return None;
-              }
-              let mut value = px;
-              if style.box_sizing == BoxSizing::ContentBox {
-                value += self.horizontal_edges_px(style)?;
-              }
-              Some(value.max(0.0))
-            });
-
-            // `compute_intrinsic_inline_size` for block formatting contexts respects authored widths.
-            // For flexbox auto minimum sizing we want the *content size suggestion* instead, which
-            // ignores the preferred size (CSS Flexbox §4.5). When a definite preferred size exists,
-            // the content-based minimum is the smaller of the preferred size suggestion and the
-            // content size suggestion.
-            let mut intrinsic_box_storage: Option<BoxNode> = None;
-            let intrinsic_box: &BoxNode = if specified_size_suggestion.is_some() && style.width.is_some() {
-              let mut cloned = box_node.clone();
-              let mut cloned_style: ComputedStyle = (*box_node.style).clone();
-              cloned_style.width = None;
-              cloned.style = Arc::new(cloned_style);
-              intrinsic_box_storage.insert(cloned)
-            } else {
-              box_node
-            };
-
-            match item_fc.compute_intrinsic_inline_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
-              Ok(content_size_suggestion) => {
-                let mut min_candidate = content_size_suggestion;
-                if let Some(specified) = specified_size_suggestion {
-                  min_candidate = min_candidate.min(specified);
-                }
-                if min_candidate.is_finite() && min_candidate > 0.0 {
-                  min_width_dimension = Dimension::length(min_candidate);
-                }
-              }
-              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-              Err(_) => {}
-            };
-          }
-        } else if min_height_dimension == Dimension::AUTO
-          && matches!(style.overflow_y, CssOverflow::Visible)
-        {
-          let specified_size_suggestion = style.height.as_ref().and_then(|len| {
-            let px = self.resolve_length_px(len, style)?;
-            if px <= 0.0 {
-              return None;
-            }
-            let mut value = px;
-            if style.box_sizing == BoxSizing::ContentBox {
-              value += self.vertical_edges_px(style)?;
-            }
-            Some(value.max(0.0))
-          });
-
-          let mut intrinsic_box_storage: Option<BoxNode> = None;
-          let intrinsic_box: &BoxNode =
-            if specified_size_suggestion.is_some() && style.height.is_some() {
-              let mut cloned = box_node.clone();
-              let mut cloned_style: ComputedStyle = (*box_node.style).clone();
-              cloned_style.height = None;
-              cloned.style = Arc::new(cloned_style);
-              intrinsic_box_storage.insert(cloned)
-            } else {
-              box_node
-            };
-
-          match item_fc.compute_intrinsic_block_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
-            Ok(content_size_suggestion) => {
-              let mut min_candidate = content_size_suggestion;
-              if let Some(specified) = specified_size_suggestion {
-                min_candidate = min_candidate.min(specified);
-              }
-              if min_candidate.is_finite() && min_candidate > 0.0 {
-                min_height_dimension = Dimension::length(min_candidate);
-              }
-            }
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => {}
-          };
-        }
-      }
-    }
 
     Ok(taffy::style::Style {
       // Display mode - only root is Flex, children are Block (flex items)
@@ -3234,6 +3140,140 @@ impl FlexFormattingContext {
 
       ..Default::default()
     })
+  }
+
+  /// Applies Flexbox's automatic minimum size (min-width/height:auto) for a specific box instance.
+  ///
+  /// This is content-dependent: it may run intrinsic sizing probes and therefore must *not* be
+  /// cached across different boxes that share the same styles/structure.
+  fn apply_flex_auto_min_size(
+    &self,
+    box_node: &BoxNode,
+    is_root: bool,
+    containing_flex: Option<&ComputedStyle>,
+    taffy_style: &mut taffy::style::Style,
+  ) -> Result<(), LayoutError> {
+    if is_root {
+      return Ok(());
+    }
+
+    let Some(container) = containing_flex else {
+      return Ok(());
+    };
+
+    // Flexbox automatic minimum size (min-width/min-height: auto) applies on the flex item's
+    // *main* axis (driven by the containing flex container), not the item's own flex-direction.
+    // Taffy treats `auto` as zero, so compute the content-based minimum size to prevent
+    // shrink-to-zero flex items. Flexbox specifies that scroll containers use a 0 automatic
+    // minimum, so only apply this when overflow is `visible`.
+    let container_inline_is_horizontal =
+      matches!(container.writing_mode, WritingMode::HorizontalTb);
+    let container_main_is_inline = matches!(
+      container.flex_direction,
+      FlexDirection::Row | FlexDirection::RowReverse
+    );
+    let container_main_is_horizontal = if container_inline_is_horizontal {
+      container_main_is_inline
+    } else {
+      !container_main_is_inline
+    };
+
+    let style = &box_node.style;
+    let item_fc_type = box_node
+      .formatting_context()
+      .unwrap_or(FormattingContextType::Block);
+    let item_fc = self.factory.get(item_fc_type);
+
+    if container_main_is_horizontal {
+      if taffy_style.min_size.width == Dimension::AUTO
+        && matches!(style.overflow_x, CssOverflow::Visible)
+      {
+        let specified_size_suggestion = style.width.as_ref().and_then(|len| {
+          let px = self.resolve_length_px(len, style)?;
+          if px <= 0.0 {
+            return None;
+          }
+          let mut value = px;
+          if style.box_sizing == BoxSizing::ContentBox {
+            value += self.horizontal_edges_px(style)?;
+          }
+          Some(value.max(0.0))
+        });
+
+        // `compute_intrinsic_inline_size` for block formatting contexts respects authored widths.
+        // For flexbox auto minimum sizing we want the *content size suggestion* instead, which
+        // ignores the preferred size (CSS Flexbox §4.5). When a definite preferred size exists,
+        // the content-based minimum is the smaller of the preferred size suggestion and the
+        // content size suggestion.
+        let mut intrinsic_box_storage: Option<BoxNode> = None;
+        let intrinsic_box: &BoxNode =
+          if specified_size_suggestion.is_some() && style.width.is_some() {
+            let mut cloned = box_node.clone();
+            let mut cloned_style: ComputedStyle = (*box_node.style).clone();
+            cloned_style.width = None;
+            cloned.style = Arc::new(cloned_style);
+            intrinsic_box_storage.insert(cloned)
+          } else {
+            box_node
+          };
+
+        match item_fc.compute_intrinsic_inline_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
+          Ok(content_size_suggestion) => {
+            let mut min_candidate = content_size_suggestion;
+            if let Some(specified) = specified_size_suggestion {
+              min_candidate = min_candidate.min(specified);
+            }
+            if min_candidate.is_finite() && min_candidate > 0.0 {
+              taffy_style.min_size.width = Dimension::length(min_candidate);
+            }
+          }
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => {}
+        }
+      }
+    } else if taffy_style.min_size.height == Dimension::AUTO
+      && matches!(style.overflow_y, CssOverflow::Visible)
+    {
+      let specified_size_suggestion = style.height.as_ref().and_then(|len| {
+        let px = self.resolve_length_px(len, style)?;
+        if px <= 0.0 {
+          return None;
+        }
+        let mut value = px;
+        if style.box_sizing == BoxSizing::ContentBox {
+          value += self.vertical_edges_px(style)?;
+        }
+        Some(value.max(0.0))
+      });
+
+      let mut intrinsic_box_storage: Option<BoxNode> = None;
+      let intrinsic_box: &BoxNode =
+        if specified_size_suggestion.is_some() && style.height.is_some() {
+          let mut cloned = box_node.clone();
+          let mut cloned_style: ComputedStyle = (*box_node.style).clone();
+          cloned_style.height = None;
+          cloned.style = Arc::new(cloned_style);
+          intrinsic_box_storage.insert(cloned)
+        } else {
+          box_node
+        };
+
+      match item_fc.compute_intrinsic_block_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
+        Ok(content_size_suggestion) => {
+          let mut min_candidate = content_size_suggestion;
+          if let Some(specified) = specified_size_suggestion {
+            min_candidate = min_candidate.min(specified);
+          }
+          if min_candidate.is_finite() && min_candidate > 0.0 {
+            taffy_style.min_size.height = Dimension::length(min_candidate);
+          }
+        }
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => {}
+      }
+    }
+
+    Ok(())
   }
 
   /// Computes the size for a node
@@ -5659,20 +5699,6 @@ mod tests {
     use crate::render_control::{DeadlineGuard, RenderDeadline};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // Allow the initial flex pre-check to pass, then trigger cancellation during the flex-item
-    // auto-min-size intrinsic probe. If that probe swallows the timeout, the remainder of the
-    // layout run would complete successfully because the cancellation callback is one-shot.
-    let counter = Arc::new(AtomicUsize::new(0));
-    let counter_clone = counter.clone();
-    let deadline = RenderDeadline::new(
-      None,
-      Some(Arc::new(move || {
-        let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
-        prev == 1
-      })),
-    );
-    let _guard = DeadlineGuard::install(Some(&deadline));
-
     let mut text_style = ComputedStyle::default();
     text_style.display = Display::Inline;
     text_style.font_size = 16.0;
@@ -5697,7 +5723,42 @@ mod tests {
     let constraints = LayoutConstraints::definite(200.0, 200.0);
 
     let fc = FlexFormattingContext::new();
-    let result = fc.layout(&container, &constraints);
+
+    // First build populates the cached Taffy template.
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
+    let root_children: Vec<&BoxNode> = container.children.iter().collect();
+    fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container,
+      &root_children,
+      &constraints,
+      &mut node_map,
+    )
+    .expect("initial flex template build should succeed");
+
+    // Trigger cancellation during the flex-item auto-min-size intrinsic probe. If template caching
+    // skips that probe on cache hits, the build would incorrectly succeed.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let deadline = RenderDeadline::new(
+      None,
+      Some(Arc::new(move || {
+        let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
+        prev == 0
+      })),
+    );
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
+    let result = fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container,
+      &root_children,
+      &constraints,
+      &mut node_map,
+    );
     assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
@@ -5849,6 +5910,132 @@ mod tests {
     assert!(
       Arc::ptr_eq(&template_a, &template_b),
       "expected second build to reuse existing cached template"
+    );
+  }
+
+  #[test]
+  fn flex_auto_min_size_is_recomputed_on_taffy_template_cache_hits() {
+    use crate::layout::taffy_integration::{taffy_flex_style_fingerprint, TaffyNodeCacheKey};
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+
+    let mut item_style = ComputedStyle::default();
+    item_style.overflow_x = Overflow::Visible;
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+    let text_style = Arc::new(text_style);
+
+    let short = BoxNode::new_text(text_style.clone(), "xxxxxxxx".to_string());
+    let long = BoxNode::new_text(text_style, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string());
+
+    let container_a = BoxNode::new_block(
+      Arc::new(container_style.clone()),
+      FormattingContextType::Flex,
+      vec![BoxNode::new_block(
+        Arc::new(item_style.clone()),
+        FormattingContextType::Block,
+        vec![short],
+      )],
+    );
+    let container_b = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      vec![BoxNode::new_block(
+        Arc::new(item_style),
+        FormattingContextType::Block,
+        vec![long],
+      )],
+    );
+
+    let fc = FlexFormattingContext::new();
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+    let length_tag = Dimension::length(0.0).tag();
+
+    let extract_min_width = |tree: &TaffyTree<*const BoxNode>,
+                             node_map: &FxHashMap<*const BoxNode, NodeId>,
+                             child: &BoxNode|
+     -> f32 {
+      let child_node = node_map
+        .get(&(child as *const BoxNode))
+        .copied()
+        .expect("child node should exist in node_map");
+      let style = tree
+        .style(child_node)
+        .expect("taffy child style should be available");
+      let min_width = style.min_size.width;
+      assert!(
+        !min_width.is_auto(),
+        "expected flex auto min-size to resolve to a min-content length"
+      );
+      assert_eq!(
+        min_width.tag(),
+        length_tag,
+        "expected flex auto min-size to resolve to a length, got {min_width:?}"
+      );
+      min_width.value()
+    };
+
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
+    let root_children: Vec<&BoxNode> = container_a.children.iter().collect();
+    let mut deadline_counter = 0usize;
+    let key_a = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Flex,
+      taffy_flex_style_fingerprint(container_a.style.as_ref()),
+      super::flex_child_fingerprint(&root_children, &mut deadline_counter).expect("fingerprint"),
+      fc.viewport_size,
+    );
+    fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container_a,
+      &root_children,
+      &constraints,
+      &mut node_map,
+    )
+    .expect("build taffy tree");
+    let min_a = extract_min_width(&taffy_tree, &node_map, &container_a.children[0]);
+    assert!(min_a > 0.0, "expected non-zero min-width for short text");
+    let template_a = fc
+      .taffy_cache
+      .get(&key_a)
+      .expect("template should be cached after first build");
+
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
+    let root_children: Vec<&BoxNode> = container_b.children.iter().collect();
+    let mut deadline_counter = 0usize;
+    let key_b = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Flex,
+      taffy_flex_style_fingerprint(container_b.style.as_ref()),
+      super::flex_child_fingerprint(&root_children, &mut deadline_counter).expect("fingerprint"),
+      fc.viewport_size,
+    );
+    assert_eq!(key_a, key_b, "expected template cache keys to match");
+    fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container_b,
+      &root_children,
+      &constraints,
+      &mut node_map,
+    )
+    .expect("build taffy tree (template cache hit)");
+    let min_b = extract_min_width(&taffy_tree, &node_map, &container_b.children[0]);
+    assert!(min_b > 0.0, "expected non-zero min-width for long text");
+    let template_b = fc
+      .taffy_cache
+      .get(&key_b)
+      .expect("template should be cached after second build");
+    assert!(
+      Arc::ptr_eq(&template_a, &template_b),
+      "expected second build to reuse cached template"
+    );
+    assert!(
+      min_b > min_a,
+      "expected long text min-width ({min_b}) to exceed short text min-width ({min_a})"
     );
   }
 
