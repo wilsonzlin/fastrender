@@ -491,7 +491,7 @@ pub fn follow_client_redirects_with_deadline(
   let Some(timeout) = timeout.filter(|t| !t.is_zero()) else {
     return follow_client_redirects(fetcher, doc, log);
   };
-  let deadline = RenderDeadline::new(Some(timeout), None).with_http_retries(true);
+  let deadline = RenderDeadline::new(Some(timeout), None);
   with_deadline(Some(&deadline), || follow_client_redirects(fetcher, doc, log))
 }
 

@@ -58,7 +58,7 @@ fn pageset_progress_soft_timeout_in_box_tree_includes_stage_note() {
   assert_eq!(progress["status"], "timeout");
   // `box_tree` timeouts still collapse into the `cascade` stage bucket.
   assert_eq!(progress["timeout_stage"], "cascade");
-  assert_eq!(progress["hotspot"], "cascade");
+  assert_eq!(progress["hotspot"], "box_tree");
   let auto_notes = progress["auto_notes"].as_str().unwrap_or_default();
   assert!(
     auto_notes.contains("stage: box_tree"),

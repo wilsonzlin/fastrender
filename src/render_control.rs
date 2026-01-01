@@ -135,8 +135,8 @@ impl RenderDeadline {
   /// this deadline.
   ///
   /// By default, a deadline with a timeout disables HTTP retries to avoid spending the remaining
-  /// render budget on exponential backoff sleeps. Some callers (e.g. client redirect following in
-  /// CLI tooling) want bounded retries, so they can opt in via this flag.
+  /// render budget on exponential backoff sleeps. Callers that want bounded retries can opt in via
+  /// this flag.
   pub fn with_http_retries(mut self, enabled: bool) -> Self {
     self.allow_http_retries = enabled;
     self

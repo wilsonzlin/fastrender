@@ -2690,9 +2690,7 @@ impl HttpFetcher {
     let timeout_budget = self.timeout_budget(deadline);
     let max_attempts = match deadline.as_ref() {
       Some(deadline)
-        if deadline.timeout_limit().is_some()
-          && timeout_budget.is_none()
-          && !deadline.http_retries_enabled() =>
+        if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
       {
         1
       }
@@ -3127,9 +3125,7 @@ impl HttpFetcher {
     let timeout_budget = self.timeout_budget(deadline);
     let max_attempts = match deadline.as_ref() {
       Some(deadline)
-        if deadline.timeout_limit().is_some()
-          && timeout_budget.is_none()
-          && !deadline.http_retries_enabled() =>
+        if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
       {
         1
       }
@@ -3560,9 +3556,7 @@ impl HttpFetcher {
     let timeout_budget = self.timeout_budget(deadline);
     let max_attempts = match deadline.as_ref() {
       Some(deadline)
-        if deadline.timeout_limit().is_some()
-          && timeout_budget.is_none()
-          && !deadline.http_retries_enabled() =>
+        if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
       {
         1
       }
@@ -4071,7 +4065,6 @@ impl HttpFetcher {
       match deadline.as_ref() {
         Some(deadline)
           if deadline.timeout_limit().is_some()
-            && timeout_budget.is_none()
             && !deadline.http_retries_enabled() =>
         {
           1

@@ -1789,6 +1789,16 @@ pub(crate) fn progress_stage_from_heartbeat(stage: StageHeartbeat) -> Option<Pro
   }
 }
 
+fn hotspot_from_heartbeat(stage: StageHeartbeat) -> &'static str {
+  match stage {
+    // Box-tree work is still bucketed into `stages_ms.cascade`, but for hotspot attribution we want
+    // to surface it explicitly so triage can distinguish "real" cascade time from box generation /
+    // intrinsic sizing work.
+    StageHeartbeat::BoxTree => "box_tree",
+    other => other.hotspot(),
+  }
+}
+
 pub(crate) fn hotspot_from_progress_stage(stage: ProgressStage) -> &'static str {
   match stage {
     ProgressStage::DomParse => "fetch",
@@ -1875,9 +1885,13 @@ fn populate_timeout_progress_with_heartbeat(
     return;
   };
   ensure_auto_note_includes(progress, &format!("stage: {}", heartbeat_stage.as_str()));
+  // `StageHeartbeat::Done` indicates the worker already committed progress and is likely stuck in
+  // post-render work (e.g. dump capture). Keep the stage-derived hotspot for that case.
+  if heartbeat_stage != StageHeartbeat::Done {
+    progress.hotspot = hotspot_from_heartbeat(heartbeat_stage).to_string();
+  }
   if let Some(mapped_stage) = progress_stage_from_heartbeat(heartbeat_stage) {
     progress.timeout_stage = Some(mapped_stage);
-    progress.hotspot = hotspot_from_progress_stage(mapped_stage).to_string();
   }
 }
 
@@ -5818,7 +5832,11 @@ fn run_queue(
         let previous = read_progress(&entry.item.progress_path);
         let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
         let timeout_stage = infer_hard_timeout_stage(heartbeat_stage, previous.as_ref());
-        let timeout_hotspot = hotspot_from_progress_stage(timeout_stage).to_string();
+        let timeout_hotspot = match heartbeat_stage {
+          Some(stage) if stage != StageHeartbeat::Done => hotspot_from_heartbeat(stage),
+          _ => hotspot_from_progress_stage(timeout_stage),
+        }
+        .to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = if crash_at_timeout {
           ProgressStatus::Panic
@@ -6095,10 +6113,21 @@ fn progress_has_cascade_profile_stats(progress: &PageProgress) -> bool {
 }
 
 fn progress_is_cascade_timeout(progress: &PageProgress) -> bool {
-  progress.status == ProgressStatus::Timeout
-    && (progress.hotspot.eq_ignore_ascii_case("cascade")
-      || matches!(progress.timeout_stage, Some(ProgressStage::Cascade))
-      || matches!(progress.failure_stage, Some(ProgressStage::Cascade)))
+  if progress.status != ProgressStatus::Timeout {
+    return false;
+  }
+
+  // Prefer the inferred hotspot when it is set, so `box_tree` timeouts (which still collapse into
+  // the `cascade` stage bucket) are not treated as cascade timeouts for cascade-profiling reruns.
+  if progress.hotspot.eq_ignore_ascii_case("cascade") {
+    return true;
+  }
+  if !is_hotspot_unset(&progress.hotspot) {
+    return false;
+  }
+
+  matches!(progress.timeout_stage, Some(ProgressStage::Cascade))
+    || matches!(progress.failure_stage, Some(ProgressStage::Cascade))
 }
 
 fn merge_cascade_diagnostics(dst: &mut CascadeDiagnostics, src: &CascadeDiagnostics) {
@@ -8125,11 +8154,27 @@ mod tests {
 
     assert_eq!(progress.status, ProgressStatus::Timeout);
     assert_eq!(progress.timeout_stage, Some(ProgressStage::Cascade));
+    assert_eq!(progress.hotspot, "box_tree");
     assert!(
       progress.auto_notes.contains("stage: box_tree"),
       "expected box_tree stage note in auto_notes, got: {}",
       progress.auto_notes
     );
+  }
+
+  #[test]
+  fn cascade_timeout_detection_prefers_explicit_hotspot() {
+    let mut progress = PageProgress::new("https://timeout.test/".to_string());
+    progress.status = ProgressStatus::Timeout;
+    progress.timeout_stage = Some(ProgressStage::Cascade);
+    progress.hotspot = "box_tree".to_string();
+    assert!(!progress_is_cascade_timeout(&progress));
+
+    progress.hotspot = "cascade".to_string();
+    assert!(progress_is_cascade_timeout(&progress));
+
+    progress.hotspot = "unknown".to_string();
+    assert!(progress_is_cascade_timeout(&progress));
   }
 
   #[test]
