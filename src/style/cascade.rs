@@ -3075,7 +3075,8 @@ fn selector_compound_fast_reject_from_iter(
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
-          return None;
+          // Keep the descriptor small: only record a subset of required keys.
+          continue;
         }
         class_keys[class_len] = key;
         class_len += 1;
@@ -3091,7 +3092,7 @@ fn selector_compound_fast_reject_from_iter(
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
-          return None;
+          continue;
         }
         attr_keys[attr_len] = key;
         attr_len += 1;
@@ -3105,7 +3106,7 @@ fn selector_compound_fast_reject_from_iter(
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
-          return None;
+          continue;
         }
         attr_keys[attr_len] = key;
         attr_len += 1;
@@ -3122,7 +3123,7 @@ fn selector_compound_fast_reject_from_iter(
           continue;
         }
         if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
-          return None;
+          continue;
         }
         attr_keys[attr_len] = key;
         attr_len += 1;
@@ -3133,17 +3134,19 @@ fn selector_compound_fast_reject_from_iter(
       | Component::DefaultNamespace(..)
       | Component::ExplicitNoNamespace
       | Component::ExplicitAnyNamespace => {}
-      // Allow simple pseudo classes / nth selectors that don't change the meaning of the extracted
-      // type/id/class/attr requirements. Reject cases with nested selector lists.
-      Component::NonTSPseudoClass(pc) => match pc {
-        PseudoClass::Has(_)
-        | PseudoClass::Host(Some(_))
-        | PseudoClass::HostContext(_)
-        | PseudoClass::NthChild(_, _, Some(_))
-        | PseudoClass::NthLastChild(_, _, Some(_)) => return None,
-        _ => {}
-      },
+      // Pseudo-classes / structure selectors don't change the meaning of the extracted
+      // type/id/class/attr requirements. Ignore them so we can still prune candidates based on
+      // any accompanying keys (e.g. `.a.b:has(.c)` can still fast-reject missing `.b`).
+      Component::NonTSPseudoClass(_) => {}
       Component::Nth(_) => {}
+      Component::NthOf(_) => {}
+      Component::Root
+      | Component::Empty
+      | Component::Scope
+      | Component::ImplicitScope
+      | Component::ParentSelector => {}
+      Component::Host(_) | Component::Has(_) => {}
+      Component::Invalid(_) => {}
       // Branching selector-lists (and negation) do not add *mandatory* simple-selector requirements
       // on the element itself. Ignore them so we can still fast-reject based on any other required
       // tag/id/class/attribute selectors in the compound.
@@ -8820,6 +8823,152 @@ mod tests {
       )),
       "fast reject should pass when required classes are present"
     );
+  }
+
+  #[test]
+  fn rightmost_fast_reject_ignores_has_pseudo_class() {
+    let stylesheet = parse_stylesheet(".a.b:has(.c) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    let fast_reject_id = index.selectors[0].fast_reject;
+    assert_ne!(
+      fast_reject_id, 0,
+      "expected fast-reject descriptor for selector with :has() and multiple required keys"
+    );
+    let desc = index.fast_reject(fast_reject_id).expect("fast reject");
+
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node_missing = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a".to_string())],
+      },
+      children: vec![],
+    };
+    let node_present = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b".to_string())],
+      },
+      children: vec![],
+    };
+
+    assert!(
+      !desc.matches(node_selector_keys(&node_missing, &mut class_keys, &mut attr_keys)),
+      "fast reject should require both .a and .b"
+    );
+    assert!(
+      desc.matches(node_selector_keys(&node_present, &mut class_keys, &mut attr_keys)),
+      "fast reject should ignore :has() while still checking required keys"
+    );
+  }
+
+  #[test]
+  fn rightmost_fast_reject_caps_required_keys() {
+    let stylesheet = parse_stylesheet(".a.b.c.d.e { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    let fast_reject_id = index.selectors[0].fast_reject;
+    assert_ne!(
+      fast_reject_id, 0,
+      "expected fast-reject descriptor even when the compound has >{RIGHTMOST_FAST_REJECT_MAX_KEYS} keys"
+    );
+    let desc = index.fast_reject(fast_reject_id).expect("fast reject");
+    assert_eq!(
+      desc.class_len as usize,
+      RIGHTMOST_FAST_REJECT_MAX_KEYS,
+      "expected class keys to be capped at RIGHTMOST_FAST_REJECT_MAX_KEYS"
+    );
+
+    let stored = &desc.keys[..desc.class_len as usize];
+    let required_classes: Vec<&'static str> = ["a", "b", "c", "d", "e"]
+      .iter()
+      .copied()
+      .filter(|name| stored.contains(&selector_bucket_class(name)))
+      .collect();
+    assert_eq!(
+      required_classes.len(),
+      RIGHTMOST_FAST_REJECT_MAX_KEYS,
+      "expected exactly {RIGHTMOST_FAST_REJECT_MAX_KEYS} stored class keys"
+    );
+
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), required_classes.join(" "))],
+      },
+      children: vec![],
+    };
+    assert!(
+      desc.matches(node_selector_keys(&node, &mut class_keys, &mut attr_keys)),
+      "fast reject should pass when all stored required classes are present"
+    );
+
+    for missing in required_classes.iter().copied() {
+      let filtered: Vec<&str> = required_classes
+        .iter()
+        .copied()
+        .filter(|name| *name != missing)
+        .collect();
+      let node = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), filtered.join(" "))],
+        },
+        children: vec![],
+      };
+      assert!(
+        !desc.matches(node_selector_keys(&node, &mut class_keys, &mut attr_keys)),
+        "fast reject should fail when stored required class .{missing} is missing"
+      );
+    }
   }
 
   #[test]
