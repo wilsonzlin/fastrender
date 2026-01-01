@@ -124,10 +124,36 @@ fn bench_shape_fallback_cache(c: &mut Criterion) {
   });
 }
 
+fn bench_shape_fallback_cache_pipeline_clones(c: &mut Criterion) {
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()];
+  style.font_size = 14.0;
+
+  let ctx = FontContext::new();
+  ctx.clear_web_fonts();
+
+  let pipeline = ShapingPipeline::new();
+  let paragraph =
+    "Text-heavy pages clone shaping pipelines in multiple formatting contexts; fallback caches should survive clones.";
+  let long_text = paragraph.repeat(8);
+  let variants: Vec<String> = (0..4096).map(|i| format!("{long_text} {i}")).collect();
+
+  c.bench_function("text_shape_fallback_cache_pipeline_clones", |b| {
+    let mut idx = 0usize;
+    b.iter(|| {
+      let text = &variants[idx % variants.len()];
+      idx = (idx + 1) % variants.len();
+      let pipeline = pipeline.clone();
+      black_box(pipeline.shape(text, &style, &ctx).ok());
+    });
+  });
+}
+
 criterion_group!(
   text_benches,
   bench_rasterize_cached_faces,
   bench_line_break_dense_paragraph,
-  bench_shape_fallback_cache
+  bench_shape_fallback_cache,
+  bench_shape_fallback_cache_pipeline_clones
 );
 criterion_main!(text_benches);

@@ -243,23 +243,14 @@ impl FallbackCacheStats {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FallbackCache {
-  glyphs: Arc<Mutex<LruCache<GlyphFallbackCacheKey, Option<LoadedFont>, FallbackCacheHasher>>>,
-  clusters: Arc<Mutex<LruCache<ClusterFallbackCacheKey, Option<LoadedFont>, FallbackCacheHasher>>>,
-  last_generation: AtomicU64,
+  glyphs: Arc<Mutex<LruCache<GlyphFallbackCacheKey, Option<Arc<LoadedFont>>, FallbackCacheHasher>>>,
+  clusters: Arc<
+    Mutex<LruCache<ClusterFallbackCacheKey, Option<Arc<LoadedFont>>, FallbackCacheHasher>>,
+  >,
+  last_generation: Arc<AtomicU64>,
   stats: Arc<FallbackCacheStats>,
-}
-
-impl Clone for FallbackCache {
-  fn clone(&self) -> Self {
-    Self {
-      glyphs: Arc::clone(&self.glyphs),
-      clusters: Arc::clone(&self.clusters),
-      last_generation: AtomicU64::new(self.last_generation.load(Ordering::Relaxed)),
-      stats: Arc::clone(&self.stats),
-    }
-  }
 }
 
 impl FallbackCache {
@@ -274,7 +265,7 @@ impl FallbackCache {
         cap,
         FallbackCacheHasher::default(),
       ))),
-      last_generation: AtomicU64::new(0),
+      last_generation: Arc::new(AtomicU64::new(0)),
       stats: Arc::new(FallbackCacheStats::default()),
     }
   }
@@ -295,7 +286,10 @@ impl FallbackCache {
     self.stats.clears.fetch_add(1, Ordering::Relaxed);
   }
 
-  pub(crate) fn get_glyph(&self, key: &GlyphFallbackCacheKey) -> Option<Option<LoadedFont>> {
+  pub(crate) fn get_glyph(
+    &self,
+    key: &GlyphFallbackCacheKey,
+  ) -> Option<Option<Arc<LoadedFont>>> {
     let result = self
       .glyphs
       .lock()
@@ -305,7 +299,10 @@ impl FallbackCache {
     result
   }
 
-  pub(crate) fn get_cluster(&self, key: &ClusterFallbackCacheKey) -> Option<Option<LoadedFont>> {
+  pub(crate) fn get_cluster(
+    &self,
+    key: &ClusterFallbackCacheKey,
+  ) -> Option<Option<Arc<LoadedFont>>> {
     let result = self
       .clusters
       .lock()
@@ -315,13 +312,21 @@ impl FallbackCache {
     result
   }
 
-  pub(crate) fn insert_glyph(&self, key: GlyphFallbackCacheKey, value: Option<LoadedFont>) {
+  pub(crate) fn insert_glyph(
+    &self,
+    key: GlyphFallbackCacheKey,
+    value: Option<Arc<LoadedFont>>,
+  ) {
     if let Ok(mut cache) = self.glyphs.lock() {
       cache.put(key, value);
     }
   }
 
-  pub(crate) fn insert_cluster(&self, key: ClusterFallbackCacheKey, value: Option<LoadedFont>) {
+  pub(crate) fn insert_cluster(
+    &self,
+    key: ClusterFallbackCacheKey,
+    value: Option<Arc<LoadedFont>>,
+  ) {
     if let Ok(mut cache) = self.clusters.lock() {
       cache.put(key, value);
     }
