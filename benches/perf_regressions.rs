@@ -378,6 +378,37 @@ fn bench_layout_grid_cached_text(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_taffy_measure_call_counts(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_taffy_measure_call_counts");
+  let viewport = common::REALISTIC_VIEWPORT;
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+
+  // Synthetic workloads that trigger many min/max-content + definite probes inside Taffy.
+  let flex_tree = flex_text_tree(128);
+  let grid_tree = grid_intrinsic_sizing_tree(256, 16);
+
+  group.bench_function("flex_layout_with_taffy_counts", |b| {
+    b.iter(|| {
+      let _perf_guard = fastrender::layout::taffy_integration::TaffyPerfCountersGuard::new();
+      engine.layout_tree(black_box(&flex_tree)).unwrap();
+      let perf = fastrender::layout::taffy_integration::taffy_perf_counters();
+      black_box(perf.flex_measure_calls);
+    })
+  });
+
+  group.bench_function("grid_layout_with_taffy_counts", |b| {
+    b.iter(|| {
+      let _perf_guard = fastrender::layout::taffy_integration::TaffyPerfCountersGuard::new();
+      engine.layout_tree(black_box(&grid_tree)).unwrap();
+      let perf = fastrender::layout::taffy_integration::taffy_perf_counters();
+      black_box(perf.grid_measure_calls);
+    })
+  });
+
+  group.finish();
+}
+
 fn bench_layout_table(c: &mut Criterion) {
   let mut group = c.benchmark_group("bench_layout_table");
   let viewport = (960, 720);
@@ -637,6 +668,7 @@ criterion_group!(
     bench_layout_flex_cached_text,
     bench_layout_grid,
     bench_layout_grid_cached_text,
+    bench_taffy_measure_call_counts,
     bench_layout_table,
     bench_layout_table_stress,
     bench_table_intrinsic,

@@ -4,7 +4,17 @@ use crate::style::AvailableSpace;
 use crate::tree::{LayoutOutput, RunMode};
 
 /// The number of cache entries for each node in the tree
-const CACHE_SIZE: usize = 9;
+///
+/// Taffy’s grid/flex algorithms frequently query children under multiple sizing modes within a
+/// single layout pass (e.g. MaxContent and Definite track sizing). FastRender’s integration uses
+/// measure functions that can be expensive (nested layout), so it's important that these distinct
+/// queries do not clobber each other in the cache.
+///
+/// The upstream cache historically treated `Definite` as equivalent to `MaxContent` when selecting
+/// a cache slot, under the assumption that a node would typically be sized under one or the other
+/// but not both. Real-world pages violate this assumption, which leads to avoidable re-measures.
+/// We keep separate slots for MaxContent vs Definite to reduce measure-call churn.
+const CACHE_SIZE: usize = 16;
 
 /// Cached intermediate layout results
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,60 +67,58 @@ impl Cache {
   ///
   ///   - How many "known_dimensions" are set. In the worst case, a node may be called first with neither dimension known, then with one
   ///     dimension known (either width of height - which doesn't matter for our purposes here), and then with both dimensions known.
-  ///   - Whether unknown dimensions are being sized under a min-content or a max-content available space constraint (definite available space
-  ///     shares a cache slot with max-content because a node will generally be sized under one or the other but not both).
+  ///   - Whether unknown dimensions are being sized under a min-content, max-content, or definite
+  ///     available space constraint.
   ///
   /// ## Cache slots:
   ///
   /// - Slot 0: Both known_dimensions were set
-  /// - Slots 1-4: 1 of 2 known_dimensions were set and:
-  ///   - Slot 1: width but not height known_dimension was set and the other dimension was either a MaxContent or Definite available space constraintraint
-  ///   - Slot 2: width but not height known_dimension was set and the other dimension was a MinContent constraint
-  ///   - Slot 3: height but not width known_dimension was set and the other dimension was either a MaxContent or Definite available space constraintable space constraint
-  ///   - Slot 4: height but not width known_dimension was set and the other dimension was a MinContent constraint
-  /// - Slots 5-8: Neither known_dimensions were set and:
-  ///   - Slot 5: x-axis available space is MaxContent or Definite and y-axis available space is MaxContent or Definite
-  ///   - Slot 6: x-axis available space is MaxContent or Definite and y-axis available space is MinContent
-  ///   - Slot 7: x-axis available space is MinContent and y-axis available space is MaxContent or Definite
-  ///   - Slot 8: x-axis available space is MinContent and y-axis available space is MinContent
+  /// - Slots 1-3: width but not height known_dimension was set and:
+  ///   - Slot 1: y-axis available space is MaxContent
+  ///   - Slot 2: y-axis available space is Definite
+  ///   - Slot 3: y-axis available space is MinContent
+  /// - Slots 4-6: height but not width known_dimension was set and:
+  ///   - Slot 4: x-axis available space is MaxContent
+  ///   - Slot 5: x-axis available space is Definite
+  ///   - Slot 6: x-axis available space is MinContent
+  /// - Slots 7-15: Neither known_dimensions were set; slots are assigned by available space
+  ///   category in each axis (MaxContent, Definite, MinContent).
   #[inline]
   fn compute_cache_slot(
     known_dimensions: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
   ) -> usize {
-    use AvailableSpace::{Definite, MaxContent, MinContent};
-
     let has_known_width = known_dimensions.width.is_some();
     let has_known_height = known_dimensions.height.is_some();
+
+    let space_slot = |space: AvailableSpace| -> usize {
+      match space {
+        AvailableSpace::MaxContent => 0,
+        AvailableSpace::Definite(_) => 1,
+        AvailableSpace::MinContent => 2,
+      }
+    };
 
     // Slot 0: Both known_dimensions were set
     if has_known_width && has_known_height {
       return 0;
     }
 
-    // Slot 1: width but not height known_dimension was set and the other dimension was either a MaxContent or Definite available space constraint
-    // Slot 2: width but not height known_dimension was set and the other dimension was a MinContent constraint
     if has_known_width && !has_known_height {
-      return 1 + (available_space.height == MinContent) as usize;
+      // Slots 1-3
+      return 1 + space_slot(available_space.height);
     }
 
-    // Slot 3: height but not width known_dimension was set and the other dimension was either a MaxContent or Definite available space constraint
-    // Slot 4: height but not width known_dimension was set and the other dimension was a MinContent constraint
     if has_known_height && !has_known_width {
-      return 3 + (available_space.width == MinContent) as usize;
+      // Slots 4-6
+      return 4 + space_slot(available_space.width);
     }
 
-    // Slots 5-8: Neither known_dimensions were set and:
-    match (available_space.width, available_space.height) {
-      // Slot 5: x-axis available space is MaxContent or Definite and y-axis available space is MaxContent or Definite
-      (MaxContent | Definite(_), MaxContent | Definite(_)) => 5,
-      // Slot 6: x-axis available space is MaxContent or Definite and y-axis available space is MinContent
-      (MaxContent | Definite(_), MinContent) => 6,
-      // Slot 7: x-axis available space is MinContent and y-axis available space is MaxContent or Definite
-      (MinContent, MaxContent | Definite(_)) => 7,
-      // Slot 8: x-axis available space is MinContent and y-axis available space is MinContent
-      (MinContent, MinContent) => 8,
-    }
+    // Slots 7-15: neither known_dimensions were set. Use the available-space categories to
+    // select a slot in a 3x3 grid.
+    let width_slot = space_slot(available_space.width);
+    let height_slot = space_slot(available_space.height);
+    7 + (width_slot * 3) + height_slot
   }
 
   /// Try to retrieve a cached result from the cache

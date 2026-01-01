@@ -42,7 +42,6 @@ use crate::layout::flex_profile::record_node_measure_store;
 use crate::layout::flex_profile::DimState;
 use crate::layout::flex_profile::{self};
 use crate::layout::formatting_context::count_flex_intrinsic_call;
-use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::intrinsic_cache_lookup;
 use crate::layout::formatting_context::intrinsic_cache_store;
 use crate::layout::formatting_context::layout_cache_lookup;
@@ -56,8 +55,8 @@ use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{
   record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
   record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
-  record_taffy_style_cache_miss, taffy_constraint_key, CachedTaffyTemplate, SendSyncStyle,
-  TaffyAdapterKind, TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT, TAFFY_ABORT_CHECK_STRIDE,
+  record_taffy_style_cache_miss, CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind,
+  TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT, TAFFY_ABORT_CHECK_STRIDE,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -2614,7 +2613,7 @@ impl FlexFormattingContext {
     taffy_tree: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
     root_children: &[&BoxNode],
-    constraints: &LayoutConstraints,
+    _constraints: &LayoutConstraints,
     node_map: &mut HashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
     let child_fingerprint = flex_child_fingerprint(root_children);
@@ -2623,8 +2622,6 @@ impl FlexFormattingContext {
       box_node.id,
       std::sync::Arc::as_ptr(&box_node.style) as usize,
       child_fingerprint,
-      taffy_constraint_key(constraints, self.viewport_size),
-      intrinsic_cache_epoch(),
       self.viewport_size,
     );
     let cached = self.taffy_cache.get(&cache_key);

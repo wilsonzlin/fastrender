@@ -11,8 +11,6 @@
 //! split by Flex vs Grid.
 
 use crate::geometry::Size;
-use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
-use crate::layout::constraints::LayoutConstraints;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -379,27 +377,6 @@ fn quantize(value: f32) -> f32 {
   }
 }
 
-fn map_space(space: CrateAvailableSpace, viewport: f32, neg_offset: f32) -> Option<u32> {
-  match space {
-    CrateAvailableSpace::Definite(v) => Some(quantize(v).to_bits()),
-    CrateAvailableSpace::MinContent => Some(quantize(-viewport - neg_offset).to_bits()),
-    CrateAvailableSpace::MaxContent => Some(quantize(-viewport - (neg_offset + 1.0)).to_bits()),
-    CrateAvailableSpace::Indefinite => None,
-  }
-}
-
-/// Quantized key for the available space used to build a Taffy tree.
-#[inline]
-pub(crate) fn taffy_constraint_key(
-  constraints: &LayoutConstraints,
-  viewport: Size,
-) -> (Option<u32>, Option<u32>) {
-  (
-    map_space(constraints.available_width, viewport.width.max(0.0), 1.0),
-    map_space(constraints.available_height, viewport.height.max(0.0), 1.0),
-  )
-}
-
 fn viewport_hash(viewport: Size) -> u64 {
   let mut h = FxHasher::default();
   quantize(viewport.width).to_bits().hash(&mut h);
@@ -413,8 +390,6 @@ pub(crate) struct TaffyNodeCacheKey {
   root_id: usize,
   root_style: usize,
   child_fingerprint: u64,
-  constraints: (Option<u32>, Option<u32>),
-  intrinsic_epoch: usize,
   viewport_hash: u64,
 }
 
@@ -424,8 +399,6 @@ impl TaffyNodeCacheKey {
     root_id: usize,
     root_style: usize,
     child_fingerprint: u64,
-    constraints: (Option<u32>, Option<u32>),
-    intrinsic_epoch: usize,
     viewport: Size,
   ) -> Self {
     Self {
@@ -433,8 +406,6 @@ impl TaffyNodeCacheKey {
       root_id,
       root_style,
       child_fingerprint,
-      constraints,
-      intrinsic_epoch,
       viewport_hash: viewport_hash(viewport),
     }
   }
@@ -504,7 +475,7 @@ impl<T> std::ops::Deref for CacheLinePadded<T> {
   }
 }
 
-/// Stores Taffy style templates keyed by container and constraint fingerprints.
+/// Stores Taffy style templates keyed by container/style identity.
 pub(crate) struct TaffyNodeCache {
   shards: Box<[CacheLinePadded<TaffyNodeCacheShard>]>,
   shard_mask: usize,
@@ -627,8 +598,6 @@ mod tests {
       1,
       1,
       0,
-      (Some(1), Some(1)),
-      1,
       viewport,
     );
     let key2 = TaffyNodeCacheKey::new(
@@ -636,8 +605,6 @@ mod tests {
       2,
       1,
       0,
-      (Some(1), Some(1)),
-      1,
       viewport,
     );
 
@@ -671,8 +638,6 @@ mod tests {
         idx + 1,
         1,
         idx as u64,
-        (Some(1), Some(1)),
-        1,
         viewport,
       );
       cache.insert(key, tpl.clone());
@@ -693,5 +658,48 @@ mod tests {
         });
       }
     });
+  }
+
+  #[test]
+  fn taffy_measure_cache_retains_definite_and_max_content_entries() {
+    use taffy::prelude::Size as TaffySize;
+    use taffy::style::AvailableSpace;
+    use taffy::tree::{Cache, LayoutOutput, RunMode};
+
+    let mut cache = Cache::new();
+    let known = TaffySize {
+      width: None,
+      height: None,
+    };
+    let max_space = TaffySize {
+      width: AvailableSpace::MaxContent,
+      height: AvailableSpace::MaxContent,
+    };
+    let def_space = TaffySize {
+      width: AvailableSpace::Definite(400.0),
+      height: AvailableSpace::Definite(300.0),
+    };
+
+    let max_layout = LayoutOutput::from_outer_size(TaffySize {
+      width: 123.0,
+      height: 45.0,
+    });
+    let def_layout = LayoutOutput::from_outer_size(TaffySize {
+      width: 210.0,
+      height: 60.0,
+    });
+
+    cache.store(known, max_space, RunMode::ComputeSize, max_layout);
+    cache.store(known, def_space, RunMode::ComputeSize, def_layout);
+
+    let got_max = cache
+      .get(known, max_space, RunMode::ComputeSize)
+      .expect("max-content entry should remain cached");
+    assert_eq!(got_max.size, max_layout.size);
+
+    let got_def = cache
+      .get(known, def_space, RunMode::ComputeSize)
+      .expect("definite entry should remain cached");
+    assert_eq!(got_def.size, def_layout.size);
   }
 }
