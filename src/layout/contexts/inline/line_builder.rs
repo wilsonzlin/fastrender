@@ -78,7 +78,16 @@ fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
   }
 }
 
+fn explicit_bidi_eq(a: Option<ExplicitBidiContext>, b: Option<ExplicitBidiContext>) -> bool {
+  match (a, b) {
+    (None, None) => true,
+    (Some(a), Some(b)) => a.level == b.level && a.override_all == b.override_all,
+    _ => false,
+  }
+}
+
 const LINE_BUILDER_DEADLINE_STRIDE: usize = 256;
+const LINE_DEFAULT_ITEM_CAPACITY: usize = 8;
 
 fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
   if let Err(RenderError::Timeout { elapsed, .. }) =
@@ -1999,7 +2008,7 @@ impl Line {
   /// Creates an empty line
   pub fn new() -> Self {
     Self {
-      items: Vec::new(),
+      items: Vec::with_capacity(LINE_DEFAULT_ITEM_CAPACITY),
       resolved_direction: Direction::Ltr,
       indent: 0.0,
       available_width: 0.0,
@@ -2871,6 +2880,8 @@ fn reorder_paragraph(
     });
   };
 
+  let mut reshape_cache = ReshapeCache::default();
+
   for (line_idx, line_range) in line_ranges.into_iter().enumerate() {
     check_layout_deadline(deadline_counter)?;
     if line_range.is_empty() {
@@ -2900,22 +2911,36 @@ fn reorder_paragraph(
     for seg in segments {
       check_layout_deadline(deadline_counter)?;
       if let Some(para_leaf) = paragraph_leaves.get(seg.leaf_index) {
-        let mut frag = para_leaf.leaf.clone();
-        if let InlineItem::Text(text_item) = &para_leaf.leaf.item {
-          if let Some(sliced) = slice_text_item(
-            text_item,
-            seg.local_start..seg.local_end,
-            shaper,
-            font_context,
-            paragraph_direction,
-            para_leaf.bidi_context,
-          ) {
-            frag.item = InlineItem::Text(sliced);
-          } else {
-            continue;
+        let item = match &para_leaf.leaf.item {
+          InlineItem::Text(text_item) => {
+            let full_range = seg.local_start == 0 && seg.local_end == text_item.text.len();
+            if full_range
+              && text_item.base_direction == paragraph_direction
+              && explicit_bidi_eq(text_item.explicit_bidi, para_leaf.bidi_context)
+            {
+              InlineItem::Text(text_item.clone())
+            } else {
+              let Some(sliced) = slice_text_item(
+                text_item,
+                seg.local_start..seg.local_end,
+                shaper,
+                font_context,
+                paragraph_direction,
+                para_leaf.bidi_context,
+                &mut reshape_cache,
+              ) else {
+                continue;
+              };
+              InlineItem::Text(sliced)
+            }
           }
-        }
-        visual_fragments.push(frag);
+          other => other.clone(),
+        };
+        visual_fragments.push(BidiLeaf {
+          item,
+          baseline_offset: para_leaf.leaf.baseline_offset,
+          box_stack: para_leaf.leaf.box_stack.clone(),
+        });
       }
     }
 
@@ -3020,6 +3045,7 @@ fn slice_text_item(
   font_context: &FontContext,
   base_direction: Direction,
   bidi_context: Option<crate::text::pipeline::ExplicitBidiContext>,
+  reshape_cache: &mut ReshapeCache,
 ) -> Option<TextItem> {
   if range.start >= range.end || range.end > item.text.len() {
     return None;
@@ -3095,6 +3121,35 @@ fn slice_text_item(
       source_range: item.source_range.start + range.start..item.source_range.start + range.end,
       source_id: item.source_id,
     });
+  }
+
+  // When slicing within the same shaping context, prefer splitting the existing shaped runs over
+  // shaping the substring again.
+  let context_matches =
+    item.base_direction == base_direction && explicit_bidi_eq(item.explicit_bidi, bidi_context);
+  if context_matches {
+    if range.start == 0 && range.end == item.text.len() {
+      return Some(item.clone());
+    }
+    if range.start == 0 {
+      return item
+        .split_at(range.end, false, pipeline, font_context, reshape_cache)
+        .map(|(before, _)| before);
+    }
+    if range.end == item.text.len() {
+      return item
+        .split_at(range.start, false, pipeline, font_context, reshape_cache)
+        .map(|(_, after)| after);
+    }
+    let slice_len = range.end.checked_sub(range.start)?;
+    if let Some((_, after)) = item.split_at(range.start, false, pipeline, font_context, reshape_cache)
+    {
+      if let Some((before, _)) =
+        after.split_at(slice_len, false, pipeline, font_context, reshape_cache)
+      {
+        return Some(before);
+      }
+    }
   }
 
   let slice_text = &item.text[range.clone()];

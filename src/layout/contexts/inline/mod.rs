@@ -95,7 +95,6 @@ use crate::text::hyphenation::Hyphenator;
 use crate::text::justify::allows_inter_character_expansion;
 use crate::text::justify::is_cjk_character;
 use crate::text::line_break::find_break_opportunities;
-use crate::text::line_break::BreakOpportunity;
 use crate::text::line_break::BreakType;
 use crate::text::pipeline::compute_adjusted_font_size;
 use crate::text::pipeline::preferred_font_aspect;
@@ -131,6 +130,8 @@ use line_builder::StaticPositionAnchor;
 use line_builder::TabItem;
 use line_builder::TextItem;
 use rayon::prelude::*;
+use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
@@ -2874,8 +2875,31 @@ impl InlineFormattingContext {
       if normalized_text.is_empty() {
         return Ok(Vec::new());
       }
+      let style = &box_node.style;
+
+      // Most pages hit the "single text item" path (horizontal writing mode and no
+      // `text-combine-upright`). Preserve the owned normalized string and feed it directly into the
+      // `TextItem` rather than cloning it again inside `create_text_item_from_normalized`.
+      if !is_vertical_typographic_mode(style.writing_mode)
+        || matches!(style.text_combine_upright, TextCombineUpright::None)
+        || boundary.prev
+        || boundary.next
+      {
+        let mut item = self.create_text_item_from_normalized_owned(
+          style,
+          normalized_text,
+          forced_breaks,
+          allow_soft_wrap,
+          is_marker,
+          effective_base_direction,
+          bidi_stack,
+        )?;
+        item.box_id = box_node.id;
+        return Ok(vec![InlineItem::Text(item)]);
+      }
+
       let mut items = self.create_text_items_with_combine(
-        &box_node.style,
+        style,
         &normalized_text,
         forced_breaks,
         allow_soft_wrap,
@@ -2973,11 +2997,17 @@ impl InlineFormattingContext {
     );
     let normalized =
       normalize_text_for_white_space(&transformed, style.white_space, style.text_wrap);
-    let mut item = self.create_text_item_from_normalized(
+    let NormalizedText {
+      text: normalized_text,
+      forced_breaks,
+      allow_soft_wrap,
+      ..
+    } = normalized;
+    let mut item = self.create_text_item_from_normalized_owned(
       &box_node.style,
-      &normalized.text,
-      normalized.forced_breaks,
-      normalized.allow_soft_wrap,
+      normalized_text,
+      forced_breaks,
+      allow_soft_wrap,
       false,
       base_direction,
       &[(box_node.style.unicode_bidi, box_node.style.direction)],
@@ -2996,18 +3026,44 @@ impl InlineFormattingContext {
     base_direction: crate::style::types::Direction,
     bidi_stack: &[(UnicodeBidi, Direction)],
   ) -> Result<TextItem, LayoutError> {
-    let mut contextual_stack = Vec::with_capacity(bidi_stack.len() + 1);
-    contextual_stack.extend_from_slice(bidi_stack);
+    self.create_text_item_from_normalized_owned(
+      style,
+      normalized_text.to_string(),
+      forced_breaks,
+      allow_soft_wrap,
+      is_marker,
+      base_direction,
+      bidi_stack,
+    )
+  }
+
+  fn create_text_item_from_normalized_owned(
+    &self,
+    style: &Arc<ComputedStyle>,
+    normalized_text: String,
+    forced_breaks: Vec<crate::text::line_break::BreakOpportunity>,
+    allow_soft_wrap: bool,
+    is_marker: bool,
+    base_direction: crate::style::types::Direction,
+    bidi_stack: &[(UnicodeBidi, Direction)],
+  ) -> Result<TextItem, LayoutError> {
     let current_context = (style.unicode_bidi, style.direction);
-    if contextual_stack.last().copied() != Some(current_context) {
+    let bidi_context = if bidi_stack.last().copied() == Some(current_context) {
+      explicit_bidi_context(base_direction, bidi_stack)
+    } else {
+      let mut contextual_stack: SmallVec<[(UnicodeBidi, Direction); 8]> =
+        SmallVec::with_capacity(bidi_stack.len() + 1);
+      contextual_stack.extend_from_slice(bidi_stack);
       contextual_stack.push(current_context);
-    }
-    let bidi_stack = contextual_stack;
+      explicit_bidi_context(base_direction, &contextual_stack)
+    };
+
     let metrics = self.resolve_scaled_metrics(style);
     let line_height =
       compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(self.viewport_size));
+
     let (hyphen_free, hyphen_breaks) = if is_marker {
-      (normalized_text.to_string(), Vec::new())
+      (normalized_text, Vec::new())
     } else {
       let hyphenator = self.hyphenator_for(&style.language);
       hyphenation_breaks(
@@ -3019,8 +3075,6 @@ impl InlineFormattingContext {
     };
 
     let forced_break_offsets: Vec<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
-
-    let bidi_context = explicit_bidi_context(base_direction, &bidi_stack);
 
     let mut shaped_runs =
       self.shape_with_fallback(hyphen_free.as_str(), style, base_direction, bidi_context)?;
@@ -6109,19 +6163,19 @@ fn merge_breaks(
   base
 }
 
-fn apply_text_transform(
-  text: &str,
+fn apply_text_transform<'a>(
+  text: &'a str,
   transform: TextTransform,
   white_space: WhiteSpace,
   language: &str,
-) -> String {
+) -> Cow<'a, str> {
   use crate::style::types::CaseTransform;
 
-  let mut out = match transform.case {
-    CaseTransform::None => text.to_string(),
-    CaseTransform::Uppercase => locale_uppercase(text, language),
-    CaseTransform::Lowercase => locale_lowercase(text, language),
-    CaseTransform::Capitalize => capitalize_words(text, language),
+  let mut out: Cow<'a, str> = match transform.case {
+    CaseTransform::None => Cow::Borrowed(text),
+    CaseTransform::Uppercase => Cow::Owned(locale_uppercase(text, language)),
+    CaseTransform::Lowercase => Cow::Owned(locale_lowercase(text, language)),
+    CaseTransform::Capitalize => Cow::Owned(capitalize_words(text, language)),
   };
 
   if transform.full_width {
@@ -6129,11 +6183,11 @@ fn apply_text_transform(
       white_space,
       WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces
     );
-    out = apply_full_width(&out, preserve_spaces);
+    out = Cow::Owned(apply_full_width(out.as_ref(), preserve_spaces));
   }
 
   if transform.full_size_kana {
-    out = apply_full_size_kana(&out);
+    out = Cow::Owned(apply_full_size_kana(out.as_ref()));
   }
 
   out
@@ -6668,30 +6722,66 @@ fn apply_break_properties(
 }
 
 fn hyphenation_breaks(
-  text: &str,
+  mut text: String,
   hyphens: HyphensMode,
   hyphenator: Option<&Hyphenator>,
   allow_soft_wrap: bool,
 ) -> (String, Vec<crate::text::line_break::BreakOpportunity>) {
   use crate::text::line_break::BreakOpportunity;
 
-  // Remove soft hyphens while tracking their positions in the output string
-  let mut cleaned = String::with_capacity(text.len());
+  const SOFT_HYPHEN: char = '\u{00AD}';
+
+  // Track soft-hyphen positions while removing them in-place. Using `String::retain` avoids an
+  // unconditional reallocation/copy for the common case (no soft hyphens).
   let mut soft_breaks = Vec::new();
-  for ch in text.chars() {
-    if ch == '\u{00AD}' {
-      soft_breaks.push(BreakOpportunity::with_hyphen(
-        cleaned.len(),
-        BreakType::Allowed,
-        true,
-      ));
-      continue;
+  if text.contains(SOFT_HYPHEN) {
+    let mut cleaned_len = 0usize;
+    for ch in text.chars() {
+      if ch == SOFT_HYPHEN {
+        soft_breaks.push(BreakOpportunity::with_hyphen(
+          cleaned_len,
+          BreakType::Allowed,
+          true,
+        ));
+      } else {
+        cleaned_len += ch.len_utf8();
+      }
     }
-    cleaned.push(ch);
+    text.retain(|ch| ch != SOFT_HYPHEN);
   }
 
   if !allow_soft_wrap || matches!(hyphens, HyphensMode::None) {
-    return (cleaned, Vec::new());
+    return (text, Vec::new());
+  }
+
+  fn add_auto_breaks(
+    text: &str,
+    hyphenator: &Hyphenator,
+    out: &mut Vec<crate::text::line_break::BreakOpportunity>,
+  ) {
+    let mut iter = text.char_indices().peekable();
+    while let Some((start_idx, ch)) = iter.next() {
+      if !ch.is_alphabetic() {
+        continue;
+      }
+      let word_start = start_idx;
+      let mut word_end = start_idx + ch.len_utf8();
+      while let Some(&(next_idx, next_ch)) = iter.peek() {
+        if !next_ch.is_alphabetic() {
+          break;
+        }
+        iter.next();
+        word_end = next_idx + next_ch.len_utf8();
+      }
+      let word = &text[word_start..word_end];
+      for rel in hyphenator.hyphenate(word) {
+        out.push(BreakOpportunity::with_hyphen(
+          word_start + rel,
+          BreakType::Allowed,
+          true,
+        ));
+      }
+    }
   }
 
   let mut breaks = match hyphens {
@@ -6699,33 +6789,7 @@ fn hyphenation_breaks(
     HyphensMode::Auto => {
       let mut auto_breaks = soft_breaks;
       if let Some(hyph) = hyphenator {
-        let mut idx = 0;
-        let chars: Vec<(usize, char)> = cleaned.char_indices().collect();
-        while idx < chars.len() {
-          if chars[idx].1.is_alphabetic() {
-            let start = chars[idx].0;
-            let mut end_idx = idx + 1;
-            while end_idx < chars.len() && chars[end_idx].1.is_alphabetic() {
-              end_idx += 1;
-            }
-            let end = if end_idx < chars.len() {
-              chars[end_idx].0
-            } else {
-              cleaned.len()
-            };
-            let word = &cleaned[start..end];
-            for rel in hyph.hyphenate(word) {
-              auto_breaks.push(BreakOpportunity::with_hyphen(
-                start + rel,
-                BreakType::Allowed,
-                true,
-              ));
-            }
-            idx = end_idx;
-          } else {
-            idx += 1;
-          }
-        }
+        add_auto_breaks(text.as_str(), hyph, &mut auto_breaks);
       }
       auto_breaks
     }
@@ -6741,7 +6805,7 @@ fn hyphenation_breaks(
     true
   });
 
-  (cleaned, breaks)
+  (text, breaks)
 }
 
 impl FormattingContext for InlineFormattingContext {
