@@ -698,9 +698,9 @@ fn http_backend_mode() -> HttpBackendMode {
 }
 
 fn should_fallback_to_curl(err: &Error) -> bool {
-  if !matches!(err, Error::Resource(_)) {
+  let Error::Resource(resource) = err else {
     return false;
-  }
+  };
 
   let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
   while let Some(current) = source {
@@ -712,13 +712,22 @@ fn should_fallback_to_curl(err: &Error) -> bool {
     source = current.source();
   }
 
-  let msg = err.to_string().to_ascii_lowercase();
+  // Inspect only the message (not the URL) so we don't accidentally fall back for domains that
+  // happen to include keywords like "tls" in the hostname.
+  let msg = resource.message.to_ascii_lowercase();
   msg.contains("timeout")
     || msg.contains("timed out")
     || msg.contains("connection reset")
     || msg.contains("connection aborted")
     || msg.contains("broken pipe")
     || msg.contains("http2")
+    || msg.contains("tls")
+    || msg.contains("ssl")
+    || msg.contains("handshake")
+    || msg.contains("certificate")
+    || msg.contains("x509")
+    || msg.contains("alpn")
+    || msg.contains("alert")
 }
 
 fn log_http_retry(reason: &str, attempt: usize, max_attempts: usize, url: &str, backoff: Duration) {
@@ -4243,6 +4252,24 @@ mod tests {
     assert_eq!(profile, HttpBrowserRequestProfile::Stylesheet);
     let parsed = Url::parse(url).expect("parse url");
     assert_eq!(profile.origin_and_referer(&parsed), None);
+  }
+
+  #[test]
+  fn http_backend_auto_falls_back_to_curl_for_tls_like_errors() {
+    let err = Error::Resource(ResourceError::new(
+      "https://example.com",
+      "TLS handshake failed",
+    ));
+    assert!(should_fallback_to_curl(&err));
+  }
+
+  #[test]
+  fn http_backend_auto_does_not_fallback_based_on_url_substrings() {
+    let err = Error::Resource(ResourceError::new(
+      "https://tls.example.com",
+      "unexpected status",
+    ));
+    assert!(!should_fallback_to_curl(&err));
   }
 
   static RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
