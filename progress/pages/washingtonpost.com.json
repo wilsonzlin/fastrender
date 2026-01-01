@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1027.827093,
   "stages_ms": {
-    "fetch": 21.92875828238771,
-    "css": 5.5933057174844985,
-    "cascade": 871.6734549352542,
-    "layout": 101.81904487271873,
-    "paint": 26.812529192154955
+    "fetch": 21.35503512982585,
+    "css": 32.33805722336487,
+    "cascade": 848.8678206111437,
+    "layout": 99.15514832814644,
+    "paint": 26.111031707519217
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=1 (img=1)",

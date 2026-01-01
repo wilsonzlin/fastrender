@@ -3,11 +3,11 @@
   "status": "ok",
   "total_ms": 1812.330251,
   "stages_ms": {
-    "fetch": 39.121790790738864,
-    "css": 148.86933783520416,
-    "cascade": 812.7439291919102,
-    "layout": 687.8307097524436,
-    "paint": 123.76448342970328
+    "fetch": 36.92636502099143,
+    "css": 242.21897449330197,
+    "cascade": 767.134591523858,
+    "layout": 649.231217375125,
+    "paint": 116.81910258672379
   },
   "notes": "See docs/notes/layout-timeouts-profiling.md; slow OK layout hotspot dominated by inline text/shaping; very sensitive to --layout-parallel (auto helps a lot).",
   "hotspot": "cascade",
