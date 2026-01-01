@@ -15,12 +15,20 @@
   "last_regression_commit": "",
   "diagnostics": {
     "stats": {
-      "timings": {},
+      "timings": {
+        "text_shape_ms": 123.45,
+        "text_fallback_ms": 67.89
+      },
       "counts": {
         "dom_nodes": 1200,
         "styled_nodes": 1100,
         "box_nodes": 900,
-        "fragments": 1500
+        "fragments": 1500,
+        "shaped_runs": 321,
+        "glyphs": 6543,
+        "fallback_cache_hits": 100,
+        "fallback_cache_misses": 5,
+        "last_resort_font_fallbacks": 2
       },
       "cascade": {
         "nodes": 1100,

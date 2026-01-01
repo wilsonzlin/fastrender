@@ -1483,7 +1483,9 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
     + t.dom_top_layer_ms.unwrap_or(0.0);
   let css = t.css_inlining_ms.unwrap_or(0.0) + t.css_parse_ms.unwrap_or(0.0);
   let cascade = t.cascade_ms.unwrap_or(0.0) + t.box_tree_ms.unwrap_or(0.0);
-  let layout = t.layout_ms.unwrap_or(0.0) + t.text_shape_ms.unwrap_or(0.0);
+  let layout = t.layout_ms.unwrap_or(0.0)
+    + t.text_fallback_ms.unwrap_or(0.0)
+    + t.text_shape_ms.unwrap_or(0.0);
   let paint = t.paint_build_ms.unwrap_or(0.0)
     + t.paint_optimize_ms.unwrap_or(0.0)
     + t.paint_rasterize_ms.unwrap_or(0.0)
@@ -2061,6 +2063,10 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   log.push_str(&format!("  cascade: {}\n", fmt(t.cascade_ms)));
   log.push_str(&format!("  box_tree: {}\n", fmt(t.box_tree_ms)));
   log.push_str(&format!("  layout: {}\n", fmt(t.layout_ms)));
+  log.push_str(&format!(
+    "  text_fallback: {}\n",
+    fmt(t.text_fallback_ms)
+  ));
   log.push_str(&format!("  text_shape: {}\n", fmt(t.text_shape_ms)));
   log.push_str(&format!("  paint_build: {}\n", fmt(t.paint_build_ms)));
   log.push_str(&format!("  paint_optimize: {}\n", fmt(t.paint_optimize_ms)));
@@ -3038,6 +3044,28 @@ fn text_summary(counts: &RenderCounts) -> Option<String> {
   }
 }
 
+fn text_summary_with_timings(stats: &RenderStats) -> Option<String> {
+  let mut sections = Vec::new();
+  if let Some(summary) = text_summary(&stats.counts) {
+    sections.push(summary);
+  }
+  let mut timing_parts = Vec::new();
+  push_opt_ms(&mut timing_parts, "text_shape_ms", stats.timings.text_shape_ms);
+  push_opt_ms(
+    &mut timing_parts,
+    "text_fallback_ms",
+    stats.timings.text_fallback_ms,
+  );
+  if !timing_parts.is_empty() {
+    sections.push(format!("timings {}", timing_parts.join(" ")));
+  }
+  if sections.is_empty() {
+    None
+  } else {
+    Some(sections.join(" | "))
+  }
+}
+
 fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
   let mut parts = Vec::new();
   push_opt_u64(&mut parts, "nodes", cascade.nodes);
@@ -3436,7 +3464,7 @@ fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
   if let Some(nodes) = nodes_summary(&stats.counts) {
     lines.push(("nodes", nodes));
   }
-  if let Some(text) = text_summary(&stats.counts) {
+  if let Some(text) = text_summary_with_timings(stats) {
     lines.push(("text", text));
   }
   if let Some(cascade) = cascade_summary(&stats.cascade) {
@@ -3814,6 +3842,58 @@ fn report(args: ReportArgs) -> io::Result<()> {
     stage_ranking!("cascade", cascade);
     stage_ranking!("layout", layout);
     stage_ranking!("paint", paint);
+
+    macro_rules! text_timing_ranking {
+      ($label:literal, $field:ident) => {{
+        let mut timing_sorted: Vec<(&LoadedProgress, f64)> = progresses
+          .iter()
+          .filter_map(|entry| {
+            if entry.progress.status != ProgressStatus::Ok {
+              return None;
+            }
+            entry.progress.total_ms?;
+            let stats = entry.stats.as_ref()?;
+            let ms = stats.timings.$field?;
+            if ms <= 0.0 {
+              return None;
+            }
+            Some((entry, ms))
+          })
+          .collect();
+        timing_sorted.sort_by(|(a_entry, a_ms), (b_entry, b_ms)| {
+          b_ms
+            .total_cmp(a_ms)
+            .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+        });
+        let top = args.top.min(timing_sorted.len());
+        if top > 0 {
+          println!(
+            "Top {label} (top {top} of {} ok pages with stats):",
+            timing_sorted.len(),
+            label = $label
+          );
+          for (idx, (entry, ms)) in timing_sorted.iter().take(top).enumerate() {
+            let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+            let share = if total_ms > 0.0 {
+              *ms / total_ms * 100.0
+            } else {
+              0.0
+            };
+            println!(
+              "  {}. {} {label}={ms:.2}ms ({share:.1}%) total={total_ms:.2}ms url={}",
+              idx + 1,
+              entry.stem,
+              entry.progress.url,
+              label = $label
+            );
+          }
+          println!();
+        }
+      }};
+    }
+
+    text_timing_ranking!("text_fallback_ms", text_fallback_ms);
+    text_timing_ranking!("text_shape_ms", text_shape_ms);
 
     let mut pages_with_stats = 0usize;
     let mut totals = ResourceDiagnostics::default();
@@ -5899,6 +5979,7 @@ mod tests {
       cascade_ms: Some(5.0),
       box_tree_ms: Some(6.0),
       layout_ms: Some(7.0),
+      text_fallback_ms: Some(1.0),
       text_shape_ms: Some(8.0),
       paint_build_ms: Some(9.0),
       paint_optimize_ms: Some(10.0),
@@ -5918,7 +5999,7 @@ mod tests {
     assert_eq!(buckets.fetch, 4.5);
     assert_eq!(buckets.css, 7.0);
     assert_eq!(buckets.cascade, 11.0);
-    assert_eq!(buckets.layout, 15.0);
+    assert_eq!(buckets.layout, 16.0);
     assert_eq!(buckets.paint, 55.0);
   }
 
