@@ -137,6 +137,10 @@ impl AnonymousBoxCreator {
         RenderStage::Cascade,
       )?;
     }
+
+    if box_node.children.is_empty() {
+      return Ok(());
+    }
     // First, recursively fix children (bottom-up traversal) without moving them out of the Vec.
     // This avoids per-child placeholder cloning (via `mem::replace`) and keeps the original
     // children Vec allocation intact.
