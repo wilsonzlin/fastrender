@@ -344,3 +344,59 @@ fn perf_smoke_fail_on_fetch_errors_exits_non_zero() {
     "blocked image fetch should set failure_stage=paint"
   );
 }
+
+#[test]
+fn perf_smoke_accepts_pageset_timeouts_suite_alias_and_legacy_manifest_env() {
+  let temp = tempdir().expect("create temp dir");
+  let output = temp.path().join("perf-smoke.json");
+  let manifest_path = temp.path().join("manifest.json");
+  let manifest = serde_json::json!({
+    "schema_version": 1,
+    "fixtures": [
+      {
+        "name": "flex_dashboard",
+        "viewport": [1040, 1240],
+        "dpr": 1.0,
+        "media": "screen",
+        "budget_ms": 100000.0
+      }
+    ]
+  });
+  fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+  let status = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
+    .env(PAGESET_TIMEOUT_MANIFEST_ENV, &manifest_path)
+    .args([
+      "--suite",
+      "pageset-timeouts",
+      "--no-isolate",
+      "--only",
+      "flex_dashboard",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .stdout(Stdio::null())
+    .status()
+    .expect("run perf_smoke with legacy suite alias");
+
+  assert!(
+    status.success(),
+    "perf_smoke should succeed when invoked via legacy suite alias"
+  );
+
+  let data = fs::read_to_string(&output).expect("read perf_smoke output");
+  let summary: Value = serde_json::from_str(&data).expect("parse perf_smoke json");
+  let fixtures = summary["fixtures"]
+    .as_array()
+    .expect("fixtures array must exist");
+  assert_eq!(
+    fixtures.len(),
+    1,
+    "fixture filter should limit to one entry"
+  );
+  assert_eq!(
+    fixtures[0]["name"].as_str(),
+    Some("flex_dashboard"),
+    "legacy suite alias should select the expected fixture"
+  );
+}
