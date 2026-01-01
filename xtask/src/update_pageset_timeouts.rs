@@ -48,6 +48,12 @@ pub struct UpdatePagesetTimeoutsArgs {
   #[arg(long, value_enum, default_value_t = FixtureCaptureMode::Crawl)]
   pub capture_mode: FixtureCaptureMode,
 
+  /// Per-request fetch timeout (seconds) passed to `bundle_page fetch` when capturing missing fixtures.
+  ///
+  /// This is useful when crawling pages that reference slow/unresponsive origins.
+  #[arg(long)]
+  pub bundle_fetch_timeout_secs: Option<u64>,
+
   /// Print what would change without writing files
   #[arg(long)]
   pub dry_run: bool,
@@ -198,6 +204,10 @@ pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()
       FixtureCaptureMode::Render => "",
       FixtureCaptureMode::Crawl => " --no-render",
     };
+    let fetch_timeout_flag = args
+      .bundle_fetch_timeout_secs
+      .map(|secs| format!(" --fetch-timeout-secs {secs}"))
+      .unwrap_or_default();
     let overwrite_flag = if args.overwrite_fixtures {
       " --overwrite"
     } else {
@@ -211,10 +221,11 @@ pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()
     eprintln!("  - {} ({})", entry.name, entry.url);
     eprintln!("    Create it with:");
     eprintln!(
-      "      cargo run --release --bin bundle_page -- fetch '{}' --out '{}'{} --viewport {}x{} --dpr {}",
+      "      cargo run --release --bin bundle_page -- fetch '{}' --out '{}'{}{} --viewport {}x{} --dpr {}",
       entry.url,
       bundle_path.display(),
       capture_flag,
+      fetch_timeout_flag,
       entry.viewport[0],
       entry.viewport[1],
       entry.dpr
@@ -262,6 +273,9 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs)
       .args(["--out", bundle_path.to_string_lossy().as_ref()]);
     if args.capture_mode == FixtureCaptureMode::Crawl {
       bundle_cmd.arg("--no-render");
+    }
+    if let Some(secs) = args.bundle_fetch_timeout_secs {
+      bundle_cmd.args(["--fetch-timeout-secs", &secs.to_string()]);
     }
     bundle_cmd
       .args([
