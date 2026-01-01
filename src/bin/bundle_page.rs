@@ -5,6 +5,7 @@ mod common;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 use common::args::CompatArgs;
+use common::asset_discovery::{discover_css_urls, extract_inline_css_chunks};
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, build_renderer_with_fetcher, decode_html_resource,
   render_document, RenderConfigBundle, RenderSurface,
@@ -23,7 +24,6 @@ use fastrender::resource::{
 };
 use fastrender::style::media::MediaType;
 use fastrender::{OutputFormat, Result};
-use regex::Regex;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
@@ -793,139 +793,4 @@ fn is_css_resource(res: &FetchedResource, url: &str) -> bool {
     return parsed.path().to_ascii_lowercase().ends_with(".css");
   }
   false
-}
-
-fn extract_inline_css_chunks(html: &str) -> Vec<String> {
-  fn capture_group(regex: &Regex, input: &str) -> Vec<String> {
-    regex
-      .captures_iter(input)
-      .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
-      .collect()
-  }
-
-  // Best-effort: this is not a full HTML parser, but is sufficient for capturing deterministic
-  // offline bundles from the common authoring patterns.
-  let style_tag = Regex::new("(?is)<style[^>]*>(.*?)</style>").expect("style tag regex");
-  let style_attr_double =
-    Regex::new("(?is)\\bstyle\\s*=\\s*\"([^\"]*)\"").expect("style attr double regex");
-  let style_attr_single =
-    Regex::new("(?is)\\bstyle\\s*=\\s*'([^']*)'").expect("style attr single regex");
-
-  let mut out = Vec::new();
-  out.extend(capture_group(&style_tag, html));
-  out.extend(capture_group(&style_attr_double, html));
-  out.extend(capture_group(&style_attr_single, html));
-  out
-}
-
-fn discover_css_urls(css: &str, base_url: &str) -> Vec<String> {
-  use cssparser::{Parser, ParserInput, Token};
-
-  fn record(out: &mut Vec<String>, base_url: &str, raw: &str) {
-    if let Some(resolved) = resolve_href(base_url, raw) {
-      out.push(resolved);
-    }
-  }
-
-  fn scan<'i, 't>(parser: &mut Parser<'i, 't>, base_url: &str, out: &mut Vec<String>) {
-    while !parser.is_exhausted() {
-      let token = match parser.next_including_whitespace_and_comments() {
-        Ok(t) => t,
-        Err(_) => break,
-      };
-
-      match token {
-        Token::UnquotedUrl(url) => record(out, base_url, url.as_ref()),
-        Token::Function(name) if name.eq_ignore_ascii_case("url") => {
-          let parse_result = parser.parse_nested_block(|nested| {
-            let mut arg: Option<String> = None;
-            while !nested.is_exhausted() {
-              match nested.next_including_whitespace_and_comments() {
-                Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
-                Ok(Token::QuotedString(s)) | Ok(Token::UnquotedUrl(s)) => {
-                  arg = Some(s.as_ref().to_string());
-                  break;
-                }
-                Ok(Token::Ident(s)) => {
-                  arg = Some(s.as_ref().to_string());
-                  break;
-                }
-                Ok(Token::BadUrl(_)) | Err(_) => break,
-                Ok(_) => {}
-              }
-            }
-            Ok::<_, cssparser::ParseError<'i, ()>>(arg)
-          });
-
-          if let Ok(Some(arg)) = parse_result {
-            record(out, base_url, &arg);
-          }
-        }
-        Token::AtKeyword(name) if name.eq_ignore_ascii_case("import") => {
-          let mut target: Option<String> = None;
-          while !parser.is_exhausted() {
-            let next = match parser.next_including_whitespace_and_comments() {
-              Ok(t) => t,
-              Err(_) => break,
-            };
-            match next {
-              Token::WhiteSpace(_) | Token::Comment(_) => continue,
-              Token::QuotedString(s) | Token::UnquotedUrl(s) => {
-                target = Some(s.as_ref().to_string());
-                break;
-              }
-              Token::Function(fname) if fname.eq_ignore_ascii_case("url") => {
-                let parse_result = parser.parse_nested_block(|nested| {
-                  let mut arg: Option<String> = None;
-                  while !nested.is_exhausted() {
-                    match nested.next_including_whitespace_and_comments() {
-                      Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
-                      Ok(Token::QuotedString(s)) | Ok(Token::UnquotedUrl(s)) => {
-                        arg = Some(s.as_ref().to_string());
-                        break;
-                      }
-                      Ok(Token::Ident(s)) => {
-                        arg = Some(s.as_ref().to_string());
-                        break;
-                      }
-                      Ok(Token::BadUrl(_)) | Err(_) => break,
-                      Ok(_) => {}
-                    }
-                  }
-                  Ok::<_, cssparser::ParseError<'i, ()>>(arg)
-                });
-                target = parse_result.ok().flatten();
-                break;
-              }
-              Token::Ident(s) => {
-                target = Some(s.as_ref().to_string());
-                break;
-              }
-              Token::Semicolon => break,
-              _ => break,
-            }
-          }
-          if let Some(target) = target {
-            record(out, base_url, &target);
-          }
-        }
-        Token::Function(_)
-        | Token::ParenthesisBlock
-        | Token::SquareBracketBlock
-        | Token::CurlyBracketBlock => {
-          let _ = parser.parse_nested_block(|nested| {
-            scan(nested, base_url, out);
-            Ok::<_, cssparser::ParseError<'i, ()>>(())
-          });
-        }
-        _ => {}
-      }
-    }
-  }
-
-  let mut out = Vec::new();
-  let mut input = ParserInput::new(css);
-  let mut parser = Parser::new(&mut input);
-  scan(&mut parser, base_url, &mut out);
-  out
 }

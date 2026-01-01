@@ -1,4 +1,4 @@
-//! Prefetch external CSS (and optional HTML subresources) into the disk-backed cache.
+//! Prefetch CSS (and optional HTML/CSS subresources) into the disk-backed cache.
 //!
 //! This is a best-effort helper intended for the pageset workflow:
 //! `fetch_pages` caches HTML, then this tool warms `fetches/assets/` so the
@@ -37,12 +37,13 @@ mod disk_cache_main {
   use rayon::prelude::*;
   use rayon::ThreadPoolBuilder;
   use std::cell::RefCell;
-  use std::collections::{HashMap, HashSet};
+  use std::collections::{BTreeSet, HashMap, HashSet};
   use std::path::{Path, PathBuf};
   use std::sync::Arc;
   use std::time::Duration;
 
   use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs, ViewportArgs};
+  use crate::common::asset_discovery::{discover_css_urls, extract_inline_css_chunks};
   use crate::common::disk_cache_stats::scan_disk_cache_dir;
   use crate::common::render_pipeline::{
     build_http_fetcher, disk_cache_namespace, read_cached_document,
@@ -107,6 +108,20 @@ mod disk_cache_main {
     )]
     prefetch_iframes: bool,
 
+    /// Prefetch non-CSS assets referenced via `url(...)` in CSS (true/false)
+    #[arg(
+      long,
+      default_value_t = false,
+      action = ArgAction::Set,
+      num_args = 0..=1,
+      default_missing_value = "true"
+    )]
+    prefetch_css_url_assets: bool,
+
+    /// Safety valve: cap the number of unique discovered assets per page (0 disables the cap)
+    #[arg(long, default_value_t = 2000)]
+    max_discovered_assets_per_page: usize,
+
     /// Override disk cache directory (defaults to fetches/assets)
     #[arg(long, default_value = DEFAULT_ASSET_DIR)]
     cache_dir: PathBuf,
@@ -136,7 +151,19 @@ mod disk_cache_main {
     discovered_documents: usize,
     fetched_documents: usize,
     failed_documents: usize,
+    discovered_css_assets: usize,
+    fetched_css_assets: usize,
+    failed_css_assets: usize,
     skipped: bool,
+  }
+
+  #[derive(Debug, Clone, Copy)]
+  struct PrefetchOptions {
+    prefetch_fonts: bool,
+    prefetch_images: bool,
+    prefetch_iframes: bool,
+    prefetch_css_url_assets: bool,
+    max_discovered_assets_per_page: usize,
   }
 
   fn selected_pages(
@@ -165,18 +192,107 @@ mod disk_cache_main {
     }
   }
 
+  fn normalize_prefetch_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+      return None;
+    }
+    if trimmed.starts_with("data:") {
+      return None;
+    }
+
+    // Fetchers treat URLs with different fragments as distinct; strip fragments so we only cache
+    // the underlying resource once (e.g. `sprite.svg#icon`).
+    let trimmed = trimmed.split('#').next().unwrap_or("").trim();
+    if trimmed.is_empty() {
+      return None;
+    }
+
+    let parsed = url::Url::parse(trimmed).ok()?;
+    match parsed.scheme() {
+      "http" | "https" | "file" => Some(parsed.to_string()),
+      _ => None,
+    }
+  }
+
+  fn looks_like_css_url(url: &str) -> bool {
+    url::Url::parse(url)
+      .ok()
+      .map(|parsed| parsed.path().to_ascii_lowercase().ends_with(".css"))
+      .unwrap_or(false)
+  }
+
+  fn looks_like_font_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+      return false;
+    };
+    let ext = Path::new(parsed.path())
+      .extension()
+      .and_then(|e| e.to_str())
+      .unwrap_or("")
+      .to_ascii_lowercase();
+    matches!(
+      ext.as_str(),
+      "woff2" | "woff" | "ttf" | "otf" | "eot" | "ttc"
+    )
+  }
+
+  fn insert_unique_with_cap(set: &mut BTreeSet<String>, url: String, max: usize) -> bool {
+    if set.contains(&url) {
+      return true;
+    }
+    if max != 0 && set.len() >= max {
+      return false;
+    }
+    set.insert(url);
+    true
+  }
+
+  fn record_image_candidate(set: &mut BTreeSet<String>, url: &str, max: usize) {
+    let Some(normalized) = normalize_prefetch_url(url) else {
+      return;
+    };
+    let _ = insert_unique_with_cap(set, normalized, max);
+  }
+
+  fn record_document_candidate(set: &mut BTreeSet<String>, url: &str, max: usize) {
+    let Some(normalized) = normalize_prefetch_url(url) else {
+      return;
+    };
+    let _ = insert_unique_with_cap(set, normalized, max);
+  }
+
+  fn record_css_url_asset_candidate(set: &mut BTreeSet<String>, url: &str, max: usize) {
+    let Some(normalized) = normalize_prefetch_url(url) else {
+      return;
+    };
+    if looks_like_css_url(&normalized) || looks_like_font_url(&normalized) {
+      return;
+    }
+    let _ = insert_unique_with_cap(set, normalized, max);
+  }
+
   struct PrefetchImportLoader<'a> {
     fetcher: &'a dyn ResourceFetcher,
     css_cache: RefCell<HashMap<String, String>>,
     summary: &'a RefCell<PageSummary>,
+    css_asset_urls: Option<&'a RefCell<BTreeSet<String>>>,
+    max_discovered_assets_per_page: usize,
   }
 
   impl<'a> PrefetchImportLoader<'a> {
-    fn new(fetcher: &'a dyn ResourceFetcher, summary: &'a RefCell<PageSummary>) -> Self {
+    fn new(
+      fetcher: &'a dyn ResourceFetcher,
+      summary: &'a RefCell<PageSummary>,
+      css_asset_urls: Option<&'a RefCell<BTreeSet<String>>>,
+      max_discovered_assets_per_page: usize,
+    ) -> Self {
       Self {
         fetcher,
         css_cache: RefCell::new(HashMap::new()),
         summary,
+        css_asset_urls,
+        max_discovered_assets_per_page,
       }
     }
   }
@@ -196,6 +312,14 @@ mod disk_cache_main {
             Ok(css) => css,
             Err(_) => decoded,
           };
+
+          if let Some(css_asset_urls) = self.css_asset_urls {
+            let discovered = discover_css_urls(&rewritten, base);
+            let mut set = css_asset_urls.borrow_mut();
+            for url in discovered {
+              record_css_url_asset_candidate(&mut set, &url, self.max_discovered_assets_per_page);
+            }
+          }
 
           self
             .css_cache
@@ -362,39 +486,23 @@ mod disk_cache_main {
     }
   }
 
-  fn prefetch_page(
-    entry: &PagesetEntry,
+  fn prefetch_assets_for_html(
+    stem: &str,
+    html: &str,
+    base_url: &str,
     fetcher: &dyn ResourceFetcher,
     media_ctx: &MediaContext,
-    prefetch_fonts: bool,
-    prefetch_images: bool,
-    prefetch_iframes: bool,
+    opts: PrefetchOptions,
   ) -> PageSummary {
     let summary = RefCell::new(PageSummary {
-      stem: entry.cache_stem.clone(),
+      stem: stem.to_string(),
       ..PageSummary::default()
     });
-
-    let cache_path = cache_html_path(&entry.cache_stem);
-    if !cache_path.exists() {
-      summary.borrow_mut().skipped = true;
-      return summary.into_inner();
-    }
-
-    let cached = match read_cached_document(&cache_path) {
-      Ok(doc) => doc,
-      Err(_) => {
-        summary.borrow_mut().skipped = true;
-        return summary.into_inner();
-      }
-    };
-    let base_url = cached.document.base_url.clone();
-    let html = cached.document.html;
 
     let mut media_query_cache = MediaQueryCache::default();
 
     let mut tasks: Vec<StylesheetTask> =
-      match discover_dom_stylesheet_tasks(&html, &base_url, media_ctx, &mut media_query_cache) {
+      match discover_dom_stylesheet_tasks(html, base_url, media_ctx, &mut media_query_cache) {
         Some(tasks) => {
           if tasks.is_empty() {
             // Pages that load their primary stylesheet dynamically (without emitting `<link rel="stylesheet">`
@@ -402,7 +510,7 @@ mod disk_cache_main {
             // substrings.
             let mut out = Vec::new();
             let mut seen = HashSet::new();
-            if let Ok(urls) = extract_embedded_css_urls(&html, &base_url) {
+            if let Ok(urls) = extract_embedded_css_urls(html, base_url) {
               for url in urls {
                 if seen.insert(url.clone()) {
                   out.push(StylesheetTask::External(url));
@@ -418,14 +526,14 @@ mod disk_cache_main {
           // DOM parse failed; fall back to the string-based extraction used by older versions.
           let mut out = Vec::new();
           let mut seen = HashSet::new();
-          if let Ok(urls) = extract_css_links(&html, &base_url, media_ctx.media_type) {
+          if let Ok(urls) = extract_css_links(html, base_url, media_ctx.media_type) {
             for url in urls {
               if seen.insert(url.clone()) {
                 out.push(StylesheetTask::External(url));
               }
             }
           }
-          if let Ok(urls) = extract_embedded_css_urls(&html, &base_url) {
+          if let Ok(urls) = extract_embedded_css_urls(html, base_url) {
             for url in urls {
               if seen.insert(url.clone()) {
                 out.push(StylesheetTask::External(url));
@@ -437,70 +545,89 @@ mod disk_cache_main {
       };
 
     summary.borrow_mut().discovered_css = tasks.len();
-    if tasks.is_empty() && !(prefetch_images || prefetch_iframes) {
+    if tasks.is_empty()
+      && !(opts.prefetch_images || opts.prefetch_iframes || opts.prefetch_css_url_assets)
+    {
       return summary.into_inner();
     }
 
-    // Process external stylesheets in sorted order for more reproducible network/cache behavior.
-    tasks.sort_by(|a, b| match (a, b) {
-      (StylesheetTask::Inline(_), StylesheetTask::External(_)) => std::cmp::Ordering::Less,
-      (StylesheetTask::External(_), StylesheetTask::Inline(_)) => std::cmp::Ordering::Greater,
-      (StylesheetTask::Inline(_), StylesheetTask::Inline(_)) => std::cmp::Ordering::Equal,
-      (StylesheetTask::External(a), StylesheetTask::External(b)) => a.cmp(b),
-    });
-
-    let import_loader = PrefetchImportLoader::new(fetcher, &summary);
-    let mut seen_fonts: HashSet<String> = HashSet::new();
-
-    for task in tasks {
-      match task {
-        StylesheetTask::Inline(css) => {
-          let sheet: StyleSheet = match parse_stylesheet(&css) {
-            Ok(sheet) => sheet,
-            Err(_) => continue,
-          };
-
-          let resolved = match sheet.resolve_imports_with_cache(
-            &import_loader,
-            Some(&base_url),
-            media_ctx,
-            Some(&mut media_query_cache),
-          ) {
-            Ok(sheet) => sheet,
-            Err(_) => sheet,
-          };
-
-          if prefetch_fonts {
-            let mut summary = summary.borrow_mut();
-            prefetch_fonts_from_stylesheet(
-              fetcher,
-              &base_url,
-              &resolved,
-              media_ctx,
-              &mut media_query_cache,
-              &mut seen_fonts,
-              &mut summary,
-            );
-          }
+    let mut image_urls: BTreeSet<String> = BTreeSet::new();
+    let mut document_urls: BTreeSet<String> = BTreeSet::new();
+    if opts.prefetch_images || opts.prefetch_iframes {
+      let html_assets = discover_html_asset_urls(html, base_url);
+      if opts.prefetch_images {
+        for url in html_assets.images {
+          record_image_candidate(&mut image_urls, &url, opts.max_discovered_assets_per_page);
         }
-        StylesheetTask::External(css_url) => match fetcher.fetch(&css_url) {
-          Ok(res) => {
-            summary.borrow_mut().fetched_css += 1;
-            let sheet_base = res.final_url.as_deref().unwrap_or(&css_url);
-            let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-            let css_text = match absolutize_css_urls(&css_text, sheet_base) {
-              Ok(css) => css,
-              Err(_) => css_text,
-            };
+      }
+      if opts.prefetch_iframes {
+        for url in html_assets.documents {
+          record_document_candidate(&mut document_urls, &url, opts.max_discovered_assets_per_page);
+        }
+      }
+    }
 
-            let sheet: StyleSheet = match parse_stylesheet(&css_text) {
+    let css_asset_urls = RefCell::new(BTreeSet::<String>::new());
+    if opts.prefetch_css_url_assets {
+      let mut set = css_asset_urls.borrow_mut();
+      for chunk in extract_inline_css_chunks(html) {
+        for url in discover_css_urls(&chunk, base_url) {
+          record_css_url_asset_candidate(&mut set, &url, opts.max_discovered_assets_per_page);
+        }
+      }
+    }
+
+    if !tasks.is_empty() {
+      // Process external stylesheets in sorted order for more reproducible network/cache behavior.
+      tasks.sort_by(|a, b| match (a, b) {
+        (StylesheetTask::Inline(_), StylesheetTask::External(_)) => std::cmp::Ordering::Less,
+        (StylesheetTask::External(_), StylesheetTask::Inline(_)) => std::cmp::Ordering::Greater,
+        (StylesheetTask::Inline(_), StylesheetTask::Inline(_)) => std::cmp::Ordering::Equal,
+        (StylesheetTask::External(a), StylesheetTask::External(b)) => a.cmp(b),
+      });
+
+      let css_asset_urls_ref = if opts.prefetch_css_url_assets {
+        Some(&css_asset_urls)
+      } else {
+        None
+      };
+      let import_loader = PrefetchImportLoader::new(
+        fetcher,
+        &summary,
+        css_asset_urls_ref,
+        opts.max_discovered_assets_per_page,
+      );
+      let mut seen_fonts: HashSet<String> = HashSet::new();
+
+      for task in tasks {
+        match task {
+          StylesheetTask::Inline(css) => {
+            if opts.prefetch_css_url_assets {
+              let scan_css = match absolutize_css_urls(&css, base_url) {
+                Ok(css) => css,
+                Err(_) => css.clone(),
+              };
+              let discovered = discover_css_urls(&scan_css, base_url);
+              {
+                let mut set = css_asset_urls.borrow_mut();
+                for url in discovered {
+                  record_css_url_asset_candidate(
+                    &mut set,
+                    &url,
+                    opts.max_discovered_assets_per_page,
+                  );
+                }
+              }
+            }
+
+            let sheet: StyleSheet = match parse_stylesheet(&css) {
               Ok(sheet) => sheet,
               Err(_) => continue,
             };
 
             let resolved = match sheet.resolve_imports_with_cache(
               &import_loader,
-              Some(sheet_base),
+              Some(base_url),
               media_ctx,
               Some(&mut media_query_cache),
             ) {
@@ -508,11 +635,11 @@ mod disk_cache_main {
               Err(_) => sheet,
             };
 
-            if prefetch_fonts {
+            if opts.prefetch_fonts {
               let mut summary = summary.borrow_mut();
               prefetch_fonts_from_stylesheet(
                 fetcher,
-                sheet_base,
+                base_url,
                 &resolved,
                 media_ctx,
                 &mut media_query_cache,
@@ -521,46 +648,329 @@ mod disk_cache_main {
               );
             }
           }
-          Err(_) => summary.borrow_mut().failed_css += 1,
-        },
+          StylesheetTask::External(css_url) => match fetcher.fetch(&css_url) {
+            Ok(res) => {
+              summary.borrow_mut().fetched_css += 1;
+              let sheet_base = res.final_url.as_deref().unwrap_or(&css_url);
+              let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+              let css_text = match absolutize_css_urls(&css_text, sheet_base) {
+                Ok(css) => css,
+                Err(_) => css_text,
+              };
+
+              if opts.prefetch_css_url_assets {
+                let discovered = discover_css_urls(&css_text, sheet_base);
+                {
+                  let mut set = css_asset_urls.borrow_mut();
+                  for url in discovered {
+                    record_css_url_asset_candidate(
+                      &mut set,
+                      &url,
+                      opts.max_discovered_assets_per_page,
+                    );
+                  }
+                }
+              }
+
+              let sheet: StyleSheet = match parse_stylesheet(&css_text) {
+                Ok(sheet) => sheet,
+                Err(_) => continue,
+              };
+
+              let resolved = match sheet.resolve_imports_with_cache(
+                &import_loader,
+                Some(sheet_base),
+                media_ctx,
+                Some(&mut media_query_cache),
+              ) {
+                Ok(sheet) => sheet,
+                Err(_) => sheet,
+              };
+
+              if opts.prefetch_fonts {
+                let mut summary = summary.borrow_mut();
+                prefetch_fonts_from_stylesheet(
+                  fetcher,
+                  sheet_base,
+                  &resolved,
+                  media_ctx,
+                  &mut media_query_cache,
+                  &mut seen_fonts,
+                  &mut summary,
+                );
+              }
+            }
+            Err(_) => summary.borrow_mut().failed_css += 1,
+          },
+        }
       }
     }
 
-    if prefetch_images || prefetch_iframes {
-      let html_assets = discover_html_asset_urls(&html, &base_url);
-      let mut image_urls = html_assets.images;
-      let mut document_urls = html_assets.documents;
+    let css_asset_urls = css_asset_urls.into_inner();
 
-      if prefetch_images {
-        summary.borrow_mut().discovered_images = image_urls.len();
-        image_urls.sort();
-        for url in image_urls {
-          if url.starts_with("data:") {
-            continue;
-          }
-          match fetcher.fetch(&url) {
-            Ok(_) => summary.borrow_mut().fetched_images += 1,
-            Err(_) => summary.borrow_mut().failed_images += 1,
-          }
+    {
+      let mut summary = summary.borrow_mut();
+      summary.discovered_images = image_urls.len();
+      summary.discovered_documents = document_urls.len();
+      summary.discovered_css_assets = css_asset_urls.len();
+    }
+
+    if opts.prefetch_images {
+      let mut summary = summary.borrow_mut();
+      for url in &image_urls {
+        match fetcher.fetch(url) {
+          Ok(_) => summary.fetched_images += 1,
+          Err(_) => summary.failed_images += 1,
         }
       }
+    }
 
-      if prefetch_iframes {
-        summary.borrow_mut().discovered_documents = document_urls.len();
-        document_urls.sort();
-        for url in document_urls {
-          if url.starts_with("data:") {
-            continue;
-          }
-          match fetcher.fetch(&url) {
-            Ok(_) => summary.borrow_mut().fetched_documents += 1,
-            Err(_) => summary.borrow_mut().failed_documents += 1,
-          }
+    if opts.prefetch_iframes {
+      let mut summary = summary.borrow_mut();
+      for url in &document_urls {
+        match fetcher.fetch(url) {
+          Ok(_) => summary.fetched_documents += 1,
+          Err(_) => summary.failed_documents += 1,
+        }
+      }
+    }
+
+    if opts.prefetch_css_url_assets {
+      let mut summary = summary.borrow_mut();
+      for url in &css_asset_urls {
+        match fetcher.fetch(url) {
+          Ok(_) => summary.fetched_css_assets += 1,
+          Err(_) => summary.failed_css_assets += 1,
         }
       }
     }
 
     summary.into_inner()
+  }
+
+  fn prefetch_page(
+    entry: &PagesetEntry,
+    fetcher: &dyn ResourceFetcher,
+    media_ctx: &MediaContext,
+    opts: PrefetchOptions,
+  ) -> PageSummary {
+    let cache_path = cache_html_path(&entry.cache_stem);
+    if !cache_path.exists() {
+      return PageSummary {
+        stem: entry.cache_stem.clone(),
+        skipped: true,
+        ..PageSummary::default()
+      };
+    }
+
+    let cached = match read_cached_document(&cache_path) {
+      Ok(doc) => doc,
+      Err(_) => {
+        return PageSummary {
+          stem: entry.cache_stem.clone(),
+          skipped: true,
+          ..PageSummary::default()
+        };
+      }
+    };
+
+    prefetch_assets_for_html(
+      &entry.cache_stem,
+      &cached.document.html,
+      &cached.document.base_url,
+      fetcher,
+      media_ctx,
+      opts,
+    )
+  }
+
+  #[cfg(test)]
+  mod tests {
+    use super::*;
+    use fastrender::resource::{CachingFetcherConfig, DiskCacheConfig, FetchedResource};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
+        panic!("network fetch should not be called for disk cache hits");
+      }
+    }
+
+    #[test]
+    fn prefetch_warms_disk_cache_for_html_images_and_css_url_assets() {
+      let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+      listener.set_nonblocking(true).expect("set_nonblocking");
+      let addr = listener.local_addr().expect("addr");
+
+      const CSS: &str =
+        "@import \"/imported.css\";\nbody { background-image: url(\"/bg.png#hash\"); }\n";
+      const IMPORTED_CSS: &str = "div { background-image: url(/import.png); }\n";
+      const IMG_BYTES: &[u8] = b"img";
+      const BG_BYTES: &[u8] = b"bg";
+      const INLINE_BYTES: &[u8] = b"inline";
+      const IMPORT_BYTES: &[u8] = b"import";
+
+      let done = Arc::new(AtomicBool::new(false));
+      let server_done = Arc::clone(&done);
+      let handle = std::thread::spawn(move || {
+        while !server_done.load(Ordering::SeqCst) {
+          match listener.accept() {
+            Ok((mut stream, _)) => {
+              let mut buf = [0u8; 4096];
+              let n = stream.read(&mut buf).unwrap_or(0);
+              let req = String::from_utf8_lossy(&buf[..n]);
+              let path = req
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("/");
+              let path = path.split('?').next().unwrap_or(path);
+
+              let (status, content_type, body): (&str, &str, &[u8]) = match path {
+                "/style.css" => ("200 OK", "text/css", CSS.as_bytes()),
+                "/imported.css" => ("200 OK", "text/css", IMPORTED_CSS.as_bytes()),
+                "/img.png" => ("200 OK", "image/png", IMG_BYTES),
+                "/bg.png" => ("200 OK", "image/png", BG_BYTES),
+                "/inline.png" => ("200 OK", "image/png", INLINE_BYTES),
+                "/import.png" => ("200 OK", "image/png", IMPORT_BYTES),
+                _ => ("404 Not Found", "text/plain", b"not found"),
+              };
+
+              let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nCache-Control: max-age=86400\r\nConnection: close\r\n\r\n",
+                body.len()
+              );
+              let _ = stream.write_all(response.as_bytes());
+              let _ = stream.write_all(body);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+              std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => break,
+          }
+        }
+      });
+
+      let tmp = tempfile::tempdir().expect("tempdir");
+      let cache_dir = tmp.path().join("cache");
+
+      let base = format!("http://{addr}");
+      let document_url = format!("{base}/index.html");
+      let html = format!(
+        r#"<!doctype html>
+<html>
+  <head>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body style="background-image: url(/inline.png#frag)">
+    <img src="/img.png#fragment">
+  </body>
+</html>"#
+      );
+
+      let html_path = tmp.path().join("cached.html");
+      std::fs::write(&html_path, html).expect("write html");
+      let mut meta_path = html_path.clone();
+      meta_path.set_extension("html.meta");
+      std::fs::write(
+        &meta_path,
+        format!("content-type: text/html\nurl: {document_url}\n"),
+      )
+      .expect("write meta");
+
+      let cached = read_cached_document(&html_path).expect("read cached document");
+
+      let http = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(2));
+      let mut disk_config = DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      };
+      disk_config.namespace = Some(disk_cache_namespace(
+        DEFAULT_USER_AGENT,
+        DEFAULT_ACCEPT_LANGUAGE,
+      ));
+
+      let fetcher = DiskCachingFetcher::with_configs(
+        http,
+        &cache_dir,
+        CachingFetcherConfig {
+          honor_http_cache_freshness: true,
+          ..CachingFetcherConfig::default()
+        },
+        disk_config.clone(),
+      );
+
+      let media_ctx = MediaContext::screen(800.0, 600.0);
+      let opts = PrefetchOptions {
+        prefetch_fonts: false,
+        prefetch_images: true,
+        prefetch_iframes: false,
+        prefetch_css_url_assets: true,
+        max_discovered_assets_per_page: 2000,
+      };
+
+      let summary = prefetch_assets_for_html(
+        "test",
+        &cached.document.html,
+        &cached.document.base_url,
+        &fetcher,
+        &media_ctx,
+        opts,
+      );
+
+      done.store(true, Ordering::SeqCst);
+      handle.join().expect("server thread");
+
+      assert_eq!(summary.fetched_css, 1);
+      assert_eq!(summary.fetched_imports, 1);
+      assert_eq!(summary.discovered_images, 1);
+      assert_eq!(summary.fetched_images, 1);
+      assert_eq!(summary.failed_images, 0);
+      assert_eq!(summary.discovered_css_assets, 3);
+      assert_eq!(summary.fetched_css_assets, 3);
+      assert_eq!(summary.failed_css_assets, 0);
+
+      let entries: Vec<_> = std::fs::read_dir(&cache_dir)
+        .expect("read cache dir")
+        .map(|e| e.expect("dir entry").path())
+        .collect();
+      let bin_count = entries
+        .iter()
+        .filter(|p| p.to_string_lossy().ends_with(".bin"))
+        .count();
+      let meta_count = entries
+        .iter()
+        .filter(|p| p.to_string_lossy().ends_with(".bin.meta"))
+        .count();
+      assert!(
+        bin_count >= 4,
+        "expected at least 4 cached .bin entries, got {bin_count} (entries={entries:?})"
+      );
+      assert!(
+        meta_count >= 4,
+        "expected at least 4 cached .bin.meta entries, got {meta_count} (entries={entries:?})"
+      );
+
+      // Ensure the persisted resources are actually usable from disk without network access.
+      let offline = DiskCachingFetcher::with_configs(
+        PanicFetcher,
+        &cache_dir,
+        CachingFetcherConfig {
+          honor_http_cache_freshness: true,
+          ..CachingFetcherConfig::default()
+        },
+        disk_config,
+      );
+      let res = offline.fetch(&format!("{base}/img.png")).expect("disk hit");
+      assert_eq!(res.bytes, IMG_BYTES);
+    }
   }
 
   fn log_disk_cache_stats(
@@ -663,12 +1073,24 @@ mod disk_cache_main {
       disk_config,
     ));
 
+    let opts = PrefetchOptions {
+      prefetch_fonts: args.prefetch_fonts,
+      prefetch_images: args.prefetch_images,
+      prefetch_iframes: args.prefetch_iframes,
+      prefetch_css_url_assets: args.prefetch_css_url_assets,
+      max_discovered_assets_per_page: args.max_discovered_assets_per_page,
+    };
+
     println!(
-      "Prefetching assets for {} page(s) ({} parallel, {}s timeout, fonts={})...",
+      "Prefetching assets for {} page(s) ({} parallel, {}s timeout, fonts={} images={} iframes={} css_url_assets={} max_assets_per_page={})...",
       selected.len(),
       args.jobs,
       per_request_timeout_label,
-      args.prefetch_fonts
+      args.prefetch_fonts,
+      args.prefetch_images,
+      args.prefetch_iframes,
+      args.prefetch_css_url_assets,
+      args.max_discovered_assets_per_page
     );
     if args.prefetch_images || args.prefetch_iframes {
       println!(
@@ -706,16 +1128,7 @@ mod disk_cache_main {
     let mut results: Vec<PageSummary> = pool.install(|| {
       selected
         .par_iter()
-        .map(|entry| {
-          prefetch_page(
-            entry,
-            fetcher.as_ref(),
-            &media_ctx,
-            args.prefetch_fonts,
-            args.prefetch_images,
-            args.prefetch_iframes,
-          )
-        })
+        .map(|entry| prefetch_page(entry, fetcher.as_ref(), &media_ctx, opts))
         .collect()
     });
 
@@ -735,6 +1148,9 @@ mod disk_cache_main {
     let mut total_documents_discovered = 0usize;
     let mut total_documents_fetched = 0usize;
     let mut total_documents_failed = 0usize;
+    let mut total_css_assets_discovered = 0usize;
+    let mut total_css_assets_fetched = 0usize;
+    let mut total_css_assets_failed = 0usize;
 
     for r in &results {
       if r.skipped {
@@ -755,72 +1171,73 @@ mod disk_cache_main {
       total_documents_discovered += r.discovered_documents;
       total_documents_fetched += r.fetched_documents;
       total_documents_failed += r.failed_documents;
+      total_css_assets_discovered += r.discovered_css_assets;
+      total_css_assets_fetched += r.fetched_css_assets;
+      total_css_assets_failed += r.failed_css_assets;
 
-      if args.prefetch_images || args.prefetch_iframes {
-        println!(
-          "• {} css={} fetched={} failed={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={} images={} img_fetched={} img_failed={} docs={} docs_fetched={} docs_failed={}",
-          r.stem,
-          r.discovered_css,
-          r.fetched_css,
-          r.failed_css,
-          r.fetched_imports,
-          r.failed_imports,
-          r.fetched_fonts,
-          r.failed_fonts,
-          r.discovered_images,
-          r.fetched_images,
-          r.failed_images,
-          r.discovered_documents,
-          r.fetched_documents,
-          r.failed_documents,
-        );
-      } else {
-        println!(
-          "• {} css={} fetched={} failed={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
-          r.stem,
-          r.discovered_css,
-          r.fetched_css,
-          r.failed_css,
-          r.fetched_imports,
-          r.failed_imports,
-          r.fetched_fonts,
-          r.failed_fonts
-        );
+      let mut line = format!(
+        "• {} css={} fetched={} failed={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
+        r.stem,
+        r.discovered_css,
+        r.fetched_css,
+        r.failed_css,
+        r.fetched_imports,
+        r.failed_imports,
+        r.fetched_fonts,
+        r.failed_fonts
+      );
+      if args.prefetch_images {
+        line.push_str(&format!(
+          " images={} img_fetched={} img_failed={}",
+          r.discovered_images, r.fetched_images, r.failed_images
+        ));
       }
+      if args.prefetch_iframes {
+        line.push_str(&format!(
+          " docs={} docs_fetched={} docs_failed={}",
+          r.discovered_documents, r.fetched_documents, r.failed_documents
+        ));
+      }
+      if args.prefetch_css_url_assets {
+        line.push_str(&format!(
+          " css_assets={} css_assets_fetched={} css_assets_failed={}",
+          r.discovered_css_assets, r.fetched_css_assets, r.failed_css_assets
+        ));
+      }
+      println!("{line}");
     }
 
     println!();
-    if args.prefetch_images || args.prefetch_iframes {
-      println!(
-        "Done: css_discovered={} css_fetched={} css_failed={} pages_skipped={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={} images_discovered={} images_fetched={} images_failed={} docs_discovered={} docs_fetched={} docs_failed={}",
-        total_discovered,
-        total_fetched,
-        total_failed,
-        total_skipped,
-        total_imports_fetched,
-        total_imports_failed,
-        total_fonts_fetched,
-        total_fonts_failed,
-        total_images_discovered,
-        total_images_fetched,
-        total_images_failed,
-        total_documents_discovered,
-        total_documents_fetched,
-        total_documents_failed,
-      );
-    } else {
-      println!(
-        "Done: css_discovered={} css_fetched={} css_failed={} pages_skipped={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
-        total_discovered,
-        total_fetched,
-        total_failed,
-        total_skipped,
-        total_imports_fetched,
-        total_imports_failed,
-        total_fonts_fetched,
-        total_fonts_failed
-      );
+    let mut done = format!(
+      "Done: css_discovered={} css_fetched={} css_failed={} pages_skipped={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
+      total_discovered,
+      total_fetched,
+      total_failed,
+      total_skipped,
+      total_imports_fetched,
+      total_imports_failed,
+      total_fonts_fetched,
+      total_fonts_failed
+    );
+    if args.prefetch_images {
+      done.push_str(&format!(
+        " images_discovered={} images_fetched={} images_failed={}",
+        total_images_discovered, total_images_fetched, total_images_failed
+      ));
     }
+    if args.prefetch_iframes {
+      done.push_str(&format!(
+        " docs_discovered={} docs_fetched={} docs_failed={}",
+        total_documents_discovered, total_documents_fetched, total_documents_failed
+      ));
+    }
+    if args.prefetch_css_url_assets {
+      done.push_str(&format!(
+        " css_assets_discovered={} css_assets_fetched={} css_assets_failed={}",
+        total_css_assets_discovered, total_css_assets_fetched, total_css_assets_failed
+      ));
+    }
+    println!("{done}");
     println!();
     log_disk_cache_stats(
       "end",
