@@ -47,6 +47,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub const DEFAULT_LAYOUT_MIN_FANOUT: usize = 8;
 /// Minimum box tree size before auto parallelism engages.
 pub const DEFAULT_LAYOUT_AUTO_MIN_NODES: usize = 1024;
+/// Stack size for Rayon threads used by layout fan-out.
+///
+/// Parallel layout can recurse deeply on complex pages (e.g., fragment tree construction or
+/// formatting-context traversal). Rayon worker threads default to a much smaller stack, which can
+/// overflow and abort the process when fan-out is enabled.
+///
+/// Keep this large enough to satisfy the deep-nesting regression coverage under `--layout-parallel`
+/// (see `fetch_and_render_layout_parallel_stack_size_test`).
 const DEFAULT_LAYOUT_RAYON_STACK_SIZE: usize = 64 * 1024 * 1024;
 /// Default ceiling on rayon worker threads used for auto layout fan-out when the global pool is
 /// very large.
@@ -65,6 +73,7 @@ fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
     ThreadPoolBuilder::new()
       .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
       .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
+      .thread_name(|idx| format!("fastr-layout-{idx}"))
       .build()
       .map(Arc::new)
       .map_err(|err| err.to_string())
@@ -625,6 +634,7 @@ impl LayoutEngine {
           ThreadPoolBuilder::new()
             .num_threads(threads)
             .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
+            .thread_name(|idx| format!("fastr-layout-{idx}"))
             .build()
             .ok()
             .map(Arc::new)
@@ -888,6 +898,7 @@ impl LayoutEngine {
             ThreadPoolBuilder::new()
               .num_threads(threads)
               .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
+              .thread_name(|idx| format!("fastr-layout-{idx}"))
               .build()
               .ok()
           })
