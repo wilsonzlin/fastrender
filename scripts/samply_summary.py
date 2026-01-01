@@ -8,6 +8,11 @@ Example:
   python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz --top 25
   python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz --top 25 \
     --addr2line-binary target/release/pageset_progress
+  python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz --list-threads
+  python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz --thread-index 72 \
+    --function-contains fastrender::layout
+  python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz --all-threads \
+    --max-threads 20 --function-contains fastrender::layout
 """
 
 from __future__ import annotations

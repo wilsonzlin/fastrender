@@ -14,6 +14,9 @@ cargo run --release --bin pageset_progress -- run --timeout 5
   - `scripts/profile_samply.sh <stem>` (writes a `.profile.json.gz` plus a sibling `.pageset_progress` binary snapshot for later symbolication)
   - `scripts/profile_perf.sh <stem>`
   - `scripts/samply_summary.py <profile.json.gz>` (terminal summary)
+    - `--list-threads` + `--thread-index N` when CPU is spread across many threads
+    - `--all-threads --max-threads N` to aggregate a few heavy threads
+    - `--function-contains fastrender::layout` (or similar) to filter the function tables
 
 - **CPU profile (best UX)** with Samply (Firefox Profiler UI):
 
@@ -85,6 +88,24 @@ Open it later (on a machine with a browser):
 
 ```bash
 samply load target/pageset/profiles/example.profile.json.gz
+```
+
+### Terminal-only triage tips (Samply profiles)
+
+`scripts/samply_summary.py` is intentionally “good enough” for quick triage, but a couple flags make it much more
+useful on highly-parallel runs:
+
+```bash
+# Find which threads have the samples.
+python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz --list-threads
+
+# Drill into a specific hot thread (use the index from --list-threads).
+python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz \
+  --thread-index 72 --top 25 --function-contains fastrender::layout
+
+# Or aggregate top functions across several heavy threads (often useful for layout parallelism).
+python3 scripts/samply_summary.py target/pageset/profiles/example.profile.json.gz \
+  --all-threads --max-threads 20 --top 25 --function-contains fastrender::layout
 ```
 
 Samply uses the Firefox Profiler UI. Use it to find:

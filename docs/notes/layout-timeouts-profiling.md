@@ -63,6 +63,9 @@ llvm-addr2line -f -C -i -a -e <profile-stem>.pageset_progress 0xDEADBEEF
 
 - The summary is **per-thread**; on pages where layout parallelism kicks in, CPU can be spread
   across many worker threads.
+- Use `--list-threads` to find hot threads, then `--thread-index N` to drill into one thread at a time.
+  For “CPU spread everywhere” runs, `--all-threads --max-threads N` can be useful when paired with
+  `--function-contains fastrender::...` to cut down noise.
 - The “inclusive” percentages in `scripts/samply_summary.py` are **de-duped per sample stack**
   (each function counted at most once per sample). This avoids the most confusing failure mode
   where recursion causes inclusive totals to exceed 100%, but inlining/dispatch can still make
