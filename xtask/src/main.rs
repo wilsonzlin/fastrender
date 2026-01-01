@@ -562,9 +562,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 
   if disk_cache_enabled
     && prefetch_support.prefetch_images
-    && !prefetch_asset_args.iter().any(|arg| {
-      arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")
-    })
+    && !prefetch_asset_args
+      .iter()
+      .any(|arg| arg == "--prefetch-images" || arg.starts_with("--prefetch-images="))
   {
     prefetch_asset_args.push("--prefetch-images".to_string());
   }
@@ -727,11 +727,15 @@ struct PrefetchAssetsSupport {
   prefetch_images: bool,
   prefetch_iframes: bool,
   prefetch_css_url_assets: bool,
+  max_discovered_assets_per_page: bool,
 }
 
 impl PrefetchAssetsSupport {
   fn any(self) -> bool {
-    self.prefetch_images || self.prefetch_iframes || self.prefetch_css_url_assets
+    self.prefetch_images
+      || self.prefetch_iframes
+      || self.prefetch_css_url_assets
+      || self.max_discovered_assets_per_page
   }
 
   fn detect() -> Self {
@@ -741,6 +745,7 @@ impl PrefetchAssetsSupport {
         prefetch_images: false,
         prefetch_iframes: false,
         prefetch_css_url_assets: false,
+        max_discovered_assets_per_page: false,
       };
     };
 
@@ -748,6 +753,7 @@ impl PrefetchAssetsSupport {
       prefetch_images: contents.contains("prefetch_images"),
       prefetch_iframes: contents.contains("prefetch_iframes"),
       prefetch_css_url_assets: contents.contains("prefetch_css_url_assets"),
+      max_discovered_assets_per_page: contents.contains("max_discovered_assets_per_page"),
     }
   }
 }
@@ -770,6 +776,10 @@ fn extract_prefetch_assets_args(
           || arg.starts_with("--prefetch-documents=")))
       || (support.prefetch_css_url_assets
         && (arg == "--prefetch-css-url-assets" || arg.starts_with("--prefetch-css-url-assets=")));
+    let is_prefetch_arg = is_prefetch_arg
+      || (support.max_discovered_assets_per_page
+        && (arg == "--max-discovered-assets-per-page"
+          || arg.starts_with("--max-discovered-assets-per-page=")));
 
     if is_prefetch_arg {
       prefetch_args.push(arg.clone());

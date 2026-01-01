@@ -18,7 +18,8 @@ set -euo pipefail
 #
 # Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
 # `--prefetch-images` / `--prefetch-css-url-assets` / `--prefetch-iframes` (alias
-# `--prefetch-documents`), these flags are intercepted by the wrapper and forwarded to
+# `--prefetch-documents`) / `--max-discovered-assets-per-page`, these flags are intercepted by the
+# wrapper and forwarded to
 # `prefetch_assets` (not `pageset_progress`) so users can override the wrapper defaults without
 # breaking `pageset_progress` arg parsing.
 
@@ -210,9 +211,11 @@ PAGESET_ARGS=()
 PREFETCH_IMAGES_IN_ARGS=0
 PREFETCH_IFRAMES_IN_ARGS=0
 PREFETCH_CSS_URL_ASSETS_IN_ARGS=0
+MAX_DISCOVERED_ASSETS_IN_ARGS=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=0
+PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=0
 PREFETCH_ASSETS_SOURCE="src/bin/prefetch_assets.rs"
 if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
   if grep -q "prefetch_images" "${PREFETCH_ASSETS_SOURCE}"; then
@@ -223,6 +226,9 @@ if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
   fi
   if grep -q "prefetch_css_url_assets" "${PREFETCH_ASSETS_SOURCE}"; then
     PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=1
+  fi
+  if grep -q "max_discovered_assets_per_page" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=1
   fi
 fi
 
@@ -249,6 +255,21 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
         PREFETCH_IFRAMES_IN_ARGS=1
         PREFETCH_ASSET_ARGS+=("${arg}")
         if [[ ("${arg}" == "--prefetch-iframes" || "${arg}" == "--prefetch-documents") && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --max-discovered-assets-per-page|--max-discovered-assets-per-page=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS}" -eq 1 ]]; then
+        MAX_DISCOVERED_ASSETS_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--max-discovered-assets-per-page" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
           next="${ARGS[$((i + 1))]}"
           if [[ "${next}" != -* ]]; then
             PREFETCH_ASSET_ARGS+=("${next}")
