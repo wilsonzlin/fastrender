@@ -746,6 +746,15 @@ impl GridFormattingContext {
       box_node.formatting_context(),
       Some(FormattingContextType::Grid)
     );
+    // Non-grid descendants are represented as leaf nodes in the Taffy tree. Avoid collecting or
+    // scanning their children here; their full subtree will be laid out later when we re-run the
+    // child formatting context with the definite sizes resolved by Taffy.
+    if !is_grid_container && !is_root {
+      let taffy_style = self.convert_style(&box_node.style, containing_grid, false, false);
+      return taffy
+        .new_leaf_with_context(taffy_style, box_node as *const BoxNode)
+        .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)));
+    }
     let mut include_children = is_root;
 
     // Prefer explicitly provided children (used to pre-filter out-of-flow for the root).
