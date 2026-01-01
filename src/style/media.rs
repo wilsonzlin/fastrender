@@ -1130,22 +1130,37 @@ impl MediaFeature {
     let value = value.trim();
 
     // Parse "16/9" or "16 / 9"
-    let parts: Vec<&str> = value.split('/').map(|s| s.trim()).collect();
-    if parts.len() != 2 {
+    let mut parts = value.split('/');
+    let Some(first) = parts.next() else {
+      return Err(MediaParseError::InvalidValue {
+        feature: name.to_string(),
+        value: value.to_string(),
+      });
+    };
+    let Some(second) = parts.next() else {
+      return Err(MediaParseError::InvalidValue {
+        feature: name.to_string(),
+        value: value.to_string(),
+      });
+    };
+    if parts.next().is_some() {
       return Err(MediaParseError::InvalidValue {
         feature: name.to_string(),
         value: value.to_string(),
       });
     }
 
-    let width = parts[0]
+    let first = first.trim();
+    let second = second.trim();
+
+    let width = first
       .parse::<u32>()
       .map_err(|_| MediaParseError::InvalidValue {
         feature: name.to_string(),
         value: value.to_string(),
       })?;
 
-    let height = parts[1]
+    let height = second
       .parse::<u32>()
       .map_err(|_| MediaParseError::InvalidValue {
         feature: name.to_string(),
@@ -2855,12 +2870,18 @@ impl<'a> MediaQueryParser<'a> {
     self.advance();
     self.skip_whitespace();
 
-    // Look ahead to the closing ')' and attempt level-4 range syntax first.
-    if let Some(close_idx) = self.input[self.pos..].find(')') {
-      let inner = &self.input[self.pos..self.pos + close_idx];
-      if inner.contains('<') || inner.contains('>') || inner.contains('=') {
+    // Look ahead to the closing ')' so we can (1) attempt level-4 range syntax without consuming
+    // input and (2) avoid re-scanning the same slice again when grabbing the value.
+    let feature_end = self.input[self.pos..].find(')').map(|idx| self.pos + idx);
+    if let Some(feature_end) = feature_end {
+      let inner = &self.input[self.pos..feature_end];
+      let has_range_op = inner
+        .as_bytes()
+        .iter()
+        .any(|b| matches!(b, b'<' | b'>' | b'='));
+      if has_range_op {
         if let Some(result) = Self::parse_range_feature_expr(inner.trim()) {
-          self.pos += close_idx;
+          self.pos = feature_end;
           if self.peek() != Some(')') {
             return Err(MediaParseError::ExpectedCloseParen);
           }
@@ -2890,8 +2911,12 @@ impl<'a> MediaQueryParser<'a> {
 
       // Parse value until ')'
       let value_start = self.pos;
-      while self.peek() != Some(')') && !self.is_eof() {
-        self.advance();
+      if let Some(end) = feature_end {
+        self.pos = end;
+      } else {
+        // Malformed input: there is no ')' to terminate this feature. Avoid a linear scan and let
+        // the close-paren check below report the error.
+        self.pos = self.input.len();
       }
       let value = self.input[value_start..self.pos].trim();
       Some(value)
@@ -2914,22 +2939,24 @@ impl<'a> MediaQueryParser<'a> {
 
   fn parse_range_feature_expr(input: &str) -> Option<Result<RangeParseOutput, MediaParseError>> {
     #[derive(Debug)]
-    enum RangeToken {
-      Atom(String),
+    enum RangeToken<'i> {
+      Atom(&'i str),
       Op(ComparisonOp),
     }
 
     let mut tokens = Vec::new();
-    let mut buf = String::new();
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut atom_start: Option<usize> = None;
+    let mut chars = input.char_indices().peekable();
+    while let Some((idx, c)) = chars.next() {
       match c {
         '<' | '>' => {
-          if !buf.trim().is_empty() {
-            tokens.push(RangeToken::Atom(buf.trim().to_string()));
+          if let Some(start) = atom_start.take() {
+            let atom = input[start..idx].trim();
+            if !atom.is_empty() {
+              tokens.push(RangeToken::Atom(atom));
+            }
           }
-          buf.clear();
-          let op = if let Some('=') = chars.peek() {
+          let op = if let Some((_, '=')) = chars.peek() {
             let _ = chars.next();
             if c == '<' {
               ComparisonOp::LessThanEqual
@@ -2944,23 +2971,34 @@ impl<'a> MediaQueryParser<'a> {
           tokens.push(RangeToken::Op(op));
         }
         '=' => {
-          if !buf.trim().is_empty() {
-            tokens.push(RangeToken::Atom(buf.trim().to_string()));
+          if let Some(start) = atom_start.take() {
+            let atom = input[start..idx].trim();
+            if !atom.is_empty() {
+              tokens.push(RangeToken::Atom(atom));
+            }
           }
-          buf.clear();
           tokens.push(RangeToken::Op(ComparisonOp::Equal));
         }
         other if other.is_whitespace() => {
-          if !buf.trim().is_empty() {
-            tokens.push(RangeToken::Atom(buf.trim().to_string()));
-            buf.clear();
+          if let Some(start) = atom_start.take() {
+            let atom = input[start..idx].trim();
+            if !atom.is_empty() {
+              tokens.push(RangeToken::Atom(atom));
+            }
           }
         }
-        _ => buf.push(c),
+        _ => {
+          if atom_start.is_none() {
+            atom_start = Some(idx);
+          }
+        }
       }
     }
-    if !buf.trim().is_empty() {
-      tokens.push(RangeToken::Atom(buf.trim().to_string()));
+    if let Some(start) = atom_start.take() {
+      let atom = input[start..].trim();
+      if !atom.is_empty() {
+        tokens.push(RangeToken::Atom(atom));
+      }
     }
 
     if !tokens.iter().any(|t| matches!(t, RangeToken::Op(_))) {
