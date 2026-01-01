@@ -32,8 +32,8 @@ fn main() -> Result<()> {
     Commands::UpdatePagesetGuardrails(args) => {
       update_pageset_timeouts::run_update_pageset_timeouts(args)
     }
-    Commands::UpdatePagesetTimeoutBudgets(args) => {
-      update_pageset_timeout_budgets::run_update_pageset_timeout_budgets(args)
+    Commands::UpdatePagesetGuardrailsBudgets(args) => {
+      update_pageset_timeout_budgets::run_update_pageset_guardrails_budgets(args)
     }
     Commands::PerfSmoke(args) => run_perf_smoke(args),
   }
@@ -72,8 +72,11 @@ enum Commands {
   /// Update `tests/pages/pageset_guardrails.json` based on `progress/pages/*.json`
   #[command(alias = "update-pageset-timeouts")]
   UpdatePagesetGuardrails(update_pageset_timeouts::UpdatePagesetTimeoutsArgs),
-  /// Update `budget_ms` entries in `tests/pages/pageset_timeouts.json` based on offline `perf_smoke` timings
-  UpdatePagesetTimeoutBudgets(update_pageset_timeout_budgets::UpdatePagesetTimeoutBudgetsArgs),
+  /// Update `budget_ms` entries in `tests/pages/pageset_guardrails.json` based on offline `perf_smoke` timings
+  ///
+  /// Note: the legacy `update-pageset-timeout-budgets` command name is kept as an alias.
+  #[command(alias = "update-pageset-timeout-budgets")]
+  UpdatePagesetGuardrailsBudgets(update_pageset_timeout_budgets::UpdatePagesetGuardrailsBudgetsArgs),
   /// Run the offline perf smoke harness (`perf_smoke` binary) over curated fixtures
   PerfSmoke(PerfSmokeArgs),
 }

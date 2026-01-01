@@ -16,9 +16,11 @@ const PAGESET_GUARDRAILS_MANIFEST_PATH: &str = "tests/pages/pageset_guardrails.j
 const LEGACY_TIMEOUT_MANIFEST_PATH: &str = "tests/pages/pageset_timeouts.json";
 
 #[derive(Args, Debug)]
-pub struct UpdatePagesetTimeoutBudgetsArgs {
-  /// Path to the pageset-timeouts manifest to rewrite
-  #[arg(long, default_value = LEGACY_TIMEOUT_MANIFEST_PATH)]
+pub struct UpdatePagesetGuardrailsBudgetsArgs {
+  /// Path to the pageset guardrails manifest to rewrite
+  ///
+  /// Note: `tests/pages/pageset_timeouts.json` is kept as a backwards-compatible mirror.
+  #[arg(long, default_value = PAGESET_GUARDRAILS_MANIFEST_PATH)]
   pub manifest: PathBuf,
 
   /// Multiply observed `total_ms` by this factor when setting budgets
@@ -118,7 +120,7 @@ struct BudgetUpdateSummary {
   missing: Vec<String>,
 }
 
-pub fn run_update_pageset_timeout_budgets(args: UpdatePagesetTimeoutBudgetsArgs) -> Result<()> {
+pub fn run_update_pageset_guardrails_budgets(args: UpdatePagesetGuardrailsBudgetsArgs) -> Result<()> {
   if !args.dry_run && !args.write {
     bail!("pass exactly one of --dry-run or --write");
   }
@@ -181,7 +183,7 @@ pub fn run_update_pageset_timeout_budgets(args: UpdatePagesetTimeoutBudgetsArgs)
   } else {
     fs::write(&args.manifest, format!("{json}\n")).with_context(|| {
       format!(
-        "failed to write updated pageset timeout manifest {}",
+        "failed to write updated pageset guardrails manifest {}",
         args.manifest.display()
       )
     })?;
@@ -189,7 +191,7 @@ pub fn run_update_pageset_timeout_budgets(args: UpdatePagesetTimeoutBudgetsArgs)
   }
 
   eprintln!(
-    "✓ Updated pageset timeout budgets (tightened {}, loosened {}, unchanged {}, capped {})",
+    "✓ Updated pageset guardrails budgets (tightened {}, loosened {}, unchanged {}, capped {})",
     summary.tightened, summary.loosened, summary.unchanged, summary.capped
   );
   if !summary.missing.is_empty() {
@@ -205,12 +207,12 @@ pub fn run_update_pageset_timeout_budgets(args: UpdatePagesetTimeoutBudgetsArgs)
 
 fn load_manifest(path: &Path) -> Result<PagesetTimeoutManifest> {
   let raw = fs::read_to_string(path)
-    .with_context(|| format!("failed to read pageset timeout manifest {}", path.display()))?;
+    .with_context(|| format!("failed to read pageset guardrails manifest {}", path.display()))?;
   serde_json::from_str(&raw).with_context(|| format!("invalid JSON in {}", path.display()))
 }
 
 fn run_perf_smoke(
-  args: &UpdatePagesetTimeoutBudgetsArgs,
+  args: &UpdatePagesetGuardrailsBudgetsArgs,
   _manifest: &PagesetTimeoutManifest,
   output: &Path,
   _tempdir: &TempDir,
@@ -225,7 +227,7 @@ fn run_perf_smoke(
     .arg("run")
     .arg("--release")
     .args(["--bin", "perf_smoke", "--"])
-    .args(["--suite", "pageset-timeouts"])
+    .args(["--suite", "pageset-guardrails"])
     .arg("--output")
     .arg(output);
 
