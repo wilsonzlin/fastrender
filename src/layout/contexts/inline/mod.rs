@@ -9990,6 +9990,7 @@ mod tests {
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
   use crate::text::font_loader::FontContext;
+  use crate::text::line_break::BreakOpportunity;
   use crate::text::line_break::BreakType;
   use crate::tree::box_tree::MarkerContent;
   use crate::tree::box_tree::ReplacedBox;
