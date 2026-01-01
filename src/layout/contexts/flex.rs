@@ -2637,8 +2637,8 @@ fn measure_cache_key(
   } else {
     match avail.width {
       AvailableSpace::Definite(w) => Some(quantize(w)),
-      AvailableSpace::MinContent => Some(quantize(-viewport.width.max(0.0) - 1.0)),
-      AvailableSpace::MaxContent => Some(quantize(-viewport.width.max(0.0) - 2.0)),
+      AvailableSpace::MinContent => Some(-viewport.width.max(0.0) - 1.0),
+      AvailableSpace::MaxContent => Some(-viewport.width.max(0.0) - 2.0),
     }
   };
   let ignore_height = drop_available_height || width_is_intrinsic;
@@ -2651,8 +2651,8 @@ fn measure_cache_key(
   } else {
     match avail.height {
       AvailableSpace::Definite(h) => Some(quantize(h)),
-      AvailableSpace::MinContent => Some(quantize(-viewport.height.max(0.0) - 1.0)),
-      AvailableSpace::MaxContent => Some(quantize(-viewport.height.max(0.0) - 2.0)),
+      AvailableSpace::MinContent => Some(-viewport.height.max(0.0) - 1.0),
+      AvailableSpace::MaxContent => Some(-viewport.height.max(0.0) - 2.0),
     }
   };
 
@@ -2795,8 +2795,8 @@ fn layout_cache_key(
   let map_space = |space: CrateAvailableSpace, vp: f32, neg_offset: f32| -> Option<u32> {
     match space {
       CrateAvailableSpace::Definite(v) => Some(quantize(v).to_bits()),
-      CrateAvailableSpace::MinContent => Some(quantize(-vp - neg_offset).to_bits()),
-      CrateAvailableSpace::MaxContent => Some(quantize(-vp - (neg_offset + 1.0)).to_bits()),
+      CrateAvailableSpace::MinContent => Some((-vp - neg_offset).to_bits()),
+      CrateAvailableSpace::MaxContent => Some((-vp - (neg_offset + 1.0)).to_bits()),
       CrateAvailableSpace::Indefinite => None,
     }
   };
@@ -6246,6 +6246,92 @@ mod tests {
       false,
     );
     assert_eq!(key_a.0, key_c.0);
+  }
+
+  #[test]
+  fn measure_cache_key_distinguishes_min_and_max_content() {
+    use crate::geometry::Size as GeoSize;
+    use taffy::style::AvailableSpace;
+
+    let viewport = GeoSize::new(1200.0, 800.0);
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+
+    let min_key = super::measure_cache_key(
+      &known,
+      &taffy::geometry::Size {
+        width: AvailableSpace::MinContent,
+        height: AvailableSpace::Definite(200.0),
+      },
+      viewport,
+      false,
+    );
+    let max_key = super::measure_cache_key(
+      &known,
+      &taffy::geometry::Size {
+        width: AvailableSpace::MaxContent,
+        height: AvailableSpace::Definite(200.0),
+      },
+      viewport,
+      false,
+    );
+    assert_ne!(
+      min_key.0, max_key.0,
+      "min-content and max-content width probes must not share a cache key"
+    );
+
+    // Height probes should also distinguish intrinsic variants when height is not ignored.
+    let known_width = taffy::geometry::Size {
+      width: Some(100.0),
+      height: None,
+    };
+    let min_h_key = super::measure_cache_key(
+      &known_width,
+      &taffy::geometry::Size {
+        width: AvailableSpace::Definite(100.0),
+        height: AvailableSpace::MinContent,
+      },
+      viewport,
+      false,
+    );
+    let max_h_key = super::measure_cache_key(
+      &known_width,
+      &taffy::geometry::Size {
+        width: AvailableSpace::Definite(100.0),
+        height: AvailableSpace::MaxContent,
+      },
+      viewport,
+      false,
+    );
+    assert_ne!(
+      min_h_key.1, max_h_key.1,
+      "min-content and max-content height probes must not share a cache key"
+    );
+  }
+
+  #[test]
+  fn layout_cache_key_distinguishes_min_and_max_content() {
+    use crate::geometry::Size as GeoSize;
+
+    let viewport = GeoSize::new(1200.0, 800.0);
+    let min_constraints = LayoutConstraints::new(
+      CrateAvailableSpace::MinContent,
+      CrateAvailableSpace::Indefinite,
+    );
+    let max_constraints = LayoutConstraints::new(
+      CrateAvailableSpace::MaxContent,
+      CrateAvailableSpace::Indefinite,
+    );
+
+    let min_key = super::layout_cache_key(&min_constraints, viewport).expect("layout cache key");
+    let max_key = super::layout_cache_key(&max_constraints, viewport).expect("layout cache key");
+
+    assert_ne!(
+      min_key.0, max_key.0,
+      "layout cache keys must distinguish min/max-content constraints"
+    );
   }
 
   #[test]
