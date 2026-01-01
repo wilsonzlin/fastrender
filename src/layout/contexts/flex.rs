@@ -5290,7 +5290,6 @@ mod tests {
   #[test]
   fn flex_tree_build_times_out_via_deadline_checks() {
     use crate::render_control::{DeadlineGuard, RenderDeadline};
-    use std::collections::HashMap;
     use std::time::Duration;
 
     let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
@@ -5310,7 +5309,7 @@ mod tests {
 
     let fc = FlexFormattingContext::new();
     let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut node_map: HashMap<*const BoxNode, NodeId> = HashMap::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
     let root_children: Vec<&BoxNode> = container.children.iter().collect();
     let result = fc.build_taffy_tree_children(
       &mut taffy_tree,
@@ -5485,7 +5484,6 @@ mod tests {
   #[test]
   fn taffy_template_cache_reuses_flex_templates_with_equal_styles() {
     use crate::layout::taffy_integration::{taffy_flex_style_fingerprint, TaffyNodeCacheKey};
-    use std::collections::HashMap;
     use taffy::TaffyTree;
 
     let mut container_style = ComputedStyle::default();
@@ -5549,7 +5547,7 @@ mod tests {
     );
 
     let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut node_map: HashMap<*const BoxNode, taffy::prelude::NodeId> = HashMap::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
     let constraints = LayoutConstraints::definite(100.0, 100.0);
     fc.build_taffy_tree_children(
       &mut taffy_tree,
@@ -5583,7 +5581,7 @@ mod tests {
     );
 
     let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut node_map: HashMap<*const BoxNode, taffy::prelude::NodeId> = HashMap::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
     fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container_b,

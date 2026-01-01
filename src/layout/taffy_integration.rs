@@ -898,7 +898,10 @@ fn adaptive_taffy_cache_limit(box_tree_nodes: usize) -> usize {
   //
   // Empirically, pages like cnet.com can build ~30k Taffy nodes worth of templates; the default
   // 512-entry cache can become capacity-limited even with good cache keying.
-  let scaled = box_tree_nodes / 8;
+  // Using the raw box-tree node count is a conservative upper bound that keeps the cache large
+  // enough for pages where a large fraction of the tree participates in flex/grid template
+  // conversion (or where repeated layout passes would otherwise churn).
+  let scaled = box_tree_nodes;
   scaled
     .max(DEFAULT_TAFFY_CACHE_LIMIT)
     .min(MAX_TAFFY_CACHE_LIMIT)
