@@ -738,6 +738,17 @@ impl FormattingContext for FlexFormattingContext {
                                 }
                             }
                         }
+
+                        // For auto flex-basis + auto width items, prefer intrinsic max-content sizing
+                        // instead of forcing the container's definite width into the measurement
+                        // constraints. This matches CSS Flexbox §4.5 (auto main size uses max-content).
+                        if known_dimensions.width.is_none()
+                            && matches!(avail.width, AvailableSpace::Definite(_))
+                            && matches!(box_node.style.flex_basis, crate::style::types::FlexBasis::Auto)
+                            && box_node.style.width.is_none()
+                        {
+                            avail.width = AvailableSpace::MaxContent;
+                        }
                     }
                     let w_state = if known_dimensions.width.is_some() {
                         DimState::Known
@@ -854,12 +865,13 @@ impl FormattingContext for FlexFormattingContext {
                                             avail.width,
                                             avail.height,
                                             key.0,
-                                        key.1,
-                                        threshold
-                                    );
+                                            key.1,
+                                            threshold
+                                        );
+                                    }
                                 }
+                            }
                         }
-                    }
                         let mut logged_first = false;
                         if log_first_n > 0 {
                             let counter = LOG_FIRST_N_COUNTER
@@ -926,7 +938,6 @@ impl FormattingContext for FlexFormattingContext {
                                 }
                             }
                         }
-                    }
                     }
                     if let (Some(w), Some(h)) = (known_dimensions.width, known_dimensions.height) {
                         let size = taffy::geometry::Size { width: w, height: h };
@@ -1149,17 +1160,6 @@ impl FormattingContext for FlexFormattingContext {
                         };
                     }
                     let fc_type = measure_box.formatting_context().unwrap_or(FormattingContextType::Block);
-                    // For auto flex-basis + auto width items, prefer intrinsic max-content sizing
-                    // instead of forcing the container's definite width into the measurement
-                    // constraints. This matches CSS Flexbox §4.5 (auto main size uses max-content).
-                    let mut avail = avail;
-                    if known_dimensions.width.is_none()
-                        && matches!(avail.width, AvailableSpace::Definite(_))
-                        && matches!(measure_box.style.flex_basis, crate::style::types::FlexBasis::Auto)
-                        && measure_box.style.width.is_none()
-                    {
-                        avail.width = AvailableSpace::MaxContent;
-                    }
                     if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
                         let seq = LOG_MEASURE_COUNTS
                             .get_or_init(|| Mutex::new(HashMap::new()))
