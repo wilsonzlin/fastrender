@@ -55,8 +55,9 @@ use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{
   record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
   record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
-  record_taffy_style_cache_miss, taffy_flex_style_fingerprint, CachedTaffyTemplate, SendSyncStyle,
-  TaffyAdapterKind, TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT, TAFFY_ABORT_CHECK_STRIDE,
+  record_taffy_style_cache_miss, taffy_flex_style_fingerprint, taffy_template_cache_limit,
+  CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey,
+  TAFFY_ABORT_CHECK_STRIDE,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -334,12 +335,12 @@ impl FlexFormattingContext {
     measured_fragments: Arc<ShardedFlexCache>,
     layout_fragments: Arc<ShardedFlexCache>,
   ) -> Self {
-    let flex_taffy_cache = Arc::new(crate::layout::taffy_integration::TaffyNodeCache::new(
-      DEFAULT_TAFFY_CACHE_LIMIT,
-    ));
-    let grid_taffy_cache = Arc::new(crate::layout::taffy_integration::TaffyNodeCache::new(
-      DEFAULT_TAFFY_CACHE_LIMIT,
-    ));
+    let flex_taffy_cache = Arc::new(TaffyNodeCache::new(taffy_template_cache_limit(
+      TaffyAdapterKind::Flex,
+    )));
+    let grid_taffy_cache = Arc::new(TaffyNodeCache::new(taffy_template_cache_limit(
+      TaffyAdapterKind::Grid,
+    )));
     let factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
       font_context.clone(),
       viewport_size,

@@ -49,7 +49,7 @@ use crate::layout::taffy_integration::{
   record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
   record_taffy_style_cache_miss, taffy_grid_container_style_fingerprint,
   taffy_grid_item_style_fingerprint, CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind,
-  TaffyNodeCache, TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT, TAFFY_ABORT_CHECK_STRIDE,
+  TaffyNodeCache, TaffyNodeCacheKey, TAFFY_ABORT_CHECK_STRIDE, taffy_template_cache_limit,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -402,7 +402,9 @@ impl GridFormattingContext {
       viewport_size,
       nearest_positioned_cb,
       font_context,
-      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
+      std::sync::Arc::new(TaffyNodeCache::new(taffy_template_cache_limit(
+        TaffyAdapterKind::Grid,
+      ))),
     )
   }
 
@@ -418,7 +420,9 @@ impl GridFormattingContext {
       nearest_positioned_cb,
       std::sync::Arc::new(ShardedFlexCache::new_measure()),
       std::sync::Arc::new(ShardedFlexCache::new_layout()),
-      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
+      std::sync::Arc::new(TaffyNodeCache::new(taffy_template_cache_limit(
+        TaffyAdapterKind::Flex,
+      ))),
       taffy_cache.clone(),
     );
     Self::with_factory(factory)

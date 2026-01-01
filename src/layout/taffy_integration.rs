@@ -23,8 +23,8 @@ use crate::style::ComputedStyle;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use taffy::style::Style as TaffyStyle;
 
@@ -51,6 +51,10 @@ pub struct TaffyUsageCounters {
   pub grid_style_cache_hits: u64,
   /// Grid style conversions executed because of cache misses.
   pub grid_style_cache_misses: u64,
+  /// Flex Taffy template entries evicted due to cache capacity pressure.
+  pub flex_template_evictions: u64,
+  /// Grid Taffy template entries evicted due to cache capacity pressure.
+  pub grid_template_evictions: u64,
 }
 
 /// Which adapter recorded a Taffy layout pass.
@@ -179,6 +183,8 @@ struct TaffyUsageAtomicCounters {
   flex_style_cache_misses: AtomicU64,
   grid_style_cache_hits: AtomicU64,
   grid_style_cache_misses: AtomicU64,
+  flex_template_evictions: AtomicU64,
+  grid_template_evictions: AtomicU64,
 }
 
 impl TaffyUsageAtomicCounters {
@@ -194,6 +200,8 @@ impl TaffyUsageAtomicCounters {
       flex_style_cache_misses: AtomicU64::new(0),
       grid_style_cache_hits: AtomicU64::new(0),
       grid_style_cache_misses: AtomicU64::new(0),
+      flex_template_evictions: AtomicU64::new(0),
+      grid_template_evictions: AtomicU64::new(0),
     }
   }
 
@@ -208,6 +216,8 @@ impl TaffyUsageAtomicCounters {
     self.flex_style_cache_misses.store(0, Ordering::Relaxed);
     self.grid_style_cache_hits.store(0, Ordering::Relaxed);
     self.grid_style_cache_misses.store(0, Ordering::Relaxed);
+    self.flex_template_evictions.store(0, Ordering::Relaxed);
+    self.grid_template_evictions.store(0, Ordering::Relaxed);
   }
 
   fn snapshot(&self) -> TaffyUsageCounters {
@@ -222,6 +232,8 @@ impl TaffyUsageAtomicCounters {
       flex_style_cache_misses: self.flex_style_cache_misses.load(Ordering::Relaxed),
       grid_style_cache_hits: self.grid_style_cache_hits.load(Ordering::Relaxed),
       grid_style_cache_misses: self.grid_style_cache_misses.load(Ordering::Relaxed),
+      flex_template_evictions: self.flex_template_evictions.load(Ordering::Relaxed),
+      grid_template_evictions: self.grid_template_evictions.load(Ordering::Relaxed),
     }
   }
 }
@@ -339,6 +351,25 @@ pub(crate) fn record_taffy_style_cache_miss(kind: TaffyAdapterKind, count: u64) 
     TaffyAdapterKind::Grid => {
       TAFFY_COUNTERS
         .grid_style_cache_misses
+        .fetch_add(count, Ordering::Relaxed);
+    }
+  }
+}
+
+#[inline]
+pub(crate) fn record_taffy_template_eviction(kind: TaffyAdapterKind, count: u64) {
+  if !taffy_counters_enabled() || count == 0 {
+    return;
+  }
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_COUNTERS
+        .flex_template_evictions
+        .fetch_add(count, Ordering::Relaxed);
+    }
+    TaffyAdapterKind::Grid => {
+      TAFFY_COUNTERS
+        .grid_template_evictions
         .fetch_add(count, Ordering::Relaxed);
     }
   }
@@ -779,14 +810,14 @@ struct TaffyNodeCacheInner {
 }
 
 struct TaffyNodeCacheShard {
-  capacity: usize,
+  capacity: AtomicUsize,
   inner: Mutex<TaffyNodeCacheInner>,
 }
 
 impl TaffyNodeCacheShard {
   fn new(capacity: usize) -> Self {
     Self {
-      capacity: capacity.max(1),
+      capacity: AtomicUsize::new(capacity.max(1)),
       inner: Mutex::new(TaffyNodeCacheInner::default()),
     }
   }
@@ -814,6 +845,75 @@ pub(crate) struct TaffyNodeCache {
 }
 
 pub(crate) const DEFAULT_TAFFY_CACHE_LIMIT: usize = 512;
+const MIN_TAFFY_CACHE_LIMIT: usize = 1;
+const MAX_TAFFY_CACHE_LIMIT: usize = 262_144;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TaffyTemplateCacheLimitOverrides {
+  global: Option<usize>,
+  flex: Option<usize>,
+  grid: Option<usize>,
+}
+
+impl TaffyTemplateCacheLimitOverrides {
+  fn from_env() -> Self {
+    Self {
+      global: parse_taffy_cache_limit_env("FASTR_TAFFY_CACHE_LIMIT"),
+      flex: parse_taffy_cache_limit_env("FASTR_TAFFY_FLEX_CACHE_LIMIT"),
+      grid: parse_taffy_cache_limit_env("FASTR_TAFFY_GRID_CACHE_LIMIT"),
+    }
+  }
+
+  fn resolve(&self, adapter: TaffyAdapterKind) -> Option<usize> {
+    match adapter {
+      TaffyAdapterKind::Flex => self.flex.or(self.global),
+      TaffyAdapterKind::Grid => self.grid.or(self.global),
+    }
+  }
+}
+
+fn parse_taffy_cache_limit_env(var: &str) -> Option<usize> {
+  std::env::var(var)
+    .ok()
+    .and_then(|raw| raw.trim().parse::<usize>().ok())
+    .map(|value| value.clamp(MIN_TAFFY_CACHE_LIMIT, MAX_TAFFY_CACHE_LIMIT))
+}
+
+fn taffy_cache_limit_overrides() -> &'static TaffyTemplateCacheLimitOverrides {
+  static LIMITS: OnceLock<TaffyTemplateCacheLimitOverrides> = OnceLock::new();
+  LIMITS.get_or_init(TaffyTemplateCacheLimitOverrides::from_env)
+}
+
+fn adaptive_taffy_cache_limit(box_tree_nodes: usize) -> usize {
+  // Heuristic: large pages tend to create many flex/grid containers and the corresponding
+  // style-to-Taffy conversion is expensive. Keeping the template cache large enough avoids churn
+  // from repeatedly rebuilding identical templates after LRU eviction.
+  //
+  // We scale the cache with the overall box-tree size (which correlates with template count on
+  // real pages) but clamp to a hard ceiling to keep memory usage bounded.
+  //
+  // Empirically, pages like cnet.com can build ~30k Taffy nodes worth of templates; the default
+  // 512-entry cache can become capacity-limited even with good cache keying.
+  let scaled = box_tree_nodes / 8;
+  scaled
+    .max(DEFAULT_TAFFY_CACHE_LIMIT)
+    .min(MAX_TAFFY_CACHE_LIMIT)
+}
+
+pub(crate) fn taffy_template_cache_limit(adapter: TaffyAdapterKind) -> usize {
+  taffy_cache_limit_overrides()
+    .resolve(adapter)
+    .unwrap_or(DEFAULT_TAFFY_CACHE_LIMIT)
+}
+
+pub(crate) fn taffy_template_cache_limit_for_box_tree(
+  adapter: TaffyAdapterKind,
+  box_tree_nodes: usize,
+) -> usize {
+  taffy_cache_limit_overrides()
+    .resolve(adapter)
+    .unwrap_or_else(|| adaptive_taffy_cache_limit(box_tree_nodes))
+}
 
 impl TaffyNodeCache {
   pub(crate) fn new(capacity: usize) -> Self {
@@ -843,6 +943,28 @@ impl TaffyNodeCache {
     Self {
       shards: shards.into_boxed_slice(),
       shard_mask: shard_count - 1,
+    }
+  }
+
+  pub(crate) fn capacity(&self) -> usize {
+    self
+      .shards
+      .iter()
+      .map(|shard| shard.capacity.load(Ordering::Relaxed))
+      .sum()
+  }
+
+  pub(crate) fn grow_to(&self, capacity: usize) {
+    let shard_count = self.shards.len().max(1);
+    let capacity = capacity.max(shard_count);
+    let per_shard = capacity / shard_count;
+    let remainder = capacity % shard_count;
+    for (idx, shard) in self.shards.iter().enumerate() {
+      let cap = per_shard + usize::from(idx < remainder);
+      // Multiple layout runs may race to tune the cache capacity (e.g. concurrent renders). Ensure
+      // the capacity monotonically increases so smaller callers cannot shrink the cache after a
+      // larger page has requested more room.
+      shard.capacity.fetch_max(cap.max(1), Ordering::Relaxed);
     }
   }
 
@@ -888,11 +1010,20 @@ impl TaffyNodeCache {
     }
     guard.order.push_back(key);
     guard.templates.insert(key, template);
-    while guard.order.len() > shard.capacity {
+    let shard_capacity = shard.capacity.load(Ordering::Relaxed);
+    let mut flex_evicted = 0u64;
+    let mut grid_evicted = 0u64;
+    while guard.order.len() > shard_capacity {
       if let Some(evicted) = guard.order.pop_front() {
         guard.templates.remove(&evicted);
+        match evicted.adapter {
+          TaffyAdapterKind::Flex => flex_evicted += 1,
+          TaffyAdapterKind::Grid => grid_evicted += 1,
+        }
       }
     }
+    record_taffy_template_eviction(TaffyAdapterKind::Flex, flex_evicted);
+    record_taffy_template_eviction(TaffyAdapterKind::Grid, grid_evicted);
   }
 
   #[cfg(test)]
@@ -930,7 +1061,11 @@ mod tests {
     assert!(cache.shards.len() <= capacity);
     assert_eq!(cache.shard_mask + 1, cache.shards.len());
 
-    let total_capacity: usize = cache.shards.iter().map(|shard| shard.capacity).sum();
+    let total_capacity: usize = cache
+      .shards
+      .iter()
+      .map(|shard| shard.capacity.load(Ordering::Relaxed))
+      .sum();
     assert_eq!(total_capacity, capacity);
   }
 

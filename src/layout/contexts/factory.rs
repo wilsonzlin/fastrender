@@ -30,7 +30,10 @@ use crate::layout::engine::LayoutParallelism;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::table::TableFormattingContext;
-use crate::layout::taffy_integration::{TaffyNodeCache, DEFAULT_TAFFY_CACHE_LIMIT};
+use crate::layout::taffy_integration::{
+  taffy_template_cache_limit, taffy_template_cache_limit_for_box_tree, TaffyAdapterKind,
+  TaffyNodeCache,
+};
 use crate::style::display::FormattingContextType;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapingPipeline;
@@ -197,14 +200,16 @@ impl FormattingContextFactory {
   ) -> Self {
     #[cfg(any(test, debug_assertions))]
     FACTORY_WITH_FONT_CONTEXT_VIEWPORT_AND_CB_CALLS.fetch_add(1, Ordering::Relaxed);
+    let flex_cache_limit = taffy_template_cache_limit(TaffyAdapterKind::Flex);
+    let grid_cache_limit = taffy_template_cache_limit(TaffyAdapterKind::Grid);
     Self::with_font_context_viewport_cb_and_cache(
       font_context,
       viewport_size,
       nearest_positioned_cb,
       std::sync::Arc::new(ShardedFlexCache::new_measure()),
       std::sync::Arc::new(ShardedFlexCache::new_layout()),
-      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
-      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
+      std::sync::Arc::new(TaffyNodeCache::new(flex_cache_limit)),
+      std::sync::Arc::new(TaffyNodeCache::new(grid_cache_limit)),
     )
   }
 
@@ -265,6 +270,15 @@ impl FormattingContextFactory {
 
   pub(crate) fn grid_taffy_cache(&self) -> std::sync::Arc<TaffyNodeCache> {
     self.grid_taffy_cache.clone()
+  }
+
+  pub(crate) fn tune_taffy_template_cache_for_box_tree(&self, box_tree_nodes: usize) {
+    let flex_limit =
+      taffy_template_cache_limit_for_box_tree(TaffyAdapterKind::Flex, box_tree_nodes);
+    self.flex_taffy_cache.grow_to(flex_limit);
+    let grid_limit =
+      taffy_template_cache_limit_for_box_tree(TaffyAdapterKind::Grid, box_tree_nodes);
+    self.grid_taffy_cache.grow_to(grid_limit);
   }
 
   pub(crate) fn shaping_cache_size(&self) -> usize {

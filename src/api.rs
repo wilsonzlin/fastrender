@@ -1789,6 +1789,8 @@ pub struct LayoutDiagnostics {
   pub taffy_nodes_reused: Option<usize>,
   pub taffy_style_cache_hits: Option<usize>,
   pub taffy_style_cache_misses: Option<usize>,
+  pub taffy_flex_template_evictions: Option<usize>,
+  pub taffy_grid_template_evictions: Option<usize>,
   /// Accumulated time spent inside Taffy's flex layout computations during this render.
   ///
   /// This is a sum of per-call wall times across the entire render (including relayout passes such
@@ -4056,6 +4058,10 @@ impl FastRender {
           Some((taffy.flex_style_cache_hits + taffy.grid_style_cache_hits) as usize);
         rec.stats.layout.taffy_style_cache_misses =
           Some((taffy.flex_style_cache_misses + taffy.grid_style_cache_misses) as usize);
+        rec.stats.layout.taffy_flex_template_evictions =
+          Some(taffy.flex_template_evictions as usize);
+        rec.stats.layout.taffy_grid_template_evictions =
+          Some(taffy.grid_template_evictions as usize);
         let taffy_perf = crate::layout::taffy_integration::taffy_perf_counters();
         if taffy_perf.flex_compute_ns > 0 || taffy_perf.flex_measure_calls > 0 {
           rec.stats.layout.taffy_flex_compute_cpu_ms =

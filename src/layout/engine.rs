@@ -834,6 +834,7 @@ impl LayoutEngine {
     let workload = layout_parallelism_workload(box_tree, self.config.parallelism.min_fanout);
     let parallelism = self.config.parallelism.resolve_for_workload(workload);
     let factory = self.factory.clone().with_parallelism(parallelism);
+    factory.tune_taffy_template_cache_for_box_tree(workload.nodes);
     let parallel_pool = if parallelism.is_active() {
       if let Some(pool) = &self.parallel_pool {
         Some(pool.clone())
