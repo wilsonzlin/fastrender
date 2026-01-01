@@ -575,6 +575,7 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
           return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
         }
         Err(super::ContentDecodeError::DecompressionFailed { .. }) if accept_encoding.is_none() => {
+          drop(jar_guard);
           return fetch_http_with_accept_inner(
             fetcher,
             &current,
