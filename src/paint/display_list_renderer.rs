@@ -1609,7 +1609,12 @@ fn apply_drop_shadow(
   };
   check_active(RenderStage::Paint)?;
   let blur_pad = (blur_radius.abs() * 3.0).ceil() as u32;
-  let spread_pad = spread.max(0.0).ceil() as u32;
+  // Negative spread is an erosion pass. Even though it shrinks the shadow, we still need a
+  // transparent margin so edge pixels can observe transparent neighbors; otherwise a tight
+  // alpha-bounds crop would clamp-to-edge and prevent the erosion from taking effect.
+  //
+  // Positive spread already needs padding to avoid clipping the dilation.
+  let spread_pad = spread.abs().ceil() as u32;
   let pad = blur_pad + spread_pad;
 
   let mut shadow = match new_pixmap(bounds_w + pad * 2, bounds_h + pad * 2) {
