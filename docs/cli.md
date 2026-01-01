@@ -56,7 +56,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 
 ## `prefetch_assets`
 
-- Purpose: warm the subresource cache (`fetches/assets/`) by prefetching linked stylesheets and their `@import` chains (plus referenced fonts) for the cached pages under `fetches/html/`. This makes subsequent pageset renders more repeatable and reduces time spent fetching during `pageset_progress`.
+- Purpose: warm the subresource cache (`fetches/assets/`) by prefetching linked stylesheets and their `@import` chains (plus referenced fonts) for the cached pages under `fetches/html/`. Optional flags can also prefetch HTML subresources (images/icons/video posters and iframe/object/embed documents). This makes subsequent pageset renders more repeatable and reduces time spent fetching during `pageset_progress`.
 - Entry: `src/bin/prefetch_assets.rs`
 - Run: `cargo run --release --bin prefetch_assets -- --help`
 - Most useful when built with `--features disk_cache` (so cache entries persist across processes).

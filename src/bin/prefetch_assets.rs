@@ -1,4 +1,4 @@
-//! Prefetch external CSS (and font subresources) into the disk-backed cache.
+//! Prefetch external CSS (and optional HTML subresources) into the disk-backed cache.
 //!
 //! This is a best-effort helper intended for the pageset workflow:
 //! `fetch_pages` caches HTML, then this tool warms `fetches/assets/` so the
@@ -27,6 +27,7 @@ mod disk_cache_main {
   use fastrender::css::types::{FontFaceSource, StyleSheet};
   use fastrender::debug::runtime;
   use fastrender::dom::parse_html;
+  use fastrender::html::asset_discovery::discover_html_asset_urls;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
     CachingFetcherConfig, DiskCachingFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
@@ -83,6 +84,29 @@ mod disk_cache_main {
     )]
     prefetch_fonts: bool,
 
+    /// Prefetch image-like URLs referenced directly from HTML (true/false)
+    #[arg(
+      long,
+      default_value_t = false,
+      action = ArgAction::Set,
+      num_args = 0..=1,
+      default_missing_value = "true"
+    )]
+    prefetch_images: bool,
+
+    /// Prefetch iframe/object/embed documents referenced directly from HTML (true/false)
+    ///
+    /// This can explode on pages that embed many third-party iframes, so it defaults to off.
+    #[arg(
+      long,
+      alias = "prefetch-documents",
+      default_value_t = false,
+      action = ArgAction::Set,
+      num_args = 0..=1,
+      default_missing_value = "true"
+    )]
+    prefetch_iframes: bool,
+
     /// Override disk cache directory (defaults to fetches/assets)
     #[arg(long, default_value = DEFAULT_ASSET_DIR)]
     cache_dir: PathBuf,
@@ -106,6 +130,12 @@ mod disk_cache_main {
     failed_imports: usize,
     fetched_fonts: usize,
     failed_fonts: usize,
+    discovered_images: usize,
+    fetched_images: usize,
+    failed_images: usize,
+    discovered_documents: usize,
+    fetched_documents: usize,
+    failed_documents: usize,
     skipped: bool,
   }
 
@@ -337,6 +367,8 @@ mod disk_cache_main {
     fetcher: &dyn ResourceFetcher,
     media_ctx: &MediaContext,
     prefetch_fonts: bool,
+    prefetch_images: bool,
+    prefetch_iframes: bool,
   ) -> PageSummary {
     let summary = RefCell::new(PageSummary {
       stem: entry.cache_stem.clone(),
@@ -494,6 +526,40 @@ mod disk_cache_main {
       }
     }
 
+    if prefetch_images || prefetch_iframes {
+      let html_assets = discover_html_asset_urls(&html, &base_url);
+      let mut image_urls = html_assets.images;
+      let mut document_urls = html_assets.documents;
+
+      if prefetch_images {
+        summary.borrow_mut().discovered_images = image_urls.len();
+        image_urls.sort();
+        for url in image_urls {
+          if url.starts_with("data:") {
+            continue;
+          }
+          match fetcher.fetch(&url) {
+            Ok(_) => summary.borrow_mut().fetched_images += 1,
+            Err(_) => summary.borrow_mut().failed_images += 1,
+          }
+        }
+      }
+
+      if prefetch_iframes {
+        summary.borrow_mut().discovered_documents = document_urls.len();
+        document_urls.sort();
+        for url in document_urls {
+          if url.starts_with("data:") {
+            continue;
+          }
+          match fetcher.fetch(&url) {
+            Ok(_) => summary.borrow_mut().fetched_documents += 1,
+            Err(_) => summary.borrow_mut().failed_documents += 1,
+          }
+        }
+      }
+    }
+
     summary.into_inner()
   }
 
@@ -604,6 +670,12 @@ mod disk_cache_main {
       per_request_timeout_label,
       args.prefetch_fonts
     );
+    if args.prefetch_images || args.prefetch_iframes {
+      println!(
+        "HTML assets: images={} iframes={}",
+        args.prefetch_images, args.prefetch_iframes
+      );
+    }
     if let Some((index, total)) = args.shard {
       println!("Shard: {}/{}", index, total);
     }
@@ -634,7 +706,16 @@ mod disk_cache_main {
     let mut results: Vec<PageSummary> = pool.install(|| {
       selected
         .par_iter()
-        .map(|entry| prefetch_page(entry, fetcher.as_ref(), &media_ctx, args.prefetch_fonts))
+        .map(|entry| {
+          prefetch_page(
+            entry,
+            fetcher.as_ref(),
+            &media_ctx,
+            args.prefetch_fonts,
+            args.prefetch_images,
+            args.prefetch_iframes,
+          )
+        })
         .collect()
     });
 
@@ -648,6 +729,12 @@ mod disk_cache_main {
     let mut total_imports_failed = 0usize;
     let mut total_fonts_fetched = 0usize;
     let mut total_fonts_failed = 0usize;
+    let mut total_images_discovered = 0usize;
+    let mut total_images_fetched = 0usize;
+    let mut total_images_failed = 0usize;
+    let mut total_documents_discovered = 0usize;
+    let mut total_documents_fetched = 0usize;
+    let mut total_documents_failed = 0usize;
 
     for r in &results {
       if r.skipped {
@@ -662,32 +749,78 @@ mod disk_cache_main {
       total_imports_failed += r.failed_imports;
       total_fonts_fetched += r.fetched_fonts;
       total_fonts_failed += r.failed_fonts;
+      total_images_discovered += r.discovered_images;
+      total_images_fetched += r.fetched_images;
+      total_images_failed += r.failed_images;
+      total_documents_discovered += r.discovered_documents;
+      total_documents_fetched += r.fetched_documents;
+      total_documents_failed += r.failed_documents;
 
-      println!(
-        "• {} css={} fetched={} failed={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
-        r.stem,
-        r.discovered_css,
-        r.fetched_css,
-        r.failed_css,
-        r.fetched_imports,
-        r.failed_imports,
-        r.fetched_fonts,
-        r.failed_fonts
-      );
+      if args.prefetch_images || args.prefetch_iframes {
+        println!(
+          "• {} css={} fetched={} failed={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={} images={} img_fetched={} img_failed={} docs={} docs_fetched={} docs_failed={}",
+          r.stem,
+          r.discovered_css,
+          r.fetched_css,
+          r.failed_css,
+          r.fetched_imports,
+          r.failed_imports,
+          r.fetched_fonts,
+          r.failed_fonts,
+          r.discovered_images,
+          r.fetched_images,
+          r.failed_images,
+          r.discovered_documents,
+          r.fetched_documents,
+          r.failed_documents,
+        );
+      } else {
+        println!(
+          "• {} css={} fetched={} failed={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
+          r.stem,
+          r.discovered_css,
+          r.fetched_css,
+          r.failed_css,
+          r.fetched_imports,
+          r.failed_imports,
+          r.fetched_fonts,
+          r.failed_fonts
+        );
+      }
     }
 
     println!();
-    println!(
-      "Done: css_discovered={} css_fetched={} css_failed={} pages_skipped={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
-      total_discovered,
-      total_fetched,
-      total_failed,
-      total_skipped,
-      total_imports_fetched,
-      total_imports_failed,
-      total_fonts_fetched,
-      total_fonts_failed
-    );
+    if args.prefetch_images || args.prefetch_iframes {
+      println!(
+        "Done: css_discovered={} css_fetched={} css_failed={} pages_skipped={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={} images_discovered={} images_fetched={} images_failed={} docs_discovered={} docs_fetched={} docs_failed={}",
+        total_discovered,
+        total_fetched,
+        total_failed,
+        total_skipped,
+        total_imports_fetched,
+        total_imports_failed,
+        total_fonts_fetched,
+        total_fonts_failed,
+        total_images_discovered,
+        total_images_fetched,
+        total_images_failed,
+        total_documents_discovered,
+        total_documents_fetched,
+        total_documents_failed,
+      );
+    } else {
+      println!(
+        "Done: css_discovered={} css_fetched={} css_failed={} pages_skipped={} imports_fetched={} imports_failed={} fonts_fetched={} fonts_failed={}",
+        total_discovered,
+        total_fetched,
+        total_failed,
+        total_skipped,
+        total_imports_fetched,
+        total_imports_failed,
+        total_fonts_fetched,
+        total_fonts_failed
+      );
+    }
     println!();
     log_disk_cache_stats(
       "end",

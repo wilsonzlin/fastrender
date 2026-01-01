@@ -726,7 +726,12 @@ fn crawl_document(
     }
   }
 
-  for url in discover_html_image_urls(&document.html, &document.base_url) {
+  let html_assets =
+    fastrender::html::asset_discovery::discover_html_asset_urls(&document.html, &document.base_url);
+  for url in html_assets.images {
+    enqueue_unique(&mut queue, &mut seen, url);
+  }
+  for url in html_assets.documents {
     enqueue_unique(&mut queue, &mut seen, url);
   }
 
@@ -810,76 +815,6 @@ fn extract_inline_css_chunks(html: &str) -> Vec<String> {
   out.extend(capture_group(&style_tag, html));
   out.extend(capture_group(&style_attr_double, html));
   out.extend(capture_group(&style_attr_single, html));
-  out
-}
-
-fn discover_html_image_urls(html: &str, base_url: &str) -> Vec<String> {
-  let img_src = Regex::new("(?is)<img[^>]*\\bsrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
-    .expect("img src regex");
-  let img_srcset = Regex::new("(?is)<img[^>]*\\bsrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
-    .expect("img srcset regex");
-  let source_srcset = Regex::new("(?is)<source[^>]*\\bsrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
-    .expect("source srcset regex");
-
-  let mut urls = Vec::new();
-  for caps in img_src.captures_iter(html) {
-    let raw = caps
-      .get(1)
-      .or_else(|| caps.get(2))
-      .or_else(|| caps.get(3))
-      .map(|m| m.as_str())
-      .unwrap_or("");
-    if let Some(resolved) = resolve_href(base_url, raw) {
-      urls.push(resolved);
-    }
-  }
-
-  const MAX_SRCSET_CANDIDATES: usize = 16;
-  for caps in img_srcset.captures_iter(html) {
-    let raw_srcset = caps
-      .get(1)
-      .or_else(|| caps.get(2))
-      .map(|m| m.as_str())
-      .unwrap_or("");
-    for candidate in parse_srcset_urls(raw_srcset, MAX_SRCSET_CANDIDATES) {
-      if let Some(resolved) = resolve_href(base_url, &candidate) {
-        urls.push(resolved);
-      }
-    }
-  }
-
-  for caps in source_srcset.captures_iter(html) {
-    let raw_srcset = caps
-      .get(1)
-      .or_else(|| caps.get(2))
-      .map(|m| m.as_str())
-      .unwrap_or("");
-    for candidate in parse_srcset_urls(raw_srcset, MAX_SRCSET_CANDIDATES) {
-      if let Some(resolved) = resolve_href(base_url, &candidate) {
-        urls.push(resolved);
-      }
-    }
-  }
-
-  urls
-}
-
-fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<String> {
-  let mut out = Vec::new();
-  for candidate in srcset.split(',') {
-    if out.len() >= max_candidates {
-      break;
-    }
-    let trimmed = candidate.trim();
-    if trimmed.is_empty() {
-      continue;
-    }
-    let url_part = trimmed.split_whitespace().next().unwrap_or("").trim();
-    if url_part.is_empty() {
-      continue;
-    }
-    out.push(url_part.to_string());
-  }
   out
 }
 
