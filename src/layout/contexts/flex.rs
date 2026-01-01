@@ -5545,7 +5545,7 @@ mod tests {
       super::flex_child_fingerprint(&children_a),
       fc.viewport_size,
     );
-
+ 
     let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
     let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
     let constraints = LayoutConstraints::definite(100.0, 100.0);

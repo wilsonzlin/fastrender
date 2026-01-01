@@ -243,21 +243,63 @@ impl TextDiagnosticsState {
   fn start_stage(&mut self, stage: TextDiagnosticsStage, now: Instant) {
     match stage {
       TextDiagnosticsStage::Coverage => {
+        let prev = self.coverage_active;
         self.coverage_active = self.coverage_active.saturating_add(1);
+        debug_assert!(
+          self.coverage_active > prev,
+          "text diagnostics coverage_active overflow"
+        );
         if self.coverage_active == 1 {
+          debug_assert!(
+            self.coverage_start.is_none(),
+            "text diagnostics coverage_start should be unset when inactive"
+          );
           self.coverage_start = Some(now);
+        } else {
+          debug_assert!(
+            self.coverage_start.is_some(),
+            "text diagnostics coverage_start missing while stage is active"
+          );
         }
       }
       TextDiagnosticsStage::Shape => {
+        let prev = self.shape_active;
         self.shape_active = self.shape_active.saturating_add(1);
+        debug_assert!(
+          self.shape_active > prev,
+          "text diagnostics shape_active overflow"
+        );
         if self.shape_active == 1 {
+          debug_assert!(
+            self.shape_start.is_none(),
+            "text diagnostics shape_start should be unset when inactive"
+          );
           self.shape_start = Some(now);
+        } else {
+          debug_assert!(
+            self.shape_start.is_some(),
+            "text diagnostics shape_start missing while stage is active"
+          );
         }
       }
       TextDiagnosticsStage::Rasterize => {
+        let prev = self.rasterize_active;
         self.rasterize_active = self.rasterize_active.saturating_add(1);
+        debug_assert!(
+          self.rasterize_active > prev,
+          "text diagnostics rasterize_active overflow"
+        );
         if self.rasterize_active == 1 {
+          debug_assert!(
+            self.rasterize_start.is_none(),
+            "text diagnostics rasterize_start should be unset when inactive"
+          );
           self.rasterize_start = Some(now);
+        } else {
+          debug_assert!(
+            self.rasterize_start.is_some(),
+            "text diagnostics rasterize_start missing while stage is active"
+          );
         }
       }
     }
@@ -267,34 +309,58 @@ impl TextDiagnosticsState {
     match stage {
       TextDiagnosticsStage::Coverage => {
         if self.coverage_active == 0 {
+          debug_assert!(
+            false,
+            "text diagnostics coverage_active underflow (timer dropped without start)"
+          );
           return;
         }
         self.coverage_active -= 1;
         if self.coverage_active == 0 {
           if let Some(start) = self.coverage_start.take() {
-            self.diag.coverage_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+            self.diag.coverage_ms += now.saturating_duration_since(start).as_secs_f64() * 1000.0;
+          } else {
+            debug_assert!(
+              false,
+              "text diagnostics coverage_start missing when closing stage"
+            );
           }
         }
       }
       TextDiagnosticsStage::Shape => {
         if self.shape_active == 0 {
+          debug_assert!(
+            false,
+            "text diagnostics shape_active underflow (timer dropped without start)"
+          );
           return;
         }
         self.shape_active -= 1;
         if self.shape_active == 0 {
           if let Some(start) = self.shape_start.take() {
-            self.diag.shape_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+            self.diag.shape_ms += now.saturating_duration_since(start).as_secs_f64() * 1000.0;
+          } else {
+            debug_assert!(false, "text diagnostics shape_start missing when closing stage");
           }
         }
       }
       TextDiagnosticsStage::Rasterize => {
         if self.rasterize_active == 0 {
+          debug_assert!(
+            false,
+            "text diagnostics rasterize_active underflow (timer dropped without start)"
+          );
           return;
         }
         self.rasterize_active -= 1;
         if self.rasterize_active == 0 {
           if let Some(start) = self.rasterize_start.take() {
-            self.diag.rasterize_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+            self.diag.rasterize_ms += now.saturating_duration_since(start).as_secs_f64() * 1000.0;
+          } else {
+            debug_assert!(
+              false,
+              "text diagnostics rasterize_start missing when closing stage"
+            );
           }
         }
       }
@@ -304,19 +370,24 @@ impl TextDiagnosticsState {
   fn finalize_open_stages(&mut self, now: Instant) {
     if self.coverage_active > 0 {
       if let Some(start) = self.coverage_start.take() {
-        self.diag.coverage_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+        self.diag.coverage_ms += now.saturating_duration_since(start).as_secs_f64() * 1000.0;
       }
     }
     if self.shape_active > 0 {
       if let Some(start) = self.shape_start.take() {
-        self.diag.shape_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+        self.diag.shape_ms += now.saturating_duration_since(start).as_secs_f64() * 1000.0;
       }
     }
     if self.rasterize_active > 0 {
       if let Some(start) = self.rasterize_start.take() {
-        self.diag.rasterize_ms += now.duration_since(start).as_secs_f64() * 1000.0;
+        self.diag.rasterize_ms += now.saturating_duration_since(start).as_secs_f64() * 1000.0;
       }
     }
+    // Clear any inconsistent starts even if the active counts were already zero (defensive against
+    // corrupted state in debug builds).
+    self.coverage_start = None;
+    self.shape_start = None;
+    self.rasterize_start = None;
     self.coverage_active = 0;
     self.shape_active = 0;
     self.rasterize_active = 0;
@@ -344,9 +415,11 @@ pub(crate) fn enable_text_diagnostics() {
   let session = TEXT_DIAGNOSTICS_SESSION
     .fetch_add(1, Ordering::AcqRel)
     .wrapping_add(1);
-  TEXT_DIAGNOSTICS_ENABLED.store(true, Ordering::Release);
   if let Ok(mut state) = diagnostics_cell().lock() {
     *state = TextDiagnosticsState::new(session);
+    TEXT_DIAGNOSTICS_ENABLED.store(true, Ordering::Release);
+  } else {
+    TEXT_DIAGNOSTICS_ENABLED.store(false, Ordering::Release);
   }
   SHAPING_CACHE_DIAG_HITS.store(0, Ordering::Relaxed);
   SHAPING_CACHE_DIAG_MISSES.store(0, Ordering::Relaxed);
@@ -2634,6 +2707,18 @@ fn assign_fonts_internal(
               slope_preferences,
               math_families,
             );
+          }
+        }
+      }
+
+      if require_base_glyph {
+        if let Some(font) = resolved.as_ref() {
+          let base_supported = font
+            .id
+            .map(|id| font_context.database().has_glyph_cached(id.inner(), base_char))
+            .unwrap_or_else(|| font_supports_all_chars(font.as_ref(), &[base_char]));
+          if !base_supported {
+            record_last_resort_fallback(cluster_text);
           }
         }
       }
@@ -8087,6 +8172,47 @@ mod tests {
       .consider(emoji_font.clone(), true, idx)
       .expect("FE0F should prefer emoji font even when property requests text");
     assert_eq!(chosen.family.as_str(), emoji_font.family.as_str());
+  }
+
+  #[test]
+  fn text_diagnostics_session_resets_counters() {
+    let _session = crate::api::DiagnosticsSessionGuard::acquire();
+    enable_text_diagnostics();
+    record_text_shape(None, 3, 7);
+    let first = take_text_diagnostics().expect("expected diagnostics snapshot");
+    assert_eq!(first.shaped_runs, 3);
+    assert_eq!(first.glyphs, 7);
+
+    enable_text_diagnostics();
+    record_text_shape(None, 1, 2);
+    let second = take_text_diagnostics().expect("expected diagnostics snapshot");
+    assert_eq!(second.shaped_runs, 1);
+    assert_eq!(second.glyphs, 2);
+  }
+
+  #[test]
+  fn text_diagnostics_stage_tracks_union_time() {
+    let base = Instant::now();
+    let mut state = TextDiagnosticsState::new(1);
+    state.start_stage(TextDiagnosticsStage::Coverage, base);
+    state.start_stage(
+      TextDiagnosticsStage::Coverage,
+      base + Duration::from_millis(10),
+    );
+    state.end_stage(
+      TextDiagnosticsStage::Coverage,
+      base + Duration::from_millis(20),
+    );
+    state.end_stage(
+      TextDiagnosticsStage::Coverage,
+      base + Duration::from_millis(30),
+    );
+
+    assert!(
+      (state.diag.coverage_ms - 30.0).abs() < 0.001,
+      "expected union duration of 30ms, got {:.3}ms",
+      state.diag.coverage_ms
+    );
   }
 }
 fn number_tag(prefix: &[u8; 2], n: u8) -> Option<[u8; 4]> {

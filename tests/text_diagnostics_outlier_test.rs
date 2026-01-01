@@ -64,3 +64,78 @@ fn blog_rust_lang_text_diagnostics_are_reasonable() {
     );
   }
 }
+
+#[test]
+fn text_diagnostics_reset_per_render() {
+  let policy = ResourcePolicy::default()
+    .allow_http(false)
+    .allow_https(false)
+    .allow_file(false)
+    .allow_data(true);
+
+  let mut renderer = FastRender::builder()
+    .font_sources(FontConfig::bundled_only())
+    .resource_policy(policy)
+    .build()
+    .expect("renderer build");
+
+  let html = "<!doctype html><html><body>\
+    <p>Hello, world!</p>\
+    <p>مرحبا بالعالم</p>\
+    <p>こんにちは世界</p>\
+    </body></html>";
+
+  let options = RenderOptions::new()
+    .with_viewport(400, 200)
+    .with_diagnostics_level(DiagnosticsLevel::Basic);
+
+  let first = renderer
+    .render_html_with_diagnostics(html, options.clone())
+    .expect("first render");
+  let first_stats = first
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("expected diagnostics stats");
+
+  let second = renderer
+    .render_html_with_diagnostics(html, options)
+    .expect("second render");
+  let second_stats = second
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("expected diagnostics stats");
+
+  let shaped_runs_1 = first_stats.counts.shaped_runs.unwrap_or(0);
+  let shaped_runs_2 = second_stats.counts.shaped_runs.unwrap_or(0);
+  assert!(shaped_runs_1 > 0, "expected some shaped runs");
+  assert_eq!(
+    shaped_runs_2, shaped_runs_1,
+    "shaped_runs should be per-render, not cumulative"
+  );
+
+  let glyphs_1 = first_stats.counts.glyphs.unwrap_or(0);
+  let glyphs_2 = second_stats.counts.glyphs.unwrap_or(0);
+  assert!(glyphs_1 > 0, "expected some glyphs");
+  assert_eq!(
+    glyphs_2, glyphs_1,
+    "glyph count should be per-render, not cumulative"
+  );
+
+  for (name, value) in [
+    ("text_fallback_cpu_ms", second_stats.timings.text_fallback_cpu_ms),
+    ("text_shape_cpu_ms", second_stats.timings.text_shape_cpu_ms),
+    (
+      "text_rasterize_cpu_ms",
+      second_stats.timings.text_rasterize_cpu_ms,
+    ),
+  ] {
+    let Some(value) = value else { continue };
+    assert!(value.is_finite(), "{name} should be finite, got {value}");
+    assert!(
+      value >= 0.0,
+      "{name} should be non-negative, got {value}"
+    );
+  }
+}

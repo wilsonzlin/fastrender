@@ -10391,6 +10391,7 @@ mod tests {
 
   #[test]
   fn last_resort_fallback_samples_are_exposed_in_render_stats() {
+    let _session = DiagnosticsSessionGuard::acquire();
     struct TextDiagnosticsGuard;
 
     impl Drop for TextDiagnosticsGuard {
