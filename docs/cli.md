@@ -36,6 +36,8 @@ Example:
 FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 cargo xtask pageset --pages tesco.com
 ```
 
+Note: `fetch_pages` skips URLs already cached under `fetches/html/`. When iterating on HTTP fetch knobs for document fetch failures, re-run with `fetch_pages --refresh` (or delete the cached HTML) so the network path is exercised.
+
 ## `cargo xtask`
 
 `cargo xtask` is the preferred entry point for common workflows; it wraps the binaries below but keeps them usable directly.

@@ -75,6 +75,9 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
   cargo xtask pageset --pages tesco.com,washingtonpost.com
 ```
 
+When comparing backends/header profiles, make sure you are actually exercising the network path:
+use `fetch_pages --refresh` for HTML and consider disabling the disk cache (`DISK_CACHE=0` / `NO_DISK_CACHE=1`) so previously cached subresources don’t mask differences.
+
 ## Resource limits
 
 - `FASTR_MAX_FOREIGN_OBJECT_CSS_BYTES=<N>` – cap the amount of document-level CSS injected into nested
