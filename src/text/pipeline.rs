@@ -2025,6 +2025,9 @@ fn is_non_rendering_for_coverage(ch: char) -> bool {
 }
 
 fn is_unicode_mark(ch: char) -> bool {
+  if ch < '\u{0300}' {
+    return false;
+  }
   matches!(
     get_general_category(ch),
     GeneralCategory::NonspacingMark | GeneralCategory::SpacingMark | GeneralCategory::EnclosingMark

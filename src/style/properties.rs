@@ -13121,7 +13121,7 @@ mod tests {
     let decls = parse_declarations("transition: var(--t);");
     assert_eq!(decls.len(), 1);
     let decl = &decls[0];
-    assert_eq!(decl.property, "transition");
+    assert_eq!(decl.property.as_str(), "transition");
     assert!(decl.raw_value.is_empty());
     match &decl.value {
       PropertyValue::Keyword(raw) => assert_eq!(raw, "var(--t)"),
