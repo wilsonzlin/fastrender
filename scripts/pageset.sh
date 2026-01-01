@@ -415,18 +415,6 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES}" -eq 1 && "${PREFETCH_IMAGES_IN_ARGS}" -eq 0 ]]; then
     PREFETCH_ASSET_ARGS+=(--prefetch-images)
   fi
-  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES}" -eq 1 && "${PREFETCH_IFRAMES_IN_ARGS}" -eq 0 ]]; then
-    PREFETCH_ASSET_ARGS+=(--prefetch-iframes)
-  fi
-  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS}" -eq 1 && "${PREFETCH_EMBEDS_IN_ARGS}" -eq 0 ]]; then
-    PREFETCH_ASSET_ARGS+=(--prefetch-embeds)
-  fi
-  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS}" -eq 1 && "${PREFETCH_ICONS_IN_ARGS}" -eq 0 ]]; then
-    PREFETCH_ASSET_ARGS+=(--prefetch-icons)
-  fi
-  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS}" -eq 1 && "${PREFETCH_VIDEO_POSTERS_IN_ARGS}" -eq 0 ]]; then
-    PREFETCH_ASSET_ARGS+=(--prefetch-video-posters)
-  fi
   if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS}" -eq 1 && "${PREFETCH_CSS_URL_ASSETS_IN_ARGS}" -eq 0 ]]; then
     PREFETCH_ASSET_ARGS+=(--prefetch-css-url-assets)
   fi

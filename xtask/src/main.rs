@@ -584,41 +584,6 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   {
     prefetch_asset_args.push("--prefetch-css-url-assets".to_string());
   }
-  if disk_cache_enabled
-    && prefetch_support.prefetch_iframes
-    && !prefetch_asset_args.iter().any(|arg| {
-      arg == "--prefetch-iframes"
-        || arg.starts_with("--prefetch-iframes=")
-        || arg == "--prefetch-documents"
-        || arg.starts_with("--prefetch-documents=")
-    })
-  {
-    prefetch_asset_args.push("--prefetch-iframes".to_string());
-  }
-  if disk_cache_enabled
-    && prefetch_support.prefetch_embeds
-    && !prefetch_asset_args
-      .iter()
-      .any(|arg| arg == "--prefetch-embeds" || arg.starts_with("--prefetch-embeds="))
-  {
-    prefetch_asset_args.push("--prefetch-embeds".to_string());
-  }
-  if disk_cache_enabled
-    && prefetch_support.prefetch_icons
-    && !prefetch_asset_args
-      .iter()
-      .any(|arg| arg == "--prefetch-icons" || arg.starts_with("--prefetch-icons="))
-  {
-    prefetch_asset_args.push("--prefetch-icons".to_string());
-  }
-  if disk_cache_enabled
-    && prefetch_support.prefetch_video_posters
-    && !prefetch_asset_args.iter().any(|arg| {
-      arg == "--prefetch-video-posters" || arg.starts_with("--prefetch-video-posters=")
-    })
-  {
-    prefetch_asset_args.push("--prefetch-video-posters".to_string());
-  }
   if disk_cache_enabled {
     println!(
       "Disk cache enabled (persisting subresources under fetches/assets/). \
