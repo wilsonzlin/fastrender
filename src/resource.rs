@@ -445,6 +445,21 @@ const BROWSER_ACCEPT_IMAGE: &str =
 /// Content-Encoding algorithms this fetcher can decode.
 const SUPPORTED_ACCEPT_ENCODING: &str = "gzip, deflate, br";
 
+/// Maximum time we allow the primary `ureq` backend to spend before falling back to cURL
+/// when `FASTR_HTTP_BACKEND=auto`.
+///
+/// This is primarily to avoid HTTP/1.1 hangs consuming the entire timeout budget (e.g. sites that
+/// only respond reliably over HTTP/2).
+const AUTO_BACKEND_UREQ_TIMEOUT_CAP: Duration = Duration::from_secs(5);
+
+fn auto_backend_ureq_timeout_slice(total: Duration) -> Duration {
+  if total.is_zero() {
+    return Duration::ZERO;
+  }
+  let half = Duration::from_secs_f64(total.as_secs_f64() * 0.5);
+  half.min(AUTO_BACKEND_UREQ_TIMEOUT_CAP)
+}
+
 fn http_browser_headers_enabled() -> bool {
   static ENABLED: OnceLock<bool> = OnceLock::new();
   *ENABLED.get_or_init(|| {
@@ -2017,43 +2032,48 @@ impl HttpFetcher {
         referrer,
         deadline,
         started,
+        false,
       ),
-      HttpBackendMode::Auto => match self.fetch_http_with_accept_inner_ureq(
-        url,
-        accept_encoding,
-        validators,
-        destination,
-        referrer,
-        deadline,
-        started,
-      ) {
-        Ok(res) => Ok(res),
-        Err(err) => {
-          if should_fallback_to_curl(&err) {
-            match curl_backend::fetch_http_with_accept_inner(
-              self,
-              url,
-              accept_encoding,
-              validators,
-              destination,
-              referrer,
-              deadline,
-              started,
-            ) {
-              Ok(res) => Ok(res),
-              Err(curl_err) => {
-                let mut err = err;
-                if let Error::Resource(ref mut res) = err {
-                  res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
+      HttpBackendMode::Auto => {
+        let curl_available = curl_backend::curl_available();
+        match self.fetch_http_with_accept_inner_ureq(
+          url,
+          accept_encoding,
+          validators,
+          destination,
+          referrer,
+          deadline,
+          started,
+          curl_available,
+        ) {
+          Ok(res) => Ok(res),
+          Err(err) => {
+            if curl_available && should_fallback_to_curl(&err) {
+              match curl_backend::fetch_http_with_accept_inner(
+                self,
+                url,
+                accept_encoding,
+                validators,
+                destination,
+                referrer,
+                deadline,
+                started,
+              ) {
+                Ok(res) => Ok(res),
+                Err(curl_err) => {
+                  let mut err = err;
+                  if let Error::Resource(ref mut res) = err {
+                    res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
+                  }
+                  Err(err)
                 }
-                Err(err)
               }
+            } else {
+              Err(err)
             }
-          } else {
-            Err(err)
           }
         }
-      },
+      }
     }
   }
 
@@ -2066,6 +2086,7 @@ impl HttpFetcher {
     referrer: Option<&str>,
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
+    auto_fallback: bool,
   ) -> Result<FetchedResource> {
     let mut current = url.to_string();
     let mut validators = validators;
@@ -2075,6 +2096,8 @@ impl HttpFetcher {
       .and_then(render_control::RenderDeadline::timeout_limit)
       .is_some()
     {
+      1
+    } else if auto_fallback {
       1
     } else {
       self.retry_policy.max_attempts.max(1)
@@ -2114,6 +2137,22 @@ impl HttpFetcher {
         let allowed_limit = self.policy.allowed_response_limit()?;
         let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
         let mut effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
+
+        // In `auto` backend mode we may fall back to cURL (HTTP/2 capable). To avoid HTTP/1.1 hangs
+        // consuming the full timeout budget, cap the `ureq` attempt so some time remains for the
+        // fallback backend.
+        if auto_fallback {
+          if let Some(timeout) = per_request_timeout {
+            // Deadline-derived timeout: keep at most half for ureq.
+            effective_timeout = effective_timeout.min(auto_backend_ureq_timeout_slice(timeout));
+          } else if let Some(budget) = timeout_budget {
+            // Timeout-budget mode (CLI): keep at most half of the remaining budget for ureq.
+            if let Some(remaining) = budget.checked_sub(started.elapsed()) {
+              effective_timeout =
+                effective_timeout.min(auto_backend_ureq_timeout_slice(remaining));
+            }
+          }
+        }
 
         if let Some(budget) = timeout_budget {
           match budget.checked_sub(started.elapsed()) {
@@ -2295,6 +2334,7 @@ impl HttpFetcher {
                     referrer,
                     deadline,
                     started,
+                    auto_fallback,
                   );
                 }
                 Err(err) => {
@@ -4414,6 +4454,23 @@ mod tests {
       "unexpected status",
     ));
     assert!(!should_fallback_to_curl(&err));
+  }
+
+  #[test]
+  fn auto_backend_ureq_timeout_slice_is_half_budget_capped() {
+    assert_eq!(
+      auto_backend_ureq_timeout_slice(Duration::from_secs(30)),
+      Duration::from_secs(5)
+    );
+    assert_eq!(
+      auto_backend_ureq_timeout_slice(Duration::from_secs(8)),
+      Duration::from_secs(4)
+    );
+    assert_eq!(
+      auto_backend_ureq_timeout_slice(Duration::from_secs(3)),
+      Duration::from_millis(1500)
+    );
+    assert_eq!(auto_backend_ureq_timeout_slice(Duration::ZERO), Duration::ZERO);
   }
 
   static RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

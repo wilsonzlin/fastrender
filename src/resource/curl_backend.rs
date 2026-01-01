@@ -19,10 +19,24 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::MutexGuard;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::{Builder, TempPath};
 use url::Url;
+
+pub(super) fn curl_available() -> bool {
+  static AVAILABLE: OnceLock<bool> = OnceLock::new();
+  *AVAILABLE.get_or_init(|| {
+    Command::new("curl")
+      .arg("--version")
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .status()
+      .map(|status| status.success())
+      .unwrap_or(false)
+  })
+}
 
 #[derive(Debug, Default)]
 pub(super) struct CookieJarState {
