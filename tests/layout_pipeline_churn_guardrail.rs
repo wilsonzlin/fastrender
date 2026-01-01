@@ -72,6 +72,7 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
   let shaping_pipeline_news = ShapingPipeline::debug_new_call_count();
   let factory_news = FormattingContextFactory::debug_with_font_context_viewport_and_cb_call_count();
   let inline_fc_news = InlineFormattingContext::debug_with_font_context_viewport_and_cb_call_count();
+  let inline_fc_with_factory_news = InlineFormattingContext::debug_with_factory_call_count();
 
   assert!(
     shaping_pipeline_news < 20,
@@ -84,6 +85,10 @@ fn layout_does_not_rebuild_shaping_pipeline_or_factory_in_hot_paths() {
   assert!(
     inline_fc_news < 20,
     "layout should not rebuild inline formatting contexts via `with_font_context_viewport_and_cb` in hot paths (got {inline_fc_news})"
+  );
+  assert!(
+    inline_fc_with_factory_news < 20,
+    "layout should not rebuild inline formatting contexts via `with_factory` in hot paths (got {inline_fc_with_factory_news})"
   );
 }
 
