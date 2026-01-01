@@ -48,6 +48,12 @@ pub struct DiskCacheConfig {
   ///
   /// Also caps HTTP-provided freshness metadata when serving from disk.
   pub max_age: Option<Duration>,
+  /// Whether to persist responses that set `Cache-Control: no-store`.
+  ///
+  /// When enabled, `no-store` entries are treated as always stale by the shared in-memory caching
+  /// layer: they will normally trigger a network refresh but can be served as a fallback (or
+  /// immediately under render deadlines when configured to serve stale entries).
+  pub allow_no_store: bool,
   /// Maximum age of `.lock` files before they are treated as stale and removed.
   ///
   /// Pageset workers can be hard-killed (e.g. timeout) while persisting a cache entry, leaving a
@@ -67,6 +73,7 @@ impl Default for DiskCacheConfig {
       max_bytes: 512 * 1024 * 1024,
       max_age: Some(Duration::from_secs(60 * 60 * 24 * 7)), // 7 days
       lock_stale_after: DEFAULT_LOCK_STALE_AFTER,
+      allow_no_store: false,
       namespace: None,
     }
   }
@@ -338,6 +345,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let cache_dir = cache_dir.into();
     let _ = fs::create_dir_all(&cache_dir);
     let index = DiskCacheIndex::new(cache_dir.clone());
+    let mut memory_config = memory_config;
+    memory_config.allow_no_store |= disk_config.allow_no_store;
     Self {
       memory: CachingFetcher::with_config(inner, memory_config),
       cache_dir,
@@ -864,12 +873,13 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         .as_ref()
         .and_then(|p| CachedHttpMetadata::from_policy(p, stored_time))
     });
-    if cache_metadata.as_ref().map(|m| m.no_store).unwrap_or(false)
-      || resource
-        .cache_policy
-        .as_ref()
-        .map(|p| p.no_store)
-        .unwrap_or(false)
+    if !self.disk_config.allow_no_store
+      && (cache_metadata.as_ref().map(|m| m.no_store).unwrap_or(false)
+        || resource
+          .cache_policy
+          .as_ref()
+          .map(|p| p.no_store)
+          .unwrap_or(false))
     {
       let meta_path = self.meta_path_for_data(&data_path);
       let _ = self.remove_entry(&key, &data_path, &meta_path);
@@ -1066,11 +1076,12 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
             let value = snapshot.value.as_result();
             if let Ok(ref ok) = value {
               let stored_at = SystemTime::now();
-              let should_store = !res
-                .cache_policy
-                .as_ref()
-                .map(|p| p.no_store)
-                .unwrap_or(false);
+              let should_store = self.memory.config.allow_no_store
+                || !res
+                  .cache_policy
+                  .as_ref()
+                  .map(|p| p.no_store)
+                  .unwrap_or(false);
               let http_cache = snapshot
                 .http_cache
                 .as_ref()
@@ -1172,6 +1183,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
               .as_ref()
               .map(|p| p.no_store)
               .unwrap_or(false)
+              && !self.memory.config.allow_no_store
             {
               self.memory.remove_cached(url);
               let canonical = self.canonical_url(url, res.final_url.as_deref());
@@ -1575,6 +1587,71 @@ mod tests {
     assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
     assert_eq!(second.content_type.as_deref(), Some("text/plain"));
     assert_eq!(second.final_url.as_deref(), Some(url));
+  }
+
+  #[test]
+  fn disk_cache_persists_no_store_when_allowed() {
+    #[derive(Clone)]
+    struct NoStoreFetcher {
+      count: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for NoStoreFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        resource.cache_policy = Some(HttpCachePolicy {
+          no_store: true,
+          ..Default::default()
+        });
+        Ok(resource)
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let url = "https://example.com/no-store";
+    let seed = DiskCachingFetcher::with_configs(
+      NoStoreFetcher {
+        count: Arc::clone(&counter),
+      },
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        allow_no_store: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let first = seed.fetch(url).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let fail_count = Arc::new(AtomicUsize::new(0));
+    let offline = DiskCachingFetcher::with_configs(
+      FailingFetcher {
+        count: Arc::clone(&fail_count),
+      },
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        allow_no_store: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let second = offline.fetch(url).expect("disk cache fetch");
+    assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      fail_count.load(Ordering::SeqCst),
+      1,
+      "should attempt refresh but fall back to cached disk entry"
+    );
   }
 
   #[test]

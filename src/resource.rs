@@ -2147,6 +2147,15 @@ pub struct CachingFetcherConfig {
   pub honor_http_cache_headers: bool,
   /// Whether to honor HTTP freshness metadata (Cache-Control/Expires) to avoid revalidation.
   pub honor_http_cache_freshness: bool,
+  /// Whether to cache responses that set `Cache-Control: no-store`.
+  ///
+  /// When enabled, `no-store` entries are treated as "always stale": callers will normally
+  /// attempt a network refresh, but the cached bytes can be used as a fallback (or served
+  /// immediately when `stale_policy` is [`CacheStalePolicy::UseStaleWhenDeadline`] under an active
+  /// render deadline).
+  ///
+  /// Defaults to `false` to remain spec-faithful unless explicitly enabled by tooling.
+  pub allow_no_store: bool,
   /// Policy controlling whether stale cached entries are served without revalidation when a
   /// render deadline is active.
   pub stale_policy: CacheStalePolicy,
@@ -2160,6 +2169,7 @@ impl Default for CachingFetcherConfig {
       cache_errors: true,
       honor_http_cache_headers: true,
       honor_http_cache_freshness: false,
+      allow_no_store: false,
       stale_policy: CacheStalePolicy::Revalidate,
     }
   }
@@ -2891,15 +2901,48 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       };
     }
 
+    if http_cache.as_ref().map(|meta| meta.no_store).unwrap_or(false) {
+      if !self.config.allow_no_store {
+        return CachePlan {
+          cached: None,
+          action: CacheAction::Fetch,
+          is_stale: false,
+        };
+      }
+
+      if self.config.stale_policy == CacheStalePolicy::UseStaleWhenDeadline
+        && render_control::active_deadline()
+          .as_ref()
+          .and_then(|deadline| deadline.timeout_limit())
+          .is_some()
+      {
+        return CachePlan {
+          cached,
+          action: CacheAction::UseCached,
+          is_stale: true,
+        };
+      }
+
+      if self.config.honor_http_cache_headers && has_validators {
+        return CachePlan {
+          cached,
+          action: CacheAction::Validate {
+            etag,
+            last_modified,
+          },
+          is_stale: false,
+        };
+      }
+
+      return CachePlan {
+        cached,
+        action: CacheAction::Fetch,
+        is_stale: false,
+      };
+    }
+
     if self.config.honor_http_cache_freshness {
       if let Some(meta) = http_cache.as_ref() {
-        if meta.no_store {
-          return CachePlan {
-            cached: None,
-            action: CacheAction::Fetch,
-            is_stale: false,
-          };
-        }
         let now = SystemTime::now();
         let is_fresh = meta.is_fresh(now, freshness_cap);
         let requires_revalidation = meta.requires_revalidation();
@@ -3039,11 +3082,12 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     resource: &FetchedResource,
     stored_at: SystemTime,
   ) -> Option<CacheEntry> {
-    if resource
-      .cache_policy
-      .as_ref()
-      .map(|p| p.no_store)
-      .unwrap_or(false)
+    if !self.config.allow_no_store
+      && resource
+        .cache_policy
+        .as_ref()
+        .map(|p| p.no_store)
+        .unwrap_or(false)
     {
       return None;
     }
@@ -3269,11 +3313,12 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             let value = snapshot.value.as_result();
             if let Ok(ref ok) = value {
               let stored_at = SystemTime::now();
-              let should_store = !res
-                .cache_policy
-                .as_ref()
-                .map(|p| p.no_store)
-                .unwrap_or(false);
+              let should_store = self.config.allow_no_store
+                || !res
+                  .cache_policy
+                  .as_ref()
+                  .map(|p| p.no_store)
+                  .unwrap_or(false);
               let updated_meta = snapshot
                 .http_cache
                 .as_ref()
@@ -3336,11 +3381,12 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             let stored_at = SystemTime::now();
             if let Some(entry) = self.build_cache_entry(&res, stored_at) {
               self.cache_entry(url, entry, res.final_url.as_deref());
-            } else if res
-              .cache_policy
-              .as_ref()
-              .map(|p| p.no_store)
-              .unwrap_or(false)
+            } else if !self.config.allow_no_store
+              && res
+                .cache_policy
+                .as_ref()
+                .map(|p| p.no_store)
+                .unwrap_or(false)
             {
               self.remove_cached(url);
             }
@@ -4039,6 +4085,148 @@ mod tests {
     assert_eq!(
       url_to_filename("HTTPS://Example.com/q?a=1"),
       "example.com_q_a_1"
+    );
+  }
+
+  #[test]
+  fn no_store_responses_are_not_cached_by_default() {
+    #[derive(Clone)]
+    struct NoStoreFetcher {
+      calls: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for NoStoreFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut resource = FetchedResource::new(b"ok".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        resource.cache_policy = Some(HttpCachePolicy {
+          no_store: true,
+          ..Default::default()
+        });
+        Ok(resource)
+      }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let fetcher = CachingFetcher::new(NoStoreFetcher {
+      calls: Arc::clone(&calls),
+    });
+    let url = "https://example.com/no-store";
+
+    let first = fetcher.fetch(url).expect("first fetch");
+    assert_eq!(first.bytes, b"ok");
+    let second = fetcher.fetch(url).expect("second fetch");
+    assert_eq!(second.bytes, b"ok");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      2,
+      "no-store responses should not be cached by default"
+    );
+  }
+
+  #[test]
+  fn allow_no_store_preserves_cached_bytes_for_fallback() {
+    #[derive(Clone)]
+    struct QueueFetcher {
+      calls: Arc<AtomicUsize>,
+      queue: Arc<Mutex<VecDeque<Result<FetchedResource>>>>,
+    }
+
+    impl ResourceFetcher for QueueFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self
+          .queue
+          .lock()
+          .unwrap()
+          .pop_front()
+          .expect("expected queued fetch result")
+      }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut resource =
+      FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+    resource.final_url = Some("https://example.com/no-store".to_string());
+    resource.cache_policy = Some(HttpCachePolicy {
+      no_store: true,
+      ..Default::default()
+    });
+
+    let mut queue = VecDeque::new();
+    queue.push_back(Ok(resource));
+    queue.push_back(Err(Error::Other("network error".to_string())));
+    let fetcher = CachingFetcher::with_config(
+      QueueFetcher {
+        calls: Arc::clone(&calls),
+        queue: Arc::new(Mutex::new(queue)),
+      },
+      CachingFetcherConfig {
+        allow_no_store: true,
+        ..CachingFetcherConfig::default()
+      },
+    );
+
+    let url = "https://example.com/no-store";
+    let first = fetcher.fetch(url).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    let second = fetcher.fetch(url).expect("fallback fetch");
+    assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      2,
+      "should attempt refresh but fall back to cached bytes"
+    );
+  }
+
+  #[test]
+  fn allow_no_store_serves_cached_bytes_under_deadline() {
+    #[derive(Clone)]
+    struct NoStoreFetcher {
+      calls: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for NoStoreFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut resource =
+          FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        resource.cache_policy = Some(HttpCachePolicy {
+          no_store: true,
+          ..Default::default()
+        });
+        Ok(resource)
+      }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let fetcher = CachingFetcher::with_config(
+      NoStoreFetcher {
+        calls: Arc::clone(&calls),
+      },
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        stale_policy: CacheStalePolicy::UseStaleWhenDeadline,
+        allow_no_store: true,
+        ..CachingFetcherConfig::default()
+      },
+    );
+
+    let url = "https://example.com/no-store-deadline";
+    let first = fetcher.fetch(url).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
+    let second = render_control::with_deadline(Some(&deadline), || fetcher.fetch(url))
+      .expect("deadline fetch");
+    assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "no-store entries should be served from cache under deadline"
     );
   }
 

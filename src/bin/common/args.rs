@@ -356,6 +356,22 @@ pub struct DiskCacheArgs {
     value_name = "SECS"
   )]
   pub lock_stale_secs: u64,
+
+  /// Persist responses that set `Cache-Control: no-store` in the disk cache.
+  ///
+  /// This is useful for pageset determinism/offline runs because some critical
+  /// CSS/font endpoints send `no-store` even though the bytes are stable. When
+  /// enabled, `no-store` entries are treated as always-stale and are only used
+  /// as a fallback (or under render deadlines when configured to serve stale).
+  #[arg(
+    long = "disk-cache-allow-no-store",
+    env = "FASTR_DISK_CACHE_ALLOW_NO_STORE",
+    default_value_t = false,
+    value_parser = parse_bool_preference,
+    default_missing_value = "true",
+    num_args = 0..=1
+  )]
+  pub allow_no_store: bool,
 }
 
 pub fn disk_cache_max_age_from_secs(secs: u64) -> Option<Duration> {
@@ -373,6 +389,7 @@ impl DiskCacheArgs {
       max_bytes: self.max_bytes,
       max_age: disk_cache_max_age_from_secs(self.max_age_secs),
       lock_stale_after: Duration::from_secs(self.lock_stale_secs),
+      allow_no_store: self.allow_no_store,
       ..fastrender::resource::DiskCacheConfig::default()
     }
   }

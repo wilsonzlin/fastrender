@@ -6110,6 +6110,7 @@ mod tests {
         max_bytes: common::args::DEFAULT_DISK_CACHE_MAX_BYTES,
         max_age_secs: common::args::DEFAULT_DISK_CACHE_MAX_AGE_SECS,
         lock_stale_secs: common::args::DEFAULT_DISK_CACHE_LOCK_STALE_SECS,
+        allow_no_store: false,
       },
       css_limit: None,
       fonts: FontSourceArgs {
