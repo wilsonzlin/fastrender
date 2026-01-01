@@ -53,7 +53,7 @@ use crate::layout::taffy_integration::{
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::{active_deadline, check_active, with_deadline};
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::style::display::Display as CssDisplay;
 use crate::style::display::FormattingContextType;
 use crate::style::grid::validate_area_rectangles;
@@ -106,6 +106,17 @@ use taffy::tree::TaffyTree;
 use taffy::DetailedGridTracksInfo;
 
 const MAX_MEASURED_KEYS_PER_NODE: usize = 12;
+const GRID_DEADLINE_CHECK_STRIDE: usize = 64;
+
+#[inline]
+fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
+  if let Err(RenderError::Timeout { elapsed, .. }) =
+    check_active_periodic(counter, GRID_DEADLINE_CHECK_STRIDE, RenderStage::Layout)
+  {
+    return Err(LayoutError::Timeout { elapsed });
+  }
+  Ok(())
+}
 
 #[derive(Clone, Copy)]
 enum Axis {
@@ -588,6 +599,7 @@ impl GridFormattingContext {
     _constraints: &LayoutConstraints,
     positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
+    let mut deadline_counter = 0usize;
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
     let mut positioned: Vec<BoxNode> = Vec::new();
     for child in root_children {
@@ -621,6 +633,7 @@ impl GridFormattingContext {
       } else {
         let mut child_styles = Vec::with_capacity(in_flow_children.len());
         for child in in_flow_children.iter() {
+          check_layout_deadline(&mut deadline_counter)?;
           child_styles.push(std::sync::Arc::new(SendSyncStyle(self.convert_style(
             &child.style,
             Some(&box_node.style),
@@ -647,6 +660,7 @@ impl GridFormattingContext {
 
       let mut taffy_children = Vec::with_capacity(in_flow_children.len());
       for (child_style, child) in template.child_styles.iter().zip(in_flow_children.iter()) {
+        check_layout_deadline(&mut deadline_counter)?;
         let node = taffy
           .new_leaf_with_context(child_style.0.clone(), *child as *const BoxNode)
           .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
@@ -681,6 +695,7 @@ impl GridFormattingContext {
       None,
       Some(root_children.to_vec()),
       positioned_children,
+      &mut deadline_counter,
     )
   }
 
@@ -692,6 +707,7 @@ impl GridFormattingContext {
     containing_grid: Option<&ComputedStyle>,
     children_override: Option<Vec<&BoxNode>>,
     positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
+    deadline_counter: &mut usize,
   ) -> Result<TaffyNodeId, LayoutError> {
     let mut children_iter: Vec<&BoxNode> = Vec::new();
     let mut positioned: Vec<BoxNode> = Vec::new();
@@ -709,6 +725,7 @@ impl GridFormattingContext {
     // Partition children into in-flow vs positioned for grid containers we expand in the tree.
     if is_grid_container {
       for child in provided_children {
+        check_layout_deadline(deadline_counter)?;
         match child.style.position {
           crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
             positioned.push(child.clone())
@@ -741,6 +758,7 @@ impl GridFormattingContext {
     let node_id = if include_children {
       let mut taffy_children = Vec::with_capacity(children_iter.len());
       for child in children_iter {
+        check_layout_deadline(deadline_counter)?;
         taffy_children.push(self.build_taffy_tree_inner(
           taffy,
           child,
@@ -748,6 +766,7 @@ impl GridFormattingContext {
           Some(&*box_node.style),
           None,
           positioned_children,
+          deadline_counter,
         )?);
       }
       let node_id = taffy
@@ -1539,7 +1558,11 @@ impl GridFormattingContext {
       return None;
     }
 
+    let mut deadline_counter = 0usize;
     for child_id in child_ids.iter().copied() {
+      if let Err(err) = check_layout_deadline(&mut deadline_counter) {
+        return Some(Err(err));
+      }
       let Ok(grandchildren) = taffy.children(child_id) else {
         return None;
       };
@@ -1551,6 +1574,9 @@ impl GridFormattingContext {
     let mut child_bounds: Vec<Rect> = Vec::with_capacity(child_ids.len());
     let mut reused_fragments: Vec<Option<FragmentNode>> = vec![None; child_ids.len()];
     for (idx, child_id) in child_ids.iter().copied().enumerate() {
+      if let Err(err) = check_layout_deadline(&mut deadline_counter) {
+        return Some(Err(err));
+      }
       let layout = match taffy.layout(child_id) {
         Ok(layout) => layout,
         Err(e) => {
@@ -1587,6 +1613,9 @@ impl GridFormattingContext {
 
     let mut indices_to_layout: Vec<usize> = Vec::new();
     for (idx, reused) in reused_fragments.iter().enumerate() {
+      if let Err(err) = check_layout_deadline(&mut deadline_counter) {
+        return Some(Err(err));
+      }
       if reused.is_none() {
         indices_to_layout.push(idx);
       }
@@ -1651,6 +1680,9 @@ impl GridFormattingContext {
     let mut child_results = child_results.into_iter();
     let mut next_child = child_results.next();
     for idx in 0..child_ids.len() {
+      if let Err(err) = check_layout_deadline(&mut deadline_counter) {
+        return Some(Err(err));
+      }
       if let Some(fragment) = reused_fragments[idx].take() {
         child_fragments.push(fragment);
         continue;
@@ -1695,7 +1727,16 @@ impl GridFormattingContext {
       Some(Display::Grid)
     );
     if is_grid_style {
-      self.apply_grid_baseline_alignment(taffy, root_id, root_layout, &child_ids, &mut fragment);
+      if let Err(err) = self.apply_grid_baseline_alignment(
+        taffy,
+        root_id,
+        root_layout,
+        &child_ids,
+        &mut fragment,
+        &mut deadline_counter,
+      ) {
+        return Some(Err(err));
+      }
     }
 
     Some(Ok(fragment))
@@ -1711,6 +1752,7 @@ impl GridFormattingContext {
     measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
     measured_node_keys: &HashMap<TaffyNodeId, Vec<MeasureKey>>,
     positioned_children: &HashMap<TaffyNodeId, Vec<BoxNode>>,
+    deadline_counter: &mut usize,
   ) -> Result<FragmentNode, LayoutError> {
     let layout = taffy
       .layout(node_id)
@@ -1721,20 +1763,20 @@ impl GridFormattingContext {
       .children(node_id)
       .map_err(|e| LayoutError::MissingContext(format!("Taffy children error: {:?}", e)))?;
 
-    let child_fragments: Vec<FragmentNode> = children
-      .iter()
-      .map(|&child_id| {
-        self.convert_to_fragments(
-          taffy,
-          child_id,
-          root_id,
-          constraints,
-          measured_fragments,
-          measured_node_keys,
-          positioned_children,
-        )
-      })
-      .collect::<Result<_, _>>()?;
+    let mut child_fragments = Vec::with_capacity(children.len());
+    for &child_id in children.iter() {
+      check_layout_deadline(deadline_counter)?;
+      child_fragments.push(self.convert_to_fragments(
+        taffy,
+        child_id,
+        root_id,
+        constraints,
+        measured_fragments,
+        measured_node_keys,
+        positioned_children,
+        deadline_counter,
+      )?);
+    }
 
     // Create fragment bounds from Taffy layout
     let bounds = Rect::from_xywh(
@@ -1762,7 +1804,14 @@ impl GridFormattingContext {
           box_node.style.clone(),
         );
         if is_grid_style {
-          self.apply_grid_baseline_alignment(taffy, node_id, layout, &children, &mut fragment);
+          self.apply_grid_baseline_alignment(
+            taffy,
+            node_id,
+            layout,
+            &children,
+            &mut fragment,
+            deadline_counter,
+          )?;
         }
         if let Some(positioned) = positioned_children.get(&node_id) {
           let mut abs_children =
@@ -1892,7 +1941,9 @@ impl GridFormattingContext {
       self.font_context.clone(),
     );
     let mut fragments = Vec::with_capacity(positioned_children.len());
+    let mut deadline_counter = 0usize;
     for child in positioned_children {
+      check_layout_deadline(&mut deadline_counter)?;
       // Layout child as static for intrinsic size.
       let mut layout_child = child.clone();
       let mut style = (*layout_child.style).clone();
@@ -2063,9 +2114,15 @@ impl GridFormattingContext {
     }
   }
 
-  fn apply_baseline_group(&self, axis: Axis, group: &[BaselineItem], fragment: &mut FragmentNode) {
+  fn apply_baseline_group(
+    &self,
+    axis: Axis,
+    group: &[BaselineItem],
+    fragment: &mut FragmentNode,
+    deadline_counter: &mut usize,
+  ) -> Result<(), LayoutError> {
     if group.is_empty() {
-      return;
+      return Ok(());
     }
 
     let debug_baseline =
@@ -2073,6 +2130,7 @@ impl GridFormattingContext {
 
     let mut target = 0.0;
     for item in group {
+      check_layout_deadline(deadline_counter)?;
       let area_size = (item.area_end - item.area_start).max(0.0);
       let clamped = item.baseline.min(area_size);
       if clamped > target {
@@ -2094,6 +2152,7 @@ impl GridFormattingContext {
     }
 
     for item in group {
+      check_layout_deadline(deadline_counter)?;
       let area_size = (item.area_end - item.area_start).max(0.0);
       if area_size <= 0.0 {
         if debug_baseline {
@@ -2138,6 +2197,7 @@ impl GridFormattingContext {
         );
       }
     }
+    Ok(())
   }
 
   fn apply_grid_baseline_alignment(
@@ -2147,22 +2207,23 @@ impl GridFormattingContext {
     layout: &TaffyLayout,
     child_ids: &[TaffyNodeId],
     fragment: &mut FragmentNode,
-  ) {
+    deadline_counter: &mut usize,
+  ) -> Result<(), LayoutError> {
     let detailed = match taffy.detailed_layout_info(node_id) {
       DetailedLayoutInfo::Grid(info) => info,
-      _ => return,
+      _ => return Ok(()),
     };
     if fragment.children.is_empty() {
-      return;
+      return Ok(());
     }
     if detailed.items.len() != fragment.children.len() || child_ids.len() != fragment.children.len()
     {
-      return;
+      return Ok(());
     }
 
     let container_style = match taffy.style(node_id) {
       Ok(style) => style,
-      Err(_) => return,
+      Err(_) => return Ok(()),
     };
 
     let row_offsets = compute_track_offsets(
@@ -2210,6 +2271,7 @@ impl GridFormattingContext {
       .zip(fragment.children.iter())
       .enumerate()
     {
+      check_layout_deadline(deadline_counter)?;
       let child_style = match taffy.style(*child_id) {
         Ok(style) => style,
         Err(_) => continue,
@@ -2285,11 +2347,12 @@ impl GridFormattingContext {
     }
 
     for group in row_groups.values() {
-      self.apply_baseline_group(Axis::Vertical, group, fragment);
+      self.apply_baseline_group(Axis::Vertical, group, fragment, deadline_counter)?;
     }
     for group in col_groups.values() {
-      self.apply_baseline_group(Axis::Horizontal, group, fragment);
+      self.apply_baseline_group(Axis::Horizontal, group, fragment, deadline_counter)?;
     }
+    Ok(())
   }
 
   /// Computes intrinsic size using Taffy
@@ -3211,6 +3274,7 @@ impl FormattingContext for GridFormattingContext {
     }
 
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
+    let mut deadline_counter = 0usize;
     let mut fragment = if !has_subgrid && !child_has_subgrid {
       match self.try_parallel_root_children_conversion(
         &taffy,
@@ -3230,6 +3294,7 @@ impl FormattingContext for GridFormattingContext {
           &measured_fragments,
           &measured_node_keys,
           &positioned_children_map,
+          &mut deadline_counter,
         )?,
       }
     } else {
@@ -3241,6 +3306,7 @@ impl FormattingContext for GridFormattingContext {
         &measured_fragments,
         &measured_node_keys,
         &positioned_children_map,
+        &mut deadline_counter,
       )?
     };
 
@@ -3710,6 +3776,35 @@ mod tests {
       Arc::ptr_eq(&template_a, &template_b),
       "expected second build to reuse existing cached template"
     );
+  }
+
+  #[test]
+  fn grid_tree_build_times_out_via_deadline_checks() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::time::Duration;
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let children: Vec<BoxNode> = (0..64)
+      .map(|_| BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]))
+      .collect();
+    let container = BoxNode::new_block(make_grid_style(), FormattingContextType::Grid, children);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let gc = GridFormattingContext::new();
+    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let root_children: Vec<&BoxNode> = container.children.iter().collect();
+    let mut positioned_children = HashMap::new();
+    let result = gc.build_taffy_tree_children(
+      &mut taffy,
+      &container,
+      &root_children,
+      &constraints,
+      &mut positioned_children,
+    );
+
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
   #[test]
@@ -4315,6 +4410,7 @@ mod tests {
           })
           .expect("matching measured fragment should exist");
 
+        let mut deadline_counter = 0usize;
         let mut fragment = fc
           .convert_to_fragments(
             &taffy,
@@ -4324,6 +4420,7 @@ mod tests {
             &measured_fragments,
             &measured_node_keys,
             &positioned_children_map,
+            &mut deadline_counter,
           )
           .expect("convert fragments");
 

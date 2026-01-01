@@ -60,7 +60,7 @@ use crate::layout::taffy_integration::{
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::{active_deadline, check_active, with_deadline};
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
@@ -162,6 +162,18 @@ fn normalize_fragment_origin(fragment: &mut FragmentNode) {
   if origin.x != 0.0 || origin.y != 0.0 {
     translate_fragment_tree(fragment, Point::new(-origin.x, -origin.y));
   }
+}
+
+const FLEX_DEADLINE_CHECK_STRIDE: usize = 64;
+
+#[inline]
+fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
+  if let Err(RenderError::Timeout { elapsed, .. }) =
+    check_active_periodic(counter, FLEX_DEADLINE_CHECK_STRIDE, RenderStage::Layout)
+  {
+    return Err(LayoutError::Timeout { elapsed });
+  }
+  Ok(())
 }
 
 #[derive(Clone)]
@@ -1604,6 +1616,7 @@ impl FormattingContext for FlexFormattingContext {
         taffy::style::FlexDirection::Row | taffy::style::FlexDirection::Column
       );
 
+      let mut deadline_counter = 0usize;
       let mut line_indices: Vec<usize> = Vec::with_capacity(fragment.children.len());
       if matches!(box_node.style.flex_wrap, FlexWrap::NoWrap) {
         line_indices.resize(fragment.children.len(), 0);
@@ -1612,6 +1625,7 @@ impl FormattingContext for FlexFormattingContext {
         let mut prev_main: Option<f32> = None;
         let wrap_break_eps = 0.5;
         for child in fragment.children.iter() {
+          check_layout_deadline(&mut deadline_counter)?;
           let main_pos = if main_is_horizontal {
             child.bounds.x()
           } else {
@@ -1653,6 +1667,7 @@ impl FormattingContext for FlexFormattingContext {
       let mut line_cross_starts = vec![f32::INFINITY; line_count];
 
       for idx in 0..fragment.children.len() {
+        check_layout_deadline(&mut deadline_counter)?;
         let child_node = &in_flow_children[idx];
         let align = child_node
           .style
@@ -1694,10 +1709,12 @@ impl FormattingContext for FlexFormattingContext {
 
       let mut line_baselines = vec![LineBaselineData::default(); line_cross_starts.len()];
       for (idx, start) in line_cross_starts.iter().enumerate() {
+        check_layout_deadline(&mut deadline_counter)?;
         line_baselines[idx].cross_start = if start.is_finite() { *start } else { 0.0 };
       }
 
       for metrics in baseline_items.iter().flatten() {
+        check_layout_deadline(&mut deadline_counter)?;
         let line_idx = metrics.line_index;
         if line_idx >= line_baselines.len() {
           line_baselines.resize(line_idx + 1, LineBaselineData::default());
@@ -1712,6 +1729,7 @@ impl FormattingContext for FlexFormattingContext {
       }
 
       for line in line_baselines.iter_mut() {
+        check_layout_deadline(&mut deadline_counter)?;
         if line.has_baseline {
           line.cross_start = line.cross_start.max(0.0);
           line.baseline = line.cross_start + line.max_above;
@@ -1723,6 +1741,7 @@ impl FormattingContext for FlexFormattingContext {
         .zip(fragment.children_mut().iter_mut())
         .enumerate()
       {
+        check_layout_deadline(&mut deadline_counter)?;
         let align = child_node
           .style
           .align_self
@@ -1788,6 +1807,7 @@ impl FormattingContext for FlexFormattingContext {
           fragment.bounds.height()
         );
         for (idx, child) in fragment.children.iter().enumerate() {
+          check_layout_deadline(&mut deadline_counter)?;
           eprintln!(
             "[flex-child-after-align] idx={} bounds=({:.2},{:.2},{:.2},{:.2})",
             idx,
@@ -1826,7 +1846,9 @@ impl FormattingContext for FlexFormattingContext {
       let max_h = fragment.bounds.height().max(0.0);
       let runaway_x = max_w.max(1.0) * 20.0;
       let runaway_y = max_h.max(1.0) * 20.0;
+      let mut deadline_counter = 0usize;
       for child in fragment.children_mut() {
+        check_layout_deadline(&mut deadline_counter)?;
         let mut x = child.bounds.x();
         let mut y = child.bounds.y();
         let mut w = child.bounds.width();
@@ -2053,7 +2075,9 @@ impl FormattingContext for FlexFormattingContext {
       };
 
       let mut positioned_candidates: Vec<PositionedCandidate> = Vec::new();
+      let mut deadline_counter = 0usize;
       for child in positioned_children {
+        check_layout_deadline(&mut deadline_counter)?;
         let child_id = child.id;
         let original_style = child.style.clone();
         let is_replaced = child.is_replaced();
@@ -2162,6 +2186,7 @@ impl FormattingContext for FlexFormattingContext {
         .unwrap_or_default();
 
       for mut candidate in positioned_candidates {
+        check_layout_deadline(&mut deadline_counter)?;
         let mut input = AbsoluteLayoutInput::new(
           candidate.positioned_style,
           candidate.fragment.bounds.size,
@@ -2206,7 +2231,9 @@ impl FormattingContext for FlexFormattingContext {
 
     if !running_children.is_empty() {
       let mut id_to_bounds: HashMap<usize, Rect> = HashMap::new();
+      let mut deadline_counter = 0usize;
       for child in fragment.children.iter() {
+        check_layout_deadline(&mut deadline_counter)?;
         let Some(box_id) = (match &child.content {
           FragmentContent::Block { box_id }
           | FragmentContent::Inline { box_id, .. }
@@ -2221,6 +2248,7 @@ impl FormattingContext for FlexFormattingContext {
 
       let snapshot_factory = base_factory.clone();
       for (order, (running_idx, running_child)) in running_children.into_iter().enumerate() {
+        check_layout_deadline(&mut deadline_counter)?;
         let Some(name) = running_child.style.running_position.clone() else {
           continue;
         };
@@ -2689,6 +2717,7 @@ impl FlexFormattingContext {
     _constraints: &LayoutConstraints,
     node_map: &mut HashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
+    let mut deadline_counter = 0usize;
     let child_fingerprint = flex_child_fingerprint(root_children);
     let root_style_fingerprint = taffy_flex_style_fingerprint(box_node.style.as_ref());
     let cache_key = TaffyNodeCacheKey::new(
@@ -2705,6 +2734,7 @@ impl FlexFormattingContext {
     } else {
       let mut child_styles = Vec::with_capacity(root_children.len());
       for child in root_children {
+        check_layout_deadline(&mut deadline_counter)?;
         child_styles.push(std::sync::Arc::new(SendSyncStyle(
           self.computed_style_to_taffy(child, false, Some(&box_node.style))?,
         )));
@@ -2724,6 +2754,7 @@ impl FlexFormattingContext {
 
     let mut taffy_children = Vec::with_capacity(root_children.len());
     for (child_style, child) in template.child_styles.iter().zip(root_children.iter()) {
+      check_layout_deadline(&mut deadline_counter)?;
       let node = taffy_tree
         .new_leaf_with_context(child_style.0.clone(), *child as *const BoxNode)
         .map_err(|e| {
@@ -3158,9 +3189,11 @@ impl FlexFormattingContext {
     let mut child_metrics: Vec<Option<ChildMetrics>> = vec![None; child_count];
     let mut child_plans: Vec<ChildPlan> = vec![ChildPlan::Skip; child_count];
     let mut layout_work: Vec<ChildLayoutWorkItem<'_>> = Vec::new();
+    let mut deadline_counter = 0usize;
 
     // Pre-pass to compute sizing/position inputs and decide which children require real layout.
     for (dom_idx, child_box) in box_node.children.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       let Some(&child_taffy) = node_map.get(&(child_box as *const BoxNode)) else {
         continue;
       };
@@ -3550,6 +3583,7 @@ impl FlexFormattingContext {
     // Sequential assembly: apply placement/fallback logic in DOM order, but reuse/compute child
     // fragments using the results from the parallel stage above.
     for (dom_idx, child_box) in box_node.children.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       let plan = mem::replace(&mut child_plans[dom_idx], ChildPlan::Skip);
       let Some(metrics) = child_metrics[dom_idx] else {
         #[cfg(test)]
@@ -3985,10 +4019,11 @@ impl FlexFormattingContext {
       } else {
         self.viewport_size.width
       };
-      let mut max_child_x = children
-        .iter()
-        .map(|c| c.bounds.max_x())
-        .fold(0.0, f32::max);
+      let mut max_child_x = 0.0f32;
+      for child in &children {
+        check_layout_deadline(&mut deadline_counter)?;
+        max_child_x = max_child_x.max(child.bounds.max_x());
+      }
       let log_shrink_ids = toggles
         .usize_list("FASTR_LOG_FLEX_SHRINK_IDS")
         .unwrap_or_default();
@@ -4003,10 +4038,12 @@ impl FlexFormattingContext {
         let mut box_lookup: std::collections::HashMap<usize, &BoxNode> =
           std::collections::HashMap::new();
         for child in &box_node.children {
+          check_layout_deadline(&mut deadline_counter)?;
           box_lookup.insert(child.id, child);
         }
         let mut frag_box_ids: Vec<(usize, usize)> = Vec::new();
         for (idx, frag) in children.iter().enumerate() {
+          check_layout_deadline(&mut deadline_counter)?;
           if let Some(box_id) = match &frag.content {
             FragmentContent::Block { box_id }
             | FragmentContent::Inline { box_id, .. }
@@ -4019,6 +4056,7 @@ impl FlexFormattingContext {
           }
         }
         for (frag_idx, box_id) in &frag_box_ids {
+          check_layout_deadline(&mut deadline_counter)?;
           if let Some(child_node) = box_lookup.get(box_id) {
             let child_fragment = &children[*frag_idx];
             let base = child_fragment.bounds.width();
@@ -5252,6 +5290,42 @@ mod tests {
   fn baseline_position(fragment: &FragmentNode) -> f32 {
     let offset = fragment_first_baseline(fragment).expect("fragment has no baseline");
     fragment.bounds.y() + offset
+  }
+
+  #[test]
+  fn flex_tree_build_times_out_via_deadline_checks() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let children: Vec<BoxNode> = (0..64)
+      .map(|_| {
+        BoxNode::new_block(
+          create_item_style(10.0, 10.0),
+          FormattingContextType::Block,
+          vec![],
+        )
+      })
+      .collect();
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let fc = FlexFormattingContext::new();
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: HashMap<*const BoxNode, NodeId> = HashMap::new();
+    let root_children: Vec<&BoxNode> = container.children.iter().collect();
+    let result = fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container,
+      &root_children,
+      &constraints,
+      &mut node_map,
+    );
+
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
   #[test]
