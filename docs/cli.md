@@ -184,5 +184,12 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - `target/pageset/logs/<stem>.log` — per-page log (not committed)
   - `target/pageset/logs/<stem>.stderr.log` — worker stdout/stderr, including panic
     backtraces and a note if the parent kills the process on timeout (not committed)
+  - Optional cascade profiling reruns: `--cascade-diagnostics` re-runs slow cascade pages and
+    cascade timeouts with cascade profiling enabled (`FASTR_CASCADE_PROFILE=1`), then merges the
+    resulting selector candidate/match counters into the committed progress JSON under
+    `diagnostics.stats.cascade`.
+    - Slow threshold: `--cascade-diagnostics-slow-ms <ms>` (defaults to 500ms).
+    - Temp rerun progress dir (not committed): `--cascade-diagnostics-progress-dir <dir>` (defaults
+      to `target/pageset/cascade-progress/`).
   - Optional traces: `--trace-failures` / `--trace-slow-ms <ms>` rerun targeted pages with Chrome tracing enabled; tune trace rerun budgets with `--trace-timeout` (defaults to `timeout * 2`), `--trace-soft-timeout-ms`, and `--trace-jobs` (defaults to 1 to avoid contention). Traces land in `target/pageset/traces/<stem>.json` with rerun progress under `target/pageset/trace-progress/<stem>.json` and logs at `target/pageset/logs/<stem>.trace.log`.
   - Workers accept `--layout-parallel {off|on|auto}` (plus `--layout-parallel-min-fanout` / `--layout-parallel-auto-min-nodes` / `--layout-parallel-max-threads`). The default is `auto`, so small pages stay serial while large pages can fan out across Rayon threads.

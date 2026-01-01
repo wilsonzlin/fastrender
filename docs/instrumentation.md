@@ -39,6 +39,14 @@ resource/cache counters to explain slow fetch-heavy pagesets (e.g. cache misses 
 disk cache reads, single-flight inflight waits, and total network fetch time). These are surfaced in
 `pageset_progress report --verbose-stats` and stored under `diagnostics.stats` in the per-page JSON
 when present.
+
+For cascade hotspots, `RenderDiagnostics.stats.cascade` is normally sparse unless cascade profiling
+is enabled. You can opt in to selector-level counters (rule candidates/matches, bloom fast rejects,
+selector/declaration/pseudo time splits, plus `:has()` counters) via:
+
+- `FASTR_CASCADE_PROFILE=1` (library + all CLIs)
+- `pageset_progress run --cascade-diagnostics` (re-runs slow-cascade ok pages + cascade timeouts
+  with profiling enabled and merges `stats.cascade` back into the committed progress JSON)
 `pageset_progress report --verbose-stats` also prints:
 - top-N rankings per stage bucket (fetch/css/cascade/layout/paint)
 - an aggregated resource totals line plus rankings for the heaviest network/inflight/disk-cache

@@ -19,6 +19,11 @@ This directory contains the **committed pageset scoreboard**: one tiny JSON file
 - These are auto-generated; don't hand-edit them except for durable human fields like `notes`/`last_*` when needed.
 - `notes` is intended for durable human explanations; `auto_notes` is machine-generated last-run diagnostics and is rewritten on each run.
 - Renderer-provided `failure_stage`/`timeout_stage` fields stay `null` on placeholders and are populated directly from diagnostics during runs for programmatic triage.
+- `diagnostics.stats.cascade` can include selector-level counters (rule candidates/matches, bloom
+  fast rejects, time splits, and `:has()` counters) when cascade profiling is enabled:
+  - `FASTR_CASCADE_PROFILE=1` for ad-hoc renders, or
+  - `pageset_progress run --cascade-diagnostics` to re-run slow cascade pages/timeouts and merge
+    the resulting cascade counters into these committed progress artifacts.
 
 `pageset_progress report --verbose-stats` prints these per-page resource breakdowns plus aggregated
 totals and top-N rankings (network/inflight/disk) to speed up performance triage.

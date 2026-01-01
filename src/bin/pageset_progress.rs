@@ -6004,6 +6004,58 @@ mod tests {
   }
 
   #[test]
+  fn merge_cascade_diagnostics_fills_missing_fields_without_overwriting() {
+    let mut dst = CascadeDiagnostics {
+      nodes: Some(1),
+      selector_time_ms: Some(2.0),
+      ..CascadeDiagnostics::default()
+    };
+    let src = CascadeDiagnostics {
+      nodes: Some(99),
+      rule_candidates: Some(10),
+      selector_time_ms: Some(42.0),
+      has_evals: Some(7),
+      ..CascadeDiagnostics::default()
+    };
+
+    merge_cascade_diagnostics(&mut dst, &src);
+
+    assert_eq!(dst.nodes, Some(1), "existing fields should not be overwritten");
+    assert_eq!(
+      dst.selector_time_ms,
+      Some(2.0),
+      "existing fields should not be overwritten"
+    );
+    assert_eq!(dst.rule_candidates, Some(10), "missing fields should be filled");
+    assert_eq!(dst.has_evals, Some(7), "missing fields should be filled");
+  }
+
+  #[test]
+  fn merge_cascade_stats_into_progress_creates_containers() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    assert!(progress.diagnostics.is_none(), "sanity: starts without diagnostics");
+
+    let rerun_stats = RenderStats {
+      cascade: CascadeDiagnostics {
+        nodes: Some(3),
+        rule_candidates: Some(4),
+        ..CascadeDiagnostics::default()
+      },
+      ..RenderStats::default()
+    };
+
+    merge_cascade_stats_into_progress(&mut progress, &rerun_stats);
+
+    let stats = progress
+      .diagnostics
+      .as_ref()
+      .and_then(|d| d.stats.as_ref())
+      .expect("merge should create diagnostics.stats");
+    assert_eq!(stats.cascade.nodes, Some(3));
+    assert_eq!(stats.cascade.rule_candidates, Some(4));
+  }
+
+  #[test]
   fn hotspot_inference_prefers_largest_bucket() {
     let buckets = StageBuckets {
       fetch: 5.0,

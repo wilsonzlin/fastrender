@@ -91,7 +91,8 @@ These are emitted by the paint pipeline:
 
 ## Performance / profiling
 
-- `FASTR_CASCADE_PROFILE=1` – cascade profiling.
+- `FASTR_CASCADE_PROFILE=1` – cascade profiling (populates `RenderDiagnostics.stats.cascade` with
+  selector candidate/match counters and `:has()` evaluation counters).
 - `FASTR_LAYOUT_PROFILE=1` – layout-context profiling.
 - `FASTR_FLEX_PROFILE=1` – flex profiling (with additional `FASTR_FLEX_PROFILE_*` knobs).
 - `FASTR_PROFILE_FRAGMENT_CLONES=1` – count fragment clones when layout/flex/grid caches reuse measured/layout fragments and enable fragment instrumentation (deep clone counts, traversal).
