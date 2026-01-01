@@ -20,6 +20,7 @@ mod flex_property_test;
 mod forgiving_selector_list_test;
 mod grid_property_test;
 mod has_selector_test;
+mod has_selector_quirks_bloom_test;
 mod layer_important_test;
 mod logical_properties_test;
 mod mask_properties_test;

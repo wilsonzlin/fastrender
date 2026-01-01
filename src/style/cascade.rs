@@ -957,19 +957,27 @@ fn rule_index_needs_bloom_summaries_for_has_relative<'a>(
 }
 
 fn rule_scopes_needs_selector_bloom_summaries<'a>(scopes: &RuleScopes<'a>) -> bool {
-  let needs_for_index = |index: &RuleIndex<'a>| index.has_has_requirements;
-  if needs_for_index(&scopes.ua)
-    || needs_for_index(&scopes.document)
-    || scopes.shadows.values().any(needs_for_index)
-    || scopes.host_rules.values().any(needs_for_index)
-  {
-    return true;
-  }
-
-  if matches!(scopes.quirks_mode, QuirksMode::Quirks) {
-    return false;
-  }
   let quirks_mode = scopes.quirks_mode;
+
+  // Fast path: in standards mode (and limited quirks), `:has()` relative selectors can emit bloom
+  // hashes for classes / IDs, so we track whether any rule contains prunable `:has()` requirements
+  // while building the `RuleIndex`. If present, selector bloom summaries are useful for both rule
+  // candidate pruning and `:has()` matching, so we can return early.
+  //
+  // In full quirks mode, the selector engine intentionally omits class / ID bloom hashes (to avoid
+  // incorrect pruning under case-folded matching). As a result, `RuleIndex::has_has_requirements`
+  // can be true even though quirks-mode pruning would be a no-op. For quirks documents we fall back
+  // to scanning for `:has()` relative selectors whose *quirks-mode* bloom hashes are non-empty.
+  if !matches!(quirks_mode, QuirksMode::Quirks) {
+    let needs_for_index = |index: &RuleIndex<'a>| index.has_has_requirements;
+    if needs_for_index(&scopes.ua)
+      || needs_for_index(&scopes.document)
+      || scopes.shadows.values().any(needs_for_index)
+      || scopes.host_rules.values().any(needs_for_index)
+    {
+      return true;
+    }
+  }
 
   rule_index_needs_bloom_summaries_for_has_relative(&scopes.ua, quirks_mode)
     || rule_index_needs_bloom_summaries_for_has_relative(&scopes.document, quirks_mode)
@@ -9016,6 +9024,102 @@ mod tests {
     );
     assert!(!prepared.needs_selector_bloom_summaries);
     assert!(prepared.dom_maps.selector_blooms().is_none());
+  }
+
+  #[test]
+  fn quirks_mode_has_attribute_selector_builds_blooms_and_prunes() {
+    crate::dom::set_selector_bloom_enabled(true);
+
+    let div_count = 40usize;
+    let mut divs: Vec<DomNode> = Vec::with_capacity(div_count);
+    for idx in 0..div_count {
+      let id = match idx {
+        0 => Some("hit"),
+        1 => Some("miss"),
+        _ => None,
+      };
+      let mut span_attrs: Vec<(String, String)> = Vec::new();
+      if idx == 0 {
+        span_attrs.push(("data-x".to_string(), String::new()));
+      }
+      let span = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: span_attrs,
+        },
+        children: vec![],
+      };
+      let mut div_attrs: Vec<(String, String)> = Vec::new();
+      if let Some(id) = id {
+        div_attrs.push(("id".to_string(), id.to_string()));
+      }
+      divs.push(DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: div_attrs,
+        },
+        children: vec![span],
+      });
+    }
+
+    let dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::Quirks,
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "body".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: divs,
+      }],
+    };
+    assert!(enumerate_dom_ids(&dom).len() >= SELECTOR_BLOOM_MIN_NODES);
+
+    let stylesheet =
+      parse_stylesheet("div:is(:has([data-x]), .noop) { display: inline; }").unwrap();
+    let style_set = StyleSet::from_document(stylesheet);
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let mut prepared =
+      PreparedCascade::new_for_style_set(&dom, &style_set, &media_ctx, None, None, None, false)
+        .expect("build prepared cascade");
+    let styled = prepared
+      .apply(None, None, None, None, None)
+      .expect("apply cascade");
+
+    assert_eq!(
+      find_styled_node_by_id(&styled, "hit")
+        .expect("hit div")
+        .styles
+        .display,
+      Display::Inline
+    );
+    assert_eq!(
+      find_styled_node_by_id(&styled, "miss")
+        .expect("miss div")
+        .styles
+        .display,
+      Display::Block
+    );
+
+    assert!(prepared.needs_selector_bloom_summaries);
+    assert!(
+      prepared.dom_maps.selector_blooms().is_some(),
+      "expected selector bloom summaries to be built in quirks mode for :has([data-x])"
+    );
+
+    let counters = crate::dom::capture_has_counters();
+    assert_eq!(
+      counters.evals, div_count as u64,
+      "expected :has to be evaluated once per <div>"
+    );
+    assert_eq!(counters.cache_hits, 0);
+    assert_eq!(counters.evaluated, 1);
+    assert_eq!(counters.filter_prunes, 0);
+    assert_eq!(counters.summary_prunes(), (div_count - 1) as u64);
   }
 
   #[test]

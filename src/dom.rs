@@ -5024,9 +5024,7 @@ fn matches_has_relative(
         }
 
         let quirks_mode = ctx.quirks_mode();
-        if selector.match_hint.is_descendant_direction()
-          && !matches!(quirks_mode, selectors::context::QuirksMode::Quirks)
-        {
+        if selector.match_hint.is_descendant_direction() {
           if let Some(summary) = anchor_summary {
             let hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode);
             if !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash)) {
