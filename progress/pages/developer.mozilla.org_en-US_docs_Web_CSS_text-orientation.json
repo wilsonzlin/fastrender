@@ -5,9 +5,9 @@
   "stages_ms": {
     "fetch": 7.455369000000001,
     "css": 18.318195999999997,
-    "cascade": 1189.602972,
-    "layout": 3025.2661680000015,
-    "paint": 347.354286
+    "cascade": 1189.6029720000001,
+    "layout": 2824.746089,
+    "paint": 347.147741
   },
   "notes": "",
   "hotspot": "layout",
@@ -50,6 +50,9 @@
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 66892,
         "fallback_cache_misses": 118740,
+        "fallback_cache_glyph_evictions": null,
+        "fallback_cache_cluster_evictions": null,
+        "fallback_cache_clears": null,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 2,
         "glyph_cache_misses": 10,
@@ -101,6 +104,9 @@
         "layout_cache_stores": 2256,
         "layout_cache_evictions": 680,
         "layout_cache_clones": 3850,
+        "inline_reshape_lookups": null,
+        "inline_reshape_hits": null,
+        "inline_reshape_stores": null,
         "flex_cache_clones": 0,
         "taffy_nodes_built": 5063,
         "taffy_nodes_reused": 336,

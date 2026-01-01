@@ -5,9 +5,9 @@
   "stages_ms": {
     "fetch": 1.8392739999999999,
     "css": 183.052381,
-    "cascade": 617.195118,
-    "layout": 238.37456300000002,
-    "paint": 122.08168399999998
+    "cascade": 617.1951180000001,
+    "layout": 146.04057500000002,
+    "paint": 105.84704299999999
   },
   "notes": "",
   "auto_notes": "ok with failures: failure_stage=paint fetch_errors=1 (img=1)",
@@ -31,7 +31,7 @@
         "css_inlining_ms": null,
         "css_parse_ms": 183.052381,
         "cascade_ms": 241.931214,
-        "box_tree_ms": 375.26390399999997,
+        "box_tree_ms": 375.263904,
         "layout_ms": 146.04057500000002,
         "text_fallback_ms": 68.583864,
         "text_shape_ms": 23.750124,
@@ -51,6 +51,9 @@
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 188,
         "fallback_cache_misses": 140,
+        "fallback_cache_glyph_evictions": null,
+        "fallback_cache_cluster_evictions": null,
+        "fallback_cache_clears": null,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 21,
         "glyph_cache_misses": 20,
@@ -166,7 +169,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 12.701265999999999
+        "image_decode_ms": 12.701266
       }
     },
     "fetch_error_summary": {

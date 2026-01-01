@@ -5,7 +5,7 @@
   "stages_ms": {
     "fetch": 2.2516030000000002,
     "css": 303.849625,
-    "cascade": 148.13167199999998,
+    "cascade": 148.131672,
     "layout": 156.91723,
     "paint": 115.312892
   },
@@ -29,7 +29,7 @@
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
         "css_parse_ms": 303.849625,
-        "cascade_ms": 107.79952399999999,
+        "cascade_ms": 107.799524,
         "box_tree_ms": 40.332148,
         "layout_ms": 156.91723,
         "text_fallback_ms": 0.0,
@@ -50,6 +50,9 @@
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 0,
         "fallback_cache_misses": 0,
+        "fallback_cache_glyph_evictions": null,
+        "fallback_cache_cluster_evictions": null,
+        "fallback_cache_clears": null,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,

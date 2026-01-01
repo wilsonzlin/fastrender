@@ -6,8 +6,8 @@
     "fetch": 1.1486669999999999,
     "css": 112.010704,
     "cascade": 208.15590500000002,
-    "layout": 543.420089,
-    "paint": 968.182128
+    "layout": 466.705985,
+    "paint": 963.4139660000001
   },
   "notes": "",
   "hotspot": "paint",
@@ -50,6 +50,9 @@
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 16630,
         "fallback_cache_misses": 12698,
+        "fallback_cache_glyph_evictions": null,
+        "fallback_cache_cluster_evictions": null,
+        "fallback_cache_clears": null,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 423,
         "glyph_cache_misses": 66,

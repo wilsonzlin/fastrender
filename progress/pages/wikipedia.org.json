@@ -6,8 +6,8 @@
     "fetch": 3.369188,
     "css": 40.844331999999994,
     "cascade": 1044.585818,
-    "layout": 492.286948,
-    "paint": 34.694288
+    "layout": 464.214443,
+    "paint": 31.607318
   },
   "notes": "",
   "hotspot": "cascade",
@@ -50,6 +50,9 @@
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 3713,
         "fallback_cache_misses": 17674,
+        "fallback_cache_glyph_evictions": null,
+        "fallback_cache_cluster_evictions": null,
+        "fallback_cache_clears": null,
         "last_resort_font_fallbacks": 111,
         "last_resort_font_fallback_samples": [
           "U+1019 U+103C",
@@ -111,6 +114,9 @@
         "layout_cache_stores": 429,
         "layout_cache_evictions": 0,
         "layout_cache_clones": 111,
+        "inline_reshape_lookups": null,
+        "inline_reshape_hits": null,
+        "inline_reshape_stores": null,
         "flex_cache_clones": 0,
         "taffy_nodes_built": 0,
         "taffy_nodes_reused": 0,
