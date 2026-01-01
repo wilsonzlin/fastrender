@@ -524,6 +524,72 @@ pub fn rasterize_conic_gradient(
   Ok(Some(pixmap))
 }
 
+/// Rasterize a conic gradient into a pixmap where the sampling coordinate space is scaled.
+///
+/// This is useful when the resulting pixmap will be drawn with a non-uniform scale (e.g. as a
+/// repeated pattern where the tile size is fractional in device pixels). The `scale_x/scale_y`
+/// parameters describe how many destination (device) pixels correspond to a 1px step in the
+/// rasterized pixmap.
+pub fn rasterize_conic_gradient_scaled(
+  width: u32,
+  height: u32,
+  center: Point,
+  start_angle: f32,
+  spread: SpreadMode,
+  stops: &[(f32, Rgba)],
+  cache: &GradientLutCache,
+  bucket: u16,
+  scale_x: f32,
+  scale_y: f32,
+) -> Result<Option<Pixmap>, RenderError> {
+  check_active(RenderStage::Paint)?;
+  if width == 0
+    || height == 0
+    || stops.is_empty()
+    || !scale_x.is_finite()
+    || !scale_y.is_finite()
+    || scale_x <= 0.0
+    || scale_y <= 0.0
+  {
+    return Ok(None);
+  }
+
+  let period = gradient_period(stops);
+  let key = GradientCacheKey::new(stops, spread, period, bucket);
+  let lut = cache.get_or_build(key, || build_gradient_lut(stops, spread, period, bucket));
+  let Some(mut pixmap) = new_pixmap(width, height) else {
+    return Ok(None);
+  };
+
+  let start_angle = start_angle.rem_euclid(std::f32::consts::PI * 2.0);
+  let angle_scale = period * 0.5 / std::f32::consts::PI;
+  let stride = width as usize;
+  let pixels = pixmap.pixels_mut();
+  let dx0 = (0.5 - center.x) * scale_x;
+  let mut deadline_counter = 0usize;
+  const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
+  for y in 0..height as usize {
+    let dy = (y as f32 + 0.5 - center.y) * scale_y;
+    let mut dx = dx0;
+    let row_base = y * stride;
+    for chunk in pixels[row_base..row_base + stride].chunks_mut(DEADLINE_PIXELS_STRIDE) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      for pixel in chunk {
+        let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
+        if pos < 0.0 {
+          pos += period;
+        } else if pos >= period {
+          pos -= period;
+        }
+        *pixel = lut.sample(pos.max(0.0));
+        dx += scale_x;
+      }
+    }
+  }
+
+  Ok(Some(pixmap))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -654,6 +720,56 @@ mod tests {
     assert!(max_diff(&lut_pixmap, &naive) <= 1);
   }
 
+  fn naive_conic_scaled(
+    width: u32,
+    height: u32,
+    center: Point,
+    start_angle: f32,
+    stops: &[(f32, Rgba)],
+    spread: SpreadMode,
+    scale_x: f32,
+    scale_y: f32,
+  ) -> Pixmap {
+    let period = gradient_period(stops);
+    let Some(mut pixmap) = new_pixmap(width, height) else {
+      panic!("pixmap allocation failed");
+    };
+    let stride = width as usize;
+    let pixels = pixmap.pixels_mut();
+    let inv_two_pi = 0.5 / std::f32::consts::PI;
+    for y in 0..height as usize {
+      let dy = (y as f32 + 0.5 - center.y) * scale_y;
+      for x in 0..width as usize {
+        let dx = (x as f32 + 0.5 - center.x) * scale_x;
+        let angle = dx.atan2(-dy) + start_angle;
+        let mut pos = (angle * inv_two_pi).rem_euclid(1.0) * period;
+        match spread {
+          SpreadMode::Repeat => {
+            pos = pos.rem_euclid(period);
+          }
+          SpreadMode::Pad => pos = pos.clamp(0.0, period),
+          SpreadMode::Reflect => {
+            let two_p = period * 2.0;
+            let mut v = pos.rem_euclid(two_p);
+            if v > period {
+              v = two_p - v;
+            }
+            pos = v;
+          }
+        }
+        let color = sample_stop_color(stops, pos, period, spread);
+        pixels[y * stride + x] = PremultipliedColorU8::from_rgba(
+          color.r,
+          color.g,
+          color.b,
+          (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+        )
+        .unwrap();
+      }
+    }
+    pixmap
+  }
+
   #[test]
   fn linear_lut_matches_naive_with_low_error() {
     let stops = vec![(0.0, Rgba::RED), (1.0, Rgba::BLUE)];
@@ -698,6 +814,37 @@ mod tests {
     }
 
     assert!(max_diff(&lut_pixmap, &naive) <= 1);
+  }
+
+  #[test]
+  fn conic_lut_scaled_matches_naive_with_low_error() {
+    let stops = vec![(0.0, Rgba::RED), (0.5, Rgba::GREEN), (1.0, Rgba::BLUE)];
+    let cache = GradientLutCache::default();
+    let width = 64;
+    let height = 32;
+    let center = Point::new(width as f32 / 2.0, height as f32 / 2.0);
+    let scale_x = 0.75;
+    let scale_y = 1.25;
+    let lut_pixmap = rasterize_conic_gradient_scaled(
+      width,
+      height,
+      center,
+      0.0,
+      SpreadMode::Repeat,
+      &stops,
+      &cache,
+      gradient_bucket(width.max(height)),
+      scale_x,
+      scale_y,
+    )
+    .expect("lut rasterize")
+    .expect("lut pixmap");
+    let naive = naive_conic_scaled(width, height, center, 0.0, &stops, SpreadMode::Repeat, scale_x, scale_y);
+    let diff = max_diff(&lut_pixmap, &naive);
+    assert!(
+      diff <= 2,
+      "expected scaled conic LUT raster to be close to naive; max_diff={diff}"
+    );
   }
 
   #[test]

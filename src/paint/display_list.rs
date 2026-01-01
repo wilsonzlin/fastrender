@@ -112,11 +112,20 @@ pub enum DisplayItem {
   /// Draw a linear gradient
   LinearGradient(LinearGradientItem),
 
+  /// Draw a repeating linear-gradient pattern (background-repeat: repeat/round).
+  LinearGradientPattern(LinearGradientPatternItem),
+
   /// Draw a radial gradient
   RadialGradient(RadialGradientItem),
 
+  /// Draw a repeating radial-gradient pattern (background-repeat: repeat/round).
+  RadialGradientPattern(RadialGradientPatternItem),
+
   /// Draw a conic gradient
   ConicGradient(ConicGradientItem),
+
+  /// Draw a repeating conic-gradient pattern (background-repeat: repeat/round).
+  ConicGradientPattern(ConicGradientPatternItem),
 
   /// Draw CSS borders with per-side styles
   Border(Box<BorderItem>),
@@ -189,8 +198,11 @@ impl DisplayItem {
         }
       }
       DisplayItem::LinearGradient(item) => Some(item.rect),
+      DisplayItem::LinearGradientPattern(item) => Some(item.dest_rect),
       DisplayItem::RadialGradient(item) => Some(item.rect),
+      DisplayItem::RadialGradientPattern(item) => Some(item.dest_rect),
       DisplayItem::ConicGradient(item) => Some(item.rect),
+      DisplayItem::ConicGradientPattern(item) => Some(item.dest_rect),
       DisplayItem::Border(item) => {
         let max_w = item
           .top
@@ -1138,6 +1150,32 @@ pub struct LinearGradientItem {
   pub spread: GradientSpread,
 }
 
+/// Draw a repeating linear gradient pattern (single fill call).
+#[derive(Debug, Clone)]
+pub struct LinearGradientPatternItem {
+  /// Destination rectangle (already clipped to the visible region).
+  pub dest_rect: Rect,
+
+  /// Tile size in CSS px after background-size/repeat-round resolution.
+  pub tile_size: Size,
+
+  /// Phase/origin in CSS px; this maps the tile's top-left corner to `origin`
+  /// before repetition.
+  pub origin: Point,
+
+  /// Gradient start point (relative to the tile rect).
+  pub start: Point,
+
+  /// Gradient end point (relative to the tile rect).
+  pub end: Point,
+
+  /// Color stops.
+  pub stops: Vec<GradientStop>,
+
+  /// Spread mode for tiling beyond 0..1.
+  pub spread: GradientSpread,
+}
+
 /// Draw a radial gradient
 #[derive(Debug, Clone)]
 pub struct RadialGradientItem {
@@ -1157,6 +1195,32 @@ pub struct RadialGradientItem {
   pub spread: GradientSpread,
 }
 
+/// Draw a repeating radial gradient pattern (single fill call).
+#[derive(Debug, Clone)]
+pub struct RadialGradientPatternItem {
+  /// Destination rectangle (already clipped to the visible region).
+  pub dest_rect: Rect,
+
+  /// Tile size in CSS px after background-size/repeat-round resolution.
+  pub tile_size: Size,
+
+  /// Phase/origin in CSS px; this maps the tile's top-left corner to `origin`
+  /// before repetition.
+  pub origin: Point,
+
+  /// Gradient center (relative to the tile rect).
+  pub center: Point,
+
+  /// Gradient radii on the x/y axes (relative to the tile rect).
+  pub radii: Point,
+
+  /// Color stops.
+  pub stops: Vec<GradientStop>,
+
+  /// Spread mode for tiling beyond 0..1.
+  pub spread: GradientSpread,
+}
+
 /// Draw a conic gradient
 #[derive(Debug, Clone)]
 pub struct ConicGradientItem {
@@ -1170,6 +1234,32 @@ pub struct ConicGradientItem {
   pub from_angle: f32,
 
   /// Color stops
+  pub stops: Vec<GradientStop>,
+
+  /// Repeating?
+  pub repeating: bool,
+}
+
+/// Draw a repeating conic gradient pattern (single fill call).
+#[derive(Debug, Clone)]
+pub struct ConicGradientPatternItem {
+  /// Destination rectangle (already clipped to the visible region).
+  pub dest_rect: Rect,
+
+  /// Tile size in CSS px after background-size/repeat-round resolution.
+  pub tile_size: Size,
+
+  /// Phase/origin in CSS px; this maps the tile's top-left corner to `origin`
+  /// before repetition.
+  pub origin: Point,
+
+  /// Gradient center (relative to the tile rect).
+  pub center: Point,
+
+  /// Start angle in degrees.
+  pub from_angle: f32,
+
+  /// Color stops.
   pub stops: Vec<GradientStop>,
 
   /// Repeating?

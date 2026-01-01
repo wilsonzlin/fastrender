@@ -23,6 +23,7 @@ use crate::paint::display_list::BoxShadowItem;
 use crate::paint::display_list::ClipItem;
 use crate::paint::display_list::ClipShape;
 use crate::paint::display_list::ConicGradientItem;
+use crate::paint::display_list::ConicGradientPatternItem;
 use crate::paint::display_list::DecorationPaint;
 use crate::paint::display_list::DecorationStroke;
 use crate::paint::display_list::DisplayItem;
@@ -38,12 +39,14 @@ use crate::paint::display_list::ImageItem;
 use crate::paint::display_list::ImagePatternItem;
 use crate::paint::display_list::ImagePatternRepeat;
 use crate::paint::display_list::LinearGradientItem;
+use crate::paint::display_list::LinearGradientPatternItem;
 use crate::paint::display_list::ListMarkerItem;
 #[cfg(test)]
 use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::display_list::OpacityItem;
 use crate::paint::display_list::OutlineItem;
 use crate::paint::display_list::RadialGradientItem;
+use crate::paint::display_list::RadialGradientPatternItem;
 use crate::paint::display_list::ResolvedFilter;
 use crate::paint::display_list::ResolvedMask;
 use crate::paint::display_list::ResolvedMaskImage;
@@ -2966,6 +2969,119 @@ impl DisplayListRenderer {
     Ok(())
   }
 
+  fn render_linear_gradient_pattern(&mut self, item: &LinearGradientPatternItem) -> Result<()> {
+    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+      return Ok(());
+    }
+
+    let dest_rect = self.ds_rect(item.dest_rect);
+    if self.canvas.apply_clip(dest_rect).is_none() {
+      return Ok(());
+    }
+    if dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0 {
+      return Ok(());
+    }
+
+    let tile_w = self.ds_len(item.tile_size.width);
+    let tile_h = self.ds_len(item.tile_size.height);
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+      return Ok(());
+    }
+
+    let width = tile_w.ceil().max(1.0) as u32;
+    let height = tile_h.ceil().max(1.0) as u32;
+    if width == 0 || height == 0 {
+      return Ok(());
+    }
+
+    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
+      return Ok(());
+    };
+
+    // The tile pixmap is rasterized at an integer pixel size, then scaled via the pattern shader
+    // so the repetition period matches `tile_w/tile_h` exactly (which can be fractional at device
+    // scale). Convert gradient geometry from tile-space (device px) into the raster pixmap's
+    // coordinate space so scaling the pixmap back preserves the intended gradient geometry.
+    let raster_scale_x = width as f32 / tile_w;
+    let raster_scale_y = height as f32 / tile_h;
+    if !raster_scale_x.is_finite() || !raster_scale_y.is_finite() {
+      return Ok(());
+    }
+
+    let start = Point::new(
+      self.ds_len(item.start.x) * raster_scale_x,
+      self.ds_len(item.start.y) * raster_scale_y,
+    );
+    let end = Point::new(
+      self.ds_len(item.end.x) * raster_scale_x,
+      self.ds_len(item.end.y) * raster_scale_y,
+    );
+    let spread = match item.spread {
+      crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
+      crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
+      crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
+    };
+
+    let background_timer = self
+      .background_paint_diagnostics
+      .as_ref()
+      .map(|_| Instant::now());
+    let timer = self.diagnostics_enabled.then(Instant::now);
+    let Some(tile) = rasterize_linear_gradient(
+      width,
+      height,
+      start,
+      end,
+      spread,
+      &stops,
+      &self.gradient_cache,
+      gradient_bucket(width.max(height)),
+    )?
+    else {
+      return Ok(());
+    };
+    if let Some(start) = timer {
+      self.record_gradient_usage((width * height) as u64, start);
+    }
+
+    let origin = self.ds_point(item.origin);
+    let scale_x = tile_w / tile.width() as f32;
+    let scale_y = tile_h / tile.height() as f32;
+    if !scale_x.is_finite() || !scale_y.is_finite() {
+      return Ok(());
+    }
+
+    let mut paint = tiny_skia::Paint::default();
+    paint.shader = Pattern::new(
+      tile.as_ref(),
+      SpreadMode::Repeat,
+      tiny_skia::FilterQuality::Nearest,
+      opacity,
+      Transform::from_row(scale_x, 0.0, 0.0, scale_y, origin.x, origin.y),
+    );
+    paint.anti_alias = false;
+    paint.blend_mode = self.canvas.blend_mode();
+
+    let Some(skia_rect) = tiny_skia::Rect::from_xywh(
+      dest_rect.x(),
+      dest_rect.y(),
+      dest_rect.width(),
+      dest_rect.height(),
+    ) else {
+      return Ok(());
+    };
+    let transform = self.canvas.transform();
+    let clip_mask = self.canvas.clip_mask().cloned();
+    self
+      .canvas
+      .pixmap_mut()
+      .fill_rect(skia_rect, &paint, transform, clip_mask.as_ref());
+
+    self.record_background_paint(background_timer);
+    Ok(())
+  }
+
   fn render_radial_gradient(&mut self, item: &RadialGradientItem) {
     let Some(stops) = self.convert_stops(&item.stops) else {
       return;
@@ -3032,6 +3148,132 @@ impl DisplayListRenderer {
       self.record_gradient_usage(pixels, start);
     }
     self.record_background_paint(background_timer);
+  }
+
+  fn render_radial_gradient_pattern(&mut self, item: &RadialGradientPatternItem) -> Result<()> {
+    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+      return Ok(());
+    }
+
+    let dest_rect = self.ds_rect(item.dest_rect);
+    if self.canvas.apply_clip(dest_rect).is_none() {
+      return Ok(());
+    }
+    if dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0 {
+      return Ok(());
+    }
+
+    let tile_w = self.ds_len(item.tile_size.width);
+    let tile_h = self.ds_len(item.tile_size.height);
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+      return Ok(());
+    }
+
+    let width = tile_w.ceil().max(1.0) as u32;
+    let height = tile_h.ceil().max(1.0) as u32;
+    if width == 0 || height == 0 {
+      return Ok(());
+    }
+
+    let Some(stops) = self.convert_stops(&item.stops) else {
+      return Ok(());
+    };
+
+    let raster_scale_x = width as f32 / tile_w;
+    let raster_scale_y = height as f32 / tile_h;
+    if !raster_scale_x.is_finite() || !raster_scale_y.is_finite() {
+      return Ok(());
+    }
+
+    let center = SkiaPoint::from_xy(
+      self.ds_len(item.center.x) * raster_scale_x,
+      self.ds_len(item.center.y) * raster_scale_y,
+    );
+    let radii = SkiaPoint::from_xy(
+      self.ds_len(item.radii.x) * raster_scale_x,
+      self.ds_len(item.radii.y) * raster_scale_y,
+    );
+    let spread = match item.spread {
+      crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
+      crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
+      crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
+    };
+    let transform = Transform::from_translate(center.x, center.y).pre_scale(radii.x, radii.y);
+    let Some(shader) = RadialGradient::new(
+      SkiaPoint::from_xy(0.0, 0.0),
+      SkiaPoint::from_xy(0.0, 0.0),
+      1.0,
+      stops,
+      spread,
+      transform,
+    ) else {
+      return Ok(());
+    };
+
+    let background_timer = self
+      .background_paint_diagnostics
+      .as_ref()
+      .map(|_| Instant::now());
+    let timer = self.diagnostics_enabled.then(Instant::now);
+    let Some(mut tile) = new_pixmap(width, height) else {
+      return Ok(());
+    };
+
+    let Some(tile_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+      return Ok(());
+    };
+    let path = PathBuilder::from_rect(tile_rect);
+    let mut paint = tiny_skia::Paint::default();
+    paint.shader = shader;
+    paint.anti_alias = true;
+    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+    tile.fill_path(
+      &path,
+      &paint,
+      tiny_skia::FillRule::Winding,
+      Transform::identity(),
+      None,
+    );
+    if let Some(start) = timer {
+      self.record_gradient_usage((width * height) as u64, start);
+    }
+
+    let origin = self.ds_point(item.origin);
+    let scale_x = tile_w / tile.width() as f32;
+    let scale_y = tile_h / tile.height() as f32;
+    if !scale_x.is_finite() || !scale_y.is_finite() {
+      return Ok(());
+    }
+
+    let mut paint = tiny_skia::Paint::default();
+    paint.shader = Pattern::new(
+      tile.as_ref(),
+      SpreadMode::Repeat,
+      tiny_skia::FilterQuality::Nearest,
+      opacity,
+      Transform::from_row(scale_x, 0.0, 0.0, scale_y, origin.x, origin.y),
+    );
+    paint.anti_alias = false;
+    paint.blend_mode = self.canvas.blend_mode();
+
+    let Some(skia_rect) = tiny_skia::Rect::from_xywh(
+      dest_rect.x(),
+      dest_rect.y(),
+      dest_rect.width(),
+      dest_rect.height(),
+    ) else {
+      return Ok(());
+    };
+    let transform = self.canvas.transform();
+    let clip_mask = self.canvas.clip_mask().cloned();
+    self
+      .canvas
+      .pixmap_mut()
+      .fill_rect(skia_rect, &paint, transform, clip_mask.as_ref());
+
+    self.record_background_paint(background_timer);
+    Ok(())
   }
 
   fn render_conic_gradient(&mut self, item: &ConicGradientItem) -> Result<()> {
@@ -3104,6 +3346,105 @@ impl DisplayListRenderer {
       transform,
       clip.as_ref(),
     );
+    self.record_background_paint(background_timer);
+    Ok(())
+  }
+
+  fn render_conic_gradient_pattern(&mut self, item: &ConicGradientPatternItem) -> Result<()> {
+    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+      return Ok(());
+    }
+
+    let dest_rect = self.ds_rect(item.dest_rect);
+    if self.canvas.apply_clip(dest_rect).is_none() {
+      return Ok(());
+    }
+    if dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0 {
+      return Ok(());
+    }
+
+    let tile_w = self.ds_len(item.tile_size.width);
+    let tile_h = self.ds_len(item.tile_size.height);
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+      return Ok(());
+    }
+
+    let width = tile_w.ceil().max(1.0) as u32;
+    let height = tile_h.ceil().max(1.0) as u32;
+    if width == 0 || height == 0 {
+      return Ok(());
+    }
+
+    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
+      return Ok(());
+    };
+
+    let scale_x = tile_w / width as f32;
+    let scale_y = tile_h / height as f32;
+    if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
+      return Ok(());
+    }
+
+    let center = Point::new(self.ds_len(item.center.x) / scale_x, self.ds_len(item.center.y) / scale_y);
+    let spread = if item.repeating {
+      SpreadMode::Repeat
+    } else {
+      SpreadMode::Pad
+    };
+
+    let background_timer = self
+      .background_paint_diagnostics
+      .as_ref()
+      .map(|_| Instant::now());
+    let timer = self.diagnostics_enabled.then(Instant::now);
+    let Some(tile) = crate::paint::gradient::rasterize_conic_gradient_scaled(
+      width,
+      height,
+      center,
+      item.from_angle.to_radians(),
+      spread,
+      &stops,
+      &self.gradient_cache,
+      gradient_bucket(width.max(height).saturating_mul(2)),
+      scale_x,
+      scale_y,
+    )?
+    else {
+      return Ok(());
+    };
+    if let Some(start) = timer {
+      self.record_gradient_usage((width * height) as u64, start);
+    }
+
+    let origin = self.ds_point(item.origin);
+
+    let mut paint = tiny_skia::Paint::default();
+    paint.shader = Pattern::new(
+      tile.as_ref(),
+      SpreadMode::Repeat,
+      tiny_skia::FilterQuality::Nearest,
+      opacity,
+      Transform::from_row(scale_x, 0.0, 0.0, scale_y, origin.x, origin.y),
+    );
+    paint.anti_alias = false;
+    paint.blend_mode = self.canvas.blend_mode();
+
+    let Some(skia_rect) = tiny_skia::Rect::from_xywh(
+      dest_rect.x(),
+      dest_rect.y(),
+      dest_rect.width(),
+      dest_rect.height(),
+    ) else {
+      return Ok(());
+    };
+    let transform = self.canvas.transform();
+    let clip_mask = self.canvas.clip_mask().cloned();
+    self
+      .canvas
+      .pixmap_mut()
+      .fill_rect(skia_rect, &paint, transform, clip_mask.as_ref());
+
     self.record_background_paint(background_timer);
     Ok(())
   }
@@ -4654,11 +4995,20 @@ impl DisplayListRenderer {
         DisplayItem::LinearGradient(item) => {
           add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
         }
+        DisplayItem::LinearGradientPattern(item) => {
+          add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
+        }
         DisplayItem::RadialGradient(item) => {
           add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
         }
+        DisplayItem::RadialGradientPattern(item) => {
+          add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
+        }
         DisplayItem::ConicGradient(item) => {
           add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
+        }
+        DisplayItem::ConicGradientPattern(item) => {
+          add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
         }
         DisplayItem::Image(item) => {
           let weight = match item.filter_quality {
@@ -5454,8 +5804,11 @@ impl DisplayListRenderer {
       ),
       DisplayItem::Outline(item) => self.render_outline(item),
       DisplayItem::LinearGradient(item) => self.render_linear_gradient(item)?,
+      DisplayItem::LinearGradientPattern(item) => self.render_linear_gradient_pattern(item)?,
       DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
+      DisplayItem::RadialGradientPattern(item) => self.render_radial_gradient_pattern(item)?,
       DisplayItem::ConicGradient(item) => self.render_conic_gradient(item)?,
+      DisplayItem::ConicGradientPattern(item) => self.render_conic_gradient_pattern(item)?,
       DisplayItem::Border(item) => self.render_border(item),
       DisplayItem::TableCollapsedBorders(item) => self.render_table_collapsed_borders(item)?,
       DisplayItem::TextDecoration(item) => {
@@ -8357,6 +8710,7 @@ mod tests {
   use super::*;
   use crate::geometry::Point;
   use crate::geometry::Rect;
+  use crate::geometry::Size;
   use crate::paint::clip_path::ResolvedClipPath;
   use crate::paint::display_list::BlendMode;
   use crate::paint::display_list::BorderImageItem;
@@ -8379,6 +8733,7 @@ mod tests {
   use crate::paint::display_list::ImageFilterQuality;
   use crate::paint::display_list::ImageItem;
   use crate::paint::display_list::LinearGradientItem;
+  use crate::paint::display_list::LinearGradientPatternItem;
   use crate::paint::display_list::RadialGradientItem;
   use crate::paint::display_list::ResolvedMaskLayer;
   use crate::paint::display_list::StackingContextItem;
@@ -9790,6 +10145,145 @@ mod tests {
     );
     assert!(right.2 > 0);
     assert_eq!(right.3, 255);
+  }
+
+  #[test]
+  fn linear_gradient_pattern_matches_explicit_tiling() {
+    let origin = Point::new(2.0, 3.0);
+    let tile_size = Size::new(8.0, 8.0);
+    // Align the destination rect to the pattern grid so all tiles are full-sized. When edge tiles
+    // are clipped the per-tile rasterization uses smaller LUT buckets which can produce tiny
+    // rounding differences vs sampling from a full tile pixmap.
+    let dest_rect = Rect::from_xywh(origin.x, origin.y, tile_size.width * 3.0, tile_size.height * 3.0);
+
+    let stops = vec![
+      GradientStop {
+        position: 0.0,
+        color: Rgba::rgb(255, 0, 0),
+      },
+      GradientStop {
+        position: 1.0,
+        color: Rgba::rgb(0, 0, 255),
+      },
+    ];
+
+    let angle = 45.0f32;
+    let rad = angle.to_radians();
+    let dx = rad.sin();
+    let dy = -rad.cos();
+    let len = 0.5 * (tile_size.width * dx.abs() + tile_size.height * dy.abs());
+
+    let tile_center_x = tile_size.width * 0.5;
+    let tile_center_y = tile_size.height * 0.5;
+    let tile_start = Point::new(tile_center_x - dx * len, tile_center_y - dy * len);
+    let tile_end = Point::new(tile_center_x + dx * len, tile_center_y + dy * len);
+
+    let aligned_start = |origin: f32, tile: f32, clip_min: f32| -> f32 {
+      if tile == 0.0 {
+        return origin;
+      }
+      let steps = ((clip_min - origin) / tile).floor();
+      origin + steps * tile
+    };
+
+    let build_positions = |origin: f32, tile: f32, clip_min: f32, clip_max: f32| -> Vec<f32> {
+      if tile <= 0.0 {
+        return Vec::new();
+      }
+      let start = aligned_start(origin, tile, clip_min);
+      let mut positions = Vec::new();
+      let mut pos = start;
+      while pos < clip_max {
+        positions.push(pos);
+        pos += tile;
+      }
+      positions
+    };
+
+    let positions_x = build_positions(origin.x, tile_size.width, dest_rect.min_x(), dest_rect.max_x());
+    let positions_y = build_positions(origin.y, tile_size.height, dest_rect.min_y(), dest_rect.max_y());
+
+    let mut explicit = DisplayList::new();
+    for ty in positions_y.iter().copied() {
+      for tx in positions_x.iter().copied() {
+        let tile_rect = Rect::from_xywh(tx, ty, tile_size.width, tile_size.height);
+        let Some(intersection) = tile_rect.intersection(dest_rect) else {
+          continue;
+        };
+        if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+          continue;
+        }
+
+        let cx = tile_rect.x() + tile_size.width * 0.5;
+        let cy = tile_rect.y() + tile_size.height * 0.5;
+        let start = Point::new(
+          cx - dx * len - intersection.x(),
+          cy - dy * len - intersection.y(),
+        );
+        let end = Point::new(
+          cx + dx * len - intersection.x(),
+          cy + dy * len - intersection.y(),
+        );
+
+        explicit.push(DisplayItem::LinearGradient(LinearGradientItem {
+          rect: intersection,
+          start,
+          end,
+          spread: GradientSpread::Pad,
+          stops: stops.clone(),
+        }));
+      }
+    }
+
+    let mut patterned = DisplayList::new();
+    patterned.push(DisplayItem::LinearGradientPattern(LinearGradientPatternItem {
+      dest_rect,
+      tile_size,
+      origin,
+      start: tile_start,
+      end: tile_end,
+      stops: stops.clone(),
+      spread: GradientSpread::Pad,
+    }));
+
+    let font_ctx = FontContext::new();
+    let pixmap_explicit = DisplayListRenderer::new(32, 32, Rgba::WHITE, font_ctx.clone())
+      .expect("renderer")
+      .render(&explicit)
+      .expect("render explicit");
+    let pixmap_pattern = DisplayListRenderer::new(32, 32, Rgba::WHITE, font_ctx)
+      .expect("renderer")
+      .render(&patterned)
+      .expect("render pattern");
+
+    if pixmap_explicit.data() != pixmap_pattern.data() {
+      let (width, height) = (pixmap_explicit.width(), pixmap_explicit.height());
+      assert_eq!(
+        (width, height),
+        (pixmap_pattern.width(), pixmap_pattern.height()),
+        "pixmap sizes must match"
+      );
+      let mut mismatch = None;
+      for y in 0..height {
+        for x in 0..width {
+          let idx = ((y * width + x) * 4) as usize;
+          let a = &pixmap_explicit.data()[idx..idx + 4];
+          let b = &pixmap_pattern.data()[idx..idx + 4];
+          if a != b {
+            mismatch = Some((x, y, [a[0], a[1], a[2], a[3]], [b[0], b[1], b[2], b[3]]));
+            break;
+          }
+        }
+        if mismatch.is_some() {
+          break;
+        }
+      }
+      let (x, y, a, b) = mismatch.expect("pixmaps differ but no mismatch located");
+
+      panic!(
+        "pattern-based gradient rendering should match explicit tiling; first mismatch at ({x},{y}): explicit={a:?} pattern={b:?}"
+      );
+    }
   }
 
   #[test]

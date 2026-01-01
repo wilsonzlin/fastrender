@@ -931,14 +931,53 @@ fn display_item_value(item: &DisplayItem) -> Value {
       ("rect", rect_value(it.rect, None)),
       ("stops", Value::from(it.stops.len() as u64)),
     ]),
+    DisplayItem::LinearGradientPattern(it) => map_from_pairs(vec![
+      ("type", Value::String("LinearGradientPattern".into())),
+      ("dest_rect", rect_value(it.dest_rect, None)),
+      (
+        "tile_size",
+        map_from_pairs(vec![
+          ("width", Value::from(it.tile_size.width)),
+          ("height", Value::from(it.tile_size.height)),
+        ]),
+      ),
+      ("origin", point_value(it.origin)),
+      ("stops", Value::from(it.stops.len() as u64)),
+    ]),
     DisplayItem::RadialGradient(it) => map_from_pairs(vec![
       ("type", Value::String("RadialGradient".into())),
       ("rect", rect_value(it.rect, None)),
       ("stops", Value::from(it.stops.len() as u64)),
     ]),
+    DisplayItem::RadialGradientPattern(it) => map_from_pairs(vec![
+      ("type", Value::String("RadialGradientPattern".into())),
+      ("dest_rect", rect_value(it.dest_rect, None)),
+      (
+        "tile_size",
+        map_from_pairs(vec![
+          ("width", Value::from(it.tile_size.width)),
+          ("height", Value::from(it.tile_size.height)),
+        ]),
+      ),
+      ("origin", point_value(it.origin)),
+      ("stops", Value::from(it.stops.len() as u64)),
+    ]),
     DisplayItem::ConicGradient(it) => map_from_pairs(vec![
       ("type", Value::String("ConicGradient".into())),
       ("rect", rect_value(it.rect, None)),
+      ("stops", Value::from(it.stops.len() as u64)),
+    ]),
+    DisplayItem::ConicGradientPattern(it) => map_from_pairs(vec![
+      ("type", Value::String("ConicGradientPattern".into())),
+      ("dest_rect", rect_value(it.dest_rect, None)),
+      (
+        "tile_size",
+        map_from_pairs(vec![
+          ("width", Value::from(it.tile_size.width)),
+          ("height", Value::from(it.tile_size.height)),
+        ]),
+      ),
+      ("origin", point_value(it.origin)),
       ("stops", Value::from(it.stops.len() as u64)),
     ]),
     DisplayItem::Border(it) => map_from_pairs(vec![

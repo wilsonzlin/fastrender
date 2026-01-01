@@ -52,6 +52,7 @@ use crate::paint::display_list::BoxShadowItem;
 use crate::paint::display_list::ClipItem;
 use crate::paint::display_list::ClipShape;
 use crate::paint::display_list::ConicGradientItem;
+use crate::paint::display_list::ConicGradientPatternItem;
 use crate::paint::display_list::DecorationPaint;
 use crate::paint::display_list::DecorationStroke;
 use crate::paint::display_list::DisplayItem;
@@ -71,11 +72,13 @@ use crate::paint::display_list::ImageItem;
 use crate::paint::display_list::ImagePatternItem;
 use crate::paint::display_list::ImagePatternRepeat;
 use crate::paint::display_list::LinearGradientItem;
+use crate::paint::display_list::LinearGradientPatternItem;
 use crate::paint::display_list::ListMarkerItem;
 use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::display_list::OpacityItem;
 use crate::paint::display_list::OutlineItem;
 use crate::paint::display_list::RadialGradientItem;
+use crate::paint::display_list::RadialGradientPatternItem;
 use crate::paint::display_list::ResolvedFilter;
 use crate::paint::display_list::ResolvedMask;
 use crate::paint::display_list::ResolvedMaskImage;
@@ -4035,58 +4038,74 @@ impl DisplayListBuilder {
       }));
     }
 
+    let repeat_both_axes = matches!(
+      layer.repeat,
+      crate::style::types::BackgroundRepeat {
+        x: BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round,
+        y: BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round,
+      }
+    );
+
+    let compute_tile_metrics = |img_w: f32, img_h: f32| -> Option<(f32, f32, f32, f32)> {
+      let (mut tile_w, mut tile_h) = Self::compute_background_size(
+        layer,
+        style.font_size,
+        style.root_font_size,
+        self.viewport,
+        origin_rect.width(),
+        origin_rect.height(),
+        img_w,
+        img_h,
+      );
+      if !tile_w.is_finite() || !tile_h.is_finite() || tile_w <= 0.0 || tile_h <= 0.0 {
+        return None;
+      }
+
+      let mut rounded_x = false;
+      let mut rounded_y = false;
+      if layer.repeat.x == BackgroundRepeatKeyword::Round {
+        tile_w = Self::round_tile_length(origin_rect.width(), tile_w);
+        rounded_x = true;
+      }
+      if layer.repeat.y == BackgroundRepeatKeyword::Round {
+        tile_h = Self::round_tile_length(origin_rect.height(), tile_h);
+        rounded_y = true;
+      }
+      if rounded_x ^ rounded_y
+        && matches!(
+          layer.size,
+          BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+        )
+      {
+        let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
+        if rounded_x {
+          tile_h = tile_w / aspect;
+        } else {
+          tile_w = tile_h * aspect;
+        }
+      }
+
+      if !tile_w.is_finite() || !tile_h.is_finite() || tile_w <= 0.0 || tile_h <= 0.0 {
+        return None;
+      }
+
+      let (offset_x, offset_y) = Self::resolve_background_offset(
+        layer.position,
+        origin_rect.width(),
+        origin_rect.height(),
+        tile_w,
+        tile_h,
+        style.font_size,
+        style.root_font_size,
+        self.viewport,
+      );
+
+      Some((tile_w, tile_h, offset_x, offset_y))
+    };
+
     let compute_tiles =
-      |img_w: f32, img_h: f32| -> Option<(f32, f32, TileAxisPlan, TileAxisPlan)> {
-        let (mut tile_w, mut tile_h) = Self::compute_background_size(
-          layer,
-          style.font_size,
-          style.root_font_size,
-          self.viewport,
-          origin_rect.width(),
-          origin_rect.height(),
-          img_w,
-          img_h,
-        );
-
-        if tile_w <= 0.0 || tile_h <= 0.0 {
-          return None;
-        }
-
-        let mut rounded_x = false;
-        let mut rounded_y = false;
-        if layer.repeat.x == BackgroundRepeatKeyword::Round {
-          tile_w = Self::round_tile_length(origin_rect.width(), tile_w);
-          rounded_x = true;
-        }
-        if layer.repeat.y == BackgroundRepeatKeyword::Round {
-          tile_h = Self::round_tile_length(origin_rect.height(), tile_h);
-          rounded_y = true;
-        }
-        if rounded_x ^ rounded_y
-          && matches!(
-            layer.size,
-            BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
-          )
-        {
-          let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
-          if rounded_x {
-            tile_h = tile_w / aspect;
-          } else {
-            tile_w = tile_h * aspect;
-          }
-        }
-
-        let (offset_x, offset_y) = Self::resolve_background_offset(
-          layer.position,
-          origin_rect.width(),
-          origin_rect.height(),
-          tile_w,
-          tile_h,
-          style.font_size,
-          style.root_font_size,
-          self.viewport,
-        );
-
+      |img_w: f32, img_h: f32| -> Option<(f32, f32, f32, f32, TileAxisPlan, TileAxisPlan)> {
+        let (tile_w, tile_h, offset_x, offset_y) = compute_tile_metrics(img_w, img_h)?;
         let positions_x = Self::tile_axis_plan(
           layer.repeat.x,
           origin_rect.x(),
@@ -4106,20 +4125,75 @@ impl DisplayListBuilder {
           visible_clip.max_y(),
         );
 
-        Some((tile_w, tile_h, positions_x, positions_y))
+        Some((tile_w, tile_h, offset_x, offset_y, positions_x, positions_y))
       };
+
+    let record_pattern_fast_path = |tile_w: f32, tile_h: f32, offset_x: f32, offset_y: f32| {
+      if let Some(counter) = self.background_pattern_fast_paths.as_ref() {
+        counter.fetch_add(1, Ordering::Relaxed);
+      }
+      if let Some(counter) = self.background_tiles.as_ref() {
+        let positions_x = Self::tile_axis_plan(
+          layer.repeat.x,
+          origin_rect.x(),
+          origin_rect.width(),
+          tile_w,
+          offset_x,
+          visible_clip.min_x(),
+          visible_clip.max_x(),
+        );
+        let positions_y = Self::tile_axis_plan(
+          layer.repeat.y,
+          origin_rect.y(),
+          origin_rect.height(),
+          tile_h,
+          offset_y,
+          visible_clip.min_y(),
+          visible_clip.max_y(),
+        );
+        let tiles = (positions_x.count as u64).saturating_mul(positions_y.count as u64);
+        if tiles > 0 {
+          counter.fetch_add(tiles, Ordering::Relaxed);
+        }
+      }
+    };
 
     match bg {
       BackgroundImage::LinearGradient { angle, stops } => {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
-          if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+          let stops = Self::gradient_stops(&resolved);
+          let rad = angle.to_radians();
+          let dx = rad.sin();
+          let dy = -rad.cos();
+
+          if repeat_both_axes {
+            if let Some((tile_w, tile_h, offset_x, offset_y)) = compute_tile_metrics(0.0, 0.0) {
+              record_pattern_fast_path(tile_w, tile_h, offset_x, offset_y);
+
+              let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
+              let cx = tile_w * 0.5;
+              let cy = tile_h * 0.5;
+              let start = Point::new(cx - dx * len, cy - dy * len);
+              let end = Point::new(cx + dx * len, cy + dy * len);
+
+              self
+                .list
+                .push(DisplayItem::LinearGradientPattern(LinearGradientPatternItem {
+                  dest_rect: visible_clip,
+                  tile_size: Size::new(tile_w, tile_h),
+                  origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                  start,
+                  end,
+                  stops,
+                  spread: GradientSpread::Pad,
+                }));
+            }
+          } else if let Some((tile_w, tile_h, _offset_x, _offset_y, positions_x, positions_y)) =
+            compute_tiles(0.0, 0.0)
+          {
             let max_x = visible_clip.max_x();
             let max_y = visible_clip.max_y();
-            let stops = Self::gradient_stops(&resolved);
-            let rad = angle.to_radians();
-            let dx = rad.sin();
-            let dy = -rad.cos();
             let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
 
             let mut deadline_counter = 0usize;
@@ -4166,13 +4240,38 @@ impl DisplayListBuilder {
       BackgroundImage::RepeatingLinearGradient { angle, stops } => {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
-          if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+          let stops = Self::gradient_stops(&resolved);
+          let rad = angle.to_radians();
+          let dx = rad.sin();
+          let dy = -rad.cos();
+
+          if repeat_both_axes {
+            if let Some((tile_w, tile_h, offset_x, offset_y)) = compute_tile_metrics(0.0, 0.0) {
+              record_pattern_fast_path(tile_w, tile_h, offset_x, offset_y);
+
+              let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
+              let cx = tile_w * 0.5;
+              let cy = tile_h * 0.5;
+              let start = Point::new(cx - dx * len, cy - dy * len);
+              let end = Point::new(cx + dx * len, cy + dy * len);
+
+              self
+                .list
+                .push(DisplayItem::LinearGradientPattern(LinearGradientPatternItem {
+                  dest_rect: visible_clip,
+                  tile_size: Size::new(tile_w, tile_h),
+                  origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                  start,
+                  end,
+                  stops,
+                  spread: GradientSpread::Repeat,
+                }));
+            }
+          } else if let Some((tile_w, tile_h, _offset_x, _offset_y, positions_x, positions_y)) =
+            compute_tiles(0.0, 0.0)
+          {
             let max_x = visible_clip.max_x();
             let max_y = visible_clip.max_y();
-            let stops = Self::gradient_stops(&resolved);
-            let rad = angle.to_radians();
-            let dx = rad.sin();
-            let dy = -rad.cos();
             let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
 
             let mut deadline_counter = 0usize;
@@ -4223,10 +4322,37 @@ impl DisplayListBuilder {
       } => {
         let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
         if !resolved.is_empty() {
-          if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+          let stops = Self::gradient_stops_unclamped(&resolved);
+
+          if repeat_both_axes {
+            if let Some((tile_w, tile_h, offset_x, offset_y)) = compute_tile_metrics(0.0, 0.0) {
+              record_pattern_fast_path(tile_w, tile_h, offset_x, offset_y);
+
+              let center = Self::resolve_gradient_center(
+                Rect::from_xywh(0.0, 0.0, tile_w, tile_h),
+                position,
+                style.font_size,
+                style.root_font_size,
+                self.viewport,
+              );
+
+              self
+                .list
+                .push(DisplayItem::ConicGradientPattern(ConicGradientPatternItem {
+                  dest_rect: visible_clip,
+                  tile_size: Size::new(tile_w, tile_h),
+                  origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                  center,
+                  from_angle: *from_angle,
+                  stops,
+                  repeating: false,
+                }));
+            }
+          } else if let Some((tile_w, tile_h, _offset_x, _offset_y, positions_x, positions_y)) =
+            compute_tiles(0.0, 0.0)
+          {
             let max_x = visible_clip.max_x();
             let max_y = visible_clip.max_y();
-            let stops = Self::gradient_stops_unclamped(&resolved);
 
             let mut deadline_counter = 0usize;
             'tiles: for ty in positions_y.iter() {
@@ -4277,10 +4403,37 @@ impl DisplayListBuilder {
       } => {
         let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
         if !resolved.is_empty() {
-          if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+          let stops = Self::gradient_stops_unclamped(&resolved);
+
+          if repeat_both_axes {
+            if let Some((tile_w, tile_h, offset_x, offset_y)) = compute_tile_metrics(0.0, 0.0) {
+              record_pattern_fast_path(tile_w, tile_h, offset_x, offset_y);
+
+              let center = Self::resolve_gradient_center(
+                Rect::from_xywh(0.0, 0.0, tile_w, tile_h),
+                position,
+                style.font_size,
+                style.root_font_size,
+                self.viewport,
+              );
+
+              self
+                .list
+                .push(DisplayItem::ConicGradientPattern(ConicGradientPatternItem {
+                  dest_rect: visible_clip,
+                  tile_size: Size::new(tile_w, tile_h),
+                  origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                  center,
+                  from_angle: *from_angle,
+                  stops,
+                  repeating: true,
+                }));
+            }
+          } else if let Some((tile_w, tile_h, _offset_x, _offset_y, positions_x, positions_y)) =
+            compute_tiles(0.0, 0.0)
+          {
             let max_x = visible_clip.max_x();
             let max_y = visible_clip.max_y();
-            let stops = Self::gradient_stops_unclamped(&resolved);
 
             let mut deadline_counter = 0usize;
             'tiles: for ty in positions_y.iter() {
@@ -4332,10 +4485,39 @@ impl DisplayListBuilder {
       } => {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
-          if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+          let stops = Self::gradient_stops(&resolved);
+
+          if repeat_both_axes {
+            if let Some((tile_w, tile_h, offset_x, offset_y)) = compute_tile_metrics(0.0, 0.0) {
+              record_pattern_fast_path(tile_w, tile_h, offset_x, offset_y);
+
+              let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
+                Rect::from_xywh(0.0, 0.0, tile_w, tile_h),
+                position,
+                size,
+                *shape,
+                style.font_size,
+                style.root_font_size,
+                self.viewport,
+              );
+
+              self
+                .list
+                .push(DisplayItem::RadialGradientPattern(RadialGradientPatternItem {
+                  dest_rect: visible_clip,
+                  tile_size: Size::new(tile_w, tile_h),
+                  origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                  center: Point::new(cx, cy),
+                  radii: Point::new(radius_x, radius_y),
+                  stops,
+                  spread: GradientSpread::Pad,
+                }));
+            }
+          } else if let Some((tile_w, tile_h, _offset_x, _offset_y, positions_x, positions_y)) =
+            compute_tiles(0.0, 0.0)
+          {
             let max_x = visible_clip.max_x();
             let max_y = visible_clip.max_y();
-            let stops = Self::gradient_stops(&resolved);
 
             let mut deadline_counter = 0usize;
             'tiles: for ty in positions_y.iter() {
@@ -4386,10 +4568,39 @@ impl DisplayListBuilder {
       } => {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
-          if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+          let stops = Self::gradient_stops(&resolved);
+
+          if repeat_both_axes {
+            if let Some((tile_w, tile_h, offset_x, offset_y)) = compute_tile_metrics(0.0, 0.0) {
+              record_pattern_fast_path(tile_w, tile_h, offset_x, offset_y);
+
+              let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
+                Rect::from_xywh(0.0, 0.0, tile_w, tile_h),
+                position,
+                size,
+                *shape,
+                style.font_size,
+                style.root_font_size,
+                self.viewport,
+              );
+
+              self
+                .list
+                .push(DisplayItem::RadialGradientPattern(RadialGradientPatternItem {
+                  dest_rect: visible_clip,
+                  tile_size: Size::new(tile_w, tile_h),
+                  origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                  center: Point::new(cx, cy),
+                  radii: Point::new(radius_x, radius_y),
+                  stops,
+                  spread: GradientSpread::Repeat,
+                }));
+            }
+          } else if let Some((tile_w, tile_h, _offset_x, _offset_y, positions_x, positions_y)) =
+            compute_tiles(0.0, 0.0)
+          {
             let max_x = visible_clip.max_x();
             let max_y = visible_clip.max_y();
-            let stops = Self::gradient_stops(&resolved);
 
             let mut deadline_counter = 0usize;
             'tiles: for ty in positions_y.iter() {
@@ -7485,6 +7696,54 @@ mod tests {
 
     let list = builder.list;
     assert!(list.is_empty());
+  }
+
+  #[test]
+  fn background_repeating_linear_gradient_uses_pattern_item() {
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+      image: Some(BackgroundImage::LinearGradient {
+        angle: 45.0,
+        stops: vec![
+          crate::css::types::ColorStop {
+            color: Color::Rgba(Rgba::RED),
+            position: Some(0.0),
+          },
+          crate::css::types::ColorStop {
+            color: Color::Rgba(Rgba::BLUE),
+            position: Some(1.0),
+          },
+        ],
+      }),
+      size: BackgroundSize::Explicit(
+        BackgroundSizeComponent::Length(Length::px(10.0)),
+        BackgroundSizeComponent::Length(Length::px(10.0)),
+      ),
+      repeat: BackgroundRepeat::repeat(),
+      ..BackgroundLayer::default()
+    }]);
+
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
+      vec![],
+      Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build(&fragment);
+    let pattern_items = list
+      .items()
+      .iter()
+      .filter(|item| matches!(item, DisplayItem::LinearGradientPattern(_)))
+      .count();
+    assert_eq!(pattern_items, 1, "expected exactly one gradient pattern item");
+    assert!(
+      !list
+        .items()
+        .iter()
+        .any(|item| matches!(item, DisplayItem::LinearGradient(_))),
+      "builder should not emit per-tile gradient items for repeat+repeat gradients"
+    );
   }
 
   #[test]

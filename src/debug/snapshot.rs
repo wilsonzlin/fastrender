@@ -821,6 +821,21 @@ fn snapshot_display_item(item_id: usize, item: &DisplayItem) -> DisplayItemSnaps
         })).collect::<Vec<_>>(),
       })),
     ),
+    DisplayItem::LinearGradientPattern(grad) => (
+      "linear_gradient_pattern".to_string(),
+      Some(serde_json::json!({
+        "dest_rect": snapshot_rect(grad.dest_rect),
+        "tile_size": { "width": grad.tile_size.width, "height": grad.tile_size.height },
+        "origin": { "x": grad.origin.x, "y": grad.origin.y },
+        "start": { "x": grad.start.x, "y": grad.start.y },
+        "end": { "x": grad.end.x, "y": grad.end.y },
+        "spread": format!("{:?}", grad.spread),
+        "stops": grad.stops.iter().map(|s| serde_json::json!({
+          "position": s.position,
+          "color": snapshot_color(s.color),
+        })).collect::<Vec<_>>(),
+      })),
+    ),
     DisplayItem::RadialGradient(grad) => (
       "radial_gradient".to_string(),
       Some(serde_json::json!({
@@ -834,10 +849,40 @@ fn snapshot_display_item(item_id: usize, item: &DisplayItem) -> DisplayItemSnaps
         })).collect::<Vec<_>>(),
       })),
     ),
+    DisplayItem::RadialGradientPattern(grad) => (
+      "radial_gradient_pattern".to_string(),
+      Some(serde_json::json!({
+        "dest_rect": snapshot_rect(grad.dest_rect),
+        "tile_size": { "width": grad.tile_size.width, "height": grad.tile_size.height },
+        "origin": { "x": grad.origin.x, "y": grad.origin.y },
+        "center": { "x": grad.center.x, "y": grad.center.y },
+        "radii": { "x": grad.radii.x, "y": grad.radii.y },
+        "spread": format!("{:?}", grad.spread),
+        "stops": grad.stops.iter().map(|s| serde_json::json!({
+          "position": s.position,
+          "color": snapshot_color(s.color),
+        })).collect::<Vec<_>>(),
+      })),
+    ),
     DisplayItem::ConicGradient(grad) => (
       "conic_gradient".to_string(),
       Some(serde_json::json!({
         "rect": snapshot_rect(grad.rect),
+        "center": { "x": grad.center.x, "y": grad.center.y },
+        "from_angle": grad.from_angle,
+        "repeating": grad.repeating,
+        "stops": grad.stops.iter().map(|s| serde_json::json!({
+          "position": s.position,
+          "color": snapshot_color(s.color),
+        })).collect::<Vec<_>>(),
+      })),
+    ),
+    DisplayItem::ConicGradientPattern(grad) => (
+      "conic_gradient_pattern".to_string(),
+      Some(serde_json::json!({
+        "dest_rect": snapshot_rect(grad.dest_rect),
+        "tile_size": { "width": grad.tile_size.width, "height": grad.tile_size.height },
+        "origin": { "x": grad.origin.x, "y": grad.origin.y },
         "center": { "x": grad.center.x, "y": grad.center.y },
         "from_angle": grad.from_angle,
         "repeating": grad.repeating,
