@@ -116,6 +116,7 @@ use unicode_vo::Orientation as VerticalOrientation;
 
 pub(crate) const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
 const SHAPING_CACHE_CAPACITY: usize = 2048;
+const SHAPING_CACHE_HASH_COLLISION_BUCKET_LIMIT: usize = 8;
 const FONT_RESOLUTION_CACHE_SIZE: usize = 131072;
 const TEXT_FALLBACK_CACHE_CAPACITY_ENV: &str = "FASTR_TEXT_FALLBACK_CACHE_CAPACITY";
 #[cfg(any(test, debug_assertions))]
@@ -4646,11 +4647,19 @@ impl Default for ShapingPipeline {
   }
 }
 
-#[derive(Clone, Eq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 struct ShapingCacheKey {
-  text: std::sync::Arc<str>,
   style_hash: u64,
   font_generation: u64,
+  text_hash: u64,
+  text_len: usize,
+  bidi_signature: u32,
+}
+
+#[derive(Debug)]
+struct ShapingCacheEntry {
+  text: Arc<str>,
+  runs: Arc<Vec<ShapedRun>>,
 }
 
 pub(crate) fn shaping_style_hash(style: &ComputedStyle) -> u64 {
@@ -4772,20 +4781,31 @@ pub(crate) fn shaping_style_hash(style: &ComputedStyle) -> u64 {
   hasher.finish()
 }
 
-impl std::hash::Hash for ShapingCacheKey {
-  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-    self.style_hash.hash(state);
-    self.font_generation.hash(state);
-    self.text.hash(state);
-  }
+fn shaping_text_hash(text: &str) -> u64 {
+  use std::hash::Hash;
+  use std::hash::Hasher;
+
+  let mut hasher = FxHasher::default();
+  text.hash(&mut hasher);
+  hasher.finish()
 }
 
-impl PartialEq for ShapingCacheKey {
-  fn eq(&self, other: &Self) -> bool {
-    self.style_hash == other.style_hash
-      && self.font_generation == other.font_generation
-      && self.text.as_ref() == other.text.as_ref()
+fn shaping_bidi_signature(
+  base_direction: Direction,
+  explicit_bidi: Option<ExplicitBidiContext>,
+) -> u32 {
+  let mut sig = 0u32;
+  if base_direction.is_rtl() {
+    sig |= 1;
   }
+  if let Some(ctx) = explicit_bidi {
+    sig |= 1 << 1;
+    sig |= (ctx.level.number() as u32) << 2;
+    if ctx.override_all {
+      sig |= 1 << 10;
+    }
+  }
+  sig
 }
 
 #[derive(Default, Debug)]
@@ -4822,7 +4842,8 @@ impl ShapingCacheStats {
 
 #[derive(Debug)]
 struct ShapingCacheInner {
-  shards: Vec<parking_lot::Mutex<LruCache<ShapingCacheKey, Arc<Vec<ShapedRun>>, ShapingCacheHasher>>>,
+  shards:
+    Vec<parking_lot::Mutex<LruCache<ShapingCacheKey, Vec<ShapingCacheEntry>, ShapingCacheHasher>>>,
   shard_mask: usize,
   entries: AtomicUsize,
   stats: ShapingCacheStats,
@@ -4880,10 +4901,17 @@ impl ShapingCache {
     (hasher.finish() as usize) & self.inner.shard_mask
   }
 
-  fn get(&self, key: &ShapingCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
+  fn get(&self, key: &ShapingCacheKey, text: &str) -> Option<Arc<Vec<ShapedRun>>> {
     let shard_idx = self.shard_index(key);
-    let mut cache = self.inner.shards[shard_idx].lock();
-    let result = cache.get(key).cloned();
+    let result = {
+      let mut cache = self.inner.shards[shard_idx].lock();
+      cache.get(key).and_then(|bucket| {
+        bucket
+          .iter()
+          .find(|entry| entry.text.as_ref() == text)
+          .map(|entry| Arc::clone(&entry.runs))
+      })
+    };
     let diag_enabled = text_diagnostics_enabled();
 
     if result.is_some() {
@@ -4905,31 +4933,62 @@ impl ShapingCache {
     result
   }
 
-  fn insert(&self, key: ShapingCacheKey, value: Arc<Vec<ShapedRun>>) -> Arc<Vec<ShapedRun>> {
+  fn insert(
+    &self,
+    key: ShapingCacheKey,
+    text: &str,
+    runs: Arc<Vec<ShapedRun>>,
+  ) -> Arc<Vec<ShapedRun>> {
     let shard_idx = self.shard_index(&key);
-    let mut cache = self.inner.shards[shard_idx].lock();
-    if let Some(existing) = cache.peek(&key).cloned() {
-      return existing;
+    let mut cached = Arc::clone(&runs);
+    let mut inserted_new_bucket = false;
+    let mut evicted = false;
+
+    {
+      let mut cache = self.inner.shards[shard_idx].lock();
+      if let Some(bucket) = cache.get_mut(&key) {
+        if let Some(existing) = bucket.iter().find(|entry| entry.text.as_ref() == text) {
+          cached = Arc::clone(&existing.runs);
+        } else {
+          if bucket.len() >= SHAPING_CACHE_HASH_COLLISION_BUCKET_LIMIT {
+            bucket.remove(0);
+          }
+          bucket.push(ShapingCacheEntry {
+            text: Arc::from(text),
+            runs: Arc::clone(&runs),
+          });
+        }
+      } else {
+        let at_capacity = cache.len() >= cache.cap().get();
+        cache.put(
+          key,
+          vec![ShapingCacheEntry {
+            text: Arc::from(text),
+            runs: Arc::clone(&runs),
+          }],
+        );
+        inserted_new_bucket = true;
+        evicted = at_capacity;
+      }
     }
 
     let diag_enabled = text_diagnostics_enabled();
-    let at_capacity = cache.len() >= cache.cap().get();
-    let _replaced = cache.put(key, Arc::clone(&value));
-
-    if at_capacity {
-      self.inner.stats.evictions.fetch_add(1, Ordering::Relaxed);
-      if diag_enabled {
-        SHAPING_CACHE_DIAG_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+    if inserted_new_bucket {
+      if evicted {
+        self.inner.stats.evictions.fetch_add(1, Ordering::Relaxed);
+        if diag_enabled {
+          SHAPING_CACHE_DIAG_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+        }
+      } else {
+        self.inner.entries.fetch_add(1, Ordering::Relaxed);
       }
-    } else {
-      self.inner.entries.fetch_add(1, Ordering::Relaxed);
     }
 
     if diag_enabled {
       record_shaping_cache_diag_entries(self.len());
     }
 
-    value
+    cached
   }
 
   fn clear(&self) {
@@ -5068,26 +5127,11 @@ impl ShapingPipeline {
       }
     }
 
-    let cache_text = Arc::<str>::from(text);
     let style_hash = shaping_style_hash(style);
     let font_generation = font_context.font_generation();
-    let cache_key = ShapingCacheKey {
-      text: cache_text.clone(),
-      style_hash,
-      font_generation,
-    };
-    if let Some(cached) = self.cache.get(&cache_key) {
-      let shaped_runs = cached.as_ref().clone();
-      if diag_enabled {
-        let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
-        record_text_shape(None, shaped_runs.len(), glyphs);
-      }
-      return Ok(shaped_runs);
-    }
+    let text_hash = shaping_text_hash(text);
 
-    let cache_stats_before = diag_enabled.then(|| self.font_cache.stats());
-
-    // Step 1: Bidi analysis
+    // Step 1: Bidi analysis inputs (needed for cache key + analysis).
     let mut resolved_base_dir = base_direction.unwrap_or(match style.direction {
       crate::style::types::Direction::Ltr => Direction::LeftToRight,
       crate::style::types::Direction::Rtl => Direction::RightToLeft,
@@ -5112,6 +5156,24 @@ impl ShapingPipeline {
       ctx.override_all = true;
       bidi_context = Some(ctx);
     }
+
+    let cache_key = ShapingCacheKey {
+      style_hash,
+      font_generation,
+      text_hash,
+      text_len: text.len(),
+      bidi_signature: shaping_bidi_signature(resolved_base_dir, bidi_context),
+    };
+    if let Some(cached) = self.cache.get(&cache_key, text) {
+      let shaped_runs = cached.as_ref().clone();
+      if diag_enabled {
+        let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
+        record_text_shape(None, shaped_runs.len(), glyphs);
+      }
+      return Ok(shaped_runs);
+    }
+
+    let cache_stats_before = diag_enabled.then(|| self.font_cache.stats());
 
     let bidi = BidiAnalysis::analyze_with_base(text, style, resolved_base_dir, bidi_context);
 
@@ -5167,7 +5229,9 @@ impl ShapingPipeline {
       reorder_runs(&mut shaped_runs, bidi.paragraphs());
     }
 
-    self.cache.insert(cache_key, Arc::new(shaped_runs.clone()));
+    self
+      .cache
+      .insert(cache_key, text, Arc::new(shaped_runs.clone()));
 
     let glyphs = shape_timer
       .as_ref()
@@ -6213,6 +6277,66 @@ mod tests {
       capacity,
       "cache should stay bounded to its configured capacity"
     );
+  }
+
+  #[test]
+  fn shaping_cache_handles_hash_collisions_by_verifying_text() {
+    let cache = ShapingCache::new(8);
+    let key = ShapingCacheKey {
+      style_hash: 42,
+      font_generation: 123,
+      text_hash: 999,
+      text_len: 5,
+      bidi_signature: 0,
+    };
+
+    let runs_hello = Arc::new(Vec::new());
+    let runs_world = Arc::new(Vec::new());
+
+    cache.insert(key, "hello", Arc::clone(&runs_hello));
+    cache.insert(key, "world", Arc::clone(&runs_world));
+
+    let got_hello = cache.get(&key, "hello").expect("expected entry for hello");
+    let got_world = cache.get(&key, "world").expect("expected entry for world");
+
+    assert!(Arc::ptr_eq(&got_hello, &runs_hello));
+    assert!(Arc::ptr_eq(&got_world, &runs_world));
+    assert_eq!(cache.len(), 1, "hash collision bucket should share cache key");
+  }
+
+  #[test]
+  fn shaping_cache_key_includes_explicit_bidi_context() {
+    let style = ComputedStyle::default();
+    let ctx = FontContext::new();
+    let pipeline = ShapingPipeline::with_cache_capacity_for_test(8);
+    SHAPE_FONT_RUN_INVOCATIONS.store(0, Ordering::Relaxed);
+
+    pipeline
+      .shape_core("Cached bidi", &style, &ctx, None, None)
+      .expect("initial shape succeeds");
+
+    let stats_after_first = pipeline.cache_stats();
+    assert_eq!(stats_after_first.misses, 1);
+    assert_eq!(stats_after_first.hits, 0);
+    assert_eq!(pipeline.cache_len(), 1);
+
+    pipeline
+      .shape_core(
+        "Cached bidi",
+        &style,
+        &ctx,
+        None,
+        Some(ExplicitBidiContext {
+          level: Level::rtl(),
+          override_all: true,
+        }),
+      )
+      .expect("shaping with explicit bidi succeeds");
+
+    let stats_after_second = pipeline.cache_stats();
+    assert_eq!(stats_after_second.misses, 2);
+    assert_eq!(stats_after_second.hits, 0);
+    assert_eq!(pipeline.cache_len(), 2);
   }
 
   #[test]
