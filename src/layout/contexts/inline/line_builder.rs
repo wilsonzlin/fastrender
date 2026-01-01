@@ -495,17 +495,63 @@ impl TextItem {
       .filter(|offset| *offset > 0 && *offset < self.text.len())
       .map(|offset| BreakOpportunity::new(offset, BreakType::Allowed))
       .collect();
-    self.break_opportunities.extend(additional);
-    self.break_opportunities.sort_by_key(|b| b.byte_offset);
-    self.break_opportunities.dedup_by(|a, b| {
-      if a.byte_offset != b.byte_offset {
-        return false;
+    if additional.is_empty() {
+      return;
+    }
+
+    let mut base = std::mem::take(&mut self.break_opportunities);
+
+    // Break opportunities should already be sorted here (constructed via `apply_break_properties`),
+    // but keep this robust to future changes.
+    let mut sorted = true;
+    let mut prev_offset: Option<usize> = None;
+    for brk in &base {
+      if let Some(prev) = prev_offset {
+        if brk.byte_offset < prev {
+          sorted = false;
+          break;
+        }
       }
-      if let BreakType::Mandatory = a.break_type {
-        *b = *a;
+      prev_offset = Some(brk.byte_offset);
+    }
+    if !sorted {
+      base.sort_unstable_by_key(|b| b.byte_offset);
+      base.dedup_by(|a, b| {
+        if a.byte_offset != b.byte_offset {
+          return false;
+        }
+        if let BreakType::Mandatory = a.break_type {
+          *b = *a;
+        }
+        b.adds_hyphen |= a.adds_hyphen;
+        true
+      });
+    }
+
+    // Both lists are sorted by byte offset; merge them to avoid sorting the combined vector.
+    // Prefer existing breaks for duplicates so we preserve any mandatory/hyphen metadata.
+    let mut merged = Vec::with_capacity(base.len() + additional.len());
+    let mut base_iter = base.into_iter().peekable();
+    let mut additional_iter = additional.into_iter().peekable();
+    while base_iter.peek().is_some() || additional_iter.peek().is_some() {
+      match (base_iter.peek(), additional_iter.peek()) {
+        (Some(a), Some(b)) => {
+          if a.byte_offset < b.byte_offset {
+            merged.push(base_iter.next().unwrap());
+          } else if a.byte_offset > b.byte_offset {
+            merged.push(additional_iter.next().unwrap());
+          } else {
+            // Same byte offset: keep the existing break, discard the cluster-added one.
+            merged.push(base_iter.next().unwrap());
+            additional_iter.next();
+          }
+        }
+        (Some(_), None) => merged.push(base_iter.next().unwrap()),
+        (None, Some(_)) => merged.push(additional_iter.next().unwrap()),
+        (None, None) => break,
       }
-      true
-    });
+    }
+    self.break_opportunities = merged;
     self.first_mandatory_break = Self::first_mandatory_break(&self.break_opportunities);
   }
 
@@ -3272,6 +3318,34 @@ mod tests {
 
   fn make_text_item(text: &str, advance: f32) -> TextItem {
     make_text_item_with_bidi(text, advance, UnicodeBidi::Normal)
+  }
+
+  #[test]
+  fn add_breaks_at_clusters_preserves_existing_hyphen_breaks() {
+    use crate::text::line_break::{BreakOpportunity, BreakType};
+
+    let mut item = make_text_item("abc", 30.0);
+    item.break_opportunities = vec![
+      BreakOpportunity::with_hyphen(2, BreakType::Allowed, true),
+      BreakOpportunity::allowed(3),
+    ];
+    item.first_mandatory_break = TextItem::first_mandatory_break(&item.break_opportunities);
+
+    item.add_breaks_at_clusters();
+
+    let offsets: Vec<usize> = item
+      .break_opportunities
+      .iter()
+      .map(|b| b.byte_offset)
+      .collect();
+    assert_eq!(offsets, vec![1, 2, 3]);
+
+    let brk2 = item
+      .break_opportunities
+      .iter()
+      .find(|b| b.byte_offset == 2)
+      .expect("break at offset 2");
+    assert!(brk2.adds_hyphen, "cluster breaks should not clear hyphen flags");
   }
 
   fn make_text_item_with_bidi(text: &str, advance: f32, ub: UnicodeBidi) -> TextItem {
