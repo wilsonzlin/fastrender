@@ -463,6 +463,7 @@ fn import_fixture(
       overwrite: args.overwrite,
       allow_missing: args.allow_missing_resources,
       allow_http_references: false,
+      legacy_rewrite: false,
       dry_run: false,
     },
   )
