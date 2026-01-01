@@ -42,4 +42,11 @@ fn perf_smoke_emits_stage_breakdowns() {
       "summary stage_ms should contain numeric {key}"
     );
   }
+
+  for key in ["text_fallback_ms", "text_shape_ms", "text_rasterize_ms"] {
+    assert!(
+      fixture["timings_ms"][key].as_f64().is_some(),
+      "fixture timings_ms should contain numeric {key}"
+    );
+  }
 }

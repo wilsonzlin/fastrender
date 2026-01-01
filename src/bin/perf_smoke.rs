@@ -134,7 +134,7 @@ const CORE_FIXTURES: &[CoreFixture] = &[
   ),
 ];
 
-const PERF_SMOKE_SCHEMA_VERSION: u32 = 2;
+const PERF_SMOKE_SCHEMA_VERSION: u32 = 3;
 const PAGESET_TIMEOUT_MANIFEST_VERSION: u32 = 1;
 const PAGESET_TIMEOUT_MANIFEST: &str = include_str!("../../tests/pages/pageset_timeouts.json");
 
@@ -217,17 +217,23 @@ struct StageTimingsSummary {
   #[serde(default)]
   layout_ms: f64,
   #[serde(default)]
+  text_fallback_ms: f64,
+  #[serde(default)]
+  text_shape_ms: f64,
+  #[serde(default)]
   paint_build_ms: f64,
   #[serde(default)]
   paint_optimize_ms: f64,
   #[serde(default)]
   paint_rasterize_ms: f64,
   #[serde(default)]
+  text_rasterize_ms: f64,
+  #[serde(default)]
   encode_ms: f64,
 }
 
 impl StageTimingsSummary {
-  fn entries(&self) -> [(&'static str, f64); 11] {
+  fn entries(&self) -> [(&'static str, f64); 14] {
     [
       ("html_decode_ms", self.html_decode_ms),
       ("dom_parse_ms", self.dom_parse_ms),
@@ -236,9 +242,12 @@ impl StageTimingsSummary {
       ("cascade_ms", self.cascade_ms),
       ("box_tree_ms", self.box_tree_ms),
       ("layout_ms", self.layout_ms),
+      ("text_fallback_ms", self.text_fallback_ms),
+      ("text_shape_ms", self.text_shape_ms),
       ("paint_build_ms", self.paint_build_ms),
       ("paint_optimize_ms", self.paint_optimize_ms),
       ("paint_rasterize_ms", self.paint_rasterize_ms),
+      ("text_rasterize_ms", self.text_rasterize_ms),
       ("encode_ms", self.encode_ms),
     ]
   }
@@ -254,6 +263,36 @@ struct CountsSummary {
   box_nodes: u64,
   #[serde(default)]
   fragments: u64,
+  #[serde(default)]
+  shaped_runs: u64,
+  #[serde(default)]
+  glyphs: u64,
+  #[serde(default)]
+  color_glyph_rasters: u64,
+  #[serde(default)]
+  fallback_cache_hits: u64,
+  #[serde(default)]
+  fallback_cache_misses: u64,
+  #[serde(default)]
+  last_resort_font_fallbacks: u64,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  last_resort_font_fallback_samples: Option<Vec<String>>,
+  #[serde(default)]
+  glyph_cache_hits: u64,
+  #[serde(default)]
+  glyph_cache_misses: u64,
+  #[serde(default)]
+  glyph_cache_evictions: u64,
+  #[serde(default)]
+  glyph_cache_bytes: u64,
+  #[serde(default)]
+  color_glyph_cache_hits: u64,
+  #[serde(default)]
+  color_glyph_cache_misses: u64,
+  #[serde(default)]
+  color_glyph_cache_evictions: u64,
+  #[serde(default)]
+  color_glyph_cache_bytes: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -342,7 +381,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if base.schema_version != PERF_SMOKE_SCHEMA_VERSION {
       return Err(
         format!(
-          "baseline schema_version {} does not match current schema_version {}",
+          "baseline schema_version {} does not match current schema_version {} (regenerate the baseline with the current perf_smoke)",
           base.schema_version, PERF_SMOKE_SCHEMA_VERSION
         )
         .into(),
@@ -748,9 +787,12 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
     cascade_ms: round_opt(t.cascade_ms),
     box_tree_ms: round_opt(t.box_tree_ms),
     layout_ms: round_opt(t.layout_ms),
+    text_fallback_ms: round_opt(t.text_fallback_ms),
+    text_shape_ms: round_opt(t.text_shape_ms),
     paint_build_ms: round_opt(t.paint_build_ms),
     paint_optimize_ms: round_opt(t.paint_optimize_ms),
     paint_rasterize_ms: round_opt(t.paint_rasterize_ms),
+    text_rasterize_ms: round_opt(t.text_rasterize_ms),
     encode_ms: round_opt(t.encode_ms),
   }
 }
@@ -767,11 +809,12 @@ fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown
     ])),
     css: round_ms(sum_timings(&[t.css_inlining_ms, t.css_parse_ms])),
     cascade: round_ms(sum_timings(&[t.cascade_ms, t.box_tree_ms])),
-    layout: round_ms(sum_timings(&[t.layout_ms])),
+    layout: round_ms(sum_timings(&[t.layout_ms, t.text_fallback_ms, t.text_shape_ms])),
     paint: round_ms(sum_timings(&[
       t.paint_build_ms,
       t.paint_optimize_ms,
       t.paint_rasterize_ms,
+      t.text_rasterize_ms,
     ])),
   }
 }
@@ -782,6 +825,25 @@ fn counts_from_stats(stats: &fastrender::RenderStats) -> CountsSummary {
     styled_nodes: stats.counts.styled_nodes.unwrap_or(0) as u64,
     box_nodes: stats.counts.box_nodes.unwrap_or(0) as u64,
     fragments: stats.counts.fragments.unwrap_or(0) as u64,
+    shaped_runs: stats.counts.shaped_runs.unwrap_or(0) as u64,
+    glyphs: stats.counts.glyphs.unwrap_or(0) as u64,
+    color_glyph_rasters: stats.counts.color_glyph_rasters.unwrap_or(0) as u64,
+    fallback_cache_hits: stats.counts.fallback_cache_hits.unwrap_or(0) as u64,
+    fallback_cache_misses: stats.counts.fallback_cache_misses.unwrap_or(0) as u64,
+    last_resort_font_fallbacks: stats.counts.last_resort_font_fallbacks.unwrap_or(0) as u64,
+    last_resort_font_fallback_samples: stats
+      .counts
+      .last_resort_font_fallback_samples
+      .clone()
+      .filter(|samples| !samples.is_empty()),
+    glyph_cache_hits: stats.counts.glyph_cache_hits.unwrap_or(0),
+    glyph_cache_misses: stats.counts.glyph_cache_misses.unwrap_or(0),
+    glyph_cache_evictions: stats.counts.glyph_cache_evictions.unwrap_or(0),
+    glyph_cache_bytes: stats.counts.glyph_cache_bytes.unwrap_or(0) as u64,
+    color_glyph_cache_hits: stats.counts.color_glyph_cache_hits.unwrap_or(0),
+    color_glyph_cache_misses: stats.counts.color_glyph_cache_misses.unwrap_or(0),
+    color_glyph_cache_evictions: stats.counts.color_glyph_cache_evictions.unwrap_or(0),
+    color_glyph_cache_bytes: stats.counts.color_glyph_cache_bytes.unwrap_or(0) as u64,
   }
 }
 
@@ -953,5 +1015,26 @@ impl Regression {
       RegressionMetric::Total => "total_ms",
       RegressionMetric::Stage(label) => label,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn stage_breakdown_includes_text_timings() {
+    let mut stats = fastrender::RenderStats::default();
+    stats.timings.layout_ms = Some(1.0);
+    stats.timings.text_fallback_ms = Some(2.0);
+    stats.timings.text_shape_ms = Some(3.0);
+    stats.timings.paint_build_ms = Some(4.0);
+    stats.timings.paint_optimize_ms = Some(5.0);
+    stats.timings.paint_rasterize_ms = Some(6.0);
+    stats.timings.text_rasterize_ms = Some(7.0);
+
+    let breakdown = stage_breakdown_from_stats(&stats);
+    assert_eq!(breakdown.layout, 6.0);
+    assert_eq!(breakdown.paint, 22.0);
   }
 }
