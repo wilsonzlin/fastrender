@@ -2834,11 +2834,11 @@ where
   let mut inserted = false;
   for selector in selectors {
     let nested = selector_keys_with_polarity(selector, quirks_mode, polarity);
-    if nested.keys.is_empty() {
+    if nested.all_keys.is_empty() {
       continue;
     }
-    if nested.keys.len() == 1
-      && matches!(nested.keys[0], SelectorKey::Universal)
+    if nested.all_keys.len() == 1
+      && matches!(nested.all_keys[0], SelectorKey::Universal)
       && !allow_universal
     {
       // Avoid falling back to the universal bucket when the outer compound already
@@ -2846,11 +2846,11 @@ where
       continue;
     }
 
-    if nested.required_and && nested.keys.len() > 1 {
-      let mut best = nested.keys[0];
+    if nested.required_and && nested.all_keys.len() > 1 {
+      let mut best = nested.all_keys[0];
       let mut best_rank = selector_key_type_rank(best);
       let mut best_pos = 0usize;
-      for (pos, &key) in nested.keys.iter().enumerate().skip(1) {
+      for (pos, &key) in nested.all_keys.iter().enumerate().skip(1) {
         let rank = selector_key_type_rank(key);
         if rank < best_rank || (rank == best_rank && pos > best_pos) {
           best = key;
@@ -2861,8 +2861,7 @@ where
       inserted |= push_key(out, best);
       continue;
     }
-
-    for key in nested.keys {
+    for key in nested.all_keys {
       inserted |= push_key(out, key);
     }
   }
@@ -2870,7 +2869,8 @@ where
 }
 
 struct SelectorKeyAnalysis {
-  keys: Vec<SelectorKey>,
+  mandatory_keys: Vec<SelectorKey>,
+  all_keys: Vec<SelectorKey>,
   required_and: bool,
 }
 
@@ -2881,97 +2881,80 @@ fn collect_sequence_keys(
 ) -> SelectorKeyAnalysis {
   use selectors::parser::Component;
 
-  let mut keys: Vec<SelectorKey> = Vec::new();
+  let mut mandatory_keys: Vec<SelectorKey> = Vec::new();
+  let mut all_keys: Vec<SelectorKey> = Vec::new();
   let mut required_and = true;
   while let Some(component) = iter.next() {
     match component {
       Component::ID(ident) => {
         if matches!(polarity, SelectorKeyPolarity::Matches) {
-          push_key(
-            &mut keys,
-            SelectorKey::Id(selector_bucket_id_for_mode(ident.as_str(), quirks_mode)),
-          );
+          let key = SelectorKey::Id(selector_bucket_id_for_mode(ident.as_str(), quirks_mode));
+          push_key(&mut all_keys, key);
+          push_key(&mut mandatory_keys, key);
         }
       }
       Component::Class(cls) => {
         if matches!(polarity, SelectorKeyPolarity::Matches) {
-          push_key(
-            &mut keys,
-            SelectorKey::Class(selector_bucket_class_for_mode(cls.as_str(), quirks_mode)),
-          );
+          let key = SelectorKey::Class(selector_bucket_class_for_mode(cls.as_str(), quirks_mode));
+          push_key(&mut all_keys, key);
+          push_key(&mut mandatory_keys, key);
         }
       }
       Component::LocalName(local) => {
         if matches!(polarity, SelectorKeyPolarity::Matches) {
-          push_key(
-            &mut keys,
-            SelectorKey::Tag(selector_bucket_tag(local.lower_name.as_str())),
-          );
+          let key = SelectorKey::Tag(selector_bucket_tag(local.lower_name.as_str()));
+          push_key(&mut all_keys, key);
+          push_key(&mut mandatory_keys, key);
         }
       }
       Component::AttributeInNoNamespaceExists {
         local_name_lower, ..
       } => {
         if matches!(polarity, SelectorKeyPolarity::Matches) {
-          push_key(
-            &mut keys,
-            SelectorKey::Attribute(selector_bucket_attr(local_name_lower.as_str())),
-          );
+          let key = SelectorKey::Attribute(selector_bucket_attr(local_name_lower.as_str()));
+          push_key(&mut all_keys, key);
+          push_key(&mut mandatory_keys, key);
         }
       }
       Component::AttributeInNoNamespace { local_name, .. } => {
         if matches!(polarity, SelectorKeyPolarity::Matches) {
-          push_key(
-            &mut keys,
-            SelectorKey::Attribute(selector_bucket_attr(local_name.as_str())),
-          );
+          let key = SelectorKey::Attribute(selector_bucket_attr(local_name.as_str()));
+          push_key(&mut all_keys, key);
+          push_key(&mut mandatory_keys, key);
         }
       }
       Component::AttributeOther(other) => {
         if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
-          push_key(
-            &mut keys,
-            SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str())),
-          );
+          let key = SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str()));
+          push_key(&mut all_keys, key);
+          push_key(&mut mandatory_keys, key);
         }
       }
       Component::NthOf(nth) => {
-        if keys.is_empty()
-          && merge_nested_keys(
-            nth.selectors().iter(),
-            quirks_mode,
-            polarity,
-            true,
-            &mut keys,
-          )
+        if all_keys.is_empty()
+          && merge_nested_keys(nth.selectors().iter(), quirks_mode, polarity, true, &mut all_keys)
         {
           required_and = false;
         }
       }
       Component::Host(Some(inner)) => {
-        if keys.is_empty()
-          && merge_nested_keys(
-            std::iter::once(inner),
-            quirks_mode,
-            polarity,
-            true,
-            &mut keys,
-          )
+        if all_keys.is_empty()
+          && merge_nested_keys(std::iter::once(inner), quirks_mode, polarity, true, &mut all_keys)
         {
           required_and = false;
         }
       }
       Component::NonTSPseudoClass(pc) => match pc {
         PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
-          if keys.is_empty()
-            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut keys)
+          if all_keys.is_empty()
+            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut all_keys)
           {
             required_and = false;
           }
         }
         PseudoClass::Host(Some(list)) => {
-          if keys.is_empty()
-            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut keys)
+          if all_keys.is_empty()
+            && merge_nested_keys(list.slice().iter(), quirks_mode, polarity, true, &mut all_keys)
           {
             required_and = false;
           }
@@ -2983,8 +2966,8 @@ fn collect_sequence_keys(
           list.slice().iter(),
           quirks_mode,
           polarity,
-          keys.is_empty(),
-          &mut keys,
+          all_keys.is_empty(),
+          &mut all_keys,
         ) {
           required_and = false;
         }
@@ -2994,8 +2977,8 @@ fn collect_sequence_keys(
           list.slice().iter(),
           quirks_mode,
           polarity,
-          keys.is_empty(),
-          &mut keys,
+          all_keys.is_empty(),
+          &mut all_keys,
         ) {
           required_and = false;
         }
@@ -3009,8 +2992,8 @@ fn collect_sequence_keys(
           list.slice().iter(),
           quirks_mode,
           flipped,
-          keys.is_empty(),
-          &mut keys,
+          all_keys.is_empty(),
+          &mut all_keys,
         ) {
           required_and = false;
         }
@@ -3019,11 +3002,15 @@ fn collect_sequence_keys(
     }
   }
 
-  if keys.is_empty() && matches!(polarity, SelectorKeyPolarity::Matches) {
-    keys.push(SelectorKey::Universal);
+  if all_keys.is_empty() && matches!(polarity, SelectorKeyPolarity::Matches) {
+    all_keys.push(SelectorKey::Universal);
   }
 
-  SelectorKeyAnalysis { keys, required_and }
+  SelectorKeyAnalysis {
+    mandatory_keys,
+    all_keys,
+    required_and,
+  }
 }
 
 fn selector_keys_with_polarity(
@@ -3608,11 +3595,18 @@ impl<'a> RuleIndex<'a> {
 
     let mut selector_key_analyses: Vec<SelectorKeyAnalysis> = Vec::new();
     let mut selector_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
+    let mut selector_mandatory_key_frequencies: FxHashMap<SelectorKey, usize> =
+      FxHashMap::default();
     let mut pseudo_key_analyses: Vec<(PseudoElement, SelectorKeyAnalysis)> = Vec::new();
     let mut pseudo_key_frequencies: HashMap<PseudoElement, FxHashMap<SelectorKey, usize>> =
       HashMap::new();
+    let mut pseudo_mandatory_key_frequencies: HashMap<
+      PseudoElement,
+      FxHashMap<SelectorKey, usize>,
+    > = HashMap::new();
     let mut slotted_arg_key_analyses: Vec<Vec<SelectorKeyAnalysis>> = Vec::new();
     let mut slotted_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
+    let mut slotted_mandatory_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
 
     for rule in rules {
       let sets_content = rule
@@ -3705,8 +3699,11 @@ impl<'a> RuleIndex<'a> {
               _ => Vec::new(),
             };
             for analysis in arg_analyses.iter() {
-              for &key in analysis.keys.iter() {
+              for &key in analysis.all_keys.iter() {
                 *slotted_key_frequencies.entry(key).or_default() += 1;
+              }
+              for &key in analysis.mandatory_keys.iter() {
+                *slotted_mandatory_key_frequencies.entry(key).or_default() += 1;
               }
             }
             slotted_arg_key_analyses.push(arg_analyses);
@@ -3743,8 +3740,14 @@ impl<'a> RuleIndex<'a> {
 
           let analysis = pseudo_selector_subject_key_analysis(selector, quirks_mode);
           let freq = pseudo_key_frequencies.entry(pseudo.clone()).or_default();
-          for &key in analysis.keys.iter() {
+          for &key in analysis.all_keys.iter() {
             *freq.entry(key).or_default() += 1;
+          }
+          let mandatory_freq = pseudo_mandatory_key_frequencies
+            .entry(pseudo.clone())
+            .or_default();
+          for &key in analysis.mandatory_keys.iter() {
+            *mandatory_freq.entry(key).or_default() += 1;
           }
           pseudo_key_analyses.push((pseudo, analysis));
           continue;
@@ -3777,16 +3780,31 @@ impl<'a> RuleIndex<'a> {
 
         let analysis =
           selector_keys_with_polarity(selector, quirks_mode, SelectorKeyPolarity::Matches);
-        for &key in analysis.keys.iter() {
+        for &key in analysis.all_keys.iter() {
           *selector_key_frequencies.entry(key).or_default() += 1;
+        }
+        for &key in analysis.mandatory_keys.iter() {
+          *selector_mandatory_key_frequencies.entry(key).or_default() += 1;
         }
         selector_key_analyses.push(analysis);
       }
     }
 
     for (selector_idx, analysis) in selector_key_analyses.iter().enumerate() {
-      if analysis.required_and {
-        let anchor = choose_anchor_key(&analysis.keys, &selector_key_frequencies);
+      if !analysis.mandatory_keys.is_empty() {
+        let anchor = choose_anchor_key(
+          &analysis.mandatory_keys,
+          &selector_mandatory_key_frequencies,
+        );
+        match anchor {
+          SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
+          SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
+          SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
+          SelectorKey::Universal => index.universal.push(selector_idx),
+        }
+      } else if analysis.required_and {
+        let anchor = choose_anchor_key(&analysis.all_keys, &selector_key_frequencies);
         match anchor {
           SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
           SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
@@ -3795,7 +3813,7 @@ impl<'a> RuleIndex<'a> {
           SelectorKey::Universal => index.universal.push(selector_idx),
         }
       } else {
-        for &key in analysis.keys.iter() {
+        for &key in analysis.all_keys.iter() {
           match key {
             SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
             SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
@@ -3813,12 +3831,27 @@ impl<'a> RuleIndex<'a> {
       let Some(freq) = pseudo_key_frequencies.get(pseudo) else {
         continue;
       };
+      let empty_mandatory_freq: FxHashMap<SelectorKey, usize> = FxHashMap::default();
+      let mandatory_freq = pseudo_mandatory_key_frequencies
+        .get(pseudo)
+        .unwrap_or(&empty_mandatory_freq);
       let bucket = index
         .pseudo_buckets
         .entry(pseudo.clone())
         .or_insert_with(PseudoBuckets::new);
-      if analysis.required_and {
-        let anchor = choose_anchor_key(&analysis.keys, freq);
+      if !analysis.mandatory_keys.is_empty() {
+        let anchor = choose_anchor_key(&analysis.mandatory_keys, mandatory_freq);
+        match anchor {
+          SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
+          SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
+          SelectorKey::Attribute(attr) => {
+            bucket.by_attr.entry(attr).or_default().push(selector_idx)
+          }
+          SelectorKey::Universal => bucket.universal.push(selector_idx),
+        }
+      } else if analysis.required_and {
+        let anchor = choose_anchor_key(&analysis.all_keys, freq);
         match anchor {
           SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
           SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
@@ -3829,7 +3862,7 @@ impl<'a> RuleIndex<'a> {
           SelectorKey::Universal => bucket.universal.push(selector_idx),
         }
       } else {
-        for &key in analysis.keys.iter() {
+        for &key in analysis.all_keys.iter() {
           match key {
             SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
             SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
@@ -3846,13 +3879,18 @@ impl<'a> RuleIndex<'a> {
     for (selector_idx, arg_analyses) in slotted_arg_key_analyses.iter().enumerate() {
       let mut keys: Vec<SelectorKey> = Vec::new();
       for analysis in arg_analyses.iter() {
-        if analysis.required_and {
+        if !analysis.mandatory_keys.is_empty() {
           push_key(
             &mut keys,
-            choose_anchor_key(&analysis.keys, &slotted_key_frequencies),
+            choose_anchor_key(&analysis.mandatory_keys, &slotted_mandatory_key_frequencies),
+          );
+        } else if analysis.required_and {
+          push_key(
+            &mut keys,
+            choose_anchor_key(&analysis.all_keys, &slotted_key_frequencies),
           );
         } else {
-          for &key in analysis.keys.iter() {
+          for &key in analysis.all_keys.iter() {
             push_key(&mut keys, key);
           }
         }
@@ -8820,6 +8858,152 @@ mod tests {
   }
 
   #[test]
+  fn rule_index_anchors_mixed_selector_list_under_mandatory_key() {
+    let stylesheet = parse_stylesheet(".foo:is(.a, .b) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+
+    assert_eq!(
+      index
+        .by_class
+        .get(&selector_bucket_class("foo"))
+        .expect("foo bucket")
+        .as_slice(),
+      &[0usize]
+    );
+    assert!(
+      index.by_class.get(&selector_bucket_class("a")).is_none(),
+      "selector should not be indexed under optional .a key"
+    );
+    assert!(
+      index.by_class.get(&selector_bucket_class("b")).is_none(),
+      "selector should not be indexed under optional .b key"
+    );
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "foo b".to_string())],
+      },
+      children: vec![],
+    };
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates.as_slice(), &[0usize]);
+  }
+
+  #[test]
+  fn rule_index_anchors_tag_plus_is_under_tag() {
+    let stylesheet = parse_stylesheet("div:is(.a, .b) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+
+    assert_eq!(
+      index
+        .by_tag
+        .get(&selector_bucket_tag("div"))
+        .expect("div bucket")
+        .as_slice(),
+      &[0usize]
+    );
+    assert!(
+      index.by_class.get(&selector_bucket_class("a")).is_none(),
+      "selector should not be indexed under optional .a key"
+    );
+    assert!(
+      index.by_class.get(&selector_bucket_class("b")).is_none(),
+      "selector should not be indexed under optional .b key"
+    );
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, QuirksMode::NoQuirks, &mut class_keys, &mut attr_keys);
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates.as_slice(), &[0usize]);
+  }
+
+  #[test]
   fn rule_index_indexes_is_selector_list_by_subject_keys() {
     let stylesheet = parse_stylesheet(":is(.a, .b) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
@@ -9017,7 +9201,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),

@@ -12975,10 +12975,10 @@ mod tests {
   use super::*;
   use crate::css::parser::{parse_declarations, parse_stylesheet};
   use crate::css::properties::parse_property_value;
-  use crate::style::custom_properties::{CustomPropertyRegistry, PropertyRule};
   use crate::geometry::Size;
   use crate::style::cascade::inherit_styles;
   use crate::style::content::{ContentItem, ContentValue, RunningElementSelect};
+  use crate::style::custom_properties::{CustomPropertyRegistry, PropertyRule};
   use crate::style::string_set::{StringSetAssignment, StringSetValue};
   use crate::style::types::AlignContent;
   use crate::style::types::AlignItems;
@@ -13382,7 +13382,10 @@ mod tests {
     assert_eq!(rule.declarations.len(), 2);
     for decl in &rule.declarations {
       assert!(decl.property.starts_with("--"));
-      assert!(decl.raw_value.is_empty(), "custom-property raw_value should be empty");
+      assert!(
+        decl.raw_value.is_empty(),
+        "custom-property raw_value should be empty"
+      );
     }
 
     let mut styles = ComputedStyle::default();
@@ -13392,7 +13395,10 @@ mod tests {
     }
 
     assert_eq!(
-      styles.custom_properties.get("--no-var").map(|v| v.value.as_str()),
+      styles
+        .custom_properties
+        .get("--no-var")
+        .map(|v| v.value.as_str()),
       Some("10px")
     );
     assert_eq!(
@@ -13416,7 +13422,10 @@ mod tests {
     assert_eq!(rule.declarations.len(), 2);
     for decl in &rule.declarations {
       assert!(decl.property.starts_with("--"));
-      assert!(decl.raw_value.is_empty(), "custom-property raw_value should be empty");
+      assert!(
+        decl.raw_value.is_empty(),
+        "custom-property raw_value should be empty"
+      );
     }
 
     let mut registry = CustomPropertyRegistry::new();
@@ -13435,7 +13444,10 @@ mod tests {
       apply_declaration(&mut styles, decl, &parent, 16.0, 16.0);
     }
 
-    let value = styles.custom_properties.get("--len").expect("custom property");
+    let value = styles
+      .custom_properties
+      .get("--len")
+      .expect("custom property");
     assert_eq!(value.value, "5px");
     assert_eq!(
       value.typed,

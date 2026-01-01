@@ -54,15 +54,17 @@ fn generate_html(
   html
 }
 
-fn generate_css(
-  class_variants: usize,
-  class_len: usize,
-  attr_len: usize,
-) -> String {
+fn generate_css(class_variants: usize, class_len: usize, attr_len: usize) -> String {
   let mut css = String::from("div { display: block; }\n");
   for i in 0..class_variants {
     let cls = long_ident("c", i, class_len);
-    let _ = writeln!(css, ".{cls} {{ color: rgb({},{},{}); }}", i % 255, (i * 3) % 255, (i * 7) % 255);
+    let _ = writeln!(
+      css,
+      ".{cls} {{ color: rgb({},{},{}); }}",
+      i % 255,
+      (i * 3) % 255,
+      (i * 7) % 255
+    );
     let attr = long_ident("data-a", i, attr_len);
     let _ = writeln!(css, "[{attr}] {{ margin-left: {}px; }}", (i % 9) + 1);
   }
@@ -80,9 +82,21 @@ fn generate_css_with_required_and_compounds(
   let compound_class_rules = class_variants * 8;
   for i in 0..compound_class_rules {
     let cls_a = long_ident("c", (i.wrapping_mul(17)) % class_variants, class_len);
-    let cls_b = long_ident("c", (i.wrapping_mul(31).wrapping_add(1)) % class_variants, class_len);
-    let cls_c = long_ident("c", (i.wrapping_mul(47).wrapping_add(2)) % class_variants, class_len);
-    let cls_d = long_ident("c", (i.wrapping_mul(71).wrapping_add(3)) % class_variants, class_len);
+    let cls_b = long_ident(
+      "c",
+      (i.wrapping_mul(31).wrapping_add(1)) % class_variants,
+      class_len,
+    );
+    let cls_c = long_ident(
+      "c",
+      (i.wrapping_mul(47).wrapping_add(2)) % class_variants,
+      class_len,
+    );
+    let cls_d = long_ident(
+      "c",
+      (i.wrapping_mul(71).wrapping_add(3)) % class_variants,
+      class_len,
+    );
     let _ = writeln!(
       css,
       ".{cls_a}.{cls_b}.{cls_c}.{cls_d} {{ padding-left: {}px; }}",
@@ -116,6 +130,46 @@ fn generate_css_with_required_and_compounds(
   }
 
   css
+}
+
+fn generate_css_with_mandatory_anchor_is_selectors(
+  class_variants: usize,
+  class_len: usize,
+) -> String {
+  let mut css = String::new();
+  for i in 0..class_variants {
+    let mandatory = long_ident("c", i, class_len);
+    let a = long_ident("a", i, class_len);
+    let b = long_ident("b", i, class_len);
+    let _ = writeln!(
+      css,
+      ".{mandatory}:is(.{a}, .{b}) {{ color: rgb({},{},{}); }}",
+      i % 255,
+      (i * 3) % 255,
+      (i * 7) % 255
+    );
+  }
+  css
+}
+
+fn generate_html_for_mandatory_anchor_is_selectors(
+  class_variants: usize,
+  class_len: usize,
+  target: usize,
+) -> String {
+  let mut classes = long_ident("c", target, class_len);
+  for i in 0..class_variants {
+    if i == target {
+      continue;
+    }
+    let a = long_ident("a", i, class_len);
+    let b = long_ident("b", i, class_len);
+    classes.push(' ');
+    classes.push_str(&a);
+    classes.push(' ');
+    classes.push_str(&b);
+  }
+  format!("<html><body><div id=\"root\"><div class=\"{classes}\"></div></div></body></html>")
 }
 
 fn selector_candidates_benchmark(c: &mut Criterion) {
@@ -158,6 +212,28 @@ fn selector_candidates_benchmark(c: &mut Criterion) {
     });
     group.finish();
   }
+
+  // Stress selectors that contain a mandatory key plus a branching selector list (e.g.
+  // `.c0:is(.a0, .b0)`), and build an element that matches only one mandatory key while matching
+  // many of the optional `:is()` keys. Without mandatory-key anchoring this produces large,
+  // duplicate candidate unions.
+  let mixed_variants = 256usize;
+  let mixed_target = 128usize;
+  let mixed_html =
+    generate_html_for_mandatory_anchor_is_selectors(mixed_variants, class_len, mixed_target);
+  let mixed_dom = parse_html(&mixed_html).expect("parse html");
+  let mixed_css = generate_css_with_mandatory_anchor_is_selectors(mixed_variants, class_len);
+  let mixed_stylesheet = parse_stylesheet(&mixed_css).expect("parse stylesheet");
+  let mut bench = SelectorCandidateBench::new(&mixed_dom, &mixed_stylesheet, &media);
+  let mut group = c.benchmark_group("selector_candidates/mandatory_anchor_is_selectors");
+  let mixed_reps = 100usize;
+  group.bench_function("cached", |b| {
+    b.iter(|| black_box(bench.run_cached(black_box(mixed_reps))));
+  });
+  group.bench_function("uncached", |b| {
+    b.iter(|| black_box(bench.run_uncached(black_box(mixed_reps))));
+  });
+  group.finish();
 }
 
 criterion_group!(benches, selector_candidates_benchmark);
