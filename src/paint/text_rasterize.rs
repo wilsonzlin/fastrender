@@ -1344,6 +1344,7 @@ impl TextRasterizer {
     rotation: Option<Transform>,
     variations: &[Variation],
   ) -> Result<Vec<Path>> {
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     let instance =
       FontInstance::new(font, variations).ok_or_else(|| RenderError::RasterizationFailed {
         reason: format!("Failed to parse font: {}", font.family),
@@ -1363,8 +1364,11 @@ impl TextRasterizer {
     let mut paths = Vec::with_capacity(glyphs.len());
     let mut cursor_x = x;
     let mut cursor_y = 0.0_f32;
+    let mut deadline_counter = 0usize;
 
     for glyph in glyphs {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + cursor_y + glyph.y_offset;
       let cached_path = if let Ok(mut cache) = self.cache.lock() {
@@ -1928,6 +1932,59 @@ mod tests {
       )
     });
 
+    assert!(
+      matches!(
+        result,
+        Err(Error::Render(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        }))
+      ),
+      "expected paint-stage timeout, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn positioned_glyph_paths_respects_deadline_timeout_in_glyph_loop() {
+    let font = FontContext::new()
+      .get_sans_serif()
+      .expect("expected bundled sans-serif font for tests");
+    let face = font.as_ttf_face().expect("parse test font");
+    let glyph_id = face
+      .glyph_index(' ')
+      .or_else(|| face.glyph_index('A'))
+      .expect("resolve glyph for deadline timeout test")
+      .0 as u32;
+
+    let glyphs: Vec<GlyphPosition> = (0..10_000u32)
+      .map(|cluster| GlyphPosition {
+        glyph_id,
+        cluster,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 0.0,
+        y_advance: 0.0,
+      })
+      .collect();
+
+    let checks = Arc::new(AtomicUsize::new(0));
+    let checks_for_cb = Arc::clone(&checks);
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(move || {
+      let prev = checks_for_cb.fetch_add(1, Ordering::SeqCst);
+      prev >= 1
+    });
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let mut rasterizer = TextRasterizer::new();
+
+    let result = with_deadline(Some(&deadline), || {
+      rasterizer.positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, None, &[])
+    });
+
+    assert!(
+      checks.load(Ordering::SeqCst) >= 2,
+      "expected render deadline to be checked more than once (entry + periodic), got {}",
+      checks.load(Ordering::SeqCst)
+    );
     assert!(
       matches!(
         result,
