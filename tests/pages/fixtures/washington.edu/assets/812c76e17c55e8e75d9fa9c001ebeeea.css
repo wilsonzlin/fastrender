@@ -1,0 +1,51 @@
+.fui-radio-unchecked:before,
+.fui-radio-checked:before {
+  background: url(ca8bf54887a99bcc2a069a15ce8649ee.png) no-repeat 0 0 rgba(0, 0, 0, 0);
+}
+
+.uw-thinstrip nav {
+	display: inline;
+}
+
+.uw-thinstrip .uw-patch {
+	background-image: url(ca8bf54887a99bcc2a069a15ce8649ee.png);
+}
+
+.uw-thinstrip .uw-wordmark {
+	background-image: url(ca8bf54887a99bcc2a069a15ce8649ee.png);
+}
+
+button.uw-search  {
+	background-image: url(12599fcf9a59f40147baf8a71df641b5.png);
+	background-repeat: no-repeat;
+	border: none !important;
+}
+
+.uw-thinstrip button.uw-quicklinks  {
+	background: url(b7c564a08e4a4a886c16f704cc7ed6b5.png) right 0 no-repeat transparent !important;
+}
+
+.uw-thinstrip ul.uw-thin-links li.uw-quicklinks button:before {
+	display: none;
+}
+
+.uw-thinstrip ul.uw-thin-links li a:after,
+.uw-thinstrip ul.uw-thin-links li button:after {
+	background-image: url(ca8bf54887a99bcc2a069a15ce8649ee.png);
+}
+
+.uw-search-bar-container a.search {
+	background-image: url(623b4aa3a53fc219864ec81181e1d2ad.png);
+}
+#uw-container #quicklinks ul#big-links li span {
+	background-image: url(ca8bf54887a99bcc2a069a15ce8649ee.png);
+}
+body.search-open #uw-container {
+    margin-top: 192px;
+}
+body.search-open #uwsearcharea .no-height{
+    top: 0px;
+}
+#uw-container.open div#uw-container-inner{
+    left: -270px;
+}

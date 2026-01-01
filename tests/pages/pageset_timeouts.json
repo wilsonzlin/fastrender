@@ -14,52 +14,8 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "amazon.com",
-      "url": "https://amazon.com",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 5000.0
-    },
-    {
-      "name": "booking.com",
-      "url": "https://booking.com",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 5000.0
-    },
-    {
       "name": "nhk.or.jp",
       "url": "https://nhk.or.jp",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 5000.0
-    },
-    {
-      "name": "tesco.com",
-      "url": "https://tesco.com",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 5000.0
-    },
-    {
-      "name": "washingtonpost.com",
-      "url": "https://washingtonpost.com",
       "viewport": [
         1200,
         800
@@ -157,17 +113,6 @@
       "budget_ms": 35000.0
     },
     {
-      "name": "abcnews.go.com",
-      "url": "https://abcnews.go.com",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 25000.0
-    },
-    {
       "name": "bbc.com",
       "url": "https://bbc.com",
       "viewport": [
@@ -192,17 +137,6 @@
     {
       "name": "dailymail.co.uk",
       "url": "https://dailymail.co.uk",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 20000.0
-    },
-    {
-      "name": "developer.mozilla.org_en-US_docs_Web_CSS_writing-mode",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode",
       "viewport": [
         1200,
         800
@@ -298,17 +232,6 @@
       "dpr": 1.0,
       "media": "screen",
       "budget_ms": 35000.0
-    },
-    {
-      "name": "nationalgeographic.com",
-      "url": "https://nationalgeographic.com",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 20000.0
     },
     {
       "name": "nbcnews.com",
@@ -487,17 +410,6 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "gitlab.io",
-      "url": "https://about.gitlab.com/",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 20000.0
-    },
-    {
       "name": "developer.mozilla.org_en-US_docs_Web_CSS_text-combine-upright",
       "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/text-combine-upright",
       "viewport": [
@@ -520,6 +432,28 @@
       "budget_ms": 5000.0
     },
     {
+      "name": "developer.mozilla.org_en-US_docs_Web_CSS_text-orientation",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/text-orientation",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "elpais.com",
+      "url": "https://elpais.com/us/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
       "name": "yahoo.com",
       "url": "https://www.yahoo.com/",
       "viewport": [
@@ -531,8 +465,63 @@
       "budget_ms": 20000.0
     },
     {
-      "name": "cnet.com",
-      "url": "https://www.cnet.com/",
+      "name": "huffpost.com",
+      "url": "https://www.huffpost.com/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "gitlab.io",
+      "url": "https://about.gitlab.com/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 20000.0
+    },
+    {
+      "name": "weather.com",
+      "url": "https://weather.com/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "bbc.co.uk",
+      "url": "https://www.bbc.co.uk/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "openai.com",
+      "url": "https://openai.com/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "washington.edu",
+      "url": "https://www.washington.edu/",
       "viewport": [
         1200,
         800
@@ -544,6 +533,17 @@
     {
       "name": "sqlite.org",
       "url": "https://sqlite.org/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "booking.com",
+      "url": "https://booking.com",
       "viewport": [
         1200,
         800

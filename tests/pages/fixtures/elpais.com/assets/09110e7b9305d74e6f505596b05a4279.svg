@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="30px" height="30px" viewBox="0 0 30 30" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Atoms/Icon/football/red_card 1</title>
+    <g id="Atoms/Icon/football/red_card-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Group-4" transform="translate(7.250000, 4.162655)">
+            <rect id="Rectangle" fill="#FF473E" x="0.75" y="0.75" width="14" height="20" rx="1"></rect>
+            <path d="M13.75,0 L1.75,0 C0.783501688,0 0,0.783501688 0,1.75 L0,19.75 C0,20.7164983 0.783501688,21.5 1.75,21.5 L13.75,21.5 C14.7164983,21.5 15.5,20.7164983 15.5,19.75 L15.5,1.75 C15.5,0.783501688 14.7164983,0 13.75,0 Z M13.75,1.5 C13.8880712,1.5 14,1.61192881 14,1.75 L14,19.75 C14,19.8880712 13.8880712,20 13.75,20 L1.75,20 C1.61192881,20 1.5,19.8880712 1.5,19.75 L1.5,1.75 C1.5,1.61192881 1.61192881,1.5 1.75,1.5 L13.75,1.5 Z" id="Rectangle" fill="#111111" fill-rule="nonzero"></path>
+        </g>
+    </g>
+</svg>

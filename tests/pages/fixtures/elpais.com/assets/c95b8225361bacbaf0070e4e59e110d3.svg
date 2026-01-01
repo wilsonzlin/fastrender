@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="86px" height="15px" viewBox="0 0 86 15" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+
+    <g id="FUNDACIÓN-CAIXA---En-progreso" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g transform="translate(-1170.000000, -318.000000)" id="Group-3">
+            <g transform="translate(1170.000000, 318.000000)">
+                <path d="M19.3173159,11.5175679 C36,10.5175679 34.6427496,10.5527038 52.7499713,9.51756794 C63.3866841,8.90949878 71.5276379,8.8372261 77.1728326,9.30074987 L77.1728264,9.30082602 C78.3352914,9.39627537 79.2002786,10.4160165 79.1048293,11.5784816 C79.0148635,12.6741621 78.0993678,13.5175679 77,13.5175679 C77,13.5175679 77,13.5175679 77,13.5175679 C64,13.5175679 54,12.5175679 47,12.5175679 C28.8412598,12.5175679 19.818779,13 8,14 C2.08075604,14.5008338 -0.00759174051,14.4586136 1,13.5175679 C2.00759174,12.5765223 13.8731936,11.8439016 19.3173159,11.5175679 Z" id="Path-2" fill="#0BBBEF"></path>
+                <text id="En-progreso" font-family="MarcinAntB, Marcin Ant B" font-size="12" font-weight="normal" fill="#FFFFFF">
+                    <tspan x="0" y="10">EN PROGRESO</tspan>
+                </text>
+            </g>
+        </g>
+    </g>
+</svg>

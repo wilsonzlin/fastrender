@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="191px" height="85px" viewBox="0 0 191 85" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>logo-caf-color</title>
+    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="logo-caf-color" transform="translate(0.543000, 0.000000)" fill-rule="nonzero">
+            <path d="M74.746,84.542 L92.602,36.978 L78.696,0 L56.257,60.68 L45.353,60.68 C33.027,60.68 26.232,57.678 26.232,42.349 C26.232,27.021 33.027,23.86 45.353,23.86 L56.889,23.86 L65.738,0.157 L43.141,0.157 C16.434,-0.001 -7.10542736e-15,13.589 -7.10542736e-15,42.348 C-7.10542736e-15,70.951 16.435,84.54 43.299,84.54 L47.566,84.54 L74.746,84.542 L74.746,84.542 Z" id="Path" fill="#005186"></path>
+            <polygon id="Path" fill="#509F26" points="146.489 84.542 146.489 57.046 176.04 57.046 176.04 35.081 146.489 35.081 146.489 23.862 181.571 23.862 190.42 0 121.995 0 121.995 41.876 106.509 0 78.696 0 110.459 84.542"></polygon>
+        </g>
+    </g>
+</svg>

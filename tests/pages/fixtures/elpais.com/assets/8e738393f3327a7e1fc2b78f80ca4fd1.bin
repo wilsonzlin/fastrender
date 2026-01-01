@@ -1,0 +1,31 @@
+{
+  "name": "EL PAÍS: el periódico global",
+  "short_name": "EL PAÍS",
+  "start_url": "/",
+  "description": "Noticias de última hora de Argentina, México, Estados Unidos y la actualidad internacional: política, economía, deportes, cultura, sociedad, tecnología, gente, opinión, viajes, moda, televisión, los blogs y las firmas de EL PAÍS. Además especiales, vídeos, fotos, audios, gráficos, entrevistas y todos los servicios de EL PAÍS.",
+  "icons": [
+    {
+      "src": "https://static.elpais.com/dist/resources/images/favicon_180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "https://static.elpais.com/dist/resources/images/favicon_512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "display": "minimal-ui",
+  "prefer_related_applications": true,
+  "related_applications": [
+    {
+      "platform": "play",
+      "url": "https://play.google.com/store/apps/details?id=com.elpais.elpais",
+      "id": "com.elpais.elpais"
+    }
+  ]
+}

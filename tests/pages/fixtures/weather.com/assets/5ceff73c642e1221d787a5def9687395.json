@@ -1,0 +1,55 @@
+{
+  "name": "The Weather Channel",
+  "short_name": "Weather.com",
+  "icons": [
+    {
+      "src": "//s.w-x.co/twc_36x36.png",
+      "sizes": "36x36",
+      "type": "image/png",
+      "density": 0.75
+    },
+    {
+      "src": "//s.w-x.co/twc_48x48.png",
+      "sizes": "48x48",
+      "type": "image/png",
+      "density": 1.0
+    },
+    {
+      "src": "//s.w-x.co/twc_72x72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "density": 1.5
+    },
+    {
+      "src": "//s.w-x.co/twc_96x96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "density": 2.0
+    },
+    {
+      "src": "//s.w-x.co/twc_128x128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "density": 2.5
+    },
+    {
+      "src": "//s.w-x.co/twc_144x144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "density": 3.0
+    },
+    {
+      "src": "//s.w-x.co/twc_192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "density": 4.0
+    }
+
+  ],
+  "prefer_related_applications": false,
+  "start_url": ".?from=launch:homescreen",
+  "theme_color": "#003399",
+  "background_color": "#2962a9",
+  "display": "standalone",
+  "gcm_sender_id": "798371954211"
+}
