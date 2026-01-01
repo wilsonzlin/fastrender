@@ -13,8 +13,12 @@
 //! split by Flex vs Grid.
 //!
 //! Note: the recorded compute durations are accumulated across *all* Taffy invocations in a render
-//! (and across rayon worker threads). This means the resulting `*_compute_ms` values act like
+//! (and across rayon worker threads). This means the resulting `*_compute_cpu_ms` values act like
 //! "core-milliseconds" and may exceed wall-clock timings for the overall render.
+//!
+//! In `RenderDiagnostics.stats`, these are exposed as
+//! `LayoutDiagnostics.taffy_{flex,grid}_compute_cpu_ms` (legacy JSON may still use
+//! `taffy_{flex,grid}_compute_ms`).
 
 use crate::geometry::Size;
 use crate::style::types::{AspectRatio, FlexBasis, GridTrack};
@@ -118,6 +122,9 @@ pub(crate) fn taffy_perf_enabled() -> bool {
 ///
 /// Layout runs can occur outside of diagnostics-enabled renders; this should be cheap to call in
 /// hot paths by doing nothing unless perf counters are enabled for an active diagnostics capture.
+///
+/// The reset request is issued once per diagnostics-enabled render so counters accumulate across
+/// multi-pass relayout within the same render (e.g. container queries).
 #[inline]
 pub(crate) fn reset_taffy_perf_counters() {
   if !taffy_perf_enabled() {
