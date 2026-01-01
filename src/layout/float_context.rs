@@ -768,9 +768,12 @@ impl FloatContext {
   }
 
   fn next_float_boundary_after_internal(&self, state: &FloatSweepState, y: f32) -> f32 {
-    self
-      .next_event_y(state)
-      .min(self.next_shape_boundary_after(state, y))
+    let next = self.next_event_y(state);
+    if state.active_shape_left.is_empty() && state.active_shape_right.is_empty() {
+      next
+    } else {
+      next.min(self.next_shape_boundary_after(state, y))
+    }
   }
 
   /// Returns the current Y position
@@ -1176,7 +1179,6 @@ impl FloatContext {
         break;
       }
 
-      self.advance_sweep_to(y, &mut state);
       let range_end = y + target_height;
       let (left_edge, right_edge, next_boundary) =
         self.edges_in_range_min_width_with_state(&mut state, y, range_end);
@@ -1272,7 +1274,6 @@ impl FloatContext {
         break;
       }
 
-      self.advance_sweep_to(y, &mut state);
       let range_end = y + target_height;
       let (left_edge, right_edge, next_boundary) =
         self.edges_in_range_min_width_with_state(&mut state, y, range_end);
