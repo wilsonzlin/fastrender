@@ -104,7 +104,8 @@ fn perf_smoke_help_mentions_suites_and_regression_flags() {
       && stdout.contains("--fail-on-regression")
       && stdout.contains("--top")
       && stdout.contains("--output")
-      && stdout.contains("--debug"),
+      && stdout.contains("--debug")
+      && stdout.contains("EXTRA"),
     "perf-smoke help should mention suite selection and regression gating flags; got:\n{stdout}"
   );
 }
