@@ -606,20 +606,23 @@ impl GridFormattingContext {
     let mut deadline_counter = 0usize;
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
     let mut positioned: Vec<BoxNode> = Vec::new();
+    let mut child_has_subgrid = false;
     for child in root_children {
       check_layout_deadline(&mut deadline_counter)?;
       match child.style.position {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
           positioned.push((*child).clone())
         }
-        _ => in_flow_children.push(*child),
+        _ => {
+          if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
+            child_has_subgrid = true;
+          }
+          in_flow_children.push(*child)
+        }
       }
     }
 
     let has_subgrid = box_node.style.grid_row_subgrid || box_node.style.grid_column_subgrid;
-    let child_has_subgrid = in_flow_children
-      .iter()
-      .any(|child| child.style.grid_row_subgrid || child.style.grid_column_subgrid);
 
     if !has_subgrid && !child_has_subgrid {
       let child_fingerprint = grid_child_fingerprint(&in_flow_children, &mut deadline_counter)?;
@@ -716,6 +719,7 @@ impl GridFormattingContext {
   ) -> Result<TaffyNodeId, LayoutError> {
     let mut children_iter: Vec<&BoxNode> = Vec::new();
     let mut positioned: Vec<BoxNode> = Vec::new();
+    let mut has_subgrid_child = false;
 
     // Determine whether this grid container should be represented in the Taffy tree.
     let is_grid_container = matches!(
@@ -735,7 +739,12 @@ impl GridFormattingContext {
           crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
             positioned.push(child.clone())
           }
-          _ => children_iter.push(child),
+          _ => {
+            if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
+              has_subgrid_child = true;
+            }
+            children_iter.push(child)
+          }
         }
       }
     } else if is_root {
@@ -745,9 +754,6 @@ impl GridFormattingContext {
     // Expand subgrids (and any grid that hosts a subgrid child) into the Taffy tree so tracks can be shared.
     if is_grid_container {
       let is_subgrid = box_node.style.grid_row_subgrid || box_node.style.grid_column_subgrid;
-      let has_subgrid_child = children_iter
-        .iter()
-        .any(|child| child.style.grid_row_subgrid || child.style.grid_column_subgrid);
       include_children |= is_subgrid || has_subgrid_child;
     }
 
@@ -3046,19 +3052,22 @@ impl FormattingContext for GridFormattingContext {
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
     let mut positioned_children: Vec<BoxNode> = Vec::new();
     let mut deadline_counter = 0usize;
+    let mut child_has_subgrid = false;
     for child in &box_node.children {
       check_layout_deadline(&mut deadline_counter)?;
       match child.style.position {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
           positioned_children.push(child.clone());
         }
-        _ => in_flow_children.push(child),
+        _ => {
+          if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
+            child_has_subgrid = true;
+          }
+          in_flow_children.push(child)
+        }
       }
     }
     let has_subgrid = box_node.style.grid_row_subgrid || box_node.style.grid_column_subgrid;
-    let child_has_subgrid = in_flow_children
-      .iter()
-      .any(|child| child.style.grid_row_subgrid || child.style.grid_column_subgrid);
 
     // Build Taffy tree from in-flow children
     let root_id = self.build_taffy_tree_children(
