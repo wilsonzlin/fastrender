@@ -1,19 +1,19 @@
 {
-  "url": "https://theguardian.com",
+  "url": "https://www.theguardian.com/us",
   "status": "timeout",
   "total_ms": 5000.0,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
-    "cascade": 0.0,
-    "layout": 5000.0,
-    "paint": 0.0
+    "fetch": 387.0,
+    "css": 199.0,
+    "cascade": 575.0,
+    "layout": 256.0,
+    "paint": 3583.0
   },
   "notes": "",
-  "auto_notes": "hard timeout after 5.00s\nstage: layout",
-  "hotspot": "layout",
+  "auto_notes": "hard timeout after 5.00s\nstage: paint_rasterize\nexit: signal 9",
+  "hotspot": "paint",
   "failure_stage": null,
-  "timeout_stage": "layout",
+  "timeout_stage": "paint",
   "last_good_commit": "",
   "last_regression_commit": ""
 }
