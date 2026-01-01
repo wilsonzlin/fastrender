@@ -47,6 +47,30 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub const DEFAULT_LAYOUT_MIN_FANOUT: usize = 8;
 /// Minimum box tree size before auto parallelism engages.
 pub const DEFAULT_LAYOUT_AUTO_MIN_NODES: usize = 1024;
+/// Default ceiling on rayon worker threads used for auto layout fan-out when the global pool is
+/// very large.
+///
+/// FastRender is frequently run in CI or container environments where the detected CPU/thread
+/// count can be extremely high. Using the full global Rayon pool in these cases can regress
+/// wall-clock layout time due to scheduling overhead and contention. Capping auto fan-out keeps
+/// layout parallelism predictable while still allowing explicit overrides via
+/// `LayoutParallelism::with_max_threads` or the `--layout-parallel-max-threads` CLI flag.
+pub const DEFAULT_LAYOUT_AUTO_MAX_THREADS: usize = 16;
+
+static DEFAULT_LAYOUT_THREAD_POOL: OnceLock<Result<Arc<ThreadPool>, String>> = OnceLock::new();
+
+fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
+  match DEFAULT_LAYOUT_THREAD_POOL.get_or_init(|| {
+    ThreadPoolBuilder::new()
+      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .build()
+      .map(Arc::new)
+      .map_err(|err| err.to_string())
+  }) {
+    Ok(pool) => Some(pool.clone()),
+    Err(_) => None,
+  }
+}
 
 /// Summary of layout fan-out opportunities for a box tree.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -576,7 +600,13 @@ impl LayoutEngine {
   ///
   /// Sharing the font context with paint keeps font fallback, cache warming, and font loading
   /// consistent across the pipeline.
-  pub fn with_font_context(config: LayoutConfig, font_context: FontContext) -> Self {
+  pub fn with_font_context(mut config: LayoutConfig, font_context: FontContext) -> Self {
+    if config.parallelism.mode == LayoutParallelismMode::Auto
+      && config.parallelism.max_threads.is_none()
+      && rayon::current_num_threads() > DEFAULT_LAYOUT_AUTO_MAX_THREADS
+    {
+      config.parallelism.max_threads = Some(DEFAULT_LAYOUT_AUTO_MAX_THREADS);
+    }
     let factory = FormattingContextFactory::with_font_context_and_viewport(
       font_context.clone(),
       config.initial_containing_block,
@@ -586,8 +616,17 @@ impl LayoutEngine {
       .parallelism
       .max_threads
       .filter(|threads| *threads > 1)
-      .and_then(|threads| ThreadPoolBuilder::new().num_threads(threads).build().ok())
-      .map(Arc::new);
+      .and_then(|threads| {
+        if threads == DEFAULT_LAYOUT_AUTO_MAX_THREADS {
+          default_layout_thread_pool()
+        } else {
+          ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .ok()
+            .map(Arc::new)
+        }
+      });
     Self {
       config,
       factory,
@@ -1107,6 +1146,47 @@ mod tests {
     let config = LayoutConfig::for_viewport(Size::new(1920.0, 1080.0));
     assert_eq!(config.initial_containing_block.width, 1920.0);
     assert_eq!(config.initial_containing_block.height, 1080.0);
+  }
+
+  #[test]
+  fn auto_parallelism_caps_threads_for_large_rayon_pools() {
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2)
+      .build()
+      .expect("build rayon pool");
+    pool.install(|| {
+      let engine = LayoutEngine::new(LayoutConfig::for_viewport(Size::new(800.0, 600.0)));
+      assert_eq!(
+        engine.config().parallelism.max_threads,
+        Some(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      );
+    });
+  }
+
+  #[test]
+  fn auto_parallelism_does_not_cap_small_rayon_pools() {
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .build()
+      .expect("build rayon pool");
+    pool.install(|| {
+      let engine = LayoutEngine::new(LayoutConfig::for_viewport(Size::new(800.0, 600.0)));
+      assert_eq!(engine.config().parallelism.max_threads, None);
+    });
+  }
+
+  #[test]
+  fn auto_parallelism_respects_explicit_max_threads() {
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2)
+      .build()
+      .expect("build rayon pool");
+    pool.install(|| {
+      let mut config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
+      config.parallelism = config.parallelism.with_max_threads(Some(32));
+      let engine = LayoutEngine::new(config);
+      assert_eq!(engine.config().parallelism.max_threads, Some(32));
+    });
   }
 
   // === LayoutEngine Creation Tests ===
