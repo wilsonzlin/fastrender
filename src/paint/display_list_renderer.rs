@@ -2976,13 +2976,9 @@ impl DisplayListRenderer {
       } else {
         return Ok(());
       }
-    } else if let Some(shader) = tiny_skia::LinearGradient::new(
-      start,
-      end,
-      stops,
-      spread,
-      tiny_skia::Transform::identity(),
-    ) {
+    } else if let Some(shader) =
+      tiny_skia::LinearGradient::new(start, end, stops, spread, tiny_skia::Transform::identity())
+    {
       paint.shader = shader;
     } else if let Some(first) = item.stops.first() {
       let opacity = self.canvas.opacity().clamp(0.0, 1.0);
@@ -3431,7 +3427,10 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let center = Point::new(self.ds_len(item.center.x) / scale_x, self.ds_len(item.center.y) / scale_y);
+    let center = Point::new(
+      self.ds_len(item.center.x) / scale_x,
+      self.ds_len(item.center.y) / scale_y,
+    );
     let spread = if item.repeating {
       SpreadMode::Repeat
     } else {
@@ -4263,6 +4262,7 @@ impl DisplayListRenderer {
   }
 
   fn render_mask(&mut self, mask: &ResolvedMask) -> RenderResult<Option<OffsetMask>> {
+    check_active(RenderStage::Paint)?;
     let mut reusable_mask = MASK_RENDER_SCRATCH.with(|cell| cell.borrow_mut().take());
 
     let viewport = (
@@ -4390,7 +4390,7 @@ impl DisplayListRenderer {
         viewport,
       );
 
-      let positions_x = tile_positions(
+      let positions_x = tile_axis_plan(
         layer.repeat.x,
         origin_rect_css.x(),
         origin_rect_css.width(),
@@ -4399,7 +4399,7 @@ impl DisplayListRenderer {
         clip_rect_css.min_x(),
         clip_rect_css.max_x(),
       );
-      let positions_y = tile_positions(
+      let positions_y = tile_axis_plan(
         layer.repeat.y,
         origin_rect_css.y(),
         origin_rect_css.height(),
@@ -4408,7 +4408,7 @@ impl DisplayListRenderer {
         clip_rect_css.min_y(),
         clip_rect_css.max_y(),
       );
-      if positions_x.is_empty() || positions_y.is_empty() {
+      if positions_x.count == 0 || positions_y.count == 0 {
         combined = Some(match combined.take() {
           Some(existing) => {
             match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
@@ -4500,7 +4500,7 @@ impl DisplayListRenderer {
         mask
       };
 
-      let rendered_layer = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      let rendered_layer = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| -> RenderResult<Option<()>> {
         let mut scratch = cell.borrow_mut();
         let replace = match scratch.pixmap.as_ref() {
           Some(existing) => existing.width() != region_w || existing.height() != region_h,
@@ -4510,11 +4510,13 @@ impl DisplayListRenderer {
           scratch.pixmap = new_pixmap(region_w, region_h);
         }
         let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
-          return None;
+          return Ok(None);
         };
         mask_pixmap.data_mut().fill(0);
-        for ty in positions_y.iter().copied() {
-          for tx in positions_x.iter().copied() {
+        let mut deadline_counter = 0usize;
+        for ty in positions_y.iter() {
+          for tx in positions_x.iter() {
+            check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
             paint_mask_tile(
               mask_pixmap,
               mask_tile,
@@ -4535,8 +4537,9 @@ impl DisplayListRenderer {
           *dst = src[src_idx];
           src_idx += 4;
         }
-        Some(())
+        Ok(Some(()))
       });
+      let rendered_layer = rendered_layer?;
       if rendered_layer.is_none() {
         return Ok(None);
       }
@@ -8224,7 +8227,52 @@ fn round_tile_length(area: f32, tile: f32) -> f32 {
   area / count
 }
 
-fn tile_positions(
+#[derive(Clone, Copy)]
+struct TileAxisPlan {
+  start: f32,
+  step: f32,
+  count: usize,
+}
+
+impl TileAxisPlan {
+  fn empty() -> Self {
+    Self {
+      start: 0.0,
+      step: 0.0,
+      count: 0,
+    }
+  }
+
+  fn iter(self) -> TileAxisIter {
+    TileAxisIter {
+      pos: self.start,
+      step: self.step,
+      remaining: self.count,
+    }
+  }
+}
+
+struct TileAxisIter {
+  pos: f32,
+  step: f32,
+  remaining: usize,
+}
+
+impl Iterator for TileAxisIter {
+  type Item = f32;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.remaining == 0 {
+      return None;
+    }
+    let out = self.pos;
+    self.pos += self.step;
+    self.remaining -= 1;
+    Some(out)
+  }
+}
+
+fn tile_axis_plan(
   repeat: BackgroundRepeatKeyword,
   area_start: f32,
   area_len: f32,
@@ -8232,58 +8280,85 @@ fn tile_positions(
   offset: f32,
   clip_start: f32,
   clip_end: f32,
-) -> Vec<f32> {
+) -> TileAxisPlan {
   if tile_len <= 0.0 || area_len <= 0.0 {
-    return Vec::new();
+    return TileAxisPlan::empty();
   }
   match repeat {
     BackgroundRepeatKeyword::NoRepeat => {
       let start = area_start + offset;
       if start + tile_len < clip_start || start > clip_end {
-        Vec::new()
+        TileAxisPlan::empty()
       } else {
-        vec![start]
+        TileAxisPlan {
+          start,
+          step: tile_len,
+          count: 1,
+        }
       }
     }
     BackgroundRepeatKeyword::Repeat => {
-      let mut positions = Vec::new();
       let first = area_start + offset;
-      let mut cursor = first;
-      while cursor < clip_end {
-        if cursor + tile_len >= clip_start - tile_len {
-          positions.push(cursor);
+      let threshold = clip_start - 2.0 * tile_len;
+      let mut start = first;
+      if start < threshold {
+        let delta = threshold - start;
+        let steps = (delta / tile_len).ceil();
+        if steps.is_finite() && steps > 0.0 {
+          start += steps * tile_len;
         }
-        cursor += tile_len;
       }
-      positions
+      if start >= clip_end {
+        return TileAxisPlan::empty();
+      }
+      let span = clip_end - start;
+      let count = (span / tile_len).ceil();
+      if !count.is_finite() || count <= 0.0 {
+        return TileAxisPlan::empty();
+      }
+      TileAxisPlan {
+        start,
+        step: tile_len,
+        count: count as usize,
+      }
     }
     BackgroundRepeatKeyword::Space => {
       let count = (area_len / tile_len).floor();
       if count < 1.0 {
-        vec![area_start + (area_len - tile_len) * 0.5]
+        TileAxisPlan {
+          start: area_start + (area_len - tile_len) * 0.5,
+          step: tile_len,
+          count: 1,
+        }
       } else if count < 2.0 {
-        vec![area_start + (area_len - tile_len) * 0.5]
+        TileAxisPlan {
+          start: area_start + (area_len - tile_len) * 0.5,
+          step: tile_len,
+          count: 1,
+        }
       } else {
         let spacing = (area_len - tile_len * count) / (count - 1.0);
-        let mut positions = Vec::with_capacity(count as usize);
-        let mut cursor = area_start;
-        for _ in 0..(count as usize) {
-          positions.push(cursor);
-          cursor += tile_len + spacing;
+        TileAxisPlan {
+          start: area_start,
+          step: tile_len + spacing,
+          count: count as usize,
         }
-        positions
       }
     }
     BackgroundRepeatKeyword::Round => {
+      if area_len <= 1e-3 {
+        return TileAxisPlan::empty();
+      }
       let count = (area_len / tile_len).round().max(1.0);
       let len = area_len / count;
-      let mut positions = Vec::new();
-      let mut cursor = area_start;
-      while cursor < area_start + area_len - 1e-3 {
-        positions.push(cursor);
-        cursor += len;
+      if !len.is_finite() || len <= 0.0 {
+        return TileAxisPlan::empty();
       }
-      positions
+      TileAxisPlan {
+        start: area_start,
+        step: len,
+        count: count as usize,
+      }
     }
   }
 }
@@ -8913,6 +8988,83 @@ mod tests {
     let idx = ((y * pixmap.width() + x) * 4) as usize;
     let data = pixmap.data();
     (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
+  }
+
+  fn legacy_tile_positions(
+    repeat: BackgroundRepeatKeyword,
+    area_start: f32,
+    area_len: f32,
+    tile_len: f32,
+    offset: f32,
+    clip_start: f32,
+    clip_end: f32,
+  ) -> Vec<f32> {
+    if tile_len <= 0.0 || area_len <= 0.0 {
+      return Vec::new();
+    }
+
+    match repeat {
+      BackgroundRepeatKeyword::NoRepeat => {
+        let start = area_start + offset;
+        if start + tile_len < clip_start || start > clip_end {
+          Vec::new()
+        } else {
+          vec![start]
+        }
+      }
+      BackgroundRepeatKeyword::Repeat => {
+        let mut positions = Vec::new();
+        let first = area_start + offset;
+        let mut cursor = first;
+        while cursor < clip_end {
+          if cursor + tile_len >= clip_start - tile_len {
+            positions.push(cursor);
+          }
+          cursor += tile_len;
+        }
+        positions
+      }
+      BackgroundRepeatKeyword::Space => {
+        let count = (area_len / tile_len).floor();
+        if count < 2.0 {
+          vec![area_start + (area_len - tile_len) * 0.5]
+        } else {
+          let spacing = (area_len - tile_len * count) / (count - 1.0);
+          let mut positions = Vec::with_capacity(count as usize);
+          let mut cursor = area_start;
+          for _ in 0..(count as usize) {
+            positions.push(cursor);
+            cursor += tile_len + spacing;
+          }
+          positions
+        }
+      }
+      BackgroundRepeatKeyword::Round => {
+        let count = (area_len / tile_len).round().max(1.0);
+        let len = area_len / count;
+        let mut positions = Vec::new();
+        let mut cursor = area_start;
+        while cursor < area_start + area_len - 1e-3 {
+          positions.push(cursor);
+          cursor += len;
+        }
+        positions
+      }
+    }
+  }
+
+  fn assert_f32_positions_close(actual: &[f32], expected: &[f32]) {
+    assert_eq!(
+      actual.len(),
+      expected.len(),
+      "length mismatch: actual={actual:?} expected={expected:?}"
+    );
+    for (idx, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate() {
+      assert!(
+        (actual - expected).abs() < 1e-4,
+        "position mismatch at idx {idx}: actual={actual} expected={expected}"
+      );
+    }
   }
 
   fn assert_rgba_close(actual: (u8, u8, u8, u8), expected: (u8, u8, u8, u8), tol: u8) {
@@ -10386,7 +10538,12 @@ mod tests {
     // Align the destination rect to the pattern grid so all tiles are full-sized. When edge tiles
     // are clipped the per-tile rasterization uses smaller LUT buckets which can produce tiny
     // rounding differences vs sampling from a full tile pixmap.
-    let dest_rect = Rect::from_xywh(origin.x, origin.y, tile_size.width * 3.0, tile_size.height * 3.0);
+    let dest_rect = Rect::from_xywh(
+      origin.x,
+      origin.y,
+      tile_size.width * 3.0,
+      tile_size.height * 3.0,
+    );
 
     let stops = vec![
       GradientStop {
@@ -10432,8 +10589,18 @@ mod tests {
       positions
     };
 
-    let positions_x = build_positions(origin.x, tile_size.width, dest_rect.min_x(), dest_rect.max_x());
-    let positions_y = build_positions(origin.y, tile_size.height, dest_rect.min_y(), dest_rect.max_y());
+    let positions_x = build_positions(
+      origin.x,
+      tile_size.width,
+      dest_rect.min_x(),
+      dest_rect.max_x(),
+    );
+    let positions_y = build_positions(
+      origin.y,
+      tile_size.height,
+      dest_rect.min_y(),
+      dest_rect.max_y(),
+    );
 
     let mut explicit = DisplayList::new();
     for ty in positions_y.iter().copied() {
@@ -10468,15 +10635,17 @@ mod tests {
     }
 
     let mut patterned = DisplayList::new();
-    patterned.push(DisplayItem::LinearGradientPattern(LinearGradientPatternItem {
-      dest_rect,
-      tile_size,
-      origin,
-      start: tile_start,
-      end: tile_end,
-      stops: stops.clone(),
-      spread: GradientSpread::Pad,
-    }));
+    patterned.push(DisplayItem::LinearGradientPattern(
+      LinearGradientPatternItem {
+        dest_rect,
+        tile_size,
+        origin,
+        start: tile_start,
+        end: tile_end,
+        stops: stops.clone(),
+        spread: GradientSpread::Pad,
+      },
+    ));
 
     let font_ctx = FontContext::new();
     let pixmap_explicit = DisplayListRenderer::new(32, 32, Rgba::WHITE, font_ctx.clone())
@@ -12293,6 +12462,145 @@ mod tests {
     // Border area is removed by the intersection with the content-box layer.
     assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
     assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 255, 255));
+  }
+
+  #[test]
+  fn render_mask_tiles_abort_on_expired_deadline() {
+    let mut renderer = DisplayListRenderer::new(256, 256, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 256.0, 256.0);
+    let mut layer = MaskLayer::default();
+    layer.repeat = BackgroundRepeat {
+      x: BackgroundRepeatKeyword::Repeat,
+      y: BackgroundRepeatKeyword::Repeat,
+    };
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::px(1.0)),
+      BackgroundSizeComponent::Length(Length::px(1.0)),
+    );
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Raster(image),
+        repeat: layer.repeat,
+        position: layer.position,
+        size: layer.size,
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let result =
+      crate::render_control::with_deadline(Some(&deadline), || renderer.render_mask(&mask));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected render_mask to surface a paint timeout, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn tile_axis_plan_matches_legacy_tile_positions() {
+    let cases = [
+      (
+        BackgroundRepeatKeyword::NoRepeat,
+        0.0,
+        100.0,
+        10.0,
+        5.0,
+        0.0,
+        100.0,
+      ),
+      (
+        BackgroundRepeatKeyword::NoRepeat,
+        0.0,
+        100.0,
+        10.0,
+        0.0,
+        50.0,
+        60.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Repeat,
+        0.0,
+        100.0,
+        10.0,
+        0.0,
+        25.0,
+        75.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Repeat,
+        0.0,
+        100.0,
+        1.0,
+        -100.0,
+        0.0,
+        10.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Repeat,
+        0.0,
+        100.0,
+        10.0,
+        100.0,
+        0.0,
+        75.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Space,
+        0.0,
+        20.0,
+        30.0,
+        0.0,
+        0.0,
+        100.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Space,
+        0.0,
+        100.0,
+        30.0,
+        0.0,
+        10.0,
+        20.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Round,
+        0.0,
+        100.0,
+        10.0,
+        99.0,
+        25.0,
+        75.0,
+      ),
+    ];
+
+    for (repeat, area_start, area_len, tile_len, offset, clip_start, clip_end) in cases {
+      let expected = legacy_tile_positions(
+        repeat, area_start, area_len, tile_len, offset, clip_start, clip_end,
+      );
+      let actual = tile_axis_plan(
+        repeat, area_start, area_len, tile_len, offset, clip_start, clip_end,
+      )
+      .iter()
+      .collect::<Vec<_>>();
+      assert_f32_positions_close(&actual, &expected);
+    }
   }
 
   #[test]
