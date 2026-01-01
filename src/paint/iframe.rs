@@ -1,12 +1,14 @@
-use crate::api::{render_html_with_shared_resources, ResourceKind};
-use crate::error::RenderStage;
+use crate::api::{render_html_with_shared_resources, ResourceContext, ResourceKind};
+use crate::error::{Error, RenderStage};
 use crate::geometry::Rect;
 use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::ImageCache;
 use crate::paint::display_list::ImageData;
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control;
-use crate::resource::{origin_from_url, FetchDestination, FetchRequest, ResourceAccessPolicy};
+use crate::resource::{
+  ensure_http_success, origin_from_url, FetchDestination, FetchRequest, ResourceAccessPolicy,
+};
 use crate::style::color::Rgba;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -328,6 +330,28 @@ fn run_iframe_render_cache_join_hook(key: &IframeRenderCacheKey, is_owner: bool)
   }
 }
 
+fn record_resource_error(
+  ctx: &ResourceContext,
+  kind: ResourceKind,
+  requested_url: &str,
+  err: &Error,
+) {
+  match err {
+    Error::Resource(res) => {
+      let final_url = res.final_url.as_deref().or(Some(res.url.as_str()));
+      let mut message = res.message.clone();
+      if let Some(status) = res.status {
+        let lower = message.to_ascii_lowercase();
+        if !lower.contains("status") {
+          message = format!("{message} (status {status})");
+        }
+      }
+      ctx.record_violation(kind, requested_url, final_url, message);
+    }
+    other => ctx.record_violation(kind, requested_url, None, other.to_string()),
+  }
+}
+
 pub(crate) fn render_iframe_srcdoc(
   html: &str,
   src: Option<&str>,
@@ -537,7 +561,15 @@ pub(crate) fn render_iframe_src(
   if let Some(referrer) = referrer {
     request = request.with_referrer(referrer);
   }
-  let resource = fetcher.fetch_with_request(request).ok()?;
+  let resource = match fetcher.fetch_with_request(request) {
+    Ok(resource) => resource,
+    Err(err) => {
+      if let Some(ctx) = context.as_ref() {
+        record_resource_error(ctx, ResourceKind::Document, &resolved, &err);
+      }
+      return None;
+    }
+  };
   let final_url = resource
     .final_url
     .clone()
@@ -554,6 +586,12 @@ pub(crate) fn render_iframe_src(
       return None;
     }
   }
+  if let Err(err) = ensure_http_success(&resource, &resolved) {
+    if let Some(ctx) = context.as_ref() {
+      record_resource_error(ctx, ResourceKind::Document, &resolved, &err);
+    }
+    return None;
+  }
   let content_type = resource.content_type.as_deref();
   let is_html = content_type
     .map(|ct| {
@@ -568,6 +606,20 @@ pub(crate) fn render_iframe_src(
       lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
     });
   if !is_html {
+    if let Some(ctx) = context.as_ref() {
+      let content_type = content_type.unwrap_or("<missing>");
+      let status = resource
+        .status
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "<missing>".to_string());
+      let final_url = resource.final_url.as_deref().unwrap_or(&resolved);
+      ctx.record_violation(
+        ResourceKind::Document,
+        &resolved,
+        resource.final_url.as_deref(),
+        format!("unexpected content-type {content_type} (status {status}, final_url {final_url})"),
+      );
+    }
     return None;
   }
 
@@ -929,5 +981,114 @@ mod tests {
       Arc::ptr_eq(&first, &second),
       "in-flight waiters should receive the same Arc<ImageData>"
     );
+  }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+  use super::*;
+  use crate::api::{SharedRenderDiagnostics, ResourceContext, ResourceKind};
+  use crate::error::{Error, ResourceError, Result};
+  use crate::geometry::{Point, Size};
+  use crate::resource::{FetchedResource, ResourceFetcher};
+  use crate::text::font_db::FontDatabase;
+  use std::sync::Arc;
+
+  struct MockFetcher {
+    handler: Box<dyn Fn(&str) -> Result<FetchedResource> + Send + Sync>,
+  }
+
+  impl MockFetcher {
+    fn new<F>(handler: F) -> Self
+    where
+      F: Fn(&str) -> Result<FetchedResource> + Send + Sync + 'static,
+    {
+      Self {
+        handler: Box::new(handler),
+      }
+    }
+  }
+
+  impl ResourceFetcher for MockFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      (self.handler)(url)
+    }
+  }
+
+  fn test_font_context() -> FontContext {
+    FontContext::with_database(Arc::new(FontDatabase::empty()))
+  }
+
+  fn test_image_cache(fetcher: Arc<dyn ResourceFetcher>, diagnostics: SharedRenderDiagnostics) -> ImageCache {
+    let mut cache = ImageCache::with_fetcher(fetcher);
+    cache.set_resource_context(Some(ResourceContext {
+      diagnostics: Some(diagnostics),
+      ..ResourceContext::default()
+    }));
+    cache
+  }
+
+  #[test]
+  fn iframe_fetch_network_error_records_diagnostics() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|url| {
+      Err(Error::Resource(ResourceError::new(
+        url.to_string(),
+        "network error".to_string(),
+      )))
+    }));
+    let cache = test_image_cache(fetcher, diagnostics.clone());
+    let rect = Rect::new(Point::ZERO, Size::new(10.0, 10.0));
+
+    let result = render_iframe_src(
+      "/bad",
+      rect,
+      None,
+      &cache,
+      &test_font_context(),
+      1.0,
+      1,
+    );
+    assert!(result.is_none());
+
+    let diag = diagnostics.into_inner();
+    assert!(
+      diag
+        .fetch_errors
+        .iter()
+        .any(|e| e.kind == ResourceKind::Document && e.url == "/bad"),
+      "expected iframe fetch error diagnostic"
+    );
+  }
+
+  #[test]
+  fn iframe_http_error_status_records_diagnostics() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|_url| {
+      let mut resource = FetchedResource::new(b"<html></html>".to_vec(), Some("text/html".to_string()));
+      resource.status = Some(403);
+      Ok(resource)
+    }));
+    let cache = test_image_cache(fetcher, diagnostics.clone());
+    let rect = Rect::new(Point::ZERO, Size::new(10.0, 10.0));
+
+    let result = render_iframe_src(
+      "/bad",
+      rect,
+      None,
+      &cache,
+      &test_font_context(),
+      1.0,
+      1,
+    );
+    assert!(result.is_none());
+
+    let diag = diagnostics.into_inner();
+    let entry = diag
+      .fetch_errors
+      .iter()
+      .find(|e| e.kind == ResourceKind::Document && e.url == "/bad")
+      .expect("expected iframe fetch error diagnostic");
+    assert_eq!(entry.status, Some(403));
   }
 }

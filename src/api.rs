@@ -1215,6 +1215,38 @@ pub struct ResourceContext {
   pub iframe_depth_remaining: Option<usize>,
 }
 
+fn extract_status_from_message(message: &str) -> Option<u16> {
+  let lower = message.to_ascii_lowercase();
+  let mut search_start = 0usize;
+  while let Some(pos) = lower[search_start..].find("status") {
+    let mut idx = search_start + pos + "status".len();
+    let bytes = lower.as_bytes();
+    while idx < bytes.len() {
+      let b = bytes[idx];
+      if b.is_ascii_digit() {
+        break;
+      }
+      // Common separators used in error strings.
+      if b == b' ' || b == b'=' || b == b':' || b == b'(' || b == b')' {
+        idx += 1;
+        continue;
+      }
+      idx += 1;
+    }
+    let start_digits = idx;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+      idx += 1;
+    }
+    if idx > start_digits {
+      if let Ok(code) = lower[start_digits..idx].parse::<u16>() {
+        return Some(code);
+      }
+    }
+    search_start = search_start + pos + 1;
+  }
+  None
+}
+
 impl ResourceContext {
   pub(crate) fn record_violation(
     &self,
@@ -1225,17 +1257,30 @@ impl ResourceContext {
   ) {
     if let Some(diag) = &self.diagnostics {
       if let Ok(mut guard) = diag.inner.lock() {
-        if guard
+        let status = extract_status_from_message(&reason);
+        let final_url_string = final_url.unwrap_or(url).to_string();
+        if let Some(existing) = guard
           .fetch_errors
-          .iter()
-          .any(|e| e.kind == kind && e.url == url)
+          .iter_mut()
+          .find(|e| e.kind == kind && e.url == url)
         {
+          if existing.status.is_none() {
+            existing.status = status;
+          }
+          // Prefer a redirected final URL when one becomes available.
+          if existing
+            .final_url
+            .as_deref()
+            .map_or(true, |current| current == url)
+            && final_url_string != url
+          {
+            existing.final_url = Some(final_url_string);
+          }
           return;
         }
         let mut entry = ResourceFetchError::new(kind, url, reason);
-        entry.final_url = final_url
-          .map(|u| u.to_string())
-          .or_else(|| Some(url.to_string()));
+        entry.status = status;
+        entry.final_url = Some(final_url_string);
         guard.fetch_errors.push(entry);
       }
     }

@@ -1,4 +1,5 @@
-use crate::error::{RenderError, RenderStage};
+use crate::api::{ResourceContext, ResourceKind};
+use crate::error::{Error, RenderError, RenderStage};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::blur::pixel_fingerprint;
@@ -6,7 +7,7 @@ use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
 use crate::paint::painter::with_paint_diagnostics;
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, check_active, with_deadline};
-use crate::resource::FetchRequest;
+use crate::resource::{ensure_http_success, FetchRequest};
 use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -40,6 +41,23 @@ const MAX_TURBULENCE_OCTAVES: u32 = 8;
 const FILTER_DEADLINE_STRIDE: usize = 256;
 
 static FILTER_CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
+
+fn record_resource_error(ctx: &ResourceContext, kind: ResourceKind, requested_url: &str, err: &Error) {
+  match err {
+    Error::Resource(res) => {
+      let final_url = res.final_url.as_deref().or(Some(res.url.as_str()));
+      let mut message = res.message.clone();
+      if let Some(status) = res.status {
+        let lower = message.to_ascii_lowercase();
+        if !lower.contains("status") {
+          message = format!("{message} (status {status})");
+        }
+      }
+      ctx.record_violation(kind, requested_url, final_url, message);
+    }
+    other => ctx.record_violation(kind, requested_url, None, other.to_string()),
+  }
+}
 
 fn filter_cache() -> &'static Mutex<FilterCache> {
   FILTER_CACHE.get_or_init(|| Mutex::new(FilterCache::new(FilterCacheConfig::from_env())))
@@ -1512,11 +1530,12 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   if resolved.is_empty() {
     return None;
   }
+  let context = image_cache.resource_context();
 
   let (resource_url, fragment) = resolved
     .rsplit_once('#')
     .map(|(base, frag)| (base.to_string(), Some(frag.to_string())))
-    .unwrap_or((resolved, None));
+    .unwrap_or((resolved.clone(), None));
 
   if resource_url.is_empty() {
     return None;
@@ -1535,12 +1554,74 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   if let Some(referrer) = referrer.as_deref() {
     request = request.with_referrer(referrer);
   }
-  let resource = fetcher.fetch_with_request(request).ok()?;
+  let resource = match fetcher.fetch_with_request(request) {
+    Ok(resource) => resource,
+    Err(err) => {
+      if let Some(ctx) = context.as_ref() {
+        record_resource_error(ctx, ResourceKind::Other, &resolved, &err);
+      }
+      return None;
+    }
+  };
+  if let Err(err) = ensure_http_success(&resource, &resource_url) {
+    if let Some(ctx) = context.as_ref() {
+      record_resource_error(ctx, ResourceKind::Other, &resolved, &err);
+    }
+    return None;
+  }
   let resource_size = resource.bytes.len();
-  let text = String::from_utf8(resource.bytes).ok()?;
+  let status = resource.status;
+  let final_url = resource.final_url.clone();
+  let bytes = resource.bytes;
+  let text = match String::from_utf8(bytes) {
+    Ok(text) => text,
+    Err(_) => {
+      if let Some(ctx) = context.as_ref() {
+        let status = status
+          .map(|s| s.to_string())
+          .unwrap_or_else(|| "<missing>".to_string());
+        let final_url_str = final_url.as_deref().unwrap_or(&resource_url);
+        ctx.record_violation(
+          ResourceKind::Other,
+          &resolved,
+          final_url.as_deref(),
+          format!(
+            "invalid utf-8 SVG filter document (status {status}, final_url {final_url_str})"
+          ),
+        );
+      }
+      return None;
+    }
+  };
   let mut scoped_cache = image_cache.clone();
-  scoped_cache.set_base_url(resource_url.clone());
-  let filter = parse_filter_definition(&text, fragment.as_deref(), &scoped_cache)?;
+  let filter_base_url = final_url.clone().unwrap_or_else(|| resource_url.clone());
+  scoped_cache.set_base_url(filter_base_url);
+  let doc = match Document::parse(&text) {
+    Ok(doc) => doc,
+    Err(err) => {
+      if let Some(ctx) = context.as_ref() {
+        let status = status
+          .map(|s| s.to_string())
+          .unwrap_or_else(|| "<missing>".to_string());
+        let final_url_str = final_url.as_deref().unwrap_or(&resource_url);
+        ctx.record_violation(
+          ResourceKind::Other,
+          &resolved,
+          final_url.as_deref(),
+          format!("invalid SVG XML ({err}) (status {status}, final_url {final_url_str})"),
+        );
+      }
+      return None;
+    }
+  };
+  let filter_node = doc.descendants().find(|n| {
+    n.has_tag_name("filter")
+      && fragment
+        .as_deref()
+        .map(|id| n.attribute("id").map(|v| v == id).unwrap_or(false))
+        .unwrap_or(true)
+  })?;
+  let filter = parse_filter_node(&filter_node, &scoped_cache)?;
 
   if let Ok(mut guard) = filter_cache().lock() {
     guard.insert(cache_key, filter.clone(), resource_size);
@@ -5879,6 +5960,94 @@ mod filter_cache_tests {
       "cache should be keyed by resolved URL"
     );
     assert_eq!(filter_cache_len(), 1);
+  }
+}
+
+#[cfg(test)]
+mod load_svg_filter_diagnostics_tests {
+  use super::*;
+  use crate::api::{ResourceContext, ResourceKind, SharedRenderDiagnostics};
+  use crate::error::{Error, ResourceError, Result};
+  use crate::resource::{FetchedResource, ResourceFetcher};
+  use std::sync::Arc;
+
+  struct MockFetcher {
+    handler: Box<dyn Fn(&str) -> Result<FetchedResource> + Send + Sync>,
+  }
+
+  impl MockFetcher {
+    fn new<F>(handler: F) -> Self
+    where
+      F: Fn(&str) -> Result<FetchedResource> + Send + Sync + 'static,
+    {
+      Self {
+        handler: Box::new(handler),
+      }
+    }
+  }
+
+  impl ResourceFetcher for MockFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      (self.handler)(url)
+    }
+  }
+
+  fn test_image_cache(fetcher: Arc<dyn ResourceFetcher>, diagnostics: SharedRenderDiagnostics) -> ImageCache {
+    let mut cache = ImageCache::with_fetcher(fetcher);
+    cache.set_resource_context(Some(ResourceContext {
+      diagnostics: Some(diagnostics),
+      ..ResourceContext::default()
+    }));
+    cache
+  }
+
+  #[test]
+  fn svg_filter_fetch_network_error_records_diagnostics() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|url| {
+      Err(Error::Resource(ResourceError::new(
+        url.to_string(),
+        "network error".to_string(),
+      )))
+    }));
+    let cache = test_image_cache(fetcher, diagnostics.clone());
+
+    let result = load_svg_filter("/bad.svg#id", &cache);
+    assert!(result.is_none());
+
+    let diag = diagnostics.into_inner();
+    assert!(
+      diag
+        .fetch_errors
+        .iter()
+        .any(|e| e.kind == ResourceKind::Other && e.url == "/bad.svg#id"),
+      "expected SVG filter fetch error diagnostic"
+    );
+  }
+
+  #[test]
+  fn svg_filter_http_error_status_records_diagnostics() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|_url| {
+      let mut resource = FetchedResource::new(
+        b"<svg xmlns='http://www.w3.org/2000/svg'></svg>".to_vec(),
+        Some("image/svg+xml".to_string()),
+      );
+      resource.status = Some(403);
+      Ok(resource)
+    }));
+    let cache = test_image_cache(fetcher, diagnostics.clone());
+
+    let result = load_svg_filter("/bad.svg#id", &cache);
+    assert!(result.is_none());
+
+    let diag = diagnostics.into_inner();
+    let entry = diag
+      .fetch_errors
+      .iter()
+      .find(|e| e.kind == ResourceKind::Other && e.url == "/bad.svg#id")
+      .expect("expected SVG filter fetch error diagnostic");
+    assert_eq!(entry.status, Some(403));
   }
 }
 
