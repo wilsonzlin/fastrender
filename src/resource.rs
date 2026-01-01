@@ -721,6 +721,8 @@ fn should_fallback_to_curl(err: &Error) -> bool {
     || msg.contains("connection aborted")
     || msg.contains("broken pipe")
     || msg.contains("http2")
+    || msg.contains("http/2")
+    || msg.contains("h2")
     || msg.contains("tls")
     || msg.contains("ssl")
     || msg.contains("handshake")
@@ -4259,6 +4261,15 @@ mod tests {
     let err = Error::Resource(ResourceError::new(
       "https://example.com",
       "TLS handshake failed",
+    ));
+    assert!(should_fallback_to_curl(&err));
+  }
+
+  #[test]
+  fn http_backend_auto_falls_back_to_curl_for_http2_like_errors() {
+    let err = Error::Resource(ResourceError::new(
+      "https://example.com",
+      "HTTP/2 internal error",
     ));
     assert!(should_fallback_to_curl(&err));
   }
