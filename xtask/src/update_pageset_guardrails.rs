@@ -705,7 +705,7 @@ mod tests {
   }
 
   fn fixture_progress_dir() -> PathBuf {
-    repo_root().join("tests/fixtures/pageset_timeouts_progress")
+    repo_root().join("tests/fixtures/pageset_guardrails_progress")
   }
 
   #[test]
