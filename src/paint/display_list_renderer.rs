@@ -4402,7 +4402,8 @@ impl DisplayListRenderer {
   }
 
   fn parallel_thread_budget(&self, tile_estimate: usize) -> usize {
-    let mut threads = rayon::current_num_threads().max(1);
+    let paint_pool = crate::paint::paint_thread_pool::paint_pool();
+    let mut threads = paint_pool.threads.max(1);
     if let Some(max_threads) = self.paint_parallelism.max_threads {
       threads = threads.min(max_threads.max(1));
     }
@@ -4424,7 +4425,14 @@ impl DisplayListRenderer {
 
     let task_capacity = self.parallel_thread_budget(tile_estimate);
     if task_capacity <= 1 {
-      *fallback_reason = Some("parallel paint thread budget is single-threaded".to_string());
+      let paint_pool = crate::paint::paint_thread_pool::paint_pool();
+      let mut message = "parallel paint thread budget is single-threaded".to_string();
+      if paint_pool.threads <= 1 {
+        if let Some(extra) = paint_pool.dedicated_fallback {
+          message = format!("{message}; {extra}");
+        }
+      }
+      *fallback_reason = Some(message);
       return Ok(false);
     }
 
@@ -4735,6 +4743,7 @@ impl DisplayListRenderer {
     let tile_count = tiles.len();
     self.canvas.clear(self.background);
 
+    let paint_pool = crate::paint::paint_thread_pool::paint_pool();
     let font_ctx = self.font_ctx.clone();
     let scale = self.scale;
     let background = self.background;
@@ -4742,9 +4751,15 @@ impl DisplayListRenderer {
     let color_renderer = self.color_renderer.clone();
     let color_cache = self.color_cache.clone();
     let glyph_cache = self.glyph_cache.clone();
+    let gradient_cache = self.gradient_cache.clone();
+    let diagnostics_enabled = self.diagnostics_enabled;
+    let image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
+    let background_paint_diagnostics = self.background_paint_diagnostics.clone();
+    let clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
+    let layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
 
     let deadline = active_deadline();
-
+ 
     let task_capacity = self.parallel_thread_budget(tile_count);
     let chunk_size = tile_count
       .checked_add(task_capacity.saturating_sub(1))
@@ -4758,49 +4773,58 @@ impl DisplayListRenderer {
     let task_count = chunks.len();
 
     let parallel_start = Instant::now();
-    let results: Result<Vec<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>>> = chunks
-      .into_par_iter()
-      .map(|chunk| {
-        with_deadline(deadline.as_ref(), || {
-          let mut out = Vec::with_capacity(chunk.len());
-          for work in chunk {
-            check_active(RenderStage::Paint).map_err(Error::Render)?;
-            let mut renderer = DisplayListRenderer::new_with_text_state(
-              work.render_w,
-              work.render_h,
-              background,
-              font_ctx.clone(),
-              scale,
-              color_renderer.clone(),
-              color_cache.clone(),
-              glyph_cache.clone(),
-            )?;
-            renderer.preserve_3d_disabled = preserve_3d_disabled;
-            renderer.paint_parallelism = PaintParallelism::disabled();
-            renderer.gradient_cache = self.gradient_cache.clone();
-            renderer.diagnostics_enabled = self.diagnostics_enabled;
-            renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
-            renderer.background_paint_diagnostics = self.background_paint_diagnostics.clone();
-            renderer.clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
-            renderer.layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
-            if work.render_x > 0 || work.render_y > 0 {
-              renderer
-                .canvas
-                .translate(-(work.render_x as f32), -(work.render_y as f32));
-            }
-            renderer.render_slice(&work.list)?;
-            let stats = renderer.gradient_stats;
-            out.push((
-              work,
-              renderer.canvas.into_pixmap(),
-              stats,
-              std::thread::current().id(),
-            ));
-          }
-          Ok(out)
-        })
-      })
-      .collect();
+    let run_tiles =
+      || -> Result<Vec<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>>> {
+        chunks
+          .into_par_iter()
+          .map(|chunk| {
+            with_deadline(deadline.as_ref(), || {
+              let mut out = Vec::with_capacity(chunk.len());
+              for work in chunk {
+                check_active(RenderStage::Paint).map_err(Error::Render)?;
+                let mut renderer = DisplayListRenderer::new_with_text_state(
+                  work.render_w,
+                  work.render_h,
+                  background,
+                  font_ctx.clone(),
+                  scale,
+                  color_renderer.clone(),
+                  color_cache.clone(),
+                  glyph_cache.clone(),
+                )?;
+                renderer.preserve_3d_disabled = preserve_3d_disabled;
+                renderer.paint_parallelism = PaintParallelism::disabled();
+                renderer.gradient_cache = gradient_cache.clone();
+                renderer.diagnostics_enabled = diagnostics_enabled;
+                renderer.image_pixmap_diagnostics = image_pixmap_diagnostics.clone();
+                renderer.background_paint_diagnostics = background_paint_diagnostics.clone();
+                renderer.clip_mask_diagnostics = clip_mask_diagnostics.clone();
+                renderer.layer_alloc_diagnostics = layer_alloc_diagnostics.clone();
+                if work.render_x > 0 || work.render_y > 0 {
+                  renderer
+                    .canvas
+                    .translate(-(work.render_x as f32), -(work.render_y as f32));
+                }
+                renderer.render_slice(&work.list)?;
+                let stats = renderer.gradient_stats;
+                out.push((
+                  work,
+                  renderer.canvas.into_pixmap(),
+                  stats,
+                  std::thread::current().id(),
+                ));
+              }
+              Ok(out)
+            })
+          })
+          .collect()
+      };
+
+    let results = if let Some(pool) = paint_pool.pool {
+      pool.install(run_tiles)
+    } else {
+      run_tiles()
+    };
     let parallel_duration = parallel_start.elapsed();
 
     let results = results?;
@@ -8259,8 +8283,32 @@ mod tests {
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
   use crate::tree::fragment_tree::FragmentNode;
+  use rayon::ThreadPoolBuilder;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
+
+  struct EnvGuard {
+    key: &'static str,
+    previous: Option<String>,
+  }
+
+  impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+      let previous = std::env::var(key).ok();
+      std::env::set_var(key, value);
+      Self { key, previous }
+    }
+  }
+
+  impl Drop for EnvGuard {
+    fn drop(&mut self) {
+      if let Some(prev) = &self.previous {
+        std::env::set_var(self.key, prev);
+      } else {
+        std::env::remove_var(self.key);
+      }
+    }
+  }
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let idx = ((y * pixmap.width() + x) * 4) as usize;
@@ -8537,6 +8585,43 @@ mod tests {
         "spread mismatch for {spread}"
       );
     }
+  }
+
+  #[test]
+  fn parallel_tiling_uses_dedicated_pool_when_current_pool_is_single_threaded() {
+    let _guard = EnvGuard::set("FASTR_PAINT_THREADS", "4");
+
+    let mut list = DisplayList::new();
+    for i in 0..256 {
+      let shade = (i % 255) as u8;
+      list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 512.0, 512.0),
+        color: Rgba::from_rgba8(shade, shade, shade, 255),
+      }));
+    }
+
+    let one_thread = ThreadPoolBuilder::new()
+      .num_threads(1)
+      .build()
+      .expect("single-thread rayon pool");
+
+    let report = one_thread.install(|| {
+      let mut parallelism = PaintParallelism::adaptive();
+      parallelism.tile_size = 128;
+      DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .with_parallelism(parallelism)
+        .render_with_report(&list)
+        .unwrap()
+    });
+
+    assert!(report.parallel_used, "expected tiled parallel paint to activate");
+    assert!(report.tiles > 1, "expected multiple tiles, got {}", report.tiles);
+    assert!(
+      report.parallel_threads > 1,
+      "expected dedicated paint pool to use >1 thread, got {}",
+      report.parallel_threads
+    );
   }
 
   fn expected_linear_red_blue(

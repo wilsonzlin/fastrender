@@ -3172,24 +3172,37 @@ impl DisplayListBuilder {
     offset: Point,
     visibility: Visibility,
   ) {
-    if let Some(plan) = self.plan_parallel(fragments.len()) {
+    let paint_pool = crate::paint::paint_thread_pool::paint_pool();
+    let pool = paint_pool.pool;
+    let threads = paint_pool.threads;
+    if let Some(plan) = self.plan_parallel(fragments.len(), threads) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
-      let mut partials: Vec<(usize, DisplayList, ThreadId)> = fragments
-        .par_chunks(plan.chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-          let chunk_offset = chunk_idx * plan.chunk_size;
-          let mut builder = self.fork();
-          let mut counter = 0usize;
-          for fragment in chunk {
-            if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
-              break;
-            }
-            builder.build_fragment(fragment, offset, visibility);
-          }
-          (chunk_offset, builder.list, std::thread::current().id())
-        })
-        .collect();
+      let deadline = active_deadline();
+      let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
+        fragments
+          .par_chunks(plan.chunk_size)
+          .enumerate()
+          .map(|(chunk_idx, chunk)| {
+            let chunk_offset = chunk_idx * plan.chunk_size;
+            with_deadline(deadline.as_ref(), || {
+              let mut builder = self.fork();
+              let mut counter = 0usize;
+              for fragment in chunk {
+                if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+                  break;
+                }
+                builder.build_fragment(fragment, offset, visibility);
+              }
+              (chunk_offset, builder.list, std::thread::current().id())
+            })
+          })
+          .collect()
+      };
+      let mut partials: Vec<(usize, DisplayList, ThreadId)> = if let Some(pool) = pool {
+        pool.install(run_build)
+      } else {
+        run_build()
+      };
       if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), start) {
         stats.record_parallel(
           partials.len(),
@@ -3224,31 +3237,41 @@ impl DisplayListBuilder {
     suppress_opacity: bool,
     visibility: Visibility,
   ) {
-    if let Some(plan) = self.plan_parallel(fragments.len()) {
+    let paint_pool = crate::paint::paint_thread_pool::paint_pool();
+    let pool = paint_pool.pool;
+    let threads = paint_pool.threads;
+    if let Some(plan) = self.plan_parallel(fragments.len(), threads) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
-      let mut partials: Vec<(usize, DisplayList, ThreadId)> = fragments
-        .par_chunks(plan.chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-          let chunk_offset = chunk_idx * plan.chunk_size;
-          with_deadline(deadline.as_ref(), || {
-            let mut builder = self.fork();
-            let mut counter = 0usize;
-            for fragment in chunk {
-              if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
-                break;
+      let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
+        fragments
+          .par_chunks(plan.chunk_size)
+          .enumerate()
+          .map(|(chunk_idx, chunk)| {
+            let chunk_offset = chunk_idx * plan.chunk_size;
+            with_deadline(deadline.as_ref(), || {
+              let mut builder = self.fork();
+              let mut counter = 0usize;
+              for fragment in chunk {
+                if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+                  break;
+                }
+                if suppress_opacity {
+                  builder.build_fragment_internal(fragment, offset, false, true, visibility);
+                } else {
+                  builder.build_fragment_shallow(fragment, offset, visibility);
+                }
               }
-              if suppress_opacity {
-                builder.build_fragment_internal(fragment, offset, false, true, visibility);
-              } else {
-                builder.build_fragment_shallow(fragment, offset, visibility);
-              }
-            }
-            (chunk_offset, builder.list, std::thread::current().id())
+              (chunk_offset, builder.list, std::thread::current().id())
+            })
           })
-        })
-        .collect();
+          .collect()
+      };
+      let mut partials: Vec<(usize, DisplayList, ThreadId)> = if let Some(pool) = pool {
+        pool.install(run_build)
+      } else {
+        run_build()
+      };
       if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), start) {
         stats.record_parallel(
           partials.len(),
@@ -3280,8 +3303,8 @@ impl DisplayListBuilder {
     }
   }
 
-  fn plan_parallel(&self, len: usize) -> Option<ParallelPlan> {
-    let threads = rayon::current_num_threads().max(1);
+  fn plan_parallel(&self, len: usize, threads: usize) -> Option<ParallelPlan> {
+    let threads = threads.max(1);
     if !self.parallel_enabled || len < self.parallel_min || threads <= 1 {
       return None;
     }

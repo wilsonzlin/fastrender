@@ -102,6 +102,7 @@ pub mod iframe;
 pub mod motion_path;
 pub mod object_fit;
 pub mod optimize;
+mod paint_thread_pool;
 pub mod painter;
 pub mod pixmap;
 pub mod preserve3d;

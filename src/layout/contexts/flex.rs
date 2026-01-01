@@ -84,6 +84,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::{error::RenderError, error::RenderStage};
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -524,7 +525,7 @@ impl FormattingContext for FlexFormattingContext {
       .with_parallelism(self.parallelism),
     );
     let this = self.clone();
-    let mut pass_cache: HashMap<u64, FlexCacheEntry> = HashMap::new();
+    let mut pass_cache: FxHashMap<u64, FlexCacheEntry> = FxHashMap::default();
     let compute_timer = flex_profile::timer();
     let log_root = toggles.truthy("FASTR_LOG_FLEX_ROOT");
     if log_root {
