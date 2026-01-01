@@ -47,8 +47,8 @@ use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
+use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 use ttf_parser::Tag;
@@ -375,7 +375,8 @@ impl GlyphCoverageCache {
   where
     F: FnOnce() -> Option<Arc<CachedFace>>,
   {
-    if let Ok(mut cache) = self.inner.lock() {
+    {
+      let mut cache = self.inner.lock();
       if let Some(face) = cache.get(&id) {
         return Some(face.clone());
       }
@@ -383,7 +384,8 @@ impl GlyphCoverageCache {
 
     let loaded = loader()?;
 
-    if let Ok(mut cache) = self.inner.lock() {
+    {
+      let mut cache = self.inner.lock();
       if let Some(face) = cache.get(&id) {
         return Some(face.clone());
       }
@@ -394,9 +396,7 @@ impl GlyphCoverageCache {
   }
 
   fn clear(&self) {
-    if let Ok(mut cache) = self.inner.lock() {
-      cache.clear();
-    }
+    self.inner.lock().clear();
   }
 }
 

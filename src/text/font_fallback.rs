@@ -56,7 +56,8 @@ use std::hash::Hasher;
 use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 type FallbackCacheHasher = BuildHasherDefault<FxHasher>;
 const FALLBACK_CACHE_SHARDS: usize = 16;
@@ -133,31 +134,22 @@ where
 
   fn get(&self, key: &K) -> Option<V> {
     let idx = self.shard_index(key);
-    self.shards[idx]
-      .lock()
-      .ok()
-      .and_then(|mut cache| cache.get(key).cloned())
+    let mut cache = self.shards[idx].lock();
+    cache.get(key).cloned()
   }
 
   fn put(&self, key: K, value: V) -> ShardedInsertOutcome {
     let idx = self.shard_index(&key);
-    if let Ok(mut cache) = self.shards[idx].lock() {
-      let inserted_new = cache.peek(&key).is_none();
-      let evicted = inserted_new && cache.len() >= cache.cap().get();
-      cache.put(key, value);
-      return ShardedInsertOutcome { inserted_new, evicted };
-    }
-    ShardedInsertOutcome {
-      inserted_new: false,
-      evicted: false,
-    }
+    let mut cache = self.shards[idx].lock();
+    let inserted_new = cache.peek(&key).is_none();
+    let evicted = inserted_new && cache.len() >= cache.cap().get();
+    cache.put(key, value);
+    ShardedInsertOutcome { inserted_new, evicted }
   }
 
   fn clear(&self) {
     for shard in &self.shards {
-      if let Ok(mut cache) = shard.lock() {
-        cache.clear();
-      }
+      shard.lock().clear();
     }
   }
 }
