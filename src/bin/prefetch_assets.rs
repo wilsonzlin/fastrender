@@ -968,7 +968,11 @@ mod disk_cache_main {
 
       let cached = read_cached_document(&html_path).expect("read cached document");
 
-      let http = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, Some(2));
+      let http = build_http_fetcher(
+        DEFAULT_USER_AGENT,
+        DEFAULT_ACCEPT_LANGUAGE,
+        Some(Duration::from_secs(2)),
+      );
       let mut disk_config = DiskCacheConfig {
         max_bytes: 0,
         ..DiskCacheConfig::default()
