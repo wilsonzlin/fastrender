@@ -125,7 +125,7 @@ jobs:
           PY
 
       - name: Download perf_smoke pageset-timeouts baseline (main)
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success'
         id: download_perf_smoke_pageset_timeouts_baseline
         uses: dawidd6/action-download-artifact@v3
         continue-on-error: true
@@ -138,7 +138,7 @@ jobs:
           path: baseline
 
       - name: Locate perf_smoke pageset-timeouts baseline JSON
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
         run: |
           set -e
           if [ -f baseline/target/perf_smoke_pageset_timeouts.json ]; then
@@ -154,7 +154,7 @@ jobs:
           echo "Using perf_smoke baseline at $match"
 
       - name: Perf regression check (perf_smoke pageset-timeouts)
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
         run: |
           # To reproduce locally:
           #   cargo run --release --bin perf_smoke -- \
@@ -246,7 +246,7 @@ jobs:
           exit $status
 
       - name: Baseline unavailable
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome != 'success'
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome != 'success'
         run: |
           echo "Previous perf_smoke pageset-timeouts artifact not found; skipping regression gate."
           {
