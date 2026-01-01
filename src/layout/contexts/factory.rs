@@ -240,6 +240,9 @@ impl FormattingContextFactory {
 
   /// Returns a copy of this factory with an updated nearest positioned containing block.
   pub fn with_positioned_cb(&self, cb: ContainingBlock) -> Self {
+    if cb == self.nearest_positioned_cb {
+      return self.clone();
+    }
     let mut clone = self.clone();
     clone.nearest_positioned_cb = cb;
     clone.reset_cached_contexts();
@@ -248,6 +251,9 @@ impl FormattingContextFactory {
 
   /// Returns a copy of this factory configured with the given parallelism settings.
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    if self.parallelism == parallelism {
+      return self;
+    }
     self.parallelism = parallelism;
     self.reset_cached_contexts();
     self
@@ -708,6 +714,26 @@ mod tests {
     let parallel = factory.with_parallelism(LayoutParallelism::enabled(2));
     let parallel_fc = parallel.get(FormattingContextType::Block);
     assert!(!Arc::ptr_eq(&original, &parallel_fc));
+  }
+
+  #[test]
+  fn test_get_does_not_reset_when_configuration_is_unchanged() {
+    let factory = FormattingContextFactory::new();
+    let original = factory.get(FormattingContextType::Block);
+
+    let same_cb_factory = factory.with_positioned_cb(factory.nearest_positioned_cb());
+    let same_cb_fc = same_cb_factory.get(FormattingContextType::Block);
+    assert!(
+      Arc::ptr_eq(&original, &same_cb_fc),
+      "with_positioned_cb should not reset cached contexts when the CB is unchanged"
+    );
+
+    let same_parallel_factory = factory.clone().with_parallelism(factory.parallelism());
+    let same_parallel_fc = same_parallel_factory.get(FormattingContextType::Block);
+    assert!(
+      Arc::ptr_eq(&original, &same_parallel_fc),
+      "with_parallelism should not reset cached contexts when the parallelism is unchanged"
+    );
   }
 
   #[test]
