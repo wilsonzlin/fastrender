@@ -25,7 +25,17 @@ Most CLI tooling can capture `RenderDiagnostics.stats` by enabling a diagnostics
 - `basic`: stage timings + high-level counters
 - `verbose`: more expensive details (profiling stats, extra counts)
 
-`pageset_progress` writes a stage-bucket summary into `progress/pages/<stem>.json`:
+`pageset_progress` writes a coarse **wall-time** stage attribution into
+`progress/pages/<stem>.json` as `stages_ms` (fetch/css/cascade/layout/paint). For ok renders this
+is derived from the worker stage heartbeat timeline (`*.stage.timeline`) when available and then
+rescaled so the buckets sum (within rounding error) to `total_ms`. If the timeline is missing or
+unreadable, it falls back to a best-effort mapping from `RenderDiagnostics.stats.timings`.
+
+`stages_ms` is intentionally **not** a sum of every detailed sub-timer: values like
+`diagnostics.stats.timings.text_shape_cpu_ms`, `text_fallback_cpu_ms`, and `text_rasterize_cpu_ms`
+can overlap with stage wall timers (layout/paint) and are kept separate for analysis.
+
+Stage buckets:
 
 - `fetch`: html decode + DOM parse/setup (viewport meta, DOM clone, top-layer plumbing)
 - `css`: css parse (includes stylesheet inlining; `timings.css_inlining_ms` is a sub-stage timer)

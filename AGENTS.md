@@ -150,6 +150,11 @@ Each file should be tiny (no huge logs, no raw HTML):
 }
 ```
 
+`stages_ms` is a coarse **wall-time** attribution (mutually exclusive buckets) derived from the
+worker stage heartbeat timeline when available and rescaled so the buckets sum (within rounding
+error) to `total_ms`. Fine-grained sub-timers (e.g. `diagnostics.stats.timings.text_*`) can overlap
+with layout/paint wall timers and are reported separately under `diagnostics.stats`.
+
 When diagnostics are enabled, the runner may also attach `diagnostics.stats` (the structured `RenderStats` summary: timings, counts, cascade/layout/paint/resources) for successful renders so `pageset_progress report --verbose-stats` stays useful. Keep it tiny — no raw logs or traces.
 
 Rules:

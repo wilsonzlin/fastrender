@@ -19,6 +19,7 @@ mod pageset_progress_dump_full_test;
 mod pageset_progress_hard_timeout_stage_test;
 mod pageset_progress_help_test;
 mod pageset_progress_migrate_test;
+mod pageset_progress_ok_stage_buckets_test;
 mod pageset_progress_report_test;
 mod pageset_progress_stage_fields_test;
 mod pageset_progress_soft_timeout_stage_buckets_test;

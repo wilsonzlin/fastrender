@@ -1703,8 +1703,9 @@ fn sync(args: SyncArgs) -> io::Result<()> {
 /// These buckets are **wall-clock stage timers** and are intended to be roughly additive (i.e.
 /// `stages_ms.sum()` should approximately match `total_ms` for successful renders).
 ///
-/// CPU-sum subsystem accumulators (e.g. `*_cpu_ms`) are intentionally excluded to avoid
-/// double-counting and nonsense totals.
+/// Subsystem/CPU-sum accumulators (e.g. `*_cpu_ms`) are intentionally excluded to avoid
+/// double-counting and nonsense totals. Fine-grained overlapping sub-timers like `timings.text_*`
+/// are also excluded; they remain available under `diagnostics.stats.timings.*`.
 ///
 /// Keep this consistent with `perf_smoke` (`stage_breakdown_from_stats`).
 fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
@@ -2143,11 +2144,22 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   match render_result {
     Ok(Ok(result)) => {
       progress.status = ProgressStatus::Ok;
-      progress.stages_ms = buckets_from_diagnostics(&result.diagnostics);
+      let total_ms = progress.total_ms.unwrap_or(0.0);
+      let timeline_total_ms = total_ms.round().max(0.0) as u64;
+      let timeline_buckets = args
+        .stage_path
+        .as_deref()
+        .and_then(|path| stage_buckets_from_timeline(path, timeline_total_ms));
+      let used_timeline = timeline_buckets.is_some();
+      progress.stages_ms =
+        timeline_buckets.unwrap_or_else(|| buckets_from_diagnostics(&result.diagnostics));
+      progress.stages_ms.rescale_to_total(total_ms);
       apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
       let fetch_error_summary = build_fetch_error_summary(&result.diagnostics);
-      if result.diagnostics.stats.is_none() {
-        log.push_str("Render stats unavailable; stages_ms left at 0ms.\n");
+      if !used_timeline && result.diagnostics.stats.is_none() {
+        log.push_str(
+          "Stage timings unavailable (no timeline or render stats); stages_ms left at 0ms.\n",
+        );
       }
       progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
       if progress.failure_stage.is_some() || fetch_error_summary.is_some() {
