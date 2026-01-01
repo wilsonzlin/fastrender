@@ -11,7 +11,8 @@ use fastrender::dom::DomCompatibilityMode;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-  parse_cached_html_meta, FetchedResource, HttpFetcher, HttpRetryPolicy, ResourceFetcher,
+  parse_cached_html_meta, FetchRequest, FetchedResource, HttpFetcher, HttpRetryPolicy,
+  ResourceFetcher,
 };
 use fastrender::style::media::MediaType;
 use fastrender::text::font_db::FontConfig;
@@ -319,7 +320,9 @@ fn follow_client_redirects_state(
         format_client_redirect_kind(kind)
       ));
 
-      match fetcher.fetch(&target) {
+      match fetcher.fetch_with_request(
+        FetchRequest::document(&target).with_referrer(state.doc.base_hint.as_str()),
+      ) {
         Ok(mut res) => {
           if is_error_status(res.status) {
             let status = res

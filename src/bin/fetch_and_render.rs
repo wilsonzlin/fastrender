@@ -23,6 +23,7 @@ use common::render_pipeline::{
 };
 use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::image_output::encode_image;
+use fastrender::resource::FetchRequest;
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::url_to_filename;
 #[cfg(not(feature = "disk_cache"))]
@@ -159,7 +160,7 @@ fn render_page(
     follow_client_redirects(fetcher.as_ref(), cached.document, &mut log)
   } else {
     println!("Fetching HTML from: {url}");
-    let resource = fetcher.fetch(url)?;
+    let resource = fetcher.fetch_with_request(FetchRequest::document(url))?;
     let base_hint = resource.final_url.as_deref().unwrap_or(url).to_string();
     let doc = decode_html_resource(&resource, &base_hint);
     follow_client_redirects(fetcher.as_ref(), doc, &mut log)

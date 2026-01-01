@@ -10,6 +10,7 @@ use common::render_pipeline::build_http_fetcher;
 use fastrender::pageset::{
   cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
+use fastrender::resource::FetchRequest;
 use fastrender::resource::FetchedResource;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
@@ -156,7 +157,9 @@ fn fetch_page(
   url: &str,
   allow_http_error_status: bool,
 ) -> Result<FetchedResource, String> {
-  let mut res = fetcher.fetch(url).map_err(|e| e.to_string())?;
+  let mut res = fetcher
+    .fetch_with_request(FetchRequest::document(url))
+    .map_err(|e| e.to_string())?;
 
   if !allow_http_error_status {
     if let Some(code) = res.status {
@@ -1000,5 +1003,49 @@ mod tests {
     assert_eq!(res.status, Some(403));
     assert_eq!(res.bytes, b"forbidden");
     assert_eq!(res.final_url.as_deref(), Some(url.as_str()));
+  }
+
+  #[test]
+  fn follow_client_redirects_sends_referrer_from_base_hint() {
+    use crate::common::render_pipeline::{follow_client_redirects, PreparedDocument};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingFetcher {
+      calls: Mutex<Vec<(String, Option<String>)>>,
+    }
+
+    impl ResourceFetcher for RecordingFetcher {
+      fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
+        panic!("follow_client_redirects should use fetch_with_request");
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> fastrender::Result<FetchedResource> {
+        self.calls.lock().unwrap().push((
+          req.url.to_string(),
+          req.referrer.map(|referrer| referrer.to_string()),
+        ));
+        Ok(FetchedResource::with_final_url(
+          b"<html></html>".to_vec(),
+          Some("text/html".to_string()),
+          Some(req.url.to_string()),
+        ))
+      }
+    }
+
+    let start_url = "https://example.com/start";
+    // Include a <base> tag so `doc.base_url` differs from `doc.base_hint`; the redirect follow-up
+    // should still use the original document URL as the referrer.
+    let html = r#"<html><head><base href="https://example.com/base/"><meta http-equiv="refresh" content="0; url=next"></head></html>"#;
+    let doc = PreparedDocument::new(html.to_string(), start_url.to_string());
+    let mut log = |_line: &str| {};
+
+    let fetcher = RecordingFetcher::default();
+    let _ = follow_client_redirects(&fetcher, doc, &mut log);
+
+    let calls = fetcher.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "https://example.com/base/next");
+    assert_eq!(calls[0].1.as_deref(), Some(start_url));
   }
 }

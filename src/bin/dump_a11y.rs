@@ -5,7 +5,7 @@ use common::args::parse_viewport;
 use fastrender::api::{FastRender, RenderOptions};
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::resource::{
-  HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+  FetchRequest, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use fastrender::style::media::MediaType;
 use std::error::Error;
@@ -120,7 +120,7 @@ fn load_html(
       return Ok((html, url.to_string()));
     }
 
-    let resource = fetcher.fetch(url.as_str())?;
+    let resource = fetcher.fetch_with_request(FetchRequest::document(url.as_str()))?;
     let base_hint = resource
       .final_url
       .as_deref()
