@@ -6336,12 +6336,23 @@ impl DisplayListBuilder {
     decorative: bool,
   ) -> Option<Arc<ImageData>> {
     let image_cache = self.image_cache.as_ref()?;
-    let resolved_src = image_cache.resolve_url(src);
-    let image = match image_cache.load(&resolved_src) {
-      Ok(img) => img,
-      Err(_) if src.trim_start().starts_with('<') => image_cache.render_svg(src).ok()?,
-      Err(_) => return None,
+    let trimmed = src.trim_start();
+    let inline_svg = trimmed.starts_with('<');
+
+    let (resolved_src, image) = if inline_svg {
+      use std::collections::hash_map::DefaultHasher;
+      use std::hash::{Hash, Hasher};
+      let mut hasher = DefaultHasher::new();
+      trimmed.hash(&mut hasher);
+      let cache_key = format!("inline-svg:{:016x}:{}", hasher.finish(), trimmed.len());
+      let image = image_cache.render_svg(trimmed).ok()?;
+      (cache_key, image)
+    } else {
+      let resolved_src = image_cache.resolve_url(src);
+      let image = image_cache.load(&resolved_src).ok()?;
+      (resolved_src, image)
     };
+
     let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
     let orientation = style
       .map(|s| s.image_orientation.resolve(image.orientation, decorative))

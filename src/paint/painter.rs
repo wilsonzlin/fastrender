@@ -6570,7 +6570,13 @@ impl Painter {
       return false;
     }
 
-    let resolved_src = self.image_cache.resolve_url(src.url);
+    let trimmed = src.url.trim_start();
+    let inline_svg = trimmed.starts_with('<');
+    let resolved_src = if inline_svg {
+      "inline-svg".to_string()
+    } else {
+      self.image_cache.resolve_url(src.url)
+    };
     if let Some(limit) = trace_image_paint_limit() {
       let idx = TRACE_IMAGE_PAINT_COUNT.fetch_add(1, Ordering::Relaxed);
       if idx < limit {
@@ -6583,18 +6589,23 @@ impl Painter {
 
     let log_image_fail = runtime::runtime_toggles().truthy("FASTR_LOG_IMAGE_FAIL");
 
-    let image = match self.image_cache.load(&resolved_src) {
-      Ok(img) => img,
-      Err(e) => {
-        if log_image_fail {
-          eprintln!("[image-load-fail] src={} stage=load err={}", src.url, e);
-        }
-        if src.url.trim_start().starts_with('<') {
-          match self.image_cache.render_svg(src.url) {
-            Ok(img) => img,
-            Err(_) => return false,
+    let image = if inline_svg {
+      match self.image_cache.render_svg(trimmed) {
+        Ok(img) => img,
+        Err(e) => {
+          if log_image_fail {
+            eprintln!("[image-load-fail] src={} stage=render-svg err={}", src.url, e);
           }
-        } else {
+          return false;
+        }
+      }
+    } else {
+      match self.image_cache.load(&resolved_src) {
+        Ok(img) => img,
+        Err(e) => {
+          if log_image_fail {
+            eprintln!("[image-load-fail] src={} stage=load err={}", src.url, e);
+          }
           return false;
         }
       }

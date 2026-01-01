@@ -4,7 +4,7 @@ use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::media::MediaContext;
 use fastrender::tree::box_generation::generate_box_tree;
 use fastrender::tree::box_tree::{BoxNode, BoxType, ReplacedType, SvgContent};
-use fastrender::FastRender;
+use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
 use resvg::tiny_skia::Pixmap;
 
 pub(super) fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> [u8; 4] {
@@ -57,6 +57,40 @@ fn inline_svg_applies_document_css_and_current_color() {
 
       let pixmap = renderer.render_html(html, 30, 30).expect("render svg");
       assert_eq!(pixel(&pixmap, 10, 10), [0, 128, 0, 255]);
+    })
+    .unwrap()
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn inline_svg_does_not_record_spurious_fetch_errors() {
+  std::thread::Builder::new()
+    .stack_size(64 * 1024 * 1024)
+    .spawn(|| {
+      let mut renderer = FastRender::new().expect("renderer");
+      let html = r#"
+      <style>
+        body { margin: 0; background: white; }
+        svg { display: block; }
+      </style>
+      <svg width="10" height="10" viewBox="0 0 10 10">
+        <rect width="10" height="10" fill="red"></rect>
+      </svg>
+      "#;
+
+      let options = RenderOptions::default()
+        .with_viewport(20, 20)
+        .with_diagnostics_level(DiagnosticsLevel::Basic);
+      let result = renderer
+        .render_html_with_diagnostics(html, options)
+        .expect("render svg");
+
+      assert!(
+        result.diagnostics.fetch_errors.is_empty(),
+        "inline SVG should not be fetched as a URL: {:?}",
+        result.diagnostics.fetch_errors
+      );
     })
     .unwrap()
     .join()

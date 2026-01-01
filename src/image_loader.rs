@@ -1582,6 +1582,11 @@ impl ImageCache {
   /// Results are cached in memory, so subsequent loads of the same URL
   /// return the cached image.
   pub fn load(&self, url: &str) -> Result<Arc<CachedImage>> {
+    let trimmed = url.trim_start();
+    if trimmed.starts_with('<') {
+      return self.render_svg(trimmed);
+    }
+
     // Resolve the URL first
     let resolved_url = self.resolve_url(url);
     self.enforce_image_policy(&resolved_url)?;
@@ -1716,6 +1721,43 @@ impl ImageCache {
   /// Probe image metadata (dimensions, EXIF orientation/resolution, SVG intrinsic ratio)
   /// without fully decoding the image.
   pub fn probe(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
+    let trimmed = url.trim_start();
+    if trimmed.starts_with('<') {
+      let cache_key = inline_svg_cache_key(trimmed);
+      record_image_cache_request();
+
+      if let Some(img) = self.get_cached(&cache_key) {
+        record_image_cache_hit();
+        return Ok(Arc::new(CachedImageMetadata::from(&*img)));
+      }
+
+      if let Some(meta) = self.get_cached_meta(&cache_key) {
+        record_image_cache_hit();
+        return Ok(meta);
+      }
+
+      let (flight, is_owner) = self.join_meta_inflight(&cache_key);
+      if !is_owner {
+        record_image_cache_hit();
+        return flight.wait(&cache_key);
+      }
+
+      let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, &cache_key, flight);
+      record_image_cache_miss();
+      let result = self.probe_svg_content(trimmed, "inline-svg").map(Arc::new);
+      let shared = match &result {
+        Ok(meta) => {
+          if let Ok(mut cache) = self.meta_cache.lock() {
+            cache.insert(cache_key.clone(), Arc::clone(meta));
+          }
+          SharedMetaResult::Success(Arc::clone(meta))
+        }
+        Err(err) => SharedMetaResult::Error(err.clone()),
+      };
+      inflight_guard.finish(shared);
+      return result;
+    }
+
     let resolved_url = self.resolve_url(url);
     self.enforce_image_policy(&resolved_url)?;
 
