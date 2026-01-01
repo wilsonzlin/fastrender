@@ -47,6 +47,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub const DEFAULT_LAYOUT_MIN_FANOUT: usize = 8;
 /// Minimum box tree size before auto parallelism engages.
 pub const DEFAULT_LAYOUT_AUTO_MIN_NODES: usize = 1024;
+const DEFAULT_LAYOUT_RAYON_STACK_SIZE: usize = 64 * 1024 * 1024;
 /// Default ceiling on rayon worker threads used for auto layout fan-out when the global pool is
 /// very large.
 ///
@@ -63,6 +64,7 @@ fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
   match DEFAULT_LAYOUT_THREAD_POOL.get_or_init(|| {
     ThreadPoolBuilder::new()
       .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
       .build()
       .map(Arc::new)
       .map_err(|err| err.to_string())
@@ -622,6 +624,7 @@ impl LayoutEngine {
         } else {
           ThreadPoolBuilder::new()
             .num_threads(threads)
+            .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
             .build()
             .ok()
             .map(Arc::new)
@@ -881,7 +884,13 @@ impl LayoutEngine {
         parallelism
           .max_threads
           .filter(|threads| *threads > 1)
-          .and_then(|threads| ThreadPoolBuilder::new().num_threads(threads).build().ok())
+          .and_then(|threads| {
+            ThreadPoolBuilder::new()
+              .num_threads(threads)
+              .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
+              .build()
+              .ok()
+          })
           .map(Arc::new)
       }
     } else {
