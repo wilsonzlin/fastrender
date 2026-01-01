@@ -865,37 +865,63 @@ impl BlockFormattingContext {
         // padding/border offsets, so use the content origin when no flow position was
         // recorded.
         let static_pos = static_position.unwrap_or(Point::ZERO);
-        let preferred_min_inline =
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
-            Ok(value) => Some(value),
+        let is_replaced = pos_child.is_replaced();
+        let needs_inline_intrinsics = positioned_style.width.is_auto()
+          && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
+        let needs_block_intrinsics = positioned_style.height.is_auto()
+          && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
+        let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+          match fc.compute_intrinsic_inline_sizes(&layout_child) {
+            Ok((min, max)) => (Some(min), Some(max)),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          };
-        let preferred_inline =
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-            Ok(value) => Some(value),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          };
-        let preferred_min_block =
+            Err(_) => {
+              let min = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MinContent,
+              ) {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let max = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MaxContent,
+              ) {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              (min, max)
+            }
+          }
+        } else {
+          (None, None)
+        };
+        let preferred_min_block = if needs_block_intrinsics {
           match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
             Ok(value) => Some(value),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
             Err(_) => None,
-          };
-        let preferred_block =
+          }
+        } else {
+          None
+        };
+        let preferred_block = if needs_block_intrinsics {
           match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
             Ok(value) => Some(value),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
             Err(_) => None,
-          };
+          }
+        } else {
+          None
+        };
 
         let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
           positioned_style,
           child_fragment.bounds.size,
           static_pos,
         );
-        input.is_replaced = pos_child.is_replaced();
+        input.is_replaced = is_replaced;
         input.preferred_min_inline_size = preferred_min_inline;
         input.preferred_inline_size = preferred_inline;
         input.preferred_min_block_size = preferred_min_block;
@@ -3502,37 +3528,63 @@ impl FormattingContext for BlockFormattingContext {
         // padding/border offsets, so use the content origin when no flow position was
         // recorded.
         let static_pos = static_position.unwrap_or(Point::ZERO);
-        let preferred_min_inline =
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
-            Ok(value) => Some(value),
+        let is_replaced = child.is_replaced();
+        let needs_inline_intrinsics = positioned_style.width.is_auto()
+          && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
+        let needs_block_intrinsics = positioned_style.height.is_auto()
+          && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
+        let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+          match fc.compute_intrinsic_inline_sizes(&layout_child) {
+            Ok((min, max)) => (Some(min), Some(max)),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          };
-        let preferred_inline =
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-            Ok(value) => Some(value),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          };
-        let preferred_min_block =
+            Err(_) => {
+              let min = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MinContent,
+              ) {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let max = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MaxContent,
+              ) {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              (min, max)
+            }
+          }
+        } else {
+          (None, None)
+        };
+        let preferred_min_block = if needs_block_intrinsics {
           match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
             Ok(value) => Some(value),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
             Err(_) => None,
-          };
-        let preferred_block =
+          }
+        } else {
+          None
+        };
+        let preferred_block = if needs_block_intrinsics {
           match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
             Ok(value) => Some(value),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
             Err(_) => None,
-          };
+          }
+        } else {
+          None
+        };
 
         let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
           positioned_style,
           child_fragment.bounds.size,
           static_pos,
         );
-        input.is_replaced = child.is_replaced();
+        input.is_replaced = is_replaced;
         input.preferred_min_inline_size = preferred_min_inline;
         input.preferred_inline_size = preferred_inline;
         input.preferred_min_block_size = preferred_min_block;

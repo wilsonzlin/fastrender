@@ -226,6 +226,14 @@ fn record_fragment_clone(site: CloneSite, fragment: &FragmentNode) {
   fragment_clone_profile::record_fragment_clone_from_fragment(site, fragment);
 }
 
+fn ensure_box_id(node: &BoxNode) -> usize {
+  if node.id != 0 {
+    return node.id;
+  }
+  const EPHEMERAL_ID_BASE: usize = 1usize << (usize::BITS - 1);
+  EPHEMERAL_ID_BASE | (node as *const BoxNode as usize)
+}
+
 fn constraints_from_taffy(
   viewport_size: crate::geometry::Size,
   known: taffy::geometry::Size<Option<f32>>,
@@ -2063,23 +2071,32 @@ impl GridFormattingContext {
           || child.is_replaced());
       let needs_block_intrinsics = positioned_style.height.is_auto()
         && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-      let preferred_min_inline = if needs_inline_intrinsics {
-        match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
-          Ok(size) => Some(size),
+      let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+        match fc.compute_intrinsic_inline_sizes(&layout_child) {
+          Ok((min, max)) => (Some(min), Some(max)),
           Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-          Err(_) => None,
+          Err(_) => {
+            let min = match fc.compute_intrinsic_inline_size(
+              &layout_child,
+              IntrinsicSizingMode::MinContent,
+            ) {
+              Ok(size) => Some(size),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => None,
+            };
+            let max = match fc.compute_intrinsic_inline_size(
+              &layout_child,
+              IntrinsicSizingMode::MaxContent,
+            ) {
+              Ok(size) => Some(size),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => None,
+            };
+            (min, max)
+          }
         }
       } else {
-        None
-      };
-      let preferred_inline = if needs_inline_intrinsics {
-        match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-          Ok(size) => Some(size),
-          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-          Err(_) => None,
-        }
-      } else {
-        None
+        (None, None)
       };
       let preferred_min_block = if needs_block_intrinsics {
         match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
@@ -3590,7 +3607,7 @@ impl FormattingContext for GridFormattingContext {
                 pos.y = start - padding_origin.y;
               }
             }
-            static_positions.insert(child.id, pos);
+            static_positions.insert(ensure_box_id(child), pos);
           }
         }
       }
@@ -3642,7 +3659,7 @@ impl FormattingContext for GridFormattingContext {
         // Static position resolves to where the element would be in flow; use the
         // content origin here since AbsoluteLayout adds padding/border.
         let static_pos = static_positions
-          .get(&child.id)
+          .get(&ensure_box_id(child))
           .copied()
           .unwrap_or(crate::geometry::Point::ZERO);
         let needs_inline_intrinsics = positioned_style.width.is_auto()
@@ -3651,23 +3668,32 @@ impl FormattingContext for GridFormattingContext {
             || child.is_replaced());
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-        let preferred_min_inline = if needs_inline_intrinsics {
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
-            Ok(size) => Some(size),
+        let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+          match fc.compute_intrinsic_inline_sizes(&layout_child) {
+            Ok((min, max)) => (Some(min), Some(max)),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
+            Err(_) => {
+              let min = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MinContent,
+              ) {
+                Ok(size) => Some(size),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let max = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MaxContent,
+              ) {
+                Ok(size) => Some(size),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              (min, max)
+            }
           }
         } else {
-          None
-        };
-        let preferred_inline = if needs_inline_intrinsics {
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-            Ok(size) => Some(size),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          }
-        } else {
-          None
+          (None, None)
         };
         let preferred_min_block = if needs_block_intrinsics {
           match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {

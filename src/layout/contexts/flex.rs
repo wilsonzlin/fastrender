@@ -241,6 +241,14 @@ struct PositionedCandidate {
   is_replaced: bool,
 }
 
+fn ensure_box_id(node: &BoxNode) -> usize {
+  if node.id != 0 {
+    return node.id;
+  }
+  const EPHEMERAL_ID_BASE: usize = 1usize << (usize::BITS - 1);
+  EPHEMERAL_ID_BASE | (node as *const BoxNode as usize)
+}
+
 fn trace_flex_text_ids() -> Vec<usize> {
   crate::debug::runtime::runtime_toggles()
     .usize_list("FASTR_TRACE_FLEX_TEXT")
@@ -2207,7 +2215,7 @@ impl FormattingContext for FlexFormattingContext {
       let mut deadline_counter = 0usize;
       for child in positioned_children {
         check_layout_deadline(&mut deadline_counter)?;
-        let child_id = child.id;
+        let child_id = ensure_box_id(child);
         let original_style = child.style.clone();
         let is_replaced = child.is_replaced();
         let cb = match child.style.position {
@@ -2252,23 +2260,32 @@ impl FormattingContext for FlexFormattingContext {
           && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-        let preferred_min_inline = if needs_inline_intrinsics {
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
-            Ok(size) => Some(size),
+        let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+          match fc.compute_intrinsic_inline_sizes(&layout_child) {
+            Ok((min, max)) => (Some(min), Some(max)),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
+            Err(_) => {
+              let min = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MinContent,
+              ) {
+                Ok(size) => Some(size),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let max = match fc.compute_intrinsic_inline_size(
+                &layout_child,
+                IntrinsicSizingMode::MaxContent,
+              ) {
+                Ok(size) => Some(size),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              (min, max)
+            }
           }
         } else {
-          None
-        };
-        let preferred_inline = if needs_inline_intrinsics {
-          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-            Ok(size) => Some(size),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          }
-        } else {
-          None
+          (None, None)
         };
         let preferred_min_block = if needs_block_intrinsics {
           match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
@@ -5039,7 +5056,7 @@ impl FlexFormattingContext {
     &self,
     box_node: &BoxNode,
     fragment: &FragmentNode,
-    _in_flow_children: &[&BoxNode],
+    in_flow_children: &[&BoxNode],
     positioned: &[PositionedCandidate],
     padding_origin: Point,
   ) -> Result<FxHashMap<usize, Point>, LayoutError> {
@@ -5051,18 +5068,12 @@ impl FlexFormattingContext {
       FxHashMap::with_capacity_and_hasher(positioned.len(), Default::default());
 
     let mut inflow_sizes: FxHashMap<usize, Size> =
-      FxHashMap::with_capacity_and_hasher(fragment.children.len(), Default::default());
-    for child in fragment.children.iter() {
+      FxHashMap::with_capacity_and_hasher(in_flow_children.len(), Default::default());
+    for (child_node, child_fragment) in
+      in_flow_children.iter().zip(fragment.children.iter())
+    {
       check_layout_deadline(&mut deadline_counter)?;
-      if let Some(box_id) = match &child.content {
-        FragmentContent::Block { box_id }
-        | FragmentContent::Inline { box_id, .. }
-        | FragmentContent::Text { box_id, .. }
-        | FragmentContent::Replaced { box_id, .. } => *box_id,
-        _ => None,
-      } {
-        inflow_sizes.insert(box_id, child.bounds.size);
-      }
+      inflow_sizes.insert(ensure_box_id(child_node), child_fragment.bounds.size);
     }
 
     let mut positioned_index: FxHashMap<usize, usize> =
@@ -5092,7 +5103,8 @@ impl FlexFormattingContext {
     for (_, child_idx) in ordered_children {
       check_layout_deadline(&mut deadline_counter)?;
       let child = &box_node.children[child_idx];
-      if let Some(&pos_idx) = positioned_index.get(&child.id) {
+      let child_id = ensure_box_id(child);
+      if let Some(&pos_idx) = positioned_index.get(&child_id) {
         let candidate = &positioned[pos_idx];
         let mut style =
           self.computed_style_to_taffy(&candidate.layout_child, false, Some(&box_node.style))?;
@@ -5105,7 +5117,7 @@ impl FlexFormattingContext {
         child_nodes.push(node);
       } else {
         let size = inflow_sizes
-          .get(&child.id)
+          .get(&child_id)
           .cloned()
           .unwrap_or(Size::new(0.0, 0.0));
         let mut style = self.computed_style_to_taffy(child, false, Some(&box_node.style))?;

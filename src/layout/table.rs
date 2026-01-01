@@ -5258,6 +5258,20 @@ impl FormattingContext for TableFormattingContext {
             AvailableSpace::Definite(cb.rect.size.width),
             AvailableSpace::Definite(cb.rect.size.height),
           );
+          let positioned_style = resolve_positioned_style(
+            &child.style,
+            &cb,
+            self.viewport_size,
+            self.factory.font_context(),
+          );
+          let is_replaced = child.is_replaced();
+          let needs_inline_intrinsics = positioned_style.width.is_auto()
+            && (positioned_style.left.is_auto()
+              || positioned_style.right.is_auto()
+              || is_replaced);
+          let needs_block_intrinsics = positioned_style.height.is_auto()
+            && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
+
           let (
             mut child_fragment,
             preferred_min_inline,
@@ -5268,33 +5282,52 @@ impl FormattingContext for TableFormattingContext {
             FormattingContextType::Table => {
               let fc = positioned_factory.create(fc_type);
               let fragment = fc.layout(&layout_child, &child_constraints)?;
-              let preferred_min_inline = match fc
-                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+                match fc.compute_intrinsic_inline_sizes(&layout_child) {
+                  Ok((min, max)) => (Some(min), Some(max)),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => {
+                    let min = match fc.compute_intrinsic_inline_size(
+                      &layout_child,
+                      IntrinsicSizingMode::MinContent,
+                    ) {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    let max = match fc.compute_intrinsic_inline_size(
+                      &layout_child,
+                      IntrinsicSizingMode::MaxContent,
+                    ) {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    (min, max)
+                  }
+                }
+              } else {
+                (None, None)
               };
-              let preferred_inline = match fc
-                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let preferred_min_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
               };
-              let preferred_min_block = match fc
-                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
-              };
-              let preferred_block = match fc
-                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let preferred_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
               };
               (
                 fragment,
@@ -5306,33 +5339,52 @@ impl FormattingContext for TableFormattingContext {
             }
             _ => positioned_factory.with_fc(fc_type, |fc| {
               let fragment = fc.layout(&layout_child, &child_constraints)?;
-              let preferred_min_inline = match fc
-                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+                match fc.compute_intrinsic_inline_sizes(&layout_child) {
+                  Ok((min, max)) => (Some(min), Some(max)),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => {
+                    let min = match fc.compute_intrinsic_inline_size(
+                      &layout_child,
+                      IntrinsicSizingMode::MinContent,
+                    ) {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    let max = match fc.compute_intrinsic_inline_size(
+                      &layout_child,
+                      IntrinsicSizingMode::MaxContent,
+                    ) {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    (min, max)
+                  }
+                }
+              } else {
+                (None, None)
               };
-              let preferred_inline = match fc
-                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let preferred_min_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
               };
-              let preferred_min_block = match fc
-                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
-              };
-              let preferred_block = match fc
-                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-              {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let preferred_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
               };
               Ok((
                 fragment,
@@ -5343,14 +5395,12 @@ impl FormattingContext for TableFormattingContext {
               ))
             })?,
           };
-          let positioned_style =
-            resolve_positioned_style(&child.style, &cb, self.viewport_size, self.factory.font_context());
           // Static position should start at the containing block origin; AbsoluteLayout
           // adds padding/border offsets, so use the content origin here to avoid double
           // counting padding.
           let mut input =
             AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, Point::ZERO);
-          input.is_replaced = child.is_replaced();
+          input.is_replaced = is_replaced;
           input.preferred_min_inline_size = preferred_min_inline;
           input.preferred_inline_size = preferred_inline;
           input.preferred_min_block_size = preferred_min_block;
