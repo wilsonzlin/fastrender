@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -173,6 +174,41 @@ fn bench_css_parse(c: &mut Criterion) {
   let realistic_css = common::inline_css_text(&realistic_dom, &realistic_media);
   group.bench_function("form_controls", |b| {
     b.iter(|| common::parse_stylesheet_text(black_box(&realistic_css)))
+  });
+
+  // Micro-benchmark: large stylesheet with many declarations that do not reference `var()`.
+  //
+  // `parse_known_property_value` consults `style::var_resolution::contains_var()` for every
+  // declaration value so we can preserve raw strings for later cascade-time resolution. This
+  // benchmark ensures we keep that check cheap for var-light stylesheets.
+  fn synthetic_no_var_stylesheet(declarations: usize) -> String {
+    let mut css = String::with_capacity(declarations.saturating_mul(32));
+    css.push_str(".synthetic{");
+    for idx in 0..declarations {
+      // Keep parsing work tiny so `contains_var()` dominates. All values are var-free and avoid
+      // backslashes so the fast path is exercised.
+      match idx % 6 {
+        0 => {
+          let _ = write!(css, "margin-left:{}px;", (idx % 16) + 1);
+        }
+        1 => {
+          let _ = write!(css, "padding-top:{}px;", (idx % 12) + 1);
+        }
+        2 => css.push_str("opacity:0.5;"),
+        3 => {
+          let _ = write!(css, "z-index:{};", (idx % 10) as i32);
+        }
+        4 => css.push_str("display:block;"),
+        _ => css.push_str("position:relative;"),
+      }
+    }
+    css.push_str("}\n");
+    css
+  }
+
+  let synthetic_css = synthetic_no_var_stylesheet(25_000);
+  group.bench_function("synthetic_no_var_25k_decls", |b| {
+    b.iter(|| common::parse_stylesheet_text(black_box(&synthetic_css)))
   });
 
   group.finish();

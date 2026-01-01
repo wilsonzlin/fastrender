@@ -370,6 +370,38 @@ fn token_to_css_string(token: &Token) -> String {
 
 /// Checks if a string contains any var() references (case-insensitive)
 pub fn contains_var(value: &str) -> bool {
+  // `parse_known_property_value` calls this for *every* declaration value while parsing CSS.
+  // Tokenizing each value with `cssparser` is very expensive for large stylesheets, so use a
+  // cheap substring-based detector with a rare correctness slow-path.
+  //
+  // Function tokens cannot contain whitespace between the name and `(`, so the literal `var(`
+  // is sufficient for the fast path (with ASCII-case-insensitive matching).
+  const NEEDLE: &[u8] = b"var(";
+  let bytes = value.as_bytes();
+  if bytes.len() >= NEEDLE.len() {
+    for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
+      let mut matched = true;
+      for (offset, &needle_byte) in NEEDLE.iter().enumerate() {
+        if bytes[start + offset].to_ascii_lowercase() != needle_byte {
+          matched = false;
+          break;
+        }
+      }
+      if matched {
+        return true;
+      }
+    }
+  }
+
+  // Escaped function names (e.g. `v\61 r(`) require a proper tokenizer to interpret escapes.
+  if bytes.contains(&b'\\') {
+    return contains_var_via_cssparser(value);
+  }
+
+  false
+}
+
+pub(crate) fn contains_var_via_cssparser(value: &str) -> bool {
   let mut input = ParserInput::new(value);
   let mut parser = Parser::new(&mut input);
   contains_var_in_parser(&mut parser)
@@ -663,11 +695,15 @@ mod tests {
   // Utility function tests
   #[test]
   fn test_contains_var() {
+    assert!(contains_var("var(--x)"));
+    assert!(contains_var("calc(var(--x) + 1px)"));
     assert!(contains_var("var(--color)"));
     assert!(contains_var("calc(var(--size) + 10px)"));
     assert!(contains_var("0 0 var(--blur) black"));
+    assert!(contains_var("v\\61 r(--x)"));
     assert!(!contains_var("10px"));
     assert!(!contains_var("red"));
+    assert!(!contains_var("color: red"));
     assert!(!contains_var(""));
   }
 
