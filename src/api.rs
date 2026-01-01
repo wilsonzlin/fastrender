@@ -3936,7 +3936,8 @@ impl FastRender {
           rec.stats.layout.table_cell_layouts = Some(table_stats.cell_layouts);
         }
 
-        if rec.verbose() {
+        let cascade_profile_active = crate::style::cascade::cascade_profile_enabled();
+        if rec.verbose() || cascade_profile_active {
           let profile = crate::style::cascade::capture_cascade_profile();
           rec.stats.cascade.nodes = Some(profile.nodes);
           rec.stats.cascade.rule_candidates = Some(profile.rule_candidates);

@@ -64,6 +64,7 @@ const DEFAULT_PROGRESS_DIR: &str = "progress/pages";
 const DEFAULT_LOG_DIR: &str = "target/pageset/logs";
 const DEFAULT_TRACE_DIR: &str = "target/pageset/traces";
 const DEFAULT_TRACE_PROGRESS_DIR: &str = "target/pageset/trace-progress";
+const DEFAULT_CASCADE_PROGRESS_DIR: &str = "target/pageset/cascade-progress";
 const DEFAULT_DUMP_DIR: &str = "target/pageset/dumps";
 // Treat traces smaller than this as likely incomplete/partial.
 const MIN_TRACE_BYTES: u64 = 4096;
@@ -354,6 +355,21 @@ struct RunArgs {
   /// Directory to write progress JSON for trace reruns (not committed)
   #[arg(long, default_value = DEFAULT_TRACE_PROGRESS_DIR)]
   trace_progress_dir: PathBuf,
+
+  /// Populate `diagnostics.stats.cascade` by re-running cascade hotspot pages with cascade profiling enabled.
+  ///
+  /// This keeps the main run free of cascade profiling overhead while still producing actionable
+  /// selector/candidate counters for slow cascade pages and cascade timeouts.
+  #[arg(long)]
+  cascade_diagnostics: bool,
+
+  /// Re-run ok pages whose cascade stage exceeds this threshold (ms) with cascade profiling enabled
+  #[arg(long, value_name = "MS", requires = "cascade_diagnostics")]
+  cascade_diagnostics_slow_ms: Option<f64>,
+
+  /// Directory to write progress JSON for cascade diagnostic reruns (not committed)
+  #[arg(long, default_value = DEFAULT_CASCADE_PROGRESS_DIR)]
+  cascade_diagnostics_progress_dir: PathBuf,
 
   /// Capture pipeline dumps for failing pages (summary|full)
   #[arg(long, value_enum)]
@@ -4500,6 +4516,7 @@ fn spawn_worker(
   args: &RunArgs,
   item: &WorkItem,
   diagnostics: DiagnosticsArg,
+  cascade_profile: bool,
   soft_timeout_ms: Option<u64>,
   worker_timeout: Duration,
   dump: Option<&DumpSettings>,
@@ -4621,6 +4638,10 @@ fn spawn_worker(
     }
   }
 
+  if cascade_profile {
+    cmd.env("FASTR_CASCADE_PROFILE", "1");
+  }
+
   if let Some(parent) = item.stderr_path.parent() {
     if !parent.as_os_str().is_empty() {
       fs::create_dir_all(parent)?;
@@ -4650,6 +4671,7 @@ fn run_queue(
   kill_timeout: Duration,
   soft_timeout_ms: Option<u64>,
   diagnostics: DiagnosticsArg,
+  cascade_profile: bool,
   jobs: usize,
   dump: Option<&DumpSettings>,
 ) -> io::Result<()> {
@@ -4670,6 +4692,7 @@ fn run_queue(
         args,
         &item,
         diagnostics,
+        cascade_profile,
         soft_timeout_ms,
         worker_timeout,
         dump,
@@ -4908,6 +4931,64 @@ fn infer_hard_timeout_stage(
         .or(Some(ProgressStage::DomParse))
     })
     .unwrap_or(ProgressStage::DomParse)
+}
+
+fn progress_has_cascade_profile_stats(progress: &PageProgress) -> bool {
+  progress
+    .diagnostics
+    .as_ref()
+    .and_then(|d| d.stats.as_ref())
+    .is_some_and(|stats| {
+      stats.cascade.nodes.is_some()
+        || stats.cascade.rule_candidates.is_some()
+        || stats.cascade.selector_time_ms.is_some()
+        || stats.cascade.has_evals.is_some()
+    })
+}
+
+fn progress_is_cascade_timeout(progress: &PageProgress) -> bool {
+  progress.status == ProgressStatus::Timeout
+    && (progress.hotspot.eq_ignore_ascii_case("cascade")
+      || matches!(progress.timeout_stage, Some(ProgressStage::Cascade))
+      || matches!(progress.failure_stage, Some(ProgressStage::Cascade)))
+}
+
+fn merge_cascade_diagnostics(dst: &mut CascadeDiagnostics, src: &CascadeDiagnostics) {
+  dst.nodes = dst.nodes.or(src.nodes);
+  dst.rule_candidates = dst.rule_candidates.or(src.rule_candidates);
+  dst.rule_matches = dst.rule_matches.or(src.rule_matches);
+  dst.rule_candidates_pruned = dst.rule_candidates_pruned.or(src.rule_candidates_pruned);
+  dst.rule_candidates_by_id = dst.rule_candidates_by_id.or(src.rule_candidates_by_id);
+  dst.rule_candidates_by_class = dst
+    .rule_candidates_by_class
+    .or(src.rule_candidates_by_class);
+  dst.rule_candidates_by_tag = dst.rule_candidates_by_tag.or(src.rule_candidates_by_tag);
+  dst.rule_candidates_by_attr = dst.rule_candidates_by_attr.or(src.rule_candidates_by_attr);
+  dst.rule_candidates_universal = dst
+    .rule_candidates_universal
+    .or(src.rule_candidates_universal);
+  dst.selector_attempts_total = dst.selector_attempts_total.or(src.selector_attempts_total);
+  dst.selector_attempts_after_bloom =
+    dst.selector_attempts_after_bloom.or(src.selector_attempts_after_bloom);
+  dst.selector_bloom_fast_rejects =
+    dst.selector_bloom_fast_rejects.or(src.selector_bloom_fast_rejects);
+  dst.selector_time_ms = dst.selector_time_ms.or(src.selector_time_ms);
+  dst.declaration_time_ms = dst.declaration_time_ms.or(src.declaration_time_ms);
+  dst.pseudo_time_ms = dst.pseudo_time_ms.or(src.pseudo_time_ms);
+  dst.has_evals = dst.has_evals.or(src.has_evals);
+  dst.has_cache_hits = dst.has_cache_hits.or(src.has_cache_hits);
+  dst.has_prunes = dst.has_prunes.or(src.has_prunes);
+  dst.has_bloom_prunes = dst.has_bloom_prunes.or(src.has_bloom_prunes);
+  dst.has_filter_prunes = dst.has_filter_prunes.or(src.has_filter_prunes);
+  dst.has_evaluated = dst.has_evaluated.or(src.has_evaluated);
+}
+
+fn merge_cascade_stats_into_progress(progress: &mut PageProgress, rerun_stats: &RenderStats) {
+  let diagnostics = progress
+    .diagnostics
+    .get_or_insert_with(ProgressDiagnostics::default);
+  let stats = diagnostics.stats.get_or_insert_with(RenderStats::default);
+  merge_cascade_diagnostics(&mut stats.cascade, &rerun_stats.cascade);
 }
 
 fn run(args: RunArgs) -> io::Result<()> {
@@ -5264,6 +5345,7 @@ fn run(args: RunArgs) -> io::Result<()> {
     worker_hard_timeout,
     soft_timeout_ms,
     args.diagnostics,
+    false,
     args.jobs,
     dump_settings.as_ref(),
   )?;
@@ -5286,6 +5368,113 @@ fn run(args: RunArgs) -> io::Result<()> {
     }
   }
   let total = ok + timeout + panic + error;
+
+  // Optional cascade diagnostics reruns.
+  //
+  // We keep the main run (and its timings) free of cascade profiling overhead, but for cascade
+  // hotspots it's often useful to have selector candidate/match counters and `:has()` counters.
+  // Rerun a small subset of pages with `FASTR_CASCADE_PROFILE=1` and merge the resulting cascade
+  // stats into the committed progress JSON.
+  if args.cascade_diagnostics {
+    fs::create_dir_all(&args.cascade_diagnostics_progress_dir)?;
+    let slow_threshold_ms = args.cascade_diagnostics_slow_ms.unwrap_or(500.0);
+    let rerun_hard_timeout = Duration::from_secs(args.timeout.saturating_mul(2));
+    let rerun_soft_timeout_ms = compute_soft_timeout_ms(rerun_hard_timeout, None);
+    let rerun_diagnostics = match args.diagnostics {
+      DiagnosticsArg::None => DiagnosticsArg::Basic,
+      other => other,
+    };
+
+    let mut rerun_items: Vec<WorkItem> = Vec::new();
+    for item in &items {
+      let Some(p) = read_progress(&item.progress_path) else {
+        continue;
+      };
+      if progress_has_cascade_profile_stats(&p) {
+        continue;
+      }
+      let needs_rerun = match p.status {
+        ProgressStatus::Ok => p
+          .diagnostics
+          .as_ref()
+          .and_then(|d| d.stats.as_ref())
+          .and_then(|s| s.timings.cascade_ms)
+          .is_some_and(|ms| ms > slow_threshold_ms),
+        ProgressStatus::Timeout => progress_is_cascade_timeout(&p),
+        ProgressStatus::Panic | ProgressStatus::Error => false,
+      };
+      if !needs_rerun {
+        continue;
+      }
+      rerun_items.push(WorkItem {
+        stem: item.stem.clone(),
+        cache_stem: item.cache_stem.clone(),
+        url: item.url.clone(),
+        cache_path: item.cache_path.clone(),
+        progress_path: args
+          .cascade_diagnostics_progress_dir
+          .join(format!("{}.json", item.cache_stem)),
+        log_path: args
+          .log_dir
+          .join(format!("{}.cascade.log", item.cache_stem)),
+        stderr_path: args
+          .log_dir
+          .join(format!("{}.cascade.stderr.log", item.cache_stem)),
+        stage_path: args
+          .log_dir
+          .join(format!("{}.cascade.stage", item.cache_stem)),
+        trace_out: None,
+      });
+    }
+
+    if !rerun_items.is_empty() {
+      let soft_desc = rerun_soft_timeout_ms
+        .map(|ms| format!("{ms}ms"))
+        .unwrap_or_else(|| "disabled".to_string());
+      println!(
+        "Cascade profiling {} pages (jobs={}, hard timeout {}s, soft timeout {}) writing temp progress to {}...",
+        rerun_items.len(),
+        args.jobs,
+        rerun_hard_timeout.as_secs(),
+        soft_desc,
+        args.cascade_diagnostics_progress_dir.display()
+      );
+
+      let queue = std::collections::VecDeque::from(rerun_items.clone());
+      run_queue(
+        &exe,
+        &args,
+        queue,
+        rerun_hard_timeout,
+        rerun_hard_timeout,
+        rerun_soft_timeout_ms,
+        rerun_diagnostics,
+        true,
+        args.jobs,
+        None,
+      )?;
+
+      // Merge rerun cascade diagnostics into the committed progress artifacts.
+      for rerun in &rerun_items {
+        let Some(rerun_progress) = read_progress(&rerun.progress_path) else {
+          continue;
+        };
+        let Some(rerun_stats) = rerun_progress
+          .diagnostics
+          .as_ref()
+          .and_then(|d| d.stats.as_ref())
+        else {
+          continue;
+        };
+        let committed_path = args.progress_dir.join(format!("{}.json", rerun.cache_stem));
+        let Some(mut committed) = read_progress(&committed_path) else {
+          continue;
+        };
+        merge_cascade_stats_into_progress(&mut committed, rerun_stats);
+        write_progress(&committed_path, &committed)?;
+      }
+    }
+  }
 
   // Optional trace reruns (kept out of the committed progress dir).
   if args.trace_failures || args.trace_slow_ms.is_some() {
@@ -5347,6 +5536,7 @@ fn run(args: RunArgs) -> io::Result<()> {
         trace_hard_timeout,
         trace_soft_timeout_ms,
         DiagnosticsArg::Verbose,
+        false,
         args.trace_jobs,
         None,
       )?;
@@ -5633,6 +5823,9 @@ mod tests {
       trace_jobs: 1,
       trace_dir: base.join("trace"),
       trace_progress_dir: base.join("trace_progress"),
+      cascade_diagnostics: false,
+      cascade_diagnostics_slow_ms: None,
+      cascade_diagnostics_progress_dir: base.join("cascade_progress"),
       dump_failures: None,
       dump_slow_ms: None,
       dump_slow: None,
@@ -6555,6 +6748,7 @@ mod tests {
       hard_timeout,
       None,
       args.diagnostics,
+      false,
       args.jobs,
       None,
     )
@@ -6626,6 +6820,7 @@ mod tests {
       overall_kill_timeout,
       None,
       args.diagnostics,
+      false,
       args.jobs,
       Some(&dump_settings),
     )
@@ -6700,6 +6895,7 @@ mod tests {
       overall_kill_timeout,
       None,
       args.diagnostics,
+      false,
       args.jobs,
       Some(&dump_settings),
     )
