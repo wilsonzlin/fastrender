@@ -5295,7 +5295,16 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         continue;
       };
       let resolved = if let Some(loader) = import_loader {
-        sheet.resolve_imports_with_cache(loader, base_url, media_ctx, media_cache.as_deref_mut())?
+        if sheet.contains_imports() {
+          sheet.resolve_imports_owned_with_cache(
+            loader,
+            base_url,
+            media_ctx,
+            media_cache.as_deref_mut(),
+          )?
+        } else {
+          sheet
+        }
       } else {
         sheet
       };

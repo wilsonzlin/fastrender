@@ -1373,14 +1373,21 @@ mod disk_cache_main {
               Err(_) => continue,
             };
 
-            let resolved = match sheet.resolve_imports_with_cache(
-              &import_loader,
-              Some(base_url),
-              media_ctx,
-              Some(&mut media_query_cache),
-            ) {
-              Ok(sheet) => sheet,
-              Err(_) => sheet,
+            let resolved = if sheet.contains_imports() {
+              match sheet.resolve_imports_owned_with_cache(
+                &import_loader,
+                Some(base_url),
+                media_ctx,
+                Some(&mut media_query_cache),
+              ) {
+                Ok(sheet) => sheet,
+                Err(_) => match parse_stylesheet(&css) {
+                  Ok(sheet) => sheet,
+                  Err(_) => continue,
+                },
+              }
+            } else {
+              sheet
             };
 
             if opts.prefetch_fonts {
@@ -1431,14 +1438,21 @@ mod disk_cache_main {
                 Err(_) => continue,
               };
 
-              let resolved = match sheet.resolve_imports_with_cache(
-                &import_loader,
-                Some(sheet_base),
-                media_ctx,
-                Some(&mut media_query_cache),
-              ) {
-                Ok(sheet) => sheet,
-                Err(_) => sheet,
+              let resolved = if sheet.contains_imports() {
+                match sheet.resolve_imports_owned_with_cache(
+                  &import_loader,
+                  Some(sheet_base),
+                  media_ctx,
+                  Some(&mut media_query_cache),
+                ) {
+                  Ok(sheet) => sheet,
+                  Err(_) => match parse_stylesheet(&css_text) {
+                    Ok(sheet) => sheet,
+                    Err(_) => continue,
+                  },
+                }
+              } else {
+                sheet
               };
 
               if opts.prefetch_fonts {
