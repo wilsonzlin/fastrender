@@ -3211,7 +3211,10 @@ fn selector_compound_fast_reject_from_iter(
             }
             Component::Class(class) => {
               let key = selector_bucket_class_for_mode(class.as_str(), quirks_mode);
-              if class_keys[..class_len].iter().any(|existing| *existing == key) {
+              if class_keys[..class_len]
+                .iter()
+                .any(|existing| *existing == key)
+              {
                 continue;
               }
               if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3224,7 +3227,10 @@ fn selector_compound_fast_reject_from_iter(
               local_name_lower, ..
             } => {
               let key = selector_bucket_attr(local_name_lower.as_str());
-              if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+              if attr_keys[..attr_len]
+                .iter()
+                .any(|existing| *existing == key)
+              {
                 continue;
               }
               if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3235,7 +3241,10 @@ fn selector_compound_fast_reject_from_iter(
             }
             Component::AttributeInNoNamespace { local_name, .. } => {
               let key = selector_bucket_attr(local_name.as_str());
-              if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+              if attr_keys[..attr_len]
+                .iter()
+                .any(|existing| *existing == key)
+              {
                 continue;
               }
               if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -3249,7 +3258,10 @@ fn selector_compound_fast_reject_from_iter(
                 return None;
               }
               let key = selector_bucket_attr(other.local_name_lower.as_str());
-              if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+              if attr_keys[..attr_len]
+                .iter()
+                .any(|existing| *existing == key)
+              {
                 continue;
               }
               if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
@@ -4438,23 +4450,21 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
     let id_map = enumerate_dom_ids(dom);
     let dom_maps = DomMaps::new(dom, id_map);
 
-    fn collect_element_nodes(
-      node: &DomNode,
-      ids: &HashMap<*const DomNode, usize>,
-      out: &mut Vec<(usize, *const DomNode)>,
-    ) {
+    let mut element_nodes: Vec<(usize, *const DomNode)> = Vec::new();
+    let mut stack: Vec<&DomNode> = Vec::new();
+    stack.push(dom);
+
+    while let Some(node) = stack.pop() {
       if node.is_element() {
-        if let Some(id) = ids.get(&(node as *const DomNode)).copied() {
-          out.push((id, node as *const DomNode));
+        if let Some(id) = dom_maps.id_map.get(&(node as *const DomNode)).copied() {
+          element_nodes.push((id, node as *const DomNode));
         }
       }
-      for child in node.children.iter() {
-        collect_element_nodes(child, ids, out);
+
+      for child in node.children.iter().rev() {
+        stack.push(child);
       }
     }
-
-    let mut element_nodes: Vec<(usize, *const DomNode)> = Vec::new();
-    collect_element_nodes(dom, &dom_maps.id_map, &mut element_nodes);
 
     Self {
       index,
@@ -4592,7 +4602,7 @@ pub struct StartingStyleSet {
 }
 
 /// A styled DOM node with computed CSS styles
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StyledNode {
   /// Stable identifier for this node within the DOM traversal (pre-order index).
   pub node_id: usize,
@@ -4619,21 +4629,106 @@ pub struct StyledNode {
   pub children: Vec<StyledNode>,
 }
 
+impl Clone for StyledNode {
+  fn clone(&self) -> Self {
+    fn clone_shallow(node: &StyledNode) -> StyledNode {
+      StyledNode {
+        node_id: node.node_id,
+        node: node.node.clone(),
+        styles: Arc::clone(&node.styles),
+        starting_styles: node.starting_styles.clone(),
+        before_styles: node.before_styles.clone(),
+        after_styles: node.after_styles.clone(),
+        marker_styles: node.marker_styles.clone(),
+        first_line_styles: node.first_line_styles.clone(),
+        first_letter_styles: node.first_letter_styles.clone(),
+        assigned_slot: node.assigned_slot.clone(),
+        slotted_node_ids: node.slotted_node_ids.clone(),
+        children: Vec::with_capacity(node.children.len()),
+      }
+    }
+
+    struct Frame<'a> {
+      src: &'a StyledNode,
+      dst: *mut StyledNode,
+      next_child: usize,
+    }
+
+    let mut root = clone_shallow(self);
+    let mut stack = vec![Frame {
+      src: self,
+      dst: &mut root as *mut StyledNode,
+      next_child: 0,
+    }];
+
+    while let Some(mut frame) = stack.pop() {
+      // Safety: destination nodes are owned by `root` and its descendants, and we never mutate a
+      // node's children while a frame borrowing that node is active. This keeps raw pointers stable
+      // for the duration of the DFS clone.
+      let dst = unsafe { &mut *frame.dst };
+      let src = frame.src;
+
+      if frame.next_child < src.children.len() {
+        let child_src = &src.children[frame.next_child];
+        frame.next_child += 1;
+
+        dst.children.push(clone_shallow(child_src));
+        let child_dst = dst.children.last_mut().expect("child was just pushed") as *mut StyledNode;
+
+        stack.push(frame);
+        stack.push(Frame {
+          src: child_src,
+          dst: child_dst,
+          next_child: 0,
+        });
+      }
+    }
+
+    root
+  }
+}
+
+impl Drop for StyledNode {
+  fn drop(&mut self) {
+    // Dropping a deeply nested styled tree recursively can overflow the stack (styled trees can
+    // mirror arbitrarily deep DOM inputs). Drop children iteratively by draining them into an
+    // explicit stack so each descendant is dropped with an empty `children` vec.
+    if self.children.is_empty() {
+      return;
+    }
+
+    let mut stack: Vec<StyledNode> = std::mem::take(&mut self.children);
+    while let Some(mut node) = stack.pop() {
+      stack.append(&mut node.children);
+    }
+  }
+}
+
 /// Copies starting-style snapshots from a parallel styled tree into the target tree.
 ///
 /// The traversal assumes both trees were produced from the same DOM with identical
 /// pre-order numbering; when their shapes diverge the copy stops at the shortest path.
 pub fn attach_starting_styles(target: &mut StyledNode, starting: &StyledNode) {
-  target.starting_styles.base = starting.starting_styles.base.clone();
-  target.starting_styles.before = starting.starting_styles.before.clone();
-  target.starting_styles.after = starting.starting_styles.after.clone();
-  target.starting_styles.marker = starting.starting_styles.marker.clone();
-  target.starting_styles.first_line = starting.starting_styles.first_line.clone();
-  target.starting_styles.first_letter = starting.starting_styles.first_letter.clone();
+  let mut stack: Vec<(*mut StyledNode, &StyledNode)> = Vec::new();
+  stack.push((target as *mut StyledNode, starting));
 
-  let child_count = target.children.len().min(starting.children.len());
-  for idx in 0..child_count {
-    attach_starting_styles(&mut target.children[idx], &starting.children[idx]);
+  while let Some((target_ptr, starting)) = stack.pop() {
+    // Safety: we only push pointers to nodes owned by the `target` root and never mutate a node's
+    // `children` vec, so raw pointers remain valid for the duration of this traversal.
+    let target = unsafe { &mut *target_ptr };
+
+    target.starting_styles.base = starting.starting_styles.base.clone();
+    target.starting_styles.before = starting.starting_styles.before.clone();
+    target.starting_styles.after = starting.starting_styles.after.clone();
+    target.starting_styles.marker = starting.starting_styles.marker.clone();
+    target.starting_styles.first_line = starting.starting_styles.first_line.clone();
+    target.starting_styles.first_letter = starting.starting_styles.first_letter.clone();
+
+    let child_count = target.children.len().min(starting.children.len());
+    let children_ptr = target.children.as_mut_ptr();
+    for idx in (0..child_count).rev() {
+      stack.push((unsafe { children_ptr.add(idx) }, &starting.children[idx]));
+    }
   }
 }
 
@@ -4649,7 +4744,18 @@ fn filter_starting_rules<'a>(
 }
 
 fn count_styled_nodes(node: &StyledNode) -> usize {
-  1 + node.children.iter().map(count_styled_nodes).sum::<usize>()
+  let mut count = 0usize;
+  let mut stack: Vec<&StyledNode> = Vec::new();
+  stack.push(node);
+
+  while let Some(node) = stack.pop() {
+    count += 1;
+    for child in node.children.iter() {
+      stack.push(child);
+    }
+  }
+
+  count
 }
 
 /// Captured container size and metadata for container query evaluation.
@@ -5414,10 +5520,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     log_cascade_profile(start.elapsed().as_secs_f64() * 1000.0);
   }
   if log_reuse {
-    fn count_nodes(node: &StyledNode) -> usize {
-      1 + node.children.iter().map(count_nodes).sum::<usize>()
-    }
-    let total = count_nodes(&styled);
+    let total = count_styled_nodes(&styled);
     eprintln!(
       "[container-reuse] total_nodes={} reused_nodes={} reused_pct={:.1}%",
       total,
@@ -5943,10 +6046,7 @@ impl<'a> PreparedCascade<'a> {
       log_cascade_profile(start.elapsed().as_secs_f64() * 1000.0);
     }
     if log_reuse {
-      fn count_nodes(node: &StyledNode) -> usize {
-        1 + node.children.iter().map(count_nodes).sum::<usize>()
-      }
-      let total = count_nodes(&styled);
+      let total = count_styled_nodes(&styled);
       eprintln!(
         "[container-reuse] total_nodes={} reused_nodes={} reused_pct={:.1}%",
         total,
@@ -8373,6 +8473,91 @@ mod tests {
   }
 
   #[test]
+  fn deep_styled_tree_clone_drop_and_starting_styles_do_not_overflow_stack() {
+    // Derived `Clone` / recursive drop can overflow the stack for pathological DOM inputs (e.g.
+    // adversarial HTML nesting). Keep this test large enough to catch accidental reintroduction of
+    // recursion, but build the tree without running the full cascade for performance.
+    let depth = 100_000usize;
+
+    let base_dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: String::new(),
+        namespace: String::new(),
+        attributes: Vec::new(),
+      },
+      children: Vec::new(),
+    };
+
+    let base_style = Arc::new(ComputedStyle::default());
+    let snapshot = Arc::new(ComputedStyle::default());
+
+    let mut target = StyledNode {
+      node_id: 0,
+      node: base_dom.clone(),
+      styles: Arc::clone(&base_style),
+      starting_styles: StartingStyleSet::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: Vec::new(),
+    };
+
+    for node_id in 1..=depth {
+      target = StyledNode {
+        node_id,
+        node: base_dom.clone(),
+        styles: Arc::clone(&base_style),
+        starting_styles: StartingStyleSet::default(),
+        before_styles: None,
+        after_styles: None,
+        marker_styles: None,
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        children: vec![target],
+      };
+    }
+
+    let mut starting = target.clone();
+    let mut cursor = &mut starting;
+    loop {
+      cursor.starting_styles.base = Some(Arc::clone(&snapshot));
+      if cursor.children.is_empty() {
+        break;
+      }
+      cursor = &mut cursor.children[0];
+    }
+
+    attach_starting_styles(&mut target, &starting);
+
+    let mut seen = 0usize;
+    let mut cursor = &target;
+    loop {
+      assert!(cursor.starting_styles.base.is_some());
+      seen += 1;
+      if cursor.children.is_empty() {
+        break;
+      }
+      cursor = &cursor.children[0];
+    }
+
+    assert_eq!(seen, depth + 1);
+    assert_eq!(count_styled_nodes(&target), depth + 1);
+
+    let cloned = target.clone();
+    assert_eq!(count_styled_nodes(&cloned), depth + 1);
+
+    drop(cloned);
+    drop(starting);
+    drop(target);
+  }
+
+  #[test]
   fn attach_starting_styles_copies_snapshot_fields() {
     let node = DomNode {
       node_type: DomNodeType::Element {
@@ -9275,7 +9460,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9346,7 +9534,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -11664,7 +11855,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
       parse_stylesheet("div::before { content: 'x'; }\n div::before { color: rgb(1, 2, 3); }")
         .expect("stylesheet");
     let styled = apply_styles(&dom, &stylesheet);
-    let before = styled.before_styles.expect("generated ::before");
+    let before = styled.before_styles.as_ref().expect("generated ::before");
     assert_eq!(before.color, Rgba::rgb(1, 2, 3));
     assert_eq!(before.content_value, ContentValue::from_string("x"));
   }
@@ -17308,8 +17499,12 @@ fn find_matching_rules<'a>(
                   ctx.with_allow_featureless_host_traversal(true, |ctx| {
                     let prev_bloom_filter = ctx.bloom_filter;
                     ctx.bloom_filter = None;
-                    let matched =
-                      matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                    let matched = matches_selector_cascade(
+                      selector,
+                      Some(&indexed.ancestor_hashes),
+                      &element_ref,
+                      ctx,
+                    );
                     ctx.bloom_filter = prev_bloom_filter;
                     matched
                   })
