@@ -2009,10 +2009,31 @@ impl GridFormattingContext {
       Some(padding_rect.size.width),
       block_base,
     );
+    let viewport_cb =
+      crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size);
     let cb_for_absolute = if establishes_abs_cb {
       padding_cb
     } else {
       self.nearest_positioned_cb
+    };
+    let cb_for_fixed = if establishes_fixed_cb {
+      padding_cb
+    } else {
+      viewport_cb
+    };
+
+    // `FormattingContextFactory::with_positioned_cb` resets the per-factory cached formatting
+    // contexts store. If we call it per positioned child we'd end up rebuilding a detached
+    // Block/Inline/Flex/etc formatting context per child.
+    let positioned_factory = self.factory.clone();
+    let abs_factory = positioned_factory.with_positioned_cb(cb_for_absolute);
+    let fixed_factory = positioned_factory.with_positioned_cb(cb_for_fixed);
+    let factory_for_cb = |cb: crate::layout::contexts::positioned::ContainingBlock| {
+      if cb == cb_for_fixed {
+        &fixed_factory
+      } else {
+        &abs_factory
+      }
     };
 
     let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(
@@ -2034,20 +2055,15 @@ impl GridFormattingContext {
 
       let cb = match child.style.position {
         crate::style::position::Position::Fixed => {
-          if establishes_fixed_cb {
-            padding_cb
-          } else {
-            crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size)
-          }
+          cb_for_fixed
         }
         _ => cb_for_absolute,
       };
 
-      let factory = self.factory.with_positioned_cb(cb);
       let fc_type = layout_child
         .formatting_context()
         .unwrap_or(crate::style::display::FormattingContextType::Block);
-      let fc = factory.get(fc_type);
+      let fc = factory_for_cb(cb).get(fc_type);
       let child_constraints = LayoutConstraints::new(
         CrateAvailableSpace::Definite(padding_rect.size.width),
         block_base
@@ -3549,10 +3565,31 @@ impl FormattingContext for GridFormattingContext {
           Some(padding_rect.size.width),
           block_base,
         );
+      let viewport_cb =
+        crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size);
       let cb_for_absolute = if establishes_abs_cb {
         padding_cb
       } else {
         self.nearest_positioned_cb
+      };
+      let cb_for_fixed = if establishes_fixed_cb {
+        padding_cb
+      } else {
+        viewport_cb
+      };
+
+      // `FormattingContextFactory::with_positioned_cb` resets the per-factory cached formatting
+      // contexts store. If we call it per positioned child we'd end up rebuilding a detached
+      // Block/Inline/Flex/etc formatting context per child.
+      let positioned_factory = self.factory.clone();
+      let abs_factory = positioned_factory.with_positioned_cb(cb_for_absolute);
+      let fixed_factory = positioned_factory.with_positioned_cb(cb_for_fixed);
+      let factory_for_cb = |cb: crate::layout::contexts::positioned::ContainingBlock| {
+        if cb == cb_for_fixed {
+          &fixed_factory
+        } else {
+          &abs_factory
+        }
       };
 
       let mut static_positions: FxHashMap<usize, Point> = FxHashMap::default();
@@ -3628,20 +3665,15 @@ impl FormattingContext for GridFormattingContext {
 
         let cb = match child.style.position {
           crate::style::position::Position::Fixed => {
-            if establishes_fixed_cb {
-              padding_cb
-            } else {
-              crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size)
-            }
+            cb_for_fixed
           }
           _ => cb_for_absolute,
         };
 
-        let factory = self.factory.with_positioned_cb(cb);
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
-        let fc = factory.get(fc_type);
+        let fc = factory_for_cb(cb).get(fc_type);
         let child_constraints = LayoutConstraints::new(
           CrateAvailableSpace::Definite(padding_rect.size.width),
           block_base
