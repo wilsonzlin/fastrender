@@ -42,6 +42,7 @@
 //! - CSS Media Queries Level 5: <https://www.w3.org/TR/mediaqueries-5/>
 
 use crate::style::values::Length;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -212,13 +213,17 @@ impl MediaType {
   /// assert!(MediaType::parse("invalid").is_err());
   /// ```
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "all" => Ok(MediaType::All),
-      "screen" => Ok(MediaType::Screen),
-      "print" => Ok(MediaType::Print),
-      "speech" => Ok(MediaType::Speech),
-      _ => Err(MediaParseError::InvalidMediaType(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "all" {
+      Ok(MediaType::All)
+    } else if s == "screen" {
+      Ok(MediaType::Screen)
+    } else if s == "print" {
+      Ok(MediaType::Print)
+    } else if s == "speech" {
+      Ok(MediaType::Speech)
+    } else {
+      Err(MediaParseError::InvalidMediaType(s.into_owned()))
     }
   }
 }
@@ -254,11 +259,13 @@ pub enum MediaModifier {
 impl MediaModifier {
   /// Parses a modifier from a string
   pub fn parse(s: &str) -> Option<Self> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "not" => Some(MediaModifier::Not),
-      "only" => Some(MediaModifier::Only),
-      _ => None,
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "not" {
+      Some(MediaModifier::Not)
+    } else if s == "only" {
+      Some(MediaModifier::Only)
+    } else {
+      None
     }
   }
 }
@@ -815,135 +822,136 @@ impl MediaFeature {
   /// let color = MediaFeature::parse("color", None).unwrap();
   /// ```
   pub fn parse(name: &str, value: Option<&str>) -> Result<Self, MediaParseError> {
-    let name = name.trim().to_lowercase();
+    let name = ascii_lowercase_cow(name.trim());
 
-    match name.as_str() {
+    match name.as_ref() {
       // Width features
       "width" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::Width(length))
       }
       "min-width" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinWidth(length))
       }
       "max-width" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxWidth(length))
       }
 
       // Inline-size features (aliases of width for container queries)
       "inline-size" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::InlineSize(length))
       }
       "min-inline-size" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinInlineSize(length))
       }
       "max-inline-size" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxInlineSize(length))
       }
 
       // Height features
       "height" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::Height(length))
       }
       "min-height" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinHeight(length))
       }
       "max-height" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxHeight(length))
       }
 
       // Block-size features (aliases of height for container queries)
       "block-size" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::BlockSize(length))
       }
       "min-block-size" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinBlockSize(length))
       }
       "max-block-size" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxBlockSize(length))
       }
 
       // Device dimensions
       "device-width" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::DeviceWidth(length))
       }
       "min-device-width" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinDeviceWidth(length))
       }
       "max-device-width" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxDeviceWidth(length))
       }
       "device-height" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::DeviceHeight(length))
       }
       "min-device-height" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinDeviceHeight(length))
       }
       "max-device-height" => {
-        let length = Self::parse_length_value(&name, value)?;
+        let length = Self::parse_length_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxDeviceHeight(length))
       }
 
       // Orientation
       "orientation" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let orientation = Orientation::parse(value)?;
         Ok(MediaFeature::Orientation(orientation))
       }
 
       // Aspect ratio
       "aspect-ratio" => {
-        let (width, height) = Self::parse_ratio_value(&name, value)?;
+        let (width, height) = Self::parse_ratio_value(name.as_ref(), value)?;
         Ok(MediaFeature::AspectRatio { width, height })
       }
       "min-aspect-ratio" => {
-        let (width, height) = Self::parse_ratio_value(&name, value)?;
+        let (width, height) = Self::parse_ratio_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinAspectRatio { width, height })
       }
       "max-aspect-ratio" => {
-        let (width, height) = Self::parse_ratio_value(&name, value)?;
+        let (width, height) = Self::parse_ratio_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxAspectRatio { width, height })
       }
       "device-aspect-ratio" => {
-        let (width, height) = Self::parse_ratio_value(&name, value)?;
+        let (width, height) = Self::parse_ratio_value(name.as_ref(), value)?;
         Ok(MediaFeature::DeviceAspectRatio { width, height })
       }
       "min-device-aspect-ratio" => {
-        let (width, height) = Self::parse_ratio_value(&name, value)?;
+        let (width, height) = Self::parse_ratio_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinDeviceAspectRatio { width, height })
       }
       "max-device-aspect-ratio" => {
-        let (width, height) = Self::parse_ratio_value(&name, value)?;
+        let (width, height) = Self::parse_ratio_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxDeviceAspectRatio { width, height })
       }
 
       // Resolution
       "resolution" => {
-        let resolution = Self::parse_resolution_value(&name, value)?;
+        let resolution = Self::parse_resolution_value(name.as_ref(), value)?;
         Ok(MediaFeature::Resolution(resolution))
       }
       "min-resolution" => {
-        let resolution = Self::parse_resolution_value(&name, value)?;
+        let resolution = Self::parse_resolution_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinResolution(resolution))
       }
       "max-resolution" => {
-        let resolution = Self::parse_resolution_value(&name, value)?;
+        let resolution = Self::parse_resolution_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxResolution(resolution))
       }
 
@@ -952,144 +960,160 @@ impl MediaFeature {
         if let Some(value) = value {
           // (color: 8) - exact color depth not commonly used
           // For simplicity, treat as min-color
-          let bits = Self::parse_integer_value(&name, Some(value))?;
+          let bits = Self::parse_integer_value(name.as_ref(), Some(value))?;
           Ok(MediaFeature::MinColor(bits))
         } else {
           Ok(MediaFeature::Color)
         }
       }
       "min-color" => {
-        let bits = Self::parse_integer_value(&name, value)?;
+        let bits = Self::parse_integer_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinColor(bits))
       }
       "max-color" => {
-        let bits = Self::parse_integer_value(&name, value)?;
+        let bits = Self::parse_integer_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxColor(bits))
       }
       "color-index" => {
         if value.is_some() {
-          let count = Self::parse_integer_value(&name, value)?;
+          let count = Self::parse_integer_value(name.as_ref(), value)?;
           Ok(MediaFeature::MinColorIndex(count))
         } else {
           Ok(MediaFeature::ColorIndex)
         }
       }
       "min-color-index" => {
-        let count = Self::parse_integer_value(&name, value)?;
+        let count = Self::parse_integer_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinColorIndex(count))
       }
       "max-color-index" => {
-        let count = Self::parse_integer_value(&name, value)?;
+        let count = Self::parse_integer_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxColorIndex(count))
       }
 
       // Monochrome features
       "monochrome" => {
         if value.is_some() {
-          let bits = Self::parse_integer_value(&name, value)?;
+          let bits = Self::parse_integer_value(name.as_ref(), value)?;
           Ok(MediaFeature::MinMonochrome(bits))
         } else {
           Ok(MediaFeature::Monochrome)
         }
       }
       "min-monochrome" => {
-        let bits = Self::parse_integer_value(&name, value)?;
+        let bits = Self::parse_integer_value(name.as_ref(), value)?;
         Ok(MediaFeature::MinMonochrome(bits))
       }
       "max-monochrome" => {
-        let bits = Self::parse_integer_value(&name, value)?;
+        let bits = Self::parse_integer_value(name.as_ref(), value)?;
         Ok(MediaFeature::MaxMonochrome(bits))
       }
 
       // Hover capability
       "hover" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let capability = HoverCapability::parse(value)?;
         Ok(MediaFeature::Hover(capability))
       }
       "any-hover" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let capability = HoverCapability::parse(value)?;
         Ok(MediaFeature::AnyHover(capability))
       }
 
       // Pointer capability
       "pointer" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let capability = PointerCapability::parse(value)?;
         Ok(MediaFeature::Pointer(capability))
       }
       "any-pointer" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let capability = PointerCapability::parse(value)?;
         Ok(MediaFeature::AnyPointer(capability))
       }
 
       // MQ5 additions
       "scripting" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let scripting = Scripting::parse(value)?;
         Ok(MediaFeature::Scripting(scripting))
       }
       "update" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let update = UpdateFrequency::parse(value)?;
         Ok(MediaFeature::Update(update))
       }
       "light-level" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let level = LightLevel::parse(value)?;
         Ok(MediaFeature::LightLevel(level))
       }
       "display-mode" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let mode = DisplayMode::parse(value)?;
         Ok(MediaFeature::DisplayMode(mode))
       }
 
       // User preferences
       "prefers-color-scheme" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let scheme = ColorScheme::parse(value)?;
         Ok(MediaFeature::PrefersColorScheme(scheme))
       }
       "prefers-reduced-motion" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let motion = ReducedMotion::parse(value)?;
         Ok(MediaFeature::PrefersReducedMotion(motion))
       }
       "prefers-contrast" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let contrast = ContrastPreference::parse(value)?;
         Ok(MediaFeature::PrefersContrast(contrast))
       }
       "prefers-reduced-transparency" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let transparency = ReducedTransparency::parse(value)?;
         Ok(MediaFeature::PrefersReducedTransparency(transparency))
       }
       "prefers-reduced-data" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let data = ReducedData::parse(value)?;
         Ok(MediaFeature::PrefersReducedData(data))
       }
       "color-gamut" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let gamut = ColorGamut::parse(value)?;
         Ok(MediaFeature::ColorGamut(gamut))
       }
       "forced-colors" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let forced = ForcedColors::parse(value)?;
         Ok(MediaFeature::ForcedColors(forced))
       }
       "inverted-colors" => {
-        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let value =
+          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
         let inverted = InvertedColors::parse(value)?;
         Ok(MediaFeature::InvertedColors(inverted))
       }
 
-      _ => Err(MediaParseError::UnknownFeature(name)),
+      _ => Err(MediaParseError::UnknownFeature(name.as_ref().to_string())),
     }
   }
 
@@ -1173,11 +1197,13 @@ pub enum Orientation {
 impl Orientation {
   /// Parses an orientation value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "portrait" => Ok(Orientation::Portrait),
-      "landscape" => Ok(Orientation::Landscape),
-      _ => Err(MediaParseError::InvalidOrientation(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "portrait" {
+      Ok(Orientation::Portrait)
+    } else if s == "landscape" {
+      Ok(Orientation::Landscape)
+    } else {
+      Err(MediaParseError::InvalidOrientation(s.into_owned()))
     }
   }
 }
@@ -1218,7 +1244,7 @@ impl Resolution {
 
   /// Parses a resolution from a string (e.g., "2dppx", "96dpi")
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
+    let s = ascii_lowercase_cow(s.trim());
 
     let validate =
       |value: f32, unit: ResolutionUnit, original: &str| -> Result<Self, MediaParseError> {
@@ -1229,40 +1255,44 @@ impl Resolution {
       };
 
     // Try each unit suffix
-    if let Some(value_str) = s.strip_suffix("dppx") {
+    if let Some(value_str) = s.as_ref().strip_suffix("dppx") {
+      let original = s.as_ref();
       let value = value_str
         .trim()
         .parse::<f32>()
-        .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-      return validate(value, ResolutionUnit::Dppx, &s);
+        .map_err(|_| MediaParseError::InvalidResolution(original.to_string()))?;
+      return validate(value, ResolutionUnit::Dppx, original);
     }
 
-    if let Some(value_str) = s.strip_suffix("dpcm") {
+    if let Some(value_str) = s.as_ref().strip_suffix("dpcm") {
+      let original = s.as_ref();
       let value = value_str
         .trim()
         .parse::<f32>()
-        .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-      return validate(value, ResolutionUnit::Dpcm, &s);
+        .map_err(|_| MediaParseError::InvalidResolution(original.to_string()))?;
+      return validate(value, ResolutionUnit::Dpcm, original);
     }
 
-    if let Some(value_str) = s.strip_suffix("dpi") {
+    if let Some(value_str) = s.as_ref().strip_suffix("dpi") {
+      let original = s.as_ref();
       let value = value_str
         .trim()
         .parse::<f32>()
-        .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-      return validate(value, ResolutionUnit::Dpi, &s);
+        .map_err(|_| MediaParseError::InvalidResolution(original.to_string()))?;
+      return validate(value, ResolutionUnit::Dpi, original);
     }
 
     // Try 'x' as alias for dppx
-    if let Some(value_str) = s.strip_suffix('x') {
+    if let Some(value_str) = s.as_ref().strip_suffix('x') {
+      let original = s.as_ref();
       let value = value_str
         .trim()
         .parse::<f32>()
-        .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-      return validate(value, ResolutionUnit::Dppx, &s);
+        .map_err(|_| MediaParseError::InvalidResolution(original.to_string()))?;
+      return validate(value, ResolutionUnit::Dppx, original);
     }
 
-    Err(MediaParseError::InvalidResolution(s))
+    Err(MediaParseError::InvalidResolution(s.into_owned()))
   }
 
   /// Converts to dppx (dots per pixel)
@@ -1308,11 +1338,13 @@ pub enum HoverCapability {
 impl HoverCapability {
   /// Parses a hover capability value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "none" => Ok(HoverCapability::None),
-      "hover" => Ok(HoverCapability::Hover),
-      _ => Err(MediaParseError::InvalidHoverCapability(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "none" {
+      Ok(HoverCapability::None)
+    } else if s == "hover" {
+      Ok(HoverCapability::Hover)
+    } else {
+      Err(MediaParseError::InvalidHoverCapability(s.into_owned()))
     }
   }
 }
@@ -1340,12 +1372,15 @@ pub enum PointerCapability {
 impl PointerCapability {
   /// Parses a pointer capability value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "none" => Ok(PointerCapability::None),
-      "coarse" => Ok(PointerCapability::Coarse),
-      "fine" => Ok(PointerCapability::Fine),
-      _ => Err(MediaParseError::InvalidPointerCapability(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "none" {
+      Ok(PointerCapability::None)
+    } else if s == "coarse" {
+      Ok(PointerCapability::Coarse)
+    } else if s == "fine" {
+      Ok(PointerCapability::Fine)
+    } else {
+      Err(MediaParseError::InvalidPointerCapability(s.into_owned()))
     }
   }
 }
@@ -1370,12 +1405,15 @@ pub enum Scripting {
 
 impl Scripting {
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_ascii_lowercase();
-    match s.as_str() {
-      "none" => Ok(Scripting::None),
-      "initial-only" => Ok(Scripting::InitialOnly),
-      "enabled" => Ok(Scripting::Enabled),
-      _ => Err(MediaParseError::InvalidScripting(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "none" {
+      Ok(Scripting::None)
+    } else if s == "initial-only" {
+      Ok(Scripting::InitialOnly)
+    } else if s == "enabled" {
+      Ok(Scripting::Enabled)
+    } else {
+      Err(MediaParseError::InvalidScripting(s.into_owned()))
     }
   }
 }
@@ -1400,12 +1438,15 @@ pub enum UpdateFrequency {
 
 impl UpdateFrequency {
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_ascii_lowercase();
-    match s.as_str() {
-      "none" => Ok(UpdateFrequency::None),
-      "slow" => Ok(UpdateFrequency::Slow),
-      "fast" => Ok(UpdateFrequency::Fast),
-      _ => Err(MediaParseError::InvalidUpdateFrequency(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "none" {
+      Ok(UpdateFrequency::None)
+    } else if s == "slow" {
+      Ok(UpdateFrequency::Slow)
+    } else if s == "fast" {
+      Ok(UpdateFrequency::Fast)
+    } else {
+      Err(MediaParseError::InvalidUpdateFrequency(s.into_owned()))
     }
   }
 }
@@ -1430,12 +1471,15 @@ pub enum LightLevel {
 
 impl LightLevel {
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_ascii_lowercase();
-    match s.as_str() {
-      "dim" => Ok(LightLevel::Dim),
-      "normal" => Ok(LightLevel::Normal),
-      "washed" => Ok(LightLevel::Washed),
-      _ => Err(MediaParseError::InvalidLightLevel(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "dim" {
+      Ok(LightLevel::Dim)
+    } else if s == "normal" {
+      Ok(LightLevel::Normal)
+    } else if s == "washed" {
+      Ok(LightLevel::Washed)
+    } else {
+      Err(MediaParseError::InvalidLightLevel(s.into_owned()))
     }
   }
 }
@@ -1462,14 +1506,19 @@ pub enum DisplayMode {
 
 impl DisplayMode {
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_ascii_lowercase();
-    match s.as_str() {
-      "browser" => Ok(DisplayMode::Browser),
-      "minimal-ui" => Ok(DisplayMode::MinimalUi),
-      "standalone" => Ok(DisplayMode::Standalone),
-      "fullscreen" => Ok(DisplayMode::Fullscreen),
-      "window-controls-overlay" => Ok(DisplayMode::WindowControlsOverlay),
-      _ => Err(MediaParseError::InvalidDisplayMode(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "browser" {
+      Ok(DisplayMode::Browser)
+    } else if s == "minimal-ui" {
+      Ok(DisplayMode::MinimalUi)
+    } else if s == "standalone" {
+      Ok(DisplayMode::Standalone)
+    } else if s == "fullscreen" {
+      Ok(DisplayMode::Fullscreen)
+    } else if s == "window-controls-overlay" {
+      Ok(DisplayMode::WindowControlsOverlay)
+    } else {
+      Err(MediaParseError::InvalidDisplayMode(s.into_owned()))
     }
   }
 }
@@ -1500,12 +1549,15 @@ pub enum ColorScheme {
 impl ColorScheme {
   /// Parses a color scheme value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "no-preference" => Ok(ColorScheme::NoPreference),
-      "light" => Ok(ColorScheme::Light),
-      "dark" => Ok(ColorScheme::Dark),
-      _ => Err(MediaParseError::InvalidColorScheme(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "no-preference" {
+      Ok(ColorScheme::NoPreference)
+    } else if s == "light" {
+      Ok(ColorScheme::Light)
+    } else if s == "dark" {
+      Ok(ColorScheme::Dark)
+    } else {
+      Err(MediaParseError::InvalidColorScheme(s.into_owned()))
     }
   }
 }
@@ -1532,11 +1584,13 @@ pub enum ReducedMotion {
 impl ReducedMotion {
   /// Parses a reduced motion value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "no-preference" => Ok(ReducedMotion::NoPreference),
-      "reduce" => Ok(ReducedMotion::Reduce),
-      _ => Err(MediaParseError::InvalidReducedMotion(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "no-preference" {
+      Ok(ReducedMotion::NoPreference)
+    } else if s == "reduce" {
+      Ok(ReducedMotion::Reduce)
+    } else {
+      Err(MediaParseError::InvalidReducedMotion(s.into_owned()))
     }
   }
 }
@@ -1566,13 +1620,17 @@ pub enum ContrastPreference {
 impl ContrastPreference {
   /// Parses a contrast preference value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "no-preference" => Ok(ContrastPreference::NoPreference),
-      "more" | "high" => Ok(ContrastPreference::More),
-      "less" | "low" => Ok(ContrastPreference::Less),
-      "custom" | "forced" => Ok(ContrastPreference::Custom),
-      _ => Err(MediaParseError::InvalidContrastPreference(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "no-preference" {
+      Ok(ContrastPreference::NoPreference)
+    } else if s == "more" || s == "high" {
+      Ok(ContrastPreference::More)
+    } else if s == "less" || s == "low" {
+      Ok(ContrastPreference::Less)
+    } else if s == "custom" || s == "forced" {
+      Ok(ContrastPreference::Custom)
+    } else {
+      Err(MediaParseError::InvalidContrastPreference(s.into_owned()))
     }
   }
 }
@@ -1600,11 +1658,13 @@ pub enum ReducedTransparency {
 impl ReducedTransparency {
   /// Parses a reduced transparency value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "no-preference" => Ok(ReducedTransparency::NoPreference),
-      "reduce" => Ok(ReducedTransparency::Reduce),
-      _ => Err(MediaParseError::InvalidReducedTransparency(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "no-preference" {
+      Ok(ReducedTransparency::NoPreference)
+    } else if s == "reduce" {
+      Ok(ReducedTransparency::Reduce)
+    } else {
+      Err(MediaParseError::InvalidReducedTransparency(s.into_owned()))
     }
   }
 }
@@ -1630,11 +1690,13 @@ pub enum ReducedData {
 impl ReducedData {
   /// Parses a reduced data value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "no-preference" => Ok(ReducedData::NoPreference),
-      "reduce" => Ok(ReducedData::Reduce),
-      _ => Err(MediaParseError::InvalidReducedData(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "no-preference" {
+      Ok(ReducedData::NoPreference)
+    } else if s == "reduce" {
+      Ok(ReducedData::Reduce)
+    } else {
+      Err(MediaParseError::InvalidReducedData(s.into_owned()))
     }
   }
 }
@@ -1658,12 +1720,15 @@ pub enum ColorGamut {
 
 impl ColorGamut {
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_ascii_lowercase();
-    match s.as_str() {
-      "srgb" => Ok(ColorGamut::Srgb),
-      "p3" | "display-p3" => Ok(ColorGamut::P3),
-      "rec2020" | "rec-2020" | "bt2020" | "bt-2020" => Ok(ColorGamut::Rec2020),
-      _ => Err(MediaParseError::InvalidColorGamut(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "srgb" {
+      Ok(ColorGamut::Srgb)
+    } else if s == "p3" || s == "display-p3" {
+      Ok(ColorGamut::P3)
+    } else if s == "rec2020" || s == "rec-2020" || s == "bt2020" || s == "bt-2020" {
+      Ok(ColorGamut::Rec2020)
+    } else {
+      Err(MediaParseError::InvalidColorGamut(s.into_owned()))
     }
   }
 }
@@ -1688,11 +1753,13 @@ pub enum ForcedColors {
 impl ForcedColors {
   /// Parses a forced-colors value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "none" => Ok(ForcedColors::None),
-      "active" => Ok(ForcedColors::Active),
-      _ => Err(MediaParseError::InvalidForcedColors(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "none" {
+      Ok(ForcedColors::None)
+    } else if s == "active" {
+      Ok(ForcedColors::Active)
+    } else {
+      Err(MediaParseError::InvalidForcedColors(s.into_owned()))
     }
   }
 }
@@ -1718,11 +1785,13 @@ pub enum InvertedColors {
 impl InvertedColors {
   /// Parses an inverted-colors value
   pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-    let s = s.trim().to_lowercase();
-    match s.as_str() {
-      "none" => Ok(InvertedColors::None),
-      "inverted" => Ok(InvertedColors::Inverted),
-      _ => Err(MediaParseError::InvalidInvertedColors(s)),
+    let s = ascii_lowercase_cow(s.trim());
+    if s == "none" {
+      Ok(InvertedColors::None)
+    } else if s == "inverted" {
+      Ok(InvertedColors::Inverted)
+    } else {
+      Err(MediaParseError::InvalidInvertedColors(s.into_owned()))
     }
   }
 }
@@ -2714,25 +2783,21 @@ impl<'a> MediaQueryParser<'a> {
 
     // Check for 'not' or 'only'
     if let Some(ident) = self.peek_ident() {
-      match ident.to_lowercase().as_str() {
-        "not" => {
-          self.parse_ident();
-          modifier = Some(MediaModifier::Not);
-          self.skip_whitespace();
-        }
-        "only" => {
-          self.parse_ident();
-          modifier = Some(MediaModifier::Only);
-          self.skip_whitespace();
-        }
-        _ => {}
+      if ident.eq_ignore_ascii_case("not") {
+        self.pos += ident.len();
+        modifier = Some(MediaModifier::Not);
+        self.skip_whitespace();
+      } else if ident.eq_ignore_ascii_case("only") {
+        self.pos += ident.len();
+        modifier = Some(MediaModifier::Only);
+        self.skip_whitespace();
       }
     }
 
     // Check for media type
     if let Some(ident) = self.peek_ident() {
-      if let Ok(mt) = MediaType::parse(&ident) {
-        self.parse_ident();
+      if let Ok(mt) = MediaType::parse(ident) {
+        self.pos += ident.len();
         media_type = Some(mt);
         self.skip_whitespace();
       }
@@ -2745,8 +2810,8 @@ impl<'a> MediaQueryParser<'a> {
       // Check for 'and'
       if media_type.is_some() || !features.is_empty() {
         if let Some(ident) = self.peek_ident() {
-          if ident.to_lowercase() == "and" {
-            self.parse_ident();
+          if ident.eq_ignore_ascii_case("and") {
+            self.pos += ident.len();
             self.skip_whitespace();
           } else {
             break;
@@ -2830,7 +2895,7 @@ impl<'a> MediaQueryParser<'a> {
     }
     self.advance();
 
-    MediaFeature::parse(&name, value).map(|f| vec![f])
+    MediaFeature::parse(name, value).map(|f| vec![f])
   }
 
   fn parse_range_feature_expr(input: &str) -> Option<Result<Vec<MediaFeature>, MediaParseError>> {
@@ -2889,7 +2954,8 @@ impl<'a> MediaQueryParser<'a> {
     }
 
     let parse_feature_kind = |name: &str| -> Option<RangeFeature> {
-      match name.trim().to_ascii_lowercase().as_str() {
+      let name = ascii_lowercase_cow(name.trim());
+      match name.as_ref() {
         "width" => Some(RangeFeature::Width),
         "inline-size" => Some(RangeFeature::InlineSize),
         "block-size" => Some(RangeFeature::BlockSize),
@@ -3020,33 +3086,29 @@ impl<'a> MediaQueryParser<'a> {
     self.pos >= self.input.len()
   }
 
-  fn peek_ident(&self) -> Option<String> {
-    let remaining = &self.input[self.pos..];
-    let mut chars = remaining.chars().peekable();
-
-    // Identifier must start with letter, underscore, or hyphen
-    let first = chars.peek()?;
-    if !first.is_alphabetic() && *first != '_' && *first != '-' {
+  fn peek_ident(&self) -> Option<&'a str> {
+    let bytes = self.input.as_bytes();
+    let start = self.pos;
+    let first = *bytes.get(start)?;
+    if !first.is_ascii_alphabetic() && first != b'_' && first != b'-' {
       return None;
     }
 
-    let mut ident = String::new();
-    for c in remaining.chars() {
-      if c.is_alphanumeric() || c == '-' || c == '_' {
-        ident.push(c);
+    let mut end = start + 1;
+    while end < bytes.len() {
+      let b = bytes[end];
+      if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+        end += 1;
       } else {
         break;
       }
     }
 
-    if ident.is_empty() {
-      None
-    } else {
-      Some(ident)
-    }
+    // `start` and `end` are always on ASCII boundaries, so slicing is safe.
+    Some(&self.input[start..end])
   }
 
-  fn parse_ident(&mut self) -> Option<String> {
+  fn parse_ident(&mut self) -> Option<&'a str> {
     let ident = self.peek_ident()?;
     self.pos += ident.len();
     Some(ident)
@@ -3262,6 +3324,14 @@ impl std::error::Error for MediaParseError {}
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+fn ascii_lowercase_cow(s: &str) -> Cow<'_, str> {
+  if s.as_bytes().iter().any(|b| b.is_ascii_uppercase()) {
+    Cow::Owned(s.to_ascii_lowercase())
+  } else {
+    Cow::Borrowed(s)
+  }
+}
 
 /// Parse a CSS length value
 fn parse_length(s: &str) -> Option<Length> {
@@ -3671,6 +3741,30 @@ mod tests {
     assert_eq!(queries[0].media_type, Some(MediaType::Screen));
     assert_eq!(queries[0].features.len(), 1);
     assert_eq!(queries[1].media_type, Some(MediaType::Print));
+  }
+
+  #[test]
+  fn test_parse_query_list_mixed_case_keywords() {
+    let queries = MediaQuery::parse_list(
+      "NoT ScReEn AnD (min-width: 768px), OnLy PrInT AnD (CoLoR)",
+    )
+    .unwrap();
+    assert_eq!(queries.len(), 2);
+    assert_eq!(queries[0].modifier, Some(MediaModifier::Not));
+    assert_eq!(queries[0].media_type, Some(MediaType::Screen));
+    assert_eq!(queries[0].features.len(), 1);
+    assert_eq!(queries[1].modifier, Some(MediaModifier::Only));
+    assert_eq!(queries[1].media_type, Some(MediaType::Print));
+    assert_eq!(queries[1].features, vec![MediaFeature::Color]);
+  }
+
+  #[test]
+  fn test_parse_feature_name_mixed_case() {
+    let query = MediaQuery::parse("(Min-Width: 600px)").unwrap();
+    assert_eq!(
+      query.features,
+      vec![MediaFeature::MinWidth(Length::px(600.0))]
+    );
   }
 
   // ============================================================================

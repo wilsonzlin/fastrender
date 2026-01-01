@@ -7,6 +7,7 @@ use fastrender::geometry::Rect;
 use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
 use fastrender::layout::table::{TableFormattingContext, TableStructure};
 use fastrender::style::display::Display;
+use fastrender::style::media::MediaQuery;
 use fastrender::style::types::BorderCollapse;
 use fastrender::style::types::GridTrack;
 use fastrender::tree::anonymous::AnonymousBoxCreator;
@@ -254,6 +255,27 @@ fn bench_css_parse(c: &mut Criterion) {
   let synthetic_css = synthetic_no_var_stylesheet(25_000);
   group.bench_function("synthetic_no_var_25k_decls", |b| {
     b.iter(|| common::parse_stylesheet_text(black_box(&synthetic_css)))
+  });
+
+  group.finish();
+}
+
+fn bench_media_query_parse_list(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_media_query_parse_list");
+
+  // Micro-benchmark: many repeated `@media` preludes. This isolates the cost of
+  // `MediaQuery::parse_list` (used for every `@media` block) without pulling in the full
+  // stylesheet parser.
+  const PRELUDE: &str = "screen and (min-width: 768px)";
+  const COUNT: usize = 500;
+
+  group.bench_function("parse_list_screen_min_width_x500", |b| {
+    b.iter(|| {
+      for _ in 0..COUNT {
+        let queries = MediaQuery::parse_list(black_box(PRELUDE)).unwrap();
+        black_box(queries);
+      }
+    })
   });
 
   group.finish();
@@ -727,6 +749,7 @@ criterion_group!(
   targets =
     bench_parse_dom,
     bench_css_parse,
+    bench_media_query_parse_list,
     bench_cascade,
     bench_box_generation,
     bench_box_tree_anonymous_fixup,
