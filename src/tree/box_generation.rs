@@ -265,15 +265,41 @@ fn collect_box_generation_prepass<'a>(
     enabled: bool,
   }
 
-  fn walk<'a>(
+  let max_css_bytes = foreign_object_css_limit_bytes().max(MAX_EMBEDDED_SVG_CSS_BYTES);
+  let forced = svg_embed_document_css_override();
+  let max_embedded_svgs = svg_embed_document_css_max_svgs();
+  let mut out = BoxGenerationPrepass {
+    document_css: String::new(),
+    svg_document_css: SvgDocumentCssPolicy {
+      embedded_style_element: None,
+      max_embedded_svgs,
+      replaced_svg_count: 0,
+      forced,
+    },
+    picture_sources: PictureSourceLookup::new(),
+    styled_lookup: StyledLookup::new(),
+  };
+  let mut css = CssState { enabled: true };
+  // Avoid recursion for extremely deep trees by using an explicit stack.
+  struct Frame<'a> {
     node: &'a StyledNode,
-    out: &mut BoxGenerationPrepass<'a>,
-    deadline_counter: &mut usize,
-    max_css_bytes: usize,
-    css: &mut CssState,
     css_allowed: bool,
     svg_count_allowed: bool,
-  ) -> Result<()> {
+  }
+
+  let mut stack: Vec<Frame<'a>> = Vec::new();
+  stack.push(Frame {
+    node: styled,
+    css_allowed: true,
+    svg_count_allowed: true,
+  });
+
+  while let Some(Frame {
+    node,
+    css_allowed,
+    svg_count_allowed,
+  }) = stack.pop()
+  {
     check_active_periodic(
       deadline_counter,
       BOX_GEN_DEADLINE_STRIDE,
@@ -331,44 +357,14 @@ fn collect_box_generation_prepass<'a>(
       }
     }
 
-    for child in node.children.iter() {
-      walk(
-        child,
-        out,
-        deadline_counter,
-        max_css_bytes,
-        css,
-        children_css_allowed,
-        children_svg_count_allowed,
-      )?;
+    for child in node.children.iter().rev() {
+      stack.push(Frame {
+        node: child,
+        css_allowed: children_css_allowed,
+        svg_count_allowed: children_svg_count_allowed,
+      });
     }
-    Ok(())
   }
-
-  let max_css_bytes = foreign_object_css_limit_bytes().max(MAX_EMBEDDED_SVG_CSS_BYTES);
-  let forced = svg_embed_document_css_override();
-  let max_embedded_svgs = svg_embed_document_css_max_svgs();
-  let mut out = BoxGenerationPrepass {
-    document_css: String::new(),
-    svg_document_css: SvgDocumentCssPolicy {
-      embedded_style_element: None,
-      max_embedded_svgs,
-      replaced_svg_count: 0,
-      forced,
-    },
-    picture_sources: PictureSourceLookup::new(),
-    styled_lookup: StyledLookup::new(),
-  };
-  let mut css = CssState { enabled: true };
-  walk(
-    styled,
-    &mut out,
-    deadline_counter,
-    max_css_bytes,
-    &mut css,
-    true,
-    true,
-  )?;
 
   let css_trimmed = out.document_css.trim();
   let css_size_ok = !css_trimmed.is_empty() && out.document_css.len() <= MAX_EMBEDDED_SVG_CSS_BYTES;
@@ -550,10 +546,55 @@ fn push_escaped_attr(out: &mut String, value: &str) {
 }
 
 fn dom_subtree_from_styled(node: &StyledNode) -> DomNode {
-  DomNode {
-    node_type: node.node.node_type.clone(),
-    children: node.children.iter().map(dom_subtree_from_styled).collect(),
+  // Avoid recursion for extremely deep styled trees.
+  struct Frame<'a> {
+    src: &'a StyledNode,
+    dst: *mut DomNode,
+    next_child: usize,
   }
+
+  let mut root = DomNode {
+    node_type: node.node.node_type.clone(),
+    children: Vec::with_capacity(node.children.len()),
+  };
+
+  let mut stack: Vec<Frame<'_>> = Vec::new();
+  stack.push(Frame {
+    src: node,
+    dst: &mut root as *mut DomNode,
+    next_child: 0,
+  });
+
+  while let Some(frame) = stack.last_mut() {
+    if frame.next_child >= frame.src.children.len() {
+      stack.pop();
+      continue;
+    }
+
+    let child = &frame.src.children[frame.next_child];
+    frame.next_child += 1;
+
+    // SAFETY: `DomNode`s are never moved while their frames are on the stack. We only mutate a
+    // `children` Vec after pushing a new child, and the child pointer we store always points to
+    // the last element of that Vec.
+    let dst = unsafe { &mut *frame.dst };
+    dst.children.push(DomNode {
+      node_type: child.node.node_type.clone(),
+      children: Vec::with_capacity(child.children.len()),
+    });
+    let child_dst = dst
+      .children
+      .last_mut()
+      .expect("child was just pushed") as *mut DomNode;
+
+    stack.push(Frame {
+      src: child,
+      dst: child_dst,
+      next_child: 0,
+    });
+  }
+
+  root
 }
 
 fn escape_attr(value: &str) -> String {
@@ -1428,8 +1469,8 @@ fn serialize_svg_subtree(
   content
 }
 
-/// Recursively generates BoxNodes from a StyledNode, honoring display: contents by
-/// splicing grandchildren into the parent’s child list rather than creating a box.
+/// Generates BoxNodes from a StyledNode, honoring display: contents by splicing grandchildren into
+/// the parent’s child list rather than creating a box.
 fn generate_boxes_for_styled_into(
   styled: &StyledNode,
   styled_lookup: &StyledLookup<'_>,
@@ -1442,288 +1483,389 @@ fn generate_boxes_for_styled_into(
   deadline_counter: &mut usize,
   out: &mut Vec<BoxNode>,
 ) -> Result<()> {
-  check_active_periodic(
-    deadline_counter,
-    BOX_GEN_DEADLINE_STRIDE,
-    RenderStage::Cascade,
-  )?;
-  if let Some(text) = styled.node.text_content() {
-    if !text.is_empty() {
-      let style = Arc::clone(&styled.styles);
-      if let Some(needle) = runtime::runtime_toggles().get("FASTR_FIND_BOX_TEXT") {
-        if text.contains(&needle) {
-          eprintln!(
-            "[box-gen-text] styled_node_id={} tag={} display={:?} text={:?}",
-            styled.node_id,
-            styled.node.tag_name().unwrap_or("#text"),
-            styled.styles.display,
-            text
-          );
-        }
-      }
-      let mut box_node = BoxNode::new_text(style, text.to_string());
-      box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-      out.push(attach_styled_id(box_node, styled));
-      return Ok(());
-    }
+  // Avoid recursion for extremely deep trees.
+  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+  enum FrameState {
+    Enter,
+    Children,
+    Finish,
   }
 
-  counters.enter_scope();
-  apply_counter_properties_from_style(styled, counters);
+  struct Frame<'a> {
+    styled: &'a StyledNode,
+    state: FrameState,
+    entered_counter_scope: bool,
+    composed_children: Option<ComposedChildren<'a>>,
+    child_idx: usize,
+    pending_children: Vec<&'a StyledNode>,
+    children: Vec<BoxNode>,
+  }
+
+  impl<'a> Frame<'a> {
+    fn new(styled: &'a StyledNode) -> Self {
+      Self {
+        styled,
+        state: FrameState::Enter,
+        entered_counter_scope: false,
+        composed_children: None,
+        child_idx: 0,
+        pending_children: Vec::new(),
+        children: Vec::new(),
+      }
+    }
+  }
 
   let site_compat = options.site_compat_hacks_enabled();
+  let mut stack: Vec<Frame<'_>> = Vec::new();
+  stack.push(Frame::new(styled));
 
-  // Common ad placeholders that hold space even when empty: drop when they have no children/content.
-  if site_compat {
-    if let Some(class_attr) = styled.node.get_attribute_ref("class") {
-      if styled.children.is_empty()
-        && (class_attr.contains("ad-height-hold")
-          || class_attr.contains("ad__slot")
-          || class_attr.contains("should-hold-space"))
-      {
-        counters.leave_scope();
-        return Ok(());
-      }
-    }
-  }
+  while let Some(state) = stack.last().map(|frame| frame.state) {
+    match state {
+      FrameState::Enter => {
+        let styled = stack.last().expect("frame exists").styled;
 
-  // display:none suppresses box generation entirely.
-  if styled.styles.display == Display::None {
-    counters.leave_scope();
-    return Ok(());
-  }
+        check_active_periodic(
+          deadline_counter,
+          BOX_GEN_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        )?;
 
-  if let Some(tag) = styled.node.tag_name() {
-    if tag.eq_ignore_ascii_case("math") {
-      let dom_subtree = dom_subtree_from_styled(styled);
-      let math_root = crate::math::parse_mathml(&dom_subtree)
-        .unwrap_or_else(|| crate::math::MathNode::Row(Vec::new()));
-      counters.leave_scope();
-      let box_node = BoxNode::new_replaced(
-        Arc::clone(&styled.styles),
-        ReplacedType::Math(MathReplaced {
-          root: math_root,
-          layout: None,
-        }),
-        None,
-        None,
-      );
-      let mut box_node = box_node;
-      box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-      out.push(attach_debug_info(box_node, styled));
-      return Ok(());
-    }
-  }
-
-  // Form controls render as replaced elements with intrinsic sizing and native painting.
-  if let Some(form_control) = create_form_control_replaced(styled) {
-    counters.leave_scope();
-    let box_node = BoxNode::new_replaced(
-      Arc::clone(&styled.styles),
-      ReplacedType::FormControl(form_control),
-      None,
-      None,
-    );
-    out.push(attach_debug_info(box_node, styled));
-    return Ok(());
-  }
-
-  // Replaced elements short-circuit to a single replaced box unless they're display: contents.
-  if let Some(tag) = styled.node.tag_name() {
-    // Non-rendered elements: <source>, <track>, <option>, <optgroup> never create boxes.
-    if tag.eq_ignore_ascii_case("source")
-      || tag.eq_ignore_ascii_case("track")
-      || tag.eq_ignore_ascii_case("option")
-      || tag.eq_ignore_ascii_case("optgroup")
-    {
-      counters.leave_scope();
-      return Ok(());
-    }
-
-    if is_replaced_element(tag) && styled.styles.display != Display::Contents {
-      // The <object> element falls back to its nested content when no data URI is provided.
-      // In that case we should not generate a replaced box, allowing the children to render normally.
-      if !tag.eq_ignore_ascii_case("object")
-        || styled
-          .node
-          .get_attribute_ref("data")
-          .is_some_and(|d| !d.is_empty())
-      {
-        counters.leave_scope();
-        let picture_sources_for_img = if tag.eq_ignore_ascii_case("img") {
-          picture_sources.take(styled.node_id)
-        } else {
-          Vec::new()
-        };
-        let box_node = create_replaced_box_from_styled(
-          styled,
-          Arc::clone(&styled.styles),
-          document_css,
-          svg_document_css_style_element,
-          picture_sources_for_img,
-        );
-        let mut box_node = box_node;
-        box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-        out.push(attach_debug_info(box_node, styled));
-        return Ok(());
-      }
-    }
-  }
-
-  let composed_children = composed_children(styled, styled_lookup);
-  let composed_len = composed_children.len();
-  let mut children: Vec<BoxNode> = Vec::with_capacity(composed_len);
-  let mut idx = 0;
-  while idx < composed_len {
-    let child = composed_children.get(idx);
-    if site_compat {
-      if let Some(testid) = child.node.get_attribute_ref("data-testid") {
-        if testid == "one-nav-overlay" {
-          let overlay_hidden =
-            matches!(child.styles.visibility, Visibility::Hidden) || child.styles.opacity == 0.0;
-          if overlay_hidden {
-            // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
-            idx += 1;
-            while idx < composed_len {
-              let next = composed_children.get(idx);
-              // Skip over whitespace/text nodes between the overlay and drawer.
-              if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
-                if content.trim().is_empty() {
-                  idx += 1;
-                  continue;
-                }
+        if let Some(text) = styled.node.text_content() {
+          if !text.is_empty() {
+            let style = Arc::clone(&styled.styles);
+            if let Some(needle) = runtime::runtime_toggles().get("FASTR_FIND_BOX_TEXT") {
+              if text.contains(&needle) {
+                eprintln!(
+                  "[box-gen-text] styled_node_id={} tag={} display={:?} text={:?}",
+                  styled.node_id,
+                  styled.node.tag_name().unwrap_or("#text"),
+                  styled.styles.display,
+                  text
+                );
               }
+            }
+            let mut box_node = BoxNode::new_text(style, text.to_string());
+            box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
+            let box_node = attach_styled_id(box_node, styled);
 
-              if let Some(class_attr) = next.node.get_attribute_ref("class") {
-                if class_attr.contains("FocusTrapContainer-") {
-                  for grandchild in &next.children {
-                    generate_boxes_for_styled_into(
-                      grandchild,
-                      styled_lookup,
-                      counters,
-                      false,
-                      document_css,
-                      svg_document_css_style_element,
-                      picture_sources,
-                      options,
-                      deadline_counter,
-                      &mut children,
-                    )?;
-                  }
-                  idx += 1;
-                }
-              }
-              break;
+            stack.pop();
+            if let Some(parent) = stack.last_mut() {
+              parent.children.push(box_node);
+            } else {
+              out.push(box_node);
             }
             continue;
           }
         }
+
+        counters.enter_scope();
+        apply_counter_properties_from_style(styled, counters);
+        stack
+          .last_mut()
+          .expect("frame exists")
+          .entered_counter_scope = true;
+
+        // Common ad placeholders that hold space even when empty: drop when they have no children/content.
+        if site_compat {
+          if let Some(class_attr) = styled.node.get_attribute_ref("class") {
+            if styled.children.is_empty()
+              && (class_attr.contains("ad-height-hold")
+                || class_attr.contains("ad__slot")
+                || class_attr.contains("should-hold-space"))
+            {
+              counters.leave_scope();
+              stack.pop();
+              continue;
+            }
+          }
+        }
+
+        // display:none suppresses box generation entirely.
+        if styled.styles.display == Display::None {
+          counters.leave_scope();
+          stack.pop();
+          continue;
+        }
+
+        if let Some(tag) = styled.node.tag_name() {
+          if tag.eq_ignore_ascii_case("math") {
+            let dom_subtree = dom_subtree_from_styled(styled);
+            let math_root = crate::math::parse_mathml(&dom_subtree)
+              .unwrap_or_else(|| crate::math::MathNode::Row(Vec::new()));
+            counters.leave_scope();
+            stack.pop();
+            let box_node = BoxNode::new_replaced(
+              Arc::clone(&styled.styles),
+              ReplacedType::Math(MathReplaced {
+                root: math_root,
+                layout: None,
+              }),
+              None,
+              None,
+            );
+            let mut box_node = box_node;
+            box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
+            let box_node = attach_debug_info(box_node, styled);
+            if let Some(parent) = stack.last_mut() {
+              parent.children.push(box_node);
+            } else {
+              out.push(box_node);
+            }
+            continue;
+          }
+        }
+
+        // Form controls render as replaced elements with intrinsic sizing and native painting.
+        if let Some(form_control) = create_form_control_replaced(styled) {
+          counters.leave_scope();
+          stack.pop();
+          let box_node = BoxNode::new_replaced(
+            Arc::clone(&styled.styles),
+            ReplacedType::FormControl(form_control),
+            None,
+            None,
+          );
+          let box_node = attach_debug_info(box_node, styled);
+          if let Some(parent) = stack.last_mut() {
+            parent.children.push(box_node);
+          } else {
+            out.push(box_node);
+          }
+          continue;
+        }
+
+        // Replaced elements short-circuit to a single replaced box unless they're display: contents.
+        if let Some(tag) = styled.node.tag_name() {
+          // Non-rendered elements: <source>, <track>, <option>, <optgroup> never create boxes.
+          if tag.eq_ignore_ascii_case("source")
+            || tag.eq_ignore_ascii_case("track")
+            || tag.eq_ignore_ascii_case("option")
+            || tag.eq_ignore_ascii_case("optgroup")
+          {
+            counters.leave_scope();
+            stack.pop();
+            continue;
+          }
+
+          if is_replaced_element(tag) && styled.styles.display != Display::Contents {
+            // The <object> element falls back to its nested content when no data URI is provided.
+            // In that case we should not generate a replaced box, allowing the children to render normally.
+            if !tag.eq_ignore_ascii_case("object")
+              || styled
+                .node
+                .get_attribute_ref("data")
+                .is_some_and(|d| !d.is_empty())
+            {
+              counters.leave_scope();
+              stack.pop();
+              let picture_sources_for_img = if tag.eq_ignore_ascii_case("img") {
+                picture_sources.take(styled.node_id)
+              } else {
+                Vec::new()
+              };
+              let box_node = create_replaced_box_from_styled(
+                styled,
+                Arc::clone(&styled.styles),
+                document_css,
+                svg_document_css_style_element,
+                picture_sources_for_img,
+              );
+              let mut box_node = box_node;
+              box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
+              let box_node = attach_debug_info(box_node, styled);
+              if let Some(parent) = stack.last_mut() {
+                parent.children.push(box_node);
+              } else {
+                out.push(box_node);
+              }
+              continue;
+            }
+          }
+        }
+
+        let composed_children = composed_children(styled, styled_lookup);
+        let composed_len = composed_children.len();
+        let frame = stack.last_mut().expect("frame exists");
+        frame.composed_children = Some(composed_children);
+        frame.children = Vec::with_capacity(composed_len);
+        frame.child_idx = 0;
+        frame.pending_children.clear();
+        frame.state = FrameState::Children;
+      }
+      FrameState::Children => {
+        let mut next_child: Option<&StyledNode> = None;
+
+        {
+          let frame = stack.last_mut().expect("frame exists");
+          if let Some(child) = frame.pending_children.pop() {
+            next_child = Some(child);
+          } else {
+            let composed_children = frame
+              .composed_children
+              .as_ref()
+              .expect("children state always has composed children");
+            let composed_len = composed_children.len();
+            if frame.child_idx >= composed_len {
+              frame.state = FrameState::Finish;
+            } else {
+              let child = composed_children.get(frame.child_idx);
+              if site_compat {
+                if let Some(testid) = child.node.get_attribute_ref("data-testid") {
+                  if testid == "one-nav-overlay" {
+                    let overlay_hidden = matches!(child.styles.visibility, Visibility::Hidden)
+                      || child.styles.opacity == 0.0;
+                    if overlay_hidden {
+                      // Skip the overlay and the subsequent focus-trap container when the overlay
+                      // is hidden (menu closed).
+                      let mut idx = frame.child_idx + 1;
+                      while idx < composed_len {
+                        let next = composed_children.get(idx);
+                        // Skip over whitespace/text nodes between the overlay and drawer.
+                        if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
+                          if content.trim().is_empty() {
+                            idx += 1;
+                            continue;
+                          }
+                        }
+
+                        if let Some(class_attr) = next.node.get_attribute_ref("class") {
+                          if class_attr.contains("FocusTrapContainer-") {
+                            for grandchild in next.children.iter().rev() {
+                              frame.pending_children.push(grandchild);
+                            }
+                            idx += 1;
+                          }
+                        }
+                        break;
+                      }
+                      frame.child_idx = idx;
+                      continue;
+                    }
+                  }
+                }
+              }
+
+              frame.child_idx += 1;
+              next_child = Some(child);
+            }
+          }
+        }
+
+        if let Some(child) = next_child {
+          stack.push(Frame::new(child));
+        }
+      }
+      FrameState::Finish => {
+        let frame = stack.pop().expect("frame exists");
+        debug_assert!(frame.entered_counter_scope);
+        let styled = frame.styled;
+        let mut children = frame.children;
+
+        // Generate ::before/::after/::marker in a single pass without repeated `insert(0, ...)`
+        // shifts.
+        let mut before_box: Option<BoxNode> = None;
+        let mut marker_box: Option<BoxNode> = None;
+        let mut after_box: Option<BoxNode> = None;
+
+        if let Some(before_styles) = &styled.before_styles {
+          let before_start = clone_starting_style(&styled.starting_styles.before);
+          before_box =
+            create_pseudo_element_box(styled, before_styles, before_start, "before", counters);
+        }
+
+        if styled.styles.display == Display::ListItem {
+          marker_box = create_marker_box(styled, counters);
+        }
+
+        if let Some(after_styles) = &styled.after_styles {
+          let after_start = clone_starting_style(&styled.starting_styles.after);
+          after_box =
+            create_pseudo_element_box(styled, after_styles, after_start, "after", counters);
+        }
+
+        if before_box.is_some() || marker_box.is_some() || after_box.is_some() {
+          let extra = usize::from(before_box.is_some())
+            + usize::from(marker_box.is_some())
+            + usize::from(after_box.is_some());
+          let mut combined = Vec::with_capacity(children.len() + extra);
+          if let Some(marker_box) = marker_box {
+            combined.push(marker_box);
+          }
+          if let Some(before_box) = before_box {
+            combined.push(before_box);
+          }
+          combined.append(&mut children);
+          if let Some(after_box) = after_box {
+            combined.push(after_box);
+          }
+          children = combined;
+        }
+
+        // display: contents contributes its children directly.
+        if styled.styles.display == Display::Contents {
+          counters.leave_scope();
+          if let Some(parent) = stack.last_mut() {
+            parent.children.extend(children);
+          } else {
+            out.extend(children);
+          }
+          continue;
+        }
+
+        let style = Arc::clone(&styled.styles);
+        let fc_type = styled
+          .styles
+          .display
+          .formatting_context_type()
+          .unwrap_or(FormattingContextType::Block);
+
+        let mut box_node = match styled.styles.display {
+          Display::Block | Display::FlowRoot | Display::ListItem => {
+            BoxNode::new_block(style, fc_type, children)
+          }
+          Display::Inline
+          | Display::Ruby
+          | Display::RubyBase
+          | Display::RubyText
+          | Display::RubyBaseContainer
+          | Display::RubyTextContainer => BoxNode::new_inline(style, children),
+          Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
+          Display::Flex | Display::InlineFlex => {
+            BoxNode::new_block(style, FormattingContextType::Flex, children)
+          }
+          Display::Grid | Display::InlineGrid => {
+            BoxNode::new_block(style, FormattingContextType::Grid, children)
+          }
+          Display::Table | Display::InlineTable => {
+            BoxNode::new_block(style, FormattingContextType::Table, children)
+          }
+          // Table-internal boxes (simplified for Wave 2)
+          Display::TableRow
+          | Display::TableCell
+          | Display::TableRowGroup
+          | Display::TableHeaderGroup
+          | Display::TableFooterGroup
+          | Display::TableColumn
+          | Display::TableColumnGroup
+          | Display::TableCaption => BoxNode::new_block(style, FormattingContextType::Block, children),
+          Display::None | Display::Contents => unreachable!("handled above"),
+        };
+
+        box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
+        box_node.first_line_style = styled.first_line_styles.as_ref().map(Arc::clone);
+        box_node.first_letter_style = styled.first_letter_styles.as_ref().map(Arc::clone);
+
+        counters.leave_scope();
+        let box_node = attach_debug_info(box_node, styled);
+        if let Some(parent) = stack.last_mut() {
+          parent.children.push(box_node);
+        } else {
+          out.push(box_node);
+        }
       }
     }
-    generate_boxes_for_styled_into(
-      child,
-      styled_lookup,
-      counters,
-      false,
-      document_css,
-      svg_document_css_style_element,
-      picture_sources,
-      options,
-      deadline_counter,
-      &mut children,
-    )?;
-    idx += 1;
   }
 
-  // Generate ::before/::after/::marker in a single pass without repeated `insert(0, ...)` shifts.
-  let mut before_box: Option<BoxNode> = None;
-  let mut marker_box: Option<BoxNode> = None;
-  let mut after_box: Option<BoxNode> = None;
-
-  if let Some(before_styles) = &styled.before_styles {
-    let before_start = clone_starting_style(&styled.starting_styles.before);
-    before_box = create_pseudo_element_box(styled, before_styles, before_start, "before", counters);
-  }
-
-  if styled.styles.display == Display::ListItem {
-    marker_box = create_marker_box(styled, counters);
-  }
-
-  if let Some(after_styles) = &styled.after_styles {
-    let after_start = clone_starting_style(&styled.starting_styles.after);
-    after_box = create_pseudo_element_box(styled, after_styles, after_start, "after", counters);
-  }
-
-  if before_box.is_some() || marker_box.is_some() || after_box.is_some() {
-    let extra = usize::from(before_box.is_some())
-      + usize::from(marker_box.is_some())
-      + usize::from(after_box.is_some());
-    let mut combined = Vec::with_capacity(children.len() + extra);
-    if let Some(marker_box) = marker_box {
-      combined.push(marker_box);
-    }
-    if let Some(before_box) = before_box {
-      combined.push(before_box);
-    }
-    combined.append(&mut children);
-    if let Some(after_box) = after_box {
-      combined.push(after_box);
-    }
-    children = combined;
-  }
-
-  // display: contents contributes its children directly.
-  if styled.styles.display == Display::Contents {
-    counters.leave_scope();
-    out.extend(children);
-    return Ok(());
-  }
-
-  let style = Arc::clone(&styled.styles);
-  let fc_type = styled
-    .styles
-    .display
-    .formatting_context_type()
-    .unwrap_or(FormattingContextType::Block);
-
-  let mut box_node = match styled.styles.display {
-    Display::Block | Display::FlowRoot | Display::ListItem => {
-      BoxNode::new_block(style, fc_type, children)
-    }
-    Display::Inline
-    | Display::Ruby
-    | Display::RubyBase
-    | Display::RubyText
-    | Display::RubyBaseContainer
-    | Display::RubyTextContainer => BoxNode::new_inline(style, children),
-    Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
-    Display::Flex | Display::InlineFlex => {
-      BoxNode::new_block(style, FormattingContextType::Flex, children)
-    }
-    Display::Grid | Display::InlineGrid => {
-      BoxNode::new_block(style, FormattingContextType::Grid, children)
-    }
-    Display::Table | Display::InlineTable => {
-      BoxNode::new_block(style, FormattingContextType::Table, children)
-    }
-    // Table-internal boxes (simplified for Wave 2)
-    Display::TableRow
-    | Display::TableCell
-    | Display::TableRowGroup
-    | Display::TableHeaderGroup
-    | Display::TableFooterGroup
-    | Display::TableColumn
-    | Display::TableColumnGroup
-    | Display::TableCaption => BoxNode::new_block(style, FormattingContextType::Block, children),
-    Display::None | Display::Contents => unreachable!("handled above"),
-  };
-
-  box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-  box_node.first_line_style = styled.first_line_styles.as_ref().map(Arc::clone);
-  box_node.first_letter_style = styled.first_letter_styles.as_ref().map(Arc::clone);
-
-  counters.leave_scope();
-  out.push(attach_debug_info(box_node, styled));
   Ok(())
 }
 
@@ -2216,41 +2358,47 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
 
 /// Count immediate list items belonging to this list, ignoring nested lists.
 fn list_item_count(styled: &StyledNode) -> usize {
-  fn walk(node: &StyledNode, in_nested_list: bool, acc: &mut usize) {
-    for child in node.children.iter() {
-      let tag = child.node.tag_name();
-      let is_list = tag.is_some_and(|tag| {
-        tag.eq_ignore_ascii_case("ol")
-          || tag.eq_ignore_ascii_case("ul")
-          || tag.eq_ignore_ascii_case("menu")
-          || tag.eq_ignore_ascii_case("dir")
-      });
-      let now_nested = in_nested_list || is_list;
-      if !now_nested && tag.is_some_and(|tag| tag.eq_ignore_ascii_case("li")) {
-        *acc += 1;
-      }
-      // Do not count descendants of nested lists toward the ancestor list's item count.
-      walk(child, now_nested, acc);
+  let mut count = 0usize;
+  let mut stack: Vec<(&StyledNode, bool)> = Vec::new();
+  for child in styled.children.iter().rev() {
+    stack.push((child, false));
+  }
+
+  while let Some((node, in_nested_list)) = stack.pop() {
+    let tag = node.node.tag_name();
+    let is_list = tag.is_some_and(|tag| {
+      tag.eq_ignore_ascii_case("ol")
+        || tag.eq_ignore_ascii_case("ul")
+        || tag.eq_ignore_ascii_case("menu")
+        || tag.eq_ignore_ascii_case("dir")
+    });
+    let now_nested = in_nested_list || is_list;
+    if !now_nested && tag.is_some_and(|tag| tag.eq_ignore_ascii_case("li")) {
+      count += 1;
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push((child, now_nested));
     }
   }
 
-  let mut count = 0;
-  walk(styled, false, &mut count);
   count
 }
 
 fn collect_text_content(node: &StyledNode) -> String {
-  fn walk(node: &StyledNode, out: &mut String) {
+  let mut text = String::new();
+  let mut stack: Vec<&StyledNode> = Vec::new();
+  stack.push(node);
+
+  while let Some(node) = stack.pop() {
     if let DomNodeType::Text { content } = &node.node.node_type {
-      out.push_str(content);
+      text.push_str(content);
     }
-    for child in node.children.iter() {
-      walk(child, out);
+    for child in node.children.iter().rev() {
+      stack.push(child);
     }
   }
 
-  let mut text = String::new();
-  walk(node, &mut text);
   text
 }
 
@@ -2280,25 +2428,26 @@ fn option_label_from_node(node: &StyledNode) -> Option<String> {
 }
 
 fn find_selected_option_label(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
-  let Some(tag) = node.node.tag_name() else {
-    return None;
-  };
+  let mut stack: Vec<(&StyledNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
-  let this_disabled = optgroup_disabled
-    || (is_option && node.node.get_attribute_ref("disabled").is_some())
-    || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let Some(tag) = node.node.tag_name() else {
+      continue;
+    };
 
-  if is_option && !this_disabled && node.node.get_attribute_ref("selected").is_some() {
-    return option_label_from_node(node);
-  }
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+    let disabled_attr = node.node.get_attribute_ref("disabled").is_some();
+    let this_disabled = optgroup_disabled || ((is_option || is_optgroup) && disabled_attr);
 
-  let next_optgroup_disabled =
-    optgroup_disabled || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
-  for child in node.children.iter() {
-    if let Some(val) = find_selected_option_label(child, next_optgroup_disabled) {
-      return Some(val);
+    if is_option && !this_disabled && node.node.get_attribute_ref("selected").is_some() {
+      return option_label_from_node(node);
+    }
+
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && disabled_attr);
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
     }
   }
 
@@ -2306,25 +2455,26 @@ fn find_selected_option_label(node: &StyledNode, optgroup_disabled: bool) -> Opt
 }
 
 fn first_enabled_option_label(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
-  let Some(tag) = node.node.tag_name() else {
-    return None;
-  };
+  let mut stack: Vec<(&StyledNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
-  let this_disabled = optgroup_disabled
-    || (is_option && node.node.get_attribute_ref("disabled").is_some())
-    || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let Some(tag) = node.node.tag_name() else {
+      continue;
+    };
 
-  if is_option && !this_disabled {
-    return option_label_from_node(node);
-  }
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+    let disabled_attr = node.node.get_attribute_ref("disabled").is_some();
+    let this_disabled = optgroup_disabled || ((is_option || is_optgroup) && disabled_attr);
 
-  let next_optgroup_disabled =
-    optgroup_disabled || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
-  for child in node.children.iter() {
-    if let Some(val) = first_enabled_option_label(child, next_optgroup_disabled) {
-      return Some(val);
+    if is_option && !this_disabled {
+      return option_label_from_node(node);
+    }
+
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && disabled_attr);
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
     }
   }
 
@@ -2363,65 +2513,78 @@ fn collect_selected_option_values(
   optgroup_disabled: bool,
   out: &mut Vec<String>,
 ) {
-  let tag = node.node.tag_name().unwrap_or("");
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+  let mut stack: Vec<(&StyledNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let tag = node.node.tag_name().unwrap_or("");
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
-  if is_option
-    && node.node.get_attribute_ref("selected").is_some()
-    && !(option_disabled || optgroup_disabled)
-  {
-    out.push(option_value_from_node(node));
-  }
+    let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
-  for child in node.children.iter() {
-    collect_selected_option_values(child, next_optgroup_disabled, out);
+    if is_option
+      && node.node.get_attribute_ref("selected").is_some()
+      && !(option_disabled || optgroup_disabled)
+    {
+      out.push(option_value_from_node(node));
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
+    }
   }
 }
 
 fn find_selected_option_value(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
-  let tag = node.node.tag_name().unwrap_or("");
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+  let mut stack: Vec<(&StyledNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let tag = node.node.tag_name().unwrap_or("");
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
-  if is_option
-    && node.node.get_attribute_ref("selected").is_some()
-    && !(option_disabled || optgroup_disabled)
-  {
-    return Some(option_value_from_node(node));
-  }
+    let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
-  for child in node.children.iter() {
-    if let Some(val) = find_selected_option_value(child, next_optgroup_disabled) {
-      return Some(val);
+    if is_option
+      && node.node.get_attribute_ref("selected").is_some()
+      && !(option_disabled || optgroup_disabled)
+    {
+      return Some(option_value_from_node(node));
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
     }
   }
+
   None
 }
 
 fn first_enabled_option_value(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
-  let tag = node.node.tag_name().unwrap_or("");
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+  let mut stack: Vec<(&StyledNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let tag = node.node.tag_name().unwrap_or("");
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
-  if is_option && !(option_disabled || optgroup_disabled) {
-    return Some(option_value_from_node(node));
-  }
+    let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
-  for child in node.children.iter() {
-    if let Some(val) = first_enabled_option_value(child, next_optgroup_disabled) {
-      return Some(val);
+    if is_option && !(option_disabled || optgroup_disabled) {
+      return Some(option_value_from_node(node));
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
     }
   }
+
   None
 }
 
@@ -5057,6 +5220,159 @@ mod tests {
       }
       other => panic!("expected svg replaced type, got {:?}", other),
     }
+  }
+
+  #[test]
+  fn deep_box_generation_does_not_overflow_stack() {
+    use style::display::Display;
+
+    let depth = 100_000usize;
+    let mut computed = ComputedStyle::default();
+    computed.display = Display::Block;
+    let style = Arc::new(computed);
+
+    let mut node = StyledNode {
+      node_id: depth,
+      node: DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      },
+      styles: Arc::clone(&style),
+      starting_styles: StartingStyleSet::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: vec![],
+    };
+
+    for node_id in (0..depth).rev() {
+      node = StyledNode {
+        node_id,
+        node: DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+          },
+          children: vec![],
+        },
+        styles: Arc::clone(&style),
+        starting_styles: StartingStyleSet::default(),
+        before_styles: None,
+        after_styles: None,
+        marker_styles: None,
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        children: vec![node],
+      };
+    }
+
+    let _tree = generate_box_tree_with_anonymous_fixup_result(&node)
+      .expect("deep box generation should not overflow stack");
+  }
+
+  #[test]
+  fn deep_select_form_control_generation_does_not_overflow_stack() {
+    use style::display::Display;
+
+    let depth = 100_000usize;
+    let mut computed = ComputedStyle::default();
+    computed.display = Display::InlineBlock;
+    let style = Arc::new(computed);
+
+    let mut option = StyledNode {
+      node_id: depth + 1,
+      node: DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "option".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![
+            ("value".to_string(), "chosen".to_string()),
+            ("selected".to_string(), String::new()),
+          ],
+        },
+        children: vec![],
+      },
+      styles: Arc::clone(&style),
+      starting_styles: StartingStyleSet::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: vec![],
+    };
+
+    for node_id in (1..=depth).rev() {
+      option = StyledNode {
+        node_id,
+        node: DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "optgroup".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+          },
+          children: vec![],
+        },
+        styles: Arc::clone(&style),
+        starting_styles: StartingStyleSet::default(),
+        before_styles: None,
+        after_styles: None,
+        marker_styles: None,
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        children: vec![option],
+      };
+    }
+
+    let select = StyledNode {
+      node_id: 0,
+      node: DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "select".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("required".to_string(), String::new())],
+        },
+        children: vec![],
+      },
+      styles: Arc::clone(&style),
+      starting_styles: StartingStyleSet::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: vec![option],
+    };
+
+    let tree = generate_box_tree(&select);
+    let BoxType::Replaced(replaced) = &tree.root.box_type else {
+      panic!("expected select to generate a replaced box");
+    };
+    let ReplacedType::FormControl(FormControl { control, .. }) = &replaced.replaced_type else {
+      panic!("expected form control replaced type");
+    };
+    let FormControlKind::Select { label, multiple } = control else {
+      panic!("expected select form control kind");
+    };
+    assert_eq!(label, "chosen");
+    assert!(!multiple);
   }
 }
 

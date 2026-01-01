@@ -695,6 +695,9 @@ pub struct BoxNode {
 
 impl Drop for BoxNode {
   fn drop(&mut self) {
+    // Dropping a deeply-nested `BoxNode` tree via Rust's default recursive drop can overflow the
+    // stack (e.g. degenerate 100k-depth trees). Drain children iteratively so each node is dropped
+    // with an empty `children` vec.
     if self.children.is_empty() {
       return;
     }
@@ -702,6 +705,8 @@ impl Drop for BoxNode {
     let mut stack: Vec<BoxNode> = std::mem::take(&mut self.children);
     while let Some(mut node) = stack.pop() {
       stack.append(&mut node.children);
+      // `node` is dropped here with an empty `children` vec, so this `Drop` implementation becomes
+      // a cheap no-op for all non-root nodes in the iterative drain.
     }
   }
 }
