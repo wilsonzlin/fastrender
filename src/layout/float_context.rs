@@ -177,16 +177,13 @@ impl Eq for FloatKey {}
 
 impl PartialOrd for FloatKey {
   fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-    self
-      .0
-      .partial_cmp(&other.0)
-      .or_else(|| Some(Ordering::Equal))
+    Some(self.cmp(other))
   }
 }
 
 impl Ord for FloatKey {
   fn cmp(&self, other: &Self) -> Ordering {
-    self.partial_cmp(other).unwrap_or(Ordering::Equal)
+    self.0.total_cmp(&other.0)
   }
 }
 
@@ -245,8 +242,7 @@ struct FloatSweepState {
 
 impl FloatSweepState {
   fn new(float_count: usize, events: &[FloatEvent]) -> Self {
-    let mut pending_events = BinaryHeap::with_capacity(events.len());
-    pending_events.extend(events.iter().copied().map(Reverse));
+    let pending_events = events.iter().copied().map(Reverse).collect();
     Self {
       current_y: f32::NEG_INFINITY,
       pending_events,
