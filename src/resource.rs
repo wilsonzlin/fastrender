@@ -2133,10 +2133,11 @@ impl HttpFetcher {
     self
   }
 
-  /// Set a total timeout budget for a single fetch call when no render deadline is active.
+  /// Set a total timeout budget for a single fetch call.
   ///
   /// This budget is shared across retries and backoff sleeps so a request cannot take
-  /// `max_attempts × timeout` wall time in CLI tooling.
+  /// `max_attempts × timeout` wall time in CLI tooling. When a render deadline is active, the
+  /// effective per-attempt timeout is additionally clamped by the remaining render budget.
   pub fn with_timeout_budget(mut self, timeout: Duration) -> Self {
     self.policy.request_timeout = timeout;
     self.policy.request_timeout_is_total_budget = true;
@@ -2451,23 +2452,20 @@ impl HttpFetcher {
   ) -> Result<FetchedResource> {
     let mut current = url.to_string();
     let agent = &self.agent;
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-    {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
-    };
-    let timeout_budget = if deadline.is_none()
-      && self.policy.request_timeout_is_total_budget
-      && !self.policy.request_timeout.is_zero()
-    {
-      Some(self.policy.request_timeout)
-    } else {
-      None
-    };
+    let timeout_budget =
+      (self.policy.request_timeout_is_total_budget && !self.policy.request_timeout.is_zero())
+        .then_some(self.policy.request_timeout);
+    let max_attempts =
+      if deadline
+        .as_ref()
+        .and_then(render_control::RenderDeadline::timeout_limit)
+        .is_some()
+        && timeout_budget.is_none()
+      {
+        1
+      } else {
+        self.retry_policy.max_attempts.max(1)
+      };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
       let budget = timeout_budget.expect("budget mode should be active");
@@ -2893,23 +2891,20 @@ impl HttpFetcher {
   ) -> Result<FetchedResource> {
     let mut current = url.to_string();
     let client = &self.reqwest_client;
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-    {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
-    };
-    let timeout_budget = if deadline.is_none()
-      && self.policy.request_timeout_is_total_budget
-      && !self.policy.request_timeout.is_zero()
-    {
-      Some(self.policy.request_timeout)
-    } else {
-      None
-    };
+    let timeout_budget =
+      (self.policy.request_timeout_is_total_budget && !self.policy.request_timeout.is_zero())
+        .then_some(self.policy.request_timeout);
+    let max_attempts =
+      if deadline
+        .as_ref()
+        .and_then(render_control::RenderDeadline::timeout_limit)
+        .is_some()
+        && timeout_budget.is_none()
+      {
+        1
+      } else {
+        self.retry_policy.max_attempts.max(1)
+      };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
       let budget = timeout_budget.expect("budget mode should be active");
@@ -3332,26 +3327,20 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let mut validators = validators;
     let agent = &self.agent;
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-    {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
-    };
-    let timeout_budget = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_none()
-      && self.policy.request_timeout_is_total_budget
-      && !self.policy.request_timeout.is_zero()
-    {
-      Some(self.policy.request_timeout)
-    } else {
-      None
-    };
+    let timeout_budget =
+      (self.policy.request_timeout_is_total_budget && !self.policy.request_timeout.is_zero())
+        .then_some(self.policy.request_timeout);
+    let max_attempts =
+      if deadline
+        .as_ref()
+        .and_then(render_control::RenderDeadline::timeout_limit)
+        .is_some()
+        && timeout_budget.is_none()
+      {
+        1
+      } else {
+        self.retry_policy.max_attempts.max(1)
+      };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
       let budget = timeout_budget.expect("budget mode should be active");
@@ -3848,25 +3837,22 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let mut validators = validators;
     let client = &self.reqwest_client;
-    let timeout_budget = if deadline.is_none()
-      && self.policy.request_timeout_is_total_budget
-      && !self.policy.request_timeout.is_zero()
-    {
-      Some(self.policy.request_timeout)
-    } else {
-      None
-    };
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-    {
-      1
-    } else if auto_fallback && timeout_budget.is_some() {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
-    };
+    let timeout_budget =
+      (self.policy.request_timeout_is_total_budget && !self.policy.request_timeout.is_zero())
+        .then_some(self.policy.request_timeout);
+    let max_attempts =
+      if deadline
+        .as_ref()
+        .and_then(render_control::RenderDeadline::timeout_limit)
+        .is_some()
+        && timeout_budget.is_none()
+      {
+        1
+      } else if auto_fallback && timeout_budget.is_some() {
+        1
+      } else {
+        self.retry_policy.max_attempts.max(1)
+      };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
       let budget = timeout_budget.expect("budget mode should be active");

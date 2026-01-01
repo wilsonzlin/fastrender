@@ -145,6 +145,7 @@ use tiny_skia::StrokeDash;
 use tiny_skia::Transform;
 
 const DEADLINE_STRIDE: usize = 256;
+const CLIP_MASK_DEADLINE_STRIDE: usize = 16 * 1024;
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
   match mode {
@@ -1245,9 +1246,9 @@ fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMas
   }
 }
 
-fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
+fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) -> RenderResult<()> {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
-    return;
+    return Ok(());
   }
   let width = mask.width() as usize;
   let stride = width;
@@ -1257,13 +1258,19 @@ fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
   let y0 = rect.y0 as usize;
   let y1 = rect.y1 as usize;
   if x0 == 0 && x1 == stride {
+    check_active(RenderStage::Paint)?;
     data[y0 * stride..y1 * stride].fill(0);
-    return;
+    return Ok(());
   }
+  let row_pixels = x1.saturating_sub(x0).max(1);
+  let deadline_row_stride = (CLIP_MASK_DEADLINE_STRIDE / row_pixels).max(1);
+  let mut deadline_counter = 0usize;
   for row in y0..y1 {
+    check_active_periodic(&mut deadline_counter, deadline_row_stride, RenderStage::Paint)?;
     let offset = row * stride;
     data[offset + x0..offset + x1].fill(0);
   }
+  Ok(())
 }
 
 #[inline]
@@ -1284,6 +1291,7 @@ fn apply_mask_rect_rgba(
   if pixmap.width() != mask.width() || pixmap.height() != mask.height() {
     return Ok(());
   }
+  check_active(RenderStage::Paint)?;
 
   let width = pixmap.width() as usize;
   let pixel_stride = width * 4;
@@ -1293,7 +1301,6 @@ fn apply_mask_rect_rgba(
 
   let x0 = rect.x0 as usize;
   let x1 = rect.x1 as usize;
-  check_active(RenderStage::Paint)?;
   let mut deadline_counter = 0usize;
   let mut pixel_counter = 0usize;
   for y in rect.y0 as usize..rect.y1 as usize {
@@ -1325,6 +1332,7 @@ fn apply_mask_rect_rgba(
 }
 
 fn hard_clip_pixmap_outside_rect_rgba(pixmap: &mut Pixmap, rect: Rect) -> RenderResult<()> {
+  check_active(RenderStage::Paint)?;
   let width = pixmap.width();
   let height = pixmap.height();
 
@@ -1347,14 +1355,18 @@ fn hard_clip_pixmap_outside_rect_rgba(pixmap: &mut Pixmap, rect: Rect) -> Render
   // Clear fully outside rows in one contiguous fill.
   check_active(RenderStage::Paint)?;
   data[..y0 as usize * stride].fill(0);
+  check_active(RenderStage::Paint)?;
   data[y1 as usize * stride..].fill(0);
+  check_active(RenderStage::Paint)?;
 
   let left_bytes = x0 as usize * 4;
   let right_start = x1 as usize * 4;
   if left_bytes != 0 || right_start != stride {
+    let row_pixels = width as usize;
+    let deadline_row_stride = (CLIP_MASK_DEADLINE_STRIDE / row_pixels.max(1)).max(1);
     let mut deadline_counter = 0usize;
     for row in y0..y1 {
-      check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
+      check_active_periodic(&mut deadline_counter, deadline_row_stride, RenderStage::Paint)?;
       let offset = row as usize * stride;
       let row = &mut data[offset..offset + stride];
       row[..left_bytes].fill(0);
@@ -1370,6 +1382,7 @@ fn apply_clip_mask_rect(
   radii: BorderRadii,
   diagnostics: Option<&Arc<ClipMaskDiagnostics>>,
 ) -> RenderResult<()> {
+  check_active(RenderStage::Paint)?;
   if rect.width() <= 0.0 || rect.height() <= 0.0 {
     return Ok(());
   }
@@ -1450,7 +1463,7 @@ fn apply_clip_mask_rect(
 
       if needs_rebuild {
         if let Some(dirty) = dirty {
-          clear_mask_rect(mask, dirty);
+          clear_mask_rect(mask, dirty)?;
         } else {
           // If the dirty bounds are empty (e.g. due to weird floating point inputs), clear the
           // entire mask so we don't reuse stale data.
@@ -9338,7 +9351,7 @@ mod tests {
 
     let mut optimized = base.clone();
     let mut reference = base.clone();
-    apply_clip_mask_rect(&mut optimized, rect, radii, None).unwrap();
+    apply_clip_mask_rect(&mut optimized, rect, radii, None).expect("clip mask");
     apply_clip_mask_rect_reference(&mut reference, rect, radii);
 
     assert_eq!(optimized.data(), reference.data());
@@ -9352,12 +9365,45 @@ mod tests {
     let radii = BorderRadii::uniform(3.0);
 
     let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
-    apply_clip_mask_rect(&mut pixmap, rect, radii, None).unwrap();
+    apply_clip_mask_rect(&mut pixmap, rect, radii, None).expect("clip mask");
     let allocations = recorder.take();
 
     assert!(
       allocations.is_empty(),
       "expected apply_clip_mask_rect to avoid new_pixmap allocations, got {allocations:?}"
+    );
+  }
+
+  #[test]
+  fn clip_mask_rect_times_out_via_cancel_callback() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_cb = Arc::clone(&calls);
+    // Let the first deadline check through, then trigger cancellation on the next poll.
+    let cancel = Arc::new(move || calls_cb.fetch_add(1, Ordering::SeqCst) >= 1);
+    let deadline = crate::render_control::RenderDeadline::new(None, Some(cancel));
+
+    let mut pixmap = new_pixmap(256, 256).unwrap();
+    pixmap.data_mut().fill(255);
+    // Use fractional bounds + non-zero radii to ensure we hit the (checked) mask application path
+    // rather than the integer-aligned hard-clip fast path.
+    let rect = Rect::from_xywh(10.25, 12.75, 220.5, 210.25);
+    let radii = BorderRadii::uniform(32.0);
+
+    let result = with_deadline(Some(&deadline), || {
+      apply_clip_mask_rect(&mut pixmap, rect, radii, None)
+    });
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(
+      calls.load(Ordering::SeqCst) >= 2,
+      "expected cancel callback to be polled more than once, got {}",
+      calls.load(Ordering::SeqCst)
     );
   }
 
