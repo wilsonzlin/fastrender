@@ -6,6 +6,28 @@ The canonical list lives in [env-vars.md](env-vars.md). This page highlights the
 
 `render_pages` writes per-page logs to `fetches/renders/<page>.log` and a summary to `fetches/renders/_summary.log`.
 
+## Hard sites (Akamai) fetch checklist
+
+When a pageset run fails to fetch a page or subresource from a CDN-protected "hard" site (common examples: Akamai), the failure mode often looks like:
+
+- HTTP/1.1 hangs/timeouts or "0 bytes"/empty-body responses.
+- HTTP/2 errors such as `INTERNAL_ERROR` (backend-dependent).
+
+Checklist (start here, in order):
+
+1. **Use an HTTP/2-capable backend**: `FASTR_HTTP_BACKEND=reqwest` (or try `FASTR_HTTP_BACKEND=curl` for differential diagnosis).
+2. **Enable browser-like headers**: `FASTR_HTTP_BROWSER_HEADERS=1`.
+   - Some font/CDN endpoints are sensitive to `Accept: */*` plus `Origin`/`Referer`; the browser-header profile is intended to match those expectations.
+3. **Turn on retry logging** when debugging transient failures: `FASTR_HTTP_LOG_RETRIES=1`.
+4. **Make sure you’re testing the network path** (not stale caches): use `fetch_pages --refresh` for HTML and consider disabling the disk cache (`DISK_CACHE=0`) when chasing subresource fetch behavior.
+
+Example (pageset loop, targeted):
+
+```bash
+FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
+  cargo xtask pageset --pages tesco.com,washingtonpost.com
+```
+
 ## inspect_frag overlays and dumps
 
 - `inspect_frag --dump-json <dir> tests/fixtures/html/block_simple.html` writes `dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, and `display_list.json` for downstream tooling. Pair with `--filter-selector`/`--filter-id` to focus on a specific subtree.

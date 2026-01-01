@@ -41,9 +41,20 @@ under render deadlines when configured to serve stale responses).
 
 ## HTTP fetch tuning
 
-These env vars tune the retry/backoff behavior for HTTP(S) requests made by the CLI binaries that construct their fetcher via [`common::render_pipeline::build_http_fetcher`](../src/bin/common/render_pipeline.rs).
+These env vars tune HTTP(S) requests made by the CLI binaries that construct their fetcher via [`common::render_pipeline::build_http_fetcher`](../src/bin/common/render_pipeline.rs) (notably `fetch_pages`, `prefetch_assets`, `render_pages`, `fetch_and_render`, and `pageset_progress` workers).
 
-They map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs) and are parsed once at process startup; invalid values are ignored.
+Unless noted otherwise, they are parsed once at process startup; invalid values are ignored.
+
+- `FASTR_HTTP_BACKEND=auto|ureq|reqwest|curl` – select which HTTP implementation is used for network fetches.
+  - `auto` (default): pick the best available backend for this build.
+  - `ureq`: in-process Rust client (HTTP/1.1).
+  - `reqwest`: in-process Rust client with HTTP/2 support (preferred for "hard" sites/CDNs that misbehave over HTTP/1.1).
+  - `curl`: shell out to `curl` (useful for differential diagnosis; requires `curl` on `$PATH`).
+  - Not all builds necessarily ship all backends; if a backend is unavailable, the selection is ignored and the default backend is used.
+- `FASTR_HTTP_BROWSER_HEADERS=0|1` – when enabled, use a more browser-like request header profile (beyond just `User-Agent`/`Accept-Language`) to reduce CDN bot-gating and "0 byte" responses. This is most useful for Akamai-protected sites and font/CDN endpoints that are sensitive to `Accept`/`Origin`/`Referer`/`Sec-Fetch-*` headers.
+- `FASTR_HTTP_LOG_RETRIES=0|1` – log retry attempts + backoff sleeps to stderr (printed by the fetcher itself, so it also applies to library users).
+
+Retry/backoff knobs map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs):
 
 - `FASTR_HTTP_BACKEND=auto|ureq|curl` – choose the HTTP backend. `auto` (default) uses the Rust client and falls back to the system `curl` binary for retryable network/TLS/HTTP2 errors. `curl` forces the cURL backend for all requests; `ureq` disables the fallback and forces the Rust backend.
 - `FASTR_HTTP_MAX_ATTEMPTS=<N>` – total attempts per HTTP request (initial request + retries). Set to `1` to disable retries (default `3`).
@@ -57,7 +68,14 @@ it is treated as a **total** wall-clock budget for a single fetch call when no r
 installed: retry attempts and backoff sleeps are bounded by the remaining budget, and per-attempt
 HTTP timeouts are clamped so one request cannot take `max_attempts × timeout`.
 
-This also applies to `fetch_pages` (migrated to `build_http_fetcher` in Task 13), so pageset fetch runs can be tuned without adding new flags.
+Because the pageset CLIs share `build_http_fetcher`, these env vars apply consistently to HTML fetches (`fetch_pages`) and subresource fetches (`prefetch_assets`, `render_pages`, `pageset_progress`, `fetch_and_render`) without adding new flags.
+
+Hard-site starting point (Akamai/CDN bot gating, empty bodies, HTTP/2 errors):
+
+```bash
+FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
+  cargo xtask pageset --pages tesco.com,washingtonpost.com
+```
 
 ## Resource limits
 
