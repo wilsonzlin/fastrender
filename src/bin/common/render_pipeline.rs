@@ -145,12 +145,28 @@ pub fn build_http_fetcher(
 ///
 /// The disk cache is keyed by URL only by default; callers that vary headers between runs
 /// (e.g. `User-Agent` or `Accept-Language`) should provide a namespace to avoid cross-contaminating
-/// variants.
+/// variants. This also includes opt-out debug toggles like `FASTR_HTTP_BROWSER_HEADERS=0`, which
+/// changes per-resource `Accept` + `Sec-Fetch-*` headers and can alter server behavior.
 #[cfg(feature = "disk_cache")]
 pub fn disk_cache_namespace(user_agent: &str, accept_language: &str) -> String {
   let ua = fastrender::resource::normalize_user_agent_for_log(user_agent).trim();
   let lang = accept_language.trim();
-  format!("user-agent:{ua}\naccept-language:{lang}")
+  let browser_headers_enabled = std::env::var("FASTR_HTTP_BROWSER_HEADERS")
+    .ok()
+    .map(|raw| {
+      !matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
+      )
+    })
+    .unwrap_or(true);
+  // Preserve cache key parity with legacy runs when browser headers are enabled (the default), but
+  // partition caches when debugging with `FASTR_HTTP_BROWSER_HEADERS=0`.
+  if browser_headers_enabled {
+    format!("user-agent:{ua}\naccept-language:{lang}")
+  } else {
+    format!("user-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0")
+  }
 }
 
 /// Rendered HTML along with its resolved base information.
