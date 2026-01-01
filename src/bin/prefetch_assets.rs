@@ -22,7 +22,9 @@ mod disk_cache_main {
     absolutize_css_urls_cow, extract_css_links, extract_embedded_css_urls,
     link_rel_is_stylesheet_candidate, resolve_href, resolve_href_with_base,
   };
-  use fastrender::css::parser::{extract_scoped_css_sources, parse_stylesheet, StylesheetSource};
+  use fastrender::css::parser::{
+    extract_scoped_css_sources, parse_stylesheet, tokenize_rel_list, StylesheetSource,
+  };
   use fastrender::css::types::CssImportLoader;
   use fastrender::css::types::{FontFaceSource, StyleSheet};
   use fastrender::debug::runtime;
@@ -37,12 +39,13 @@ mod disk_cache_main {
     DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
+  use regex::Regex;
   use rayon::prelude::*;
   use rayon::ThreadPoolBuilder;
   use std::cell::RefCell;
   use std::collections::{BTreeSet, HashMap, HashSet};
   use std::path::{Path, PathBuf};
-  use std::sync::Arc;
+  use std::sync::{Arc, OnceLock};
   use std::time::Duration;
 
   use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs, ViewportArgs};
@@ -106,7 +109,7 @@ mod disk_cache_main {
     #[arg(long, default_value_t = 2)]
     max_image_urls_per_element: usize,
 
-    /// Prefetch iframe/object/embed documents referenced directly from HTML (true/false)
+    /// Prefetch iframe documents referenced directly from HTML (true/false)
     ///
     /// This also best-effort warms the discovered document's linked stylesheets (and their
     /// `@import` chains/fonts), plus HTML images when `--prefetch-images` is enabled.
@@ -121,6 +124,36 @@ mod disk_cache_main {
       default_missing_value = "true"
     )]
     prefetch_iframes: bool,
+
+    /// Prefetch subresources referenced by `<embed src>`, `<object data>`, and `<source>` (true/false)
+    #[arg(
+      long,
+      default_value_t = false,
+      action = ArgAction::Set,
+      num_args = 0..=1,
+      default_missing_value = "true"
+    )]
+    prefetch_embeds: bool,
+
+    /// Prefetch icon resources referenced by `<link rel=icon ... href=...>` (true/false)
+    #[arg(
+      long,
+      default_value_t = false,
+      action = ArgAction::Set,
+      num_args = 0..=1,
+      default_missing_value = "true"
+    )]
+    prefetch_icons: bool,
+
+    /// Prefetch poster images referenced by `<video poster>` (true/false)
+    #[arg(
+      long,
+      default_value_t = false,
+      action = ArgAction::Set,
+      num_args = 0..=1,
+      default_missing_value = "true"
+    )]
+    prefetch_video_posters: bool,
 
     /// Prefetch non-CSS assets referenced via `url(...)` in CSS (true/false)
     #[arg(
@@ -175,7 +208,10 @@ mod disk_cache_main {
   struct PrefetchOptions {
     prefetch_fonts: bool,
     prefetch_images: bool,
+    prefetch_icons: bool,
+    prefetch_video_posters: bool,
     prefetch_iframes: bool,
+    prefetch_embeds: bool,
     prefetch_css_url_assets: bool,
     max_discovered_assets_per_page: usize,
     image_limits: ImagePrefetchLimits,
@@ -318,6 +354,499 @@ mod disk_cache_main {
       return;
     };
     let _ = insert_unique_with_cap(set, normalized, max);
+  }
+
+  fn link_rel_is_icon_candidate(rel_tokens: &[String]) -> bool {
+    if rel_tokens.iter().any(|t| t == "icon") {
+      return true;
+    }
+
+    if rel_tokens
+      .iter()
+      .any(|t| t == "apple-touch-icon" || t == "mask-icon")
+    {
+      return true;
+    }
+
+    if rel_tokens
+      .iter()
+      .any(|t| t == "apple-touch-icon-precomposed")
+    {
+      return true;
+    }
+
+    false
+  }
+
+  fn record_iframe_document_candidates(
+    dom: &DomNode,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    const MAX_IFRAMES_PER_PAGE: usize = 32;
+
+    let mut stack: Vec<&DomNode> = vec![dom];
+    let mut inserted = 0usize;
+
+    while let Some(node) = stack.pop() {
+      if inserted >= MAX_IFRAMES_PER_PAGE {
+        break;
+      }
+
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("iframe") {
+          if let Some(src) = node.get_attribute_ref("src") {
+            if let Some(resolved) = resolve_href(base_url, src) {
+              let before = out.len();
+              record_document_candidate(out, &resolved, max_total);
+              if out.len() > before {
+                inserted += 1;
+              }
+            }
+          }
+        }
+      }
+
+      for child in node.children.iter().rev() {
+        stack.push(child);
+      }
+    }
+  }
+
+  fn record_iframe_document_candidates_from_html(
+    html: &str,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    const MAX_IFRAMES_PER_PAGE: usize = 32;
+    static IFRAME_SRC: OnceLock<Regex> = OnceLock::new();
+
+    let iframe_src = IFRAME_SRC.get_or_init(|| {
+      Regex::new("(?is)<iframe[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+        .expect("valid iframe src regex")
+    });
+
+    let mut inserted = 0usize;
+    for caps in iframe_src.captures_iter(html) {
+      if inserted >= MAX_IFRAMES_PER_PAGE {
+        break;
+      }
+      let raw = caps
+        .get(1)
+        .or_else(|| caps.get(2))
+        .or_else(|| caps.get(3))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+      if raw.trim().is_empty() {
+        continue;
+      }
+      if let Some(resolved) = resolve_href(base_url, raw) {
+        let before = out.len();
+        record_document_candidate(out, &resolved, max_total);
+        if out.len() > before {
+          inserted += 1;
+        }
+      }
+    }
+  }
+
+  fn record_icon_candidates_from_html(
+    html: &str,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    const MAX_ICONS_PER_PAGE: usize = 32;
+    static LINK_TAG: OnceLock<Regex> = OnceLock::new();
+    static ATTR_REL: OnceLock<Regex> = OnceLock::new();
+    static ATTR_HREF: OnceLock<Regex> = OnceLock::new();
+
+    let link_tag = LINK_TAG.get_or_init(|| {
+      Regex::new("(?is)<link\\b[^>]*>").expect("valid link tag regex")
+    });
+    let attr_rel = ATTR_REL.get_or_init(|| {
+      Regex::new("(?is)(?:^|\\s)rel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+        .expect("valid rel attr regex")
+    });
+    let attr_href = ATTR_HREF.get_or_init(|| {
+      Regex::new("(?is)(?:^|\\s)href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+        .expect("valid href attr regex")
+    });
+
+    let mut inserted = 0usize;
+    for caps in link_tag.captures_iter(html) {
+      if inserted >= MAX_ICONS_PER_PAGE {
+        break;
+      }
+      let tag = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+      if tag.is_empty() {
+        continue;
+      }
+      let rel_value = attr_rel
+        .captures(tag)
+        .and_then(|c| c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+      if rel_value.trim().is_empty() {
+        continue;
+      }
+      let rel_tokens = tokenize_rel_list(rel_value);
+      if rel_tokens.is_empty() || !link_rel_is_icon_candidate(&rel_tokens) {
+        continue;
+      }
+
+      let href_value = attr_href
+        .captures(tag)
+        .and_then(|c| c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+      if href_value.trim().is_empty() {
+        continue;
+      }
+      if let Some(resolved) = resolve_href(base_url, href_value) {
+        let before = out.len();
+        record_image_candidate(out, &resolved, max_total);
+        if out.len() > before {
+          inserted += 1;
+        }
+      }
+    }
+  }
+
+  fn record_icon_candidates(
+    dom: &DomNode,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    // Keep worst-case work bounded for pages that ship many icon links.
+    const MAX_ICONS_PER_PAGE: usize = 32;
+
+    let mut stack: Vec<&DomNode> = vec![dom];
+    let mut inserted = 0usize;
+
+    while let Some(node) = stack.pop() {
+      if inserted >= MAX_ICONS_PER_PAGE {
+        break;
+      }
+
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("link") {
+            let href = node.get_attribute_ref("href").unwrap_or("");
+            if !href.trim().is_empty() {
+              let rel_attr = node.get_attribute_ref("rel").unwrap_or("");
+              if !rel_attr.trim().is_empty() {
+                let rel_tokens = tokenize_rel_list(rel_attr);
+                if !rel_tokens.is_empty()
+                  && link_rel_is_icon_candidate(&rel_tokens)
+                {
+                  if let Some(resolved) = resolve_href(base_url, href) {
+                    let before = out.len();
+                    record_image_candidate(out, &resolved, max_total);
+                    if out.len() > before {
+                    inserted += 1;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      for child in node.children.iter().rev() {
+        stack.push(child);
+      }
+    }
+  }
+
+  fn record_video_poster_candidates_from_html(
+    html: &str,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    const MAX_VIDEO_POSTERS_PER_PAGE: usize = 32;
+    static VIDEO_POSTER: OnceLock<Regex> = OnceLock::new();
+
+    let video_poster = VIDEO_POSTER.get_or_init(|| {
+      Regex::new("(?is)<video[^>]*\\sposter\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+        .expect("valid video poster regex")
+    });
+
+    let mut inserted = 0usize;
+    for caps in video_poster.captures_iter(html) {
+      if inserted >= MAX_VIDEO_POSTERS_PER_PAGE {
+        break;
+      }
+      let raw = caps
+        .get(1)
+        .or_else(|| caps.get(2))
+        .or_else(|| caps.get(3))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+      if raw.trim().is_empty() {
+        continue;
+      }
+      if let Some(resolved) = resolve_href(base_url, raw) {
+        let before = out.len();
+        record_image_candidate(out, &resolved, max_total);
+        if out.len() > before {
+          inserted += 1;
+        }
+      }
+    }
+  }
+
+  fn record_video_poster_candidates(
+    dom: &DomNode,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    // Keep worst-case work bounded for pages that ship many <video> tags.
+    const MAX_VIDEO_POSTERS_PER_PAGE: usize = 32;
+
+    let mut stack: Vec<&DomNode> = vec![dom];
+    let mut inserted = 0usize;
+
+    while let Some(node) = stack.pop() {
+      if inserted >= MAX_VIDEO_POSTERS_PER_PAGE {
+        break;
+      }
+
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("video") {
+          if let Some(poster) = node.get_attribute_ref("poster") {
+            if !poster.trim().is_empty() {
+              if let Some(resolved) = resolve_href(base_url, poster) {
+                let before = out.len();
+                record_image_candidate(out, &resolved, max_total);
+                if out.len() > before {
+                  inserted += 1;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      for child in node.children.iter().rev() {
+        stack.push(child);
+      }
+    }
+  }
+
+  fn record_embed_document_candidates_from_html(
+    html: &str,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    const MAX_EMBED_DOCS_PER_PAGE: usize = 32;
+    static EMBED_DOC: OnceLock<Regex> = OnceLock::new();
+
+    let embed_doc = EMBED_DOC.get_or_init(|| {
+      Regex::new(concat!(
+        "(?is)",
+        "<object[^>]*\\sdata\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+        "|",
+        "<embed[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      ))
+      .expect("valid embed document regex")
+    });
+
+    let mut inserted = 0usize;
+    for caps in embed_doc.captures_iter(html) {
+      if inserted >= MAX_EMBED_DOCS_PER_PAGE {
+        break;
+      }
+      let raw = caps
+        .get(1)
+        .or_else(|| caps.get(2))
+        .or_else(|| caps.get(3))
+        .or_else(|| caps.get(4))
+        .or_else(|| caps.get(5))
+        .or_else(|| caps.get(6))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+      if raw.trim().is_empty() {
+        continue;
+      }
+      if let Some(resolved) = resolve_href(base_url, raw) {
+        let before = out.len();
+        record_document_candidate(out, &resolved, max_total);
+        if out.len() > before {
+          inserted += 1;
+        }
+      }
+    }
+  }
+
+  fn record_embed_document_candidates(
+    dom: &DomNode,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    // Keep worst-case work bounded for pages that embed many plugin/media elements.
+    const MAX_EMBED_DOCS_PER_PAGE: usize = 32;
+
+    let mut stack: Vec<&DomNode> = vec![dom];
+    let mut inserted = 0usize;
+
+    while let Some(node) = stack.pop() {
+      if inserted >= MAX_EMBED_DOCS_PER_PAGE {
+        break;
+      }
+
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("object") {
+          if let Some(data) = node.get_attribute_ref("data") {
+            if !data.trim().is_empty() {
+              if let Some(resolved) = resolve_href(base_url, data) {
+                let before = out.len();
+                record_document_candidate(out, &resolved, max_total);
+                if out.len() > before {
+                  inserted += 1;
+                }
+              }
+            }
+          }
+        } else if tag.eq_ignore_ascii_case("embed") {
+          if let Some(src) = node.get_attribute_ref("src") {
+            if !src.trim().is_empty() {
+              if let Some(resolved) = resolve_href(base_url, src) {
+                let before = out.len();
+                record_document_candidate(out, &resolved, max_total);
+                if out.len() > before {
+                  inserted += 1;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      for child in node.children.iter().rev() {
+        stack.push(child);
+      }
+    }
+  }
+
+  fn record_media_source_candidates_from_html(
+    html: &str,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    const MAX_MEDIA_SOURCES_PER_PAGE: usize = 32;
+    static MEDIA_SRC: OnceLock<Regex> = OnceLock::new();
+
+    let media_src = MEDIA_SRC.get_or_init(|| {
+      Regex::new(concat!(
+        "(?is)",
+        "<(?:video|audio|source)[^>]*\\ssrc\\s*=\\s*",
+        "(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      ))
+      .expect("valid media src regex")
+    });
+
+    let mut inserted = 0usize;
+    for caps in media_src.captures_iter(html) {
+      if inserted >= MAX_MEDIA_SOURCES_PER_PAGE {
+        break;
+      }
+      let raw = caps
+        .get(1)
+        .or_else(|| caps.get(2))
+        .or_else(|| caps.get(3))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+      if raw.trim().is_empty() {
+        continue;
+      }
+      if let Some(resolved) = resolve_href(base_url, raw) {
+        let before = out.len();
+        record_document_candidate(out, &resolved, max_total);
+        if out.len() > before {
+          inserted += 1;
+        }
+      }
+    }
+  }
+
+  fn record_media_source_candidates(
+    dom: &DomNode,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    // Keep worst-case work bounded for pages with many <video>/<audio> tags.
+    const MAX_MEDIA_SOURCES_PER_PAGE: usize = 32;
+
+    #[derive(Clone, Copy)]
+    struct Flags {
+      in_video: bool,
+      in_audio: bool,
+    }
+
+    let mut stack: Vec<(&DomNode, Flags)> = vec![(
+      dom,
+      Flags {
+        in_video: false,
+        in_audio: false,
+      },
+    )];
+    let mut inserted = 0usize;
+
+    while let Some((node, flags)) = stack.pop() {
+      if inserted >= MAX_MEDIA_SOURCES_PER_PAGE {
+        break;
+      }
+
+      let mut child_flags = flags;
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("video") {
+          child_flags.in_video = true;
+          if let Some(src) = node.get_attribute_ref("src") {
+            if let Some(resolved) = resolve_href(base_url, src) {
+              let before = out.len();
+              record_document_candidate(out, &resolved, max_total);
+              if out.len() > before {
+                inserted += 1;
+              }
+            }
+          }
+        } else if tag.eq_ignore_ascii_case("audio") {
+          child_flags.in_audio = true;
+          if let Some(src) = node.get_attribute_ref("src") {
+            if let Some(resolved) = resolve_href(base_url, src) {
+              let before = out.len();
+              record_document_candidate(out, &resolved, max_total);
+              if out.len() > before {
+                inserted += 1;
+              }
+            }
+          }
+        } else if (flags.in_video || flags.in_audio) && tag.eq_ignore_ascii_case("source") {
+          if let Some(src) = node.get_attribute_ref("src") {
+            if let Some(resolved) = resolve_href(base_url, src) {
+              let before = out.len();
+              record_document_candidate(out, &resolved, max_total);
+              if out.len() > before {
+                inserted += 1;
+              }
+            }
+          }
+        }
+      }
+
+      for child in node.children.iter().rev() {
+        stack.push((child, child_flags));
+      }
+    }
   }
 
   fn record_css_url_asset_candidate(set: &mut BTreeSet<String>, url: &str, max: usize) {
@@ -606,12 +1135,17 @@ mod disk_cache_main {
 
     summary.borrow_mut().discovered_css = tasks.len();
     if tasks.is_empty()
-      && !(opts.prefetch_images || opts.prefetch_iframes || opts.prefetch_css_url_assets)
+      && !(opts.prefetch_images
+        || opts.prefetch_icons
+        || opts.prefetch_video_posters
+        || opts.prefetch_iframes
+        || opts.prefetch_embeds
+        || opts.prefetch_css_url_assets)
     {
       return summary.into_inner();
     }
 
-    let mut image_urls: Vec<String> = Vec::new();
+    let mut image_urls: BTreeSet<String> = BTreeSet::new();
     let mut document_urls: BTreeSet<String> = BTreeSet::new();
 
     if opts.prefetch_images {
@@ -633,54 +1167,115 @@ mod disk_cache_main {
         } else {
           opts.max_discovered_assets_per_page
         };
-        let mut seen = HashSet::new();
         for url in discovery.urls {
           if image_urls.len() >= max_urls {
             break;
           }
-          let Some(normalized) = normalize_prefetch_url(&url) else {
-            continue;
-          };
-          if seen.insert(normalized.clone()) {
-            image_urls.push(normalized);
-          }
+          record_image_candidate(&mut image_urls, &url, max_urls);
         }
       }
     }
 
-    if opts.prefetch_iframes || (opts.prefetch_images && dom.is_none()) {
-      let html_assets = discover_html_asset_urls(html, base_url);
-      if opts.prefetch_iframes {
-        for url in html_assets.documents {
-          record_document_candidate(
-            &mut document_urls,
-            &url,
-            opts.max_discovered_assets_per_page,
-          );
-        }
+    if opts.prefetch_icons {
+      if let Some(dom) = dom.as_ref() {
+        record_icon_candidates(
+          dom,
+          base_url,
+          &mut image_urls,
+          opts.max_discovered_assets_per_page,
+        );
+      } else {
+        record_icon_candidates_from_html(
+          html,
+          base_url,
+          &mut image_urls,
+          opts.max_discovered_assets_per_page,
+        );
       }
-      // Fallback when the DOM parse failed: keep behavior best-effort and bounded using the
-      // same overall caps, but do not attempt to prefetch unlimited `srcset` candidates.
-      if opts.prefetch_images && dom.is_none() {
-        let mut seen = HashSet::new();
-        let mut max_urls = opts
-          .image_limits
-          .max_image_elements
-          .saturating_mul(opts.image_limits.max_urls_per_element);
-        if opts.max_discovered_assets_per_page != 0 {
-          max_urls = max_urls.min(opts.max_discovered_assets_per_page);
+    }
+
+    if opts.prefetch_video_posters {
+      if let Some(dom) = dom.as_ref() {
+        record_video_poster_candidates(
+          dom,
+          base_url,
+          &mut image_urls,
+          opts.max_discovered_assets_per_page,
+        );
+      } else {
+        record_video_poster_candidates_from_html(
+          html,
+          base_url,
+          &mut image_urls,
+          opts.max_discovered_assets_per_page,
+        );
+      }
+    }
+
+    if opts.prefetch_iframes {
+      if let Some(dom) = dom.as_ref() {
+        record_iframe_document_candidates(
+          dom,
+          base_url,
+          &mut document_urls,
+          opts.max_discovered_assets_per_page,
+        );
+      } else {
+        record_iframe_document_candidates_from_html(
+          html,
+          base_url,
+          &mut document_urls,
+          opts.max_discovered_assets_per_page,
+        );
+      }
+    }
+
+    // Fallback when the DOM parse failed: keep behavior best-effort and bounded using the
+    // same overall caps, but do not attempt to prefetch unlimited `srcset` candidates.
+    if opts.prefetch_images && dom.is_none() {
+      let html_assets = discover_html_asset_urls(html, base_url);
+      let mut max_urls = opts
+        .image_limits
+        .max_image_elements
+        .saturating_mul(opts.image_limits.max_urls_per_element);
+      if opts.max_discovered_assets_per_page != 0 {
+        max_urls = max_urls.min(opts.max_discovered_assets_per_page);
+      }
+      for url in html_assets.images {
+        if image_urls.len() >= max_urls {
+          break;
         }
-        for url in html_assets.images {
-          if image_urls.len() >= max_urls {
-            break;
-          }
-          let Some(normalized) = normalize_prefetch_url(&url) else {
-            continue;
-          };
-          if seen.insert(normalized.clone()) {
-            image_urls.push(normalized);
-          }
-        }
+        record_image_candidate(&mut image_urls, &url, max_urls);
+      }
+    }
+
+    if opts.prefetch_embeds {
+      if let Some(dom) = dom.as_ref() {
+        record_embed_document_candidates(
+          dom,
+          base_url,
+          &mut document_urls,
+          opts.max_discovered_assets_per_page,
+        );
+        record_media_source_candidates(
+          dom,
+          base_url,
+          &mut document_urls,
+          opts.max_discovered_assets_per_page,
+        );
+      } else {
+        record_embed_document_candidates_from_html(
+          html,
+          base_url,
+          &mut document_urls,
+          opts.max_discovered_assets_per_page,
+        );
+        record_media_source_candidates_from_html(
+          html,
+          base_url,
+          &mut document_urls,
+          opts.max_discovered_assets_per_page,
+        );
       }
     }
 
@@ -833,7 +1428,7 @@ mod disk_cache_main {
       summary.discovered_css_assets = css_asset_urls.len();
     }
 
-    if opts.prefetch_images {
+    if opts.prefetch_images || opts.prefetch_icons || opts.prefetch_video_posters {
       let mut summary = summary.borrow_mut();
       for url in &image_urls {
         match fetcher.fetch(url) {
@@ -843,7 +1438,7 @@ mod disk_cache_main {
       }
     }
 
-    if opts.prefetch_iframes {
+    if opts.prefetch_iframes || opts.prefetch_embeds {
       let mut fetched_docs: Vec<(String, FetchedResource)> = Vec::new();
       {
         let mut summary = summary.borrow_mut();
@@ -858,11 +1453,12 @@ mod disk_cache_main {
         }
       }
 
-      // Best-effort: when iframe/object/embed prefetching is enabled, also warm their subresource
+      // Best-effort: when iframe/embed prefetching is enabled, also warm their subresource
       // dependencies (stylesheets/@imports/fonts, and HTML images when enabled). This reduces
       // render-deadline network fetches because iframes are rendered as nested documents.
       let nested_opts = PrefetchOptions {
         prefetch_iframes: false,
+        prefetch_embeds: false,
         ..opts
       };
       for (url, res) in fetched_docs {
@@ -1063,7 +1659,10 @@ mod disk_cache_main {
       let opts = PrefetchOptions {
         prefetch_fonts: false,
         prefetch_images: true,
+        prefetch_icons: false,
+        prefetch_video_posters: false,
         prefetch_iframes: false,
+        prefetch_embeds: false,
         prefetch_css_url_assets: true,
         max_discovered_assets_per_page: 2000,
         image_limits: ImagePrefetchLimits {
@@ -1251,27 +1850,45 @@ mod disk_cache_main {
     let opts = PrefetchOptions {
       prefetch_fonts: args.prefetch_fonts,
       prefetch_images: args.prefetch_images,
+      prefetch_icons: args.prefetch_icons,
+      prefetch_video_posters: args.prefetch_video_posters,
       prefetch_iframes: args.prefetch_iframes,
+      prefetch_embeds: args.prefetch_embeds,
       prefetch_css_url_assets: args.prefetch_css_url_assets,
       max_discovered_assets_per_page: args.max_discovered_assets_per_page,
       image_limits,
     };
+    let prefetch_any_images =
+      args.prefetch_images || args.prefetch_icons || args.prefetch_video_posters;
+    let prefetch_any_documents = args.prefetch_iframes || args.prefetch_embeds;
 
     println!(
-      "Prefetching assets for {} page(s) ({} parallel, {}s timeout, fonts={} images={} iframes={} css_url_assets={} max_assets_per_page={})...",
+      "Prefetching assets for {} page(s) ({} parallel, {}s timeout, fonts={} images={} iframes={} embeds={} icons={} video_posters={} css_url_assets={} max_assets_per_page={})...",
       selected.len(),
       args.jobs,
       per_request_timeout_label,
       args.prefetch_fonts,
       args.prefetch_images,
       args.prefetch_iframes,
+      args.prefetch_embeds,
+      args.prefetch_icons,
+      args.prefetch_video_posters,
       args.prefetch_css_url_assets,
       args.max_discovered_assets_per_page
     );
-    if args.prefetch_images || args.prefetch_iframes {
+    if args.prefetch_images
+      || args.prefetch_iframes
+      || args.prefetch_embeds
+      || args.prefetch_icons
+      || args.prefetch_video_posters
+    {
       println!(
-        "HTML assets: images={} iframes={}",
-        args.prefetch_images, args.prefetch_iframes
+        "HTML assets: images={} documents={} embeds={} icons={} video_posters={}",
+        args.prefetch_images,
+        args.prefetch_iframes,
+        args.prefetch_embeds,
+        args.prefetch_icons,
+        args.prefetch_video_posters
       );
     }
     if args.prefetch_images {
@@ -1368,13 +1985,13 @@ mod disk_cache_main {
         r.fetched_fonts,
         r.failed_fonts
       );
-      if args.prefetch_images {
+      if prefetch_any_images {
         line.push_str(&format!(
           " images={} img_fetched={} img_failed={}",
           r.discovered_images, r.fetched_images, r.failed_images
         ));
       }
-      if args.prefetch_iframes {
+      if prefetch_any_documents {
         line.push_str(&format!(
           " docs={} docs_fetched={} docs_failed={}",
           r.discovered_documents, r.fetched_documents, r.failed_documents
@@ -1401,13 +2018,13 @@ mod disk_cache_main {
       total_fonts_fetched,
       total_fonts_failed
     );
-    if args.prefetch_images {
+    if prefetch_any_images {
       done.push_str(&format!(
         " images_discovered={} images_fetched={} images_failed={}",
         total_images_discovered, total_images_fetched, total_images_failed
       ));
     }
-    if args.prefetch_iframes {
+    if prefetch_any_documents {
       done.push_str(&format!(
         " docs_discovered={} docs_fetched={} docs_failed={}",
         total_documents_discovered, total_documents_fetched, total_documents_failed

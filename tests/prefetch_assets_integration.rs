@@ -465,9 +465,9 @@ fn prefetch_assets_warms_disk_cache_with_shadow_root_style_import() {
 }
 
 #[test]
-fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
+fn prefetch_assets_warms_disk_cache_with_html_images_iframes_and_embeds() {
   let Some(listener) =
-    try_bind_localhost("prefetch_assets_warms_disk_cache_with_html_images_and_iframes")
+    try_bind_localhost("prefetch_assets_warms_disk_cache_with_html_images_iframes_and_embeds")
   else {
     return;
   };
@@ -569,6 +569,7 @@ fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
     .arg("5")
     .arg("--prefetch-images")
     .arg("--prefetch-iframes")
+    .arg("--prefetch-embeds")
     .status()
     .expect("run prefetch_assets");
   assert!(status.success(), "prefetch_assets should succeed");
@@ -614,6 +615,124 @@ fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
   ] {
     assert!(offline.fetch(url).is_ok(), "{url} should be cached on disk");
   }
+}
+
+#[test]
+fn prefetch_assets_does_not_fetch_embeds_without_prefetch_embeds() {
+  let Some(listener) = try_bind_localhost(
+    "prefetch_assets_does_not_fetch_embeds_without_prefetch_embeds",
+  ) else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    "/frame.html".to_string(),
+    (b"<!doctype html><html><body>frame</body></html>".to_vec(), "text/html"),
+  );
+  responses.insert(
+    "/object.bin".to_string(),
+    (b"dummy-object".to_vec(), "application/octet-stream"),
+  );
+  responses.insert(
+    "/embed.bin".to_string(),
+    (b"dummy-embed".to_vec(), "application/octet-stream"),
+  );
+  responses.insert(
+    "/media.mp4".to_string(),
+    (b"dummy-media".to_vec(), "video/mp4"),
+  );
+  responses.insert(
+    "/__shutdown__".to_string(),
+    (b"shutdown".to_vec(), "text/plain"),
+  );
+
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec!["/frame.html", "/__shutdown__"],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><body>\
+      <iframe src=\"/frame.html\"></iframe>\
+      <object data=\"/object.bin\"></object>\
+      <embed src=\"/embed.bin\">\
+      <video><source src=\"/media.mp4\"></video>\
+    </body></html>",
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .arg("--prefetch-iframes")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  let shutdown_url = format!("http://{}/__shutdown__", addr);
+  let _ = ureq::get(&shutdown_url).call();
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let iframe_doc = format!("http://{}/frame.html", addr);
+  let object = format!("http://{}/object.bin", addr);
+  let embed = format!("http://{}/embed.bin", addr);
+  let media = format!("http://{}/media.mp4", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  assert!(offline.fetch(&iframe_doc).is_ok(), "iframe should be cached");
+  assert!(
+    offline.fetch(&object).is_err(),
+    "object should not be cached without --prefetch-embeds"
+  );
+  assert!(
+    offline.fetch(&embed).is_err(),
+    "embed should not be cached without --prefetch-embeds"
+  );
+  assert!(
+    offline.fetch(&media).is_err(),
+    "media source should not be cached without --prefetch-embeds"
+  );
+
+  let hits = hits.lock().unwrap();
+  assert_eq!(hits.get("/object.bin").copied().unwrap_or(0), 0);
+  assert_eq!(hits.get("/embed.bin").copied().unwrap_or(0), 0);
+  assert_eq!(hits.get("/media.mp4").copied().unwrap_or(0), 0);
 }
 
 #[test]
@@ -853,4 +972,161 @@ fn prefetch_assets_selects_preload_imagesrcset_candidate() {
   assert_eq!(hits.get("/a2.jpg").copied().unwrap_or(0), 1);
   assert_eq!(hits.get("/a1.jpg").copied().unwrap_or(0), 0);
   assert_eq!(hits.get("/fallback.jpg").copied().unwrap_or(0), 0);
+}
+
+#[test]
+fn prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_sources() {
+  let Some(listener) = try_bind_localhost(
+    "prefetch_assets_warms_disk_cache_with_iframes_embeds_icons_video_posters_and_sources",
+  ) else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+
+  responses.insert(
+    "/frame.html".to_string(),
+    (
+      b"<!doctype html><html><body>frame</body></html>".to_vec(),
+      "text/html",
+    ),
+  );
+  responses.insert(
+    "/poster.png".to_string(),
+    (b"dummy-poster".to_vec(), "image/png"),
+  );
+  responses.insert(
+    "/icon.png".to_string(),
+    (b"dummy-icon".to_vec(), "image/png"),
+  );
+  responses.insert(
+    "/embed.bin".to_string(),
+    (b"dummy-embed".to_vec(), "application/octet-stream"),
+  );
+  responses.insert(
+    "/object.bin".to_string(),
+    (b"dummy-object".to_vec(), "application/octet-stream"),
+  );
+  responses.insert(
+    "/media.mp4".to_string(),
+    (b"dummy-media".to_vec(), "video/mp4"),
+  );
+  responses.insert(
+    "/img.png".to_string(),
+    (b"dummy-img".to_vec(), "image/png"),
+  );
+  responses.insert(
+    "/picture-1x.png".to_string(),
+    (b"dummy-picture-1x".to_vec(), "image/png"),
+  );
+  responses.insert(
+    "/__shutdown__".to_string(),
+    (b"shutdown".to_vec(), "text/plain"),
+  );
+
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec![
+      "/frame.html",
+      "/poster.png",
+      "/icon.png",
+      "/embed.bin",
+      "/object.bin",
+      "/media.mp4",
+      "/__shutdown__",
+    ],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><head><link rel=\"icon\" href=\"/icon.png\"></head><body>\
+      <img src=\"/img.png\">\
+      <iframe src=\"/frame.html\"></iframe>\
+      <video poster=\"/poster.png\"></video>\
+      <video><source src=\"/media.mp4\"></video>\
+      <picture><source srcset=\"/picture-1x.png 1x, /picture-2x.png 2x\"><img src=\"/fallback.png\"></picture>\
+      <object data=\"/object.bin\"></object>\
+      <embed src=\"/embed.bin\">\
+    </body></html>",
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .arg("--prefetch-iframes")
+    .arg("--prefetch-embeds")
+    .arg("--prefetch-icons")
+    .arg("--prefetch-video-posters")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  // Trigger server shutdown so we can assert which subresources were fetched.
+  let shutdown_url = format!("http://{}/__shutdown__", addr);
+  let _ = ureq::get(&shutdown_url).call();
+
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let iframe = format!("http://{}/frame.html", addr);
+  let poster = format!("http://{}/poster.png", addr);
+  let icon = format!("http://{}/icon.png", addr);
+  let embed = format!("http://{}/embed.bin", addr);
+  let object = format!("http://{}/object.bin", addr);
+  let media = format!("http://{}/media.mp4", addr);
+  let img = format!("http://{}/img.png", addr);
+  let picture_1x = format!("http://{}/picture-1x.png", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  assert!(offline.fetch(&iframe).is_ok(), "iframe document should be cached");
+  assert!(offline.fetch(&poster).is_ok(), "video poster should be cached");
+  assert!(offline.fetch(&icon).is_ok(), "icon should be cached");
+  assert!(offline.fetch(&embed).is_ok(), "embed src should be cached");
+  assert!(offline.fetch(&object).is_ok(), "object data should be cached");
+  assert!(offline.fetch(&media).is_ok(), "video source should be cached");
+  assert!(
+    offline.fetch(&img).is_err(),
+    "img/src should not be cached without --prefetch-images"
+  );
+  assert!(
+    offline.fetch(&picture_1x).is_err(),
+    "picture srcset candidate should not be cached without --prefetch-images"
+  );
+
+  let hits = hits.lock().unwrap();
+  assert_eq!(hits.get("/img.png").copied().unwrap_or(0), 0);
+  assert_eq!(hits.get("/picture-1x.png").copied().unwrap_or(0), 0);
 }

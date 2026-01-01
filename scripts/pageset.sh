@@ -210,12 +210,18 @@ PREFETCH_ASSET_ARGS=()
 PAGESET_ARGS=()
 PREFETCH_IMAGES_IN_ARGS=0
 PREFETCH_IFRAMES_IN_ARGS=0
+PREFETCH_EMBEDS_IN_ARGS=0
+PREFETCH_ICONS_IN_ARGS=0
+PREFETCH_VIDEO_POSTERS_IN_ARGS=0
 PREFETCH_CSS_URL_ASSETS_IN_ARGS=0
 MAX_DISCOVERED_ASSETS_IN_ARGS=0
 MAX_IMAGES_PER_PAGE_IN_ARGS=0
 MAX_IMAGE_URLS_PER_ELEMENT_IN_ARGS=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=0
+PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS=0
+PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS=0
+PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=0
 PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=0
 PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=0
@@ -227,6 +233,15 @@ if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
   fi
   if grep -q "prefetch_iframes" "${PREFETCH_ASSETS_SOURCE}"; then
     PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=1
+  fi
+  if grep -q "prefetch_embeds" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS=1
+  fi
+  if grep -q "prefetch_icons" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS=1
+  fi
+  if grep -q "prefetch_video_posters" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS=1
   fi
   if grep -q "prefetch_css_url_assets" "${PREFETCH_ASSETS_SOURCE}"; then
     PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=1
@@ -265,6 +280,51 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
         PREFETCH_IFRAMES_IN_ARGS=1
         PREFETCH_ASSET_ARGS+=("${arg}")
         if [[ ("${arg}" == "--prefetch-iframes" || "${arg}" == "--prefetch-documents") && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --prefetch-embeds|--prefetch-embeds=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS}" -eq 1 ]]; then
+        PREFETCH_EMBEDS_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--prefetch-embeds" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --prefetch-icons|--prefetch-icons=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS}" -eq 1 ]]; then
+        PREFETCH_ICONS_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--prefetch-icons" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --prefetch-video-posters|--prefetch-video-posters=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS}" -eq 1 ]]; then
+        PREFETCH_VIDEO_POSTERS_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--prefetch-video-posters" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
           next="${ARGS[$((i + 1))]}"
           if [[ "${next}" != -* ]]; then
             PREFETCH_ASSET_ARGS+=("${next}")
@@ -353,6 +413,18 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   echo "Prefetching assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
   if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES}" -eq 1 && "${PREFETCH_IMAGES_IN_ARGS}" -eq 0 ]]; then
     PREFETCH_ASSET_ARGS+=(--prefetch-images)
+  fi
+  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES}" -eq 1 && "${PREFETCH_IFRAMES_IN_ARGS}" -eq 0 ]]; then
+    PREFETCH_ASSET_ARGS+=(--prefetch-iframes)
+  fi
+  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS}" -eq 1 && "${PREFETCH_EMBEDS_IN_ARGS}" -eq 0 ]]; then
+    PREFETCH_ASSET_ARGS+=(--prefetch-embeds)
+  fi
+  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS}" -eq 1 && "${PREFETCH_ICONS_IN_ARGS}" -eq 0 ]]; then
+    PREFETCH_ASSET_ARGS+=(--prefetch-icons)
+  fi
+  if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS}" -eq 1 && "${PREFETCH_VIDEO_POSTERS_IN_ARGS}" -eq 0 ]]; then
+    PREFETCH_ASSET_ARGS+=(--prefetch-video-posters)
   fi
   if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS}" -eq 1 && "${PREFETCH_CSS_URL_ASSETS_IN_ARGS}" -eq 0 ]]; then
     PREFETCH_ASSET_ARGS+=(--prefetch-css-url-assets)

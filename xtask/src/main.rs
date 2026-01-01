@@ -582,6 +582,41 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   {
     prefetch_asset_args.push("--prefetch-css-url-assets".to_string());
   }
+  if disk_cache_enabled
+    && prefetch_support.prefetch_iframes
+    && !prefetch_asset_args.iter().any(|arg| {
+      arg == "--prefetch-iframes"
+        || arg.starts_with("--prefetch-iframes=")
+        || arg == "--prefetch-documents"
+        || arg.starts_with("--prefetch-documents=")
+    })
+  {
+    prefetch_asset_args.push("--prefetch-iframes".to_string());
+  }
+  if disk_cache_enabled
+    && prefetch_support.prefetch_embeds
+    && !prefetch_asset_args
+      .iter()
+      .any(|arg| arg == "--prefetch-embeds" || arg.starts_with("--prefetch-embeds="))
+  {
+    prefetch_asset_args.push("--prefetch-embeds".to_string());
+  }
+  if disk_cache_enabled
+    && prefetch_support.prefetch_icons
+    && !prefetch_asset_args
+      .iter()
+      .any(|arg| arg == "--prefetch-icons" || arg.starts_with("--prefetch-icons="))
+  {
+    prefetch_asset_args.push("--prefetch-icons".to_string());
+  }
+  if disk_cache_enabled
+    && prefetch_support.prefetch_video_posters
+    && !prefetch_asset_args.iter().any(|arg| {
+      arg == "--prefetch-video-posters" || arg.starts_with("--prefetch-video-posters=")
+    })
+  {
+    prefetch_asset_args.push("--prefetch-video-posters".to_string());
+  }
   if disk_cache_enabled {
     println!(
       "Disk cache enabled (persisting subresources under fetches/assets/). \
@@ -732,6 +767,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 struct PrefetchAssetsSupport {
   prefetch_images: bool,
   prefetch_iframes: bool,
+  prefetch_embeds: bool,
+  prefetch_icons: bool,
+  prefetch_video_posters: bool,
   prefetch_css_url_assets: bool,
   max_discovered_assets_per_page: bool,
   max_images_per_page: bool,
@@ -742,6 +780,9 @@ impl PrefetchAssetsSupport {
   fn any(self) -> bool {
     self.prefetch_images
       || self.prefetch_iframes
+      || self.prefetch_embeds
+      || self.prefetch_icons
+      || self.prefetch_video_posters
       || self.prefetch_css_url_assets
       || self.max_discovered_assets_per_page
       || self.max_images_per_page
@@ -754,6 +795,9 @@ impl PrefetchAssetsSupport {
       return Self {
         prefetch_images: false,
         prefetch_iframes: false,
+        prefetch_embeds: false,
+        prefetch_icons: false,
+        prefetch_video_posters: false,
         prefetch_css_url_assets: false,
         max_discovered_assets_per_page: false,
         max_images_per_page: false,
@@ -764,6 +808,9 @@ impl PrefetchAssetsSupport {
     Self {
       prefetch_images: contents.contains("prefetch_images"),
       prefetch_iframes: contents.contains("prefetch_iframes"),
+      prefetch_embeds: contents.contains("prefetch_embeds"),
+      prefetch_icons: contents.contains("prefetch_icons"),
+      prefetch_video_posters: contents.contains("prefetch_video_posters"),
       prefetch_css_url_assets: contents.contains("prefetch_css_url_assets"),
       max_discovered_assets_per_page: contents.contains("max_discovered_assets_per_page"),
       max_images_per_page: contents.contains("max_images_per_page"),
@@ -788,6 +835,11 @@ fn extract_prefetch_assets_args(
           || arg.starts_with("--prefetch-iframes=")
           || arg == "--prefetch-documents"
           || arg.starts_with("--prefetch-documents=")))
+      || (support.prefetch_embeds
+        && (arg == "--prefetch-embeds" || arg.starts_with("--prefetch-embeds=")))
+      || (support.prefetch_icons && (arg == "--prefetch-icons" || arg.starts_with("--prefetch-icons=")))
+      || (support.prefetch_video_posters
+        && (arg == "--prefetch-video-posters" || arg.starts_with("--prefetch-video-posters=")))
       || (support.prefetch_css_url_assets
         && (arg == "--prefetch-css-url-assets" || arg.starts_with("--prefetch-css-url-assets=")));
     let is_prefetch_arg = is_prefetch_arg
