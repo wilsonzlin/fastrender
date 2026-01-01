@@ -463,6 +463,22 @@ struct ReportArgs {
   #[arg(long)]
   fail_on_missing_stage_timings: bool,
 
+  /// Exit non-zero when ok entries have stage buckets that materially exceed `total_ms`
+  ///
+  /// This is a guardrail for catching stage timing accounting regressions (e.g., double counting
+  /// or mixing CPU-sum metrics into wall-clock buckets).
+  #[arg(long)]
+  fail_on_stage_sum_exceeds_total: bool,
+
+  /// Tolerance for `--fail-on-stage-sum-exceeds-total` (percent)
+  #[arg(
+    long,
+    default_value_t = 10.0,
+    requires = "fail_on_stage_sum_exceeds_total",
+    value_name = "PERCENT"
+  )]
+  stage_sum_tolerance_percent: f64,
+
   /// Exit non-zero when ok entries exceed this total render time threshold (ms)
   #[arg(long, value_name = "MS")]
   fail_on_slow_ok_ms: Option<f64>,
@@ -3621,6 +3637,7 @@ const REPORT_OFFENDING_STEMS_LIMIT: usize = 25;
 struct ReportError {
   missing_stages: Vec<String>,
   missing_stage_timings: Vec<String>,
+  stage_sum_exceeds_total: Vec<String>,
   slow_ok: Vec<String>,
   ok_with_failures: Vec<String>,
 }
@@ -3629,6 +3646,7 @@ impl ReportError {
   fn is_empty(&self) -> bool {
     self.missing_stages.is_empty()
       && self.missing_stage_timings.is_empty()
+      && self.stage_sum_exceeds_total.is_empty()
       && self.slow_ok.is_empty()
       && self.ok_with_failures.is_empty()
   }
@@ -3641,6 +3659,7 @@ fn evaluate_report_checks(
   let mut error = ReportError {
     missing_stages: Vec::new(),
     missing_stage_timings: Vec::new(),
+    stage_sum_exceeds_total: Vec::new(),
     slow_ok: Vec::new(),
     ok_with_failures: Vec::new(),
   };
@@ -3664,6 +3683,29 @@ fn evaluate_report_checks(
         && entry.progress.stages_ms.sum() == 0.0
       {
         error.missing_stage_timings.push(entry.stem.clone());
+      }
+    }
+  }
+
+  if args.fail_on_stage_sum_exceeds_total {
+    let tolerance = args.stage_sum_tolerance_percent.max(0.0) / 100.0;
+    for entry in progresses {
+      if entry.progress.status != ProgressStatus::Ok {
+        continue;
+      }
+      let Some(total_ms) = entry.progress.total_ms else {
+        continue;
+      };
+      if !total_ms.is_finite() || total_ms <= 0.0 {
+        continue;
+      }
+      let sum_ms = entry.progress.stages_ms.sum();
+      if !sum_ms.is_finite() || sum_ms <= 0.0 {
+        continue;
+      }
+      let allowed_ms = total_ms * (1.0 + tolerance);
+      if sum_ms > allowed_ms {
+        error.stage_sum_exceeds_total.push(entry.stem.clone());
       }
     }
   }
@@ -3698,6 +3740,8 @@ fn evaluate_report_checks(
   error.missing_stages.dedup();
   error.missing_stage_timings.sort();
   error.missing_stage_timings.dedup();
+  error.stage_sum_exceeds_total.sort();
+  error.stage_sum_exceeds_total.dedup();
   error.slow_ok.sort();
   error.slow_ok.dedup();
   error.ok_with_failures.sort();
@@ -3748,6 +3792,39 @@ fn eprint_offending_slow_ok(progresses: &[LoadedProgress], stems: &[String]) {
   }
 }
 
+fn eprint_offending_stage_sum_exceeds_total(progresses: &[LoadedProgress], stems: &[String]) {
+  let mut offenders: Vec<(String, f64, f64, f64)> = stems
+    .iter()
+    .filter_map(|stem| {
+      let entry = progresses.iter().find(|p| &p.stem == stem)?;
+      let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+      let sum_ms = entry.progress.stages_ms.sum();
+      let ratio = if total_ms > 0.0 { sum_ms / total_ms } else { 0.0 };
+      Some((stem.clone(), total_ms, sum_ms, ratio))
+    })
+    .collect();
+  offenders.sort_by(|(a_stem, a_total, a_sum, a_ratio), (b_stem, b_total, b_sum, b_ratio)| {
+    b_ratio
+      .total_cmp(a_ratio)
+      .then_with(|| b_sum.total_cmp(a_sum))
+      .then_with(|| b_total.total_cmp(a_total))
+      .then_with(|| a_stem.cmp(b_stem))
+  });
+  let shown = offenders.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+  for (stem, total_ms, sum_ms, ratio) in offenders.iter().take(shown) {
+    eprintln!(
+      "  {stem} total={total_ms:.2}ms stage_sum={sum_ms:.2}ms ratio={ratio:.2}x"
+    );
+  }
+  if offenders.len() > shown {
+    eprintln!(
+      "  {} and {} more",
+      PROGRESS_NOTE_ELLIPSIS,
+      offenders.len() - shown
+    );
+  }
+}
+
 fn report(args: ReportArgs) -> io::Result<()> {
   if args.fail_on_regression && args.compare.is_none() {
     eprintln!("--fail-on-regression requires --compare");
@@ -3759,6 +3836,10 @@ fn report(args: ReportArgs) -> io::Result<()> {
   }
   if args.regression_threshold_percent < 0.0 {
     eprintln!("regression threshold must be >= 0");
+    std::process::exit(2);
+  }
+  if args.stage_sum_tolerance_percent < 0.0 {
+    eprintln!("--stage-sum-tolerance-percent must be >= 0");
     std::process::exit(2);
   }
   if let Some(ms) = args.fail_on_slow_ok_ms {
@@ -4826,6 +4907,18 @@ fn report(args: ReportArgs) -> io::Result<()> {
         err.missing_stage_timings.len()
       );
       eprint_offending_stems(&err.missing_stage_timings);
+      printed_any = true;
+    }
+    if !err.stage_sum_exceeds_total.is_empty() {
+      if printed_any {
+        eprintln!();
+      }
+      let tolerance = args.stage_sum_tolerance_percent;
+      eprintln!(
+        "Failing due to {} ok page(s) whose stage buckets exceed total_ms by more than {tolerance:.1}%:",
+        err.stage_sum_exceeds_total.len()
+      );
+      eprint_offending_stage_sum_exceeds_total(&progresses, &err.stage_sum_exceeds_total);
       printed_any = true;
     }
     if !err.slow_ok.is_empty() {
@@ -6175,6 +6268,8 @@ mod tests {
       verbose: false,
       fail_on_missing_stages: false,
       fail_on_missing_stage_timings: false,
+      fail_on_stage_sum_exceeds_total: false,
+      stage_sum_tolerance_percent: 10.0,
       fail_on_slow_ok_ms: None,
       fail_on_ok_with_failures: false,
       fail_on_new_ok_failures: false,
@@ -6206,6 +6301,7 @@ mod tests {
     let err = evaluate_report_checks(&args, &progresses).unwrap_err();
     assert_eq!(err.missing_stages, vec!["missing".to_string()]);
     assert!(err.missing_stage_timings.is_empty());
+    assert!(err.stage_sum_exceeds_total.is_empty());
   }
 
   #[test]
@@ -6247,6 +6343,44 @@ mod tests {
     let err = evaluate_report_checks(&args, &progresses).unwrap_err();
     assert_eq!(err.missing_stage_timings, vec!["missing".to_string()]);
     assert!(err.missing_stages.is_empty());
+    assert!(err.stage_sum_exceeds_total.is_empty());
+  }
+
+  #[test]
+  fn report_gate_fails_on_stage_sum_exceeds_total() {
+    let mut offender = make_progress("offender", ProgressStatus::Ok, Some(100.0), "layout");
+    offender.progress.stages_ms.fetch = 60.0;
+    offender.progress.stages_ms.layout = 60.0; // 120ms total
+
+    let mut ok = make_progress("ok", ProgressStatus::Ok, Some(100.0), "layout");
+    ok.progress.stages_ms.fetch = 50.0;
+    ok.progress.stages_ms.layout = 55.0; // 105ms total
+
+    let progresses = vec![offender, ok];
+
+    let mut args = basic_report_args();
+    args.fail_on_stage_sum_exceeds_total = true;
+    args.stage_sum_tolerance_percent = 10.0;
+
+    let err = evaluate_report_checks(&args, &progresses).unwrap_err();
+    assert_eq!(err.stage_sum_exceeds_total, vec!["offender".to_string()]);
+    assert!(err.missing_stages.is_empty());
+    assert!(err.missing_stage_timings.is_empty());
+  }
+
+  #[test]
+  fn report_gate_allows_stage_sum_within_tolerance() {
+    let mut page = make_progress("page", ProgressStatus::Ok, Some(100.0), "layout");
+    page.progress.stages_ms.fetch = 60.0;
+    page.progress.stages_ms.layout = 60.0; // 120ms total
+
+    let progresses = vec![page];
+
+    let mut args = basic_report_args();
+    args.fail_on_stage_sum_exceeds_total = true;
+    args.stage_sum_tolerance_percent = 25.0;
+
+    assert!(evaluate_report_checks(&args, &progresses).is_ok());
   }
 
   struct EnvVarGuard {
