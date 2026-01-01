@@ -144,7 +144,17 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
         run: |
           # To reproduce locally:
-          #   cargo run --release --bin perf_smoke -- --suite pageset-timeouts --fail-on-missing-fixtures --fail-on-failure --baseline <path> --fail-on-regression --threshold 0.10 --count-threshold 0.20
+          #   cargo run --release --bin perf_smoke -- \
+          #     --suite pageset-timeouts \
+          #     --fail-on-missing-fixtures \
+          #     --fail-on-failure \
+          #     --isolate \
+          #     --baseline <path> \
+          #     --fail-on-regression \
+          #     --threshold 0.10 \
+          #     --count-threshold 0.20 \
+          #     # Optional once budgets are calibrated:
+          #     # --fail-on-budget
           report_path=target/perf_smoke_pageset_timeouts_regression_report.txt
           status=0
           extra_args=()
