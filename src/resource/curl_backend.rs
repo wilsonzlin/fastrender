@@ -364,23 +364,16 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
   let mut current = url.to_string();
   let mut validators = validators;
 
+  let timeout_budget = fetcher.timeout_budget(deadline);
   let max_attempts = if deadline
     .as_ref()
     .and_then(render_control::RenderDeadline::timeout_limit)
     .is_some()
+    && timeout_budget.is_none()
   {
     1
   } else {
     fetcher.retry_policy.max_attempts.max(1)
-  };
-
-  let timeout_budget = if deadline.is_none()
-    && fetcher.policy.request_timeout_is_total_budget
-    && !fetcher.policy.request_timeout.is_zero()
-  {
-    Some(fetcher.policy.request_timeout)
-  } else {
-    None
   };
 
   let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
