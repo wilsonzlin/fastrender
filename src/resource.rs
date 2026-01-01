@@ -30,6 +30,8 @@ use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use http::HeaderMap;
 use httpdate::parse_http_date;
 use lru::LruCache;
+use reqwest::blocking as reqwest_blocking;
+use reqwest::cookie::Jar as ReqwestCookieJar;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -725,6 +727,7 @@ fn http_retry_logging_enabled() -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HttpBackendMode {
   Ureq,
+  Reqwest,
   Curl,
   Auto,
 }
@@ -739,6 +742,7 @@ fn http_backend_mode() -> HttpBackendMode {
     match lowered.as_str() {
       "" | "auto" | "fallback" => HttpBackendMode::Auto,
       "ureq" | "rust" | "native" => HttpBackendMode::Ureq,
+      "reqwest" => HttpBackendMode::Reqwest,
       "curl" => HttpBackendMode::Curl,
       _ => HttpBackendMode::Auto,
     }
@@ -913,6 +917,31 @@ fn is_retryable_ureq_error(err: &ureq::Error) -> bool {
   }
 
   // Fallback: match common transient error strings when we can't downcast.
+  let msg = err.to_string().to_ascii_lowercase();
+  msg.contains("timeout")
+    || msg.contains("timed out")
+    || msg.contains("connection reset")
+    || msg.contains("connection aborted")
+    || msg.contains("broken pipe")
+    || msg.contains("temporary failure")
+    || msg.contains("dns")
+}
+
+fn is_retryable_reqwest_error(err: &reqwest::Error) -> bool {
+  if err.is_timeout() || err.is_connect() {
+    return true;
+  }
+
+  let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+  while let Some(current) = source {
+    if let Some(io_err) = current.downcast_ref::<io::Error>() {
+      if is_retryable_io_error(io_err) {
+        return true;
+      }
+    }
+    source = current.source();
+  }
+
   let msg = err.to_string().to_ascii_lowercase();
   msg.contains("timeout")
     || msg.contains("timed out")
@@ -1728,7 +1757,11 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 ///
 /// Fetches resources over HTTP/HTTPS with configurable timeouts and user agent.
 /// Also handles `file://` URLs and `data:` URLs.
-/// Clones share an internal `ureq::Agent` so connections and TLS state can be reused.
+/// Clones share internal HTTP client state (`ureq::Agent` and `reqwest::blocking::Client`) so
+/// connections and cookies can be reused.
+///
+/// The HTTP backend can be selected via `FASTR_HTTP_BACKEND=ureq|reqwest|curl|auto` (defaults to
+/// `auto`).
 ///
 /// # Example
 ///
@@ -1746,6 +1779,7 @@ pub struct HttpFetcher {
   accept_language: String,
   policy: ResourcePolicy,
   agent: Arc<ureq::Agent>,
+  reqwest_client: Arc<reqwest_blocking::Client>,
   retry_policy: HttpRetryPolicy,
   curl_cookie_jar: Arc<Mutex<curl_backend::CookieJarState>>,
 }
@@ -1854,6 +1888,7 @@ impl std::fmt::Debug for HttpFetcher {
       .field("user_agent", &self.user_agent)
       .field("accept_language", &self.accept_language)
       .field("policy", &self.policy)
+      .field("http_backend", &http_backend_mode())
       .field("retry_policy", &self.retry_policy)
       .finish()
   }
@@ -1866,6 +1901,16 @@ impl HttpFetcher {
       .timeout_global(Some(policy.request_timeout))
       .build();
     Arc::new(config.into())
+  }
+
+  fn build_reqwest_client(cookie_jar: &Arc<ReqwestCookieJar>) -> Arc<reqwest_blocking::Client> {
+    Arc::new(
+      reqwest_blocking::Client::builder()
+        .cookie_provider(Arc::clone(cookie_jar))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("failed to build reqwest HTTP client"),
+    )
   }
 
   fn rebuild_agent(&mut self) {
@@ -2013,10 +2058,26 @@ impl HttpFetcher {
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
   ) -> Result<FetchedResource> {
+    let rewritten_url = Url::parse(url).ok().and_then(|mut parsed| {
+      if parsed.scheme() != "https" {
+        return None;
+      }
+      if !parsed
+        .host_str()
+        .map(|host| host.eq_ignore_ascii_case("tesco.com"))
+        .unwrap_or(false)
+      {
+        return None;
+      }
+      parsed.set_host(Some("www.tesco.com")).ok()?;
+      Some(parsed.to_string())
+    });
+    let effective_url = rewritten_url.as_deref().unwrap_or(url);
+
     match http_backend_mode() {
       HttpBackendMode::Curl => curl_backend::fetch_http_with_accept_inner(
         self,
-        url,
+        effective_url,
         accept_encoding,
         validators,
         destination,
@@ -2025,7 +2086,17 @@ impl HttpFetcher {
         started,
       ),
       HttpBackendMode::Ureq => self.fetch_http_with_accept_inner_ureq(
-        url,
+        effective_url,
+        accept_encoding,
+        validators,
+        destination,
+        referrer,
+        deadline,
+        started,
+        false,
+      ),
+      HttpBackendMode::Reqwest => self.fetch_http_with_accept_inner_reqwest(
+        effective_url,
         accept_encoding,
         validators,
         destination,
@@ -2036,22 +2107,41 @@ impl HttpFetcher {
       ),
       HttpBackendMode::Auto => {
         let curl_available = curl_backend::curl_available();
-        match self.fetch_http_with_accept_inner_ureq(
-          url,
-          accept_encoding,
-          validators,
-          destination,
-          referrer,
-          deadline,
-          started,
-          curl_available,
-        ) {
+        let prefer_reqwest = effective_url
+          .get(..8)
+          .map(|prefix| prefix.eq_ignore_ascii_case("https://"))
+          .unwrap_or(false);
+        let result = if prefer_reqwest {
+          self.fetch_http_with_accept_inner_reqwest(
+            effective_url,
+            accept_encoding,
+            validators,
+            destination,
+            referrer,
+            deadline,
+            started,
+            curl_available,
+          )
+        } else {
+          self.fetch_http_with_accept_inner_ureq(
+            effective_url,
+            accept_encoding,
+            validators,
+            destination,
+            referrer,
+            deadline,
+            started,
+            curl_available,
+          )
+        };
+
+        match result {
           Ok(res) => Ok(res),
           Err(err) => {
             if curl_available && should_fallback_to_curl(&err) {
               match curl_backend::fetch_http_with_accept_inner(
                 self,
-                url,
+                effective_url,
                 accept_encoding,
                 validators,
                 destination,
@@ -2096,8 +2186,6 @@ impl HttpFetcher {
       .and_then(render_control::RenderDeadline::timeout_limit)
       .is_some()
     {
-      1
-    } else if auto_fallback {
       1
     } else {
       self.retry_policy.max_attempts.max(1)
@@ -2593,6 +2681,524 @@ impl HttpFetcher {
     ))
   }
 
+  fn fetch_http_with_accept_inner_reqwest<'a>(
+    &self,
+    url: &str,
+    accept_encoding: Option<&str>,
+    validators: Option<HttpCacheValidators<'a>>,
+    destination: Option<FetchDestination>,
+    referrer: Option<&str>,
+    deadline: &Option<render_control::RenderDeadline>,
+    started: Instant,
+    auto_fallback: bool,
+  ) -> Result<FetchedResource> {
+    let mut current = url.to_string();
+    let mut validators = validators;
+    let client = &self.reqwest_client;
+    let max_attempts = if deadline
+      .as_ref()
+      .and_then(render_control::RenderDeadline::timeout_limit)
+      .is_some()
+    {
+      1
+    } else if auto_fallback {
+      1
+    } else {
+      self.retry_policy.max_attempts.max(1)
+    };
+    let timeout_budget = if deadline.is_none()
+      && self.policy.request_timeout_is_total_budget
+      && !self.policy.request_timeout.is_zero()
+    {
+      Some(self.policy.request_timeout)
+    } else {
+      None
+    };
+
+    let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
+      let budget = timeout_budget.expect("budget mode should be active");
+      let elapsed = started.elapsed();
+      Error::Resource(
+        ResourceError::new(
+          current_url.to_string(),
+          format!(
+            "overall HTTP timeout budget exceeded (budget={budget:?}, elapsed={elapsed:?}){}",
+            format_attempt_suffix(attempt, max_attempts)
+          ),
+        )
+        .with_final_url(current_url.to_string()),
+      )
+    };
+
+    'redirects: for _ in 0..self.policy.max_redirects {
+      self.policy.ensure_url_allowed(&current)?;
+      for attempt in 1..=max_attempts {
+        self.policy.ensure_url_allowed(&current)?;
+        let stage_hint = render_stage_hint_from_url(&current);
+        if let Some(deadline) = deadline.as_ref().filter(|d| d.is_enabled()) {
+          deadline.check(stage_hint).map_err(Error::Render)?;
+        }
+        let allowed_limit = self.policy.allowed_response_limit()?;
+        let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
+        let mut effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
+
+        if let Some(budget) = timeout_budget {
+          match budget.checked_sub(started.elapsed()) {
+            Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+              let budget_timeout = remaining.saturating_sub(HTTP_DEADLINE_BUFFER);
+              effective_timeout = effective_timeout.min(budget_timeout);
+            }
+            _ => return Err(budget_exhausted_error(&current, attempt)),
+          }
+        }
+
+        let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
+        let headers = build_http_header_pairs(
+          &current,
+          &self.user_agent,
+          &self.accept_language,
+          accept_encoding_value,
+          validators,
+          destination,
+          referrer,
+        );
+        let mut request = client.get(&current);
+        for (name, value) in &headers {
+          request = request.header(name, value);
+        }
+
+        if !effective_timeout.is_zero() {
+          request = request.timeout(effective_timeout);
+        }
+
+        let mut network_timer = start_network_fetch_diagnostics();
+        let response = match request.send() {
+          Ok(resp) => resp,
+          Err(err) => {
+            finish_network_fetch_diagnostics(network_timer.take());
+            if !auto_fallback && attempt < max_attempts && is_retryable_reqwest_error(&err) {
+              let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+              let mut can_retry = true;
+              if let Some(deadline) = deadline.as_ref() {
+                if deadline.timeout_limit().is_some() {
+                  match deadline.remaining_timeout() {
+                    Some(remaining) if !remaining.is_zero() => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
+              }
+              if let Some(budget) = timeout_budget {
+                match budget.checked_sub(started.elapsed()) {
+                  Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                    let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                    backoff = backoff.min(max_sleep);
+                  }
+                  _ => can_retry = false,
+                }
+              }
+              if can_retry {
+                let reason = err.to_string();
+                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
+                if !backoff.is_zero() {
+                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                    .map_err(Error::Render)?;
+                }
+                continue;
+              }
+              if timeout_budget.is_some() {
+                return Err(budget_exhausted_error(&current, attempt));
+              }
+            }
+
+            let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
+            let mut message = err.to_string();
+            if err.is_timeout() {
+              if let Some(overall) = overall_timeout {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout={overall:?})"
+                ));
+              } else if let Some(budget) = timeout_budget {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout_budget={budget:?})"
+                ));
+              } else {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?})"
+                ));
+              }
+            } else {
+              message.push_str(&format_attempt_suffix(attempt, max_attempts));
+            }
+
+            let err = ResourceError::new(current.clone(), message)
+              .with_final_url(current.clone())
+              .with_source(err);
+            return Err(Error::Resource(err));
+          }
+        };
+
+        let status = response.status();
+        if (300..400).contains(&status.as_u16()) {
+          if let Some(loc) = response
+            .headers()
+            .get("location")
+            .and_then(|h| h.to_str().ok())
+          {
+            let next = Url::parse(&current)
+              .ok()
+              .and_then(|base| base.join(loc).ok())
+              .map(|u| u.to_string())
+              .unwrap_or_else(|| loc.to_string());
+            finish_network_fetch_diagnostics(network_timer.take());
+            self.policy.ensure_url_allowed(&next)?;
+            current = next;
+            validators = None;
+            continue 'redirects;
+          }
+        }
+
+        let status_code = status.as_u16();
+        let retry_after =
+          if self.retry_policy.respect_retry_after && retryable_http_status(status_code) {
+            parse_retry_after(response.headers())
+          } else {
+            None
+          };
+
+        let encodings = parse_content_encodings(response.headers());
+        let content_type = response
+          .headers()
+          .get("content-type")
+          .and_then(|h| h.to_str().ok())
+          .map(|s| s.to_string());
+        let decode_stage = decode_stage_for_content_type(content_type.as_deref());
+        let etag = response
+          .headers()
+          .get("etag")
+          .and_then(|h| h.to_str().ok())
+          .map(|s| s.to_string());
+        let last_modified = response
+          .headers()
+          .get("last-modified")
+          .and_then(|h| h.to_str().ok())
+          .map(|s| s.to_string());
+        let cache_policy = parse_http_cache_policy(response.headers());
+        let final_url = response.url().to_string();
+
+        let mut body = Vec::new();
+        let body_result = response
+          .take((allowed_limit as u64).saturating_add(1))
+          .read_to_end(&mut body)
+          .map(|_| body);
+
+        match body_result {
+          Ok(body) => {
+            if body.len() > allowed_limit {
+              finish_network_fetch_diagnostics(network_timer.take());
+              if let Some(remaining) = self.policy.remaining_budget() {
+                if body.len() > remaining {
+                  let err = ResourceError::new(
+                    current.clone(),
+                    format!(
+                      "total bytes budget exceeded ({} > {} bytes remaining)",
+                      body.len(),
+                      remaining
+                    ),
+                  )
+                  .with_status(status.as_u16())
+                  .with_final_url(final_url.clone());
+                  return Err(Error::Resource(err));
+                }
+              }
+              let err = ResourceError::new(
+                current.clone(),
+                format!(
+                  "response too large ({} > {} bytes)",
+                  body.len(),
+                  allowed_limit
+                ),
+              )
+              .with_status(status.as_u16())
+              .with_final_url(final_url.clone());
+              return Err(Error::Resource(err));
+            }
+
+            let bytes =
+              match decode_content_encodings(body, &encodings, allowed_limit, decode_stage) {
+                Ok(decoded) => decoded,
+                Err(ContentDecodeError::DeadlineExceeded { stage, elapsed, .. }) => {
+                  finish_network_fetch_diagnostics(network_timer.take());
+                  return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
+                }
+                Err(ContentDecodeError::DecompressionFailed { .. })
+                  if accept_encoding.is_none() =>
+                {
+                  finish_network_fetch_diagnostics(network_timer.take());
+                  return self.fetch_http_with_accept_inner(
+                    &current,
+                    Some("identity"),
+                    validators,
+                    destination,
+                    referrer,
+                    deadline,
+                    started,
+                  );
+                }
+                Err(err) => {
+                  finish_network_fetch_diagnostics(network_timer.take());
+                  let err =
+                    err.into_resource_error(current.clone(), status.as_u16(), final_url.clone());
+                  return Err(Error::Resource(err));
+                }
+              };
+
+            record_network_fetch_bytes(bytes.len());
+            let is_retryable_status = retryable_http_status(status_code);
+
+            if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
+              finish_network_fetch_diagnostics(network_timer.take());
+              let mut can_retry = attempt < max_attempts;
+              if can_retry {
+                let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+                if let Some(retry_after) = retry_after {
+                  backoff = backoff.max(retry_after);
+                }
+
+                if let Some(deadline) = deadline.as_ref() {
+                  if deadline.timeout_limit().is_some() {
+                    match deadline.remaining_timeout() {
+                      Some(remaining) if !remaining.is_zero() => {
+                        let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                        backoff = backoff.min(max_sleep);
+                      }
+                      _ => can_retry = false,
+                    }
+                  }
+                }
+                if let Some(budget) = timeout_budget {
+                  match budget.checked_sub(started.elapsed()) {
+                    Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
+
+                if can_retry {
+                  log_http_retry(
+                    &format!("empty body (status {status_code})"),
+                    attempt,
+                    max_attempts,
+                    &current,
+                    backoff,
+                  );
+                  if !backoff.is_zero() {
+                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                      .map_err(Error::Render)?;
+                  }
+                  continue;
+                }
+                if timeout_budget.is_some() {
+                  return Err(budget_exhausted_error(&current, attempt));
+                }
+              }
+
+              let mut message = "empty HTTP response body".to_string();
+              if attempt < max_attempts {
+                message.push_str(" (retry aborted: render deadline exceeded)");
+              }
+              message.push_str(&format_attempt_suffix(attempt, max_attempts));
+              let err = ResourceError::new(current.clone(), message)
+                .with_status(status_code)
+                .with_final_url(final_url.clone());
+              return Err(Error::Resource(err));
+            }
+
+            if is_retryable_status {
+              finish_network_fetch_diagnostics(network_timer.take());
+              let mut can_retry = attempt < max_attempts;
+              if can_retry {
+                let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+                if let Some(retry_after) = retry_after {
+                  backoff = backoff.max(retry_after);
+                }
+                if let Some(deadline) = deadline.as_ref() {
+                  if deadline.timeout_limit().is_some() {
+                    match deadline.remaining_timeout() {
+                      Some(remaining) if !remaining.is_zero() => {
+                        let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                        backoff = backoff.min(max_sleep);
+                      }
+                      _ => can_retry = false,
+                    }
+                  }
+                }
+                if let Some(budget) = timeout_budget {
+                  match budget.checked_sub(started.elapsed()) {
+                    Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
+                if can_retry {
+                  log_http_retry(
+                    &format!("status {status_code}"),
+                    attempt,
+                    max_attempts,
+                    &current,
+                    backoff,
+                  );
+                  if !backoff.is_zero() {
+                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                      .map_err(Error::Render)?;
+                  }
+                  continue;
+                }
+                if timeout_budget.is_some() {
+                  return Err(budget_exhausted_error(&current, attempt));
+                }
+              }
+
+              if status_code != 202 {
+                let mut message = if attempt < max_attempts {
+                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
+                } else {
+                  "retryable HTTP status (retries exhausted)".to_string()
+                };
+                message.push_str(&format_attempt_suffix(attempt, max_attempts));
+                let err = ResourceError::new(current.clone(), message)
+                  .with_status(status_code)
+                  .with_final_url(final_url.clone());
+                return Err(Error::Resource(err));
+              }
+            }
+
+            if bytes.len() > allowed_limit {
+              finish_network_fetch_diagnostics(network_timer.take());
+              if let Some(remaining) = self.policy.remaining_budget() {
+                if bytes.len() > remaining {
+                  let err = ResourceError::new(
+                    current.clone(),
+                    format!(
+                      "total bytes budget exceeded ({} > {} bytes remaining)",
+                      bytes.len(),
+                      remaining
+                    ),
+                  )
+                  .with_status(status.as_u16())
+                  .with_final_url(final_url.clone());
+                  return Err(Error::Resource(err));
+                }
+              }
+
+              let err = ResourceError::new(
+                current.clone(),
+                format!(
+                  "response too large ({} > {} bytes)",
+                  bytes.len(),
+                  allowed_limit
+                ),
+              )
+              .with_status(status.as_u16())
+              .with_final_url(final_url.clone());
+              return Err(Error::Resource(err));
+            }
+
+            finish_network_fetch_diagnostics(network_timer.take());
+            self.policy.reserve_budget(bytes.len())?;
+            let mut resource =
+              FetchedResource::with_final_url(bytes, content_type, Some(final_url));
+            resource.status = Some(status.as_u16());
+            resource.etag = etag;
+            resource.last_modified = last_modified;
+            resource.cache_policy = cache_policy;
+            render_control::check_active(decode_stage).map_err(Error::Render)?;
+            return Ok(resource);
+          }
+          Err(err) => {
+            finish_network_fetch_diagnostics(network_timer.take());
+            if attempt < max_attempts && is_retryable_io_error(&err) {
+              let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+              let mut can_retry = true;
+              if let Some(deadline) = deadline.as_ref() {
+                if deadline.timeout_limit().is_some() {
+                  match deadline.remaining_timeout() {
+                    Some(remaining) if !remaining.is_zero() => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
+              }
+              if let Some(budget) = timeout_budget {
+                match budget.checked_sub(started.elapsed()) {
+                  Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                    let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                    backoff = backoff.min(max_sleep);
+                  }
+                  _ => can_retry = false,
+                }
+              }
+              if can_retry {
+                let reason = err.to_string();
+                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
+                if !backoff.is_zero() {
+                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                    .map_err(Error::Render)?;
+                }
+                continue;
+              }
+              if timeout_budget.is_some() {
+                return Err(budget_exhausted_error(&current, attempt));
+              }
+            }
+
+            let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
+            let mut message = err.to_string();
+            if err.kind() == io::ErrorKind::TimedOut {
+              if let Some(overall) = overall_timeout {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout={overall:?})"
+                ));
+              } else if let Some(budget) = timeout_budget {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout_budget={budget:?})"
+                ));
+              } else {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?})"
+                ));
+              }
+            } else {
+              message.push_str(&format_attempt_suffix(attempt, max_attempts));
+            }
+
+            let err = ResourceError::new(current.clone(), message)
+              .with_status(status.as_u16())
+              .with_final_url(final_url)
+              .with_source(err);
+            return Err(Error::Resource(err));
+          }
+        }
+      }
+    }
+
+    Err(Error::Resource(
+      ResourceError::new(
+        url,
+        format!("too many redirects (limit {})", self.policy.max_redirects),
+      )
+      .with_final_url(current),
+    ))
+  }
+
   /// Fetch from a file:// URL
   fn fetch_file(&self, url: &str) -> Result<FetchedResource> {
     let path = url.strip_prefix("file://").unwrap_or(url);
@@ -2680,10 +3286,13 @@ impl HttpFetcher {
 impl Default for HttpFetcher {
   fn default() -> Self {
     let policy = ResourcePolicy::default();
+    let cookie_jar = Arc::new(ReqwestCookieJar::default());
+    let reqwest_client = Self::build_reqwest_client(&cookie_jar);
     Self {
       user_agent: DEFAULT_USER_AGENT.to_string(),
       accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
       agent: Self::build_agent(&policy),
+      reqwest_client,
       policy,
       retry_policy: HttpRetryPolicy::default(),
       curl_cookie_jar: Arc::new(Mutex::new(curl_backend::CookieJarState::default())),
