@@ -13,6 +13,8 @@ env:
   MSRV: "1.70"
   # perf_smoke is a lightweight offline perf signal; keep this conservative to avoid flakiness.
   PERF_SMOKE_REGRESSION_THRESHOLD: "0.10"
+  # Enable once pageset-timeouts budgets are calibrated (Task 74).
+  PERF_SMOKE_FAIL_ON_BUDGET: "0"
 
 jobs:
   # ===========================================================================
@@ -92,7 +94,17 @@ jobs:
         id: perf_smoke_pageset_timeouts
         run: |
           set -o pipefail
-          cargo run --release --bin perf_smoke -- --suite pageset-timeouts --top 5 --output target/perf_smoke_pageset_timeouts.json | tee target/perf_smoke_pageset_timeouts.log
+          extra_args=()
+          if [ "${PERF_SMOKE_FAIL_ON_BUDGET}" = "1" ]; then
+            extra_args+=(--fail-on-budget)
+          fi
+          cargo run --release --bin perf_smoke -- \
+            --suite pageset-timeouts \
+            --fail-on-missing-fixtures \
+            "${extra_args[@]}" \
+            --top 5 \
+            --output target/perf_smoke_pageset_timeouts.json \
+            | tee target/perf_smoke_pageset_timeouts.log
 
       - name: Download perf_smoke pageset-timeouts baseline (main)
         if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
@@ -127,17 +139,23 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
         run: |
           # To reproduce locally:
-          #   cargo run --release --bin perf_smoke -- --suite pageset-timeouts --baseline <path> --fail-on-regression --threshold 0.10
+          #   cargo run --release --bin perf_smoke -- --suite pageset-timeouts --fail-on-missing-fixtures --baseline <path> --fail-on-regression --threshold 0.10
           report_path=target/perf_smoke_pageset_timeouts_regression_report.txt
           status=0
+          extra_args=()
+          if [ "${PERF_SMOKE_FAIL_ON_BUDGET}" = "1" ]; then
+            extra_args+=(--fail-on-budget)
+          fi
 
           # Use the already-built binary to keep the report free of cargo build noise.
           target/release/perf_smoke \
             --suite pageset-timeouts \
+            --fail-on-missing-fixtures \
             --top 5 \
             --output target/perf_smoke_pageset_timeouts.json \
             --baseline "${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}" \
             --fail-on-regression \
+            "${extra_args[@]}" \
             --threshold "${PERF_SMOKE_REGRESSION_THRESHOLD}" \
             > /dev/null 2> "${report_path}" || status=$?
 
