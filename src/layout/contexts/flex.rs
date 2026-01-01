@@ -466,10 +466,15 @@ impl FormattingContext for FlexFormattingContext {
     }
     // Keep block axis as provided; many flex containers legitimately size-to-content.
 
-    let has_running_children = box_node
-      .children
-      .iter()
-      .any(|child| child.style.running_position.is_some());
+    let mut deadline_counter = 0usize;
+    let mut has_running_children = false;
+    for child in box_node.children.iter() {
+      check_layout_deadline(&mut deadline_counter)?;
+      if child.style.running_position.is_some() {
+        has_running_children = true;
+        break;
+      }
+    }
     if !has_running_children {
       if let Some(cached) = layout_cache_lookup(
         box_node,
@@ -526,7 +531,6 @@ impl FormattingContext for FlexFormattingContext {
     let mut in_flow_children: Vec<(usize, &BoxNode)> = Vec::new();
     let mut positioned_children: Vec<&BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
-    let mut deadline_counter = 0usize;
     for (idx, child) in box_node.children.iter().enumerate() {
       check_layout_deadline(&mut deadline_counter)?;
       if child.style.running_position.is_some() {
@@ -5627,6 +5631,55 @@ mod tests {
     );
 
     assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
+  fn flex_running_child_scan_times_out_before_cache_hit() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    let children: Vec<BoxNode> = (0..FLEX_DEADLINE_CHECK_STRIDE)
+      .map(|_| {
+        BoxNode::new_block(
+          create_item_style(10.0, 10.0),
+          FormattingContextType::Block,
+          vec![],
+        )
+      })
+      .collect();
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let fc = FlexFormattingContext::new();
+    fc.layout(&container, &constraints).expect("populate flex cache");
+
+    let key = layout_cache_key(&constraints, fc.viewport_size).expect("cache key");
+    let node_key = flex_cache_key(&container);
+    assert!(
+      fc.layout_fragments.get(node_key, &key).is_some(),
+      "expected second layout to be able to hit the flex layout cache",
+    );
+
+    // Let the initial check_active() pass, then time out on the first periodic deadline check in
+    // the running-children scan loop. If that loop fails to check deadlines, the layout cache hit
+    // would return early and mask the timeout.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let deadline = RenderDeadline::new(
+      None,
+      Some(Arc::new(move || {
+        let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
+        prev == 1
+      })),
+    );
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let result = fc.layout(&container, &constraints);
+    match result {
+      Err(LayoutError::Timeout { elapsed }) => assert!(elapsed >= Duration::from_secs(0)),
+      other => panic!("expected LayoutError::Timeout from running scan, got {other:?}"),
+    }
   }
 
   #[test]
