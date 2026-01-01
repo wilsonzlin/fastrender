@@ -66,7 +66,7 @@ fn sniff_html_meta_charset(bytes: &[u8]) -> Option<&'static Encoding> {
           break;
         }
       }
-      if lower[i..].starts_with(b"<meta") {
+      if lower[i..].starts_with(b"<meta") && is_meta_tag_boundary(lower.get(i + 5).copied()) {
         if let Some(tag_end) = find_tag_end(&lower, i + 5) {
           let attrs = &lower[i + 5..tag_end];
           if let Some(enc) = parse_meta_charset(attrs) {
@@ -84,14 +84,28 @@ fn sniff_html_meta_charset(bytes: &[u8]) -> Option<&'static Encoding> {
   None
 }
 
+fn is_meta_tag_boundary(b: Option<u8>) -> bool {
+  matches!(b, None | Some(b'>') | Some(b'/')) || b.is_some_and(|b| b.is_ascii_whitespace())
+}
+
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
   haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn find_tag_end(bytes: &[u8], mut idx: usize) -> Option<usize> {
+  let mut quote: Option<u8> = None;
   while idx < bytes.len() {
-    if bytes[idx] == b'>' {
-      return Some(idx);
+    match quote {
+      Some(q) => {
+        if bytes[idx] == q {
+          quote = None;
+        }
+      }
+      None => match bytes[idx] {
+        b'>' => return Some(idx),
+        b'"' | b'\'' => quote = Some(bytes[idx]),
+        _ => {}
+      },
     }
     idx += 1;
   }
@@ -99,31 +113,109 @@ fn find_tag_end(bytes: &[u8], mut idx: usize) -> Option<usize> {
 }
 
 fn parse_meta_charset(attrs_lower: &[u8]) -> Option<&'static Encoding> {
-  // Look for charset attribute.
-  if let Some(pos) = find_bytes(attrs_lower, b"charset") {
-    let after = &attrs_lower[pos + "charset".len()..];
-    let (raw_val, _) = parse_attr_value(after);
-    if let Some(label) = raw_val {
-      if let Some(enc) = Encoding::for_label(label.as_bytes()) {
+  let mut charset: Option<&[u8]> = None;
+  let mut http_equiv: Option<&[u8]> = None;
+  let mut content: Option<&[u8]> = None;
+
+  // Parse attributes by name (not substring search) to avoid matching "charset"/"content" inside
+  // other attribute values like `http-equiv="Content-Type"`.
+  let mut i = 0;
+  while i < attrs_lower.len() {
+    // Skip whitespace between attributes.
+    while i < attrs_lower.len() && attrs_lower[i].is_ascii_whitespace() {
+      i += 1;
+    }
+    if i >= attrs_lower.len() {
+      break;
+    }
+
+    // Ignore a self-closing `/>` marker.
+    if attrs_lower[i] == b'/' {
+      i += 1;
+      continue;
+    }
+
+    // Parse attribute name.
+    let name_start = i;
+    while i < attrs_lower.len() {
+      let b = attrs_lower[i];
+      if b.is_ascii_whitespace() || b == b'=' || b == b'/' {
+        break;
+      }
+      i += 1;
+    }
+    let name_end = i;
+    if name_end == name_start {
+      i += 1;
+      continue;
+    }
+    let name = &attrs_lower[name_start..name_end];
+
+    // Skip whitespace after name.
+    while i < attrs_lower.len() && attrs_lower[i].is_ascii_whitespace() {
+      i += 1;
+    }
+
+    // Parse optional attribute value.
+    let mut value: Option<&[u8]> = None;
+    if i < attrs_lower.len() && attrs_lower[i] == b'=' {
+      i += 1;
+      while i < attrs_lower.len() && attrs_lower[i].is_ascii_whitespace() {
+        i += 1;
+      }
+      if i < attrs_lower.len() {
+        match attrs_lower[i] {
+          b'"' | b'\'' => {
+            let quote = attrs_lower[i];
+            i += 1;
+            let start = i;
+            while i < attrs_lower.len() && attrs_lower[i] != quote {
+              i += 1;
+            }
+            value = Some(&attrs_lower[start..i]);
+            if i < attrs_lower.len() && attrs_lower[i] == quote {
+              i += 1;
+            }
+          }
+          _ => {
+            let start = i;
+            while i < attrs_lower.len() {
+              let b = attrs_lower[i];
+              if b.is_ascii_whitespace() || b == b'/' {
+                break;
+              }
+              i += 1;
+            }
+            value = Some(&attrs_lower[start..i]);
+          }
+        }
+      }
+    }
+
+    match name {
+      b"charset" => charset = value,
+      b"http-equiv" => http_equiv = value,
+      b"content" => content = value,
+      _ => {}
+    }
+  }
+
+  if let Some(label) = charset {
+    let label = trim_ascii_quotes(trim_ascii_whitespace(label));
+    if !label.is_empty() {
+      if let Some(enc) = Encoding::for_label(label) {
         return Some(enc);
       }
     }
   }
 
-  // Look for http-equiv/content pair specifying charset
-  if let Some(http_equiv_pos) = find_bytes(attrs_lower, b"http-equiv") {
-    let (http_equiv, _) = parse_attr_value(&attrs_lower[http_equiv_pos + "http-equiv".len()..]);
-    if http_equiv.as_deref() != Some("content-type") {
-      return None;
-    }
-    if let Some(content_pos) = find_bytes(attrs_lower, b"content") {
-      let (content, _) = parse_attr_value(&attrs_lower[content_pos + "content".len()..]);
-      if let Some(content) = content {
-        if let Some(idx) = content.to_ascii_lowercase().find("charset=") {
-          let label = content[idx + "charset=".len()..].trim_matches(['\'', '"', ' ', ';']);
-          if let Some(enc) = Encoding::for_label(label.as_bytes()) {
-            return Some(enc);
-          }
+  let http_equiv = http_equiv.map(trim_ascii_whitespace);
+  if http_equiv == Some(b"content-type") {
+    if let Some(content) = content {
+      let content = trim_ascii_whitespace(content);
+      if let Some(label) = charset_from_content_type_bytes(content) {
+        if let Some(enc) = Encoding::for_label(label) {
+          return Some(enc);
         }
       }
     }
@@ -131,39 +223,66 @@ fn parse_meta_charset(attrs_lower: &[u8]) -> Option<&'static Encoding> {
   None
 }
 
-/// Parses an attribute value after the attribute name.
-/// Returns (value, bytes_consumed_from_lowercase_slice_after_name)
-fn parse_attr_value(slice_lower: &[u8]) -> (Option<String>, usize) {
-  let mut i = 0;
-  while i < slice_lower.len() && (slice_lower[i].is_ascii_whitespace() || slice_lower[i] == b'=') {
-    i += 1;
-  }
-  if i >= slice_lower.len() {
-    return (None, i);
-  }
-  let (value, consumed) = if slice_lower[i] == b'"' || slice_lower[i] == b'\'' {
-    let quote = slice_lower[i];
-    i += 1;
-    let start = i;
-    while i < slice_lower.len() && slice_lower[i] != quote {
-      i += 1;
+fn charset_from_content_type_bytes(content_type: &[u8]) -> Option<&[u8]> {
+  for param in content_type.split(|&b| b == b';').skip(1) {
+    let param = trim_ascii_whitespace(param);
+    if param.is_empty() {
+      continue;
     }
-    let end = i.min(slice_lower.len());
-    let value_bytes = &slice_lower[start..end];
-    (
-      Some(String::from_utf8_lossy(value_bytes).into_owned()),
-      end + 1,
-    )
-  } else {
-    let start = i;
-    while i < slice_lower.len() && !slice_lower[i].is_ascii_whitespace() && slice_lower[i] != b'>' {
-      i += 1;
+
+    let mut parts = param.splitn(2, |&b| b == b'=');
+    let name = trim_ascii_whitespace(parts.next()?);
+    if name != b"charset" {
+      continue;
     }
-    let end = i;
-    let value_bytes = &slice_lower[start..end];
-    (Some(String::from_utf8_lossy(value_bytes).into_owned()), end)
-  };
-  (value, consumed)
+
+    let value = parts.next().unwrap_or_default();
+    let value = trim_ascii_quotes(trim_ascii_whitespace(value));
+    if !value.is_empty() {
+      return Some(value);
+    }
+  }
+  None
+}
+
+fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+  let mut start = 0;
+  let mut end = bytes.len();
+  while start < end && bytes[start].is_ascii_whitespace() {
+    start += 1;
+  }
+  while end > start && bytes[end - 1].is_ascii_whitespace() {
+    end -= 1;
+  }
+  &bytes[start..end]
+}
+
+fn trim_ascii_quotes(mut bytes: &[u8]) -> &[u8] {
+  loop {
+    bytes = trim_ascii_whitespace(bytes);
+    if bytes.len() >= 2 {
+      let first = bytes[0];
+      let last = bytes[bytes.len() - 1];
+      if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+        bytes = &bytes[1..bytes.len() - 1];
+        continue;
+      }
+    }
+
+    let mut changed = false;
+    if !bytes.is_empty() && matches!(bytes[0], b'"' | b'\'') {
+      bytes = &bytes[1..];
+      changed = true;
+    }
+    if !bytes.is_empty() && matches!(bytes[bytes.len() - 1], b'"' | b'\'') {
+      bytes = &bytes[..bytes.len() - 1];
+      changed = true;
+    }
+    if !changed {
+      break;
+    }
+  }
+  bytes
 }
 
 #[cfg(test)]
@@ -200,6 +319,34 @@ mod tests {
     assert!(
       decoded.contains('デ'),
       "decoded text should contain kana when meta declares charset: {}",
+      decoded
+    );
+  }
+
+  #[test]
+  fn decode_html_uses_meta_http_equiv_content_type_charset() {
+    let encoded = encoding_rs::GBK.encode(
+      "<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=gbk\"></head><body>中文</body></html>",
+    ).0;
+    let decoded = decode_html_bytes(&encoded, None);
+    assert!(
+      decoded.contains("中文"),
+      "decoded text should contain Han characters when meta declares charset via http-equiv: {}",
+      decoded
+    );
+  }
+
+  #[test]
+  fn decode_html_meta_sniff_does_not_match_attribute_values() {
+    // The `data` attribute value contains the substring `content="..."`, but it is not the `content`
+    // attribute. Only actual attribute names should be considered by the sniffing algorithm.
+    let encoded = encoding_rs::WINDOWS_1252
+      .encode("<html><head><meta data='content=\"text/html; charset=shift_jis\"' http-equiv=\"Content-Type\"></head><body>\u{00a3}</body></html>")
+      .0;
+    let decoded = decode_html_bytes(&encoded, None);
+    assert!(
+      decoded.contains('£'),
+      "decoded text should not treat attribute values as meta declarations: {}",
       decoded
     );
   }
