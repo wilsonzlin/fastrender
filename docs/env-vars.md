@@ -62,6 +62,12 @@ This also applies to `fetch_pages` (migrated to `build_http_fetcher` in Task 13)
 
 - `FASTR_MAX_FOREIGN_OBJECT_CSS_BYTES=<N>` – cap the amount of document-level CSS injected into nested
   `<foreignObject>` HTML renders (default 262_144 bytes).
+- `FASTR_SVG_EMBED_DOCUMENT_CSS=0|1` – force-disable/force-enable embedding document `<style>` CSS into
+  serialized inline `<svg>` replaced elements. When unset, embedding is automatic and is disabled when
+  the document CSS exceeds 64KiB or when the document contains more than
+  `FASTR_SVG_EMBED_DOCUMENT_CSS_MAX_SVGS` replaced inline SVGs. The 64KiB cap still applies when forced on.
+- `FASTR_SVG_EMBED_DOCUMENT_CSS_MAX_SVGS=<N>` – maximum replaced inline `<svg>` elements allowed before
+  document CSS embedding is disabled (default 16). Only used when `FASTR_SVG_EMBED_DOCUMENT_CSS` is unset.
 - `FASTR_INLINE_MAX_STYLESHEETS=<N>` – maximum number of stylesheets inlined across `<link>`/embedded
   discovery and `@import` chains (default 128).
 - `FASTR_EMBEDDED_CSS_MAX_CANDIDATES=<N>` – cap the number of stylesheet URLs discovered via the
@@ -104,6 +110,8 @@ These are emitted by the paint pipeline:
   selector candidate/match counters and `:has()` evaluation counters).
 - `FASTR_LAYOUT_PROFILE=1` – layout-context profiling.
 - `FASTR_FLEX_PROFILE=1` – flex profiling (with additional `FASTR_FLEX_PROFILE_*` knobs).
+- `FASTR_SVG_PROFILE=1` – print per-render inline SVG serialization stats (calls/bytes/time and whether
+  document CSS embedding was enabled).
 - `FASTR_PROFILE_FRAGMENT_CLONES=1` – count fragment clones when layout/flex/grid caches reuse measured/layout fragments and enable fragment instrumentation (deep clone counts, traversal).
 - `FASTR_INTRINSIC_STATS=1` – intrinsic sizing cache stats.
 - `FASTR_LAYOUT_CACHE_STATS=1` – layout cache stats (intrinsic cache hits/misses and pass counts).
