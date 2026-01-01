@@ -39,7 +39,7 @@ use crate::tree::fragment_tree::FragmentTree;
 use rayon::ThreadPool;
 use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -67,6 +67,8 @@ const DEFAULT_LAYOUT_RAYON_STACK_SIZE: usize = 64 * 1024 * 1024;
 pub const DEFAULT_LAYOUT_AUTO_MAX_THREADS: usize = 16;
 
 static DEFAULT_LAYOUT_THREAD_POOL: OnceLock<Result<Arc<ThreadPool>, String>> = OnceLock::new();
+static LAYOUT_THREAD_POOL_CACHE: OnceLock<Mutex<HashMap<usize, Result<Arc<ThreadPool>, String>>>> =
+  OnceLock::new();
 
 fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
   match DEFAULT_LAYOUT_THREAD_POOL.get_or_init(|| {
@@ -81,6 +83,45 @@ fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
     Ok(pool) => Some(pool.clone()),
     Err(_) => None,
   }
+}
+
+fn layout_thread_pool_for_threads(threads: usize) -> Option<Arc<ThreadPool>> {
+  let threads = threads.max(1);
+  if threads <= 1 {
+    return None;
+  }
+  if threads == DEFAULT_LAYOUT_AUTO_MAX_THREADS {
+    return default_layout_thread_pool();
+  }
+  if threads > DEFAULT_LAYOUT_AUTO_MAX_THREADS {
+    return ThreadPoolBuilder::new()
+      .num_threads(threads)
+      .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
+      .thread_name(|idx| format!("fastr-layout-{idx}"))
+      .build()
+      .ok()
+      .map(Arc::new);
+  }
+
+  let cache = LAYOUT_THREAD_POOL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+  if let Ok(guard) = cache.lock() {
+    if let Some(result) = guard.get(&threads) {
+      return result.as_ref().ok().cloned();
+    }
+  }
+
+  let built = ThreadPoolBuilder::new()
+    .num_threads(threads)
+    .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
+    .thread_name(|idx| format!("fastr-layout-{idx}"))
+    .build()
+    .map(Arc::new)
+    .map_err(|err| err.to_string());
+
+  if let Ok(mut guard) = cache.lock() {
+    guard.insert(threads, built.clone());
+  }
+  built.ok()
 }
 
 /// Summary of layout fan-out opportunities for a box tree.
@@ -627,19 +668,7 @@ impl LayoutEngine {
       .parallelism
       .max_threads
       .filter(|threads| *threads > 1)
-      .and_then(|threads| {
-        if threads == DEFAULT_LAYOUT_AUTO_MAX_THREADS {
-          default_layout_thread_pool()
-        } else {
-          ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
-            .thread_name(|idx| format!("fastr-layout-{idx}"))
-            .build()
-            .ok()
-            .map(Arc::new)
-        }
-      });
+      .and_then(layout_thread_pool_for_threads);
     Self {
       config,
       factory,
@@ -891,18 +920,10 @@ impl LayoutEngine {
       if let Some(pool) = &self.parallel_pool {
         Some(pool.clone())
       } else {
-        parallelism
-          .max_threads
-          .filter(|threads| *threads > 1)
-          .and_then(|threads| {
-            ThreadPoolBuilder::new()
-              .num_threads(threads)
-              .stack_size(DEFAULT_LAYOUT_RAYON_STACK_SIZE)
-              .thread_name(|idx| format!("fastr-layout-{idx}"))
-              .build()
-              .ok()
-          })
-          .map(Arc::new)
+        let threads = parallelism.max_threads.unwrap_or_else(|| {
+          rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+        });
+        layout_thread_pool_for_threads(threads)
       }
     } else {
       None

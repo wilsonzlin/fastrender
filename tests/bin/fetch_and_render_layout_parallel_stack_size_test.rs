@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
 
@@ -16,31 +17,12 @@ fn build_deep_parallel_html(depth: usize, siblings: usize) -> String {
   html
 }
 
-#[test]
-fn fetch_and_render_layout_parallel_workers_use_large_stack() {
-  let temp = tempdir().expect("tempdir");
-  let html_path = temp.path().join("deep_parallel.html");
-  fs::write(&html_path, build_deep_parallel_html(500, 8)).expect("write deep html");
-
-  let url = format!("file://{}", html_path.display());
-  let output_path = temp.path().join("out.png");
-
+fn run_fetch_and_render(temp_dir: &Path, url: &str, output_path: &Path, args: &[&str]) {
   let output = Command::new(env!("CARGO_BIN_EXE_fetch_and_render"))
-    .current_dir(temp.path())
+    .current_dir(temp_dir)
     .env("FASTR_USE_BUNDLED_FONTS", "1")
-    .args([
-      "--timeout",
-      "30",
-      "--viewport",
-      "64x64",
-      "--layout-parallel",
-      "on",
-      "--layout-parallel-min-fanout",
-      "8",
-      "--layout-parallel-max-threads",
-      "2",
-    ])
-    .arg(&url)
+    .args(args)
+    .arg(url)
     .arg(output_path.to_str().unwrap())
     .output()
     .expect("run fetch_and_render on deep DOM");
@@ -78,3 +60,54 @@ fn fetch_and_render_layout_parallel_workers_use_large_stack() {
   );
 }
 
+#[test]
+fn fetch_and_render_layout_parallel_workers_use_large_stack() {
+  let temp = tempdir().expect("tempdir");
+  let html_path = temp.path().join("deep_parallel.html");
+  fs::write(&html_path, build_deep_parallel_html(500, 8)).expect("write deep html");
+
+  let url = format!("file://{}", html_path.display());
+  let output_path = temp.path().join("out.png");
+  run_fetch_and_render(
+    temp.path(),
+    &url,
+    &output_path,
+    &[
+      "--timeout",
+      "30",
+      "--viewport",
+      "64x64",
+      "--layout-parallel",
+      "on",
+      "--layout-parallel-min-fanout",
+      "8",
+      "--layout-parallel-max-threads",
+      "2",
+    ],
+  );
+}
+
+#[test]
+fn fetch_and_render_layout_parallel_without_max_threads_uses_large_stack() {
+  let temp = tempdir().expect("tempdir");
+  let html_path = temp.path().join("deep_parallel.html");
+  fs::write(&html_path, build_deep_parallel_html(500, 8)).expect("write deep html");
+
+  let url = format!("file://{}", html_path.display());
+  let output_path = temp.path().join("out.png");
+  run_fetch_and_render(
+    temp.path(),
+    &url,
+    &output_path,
+    &[
+      "--timeout",
+      "30",
+      "--viewport",
+      "64x64",
+      "--layout-parallel",
+      "on",
+      "--layout-parallel-min-fanout",
+      "8",
+    ],
+  );
+}
