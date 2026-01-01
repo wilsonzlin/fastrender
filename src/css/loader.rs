@@ -422,12 +422,15 @@ pub fn absolutize_css_urls_cow<'a>(
                 Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
                 Ok(Token::QuotedString(s)) | Ok(Token::UnquotedUrl(s)) => {
                   arg = Some(s.clone());
+                  break;
                 }
                 Ok(Token::Ident(s)) => {
                   arg = Some(s.clone());
+                  break;
                 }
                 Ok(Token::BadUrl(_)) => {
                   arg = None;
+                  break;
                 }
                 Ok(_) => {}
                 Err(_) => break,
