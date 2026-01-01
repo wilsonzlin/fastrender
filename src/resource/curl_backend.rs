@@ -109,6 +109,7 @@ pub(super) fn build_curl_args(
   cookie_jar: &Path,
   timeout: Option<Duration>,
   headers: &[(String, String)],
+  force_http1: bool,
 ) -> Vec<String> {
   let mut args = Vec::new();
   args.push("-q".to_string());
@@ -117,6 +118,9 @@ pub(super) fn build_curl_args(
   args.push("--show-error".to_string());
   args.push("--dump-header".to_string());
   args.push("-".to_string());
+  if force_http1 {
+    args.push("--http1.1".to_string());
+  }
   args.push("-b".to_string());
   args.push(cookie_jar.display().to_string());
   args.push("-c".to_string());
@@ -212,8 +216,9 @@ fn run_curl(
   timeout: Option<Duration>,
   headers: &[(String, String)],
   body_limit: usize,
+  force_http1: bool,
 ) -> std::result::Result<CurlResponse, CurlError> {
-  let args = build_curl_args(url, cookie_jar, timeout, headers);
+  let args = build_curl_args(url, cookie_jar, timeout, headers, force_http1);
   let mut command = Command::new("curl");
   command.args(&args);
   command.stdout(Stdio::piped());
@@ -383,6 +388,8 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
     .map_err(|e| Error::Resource(ResourceError::new(url.to_string(), e.to_string()).with_source(e)))?
     .to_path_buf();
 
+  let mut force_http1 = false;
+
   'redirects: for _ in 0..fetcher.policy.max_redirects {
     fetcher.policy.ensure_url_allowed(&current)?;
 
@@ -424,6 +431,7 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         (!effective_timeout.is_zero()).then_some(effective_timeout),
         &headers,
         allowed_limit,
+        force_http1,
       );
       super::finish_network_fetch_diagnostics(network_timer);
 
@@ -458,6 +466,17 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
           return Err(Error::Resource(err));
         }
         Err(CurlError::Failure(failure)) => {
+          if !force_http1
+            && failure
+              .exit_status
+              .as_ref()
+              .and_then(|s| s.code())
+              .is_some_and(|code| code == 92)
+          {
+            // Retry HTTP/2 INTERNAL_ERROR responses over HTTP/1.1. Some sites/CDNs fail
+            // intermittently when negotiating H2 but succeed over H1.
+            force_http1 = true;
+          }
           if attempt < max_attempts && failure.retryable() {
             let mut backoff = super::compute_backoff(&fetcher.retry_policy, attempt, &current);
             let mut can_retry = true;
@@ -801,6 +820,7 @@ mod tests {
       &cookie,
       Some(Duration::from_secs(3)),
       &headers,
+      false,
     );
     assert!(args.contains(&"--silent".to_string()));
     assert!(args.contains(&"--show-error".to_string()));
@@ -816,7 +836,7 @@ mod tests {
   fn build_args_sanitizes_header_values() {
     let cookie = PathBuf::from("/tmp/cookies.txt");
     let headers = vec![("X-Test".to_string(), "a\r\nb\0c".to_string())];
-    let args = build_curl_args("https://example.com/", &cookie, None, &headers);
+    let args = build_curl_args("https://example.com/", &cookie, None, &headers, false);
     let header_value = args
       .iter()
       .skip_while(|v| *v != "--header")
@@ -830,5 +850,13 @@ mod tests {
   #[test]
   fn status_line_parses_http2() {
     assert_eq!(parse_status_line("HTTP/2 204\r\n"), Some(204));
+  }
+
+  #[test]
+  fn build_args_can_force_http1() {
+    let cookie = PathBuf::from("/tmp/cookies.txt");
+    let headers = vec![("User-Agent".to_string(), DEFAULT_USER_AGENT.to_string())];
+    let args = build_curl_args("https://example.com/", &cookie, None, &headers, true);
+    assert!(args.contains(&"--http1.1".to_string()));
   }
 }
