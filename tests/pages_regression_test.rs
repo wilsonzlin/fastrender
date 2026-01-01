@@ -583,38 +583,15 @@ fn pageset_failure_fixtures_present() {
 }
 
 #[test]
-fn pageset_timeouts_fixtures_present() {
-  #[derive(Deserialize)]
-  struct TimeoutsManifest {
-    schema_version: u32,
-    fixtures: Vec<TimeoutFixture>,
-  }
+fn pageset_timeouts_manifest_is_legacy_guardrails_mirror() {
+  let guardrails: serde_json::Value = serde_json::from_str(include_str!("pages/pageset_guardrails.json"))
+    .expect("failed to parse pageset guardrails manifest");
+  let legacy: serde_json::Value = serde_json::from_str(include_str!("pages/pageset_timeouts.json"))
+    .expect("failed to parse legacy pageset timeouts manifest");
 
-  #[derive(Deserialize)]
-  struct TimeoutFixture {
-    name: String,
-  }
-
-  let manifest: TimeoutsManifest = serde_json::from_str(include_str!("pages/pageset_timeouts.json"))
-    .expect("failed to parse pageset timeout manifest");
   assert_eq!(
-    manifest.schema_version, 1,
-    "unexpected pageset timeout manifest schema_version {}",
-    manifest.schema_version
-  );
-
-  let mut missing = Vec::new();
-  for fixture in manifest.fixtures {
-    let html_path = fixtures_dir().join(&fixture.name).join("index.html");
-    if !html_path.exists() {
-      missing.push(format!("{} ({})", fixture.name, html_path.display()));
-    }
-  }
-
-  assert!(
-    missing.is_empty(),
-    "pages/pageset_timeouts.json references fixtures missing from the repository:\n{}",
-    missing.join("\n")
+    guardrails, legacy,
+    "pages/pageset_timeouts.json should remain a backwards-compatible mirror of pages/pageset_guardrails.json"
   );
 }
 
