@@ -598,7 +598,12 @@ fn rewrite_reference(
     bail!("could not resolve URL '{trimmed}' against base {base_url}");
   };
 
-  if resolved.starts_with("data:") {
+  const DATA_URL_PREFIX: &str = "data:";
+  if resolved
+    .get(..DATA_URL_PREFIX.len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+    .unwrap_or(false)
+  {
     return Ok(None);
   }
 

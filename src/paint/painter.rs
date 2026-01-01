@@ -9078,7 +9078,12 @@ struct EmbeddedImportFetcher {
 
 impl EmbeddedImportFetcher {
   fn resolve_url(&self, href: &str) -> Option<Url> {
-    if href.starts_with("data:") {
+    const DATA_URL_PREFIX: &str = "data:";
+    if href
+      .get(..DATA_URL_PREFIX.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+      .unwrap_or(false)
+    {
       return None;
     }
 
@@ -9106,7 +9111,12 @@ impl EmbeddedImportFetcher {
 
 impl css::types::CssImportLoader for EmbeddedImportFetcher {
   fn load(&self, url: &str) -> Result<String> {
-    if url.starts_with("data:") {
+    const DATA_URL_PREFIX: &str = "data:";
+    if url
+      .get(..DATA_URL_PREFIX.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+      .unwrap_or(false)
+    {
       return decode_data_url_to_string(url);
     }
 

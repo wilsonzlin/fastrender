@@ -495,7 +495,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn should_skip_disk(&self, url: &str) -> bool {
-    url.starts_with("data:")
+    const DATA_URL_PREFIX: &str = "data:";
+    url
+      .get(..DATA_URL_PREFIX.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+      .unwrap_or(false)
   }
 
   fn disk_writeback_disabled(&self) -> bool {
@@ -1820,6 +1824,19 @@ mod tests {
     assert_eq!(
       snapshot[0].referrer.as_deref(),
       Some("https://example.com/")
+    );
+  }
+
+  #[test]
+  fn should_skip_disk_matches_data_urls_case_insensitively() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fetcher = CountingFetcher {
+      count: Arc::new(AtomicUsize::new(0)),
+    };
+    let cache = DiskCachingFetcher::new(fetcher, tmp.path());
+    assert!(
+      cache.should_skip_disk("DATA:text/plain;base64,aGk="),
+      "expected DiskCachingFetcher to skip persisting data URLs regardless of scheme casing"
     );
   }
 

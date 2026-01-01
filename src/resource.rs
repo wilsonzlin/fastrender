@@ -6163,7 +6163,12 @@ fn guess_content_type_from_path(path: &str) -> Option<String> {
 
 /// Decode a data: URL into bytes
 fn decode_data_url(url: &str) -> Result<FetchedResource> {
-  if !url.starts_with("data:") {
+  const DATA_URL_PREFIX: &str = "data:";
+  if !url
+    .get(..DATA_URL_PREFIX.len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+    .unwrap_or(false)
+  {
     return Err(Error::Image(ImageError::InvalidDataUrl {
       reason: "URL does not start with 'data:'".to_string(),
     }));

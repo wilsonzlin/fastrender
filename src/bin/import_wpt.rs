@@ -557,10 +557,14 @@ fn resolve_reference(
   dest_dir: &Path,
   value: &str,
 ) -> Result<Option<Reference>> {
+  const DATA_URL_PREFIX: &str = "data:";
   let trimmed = value.trim();
   if trimmed.is_empty()
     || trimmed.starts_with('#')
-    || trimmed.starts_with("data:")
+    || trimmed
+      .get(..DATA_URL_PREFIX.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+      .unwrap_or(false)
     || trimmed.starts_with("http://")
     || trimmed.starts_with("https://")
     || trimmed.starts_with("//")

@@ -2423,11 +2423,18 @@ fn font_supports_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
   }
 }
 
+fn has_prefix_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+  value
+    .get(..prefix.len())
+    .map(|head| head.eq_ignore_ascii_case(prefix))
+    .unwrap_or(false)
+}
+
 fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {
-  if url.starts_with("http://")
-    || url.starts_with("https://")
-    || url.starts_with("data:")
-    || url.starts_with("file:")
+  if has_prefix_ignore_ascii_case(url, "http://")
+    || has_prefix_ignore_ascii_case(url, "https://")
+    || has_prefix_ignore_ascii_case(url, "data:")
+    || has_prefix_ignore_ascii_case(url, "file:")
   {
     return url.to_string();
   }
@@ -2446,11 +2453,11 @@ fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {
 }
 
 fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
-  if url.starts_with("data:") {
+  if has_prefix_ignore_ascii_case(url, "data:") {
     return decode_data_url(url);
   }
 
-  if url.starts_with("http://") || url.starts_with("https://") {
+  if has_prefix_ignore_ascii_case(url, "http://") || has_prefix_ignore_ascii_case(url, "https://") {
     static FETCHER: OnceLock<HttpFetcher> = OnceLock::new();
     let fetcher = FETCHER.get_or_init(|| {
       HttpFetcher::new()
@@ -2477,8 +2484,9 @@ fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
     return Ok((resource.bytes, resource.content_type));
   }
 
-  if url.starts_with("file://") {
-    let path = url.trim_start_matches("file://");
+  const FILE_URL_PREFIX: &str = "file://";
+  if has_prefix_ignore_ascii_case(url, FILE_URL_PREFIX) {
+    let path = url.get(FILE_URL_PREFIX.len()..).unwrap_or("");
     return std::fs::read(path).map(|b| (b, None)).map_err(|e| {
       Error::Font(crate::error::FontError::LoadFailed {
         family: url.to_string(),
@@ -2589,7 +2597,15 @@ fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u
 }
 
 fn decode_data_url(url: &str) -> Result<(Vec<u8>, Option<String>)> {
-  let without_prefix = url.trim_start_matches("data:");
+  const DATA_URL_PREFIX: &str = "data:";
+  let without_prefix = if has_prefix_ignore_ascii_case(url, DATA_URL_PREFIX) {
+    &url[DATA_URL_PREFIX.len()..]
+  } else {
+    return Err(Error::Font(crate::error::FontError::LoadFailed {
+      family: "data-url".into(),
+      reason: "URL does not start with 'data:'".into(),
+    }));
+  };
   let mut parts = without_prefix.splitn(2, ',');
   let meta = parts.next().unwrap_or("");
   let data = parts.next().ok_or_else(|| {
@@ -2842,6 +2858,14 @@ mod tests {
 
     let ctx = FontContext::with_database(db);
     assert_eq!(ctx.font_count(), count);
+  }
+
+  #[test]
+  fn fetch_font_bytes_decodes_data_url_case_insensitive_scheme() {
+    let (bytes, content_type) =
+      fetch_font_bytes("DATA:font/woff2;base64,aGk=").expect("fetch data url font bytes");
+    assert_eq!(bytes, b"hi");
+    assert_eq!(content_type.as_deref(), Some("font/woff2"));
   }
 
   #[test]

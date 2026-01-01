@@ -80,7 +80,12 @@ fn is_inert_template(node: &DomNode) -> bool {
 
 fn resolve_prefetch_url(ctx: ImageSelectionContext<'_>, raw: &str) -> Option<String> {
   let resolved = resolve_href_with_base(ctx.base_url, raw)?;
-  if resolved.starts_with("data:") {
+  const DATA_URL_PREFIX: &str = "data:";
+  if resolved
+    .get(..DATA_URL_PREFIX.len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+    .unwrap_or(false)
+  {
     return None;
   }
   Some(resolved)

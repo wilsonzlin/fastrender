@@ -1584,7 +1584,12 @@ impl ImageCache {
     }
 
     // Absolute or data URLs can be returned directly.
-    if url.starts_with("data:") {
+    const DATA_URL_PREFIX: &str = "data:";
+    if url
+      .get(..DATA_URL_PREFIX.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+      .unwrap_or(false)
+    {
       return url.to_string();
     }
     if let Ok(parsed) = url::Url::parse(url) {
@@ -1909,7 +1914,14 @@ impl ImageCache {
         }
 
         let href = attr.value().trim();
-        if href.is_empty() || href.starts_with('#') || href.starts_with("data:") {
+        const DATA_URL_PREFIX: &str = "data:";
+        if href.is_empty()
+          || href.starts_with('#')
+          || href
+            .get(..DATA_URL_PREFIX.len())
+            .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+            .unwrap_or(false)
+        {
           continue;
         }
 

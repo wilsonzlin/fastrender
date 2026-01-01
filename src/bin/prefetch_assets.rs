@@ -268,7 +268,12 @@ mod disk_cache_main {
     if trimmed.is_empty() || trimmed.starts_with('#') {
       return None;
     }
-    if trimmed.starts_with("data:") {
+    const DATA_URL_PREFIX: &str = "data:";
+    if trimmed
+      .get(..DATA_URL_PREFIX.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+      .unwrap_or(false)
+    {
       return None;
     }
 
@@ -1042,7 +1047,12 @@ mod disk_cache_main {
         let Some(resolved) = resolve_href(css_base_url, &url_source.url) else {
           continue;
         };
-        if resolved.starts_with("data:") {
+        const DATA_URL_PREFIX: &str = "data:";
+        if resolved
+          .get(..DATA_URL_PREFIX.len())
+          .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+          .unwrap_or(false)
+        {
           continue;
         }
         if !seen_fonts.insert(resolved.clone()) {

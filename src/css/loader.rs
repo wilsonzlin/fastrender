@@ -2074,6 +2074,14 @@ mod tests {
   }
 
   #[test]
+  fn resolves_data_urls_case_insensitively() {
+    let base = "https://example.com/index.html";
+    let href = "DATA:text/plain;base64,aGk=";
+    let resolved = resolve_href(base, href).expect("resolved");
+    assert_eq!(resolved, href);
+  }
+
+  #[test]
   fn absolutizes_css_urls_cow_fast_path_skips_when_no_url_tokens() {
     let css = "body { color: red; }";
     let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
