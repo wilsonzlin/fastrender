@@ -12411,7 +12411,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let styled = apply_styles(&q, &StyleSheet::new());
     assert_eq!(
       styled.styles.quotes,
-      vec![("“".into(), "”".into()), ("‘".into(), "’".into())]
+      vec![("“".into(), "”".into()), ("‘".into(), "’".into())].into()
     );
   }
 

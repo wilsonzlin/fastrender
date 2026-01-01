@@ -26,7 +26,7 @@ fn bundled_fonts_render_common_scripts() {
 
   for (label, text) in samples {
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["sans-serif".to_string()];
+    style.font_family = vec!["sans-serif".to_string()].into();
     style.font_size = 32.0;
 
     let runs = pipeline
@@ -67,7 +67,7 @@ fn bundled_fonts_render_pageset_blocker_clusters() {
 
   for (label, text) in samples {
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["sans-serif".to_string()];
+    style.font_family = vec!["sans-serif".to_string()].into();
     style.font_size = 32.0;
 
     let runs = pipeline
@@ -106,7 +106,7 @@ fn bundled_fonts_cover_spacing_modifier_letters() {
 
   for (family, expected_font) in samples {
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.to_string()];
+    style.font_family = vec![family.to_string()].into();
     style.font_size = 32.0;
 
     let runs = pipeline
@@ -148,7 +148,7 @@ fn bundled_fonts_cover_javanese_punctuation_cluster() {
   );
 
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_size = 32.0;
 
   let text = "\u{A9DF}\u{0333}";

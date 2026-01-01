@@ -22,7 +22,7 @@ fn bundled_emoji_renders_with_bundled_fonts() {
   let mut pipeline = ShapingPipeline::new();
   let font_ctx = FontContext::with_config(FontConfig::bundled_only());
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["emoji".to_string(), "sans-serif".to_string()];
+  style.font_family = vec!["emoji".to_string(), "sans-serif".to_string()].into();
   style.font_size = 64.0;
 
   let runs = pipeline

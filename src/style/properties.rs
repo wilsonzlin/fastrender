@@ -45,6 +45,7 @@ use cssparser::ToCss;
 use cssparser::Token;
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use svgtypes::PathParser;
 
@@ -6392,7 +6393,7 @@ pub fn apply_declaration_with_base(
     }
     "font-family" => {
       if let PropertyValue::FontFamily(families) = &resolved_value {
-        styles.font_family = families.clone();
+        styles.font_family = families.clone().into();
       }
     }
     "font-size" => match &resolved_value {
@@ -6652,12 +6653,12 @@ pub fn apply_declaration_with_base(
       if let PropertyValue::Keyword(raw) = &resolved_value {
         let trimmed = raw.trim();
         if trimmed.eq_ignore_ascii_case("normal") {
-          styles.font_feature_settings.clear();
+          styles.font_feature_settings = default_computed_style().font_feature_settings.clone();
         } else {
           let mut input = ParserInput::new(trimmed);
           let mut parser = Parser::new(&mut input);
           if let Ok(features) = parser.parse_comma_separated(|p| parse_feature_setting(p)) {
-            styles.font_feature_settings = features;
+            styles.font_feature_settings = features.into();
           }
         }
       }
@@ -6704,12 +6705,12 @@ pub fn apply_declaration_with_base(
       if let PropertyValue::Keyword(raw) = &resolved_value {
         let trimmed = raw.trim();
         if trimmed.eq_ignore_ascii_case("normal") {
-          styles.font_variation_settings.clear();
+          styles.font_variation_settings = default_computed_style().font_variation_settings.clone();
         } else {
           let mut input = ParserInput::new(trimmed);
           let mut parser = Parser::new(&mut input);
           if let Ok(vars) = parser.parse_comma_separated(|p| parse_variation_setting(p)) {
-            styles.font_variation_settings = vars;
+            styles.font_variation_settings = vars.into();
           }
         }
       }
@@ -7510,7 +7511,7 @@ pub fn apply_declaration_with_base(
     }
     "cursor" => {
       if let Some((images, keyword)) = parse_cursor(&resolved_value) {
-        styles.cursor_images = images;
+        styles.cursor_images = images.into();
         styles.cursor = keyword;
       }
     }
@@ -8318,10 +8319,10 @@ pub fn apply_declaration_with_base(
     },
     "text-shadow" => match &resolved_value {
       PropertyValue::TextShadow(shadows) => {
-        styles.text_shadow = shadows.clone();
+        styles.text_shadow = shadows.clone().into();
       }
       PropertyValue::Keyword(kw) if kw == "none" => {
-        styles.text_shadow.clear();
+        styles.text_shadow = default_computed_style().text_shadow.clone();
       }
       _ => {}
     },
@@ -8524,10 +8525,10 @@ pub fn apply_declaration_with_base(
     }
     "quotes" => match &resolved_value {
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
-        styles.quotes.clear();
+        styles.quotes = Arc::from(Vec::new());
       }
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
-        styles.quotes = crate::style::content::default_quotes();
+        styles.quotes = default_computed_style().quotes.clone();
       }
       PropertyValue::Multiple(list)
         if list.iter().all(|v| matches!(v, PropertyValue::String(_))) =>
@@ -8546,7 +8547,8 @@ pub fn apply_declaration_with_base(
           styles.quotes = strings
             .chunks(2)
             .map(|pair| (pair[0].clone(), pair[1].clone()))
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         }
       }
       _ => {}
@@ -10619,7 +10621,7 @@ fn parse_font_shorthand(
   FontStretch,
   f32,
   LineHeight,
-  Vec<String>,
+  Arc<[String]>,
 )> {
   let trimmed = value.trim();
   if trimmed.is_empty() {
@@ -10842,7 +10844,7 @@ fn parse_font_shorthand(
     font_stretch.unwrap_or(FontStretch::Normal),
     font_size.unwrap_or(parent_font_size),
     line_height.unwrap_or(LineHeight::Normal),
-    families,
+    families.into(),
   ))
 }
 
@@ -18009,6 +18011,7 @@ mod tests {
         ("«".to_string(), "»".to_string()),
         ("‹".to_string(), "›".to_string())
       ]
+      .into()
     );
 
     let decl = Declaration {
@@ -19306,7 +19309,7 @@ mod tests {
     }
     assert_eq!(
       style.font_family,
-      vec!["Fira Sans".to_string(), "serif".to_string()]
+      vec!["Fira Sans".to_string(), "serif".to_string()].into()
     );
   }
 
@@ -19343,7 +19346,7 @@ mod tests {
     assert!((style.font_stretch.to_percentage() - 100.0).abs() < 0.01);
     assert!((style.font_size - 24.0).abs() < 0.01);
     assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 125.0).abs() < 0.001));
-    assert_eq!(style.font_family, vec!["serif".to_string()]);
+    assert_eq!(style.font_family, vec!["serif".to_string()].into());
   }
 
   #[test]
@@ -19360,7 +19363,7 @@ mod tests {
     assert!(matches!(style.font_weight, FontWeight::Bold));
     assert!((style.font_size - 20.0).abs() < 0.01);
     assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 75.0).abs() < 0.001));
-    assert_eq!(style.font_family, vec!["serif".to_string()]);
+    assert_eq!(style.font_family, vec!["serif".to_string()].into());
   }
 
   #[test]
@@ -19377,7 +19380,7 @@ mod tests {
     assert!(matches!(style.font_weight, FontWeight::Bold));
     assert!((style.font_size - 15.0).abs() < 0.01);
     assert!(matches!(style.line_height, LineHeight::Normal));
-    assert_eq!(style.font_family, vec!["serif".to_string()]);
+    assert_eq!(style.font_family, vec!["serif".to_string()].into());
   }
 
   #[test]
@@ -19395,7 +19398,7 @@ mod tests {
     assert!(matches!(style.font_weight, FontWeight::Normal));
     assert!((style.font_size - 16.0).abs() < 0.01);
     assert!(matches!(style.line_height, LineHeight::Normal));
-    assert_eq!(style.font_family, vec!["serif".to_string()]);
+    assert_eq!(style.font_family, vec!["serif".to_string()].into());
   }
 
   #[test]
@@ -19413,7 +19416,7 @@ mod tests {
     assert!(matches!(style.font_weight, FontWeight::Normal));
     assert!((style.font_size - 16.0).abs() < 0.01);
     assert!(matches!(style.line_height, LineHeight::Normal));
-    assert_eq!(style.font_family, vec!["serif".to_string()]);
+    assert_eq!(style.font_family, vec!["serif".to_string()].into());
   }
 
   #[test]
@@ -19436,15 +19439,16 @@ mod tests {
         "Open Sans".to_string(),
         "serif".to_string()
       ]
+      .into()
     );
   }
 
   #[test]
   fn font_family_honors_global_keywords() {
     let mut parent = ComputedStyle::default();
-    parent.font_family = vec!["ParentFace".to_string()];
+    parent.font_family = vec!["ParentFace".to_string()].into();
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["ChildDefault".to_string()];
+    style.font_family = vec!["ChildDefault".to_string()].into();
 
     let decl = Declaration {
       property: "font-family".to_string(),
@@ -19502,7 +19506,8 @@ mod tests {
     style.font_variation_settings = vec![FontVariationSetting {
       tag: *b"wght",
       value: 500.0,
-    }];
+    }]
+    .into();
 
     let decl = Declaration {
       property: "font-variation-settings".to_string(),
@@ -20015,10 +20020,11 @@ mod tests {
     style.font_variant_numeric.figure = NumericFigure::Oldstyle;
     style.font_variant_east_asian.width = Some(EastAsianWidth::FullWidth);
     style.font_variant_position = FontVariantPosition::Super;
-    style.font_feature_settings.push(FontFeatureSetting {
+    style.font_feature_settings = vec![FontFeatureSetting {
       tag: *b"TEST",
       value: 1,
-    });
+    }]
+    .into();
     style.font_variant_emoji = FontVariantEmoji::Emoji;
 
     let decl = Declaration {

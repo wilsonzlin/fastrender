@@ -116,7 +116,7 @@ fn bundled_multiscript_string_has_no_notdef_glyphs() {
   let font_ctx = FontContext::with_config(FontConfig::bundled_only());
 
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_size = 32.0;
 
   let runs = pipeline

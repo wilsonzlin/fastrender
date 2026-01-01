@@ -26,7 +26,7 @@ fn font_palette_selects_cpal_palettes_and_renders() {
   let ctx = font_context();
   let pipeline = ShapingPipeline::new();
   let mut base_style = ComputedStyle::default();
-  base_style.font_family = vec!["PaletteTestCOLRv1".to_string()];
+  base_style.font_family = vec!["PaletteTestCOLRv1".to_string()].into();
   base_style.font_size = 72.0;
 
   let mut normal = base_style.clone();
@@ -178,7 +178,7 @@ fn font_palette_overrides_recolor_colr_glyphs() {
 
   let pipeline = ShapingPipeline::new();
   let mut base_style = ComputedStyle::default();
-  base_style.font_family = vec!["PaletteTestCOLRv1".to_string()];
+  base_style.font_family = vec!["PaletteTestCOLRv1".to_string()].into();
   base_style.font_size = 72.0;
   base_style.font_palette = FontPalette::Normal;
   base_style.font_palettes = registry.clone();

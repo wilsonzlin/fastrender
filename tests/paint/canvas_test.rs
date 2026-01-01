@@ -660,7 +660,7 @@ fn canvas_renders_color_fonts() {
   let font_ctx = FontContext::with_database(Arc::new(db));
 
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["ColorTestCOLR".to_string()];
+  style.font_family = vec!["ColorTestCOLR".to_string()].into();
   style.font_size = 32.0;
 
   let pipeline = ShapingPipeline::new();
@@ -730,7 +730,7 @@ fn canvas_respects_font_palette() {
   let font_ctx = FontContext::with_database(Arc::new(db));
 
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["PaletteTestCOLRv1".to_string()];
+  style.font_family = vec!["PaletteTestCOLRv1".to_string()].into();
   style.font_size = 48.0;
   style.root_font_size = style.font_size;
   style.font_palette = FontPalette::Dark;

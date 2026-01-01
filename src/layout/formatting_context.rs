@@ -617,7 +617,7 @@ pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
   style.containment.layout.hash(&mut h);
   style.containment.style.hash(&mut h);
   style.containment.paint.hash(&mut h);
-  for family in &style.font_family {
+  for family in style.font_family.iter() {
     family.hash(&mut h);
   }
   h.finish()

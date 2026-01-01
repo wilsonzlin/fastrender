@@ -531,7 +531,7 @@ fn bundled_fallback_chain_matches_pipeline_for_ascii() {
 
   let ctx = FontContext::with_database(Arc::clone(&db));
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["DejaVu Sans".to_string()];
+  style.font_family = vec!["DejaVu Sans".to_string()].into();
   let chain = FallbackChain::from_families(&style.font_family);
 
   let runs = match ShapingPipeline::new().shape("F", &style, &ctx) {
@@ -559,7 +559,7 @@ fn fallback_chain_matches_pipeline_for_cjk_when_available() {
 
   let ctx = FontContext::with_database(Arc::clone(&db));
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   let chain = FallbackChain::from_families(&style.font_family);
 
   let runs = match ShapingPipeline::new().shape("中", &style, &ctx) {
@@ -587,7 +587,7 @@ fn fallback_chain_matches_pipeline_for_emoji_when_available() {
 
   let ctx = FontContext::with_database(Arc::clone(&db));
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_variant_emoji = FontVariantEmoji::Emoji;
   let chain = FallbackChain::new()
     .add_generic(GenericFamily::Emoji)

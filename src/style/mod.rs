@@ -490,7 +490,7 @@ pub struct ComputedStyle {
   /// Cursor property (inherited)
   pub cursor: CursorKeyword,
   /// Custom cursor images (in order of preference)
-  pub cursor_images: Vec<CursorImage>,
+  pub cursor_images: Arc<[CursorImage]>,
   pub outline_color: OutlineColor,
   pub outline_style: OutlineStyle,
   pub outline_width: Length,
@@ -608,7 +608,7 @@ pub struct ComputedStyle {
   pub column_span: ColumnSpan,
 
   // Typography
-  pub font_family: Vec<String>,
+  pub font_family: Arc<[String]>,
   pub font_size: f32,
   pub font_weight: FontWeight,
   pub font_style: FontStyle,
@@ -621,8 +621,8 @@ pub struct ComputedStyle {
   pub font_variant_position: FontVariantPosition,
   pub font_size_adjust: FontSizeAdjust,
   pub font_synthesis: FontSynthesis,
-  pub font_feature_settings: Vec<FontFeatureSetting>,
-  pub font_variation_settings: Vec<FontVariationSetting>,
+  pub font_feature_settings: Arc<[FontFeatureSetting]>,
+  pub font_variation_settings: Arc<[FontVariationSetting]>,
   pub font_optical_sizing: FontOpticalSizing,
   pub font_language_override: FontLanguageOverride,
   pub font_variant_emoji: FontVariantEmoji,
@@ -737,7 +737,7 @@ pub struct ComputedStyle {
   // Visual effects
   pub opacity: f32,
   pub box_shadow: Vec<BoxShadow>,
-  pub text_shadow: Vec<TextShadow>,
+  pub text_shadow: Arc<[TextShadow]>,
   pub transform: Vec<Transform>,
   pub offset_path: OffsetPath,
   pub offset_distance: Length,
@@ -768,7 +768,7 @@ pub struct ComputedStyle {
   pub content_value: crate::style::content::ContentValue,
 
   /// Quotes used by open-quote/close-quote
-  pub quotes: Vec<(String, String)>,
+  pub quotes: Arc<[(String, String)]>,
 
   /// Named strings assigned by the `string-set` property.
   pub string_set: Vec<crate::style::content::StringSetAssignment>,
@@ -834,7 +834,7 @@ impl Default for ComputedStyle {
       z_index: None,
       visibility: Visibility::Visible,
       cursor: CursorKeyword::Auto,
-      cursor_images: Vec::new(),
+      cursor_images: Arc::from(Vec::new()),
       outline_color: OutlineColor::Invert,
       outline_style: OutlineStyle::None,
       outline_width: Length::px(3.0),
@@ -930,7 +930,7 @@ impl Default for ComputedStyle {
       column_fill: ColumnFill::Balance,
       column_span: ColumnSpan::None,
 
-      font_family: vec!["serif".to_string()],
+      font_family: Arc::from(vec!["serif".to_string()]),
       font_size: 16.0,
       font_weight: FontWeight::Normal,
       font_style: FontStyle::Normal,
@@ -943,8 +943,8 @@ impl Default for ComputedStyle {
       font_variant_position: FontVariantPosition::Normal,
       font_size_adjust: FontSizeAdjust::None,
       font_synthesis: FontSynthesis::default(),
-      font_feature_settings: Vec::new(),
-      font_variation_settings: Vec::new(),
+      font_feature_settings: Arc::from(Vec::new()),
+      font_variation_settings: Arc::from(Vec::new()),
       font_optical_sizing: FontOpticalSizing::Auto,
       font_language_override: FontLanguageOverride::Normal,
       font_variant_emoji: FontVariantEmoji::Normal,
@@ -1041,7 +1041,7 @@ impl Default for ComputedStyle {
 
       opacity: 1.0,
       box_shadow: Vec::new(),
-      text_shadow: Vec::new(),
+      text_shadow: Arc::from(Vec::new()),
       transform: Vec::new(),
       offset_path: OffsetPath::None,
       offset_distance: Length::px(0.0),
@@ -1077,7 +1077,7 @@ impl Default for ComputedStyle {
 
       content: String::new(),
       content_value: crate::style::content::ContentValue::Normal,
-      quotes: crate::style::content::default_quotes(),
+      quotes: Arc::from(crate::style::content::default_quotes()),
       string_set: Vec::new(),
     }
   }

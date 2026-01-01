@@ -1645,7 +1645,8 @@ fn marker_text_shadow_is_rendered_in_display_list() {
     offset_y: Length::px(0.0),
     blur_radius: Length::px(0.0),
     color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
-  }];
+  }]
+  .into();
   let style = Arc::new(style);
 
   let mut marker = FragmentNode::new_text(

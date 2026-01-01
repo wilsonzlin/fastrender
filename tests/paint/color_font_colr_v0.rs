@@ -83,7 +83,7 @@ fn paints_colr_v0_glyphs_through_display_list() {
   let (font_ctx, family) = load_color_font_context();
 
   let mut style = ComputedStyle::default();
-  style.font_family = vec![family];
+  style.font_family = vec![family].into();
   style.font_size = 32.0;
   style.root_font_size = style.font_size;
 

@@ -12,6 +12,13 @@ use crate::style::ComputedStyle;
 use crate::style::Display;
 use crate::style::Length;
 use crate::style::Rgba;
+use std::sync::OnceLock;
+
+static DEFAULT_COMPUTED_STYLE: OnceLock<ComputedStyle> = OnceLock::new();
+
+fn default_computed_style() -> &'static ComputedStyle {
+  DEFAULT_COMPUTED_STYLE.get_or_init(ComputedStyle::default)
+}
 
 /// Get default styles for an HTML element
 ///
@@ -21,7 +28,7 @@ use crate::style::Rgba;
 /// Note: All styling should come from CSS (user-agent.css or author styles),
 /// not from class-name checks in Rust code. This function only sets tag-based defaults.
 pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
-  let mut styles = ComputedStyle::default();
+  let mut styles = default_computed_style().clone();
 
   // Handle Document/shadow root node types - they act as containers only.
   if matches!(node.node_type, DomNodeType::Document { .. }) {
@@ -141,7 +148,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
       }
       "math" => {
         // Prefer math fonts when available and honor display="block" attribute
-        styles.font_family = vec!["math".to_string(), "serif".to_string()];
+        styles.font_family = vec!["math".to_string(), "serif".to_string()].into();
         if let Some(display) = node.get_attribute("display") {
           if display.eq_ignore_ascii_case("block") {
             styles.display = Display::Block;

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 fn prepare_item() -> Option<(TextItem, ShapingPipeline, FontContext, Vec<Range<usize>>)> {
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_size = 14.0;
   let style = Arc::new(style);
 
@@ -80,4 +80,3 @@ criterion_group!(
   bench_inline_reshape_cache_misses
 );
 criterion_main!(reshape_cache_benches);
-

@@ -15,7 +15,7 @@ use unicode_bidi::Level;
 fn prepare_runs() -> Option<(Vec<ShapedRun>, Pixmap)> {
   let ctx = FontContext::new();
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_size = 16.0;
   let pipeline = ShapingPipeline::new();
   let text = "FastRender caches parsed faces to avoid reparsing fonts for every run. ".repeat(16);
@@ -53,7 +53,7 @@ fn bench_rasterize_cached_faces(c: &mut Criterion) {
 
 fn bench_line_break_dense_paragraph(c: &mut Criterion) {
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_size = 14.0;
   style.word_break = WordBreak::BreakWord;
   let style = Arc::new(style);
@@ -105,7 +105,7 @@ fn bench_line_break_dense_paragraph(c: &mut Criterion) {
 
 fn bench_shape_fallback_cache(c: &mut Criterion) {
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_size = 14.0;
   let ctx = FontContext::new();
   let pipeline = ShapingPipeline::new();
@@ -126,7 +126,7 @@ fn bench_shape_fallback_cache(c: &mut Criterion) {
 
 fn bench_shape_fallback_cache_pipeline_clones(c: &mut Criterion) {
   let mut style = ComputedStyle::default();
-  style.font_family = vec!["sans-serif".to_string()];
+  style.font_family = vec!["sans-serif".to_string()].into();
   style.font_size = 14.0;
 
   let ctx = FontContext::new();

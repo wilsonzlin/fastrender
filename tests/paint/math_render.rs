@@ -212,7 +212,7 @@ fn scripts_on_italic_identifiers_offset_and_raise() {
   let ctx = math_font_context();
   let mut style = fastrender::ComputedStyle::default();
   style.font_size = 24.0;
-  style.font_family = vec!["STIX Two Math".to_string()];
+  style.font_family = vec!["STIX Two Math".to_string()].into();
   let base_node = MathNode::Identifier {
     text: "f".into(),
     variant: Some(MathVariant::Italic),
@@ -251,7 +251,7 @@ fn radicals_scale_with_nested_content() {
   let ctx = math_font_context();
   let mut style = fastrender::ComputedStyle::default();
   style.font_size = 24.0;
-  style.font_family = vec!["STIX Two Math".to_string()];
+  style.font_family = vec!["STIX Two Math".to_string()].into();
   let radicand = MathNode::SubSuperscript {
     base: Box::new(MathNode::Identifier {
       text: "x".into(),

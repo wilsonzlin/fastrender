@@ -14,12 +14,13 @@ use std::sync::Arc;
 fn marker_shadow_respects_opacity() {
   let mut style = ComputedStyle::default();
   style.color = Rgba::BLACK;
-  style.text_shadow.push(TextShadow {
+  style.text_shadow = vec![TextShadow {
     offset_x: fastrender::style::values::Length::px(2.0),
     offset_y: fastrender::style::values::Length::px(0.0),
     blur_radius: fastrender::style::values::Length::px(0.0),
     color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
-  });
+  }]
+  .into();
   style.opacity = 0.5;
   let style = Arc::new(style);
 

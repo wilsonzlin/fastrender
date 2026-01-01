@@ -14,7 +14,6 @@ use fastrender::style::media::MediaContext;
 use fastrender::style::style_set::StyleSet;
 use selectors::context::QuirksMode;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -685,10 +684,11 @@ fn cascade_setup_many_selectors_benchmark(c: &mut Criterion) {
 }
 
 fn var_resolution_width_benchmark(c: &mut Criterion) {
+  use fastrender::style::custom_property_store::CustomPropertyStore;
   use fastrender::style::values::CustomPropertyValue;
   use fastrender::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
 
-  let mut custom_properties = HashMap::new();
+  let mut custom_properties = CustomPropertyStore::default();
   custom_properties.insert("--x".to_string(), CustomPropertyValue::new("10px", None));
   let value = PropertyValue::Keyword("var(--x)".to_string());
 

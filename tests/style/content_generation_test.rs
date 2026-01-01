@@ -430,7 +430,8 @@ fn test_context_quotes_custom() {
   ctx.set_quotes(vec![
     ("<<".to_string(), ">>".to_string()),
     ("<".to_string(), ">".to_string()),
-  ]);
+  ]
+  .into());
 
   assert_eq!(ctx.open_quote(), "<<");
   ctx.push_quote();
@@ -1034,7 +1035,8 @@ fn test_quoted_text_workflow() {
   ctx.set_quotes(vec![
     ("«\u{00A0}".to_string(), "\u{00A0}»".to_string()),
     ("‹\u{00A0}".to_string(), "\u{00A0}›".to_string()),
-  ]);
+  ]
+  .into());
 
   let content = ContentValue::Items(vec![
     ContentItem::OpenQuote,

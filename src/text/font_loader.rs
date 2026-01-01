@@ -3414,7 +3414,7 @@ mod tests {
     );
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["Broken".to_string(), fallback_family];
+    style.font_family = vec!["Broken".to_string(), fallback_family].into();
     style.font_size = 14.0;
 
     let pipeline = crate::text::pipeline::ShapingPipeline::new();
@@ -3484,7 +3484,7 @@ mod tests {
       .expect("schedule swap upgrade");
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["SwapUpgrade".to_string(), fallback_family.clone()];
+    style.font_family = vec!["SwapUpgrade".to_string(), fallback_family.clone()].into();
     style.font_size = 14.0;
 
     let pipeline = crate::text::pipeline::ShapingPipeline::new();

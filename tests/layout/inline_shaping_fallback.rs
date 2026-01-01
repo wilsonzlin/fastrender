@@ -61,7 +61,7 @@ fn inline_layout_degrades_gracefully_when_shaping_fails() {
     .expect("web font should load");
 
   let mut text_style = ComputedStyle::default();
-  text_style.font_family = vec!["sans-serif".to_string()];
+  text_style.font_family = vec!["sans-serif".to_string()].into();
   text_style.font_size = 16.0;
   let text_node = BoxNode::new_text(Arc::new(text_style), "뮝\u{07FD}".to_string());
 

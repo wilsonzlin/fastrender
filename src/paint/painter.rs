@@ -12628,7 +12628,8 @@ mod tests {
       offset_y: Length::px(0.0),
       blur_radius: Length::px(0.0),
       color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
-    }];
+    }]
+    .into();
     let style = Arc::new(style);
 
     let fragment = FragmentNode::new_text_styled(
@@ -12671,7 +12672,8 @@ mod tests {
       offset_y: Length::px(0.0),
       blur_radius: Length::px(0.0),
       color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
-    }];
+    }]
+    .into();
     let style = Arc::new(style);
 
     let fragment = FragmentNode::new_text_styled(
@@ -12719,7 +12721,8 @@ mod tests {
       offset_y: Length::px(0.0),
       blur_radius: Length::px(4.0),
       color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
-    }];
+    }]
+    .into();
     let style = Arc::new(style);
 
     let fragment = FragmentNode::new_text_styled(
@@ -12845,7 +12848,8 @@ mod tests {
       offset_y: Length::em(1.0),       // 20px
       blur_radius: Length::px(0.0),
       color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
-    }];
+    }]
+    .into();
     let style = Arc::new(style);
 
     let fragment = FragmentNode::new_text_styled(
@@ -12891,7 +12895,8 @@ mod tests {
       offset_y: Length::px(0.0),
       blur_radius: Length::px(0.0),
       color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
-    }];
+    }]
+    .into();
     let style = Arc::new(style);
 
     let marker = FragmentNode::new_with_style(
@@ -16006,7 +16011,7 @@ mod tests {
     let font_ctx = FontContext::with_database(Arc::new(db));
 
     let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_family = vec!["TestVar".to_string()].into();
     base_style.font_size = 96.0;
 
     let mut light_style = base_style.clone();
@@ -16060,7 +16065,7 @@ mod tests {
     let font_ctx = FontContext::with_database(Arc::new(db));
 
     let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_family = vec!["TestVar".to_string()].into();
     base_style.font_size = 64.0;
 
     let mut light_style = base_style.clone();
@@ -16110,7 +16115,7 @@ mod tests {
     let font_ctx = FontContext::with_database(Arc::new(db));
 
     let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_family = vec!["TestVar".to_string()].into();
     base_style.font_size = 96.0;
 
     let mut light_style = base_style.clone();
@@ -16166,7 +16171,7 @@ mod tests {
     let font_ctx = FontContext::with_database(Arc::new(db));
 
     let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_family = vec!["TestVar".to_string()].into();
     base_style.font_size = 64.0;
     base_style.text_emphasis_style = crate::style::types::TextEmphasisStyle::String("A".into());
     base_style.text_emphasis_color = Some(Rgba::BLACK);

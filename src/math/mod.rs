@@ -980,7 +980,9 @@ impl MathLayoutContext {
   ) -> Option<Arc<LoadedFont>> {
     let mut style = base_style.clone();
     style.font_size = math_style.font_size;
-    style.font_family = self.preferred_math_families_for_variant(base_style, variant);
+    style.font_family = self
+      .preferred_math_families_for_variant(base_style, variant)
+      .into();
     style.font_style = if variant.is_italic() {
       CssFontStyle::Italic
     } else {
@@ -1464,7 +1466,7 @@ impl MathLayoutContext {
     let mut families: Vec<String> = Vec::new();
     families.push("math".to_string());
     families.extend(self.font_ctx.math_family_names());
-    for fam in &style.font_family {
+    for fam in style.font_family.iter() {
       if !families.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
         families.push(fam.clone());
       }
@@ -1520,7 +1522,9 @@ impl MathLayoutContext {
   ) -> (Vec<ShapedRun>, ScaledMetrics) {
     let mut style = base_style.clone();
     style.font_size = math_style.font_size;
-    style.font_family = self.preferred_math_families_for_variant(base_style, variant);
+    style.font_family = self
+      .preferred_math_families_for_variant(base_style, variant)
+      .into();
     style.font_style = if variant.is_italic() {
       CssFontStyle::Italic
     } else {

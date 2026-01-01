@@ -29,12 +29,13 @@ fn variable_font_context() -> FontContext {
 
 fn style_with_weight(weight: f32) -> ComputedStyle {
   let mut style = ComputedStyle::default();
-  style.font_family = vec![VARIABLE_FAMILY.to_string()];
+  style.font_family = vec![VARIABLE_FAMILY.to_string()].into();
   style.font_size = FONT_SIZE;
   style.font_variation_settings = vec![FontVariationSetting {
     tag: *b"wght",
     value: weight,
-  }];
+  }]
+  .into();
   style
 }
 

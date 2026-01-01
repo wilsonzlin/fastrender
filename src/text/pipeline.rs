@@ -1825,7 +1825,7 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
   }
 
   // Low-level font-feature-settings override defaults and prior toggles.
-  for setting in &style.font_feature_settings {
+  for setting in style.font_feature_settings.iter() {
     let tag = Tag::from_bytes(&setting.tag);
     features.retain(|f| f.tag != tag);
     features.push(Feature {
@@ -2897,7 +2897,7 @@ fn emoji_preference_with_selector(
 fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback::FamilyEntry> {
   use crate::text::font_fallback::FamilyEntry;
   let mut entries = Vec::new();
-  for family in &style.font_family {
+  for family in style.font_family.iter() {
     if let Some(generic) = crate::text::font_db::GenericFamily::parse(family) {
       entries.push(FamilyEntry::Generic(generic));
     } else {
@@ -4071,11 +4071,11 @@ pub(crate) fn shaping_style_hash(style: &ComputedStyle) -> u64 {
     FontSizeAdjust::FromFont => 2u8.hash(&mut hasher),
   }
 
-  for setting in &style.font_feature_settings {
+  for setting in style.font_feature_settings.iter() {
     setting.tag.hash(&mut hasher);
     setting.value.hash(&mut hasher);
   }
-  for setting in &style.font_variation_settings {
+  for setting in style.font_variation_settings.iter() {
     setting.tag.hash(&mut hasher);
     setting.value.to_bits().hash(&mut hasher);
   }
@@ -5157,7 +5157,7 @@ mod tests {
 
     let pipeline = ShapingPipeline::new();
     let mut style = ComputedStyle::default();
-    style.font_family = vec![font.family.clone()];
+    style.font_family = vec![font.family.clone()].into();
     style.font_size = 16.0;
 
     for text in ["뮝\u{07FD}", "犧\u{0345}"] {
@@ -5407,7 +5407,7 @@ mod tests {
     };
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec![font.family.clone()];
+    style.font_family = vec![font.family.clone()].into();
     style.font_size = 20.0;
     let desired = aspect * 2.0;
     style.font_size_adjust = FontSizeAdjust::Number(desired);
@@ -5433,7 +5433,7 @@ mod tests {
     };
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec![font.family.clone()];
+    style.font_family = vec![font.family.clone()].into();
     style.font_size = 18.0;
     style.font_size_adjust = FontSizeAdjust::FromFont;
 
@@ -5741,7 +5741,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family];
+    style.font_family = vec![family].into();
     style.font_size = 16.0;
 
     let pipeline = ShapingPipeline::new();
@@ -5750,13 +5750,15 @@ mod tests {
     style.font_variation_settings = vec![FontVariationSetting {
       tag: *b"wdth",
       value: 75.0,
-    }];
+    }]
+    .into();
     let narrow_run = pipeline.shape("mmmm", &style, &ctx).expect("narrow run");
 
     style.font_variation_settings = vec![FontVariationSetting {
       tag: *b"wdth",
       value: 130.0,
-    }];
+    }]
+    .into();
     let wide_run = pipeline.shape("mmmm", &style, &ctx).expect("wide run");
 
     let default_advance: f32 = default_run.iter().map(|r| r.advance).sum();
@@ -5784,7 +5786,7 @@ mod tests {
     let ctx = FontContext::with_database(Arc::new(db));
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["Webby".to_string(), fallback_family.clone()];
+    style.font_family = vec!["Webby".to_string(), fallback_family.clone()].into();
     style.font_size = 16.0;
 
     let pipeline = ShapingPipeline::new();
@@ -5837,7 +5839,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family];
+    style.font_family = vec![family].into();
     style.font_size = 20.0;
     let runs_auto = match assign_fonts(
       &[ItemizedRun {
@@ -5890,7 +5892,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family];
+    style.font_family = vec![family].into();
     style.font_weight = FontWeight::Number(900);
 
     let runs = match ShapingPipeline::new().shape("m", &style, &ctx) {
@@ -5910,7 +5912,7 @@ mod tests {
   fn font_language_override_sets_language_tag() {
     let ctx = FontContext::new();
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["serif".to_string()];
+    style.font_family = vec!["serif".to_string()].into();
     style.font_language_override =
       crate::style::types::FontLanguageOverride::Override("SRB".to_string());
 
@@ -5938,7 +5940,7 @@ mod tests {
       return;
     }
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["math".to_string()];
+    style.font_family = vec!["math".to_string()].into();
     style.font_size = 18.0;
 
     let runs = match ShapingPipeline::new().shape("∑", &style, &ctx) {
@@ -5980,7 +5982,7 @@ mod tests {
     }
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["math".to_string()];
+    style.font_family = vec!["math".to_string()].into();
     style.font_size = 16.0;
 
     let runs = match ShapingPipeline::new().shape("∑", &style, &ctx) {
@@ -6010,7 +6012,7 @@ mod tests {
     }
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["math".to_string(), fallback_family.clone()];
+    style.font_family = vec!["math".to_string(), fallback_family.clone()].into();
     style.font_size = 16.0;
 
     let runs = match ShapingPipeline::new().shape("∑", &style, &ctx) {
@@ -6125,7 +6127,7 @@ mod tests {
 
     let pipeline = ShapingPipeline::new();
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["WebOnlySans".to_string()];
+    style.font_family = vec!["WebOnlySans".to_string()].into();
     style.font_size = 16.0;
 
     let ok_runs = pipeline
@@ -6161,7 +6163,7 @@ mod tests {
     let pipeline = ShapingPipeline::new();
 
     let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["sans-serif".to_string()];
+    base_style.font_family = vec!["sans-serif".to_string()].into();
     base_style.font_size = 16.0;
 
     let mut latin_style = base_style.clone();
@@ -6253,7 +6255,7 @@ mod tests {
   fn fallback_cache_hits_for_reused_clusters() {
     let ctx = FontContext::new();
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["sans-serif".to_string()];
+    style.font_family = vec!["sans-serif".to_string()].into();
     style.font_size = 16.0;
 
     let pipeline = ShapingPipeline::with_cache_capacity_for_test(1);
@@ -6297,7 +6299,7 @@ mod tests {
     ctx.clear_web_fonts();
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["sans-serif".to_string()];
+    style.font_family = vec!["sans-serif".to_string()].into();
     style.font_size = 16.0;
 
     let pipeline = ShapingPipeline::new();
@@ -6349,7 +6351,7 @@ mod tests {
     let _guard = crate::text::face_cache::FaceParseCountGuard::start();
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["sans-serif".to_string()];
+    style.font_family = vec!["sans-serif".to_string()].into();
     let pipeline = ShapingPipeline::new();
 
     let short = "fast render text ".repeat(4);
@@ -6388,7 +6390,7 @@ mod tests {
     let ctx = FontContext::with_database(Arc::new(db));
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["ColorTestCOLR".to_string()];
+    style.font_family = vec!["ColorTestCOLR".to_string()].into();
     style.font_size = 16.0;
 
     let pipeline = ShapingPipeline::new();
@@ -6438,7 +6440,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.clone()];
+    style.font_family = vec![family.clone()].into();
     style.font_size = 16.0;
 
     let pipeline = ShapingPipeline::new();
@@ -6525,7 +6527,7 @@ mod tests {
       .expect("Roboto Flex exposes opsz axis");
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.clone()];
+    style.font_family = vec![family.clone()].into();
     style.font_weight = FontWeight::Number(1);
     style.font_stretch = FontStretch::from_percentage(200.0);
     style.font_size = opsz_axis.max_value + 1000.0;
@@ -6590,7 +6592,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.clone()];
+    style.font_family = vec![family.clone()].into();
     style.font_size = 16.0;
 
     let pipeline = ShapingPipeline::new();
@@ -6599,7 +6601,8 @@ mod tests {
     style.font_variation_settings = vec![FontVariationSetting {
       tag: *b"wdth",
       value: 100.0,
-    }];
+    }]
+    .into();
     let forced = match pipeline.shape("mmmm", &style, &ctx) {
       Ok(runs) => runs,
       Err(_) => return,
@@ -6609,7 +6612,7 @@ mod tests {
     }
     let forced_adv: f32 = forced.iter().map(|r| r.advance).sum();
 
-    style.font_variation_settings.clear();
+    style.font_variation_settings = Vec::new().into();
     style.font_stretch = FontStretch::Normal;
     let baseline = match pipeline.shape("mmmm", &style, &ctx) {
       Ok(runs) => runs,
@@ -6634,7 +6637,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.clone()];
+    style.font_family = vec![family.clone()].into();
     style.font_size = 16.0;
     style.font_style = CssFontStyle::Oblique(Some(20.0));
 
@@ -6685,13 +6688,14 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family];
+    style.font_family = vec![family].into();
     style.font_size = 16.0;
     style.font_style = CssFontStyle::Oblique(Some(10.0));
     style.font_variation_settings = vec![FontVariationSetting {
       tag: *b"slnt",
       value: -5.0,
-    }];
+    }]
+    .into();
 
     let runs = assign_fonts(
       &[ItemizedRun {
@@ -6725,7 +6729,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.clone()];
+    style.font_family = vec![family.clone()].into();
     style.font_size = 16.0;
     style.font_style = CssFontStyle::Oblique(Some(12.0));
 
@@ -6783,7 +6787,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.clone()];
+    style.font_family = vec![family.clone()].into();
     style.font_size = 16.0;
     style.font_style = CssFontStyle::Italic;
 
@@ -6845,7 +6849,7 @@ mod tests {
       return;
     };
     let mut style = ComputedStyle::default();
-    style.font_family = vec![family.clone()];
+    style.font_family = vec![family.clone()].into();
     style.font_size = 16.0;
     style.font_style = CssFontStyle::Oblique(Some(10.0));
 
@@ -7016,7 +7020,8 @@ mod tests {
     style.font_feature_settings = vec![FontFeatureSetting {
       tag: *b"liga",
       value: 1,
-    }];
+    }]
+    .into();
 
     let feats = collect_opentype_features(&style);
     let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();

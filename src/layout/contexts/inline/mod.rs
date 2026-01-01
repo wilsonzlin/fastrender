@@ -3239,7 +3239,7 @@ impl InlineFormattingContext {
         let mut fallback_error: Option<crate::error::Error> = None;
         if let Some(fallback_font) = self.font_context.get_sans_serif() {
           let mut fallback_style = style.clone();
-          fallback_style.font_family = vec![fallback_font.family.clone()];
+          fallback_style.font_family = vec![fallback_font.family.clone()].into();
           match self.pipeline.shape_with_context(
             text,
             &fallback_style,
@@ -16203,7 +16203,7 @@ mod tests {
     let Ok(metrics) = font.metrics() else { return };
 
     let mut style = ComputedStyle::default();
-    style.font_family = vec![font.family.clone()];
+    style.font_family = vec![font.family.clone()].into();
     style.font_size = 20.0;
 
     let scaled = metrics.scale(style.font_size);

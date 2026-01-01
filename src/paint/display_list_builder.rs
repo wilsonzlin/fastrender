@@ -592,7 +592,7 @@ impl DisplayListBuilder {
         let mut min_y = absolute_rect.min_y();
         let mut max_x = absolute_rect.max_x();
         let mut max_y = absolute_rect.max_y();
-        for shadow in &style.text_shadow {
+        for shadow in style.text_shadow.iter() {
           let offset_x = Self::resolve_length_for_paint(
             &shadow.offset_x,
             style.font_size,
@@ -8310,7 +8310,7 @@ mod tests {
   fn underline_exclusions_reuse_cached_faces() {
     let ctx = FontContext::new();
     let mut style = ComputedStyle::default();
-    style.font_family = vec!["sans-serif".to_string()];
+    style.font_family = vec!["sans-serif".to_string()].into();
     style.font_size = 14.0;
     let pipeline = ShapingPipeline::new();
 

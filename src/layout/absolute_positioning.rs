@@ -1977,7 +1977,7 @@ pub fn resolve_positioned_style(
     .map_or(LengthOrAuto::Auto, LengthOrAuto::Length);
   resolved.box_sizing = style.box_sizing;
   resolved.aspect_ratio = style.aspect_ratio;
-  resolved.font_family = style.font_family.clone();
+  resolved.font_family = style.font_family.to_vec();
   resolved.font_size = style.font_size;
   resolved.root_font_size = style.root_font_size;
   resolved.font_weight = style.font_weight.to_u16();

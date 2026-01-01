@@ -839,7 +839,7 @@ fn to_greek(n: i32) -> String {
 /// context.set_counter("chapter", 5);
 /// context.set_attribute("data-label", "Introduction");
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ContentContext {
   /// Current counter values
   ///
@@ -871,7 +871,13 @@ pub struct ContentContext {
   ///
   /// Each pair is (open-quote, close-quote)
   /// Default is `["\u{201C}", "\u{201D}", "\u{2018}", "\u{2019}"]` (curly quotes)
-  quotes: Vec<(String, String)>,
+  quotes: Arc<[(String, String)]>,
+}
+
+impl Default for ContentContext {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 impl ContentContext {
@@ -884,7 +890,7 @@ impl ContentContext {
       running_element_firsts: HashMap::new(),
       attributes: HashMap::new(),
       quote_depth: 0,
-      quotes: default_quotes(),
+      quotes: Arc::from(default_quotes()),
     }
   }
 
@@ -1065,7 +1071,7 @@ impl ContentContext {
   ///
   /// Each pair is (open-quote, close-quote) for a nesting level.
   /// The first pair is for the outermost level, second for nested, etc.
-  pub fn set_quotes(&mut self, quotes: Vec<(String, String)>) {
+  pub fn set_quotes(&mut self, quotes: Arc<[(String, String)]>) {
     self.quotes = quotes;
   }
 

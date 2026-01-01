@@ -3798,12 +3798,13 @@ mod tests {
     marker_styles.text_decoration.style = TextDecorationStyle::Wavy;
     marker_styles.text_decoration.color = Some(Rgba::BLUE);
     marker_styles.text_decoration.thickness = TextDecorationThickness::Length(Length::px(2.0));
-    marker_styles.text_shadow.push(TextShadow {
+    marker_styles.text_shadow = vec![TextShadow {
       offset_x: Length::px(1.0),
       offset_y: Length::px(2.0),
       blur_radius: Length::px(3.0),
       color: Some(Rgba::GREEN),
-    });
+    }]
+    .into();
     marker_styles.padding_left = Length::px(8.0);
     marker_styles.margin_left = Some(Length::px(4.0));
     marker_styles.background_color = Rgba::rgb(255, 0, 255);
@@ -3912,7 +3913,7 @@ mod tests {
       ContentItem::OpenQuote,
       ContentItem::String("hi".to_string()),
     ]);
-    before_style.quotes = vec![("«".to_string(), "»".to_string())];
+    before_style.quotes = vec![("«".to_string(), "»".to_string())].into();
 
     let base_style = ComputedStyle::default();
     let styled = StyledNode {

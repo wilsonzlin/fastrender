@@ -151,7 +151,7 @@ fn palette_overrides_recolor_colr_glyphs() {
   let palette_registry = build_palette_registry(&family);
 
   let mut normal_style = ComputedStyle::default();
-  normal_style.font_family = vec![family.clone()];
+  normal_style.font_family = vec![family.clone()].into();
   normal_style.font_size = 32.0;
   normal_style.font_palettes = palette_registry.clone();
   normal_style.font_palette = FontPalette::Normal;
@@ -219,7 +219,7 @@ fn palette_overrides_follow_current_color_across_cached_runs() {
   let palette_registry = build_current_color_palette_registry(&family);
 
   let mut red_style = ComputedStyle::default();
-  red_style.font_family = vec![family.clone()];
+  red_style.font_family = vec![family.clone()].into();
   red_style.font_size = 32.0;
   red_style.font_palette = FontPalette::Named("--current".into());
   red_style.font_palettes = palette_registry.clone();
