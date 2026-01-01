@@ -2788,6 +2788,14 @@ impl StageHeartbeatWriter {
           std::thread::sleep(Duration::from_millis(delay));
         }
       }
+      if matches!(stage, StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize) {
+        if let Some(delay) = std::env::var("FASTR_TEST_PAINT_DELAY_MS")
+          .ok()
+          .and_then(|raw| raw.parse::<u64>().ok())
+        {
+          std::thread::sleep(Duration::from_millis(delay));
+        }
+      }
     }
   }
 }

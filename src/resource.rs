@@ -2617,15 +2617,15 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let agent = &self.agent;
     let timeout_budget = self.timeout_budget(deadline);
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-      && timeout_budget.is_none()
-    {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
+    let max_attempts = match deadline.as_ref() {
+      Some(deadline)
+        if deadline.timeout_limit().is_some()
+          && timeout_budget.is_none()
+          && !deadline.http_retries_enabled() =>
+      {
+        1
+      }
+      _ => self.retry_policy.max_attempts.max(1),
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
@@ -3054,15 +3054,15 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let client = &self.reqwest_client;
     let timeout_budget = self.timeout_budget(deadline);
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-      && timeout_budget.is_none()
-    {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
+    let max_attempts = match deadline.as_ref() {
+      Some(deadline)
+        if deadline.timeout_limit().is_some()
+          && timeout_budget.is_none()
+          && !deadline.http_retries_enabled() =>
+      {
+        1
+      }
+      _ => self.retry_policy.max_attempts.max(1),
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
@@ -3487,15 +3487,15 @@ impl HttpFetcher {
     let mut validators = validators;
     let agent = &self.agent;
     let timeout_budget = self.timeout_budget(deadline);
-    let max_attempts = if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-      && timeout_budget.is_none()
-    {
-      1
-    } else {
-      self.retry_policy.max_attempts.max(1)
+    let max_attempts = match deadline.as_ref() {
+      Some(deadline)
+        if deadline.timeout_limit().is_some()
+          && timeout_budget.is_none()
+          && !deadline.http_retries_enabled() =>
+      {
+        1
+      }
+      _ => self.retry_policy.max_attempts.max(1),
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
@@ -3996,15 +3996,17 @@ impl HttpFetcher {
     let timeout_budget = self.timeout_budget(deadline);
     let max_attempts = if auto_fallback && timeout_budget.is_some() {
       1
-    } else if deadline
-      .as_ref()
-      .and_then(render_control::RenderDeadline::timeout_limit)
-      .is_some()
-      && timeout_budget.is_none()
-    {
-      1
     } else {
-      self.retry_policy.max_attempts.max(1)
+      match deadline.as_ref() {
+        Some(deadline)
+          if deadline.timeout_limit().is_some()
+            && timeout_budget.is_none()
+            && !deadline.http_retries_enabled() =>
+        {
+          1
+        }
+        _ => self.retry_policy.max_attempts.max(1),
+      }
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {

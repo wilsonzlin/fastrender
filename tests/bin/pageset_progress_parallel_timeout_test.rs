@@ -26,6 +26,9 @@ fn pageset_progress_worker_times_out_cooperatively_under_parallel_layout_and_pai
     .env("RAYON_NUM_THREADS", "2")
     .env("FASTR_PAINT_THREADS", "2")
     .env("FASTR_PAINT_PARALLEL", "on")
+    // Ensure the render exceeds the cooperative timeout even on very fast machines so we
+    // deterministically exercise deadline propagation across worker threads.
+    .env("FASTR_TEST_PAINT_DELAY_MS", "1000")
     .args([
       "worker",
       "--cache-path",

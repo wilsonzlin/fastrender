@@ -16,6 +16,7 @@ pub struct RenderDeadline {
   start: Instant,
   timeout: Option<Duration>,
   cancel: Option<Arc<CancelCallback>>,
+  allow_http_retries: bool,
 }
 
 /// Guard that installs an active deadline for the duration of a render stage.
@@ -121,12 +122,29 @@ impl RenderDeadline {
       start: Instant::now(),
       timeout,
       cancel,
+      allow_http_retries: false,
     }
   }
 
   /// Returns a disabled deadline that never triggers.
   pub fn none() -> Self {
     Self::new(None, None)
+  }
+
+  /// When enabled, HTTP fetchers may honor their retry/backoff policy while still being bounded by
+  /// this deadline.
+  ///
+  /// By default, a deadline with a timeout disables HTTP retries to avoid spending the remaining
+  /// render budget on exponential backoff sleeps. Some callers (e.g. client redirect following in
+  /// CLI tooling) want bounded retries, so they can opt in via this flag.
+  pub fn with_http_retries(mut self, enabled: bool) -> Self {
+    self.allow_http_retries = enabled;
+    self
+  }
+
+  /// Whether HTTP fetchers should allow retries when this deadline is active.
+  pub fn http_retries_enabled(&self) -> bool {
+    self.allow_http_retries
   }
 
   /// Returns true when either timeout or cancellation is configured.
