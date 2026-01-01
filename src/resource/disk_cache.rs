@@ -1297,14 +1297,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   fn debug_index_stats(&self) -> disk_cache_index::DebugStats {
     self.index.debug_stats()
   }
-}
 
-impl<F: ResourceFetcher> DiskCachingFetcher<F> {
-  fn fetch_with_context<'a>(
-    &self,
-    url: &'a str,
-    request: Option<FetchRequest<'a>>,
-  ) -> Result<FetchedResource> {
+  fn fetch_with_network<FN>(&self, url: &str, fetch_network: FN) -> Result<FetchedResource>
+  where
+    FN: FnOnce(Option<(Option<&str>, Option<&str>)>) -> Result<FetchedResource>,
+  {
     if let Some(policy) = &self.policy {
       policy.ensure_url_allowed(url)?;
     }
@@ -1368,18 +1365,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       _ => None,
     };
 
-    let fetch_result = match request {
-      Some(req) => self.memory.inner.fetch_with_request(req),
-      None => match validators {
-        Some((etag, last_modified)) => {
-          self
-            .memory
-            .inner
-            .fetch_with_validation(url, etag, last_modified)
-        }
-        None => self.memory.inner.fetch(url),
-      },
-    };
+    let fetch_result = fetch_network(validators);
 
     let (mut result, charge_budget) = match fetch_result {
       Ok(res) => {
@@ -1552,6 +1538,33 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     result
   }
+}
+
+impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
+  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    self.fetch_with_network(url, |validators| match validators {
+      Some((etag, last_modified)) => {
+        self
+          .memory
+          .inner
+          .fetch_with_validation(url, etag, last_modified)
+      }
+      None => self.memory.inner.fetch(url),
+    })
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    let url = req.url;
+    self.fetch_with_network(url, |validators| match validators {
+      Some((etag, last_modified)) => {
+        self
+          .memory
+          .inner
+          .fetch_with_request_and_validation(req, etag, last_modified)
+      }
+      None => self.memory.inner.fetch_with_request(req),
+    })
+  }
 
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
     if let Some(policy) = &self.policy {
@@ -1583,16 +1596,6 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
 
     self.memory.inner.fetch_partial(url, max_bytes)
-  }
-}
-
-impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
-  fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    self.fetch_with_context(url, None)
-  }
-
-  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
-    self.fetch_with_context(req.url, Some(req))
   }
 }
 
@@ -1677,7 +1680,9 @@ fn secs_to_system_time(secs: u64) -> Option<SystemTime> {
 
 #[cfg(test)]
 mod tests {
-  use super::super::{CacheStalePolicy, HttpFetcher, ResourcePolicy};
+  use super::super::{
+    CacheStalePolicy, FetchDestination, FetchRequest, HttpFetcher, ResourcePolicy,
+  };
   use super::*;
   use filetime::FileTime;
   use std::collections::VecDeque;
@@ -1763,6 +1768,59 @@ mod tests {
       resource.final_url = Some(url.to_string());
       Ok(resource)
     }
+  }
+
+  #[derive(Clone, Debug)]
+  struct RecordedRequestCall {
+    destination: FetchDestination,
+    referrer: Option<String>,
+  }
+
+  #[derive(Clone)]
+  struct ContextRecordingFetcher {
+    calls: Arc<Mutex<Vec<RecordedRequestCall>>>,
+  }
+
+  impl ResourceFetcher for ContextRecordingFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      panic!("fetch() should not be called by DiskCachingFetcher::fetch_with_request");
+    }
+
+    fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+      self.calls.lock().unwrap().push(RecordedRequestCall {
+        destination: req.destination,
+        referrer: req.referrer.map(|s| s.to_string()),
+      });
+      Ok(FetchedResource::new(
+        b"ok".to_vec(),
+        Some("text/plain".to_string()),
+      ))
+    }
+  }
+
+  #[test]
+  fn disk_caching_fetcher_forwards_fetch_request_context_on_miss() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let disk = DiskCachingFetcher::new(
+      ContextRecordingFetcher {
+        calls: Arc::clone(&calls),
+      },
+      tmp.path(),
+    );
+
+    let url = "https://example.com/style.css";
+    let req = FetchRequest::new(url, FetchDestination::Style).with_referrer("https://example.com/");
+    let res = disk.fetch_with_request(req).expect("fetch");
+    assert_eq!(res.bytes, b"ok");
+
+    let snapshot = calls.lock().unwrap().clone();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].destination, FetchDestination::Style);
+    assert_eq!(
+      snapshot[0].referrer.as_deref(),
+      Some("https://example.com/")
+    );
   }
 
   #[test]

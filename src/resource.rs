@@ -1783,6 +1783,24 @@ pub trait ResourceFetcher: Send + Sync {
     self.fetch(req.url)
   }
 
+  /// Fetch a resource with contextual request metadata and optional validators.
+  ///
+  /// This is primarily used by caching wrappers so they can issue conditional
+  /// HTTP requests (`If-None-Match` / `If-Modified-Since`) while still providing
+  /// the destination + referrer needed for browser-ish headers.
+  ///
+  /// The default implementation ignores the validators and delegates to
+  /// [`ResourceFetcher::fetch_with_request`].
+  fn fetch_with_request_and_validation(
+    &self,
+    req: FetchRequest<'_>,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    let _ = (etag, last_modified);
+    self.fetch_with_request(req)
+  }
+
   /// Fetch a prefix of a resource body.
   ///
   /// Returns up to the first `max_bytes` of the response body. Callers must treat truncated bodies
@@ -1827,6 +1845,15 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 
   fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
     (**self).fetch_with_request(req)
+  }
+
+  fn fetch_with_request_and_validation(
+    &self,
+    req: FetchRequest<'_>,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    (**self).fetch_with_request_and_validation(req, etag, last_modified)
   }
 
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
@@ -4371,6 +4398,37 @@ impl ResourceFetcher for HttpFetcher {
     }
   }
 
+  fn fetch_with_request_and_validation(
+    &self,
+    req: FetchRequest<'_>,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    render_control::check_active(render_stage_hint_from_url(req.url)).map_err(Error::Render)?;
+    match self.policy.ensure_url_allowed(req.url)? {
+      ResourceScheme::Http | ResourceScheme::Https => {
+        let deadline = render_control::active_deadline();
+        let started = Instant::now();
+        self.fetch_http_with_accept_inner(
+          req.url,
+          None,
+          Some(HttpCacheValidators {
+            etag,
+            last_modified,
+          }),
+          Some(req.destination),
+          req.referrer,
+          &deadline,
+          started,
+        )
+      }
+      ResourceScheme::Data => self.fetch_data(req.url),
+      ResourceScheme::File => self.fetch_file(req.url),
+      ResourceScheme::Relative => self.fetch_file(&format!("file://{}", req.url)),
+      ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
+    }
+  }
+
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
     if max_bytes == 0 {
       let mut res = self.fetch(url)?;
@@ -5570,6 +5628,188 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       .unwrap_or_else(|poisoned| poisoned.into_inner());
     map.remove(url);
   }
+
+  fn fetch_with_network<FN>(&self, url: &str, fetch_network: FN) -> Result<FetchedResource>
+  where
+    FN: FnOnce(Option<(Option<&str>, Option<&str>)>) -> Result<FetchedResource>,
+  {
+    if let Some(policy) = &self.policy {
+      policy.ensure_url_allowed(url)?;
+    }
+
+    let cached = self.cached_entry(url);
+    let plan = self.plan_cache_use(url, cached.clone(), None);
+    if let CacheAction::UseCached = plan.action {
+      if let Some(snapshot) = plan.cached.as_ref() {
+        if plan.is_stale {
+          record_cache_stale_hit();
+        } else {
+          record_cache_fresh_hit();
+        }
+        let result = snapshot.value.as_result();
+        if let Ok(ref res) = result {
+          record_resource_cache_bytes(res.bytes.len());
+          reserve_policy_bytes(&self.policy, res)?;
+        }
+        return result;
+      }
+    }
+
+    let (flight, is_owner) = self.join_inflight(url);
+    if !is_owner {
+      let inflight_timer = start_fetch_inflight_wait_diagnostics();
+      let result = flight.wait(url);
+      finish_fetch_inflight_wait_diagnostics(inflight_timer);
+      if let Ok(ref res) = result {
+        reserve_policy_bytes(&self.policy, res)?;
+      }
+      return result;
+    }
+
+    let mut inflight_guard = InFlightOwnerGuard::new(self, url, flight);
+
+    let validators = match &plan.action {
+      CacheAction::Validate {
+        etag,
+        last_modified,
+      } => Some((etag.as_deref(), last_modified.as_deref())),
+      _ => None,
+    };
+
+    let fetch_result = fetch_network(validators);
+
+    let (mut result, charge_budget) = match fetch_result {
+      Ok(res) => {
+        if res.is_not_modified() {
+          if let Some(snapshot) = plan.cached.as_ref() {
+            let value = snapshot.value.as_result();
+            if let Ok(ref ok) = value {
+              let stored_at = SystemTime::now();
+              let should_store = self.config.allow_no_store
+                || !res
+                  .cache_policy
+                  .as_ref()
+                  .map(|p| p.no_store)
+                  .unwrap_or(false);
+              let updated_meta = snapshot
+                .http_cache
+                .as_ref()
+                .and_then(|meta| meta.with_updated_policy(res.cache_policy.as_ref(), stored_at))
+                .or_else(|| {
+                  res
+                    .cache_policy
+                    .as_ref()
+                    .and_then(|policy| CachedHttpMetadata::from_policy(policy, stored_at))
+                });
+
+              if should_store {
+                self.cache_entry(
+                  url,
+                  CacheEntry {
+                    value: CacheValue::Resource(ok.clone()),
+                    etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
+                    last_modified: res
+                      .last_modified
+                      .clone()
+                      .or_else(|| snapshot.last_modified.clone()),
+                    http_cache: updated_meta,
+                  },
+                  ok.final_url.as_deref(),
+                );
+              } else {
+                self.remove_cached(url);
+              }
+            }
+            record_cache_revalidated_hit();
+            if let Ok(ref ok) = value {
+              record_resource_cache_bytes(ok.bytes.len());
+            }
+            let is_ok = value.is_ok();
+            (value, is_ok)
+          } else {
+            (
+              Err(Error::Resource(
+                ResourceError::new(url.to_string(), "received 304 without cached entry")
+                  .with_final_url(url.to_string()),
+              )),
+              false,
+            )
+          }
+        } else {
+          if res.status.map(is_transient_http_status).unwrap_or(false) {
+            if let Some(snapshot) = plan.cached.as_ref() {
+              record_cache_stale_hit();
+              let fallback = snapshot.value.as_result();
+              if let Ok(ref ok) = fallback {
+                record_resource_cache_bytes(ok.bytes.len());
+              }
+              let is_ok = fallback.is_ok();
+              (fallback, is_ok)
+            } else {
+              record_cache_miss();
+              (Ok(res), false)
+            }
+          } else {
+            let stored_at = SystemTime::now();
+            if let Some(entry) = self.build_cache_entry(&res, stored_at) {
+              self.cache_entry(url, entry, res.final_url.as_deref());
+            } else if !self.config.allow_no_store
+              && res
+                .cache_policy
+                .as_ref()
+                .map(|p| p.no_store)
+                .unwrap_or(false)
+            {
+              self.remove_cached(url);
+            }
+            record_cache_miss();
+            (Ok(res), false)
+          }
+        }
+      }
+      Err(err) => {
+        if let Some(snapshot) = plan.cached.as_ref() {
+          record_cache_stale_hit();
+          let fallback = snapshot.value.as_result();
+          if let Ok(ref ok) = fallback {
+            record_resource_cache_bytes(ok.bytes.len());
+          }
+          let is_ok = fallback.is_ok();
+          (fallback, is_ok)
+        } else {
+          if self.config.cache_errors {
+            self.cache_entry(
+              url,
+              CacheEntry {
+                value: CacheValue::Error(err.clone()),
+                etag: None,
+                last_modified: None,
+                http_cache: None,
+              },
+              None,
+            );
+          }
+          (Err(err), false)
+        }
+      }
+    };
+
+    if charge_budget {
+      if let Ok(ref res) = result {
+        if let Err(err) = reserve_policy_bytes(&self.policy, res) {
+          result = Err(err);
+        }
+      }
+    }
+
+    let notify = match &result {
+      Ok(res) => SharedResult::Success(res.clone()),
+      Err(err) => SharedResult::Error(err.clone()),
+    };
+    inflight_guard.finish(notify);
+
+    result
+  }
 }
 
 struct InFlightOwnerGuard<'a, F: ResourceFetcher> {
@@ -5617,357 +5857,22 @@ impl<'a, F: ResourceFetcher> Drop for InFlightOwnerGuard<'a, F> {
 
 impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    if let Some(policy) = &self.policy {
-      policy.ensure_url_allowed(url)?;
-    }
-
-    let cached = self.cached_entry(url);
-    let plan = self.plan_cache_use(url, cached.clone(), None);
-    if let CacheAction::UseCached = plan.action {
-      if let Some(snapshot) = plan.cached.as_ref() {
-        if plan.is_stale {
-          record_cache_stale_hit();
-        } else {
-          record_cache_fresh_hit();
-        }
-        let result = snapshot.value.as_result();
-        if let Ok(ref res) = result {
-          record_resource_cache_bytes(res.bytes.len());
-          reserve_policy_bytes(&self.policy, res)?;
-        }
-        return result;
-      }
-    }
-
-    let (flight, is_owner) = self.join_inflight(url);
-    if !is_owner {
-      let inflight_timer = start_fetch_inflight_wait_diagnostics();
-      let result = flight.wait(url);
-      finish_fetch_inflight_wait_diagnostics(inflight_timer);
-      if let Ok(ref res) = result {
-        reserve_policy_bytes(&self.policy, res)?;
-      }
-      return result;
-    }
-
-    let mut inflight_guard = InFlightOwnerGuard::new(self, url, flight);
-
-    let validators = match &plan.action {
-      CacheAction::Validate {
-        etag,
-        last_modified,
-      } => Some((etag.as_deref(), last_modified.as_deref())),
-      _ => None,
-    };
-
-    let fetch_result = match validators {
+    self.fetch_with_network(url, |validators| match validators {
       Some((etag, last_modified)) => self.inner.fetch_with_validation(url, etag, last_modified),
       None => self.inner.fetch(url),
-    };
-
-    let (mut result, charge_budget) = match fetch_result {
-      Ok(res) => {
-        if res.is_not_modified() {
-          if let Some(snapshot) = plan.cached.as_ref() {
-            let value = snapshot.value.as_result();
-            if let Ok(ref ok) = value {
-              let stored_at = SystemTime::now();
-              let should_store = self.config.allow_no_store
-                || !res
-                  .cache_policy
-                  .as_ref()
-                  .map(|p| p.no_store)
-                  .unwrap_or(false);
-              let updated_meta = snapshot
-                .http_cache
-                .as_ref()
-                .and_then(|meta| meta.with_updated_policy(res.cache_policy.as_ref(), stored_at))
-                .or_else(|| {
-                  res
-                    .cache_policy
-                    .as_ref()
-                    .and_then(|policy| CachedHttpMetadata::from_policy(policy, stored_at))
-                });
-
-              if should_store {
-                self.cache_entry(
-                  url,
-                  CacheEntry {
-                    value: CacheValue::Resource(ok.clone()),
-                    etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
-                    last_modified: res
-                      .last_modified
-                      .clone()
-                      .or_else(|| snapshot.last_modified.clone()),
-                    http_cache: updated_meta,
-                  },
-                  ok.final_url.as_deref(),
-                );
-              } else {
-                self.remove_cached(url);
-              }
-            }
-            record_cache_revalidated_hit();
-            if let Ok(ref ok) = value {
-              record_resource_cache_bytes(ok.bytes.len());
-            }
-            let is_ok = value.is_ok();
-            (value, is_ok)
-          } else {
-            (
-              Err(Error::Resource(
-                ResourceError::new(url.to_string(), "received 304 without cached entry")
-                  .with_final_url(url.to_string()),
-              )),
-              false,
-            )
-          }
-        } else {
-          if res.status.map(is_transient_http_status).unwrap_or(false) {
-            if let Some(snapshot) = plan.cached.as_ref() {
-              record_cache_stale_hit();
-              let fallback = snapshot.value.as_result();
-              if let Ok(ref ok) = fallback {
-                record_resource_cache_bytes(ok.bytes.len());
-              }
-              let is_ok = fallback.is_ok();
-              (fallback, is_ok)
-            } else {
-              record_cache_miss();
-              (Ok(res), false)
-            }
-          } else {
-            let stored_at = SystemTime::now();
-            if let Some(entry) = self.build_cache_entry(&res, stored_at) {
-              self.cache_entry(url, entry, res.final_url.as_deref());
-            } else if !self.config.allow_no_store
-              && res
-                .cache_policy
-                .as_ref()
-                .map(|p| p.no_store)
-                .unwrap_or(false)
-            {
-              self.remove_cached(url);
-            }
-            record_cache_miss();
-            (Ok(res), false)
-          }
-        }
-      }
-      Err(err) => {
-        if let Some(snapshot) = plan.cached.as_ref() {
-          record_cache_stale_hit();
-          let fallback = snapshot.value.as_result();
-          if let Ok(ref ok) = fallback {
-            record_resource_cache_bytes(ok.bytes.len());
-          }
-          let is_ok = fallback.is_ok();
-          (fallback, is_ok)
-        } else {
-          if self.config.cache_errors {
-            self.cache_entry(
-              url,
-              CacheEntry {
-                value: CacheValue::Error(err.clone()),
-                etag: None,
-                last_modified: None,
-                http_cache: None,
-              },
-              None,
-            );
-          }
-          (Err(err), false)
-        }
-      }
-    };
-
-    if charge_budget {
-      if let Ok(ref res) = result {
-        if let Err(err) = reserve_policy_bytes(&self.policy, res) {
-          result = Err(err);
-        }
-      }
-    }
-
-    let notify = match &result {
-      Ok(res) => SharedResult::Success(res.clone()),
-      Err(err) => SharedResult::Error(err.clone()),
-    };
-    inflight_guard.finish(notify);
-
-    result
+    })
   }
 
   fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
     let url = req.url;
-    if let Some(policy) = &self.policy {
-      policy.ensure_url_allowed(url)?;
-    }
-
-    let cached = self.cached_entry(url);
-    let plan = self.plan_cache_use(url, cached.clone(), None);
-    if let CacheAction::UseCached = plan.action {
-      if let Some(snapshot) = plan.cached.as_ref() {
-        if plan.is_stale {
-          record_cache_stale_hit();
-        } else {
-          record_cache_fresh_hit();
-        }
-        let result = snapshot.value.as_result();
-        if let Ok(ref res) = result {
-          record_resource_cache_bytes(res.bytes.len());
-          reserve_policy_bytes(&self.policy, res)?;
-        }
-        return result;
+    self.fetch_with_network(url, |validators| match validators {
+      Some((etag, last_modified)) => {
+        self
+          .inner
+          .fetch_with_request_and_validation(req, etag, last_modified)
       }
-    }
-
-    let (flight, is_owner) = self.join_inflight(url);
-    if !is_owner {
-      let inflight_timer = start_fetch_inflight_wait_diagnostics();
-      let result = flight.wait(url);
-      finish_fetch_inflight_wait_diagnostics(inflight_timer);
-      if let Ok(ref res) = result {
-        reserve_policy_bytes(&self.policy, res)?;
-      }
-      return result;
-    }
-
-    let mut inflight_guard = InFlightOwnerGuard::new(self, url, flight);
-
-    let fetch_result = self.inner.fetch_with_request(req);
-
-    let (mut result, charge_budget) = match fetch_result {
-      Ok(res) => {
-        if res.is_not_modified() {
-          if let Some(snapshot) = plan.cached.as_ref() {
-            let value = snapshot.value.as_result();
-            if let Ok(ref ok) = value {
-              let stored_at = SystemTime::now();
-              let should_store = self.config.allow_no_store
-                || !res
-                  .cache_policy
-                  .as_ref()
-                  .map(|p| p.no_store)
-                  .unwrap_or(false);
-              let updated_meta = snapshot
-                .http_cache
-                .as_ref()
-                .and_then(|meta| meta.with_updated_policy(res.cache_policy.as_ref(), stored_at))
-                .or_else(|| {
-                  res
-                    .cache_policy
-                    .as_ref()
-                    .and_then(|policy| CachedHttpMetadata::from_policy(policy, stored_at))
-                });
-
-              if should_store {
-                self.cache_entry(
-                  url,
-                  CacheEntry {
-                    value: CacheValue::Resource(ok.clone()),
-                    etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
-                    last_modified: res
-                      .last_modified
-                      .clone()
-                      .or_else(|| snapshot.last_modified.clone()),
-                    http_cache: updated_meta,
-                  },
-                  ok.final_url.as_deref(),
-                );
-              } else {
-                self.remove_cached(url);
-              }
-            }
-            record_cache_revalidated_hit();
-            if let Ok(ref ok) = value {
-              record_resource_cache_bytes(ok.bytes.len());
-            }
-            let is_ok = value.is_ok();
-            (value, is_ok)
-          } else {
-            (
-              Err(Error::Resource(
-                ResourceError::new(url.to_string(), "received 304 without cached entry")
-                  .with_final_url(url.to_string()),
-              )),
-              false,
-            )
-          }
-        } else {
-          if res.status.map(is_transient_http_status).unwrap_or(false) {
-            if let Some(snapshot) = plan.cached.as_ref() {
-              record_cache_stale_hit();
-              let fallback = snapshot.value.as_result();
-              if let Ok(ref ok) = fallback {
-                record_resource_cache_bytes(ok.bytes.len());
-              }
-              let is_ok = fallback.is_ok();
-              (fallback, is_ok)
-            } else {
-              record_cache_miss();
-              (Ok(res), false)
-            }
-          } else {
-            let stored_at = SystemTime::now();
-            if let Some(entry) = self.build_cache_entry(&res, stored_at) {
-              self.cache_entry(url, entry, res.final_url.as_deref());
-            } else if !self.config.allow_no_store
-              && res
-                .cache_policy
-                .as_ref()
-                .map(|p| p.no_store)
-                .unwrap_or(false)
-            {
-              self.remove_cached(url);
-            }
-            record_cache_miss();
-            (Ok(res), false)
-          }
-        }
-      }
-      Err(err) => {
-        if let Some(snapshot) = plan.cached.as_ref() {
-          record_cache_stale_hit();
-          let fallback = snapshot.value.as_result();
-          if let Ok(ref ok) = fallback {
-            record_resource_cache_bytes(ok.bytes.len());
-          }
-          let is_ok = fallback.is_ok();
-          (fallback, is_ok)
-        } else {
-          if self.config.cache_errors {
-            self.cache_entry(
-              url,
-              CacheEntry {
-                value: CacheValue::Error(err.clone()),
-                etag: None,
-                last_modified: None,
-                http_cache: None,
-              },
-              None,
-            );
-          }
-          (Err(err), false)
-        }
-      }
-    };
-
-    if charge_budget {
-      if let Ok(ref res) = result {
-        if let Err(err) = reserve_policy_bytes(&self.policy, res) {
-          result = Err(err);
-        }
-      }
-    }
-
-    let notify = match &result {
-      Ok(res) => SharedResult::Success(res.clone()),
-      Err(err) => SharedResult::Error(err.clone()),
-    };
-    inflight_guard.finish(notify);
-
-    result
+      None => self.inner.fetch_with_request(req),
+    })
   }
 
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
@@ -8991,6 +8896,154 @@ mod tests {
     assert!(cache.fetch("http://example.com/error").is_err());
     assert!(cache.fetch("http://example.com/error").is_err());
     assert_eq!(counter.load(Ordering::SeqCst), 1);
+  }
+
+  #[derive(Clone, Debug)]
+  struct RecordedFetchRequestCall {
+    destination: FetchDestination,
+    referrer: Option<String>,
+  }
+
+  #[derive(Clone)]
+  struct RequestRecordingFetcher {
+    calls: Arc<Mutex<Vec<RecordedFetchRequestCall>>>,
+  }
+
+  impl ResourceFetcher for RequestRecordingFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      panic!("fetch() should not be called when using fetch_with_request()");
+    }
+
+    fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+      self.calls.lock().unwrap().push(RecordedFetchRequestCall {
+        destination: req.destination,
+        referrer: req.referrer.map(|s| s.to_string()),
+      });
+      Ok(FetchedResource::new(
+        b"ok".to_vec(),
+        Some("text/plain".to_string()),
+      ))
+    }
+  }
+
+  #[test]
+  fn caching_fetcher_forwards_fetch_request_context() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let inner = RequestRecordingFetcher {
+      calls: Arc::clone(&calls),
+    };
+    let cache = CachingFetcher::new(inner);
+
+    let url = "http://example.com/asset.css";
+    let req = FetchRequest::new(url, FetchDestination::Style).with_referrer("http://example.com/");
+    let res = cache.fetch_with_request(req).expect("fetch");
+    assert_eq!(res.bytes, b"ok");
+
+    let snapshot = calls.lock().unwrap().clone();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].destination, FetchDestination::Style);
+    assert_eq!(snapshot[0].referrer.as_deref(), Some("http://example.com/"));
+
+    // Cache key remains URL-only: a subsequent request with different context should
+    // still hit the cache and avoid a second network call.
+    let req2 =
+      FetchRequest::new(url, FetchDestination::Image).with_referrer("http://other.example/");
+    let res = cache.fetch_with_request(req2).expect("cached fetch");
+    assert_eq!(res.bytes, b"ok");
+    assert_eq!(
+      calls.lock().unwrap().len(),
+      1,
+      "expected request context fetch to be cached by URL"
+    );
+  }
+
+  #[derive(Clone, Debug)]
+  struct RecordedValidationCall {
+    destination: FetchDestination,
+    referrer: Option<String>,
+    etag: Option<String>,
+    last_modified: Option<String>,
+  }
+
+  #[derive(Clone)]
+  struct ContextValidatingFetcher {
+    calls: Arc<Mutex<Vec<RecordedValidationCall>>>,
+    step: Arc<AtomicUsize>,
+  }
+
+  impl ResourceFetcher for ContextValidatingFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      panic!("fetch() should not be called by CachingFetcher::fetch_with_request");
+    }
+
+    fn fetch_with_request(&self, _req: FetchRequest<'_>) -> Result<FetchedResource> {
+      let step = self.step.fetch_add(1, Ordering::SeqCst);
+      assert_eq!(step, 0, "unexpected fetch_with_request call count");
+      let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+      resource.status = Some(200);
+      resource.etag = Some("etag1".to_string());
+      resource.last_modified = Some("lm1".to_string());
+      Ok(resource)
+    }
+
+    fn fetch_with_validation(
+      &self,
+      _url: &str,
+      _etag: Option<&str>,
+      _last_modified: Option<&str>,
+    ) -> Result<FetchedResource> {
+      panic!(
+        "expected CachingFetcher::fetch_with_request to use fetch_with_request_and_validation"
+      );
+    }
+
+    fn fetch_with_request_and_validation(
+      &self,
+      req: FetchRequest<'_>,
+      etag: Option<&str>,
+      last_modified: Option<&str>,
+    ) -> Result<FetchedResource> {
+      let step = self.step.fetch_add(1, Ordering::SeqCst);
+      assert_eq!(
+        step, 1,
+        "unexpected fetch_with_request_and_validation call count"
+      );
+      self.calls.lock().unwrap().push(RecordedValidationCall {
+        destination: req.destination,
+        referrer: req.referrer.map(|s| s.to_string()),
+        etag: etag.map(|s| s.to_string()),
+        last_modified: last_modified.map(|s| s.to_string()),
+      });
+      let mut res = FetchedResource::new(Vec::new(), Some("text/plain".to_string()));
+      res.status = Some(304);
+      Ok(res)
+    }
+  }
+
+  #[test]
+  fn caching_fetcher_preserves_request_context_for_conditional_requests() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let inner = ContextValidatingFetcher {
+      calls: Arc::clone(&calls),
+      step: Arc::new(AtomicUsize::new(0)),
+    };
+    let cache = CachingFetcher::new(inner);
+
+    let url = "http://example.com/resource";
+    let req = FetchRequest::new(url, FetchDestination::Style).with_referrer("http://example.com/");
+
+    let first = cache.fetch_with_request(req).expect("initial fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = cache.fetch_with_request(req).expect("revalidation fetch");
+    assert_eq!(second.bytes, b"cached", "should return cached body on 304");
+
+    let snapshot = calls.lock().unwrap().clone();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].destination, FetchDestination::Style);
+    assert_eq!(snapshot[0].referrer.as_deref(), Some("http://example.com/"));
+    assert_eq!(snapshot[0].etag.as_deref(), Some("etag1"));
+    assert_eq!(snapshot[0].last_modified.as_deref(), Some("lm1"));
   }
 
   #[derive(Clone, Debug)]
