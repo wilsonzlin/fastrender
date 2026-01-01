@@ -1239,8 +1239,8 @@ fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
 
 fn collect_cached_html_paths_in(dir: &Path) -> io::Result<BTreeMap<String, PathBuf>> {
   let mut entries: BTreeMap<String, PathBuf> = BTreeMap::new();
-  for entry in fs::read_dir(dir)
-    .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", dir.display(), e)))?
+  for entry in
+    fs::read_dir(dir).map_err(|e| io::Error::new(e.kind(), format!("{}: {}", dir.display(), e)))?
   {
     let entry = entry?;
     if entry.file_type()?.is_dir() {
@@ -3914,6 +3914,151 @@ fn report(args: ReportArgs) -> io::Result<()> {
     text_timing_ranking!("text_fallback_ms", text_fallback_ms);
     text_timing_ranking!("text_shape_ms", text_shape_ms);
 
+    macro_rules! stat_ranking_ms {
+      ($metric:literal, $getter:expr) => {{
+        let mut sorted: Vec<(&LoadedProgress, f64)> = progresses
+          .iter()
+          .filter_map(|entry| {
+            if entry.progress.status != ProgressStatus::Ok {
+              return None;
+            }
+            entry.progress.total_ms?;
+            let stats = entry.stats.as_ref()?;
+            let ms = ($getter)(stats)?;
+            if ms <= 0.0 {
+              return None;
+            }
+            Some((entry, ms))
+          })
+          .collect();
+        sorted.sort_by(|(a_entry, a_ms), (b_entry, b_ms)| {
+          b_ms
+            .total_cmp(a_ms)
+            .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+        });
+        let top = args.top.min(sorted.len());
+        if top > 0 {
+          println!(
+            "Top {metric} (top {top} of {} with stats):",
+            sorted.len(),
+            metric = $metric
+          );
+          for (idx, (entry, ms)) in sorted.iter().take(top).enumerate() {
+            let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+            println!(
+              "  {}. {} {metric}={ms:.2}ms total={total_ms:.2}ms hotspot={} url={}",
+              idx + 1,
+              entry.stem,
+              normalize_hotspot(&entry.progress.hotspot),
+              entry.progress.url,
+              metric = $metric
+            );
+          }
+          println!();
+        }
+      }};
+    }
+
+    macro_rules! stat_ranking_count {
+      ($metric:literal, $getter:expr) => {{
+        let mut sorted: Vec<(&LoadedProgress, u64)> = progresses
+          .iter()
+          .filter_map(|entry| {
+            if entry.progress.status != ProgressStatus::Ok {
+              return None;
+            }
+            entry.progress.total_ms?;
+            let stats = entry.stats.as_ref()?;
+            let value = ($getter)(stats)?;
+            if value == 0 {
+              return None;
+            }
+            Some((entry, value))
+          })
+          .collect();
+        sorted.sort_by(|(a_entry, a_value), (b_entry, b_value)| {
+          b_value
+            .cmp(a_value)
+            .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+        });
+        let top = args.top.min(sorted.len());
+        if top > 0 {
+          println!(
+            "Top {metric} (top {top} of {} with stats):",
+            sorted.len(),
+            metric = $metric
+          );
+          for (idx, (entry, value)) in sorted.iter().take(top).enumerate() {
+            let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+            println!(
+              "  {}. {} {metric}={value} total={total_ms:.2}ms hotspot={} url={}",
+              idx + 1,
+              entry.stem,
+              normalize_hotspot(&entry.progress.hotspot),
+              entry.progress.url,
+              metric = $metric
+            );
+          }
+          println!();
+        }
+      }};
+    }
+
+    stat_ranking_ms!("timings.css_parse_ms", |stats: &RenderStats| stats
+      .timings
+      .css_parse_ms);
+    stat_ranking_ms!("timings.cascade_ms", |stats: &RenderStats| stats
+      .timings
+      .cascade_ms);
+    stat_ranking_ms!("timings.box_tree_ms", |stats: &RenderStats| stats
+      .timings
+      .box_tree_ms);
+    stat_ranking_ms!("timings.layout_ms", |stats: &RenderStats| stats
+      .timings
+      .layout_ms);
+    stat_ranking_ms!("timings.paint_build_ms", |stats: &RenderStats| stats
+      .timings
+      .paint_build_ms);
+    stat_ranking_ms!("timings.paint_rasterize_ms", |stats: &RenderStats| stats
+      .timings
+      .paint_rasterize_ms);
+    stat_ranking_ms!("layout.taffy_grid_compute_ms", |stats: &RenderStats| stats
+      .layout
+      .taffy_grid_compute_ms);
+    stat_ranking_ms!("layout.taffy_flex_compute_ms", |stats: &RenderStats| stats
+      .layout
+      .taffy_flex_compute_ms);
+    stat_ranking_ms!("paint.gradient_ms", |stats: &RenderStats| stats
+      .paint
+      .gradient_ms);
+
+    stat_ranking_count!("layout.taffy_grid_measure_calls", |stats: &RenderStats| {
+      stats.layout.taffy_grid_measure_calls
+    });
+    stat_ranking_count!("layout.taffy_flex_measure_calls", |stats: &RenderStats| {
+      stats.layout.taffy_flex_measure_calls
+    });
+    stat_ranking_count!("counts.dom_nodes", |stats: &RenderStats| stats
+      .counts
+      .dom_nodes
+      .map(|value| value as u64));
+    stat_ranking_count!("counts.box_nodes", |stats: &RenderStats| stats
+      .counts
+      .box_nodes
+      .map(|value| value as u64));
+    stat_ranking_count!("counts.fragments", |stats: &RenderStats| stats
+      .counts
+      .fragments
+      .map(|value| value as u64));
+    stat_ranking_count!("counts.shaped_runs", |stats: &RenderStats| stats
+      .counts
+      .shaped_runs
+      .map(|value| value as u64));
+    stat_ranking_count!("counts.glyphs", |stats: &RenderStats| stats
+      .counts
+      .glyphs
+      .map(|value| value as u64));
+
     let mut pages_with_stats = 0usize;
     let mut totals = ResourceDiagnostics::default();
     let mut saw = ResourceDiagnostics {
@@ -4077,9 +4222,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
           }
         }
 
-        if let (Some(bytes), Some(fetches)) =
-          (totals.network_fetch_bytes, totals.network_fetches)
-        {
+        if let (Some(bytes), Some(fetches)) = (totals.network_fetch_bytes, totals.network_fetches) {
           if fetches > 0 {
             derived_parts.push(format!(
               "network_avg_bytes={}",
@@ -4245,11 +4388,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
           "Top disk cache lock wait time (top {disk_lock_top} of {} with stats):",
           disk_lock_sorted.len()
         );
-        for (idx, (entry, ms)) in disk_lock_sorted
-          .iter()
-          .take(disk_lock_top)
-          .enumerate()
-        {
+        for (idx, (entry, ms)) in disk_lock_sorted.iter().take(disk_lock_top).enumerate() {
           let stats = entry.stats.as_ref().expect("stats should be present");
           let waits = stats.resources.disk_cache_lock_waits.unwrap_or(0);
           let disk_total_ms = stats.resources.disk_cache_ms.unwrap_or(0.0);
@@ -5319,11 +5458,8 @@ fn run(args: RunArgs) -> io::Result<()> {
     let mut filtered_paths: Vec<(String, PathBuf, Option<&PagesetEntry>)> = cached_paths
       .iter()
       .filter_map(|(cache_stem, cache_path)| {
-        let entry = resolve_pageset_entry_for_cache_stem(
-          cache_stem,
-          &pageset_by_cache,
-          &pageset_by_stem,
-        );
+        let entry =
+          resolve_pageset_entry_for_cache_stem(cache_stem, &pageset_by_cache, &pageset_by_stem);
         let effective_cache_stem = entry
           .map(|e| e.cache_stem.as_str())
           .unwrap_or(cache_stem.as_str());
@@ -5344,9 +5480,7 @@ fn run(args: RunArgs) -> io::Result<()> {
         let (index, total) = args.shard.expect("shard present");
         println!(
           "Shard {}/{} selected no cached pages ({} matched before sharding). Nothing to do.",
-          index,
-          total,
-          matched_count
+          index, total, matched_count
         );
         return Ok(());
       }
@@ -5367,7 +5501,10 @@ fn run(args: RunArgs) -> io::Result<()> {
           if !missing.is_empty() {
             missing.sort();
             missing.dedup();
-            eprintln!("Missing cached HTML for requested pages: {}", missing.join(", "));
+            eprintln!(
+              "Missing cached HTML for requested pages: {}",
+              missing.join(", ")
+            );
           }
         }
       }
@@ -6312,12 +6449,9 @@ mod tests {
         .push(entry);
     }
 
-    let resolved = resolve_pageset_entry_for_cache_stem(
-      "www.example.com",
-      &pageset_by_cache,
-      &pageset_by_stem,
-    )
-    .expect("entry");
+    let resolved =
+      resolve_pageset_entry_for_cache_stem("www.example.com", &pageset_by_cache, &pageset_by_stem)
+        .expect("entry");
 
     assert_eq!(resolved.cache_stem, "example.com");
   }
@@ -6517,7 +6651,10 @@ mod tests {
     );
     assert_eq!(
       legacy_auto_notes_from_previous(&previous),
-      Some("[paint] Invalid paint parameters: Layout failed\nhard timeout after 5.00s\nstage: layout".to_string())
+      Some(
+        "[paint] Invalid paint parameters: Layout failed\nhard timeout after 5.00s\nstage: layout"
+          .to_string()
+      )
     );
   }
 
@@ -6567,7 +6704,9 @@ mod tests {
     let mut progress = PageProgress {
       url: "https://example.com".to_string(),
       status: ProgressStatus::Timeout,
-      notes: "[paint] Invalid paint parameters\nmanual blocker\nhard timeout after 5.00s\nstage: layout".to_string(),
+      notes:
+        "[paint] Invalid paint parameters\nmanual blocker\nhard timeout after 5.00s\nstage: layout"
+          .to_string(),
       ..PageProgress::default()
     };
 

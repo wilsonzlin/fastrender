@@ -16,8 +16,22 @@
   "diagnostics": {
     "stats": {
       "timings": {
+        "html_decode_ms": 20.0,
+        "dom_parse_ms": 50.0,
+        "dom_meta_viewport_ms": 10.0,
+        "dom_clone_ms": 10.0,
+        "dom_top_layer_ms": 10.0,
+        "css_inlining_ms": 50.0,
+        "css_parse_ms": 150.0,
+        "cascade_ms": 300.0,
+        "box_tree_ms": 100.0,
+        "layout_ms": 700.0,
         "text_shape_ms": 123.45,
-        "text_fallback_ms": 67.89
+        "text_fallback_ms": 67.89,
+        "paint_build_ms": 100.0,
+        "paint_optimize_ms": 20.0,
+        "paint_rasterize_ms": 150.0,
+        "encode_ms": 30.0
       },
       "counts": {
         "dom_nodes": 1200,
@@ -47,12 +61,17 @@
         "layout_parallel_work_items": 12,
         "layout_parallel_worker_threads": 2,
         "layout_parallel_enabled": true,
-        "layout_parallel_auto_activated": null
+        "layout_parallel_auto_activated": null,
+        "taffy_flex_compute_ms": 210.12,
+        "taffy_grid_compute_ms": 321.45,
+        "taffy_flex_measure_calls": 5678,
+        "taffy_grid_measure_calls": 9012
       },
       "paint": {
         "display_items": 800,
         "optimized_items": 500,
-        "culled_items": 120
+        "culled_items": 120,
+        "gradient_ms": 45.67
       },
       "resources": {
         "fetch_counts": {

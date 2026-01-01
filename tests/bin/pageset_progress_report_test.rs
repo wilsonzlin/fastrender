@@ -113,6 +113,22 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains("Top inflight wait time (top 1 of 1 with stats):"));
   assert!(stdout.contains("Top disk cache time (top 1 of 1 with stats):"));
   assert!(stdout.contains("Top disk cache lock wait time (top 1 of 1 with stats):"));
+  assert!(stdout.contains("Top timings.css_parse_ms (top 1 of 1 with stats):"));
+  assert!(stdout.contains(
+    "1. stats_ok timings.css_parse_ms=150.00ms total=1800.00ms hotspot=cascade url=https://stats.test/"
+  ));
+  assert!(stdout.contains("Top layout.taffy_grid_compute_ms (top 1 of 1 with stats):"));
+  assert!(stdout.contains(
+    "1. stats_ok layout.taffy_grid_compute_ms=321.45ms total=1800.00ms hotspot=cascade url=https://stats.test/"
+  ));
+  assert!(stdout.contains("Top paint.gradient_ms (top 1 of 1 with stats):"));
+  assert!(stdout.contains(
+    "1. stats_ok paint.gradient_ms=45.67ms total=1800.00ms hotspot=cascade url=https://stats.test/"
+  ));
+  assert!(stdout.contains("Top layout.taffy_grid_measure_calls (top 1 of 1 with stats):"));
+  assert!(stdout.contains(
+    "1. stats_ok layout.taffy_grid_measure_calls=9012 total=1800.00ms hotspot=cascade url=https://stats.test/"
+  ));
 }
 
 #[test]
