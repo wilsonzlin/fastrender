@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use fastrender::css::parser::{parse_stylesheet, parse_stylesheet_with_media};
+use fastrender::css::types::CssImportLoader;
 use fastrender::style::media::{MediaContext, MediaQueryCache};
 
 const APPLE_STYLESHEET: &str =
@@ -17,6 +18,13 @@ const DEBIAN_STYLESHEETS: [&str; 5] = [
 
 const DISCORD_STYLESHEET: &str =
   include_str!("../tests/pages/fixtures/discord.com/assets/2164002ff1c149956ba135bfcc553b74.css");
+struct NoImportLoader;
+
+impl CssImportLoader for NoImportLoader {
+  fn load(&self, url: &str) -> fastrender::error::Result<String> {
+    unreachable!("unexpected import load in benchmark: {url}");
+  }
+}
 
 fn bench_css_parse_pageset(c: &mut Criterion) {
   let mut group = c.benchmark_group("css_parse_pageset");
@@ -42,6 +50,49 @@ fn bench_css_parse_pageset(c: &mut Criterion) {
       black_box(sheet);
     });
   });
+
+  let loader = NoImportLoader;
+  group.bench_function(
+    "apple.com/pruned_media_1200x800/resolve_imports_owned",
+    |b| {
+      b.iter(|| {
+        let mut cache = MediaQueryCache::default();
+        let sheet =
+          parse_stylesheet_with_media(black_box(APPLE_STYLESHEET), &media_ctx, Some(&mut cache))
+            .expect("parse stylesheet with media pruning");
+        let resolved = sheet
+          .resolve_imports_owned_with_cache(
+            &loader,
+            Some("https://example.com/apple.css"),
+            &media_ctx,
+            Some(&mut cache),
+          )
+          .expect("resolve imports");
+        black_box(resolved);
+      });
+    },
+  );
+
+  group.bench_function(
+    "apple.com/pruned_media_1200x800/resolve_imports_borrowed",
+    |b| {
+      b.iter(|| {
+        let mut cache = MediaQueryCache::default();
+        let sheet =
+          parse_stylesheet_with_media(black_box(APPLE_STYLESHEET), &media_ctx, Some(&mut cache))
+            .expect("parse stylesheet with media pruning");
+        let resolved = sheet
+          .resolve_imports_with_cache(
+            &loader,
+            Some("https://example.com/apple.css"),
+            &media_ctx,
+            Some(&mut cache),
+          )
+          .expect("resolve imports");
+        black_box(resolved);
+      });
+    },
+  );
 
   group.bench_function("debian.org/multi_full", |b| {
     b.iter(|| {

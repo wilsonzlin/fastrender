@@ -67,8 +67,8 @@ use crate::css::loader::{
   resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
 };
 use crate::css::parser::{
-  extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_media_cached_shared,
-  CssTreeScope, StylesheetSource,
+  extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_media, CssTreeScope,
+  StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug;
@@ -5366,19 +5366,14 @@ impl FastRender {
 
         match self {
           StylesheetTask::Inline { css } => {
-            let sheet = parse_stylesheet_with_media_cached_shared(
-              &css,
-              document_base_url.as_deref(),
-              media_ctx,
-              Some(&mut local_media_cache),
-            )?;
+            let sheet = parse_stylesheet_with_media(&css, media_ctx, Some(&mut local_media_cache))?;
             let loader = CssImportFetcher::new(
               document_base_url.clone(),
               Arc::clone(fetcher),
               resource_context.clone(),
               stylesheet_fetch_counter.clone(),
             );
-            let resolved = sheet.resolve_imports_with_cache(
+            let resolved = sheet.resolve_imports_owned_with_cache(
               &loader,
               document_base_url.as_deref(),
               media_ctx,
@@ -5434,19 +5429,15 @@ impl FastRender {
               css_text = rewritten;
             }
 
-            let sheet = parse_stylesheet_with_media_cached_shared(
-              &css_text,
-              Some(&sheet_base),
-              media_ctx,
-              Some(&mut local_media_cache),
-            )?;
+            let sheet =
+              parse_stylesheet_with_media(&css_text, media_ctx, Some(&mut local_media_cache))?;
             let loader = CssImportFetcher::new(
               Some(sheet_base.clone()),
               Arc::clone(fetcher),
               resource_context.clone(),
               stylesheet_fetch_counter.clone(),
             );
-            let resolved = sheet.resolve_imports_with_cache(
+            let resolved = sheet.resolve_imports_owned_with_cache(
               &loader,
               Some(&sheet_base),
               media_ctx,
@@ -5637,13 +5628,8 @@ impl FastRender {
             continue;
           }
 
-          let sheet = parse_stylesheet_with_media_cached_shared(
-            &inline.css,
-            self.base_url.as_deref(),
-            media_ctx,
-            Some(media_query_cache),
-          )?;
-          let resolved = sheet.resolve_imports_with_cache(
+          let sheet = parse_stylesheet_with_media(&inline.css, media_ctx, Some(media_query_cache))?;
+          let resolved = sheet.resolve_imports_owned_with_cache(
             &inline_loader,
             self.base_url.as_deref(),
             media_ctx,
@@ -5723,19 +5709,15 @@ impl FastRender {
                 css_text = rewritten;
               }
 
-              let sheet = parse_stylesheet_with_media_cached_shared(
-                &css_text,
-                Some(&stylesheet_url),
-                media_ctx,
-                Some(media_query_cache),
-              )?;
+              let sheet =
+                parse_stylesheet_with_media(&css_text, media_ctx, Some(media_query_cache))?;
               let loader = CssImportFetcher::new(
                 Some(stylesheet_url.clone()),
                 Arc::clone(&fetcher),
                 resource_context.cloned(),
                 stylesheet_fetch_counter.clone(),
               );
-              let resolved = sheet.resolve_imports_with_cache(
+              let resolved = sheet.resolve_imports_owned_with_cache(
                 &loader,
                 Some(&stylesheet_url),
                 media_ctx,

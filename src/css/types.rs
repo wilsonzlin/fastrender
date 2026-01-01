@@ -12,9 +12,9 @@ use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::counter_styles::CounterStyleRule;
 use crate::style::media::MediaContext;
-use crate::style::media::MediaType;
 use crate::style::media::MediaQuery;
 use crate::style::media::MediaQueryCache;
+use crate::style::media::MediaType;
 use crate::style::values::Length;
 use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
 use cssparser::Parser;
@@ -607,11 +607,28 @@ impl StyleSheet {
     media_ctx: &MediaContext,
     cache: Option<&mut MediaQueryCache>,
   ) -> std::result::Result<Self, RenderError> {
+    self
+      .clone()
+      .resolve_imports_owned_with_cache(loader, base_url, media_ctx, cache)
+  }
+
+  /// Resolve @import rules by consuming the stylesheet and moving rules into the resolved output.
+  ///
+  /// This avoids cloning rules when no imports are present (the common case during document
+  /// stylesheet aggregation). Callers with only a shared reference can continue to use
+  /// [`Self::resolve_imports_with_cache`], which clones the stylesheet before delegating here.
+  pub fn resolve_imports_owned_with_cache<L: CssImportLoader + ?Sized>(
+    self,
+    loader: &L,
+    base_url: Option<&str>,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> std::result::Result<Self, RenderError> {
     let mut resolved = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut deadline_counter = 0usize;
-    resolve_rules(
-      &self.rules,
+    resolve_rules_owned(
+      self.rules,
       loader,
       base_url,
       media_ctx,
@@ -2187,8 +2204,8 @@ pub struct Declaration {
   pub important: bool,
 }
 
-fn resolve_rules<L: CssImportLoader + ?Sized>(
-  rules: &[CssRule],
+fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
+  rules: Vec<CssRule>,
   loader: &L,
   base_url: Option<&str>,
   media_ctx: &MediaContext,
@@ -2211,11 +2228,17 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
       | CssRule::Keyframes(_)
       | CssRule::CounterStyle(_)
       | CssRule::FontPaletteValues(_)
-      | CssRule::Property(_) => out.push(rule.clone()),
+      | CssRule::Property(_)
+      | CssRule::Page(_) => out.push(rule),
       CssRule::Container(container_rule) => {
+        let ContainerRule {
+          name,
+          query_list,
+          rules,
+        } = container_rule;
         let mut resolved_children = Vec::new();
-        resolve_rules(
-          &container_rule.rules,
+        resolve_rules_owned(
+          rules,
           loader,
           base_url,
           media_ctx,
@@ -2225,15 +2248,16 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           deadline_counter,
         )?;
         out.push(CssRule::Container(ContainerRule {
-          name: container_rule.name.clone(),
-          query_list: container_rule.query_list.clone(),
+          name,
+          query_list,
           rules: resolved_children,
         }));
       }
       CssRule::Supports(supports_rule) => {
+        let SupportsRule { condition, rules } = supports_rule;
         let mut resolved_children = Vec::new();
-        resolve_rules(
-          &supports_rule.rules,
+        resolve_rules_owned(
+          rules,
           loader,
           base_url,
           media_ctx,
@@ -2243,17 +2267,15 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           deadline_counter,
         )?;
         out.push(CssRule::Supports(SupportsRule {
-          condition: supports_rule.condition.clone(),
+          condition,
           rules: resolved_children,
         }));
       }
-      CssRule::Page(page_rule) => {
-        out.push(CssRule::Page(page_rule.clone()));
-      }
       CssRule::Scope(scope_rule) => {
+        let ScopeRule { start, end, rules } = scope_rule;
         let mut resolved_children = Vec::new();
-        resolve_rules(
-          &scope_rule.rules,
+        resolve_rules_owned(
+          rules,
           loader,
           base_url,
           media_ctx,
@@ -2263,15 +2285,20 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           deadline_counter,
         )?;
         out.push(CssRule::Scope(ScopeRule {
-          start: scope_rule.start.clone(),
-          end: scope_rule.end.clone(),
+          start,
+          end,
           rules: resolved_children,
         }));
       }
       CssRule::Layer(layer_rule) => {
+        let LayerRule {
+          names,
+          rules,
+          anonymous,
+        } = layer_rule;
         let mut resolved_children = Vec::new();
-        resolve_rules(
-          &layer_rule.rules,
+        resolve_rules_owned(
+          rules,
           loader,
           base_url,
           media_ctx,
@@ -2281,15 +2308,16 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           deadline_counter,
         )?;
         out.push(CssRule::Layer(LayerRule {
-          names: layer_rule.names.clone(),
+          names,
           rules: resolved_children,
-          anonymous: layer_rule.anonymous,
+          anonymous,
         }));
       }
       CssRule::StartingStyle(starting_rule) => {
+        let StartingStyleRule { rules } = starting_rule;
         let mut resolved_children = Vec::new();
-        resolve_rules(
-          &starting_rule.rules,
+        resolve_rules_owned(
+          rules,
           loader,
           base_url,
           media_ctx,
@@ -2303,19 +2331,25 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         }));
       }
       CssRule::Import(import) => {
-        if let Some(condition) = &import.supports {
+        let ImportRule {
+          href,
+          media,
+          layer,
+          supports,
+        } = import;
+        if let Some(condition) = supports.as_ref() {
           if !condition.matches() {
             continue;
           }
         }
 
-        let media_matches = import.media.is_empty()
-          || media_ctx.evaluate_list_with_cache(&import.media, cache.as_deref_mut());
+        let media_matches =
+          media.is_empty() || media_ctx.evaluate_list_with_cache(&media, cache.as_deref_mut());
         if !media_matches {
           continue;
         }
 
-        let resolved_href = if let Some(resolved) = resolve_href_with_base(base_url, &import.href) {
+        let resolved_href = if let Some(resolved) = resolve_href_with_base(base_url, &href) {
           resolved
         } else {
           continue;
@@ -2332,9 +2366,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         match loader.load(&resolved_href) {
           Ok(css_text) => {
             seen.insert(resolved_href.clone());
-            let sheet = match crate::css::parser::parse_stylesheet_with_media_cached_shared(
+            let sheet = match crate::css::parser::parse_stylesheet_with_media(
               &css_text,
-              Some(&resolved_href),
               media_ctx,
               cache.as_deref_mut(),
             ) {
@@ -2343,8 +2376,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
               Err(_) => continue,
             };
             let mut resolved_children = Vec::new();
-            resolve_rules(
-              &sheet.rules,
+            resolve_rules_owned(
+              sheet.rules,
               loader,
               Some(&resolved_href),
               media_ctx,
@@ -2354,7 +2387,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
               deadline_counter,
             )?;
 
-            if let Some(layer) = &import.layer {
+            if let Some(layer) = layer {
               let layer_rule = match layer {
                 ImportLayer::Anonymous => LayerRule {
                   names: Vec::new(),
@@ -2362,7 +2395,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                   anonymous: true,
                 },
                 ImportLayer::Named(path) => LayerRule {
-                  names: vec![path.clone()],
+                  names: vec![path],
                   rules: resolved_children,
                   anonymous: false,
                 },
