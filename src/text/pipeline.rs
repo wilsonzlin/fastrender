@@ -2490,19 +2490,18 @@ fn assign_fonts_internal(
       let first_char = cluster_iter.next().unwrap_or(' ');
       let is_single_char_cluster = cluster_iter.next().is_none();
 
-      let (emoji_pref, base_char, cluster_char_count, cluster_chars) = if is_single_char_cluster {
+      let (emoji_pref, base_char, cluster_chars) = if is_single_char_cluster {
         (
           emoji_preference_with_selector(first_char, None, style.font_variant_emoji),
           first_char,
-          1usize,
           &[] as &[char],
         )
       } else {
         let emoji_pref = cluster_emoji_preference(cluster_text, style.font_variant_emoji);
-        let (base_char, cluster_char_count) =
+        let (base_char, _cluster_char_count) =
           cluster_base_and_relevant_chars(cluster_text, &mut relevant_chars);
         let cluster_chars = relevant_chars.as_slice();
-        (emoji_pref, base_char, cluster_char_count, cluster_chars)
+        (emoji_pref, base_char, cluster_chars)
       };
       let require_base_glyph = !is_non_rendering_for_coverage(base_char);
       let base_arr = [base_char];
@@ -2626,7 +2625,10 @@ fn assign_fonts_internal(
           set.insert(descriptor);
         }
       }
-      let cluster_cache_key = if cluster_char_count > 1 {
+      // Only use the cluster cache for clusters that require coverage across multiple codepoints.
+      // This avoids hashing + caching for clusters that contain only non-rendering codepoints
+      // (e.g. variation selectors) in addition to a single renderable base.
+      let cluster_cache_key = if coverage_chars_all.len() > 1 {
         descriptor.map(|descriptor| ClusterFallbackCacheKey {
           descriptor,
           signature: cluster_signature(cluster_text),
@@ -2643,7 +2645,7 @@ fn assign_fonts_internal(
       let mut resolved: Option<Arc<LoadedFont>> = cached_cluster.clone().flatten();
       let mut skip_resolution = matches!(cached_cluster, Some(None));
 
-      if !skip_resolution && resolved.is_none() && cluster_char_count == 1 {
+      if !skip_resolution && resolved.is_none() && coverage_chars_all.len() <= 1 {
         let char_cache_key = descriptor.map(|descriptor| GlyphFallbackCacheKey {
           descriptor,
           ch: base_char,
@@ -7987,6 +7989,46 @@ mod tests {
       "variation selector should not split font runs"
     );
     assert_eq!(runs[0].text, "A\u{fe0f}");
+  }
+
+  #[test]
+  fn variation_selector_clusters_use_glyph_fallback_cache() {
+    let ctx = FontContext::new();
+    let style = ComputedStyle::default();
+    let text = "A\u{fe0f}".to_string();
+    let text_len = text.len();
+
+    let run = ItemizedRun {
+      text,
+      start: 0,
+      end: text_len,
+      script: Script::Latin,
+      direction: Direction::LeftToRight,
+      level: 0,
+    };
+
+    let cache = FallbackCache::new(256);
+    let _ = assign_fonts_internal(
+      &[run],
+      &style,
+      &ctx,
+      Some(&cache),
+      ctx.font_generation(),
+      true,
+    )
+    .expect("assign fonts");
+
+    let stats = cache.stats();
+    let cluster_lookups = stats.cluster_hits + stats.cluster_misses;
+    assert_eq!(
+      cluster_lookups, 0,
+      "expected variation selector clusters to use glyph fallback caching (cluster lookups={cluster_lookups})"
+    );
+    let glyph_lookups = stats.glyph_hits + stats.glyph_misses;
+    assert!(
+      glyph_lookups > 0,
+      "expected variation selector clusters to consult glyph fallback cache"
+    );
   }
 
   #[test]
