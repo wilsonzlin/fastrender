@@ -153,7 +153,7 @@ use percent_encoding::percent_decode;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 #[cfg(test)]
 use std::fs;
@@ -9697,6 +9697,8 @@ fn invert(color: [f32; 3], amount: f32) -> [f32; 3] {
   ]
 }
 
+const LEGACY_FILTER_DEADLINE_STRIDE: usize = 4096;
+
 fn apply_drop_shadow(
   pixmap: &mut Pixmap,
   offset_x: f32,
@@ -9722,7 +9724,10 @@ fn apply_drop_shadow(
   {
     let src = pixmap.pixels();
     let dst = shadow.pixels_mut();
-    for (src_px, dst_px) in src.iter().zip(dst.iter_mut()) {
+    for (idx, (src_px, dst_px)) in src.iter().zip(dst.iter_mut()).enumerate() {
+      if idx % LEGACY_FILTER_DEADLINE_STRIDE == 0 {
+        check_active(RenderStage::Paint)?;
+      }
       let alpha = src_px.alpha() as f32 / 255.0;
       if alpha == 0.0 {
         *dst_px = PremultipliedColorU8::TRANSPARENT;
@@ -9744,7 +9749,7 @@ fn apply_drop_shadow(
   }
 
   if spread != 0.0 {
-    apply_spread(&mut shadow, spread);
+    apply_spread(&mut shadow, spread)?;
   }
 
   if blur_radius > 0.0 {
@@ -9764,7 +9769,260 @@ fn apply_drop_shadow(
   Ok(())
 }
 
-fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
+#[derive(Default)]
+struct DropShadowSpreadScratch {
+  alpha0: Vec<u8>,
+  alpha1: Vec<u8>,
+}
+
+thread_local! {
+  static DROP_SHADOW_SPREAD_SCRATCH: RefCell<DropShadowSpreadScratch> =
+    RefCell::new(DropShadowSpreadScratch::default());
+}
+
+fn apply_spread(pixmap: &mut Pixmap, spread: f32) -> RenderResult<()> {
+  // Run a separable square dilation/erosion with sliding-window extrema to avoid
+  // the quadratic neighborhood scan.
+  let radius = spread.abs().ceil() as i32;
+  if radius <= 0 || spread == 0.0 {
+    return Ok(());
+  }
+  let expand = spread > 0.0;
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return Ok(());
+  }
+  let radius = radius as usize;
+  let len = width * height;
+
+  let src_pixels = pixmap.pixels();
+  let mut base_ratio = (0.0, 0.0, 0.0);
+  for px in src_pixels.iter() {
+    let alpha = px.alpha();
+    if alpha > 0 {
+      let a = alpha as f32;
+      base_ratio = (
+        px.red() as f32 / a,
+        px.green() as f32 / a,
+        px.blue() as f32 / a,
+      );
+      break;
+    }
+  }
+
+  let mut scratch =
+    DROP_SHADOW_SPREAD_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+  scratch.alpha0.resize(len, 0);
+  scratch.alpha1.resize(len, 0);
+
+  for (src, dst) in src_pixels.iter().zip(scratch.alpha0.iter_mut()) {
+    *dst = src.alpha();
+  }
+
+  apply_spread_alpha_horizontal(
+    &scratch.alpha0,
+    &mut scratch.alpha1,
+    width,
+    height,
+    radius,
+    expand,
+  )?;
+
+  apply_spread_alpha_vertical(
+    &scratch.alpha1,
+    &mut scratch.alpha0,
+    width,
+    height,
+    radius,
+    expand,
+  )?;
+
+  // Apply the updated alpha back onto the pixmap while preserving the per-pixel premultiplied
+  // color ratios used by the legacy spread implementation.
+  let dst_pixels = pixmap.pixels_mut();
+  for (idx, px) in dst_pixels.iter_mut().enumerate() {
+    if idx % LEGACY_FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
+    let agg_alpha = scratch.alpha0[idx];
+    if agg_alpha == 0 {
+      *px = PremultipliedColorU8::TRANSPARENT;
+      continue;
+    }
+
+    let orig = *px;
+    let orig_alpha = orig.alpha();
+    if orig_alpha > 0 {
+      let factor = (agg_alpha as f32) / (orig_alpha as f32);
+      let r = (orig.red() as f32 * factor).round().clamp(0.0, 255.0) as u8;
+      let g = (orig.green() as f32 * factor).round().clamp(0.0, 255.0) as u8;
+      let b = (orig.blue() as f32 * factor).round().clamp(0.0, 255.0) as u8;
+      *px = PremultipliedColorU8::from_rgba(r, g, b, agg_alpha)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    } else {
+      let r = (base_ratio.0 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+      let g = (base_ratio.1 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+      let b = (base_ratio.2 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+      *px = PremultipliedColorU8::from_rgba(r, g, b, agg_alpha)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+
+  DROP_SHADOW_SPREAD_SCRATCH.with(|cell| {
+    *cell.borrow_mut() = scratch;
+  });
+
+  Ok(())
+}
+
+fn apply_spread_alpha_horizontal(
+  src: &[u8],
+  dst: &mut [u8],
+  width: usize,
+  height: usize,
+  radius: usize,
+  expand: bool,
+) -> RenderResult<()> {
+  debug_assert_eq!(src.len(), width * height);
+  debug_assert_eq!(dst.len(), width * height);
+  if radius == 0 {
+    dst.copy_from_slice(src);
+    return Ok(());
+  }
+  let window_size = radius * 2 + 1;
+  let extended_len = width + radius * 2;
+
+  let mut queue: VecDeque<(usize, u8)> = VecDeque::with_capacity(window_size);
+  let mut checked = 0usize;
+  for y in 0..height {
+    queue.clear();
+    let row_start = y * width;
+    for j in 0..extended_len {
+      let src_x = if j < radius {
+        0
+      } else if j >= radius + width {
+        width - 1
+      } else {
+        j - radius
+      };
+      let value = src[row_start + src_x];
+
+      if expand {
+        while let Some(&(_, v)) = queue.back() {
+          if v >= value {
+            break;
+          }
+          queue.pop_back();
+        }
+      } else {
+        while let Some(&(_, v)) = queue.back() {
+          if v <= value {
+            break;
+          }
+          queue.pop_back();
+        }
+      }
+      queue.push_back((j, value));
+
+      if j >= window_size {
+        let expire = j - window_size;
+        while let Some(&(idx, _)) = queue.front() {
+          if idx <= expire {
+            queue.pop_front();
+          } else {
+            break;
+          }
+        }
+      }
+
+      if j + 1 >= window_size {
+        let out_x = j + 1 - window_size;
+        dst[row_start + out_x] = queue.front().map(|(_, v)| *v).unwrap_or(0);
+        checked += 1;
+        if checked % LEGACY_FILTER_DEADLINE_STRIDE == 0 {
+          check_active(RenderStage::Paint)?;
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+fn apply_spread_alpha_vertical(
+  src: &[u8],
+  dst: &mut [u8],
+  width: usize,
+  height: usize,
+  radius: usize,
+  expand: bool,
+) -> RenderResult<()> {
+  debug_assert_eq!(src.len(), width * height);
+  debug_assert_eq!(dst.len(), width * height);
+  if radius == 0 {
+    dst.copy_from_slice(src);
+    return Ok(());
+  }
+  let window_size = radius * 2 + 1;
+  let extended_len = height + radius * 2;
+
+  let mut queue: VecDeque<(usize, u8)> = VecDeque::with_capacity(window_size);
+  let mut checked = 0usize;
+  for x in 0..width {
+    queue.clear();
+    for j in 0..extended_len {
+      let src_y = if j < radius {
+        0
+      } else if j >= radius + height {
+        height - 1
+      } else {
+        j - radius
+      };
+      let value = src[src_y * width + x];
+
+      if expand {
+        while let Some(&(_, v)) = queue.back() {
+          if v >= value {
+            break;
+          }
+          queue.pop_back();
+        }
+      } else {
+        while let Some(&(_, v)) = queue.back() {
+          if v <= value {
+            break;
+          }
+          queue.pop_back();
+        }
+      }
+      queue.push_back((j, value));
+
+      if j >= window_size {
+        let expire = j - window_size;
+        while let Some(&(idx, _)) = queue.front() {
+          if idx <= expire {
+            queue.pop_front();
+          } else {
+            break;
+          }
+        }
+      }
+
+      if j + 1 >= window_size {
+        let out_y = j + 1 - window_size;
+        dst[out_y * width + x] = queue.front().map(|(_, v)| *v).unwrap_or(0);
+        checked += 1;
+        if checked % LEGACY_FILTER_DEADLINE_STRIDE == 0 {
+          check_active(RenderStage::Paint)?;
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+#[cfg(test)]
+fn apply_spread_slow_reference(pixmap: &mut Pixmap, spread: f32) {
   let radius = spread.abs().ceil() as i32;
   if radius <= 0 || spread == 0.0 {
     return;
@@ -13343,6 +13601,84 @@ mod tests {
       "expected only the shadow pixmap allocation, got {allocations:?}"
     );
     assert_eq!((allocations[0].width, allocations[0].height), (8, 8));
+  }
+
+  #[test]
+  fn drop_shadow_spread_is_cancelable() {
+    let width = 2048;
+    let height = 64;
+    let mut pixmap = new_pixmap(width, height).expect("pixmap");
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::from_rgba(0, 0, 0, 255).expect("premultiplied");
+    }
+
+    let total_pixels = width as usize * height as usize;
+    let conversion_checks =
+      (total_pixels + LEGACY_FILTER_DEADLINE_STRIDE - 1) / LEGACY_FILTER_DEADLINE_STRIDE;
+    // Allow the conversion loop to finish before triggering cancellation so we prove the spread
+    // path checks deadlines as well.
+    let cancel_after = conversion_checks + 8;
+
+    let cancel_calls = Arc::new(AtomicUsize::new(0));
+    let cancel_calls_cb = cancel_calls.clone();
+    let cancel = Arc::new(move || {
+      let call_num = cancel_calls_cb.fetch_add(1, Ordering::SeqCst) + 1;
+      call_num > cancel_after
+    });
+    let deadline = RenderDeadline::new(None, Some(cancel));
+
+    let result = with_deadline(Some(&deadline), || {
+      apply_drop_shadow(&mut pixmap, 0.0, 0.0, 0.0, 8.0, Rgba::BLACK)
+    });
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout from cooperative cancellation, got {result:?}"
+    );
+    let calls = cancel_calls.load(Ordering::SeqCst);
+    assert!(
+      calls >= cancel_after + 1,
+      "expected cancel callback to be invoked multiple times (got {calls})"
+    );
+  }
+
+  #[test]
+  fn spread_matches_reference_implementation() {
+    let mut source = new_pixmap(17, 9).expect("pixmap");
+    let width = source.width() as usize;
+    for (idx, px) in source.pixels_mut().iter_mut().enumerate() {
+      let x = idx % width;
+      let y = idx / width;
+      let alpha = if (x + y) % 4 == 0 {
+        0
+      } else {
+        ((x * 17 + y * 31) % 200 + 30) as u8
+      };
+      let ru = ((x * 53 + y * 19) % 256) as u8;
+      let gu = ((x * 11 + y * 73) % 256) as u8;
+      let bu = ((x * 97 + y * 7) % 256) as u8;
+      let r = ((ru as u16 * alpha as u16 + 127) / 255) as u8;
+      let g = ((gu as u16 * alpha as u16 + 127) / 255) as u8;
+      let b = ((bu as u16 * alpha as u16 + 127) / 255) as u8;
+      *px = PremultipliedColorU8::from_rgba(r, g, b, alpha).expect("premultiplied");
+    }
+
+    for spread in [3.0, -3.0] {
+      let mut fast = source.clone();
+      let mut slow = source.clone();
+      apply_spread(&mut fast, spread).expect("fast spread");
+      apply_spread_slow_reference(&mut slow, spread);
+      assert_eq!(
+        fast.data(),
+        slow.data(),
+        "spread {spread} should match legacy reference implementation"
+      );
+    }
   }
 
   #[test]
