@@ -812,21 +812,34 @@ impl GenericFamily {
   ///
   /// Returns None if the string is not a recognized generic family.
   pub fn parse(s: &str) -> Option<Self> {
-    match s.to_lowercase().as_str() {
-      "serif" => Some(GenericFamily::Serif),
-      "sans-serif" => Some(GenericFamily::SansSerif),
-      "monospace" => Some(GenericFamily::Monospace),
-      "cursive" => Some(GenericFamily::Cursive),
-      "fantasy" => Some(GenericFamily::Fantasy),
-      "system-ui" => Some(GenericFamily::SystemUi),
-      "ui-serif" => Some(GenericFamily::UiSerif),
-      "ui-sans-serif" => Some(GenericFamily::UiSansSerif),
-      "ui-monospace" => Some(GenericFamily::UiMonospace),
-      "ui-rounded" => Some(GenericFamily::UiRounded),
-      "emoji" => Some(GenericFamily::Emoji),
-      "math" => Some(GenericFamily::Math),
-      "fangsong" => Some(GenericFamily::Fangsong),
-      _ => None,
+    if s.eq_ignore_ascii_case("serif") {
+      Some(GenericFamily::Serif)
+    } else if s.eq_ignore_ascii_case("sans-serif") {
+      Some(GenericFamily::SansSerif)
+    } else if s.eq_ignore_ascii_case("monospace") {
+      Some(GenericFamily::Monospace)
+    } else if s.eq_ignore_ascii_case("cursive") {
+      Some(GenericFamily::Cursive)
+    } else if s.eq_ignore_ascii_case("fantasy") {
+      Some(GenericFamily::Fantasy)
+    } else if s.eq_ignore_ascii_case("system-ui") {
+      Some(GenericFamily::SystemUi)
+    } else if s.eq_ignore_ascii_case("ui-serif") {
+      Some(GenericFamily::UiSerif)
+    } else if s.eq_ignore_ascii_case("ui-sans-serif") {
+      Some(GenericFamily::UiSansSerif)
+    } else if s.eq_ignore_ascii_case("ui-monospace") {
+      Some(GenericFamily::UiMonospace)
+    } else if s.eq_ignore_ascii_case("ui-rounded") {
+      Some(GenericFamily::UiRounded)
+    } else if s.eq_ignore_ascii_case("emoji") {
+      Some(GenericFamily::Emoji)
+    } else if s.eq_ignore_ascii_case("math") {
+      Some(GenericFamily::Math)
+    } else if s.eq_ignore_ascii_case("fangsong") {
+      Some(GenericFamily::Fangsong)
+    } else {
+      None
     }
   }
 
