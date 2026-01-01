@@ -123,11 +123,12 @@ fn synthetic_anonymous_fixup_tree() -> BoxNode {
   //
   // Layout engines see a few very wide sibling lists (e.g. <body>, main content wrappers) rather
   // than uniformly-small Vecs. This structure aims to reflect that: a single block container with
-  // ~50k children arranged as `[inline × N, block]` repeated. This ensures:
-  // - bottom-up traversal touches many nodes, and
-  // - CSS 2.1 9.2.1.1 mixed inline/block rules still trigger anonymous block insertion.
-  const RUN_GROUPS: usize = 5600;
-  const INLINE_RUN_LEN: usize = 8;
+  // ~50k children arranged as `[inline(text), text, inline(text), text, block]` repeated. This
+  // ensures:
+  // - bottom-up traversal touches many nodes,
+  // - CSS 2.1 9.2.1.1 mixed inline/block rules still trigger anonymous block insertion, and
+  // - inline containers contain text so `fixup_inline_children` is exercised.
+  const RUN_GROUPS: usize = 7200;
 
   let mut block_style = ComputedStyle::default();
   block_style.display = Display::Block;
@@ -137,11 +138,20 @@ fn synthetic_anonymous_fixup_tree() -> BoxNode {
   inline_style.display = Display::Inline;
   let inline_style = Arc::new(inline_style);
 
-  let mut children = Vec::with_capacity(RUN_GROUPS * (INLINE_RUN_LEN + 1));
+  let text_style = Arc::new(ComputedStyle::default());
+
+  let mut children = Vec::with_capacity(RUN_GROUPS * 5);
   for _ in 0..RUN_GROUPS {
-    for _ in 0..INLINE_RUN_LEN {
-      children.push(BoxNode::new_inline(inline_style.clone(), Vec::new()));
-    }
+    children.push(BoxNode::new_inline(
+      inline_style.clone(),
+      vec![BoxNode::new_text(text_style.clone(), String::new())],
+    ));
+    children.push(BoxNode::new_text(text_style.clone(), String::new()));
+    children.push(BoxNode::new_inline(
+      inline_style.clone(),
+      vec![BoxNode::new_text(text_style.clone(), String::new())],
+    ));
+    children.push(BoxNode::new_text(text_style.clone(), String::new()));
     children.push(BoxNode::new_block(
       block_style.clone(),
       FormattingContextType::Block,
