@@ -14487,16 +14487,66 @@ mod tests {
     style.text_wrap = TextWrap::Balance;
     style.hyphens = HyphensMode::Auto;
     let text = "hy\u{00AD}phenation examples keep wrapping tidy";
+    // Compute a width which forces the first word to wrap via a hyphenation opportunity across
+    // font/metric variations (otherwise it may wrap cleanly on spaces and never insert a hyphen).
+    let strut = ifc.compute_strut_metrics(&style);
+    let prefix_node = BoxNode::new_text(Arc::new(style.clone()), "hy".to_string());
+    let prefix_items = ifc
+      .create_inline_items_for_text(&prefix_node, "hy", false)
+      .expect("prefix items");
+    let prefix_line = ifc
+      .layout_segment_lines(
+        prefix_items,
+        true,
+        10_000.0,
+        10_000.0,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
+    let prefix_width_with_hyphen = prefix_line.first().unwrap().width + ifc.hyphen_advance(&style);
+
+    let word_node = BoxNode::new_text(Arc::new(style.clone()), "hy\u{00AD}phenation".to_string());
+    let word_items = ifc
+      .create_inline_items_for_text(&word_node, "hy\u{00AD}phenation", false)
+      .expect("word items");
+    let word_line = ifc
+      .layout_segment_lines(
+        word_items,
+        true,
+        10_000.0,
+        10_000.0,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
+    let full_word_width = word_line.first().unwrap().width;
+    let width = (prefix_width_with_hyphen + full_word_width) / 2.0;
     let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
     let items = ifc
       .create_inline_items_for_text(&node, text, false)
       .expect("hyphen items");
-    let strut = ifc.compute_strut_metrics(&style);
     let lines = ifc.layout_segment_lines(
       items,
       true,
-      140.0,
-      140.0,
+      width,
+      width,
       style.text_wrap,
       0.0,
       false,
@@ -14529,8 +14579,8 @@ mod tests {
     let manual_lines = ifc.layout_segment_lines(
       manual_items,
       true,
-      140.0,
-      140.0,
+      width,
+      width,
       manual.text_wrap,
       0.0,
       false,
