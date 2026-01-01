@@ -53,13 +53,29 @@ fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<&str> {
   out
 }
 
-fn link_rel_is_icon_or_manifest(rel_value: &str) -> bool {
-  rel_value.split_whitespace().any(|token| {
-    matches!(
-      token.to_ascii_lowercase().as_str(),
-      "icon" | "apple-touch-icon" | "apple-touch-icon-precomposed" | "manifest"
-    )
-  })
+fn link_rel_is_image_asset(rel_value: &str, as_value: Option<&str>) -> bool {
+  let mut has_preload = false;
+  for token in rel_value.split_whitespace() {
+    if token.eq_ignore_ascii_case("icon")
+      || token.eq_ignore_ascii_case("apple-touch-icon")
+      || token.eq_ignore_ascii_case("apple-touch-icon-precomposed")
+      || token.eq_ignore_ascii_case("manifest")
+      || token.eq_ignore_ascii_case("mask-icon")
+    {
+      return true;
+    }
+    if token.eq_ignore_ascii_case("preload") {
+      has_preload = true;
+    }
+  }
+
+  if has_preload {
+    return as_value
+      .map(|value| value.trim().eq_ignore_ascii_case("image"))
+      .unwrap_or(false);
+  }
+
+  false
 }
 
 /// Best-effort extraction of subresource URLs from raw HTML.
@@ -78,6 +94,7 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
   static LINK_TAG: OnceLock<Regex> = OnceLock::new();
   static ATTR_REL: OnceLock<Regex> = OnceLock::new();
   static ATTR_HREF: OnceLock<Regex> = OnceLock::new();
+  static ATTR_AS: OnceLock<Regex> = OnceLock::new();
 
   let img_src = IMG_SRC.get_or_init(|| {
     regex(
@@ -132,6 +149,12 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
     regex(
       "(?is)(?:^|\\s)href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       "href attr",
+    )
+  });
+  let attr_as = ATTR_AS.get_or_init(|| {
+    regex(
+      "(?is)(?:^|\\s)as\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      "as attr",
     )
   });
 
@@ -217,7 +240,8 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
       .captures(tag)
       .and_then(|c| capture_first(&c, &[1, 2, 3]))
       .unwrap_or("");
-    if rel.is_empty() || !link_rel_is_icon_or_manifest(rel) {
+    let as_value = attr_as.captures(tag).and_then(|c| capture_first(&c, &[1, 2, 3]));
+    if rel.is_empty() || !link_rel_is_image_asset(rel, as_value) {
       continue;
     }
     let href = attr_href
@@ -315,6 +339,9 @@ mod tests {
       <link rel="apple-touch-icon" href="/touch.png">
       <link href="favicon2.ico" rel="shortcut icon">
       <link href="manifest.json" rel="manifest">
+      <link rel="mask-icon" href="/mask.svg">
+      <link rel="preload" as="image" href="preload.png">
+      <link rel="preload" as="script" href="preload.js">
     "#;
     let out = discover_html_asset_urls(html, "https://example.com/base/page.html");
     assert_eq!(
@@ -324,6 +351,8 @@ mod tests {
         "https://example.com/touch.png",
         "https://example.com/base/favicon2.ico",
         "https://example.com/base/manifest.json",
+        "https://example.com/mask.svg",
+        "https://example.com/base/preload.png",
       ]
       .into_iter()
       .map(str::to_string)

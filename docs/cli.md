@@ -79,6 +79,8 @@ FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 cargo xtask pageset --pages
       - Safety valves: `--max-images-per-page` and `--max-image-urls-per-element` bound image prefetching when pages contain large `srcset` lists.
     - `--prefetch-iframes` (alias `--prefetch-documents`): prefetch iframe/object/embed documents and best-effort warm their linked stylesheets/images (non-recursive).
     - `--prefetch-css-url-assets`: prefetch non-CSS assets referenced via CSS `url(...)` (including in `@import`ed stylesheets).
+    - `--max-images-per-page`: cap how many image-like elements are considered during HTML discovery when `--prefetch-images` is enabled.
+    - `--max-image-urls-per-element`: cap how many URLs are prefetched per image element (primary + fallbacks) when `--prefetch-images` is enabled.
     - `--max-discovered-assets-per-page`: safety valve for pathological pages (0 disables the cap).
 - Disk cache tuning flags (`--disk-cache-max-age-secs`, `--disk-cache-max-bytes`, `--disk-cache-lock-stale-secs`, or the corresponding `FASTR_DISK_CACHE_*` env vars) match the pageset render binaries.
 
