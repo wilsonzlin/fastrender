@@ -343,7 +343,7 @@ pub(crate) fn enable_paint_diagnostics() {
   });
   let mut guard = paint_diagnostics_sessions()
     .lock()
-    .expect("paint diagnostics lock poisoned");
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   if prev_session_id != 0 {
     if guard.remove(&prev_session_id).is_some() {
       PAINT_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_sub(1, Ordering::Relaxed);
@@ -364,7 +364,7 @@ pub(crate) fn take_paint_diagnostics() -> Option<PaintDiagnosticsSummary> {
   }
   let mut guard = paint_diagnostics_sessions()
     .lock()
-    .expect("paint diagnostics lock poisoned");
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   let stats = guard.remove(&session_id);
   if stats.is_some() {
     PAINT_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_sub(1, Ordering::Relaxed);
@@ -382,7 +382,7 @@ pub(crate) fn with_paint_diagnostics<F: FnOnce(&mut PaintDiagnosticsSummary)>(f:
   };
   let mut guard = paint_diagnostics_sessions()
     .lock()
-    .expect("paint diagnostics lock poisoned");
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   if let Some(stats) = guard.get_mut(&session_id) {
     f(stats);
   }
@@ -421,6 +421,25 @@ mod diagnostics_tests {
     for handle in handles {
       handle.join().expect("thread should not panic");
     }
+  }
+
+  #[test]
+  fn paint_diagnostics_survives_poisoned_lock() {
+    let result = std::panic::catch_unwind(|| {
+      let _guard = paint_diagnostics_sessions().lock().unwrap();
+      panic!("poison paint diagnostics lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+
+    assert!(
+      paint_diagnostics_sessions().is_poisoned(),
+      "expected paint diagnostics mutex to be poisoned"
+    );
+
+    enable_paint_diagnostics();
+    with_paint_diagnostics(|diag| diag.blur_calls = 2);
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    assert_eq!(stats.blur_calls, 2);
   }
 }
 

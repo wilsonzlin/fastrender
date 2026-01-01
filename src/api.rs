@@ -7871,7 +7871,9 @@ impl FastRender {
   fn intrinsic_probe_pool(parallelism: usize) -> Arc<rayon::ThreadPool> {
     static POOLS: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> = OnceLock::new();
     let pools = POOLS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = pools.lock().expect("intrinsic probe pool lock poisoned");
+    let mut guard = pools
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(existing) = guard.get(&parallelism) {
       return Arc::clone(existing);
     }
@@ -12695,9 +12697,11 @@ mod tests {
             Err(next) => observed = next,
           }
         }
-
+ 
         let (lock, cvar) = &*self.gate;
-        let mut state = lock.lock().expect("gate lock poisoned");
+        let mut state = lock
+          .lock()
+          .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.arrivals += 1;
         if state.arrivals >= 2 {
           state.opened = true;
@@ -12706,7 +12710,7 @@ mod tests {
           while !state.opened {
             let (next, timeout) = cvar
               .wait_timeout(state, Duration::from_millis(500))
-              .expect("gate wait poisoned");
+              .unwrap_or_else(|poisoned| poisoned.into_inner());
             state = next;
             if timeout.timed_out() {
               break;

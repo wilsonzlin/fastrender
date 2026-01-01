@@ -92,7 +92,7 @@ pub(crate) fn enable_image_cache_diagnostics() {
   IMAGE_CACHE_DIAGNOSTICS_ACTIVE.store(true, Ordering::Relaxed);
   let mut guard = IMAGE_CACHE_DIAGNOSTICS
     .lock()
-    .expect("image cache diagnostics lock poisoned");
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   *guard = Some(ImageCacheDiagnostics::default());
 }
 
@@ -100,7 +100,7 @@ pub(crate) fn take_image_cache_diagnostics() -> Option<ImageCacheDiagnostics> {
   IMAGE_CACHE_DIAGNOSTICS_ACTIVE.store(false, Ordering::Relaxed);
   IMAGE_CACHE_DIAGNOSTICS
     .lock()
-    .expect("image cache diagnostics lock poisoned")
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
     .take()
 }
 
@@ -111,7 +111,7 @@ fn with_image_cache_diagnostics<F: FnOnce(&mut ImageCacheDiagnostics)>(f: F) {
   }
   let mut guard = IMAGE_CACHE_DIAGNOSTICS
     .lock()
-    .expect("image cache diagnostics lock poisoned");
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   if let Some(stats) = guard.as_mut() {
     f(stats);
   }
@@ -3409,6 +3409,25 @@ mod tests {
   use image::RgbaImage;
   use std::path::PathBuf;
   use std::time::SystemTime;
+
+  #[test]
+  fn image_cache_diagnostics_survives_poisoned_lock() {
+    let result = std::panic::catch_unwind(|| {
+      let _guard = IMAGE_CACHE_DIAGNOSTICS.lock().unwrap();
+      panic!("poison image cache diagnostics lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+
+    assert!(
+      IMAGE_CACHE_DIAGNOSTICS.is_poisoned(),
+      "expected image cache diagnostics mutex to be poisoned"
+    );
+
+    enable_image_cache_diagnostics();
+    record_image_cache_request();
+    let stats = take_image_cache_diagnostics().expect("diagnostics enabled");
+    assert_eq!(stats.requests, 1);
+  }
 
   #[test]
   fn http_403_image_reports_resource_error_with_status() {

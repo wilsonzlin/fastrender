@@ -6979,7 +6979,7 @@ mod tests {
     LOCK
       .get_or_init(|| std::sync::Mutex::new(()))
       .lock()
-      .expect("env lock poisoned")
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
   }
 
   impl EnvVarGuard {
