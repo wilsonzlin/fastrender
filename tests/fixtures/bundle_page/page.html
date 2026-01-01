@@ -2,9 +2,24 @@
 <html>
   <head>
     <link rel="stylesheet" href="styles.css">
+    <style>
+      .inline-style {
+        width: 10px;
+        height: 10px;
+        background-image: url("inline_bg.png");
+      }
+    </style>
   </head>
   <body>
     <div class="box">Bundle!</div>
-    <img class="dot" src="image.png" alt="dot">
+    <div class="imported"></div>
+    <div class="imported2"></div>
+    <div class="inline-style"></div>
+    <div style="width: 10px; height: 10px; background-image: url('inline_attr.png');"></div>
+    <picture>
+      <source srcset="source.png 1x">
+      <img src="image.png" alt="picture">
+    </picture>
+    <img class="dot" src="image.png" srcset="image.png 1x, image2.png 2x" alt="dot">
   </body>
 </html>

@@ -71,7 +71,15 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
   let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bundle_page");
   let html_path = fixture_dir.join("page.html");
   let css_path = fixture_dir.join("styles.css");
+  let imported_css_path = fixture_dir.join("imported.css");
+  let imported2_css_path = fixture_dir.join("imported2.css");
   let image_path = fixture_dir.join("image.png");
+  let image2_path = fixture_dir.join("image2.png");
+  let source_path = fixture_dir.join("source.png");
+  let inline_bg_path = fixture_dir.join("inline_bg.png");
+  let inline_attr_path = fixture_dir.join("inline_attr.png");
+  let imported_bg_path = fixture_dir.join("imported_bg.png");
+  let imported2_bg_path = fixture_dir.join("imported2_bg.png");
   let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fonts/ColorTestCOLR.ttf");
 
   let url = format!("file://{}", html_path.display());
@@ -96,7 +104,15 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
 
   let resources = manifest["resources"].as_object().expect("resources object");
   let css_url = format!("file://{}", css_path.display());
+  let imported_css_url = format!("file://{}", imported_css_path.display());
+  let imported2_css_url = format!("file://{}", imported2_css_path.display());
   let image_url = format!("file://{}", image_path.display());
+  let image2_url = format!("file://{}", image2_path.display());
+  let source_url = format!("file://{}", source_path.display());
+  let inline_bg_url = format!("file://{}", inline_bg_path.display());
+  let inline_attr_url = format!("file://{}", inline_attr_path.display());
+  let imported_bg_url = format!("file://{}", imported_bg_path.display());
+  let imported2_bg_url = format!("file://{}", imported2_bg_path.display());
   let font_url = format!("file://{}", font_path.display());
 
   assert!(
@@ -104,8 +120,40 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
     "css should be captured in manifest"
   );
   assert!(
+    resources.contains_key(&imported_css_url),
+    "@import stylesheet should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&imported2_css_url),
+    "recursive @import stylesheet should be captured in manifest"
+  );
+  assert!(
     resources.contains_key(&image_url),
     "image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&image2_url),
+    "srcset candidate image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&source_url),
+    "<source srcset> image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&inline_bg_url),
+    "<style> url() image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&inline_attr_url),
+    "style attribute url() image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&imported_bg_url),
+    "@import CSS url() image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&imported2_bg_url),
+    "recursive @import CSS url() image should be captured in manifest"
   );
   assert!(
     resources.contains_key(&font_url),

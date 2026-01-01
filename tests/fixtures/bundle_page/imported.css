@@ -1,0 +1,7 @@
+@import "imported2.css";
+
+.imported {
+  width: 10px;
+  height: 10px;
+  background-image: url("imported_bg.png");
+}
