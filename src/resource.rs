@@ -2204,20 +2204,7 @@ impl HttpFetcher {
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
   ) -> Result<FetchedResource> {
-    let rewritten_url = Url::parse(url).ok().and_then(|mut parsed| {
-      if parsed.scheme() != "https" {
-        return None;
-      }
-      if !parsed
-        .host_str()
-        .map(|host| host.eq_ignore_ascii_case("tesco.com"))
-        .unwrap_or(false)
-      {
-        return None;
-      }
-      parsed.set_host(Some("www.tesco.com")).ok()?;
-      Some(parsed.to_string())
-    });
+    let rewritten_url = rewrite_known_pageset_hosts(url);
     let effective_url = rewritten_url.as_deref().unwrap_or(url);
     let prefer_reqwest = effective_url
       .get(..8)
