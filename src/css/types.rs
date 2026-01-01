@@ -2258,10 +2258,13 @@ pub struct Declaration {
   pub value: PropertyValue,
   /// Raw token string as authored (after stripping !important/semicolon).
   ///
-  /// For properties that store their value as a token stream (e.g. transitions), the parser keeps
-  /// this string so computed-value application can re-parse it later. Custom properties (`--*`)
-  /// store their raw tokens in [`PropertyValue::Custom`] and may leave `raw_value` empty to avoid
-  /// duplicating the bytes.
+  /// This field is retained for backwards compatibility and for callers that construct
+  /// declarations manually, but the main CSS parser typically leaves it empty to avoid duplicating
+  /// the authored bytes.
+  ///
+  /// Properties that need token-stream semantics store their raw CSS text in
+  /// [`PropertyValue::Keyword`] (or [`PropertyValue::Custom`] for `--*`) so computed-value code can
+  /// re-parse it later without needing a second owned copy.
   pub raw_value: String,
   pub important: bool,
 }
