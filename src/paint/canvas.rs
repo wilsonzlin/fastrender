@@ -1031,7 +1031,7 @@ impl Canvas {
   ///   run.synthetic_oblique,
   ///   run.palette_index,
   ///   &[],
-  /// );
+  /// )?;
   /// ```
   pub fn draw_text(
     &mut self,
@@ -1596,9 +1596,7 @@ impl BlendModeExt for BlendMode {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::paint::pixmap::new_pixmap;
-  use crate::paint::pixmap::NewPixmapAllocRecorder;
-  use crate::paint::pixmap::new_pixmap;
+  use crate::paint::pixmap::{new_pixmap, NewPixmapAllocRecorder};
   use tiny_skia::MaskType;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
