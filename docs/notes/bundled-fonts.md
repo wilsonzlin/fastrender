@@ -14,3 +14,21 @@ To keep pageset runs hermetic and fast:
   `monospace` → text faces, `emoji` → FastRenderEmoji, `math` → math-capable face).
 - Avoid adding test dependencies on system fonts; bundled fixtures should be enough for common
   scripts (Latin, Greek, Cyrillic, Arabic, Indic, CJK, symbols) during CI and pageset runs.
+
+## Auditing pageset glyph coverage
+
+To make bundled-font subset decisions data-driven, use the offline coverage audit tool:
+
+```bash
+# Scan all cached pageset HTML under fetches/html/ using bundled fonts only.
+cargo run --release --bin bundled_font_coverage -- --pageset
+
+# Machine-readable JSON (useful for diffs across commits).
+cargo run --release --bin bundled_font_coverage -- --pageset --json > coverage.json
+
+# Include inline CSS pseudo-element strings (`content: "..."`).
+cargo run --release --bin bundled_font_coverage -- --pageset --include-css-content
+```
+
+The report lists every unique Unicode codepoint found in visible DOM text nodes that does not have
+any glyph in `FontDatabase::shared_bundled()` (including the bundled emoji face when enabled).

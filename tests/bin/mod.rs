@@ -1,6 +1,7 @@
 //! CLI integration tests.
 
 mod bundle_page_test;
+mod bundled_font_coverage_test;
 mod diff_renders_test;
 mod fetch_and_render_dom_compat_test;
 mod fetch_and_render_exit_test;
