@@ -3780,14 +3780,6 @@ fn parse_property_value_in_context_cached(
     return parse_property_value_in_context(context, property, value);
   }
 
-  // Most author stylesheets contain a long tail of unknown properties. Avoid hashing/caching work
-  // on the fast path by checking property support up-front (mirrors `parse_property_value_in_context`).
-  if matches!(context, DeclarationContext::Style)
-    && !super::properties::is_known_style_property(property)
-  {
-    return None;
-  }
-
   // Declarations in @page blocks are rare relative to style rules; keep the cache focused on the
   // hot path.
   if matches!(context, DeclarationContext::Page) {
