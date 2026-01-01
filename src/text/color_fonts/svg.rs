@@ -41,7 +41,9 @@ pub fn render_svg_glyph(
 ) -> Option<ColorGlyphRaster> {
   let key = SvgCacheKey::new(font_key, glyph_id.0, svg_color_signature(text_color));
   let cached = {
-    let mut caches = caches.lock().ok()?;
+    let mut caches = caches
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     caches.svg_glyph(key)
   }
   .flatten();
@@ -49,9 +51,10 @@ pub fn render_svg_glyph(
     glyph
   } else {
     let parsed = parse_svg_glyph(face, glyph_id, text_color);
-    if let Ok(mut caches) = caches.lock() {
-      caches.put_svg_glyph(key, parsed.clone());
-    }
+    caches
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .put_svg_glyph(key, parsed.clone());
     parsed?
   };
   rasterize_parsed_svg(

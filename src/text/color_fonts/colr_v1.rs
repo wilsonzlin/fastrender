@@ -168,13 +168,17 @@ pub fn render_colr_glyph(
   caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
   let colr_entry = {
-    let mut caches = caches.lock().ok()?;
+    let mut caches = caches
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     caches.colr_v1_font(font_key, font)?
   };
   let colr = &colr_entry.colr;
 
   {
-    let mut caches = caches.lock().ok()?;
+    let mut caches = caches
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _ = caches.colr_v1_var_store(font_key, face);
   }
 
@@ -198,7 +202,9 @@ pub fn render_colr_glyph(
   );
 
   let cached_plan = {
-    let mut caches = caches.lock().ok()?;
+    let mut caches = caches
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     caches.colr_v1_plan(cache_key)
   };
 
@@ -207,12 +213,16 @@ pub fn render_colr_glyph(
   } else {
     let (paint, paint_id) = {
       let key = BaseGlyphCacheKey::new(font_key, glyph_id.0);
-      let mut caches = caches.lock().ok()?;
+      let mut caches = caches
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
       caches.colr_v1_base_glyph(key, colr_entry.as_ref())?
     }?;
 
     let palette = {
-      let mut caches = caches.lock().ok()?;
+      let mut caches = caches
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
       caches
         .palette(font_key, face, palette_index)
         .unwrap_or_else(|| Arc::new(cpal::ParsedPalette::default()))
@@ -272,9 +282,10 @@ pub fn render_colr_glyph(
       clip_path: clip_path.map(Arc::new),
       bounds,
     });
-    if let Ok(mut caches) = caches.lock() {
-      caches.put_colr_v1_plan(cache_key, plan.clone());
-    }
+    caches
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .put_colr_v1_plan(cache_key, plan.clone());
     plan
   };
 
@@ -1203,7 +1214,10 @@ impl<'a, 'p> Renderer<'a, 'p> {
 
   fn cached_base_glyph(&self, glyph: GlyphId) -> Option<(Paint<'static>, PaintId)> {
     let key = BaseGlyphCacheKey::new(self.font_key, glyph.to_u32() as u16);
-    let mut caches = self.caches.lock().ok()?;
+    let mut caches = self
+      .caches
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     caches.colr_v1_base_glyph(key, self.colr_entry.as_ref())?
   }
 }
@@ -1917,11 +1931,11 @@ mod tests {
     colr_v1_parse_counts, raster_bounds, Brush, ColrV1ParseCountGuard, DrawCommand, RASTER_PAD,
   };
   use crate::style::color::Rgba;
-  use crate::text::color_fonts::ColorFontRenderer;
+  use crate::text::color_fonts::{ColorFontCaches, ColorFontRenderer};
   use crate::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
   use crate::text::font_instance::FontInstance;
   use std::path::PathBuf;
-  use std::sync::Arc;
+  use std::sync::{Arc, Mutex};
   use tiny_skia::{BlendMode, Color, Path, PathBuilder};
 
   fn rect_path(left: f32, top: f32, right: f32, bottom: f32) -> Path {
@@ -2052,5 +2066,64 @@ mod tests {
     let (font_ref_parses, colr_accesses) = colr_v1_parse_counts();
     assert_eq!(font_ref_parses, 1, "FontRef::from_index should be cached");
     assert_eq!(colr_accesses, 1, "COLR table lookup should be cached");
+  }
+
+  #[test]
+  fn colr_v1_renderer_recovers_from_poisoned_cache_lock() {
+    let font = load_test_font();
+    let caches = Arc::new(Mutex::new(ColorFontCaches::new()));
+    let renderer = ColorFontRenderer::with_caches(Arc::clone(&caches));
+    let face = font.as_ttf_face().unwrap();
+    let instance = FontInstance::new(&font, &[]).expect("font instance");
+    let text_color = Rgba::from_rgba8(10, 20, 30, 255);
+
+    let renderable_gid = (0..face.number_of_glyphs())
+      .find(|gid| {
+        renderer
+          .render(
+            &font,
+            &instance,
+            *gid as u32,
+            64.0,
+            0,
+            &[],
+            0,
+            text_color,
+            0.0,
+            &[],
+            None,
+          )
+          .is_some()
+      })
+      .expect("font should contain a COLRv1 glyph");
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let _guard = caches.lock().unwrap();
+      panic!("poison color font caches lock");
+    }));
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(
+      caches.is_poisoned(),
+      "expected color font caches mutex to be poisoned"
+    );
+
+    assert!(
+      renderer
+        .render(
+          &font,
+          &instance,
+          renderable_gid as u32,
+          64.0,
+          0,
+          &[],
+          0,
+          text_color,
+          0.0,
+          &[],
+          None,
+        )
+        .is_some(),
+      "expected renderer to recover from poisoned cache lock"
+    );
   }
 }
