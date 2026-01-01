@@ -21,6 +21,7 @@ fn run_fetch_and_render(temp_dir: &Path, url: &str, output_path: &Path, args: &[
   let output = Command::new(env!("CARGO_BIN_EXE_fetch_and_render"))
     .current_dir(temp_dir)
     .env("FASTR_USE_BUNDLED_FONTS", "1")
+    .env("RAYON_NUM_THREADS", "4")
     .args(args)
     .arg(url)
     .arg(output_path.to_str().unwrap())
@@ -111,3 +112,4 @@ fn fetch_and_render_layout_parallel_without_max_threads_uses_large_stack() {
     ],
   );
 }
+
