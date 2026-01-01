@@ -4345,6 +4345,7 @@ fn resolve_border_side(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::types::Transform;
   use crate::layout::contexts::inline::InlineFormattingContext;
   use crate::layout::formatting_context::IntrinsicSizingMode;
   use crate::style::display::Display;
@@ -5508,11 +5509,90 @@ mod tests {
     let constraints = LayoutConstraints::definite(800.0, 600.0);
     let fragment = fc.layout(&root, &constraints).unwrap();
 
-    let abs_fragment = find_abs_fragment(&fragment).expect("expected absolute-positioned descendant");
+    let abs_fragment =
+      find_abs_fragment(&fragment).expect("expected absolute-positioned descendant");
     assert_eq!(
       abs_fragment.bounds.x(),
       100.0,
       "left:50% should resolve against the positioned 200px-wide containing block"
+    );
+  }
+
+  #[test]
+  fn inline_absolute_children_use_updated_nearest_positioned_cb() {
+    fn find_fragment_by_box_id<'a>(node: &'a FragmentNode, id: usize) -> Option<&'a FragmentNode> {
+      if node.box_id() == Some(id) {
+        return Some(node);
+      }
+      for child in node.children.iter() {
+        if let Some(found) = find_fragment_by_box_id(child, id) {
+          return Some(found);
+        }
+      }
+      None
+    }
+
+    let viewport = Size::new(300.0, 300.0);
+    let fc = BlockFormattingContext::with_font_context_viewport_and_cb(
+      FontContext::new(),
+      viewport,
+      ContainingBlock::viewport(viewport),
+    );
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Block;
+    container_style.width = Some(Length::px(200.0));
+    container_style.border_left_width = Length::px(10.0);
+    container_style.border_top_width = Length::px(12.0);
+    // Non-empty transforms establish a new positioned containing block. The block formatting
+    // context clones itself when entering such a subtree; ensure the shared inline formatting
+    // context is rebuilt with the updated `nearest_positioned_cb`.
+    container_style.transform = vec![Transform::TranslateX(Length::px(0.0))];
+
+    let mut wrapper_style = ComputedStyle::default();
+    wrapper_style.display = Display::Inline;
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.display = Display::Block;
+    abs_style.position = Position::Absolute;
+    abs_style.left = Some(Length::px(0.0));
+    abs_style.top = Some(Length::px(0.0));
+    abs_style.width = Some(Length::px(20.0));
+    abs_style.height = Some(Length::px(10.0));
+
+    let abs_id = 9001;
+    let mut abs_child =
+      BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+    abs_child.id = abs_id;
+
+    let inline_wrapper = BoxNode::new_inline(
+      Arc::new(wrapper_style),
+      vec![BoxNode::new_text(Arc::new(text_style), "hi".to_string()), abs_child],
+    );
+    let container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Block,
+      vec![inline_wrapper],
+    );
+    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![container]);
+
+    let fragment = fc
+      .layout(&root, &LayoutConstraints::definite(300.0, 300.0))
+      .unwrap();
+
+    let abs_fragment = find_fragment_by_box_id(&fragment, abs_id).expect("positioned fragment");
+    assert!(
+      (abs_fragment.bounds.x() - 10.0).abs() < 0.01,
+      "expected positioned child x to account for container border-left, got {}",
+      abs_fragment.bounds.x()
+    );
+    assert!(
+      (abs_fragment.bounds.y() - 12.0).abs() < 0.01,
+      "expected positioned child y to account for container border-top, got {}",
+      abs_fragment.bounds.y()
     );
   }
 
