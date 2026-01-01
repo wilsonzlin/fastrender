@@ -67,7 +67,7 @@ Unless noted otherwise, they are parsed once at process startup; invalid values 
   - `render_pages`: captured in `fetches/renders/<stem>.stderr.log` when running in the default worker mode (with `--in-process`, logs go to the terminal).
   - Other CLIs (`fetch_pages`, `prefetch_assets`, `fetch_and_render`, `bundle_page`): printed directly to the terminal.
 
-Retry/backoff knobs map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs):
+Retry/backoff knobs map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs) and are applied by the CLI helper `build_http_fetcher` (defaults below refer to that CLI path):
 
 - `FASTR_HTTP_MAX_ATTEMPTS=<N>` – total attempts per HTTP request (initial request + retries). Set to `1` to disable retries (default `3`).
 - `FASTR_HTTP_BACKOFF_BASE_MS=<ms>` – base delay for exponential backoff (default `50`).
