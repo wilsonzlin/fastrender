@@ -103,6 +103,34 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 ## `render_pages`
 
 - Purpose: render all cached HTML in `fetches/html/` to `fetches/renders/` (PNG + per-page logs + `_summary.log`).
+
+### Chrome baseline screenshots (from cached HTML)
+
+If you want a “known-correct engine” visual baseline for the same cached HTML that FastRender renders, you can use headless Chrome/Chromium to screenshot `fetches/html/*.html`:
+
+```bash
+# Install deps on Ubuntu (python + fonts + chrome/chromium):
+scripts/install_chrome_baseline_deps_ubuntu.sh
+
+# 1) Ensure cached HTML exists:
+cargo run --release --bin fetch_pages
+
+# 2) Screenshot with Chrome/Chromium (JS disabled by default; injects <base href=...> from *.html.meta):
+scripts/chrome_baseline.sh
+
+# 3) Render FastRender output:
+cargo run --release --bin render_pages
+
+# 4) Diff the two directories:
+cargo run --release --bin diff_renders -- \
+  --before fetches/chrome_renders \
+  --after fetches/renders \
+  --html target/chrome_vs_fastrender.html
+```
+
+Notes:
+- This is not fully deterministic (live subresources can change); it’s still excellent for rapid “why is our render different from Chrome on the same HTML?” debugging.
+- Set `CHROME_BIN=/path/to/chrome` if auto-detection fails.
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
 - HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).

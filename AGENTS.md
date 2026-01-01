@@ -69,6 +69,7 @@ You may temporarily focus on a single pageset page (or a minimized repro derived
 - **Accuracy is correctness**: wrong/blank/missing output is a bug. Treat “it’s probably JS” as a hypothesis to disprove, not a conclusion.
 - **Performance is correctness**: a renderer that times out or loops is wrong.
 - **No vanity work**: changes that don’t improve pageset accuracy, eliminate a crash/timeout, or reduce uncertainty for an imminent fix are not acceptable. Instrumentation that never leads to a fix is waste.
+- **Accuracy needs evidence**: “looks better” is not enough. Prefer: a minimized fixture + golden update, a regression test, or a deterministic diff that shows *what* got more correct. If you can’t demonstrate an accuracy delta, you probably didn’t ship one.
 - **Ruthless triage**: if you can’t turn a symptom into a task with a measurable outcome quickly, stop and split the work.
 - **Accountability**: progress must be visible, comparable, and committed. Regressions must be obvious.
 - **Worship data (in service of accuracy)**: we don’t “feel” performance or correctness — we measure it. Prefer evidence like `progress/pages/*.json` deltas, timings, traces, logs, and tests (unit/prop/fuzz/regressions). Use standard instrumentation when helpful (`tracing` spans/events, `metrics` counters/histograms). Data is only valuable if it helps us ship more correct pageset renders.
@@ -115,7 +116,11 @@ A worker task is only “done” if it produces at least one of:
 - A pageset page transitions **timeout → render** (under 5s)
 - A pageset page gets **materially faster** (lower total_ms or dominant stage_ms)
 - A **panic/crash** is eliminated (with regression)
-- A correctness fix that causes an observable improvement (ideally captured by snapshots/fixtures) on the pageset
+- A correctness fix that causes an observable improvement on the pageset **with evidence**:
+  - ideally: a minimized fixture + golden (or a focused regression test),
+  - alternatively: a deterministic diff / measurable signal that tracks correctness.
+
+Instrumentation/perf work is only “done” if it directly enables one of the above within the same session (or very shortly after). Otherwise it’s tool-building for its own sake.
 
 If you can’t show a measurable delta, you are not done. Stop, re-scope, or pick a different task.
 
@@ -163,6 +168,8 @@ Rules:
 - If you must edit anything by hand, keep it to durable human fields like `notes` / `last_*` (the runner should preserve them).
 - Don’t commit machine-local paths, enormous traces, or blobs.
 
+Important: this scoreboard is necessary but not sufficient for “accuracy”. Use it to drive selection and accountability, but use fixtures/goldens/regressions to prove correctness improvements.
+
 `failure_stage` and `timeout_stage` expose the renderer’s structured diagnostics for triage
 without scraping notes. They remain `null` in placeholders or when the renderer doesn’t report a
 stage (e.g., hard-killed workers).
@@ -179,6 +186,8 @@ stage (e.g., hard-killed workers).
 
 - Binaries: `fetch_pages`, `render_pages`, `fetch_and_render`, `pageset_progress` (see `docs/cli.md`)
 - Scripts (terminal-friendly): `scripts/pageset.sh`, `scripts/profile_samply.sh`, `scripts/profile_perf.sh`, `scripts/samply_summary.py`
+- Chrome baseline (cached HTML → screenshots): `scripts/chrome_baseline.sh`
+- Ubuntu install helper (chrome baseline deps): `scripts/install_chrome_baseline_deps_ubuntu.sh`
 - Inspection: `inspect_frag`
 - Profiling/debug: `docs/env-vars.md`, `docs/debugging.md`, `docs/perf-logging.md`, `docs/profiling-linux.md`, `docs/instrumentation.md`
 - Prefer adding timers/counters that attribute time to stages and hotspots over “stare at PNGs”.
