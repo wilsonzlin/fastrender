@@ -3335,6 +3335,46 @@ fn font_is_emoji_font(db: &FontDatabase, id: Option<fontdb::ID>, font: &LoadedFo
   FontDatabase::family_name_is_emoji_font(&font.family)
 }
 
+fn font_id_is_emoji_font(db: &FontDatabase, id: fontdb::ID) -> bool {
+  if let Some(is_color) = db.is_color_capable_font(id) {
+    return is_color;
+  }
+
+  db.inner().face(id).is_some_and(|face| {
+    face
+      .families
+      .iter()
+      .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name))
+  })
+}
+
+fn consider_local_font_candidate(
+  db: &FontDatabase,
+  picker: &mut FontPreferencePicker,
+  id: fontdb::ID,
+  covers: bool,
+) -> Option<Arc<LoadedFont>> {
+  let is_emoji_font = font_id_is_emoji_font(db, id);
+  let needs_any = if is_emoji_font {
+    picker.first_emoji_any.is_none()
+  } else {
+    picker.first_text_any.is_none()
+  };
+  if !covers && !needs_any {
+    return None;
+  }
+
+  let font = db.load_font(id)?;
+  let font = Arc::new(font);
+  let idx = picker.bump_order();
+  picker.record_any(&font, is_emoji_font, idx);
+  if covers {
+    picker.consider(font, is_emoji_font, idx)
+  } else {
+    None
+  }
+}
+
 #[derive(Default)]
 struct FontPreferencePicker {
   prefer_emoji: bool,
@@ -3582,16 +3622,9 @@ fn resolve_font_for_char_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  let font = Arc::new(font);
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if db.has_glyph_cached(id, ch) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
+                let covers = db.has_glyph_cached(id, ch);
+                if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+                  return Some(font);
                 }
               }
             }
@@ -3637,16 +3670,9 @@ fn resolve_font_for_char_with_preferences(
           };
 
           if let Some(id) = db.inner().query(&query) {
-            if let Some(font) = db.load_font(id) {
-              let font = Arc::new(font);
-              let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-              let idx = picker.bump_order();
-              picker.record_any(&font, is_emoji_font, idx);
-              if db.has_glyph_cached(id, ch) {
-                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                  return Some(font);
-                }
-              }
+            let covers = db.has_glyph_cached(id, ch);
+            if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+              return Some(font);
             }
           }
         }
@@ -3665,16 +3691,9 @@ fn resolve_font_for_char_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  let font = Arc::new(font);
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if db.has_glyph_cached(id, ch) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
+                let covers = db.has_glyph_cached(id, ch);
+                if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+                  return Some(font);
                 }
               }
             }
@@ -3686,15 +3705,9 @@ fn resolve_font_for_char_with_preferences(
 
   if is_emoji && !picker.avoid_emoji {
     for id in db.find_emoji_fonts() {
-      if let Some(font) = db.load_font(id) {
-        let idx = picker.bump_order();
-        let font = Arc::new(font);
-        picker.record_any(&font, true, idx);
-        if db.has_glyph_cached(id, ch) {
-          if let Some(font) = picker.consider(font, true, idx) {
-            return Some(font);
-          }
-        }
+      let covers = db.has_glyph_cached(id, ch);
+      if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+        return Some(font);
       }
     }
   }
@@ -3710,16 +3723,9 @@ fn resolve_font_for_char_with_preferences(
             style: (*slope).into(),
           };
           if let Some(id) = db.inner().query(&query) {
-            if let Some(font) = db.load_font(id) {
-              let font = Arc::new(font);
-              let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-              let idx = picker.bump_order();
-              picker.record_any(&font, is_emoji_font, idx);
-              if db.has_glyph_cached(id, ch) {
-                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                  return Some(font);
-                }
-              }
+            let covers = db.has_glyph_cached(id, ch);
+            if let Some(font) = consider_local_font_candidate(db, picker, id, covers) {
+              return Some(font);
             }
           }
         }
@@ -3728,16 +3734,9 @@ fn resolve_font_for_char_with_preferences(
   }
 
   for face in db.faces() {
-    if let Some(font) = db.load_font(face.id) {
-      let font = Arc::new(font);
-      let is_emoji_font = font_is_emoji_font(db, Some(face.id), font.as_ref());
-      let idx = picker.bump_order();
-      picker.record_any(&font, is_emoji_font, idx);
-      if db.has_glyph_cached(face.id, ch) {
-        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-          return Some(font);
-        }
-      }
+    let covers = db.has_glyph_cached(face.id, ch);
+    if let Some(font) = consider_local_font_candidate(db, picker, face.id, covers) {
+      return Some(font);
     }
   }
 
@@ -3847,16 +3846,9 @@ fn resolve_font_for_cluster_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  let font = Arc::new(font);
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if covers_needed(id) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
+                let covers = covers_needed(id);
+                if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+                  return Some(font);
                 }
               }
             }
@@ -3905,16 +3897,9 @@ fn resolve_font_for_cluster_with_preferences(
           };
 
           if let Some(id) = db.inner().query(&query) {
-            if let Some(font) = db.load_font(id) {
-              let font = Arc::new(font);
-              let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-              let idx = picker.bump_order();
-              picker.record_any(&font, is_emoji_font, idx);
-              if covers_needed(id) {
-                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                  return Some(font);
-                }
-              }
+            let covers = covers_needed(id);
+            if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+              return Some(font);
             }
           }
         }
@@ -3933,16 +3918,9 @@ fn resolve_font_for_cluster_with_preferences(
                 style: (*slope).into(),
               };
               if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  let font = Arc::new(font);
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if covers_needed(id) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
+                let covers = covers_needed(id);
+                if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+                  return Some(font);
                 }
               }
             }
@@ -3954,15 +3932,9 @@ fn resolve_font_for_cluster_with_preferences(
 
   if is_emoji && !picker.avoid_emoji {
     for id in db.find_emoji_fonts() {
-      if let Some(font) = db.load_font(id) {
-        let idx = picker.bump_order();
-        let font = Arc::new(font);
-        picker.record_any(&font, true, idx);
-        if covers_needed(id) {
-          if let Some(font) = picker.consider(font, true, idx) {
-            return Some(font);
-          }
-        }
+      let covers = covers_needed(id);
+      if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+        return Some(font);
       }
     }
   }
@@ -3978,16 +3950,9 @@ fn resolve_font_for_cluster_with_preferences(
             style: (*slope).into(),
           };
           if let Some(id) = db.inner().query(&query) {
-            if let Some(font) = db.load_font(id) {
-              let font = Arc::new(font);
-              let is_emoji_font = font_is_emoji_font(db, Some(id), font.as_ref());
-              let idx = picker.bump_order();
-              picker.record_any(&font, is_emoji_font, idx);
-              if covers_needed(id) {
-                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                  return Some(font);
-                }
-              }
+            let covers = covers_needed(id);
+            if let Some(font) = consider_local_font_candidate(db, &mut picker, id, covers) {
+              return Some(font);
             }
           }
         }
@@ -3996,16 +3961,9 @@ fn resolve_font_for_cluster_with_preferences(
   }
 
   for face in db.faces() {
-    if let Some(font) = db.load_font(face.id) {
-      let font = Arc::new(font);
-      let is_emoji_font = font_is_emoji_font(db, Some(face.id), font.as_ref());
-      let idx = picker.bump_order();
-      picker.record_any(&font, is_emoji_font, idx);
-      if covers_needed(face.id) {
-        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-          return Some(font);
-        }
-      }
+    let covers = covers_needed(face.id);
+    if let Some(font) = consider_local_font_candidate(db, &mut picker, face.id, covers) {
+      return Some(font);
     }
   }
 
