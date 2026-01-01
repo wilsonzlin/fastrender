@@ -156,7 +156,11 @@ fn parse_status_line(line: &str) -> Option<u16> {
   let trimmed = line.trim();
   let mut parts = trimmed.split_whitespace();
   let proto = parts.next()?;
-  if !proto.to_ascii_lowercase().starts_with("http/") {
+  if !proto
+    .get(.."http/".len())
+    .map(|prefix| prefix.eq_ignore_ascii_case("http/"))
+    .unwrap_or(false)
+  {
     return None;
   }
   let code = parts.next()?;

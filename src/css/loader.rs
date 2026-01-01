@@ -213,13 +213,35 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
 
   // Strip common sourceURL markers that get inlined with CSS text (e.g.,
   // "sourceURL=https://example.com/style.css").
-  if cleaned.to_ascii_lowercase().starts_with("sourceurl=") {
+  const SOURCEURL_PREFIX: &str = "sourceurl=";
+  if cleaned
+    .get(..SOURCEURL_PREFIX.len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(SOURCEURL_PREFIX))
+    .unwrap_or(false)
+  {
     if let Some((_, rest)) = cleaned.split_once('=') {
       cleaned = rest.to_string();
     }
   }
 
-  if let Some(pos) = cleaned.to_ascii_lowercase().rfind(".css") {
+  fn rfind_dot_css(value: &str) -> Option<usize> {
+    let bytes = value.as_bytes();
+    if bytes.len() < 4 {
+      return None;
+    }
+    for idx in (0..=bytes.len() - 4).rev() {
+      if bytes[idx] == b'.'
+        && matches!(bytes[idx + 1], b'c' | b'C')
+        && matches!(bytes[idx + 2], b's' | b'S')
+        && matches!(bytes[idx + 3], b's' | b'S')
+      {
+        return Some(idx);
+      }
+    }
+    None
+  }
+
+  if let Some(pos) = rfind_dot_css(&cleaned) {
     let trailing = &cleaned[pos + 4..];
     if trailing.chars().all(|c| c == '/') {
       cleaned.truncate(pos + 4);
