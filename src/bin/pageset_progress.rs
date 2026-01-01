@@ -1223,13 +1223,17 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
   atomic_write_with_hook(path, contents, |_| Ok(()))
 }
 
-fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
+fn serialize_progress(progress: &PageProgress) -> io::Result<String> {
   let mut normalized = progress.clone();
   normalized.notes = normalize_progress_note(&normalized.notes);
   normalized.auto_notes = normalize_progress_note(&normalized.auto_notes);
   let json = serde_json::to_string_pretty(&normalized)
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-  let formatted = format!("{json}\n");
+  Ok(format!("{json}\n"))
+}
+
+fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
+  let formatted = serialize_progress(progress)?;
   atomic_write(path, formatted.as_bytes())
 }
 
@@ -1344,6 +1348,7 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
   paths.sort();
 
   let mut processed = 0usize;
+  let mut rewritten = 0usize;
   for path in paths {
     let stem = path
       .file_stem()
@@ -1366,11 +1371,15 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
     })?;
     migrate_legacy_notes(&mut progress);
     normalize_missing_cache_placeholder(&mut progress, cache_exists);
-    write_progress(&path, &progress)?;
+    let formatted = serialize_progress(&progress)?;
+    if formatted != raw {
+      atomic_write(&path, formatted.as_bytes())?;
+      rewritten += 1;
+    }
     processed += 1;
   }
 
-  println!("Migrated {processed} progress files.");
+  println!("Migrated {rewritten} / {processed} progress files.");
   Ok(())
 }
 
