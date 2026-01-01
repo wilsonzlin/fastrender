@@ -282,8 +282,9 @@ fn bench_flex_measure_hot_path(c: &mut Criterion) {
 fn bench_block_intrinsic_sizing(c: &mut Criterion) {
   let viewport = Size::new(800.0, 600.0);
   let font_ctx = common::fixed_font_context();
-  let bfc = BlockFormattingContext::with_font_context_and_viewport(font_ctx, viewport)
+  let factory = FormattingContextFactory::with_font_context_and_viewport(font_ctx, viewport)
     .with_parallelism(LayoutParallelism::disabled());
+  let bfc = BlockFormattingContext::with_factory(factory);
   let mut tree = build_block_intrinsic_tree(64);
   // Disable global intrinsic caching for the root so each iteration recomputes the intrinsic width.
   tree.root.id = 0;
@@ -323,8 +324,9 @@ fn bench_block_intrinsic_sizing(c: &mut Criterion) {
 fn bench_block_intrinsic_many_inline_runs(c: &mut Criterion) {
   let viewport = Size::new(800.0, 600.0);
   let font_ctx = common::fixed_font_context();
-  let bfc = BlockFormattingContext::with_font_context_and_viewport(font_ctx, viewport)
+  let factory = FormattingContextFactory::with_font_context_and_viewport(font_ctx, viewport)
     .with_parallelism(LayoutParallelism::disabled());
+  let bfc = BlockFormattingContext::with_factory(factory);
   let mut tree = build_block_intrinsic_many_runs_tree(512);
   // Disable global intrinsic caching for the root so each iteration recomputes the intrinsic width.
   tree.root.id = 0;
