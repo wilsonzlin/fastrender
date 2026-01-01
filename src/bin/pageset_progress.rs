@@ -8061,6 +8061,9 @@ mod tests {
     let mut args = basic_run_args(dir.path());
     // Avoid scanning system fonts in tests.
     args.fonts.bundled_fonts = true;
+    // Keep the render workload tiny so the worker reliably reaches progress write before the
+    // supervisor's hard timeout.
+    args.viewport = (64, 64);
 
     let dump_settings = DumpSettings {
       failures: None,

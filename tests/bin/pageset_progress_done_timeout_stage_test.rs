@@ -20,13 +20,22 @@ fn pageset_progress_killed_after_done_populates_timeout_stage() {
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .current_dir(temp.path())
     .env("FASTR_TEST_SKIP_PROGRESS_SENTINEL", "1")
-    .env("FASTR_TEST_POST_DONE_SLEEP_MS", "2000")
+    // The worker sleeps after committing progress so the parent hits the hard timeout while the
+    // page is already "done". Keep the sleep well above the hard timeout so the test isn't
+    // sensitive to render speed variations in debug builds / CI.
+    .env("FASTR_TEST_POST_DONE_SLEEP_MS", "5000")
     .args([
       "run",
       "--jobs",
       "1",
       "--timeout",
-      "1",
+      // 1s is too tight in debug builds and can flake when the renderer hasn't reached paint yet.
+      // We still want a short test, but need enough headroom to reliably hit the post-done sleep.
+      "2",
+      // Keep the render fast/deterministic so the timeout is driven by the post-done sleep, not by
+      // heavy debug-mode painting.
+      "--viewport",
+      "64x64",
       "--diagnostics",
       "none",
       "--progress-dir",

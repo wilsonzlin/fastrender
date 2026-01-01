@@ -26,6 +26,10 @@ fn pageset_progress_worker_fast_exits_after_writing_progress() {
       "1",
       "--timeout",
       "2",
+      // Reduce paint workload so debug builds can complete before the timeout (the test is about
+      // worker exit behavior, not rendering a large viewport).
+      "--viewport",
+      "64x64",
       "--diagnostics",
       "none",
       "--progress-dir",
