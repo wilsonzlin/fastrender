@@ -17,9 +17,10 @@ set -euo pipefail
 #   scripts/pageset.sh -- --pages example.com --disk-cache-max-age-secs 0
 #
 # Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
-# `--prefetch-images` / `--prefetch-css-url-assets`, these flags are intercepted by the wrapper
-# and forwarded to `prefetch_assets` (not `pageset_progress`) so users can override the wrapper
-# defaults without breaking `pageset_progress` arg parsing.
+# `--prefetch-images` / `--prefetch-css-url-assets` / `--prefetch-iframes` (alias
+# `--prefetch-documents`), these flags are intercepted by the wrapper and forwarded to
+# `prefetch_assets` (not `pageset_progress`) so users can override the wrapper defaults without
+# breaking `pageset_progress` arg parsing.
 
 TOTAL_CPUS="$(nproc)"
 JOBS="${JOBS:-${TOTAL_CPUS}}"
@@ -207,13 +208,18 @@ fi
 PREFETCH_ASSET_ARGS=()
 PAGESET_ARGS=()
 PREFETCH_IMAGES_IN_ARGS=0
+PREFETCH_IFRAMES_IN_ARGS=0
 PREFETCH_CSS_URL_ASSETS_IN_ARGS=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=0
+PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=0
 PREFETCH_ASSETS_SOURCE="src/bin/prefetch_assets.rs"
 if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
   if grep -q "prefetch_images" "${PREFETCH_ASSETS_SOURCE}"; then
     PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=1
+  fi
+  if grep -q "prefetch_iframes" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=1
   fi
   if grep -q "prefetch_css_url_assets" "${PREFETCH_ASSETS_SOURCE}"; then
     PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=1
@@ -228,6 +234,21 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
         PREFETCH_IMAGES_IN_ARGS=1
         PREFETCH_ASSET_ARGS+=("${arg}")
         if [[ "${arg}" == "--prefetch-images" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --prefetch-iframes|--prefetch-iframes=*|--prefetch-documents|--prefetch-documents=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES}" -eq 1 ]]; then
+        PREFETCH_IFRAMES_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ ("${arg}" == "--prefetch-iframes" || "${arg}" == "--prefetch-documents") && $((i + 1)) -lt ${#ARGS[@]} ]]; then
           next="${ARGS[$((i + 1))]}"
           if [[ "${next}" != -* ]]; then
             PREFETCH_ASSET_ARGS+=("${next}")
