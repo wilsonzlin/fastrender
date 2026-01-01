@@ -42,7 +42,12 @@ const FILTER_DEADLINE_STRIDE: usize = 256;
 
 static FILTER_CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
 
-fn record_resource_error(ctx: &ResourceContext, kind: ResourceKind, requested_url: &str, err: &Error) {
+fn record_resource_error(
+  ctx: &ResourceContext,
+  kind: ResourceKind,
+  requested_url: &str,
+  err: &Error,
+) {
   match err {
     Error::Resource(res) => {
       let final_url = res.final_url.as_deref().or(Some(res.url.as_str()));
@@ -143,27 +148,33 @@ impl FilterCache {
 
 #[cfg(test)]
 fn reset_filter_cache_for_tests(config: FilterCacheConfig) {
-  if let Ok(mut cache) = filter_cache().lock() {
-    *cache = FilterCache::new(config);
-  }
+  *filter_cache()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner()) = FilterCache::new(config);
 }
 
 #[cfg(test)]
 fn filter_cache_len() -> usize {
-  filter_cache().lock().unwrap().len()
+  filter_cache()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .len()
 }
 
 #[cfg(test)]
 fn reset_filter_result_cache_for_tests(config: FilterCacheConfig) {
   filter_result_cache_config_state().store(config);
-  if let Ok(mut cache) = filter_result_cache().lock() {
-    *cache = FilterResultCache::new(config);
-  }
+  *filter_result_cache()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner()) = FilterResultCache::new(config);
 }
 
 #[cfg(test)]
 fn filter_result_cache_len() -> usize {
-  filter_result_cache().lock().unwrap().len()
+  filter_result_cache()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .len()
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -464,10 +475,10 @@ where
   if let Some(cache) = cache {
     return f(Some(cache));
   }
-  match svg_blur_cache().lock() {
-    Ok(mut guard) => f(Some(&mut *guard)),
-    Err(_) => f(None),
-  }
+  let mut guard = svg_blur_cache()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  f(Some(&mut *guard))
 }
 
 fn record_filter_cache_hit() {
@@ -1542,7 +1553,10 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   }
 
   let cache_key = format!("{}#{}", resource_url, fragment.as_deref().unwrap_or(""));
-  if let Ok(mut guard) = filter_cache().lock() {
+  {
+    let mut guard = filter_cache()
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(existing) = guard.get(&cache_key) {
       return Some(existing);
     }
@@ -1588,9 +1602,7 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
           ResourceKind::Other,
           &resolved,
           final_url.as_deref(),
-          format!(
-            "invalid utf-8 SVG filter document (status {status}, final_url {final_url_str})"
-          ),
+          format!("invalid utf-8 SVG filter document (status {status}, final_url {final_url_str})"),
         );
       }
       return None;
@@ -1626,9 +1638,10 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   })?;
   let filter = parse_filter_node(&filter_node, &scoped_cache)?;
 
-  if let Ok(mut guard) = filter_cache().lock() {
-    guard.insert(cache_key, filter.clone(), resource_size);
-  }
+  filter_cache()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .insert(cache_key, filter.clone(), resource_size);
 
   Some(filter)
 }
@@ -2754,10 +2767,11 @@ fn apply_svg_filter_scaled(
     None
   };
   if let Some(key) = cache_key.as_ref() {
-    if let Ok(mut cache) = filter_result_cache().lock() {
-      if cache.copy_into(key, pixmap) {
-        return Ok(());
-      }
+    let mut cache = filter_result_cache()
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.copy_into(key, pixmap) {
+      return Ok(());
     }
   }
 
@@ -2838,9 +2852,10 @@ fn apply_svg_filter_scaled(
   clip_to_region(pixmap, filter_region);
 
   if let Some(key) = cache_key {
-    if let Ok(mut cache) = filter_result_cache().lock() {
-      cache.insert(key, pixmap);
-    }
+    filter_result_cache()
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(key, pixmap);
   }
 
   Ok(())
@@ -5863,7 +5878,12 @@ mod filter_cache_tests {
   use crate::resource::{FetchDestination, FetchedResource, ResourceFetcher};
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicUsize, Ordering};
-  use std::sync::{Arc, Mutex};
+  use std::sync::{Arc, Mutex, OnceLock};
+
+  fn test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+  }
 
   #[derive(Clone)]
   struct TestFilterFetcher {
@@ -5939,6 +5959,7 @@ mod filter_cache_tests {
 
   #[test]
   fn evicts_least_recently_used_filter_when_over_capacity() {
+    let _guard = test_lock().lock().unwrap();
     reset_filter_cache_for_tests(FilterCacheConfig {
       max_items: 2,
       max_bytes: 1024 * 1024,
@@ -5973,6 +5994,7 @@ mod filter_cache_tests {
 
   #[test]
   fn reuses_cache_for_resolved_urls() {
+    let _guard = test_lock().lock().unwrap();
     reset_filter_cache_for_tests(FilterCacheConfig {
       max_items: 4,
       max_bytes: 1024 * 1024,
@@ -6003,6 +6025,7 @@ mod filter_cache_tests {
 
   #[test]
   fn load_svg_filter_fetches_with_image_destination_and_document_referrer() {
+    let _guard = test_lock().lock().unwrap();
     let fetcher = Arc::new(RecordingRequestFetcher::default());
     let mut cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
 
@@ -6018,6 +6041,42 @@ mod filter_cache_tests {
     assert_eq!(requested_url, "https://cdn.example.com/filter.svg");
     assert_eq!(destination, FetchDestination::Image);
     assert_eq!(referrer.as_deref(), Some(document_url));
+  }
+
+  #[test]
+  fn filter_cache_recovers_from_poisoned_lock() {
+    let _guard = test_lock().lock().unwrap();
+    reset_filter_cache_for_tests(FilterCacheConfig {
+      max_items: 4,
+      max_bytes: 1024 * 1024,
+    });
+
+    let fetcher = Arc::new(TestFilterFetcher::new([(
+      "test://filters/shared.svg".to_string(),
+      svg_with_filter("shared"),
+    )]));
+    let cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
+
+    let first = load_svg_filter("test://filters/shared.svg#shared", &cache).expect("load filter");
+    assert_eq!(fetcher.fetches(), 1, "expected initial fetch");
+
+    let result = std::panic::catch_unwind(|| {
+      let _guard = filter_cache().lock().unwrap();
+      panic!("poison svg filter cache lock");
+    });
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(
+      filter_cache().is_poisoned(),
+      "expected svg filter cache mutex to be poisoned"
+    );
+
+    let second =
+      load_svg_filter("test://filters/shared.svg#shared", &cache).expect("reload filter");
+    assert!(
+      Arc::ptr_eq(&first, &second),
+      "expected cached filter to be reused after lock poison recovery"
+    );
+    assert_eq!(fetcher.fetches(), 1, "expected no refetch after poisoning");
   }
 }
 
@@ -6050,7 +6109,10 @@ mod load_svg_filter_diagnostics_tests {
     }
   }
 
-  fn test_image_cache(fetcher: Arc<dyn ResourceFetcher>, diagnostics: SharedRenderDiagnostics) -> ImageCache {
+  fn test_image_cache(
+    fetcher: Arc<dyn ResourceFetcher>,
+    diagnostics: SharedRenderDiagnostics,
+  ) -> ImageCache {
     let mut cache = ImageCache::with_fetcher(fetcher);
     cache.set_resource_context(Some(ResourceContext {
       diagnostics: Some(diagnostics),

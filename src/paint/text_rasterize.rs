@@ -1002,7 +1002,11 @@ impl TextRasterizer {
         transform_signature,
       );
 
-      let cached_color_glyph = if let Ok(mut cache) = self.color_cache.lock() {
+      let cached_color_glyph = {
+        let mut cache = self
+          .color_cache
+          .lock()
+          .unwrap_or_else(|poisoned| poisoned.into_inner());
         if diag_enabled {
           let before = cache.stats();
           let value = cache.get(&color_key);
@@ -1016,8 +1020,6 @@ impl TextRasterizer {
         } else {
           cache.get(&color_key)
         }
-      } else {
-        None
       };
 
       let color_glyph = match cached_color_glyph {
@@ -1036,7 +1038,11 @@ impl TextRasterizer {
             variations,
             Some((pixmap.width(), pixmap.height())),
           );
-          if let Ok(mut cache) = self.color_cache.lock() {
+          {
+            let mut cache = self
+              .color_cache
+              .lock()
+              .unwrap_or_else(|poisoned| poisoned.into_inner());
             if diag_enabled {
               let before = cache.stats();
               cache.insert(color_key, rendered.clone());
@@ -1081,7 +1087,11 @@ impl TextRasterizer {
           );
         }
       } else {
-        let cached_path = if let Ok(mut cache) = self.cache.lock() {
+        let cached_path = {
+          let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
           if diag_enabled {
             let before = cache.stats();
             let path = cache
@@ -1099,8 +1109,6 @@ impl TextRasterizer {
               .get_or_build(font, &instance, glyph.glyph_id)
               .and_then(|glyph| glyph.path.clone())
           }
-        } else {
-          None
         };
         if let Some(path) = cached_path {
           let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
@@ -1139,10 +1147,18 @@ impl TextRasterizer {
     if diag_enabled {
       // Preserve the previous behavior of reporting cache sizes even when this run happens to be
       // entirely color glyphs (or otherwise doesn't touch one of the caches).
-      if let Ok(cache) = self.cache.lock() {
+      {
+        let cache = self
+          .cache
+          .lock()
+          .unwrap_or_else(|poisoned| poisoned.into_inner());
         outline_bytes = outline_bytes.max(cache.stats().bytes);
       }
-      if let Ok(cache) = self.color_cache.lock() {
+      {
+        let cache = self
+          .color_cache
+          .lock()
+          .unwrap_or_else(|poisoned| poisoned.into_inner());
         color_bytes = color_bytes.max(cache.stats().bytes);
       }
       record_text_rasterize(
@@ -1375,13 +1391,12 @@ impl TextRasterizer {
         .map_err(Error::Render)?;
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + cursor_y + glyph.y_offset;
-      let cached_path = if let Ok(mut cache) = self.cache.lock() {
-        cache
-          .get_or_build(font, &instance, glyph.glyph_id)
-          .and_then(|glyph| glyph.path.clone())
-      } else {
-        None
-      };
+      let cached_path = self
+        .cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get_or_build(font, &instance, glyph.glyph_id)
+        .and_then(|glyph| glyph.path.clone());
       if let Some(path) = cached_path {
         let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
         if let Some(rotation) = rotation {
@@ -1429,40 +1444,57 @@ impl TextRasterizer {
   ///
   /// Call this when fonts are unloaded or memory pressure is high.
   pub fn clear_cache(&mut self) {
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.clear();
-    }
-    if let Ok(mut cache) = self.color_cache.lock() {
-      cache.clear();
-    }
+    self
+      .cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .clear();
+    self
+      .color_cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .clear();
   }
 
   /// Sets the maximum number of cached glyph outlines.
   pub fn set_cache_capacity(&mut self, max_glyphs: usize) {
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.set_max_size(max_glyphs);
-    }
+    self
+      .cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .set_max_size(max_glyphs);
   }
 
   /// Sets an optional memory budget (in bytes) for cached outlines.
   pub fn set_cache_memory_budget(&mut self, max_bytes: Option<usize>) {
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.set_max_bytes(max_bytes);
-    }
-    if let (Some(bytes), Ok(mut cache)) = (max_bytes, self.color_cache.lock()) {
-      cache.set_max_bytes(bytes);
+    self
+      .cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .set_max_bytes(max_bytes);
+    if let Some(bytes) = max_bytes {
+      self
+        .color_cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .set_max_bytes(bytes);
     }
   }
 
   /// Returns the number of cached glyph paths.
   #[inline]
   pub fn cache_size(&self) -> usize {
-    let outline_len = self.cache.lock().map(|cache| cache.len()).unwrap_or(0);
+    let outline_len = self
+      .cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .len();
     let color_len = self
       .color_cache
       .lock()
-      .map(|cache| cache.glyphs.len())
-      .unwrap_or(0);
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .glyphs
+      .len();
     outline_len + color_len
   }
 
@@ -1472,13 +1504,13 @@ impl TextRasterizer {
     let outlines = self
       .cache
       .lock()
-      .map(|cache| cache.stats())
-      .unwrap_or_default();
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .stats();
     let color = self
       .color_cache
       .lock()
-      .map(|cache| cache.stats())
-      .unwrap_or_default();
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .stats();
     GlyphCacheStats {
       hits: outlines.hits + color.hits,
       misses: outlines.misses + color.misses,
@@ -1489,12 +1521,16 @@ impl TextRasterizer {
 
   /// Resets cache statistics without dropping cached outlines.
   pub fn reset_cache_stats(&mut self) {
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.reset_stats();
-    }
-    if let Ok(mut cache) = self.color_cache.lock() {
-      cache.reset_stats();
-    }
+    self
+      .cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .reset_stats();
+    self
+      .color_cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .reset_stats();
   }
 
   /// Returns a cached or freshly rendered color glyph raster for the given glyph.
@@ -1525,12 +1561,12 @@ impl TextRasterizer {
       synthetic_oblique,
       cache_transform_signature(Transform::identity(), None),
     );
-    match self
+    let cached = self
       .color_cache
       .lock()
-      .ok()
-      .and_then(|mut cache| cache.get(&color_key))
-    {
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .get(&color_key);
+    match cached {
       Some(value) => value,
       None => {
         let rendered = self.color_renderer.render(
@@ -1546,9 +1582,11 @@ impl TextRasterizer {
           variations,
           None,
         );
-        if let Ok(mut cache) = self.color_cache.lock() {
-          cache.insert(color_key, rendered.clone());
-        }
+        self
+          .color_cache
+          .lock()
+          .unwrap_or_else(|poisoned| poisoned.into_inner())
+          .insert(color_key, rendered.clone());
         rendered
       }
     }
@@ -2243,6 +2281,73 @@ mod tests {
     let stats = rasterizer.cache_stats();
     assert_eq!(stats.misses, 1);
     assert!(stats.hits >= 1);
+  }
+
+  #[test]
+  fn text_rasterizer_cache_recovers_from_poisoned_lock() {
+    let font = match get_test_font() {
+      Some(f) => f,
+      None => return,
+    };
+
+    let face = font.as_ttf_face().unwrap();
+    let Some(glyph_id) = face.glyph_index('A').map(|g| g.0 as u32) else {
+      return;
+    };
+
+    let glyphs = vec![GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 10.0,
+      y_advance: 0.0,
+    }];
+
+    let mut rasterizer = TextRasterizer::new();
+    rasterizer.reset_cache_stats();
+
+    let mut pixmap = new_pixmap(50, 50).unwrap();
+    rasterizer
+      .render_glyphs(&glyphs, &font, 16.0, 10.0, 35.0, Rgba::BLACK, &mut pixmap)
+      .unwrap();
+
+    let stats_before = rasterizer.cache_stats();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let _guard = rasterizer.cache.lock().unwrap();
+      panic!("poison text outline cache lock");
+    }));
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(
+      rasterizer.cache.is_poisoned(),
+      "expected glyph outline cache mutex to be poisoned"
+    );
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let _guard = rasterizer.color_cache.lock().unwrap();
+      panic!("poison text color cache lock");
+    }));
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(
+      rasterizer.color_cache.is_poisoned(),
+      "expected color glyph cache mutex to be poisoned"
+    );
+
+    let mut pixmap2 = new_pixmap(50, 50).unwrap();
+    rasterizer
+      .render_glyphs(&glyphs, &font, 16.0, 20.0, 40.0, Rgba::BLACK, &mut pixmap2)
+      .unwrap();
+
+    let stats_after = rasterizer.cache_stats();
+    assert_eq!(
+      stats_after.misses, stats_before.misses,
+      "second render should reuse cached entries without additional misses"
+    );
+    assert!(
+      stats_after.hits > stats_before.hits,
+      "second render should record cache hits after lock poison recovery"
+    );
   }
 
   #[test]
