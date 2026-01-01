@@ -618,6 +618,28 @@ mod tests {
       )))
     }
   }
+
+  struct HtmlFetcher {
+    expected_url: String,
+    body: Vec<u8>,
+    calls: AtomicUsize,
+  }
+
+  impl ResourceFetcher for HtmlFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      self.calls.fetch_add(1, Ordering::SeqCst);
+      if url != self.expected_url {
+        return Err(Error::Io(io::Error::new(
+          io::ErrorKind::NotFound,
+          format!("unexpected fetch: {url}"),
+        )));
+      }
+      Ok(FetchedResource::new(
+        self.body.clone(),
+        Some("text/html; charset=utf-8".to_string()),
+      ))
+    }
+  }
  
   #[test]
   fn iframe_render_cache_hits_for_repeated_srcdoc() {
@@ -665,6 +687,64 @@ mod tests {
     assert!(
       Arc::ptr_eq(&first, &second),
       "cache hit should return the same Arc<ImageData>"
+    );
+  }
+
+  #[test]
+  fn iframe_render_cache_hits_for_repeated_src() {
+    let font_ctx = FontContext::new();
+    let url = "https://example.com/iframe-render-cache-src-113.html";
+    let html = r#"
+      <style>html, body { margin: 0; padding: 0; background: rgb(255, 0, 0); }</style>
+      <div data-fastr-test="iframe-render-cache-src-113"></div>
+    "#;
+    let fetcher = Arc::new(HtmlFetcher {
+      expected_url: url.to_string(),
+      body: html.as_bytes().to_vec(),
+      calls: AtomicUsize::new(0),
+    });
+    let image_cache = ImageCache::with_fetcher(fetcher.clone());
+    let rect = Rect::from_xywh(0.0, 0.0, 16.0, 16.0);
+
+    let first = render_iframe_src(
+      url,
+      rect,
+      None,
+      &image_cache,
+      &font_ctx,
+      1.0,
+      3,
+    )
+    .expect("first iframe src render");
+    assert_eq!(
+      take_last_iframe_cache_hit(),
+      Some(false),
+      "first render should miss cache"
+    );
+
+    let second = render_iframe_src(
+      url,
+      rect,
+      None,
+      &image_cache,
+      &font_ctx,
+      1.0,
+      3,
+    )
+    .expect("second iframe src render");
+    assert_eq!(
+      take_last_iframe_cache_hit(),
+      Some(true),
+      "second render should hit cache"
+    );
+    assert!(
+      Arc::ptr_eq(&first, &second),
+      "cache hit should return the same Arc<ImageData>"
+    );
+    assert_eq!(
+      fetcher.calls.load(Ordering::SeqCst),
+      1,
+      "cache hit should avoid re-fetching iframe HTML"
     );
   }
 
