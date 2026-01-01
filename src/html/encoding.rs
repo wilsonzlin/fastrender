@@ -181,7 +181,15 @@ fn parse_meta_charset(attrs_lower: &[u8]) -> Option<&'static Encoding> {
             let start = i;
             while i < attrs_lower.len() {
               let b = attrs_lower[i];
-              if b.is_ascii_whitespace() || b == b'/' {
+              if b.is_ascii_whitespace() {
+                break;
+              }
+              // In HTML, attribute values may legally contain `/` (e.g. `text/html`), so we must not
+              // treat `/` as a terminator. However, a `<meta .../>` tag can appear without
+              // whitespace between the last attribute value and the self-closing marker. When the
+              // trailing `/` is the last byte before `>`, ignore it so we still parse the value
+              // correctly.
+              if b == b'/' && i + 1 == attrs_lower.len() {
                 break;
               }
               i += 1;
@@ -347,6 +355,20 @@ mod tests {
     assert!(
       decoded.contains('£'),
       "decoded text should not treat attribute values as meta declarations: {}",
+      decoded
+    );
+  }
+
+  #[test]
+  fn decode_html_uses_meta_http_equiv_content_type_charset_unquoted() {
+    // Common legacy form with unquoted attribute values.
+    let encoded = encoding_rs::GBK.encode(
+      "<html><head><meta http-equiv=Content-Type content=text/html;charset=gbk></head><body>中文</body></html>",
+    ).0;
+    let decoded = decode_html_bytes(&encoded, None);
+    assert!(
+      decoded.contains("中文"),
+      "decoded text should contain Han characters when meta declares charset via unquoted http-equiv/content: {}",
       decoded
     );
   }
