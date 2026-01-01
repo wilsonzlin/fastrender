@@ -52,8 +52,8 @@ Stage buckets:
 - `css`: css parse (includes stylesheet inlining; `timings.css_inlining_ms` is a sub-stage timer)
 - `cascade`: selector matching + box tree generation
 - `layout`: layout engine
-- `paint`: display-list build/optimize + rasterize + encode (verbose captures `paint.gradient_ms` +
-  `paint.gradient_pixels` for gradient-heavy pages)
+- `paint`: display-list build/optimize + rasterize + encode (diagnostics captures `paint.gradient_ms`
+  + `paint.gradient_pixels` for gradient-heavy pages)
 
 ### Timing semantics (wall vs CPU-sum)
 
