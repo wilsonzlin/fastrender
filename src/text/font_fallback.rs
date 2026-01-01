@@ -89,6 +89,7 @@ struct ShardedInsertOutcome {
 struct ShardedLruCache<K: Hash + Eq, V> {
   shards: Vec<Mutex<LruCache<K, V, FallbackCacheHasher>>>,
   total_capacity: usize,
+  shard_mask: Option<usize>,
 }
 
 impl<K, V> ShardedLruCache<K, V>
@@ -99,6 +100,7 @@ where
   fn new(capacity: usize, shard_count: usize) -> Self {
     let capacity = capacity.max(1);
     let shard_count = shard_count.clamp(1, capacity);
+    let shard_mask = shard_count.is_power_of_two().then(|| shard_count - 1);
     let base_capacity = capacity / shard_count;
     let remainder = capacity % shard_count;
 
@@ -115,6 +117,7 @@ where
     Self {
       shards,
       total_capacity: capacity,
+      shard_mask,
     }
   }
 
@@ -129,7 +132,12 @@ where
     key.hash(&mut hasher);
     let hash = hasher.finish();
     let mixed = hash ^ (hash >> 32);
-    (mixed as usize) % self.shards.len()
+    let idx = mixed as usize;
+    if let Some(mask) = self.shard_mask {
+      idx & mask
+    } else {
+      idx % self.shards.len()
+    }
   }
 
   fn get(&self, key: &K) -> Option<V> {
