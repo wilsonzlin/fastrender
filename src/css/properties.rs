@@ -1984,12 +1984,7 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
 }
 
 fn parse_length_token(token: &str) -> Option<Length> {
-  match parse_property_value("width", token)? {
-    PropertyValue::Length(l) => Some(l),
-    PropertyValue::Percentage(p) => Some(Length::percent(p)),
-    PropertyValue::Number(0.0) => Some(Length::px(0.0)),
-    _ => None,
-  }
+  parse_length(token)
 }
 
 fn parse_radial_position(text: &str) -> Option<GradientPosition> {
@@ -2006,27 +2001,22 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
     Offset(Length),
   }
 
-  fn classify(value: &PropertyValue) -> Option<Part> {
-    match value {
-      PropertyValue::Keyword(kw) => {
-        if kw.eq_ignore_ascii_case("left") {
-          Some(Part::Keyword(AxisKind::Horizontal, 0.0))
-        } else if kw.eq_ignore_ascii_case("right") {
-          Some(Part::Keyword(AxisKind::Horizontal, 1.0))
-        } else if kw.eq_ignore_ascii_case("top") {
-          Some(Part::Keyword(AxisKind::Vertical, 0.0))
-        } else if kw.eq_ignore_ascii_case("bottom") {
-          Some(Part::Keyword(AxisKind::Vertical, 1.0))
-        } else if kw.eq_ignore_ascii_case("center") {
-          Some(Part::Keyword(AxisKind::Either, 0.5))
-        } else {
-          None
-        }
-      }
-      PropertyValue::Length(l) => Some(Part::Offset(*l)),
-      PropertyValue::Percentage(p) => Some(Part::Offset(Length::percent(*p))),
-      PropertyValue::Number(n) if *n == 0.0 => Some(Part::Offset(Length::px(0.0))),
-      _ => None,
+  fn classify_token(token: &str) -> Option<Part> {
+    let token = token.trim();
+    if token.eq_ignore_ascii_case("left") {
+      Some(Part::Keyword(AxisKind::Horizontal, 0.0))
+    } else if token.eq_ignore_ascii_case("right") {
+      Some(Part::Keyword(AxisKind::Horizontal, 1.0))
+    } else if token.eq_ignore_ascii_case("top") {
+      Some(Part::Keyword(AxisKind::Vertical, 0.0))
+    } else if token.eq_ignore_ascii_case("bottom") {
+      Some(Part::Keyword(AxisKind::Vertical, 1.0))
+    } else if token.eq_ignore_ascii_case("center") {
+      Some(Part::Keyword(AxisKind::Either, 0.5))
+    } else if let Some(len) = parse_length(token) {
+      Some(Part::Offset(len))
+    } else {
+      None
     }
   }
 
@@ -2059,78 +2049,203 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
     }
   }
 
-  let tokens = tokenize_property_value(text, false);
-  let parsed_tokens: Vec<PropertyValue> = tokens
-    .into_iter()
-    .filter_map(|t| parse_property_value("background-position", t))
-    .collect();
-  if parsed_tokens.is_empty() {
-    return None;
+  #[inline]
+  fn trim_ascii_whitespace(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut start = 0usize;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+      start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+      end -= 1;
+    }
+    &s[start..end]
   }
-  let parts: Vec<Part> = parsed_tokens.iter().filter_map(classify).collect();
-  if parts.is_empty() || parts.len() > 4 {
+
+  let mut parts_buf: [Option<Part>; 4] = [None; 4];
+  let mut parts_len = 0usize;
+
+  let mut token_start: Option<usize> = None;
+  let mut paren = 0i32;
+  let mut bracket = 0i32;
+  let mut brace = 0i32;
+  let mut in_string: Option<u8> = None;
+  let mut escape = false;
+
+  let bytes = text.as_bytes();
+  let mut idx = 0usize;
+  while idx < bytes.len() {
+    let b = bytes[idx];
+
+    if escape {
+      escape = false;
+      idx += 1;
+      continue;
+    }
+
+    if b == b'\\' {
+      token_start.get_or_insert(idx);
+      escape = true;
+      idx += 1;
+      continue;
+    }
+
+    if let Some(q) = in_string {
+      token_start.get_or_insert(idx);
+      if b == q {
+        in_string = None;
+      }
+      idx += 1;
+      continue;
+    }
+
+    match b {
+      b'"' | b'\'' => {
+        token_start.get_or_insert(idx);
+        in_string = Some(b);
+      }
+      b'(' => {
+        token_start.get_or_insert(idx);
+        paren += 1;
+      }
+      b')' => {
+        token_start.get_or_insert(idx);
+        paren -= 1;
+      }
+      b'[' => {
+        token_start.get_or_insert(idx);
+        bracket += 1;
+      }
+      b']' => {
+        token_start.get_or_insert(idx);
+        bracket -= 1;
+      }
+      b'{' => {
+        token_start.get_or_insert(idx);
+        brace += 1;
+      }
+      b'}' => {
+        token_start.get_or_insert(idx);
+        brace -= 1;
+      }
+      b'/' if paren == 0 && bracket == 0 && brace == 0 => {
+        if let Some(start) = token_start.take() {
+          let slice = trim_ascii_whitespace(&text[start..idx]);
+          if let Some(part) = classify_token(slice) {
+            if parts_len == parts_buf.len() {
+              return None;
+            }
+            parts_buf[parts_len] = Some(part);
+            parts_len += 1;
+          }
+        }
+      }
+      b if b.is_ascii_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
+        if let Some(start) = token_start.take() {
+          let slice = trim_ascii_whitespace(&text[start..idx]);
+          if let Some(part) = classify_token(slice) {
+            if parts_len == parts_buf.len() {
+              return None;
+            }
+            parts_buf[parts_len] = Some(part);
+            parts_len += 1;
+          }
+        }
+      }
+      _ => {
+        token_start.get_or_insert(idx);
+      }
+    }
+
+    idx += 1;
+  }
+
+  if let Some(start) = token_start.take() {
+    let slice = trim_ascii_whitespace(&text[start..]);
+    if let Some(part) = classify_token(slice) {
+      if parts_len == parts_buf.len() {
+        return None;
+      }
+      parts_buf[parts_len] = Some(part);
+      parts_len += 1;
+    }
+  }
+
+  if parts_len == 0 {
     return None;
   }
 
   let mut x: Option<GradientPositionComponent> = None;
   let mut y: Option<GradientPositionComponent> = None;
 
-  match parts.len() {
+  match parts_len {
     1 => {
-      x = component_from_single(&parts[0], AxisKind::Horizontal);
-      y = component_from_single(&parts[0], AxisKind::Vertical);
+      let part = parts_buf[0].unwrap();
+      x = component_from_single(&part, AxisKind::Horizontal);
+      y = component_from_single(&part, AxisKind::Vertical);
     }
     2 => {
+      let part0 = parts_buf[0].unwrap();
+      let part1 = parts_buf[1].unwrap();
       // First token determines axis, second fills the other.
-      if let Some(cx) = component_from_single(&parts[0], AxisKind::Horizontal) {
+      if let Some(cx) = component_from_single(&part0, AxisKind::Horizontal) {
         x = Some(cx);
-        y = component_from_single(&parts[1], AxisKind::Vertical)
-          .or_else(|| component_from_single(&parts[0], AxisKind::Vertical));
-      } else if let Some(cy) = component_from_single(&parts[0], AxisKind::Vertical) {
+        y = component_from_single(&part1, AxisKind::Vertical)
+          .or_else(|| component_from_single(&part0, AxisKind::Vertical));
+      } else if let Some(cy) = component_from_single(&part0, AxisKind::Vertical) {
         y = Some(cy);
-        x = component_from_single(&parts[1], AxisKind::Horizontal)
-          .or_else(|| component_from_single(&parts[0], AxisKind::Horizontal));
+        x = component_from_single(&part1, AxisKind::Horizontal)
+          .or_else(|| component_from_single(&part0, AxisKind::Horizontal));
       }
       if x.is_none() && y.is_none() {
         // Treat as generic x y ordering.
-        x = component_from_single(&parts[0], AxisKind::Horizontal);
-        y = component_from_single(&parts[1], AxisKind::Vertical);
+        x = component_from_single(&part0, AxisKind::Horizontal);
+        y = component_from_single(&part1, AxisKind::Vertical);
       }
     }
     3 => {
+      let part0 = parts_buf[0].unwrap();
+      let part1 = parts_buf[1].unwrap();
+      let part2 = parts_buf[2].unwrap();
       // x keyword [offset] y keyword
-      if let Some(cx) = component_from_single(&parts[0], AxisKind::Horizontal) {
+      if let Some(cx) = component_from_single(&part0, AxisKind::Horizontal) {
         x = Some(component_from_keyword(
           cx.alignment,
-          match parts[1] {
+          match part1 {
             Part::Offset(len) => Some(len),
             Part::Keyword(_, _) => None,
           },
         ));
-        y = component_from_single(&parts[2], AxisKind::Vertical);
-      } else if let Some(cy) = component_from_single(&parts[0], AxisKind::Vertical) {
+        y = component_from_single(&part2, AxisKind::Vertical);
+      } else if let Some(cy) = component_from_single(&part0, AxisKind::Vertical) {
         y = Some(component_from_keyword(
           cy.alignment,
-          match parts[1] {
+          match part1 {
             Part::Offset(len) => Some(len),
             Part::Keyword(_, _) => None,
           },
         ));
-        x = component_from_single(&parts[2], AxisKind::Horizontal);
+        x = component_from_single(&part2, AxisKind::Horizontal);
       }
     }
     4 => {
-      x = component_from_single(&parts[0], AxisKind::Horizontal);
-      y = component_from_single(&parts[2], AxisKind::Vertical);
+      let part0 = parts_buf[0].unwrap();
+      let part1 = parts_buf[1].unwrap();
+      let part2 = parts_buf[2].unwrap();
+      let part3 = parts_buf[3].unwrap();
+
+      x = component_from_single(&part0, AxisKind::Horizontal);
+      y = component_from_single(&part2, AxisKind::Vertical);
       // offsets are parts[1] and parts[3]
-      if let (Some(mut cx), Part::Offset(off)) = (x, parts[1]) {
+      if let (Some(mut cx), Part::Offset(off)) = (x, part1) {
         cx.offset = off;
         if (cx.alignment - 1.0).abs() < 1e-6 {
           cx.offset.value = -cx.offset.value;
         }
         x = Some(cx);
       }
-      if let (Some(mut cy), Part::Offset(off)) = (y, parts[3]) {
+      if let (Some(mut cy), Part::Offset(off)) = (y, part3) {
         cy.offset = off;
         if (cy.alignment - 1.0).abs() < 1e-6 {
           cy.offset.value = -cy.offset.value;
