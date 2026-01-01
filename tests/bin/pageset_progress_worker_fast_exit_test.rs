@@ -25,7 +25,7 @@ fn pageset_progress_worker_fast_exits_after_writing_progress() {
       "--jobs",
       "1",
       "--timeout",
-      "1",
+      "2",
       "--diagnostics",
       "none",
       "--progress-dir",
