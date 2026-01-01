@@ -10286,6 +10286,7 @@ mod tests {
       }
     }
 
+    let _diagnostics_session = DiagnosticsSessionGuard::acquire();
     crate::text::pipeline::enable_text_diagnostics();
     let _guard = TextDiagnosticsGuard;
 
@@ -10318,6 +10319,184 @@ mod tests {
     assert_eq!(
       stats.counts.last_resort_font_fallback_samples,
       Some(vec![format!("U+{:04X} U+0301", missing as u32)])
+    );
+  }
+
+  #[test]
+  fn diagnostics_are_per_render_and_do_not_leak_between_sequential_renders() {
+    // Render 1:
+    // - includes text so shaping runs
+    // - uses flex layout so Taffy runs
+    // - applies a blur filter so paint diagnostics hit the blur counters
+    // - loads one external stylesheet so ResourceDiagnostics.fetch_counts is non-empty
+    //
+    // Render 2:
+    // - no text and no flex/grid so shaping/Taffy/blur should be absent/zero
+    // - no subresources so fetch_counts should be empty
+    let mut pixels = RgbaImage::new(1, 1);
+    pixels.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+    let mut png_bytes = Vec::new();
+    PngEncoder::new(&mut png_bytes)
+      .write_image(pixels.as_raw(), 1, 1, ColorType::Rgba8.into())
+      .expect("encode png");
+
+    let mut fetcher = MapFetcher::default().with_entry(
+      "https://example.com/style.css",
+      r#"
+        #container { display: flex; filter: blur(1px); background: rgb(0, 255, 0); }
+        #container > div { flex: 1; }
+        img { width: 8px; height: 8px; }
+      "#,
+    );
+    fetcher.map.insert(
+      "https://example.com/image.png".to_string(),
+      (png_bytes, Some("image/png".to_string())),
+    );
+
+    let mut renderer = FastRender::builder()
+      .font_sources(FontConfig::bundled_only())
+      .fetcher(Arc::new(fetcher))
+      .build()
+      .unwrap();
+
+    let options = RenderOptions::new()
+      .with_viewport(64, 64)
+      .with_diagnostics_level(DiagnosticsLevel::Basic)
+      .with_runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_FETCH_LINK_CSS".to_string(),
+        "1".to_string(),
+      )])));
+
+    let html_with_text_and_flex = r#"<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="https://example.com/style.css">
+  </head>
+  <body>
+    <div id="container">
+      <div>Alpha</div>
+      <div>Beta</div>
+      <div><img src="https://example.com/image.png"></div>
+    </div>
+  </body>
+</html>"#;
+
+    let stats1 = renderer
+      .render_html_with_diagnostics(html_with_text_and_flex, options.clone())
+      .unwrap()
+      .diagnostics
+      .stats
+      .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+
+    let stats2 = renderer
+      .render_html_with_diagnostics("<div></div>", options)
+      .unwrap()
+      .diagnostics
+      .stats
+      .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+
+    assert!(
+      stats1.counts.shaped_runs.unwrap_or(0) > 0,
+      "expected shaped_runs > 0 in first render, got {:?}",
+      stats1.counts.shaped_runs
+    );
+    assert!(
+      stats1.counts.glyphs.unwrap_or(0) > 0,
+      "expected glyphs > 0 in first render, got {:?}",
+      stats1.counts.glyphs
+    );
+    assert_eq!(
+      stats2.counts.shaped_runs,
+      Some(0),
+      "expected shaped_runs to reset for second render"
+    );
+    assert_eq!(
+      stats2.counts.glyphs,
+      Some(0),
+      "expected glyphs to reset for second render"
+    );
+
+    let taffy_nodes_total = stats1
+      .layout
+      .taffy_nodes_built
+      .unwrap_or(0)
+      .saturating_add(stats1.layout.taffy_nodes_reused.unwrap_or(0));
+    assert!(
+      taffy_nodes_total > 0,
+      "expected Taffy to run in first render (nodes_built={:?} nodes_reused={:?})",
+      stats1.layout.taffy_nodes_built,
+      stats1.layout.taffy_nodes_reused
+    );
+    assert!(
+      stats1.layout.taffy_flex_measure_calls.unwrap_or(0) > 0
+        || stats1.layout.taffy_grid_measure_calls.unwrap_or(0) > 0,
+      "expected Taffy measure calls in first render (flex={:?} grid={:?})",
+      stats1.layout.taffy_flex_measure_calls,
+      stats1.layout.taffy_grid_measure_calls
+    );
+
+    assert_eq!(
+      stats2.layout.taffy_nodes_built,
+      Some(0),
+      "expected no Taffy nodes to be built in second render"
+    );
+    assert_eq!(
+      stats2.layout.taffy_nodes_reused,
+      Some(0),
+      "expected no Taffy nodes to be reused in second render"
+    );
+    assert_eq!(
+      stats2.layout.taffy_flex_compute_ms, None,
+      "expected flex compute time to be absent in second render"
+    );
+    assert_eq!(
+      stats2.layout.taffy_grid_compute_ms, None,
+      "expected grid compute time to be absent in second render"
+    );
+    assert_eq!(
+      stats2.layout.taffy_flex_measure_calls, None,
+      "expected flex measure calls to be absent in second render"
+    );
+    assert_eq!(
+      stats2.layout.taffy_grid_measure_calls, None,
+      "expected grid measure calls to be absent in second render"
+    );
+
+    assert!(
+      stats1.paint.blur_calls.unwrap_or(0) > 0,
+      "expected blur_calls > 0 in first render, got {:?}",
+      stats1.paint.blur_calls
+    );
+    assert_eq!(
+      stats2.paint.blur_calls,
+      Some(0),
+      "expected paint blur calls to reset for second render"
+    );
+
+    assert!(
+      stats1
+        .resources
+        .fetch_counts
+        .get(&ResourceKind::Stylesheet)
+        .copied()
+        .unwrap_or(0)
+        > 0,
+      "expected external stylesheet fetch count to be recorded in first render"
+    );
+    assert!(
+      stats1
+        .resources
+        .fetch_counts
+        .get(&ResourceKind::Image)
+        .copied()
+        .unwrap_or(0)
+        > 0,
+      "expected image fetch count to be recorded in first render"
+    );
+    assert!(
+      stats2.resources.fetch_counts.is_empty(),
+      "expected no subresource fetch counts in second render, got {:?}",
+      stats2.resources.fetch_counts
     );
   }
 
