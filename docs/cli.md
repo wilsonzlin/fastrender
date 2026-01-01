@@ -77,7 +77,7 @@ Note: `fetch_pages` skips URLs already cached under `fetches/html/`. When iterat
 - Most useful when built with `--features disk_cache` (so cache entries persist across processes).
 - Key flags: page selection (`--pages`), deterministic sharding (`--shard <index>/<total>`), parallelism (`--jobs`), and fetch timeout (`--timeout`). See `--help` for the full flag list.
   - Optional subresource warming:
-    - `--prefetch-images`: prefetch common HTML image-like assets (`<img>`, `<picture><source srcset>`, video posters, icons/manifests). This uses the renderer's responsive image selection (DPR/viewport + `srcset`/`sizes`/`picture`) instead of enumerating every candidate.
+    - `--prefetch-images`: prefetch common HTML image-like assets (`<img>`, `<picture><source srcset>`, video posters, icons/manifests (including `mask-icon`), and `<link rel="preload" as="image">`). This uses the renderer's responsive image selection (DPR/viewport + `srcset`/`sizes`/`picture`) instead of enumerating every candidate.
       - Safety valves: `--max-images-per-page` and `--max-image-urls-per-element` bound image prefetching when pages contain large `srcset` lists.
     - `--prefetch-iframes` (alias `--prefetch-documents`): prefetch iframe/object/embed documents and best-effort warm their linked stylesheets/images (non-recursive).
     - `--prefetch-css-url-assets`: prefetch non-CSS assets referenced via CSS `url(...)` (including in `@import`ed stylesheets).

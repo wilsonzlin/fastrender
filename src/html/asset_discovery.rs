@@ -12,7 +12,8 @@ use std::sync::OnceLock;
 /// URLs discovered from an HTML document that are likely to be fetched during paint.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HtmlAssetUrls {
-  /// Image-like assets (img/src/srcset/source/srcset, video posters, icons/manifests).
+  /// Image-like assets (img/src/srcset/source/srcset, video posters, icons/manifests (including
+  /// `mask-icon`), and `<link rel=preload as=image>` candidates).
   pub images: Vec<String>,
   /// Embedded documents (iframes, objects, embeds).
   pub documents: Vec<String>,
