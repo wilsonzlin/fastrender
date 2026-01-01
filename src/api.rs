@@ -1693,6 +1693,10 @@ pub struct RenderCounts {
   pub shaped_runs: Option<usize>,
   pub glyphs: Option<usize>,
   pub color_glyph_rasters: Option<usize>,
+  pub shaping_cache_hits: Option<u64>,
+  pub shaping_cache_misses: Option<u64>,
+  pub shaping_cache_evictions: Option<u64>,
+  pub shaping_cache_entries: Option<usize>,
   pub fallback_cache_hits: Option<usize>,
   pub fallback_cache_misses: Option<usize>,
   #[serde(default)]
@@ -2044,6 +2048,10 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
     stats.counts.shaped_runs = Some(text.shaped_runs);
     stats.counts.glyphs = Some(text.glyphs);
     stats.counts.color_glyph_rasters = Some(text.color_glyph_rasters);
+    stats.counts.shaping_cache_hits = Some(text.shaping_cache_hits);
+    stats.counts.shaping_cache_misses = Some(text.shaping_cache_misses);
+    stats.counts.shaping_cache_evictions = Some(text.shaping_cache_evictions);
+    stats.counts.shaping_cache_entries = Some(text.shaping_cache_entries);
     stats.counts.fallback_cache_hits = Some(text.fallback_cache_hits);
     stats.counts.fallback_cache_misses = Some(text.fallback_cache_misses);
     stats.counts.fallback_cache_glyph_evictions = Some(text.fallback_cache_glyph_evictions);

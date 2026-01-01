@@ -95,6 +95,7 @@ use rustybuzz::Language as HbLanguage;
 use rustybuzz::UnicodeBuffer;
 use rustybuzz::Variation;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
@@ -176,6 +177,10 @@ pub struct TextDiagnostics {
   pub fallback_descriptor_unique_languages: Option<usize>,
   pub fallback_descriptor_unique_weights: Option<usize>,
   pub fallback_descriptor_samples: Vec<String>,
+  pub shaping_cache_hits: u64,
+  pub shaping_cache_misses: u64,
+  pub shaping_cache_evictions: u64,
+  pub shaping_cache_entries: usize,
   pub glyph_cache: TextCacheStats,
   pub color_glyph_cache: TextCacheStats,
 }
@@ -323,6 +328,10 @@ static TEXT_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
 static TEXT_DIAGNOSTICS_SESSION: AtomicU64 = AtomicU64::new(0);
 static LAST_RESORT_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SHAPING_FALLBACK_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static SHAPING_CACHE_DIAG_HITS: AtomicU64 = AtomicU64::new(0);
+static SHAPING_CACHE_DIAG_MISSES: AtomicU64 = AtomicU64::new(0);
+static SHAPING_CACHE_DIAG_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+static SHAPING_CACHE_DIAG_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 
 const LAST_RESORT_SAMPLE_LIMIT: usize = 8;
 const FALLBACK_DESCRIPTOR_SAMPLE_LIMIT: usize = 16;
@@ -339,6 +348,10 @@ pub(crate) fn enable_text_diagnostics() {
   if let Ok(mut state) = diagnostics_cell().lock() {
     *state = TextDiagnosticsState::new(session);
   }
+  SHAPING_CACHE_DIAG_HITS.store(0, Ordering::Relaxed);
+  SHAPING_CACHE_DIAG_MISSES.store(0, Ordering::Relaxed);
+  SHAPING_CACHE_DIAG_EVICTIONS.store(0, Ordering::Relaxed);
+  SHAPING_CACHE_DIAG_ENTRIES.store(0, Ordering::Relaxed);
 }
 
 pub(crate) fn take_text_diagnostics() -> Option<TextDiagnostics> {
@@ -356,7 +369,11 @@ pub(crate) fn take_text_diagnostics() -> Option<TextDiagnostics> {
       state.diag.fallback_descriptor_unique_languages = Some(stats.languages.len());
       state.diag.fallback_descriptor_unique_weights = Some(stats.weights.len());
     }
-    let diag = state.diag.clone();
+    let mut diag = state.diag.clone();
+    diag.shaping_cache_hits = SHAPING_CACHE_DIAG_HITS.load(Ordering::Relaxed);
+    diag.shaping_cache_misses = SHAPING_CACHE_DIAG_MISSES.load(Ordering::Relaxed);
+    diag.shaping_cache_evictions = SHAPING_CACHE_DIAG_EVICTIONS.load(Ordering::Relaxed);
+    diag.shaping_cache_entries = SHAPING_CACHE_DIAG_ENTRIES.load(Ordering::Relaxed);
     // Prevent any late-dropped timers from mutating the taken snapshot (or a later session).
     state.session = 0;
     diag
@@ -659,6 +676,21 @@ pub(crate) fn record_fallback_cache_stats_delta(
     diag.fallback_cache_cluster_capacity = Some(after.cluster_capacity as usize);
     diag.fallback_cache_shards = Some(after.shards as usize);
   });
+}
+
+fn record_shaping_cache_diag_entries(entries: usize) {
+  let mut current = SHAPING_CACHE_DIAG_ENTRIES.load(Ordering::Relaxed);
+  while entries > current {
+    match SHAPING_CACHE_DIAG_ENTRIES.compare_exchange_weak(
+      current,
+      entries,
+      Ordering::Relaxed,
+      Ordering::Relaxed,
+    ) {
+      Ok(_) => break,
+      Err(next) => current = next,
+    }
+  }
 }
 
 pub(crate) fn record_text_rasterize(
@@ -1662,7 +1694,7 @@ pub struct FontRun {
   /// BCP47 language tag (lowercased).
   pub language: String,
   /// OpenType features to apply for this run.
-  pub features: Vec<Feature>,
+  pub features: Arc<[Feature]>,
   /// Font variation settings to apply for this run.
   pub variations: Vec<Variation>,
 
@@ -2020,7 +2052,7 @@ fn assign_fonts_internal(
   let descriptor_stats_enabled =
     font_cache.is_some() && text_diagnostics_enabled() && text_fallback_descriptor_stats_enabled();
 
-  let features = collect_opentype_features(style);
+  let features: Arc<[Feature]> = collect_opentype_features(style).into_boxed_slice().into();
   let authored_variations = authored_variations_from_style(style);
   let preferred_aspect = preferred_font_aspect(style, font_context);
   let (font_style, requested_oblique) = match style.font_style {
@@ -3476,7 +3508,7 @@ fn push_font_run(
   synthetic_oblique: f32,
   font_size: f32,
   baseline_shift: f32,
-  features: &[Feature],
+  features: &Arc<[Feature]>,
   authored_variations: &[Variation],
   style: &ComputedStyle,
   _font_context: &FontContext,
@@ -3514,7 +3546,7 @@ fn push_font_run(
     font_size,
     baseline_shift,
     language,
-    features: features.to_vec(),
+    features: Arc::clone(features),
     variations,
     palette_index,
     palette_overrides: Arc::clone(&palette_overrides),
@@ -3772,10 +3804,39 @@ fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
   }
 }
 
+thread_local! {
+  static THREAD_UNICODE_BUFFER: RefCell<Option<UnicodeBuffer>> = RefCell::new(None);
+}
+
+fn take_unicode_buffer() -> UnicodeBuffer {
+  THREAD_UNICODE_BUFFER.with(|cell| cell.borrow_mut().take().unwrap_or_else(UnicodeBuffer::new))
+}
+
+fn recycle_unicode_buffer(buffer: UnicodeBuffer) {
+  THREAD_UNICODE_BUFFER.with(|cell| {
+    *cell.borrow_mut() = Some(buffer);
+  });
+}
+
 /// Shapes a single font run into positioned glyphs.
 fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   #[cfg(any(test, debug_assertions))]
   SHAPE_FONT_RUN_INVOCATIONS.fetch_add(1, Ordering::Relaxed);
+
+  enum ShaperFace {
+    Shared(Arc<rustybuzz::Face<'static>>),
+    Owned(rustybuzz::Face<'static>),
+  }
+
+  impl ShaperFace {
+    #[inline]
+    fn as_face(&self) -> &rustybuzz::Face<'static> {
+      match self {
+        Self::Shared(face) => face.as_ref(),
+        Self::Owned(face) => face,
+      }
+    }
+  }
 
   // Create rustybuzz face from cached font data to avoid reparsing per run.
   let cached_face = crate::text::face_cache::get_rustybuzz_face(&run.font).ok_or_else(|| {
@@ -3784,13 +3845,16 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       reason: "Failed to create HarfBuzz face".to_string(),
     }
   })?;
-  let mut rb_face = cached_face.clone_face();
-  if !run.variations.is_empty() {
+  let rb_face = if run.variations.is_empty() {
+    ShaperFace::Shared(cached_face.face())
+  } else {
+    let mut rb_face = cached_face.clone_face();
     rb_face.set_variations(&run.variations);
-  }
+    ShaperFace::Owned(rb_face)
+  };
 
   // Create Unicode buffer
-  let mut buffer = UnicodeBuffer::new();
+  let mut buffer = take_unicode_buffer();
 
   let (shape_text, cluster_map_override) = mirror_text_for_direction(&run.text, run.direction);
   buffer.push_str(&shape_text);
@@ -3815,37 +3879,41 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     }
   }
 
-  let mut features = run.features.clone();
-  if run.vertical {
-    let need_vert = !features
-      .iter()
-      .any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
-    let need_vrt2 = !features
-      .iter()
-      .any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
-    if need_vert {
-      features.push(Feature {
-        tag: Tag::from_bytes(b"vert"),
-        value: 1,
-        start: 0,
-        end: u32::MAX,
-      });
+  let features = if run.vertical {
+    let base = run.features.as_ref();
+    let need_vert = !base.iter().any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
+    let need_vrt2 = !base.iter().any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
+    if need_vert || need_vrt2 {
+      let mut features = base.to_vec();
+      if need_vert {
+        features.push(Feature {
+          tag: Tag::from_bytes(b"vert"),
+          value: 1,
+          start: 0,
+          end: u32::MAX,
+        });
+      }
+      if need_vrt2 {
+        features.push(Feature {
+          tag: Tag::from_bytes(b"vrt2"),
+          value: 1,
+          start: 0,
+          end: u32::MAX,
+        });
+      }
+      Cow::Owned(features)
+    } else {
+      Cow::Borrowed(base)
     }
-    if need_vrt2 {
-      features.push(Feature {
-        tag: Tag::from_bytes(b"vrt2"),
-        value: 1,
-        start: 0,
-        end: u32::MAX,
-      });
-    }
-  }
+  } else {
+    Cow::Borrowed(run.features.as_ref())
+  };
 
   // Shape the text
-  let output = rustybuzz::shape(&rb_face, &features, buffer);
+  let output = rustybuzz::shape(rb_face.as_face(), features.as_ref(), buffer);
 
   // Calculate scale factor
-  let units_per_em = rb_face.units_per_em() as f32;
+  let units_per_em = rb_face.as_face().units_per_em() as f32;
   let scale = run.font_size / units_per_em;
 
   // Extract glyph information
@@ -3904,7 +3972,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     inline_position = fallback_advance;
   }
 
-  Ok(ShapedRun {
+  let shaped = ShapedRun {
     text: run.text.clone(),
     start: run.start,
     end: run.end,
@@ -3924,7 +3992,10 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     palette_override_hash: run.palette_override_hash,
     variations: run.variations.clone(),
     scale: 1.0,
-  })
+  };
+
+  recycle_unicode_buffer(output.clear());
+  Ok(shaped)
 }
 
 // ============================================================================
@@ -4099,29 +4170,28 @@ impl PartialEq for ShapingCacheKey {
   }
 }
 
-#[cfg(any(test, debug_assertions))]
 #[derive(Default, Debug)]
 struct ShapingCacheStats {
-  hits: AtomicUsize,
-  misses: AtomicUsize,
-  evictions: AtomicUsize,
+  hits: AtomicU64,
+  misses: AtomicU64,
+  evictions: AtomicU64,
 }
 
-#[cfg(any(test, debug_assertions))]
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct ShapingCacheStatsSnapshot {
-  hits: usize,
-  misses: usize,
-  evictions: usize,
+  hits: u64,
+  misses: u64,
+  evictions: u64,
+  entries: usize,
 }
 
-#[cfg(any(test, debug_assertions))]
 impl ShapingCacheStats {
-  fn snapshot(&self) -> ShapingCacheStatsSnapshot {
+  fn snapshot(&self, entries: usize) -> ShapingCacheStatsSnapshot {
     ShapingCacheStatsSnapshot {
       hits: self.hits.load(Ordering::Relaxed),
       misses: self.misses.load(Ordering::Relaxed),
       evictions: self.evictions.load(Ordering::Relaxed),
+      entries,
     }
   }
 
@@ -4132,76 +4202,144 @@ impl ShapingCacheStats {
   }
 }
 
+#[derive(Debug)]
+struct ShapingCacheInner {
+  shards: Vec<parking_lot::Mutex<LruCache<ShapingCacheKey, Arc<Vec<ShapedRun>>, ShapingCacheHasher>>>,
+  shard_mask: usize,
+  entries: AtomicUsize,
+  stats: ShapingCacheStats,
+}
+
 #[derive(Clone, Debug)]
 struct ShapingCache {
-  entries: Arc<Mutex<LruCache<ShapingCacheKey, Arc<Vec<ShapedRun>>, ShapingCacheHasher>>>,
-  #[cfg(any(test, debug_assertions))]
-  stats: Arc<ShapingCacheStats>,
+  inner: Arc<ShapingCacheInner>,
 }
 
 impl ShapingCache {
   fn new(capacity: usize) -> Self {
-    let cap = NonZeroUsize::new(capacity).unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
-    Self {
-      entries: Arc::new(Mutex::new(LruCache::with_hasher(
+    const SHARD_TARGET: usize = 64;
+    const SHARD_LIMIT: usize = 16;
+
+    let capacity = capacity.max(1);
+    let desired_shards = (capacity / SHARD_TARGET).clamp(1, SHARD_LIMIT);
+    let shard_count = if desired_shards.is_power_of_two() {
+      desired_shards
+    } else {
+      1usize << (usize::BITS - 1 - desired_shards.leading_zeros()) as usize
+    };
+    let shard_count = shard_count.max(1);
+    let shard_mask = shard_count - 1;
+
+    let base = capacity / shard_count;
+    let rem = capacity % shard_count;
+    let mut shards = Vec::with_capacity(shard_count);
+    for idx in 0..shard_count {
+      let shard_cap = base + usize::from(idx < rem);
+      let cap = NonZeroUsize::new(shard_cap.max(1)).unwrap();
+      shards.push(parking_lot::Mutex::new(LruCache::with_hasher(
         cap,
         ShapingCacheHasher::default(),
-      ))),
-      #[cfg(any(test, debug_assertions))]
-      stats: Arc::new(ShapingCacheStats::default()),
+      )));
+    }
+
+    Self {
+      inner: Arc::new(ShapingCacheInner {
+        shards,
+        shard_mask,
+        entries: AtomicUsize::new(0),
+        stats: ShapingCacheStats::default(),
+      }),
     }
   }
 
+  #[inline]
+  fn shard_index(&self, key: &ShapingCacheKey) -> usize {
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    let mut hasher = FxHasher::default();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) & self.inner.shard_mask
+  }
+
   fn get(&self, key: &ShapingCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
-    let result = self
-      .entries
-      .lock()
-      .ok()
-      .and_then(|mut cache| cache.get(key).cloned());
-    #[cfg(any(test, debug_assertions))]
-    {
-      if result.is_some() {
-        self.stats.hits.fetch_add(1, Ordering::Relaxed);
-      } else {
-        self.stats.misses.fetch_add(1, Ordering::Relaxed);
+    let shard_idx = self.shard_index(key);
+    let mut cache = self.inner.shards[shard_idx].lock();
+    let result = cache.get(key).cloned();
+    let diag_enabled = text_diagnostics_enabled();
+
+    if result.is_some() {
+      self.inner.stats.hits.fetch_add(1, Ordering::Relaxed);
+      if diag_enabled {
+        SHAPING_CACHE_DIAG_HITS.fetch_add(1, Ordering::Relaxed);
+      }
+    } else {
+      self.inner.stats.misses.fetch_add(1, Ordering::Relaxed);
+      if diag_enabled {
+        SHAPING_CACHE_DIAG_MISSES.fetch_add(1, Ordering::Relaxed);
       }
     }
+
+    if diag_enabled {
+      record_shaping_cache_diag_entries(self.len());
+    }
+
     result
   }
 
   fn insert(&self, key: ShapingCacheKey, value: Arc<Vec<ShapedRun>>) -> Arc<Vec<ShapedRun>> {
-    if let Ok(mut cache) = self.entries.lock() {
-      if let Some(existing) = cache.peek(&key).cloned() {
-        return existing;
-      }
-      #[cfg(any(test, debug_assertions))]
-      let at_capacity = cache.len() >= cache.cap().get();
-      let evicted = cache.put(key, Arc::clone(&value));
-      #[cfg(any(test, debug_assertions))]
-      if evicted.is_some() || at_capacity {
-        self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-      }
+    let shard_idx = self.shard_index(&key);
+    let mut cache = self.inner.shards[shard_idx].lock();
+    if let Some(existing) = cache.peek(&key).cloned() {
+      return existing;
     }
+
+    let diag_enabled = text_diagnostics_enabled();
+    let at_capacity = cache.len() >= cache.cap().get();
+    let _replaced = cache.put(key, Arc::clone(&value));
+
+    if at_capacity {
+      self.inner.stats.evictions.fetch_add(1, Ordering::Relaxed);
+      if diag_enabled {
+        SHAPING_CACHE_DIAG_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+      }
+    } else {
+      self.inner.entries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    if diag_enabled {
+      record_shaping_cache_diag_entries(self.len());
+    }
+
     value
   }
 
   fn clear(&self) {
-    if let Ok(mut cache) = self.entries.lock() {
-      cache.clear();
+    for shard in &self.inner.shards {
+      shard.lock().clear();
     }
-    #[cfg(any(test, debug_assertions))]
-    self.stats.clear();
+    self.inner.entries.store(0, Ordering::Relaxed);
+    self.inner.stats.clear();
   }
 
-  #[cfg(any(test, debug_assertions))]
   fn len(&self) -> usize {
-    self.entries.lock().map(|cache| cache.len()).unwrap_or(0)
+    self.inner.entries.load(Ordering::Relaxed)
   }
 
-  #[cfg(any(test, debug_assertions))]
   fn stats(&self) -> ShapingCacheStatsSnapshot {
-    self.stats.snapshot()
+    self.inner.stats.snapshot(self.len())
   }
+}
+
+fn shaping_cache_capacity_from_env() -> usize {
+  static CAPACITY: OnceLock<usize> = OnceLock::new();
+  *CAPACITY.get_or_init(|| {
+    std::env::var("FASTR_TEXT_SHAPING_CACHE_CAPACITY")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|value| *value > 0)
+      .unwrap_or(SHAPING_CACHE_CAPACITY)
+  })
 }
 
 impl ShapingPipeline {
@@ -4210,7 +4348,7 @@ impl ShapingPipeline {
     #[cfg(any(test, debug_assertions))]
     SHAPING_PIPELINE_NEW_CALLS.fetch_add(1, Ordering::Relaxed);
     Self {
-      cache: ShapingCache::new(SHAPING_CACHE_CAPACITY),
+      cache: ShapingCache::new(shaping_cache_capacity_from_env()),
       font_cache: FallbackCache::new(fallback_cache_capacity()),
     }
   }
@@ -4253,12 +4391,7 @@ impl ShapingPipeline {
 
   /// Returns the number of cached shaped runs currently stored.
   pub fn cache_len(&self) -> usize {
-    self
-      .cache
-      .entries
-      .lock()
-      .map(|cache| cache.len())
-      .unwrap_or(0)
+    self.cache.len()
   }
 
   /// Shapes text into positioned glyphs.

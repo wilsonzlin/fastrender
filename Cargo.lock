@@ -887,6 +887,7 @@ dependencies = [
  "markup5ever_rcdom",
  "memchr",
  "num_cpus",
+ "parking_lot",
  "pathdiff",
  "percent-encoding",
  "precomputed-hash",

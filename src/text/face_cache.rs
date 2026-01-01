@@ -1,10 +1,11 @@
 use crate::text::font_db::LoadedFont;
 use lru::LruCache;
+use parking_lot::Mutex;
 use rustc_hash::FxHasher;
 use rustybuzz::Face as RbFace;
 use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(debug_assertions)]
 use std::cell::Cell;
@@ -122,7 +123,8 @@ impl FaceCache {
   fn get_or_parse(&self, data: Arc<Vec<u8>>, index: u32) -> Option<Arc<CachedFace>> {
     let key = FaceCacheKey::new(&data, index);
 
-    if let Ok(mut cache) = self.inner.lock() {
+    {
+      let mut cache = self.inner.lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
@@ -130,7 +132,8 @@ impl FaceCache {
 
     let parsed = Arc::new(CachedFace::parse(data, index).ok()?);
 
-    if let Ok(mut cache) = self.inner.lock() {
+    {
+      let mut cache = self.inner.lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
@@ -164,7 +167,8 @@ impl RustybuzzFaceCache {
   fn get_or_parse(&self, data: Arc<Vec<u8>>, index: u32) -> Option<Arc<CachedRustybuzzFace>> {
     let key = FaceCacheKey::new(&data, index);
 
-    if let Ok(mut cache) = self.inner.lock() {
+    {
+      let mut cache = self.inner.lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
@@ -172,7 +176,8 @@ impl RustybuzzFaceCache {
 
     let parsed = Arc::new(CachedRustybuzzFace::parse(data, index)?);
 
-    if let Ok(mut cache) = self.inner.lock() {
+    {
+      let mut cache = self.inner.lock();
       if let Some(face) = cache.get(&key) {
         return Some(face.clone());
       }
