@@ -90,6 +90,8 @@ struct Cli {
 enum CommandKind {
   /// Ensure `progress/pages/*.json` exists for every page in the pageset.
   Sync(SyncArgs),
+  /// Apply schema migrations to existing `progress/pages/*.json` artifacts without rendering.
+  Migrate(MigrateArgs),
   /// Render cached pages and update `progress/pages/*.json`.
   Run(RunArgs),
   /// Summarize existing `progress/pages/*.json` artifacts.
@@ -193,6 +195,17 @@ struct SyncArgs {
   /// Remove progress files that are no longer part of the pageset
   #[arg(long)]
   prune: bool,
+}
+
+#[derive(Args, Debug)]
+struct MigrateArgs {
+  /// Directory containing `progress/pages/*.json`
+  #[arg(long, default_value = DEFAULT_PROGRESS_DIR)]
+  progress_dir: PathBuf,
+
+  /// Directory containing cached HTML (used only for normalizing missing-cache placeholders)
+  #[arg(long, default_value = CACHE_HTML_DIR)]
+  html_dir: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, ValueEnum)]
@@ -1289,6 +1302,60 @@ fn prune_stale_progress(progress_dir: &Path, keep: &BTreeSet<String>) -> io::Res
     pruned += 1;
   }
   Ok(pruned)
+}
+
+fn migrate(args: MigrateArgs) -> io::Result<()> {
+  let entries = fs::read_dir(&args.progress_dir).map_err(|e| {
+    io::Error::new(
+      e.kind(),
+      format!("{}: {}", args.progress_dir.display(), e),
+    )
+  })?;
+
+  let mut paths: Vec<PathBuf> = entries
+    .filter_map(|entry| {
+      let entry = entry.ok()?;
+      if entry.file_type().ok()?.is_dir() {
+        return None;
+      }
+      let path = entry.path();
+      if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+        return None;
+      }
+      Some(path)
+    })
+    .collect();
+  paths.sort();
+
+  let mut processed = 0usize;
+  for path in paths {
+    let stem = path
+      .file_stem()
+      .and_then(|s| s.to_str())
+      .ok_or_else(|| {
+        io::Error::new(
+          io::ErrorKind::InvalidData,
+          format!("{}: invalid filename", path.display()),
+        )
+      })?
+      .to_string();
+    let cache_exists = args.html_dir.join(format!("{stem}.html")).exists();
+
+    let raw = fs::read_to_string(&path)?;
+    let mut progress: PageProgress = serde_json::from_str(&raw).map_err(|e| {
+      io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{}: {}", path.display(), e),
+      )
+    })?;
+    migrate_legacy_notes(&mut progress);
+    normalize_missing_cache_placeholder(&mut progress, cache_exists);
+    write_progress(&path, &progress)?;
+    processed += 1;
+  }
+
+  println!("Migrated {processed} progress files.");
+  Ok(())
 }
 
 fn sync(args: SyncArgs) -> io::Result<()> {
@@ -6657,6 +6724,7 @@ fn main() -> io::Result<()> {
   let cli = Cli::parse();
   match cli.command {
     CommandKind::Sync(args) => sync(args),
+    CommandKind::Migrate(args) => migrate(args),
     CommandKind::Run(args) => run(args),
     CommandKind::Report(args) => report(args),
     CommandKind::Worker(args) => worker(args),
