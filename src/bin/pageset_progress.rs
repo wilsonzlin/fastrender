@@ -4480,6 +4480,9 @@ fn report(args: ReportArgs) -> io::Result<()> {
     if entry.progress.status != ProgressStatus::Ok {
       continue;
     }
+    if entry.progress.stages_ms.sum() <= 0.0 {
+      continue;
+    }
     stage_count += 1;
     add_stage_buckets(&mut stage_total, &entry.progress.stages_ms);
   }
