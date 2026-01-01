@@ -37,7 +37,8 @@ use crate::error::RenderStage;
 use crate::error::Result;
 use crate::render_control;
 use crate::resource::{
-  ensure_font_mime_sane, ensure_http_success, FetchedResource, ResourceFetcher,
+  ensure_font_mime_sane, ensure_http_success, FetchedResource, HttpFetcher, HttpRetryPolicy,
+  ResourceFetcher,
 };
 use crate::text::face_cache;
 use crate::text::font_db::FontCacheConfig;
@@ -67,10 +68,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 use std::time::Instant;
-use ureq::Agent;
 use url::Url;
 use wuff::decompress_woff1;
 use wuff::decompress_woff2;
@@ -2415,33 +2415,22 @@ fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
   }
 
   if url.starts_with("http://") || url.starts_with("https://") {
-    let agent: Agent = Agent::config_builder()
-      .timeout_global(Some(std::time::Duration::from_secs(10)))
-      .build()
-      .into();
-    let mut response = agent.get(url).call().map_err(|e| {
+    static FETCHER: OnceLock<HttpFetcher> = OnceLock::new();
+    let fetcher = FETCHER.get_or_init(|| {
+      HttpFetcher::new()
+        .with_timeout(Duration::from_secs(10))
+        .with_retry_policy(HttpRetryPolicy {
+          max_attempts: 1,
+          ..HttpRetryPolicy::default()
+        })
+    });
+    let resource = fetcher.fetch(url).map_err(|e| {
       Error::Font(crate::error::FontError::LoadFailed {
         family: url.to_string(),
         reason: e.to_string(),
       })
     })?;
-    let bytes = response
-      .body_mut()
-      .with_config()
-      .limit(50 * 1024 * 1024)
-      .read_to_vec()
-      .map_err(|e| {
-        Error::Font(crate::error::FontError::LoadFailed {
-          family: url.to_string(),
-          reason: e.to_string(),
-        })
-      })?;
-    let content_type = response
-      .headers()
-      .get("content-type")
-      .and_then(|h| h.to_str().ok())
-      .map(|s| s.to_string());
-    return Ok((bytes, content_type));
+    return Ok((resource.bytes, resource.content_type));
   }
 
   if url.starts_with("file://") {
