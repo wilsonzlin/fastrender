@@ -3728,7 +3728,7 @@ impl HttpFetcher {
           Ok(resp) => resp,
           Err(err) => {
             finish_network_fetch_diagnostics(network_timer.take());
-            if !auto_fallback && attempt < max_attempts && is_retryable_reqwest_error(&err) {
+            if attempt < max_attempts && is_retryable_reqwest_error(&err) {
               let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
               let mut can_retry = true;
               if let Some(deadline) = deadline.as_ref() {
@@ -6097,6 +6097,39 @@ mod tests {
       "unexpected status",
     ));
     assert!(!should_fallback_to_curl(&err));
+  }
+
+  #[test]
+  fn reqwest_auto_backend_does_not_disable_retries_without_budget() {
+    let Some(listener) =
+      try_bind_localhost("reqwest_auto_backend_does_not_disable_retries_without_budget")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().expect("local addr");
+    drop(listener);
+
+    let retry = HttpRetryPolicy {
+      max_attempts: 3,
+      backoff_base: Duration::ZERO,
+      backoff_cap: Duration::ZERO,
+      respect_retry_after: true,
+    };
+    let fetcher = HttpFetcher::new()
+      .with_retry_policy(retry)
+      .with_timeout(Duration::from_millis(50));
+
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/");
+    let err = fetcher
+      .fetch_http_with_accept_inner_reqwest(&url, None, None, None, None, &deadline, started, true)
+      .expect_err("reqwest should error when no server is listening");
+    let msg = err.to_string();
+    assert!(
+      msg.contains("attempt 3/3"),
+      "expected retries to be attempted (message: {msg})"
+    );
   }
 
   #[test]
