@@ -14,17 +14,6 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "amazon.com",
-      "url": "https://amazon.com",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 5000.0
-    },
-    {
       "name": "booking.com",
       "url": "https://booking.com",
       "viewport": [
@@ -38,28 +27,6 @@
     {
       "name": "nhk.or.jp",
       "url": "https://nhk.or.jp",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 5000.0
-    },
-    {
-      "name": "tesco.com",
-      "url": "https://tesco.com",
-      "viewport": [
-        1200,
-        800
-      ],
-      "dpr": 1.0,
-      "media": "screen",
-      "budget_ms": 5000.0
-    },
-    {
-      "name": "washingtonpost.com",
-      "url": "https://washingtonpost.com",
       "viewport": [
         1200,
         800

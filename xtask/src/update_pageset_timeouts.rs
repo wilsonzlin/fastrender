@@ -939,6 +939,29 @@ mod tests {
   }
 
   #[test]
+  fn repo_guardrails_manifest_fixtures_exist() {
+    let root = repo_root();
+    let fixtures_root = root.join("tests/pages/fixtures");
+    let manifest_path = root.join(DEFAULT_MANIFEST_PATH);
+    let manifest = load_manifest(&manifest_path).expect("load pageset guardrails manifest");
+
+    let mut missing = Vec::new();
+    for fixture in &manifest.fixtures {
+      let html_path = fixtures_root.join(&fixture.name).join("index.html");
+      if !html_path.is_file() {
+        missing.push(format!("{} ({})", fixture.name, html_path.display()));
+      }
+    }
+
+    assert!(
+      missing.is_empty(),
+      "{} references fixture(s) missing under tests/pages/fixtures: {}",
+      manifest_path.display(),
+      missing.join(", ")
+    );
+  }
+
+  #[test]
   fn legacy_manifest_is_kept_in_sync_with_guardrails() {
     let root = repo_root();
     let guardrails_path = root.join(DEFAULT_MANIFEST_PATH);
