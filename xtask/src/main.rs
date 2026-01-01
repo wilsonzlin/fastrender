@@ -728,6 +728,8 @@ struct PrefetchAssetsSupport {
   prefetch_iframes: bool,
   prefetch_css_url_assets: bool,
   max_discovered_assets_per_page: bool,
+  max_images_per_page: bool,
+  max_image_urls_per_element: bool,
 }
 
 impl PrefetchAssetsSupport {
@@ -736,6 +738,8 @@ impl PrefetchAssetsSupport {
       || self.prefetch_iframes
       || self.prefetch_css_url_assets
       || self.max_discovered_assets_per_page
+      || self.max_images_per_page
+      || self.max_image_urls_per_element
   }
 
   fn detect() -> Self {
@@ -746,6 +750,8 @@ impl PrefetchAssetsSupport {
         prefetch_iframes: false,
         prefetch_css_url_assets: false,
         max_discovered_assets_per_page: false,
+        max_images_per_page: false,
+        max_image_urls_per_element: false,
       };
     };
 
@@ -754,6 +760,8 @@ impl PrefetchAssetsSupport {
       prefetch_iframes: contents.contains("prefetch_iframes"),
       prefetch_css_url_assets: contents.contains("prefetch_css_url_assets"),
       max_discovered_assets_per_page: contents.contains("max_discovered_assets_per_page"),
+      max_images_per_page: contents.contains("max_images_per_page"),
+      max_image_urls_per_element: contents.contains("max_image_urls_per_element"),
     }
   }
 }
@@ -780,6 +788,13 @@ fn extract_prefetch_assets_args(
       || (support.max_discovered_assets_per_page
         && (arg == "--max-discovered-assets-per-page"
           || arg.starts_with("--max-discovered-assets-per-page=")));
+    let is_prefetch_arg = is_prefetch_arg
+      || (support.max_images_per_page
+        && (arg == "--max-images-per-page" || arg.starts_with("--max-images-per-page=")));
+    let is_prefetch_arg = is_prefetch_arg
+      || (support.max_image_urls_per_element
+        && (arg == "--max-image-urls-per-element"
+          || arg.starts_with("--max-image-urls-per-element=")));
 
     if is_prefetch_arg {
       prefetch_args.push(arg.clone());

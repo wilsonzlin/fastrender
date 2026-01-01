@@ -212,10 +212,14 @@ PREFETCH_IMAGES_IN_ARGS=0
 PREFETCH_IFRAMES_IN_ARGS=0
 PREFETCH_CSS_URL_ASSETS_IN_ARGS=0
 MAX_DISCOVERED_ASSETS_IN_ARGS=0
+MAX_IMAGES_PER_PAGE_IN_ARGS=0
+MAX_IMAGE_URLS_PER_ELEMENT_IN_ARGS=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=0
 PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=0
+PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=0
+PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT=0
 PREFETCH_ASSETS_SOURCE="src/bin/prefetch_assets.rs"
 if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
   if grep -q "prefetch_images" "${PREFETCH_ASSETS_SOURCE}"; then
@@ -229,6 +233,12 @@ if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
   fi
   if grep -q "max_discovered_assets_per_page" "${PREFETCH_ASSETS_SOURCE}"; then
     PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=1
+  fi
+  if grep -q "max_images_per_page" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=1
+  fi
+  if grep -q "max_image_urls_per_element" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT=1
   fi
 fi
 
@@ -255,6 +265,36 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
         PREFETCH_IFRAMES_IN_ARGS=1
         PREFETCH_ASSET_ARGS+=("${arg}")
         if [[ ("${arg}" == "--prefetch-iframes" || "${arg}" == "--prefetch-documents") && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --max-images-per-page|--max-images-per-page=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE}" -eq 1 ]]; then
+        MAX_IMAGES_PER_PAGE_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--max-images-per-page" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
+      fi
+      ;;
+    --max-image-urls-per-element|--max-image-urls-per-element=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT}" -eq 1 ]]; then
+        MAX_IMAGE_URLS_PER_ELEMENT_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--max-image-urls-per-element" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
           next="${ARGS[$((i + 1))]}"
           if [[ "${next}" != -* ]]; then
             PREFETCH_ASSET_ARGS+=("${next}")
