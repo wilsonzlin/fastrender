@@ -9,6 +9,7 @@
 use super::properties::known_page_property_set;
 use super::properties::known_style_property_set;
 use super::properties::parse_property_value_in_context;
+use super::properties::parse_property_value_in_context_known_property;
 use super::properties::DeclarationContext;
 use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
@@ -3869,11 +3870,11 @@ fn parse_property_value_in_context_cached(
   // Declarations in @page blocks are rare relative to style rules; keep the cache focused on the
   // hot path.
   if matches!(context, DeclarationContext::Page) {
-    return parse_property_value_in_context(context, property, value);
+    return parse_property_value_in_context_known_property(context, property, value);
   }
 
   if super::properties::is_raw_only_property(property) {
-    return parse_property_value_in_context(context, property, value);
+    return parse_property_value_in_context_known_property(context, property, value);
   }
 
   let value = value.trim();
@@ -3882,7 +3883,14 @@ fn parse_property_value_in_context_cached(
   }
 
   if value.len() > DECLARATION_VALUE_CACHE_MAX_LEN {
-    return parse_property_value_in_context(context, property, value);
+    return parse_property_value_in_context_known_property(context, property, value);
+  }
+
+  // Values containing `var()` are preserved as raw keywords so they can be resolved during cascade.
+  // Cloning those strings on cache hits erases most of the benefit, so bypass the declaration value
+  // cache for this path.
+  if crate::style::var_resolution::contains_var(value) {
+    return Some(PropertyValue::Keyword(value.to_string()));
   }
 
   let key = DeclarationValueCacheKey {
@@ -3904,7 +3912,7 @@ fn parse_property_value_in_context_cached(
     return Some(hit);
   }
 
-  let parsed = parse_property_value_in_context(context, property, value)?;
+  let parsed = parse_property_value_in_context_known_property(context, property, value)?;
   let parsed_for_cache = parsed.clone();
   DECLARATION_VALUE_CACHE.with(|cache| {
     let mut cache = cache.borrow_mut();
