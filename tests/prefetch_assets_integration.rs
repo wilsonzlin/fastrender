@@ -736,6 +736,103 @@ fn prefetch_assets_does_not_fetch_embeds_without_prefetch_embeds() {
 }
 
 #[test]
+fn prefetch_assets_honors_base_href_for_html_discovery() {
+  let Some(listener) =
+    try_bind_localhost("prefetch_assets_honors_base_href_for_html_discovery")
+  else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    "/base/frame.html".to_string(),
+    (b"<!doctype html><html><body>frame</body></html>".to_vec(), "text/html"),
+  );
+  responses.insert(
+    "/base/icon.png".to_string(),
+    (b"dummy-icon".to_vec(), "image/png"),
+  );
+  responses.insert(
+    "/base/poster.png".to_string(),
+    (b"dummy-poster".to_vec(), "image/png"),
+  );
+
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec!["/base/frame.html", "/base/icon.png", "/base/poster.png"],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    format!(
+      "<!doctype html><html><head>\
+        <base href=\"http://{addr}/base/\">\
+        <link rel=\"icon\" href=\"icon.png\">\
+      </head><body>\
+        <iframe src=\"frame.html\"></iframe>\
+        <video poster=\"poster.png\"></video>\
+      </body></html>"
+    ),
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .arg("--prefetch-iframes")
+    .arg("--prefetch-icons")
+    .arg("--prefetch-video-posters")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let iframe_doc = format!("http://{}/base/frame.html", addr);
+  let icon = format!("http://{}/base/icon.png", addr);
+  let poster = format!("http://{}/base/poster.png", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  assert!(offline.fetch(&iframe_doc).is_ok(), "iframe should be cached");
+  assert!(offline.fetch(&icon).is_ok(), "icon should be cached");
+  assert!(offline.fetch(&poster).is_ok(), "poster should be cached");
+}
+
+#[test]
 fn prefetch_assets_selects_srcset_candidate_and_respects_max_urls_per_element() {
   let Some(listener) = try_bind_localhost(
     "prefetch_assets_selects_srcset_candidate_and_respects_max_urls_per_element",
