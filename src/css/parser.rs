@@ -3953,20 +3953,23 @@ fn parse_declaration<'i, 't>(
   };
 
   let value_start = parser.position();
-  let mut before_important_state = None;
+  let mut important_pos = None;
 
   loop {
-    let state_before_token = parser.state();
+    let token_start = parser.position();
     match parser.next() {
       Ok(Token::Semicolon) | Err(_) => break,
       Ok(Token::Delim('!')) => {
-        let after_bang = parser.state();
-        parser.skip_whitespace();
-        if parser.expect_ident_matching("important").is_ok() {
-          before_important_state = Some(state_before_token);
+        if parser
+          .try_parse(|p| {
+            p.skip_whitespace();
+            p.expect_ident_matching("important")
+          })
+          .is_ok()
+        {
+          important_pos = Some(token_start);
           continue;
         }
-        parser.reset(&after_bang);
       }
       Ok(Token::Function(_))
       | Ok(Token::ParenthesisBlock)
@@ -3980,22 +3983,23 @@ fn parse_declaration<'i, 't>(
     // `!important` is only valid at the end of the declaration (followed only by whitespace and an
     // optional semicolon). If we see any further tokens after a candidate `!important`, treat it
     // as part of the value instead of truncating.
-    if before_important_state.is_some() {
-      before_important_state = None;
+    if important_pos.is_some() {
+      important_pos = None;
     }
   }
 
-  let end_state = parser.state();
-  let important = before_important_state.is_some();
-  let full_slice_raw = if let Some(before_important_state) = before_important_state {
-    parser.reset(&before_important_state);
-    let raw = parser.slice_from(value_start);
-    parser.reset(&end_state);
-    raw
+  let full_slice_raw = parser.slice_from(value_start);
+  let important = important_pos.is_some();
+  let value = if let Some(pos) = important_pos {
+    let important_slice = parser.slice_from(pos);
+    let prefix_len = full_slice_raw.len().saturating_sub(important_slice.len());
+    full_slice_raw
+      .get(..prefix_len)
+      .unwrap_or(full_slice_raw)
   } else {
-    parser.slice_from(value_start)
+    full_slice_raw
   };
-  let value = full_slice_raw.trim_end_matches(';').trim_end();
+  let value = value.trim_end_matches(';').trim_end();
 
   let parsed_value = parse_property_value_in_context_cached(context, property.as_str(), value)?;
   Some(Declaration {
@@ -4102,20 +4106,23 @@ fn parse_declaration_in_style_block<'i, 't>(
 
   let value_location = errors.enabled().then(|| parser.current_source_location());
   let value_start = parser.position();
-  let mut before_important_state = None;
+  let mut important_pos = None;
 
   loop {
-    let state_before_token = parser.state();
+    let token_start = parser.position();
     match parser.next() {
       Ok(Token::Semicolon) | Err(_) => break,
       Ok(Token::Delim('!')) => {
-        let after_bang = parser.state();
-        parser.skip_whitespace();
-        if parser.expect_ident_matching("important").is_ok() {
-          before_important_state = Some(state_before_token);
+        if parser
+          .try_parse(|p| {
+            p.skip_whitespace();
+            p.expect_ident_matching("important")
+          })
+          .is_ok()
+        {
+          important_pos = Some(token_start);
           continue;
         }
-        parser.reset(&after_bang);
       }
       Ok(Token::CurlyBracketBlock) if !is_custom_property => {
         // Nested rules like `a:hover {}` contain a colon, but must not be treated as declarations.
@@ -4131,22 +4138,23 @@ fn parse_declaration_in_style_block<'i, 't>(
     // `!important` is only valid at the end of the declaration (followed only by whitespace and an
     // optional semicolon). If we see any further tokens after a candidate `!important`, treat it
     // as part of the value instead of truncating.
-    if before_important_state.is_some() {
-      before_important_state = None;
+    if important_pos.is_some() {
+      important_pos = None;
     }
   }
 
-  let end_state = parser.state();
-  let important = before_important_state.is_some();
-  let full_slice_raw = if let Some(before_important_state) = before_important_state {
-    parser.reset(&before_important_state);
-    let raw = parser.slice_from(value_start);
-    parser.reset(&end_state);
-    raw
+  let full_slice_raw = parser.slice_from(value_start);
+  let important = important_pos.is_some();
+  let value = if let Some(pos) = important_pos {
+    let important_slice = parser.slice_from(pos);
+    let prefix_len = full_slice_raw.len().saturating_sub(important_slice.len());
+    full_slice_raw
+      .get(..prefix_len)
+      .unwrap_or(full_slice_raw)
   } else {
-    parser.slice_from(value_start)
+    full_slice_raw
   };
-  let value = full_slice_raw.trim_end_matches(';').trim_end();
+  let value = value.trim_end_matches(';').trim_end();
 
   let Some(property) = property else {
     return Ok(None);
