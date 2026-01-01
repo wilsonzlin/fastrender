@@ -33,7 +33,7 @@ pub enum DeclarationContext {
   Page,
 }
 
-fn is_raw_only_property(property: &str) -> bool {
+pub(crate) fn is_raw_only_property(property: &str) -> bool {
   matches!(
     property,
     "scroll-timeline"

@@ -3786,6 +3786,10 @@ fn parse_property_value_in_context_cached(
     return parse_property_value_in_context(context, property, value);
   }
 
+  if super::properties::is_raw_only_property(property) {
+    return parse_property_value_in_context(context, property, value);
+  }
+
   let value = value.trim();
   if value.is_empty() {
     return None;
