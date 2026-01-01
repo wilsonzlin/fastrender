@@ -288,7 +288,11 @@ impl ResourceFetcher for BundledFetcher {
     // Bundles are meant to be replayable without network access, but data: URLs encode their
     // payload in the URL itself. Decode them directly so bundles don't need to persist huge
     // `data:` strings in the manifest for correctness.
-    if url.starts_with("data:") {
+    if url
+      .get(..5)
+      .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+      .unwrap_or(false)
+    {
       return super::data_url::decode_data_url(url);
     }
 
@@ -352,7 +356,7 @@ mod tests {
     let fetcher = BundledFetcher::new(bundle);
 
     let res = fetcher
-      .fetch("data:text/plain;base64,aGk=")
+      .fetch("DATA:text/plain;base64,aGk=")
       .expect("fetch data url");
     assert_eq!(res.bytes, b"hi");
     assert_eq!(res.content_type.as_deref(), Some("text/plain"));

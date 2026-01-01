@@ -28,7 +28,12 @@ fn bundles_and_renders_local_fixture() {
 
   let resources = manifest["resources"].as_object().expect("resources object");
   assert!(
-    resources.keys().all(|url| !url.starts_with("data:")),
+    resources.keys().all(|url| {
+      !url
+        .get(..5)
+        .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+        .unwrap_or(false)
+    }),
     "data: URLs should not be persisted in bundle manifests"
   );
   let css_url = format!("file://{}", css_path.display());
@@ -112,7 +117,12 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
 
   let resources = manifest["resources"].as_object().expect("resources object");
   assert!(
-    resources.keys().all(|url| !url.starts_with("data:")),
+    resources.keys().all(|url| {
+      !url
+        .get(..5)
+        .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+        .unwrap_or(false)
+    }),
     "data: URLs should not be persisted in bundle manifests"
   );
   let css_url = format!("file://{}", css_path.display());

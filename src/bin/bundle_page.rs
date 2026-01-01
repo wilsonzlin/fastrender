@@ -258,7 +258,11 @@ impl ResourceFetcher for RecordingFetcher {
     let result = self.inner.fetch(url)?;
     // Don't store `data:` URLs in bundle manifests: they can be extremely large (embedded
     // fonts/images) and are already self-contained.
-    if !url.starts_with("data:") {
+    if !url
+      .get(..5)
+      .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+      .unwrap_or(false)
+    {
       if let Ok(mut map) = self.recorded.lock() {
         map.insert(url.to_string(), result.clone());
       }
@@ -275,7 +279,11 @@ impl ResourceFetcher for RecordingFetcher {
 
     let url = req.url.to_string();
     let result = self.inner.fetch_with_request(req)?;
-    if !url.starts_with("data:") {
+    if !url
+      .get(..5)
+      .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+      .unwrap_or(false)
+    {
       if let Ok(mut map) = self.recorded.lock() {
         map.insert(url, result.clone());
       }
@@ -296,7 +304,11 @@ impl ResourceFetcher for RecordingFetcher {
     }
 
     let result = self.inner.fetch_with_validation(url, etag, last_modified)?;
-    if !url.starts_with("data:") {
+    if !url
+      .get(..5)
+      .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+      .unwrap_or(false)
+    {
       if let Ok(mut map) = self.recorded.lock() {
         map.insert(url.to_string(), result.clone());
       }

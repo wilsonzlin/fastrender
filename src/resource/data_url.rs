@@ -8,7 +8,11 @@ const DEFAULT_CHARSET: &str = "charset=US-ASCII";
 
 /// Decode a data: URL into bytes and content type following RFC 2397 semantics.
 pub(crate) fn decode_data_url(url: &str) -> Result<FetchedResource> {
-  if !url.starts_with(DATA_URL_PREFIX) {
+  if !url
+    .get(..DATA_URL_PREFIX.len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
+    .unwrap_or(false)
+  {
     return Err(Error::Image(ImageError::InvalidDataUrl {
       reason: "URL does not start with 'data:'".to_string(),
     }));
@@ -156,4 +160,16 @@ pub(crate) fn encode_base64_data_url(media_type: &str, data: &[u8]) -> String {
   url.push_str(";base64,");
   url.push_str(&base64::engine::general_purpose::STANDARD.encode(data));
   url
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn decodes_data_url_case_insensitive_scheme() {
+    let res = decode_data_url("DATA:text/plain;base64,aGk=").expect("decode data url");
+    assert_eq!(res.bytes, b"hi");
+    assert_eq!(res.content_type.as_deref(), Some("text/plain"));
+  }
 }
