@@ -105,6 +105,7 @@ jobs:
             --suite pageset-timeouts \
             --fail-on-missing-fixtures \
             --fail-on-failure \
+            --isolate \
             "${extra_args[@]}" \
             --top 5 \
             --output target/perf_smoke_pageset_timeouts.json \
@@ -156,6 +157,7 @@ jobs:
             --suite pageset-timeouts \
             --fail-on-missing-fixtures \
             --fail-on-failure \
+            --isolate \
             --top 5 \
             --output target/perf_smoke_pageset_timeouts.json \
             --baseline "${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}" \
@@ -228,6 +230,14 @@ jobs:
             echo "## perf_smoke pageset-timeouts regression check"
             echo
             echo "No prior baseline artifact was available from main."
+            echo "Threshold: ${PERF_SMOKE_REGRESSION_THRESHOLD} (relative)"
+            echo "Count threshold: ${PERF_SMOKE_COUNT_REGRESSION_THRESHOLD} (relative)"
+            if [ "${PERF_SMOKE_FAIL_ON_BUDGET}" = "1" ]; then
+              echo "Budget gate: enabled"
+            else
+              echo "Budget gate: disabled (set PERF_SMOKE_FAIL_ON_BUDGET=1 to enable)"
+            fi
+            echo
             echo "The uploaded perf_smoke output from this run will serve as the next baseline."
           } >> "$GITHUB_STEP_SUMMARY"
 
