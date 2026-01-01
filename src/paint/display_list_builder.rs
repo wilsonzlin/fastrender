@@ -329,6 +329,51 @@ struct ConservativeGlyphRunBoundsBuilder {
   max_x: f32,
 }
 
+#[derive(Clone, Copy)]
+struct TileAxisPlan {
+  start: f32,
+  step: f32,
+  count: usize,
+}
+
+impl TileAxisPlan {
+  fn empty() -> Self {
+    Self {
+      start: 0.0,
+      step: 0.0,
+      count: 0,
+    }
+  }
+
+  fn iter(self) -> TileAxisIter {
+    TileAxisIter {
+      pos: self.start,
+      step: self.step,
+      remaining: self.count,
+    }
+  }
+}
+
+struct TileAxisIter {
+  pos: f32,
+  step: f32,
+  remaining: usize,
+}
+
+impl Iterator for TileAxisIter {
+  type Item = f32;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.remaining == 0 {
+      return None;
+    }
+    let out = self.pos;
+    self.pos += self.step;
+    self.remaining -= 1;
+    Some(out)
+  }
+}
+
 impl ConservativeGlyphRunBoundsBuilder {
   fn new(origin: Point, advance_width: f32) -> Self {
     Self {
@@ -3033,7 +3078,7 @@ impl DisplayListBuilder {
     area_len / count
   }
 
-  fn tile_positions(
+  fn tile_axis_plan(
     repeat: BackgroundRepeatKeyword,
     area_start: f32,
     area_len: f32,
@@ -3041,22 +3086,57 @@ impl DisplayListBuilder {
     offset: f32,
     clip_min: f32,
     clip_max: f32,
-  ) -> Vec<f32> {
-    if tile_len <= 0.0 {
-      return Vec::new();
+  ) -> TileAxisPlan {
+    if !tile_len.is_finite() || tile_len <= 0.0 {
+      return TileAxisPlan::empty();
     }
 
+    if !area_start.is_finite()
+      || !area_len.is_finite()
+      || !offset.is_finite()
+      || !clip_min.is_finite()
+      || !clip_max.is_finite()
+    {
+      return TileAxisPlan::empty();
+    }
+
+    let plan_with_step = |start: f32, step: f32| -> TileAxisPlan {
+      if !start.is_finite() || !step.is_finite() || step <= 0.0 {
+        return TileAxisPlan::empty();
+      }
+
+      let span = clip_max - start;
+      if !span.is_finite() || span <= 0.0 {
+        return TileAxisPlan::empty();
+      }
+
+      let raw = (span / step).ceil();
+      if !raw.is_finite() || raw <= 0.0 {
+        return TileAxisPlan::empty();
+      }
+
+      TileAxisPlan {
+        start,
+        step,
+        count: raw as usize,
+      }
+    };
+
     match repeat {
-      BackgroundRepeatKeyword::NoRepeat => vec![area_start + offset],
+      BackgroundRepeatKeyword::NoRepeat => {
+        let start = area_start + offset;
+        if !start.is_finite() {
+          return TileAxisPlan::empty();
+        }
+        TileAxisPlan {
+          start,
+          step: tile_len,
+          count: 1,
+        }
+      }
       BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round => {
         let start = Self::aligned_start(area_start + offset, tile_len, clip_min);
-        let mut positions = Vec::new();
-        let mut pos = start;
-        while pos < clip_max {
-          positions.push(pos);
-          pos += tile_len;
-        }
-        positions
+        plan_with_step(start, tile_len)
       }
       BackgroundRepeatKeyword::Space => {
         let count = (area_len / tile_len).floor() as i32;
@@ -3064,17 +3144,19 @@ impl DisplayListBuilder {
           let spacing = (area_len - tile_len * count as f32) / (count as f32 - 1.0);
           let step = tile_len + spacing;
           let anchor = area_start;
-          let mut positions = Vec::new();
           let k = ((clip_min - anchor) / step).floor();
-          let mut pos = anchor + k * step;
-          while pos < clip_max {
-            positions.push(pos);
-            pos += step;
-          }
-          positions
+          let start = anchor + k * step;
+          plan_with_step(start, step)
         } else {
           let centered = area_start + offset + (area_len - tile_len) * 0.5;
-          vec![centered]
+          if !centered.is_finite() {
+            return TileAxisPlan::empty();
+          }
+          TileAxisPlan {
+            start: centered,
+            step: tile_len,
+            count: 1,
+          }
         }
       }
     }
@@ -3867,6 +3949,10 @@ impl DisplayListBuilder {
     layer: &BackgroundLayer,
     bg: &BackgroundImage,
   ) {
+    if self.deadline_reached() {
+      return;
+    }
+
     let is_local = layer.attachment == BackgroundAttachment::Local;
     let clip_box = if is_local {
       match layer.clip {
@@ -3949,78 +4035,79 @@ impl DisplayListBuilder {
       }));
     }
 
-    let compute_tiles = |img_w: f32, img_h: f32| -> Option<(f32, f32, Vec<f32>, Vec<f32>)> {
-      let (mut tile_w, mut tile_h) = Self::compute_background_size(
-        layer,
-        style.font_size,
-        style.root_font_size,
-        self.viewport,
-        origin_rect.width(),
-        origin_rect.height(),
-        img_w,
-        img_h,
-      );
+    let compute_tiles =
+      |img_w: f32, img_h: f32| -> Option<(f32, f32, TileAxisPlan, TileAxisPlan)> {
+        let (mut tile_w, mut tile_h) = Self::compute_background_size(
+          layer,
+          style.font_size,
+          style.root_font_size,
+          self.viewport,
+          origin_rect.width(),
+          origin_rect.height(),
+          img_w,
+          img_h,
+        );
 
-      if tile_w <= 0.0 || tile_h <= 0.0 {
-        return None;
-      }
-
-      let mut rounded_x = false;
-      let mut rounded_y = false;
-      if layer.repeat.x == BackgroundRepeatKeyword::Round {
-        tile_w = Self::round_tile_length(origin_rect.width(), tile_w);
-        rounded_x = true;
-      }
-      if layer.repeat.y == BackgroundRepeatKeyword::Round {
-        tile_h = Self::round_tile_length(origin_rect.height(), tile_h);
-        rounded_y = true;
-      }
-      if rounded_x ^ rounded_y
-        && matches!(
-          layer.size,
-          BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
-        )
-      {
-        let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
-        if rounded_x {
-          tile_h = tile_w / aspect;
-        } else {
-          tile_w = tile_h * aspect;
+        if tile_w <= 0.0 || tile_h <= 0.0 {
+          return None;
         }
-      }
 
-      let (offset_x, offset_y) = Self::resolve_background_offset(
-        layer.position,
-        origin_rect.width(),
-        origin_rect.height(),
-        tile_w,
-        tile_h,
-        style.font_size,
-        style.root_font_size,
-        self.viewport,
-      );
+        let mut rounded_x = false;
+        let mut rounded_y = false;
+        if layer.repeat.x == BackgroundRepeatKeyword::Round {
+          tile_w = Self::round_tile_length(origin_rect.width(), tile_w);
+          rounded_x = true;
+        }
+        if layer.repeat.y == BackgroundRepeatKeyword::Round {
+          tile_h = Self::round_tile_length(origin_rect.height(), tile_h);
+          rounded_y = true;
+        }
+        if rounded_x ^ rounded_y
+          && matches!(
+            layer.size,
+            BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+          )
+        {
+          let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
+          if rounded_x {
+            tile_h = tile_w / aspect;
+          } else {
+            tile_w = tile_h * aspect;
+          }
+        }
 
-      let positions_x = Self::tile_positions(
-        layer.repeat.x,
-        origin_rect.x(),
-        origin_rect.width(),
-        tile_w,
-        offset_x,
-        visible_clip.min_x(),
-        visible_clip.max_x(),
-      );
-      let positions_y = Self::tile_positions(
-        layer.repeat.y,
-        origin_rect.y(),
-        origin_rect.height(),
-        tile_h,
-        offset_y,
-        visible_clip.min_y(),
-        visible_clip.max_y(),
-      );
+        let (offset_x, offset_y) = Self::resolve_background_offset(
+          layer.position,
+          origin_rect.width(),
+          origin_rect.height(),
+          tile_w,
+          tile_h,
+          style.font_size,
+          style.root_font_size,
+          self.viewport,
+        );
 
-      Some((tile_w, tile_h, positions_x, positions_y))
-    };
+        let positions_x = Self::tile_axis_plan(
+          layer.repeat.x,
+          origin_rect.x(),
+          origin_rect.width(),
+          tile_w,
+          offset_x,
+          visible_clip.min_x(),
+          visible_clip.max_x(),
+        );
+        let positions_y = Self::tile_axis_plan(
+          layer.repeat.y,
+          origin_rect.y(),
+          origin_rect.height(),
+          tile_h,
+          offset_y,
+          visible_clip.min_y(),
+          visible_clip.max_y(),
+        );
+
+        Some((tile_w, tile_h, positions_x, positions_y))
+      };
 
     match bg {
       BackgroundImage::LinearGradient { angle, stops } => {
@@ -4035,8 +4122,12 @@ impl DisplayListBuilder {
             let dy = -rad.cos();
             let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
 
-            for ty in positions_y.iter().copied() {
-              for tx in positions_x.iter().copied() {
+            let mut deadline_counter = 0usize;
+            'tiles: for ty in positions_y.iter() {
+              for tx in positions_x.iter() {
+                if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+                  break 'tiles;
+                }
                 if tx >= max_x || ty >= max_y {
                   continue;
                 }
@@ -4084,8 +4175,12 @@ impl DisplayListBuilder {
             let dy = -rad.cos();
             let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
 
-            for ty in positions_y.iter().copied() {
-              for tx in positions_x.iter().copied() {
+            let mut deadline_counter = 0usize;
+            'tiles: for ty in positions_y.iter() {
+              for tx in positions_x.iter() {
+                if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+                  break 'tiles;
+                }
                 if tx >= max_x || ty >= max_y {
                   continue;
                 }
@@ -4133,8 +4228,12 @@ impl DisplayListBuilder {
             let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops_unclamped(&resolved);
 
-            for ty in positions_y.iter().copied() {
-              for tx in positions_x.iter().copied() {
+            let mut deadline_counter = 0usize;
+            'tiles: for ty in positions_y.iter() {
+              for tx in positions_x.iter() {
+                if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+                  break 'tiles;
+                }
                 if tx >= max_x || ty >= max_y {
                   continue;
                 }
@@ -4183,8 +4282,12 @@ impl DisplayListBuilder {
             let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops_unclamped(&resolved);
 
-            for ty in positions_y.iter().copied() {
-              for tx in positions_x.iter().copied() {
+            let mut deadline_counter = 0usize;
+            'tiles: for ty in positions_y.iter() {
+              for tx in positions_x.iter() {
+                if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+                  break 'tiles;
+                }
                 if tx >= max_x || ty >= max_y {
                   continue;
                 }
@@ -4234,8 +4337,12 @@ impl DisplayListBuilder {
             let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops(&resolved);
 
-            for ty in positions_y.iter().copied() {
-              for tx in positions_x.iter().copied() {
+            let mut deadline_counter = 0usize;
+            'tiles: for ty in positions_y.iter() {
+              for tx in positions_x.iter() {
+                if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+                  break 'tiles;
+                }
                 if tx >= max_x || ty >= max_y {
                   continue;
                 }
@@ -4284,8 +4391,12 @@ impl DisplayListBuilder {
             let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops(&resolved);
 
-            for ty in positions_y.iter().copied() {
-              for tx in positions_x.iter().copied() {
+            let mut deadline_counter = 0usize;
+            'tiles: for ty in positions_y.iter() {
+              for tx in positions_x.iter() {
+                if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+                  break 'tiles;
+                }
                 if tx >= max_x || ty >= max_y {
                   continue;
                 }
@@ -4392,7 +4503,7 @@ impl DisplayListBuilder {
                   counter.fetch_add(1, Ordering::Relaxed);
                 }
                 if let Some(counter) = self.background_tiles.as_ref() {
-                  let positions_x = Self::tile_positions(
+                  let positions_x = Self::tile_axis_plan(
                     layer.repeat.x,
                     origin_rect.x(),
                     origin_rect.width(),
@@ -4401,7 +4512,7 @@ impl DisplayListBuilder {
                     visible_clip.min_x(),
                     visible_clip.max_x(),
                   );
-                  let positions_y = Self::tile_positions(
+                  let positions_y = Self::tile_axis_plan(
                     layer.repeat.y,
                     origin_rect.y(),
                     origin_rect.height(),
@@ -4410,7 +4521,7 @@ impl DisplayListBuilder {
                     visible_clip.min_y(),
                     visible_clip.max_y(),
                   );
-                  let tiles = (positions_x.len() as u64).saturating_mul(positions_y.len() as u64);
+                  let tiles = (positions_x.count as u64).saturating_mul(positions_y.count as u64);
                   if tiles > 0 {
                     counter.fetch_add(tiles, Ordering::Relaxed);
                   }
@@ -4425,7 +4536,7 @@ impl DisplayListBuilder {
                   filter_quality: quality,
                 }));
               } else {
-                let positions_x = Self::tile_positions(
+                let positions_x = Self::tile_axis_plan(
                   layer.repeat.x,
                   origin_rect.x(),
                   origin_rect.width(),
@@ -4434,7 +4545,7 @@ impl DisplayListBuilder {
                   visible_clip.min_x(),
                   visible_clip.max_x(),
                 );
-                let positions_y = Self::tile_positions(
+                let positions_y = Self::tile_axis_plan(
                   layer.repeat.y,
                   origin_rect.y(),
                   origin_rect.height(),
@@ -4447,8 +4558,12 @@ impl DisplayListBuilder {
                 let max_x = visible_clip.max_x();
                 let max_y = visible_clip.max_y();
 
-                for ty in positions_y.iter().copied() {
-                  for tx in positions_x.iter().copied() {
+                let mut deadline_counter = 0usize;
+                'tiles: for ty in positions_y.iter() {
+                  for tx in positions_x.iter() {
+                    if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+                      break 'tiles;
+                    }
                     if tx >= max_x || ty >= max_y {
                       continue;
                     }
@@ -6465,6 +6580,7 @@ mod tests {
   use crate::paint::display_list::ResolvedMaskImage;
   use crate::paint::stacking::StackingContext;
   use crate::paint::stacking::StackingContextReason;
+  use crate::render_control::RenderDeadline;
   use crate::style::color::Color;
   use crate::style::color::Rgba;
   use crate::style::content::parse_content;
@@ -6477,6 +6593,9 @@ mod tests {
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundLayer;
   use crate::style::types::BackgroundRepeat;
+  use crate::style::types::BackgroundRepeatKeyword;
+  use crate::style::types::BackgroundSize;
+  use crate::style::types::BackgroundSizeComponent;
   use crate::style::types::BasicShape;
   use crate::style::types::ClipPath;
   use crate::style::types::ImageOrientation;
@@ -8584,5 +8703,188 @@ mod tests {
       list.is_empty(),
       "backface should be culled with perspective"
     );
+  }
+
+  fn legacy_tile_positions(
+    repeat: BackgroundRepeatKeyword,
+    area_start: f32,
+    area_len: f32,
+    tile_len: f32,
+    offset: f32,
+    clip_min: f32,
+    clip_max: f32,
+  ) -> Vec<f32> {
+    if tile_len <= 0.0 {
+      return Vec::new();
+    }
+
+    match repeat {
+      BackgroundRepeatKeyword::NoRepeat => vec![area_start + offset],
+      BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round => {
+        let start = DisplayListBuilder::aligned_start(area_start + offset, tile_len, clip_min);
+        let mut positions = Vec::new();
+        let mut pos = start;
+        while pos < clip_max {
+          positions.push(pos);
+          pos += tile_len;
+        }
+        positions
+      }
+      BackgroundRepeatKeyword::Space => {
+        let count = (area_len / tile_len).floor() as i32;
+        if count >= 2 {
+          let spacing = (area_len - tile_len * count as f32) / (count as f32 - 1.0);
+          let step = tile_len + spacing;
+          let anchor = area_start;
+          let mut positions = Vec::new();
+          let k = ((clip_min - anchor) / step).floor();
+          let mut pos = anchor + k * step;
+          while pos < clip_max {
+            positions.push(pos);
+            pos += step;
+          }
+          positions
+        } else {
+          let centered = area_start + offset + (area_len - tile_len) * 0.5;
+          vec![centered]
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn tile_axis_plan_matches_legacy_tile_positions() {
+    let cases = [
+      (
+        BackgroundRepeatKeyword::NoRepeat,
+        0.0,
+        100.0,
+        10.0,
+        5.0,
+        0.0,
+        100.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Repeat,
+        0.0,
+        100.0,
+        10.0,
+        0.0,
+        25.0,
+        75.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Round,
+        0.0,
+        100.0,
+        10.0,
+        0.0,
+        -5.0,
+        35.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Space,
+        0.0,
+        100.0,
+        30.0,
+        0.0,
+        0.0,
+        100.0,
+      ),
+      (
+        BackgroundRepeatKeyword::Space,
+        0.0,
+        20.0,
+        30.0,
+        0.0,
+        0.0,
+        100.0,
+      ),
+    ];
+
+    for (repeat, area_start, area_len, tile_len, offset, clip_min, clip_max) in cases {
+      let legacy = legacy_tile_positions(
+        repeat, area_start, area_len, tile_len, offset, clip_min, clip_max,
+      );
+      let plan = DisplayListBuilder::tile_axis_plan(
+        repeat, area_start, area_len, tile_len, offset, clip_min, clip_max,
+      );
+      let planned: Vec<f32> = plan.iter().collect();
+      assert_eq!(planned, legacy, "repeat={repeat:?}");
+    }
+  }
+
+  #[test]
+  fn background_tiling_aborts_on_deadline() {
+    struct EnvVarGuard {
+      key: &'static str,
+      prev: Option<String>,
+    }
+
+    impl EnvVarGuard {
+      fn set(key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, prev }
+      }
+    }
+
+    impl Drop for EnvVarGuard {
+      fn drop(&mut self) {
+        match &self.prev {
+          Some(prev) => std::env::set_var(self.key, prev),
+          None => std::env::remove_var(self.key),
+        }
+      }
+    }
+
+    // Make each deadline check take 10ms so we can deterministically force the render deadline to
+    // expire mid-way through background tiling (as opposed to at fragment traversal boundaries).
+    let _delay_guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_MS", "10");
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(35)), None);
+
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+      image: Some(BackgroundImage::LinearGradient {
+        angle: 0.0,
+        stops: vec![
+          crate::css::types::ColorStop {
+            color: Color::Rgba(Rgba::BLACK),
+            position: Some(0.0),
+          },
+          crate::css::types::ColorStop {
+            color: Color::Rgba(Rgba::WHITE),
+            position: Some(1.0),
+          },
+        ],
+      }),
+      repeat: BackgroundRepeat {
+        x: BackgroundRepeatKeyword::Repeat,
+        y: BackgroundRepeatKeyword::Repeat,
+      },
+      size: BackgroundSize::Explicit(
+        BackgroundSizeComponent::Length(Length::px(1.0)),
+        BackgroundSizeComponent::Length(Length::px(1.0)),
+      ),
+      ..BackgroundLayer::default()
+    }]);
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 256.0, 256.0),
+      vec![],
+      Arc::new(style),
+    );
+
+    let result = with_deadline(Some(&deadline), || {
+      DisplayListBuilder::new().build_with_stacking_tree_offset_checked(&fragment, Point::ZERO)
+    });
+
+    assert!(matches!(
+      result,
+      Err(Error::Render(RenderError::Timeout {
+        stage: RenderStage::Paint,
+        ..
+      }))
+    ));
   }
 }
