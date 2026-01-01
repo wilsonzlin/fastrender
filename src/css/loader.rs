@@ -474,50 +474,56 @@ pub fn absolutize_css_urls_cow<'a>(
           last_emitted = parser.position();
         }
         Token::Function(_)
-        | Token::ParenthesisBlock
-        | Token::SquareBracketBlock
-        | Token::CurlyBracketBlock => {
-          let open_len = parser.slice_from(token_start).len();
-          let mut nested_error: Option<RenderError> = None;
-          let parse_result = parser.parse_nested_block(|nested| {
-            let rewritten = match rewrite_urls_in_parser(nested, base_url, 0, deadline_counter) {
-              Ok(r) => r,
-              Err(err) => {
-                nested_error = Some(err);
-                return Err(nested.new_custom_error(()));
-              }
+          | Token::ParenthesisBlock
+          | Token::SquareBracketBlock
+          | Token::CurlyBracketBlock => {
+            let open_len = parser.slice_from(token_start).len();
+            let mut nested_error: Option<RenderError> = None;
+            let parse_result = parser.parse_nested_block(|nested| {
+              let nested_capacity_hint = nested.slice_from(nested.position()).len();
+              let rewritten = match rewrite_urls_in_parser(
+                nested,
+                base_url,
+                nested_capacity_hint,
+                deadline_counter,
+              ) {
+                Ok(r) => r,
+                Err(err) => {
+                  nested_error = Some(err);
+                  return Err(nested.new_custom_error(()));
+                }
+              };
+              let changed = matches!(rewritten, Cow::Owned(_));
+              Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, changed))
+            });
+
+            if let Some(err) = nested_error {
+              return Err(err);
+            }
+            let Ok((inner_rewritten, changed)) = parse_result else {
+              continue;
             };
-            let changed = matches!(rewritten, Cow::Owned(_));
-            Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, changed))
-          });
+            if !changed {
+              continue;
+            }
 
-          if let Some(err) = nested_error {
-            return Err(err);
-          }
-          let Ok((inner_rewritten, changed)) = parse_result else {
-            continue;
-          };
-          if !changed {
-            continue;
-          }
+            let block_text = parser.slice_from(token_start);
+            const CLOSING_LEN: usize = 1;
+            if block_text.len() < open_len + CLOSING_LEN {
+              continue;
+            }
 
-          let block_text = parser.slice_from(token_start);
-          const CLOSING_LEN: usize = 1;
-          if block_text.len() < open_len + CLOSING_LEN {
-            continue;
-          }
+            let chunk = parser.slice_from(last_emitted);
+            let prefix_len = chunk.len().saturating_sub(block_text.len());
+            let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
+            out.push_str(&chunk[..prefix_len]);
 
-          let chunk = parser.slice_from(last_emitted);
-          let prefix_len = chunk.len().saturating_sub(block_text.len());
-          let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
-          out.push_str(&chunk[..prefix_len]);
+            let close_part = &block_text[block_text.len() - CLOSING_LEN..];
+            out.push_str(&block_text[..open_len]);
+            out.push_str(inner_rewritten.as_ref());
+            out.push_str(close_part);
 
-          let close_part = &block_text[block_text.len() - CLOSING_LEN..];
-          out.push_str(&block_text[..open_len]);
-          out.push_str(inner_rewritten.as_ref());
-          out.push_str(close_part);
-
-          last_emitted = parser.position();
+            last_emitted = parser.position();
         }
         _ => {}
       }
