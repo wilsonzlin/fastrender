@@ -5591,6 +5591,45 @@ mod tests {
   }
 
   #[test]
+  fn flex_tree_build_times_out_in_later_loops_via_deadline_checks() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::time::Duration;
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    // Use fewer children than FLEX_DEADLINE_CHECK_STRIDE so the initial fingerprint loop alone would
+    // not trigger a periodic deadline check. The build should still time out because subsequent
+    // loops (style conversion + Taffy node construction) also perform deadline checks.
+    let child_count = FLEX_DEADLINE_CHECK_STRIDE / 3 + 1;
+    let children: Vec<BoxNode> = (0..child_count)
+      .map(|_| {
+        BoxNode::new_block(
+          create_item_style(10.0, 10.0),
+          FormattingContextType::Block,
+          vec![],
+        )
+      })
+      .collect();
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let fc = FlexFormattingContext::new();
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
+    let root_children: Vec<&BoxNode> = container.children.iter().collect();
+    let result = fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container,
+      &root_children,
+      &constraints,
+      &mut node_map,
+    );
+
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
   fn flex_intrinsic_inline_size_times_out_via_deadline_checks() {
     use crate::render_control::{DeadlineGuard, RenderDeadline};
     use std::time::Duration;

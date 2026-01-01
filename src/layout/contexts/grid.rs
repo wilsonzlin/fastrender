@@ -3920,6 +3920,41 @@ mod tests {
   }
 
   #[test]
+  fn grid_subgrid_tree_build_times_out_via_deadline_checks() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::time::Duration;
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let mut subgrid_style = ComputedStyle::default();
+    subgrid_style.display = CssDisplay::Grid;
+    subgrid_style.grid_row_subgrid = true;
+    let subgrid_style = Arc::new(subgrid_style);
+
+    let mut root = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    for _ in 0..(GRID_DEADLINE_CHECK_STRIDE + 16) {
+      root = BoxNode::new_block(subgrid_style.clone(), FormattingContextType::Grid, vec![root]);
+    }
+    let container = root;
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let gc = GridFormattingContext::new();
+    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let root_children: Vec<&BoxNode> = container.children.iter().collect();
+    let mut positioned_children = FxHashMap::default();
+    let result = gc.build_taffy_tree_children(
+      &mut taffy,
+      &container,
+      &root_children,
+      &constraints,
+      &mut positioned_children,
+    );
+
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
   fn grid_baseline_traversal_times_out_via_deadline_checks() {
     use crate::render_control::{DeadlineGuard, RenderDeadline};
     use std::time::Duration;
