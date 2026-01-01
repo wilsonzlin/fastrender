@@ -19,7 +19,7 @@ mod disk_cache_main {
   use clap::{ArgAction, Parser};
   use fastrender::css::encoding::decode_css_bytes;
   use fastrender::css::loader::{
-    absolutize_css_urls, extract_css_links, extract_embedded_css_urls,
+    absolutize_css_urls_cow, extract_css_links, extract_embedded_css_urls,
     link_rel_is_stylesheet_candidate, resolve_href, resolve_href_with_base,
   };
   use fastrender::css::parser::{extract_scoped_css_sources, parse_stylesheet, StylesheetSource};
@@ -354,9 +354,9 @@ mod disk_cache_main {
           self.summary.borrow_mut().fetched_imports += 1;
           let base = res.final_url.as_deref().unwrap_or(url);
           let decoded = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-          let rewritten = match absolutize_css_urls(&decoded, base) {
-            Ok(css) => css,
-            Err(_) => decoded,
+          let rewritten = match absolutize_css_urls_cow(&decoded, base) {
+            Ok(std::borrow::Cow::Owned(css)) => css,
+            Ok(std::borrow::Cow::Borrowed(_)) | Err(_) => decoded,
           };
 
           if let Some(css_asset_urls) = self.css_asset_urls {
@@ -653,11 +653,11 @@ mod disk_cache_main {
         match task {
           StylesheetTask::Inline(css) => {
             if opts.prefetch_css_url_assets {
-              let scan_css = match absolutize_css_urls(&css, base_url) {
+              let scan_css = match absolutize_css_urls_cow(&css, base_url) {
                 Ok(css) => css,
-                Err(_) => css.clone(),
+                Err(_) => std::borrow::Cow::Borrowed(css.as_str()),
               };
-              let discovered = discover_css_urls(&scan_css, base_url);
+              let discovered = discover_css_urls(scan_css.as_ref(), base_url);
               {
                 let mut set = css_asset_urls.borrow_mut();
                 for url in discovered {
@@ -702,11 +702,12 @@ mod disk_cache_main {
             Ok(res) => {
               summary.borrow_mut().fetched_css += 1;
               let sheet_base = res.final_url.as_deref().unwrap_or(&css_url);
-              let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-              let css_text = match absolutize_css_urls(&css_text, sheet_base) {
-                Ok(css) => css,
-                Err(_) => css_text,
-              };
+              let mut css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+              if let Ok(std::borrow::Cow::Owned(rewritten)) =
+                absolutize_css_urls_cow(&css_text, sheet_base)
+              {
+                css_text = rewritten;
+              }
 
               if opts.prefetch_css_url_assets {
                 let discovered = discover_css_urls(&css_text, sheet_base);
