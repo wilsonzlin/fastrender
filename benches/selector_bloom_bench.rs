@@ -80,7 +80,9 @@ fn build_branching_tree_html(depth: usize, branching: usize, class_variants: usi
     let _ = write!(html, "</{tag}>", tag = tag);
   }
 
-  let mut html = String::from("<html><head></head><body>");
+  // Include a doctype so the DOM parses in standards mode; quirks mode disables
+  // some bloom hashes (notably class/ID) for :has() pruning.
+  let mut html = String::from("<!doctype html><html><head></head><body>");
   build_level(&mut html, 0, depth, branching, class_variants);
   html.push_str("</body></html>");
   html
@@ -149,6 +151,19 @@ fn generate_descendant_styles(class_variants: usize, chain_lengths: &[usize]) ->
 }
 
 fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> String {
+  build_has_tree_html_inner(depth, branching, needle_stride, false)
+}
+
+fn build_has_tree_html_with_leaf_noise(depth: usize, branching: usize, needle_stride: usize) -> String {
+  build_has_tree_html_inner(depth, branching, needle_stride, true)
+}
+
+fn build_has_tree_html_inner(
+  depth: usize,
+  branching: usize,
+  needle_stride: usize,
+  include_unique_leaf_classes: bool,
+) -> String {
   fn estimated_has_tree_element_count(depth: usize, branching: usize) -> Option<u128> {
     // This builder expands an exponential tree:
     // - 1 <section> at every recursion node (levels 0..=depth)
@@ -201,11 +216,12 @@ fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> 
     max_depth: usize,
     branching: usize,
     needle_stride: usize,
+    include_unique_leaf_classes: bool,
     counter: &mut usize,
   ) {
     let _ = write!(
       html,
-      "<section class=\"layer{level}\" data-level=\"{level}\">",
+      "<section class=\"layer layer{level}\" data-level=\"{level}\">",
       level = level
     );
 
@@ -217,10 +233,28 @@ fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> 
       } else {
         ""
       };
+      let leaf_noise = if include_unique_leaf_classes {
+        // Add a unique, never-referenced class to stress bloom summary saturation / false positives.
+        // This is intentionally *not* used by the :has() selectors.
+        // Note: leaf_id is stable within this generated tree and monotonically increases.
+        // This will increase the number of distinct class hashes present in large subtrees.
+        // (Used by the summary-bits benchmark to demonstrate pruning improvements.)
+        // Keep the string short to avoid bloating HTML excessively.
+        // Example: u123
+        // (The \"u\" prefix avoids accidentally matching real class names in test selectors.)
+        // We include the space here so callers can just splice it into the class attribute.
+        // SAFETY: leaf_id is numeric so this is always valid UTF-8.
+        // (Just a comment for future readers; this is plain Rust.)
+        // NOTE: This allocates; acceptable for one-time bench setup.
+        format!(" u{leaf_id}")
+      } else {
+        String::new()
+      };
       let _ = write!(
         html,
-        "<div class=\"leaf{needle}\" data-leaf=\"{leaf_id}\"></div><div class=\"trail trail{level}\"></div>",
+        "<div class=\"leaf{needle}{leaf_noise}\" data-leaf=\"{leaf_id}\"></div><div class=\"trail trail{level}\"></div>",
         needle = needle,
+        leaf_noise = leaf_noise,
         leaf_id = leaf_id,
         level = level
       );
@@ -249,6 +283,7 @@ fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> 
         max_depth,
         branching,
         needle_stride,
+        include_unique_leaf_classes,
         counter,
       );
       html.push_str("</div>");
@@ -262,7 +297,9 @@ fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> 
     html.push_str("</section>");
   }
 
-  let mut html = String::from("<html><head></head><body>");
+  // Include a doctype so the DOM parses in standards mode; quirks mode disables
+  // some bloom hashes (notably class/ID) for :has() pruning.
+  let mut html = String::from("<!doctype html><html><head></head><body>");
   let mut counter = 0usize;
 
   // Guardrail: prevent accidental runaway allocations during benches.
@@ -279,7 +316,15 @@ set FASTR_BLOOM_BENCH_MAX_ELEMS to raise the cap"
     );
   }
 
-  build_level(&mut html, 0, depth, branching, needle_stride, &mut counter);
+  build_level(
+    &mut html,
+    0,
+    depth,
+    branching,
+    needle_stride,
+    include_unique_leaf_classes,
+    &mut counter,
+  );
   html.push_str("</body></html>");
   html
 }
@@ -312,6 +357,20 @@ fn generate_has_styles(max_depth: usize, needle_stride: usize) -> String {
       (level % 6) + 1,
       level = level,
       target_leaf = target_leaf
+    );
+  }
+  css
+}
+
+fn generate_has_pruning_stress_styles(missing_selectors: usize) -> String {
+  // Intentionally small declaration set; we care about :has() evaluation + pruning, not style work.
+  let mut css = String::from("body { margin: 0; }\n");
+  let _ = write!(css, ".layer:has(.needle) {{ padding-left: 1px; }}\n");
+  for idx in 0..missing_selectors {
+    let _ = write!(
+      css,
+      ".layer:has(.missing{idx}) {{ margin-left: {}px; }}\n",
+      (idx % 7) + 1
     );
   }
   css
@@ -630,12 +689,16 @@ fn selector_bloom_summary_bits_build_benchmark(c: &mut Criterion) {
 }
 
 fn has_selector_summary_bits_benchmark(c: &mut Criterion) {
-  let depth = 8;
-  let branching = 4;
-  let needle_stride = 23;
+  // Stress-case for bloom-summary false positives:
+  // - Inject unique leaf class names (never referenced by selectors) to saturate the summary.
+  // - Use many missing :has() selectors so false positives translate into expensive evaluations.
+  let depth = 5;
+  let branching = 3;
+  let needle_stride = 10_000;
+  let missing_selectors = 128;
 
-  let html = build_has_tree_html(depth, branching, needle_stride);
-  let css = generate_has_styles(depth, needle_stride);
+  let html = build_has_tree_html_with_leaf_noise(depth, branching, needle_stride);
+  let css = generate_has_pruning_stress_styles(missing_selectors);
 
   let dom = parse_html(&html).expect("parse html");
   let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
