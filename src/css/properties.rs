@@ -1807,6 +1807,7 @@ fn parse_linear_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
   if parts.len() < 2 {
     return None;
   }
+  let part_count = parts.len();
 
   let mut iter = parts.into_iter();
   let first = iter.next().unwrap();
@@ -1815,16 +1816,12 @@ fn parse_linear_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
     None => (180.0, Some(first)),
   };
 
-  let mut stops = Vec::new();
+  let mut stops = Vec::with_capacity(part_count.saturating_add(1));
   if let Some(stop) = first_stop {
-    if let Some(cs) = parse_color_stops(stop) {
-      stops.extend(cs);
-    }
+    let _ = parse_color_stop_segment(stop, &mut stops);
   }
   for part in iter {
-    if let Some(cs) = parse_color_stops(part) {
-      stops.extend(cs);
-    }
+    let _ = parse_color_stop_segment(part, &mut stops);
   }
 
   if stops.len() < 2 {
@@ -1954,9 +1951,7 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
 
   let mut stops = Vec::new();
   if !looks_like_prelude(parts[0]) {
-    if let Some(cs) = parse_color_stops(parts[0]) {
-      stops.extend(cs);
-    } else {
+    if !parse_color_stop_segment(parts[0], &mut stops) {
       parse_prelude(parts[0], &mut shape, &mut size, &mut position)?;
     }
   } else {
@@ -1964,9 +1959,7 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
   }
 
   for part in parts.iter().skip(1) {
-    if let Some(cs) = parse_color_stops(part) {
-      stops.extend(cs);
-    }
+    let _ = parse_color_stop_segment(part, &mut stops);
   }
 
   if stops.len() < 2 {
@@ -2220,7 +2213,7 @@ fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
   };
 
   let prelude = parts[0].trim();
-  let mut stops = Vec::new();
+  let mut stops = Vec::with_capacity(parts.len().saturating_add(1));
 
   // Conic gradients may have an optional `from <angle>` and/or `at <position>` prelude.
   //
@@ -2232,17 +2225,14 @@ fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
 
   if looks_like_prelude {
     parse_prelude(prelude, &mut from_angle, &mut position);
-  } else if let Some(cs) = parse_color_stops(prelude) {
-    // No prelude; treat the first segment as a stop.
-    stops.extend(cs);
+  } else if parse_color_stop_segment(prelude, &mut stops) {
+    // No prelude; the first segment is a stop.
   } else {
     parse_prelude(prelude, &mut from_angle, &mut position);
   }
 
   for part in parts.iter().skip(1) {
-    if let Some(cs) = parse_color_stops(part) {
-      stops.extend(cs);
-    }
+    let _ = parse_color_stop_segment(part, &mut stops);
   }
   if stops.len() < 2 {
     return None;
@@ -2382,43 +2372,53 @@ fn parse_angle(token: &str) -> Option<f32> {
   }
 }
 
-fn parse_color_stops(token: &str) -> Option<Vec<crate::css::types::ColorStop>> {
+fn parse_color_stop_segment(token: &str, stops: &mut Vec<crate::css::types::ColorStop>) -> bool {
   let trimmed = token.trim();
   if trimmed.is_empty() {
-    return None;
+    return false;
   }
 
-  let (color_part, position_parts) = split_color_and_positions(trimmed);
-  let color = Color::parse(color_part).ok()?;
+  let (color_part, first_pos, second_pos) = split_color_and_positions(trimmed);
+  let Ok(color) = Color::parse(color_part) else {
+    return false;
+  };
 
-  match position_parts.len() {
-    0 => Some(vec![crate::css::types::ColorStop {
-      color,
-      position: None,
-    }]),
-    1 => Some(vec![crate::css::types::ColorStop {
-      color,
-      position: parse_stop_position(position_parts[0]),
-    }]),
-    2 => {
-      let first = parse_stop_position(position_parts[0])?;
-      let second = parse_stop_position(position_parts[1])?;
-      Some(vec![
-        crate::css::types::ColorStop {
-          color: color.clone(),
-          position: Some(first),
-        },
-        crate::css::types::ColorStop {
-          color,
-          position: Some(second),
-        },
-      ])
+  match (first_pos, second_pos) {
+    (None, None) => {
+      stops.push(crate::css::types::ColorStop {
+        color,
+        position: None,
+      });
     }
-    _ => None,
+    (Some(pos), None) => {
+      stops.push(crate::css::types::ColorStop {
+        color,
+        position: Some(pos),
+      });
+    }
+    (Some(first), Some(second)) => {
+      stops.push(crate::css::types::ColorStop {
+        color: color.clone(),
+        position: Some(first),
+      });
+      stops.push(crate::css::types::ColorStop {
+        color,
+        position: Some(second),
+      });
+    }
+    (None, Some(_)) => {
+      // `split_color_and_positions` never returns a second position without a first.
+      stops.push(crate::css::types::ColorStop {
+        color,
+        position: None,
+      });
+    }
   }
+
+  true
 }
 
-fn split_color_and_positions(token: &str) -> (&str, Vec<&str>) {
+fn split_color_and_positions(token: &str) -> (&str, Option<f32>, Option<f32>) {
   fn split_last_segment(input: &str) -> Option<(&str, &str)> {
     let mut depth = 0i32;
     for (idx, ch) in input.char_indices().rev() {
@@ -2440,21 +2440,21 @@ fn split_color_and_positions(token: &str) -> (&str, Vec<&str>) {
   }
 
   let mut remainder = token;
-  let mut positions = Vec::new();
+  let mut first: Option<f32> = None;
+  let mut second: Option<f32> = None;
   for _ in 0..2 {
     let Some((head, tail)) = split_last_segment(remainder) else {
       break;
     };
-    if parse_stop_position(tail).is_some() {
-      positions.push(tail);
-      remainder = head;
-    } else {
+    let Some(pos) = parse_stop_position(tail) else {
       break;
-    }
+    };
+    second = first;
+    first = Some(pos);
+    remainder = head;
   }
 
-  positions.reverse();
-  (remainder, positions)
+  (remainder, first, second)
 }
 
 fn parse_stop_position(token: &str) -> Option<f32> {
