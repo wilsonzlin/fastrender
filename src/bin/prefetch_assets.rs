@@ -446,6 +446,9 @@ mod disk_cache_main {
     let mut inserted = 0usize;
 
     while let Some(node) = stack.pop() {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_IFRAMES_PER_PAGE {
         break;
       }
@@ -490,6 +493,9 @@ mod disk_cache_main {
 
     let mut inserted = 0usize;
     for caps in iframe_src.captures_iter(html) {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_IFRAMES_PER_PAGE {
         break;
       }
@@ -538,6 +544,9 @@ mod disk_cache_main {
 
     let mut inserted = 0usize;
     for caps in link_tag.captures_iter(html) {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_ICONS_PER_PAGE {
         break;
       }
@@ -590,6 +599,9 @@ mod disk_cache_main {
     let mut inserted = 0usize;
 
     while let Some(node) = stack.pop() {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_ICONS_PER_PAGE {
         break;
       }
@@ -643,6 +655,9 @@ mod disk_cache_main {
 
     let mut inserted = 0usize;
     for caps in video_poster.captures_iter(html) {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_VIDEO_POSTERS_PER_PAGE {
         break;
       }
@@ -679,6 +694,9 @@ mod disk_cache_main {
     let mut inserted = 0usize;
 
     while let Some(node) = stack.pop() {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_VIDEO_POSTERS_PER_PAGE {
         break;
       }
@@ -730,6 +748,9 @@ mod disk_cache_main {
 
     let mut inserted = 0usize;
     for caps in embed_doc.captures_iter(html) {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_EMBED_DOCS_PER_PAGE {
         break;
       }
@@ -769,6 +790,9 @@ mod disk_cache_main {
     let mut inserted = 0usize;
 
     while let Some(node) = stack.pop() {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
       if inserted >= MAX_EMBED_DOCS_PER_PAGE {
         break;
       }
