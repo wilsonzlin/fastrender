@@ -731,7 +731,7 @@ mod tests {
       SpreadMode::Repeat,
       &stops,
       &cache,
-      gradient_bucket(width.max(height)),
+      gradient_bucket(width.max(height).saturating_mul(2)),
     )
     .expect("lut rasterize")
     .expect("lut pixmap");
