@@ -43,6 +43,7 @@ fn render_offset(dx: f32) -> Pixmap {
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
   pixmap
 }
@@ -76,6 +77,7 @@ fn render_drop_shadow(dx: f32) -> Pixmap {
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
   pixmap
 }

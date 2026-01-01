@@ -6,7 +6,7 @@ use tiny_skia::Pixmap;
 #[test]
 fn color_font_caching_keeps_output_stable() {
   let font = load_fixture_font("colrv1-test.ttf");
-  let run = shaped_run(&font, 'A', 64.0, 0);
+  let run = shaped_run(&font, 'G', 64.0, 0);
 
   let mut rasterizer = TextRasterizer::new();
   rasterizer.reset_cache_stats();

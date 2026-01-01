@@ -117,6 +117,7 @@ fn gaussian_blur_resolves_single_value_per_axis_in_object_bbox_units() {
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
   let bounds = opaque_bounds(&pixmap).expect("blurred content should be visible");

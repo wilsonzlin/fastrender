@@ -16,6 +16,8 @@ fn solid_pixmap(width: u32, height: u32, color: PremultipliedColorU8) -> Pixmap 
 }
 
 fn with_fingerprint(filter: SvgFilter) -> SvgFilter {
+  let mut filter = filter;
+  filter.refresh_fingerprint();
   filter
 }
 

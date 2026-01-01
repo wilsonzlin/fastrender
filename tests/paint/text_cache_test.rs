@@ -38,7 +38,7 @@ fn glyphs_for_char(font: &LoadedFont, ch: char, font_size: f32) -> Vec<GlyphPosi
 #[test]
 fn caches_glyph_outlines_between_draws() {
   let font = load_subset_font();
-  let glyphs = glyphs_for_char(&font, 'A', 24.0);
+  let glyphs = glyphs_for_char(&font, 'W', 24.0);
   let instances: Vec<GlyphInstance> = glyphs
     .iter()
     .map(|g| GlyphInstance {

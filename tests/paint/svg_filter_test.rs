@@ -64,6 +64,7 @@ fn displacement_filter(scale: f32) -> SvgFilter {
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   filter
 }
 
@@ -136,6 +137,7 @@ fn displacement_map_interprets_map_in_color_interpolation_space() {
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
 
   let bbox = Rect::from_xywh(0.0, 0.0, primary.width() as f32, primary.height() as f32);
   apply_svg_filter(&filter, &mut primary, 1.0, bbox).unwrap();

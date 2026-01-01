@@ -1760,7 +1760,7 @@ impl SvgFilter {
     self.region.resolve(bbox)
   }
 
-  pub(crate) fn refresh_fingerprint(&mut self) {
+  pub fn refresh_fingerprint(&mut self) {
     self.fingerprint = svg_filter_fingerprint(self);
   }
 

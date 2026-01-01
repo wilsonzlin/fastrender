@@ -42,6 +42,7 @@ fn make_filter(kind: ColorMatrixKind, color_space: ColorInterpolationFilters) ->
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   filter
 }
 
@@ -65,6 +66,7 @@ fn color_matrix_respects_color_interpolation_filters() {
 
   let mut srgb_filter = filter_linear.clone();
   srgb_filter.color_interpolation_filters = ColorInterpolationFilters::SRGB;
+  srgb_filter.refresh_fingerprint();
   let mut srgb_result = base.clone();
   apply_svg_filter(&srgb_filter, &mut srgb_result, 1.0, bbox).unwrap();
 
@@ -141,6 +143,7 @@ fn blur_filter(color_space: ColorInterpolationFilters) -> SvgFilter {
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   filter
 }
 
