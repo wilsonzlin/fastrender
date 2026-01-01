@@ -3528,6 +3528,21 @@ fn layout_summary(layout: &LayoutDiagnostics) -> Option<String> {
     parts.push(format!("intrinsic {}", intrinsic_parts.join(" ")));
   }
 
+  let mut taffy_parts = Vec::new();
+  if let Some(evictions) = layout.taffy_flex_template_evictions {
+    if evictions > 0 {
+      taffy_parts.push(format!("flex_evictions={evictions}"));
+    }
+  }
+  if let Some(evictions) = layout.taffy_grid_template_evictions {
+    if evictions > 0 {
+      taffy_parts.push(format!("grid_evictions={evictions}"));
+    }
+  }
+  if !taffy_parts.is_empty() {
+    parts.push(format!("taffy_templates {}", taffy_parts.join(" ")));
+  }
+
   fn push_profile_kind(parts: &mut Vec<String>, label: &str, ms: Option<f64>, calls: Option<u64>) {
     match (ms, calls) {
       (Some(ms), Some(calls)) => {
@@ -4632,6 +4647,18 @@ fn report(args: ReportArgs) -> io::Result<()> {
     });
     stat_ranking_count!("layout.taffy_flex_measure_calls", |stats: &RenderStats| {
       stats.layout.taffy_flex_measure_calls
+    });
+    stat_ranking_count!("layout.taffy_flex_template_evictions", |stats: &RenderStats| {
+      stats
+        .layout
+        .taffy_flex_template_evictions
+        .map(|value| value as u64)
+    });
+    stat_ranking_count!("layout.taffy_grid_template_evictions", |stats: &RenderStats| {
+      stats
+        .layout
+        .taffy_grid_template_evictions
+        .map(|value| value as u64)
     });
     stat_ranking_count!("counts.dom_nodes", |stats: &RenderStats| stats
       .counts
