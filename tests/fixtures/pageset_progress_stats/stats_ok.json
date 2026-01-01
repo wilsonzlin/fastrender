@@ -4,13 +4,13 @@
   "total_ms": 1800.0,
   "stages_ms": {
     "fetch": 100.0,
-    "css": 200.0,
+    "css": 150.0,
     "cascade": 400.0,
-    "layout": 800.0,
+    "layout": 700.0,
     "paint": 300.0
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "layout",
   "last_good_commit": "",
   "last_regression_commit": "",
   "diagnostics": {
