@@ -6135,10 +6135,6 @@ impl FastRender {
         stats.as_deref_mut(),
       )?
     };
-    let mut stylesheet = style_set.document.clone();
-    for sheet in style_set.shadows.values() {
-      stylesheet.rules.extend(sheet.rules.clone());
-    }
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(&mut rec.stats.timings.css_inlining_ms, css_inlining_timer);
     }
@@ -6156,7 +6152,7 @@ impl FastRender {
     let style_load_start = timings_enabled.then(Instant::now);
     self.font_context.clear_web_fonts();
     let font_faces =
-      stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
+      style_set.collect_font_face_rules_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
     // Best-effort loading; rendering should continue even if a web font fails.
     let _ = self.font_context.load_web_fonts(
       &font_faces,
@@ -6164,8 +6160,9 @@ impl FastRender {
       Some(&used_codepoints),
     );
     let keyframes =
-      stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
-    let has_container_queries = stylesheet.has_container_rules();
+      style_set.collect_keyframes_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let has_container_queries = style_set.has_container_rules_any_scope();
+    let has_starting_style_rules = style_set.has_starting_style_rules_any_scope();
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(&mut rec.stats.timings.css_parse_ms, css_parse_timer);
     }
@@ -6190,7 +6187,7 @@ impl FastRender {
       let styled_tree = prepared.apply(target_fragment.as_deref(), None, None, None, deadline)?;
       (prepared, styled_tree)
     };
-    if options.animation_time.is_some() && stylesheet.has_starting_style_rules() {
+    if options.animation_time.is_some() && has_starting_style_rules {
       if let Ok(starting_tree) =
         apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
           &dom_with_state,
@@ -6216,6 +6213,22 @@ impl FastRender {
     let first_style_fingerprints =
       has_container_queries.then(|| styled_fingerprint_map(&styled_tree));
     let mut svg_filter_defs = crate::tree::box_generation::collect_svg_filter_defs(&styled_tree);
+
+    // Keep the stylesheet for the `PreparedDocument`/`LayoutArtifacts` API surface, but build it
+    // by moving rules out of the scoped `StyleSet` instead of cloning a combined AST up front.
+    let stylesheet = {
+      let StyleSet { mut document, shadows } = style_set;
+      if !shadows.is_empty() {
+        let mut shadow_entries: Vec<_> = shadows.into_iter().collect();
+        shadow_entries.sort_by_key(|(host, _)| *host);
+        let additional: usize = shadow_entries.iter().map(|(_, sheet)| sheet.rules.len()).sum();
+        document.rules.reserve(additional);
+        for (_host, mut sheet) in shadow_entries {
+          document.rules.append(&mut sheet.rules);
+        }
+      }
+      document
+    };
 
     let fallback_page_size = viewport_size;
     let page_rules =
@@ -6924,7 +6937,7 @@ impl FastRender {
       crate::layout::table::log_table_stats();
     }
 
-    if options.animation_time.is_some() && stylesheet.has_starting_style_rules() {
+    if options.animation_time.is_some() && has_starting_style_rules {
       fragment_tree.attach_starting_styles_from_boxes(&box_tree);
     }
 

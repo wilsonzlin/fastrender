@@ -149,6 +149,10 @@ name = "css_parse_pageset"
 harness = false
 
 [[bench]]
+name = "style_set_collectors"
+harness = false
+
+[[bench]]
 name = "reshape_cache_bench"
 harness = false
 
