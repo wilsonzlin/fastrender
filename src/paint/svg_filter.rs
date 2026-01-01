@@ -1549,9 +1549,12 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   }
 
   let fetcher = image_cache.fetcher();
-  let referrer = image_cache.base_url().filter(|url| !url.trim().is_empty());
+  let referrer = context
+    .as_ref()
+    .and_then(|ctx| ctx.document_url.as_deref())
+    .filter(|url| !url.trim().is_empty());
   let mut request = FetchRequest::image(&resource_url);
-  if let Some(referrer) = referrer.as_deref() {
+  if let Some(referrer) = referrer {
     request = request.with_referrer(referrer);
   }
   let resource = match fetcher.fetch_with_request(request) {
@@ -5851,11 +5854,12 @@ mod tests_composite {
 #[cfg(test)]
 mod filter_cache_tests {
   use super::*;
+  use crate::api::ResourceContext;
   use crate::image_loader::ImageCache;
-  use crate::resource::{FetchedResource, ResourceFetcher};
+  use crate::resource::{FetchDestination, FetchedResource, ResourceFetcher};
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicUsize, Ordering};
-  use std::sync::Arc;
+  use std::sync::{Arc, Mutex};
 
   #[derive(Clone)]
   struct TestFilterFetcher {
@@ -5896,6 +5900,37 @@ mod filter_cache_tests {
     format!(
       r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="{id}"><feGaussianBlur stdDeviation="2"/></filter></svg>"#
     )
+  }
+
+  #[derive(Default)]
+  struct RecordingRequestFetcher {
+    last_request: Mutex<Option<(String, FetchDestination, Option<String>)>>,
+  }
+
+  impl RecordingRequestFetcher {
+    fn take_request(&self) -> Option<(String, FetchDestination, Option<String>)> {
+      self.last_request.lock().ok()?.take()
+    }
+  }
+
+  impl ResourceFetcher for RecordingRequestFetcher {
+    fn fetch(&self, _url: &str) -> crate::Result<FetchedResource> {
+      panic!("unexpected ResourceFetcher::fetch() call; expected fetch_with_request()");
+    }
+
+    fn fetch_with_request(&self, req: FetchRequest<'_>) -> crate::Result<FetchedResource> {
+      if let Ok(mut guard) = self.last_request.lock() {
+        *guard = Some((
+          req.url.to_string(),
+          req.destination,
+          req.referrer.map(|v| v.to_string()),
+        ));
+      }
+      Ok(FetchedResource::new(
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="f"><feGaussianBlur stdDeviation="1"/></filter></svg>"#.to_vec(),
+        Some("image/svg+xml".to_string()),
+      ))
+    }
   }
 
   #[test]
@@ -5960,6 +5995,25 @@ mod filter_cache_tests {
       "cache should be keyed by resolved URL"
     );
     assert_eq!(filter_cache_len(), 1);
+  }
+
+  #[test]
+  fn load_svg_filter_fetches_with_image_destination_and_document_referrer() {
+    let fetcher = Arc::new(RecordingRequestFetcher::default());
+    let mut cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
+
+    let document_url = "https://example.com/page.html";
+    let mut context = ResourceContext::default();
+    context.document_url = Some(document_url.to_string());
+    cache.set_resource_context(Some(context));
+
+    let filter_url = "https://cdn.example.com/filter.svg#f";
+    let _filter = load_svg_filter(filter_url, &cache).expect("load svg filter");
+
+    let (requested_url, destination, referrer) = fetcher.take_request().expect("recorded request");
+    assert_eq!(requested_url, "https://cdn.example.com/filter.svg");
+    assert_eq!(destination, FetchDestination::Image);
+    assert_eq!(referrer.as_deref(), Some(document_url));
   }
 }
 
