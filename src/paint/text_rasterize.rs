@@ -1132,6 +1132,10 @@ impl TextRasterizer {
       cursor_y += glyph.y_advance;
     }
 
+    // Even if the glyph count is below the periodic stride (or the deadline expires during the
+    // last chunk of work), ensure we still surface the paint timeout.
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
+
     if diag_enabled {
       // Preserve the previous behavior of reporting cache sizes even when this run happens to be
       // entirely color glyphs (or otherwise doesn't touch one of the caches).
@@ -1391,6 +1395,8 @@ impl TextRasterizer {
       cursor_x += glyph.x_advance;
       cursor_y += glyph.y_advance;
     }
+
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     Ok(paths)
   }
@@ -1983,6 +1989,125 @@ mod tests {
     assert!(
       checks.load(Ordering::SeqCst) >= 2,
       "expected render deadline to be checked more than once (entry + periodic), got {}",
+      checks.load(Ordering::SeqCst)
+    );
+    assert!(
+      matches!(
+        result,
+        Err(Error::Render(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        }))
+      ),
+      "expected paint-stage timeout, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn text_rasterize_respects_deadline_timeout_for_short_runs() {
+    let font = FontContext::new()
+      .get_sans_serif()
+      .expect("expected bundled sans-serif font for tests");
+    let face = font.as_ttf_face().expect("parse test font");
+    let glyph_id = face
+      .glyph_index(' ')
+      .or_else(|| face.glyph_index('A'))
+      .expect("resolve glyph for deadline timeout test")
+      .0 as u32;
+
+    let glyphs = [GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 0.0,
+      y_advance: 0.0,
+    }];
+
+    let checks = Arc::new(AtomicUsize::new(0));
+    let checks_for_cb = Arc::clone(&checks);
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(move || {
+      let prev = checks_for_cb.fetch_add(1, Ordering::SeqCst);
+      prev >= 1
+    });
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let mut rasterizer = TextRasterizer::new();
+    let mut pixmap = new_pixmap(4, 4).unwrap();
+
+    let result = with_deadline(Some(&deadline), || {
+      rasterizer.render_glyph_run(
+        &glyphs,
+        &font,
+        16.0,
+        0.0,
+        0.0,
+        0,
+        &[],
+        0,
+        &[],
+        None,
+        0.0,
+        0.0,
+        Rgba::BLACK,
+        TextRenderState::default(),
+        &mut pixmap,
+      )
+    });
+
+    assert!(
+      checks.load(Ordering::SeqCst) >= 2,
+      "expected entry + final deadline checks for short runs, got {}",
+      checks.load(Ordering::SeqCst)
+    );
+    assert!(
+      matches!(
+        result,
+        Err(Error::Render(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        }))
+      ),
+      "expected paint-stage timeout, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn positioned_glyph_paths_respects_deadline_timeout_for_short_runs() {
+    let font = FontContext::new()
+      .get_sans_serif()
+      .expect("expected bundled sans-serif font for tests");
+    let face = font.as_ttf_face().expect("parse test font");
+    let glyph_id = face
+      .glyph_index(' ')
+      .or_else(|| face.glyph_index('A'))
+      .expect("resolve glyph for deadline timeout test")
+      .0 as u32;
+
+    let glyphs = [GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 0.0,
+      y_advance: 0.0,
+    }];
+
+    let checks = Arc::new(AtomicUsize::new(0));
+    let checks_for_cb = Arc::clone(&checks);
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(move || {
+      let prev = checks_for_cb.fetch_add(1, Ordering::SeqCst);
+      prev >= 1
+    });
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let mut rasterizer = TextRasterizer::new();
+
+    let result = with_deadline(Some(&deadline), || {
+      rasterizer.positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, None, &[])
+    });
+
+    assert!(
+      checks.load(Ordering::SeqCst) >= 2,
+      "expected entry + final deadline checks for short runs, got {}",
       checks.load(Ordering::SeqCst)
     );
     assert!(
