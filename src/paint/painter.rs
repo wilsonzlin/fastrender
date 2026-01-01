@@ -70,7 +70,8 @@ use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
 use crate::render_control::{
-  active_deadline, check_active, record_stage, with_deadline, RenderDeadline, StageHeartbeat,
+  active_deadline, check_active, check_active_periodic, record_stage, with_deadline,
+  RenderDeadline, StageHeartbeat,
 };
 use crate::scroll::ScrollState;
 #[cfg(test)]
@@ -9580,6 +9581,7 @@ fn apply_backdrop_filters(
   if filters.is_empty() {
     return Ok(());
   }
+  check_active(RenderStage::Paint)?;
   let (out_l, out_t, out_r, out_b) = compute_filter_outset(filters, filter_bounds, scale);
 
   let x = (bounds.min_x() - out_l).floor() as i32;
@@ -9627,14 +9629,26 @@ fn apply_backdrop_filters(
   let bytes_per_row = pixmap.width() as usize * 4;
   let region_row_bytes = region_w as usize * 4;
   let start = (clamped_y as usize * bytes_per_row) + clamped_x as usize * 4;
-  let data = pixmap.data();
-  let dest = region.data_mut();
-  for row in 0..region_h as usize {
-    let src_offset = start + row * bytes_per_row;
-    let dst_offset = row * region_row_bytes;
-    let src_slice = &data[src_offset..src_offset + region_row_bytes];
-    let dst_slice = &mut dest[dst_offset..dst_offset + region_row_bytes];
-    dst_slice.copy_from_slice(src_slice);
+  let copy_in = (|| -> RenderResult<()> {
+    let data = pixmap.data();
+    let dest = region.data_mut();
+    let mut deadline_counter = 0usize;
+    for row in 0..region_h as usize {
+      check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
+      let src_offset = start + row * bytes_per_row;
+      let dst_offset = row * region_row_bytes;
+      let src_slice = &data[src_offset..src_offset + region_row_bytes];
+      let dst_slice = &mut dest[dst_offset..dst_offset + region_row_bytes];
+      dst_slice.copy_from_slice(src_slice);
+    }
+    Ok(())
+  })();
+  if let Err(err) = copy_in {
+    scratch.region = Some(region);
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
   }
 
   let local_bbox = Rect::from_xywh(
@@ -9651,9 +9665,16 @@ fn apply_backdrop_filters(
     return Err(err);
   }
   if !radii.is_zero() {
-    apply_clip_mask_rect(&mut region, local_bbox, radii)?;
+    if let Err(err) = apply_clip_mask_rect(&mut region, local_bbox, radii) {
+      scratch.region = Some(region);
+      BACKDROP_FILTER_SCRATCH.with(|cell| {
+        *cell.borrow_mut() = scratch;
+      });
+      return Err(err);
+    }
   }
 
+  check_active(RenderStage::Paint)?;
   let mut paint = PixmapPaint::default();
   paint.blend_mode = SkiaBlendMode::SourceOver;
   pixmap.draw_pixmap(
@@ -11011,7 +11032,11 @@ fn mul_div_255_round(value: u8, alpha: u8) -> u8 {
   ((prod + 255) >> 8) as u8
 }
 
-fn apply_mask_rect_rgba(pixmap: &mut Pixmap, mask: &Mask, rect: ClipMaskDirtyRect) -> RenderResult<()> {
+fn apply_mask_rect_rgba(
+  pixmap: &mut Pixmap,
+  mask: &Mask,
+  rect: ClipMaskDirtyRect,
+) -> RenderResult<()> {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
     return Ok(());
   }
@@ -17690,6 +17715,53 @@ mod tests {
     assert!(
       allocations.is_empty(),
       "expected apply_backdrop_filters to reuse scratch pixmaps, got {allocations:?}"
+    );
+  }
+
+  #[test]
+  fn legacy_backdrop_filters_times_out_via_cancel_callback() {
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = BackdropFilterScratch::default();
+    });
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_cb = Arc::clone(&calls);
+    // Let the first deadline check through, then trigger cancellation on the next poll.
+    let cancel = Arc::new(move || calls_cb.fetch_add(1, Ordering::SeqCst) >= 1);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+
+    let mut pixmap = new_pixmap(128, 128).expect("pixmap");
+    pixmap.data_mut().fill(200);
+    let bounds = Rect::from_xywh(0.0, 0.0, 128.0, 128.0);
+    // Blur with sigma=0 is a no-op and won't call into the blur implementation, so this test
+    // asserts that apply_backdrop_filters itself periodically checks the active deadline.
+    let filters = vec![ResolvedFilter::Blur(0.0)];
+
+    let result = with_deadline(Some(&deadline), || {
+      apply_backdrop_filters(
+        &mut pixmap,
+        &bounds,
+        &filters,
+        BorderRadii::ZERO,
+        1.0,
+        bounds,
+      )
+    });
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(
+      calls.load(Ordering::SeqCst) >= 2,
+      "expected cancel callback to be polled more than once, got {}",
+      calls.load(Ordering::SeqCst)
     );
   }
 

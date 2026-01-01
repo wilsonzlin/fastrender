@@ -24,7 +24,6 @@ use common::render_pipeline::{
   render_document_with_artifacts, PreparedDocument, RenderConfigBundle, RenderSurface,
   CLI_RENDER_STACK_SIZE,
 };
-use stage_buckets::StageBuckets;
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
   RenderArtifacts, RenderCounts, RenderDiagnostics, RenderStats, ResourceDiagnostics, ResourceKind,
@@ -50,6 +49,7 @@ use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::text::font_db::FontConfig;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use stage_buckets::StageBuckets;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -2106,12 +2106,6 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   log.push_str(&format!("Final resource base: {}\n", doc.base_url));
   let dump_doc = doc.clone();
 
-  if let Some(timeout_ms) = args.soft_timeout_ms.filter(|ms| *ms > 0) {
-    let budget = Duration::from_millis(timeout_ms).min(hard_timeout);
-    let remaining = budget.saturating_sub(started.elapsed());
-    options.timeout = Some(remaining);
-  }
-
   record_stage(StageHeartbeat::CssInline);
   log.push_str("Stage: render\n");
   flush_log(&log, &args.log_path);
@@ -2386,10 +2380,7 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
       "  text_fallback_cpu: {}\n",
       fmt(t.text_fallback_cpu_ms)
     ));
-    log.push_str(&format!(
-      "  text_shape_cpu: {}\n",
-      fmt(t.text_shape_cpu_ms)
-    ));
+    log.push_str(&format!("  text_shape_cpu: {}\n", fmt(t.text_shape_cpu_ms)));
     log.push_str(&format!(
       "  text_rasterize_cpu: {}\n",
       fmt(t.text_rasterize_cpu_ms)
@@ -2788,7 +2779,10 @@ impl StageHeartbeatWriter {
           std::thread::sleep(Duration::from_millis(delay));
         }
       }
-      if matches!(stage, StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize) {
+      if matches!(
+        stage,
+        StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize
+      ) {
         if let Some(delay) = std::env::var("FASTR_TEST_PAINT_DELAY_MS")
           .ok()
           .and_then(|raw| raw.parse::<u64>().ok())
@@ -3378,7 +3372,9 @@ fn push_opt_ratio(
   let numerator = numerator
     .map(|v| v.to_string())
     .unwrap_or_else(|| "?".to_string());
-  let denom = denom.map(|v| v.to_string()).unwrap_or_else(|| "?".to_string());
+  let denom = denom
+    .map(|v| v.to_string())
+    .unwrap_or_else(|| "?".to_string());
   parts.push(format!("{label}={numerator}/{denom}"));
 }
 
@@ -3448,9 +3444,21 @@ fn text_summary(counts: &RenderCounts) -> Option<String> {
     }
   }
   push_opt_u64(&mut parts, "shape_cache_hits", counts.shaping_cache_hits);
-  push_opt_u64(&mut parts, "shape_cache_misses", counts.shaping_cache_misses);
-  push_opt_u64(&mut parts, "shape_cache_evict", counts.shaping_cache_evictions);
-  push_opt_usize(&mut parts, "shape_cache_entries", counts.shaping_cache_entries);
+  push_opt_u64(
+    &mut parts,
+    "shape_cache_misses",
+    counts.shaping_cache_misses,
+  );
+  push_opt_u64(
+    &mut parts,
+    "shape_cache_evict",
+    counts.shaping_cache_evictions,
+  );
+  push_opt_usize(
+    &mut parts,
+    "shape_cache_entries",
+    counts.shaping_cache_entries,
+  );
   push_opt_ratio(
     &mut parts,
     "fallback_entries",
@@ -3465,10 +3473,7 @@ fn text_summary(counts: &RenderCounts) -> Option<String> {
   );
   push_opt_usize(&mut parts, "fallback_shards", counts.fallback_cache_shards);
   if let Some(stats) = &counts.fallback_descriptor_stats {
-    parts.push(format!(
-      "fallback_desc_unique={}",
-      stats.unique_descriptors
-    ));
+    parts.push(format!("fallback_desc_unique={}", stats.unique_descriptors));
     parts.push(format!(
       "fallback_desc_families={}",
       stats.unique_family_signatures
@@ -3937,7 +3942,10 @@ fn print_render_stats(stats: &RenderStats, indent: &str, verbose_text: bool) -> 
       if let Some(desc) = stats.counts.fallback_descriptor_stats.as_ref() {
         if !desc.samples.is_empty() {
           text.push(' ');
-          text.push_str(&format!("fallback_desc_samples=[{}]", desc.samples.join("; ")));
+          text.push_str(&format!(
+            "fallback_desc_samples=[{}]",
+            desc.samples.join("; ")
+          ));
         }
       }
     }
@@ -4146,22 +4154,26 @@ fn eprint_offending_stage_sum_exceeds_total(progresses: &[LoadedProgress], stems
       let entry = progresses.iter().find(|p| &p.stem == stem)?;
       let total_ms = entry.progress.total_ms.unwrap_or(0.0);
       let sum_ms = entry.progress.stages_ms.sum();
-      let ratio = if total_ms > 0.0 { sum_ms / total_ms } else { 0.0 };
+      let ratio = if total_ms > 0.0 {
+        sum_ms / total_ms
+      } else {
+        0.0
+      };
       Some((stem.clone(), total_ms, sum_ms, ratio))
     })
     .collect();
-  offenders.sort_by(|(a_stem, a_total, a_sum, a_ratio), (b_stem, b_total, b_sum, b_ratio)| {
-    b_ratio
-      .total_cmp(a_ratio)
-      .then_with(|| b_sum.total_cmp(a_sum))
-      .then_with(|| b_total.total_cmp(a_total))
-      .then_with(|| a_stem.cmp(b_stem))
-  });
+  offenders.sort_by(
+    |(a_stem, a_total, a_sum, a_ratio), (b_stem, b_total, b_sum, b_ratio)| {
+      b_ratio
+        .total_cmp(a_ratio)
+        .then_with(|| b_sum.total_cmp(a_sum))
+        .then_with(|| b_total.total_cmp(a_total))
+        .then_with(|| a_stem.cmp(b_stem))
+    },
+  );
   let shown = offenders.len().min(REPORT_OFFENDING_STEMS_LIMIT);
   for (stem, total_ms, sum_ms, ratio) in offenders.iter().take(shown) {
-    eprintln!(
-      "  {stem} total={total_ms:.2}ms stage_sum={sum_ms:.2}ms ratio={ratio:.2}x"
-    );
+    eprintln!("  {stem} total={total_ms:.2}ms stage_sum={sum_ms:.2}ms ratio={ratio:.2}x");
   }
   if offenders.len() > shown {
     eprintln!(
@@ -4691,12 +4703,12 @@ fn report(args: ReportArgs) -> io::Result<()> {
     stat_ranking_ms!("timings.paint_rasterize_ms", |stats: &RenderStats| stats
       .timings
       .paint_rasterize_ms);
-    stat_ranking_ms!("layout.taffy_grid_compute_cpu_ms", |stats: &RenderStats| stats
-      .layout
-      .taffy_grid_compute_cpu_ms);
-    stat_ranking_ms!("layout.taffy_flex_compute_cpu_ms", |stats: &RenderStats| stats
-      .layout
-      .taffy_flex_compute_cpu_ms);
+    stat_ranking_ms!("layout.taffy_grid_compute_cpu_ms", |stats: &RenderStats| {
+      stats.layout.taffy_grid_compute_cpu_ms
+    });
+    stat_ranking_ms!("layout.taffy_flex_compute_cpu_ms", |stats: &RenderStats| {
+      stats.layout.taffy_flex_compute_cpu_ms
+    });
     stat_ranking_ms!("paint.gradient_ms", |stats: &RenderStats| stats
       .paint
       .gradient_ms);
@@ -4707,18 +4719,24 @@ fn report(args: ReportArgs) -> io::Result<()> {
     stat_ranking_count!("layout.taffy_flex_measure_calls", |stats: &RenderStats| {
       stats.layout.taffy_flex_measure_calls
     });
-    stat_ranking_count!("layout.taffy_flex_template_evictions", |stats: &RenderStats| {
-      stats
-        .layout
-        .taffy_flex_template_evictions
-        .map(|value| value as u64)
-    });
-    stat_ranking_count!("layout.taffy_grid_template_evictions", |stats: &RenderStats| {
-      stats
-        .layout
-        .taffy_grid_template_evictions
-        .map(|value| value as u64)
-    });
+    stat_ranking_count!(
+      "layout.taffy_flex_template_evictions",
+      |stats: &RenderStats| {
+        stats
+          .layout
+          .taffy_flex_template_evictions
+          .map(|value| value as u64)
+      }
+    );
+    stat_ranking_count!(
+      "layout.taffy_grid_template_evictions",
+      |stats: &RenderStats| {
+        stats
+          .layout
+          .taffy_grid_template_evictions
+          .map(|value| value as u64)
+      }
+    );
     stat_ranking_count!("counts.dom_nodes", |stats: &RenderStats| stats
       .counts
       .dom_nodes
@@ -5714,13 +5732,14 @@ fn run_queue(
         let mut entry = running.swap_remove(i);
         let kill_result = entry.child.kill();
         let waited = entry.child.wait();
-        let exit_summary = waited
-          .as_ref()
-          .map(summarize_exit_status)
-          .unwrap_or(ExitStatusSummary {
-            code: None,
-            signal: None,
-          });
+        let exit_summary =
+          waited
+            .as_ref()
+            .map(summarize_exit_status)
+            .unwrap_or(ExitStatusSummary {
+              code: None,
+              signal: None,
+            });
         let exit_str = format_exit_status(exit_summary);
         let crash_at_timeout = hard_timeout_exit_indicates_crash(exit_summary, &kill_result);
         let progress_written = progress_sentinel_path(&entry.item.stage_path).exists();
@@ -5813,25 +5832,26 @@ fn run_queue(
           let progress_written = progress_sentinel_path(&entry.item.stage_path).exists();
           if progress_written {
             if let Some(p) = read_progress(&entry.item.progress_path) {
-            if p.status != ProgressStatus::Ok {
-              let note = if p.auto_notes.trim().is_empty() {
-                p.notes.as_str()
-              } else {
-                p.auto_notes.as_str()
-              };
-              let short: String = note.chars().take(120).collect();
-              eprintln!(
-                "FAIL {} {:?}: {} (exit: {})",
-                entry.item.cache_stem, p.status, short, exit_str
-              );
-            }
+              if p.status != ProgressStatus::Ok {
+                let note = if p.auto_notes.trim().is_empty() {
+                  p.notes.as_str()
+                } else {
+                  p.auto_notes.as_str()
+                };
+                let short: String = note.chars().take(120).collect();
+                eprintln!(
+                  "FAIL {} {:?}: {} (exit: {})",
+                  entry.item.cache_stem, p.status, short, exit_str
+                );
+              }
             } else {
               // Sentinel says the worker wrote progress, but the file isn't readable.
               let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
               let mut progress = PageProgress::new(entry.item.url.clone());
               progress.status = ProgressStatus::Panic;
               progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
-              progress.auto_notes = "progress sentinel present but progress file unreadable".to_string();
+              progress.auto_notes =
+                "progress sentinel present but progress file unreadable".to_string();
               progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
               if let Some(stage) = heartbeat_stage {
                 ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
