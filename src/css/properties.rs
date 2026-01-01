@@ -2,9 +2,9 @@
 //!
 //! Parses individual CSS property values.
 
+use super::types::BoxShadow;
 use super::types::GradientPosition;
 use super::types::GradientPositionComponent;
-use super::types::BoxShadow;
 use super::types::PropertyValue;
 use super::types::RadialGradientShape;
 use super::types::RadialGradientSize;

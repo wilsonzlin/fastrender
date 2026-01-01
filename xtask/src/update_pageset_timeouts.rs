@@ -44,6 +44,10 @@ pub struct UpdatePagesetTimeoutsArgs {
   #[arg(long)]
   pub allow_missing_resources: bool,
 
+  /// Capture mode used when running `bundle_page fetch` for missing fixtures.
+  #[arg(long, value_enum, default_value_t = FixtureCaptureMode::Crawl)]
+  pub capture_mode: FixtureCaptureMode,
+
   /// Print what would change without writing files
   #[arg(long)]
   pub dry_run: bool,
@@ -61,6 +65,15 @@ pub enum PagesetTimeoutSelectionStrategy {
   Slowest,
   /// Prioritize coverage across timeout stages and OK-page hotspots.
   Coverage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "snake_case")]
+pub enum FixtureCaptureMode {
+  /// Fetch the page and capture subresources by rendering it once (historical behavior).
+  Render,
+  /// Fetch the page and discover subresources by parsing HTML + CSS without rendering.
+  Crawl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -181,12 +194,17 @@ pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()
   for entry in &missing {
     let fixture_dir = args.fixtures_root.join(&entry.name);
     let bundle_path = default_bundle_path(&entry.name);
+    let capture_flag = match args.capture_mode {
+      FixtureCaptureMode::Render => "",
+      FixtureCaptureMode::Crawl => " --no-render",
+    };
     eprintln!("  - {} ({})", entry.name, entry.url);
     eprintln!("    Create it with:");
     eprintln!(
-      "      cargo run --release --bin bundle_page -- fetch '{}' --out '{}' --viewport {}x{} --dpr {}",
+      "      cargo run --release --bin bundle_page -- fetch '{}' --out '{}'{} --viewport {}x{} --dpr {}",
       entry.url,
       bundle_path.display(),
+      capture_flag,
       entry.viewport[0],
       entry.viewport[1],
       entry.dpr
@@ -229,7 +247,11 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs)
     bundle_cmd
       .args(["run", "--release", "--bin", "bundle_page", "--"])
       .args(["fetch", &entry.url])
-      .args(["--out", bundle_path.to_string_lossy().as_ref()])
+      .args(["--out", bundle_path.to_string_lossy().as_ref()]);
+    if args.capture_mode == FixtureCaptureMode::Crawl {
+      bundle_cmd.arg("--no-render");
+    }
+    bundle_cmd
       .args([
         "--viewport",
         &format!("{}x{}", entry.viewport[0], entry.viewport[1]),

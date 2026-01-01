@@ -1941,6 +1941,11 @@ mod tests {
               "filter_cache_misses": null,
               "blur_cache_hits": null,
               "blur_cache_misses": null,
+              "blur_calls": null,
+              "blur_ms": null,
+              "blur_bytes": null,
+              "blur_pixels": null,
+              "blur_cancellations": null,
               "blur_tiles": null
             },
             "resources": {
