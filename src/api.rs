@@ -1742,12 +1742,22 @@ pub struct LayoutDiagnostics {
   pub taffy_nodes_reused: Option<usize>,
   pub taffy_style_cache_hits: Option<usize>,
   pub taffy_style_cache_misses: Option<usize>,
+  /// Accumulated time spent inside Taffy's flex layout computations during this render.
+  ///
+  /// This is a sum of per-call wall times across the entire render (including relayout passes such
+  /// as container queries), and across rayon worker threads. As a result, it represents
+  /// "core-milliseconds" and may exceed the render's wall-clock timings (`layout_ms`, `total_ms`).
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub taffy_flex_compute_ms: Option<f64>,
+  /// Accumulated time spent inside Taffy's grid layout computations during this render.
+  ///
+  /// See [`taffy_flex_compute_ms`](Self::taffy_flex_compute_ms) for interpretation notes.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub taffy_grid_compute_ms: Option<f64>,
+  /// Number of measure callback invocations performed by Taffy during flex layout.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub taffy_flex_measure_calls: Option<u64>,
+  /// Number of measure callback invocations performed by Taffy during grid layout.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub taffy_grid_measure_calls: Option<u64>,
   pub fragment_deep_clones: Option<usize>,
@@ -3605,19 +3615,19 @@ impl FastRender {
       }
     }
     let diagnostics_level = options.diagnostics_level;
-    let mut stats_recorder = (!matches!(diagnostics_level, DiagnosticsLevel::None))
-      .then(|| RenderStatsRecorder::new(diagnostics_level));
+    let diagnostics_enabled = !matches!(diagnostics_level, DiagnosticsLevel::None);
     let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
       Some(crate::style::cascade::cascade_profile_enabled())
     } else {
       None
     };
-    let _diagnostics_session = if stats_recorder.is_some() {
-      Some(DiagnosticsSessionGuard::acquire())
-    } else {
-      None
-    };
-    if stats_recorder.is_some() {
+    // Acquire the session lock before enabling any diagnostics modules. These diagnostics counters
+    // are global (process-wide) and will otherwise clobber each other if multiple renders begin
+    // collecting at the same time.
+    let _diagnostics_session = diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
+    let mut stats_recorder =
+      diagnostics_enabled.then(|| RenderStatsRecorder::new(diagnostics_level));
+    if diagnostics_enabled {
       crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
@@ -4696,18 +4706,15 @@ impl FastRender {
       }
     }
     let diagnostics_level = options.diagnostics_level;
-    let mut stats_recorder = (!matches!(diagnostics_level, DiagnosticsLevel::None))
-      .then(|| RenderStatsRecorder::new(diagnostics_level));
+    let diagnostics_enabled = !matches!(diagnostics_level, DiagnosticsLevel::None);
     let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
       Some(crate::style::cascade::cascade_profile_enabled())
     } else {
       None
     };
-    let _diagnostics_session = if stats_recorder.is_some() {
-      Some(DiagnosticsSessionGuard::acquire())
-    } else {
-      None
-    };
+    let _diagnostics_session = diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
+    let mut stats_recorder =
+      diagnostics_enabled.then(|| RenderStatsRecorder::new(diagnostics_level));
     if let Some(stats) = stats_recorder.as_mut() {
       crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
@@ -4875,18 +4882,12 @@ impl FastRender {
         options.diagnostics_level = env_level;
       }
     }
+    let local_diagnostics_enabled =
+      stats.is_none() && !matches!(options.diagnostics_level, DiagnosticsLevel::None);
+    let _diagnostics_session = local_diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
     let mut local_recorder =
-      if stats.is_none() && !matches!(options.diagnostics_level, DiagnosticsLevel::None) {
-        Some(RenderStatsRecorder::new(options.diagnostics_level))
-      } else {
-        None
-      };
-    let _diagnostics_session = if stats.is_none() && local_recorder.is_some() {
-      Some(DiagnosticsSessionGuard::acquire())
-    } else {
-      None
-    };
-    if stats.is_none() && local_recorder.is_some() {
+      local_diagnostics_enabled.then(|| RenderStatsRecorder::new(options.diagnostics_level));
+    if local_diagnostics_enabled {
       crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
@@ -4896,8 +4897,7 @@ impl FastRender {
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
     }
-    let _cascade_profile_override = if stats.is_none()
-      && local_recorder.is_some()
+    let _cascade_profile_override = if local_diagnostics_enabled
       && matches!(options.diagnostics_level, DiagnosticsLevel::Verbose)
     {
       Some(CascadeProfileOverride::enable())
@@ -4997,18 +4997,15 @@ impl FastRender {
         }
       }
       let diagnostics_level = options.diagnostics_level;
-      let mut stats_recorder = (!matches!(diagnostics_level, DiagnosticsLevel::None))
-        .then(|| RenderStatsRecorder::new(diagnostics_level));
-      let restore_cascade_profile = if stats_recorder.as_ref().is_some_and(|rec| rec.verbose()) {
+      let diagnostics_enabled = !matches!(diagnostics_level, DiagnosticsLevel::None);
+      let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
         Some(crate::style::cascade::cascade_profile_enabled())
       } else {
         None
       };
-      let _diagnostics_session = if stats_recorder.is_some() {
-        Some(DiagnosticsSessionGuard::acquire())
-      } else {
-        None
-      };
+      let _diagnostics_session = diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
+      let mut stats_recorder =
+        diagnostics_enabled.then(|| RenderStatsRecorder::new(diagnostics_level));
       if let Some(stats) = stats_recorder.as_mut() {
         crate::resource::enable_resource_cache_diagnostics();
         crate::image_loader::enable_image_cache_diagnostics();
@@ -10184,6 +10181,7 @@ mod tests {
       .parse_html("<div><p id=content>Hello</p></div>")
       .unwrap();
     let trace = TraceHandle::disabled();
+    let _diagnostics_session = DiagnosticsSessionGuard::acquire();
     let mut stats = RenderStatsRecorder::new(DiagnosticsLevel::Basic);
     let artifacts = renderer
       .layout_document_for_media_with_artifacts(
@@ -10220,6 +10218,7 @@ mod tests {
       .unwrap();
     let trace = TraceHandle::disabled();
     let mut renderer = renderer;
+    let _diagnostics_session = DiagnosticsSessionGuard::acquire();
     let mut stats = RenderStatsRecorder::new(DiagnosticsLevel::Basic);
     let artifacts = renderer
       .layout_document_for_media_with_artifacts(

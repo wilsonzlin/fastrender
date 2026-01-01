@@ -9,6 +9,10 @@
 //! - wall time spent inside `taffy::TaffyTree::compute_layout_with_measure(_and_cancel)`, and
 //! - how many times the measure callback is invoked,
 //! split by Flex vs Grid.
+//!
+//! Note: the recorded compute durations are accumulated across *all* Taffy invocations in a render
+//! (and across rayon worker threads). This means the resulting `*_compute_ms` values act like
+//! "core-milliseconds" and may exceed wall-clock timings for the overall render.
 
 use crate::geometry::Size;
 use rustc_hash::{FxHashMap, FxHasher};
@@ -593,20 +597,8 @@ mod tests {
     let viewport = Size::new(800.0, 600.0);
     let tpl = template();
 
-    let key1 = TaffyNodeCacheKey::new(
-      TaffyAdapterKind::Flex,
-      1,
-      1,
-      0,
-      viewport,
-    );
-    let key2 = TaffyNodeCacheKey::new(
-      TaffyAdapterKind::Flex,
-      2,
-      1,
-      0,
-      viewport,
-    );
+    let key1 = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, 1, 1, 0, viewport);
+    let key2 = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, 2, 1, 0, viewport);
 
     cache.insert(key1, tpl.clone());
     cache.insert(key2, tpl.clone());
@@ -633,13 +625,7 @@ mod tests {
     let mut expected = Vec::new();
     for idx in 0..32usize {
       let tpl = template();
-      let key = TaffyNodeCacheKey::new(
-        TaffyAdapterKind::Flex,
-        idx + 1,
-        1,
-        idx as u64,
-        viewport,
-      );
+      let key = TaffyNodeCacheKey::new(TaffyAdapterKind::Flex, idx + 1, 1, idx as u64, viewport);
       cache.insert(key, tpl.clone());
       expected.push((key, tpl));
     }
