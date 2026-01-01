@@ -1870,8 +1870,8 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
       return None;
     }
     for idx in 0..=bytes.len() - 4 {
-      if bytes[idx] == b' '
-        && bytes[idx + 3] == b' '
+      if bytes[idx].is_ascii_whitespace()
+        && bytes[idx + 3].is_ascii_whitespace()
         && bytes[idx + 1].to_ascii_lowercase() == b'a'
         && bytes[idx + 2].to_ascii_lowercase() == b't'
       {
@@ -2963,6 +2963,24 @@ mod tests {
     };
     assert!((position.x.alignment - 0.0).abs() < 1e-6);
     assert!((position.y.alignment - 0.0).abs() < 1e-6);
+    assert_eq!(stops.len(), 2);
+  }
+
+  #[test]
+  fn parses_radial_gradient_with_tab_separated_at() {
+    let value = "radial-gradient(circle\tat\tcenter, red, blue)";
+    let PropertyValue::RadialGradient {
+      shape,
+      position,
+      stops,
+      ..
+    } = parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected radial gradient");
+    };
+    assert!(matches!(shape, RadialGradientShape::Circle));
+    assert!((position.x.alignment - 0.5).abs() < 1e-6);
+    assert!((position.y.alignment - 0.5).abs() < 1e-6);
     assert_eq!(stops.len(), 2);
   }
 
