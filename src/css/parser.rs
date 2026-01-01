@@ -3906,20 +3906,8 @@ fn parse_declaration<'i, 't>(
   })
 }
 
-fn property_needs_raw_value(property: &str) -> bool {
-  matches!(
-    property,
-    "scroll-timeline"
-      | "view-timeline"
-      | "animation-timeline"
-      | "animation-range"
-      | "animation-name"
-      | "transition-property"
-      | "transition-duration"
-      | "transition-delay"
-      | "transition-timing-function"
-      | "transition"
-  )
+fn property_needs_raw_value(_property: &str) -> bool {
+  false
 }
 
 fn parse_declaration_collecting_errors<'i, 't>(
@@ -4656,11 +4644,15 @@ mod tests {
   }
 
   #[test]
-  fn transition_declarations_preserve_raw_value() {
+  fn transition_declarations_parse_as_raw_keyword() {
     let decls = parse_declarations("transition:opacity 1s;");
     assert_eq!(decls.len(), 1);
     assert_eq!(decls[0].property, "transition");
-    assert_eq!(decls[0].raw_value, "opacity 1s");
+    assert!(decls[0].raw_value.is_empty());
+    match &decls[0].value {
+      PropertyValue::Keyword(raw) => assert_eq!(raw, "opacity 1s"),
+      other => panic!("expected keyword, got {:?}", other),
+    }
   }
 
   #[test]

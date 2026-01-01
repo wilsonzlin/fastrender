@@ -4237,6 +4237,15 @@ fn decl_raw_text(decl: &Declaration) -> &str {
   }
 }
 
+#[inline]
+fn declaration_css_text_str<'a>(decl: &'a Declaration, resolved_css_text: &'a str) -> &'a str {
+  if !resolved_css_text.is_empty() {
+    resolved_css_text
+  } else {
+    decl_raw_text(decl)
+  }
+}
+
 pub fn apply_declaration_with_base(
   styles: &mut ComputedStyle,
   decl: &Declaration,
@@ -4318,11 +4327,7 @@ pub fn apply_declaration_with_base(
       // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
       _ => return,
     };
-  let resolved_css_text_str = if resolved_css_text.is_empty() {
-    decl.raw_value.as_str()
-  } else {
-    resolved_css_text.as_str()
-  };
+  let resolved_css_text_str = declaration_css_text_str(decl, resolved_css_text.as_str());
   let order = styles.logical.next_order();
   if let Some(global) = global_keyword(&resolved_value) {
     if apply_global_keyword(
@@ -12953,7 +12958,7 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::css::parser::parse_stylesheet;
+  use crate::css::parser::{parse_declarations, parse_stylesheet};
   use crate::css::properties::parse_property_value;
   use crate::style::custom_properties::{CustomPropertyRegistry, PropertyRule};
   use crate::geometry::Size;
@@ -13057,6 +13062,74 @@ mod tests {
 
     apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
     assert_eq!(style.object_fit, ObjectFit::Cover);
+  }
+
+  #[test]
+  fn transition_declaration_is_raw_keyword_and_applies() {
+    let decls = parse_declarations("transition: opacity 1s linear 2s;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    assert_eq!(decl.property, "transition");
+    assert!(decl.raw_value.is_empty());
+    match &decl.value {
+      PropertyValue::Keyword(raw) => assert_eq!(raw, "opacity 1s linear 2s"),
+      other => panic!("expected keyword, got {:?}", other),
+    }
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.transition_properties,
+      vec![TransitionProperty::Name("opacity".to_string())]
+    );
+    assert_eq!(styles.transition_durations, vec![1000.0]);
+    assert_eq!(styles.transition_delays, vec![2000.0]);
+    assert_eq!(
+      styles.transition_timing_functions,
+      vec![TransitionTimingFunction::Linear]
+    );
+  }
+
+  #[test]
+  fn animation_name_declaration_is_raw_keyword_and_applies() {
+    let decls = parse_declarations("animation-name: fade, slide;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    assert_eq!(decl.property, "animation-name");
+    assert!(decl.raw_value.is_empty());
+    match &decl.value {
+      PropertyValue::Keyword(raw) => assert_eq!(raw, "fade, slide"),
+      other => panic!("expected keyword, got {:?}", other),
+    }
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.animation_names,
+      vec!["fade".to_string(), "slide".to_string()]
+    );
   }
 
   #[test]

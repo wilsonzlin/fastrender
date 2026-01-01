@@ -33,6 +33,22 @@ pub enum DeclarationContext {
   Page,
 }
 
+fn is_raw_only_property(property: &str) -> bool {
+  matches!(
+    property,
+    "scroll-timeline"
+      | "view-timeline"
+      | "animation-timeline"
+      | "animation-range"
+      | "animation-name"
+      | "transition-property"
+      | "transition-duration"
+      | "transition-delay"
+      | "transition-timing-function"
+      | "transition"
+  )
+}
+
 /// Set of property names that the engine understands in standard style declarations.
 ///
 /// Unknown properties are dropped during parsing (per CSS 2.1 §4.2) and treated as unsupported
@@ -944,6 +960,15 @@ fn parse_property_value_in_context_internal(
   // Unknown properties are ignored per the CSS error-handling rules.
   if !property_allowed_in_context(context, property) {
     return None;
+  }
+
+  if is_raw_only_property(property) {
+    let trimmed = value_str.trim();
+    if trimmed.is_empty() {
+      return None;
+    }
+    let trimmed = trimmed.trim_end_matches("!important").trim();
+    return Some(PropertyValue::Keyword(trimmed.to_string()));
   }
 
   let trimmed = value_str.trim();
