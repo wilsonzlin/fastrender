@@ -331,29 +331,58 @@ mod disk_cache_main {
     lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
   }
 
-  fn insert_unique_with_cap(set: &mut BTreeSet<String>, url: String, max: usize) -> bool {
+  fn insert_unique_with_cap(
+    all: &RefCell<BTreeSet<String>>,
+    set: &mut BTreeSet<String>,
+    url: String,
+    max_total: usize,
+    max_set: usize,
+  ) -> bool {
     if set.contains(&url) {
       return true;
     }
-    if max != 0 && set.len() >= max {
+    if max_set != 0 && set.len() >= max_set {
       return false;
     }
+
+    let mut all = all.borrow_mut();
+    if all.contains(&url) {
+      // Deduplicate across all discovery sources: do not schedule the same URL for multiple
+      // fetch loops (e.g. an image referenced both from HTML and CSS).
+      return true;
+    }
+    if max_total != 0 && all.len() >= max_total {
+      return false;
+    }
+    all.insert(url.clone());
     set.insert(url);
     true
   }
 
-  fn record_image_candidate(set: &mut BTreeSet<String>, url: &str, max: usize) {
+  fn record_image_candidate(
+    all: &RefCell<BTreeSet<String>>,
+    set: &mut BTreeSet<String>,
+    url: &str,
+    max_total: usize,
+    max_set: usize,
+  ) {
     let Some(normalized) = normalize_prefetch_url(url) else {
       return;
     };
-    let _ = insert_unique_with_cap(set, normalized, max);
+    let _ = insert_unique_with_cap(all, set, normalized, max_total, max_set);
   }
 
-  fn record_document_candidate(set: &mut BTreeSet<String>, url: &str, max: usize) {
+  fn record_document_candidate(
+    all: &RefCell<BTreeSet<String>>,
+    set: &mut BTreeSet<String>,
+    url: &str,
+    max_total: usize,
+    max_set: usize,
+  ) {
     let Some(normalized) = normalize_prefetch_url(url) else {
       return;
     };
-    let _ = insert_unique_with_cap(set, normalized, max);
+    let _ = insert_unique_with_cap(all, set, normalized, max_total, max_set);
   }
 
   fn link_rel_is_icon_candidate(rel_tokens: &[String]) -> bool {
@@ -379,6 +408,7 @@ mod disk_cache_main {
   }
 
   fn record_iframe_document_candidates(
+    all: &RefCell<BTreeSet<String>>,
     dom: &DomNode,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -399,7 +429,7 @@ mod disk_cache_main {
           if let Some(src) = node.get_attribute_ref("src") {
             if let Some(resolved) = resolve_href(base_url, src) {
               let before = out.len();
-              record_document_candidate(out, &resolved, max_total);
+              record_document_candidate(all, out, &resolved, max_total, max_total);
               if out.len() > before {
                 inserted += 1;
               }
@@ -415,6 +445,7 @@ mod disk_cache_main {
   }
 
   fn record_iframe_document_candidates_from_html(
+    all: &RefCell<BTreeSet<String>>,
     html: &str,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -444,7 +475,7 @@ mod disk_cache_main {
       }
       if let Some(resolved) = resolve_href(base_url, raw) {
         let before = out.len();
-        record_document_candidate(out, &resolved, max_total);
+        record_document_candidate(all, out, &resolved, max_total, max_total);
         if out.len() > before {
           inserted += 1;
         }
@@ -453,6 +484,7 @@ mod disk_cache_main {
   }
 
   fn record_icon_candidates_from_html(
+    all: &RefCell<BTreeSet<String>>,
     html: &str,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -507,7 +539,7 @@ mod disk_cache_main {
       }
       if let Some(resolved) = resolve_href(base_url, href_value) {
         let before = out.len();
-        record_image_candidate(out, &resolved, max_total);
+        record_image_candidate(all, out, &resolved, max_total, max_total);
         if out.len() > before {
           inserted += 1;
         }
@@ -516,6 +548,7 @@ mod disk_cache_main {
   }
 
   fn record_icon_candidates(
+    all: &RefCell<BTreeSet<String>>,
     dom: &DomNode,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -544,12 +577,12 @@ mod disk_cache_main {
                 {
                   if let Some(resolved) = resolve_href(base_url, href) {
                     let before = out.len();
-                    record_image_candidate(out, &resolved, max_total);
+                    record_image_candidate(all, out, &resolved, max_total, max_total);
                     if out.len() > before {
-                    inserted += 1;
+                      inserted += 1;
+                    }
                   }
                 }
-              }
             }
           }
         }
@@ -562,6 +595,7 @@ mod disk_cache_main {
   }
 
   fn record_video_poster_candidates_from_html(
+    all: &RefCell<BTreeSet<String>>,
     html: &str,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -591,7 +625,7 @@ mod disk_cache_main {
       }
       if let Some(resolved) = resolve_href(base_url, raw) {
         let before = out.len();
-        record_image_candidate(out, &resolved, max_total);
+        record_image_candidate(all, out, &resolved, max_total, max_total);
         if out.len() > before {
           inserted += 1;
         }
@@ -600,6 +634,7 @@ mod disk_cache_main {
   }
 
   fn record_video_poster_candidates(
+    all: &RefCell<BTreeSet<String>>,
     dom: &DomNode,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -622,7 +657,7 @@ mod disk_cache_main {
             if !poster.trim().is_empty() {
               if let Some(resolved) = resolve_href(base_url, poster) {
                 let before = out.len();
-                record_image_candidate(out, &resolved, max_total);
+                record_image_candidate(all, out, &resolved, max_total, max_total);
                 if out.len() > before {
                   inserted += 1;
                 }
@@ -639,6 +674,7 @@ mod disk_cache_main {
   }
 
   fn record_embed_document_candidates_from_html(
+    all: &RefCell<BTreeSet<String>>,
     html: &str,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -676,7 +712,7 @@ mod disk_cache_main {
       }
       if let Some(resolved) = resolve_href(base_url, raw) {
         let before = out.len();
-        record_document_candidate(out, &resolved, max_total);
+        record_document_candidate(all, out, &resolved, max_total, max_total);
         if out.len() > before {
           inserted += 1;
         }
@@ -685,6 +721,7 @@ mod disk_cache_main {
   }
 
   fn record_embed_document_candidates(
+    all: &RefCell<BTreeSet<String>>,
     dom: &DomNode,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -707,7 +744,7 @@ mod disk_cache_main {
             if !data.trim().is_empty() {
               if let Some(resolved) = resolve_href(base_url, data) {
                 let before = out.len();
-                record_document_candidate(out, &resolved, max_total);
+                record_document_candidate(all, out, &resolved, max_total, max_total);
                 if out.len() > before {
                   inserted += 1;
                 }
@@ -719,7 +756,7 @@ mod disk_cache_main {
             if !src.trim().is_empty() {
               if let Some(resolved) = resolve_href(base_url, src) {
                 let before = out.len();
-                record_document_candidate(out, &resolved, max_total);
+                record_document_candidate(all, out, &resolved, max_total, max_total);
                 if out.len() > before {
                   inserted += 1;
                 }
@@ -736,6 +773,7 @@ mod disk_cache_main {
   }
 
   fn record_media_source_candidates_from_html(
+    all: &RefCell<BTreeSet<String>>,
     html: &str,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -769,7 +807,7 @@ mod disk_cache_main {
       }
       if let Some(resolved) = resolve_href(base_url, raw) {
         let before = out.len();
-        record_document_candidate(out, &resolved, max_total);
+        record_document_candidate(all, out, &resolved, max_total, max_total);
         if out.len() > before {
           inserted += 1;
         }
@@ -778,6 +816,7 @@ mod disk_cache_main {
   }
 
   fn record_media_source_candidates(
+    all: &RefCell<BTreeSet<String>>,
     dom: &DomNode,
     base_url: &str,
     out: &mut BTreeSet<String>,
@@ -813,7 +852,7 @@ mod disk_cache_main {
           if let Some(src) = node.get_attribute_ref("src") {
             if let Some(resolved) = resolve_href(base_url, src) {
               let before = out.len();
-              record_document_candidate(out, &resolved, max_total);
+              record_document_candidate(all, out, &resolved, max_total, max_total);
               if out.len() > before {
                 inserted += 1;
               }
@@ -824,7 +863,7 @@ mod disk_cache_main {
           if let Some(src) = node.get_attribute_ref("src") {
             if let Some(resolved) = resolve_href(base_url, src) {
               let before = out.len();
-              record_document_candidate(out, &resolved, max_total);
+              record_document_candidate(all, out, &resolved, max_total, max_total);
               if out.len() > before {
                 inserted += 1;
               }
@@ -834,7 +873,7 @@ mod disk_cache_main {
           if let Some(src) = node.get_attribute_ref("src") {
             if let Some(resolved) = resolve_href(base_url, src) {
               let before = out.len();
-              record_document_candidate(out, &resolved, max_total);
+              record_document_candidate(all, out, &resolved, max_total, max_total);
               if out.len() > before {
                 inserted += 1;
               }
@@ -849,20 +888,27 @@ mod disk_cache_main {
     }
   }
 
-  fn record_css_url_asset_candidate(set: &mut BTreeSet<String>, url: &str, max: usize) {
+  fn record_css_url_asset_candidate(
+    all: &RefCell<BTreeSet<String>>,
+    set: &mut BTreeSet<String>,
+    url: &str,
+    max_total: usize,
+    max_set: usize,
+  ) {
     let Some(normalized) = normalize_prefetch_url(url) else {
       return;
     };
     if looks_like_css_url(&normalized) || looks_like_font_url(&normalized) {
       return;
     }
-    let _ = insert_unique_with_cap(set, normalized, max);
+    let _ = insert_unique_with_cap(all, set, normalized, max_total, max_set);
   }
 
   struct PrefetchImportLoader<'a> {
     fetcher: &'a dyn ResourceFetcher,
     css_cache: RefCell<HashMap<String, String>>,
     summary: &'a RefCell<PageSummary>,
+    all_asset_urls: &'a RefCell<BTreeSet<String>>,
     css_asset_urls: Option<&'a RefCell<BTreeSet<String>>>,
     max_discovered_assets_per_page: usize,
   }
@@ -871,6 +917,7 @@ mod disk_cache_main {
     fn new(
       fetcher: &'a dyn ResourceFetcher,
       summary: &'a RefCell<PageSummary>,
+      all_asset_urls: &'a RefCell<BTreeSet<String>>,
       css_asset_urls: Option<&'a RefCell<BTreeSet<String>>>,
       max_discovered_assets_per_page: usize,
     ) -> Self {
@@ -878,6 +925,7 @@ mod disk_cache_main {
         fetcher,
         css_cache: RefCell::new(HashMap::new()),
         summary,
+        all_asset_urls,
         css_asset_urls,
         max_discovered_assets_per_page,
       }
@@ -904,7 +952,13 @@ mod disk_cache_main {
             let discovered = discover_css_urls(&rewritten, base);
             let mut set = css_asset_urls.borrow_mut();
             for url in discovered {
-              record_css_url_asset_candidate(&mut set, &url, self.max_discovered_assets_per_page);
+              record_css_url_asset_candidate(
+                self.all_asset_urls,
+                &mut set,
+                &url,
+                self.max_discovered_assets_per_page,
+                self.max_discovered_assets_per_page,
+              );
             }
           }
 
@@ -1145,6 +1199,11 @@ mod disk_cache_main {
       return summary.into_inner();
     }
 
+    // Track every unique discovered URL across all enabled discovery classes so
+    // `--max-discovered-assets-per-page` caps total work, and so the same URL
+    // is not fetched multiple times via different discovery paths.
+    let all_asset_urls = RefCell::new(BTreeSet::<String>::new());
+
     let mut image_urls: BTreeSet<String> = BTreeSet::new();
     let mut document_urls: BTreeSet<String> = BTreeSet::new();
 
@@ -1171,7 +1230,13 @@ mod disk_cache_main {
           if image_urls.len() >= max_urls {
             break;
           }
-          record_image_candidate(&mut image_urls, &url, max_urls);
+          record_image_candidate(
+            &all_asset_urls,
+            &mut image_urls,
+            &url,
+            opts.max_discovered_assets_per_page,
+            max_urls,
+          );
         }
       }
     }
@@ -1179,6 +1244,7 @@ mod disk_cache_main {
     if opts.prefetch_icons {
       if let Some(dom) = dom.as_ref() {
         record_icon_candidates(
+          &all_asset_urls,
           dom,
           base_url,
           &mut image_urls,
@@ -1186,6 +1252,7 @@ mod disk_cache_main {
         );
       } else {
         record_icon_candidates_from_html(
+          &all_asset_urls,
           html,
           base_url,
           &mut image_urls,
@@ -1197,6 +1264,7 @@ mod disk_cache_main {
     if opts.prefetch_video_posters {
       if let Some(dom) = dom.as_ref() {
         record_video_poster_candidates(
+          &all_asset_urls,
           dom,
           base_url,
           &mut image_urls,
@@ -1204,6 +1272,7 @@ mod disk_cache_main {
         );
       } else {
         record_video_poster_candidates_from_html(
+          &all_asset_urls,
           html,
           base_url,
           &mut image_urls,
@@ -1215,6 +1284,7 @@ mod disk_cache_main {
     if opts.prefetch_iframes {
       if let Some(dom) = dom.as_ref() {
         record_iframe_document_candidates(
+          &all_asset_urls,
           dom,
           base_url,
           &mut document_urls,
@@ -1222,6 +1292,7 @@ mod disk_cache_main {
         );
       } else {
         record_iframe_document_candidates_from_html(
+          &all_asset_urls,
           html,
           base_url,
           &mut document_urls,
@@ -1245,19 +1316,27 @@ mod disk_cache_main {
         if image_urls.len() >= max_urls {
           break;
         }
-        record_image_candidate(&mut image_urls, &url, max_urls);
+        record_image_candidate(
+          &all_asset_urls,
+          &mut image_urls,
+          &url,
+          opts.max_discovered_assets_per_page,
+          max_urls,
+        );
       }
     }
 
     if opts.prefetch_embeds {
       if let Some(dom) = dom.as_ref() {
         record_embed_document_candidates(
+          &all_asset_urls,
           dom,
           base_url,
           &mut document_urls,
           opts.max_discovered_assets_per_page,
         );
         record_media_source_candidates(
+          &all_asset_urls,
           dom,
           base_url,
           &mut document_urls,
@@ -1265,12 +1344,14 @@ mod disk_cache_main {
         );
       } else {
         record_embed_document_candidates_from_html(
+          &all_asset_urls,
           html,
           base_url,
           &mut document_urls,
           opts.max_discovered_assets_per_page,
         );
         record_media_source_candidates_from_html(
+          &all_asset_urls,
           html,
           base_url,
           &mut document_urls,
@@ -1284,7 +1365,13 @@ mod disk_cache_main {
       let mut set = css_asset_urls.borrow_mut();
       for chunk in extract_inline_css_chunks(html) {
         for url in discover_css_urls(&chunk, base_url) {
-          record_css_url_asset_candidate(&mut set, &url, opts.max_discovered_assets_per_page);
+          record_css_url_asset_candidate(
+            &all_asset_urls,
+            &mut set,
+            &url,
+            opts.max_discovered_assets_per_page,
+            opts.max_discovered_assets_per_page,
+          );
         }
       }
     }
@@ -1306,6 +1393,7 @@ mod disk_cache_main {
       let import_loader = PrefetchImportLoader::new(
         fetcher,
         &summary,
+        &all_asset_urls,
         css_asset_urls_ref,
         opts.max_discovered_assets_per_page,
       );
@@ -1324,8 +1412,10 @@ mod disk_cache_main {
                 let mut set = css_asset_urls.borrow_mut();
                 for url in discovered {
                   record_css_url_asset_candidate(
+                    &all_asset_urls,
                     &mut set,
                     &url,
+                    opts.max_discovered_assets_per_page,
                     opts.max_discovered_assets_per_page,
                   );
                 }
@@ -1377,8 +1467,10 @@ mod disk_cache_main {
                   let mut set = css_asset_urls.borrow_mut();
                   for url in discovered {
                     record_css_url_asset_candidate(
+                      &all_asset_urls,
                       &mut set,
                       &url,
+                      opts.max_discovered_assets_per_page,
                       opts.max_discovered_assets_per_page,
                     );
                   }
@@ -1545,6 +1637,55 @@ mod disk_cache_main {
       fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
         panic!("network fetch should not be called for disk cache hits");
       }
+    }
+
+    #[test]
+    fn max_discovered_assets_per_page_caps_total_and_dedupes_across_classes() {
+      let all = RefCell::new(BTreeSet::<String>::new());
+      let mut image_urls = BTreeSet::<String>::new();
+      let mut document_urls = BTreeSet::<String>::new();
+      let mut css_assets = BTreeSet::<String>::new();
+
+      record_image_candidate(
+        &all,
+        &mut image_urls,
+        "https://example.com/a.png",
+        2,
+        2,
+      );
+      record_document_candidate(
+        &all,
+        &mut document_urls,
+        "https://example.com/frame.html",
+        2,
+        2,
+      );
+
+      // A duplicate discovered via a different class should not be re-scheduled.
+      record_css_url_asset_candidate(
+        &all,
+        &mut css_assets,
+        "https://example.com/a.png",
+        2,
+        2,
+      );
+      assert!(
+        css_assets.is_empty(),
+        "duplicates across classes should be suppressed"
+      );
+
+      // Global cap should prevent inserting additional unique URLs.
+      record_image_candidate(
+        &all,
+        &mut image_urls,
+        "https://example.com/b.png",
+        2,
+        2,
+      );
+
+      assert_eq!(all.borrow().len(), 2);
+      assert_eq!(image_urls.len(), 1);
+      assert_eq!(document_urls.len(), 1);
     }
 
     #[test]
