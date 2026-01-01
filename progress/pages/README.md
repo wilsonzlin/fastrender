@@ -19,10 +19,13 @@ This directory contains the **committed pageset scoreboard**: one tiny JSON file
 - These are auto-generated; don't hand-edit them except for durable human fields like `notes`/`last_*` when needed.
 - `notes` is intended for durable human explanations; `auto_notes` is machine-generated last-run diagnostics and is rewritten on each run.
 - Renderer-provided `failure_stage`/`timeout_stage` fields stay `null` on placeholders and are populated directly from diagnostics during runs for programmatic triage.
-- `stages_ms` buckets are derived from `RenderStats.timings` wall-clock stage timers and are intended
-  to be additive. `text_*` timings are subsystem breakdown counters (and may be CPU-summed), so they
-  are intentionally excluded from `stages_ms` to avoid double-counting. Use `pageset_progress
-  migrate` to refresh older artifacts.
+- `stages_ms` buckets are derived from `RenderStats.timings` wall-clock stage timers (`*_ms`) and
+  are intended to be additive.
+- CPU-sum subsystem counters (`*_cpu_ms`, e.g. `timings.text_shape_cpu_ms`,
+  `layout.taffy_flex_compute_cpu_ms`) may exceed wall time and are intentionally excluded from
+  `stages_ms` to avoid double-counting.
+- Use `pageset_progress migrate` to refresh older artifacts (including rewriting legacy
+  `text_*_ms` / `taffy_*_compute_ms` keys).
 - `diagnostics.stats.cascade` can include selector-level counters (rule candidates/matches, bloom
   fast rejects, time splits, and `:has()` counters) when cascade profiling is enabled:
   - `FASTR_CASCADE_PROFILE=1` for ad-hoc renders, or
