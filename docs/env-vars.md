@@ -51,6 +51,8 @@ Unless noted otherwise, they are parsed once at process startup; invalid values 
   - `auto` (default): use the Rust backend and fall back to the system `curl` binary for retryable network/TLS/HTTP2 errors.
     - If the fallback also fails, the original error message is annotated with `curl fallback failed: ...` to make it obvious both backends were attempted.
     - Fallback is not triggered for all failure modes (for example, `empty HTTP response body` / 0 bytes); set `FASTR_HTTP_BACKEND=curl` explicitly when comparing behavior on hard sites.
+    - If `curl` is not available on `$PATH`, `auto` behaves like `ureq` (no fallback).
+    - When a timeout budget is active (CLI `--timeout` or a render deadline with a timeout), `auto` caps the initial Rust backend attempt (and disables Rust retries) so there is still time left to attempt the `curl` fallback.
   - `ureq`: force the Rust backend (disables the `curl` fallback; useful to confirm a failure is backend-specific).
   - `curl`: force the `curl` backend for all requests (HTTP/2-capable when your system `curl` has HTTP/2 support; useful for hard sites and differential diagnosis; requires `curl` on `$PATH`).
   - Accepted aliases: `fallback` (auto) and `rust`/`native` (ureq). Unknown values behave like `auto`.
