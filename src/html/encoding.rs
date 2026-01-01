@@ -34,16 +34,17 @@ pub fn decode_html_bytes(bytes: &[u8], content_type: Option<&str>) -> String {
   WINDOWS_1252.decode_with_bom_removal(bytes).0.into_owned()
 }
 
-fn charset_from_content_type(content_type: &str) -> Option<String> {
+fn charset_from_content_type(content_type: &str) -> Option<&str> {
   for param in content_type.split(';').skip(1) {
     let mut parts = param.splitn(2, '=');
     let name = parts.next()?.trim();
     if !name.eq_ignore_ascii_case("charset") {
       continue;
     }
-    let value = parts.next()?.trim().trim_matches('"').trim_matches('\'');
+    let value = parts.next()?.trim();
+    let value = value.trim_matches('"').trim_matches('\'');
     if !value.is_empty() {
-      return Some(value.to_string());
+      return Some(value);
     }
   }
   None
