@@ -7149,7 +7149,7 @@ mod tests {
     };
     let buckets = buckets_from_diagnostics(&diag);
     assert_eq!(buckets.fetch, 4.5);
-    assert_eq!(buckets.css, 4.0);
+    assert_eq!(buckets.css, 7.0);
     assert_eq!(buckets.cascade, 11.0);
     assert_eq!(buckets.layout, 7.0);
     assert_eq!(buckets.paint, 43.0);
