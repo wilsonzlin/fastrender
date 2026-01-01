@@ -4353,11 +4353,7 @@ impl TableFormattingContext {
     percent_base: Option<f32>,
   ) -> (f32, f32) {
     let style_overrides = StyleOverrideCache::default();
-    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
-      self.factory.font_context().clone(),
-      self.factory.viewport_size(),
-    )
-    .with_parallelism(self.parallelism);
+    let cell_bfc = BlockFormattingContext::with_factory(self.factory.detached());
     let mut min_sum = 0.0;
     let mut max_sum = 0.0;
     for cell in cells {
@@ -4557,11 +4553,7 @@ impl TableFormattingContext {
     style_overrides: &StyleOverrideCache,
   ) -> Result<(), LayoutError> {
     let source_rows = collect_source_rows(table_box);
-    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
-      self.factory.font_context().clone(),
-      self.factory.viewport_size(),
-    )
-    .with_parallelism(self.parallelism);
+    let cell_bfc = BlockFormattingContext::with_factory(self.factory.detached());
     let measure_cells_in_parallel = self.parallelism.should_parallelize(structure.cells.len())
       || (structure.cells.len() > 256 && rayon::current_num_threads() > 1);
     let measurements: Vec<Option<(f32, f32)>> = if matches!(mode, DistributionMode::Auto) {
@@ -5515,11 +5507,7 @@ impl FormattingContext for TableFormattingContext {
       let next = col_prefix.last().copied().unwrap_or(0.0) + *width;
       col_prefix.push(next);
     }
-    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
-      self.factory.font_context().clone(),
-      self.factory.viewport_size(),
-    )
-    .with_parallelism(self.parallelism);
+    let cell_bfc = BlockFormattingContext::with_factory(self.factory.detached());
     let mut fragments = Vec::new();
 
     struct LaidOutCell {
@@ -8227,11 +8215,7 @@ mod tests {
       DistributionMode::Auto,
     );
     let source_rows = collect_source_rows(&table);
-    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
-      tfc.factory.font_context().clone(),
-      tfc.factory.viewport_size(),
-    )
-    .with_parallelism(tfc.parallelism);
+    let cell_bfc = BlockFormattingContext::with_factory(tfc.factory.detached());
     let span_box = source_rows
       .get(structure.cells[0].source_row)
       .and_then(|row| row.children.get(structure.cells[0].box_index))
@@ -9877,11 +9861,7 @@ mod tests {
     };
 
     let tfc = TableFormattingContext::new();
-    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
-      tfc.factory.font_context().clone(),
-      tfc.factory.viewport_size(),
-    )
-    .with_parallelism(tfc.parallelism);
+    let cell_bfc = BlockFormattingContext::with_factory(tfc.factory.detached());
     let style_overrides = StyleOverrideCache::default();
 
     // `box-sizing: border-box` means the specified width already includes padding.
