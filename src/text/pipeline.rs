@@ -1752,6 +1752,12 @@ fn needs_nontrivial_grapheme_segmentation(text: &str) -> bool {
       return true;
     }
 
+    // Halfwidth Katakana voiced/semi-voiced sound marks are Grapheme_Extend characters
+    // even though they are not in the Unicode Mark (M*) general categories.
+    if matches!(cp, 0xff9e | 0xff9f) {
+      return true;
+    }
+
     if is_hangul_jamo(cp) || is_grapheme_prepend(cp) {
       return true;
     }

@@ -278,6 +278,15 @@ fn atomic_clusters_do_not_split_emoji_modifier_sequences() {
 }
 
 #[test]
+fn atomic_clusters_do_not_split_halfwidth_katakana_voicing_marks() {
+  // Halfwidth KA + halfwidth voiced sound mark (ｶﾞ). Unicode grapheme segmentation treats this as a
+  // single extended grapheme cluster even though U+FF9E is General_Category=Lm.
+  let text = "\u{FF76}\u{FF9E}";
+  let clusters = atomic_shaping_clusters(text);
+  assert_eq!(clusters, vec![(0, text.len())]);
+}
+
+#[test]
 fn atomic_clusters_preserve_emoji_variation_sequences() {
   let text = "❤️";
   let clusters = atomic_shaping_clusters(text);
