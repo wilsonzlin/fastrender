@@ -4,4 +4,3 @@
 
 mod test_support;
 mod bin;
-mod test_support;
