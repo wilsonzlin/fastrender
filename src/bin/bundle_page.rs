@@ -774,6 +774,34 @@ fn crawl_document(
       for dep in discover_css_urls(&css, css_base) {
         enqueue_unique(&mut queue, &mut seen, dep);
       }
+    } else if is_html_resource(&res, &url) {
+      // Iframes/objects/embeds are rendered as nested documents, so crawl their HTML for the
+      // same kinds of subresources we discover in the root document (CSS links, inline `url()`,
+      // and common HTML asset tags).
+      let base_hint = res.final_url.as_deref().unwrap_or(&url);
+      let doc = decode_html_resource(&res, base_hint);
+
+      for css_url in
+        fastrender::css::loader::extract_css_links(&doc.html, &doc.base_url, MediaType::Screen)
+          .unwrap_or_default()
+      {
+        enqueue_unique(&mut queue, &mut seen, css_url);
+      }
+
+      for css_chunk in extract_inline_css_chunks(&doc.html) {
+        for url in discover_css_urls(&css_chunk, &doc.base_url) {
+          enqueue_unique(&mut queue, &mut seen, url);
+        }
+      }
+
+      let html_assets =
+        fastrender::html::asset_discovery::discover_html_asset_urls(&doc.html, &doc.base_url);
+      for url in html_assets.images {
+        enqueue_unique(&mut queue, &mut seen, url);
+      }
+      for url in html_assets.documents {
+        enqueue_unique(&mut queue, &mut seen, url);
+      }
     }
   }
 
@@ -793,4 +821,28 @@ fn is_css_resource(res: &FetchedResource, url: &str) -> bool {
     return parsed.path().to_ascii_lowercase().ends_with(".css");
   }
   false
+}
+
+fn is_html_resource(res: &FetchedResource, url: &str) -> bool {
+  let is_html = res
+    .content_type
+    .as_deref()
+    .map(|ct| {
+      let ct = ct.to_ascii_lowercase();
+      ct.starts_with("text/html")
+        || ct.starts_with("application/xhtml+xml")
+        || ct.starts_with("application/html")
+        || ct.contains("+html")
+    })
+    .unwrap_or(false);
+  if is_html {
+    return true;
+  }
+
+  let candidate = res.final_url.as_deref().unwrap_or(url);
+  let Ok(parsed) = url::Url::parse(candidate) else {
+    return false;
+  };
+  let lower = parsed.path().to_ascii_lowercase();
+  lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
 }

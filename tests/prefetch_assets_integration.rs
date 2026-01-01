@@ -490,9 +490,17 @@ fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
   responses.insert(
     "/frame.html".to_string(),
     (
-      b"<!doctype html><html><body>frame</body></html>".to_vec(),
+      b"<!doctype html><html><head><link rel=\"stylesheet\" href=\"/frame.css\"></head><body><img src=\"/frame_img.png\">frame</body></html>".to_vec(),
       "text/html",
     ),
+  );
+  responses.insert(
+    "/frame.css".to_string(),
+    (b"body { color: black }".to_vec(), "text/css"),
+  );
+  responses.insert(
+    "/frame_img.png".to_string(),
+    (b"dummy-frame-img".to_vec(), "image/png"),
   );
   responses.insert(
     "/object.html".to_string(),
@@ -519,6 +527,8 @@ fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
       "/favicon.ico",
       "/manifest.json",
       "/frame.html",
+      "/frame.css",
+      "/frame_img.png",
       "/object.html",
       "/embed.html",
     ],
@@ -573,6 +583,8 @@ fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
   let favicon = format!("http://{}/favicon.ico", addr);
   let manifest = format!("http://{}/manifest.json", addr);
   let iframe_doc = format!("http://{}/frame.html", addr);
+  let iframe_css = format!("http://{}/frame.css", addr);
+  let iframe_img = format!("http://{}/frame_img.png", addr);
   let object_doc = format!("http://{}/object.html", addr);
   let embed_doc = format!("http://{}/embed.html", addr);
 
@@ -595,6 +607,8 @@ fn prefetch_assets_warms_disk_cache_with_html_images_and_iframes() {
     &favicon,
     &manifest,
     &iframe_doc,
+    &iframe_css,
+    &iframe_img,
     &object_doc,
     &embed_doc,
   ] {

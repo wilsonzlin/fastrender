@@ -30,8 +30,8 @@ mod disk_cache_main {
   use fastrender::html::asset_discovery::discover_html_asset_urls;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
-    CachingFetcherConfig, DiskCachingFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
-    DEFAULT_USER_AGENT,
+    CachingFetcherConfig, DiskCachingFetcher, FetchedResource, ResourceFetcher,
+    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
   use rayon::prelude::*;
@@ -46,7 +46,7 @@ mod disk_cache_main {
   use crate::common::asset_discovery::{discover_css_urls, extract_inline_css_chunks};
   use crate::common::disk_cache_stats::scan_disk_cache_dir;
   use crate::common::render_pipeline::{
-    build_http_fetcher, disk_cache_namespace, read_cached_document,
+    build_http_fetcher, decode_html_resource, disk_cache_namespace, read_cached_document,
   };
 
   const DEFAULT_ASSET_DIR: &str = "fetches/assets";
@@ -96,6 +96,9 @@ mod disk_cache_main {
     prefetch_images: bool,
 
     /// Prefetch iframe/object/embed documents referenced directly from HTML (true/false)
+    ///
+    /// This also best-effort warms the discovered document's linked stylesheets (and their
+    /// `@import` chains/fonts), plus HTML images when `--prefetch-images` is enabled.
     ///
     /// This can explode on pages that embed many third-party iframes, so it defaults to off.
     #[arg(
@@ -164,6 +167,25 @@ mod disk_cache_main {
     prefetch_iframes: bool,
     prefetch_css_url_assets: bool,
     max_discovered_assets_per_page: usize,
+  }
+
+  fn merge_page_summary(into: &mut PageSummary, other: PageSummary) {
+    into.discovered_css += other.discovered_css;
+    into.fetched_css += other.fetched_css;
+    into.failed_css += other.failed_css;
+    into.fetched_imports += other.fetched_imports;
+    into.failed_imports += other.failed_imports;
+    into.fetched_fonts += other.fetched_fonts;
+    into.failed_fonts += other.failed_fonts;
+    into.discovered_images += other.discovered_images;
+    into.fetched_images += other.fetched_images;
+    into.failed_images += other.failed_images;
+    into.discovered_documents += other.discovered_documents;
+    into.fetched_documents += other.fetched_documents;
+    into.failed_documents += other.failed_documents;
+    into.discovered_css_assets += other.discovered_css_assets;
+    into.fetched_css_assets += other.fetched_css_assets;
+    into.failed_css_assets += other.failed_css_assets;
   }
 
   fn selected_pages(
@@ -235,6 +257,30 @@ mod disk_cache_main {
       ext.as_str(),
       "woff2" | "woff" | "ttf" | "otf" | "eot" | "ttc"
     )
+  }
+
+  fn looks_like_html_document(res: &FetchedResource, requested_url: &str) -> bool {
+    let is_html = res
+      .content_type
+      .as_deref()
+      .map(|ct| {
+        let ct = ct.to_ascii_lowercase();
+        ct.starts_with("text/html")
+          || ct.starts_with("application/xhtml+xml")
+          || ct.starts_with("application/html")
+          || ct.contains("+html")
+      })
+      .unwrap_or(false);
+    if is_html {
+      return true;
+    }
+
+    let candidate = res.final_url.as_deref().unwrap_or(requested_url);
+    let Ok(parsed) = url::Url::parse(candidate) else {
+      return false;
+    };
+    let lower = parsed.path().to_ascii_lowercase();
+    lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
   }
 
   fn insert_unique_with_cap(set: &mut BTreeSet<String>, url: String, max: usize) -> bool {
@@ -562,7 +608,11 @@ mod disk_cache_main {
       }
       if opts.prefetch_iframes {
         for url in html_assets.documents {
-          record_document_candidate(&mut document_urls, &url, opts.max_discovered_assets_per_page);
+          record_document_candidate(
+            &mut document_urls,
+            &url,
+            opts.max_discovered_assets_per_page,
+          );
         }
       }
     }
@@ -726,12 +776,42 @@ mod disk_cache_main {
     }
 
     if opts.prefetch_iframes {
-      let mut summary = summary.borrow_mut();
-      for url in &document_urls {
-        match fetcher.fetch(url) {
-          Ok(_) => summary.fetched_documents += 1,
-          Err(_) => summary.failed_documents += 1,
+      let mut fetched_docs: Vec<(String, FetchedResource)> = Vec::new();
+      {
+        let mut summary = summary.borrow_mut();
+        for url in &document_urls {
+          match fetcher.fetch(url) {
+            Ok(res) => {
+              summary.fetched_documents += 1;
+              fetched_docs.push((url.clone(), res));
+            }
+            Err(_) => summary.failed_documents += 1,
+          }
         }
+      }
+
+      // Best-effort: when iframe/object/embed prefetching is enabled, also warm their subresource
+      // dependencies (stylesheets/@imports/fonts, and HTML images when enabled). This reduces
+      // render-deadline network fetches because iframes are rendered as nested documents.
+      let nested_opts = PrefetchOptions {
+        prefetch_iframes: false,
+        ..opts
+      };
+      for (url, res) in fetched_docs {
+        if !looks_like_html_document(&res, &url) {
+          continue;
+        }
+        let base_hint = res.final_url.as_deref().unwrap_or(&url);
+        let doc = decode_html_resource(&res, base_hint);
+        let nested_summary = prefetch_assets_for_html(
+          &format!("{stem}::document:{url}"),
+          &doc.html,
+          &doc.base_url,
+          fetcher,
+          media_ctx,
+          nested_opts,
+        );
+        merge_page_summary(&mut summary.borrow_mut(), nested_summary);
       }
     }
 

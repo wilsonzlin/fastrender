@@ -76,6 +76,10 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
   let image_path = fixture_dir.join("image.png");
   let image2_path = fixture_dir.join("image2.png");
   let source_path = fixture_dir.join("source.png");
+  let iframe_html_path = fixture_dir.join("iframe.html");
+  let iframe_css_path = fixture_dir.join("iframe.css");
+  let iframe_image_path = fixture_dir.join("iframe_image.png");
+  let iframe_bg_path = fixture_dir.join("iframe_bg.png");
   let inline_bg_path = fixture_dir.join("inline_bg.png");
   let inline_attr_path = fixture_dir.join("inline_attr.png");
   let imported_bg_path = fixture_dir.join("imported_bg.png");
@@ -109,6 +113,10 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
   let image_url = format!("file://{}", image_path.display());
   let image2_url = format!("file://{}", image2_path.display());
   let source_url = format!("file://{}", source_path.display());
+  let iframe_html_url = format!("file://{}", iframe_html_path.display());
+  let iframe_css_url = format!("file://{}", iframe_css_path.display());
+  let iframe_image_url = format!("file://{}", iframe_image_path.display());
+  let iframe_bg_url = format!("file://{}", iframe_bg_path.display());
   let inline_bg_url = format!("file://{}", inline_bg_path.display());
   let inline_attr_url = format!("file://{}", inline_attr_path.display());
   let imported_bg_url = format!("file://{}", imported_bg_path.display());
@@ -138,6 +146,22 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
   assert!(
     resources.contains_key(&source_url),
     "<source srcset> image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&iframe_html_url),
+    "iframe document should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&iframe_css_url),
+    "iframe stylesheet should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&iframe_image_url),
+    "iframe image should be captured in manifest"
+  );
+  assert!(
+    resources.contains_key(&iframe_bg_url),
+    "iframe CSS url() image should be captured in manifest"
   );
   assert!(
     resources.contains_key(&inline_bg_url),
