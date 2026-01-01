@@ -203,21 +203,39 @@ struct FloatEvent {
   float_id: usize,
 }
 
-fn float_event_cmp(a: &FloatEvent, b: &FloatEvent) -> Ordering {
-  match a.y.partial_cmp(&b.y).unwrap_or(Ordering::Equal) {
-    Ordering::Equal => match (a.kind, b.kind) {
-      (FloatEventKind::Start, FloatEventKind::End) => Ordering::Less,
-      (FloatEventKind::End, FloatEventKind::Start) => Ordering::Greater,
-      _ => a.float_id.cmp(&b.float_id),
-    },
-    other => other,
+impl PartialEq for FloatEvent {
+  fn eq(&self, other: &Self) -> bool {
+    self.y.to_bits() == other.y.to_bits()
+      && self.kind == other.kind
+      && self.float_id == other.float_id
+  }
+}
+
+impl Eq for FloatEvent {}
+
+impl PartialOrd for FloatEvent {
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for FloatEvent {
+  fn cmp(&self, other: &Self) -> Ordering {
+    match self.y.total_cmp(&other.y) {
+      Ordering::Equal => match (self.kind, other.kind) {
+        (FloatEventKind::Start, FloatEventKind::End) => Ordering::Less,
+        (FloatEventKind::End, FloatEventKind::Start) => Ordering::Greater,
+        _ => self.float_id.cmp(&other.float_id),
+      },
+      other => other,
+    }
   }
 }
 
 #[derive(Debug, Clone)]
 struct FloatSweepState {
   current_y: f32,
-  event_cursor: usize,
+  pending_events: BinaryHeap<Reverse<FloatEvent>>,
   active: Vec<bool>,
   active_left: BinaryHeap<(FloatKey, usize)>,
   active_right: BinaryHeap<(Reverse<FloatKey>, usize)>,
@@ -226,10 +244,12 @@ struct FloatSweepState {
 }
 
 impl FloatSweepState {
-  fn new(float_count: usize) -> Self {
+  fn new(float_count: usize, events: &[FloatEvent]) -> Self {
+    let mut pending_events = BinaryHeap::with_capacity(events.len());
+    pending_events.extend(events.iter().copied().map(Reverse));
     Self {
       current_y: f32::NEG_INFINITY,
-      event_cursor: 0,
+      pending_events,
       active: vec![false; float_count],
       active_left: BinaryHeap::new(),
       active_right: BinaryHeap::new(),
@@ -417,7 +437,10 @@ pub struct FloatContext {
   /// Map from float id -> backing storage (left/right vector + index).
   float_map: Vec<FloatRef>,
 
-  /// Sorted list of float start/end events for sweep queries.
+  /// Unsorted list of float start/end events.
+  ///
+  /// Sweep queries are powered by a per-context heap inside [`FloatSweepState`], which allows
+  /// floats to be added without repeatedly sorting all prior events.
   events: Vec<FloatEvent>,
 
   /// Sweep state used to answer monotonic Y queries efficiently.
@@ -458,7 +481,7 @@ impl FloatContext {
       right_floats: Vec::new(),
       float_map: Vec::new(),
       events: Vec::new(),
-      sweep_state: RefCell::new(FloatSweepState::new(0)),
+      sweep_state: RefCell::new(FloatSweepState::new(0, &[])),
       clearance_state: RefCell::new(ClearanceSweepState::new()),
       clearance_left_ordered: true,
       clearance_right_ordered: true,
@@ -473,7 +496,7 @@ impl FloatContext {
   }
 
   fn reset_sweep_state(&mut self) {
-    self.sweep_state = RefCell::new(FloatSweepState::new(self.float_map.len()));
+    self.sweep_state = RefCell::new(FloatSweepState::new(self.float_map.len(), &self.events));
   }
 
   fn reset_clearance_state(&mut self) {
@@ -503,17 +526,10 @@ impl FloatContext {
     }
   }
 
-  fn insert_event_sorted(&mut self, event: FloatEvent) {
-    let idx = self
-      .events
-      .partition_point(|probe| float_event_cmp(probe, &event) == Ordering::Less);
-    self.events.insert(idx, event);
-  }
-
-  fn ensure_sweep_state(&self, y: f32) -> std::cell::RefMut<FloatSweepState> {
+  fn ensure_sweep_state(&self, y: f32) -> std::cell::RefMut<'_, FloatSweepState> {
     let mut state = self.sweep_state.borrow_mut();
     if y < state.current_y {
-      *state = FloatSweepState::new(self.float_map.len());
+      *state = FloatSweepState::new(self.float_map.len(), &self.events);
     }
     state
   }
@@ -581,15 +597,15 @@ impl FloatContext {
 
   fn advance_sweep_to(&self, target_y: f32, state: &mut FloatSweepState) {
     if target_y < state.current_y {
-      *state = FloatSweepState::new(self.float_map.len());
+      *state = FloatSweepState::new(self.float_map.len(), &self.events);
     }
     let mut steps = 0;
-    while let Some(event) = self.events.get(state.event_cursor) {
+    while let Some(Reverse(event)) = state.pending_events.peek().copied() {
       if event.y > target_y {
         break;
       }
-      self.apply_event(event, state);
-      state.event_cursor += 1;
+      state.pending_events.pop();
+      self.apply_event(&event, state);
       steps += 1;
     }
     if steps > 0 {
@@ -730,10 +746,10 @@ impl FloatContext {
   }
 
   fn next_event_y(&self, state: &FloatSweepState) -> f32 {
-    self
-      .events
-      .get(state.event_cursor)
-      .map(|e| e.y)
+    state
+      .pending_events
+      .peek()
+      .map(|Reverse(event)| event.y)
       .unwrap_or(f32::INFINITY)
   }
 
@@ -867,55 +883,28 @@ impl FloatContext {
     let id = self.float_map.len();
     self.float_map.push(FloatRef { side, index });
 
-    self.insert_event_sorted(FloatEvent {
+    let start_event = FloatEvent {
       y: start_y,
       kind: FloatEventKind::Start,
       float_id: id,
-    });
-    self.insert_event_sorted(FloatEvent {
+    };
+    let end_event = FloatEvent {
       y: end_y,
       kind: FloatEventKind::End,
       float_id: id,
-    });
+    };
+    self.events.push(start_event);
+    self.events.push(end_event);
 
     // Keep the sweep state usable across interleaved insertions + monotonic queries (the common
     // pattern during BFC layout). Resetting here destroys the incremental sweep and turns
     // float-heavy pages into O(n^2) boundary rescans.
-    let mut state = self.sweep_state.borrow_mut();
-    state.active.push(false);
-
-    // If the sweep has already advanced to a concrete Y, ensure:
-    // - the new float is marked active if it overlaps the current sweep position, and
-    // - the event cursor accounts for the newly inserted events.
-    let current_y = state.current_y;
-    if current_y.is_finite() {
-      let float = self.float_info(id);
-      if float.contains_y(current_y) {
-        state.active[id] = true;
-        match float.side {
-          FloatSide::Left => {
-            if float.shape.is_some() {
-              state.active_shape_left.push(id);
-            } else {
-              state.active_left.push((FloatKey(float.right_edge()), id));
-            }
-          }
-          FloatSide::Right => {
-            if float.shape.is_some() {
-              state.active_shape_right.push(id);
-            } else {
-              state
-                .active_right
-                .push((Reverse(FloatKey(float.left_edge())), id));
-            }
-          }
-        }
-      }
-
-      // Match `advance_sweep_to`: events are processed until we see `event.y > current_y`.
-      state.event_cursor = self.events.partition_point(|e| !(e.y > current_y));
-      self.prune_heaps(&mut state);
-    }
+    let mut sweep_state = self.sweep_state.borrow_mut();
+    sweep_state.active.push(false);
+    sweep_state.pending_events.push(Reverse(start_event));
+    sweep_state.pending_events.push(Reverse(end_event));
+    let current_y = sweep_state.current_y;
+    self.advance_sweep_to(current_y, &mut sweep_state);
   }
 
   fn clearance_side_max_bottom(
@@ -1046,26 +1035,8 @@ impl FloatContext {
   pub fn next_float_boundary_after(&self, y: f32) -> f32 {
     let mut state = self.ensure_sweep_state(y);
     self.advance_sweep_to(y, &mut state);
-    let mut next = self.next_float_boundary_after_internal(&*state, y);
-    if next <= y {
-      let mut event_cursor = state.event_cursor;
-      while let Some(event) = self.events.get(event_cursor) {
-        if event.y > y {
-          next = next.min(event.y);
-          break;
-        }
-        event_cursor += 1;
-      }
-      let shape_next = self.next_shape_boundary_after(&*state, y + f32::EPSILON);
-      if shape_next > y {
-        next = next.min(shape_next);
-      }
-    }
-    if next.is_finite() && next > y {
-      next
-    } else {
-      y
-    }
+    let next = self.next_float_boundary_after_internal(&*state, y);
+    if next.is_finite() && next > y { next } else { y }
   }
 
   /// Compute the clearance needed for an element with the given clear value
@@ -1226,7 +1197,7 @@ impl FloatContext {
         return (x, y);
       }
 
-      let mut candidate_y = next_boundary;
+      let candidate_y = next_boundary;
       if !candidate_y.is_finite() || candidate_y <= y {
         let x = match side {
           FloatSide::Left => last_left,
