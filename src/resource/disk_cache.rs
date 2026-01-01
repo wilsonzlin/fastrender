@@ -17,6 +17,7 @@ use crate::render_control;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
@@ -79,7 +80,27 @@ const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
 /// Small time buffer to avoid spending the entire render budget waiting on `.lock` files.
 const LOCK_DEADLINE_BUFFER: Duration = Duration::from_millis(10);
 const DISK_READ_CHUNK_SIZE: usize = 64 * 1024;
+/// Minimum chunk size used for deadline-aware disk reads.
+///
+/// Most disk-cache hits are tiny (CSS, meta JSON) so reading with a 64KiB scratch buffer on every
+/// hit is wasteful. Keeping a minimum of 4KiB matches common page sizes and avoids pathological
+/// syscalls for very small reads.
+const DISK_READ_MIN_CHUNK_SIZE: usize = 4 * 1024;
+/// Maximum chunk size used when reading `.bin.meta` files.
+///
+/// Metadata blobs are expected to be tiny; capping their per-read chunk size avoids growing the
+/// reusable scratch buffer on threads that only touch metadata. (The scratch buffer is shared with
+/// data reads; once it grows for larger resources it is intentionally retained for reuse.)
+const DISK_META_READ_CHUNK_SIZE: usize = 8 * 1024;
 const DISK_META_READ_STAGE: RenderStage = RenderStage::Paint;
+
+thread_local! {
+  /// Per-thread reusable scratch buffer for deadline-aware disk reads.
+  ///
+  /// The buffer grows on demand but is never shrunk to avoid repeated allocations/zeroing under
+  /// parallel disk-cache hits.
+  static DISK_READ_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+}
 
 #[derive(Debug)]
 enum ReadAllWithDeadlineError {
@@ -97,37 +118,49 @@ fn read_all_with_deadline<R: Read>(
   reader: &mut R,
   capacity_hint: Option<usize>,
   stage: RenderStage,
+  max_chunk_size: usize,
 ) -> std::result::Result<Vec<u8>, ReadAllWithDeadlineError> {
-  let mut bytes = Vec::new();
-  if let Some(cap) = capacity_hint {
-    bytes.reserve(cap);
-  }
-  let mut buf = vec![0u8; DISK_READ_CHUNK_SIZE];
-  let mut deadline_counter = 0usize;
-  loop {
-    if let Err(err) = render_control::check_active_periodic(&mut deadline_counter, 1, stage) {
-      return Err(ReadAllWithDeadlineError::Timeout(err));
+  let mut bytes = match capacity_hint {
+    Some(cap) => Vec::with_capacity(cap),
+    None => Vec::new(),
+  };
+
+  let desired_chunk_size = capacity_hint
+    .unwrap_or(max_chunk_size)
+    .clamp(DISK_READ_MIN_CHUNK_SIZE, max_chunk_size);
+
+  DISK_READ_SCRATCH.with(|scratch| {
+    let mut buf = scratch.borrow_mut();
+    if buf.len() < desired_chunk_size {
+      buf.resize(desired_chunk_size, 0);
     }
-    match reader.read(&mut buf) {
-      Ok(0) => break,
-      Ok(n) => bytes.extend_from_slice(&buf[..n]),
-      Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-      Err(_err) => return Err(ReadAllWithDeadlineError::Io),
+    let mut deadline_counter = 0usize;
+    loop {
+      if let Err(err) = render_control::check_active_periodic(&mut deadline_counter, 1, stage) {
+        return Err(ReadAllWithDeadlineError::Timeout(err));
+      }
+      match reader.read(&mut buf[..desired_chunk_size]) {
+        Ok(0) => break,
+        Ok(n) => bytes.extend_from_slice(&buf[..n]),
+        Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+        Err(_err) => return Err(ReadAllWithDeadlineError::Io),
+      }
     }
-  }
-  Ok(bytes)
+    Ok(bytes)
+  })
 }
 
 fn read_path_with_deadline(
   path: &Path,
   stage: RenderStage,
+  max_chunk_size: usize,
 ) -> std::result::Result<Vec<u8>, ReadAllWithDeadlineError> {
   let mut file = fs::File::open(path)?;
   let capacity_hint = file
     .metadata()
     .ok()
     .and_then(|meta| meta.len().try_into().ok());
-  read_all_with_deadline(&mut file, capacity_hint, stage)
+  read_all_with_deadline(&mut file, capacity_hint, stage, max_chunk_size)
 }
 
 fn stage_for_cached_content_type(content_type: Option<&str>) -> RenderStage {
@@ -663,7 +696,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return SnapshotRead::Locked;
     }
 
-    let meta_bytes = match read_path_with_deadline(meta_path, DISK_META_READ_STAGE) {
+    let meta_bytes = match read_path_with_deadline(
+      meta_path,
+      DISK_META_READ_STAGE,
+      DISK_META_READ_CHUNK_SIZE,
+    ) {
       Ok(bytes) => bytes,
       Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotRead::Timeout(err),
       Err(_) => {
@@ -680,7 +717,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     };
 
     let read_stage = stage_for_cached_content_type(meta.content_type.as_deref());
-    let bytes = match read_path_with_deadline(data_path, read_stage) {
+    let bytes = match read_path_with_deadline(data_path, read_stage, DISK_READ_CHUNK_SIZE) {
       Ok(bytes) => bytes,
       Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotRead::Timeout(err),
       Err(_) => {
@@ -1394,7 +1431,7 @@ mod tests {
 
     let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(70)), None);
     let result = render_control::with_deadline(Some(&deadline), || {
-      read_all_with_deadline(&mut reader, Some(total_bytes), RenderStage::Css)
+      read_all_with_deadline(&mut reader, Some(total_bytes), RenderStage::Css, DISK_READ_CHUNK_SIZE)
     });
 
     assert!(
@@ -1414,6 +1451,54 @@ mod tests {
     assert!(
       consumed < total_bytes,
       "reader should not consume entire stream"
+    );
+  }
+
+  #[test]
+  fn disk_cache_read_reuses_scratch_buffer_across_many_reads() {
+    // Reset the per-thread scratch buffer so this test isn't sensitive to test ordering.
+    DISK_READ_SCRATCH.with(|scratch| {
+      *scratch.borrow_mut() = Vec::new();
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let small_path = tmp.path().join("small.bin");
+    let medium_path = tmp.path().join("medium.bin");
+    let small_bytes = vec![1u8; 128];
+    let medium_bytes = vec![2u8; DISK_READ_CHUNK_SIZE * 2];
+    fs::write(&small_path, &small_bytes).unwrap();
+    fs::write(&medium_path, &medium_bytes).unwrap();
+
+    for _ in 0..256 {
+      let bytes =
+        read_path_with_deadline(&small_path, RenderStage::Css, DISK_READ_CHUNK_SIZE).unwrap();
+      assert_eq!(bytes, small_bytes);
+    }
+
+    let small_capacity = DISK_READ_SCRATCH.with(|scratch| scratch.borrow().capacity());
+    assert!(
+      small_capacity < DISK_READ_CHUNK_SIZE,
+      "expected tiny reads to keep scratch buffer < {DISK_READ_CHUNK_SIZE} bytes, got {small_capacity}"
+    );
+
+    let bytes =
+      read_path_with_deadline(&medium_path, RenderStage::Css, DISK_READ_CHUNK_SIZE).unwrap();
+    assert_eq!(bytes, medium_bytes);
+
+    let medium_capacity = DISK_READ_SCRATCH.with(|scratch| scratch.borrow().capacity());
+    assert!(
+      medium_capacity >= DISK_READ_CHUNK_SIZE,
+      "expected medium read to grow scratch buffer to at least {DISK_READ_CHUNK_SIZE} bytes, got {medium_capacity}"
+    );
+
+    // Ensure subsequent tiny reads don't trigger unexpected buffer shrinkage.
+    let bytes =
+      read_path_with_deadline(&small_path, RenderStage::Css, DISK_READ_CHUNK_SIZE).unwrap();
+    assert_eq!(bytes, small_bytes);
+    let final_capacity = DISK_READ_SCRATCH.with(|scratch| scratch.borrow().capacity());
+    assert_eq!(
+      final_capacity, medium_capacity,
+      "scratch buffer should not shrink between reads"
     );
   }
 

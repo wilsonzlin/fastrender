@@ -45,49 +45,91 @@ fn bench_disk_cache_parallel_hits(c: &mut Criterion) {
     .map(|i| format!("https://example.com/resource/{i}"))
     .collect();
 
-  let tmp = tempfile::tempdir().expect("create tempdir for disk cache bench");
-  let body: Arc<Vec<u8>> = Arc::new(vec![42u8; 128]);
-
   let memory_config = CachingFetcherConfig {
     honor_http_cache_freshness: true,
     ..CachingFetcherConfig::default()
   };
   let disk_config = DiskCacheConfig::default();
 
-  // Warm the disk cache with deterministic contents.
-  let seeder = DiskCachingFetcher::with_configs(
-    StaticFetcher {
-      body: Arc::clone(&body),
-    },
-    tmp.path(),
-    memory_config,
-    disk_config.clone(),
-  );
-  for url in &urls {
-    let res = seeder.fetch(url).expect("seed fetch");
-    assert_eq!(res.bytes.len(), body.len());
-  }
-  drop(seeder);
-
   let pool = rayon::ThreadPoolBuilder::new()
     .num_threads(workers)
     .build()
     .expect("build rayon pool");
 
+  // Two scenarios:
+  // - `tiny`: models common disk-cache hits (CSS, font metadata) where the old read path would
+  //   allocate/zero a 64KiB scratch buffer twice per hit (meta + data).
+  // - `medium`: exercises a larger payload (128KiB) to ensure throughput remains good when reads
+  //   require the full 64KiB chunk size.
+  //
+  // Expected perf change after optimizing `read_all_with_deadline`:
+  // - `tiny` should improve significantly due to fewer per-hit allocations/zeroing.
+  // - `medium` should improve modestly from scratch-buffer reuse.
+  let tmp_tiny = tempfile::tempdir().expect("create tempdir for tiny disk cache bench");
+  let body_tiny: Arc<Vec<u8>> = Arc::new(vec![42u8; 128]);
+  let seeder_tiny = DiskCachingFetcher::with_configs(
+    StaticFetcher {
+      body: Arc::clone(&body_tiny),
+    },
+    tmp_tiny.path(),
+    memory_config,
+    disk_config.clone(),
+  );
+  for url in &urls {
+    let res = seeder_tiny.fetch(url).expect("seed tiny fetch");
+    assert_eq!(res.bytes.len(), body_tiny.len());
+  }
+  drop(seeder_tiny);
+
+  let tmp_medium = tempfile::tempdir().expect("create tempdir for medium disk cache bench");
+  let body_medium: Arc<Vec<u8>> = Arc::new(vec![24u8; 128 * 1024]);
+  let seeder_medium = DiskCachingFetcher::with_configs(
+    StaticFetcher {
+      body: Arc::clone(&body_medium),
+    },
+    tmp_medium.path(),
+    memory_config,
+    disk_config.clone(),
+  );
+  for url in &urls {
+    let res = seeder_medium.fetch(url).expect("seed medium fetch");
+    assert_eq!(res.bytes.len(), body_medium.len());
+  }
+  drop(seeder_medium);
+
   let mut group = c.benchmark_group("disk_cache");
-  group.bench_function("parallel_hits_small_urlset", |b| {
+  group.bench_function("parallel_hits_tiny_resources", |b| {
     b.iter(|| {
       pool.install(|| {
         (0..workers).into_par_iter().for_each(|_| {
           let fetcher = DiskCachingFetcher::with_configs(
             PanicFetcher,
-            tmp.path(),
+            tmp_tiny.path(),
             memory_config,
             disk_config.clone(),
           );
           for url in &urls {
             let res = fetcher.fetch(url).expect("disk hit");
-            assert_eq!(res.bytes.len(), body.len());
+            assert_eq!(res.bytes.len(), body_tiny.len());
+          }
+        });
+      });
+    });
+  });
+
+  group.bench_function("parallel_hits_medium_resources", |b| {
+    b.iter(|| {
+      pool.install(|| {
+        (0..workers).into_par_iter().for_each(|_| {
+          let fetcher = DiskCachingFetcher::with_configs(
+            PanicFetcher,
+            tmp_medium.path(),
+            memory_config,
+            disk_config.clone(),
+          );
+          for url in &urls {
+            let res = fetcher.fetch(url).expect("disk hit");
+            assert_eq!(res.bytes.len(), body_medium.len());
           }
         });
       });
