@@ -25,8 +25,8 @@ use selectors::context::QuirksMode;
 use selectors::matching::matches_selector;
 use selectors::matching::selector_may_match;
 use selectors::matching::MatchingContext;
-use selectors::parser::Selector;
 use selectors::parser::RelativeSelector;
+use selectors::parser::Selector;
 use selectors::relative_selector::cache::RelativeSelectorCachedMatch;
 use selectors::Element;
 use selectors::OpaqueElement;
@@ -3010,10 +3010,7 @@ fn convert_handle_to_node(
         node_type: child_type,
         children: Vec::with_capacity(child_len),
       });
-      let child_dst = dst
-        .children
-        .last_mut()
-        .expect("child was just pushed") as *mut DomNode;
+      let child_dst = dst.children.last_mut().expect("child was just pushed") as *mut DomNode;
 
       stack.push(Frame {
         handle: child_handle,
@@ -3149,9 +3146,15 @@ impl DomNode {
   where
     F: FnMut(&DomNode),
   {
-    f(self);
-    for child in &self.children {
-      child.walk_tree(f);
+    // Avoid recursion for extremely deep/degenerate DOM trees.
+    let mut stack: Vec<&DomNode> = Vec::new();
+    stack.push(self);
+
+    while let Some(node) = stack.pop() {
+      f(node);
+      for child in node.children.iter().rev() {
+        stack.push(child);
+      }
     }
   }
 
@@ -4506,18 +4509,22 @@ fn supports_placeholder(input_type: Option<&str>) -> bool {
 }
 
 fn select_has_explicit_selection(select: &DomNode) -> bool {
-  let mut found = false;
-  select.walk_tree(&mut |node| {
-    if found {
-      return;
-    }
+  let mut stack: Vec<&DomNode> = Vec::new();
+  stack.push(select);
+
+  while let Some(node) = stack.pop() {
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("option") && node.get_attribute_ref("selected").is_some() {
-        found = true;
+        return true;
       }
     }
-  });
-  found
+
+    for child in node.children.iter().rev() {
+      stack.push(child);
+    }
+  }
+
+  false
 }
 
 fn option_value_from_node(node: &DomNode) -> String {
@@ -4541,65 +4548,78 @@ fn option_value_from_node(node: &DomNode) -> String {
 }
 
 fn collect_selected_option_values(node: &DomNode, optgroup_disabled: bool, out: &mut Vec<String>) {
-  let tag = node.tag_name().unwrap_or("");
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+  let mut stack: Vec<(&DomNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let option_disabled = node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let tag = node.tag_name().unwrap_or("");
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
-  if is_option
-    && node.get_attribute_ref("selected").is_some()
-    && !(option_disabled || optgroup_disabled)
-  {
-    out.push(option_value_from_node(node));
-  }
+    let option_disabled = node.get_attribute_ref("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
-  for child in node.children.iter() {
-    collect_selected_option_values(child, next_optgroup_disabled, out);
+    if is_option
+      && node.get_attribute_ref("selected").is_some()
+      && !(option_disabled || optgroup_disabled)
+    {
+      out.push(option_value_from_node(node));
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
+    }
   }
 }
 
 fn find_selected_option_value(node: &DomNode, optgroup_disabled: bool) -> Option<String> {
-  let tag = node.tag_name().unwrap_or("");
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+  let mut stack: Vec<(&DomNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let option_disabled = node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let tag = node.tag_name().unwrap_or("");
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
-  if is_option
-    && node.get_attribute_ref("selected").is_some()
-    && !(option_disabled || optgroup_disabled)
-  {
-    return Some(option_value_from_node(node));
-  }
+    let option_disabled = node.get_attribute_ref("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
-  for child in node.children.iter() {
-    if let Some(val) = find_selected_option_value(child, next_optgroup_disabled) {
-      return Some(val);
+    if is_option
+      && node.get_attribute_ref("selected").is_some()
+      && !(option_disabled || optgroup_disabled)
+    {
+      return Some(option_value_from_node(node));
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
     }
   }
+
   None
 }
 
 fn first_enabled_option<'a>(node: &'a DomNode, optgroup_disabled: bool) -> Option<&'a DomNode> {
-  let tag = node.tag_name().unwrap_or("");
-  let is_option = tag.eq_ignore_ascii_case("option");
-  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+  let mut stack: Vec<(&'a DomNode, bool)> = Vec::new();
+  stack.push((node, optgroup_disabled));
 
-  let option_disabled = node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+  while let Some((node, optgroup_disabled)) = stack.pop() {
+    let tag = node.tag_name().unwrap_or("");
+    let is_option = tag.eq_ignore_ascii_case("option");
+    let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
-  if is_option && !(option_disabled || optgroup_disabled) {
-    return Some(node);
-  }
+    let option_disabled = node.get_attribute_ref("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
-  for child in node.children.iter() {
-    if let Some(opt) = first_enabled_option(child, next_optgroup_disabled) {
-      return Some(opt);
+    if is_option && !(option_disabled || optgroup_disabled) {
+      return Some(node);
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push((child, next_optgroup_disabled));
     }
   }
+
   None
 }
 
@@ -5313,7 +5333,8 @@ pub(crate) fn relative_selector_bloom_hashes(
   quirks_mode: QuirksMode,
 ) -> Vec<u32> {
   let mut hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode).to_vec();
-  if matches!(quirks_mode, QuirksMode::Quirks) && hashes.len() < RELATIVE_SELECTOR_BLOOM_HASHES_MAX {
+  if matches!(quirks_mode, QuirksMode::Quirks) && hashes.len() < RELATIVE_SELECTOR_BLOOM_HASHES_MAX
+  {
     append_relative_selector_quirks_id_class_hashes(&selector.selector, &mut hashes);
     hashes.truncate(RELATIVE_SELECTOR_BLOOM_HASHES_MAX);
   }
@@ -6240,6 +6261,10 @@ mod tests {
     apply_dom_compatibility_mutations(&mut dom, &mut deadline_counter)
       .expect("apply_dom_compatibility_mutations");
 
+    let mut walked = 0usize;
+    dom.walk_tree(&mut |_| walked += 1);
+    assert_eq!(walked, depth);
+
     let ids = enumerate_dom_ids(&dom);
     assert_eq!(ids.len(), depth);
 
@@ -6265,6 +6290,58 @@ mod tests {
     drop(ids);
     drop(store);
     drop(dom);
+  }
+
+  #[test]
+  fn deep_select_option_traversals_do_not_overflow_stack() {
+    let depth = 100_000usize;
+
+    let mut node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "option".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("selected".to_string(), String::new()),
+          ("value".to_string(), "x".to_string()),
+        ],
+      },
+      children: vec![],
+    };
+
+    for _ in 0..depth {
+      node = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "optgroup".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![node],
+      };
+    }
+
+    let select = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "select".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![node],
+    };
+
+    assert!(select_has_explicit_selection(&select));
+
+    let mut values = Vec::new();
+    collect_selected_option_values(&select, false, &mut values);
+    assert_eq!(values, vec!["x".to_string()]);
+
+    assert_eq!(
+      find_selected_option_value(&select, false),
+      Some("x".to_string())
+    );
+
+    let first = first_enabled_option(&select, false).expect("expected enabled option");
+    assert_eq!(first.tag_name().unwrap_or(""), "option");
+    assert_eq!(first.get_attribute_ref("value"), Some("x"));
   }
 
   #[test]
