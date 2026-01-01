@@ -163,7 +163,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
-use tiny_skia::Pixmap;
 
 const DECODED_IMAGE_CACHE_MAX_ENTRIES: usize = 256;
 const DECODED_IMAGE_CACHE_MAX_BYTES: usize = 128 * 1024 * 1024;
@@ -3645,7 +3644,7 @@ impl DisplayListBuilder {
 
         if let ReplacedType::Iframe { src, srcdoc } = replaced_type {
           if let Some(cache) = self.image_cache.as_ref() {
-            if let Some(pixmap) = srcdoc.as_deref().and_then(|html| {
+            if let Some(image) = srcdoc.as_deref().and_then(|html| {
               render_iframe_srcdoc(
                 html,
                 Some(src.as_str()),
@@ -3657,11 +3656,11 @@ impl DisplayListBuilder {
                 self.max_iframe_depth,
               )
             }) {
-              self.emit_iframe_pixmap(pixmap, rect, style_for_image);
+              self.emit_iframe_image(image, rect, style_for_image);
               return;
             }
 
-            if let Some(pixmap) = render_iframe_src(
+            if let Some(image) = render_iframe_src(
               src,
               rect,
               style_for_image,
@@ -3670,7 +3669,7 @@ impl DisplayListBuilder {
               self.device_pixel_ratio,
               self.max_iframe_depth,
             ) {
-              self.emit_iframe_pixmap(pixmap, rect, style_for_image);
+              self.emit_iframe_image(image, rect, style_for_image);
               return;
             }
           }
@@ -6004,13 +6003,15 @@ impl DisplayListBuilder {
     true
   }
 
-  fn emit_iframe_pixmap(&mut self, pixmap: Pixmap, rect: Rect, style: Option<&ComputedStyle>) {
-    let css_width = rect.width().max(0.0);
-    let css_height = rect.height().max(0.0);
-    let image = ImageData::from_pixmap(&pixmap, css_width, css_height);
+  fn emit_iframe_image(
+    &mut self,
+    image: Arc<ImageData>,
+    rect: Rect,
+    style: Option<&ComputedStyle>,
+  ) {
     self.list.push(DisplayItem::Image(ImageItem {
       dest_rect: rect,
-      image: Arc::new(image),
+      image,
       filter_quality: Self::image_filter_quality(style),
       src_rect: None,
     }));

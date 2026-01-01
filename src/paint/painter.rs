@@ -43,6 +43,7 @@ use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::BorderRadii;
+use crate::paint::display_list::ImageData;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list_builder::DisplayListBuilder;
@@ -175,6 +176,7 @@ use tiny_skia::PathBuilder;
 use tiny_skia::Pattern;
 use tiny_skia::Pixmap;
 use tiny_skia::PixmapPaint;
+use tiny_skia::PixmapRef;
 use tiny_skia::PremultipliedColorU8;
 use tiny_skia::RadialGradient;
 use tiny_skia::Rect as SkiaRect;
@@ -5650,19 +5652,23 @@ impl Painter {
         srcdoc: Some(html),
         src,
       } => {
-        if let Some(pixmap) = self.render_iframe_srcdoc(html, src, content_rect, style) {
-          let device_x = self.device_x(content_rect.x());
-          let device_y = self.device_y(content_rect.y());
-          let paint = PixmapPaint::default();
-          self.pixmap.draw_pixmap(
-            device_x as i32,
-            device_y as i32,
-            pixmap.as_ref(),
-            &paint,
-            Transform::identity(),
-            None,
-          );
-          return;
+        if let Some(image) = self.render_iframe_srcdoc(html, src, content_rect, style) {
+          if let Some(pixmap) =
+            PixmapRef::from_bytes(image.pixels.as_ref(), image.width, image.height)
+          {
+            let device_x = self.device_x(content_rect.x());
+            let device_y = self.device_y(content_rect.y());
+            let paint = PixmapPaint::default();
+            self.pixmap.draw_pixmap(
+              device_x as i32,
+              device_y as i32,
+              pixmap,
+              &paint,
+              Transform::identity(),
+              None,
+            );
+            return;
+          }
         }
 
         if self.paint_svg(
@@ -5736,19 +5742,23 @@ impl Painter {
         src: content,
         srcdoc: None,
       } => {
-        if let Some(pixmap) = self.render_iframe_src(content, content_rect, style) {
-          let device_x = self.device_x(content_rect.x());
-          let device_y = self.device_y(content_rect.y());
-          let paint = PixmapPaint::default();
-          self.pixmap.draw_pixmap(
-            device_x as i32,
-            device_y as i32,
-            pixmap.as_ref(),
-            &paint,
-            Transform::identity(),
-            None,
-          );
-          return;
+        if let Some(image) = self.render_iframe_src(content, content_rect, style) {
+          if let Some(pixmap) =
+            PixmapRef::from_bytes(image.pixels.as_ref(), image.width, image.height)
+          {
+            let device_x = self.device_x(content_rect.x());
+            let device_y = self.device_y(content_rect.y());
+            let paint = PixmapPaint::default();
+            self.pixmap.draw_pixmap(
+              device_x as i32,
+              device_y as i32,
+              pixmap,
+              &paint,
+              Transform::identity(),
+              None,
+            );
+            return;
+          }
         }
 
         if self.paint_svg(
@@ -6362,7 +6372,7 @@ impl Painter {
     src: &str,
     content_rect: Rect,
     style: Option<&ComputedStyle>,
-  ) -> Option<Pixmap> {
+  ) -> Option<Arc<ImageData>> {
     let remaining_depth = self.iframe_depth_remaining(self.image_cache.resource_context().as_ref());
     render_iframe_srcdoc(
       html,
@@ -6381,7 +6391,7 @@ impl Painter {
     src: &str,
     content_rect: Rect,
     style: Option<&ComputedStyle>,
-  ) -> Option<Pixmap> {
+  ) -> Option<Arc<ImageData>> {
     let remaining_depth = self.iframe_depth_remaining(self.image_cache.resource_context().as_ref());
     render_iframe_src(
       src,
