@@ -2167,12 +2167,11 @@ fn font_has_glyph_fast(
   cached_face: &mut Option<Arc<crate::text::face_cache::CachedFace>>,
   ch: char,
 ) -> bool {
-  if let Some(id) = font.id {
-    return db.has_glyph_cached(id.inner(), ch);
-  }
-
   if cached_face.is_none() {
-    *cached_face = crate::text::face_cache::get_ttf_face(font);
+    *cached_face = font
+      .id
+      .and_then(|id| db.cached_face(id.inner()))
+      .or_else(|| crate::text::face_cache::get_ttf_face(font));
   }
   cached_face.as_ref().is_some_and(|face| face.has_glyph(ch))
 }
@@ -3825,7 +3824,15 @@ fn resolve_font_for_cluster_with_preferences(
   let mut math_families_ref: &[String] = math_families.unwrap_or(&[]);
   let mut picker = FontPreferencePicker::new(emoji_pref);
 
-  let covers_needed = |id: fontdb::ID| coverage_chars.iter().all(|c| db.has_glyph_cached(id, *c));
+  let covers_needed = |id: fontdb::ID| {
+    if coverage_chars.is_empty() {
+      return true;
+    }
+    let Some(face) = db.cached_face(id) else {
+      return false;
+    };
+    coverage_chars.iter().all(|c| face.has_glyph(*c))
+  };
 
   for entry in families {
     if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {

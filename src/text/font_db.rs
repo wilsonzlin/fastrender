@@ -1423,7 +1423,7 @@ impl FontDatabase {
     self.db.faces()
   }
 
-  fn cached_face(&self, id: ID) -> Option<Arc<CachedFace>> {
+  pub(crate) fn cached_face(&self, id: ID) -> Option<Arc<CachedFace>> {
     let face_info = self.db.face(id)?;
     let data = self.get_or_load_font_data(id)?;
 
