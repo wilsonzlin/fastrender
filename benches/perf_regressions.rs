@@ -6,6 +6,7 @@ use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion
 use fastrender::geometry::Rect;
 use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
 use fastrender::layout::table::{TableFormattingContext, TableStructure};
+use fastrender::render_control::{with_deadline, RenderDeadline};
 use fastrender::style::display::Display;
 use fastrender::style::media::MediaQuery;
 use fastrender::style::types::BorderCollapse;
@@ -58,9 +59,7 @@ fn flex_text_tree(item_count: usize) -> BoxTree {
 fn grid_text_tree(item_count: usize, columns: usize) -> BoxTree {
   let mut grid_style = ComputedStyle::default();
   grid_style.display = Display::Grid;
-  grid_style.grid_template_columns = (0..columns.max(1))
-    .map(|_| GridTrack::Fr(1.0))
-    .collect();
+  grid_style.grid_template_columns = (0..columns.max(1)).map(|_| GridTrack::Fr(1.0)).collect();
   let grid_style = Arc::new(grid_style);
   let block_style = Arc::new(ComputedStyle::default());
   let inline_style = Arc::new(ComputedStyle::default());
@@ -98,7 +97,10 @@ fn grid_intrinsic_sizing_tree(item_count: usize, columns: usize) -> BoxTree {
 
   let mut children = Vec::with_capacity(item_count);
   for idx in 0..item_count {
-    let text = format!("Item {}: {} {}", idx, GRID_INTRINSIC_TEXT, GRID_INTRINSIC_TEXT);
+    let text = format!(
+      "Item {}: {} {}",
+      idx, GRID_INTRINSIC_TEXT, GRID_INTRINSIC_TEXT
+    );
     let text_node = BoxNode::new_text(text_style.clone(), text);
     let inline = BoxNode::new_block(
       inline_style.clone(),
@@ -119,12 +121,13 @@ fn grid_intrinsic_sizing_tree(item_count: usize, columns: usize) -> BoxTree {
 fn synthetic_anonymous_fixup_tree() -> BoxNode {
   // Synthetic box tree designed to stress anonymous fixup traversal.
   //
-  // The tree is intentionally dominated by mixed inline/block runs inside block containers
-  // (CSS 2.1 9.2.1.1) so anonymous block insertion work happens alongside a large bottom-up
-  // traversal.
-  const SECTION_COUNT: usize = 900;
-  const RUNS_PER_SECTION: usize = 6;
-  const INLINE_RUN_LEN: usize = 4;
+  // Layout engines see a few very wide sibling lists (e.g. <body>, main content wrappers) rather
+  // than uniformly-small Vecs. This structure aims to reflect that: a single block container with
+  // ~50k children arranged as `[inline × N, block]` repeated. This ensures:
+  // - bottom-up traversal touches many nodes, and
+  // - CSS 2.1 9.2.1.1 mixed inline/block rules still trigger anonymous block insertion.
+  const RUN_GROUPS: usize = 5600;
+  const INLINE_RUN_LEN: usize = 8;
 
   let mut block_style = ComputedStyle::default();
   block_style.display = Display::Block;
@@ -134,30 +137,19 @@ fn synthetic_anonymous_fixup_tree() -> BoxNode {
   inline_style.display = Display::Inline;
   let inline_style = Arc::new(inline_style);
 
-  let text_style = Arc::new(ComputedStyle::default());
-
-  let mut sections = Vec::with_capacity(SECTION_COUNT);
-  for _ in 0..SECTION_COUNT {
-    let mut children = Vec::with_capacity(RUNS_PER_SECTION * (INLINE_RUN_LEN + 1));
-    for _ in 0..RUNS_PER_SECTION {
-      for _ in 0..INLINE_RUN_LEN {
-        let text = BoxNode::new_text(text_style.clone(), String::new());
-        children.push(BoxNode::new_inline(inline_style.clone(), vec![text]));
-      }
-      children.push(BoxNode::new_block(
-        block_style.clone(),
-        FormattingContextType::Block,
-        Vec::new(),
-      ));
+  let mut children = Vec::with_capacity(RUN_GROUPS * (INLINE_RUN_LEN + 1));
+  for _ in 0..RUN_GROUPS {
+    for _ in 0..INLINE_RUN_LEN {
+      children.push(BoxNode::new_inline(inline_style.clone(), Vec::new()));
     }
-    sections.push(BoxNode::new_block(
+    children.push(BoxNode::new_block(
       block_style.clone(),
       FormattingContextType::Block,
-      children,
+      Vec::new(),
     ));
   }
 
-  BoxNode::new_block(block_style, FormattingContextType::Block, sections)
+  BoxNode::new_block(block_style, FormattingContextType::Block, children)
 }
 
 fn clear_box_ids(node: &mut BoxNode) {
@@ -366,15 +358,20 @@ fn bench_box_tree_anonymous_fixup(c: &mut Criterion) {
   group.sample_size(10);
   group.measurement_time(Duration::from_secs(2));
 
-  group.bench_function("synthetic_mixed_50k", |b| {
-    b.iter_batched(
-      synthetic_anonymous_fixup_tree,
-      |tree| {
-        let fixed = AnonymousBoxCreator::fixup_tree(tree).expect("anonymous fixup");
-        black_box(fixed);
-      },
-      BatchSize::LargeInput,
-    )
+  // Install a cooperative deadline like the real render pipeline does; anonymous fixup performs
+  // periodic deadline checks.
+  let deadline = RenderDeadline::new(Some(Duration::from_secs(60)), None);
+  with_deadline(Some(&deadline), || {
+    group.bench_function("synthetic_mixed_50k", |b| {
+      b.iter_batched(
+        synthetic_anonymous_fixup_tree,
+        |tree| {
+          let fixed = AnonymousBoxCreator::fixup_tree(tree).expect("anonymous fixup");
+          black_box(fixed);
+        },
+        BatchSize::LargeInput,
+      )
+    });
   });
 
   group.finish();
