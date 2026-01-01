@@ -67,7 +67,6 @@ use lru::LruCache;
 use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -481,7 +480,7 @@ impl ColorGlyphCacheKey {
 
 #[derive(Debug)]
 pub(crate) struct ColorGlyphCache {
-  glyphs: LruCache<ColorGlyphCacheKey, ColorGlyphRaster>,
+  glyphs: LruCache<ColorGlyphCacheKey, Option<ColorGlyphRaster>>,
   max_size: usize,
   max_bytes: usize,
   current_bytes: usize,
@@ -499,10 +498,15 @@ impl Default for ColorGlyphCache {
 
 impl ColorGlyphCache {
   pub(crate) fn new() -> Self {
-    let max_size = 512;
+    // The cache stores both successful rasters and negative lookups (`None`) so we avoid
+    // repeatedly attempting expensive color-glyph rasterization for glyphs that fall back to
+    // outlines. Negative entries are tiny (no pixmap bytes) but they still occupy an LRU slot, so
+    // keep the default entry budget comfortably above the number of likely "text glyphs" to avoid
+    // crowding out actual color rasters on pages that mix emoji fonts with normal text.
+    let max_size = 2048;
     let max_bytes = 16 * 1024 * 1024;
     Self {
-      glyphs: LruCache::new(NonZeroUsize::new(max_size).unwrap()),
+      glyphs: LruCache::unbounded(),
       max_size,
       max_bytes,
       current_bytes: 0,
@@ -513,7 +517,7 @@ impl ColorGlyphCache {
     }
   }
 
-  fn get(&mut self, key: &ColorGlyphCacheKey) -> Option<ColorGlyphRaster> {
+  fn get(&mut self, key: &ColorGlyphCacheKey) -> Option<Option<ColorGlyphRaster>> {
     if let Some(value) = self.glyphs.get(key).cloned() {
       self.hits += 1;
       return Some(value);
@@ -522,8 +526,14 @@ impl ColorGlyphCache {
     None
   }
 
-  fn insert(&mut self, key: ColorGlyphCacheKey, value: ColorGlyphRaster) {
-    let glyph_bytes = color_glyph_size(&value);
+  fn insert(&mut self, key: ColorGlyphCacheKey, value: Option<ColorGlyphRaster>) {
+    if let Some(existing) = self.glyphs.peek(&key) {
+      self.current_bytes = self
+        .current_bytes
+        .saturating_sub(color_glyph_entry_size(existing));
+    }
+
+    let glyph_bytes = color_glyph_entry_size(&value);
     self.current_bytes = self.current_bytes.saturating_add(glyph_bytes);
     self.peak_bytes = self.peak_bytes.max(self.current_bytes);
     self.glyphs.put(key, value);
@@ -549,7 +559,9 @@ impl ColorGlyphCache {
   fn evict_if_needed(&mut self) {
     while self.glyphs.len() > self.max_size || self.current_bytes > self.max_bytes {
       if let Some((_key, value)) = self.glyphs.pop_lru() {
-        self.current_bytes = self.current_bytes.saturating_sub(color_glyph_size(&value));
+        self.current_bytes = self
+          .current_bytes
+          .saturating_sub(color_glyph_entry_size(&value));
         self.evictions += 1;
       } else {
         break;
@@ -568,10 +580,7 @@ impl ColorGlyphCache {
 
   fn set_max_size(&mut self, max_size: usize) {
     self.max_size = max_size.max(1);
-    self.glyphs = LruCache::new(NonZeroUsize::new(self.max_size).unwrap());
-    self.current_bytes = 0;
-    self.peak_bytes = 0;
-    self.evictions = 0;
+    self.evict_if_needed();
   }
 
   fn set_max_bytes(&mut self, max_bytes: usize) {
@@ -624,6 +633,10 @@ fn color_glyph_size(glyph: &ColorGlyphRaster) -> usize {
     .data()
     .len()
     .saturating_add(std::mem::size_of::<ColorGlyphRaster>())
+}
+
+fn color_glyph_entry_size(entry: &Option<ColorGlyphRaster>) -> usize {
+  entry.as_ref().map(color_glyph_size).unwrap_or(0)
 }
 
 fn estimate_glyph_size(metrics: &GlyphOutlineMetrics) -> usize {
@@ -981,7 +994,7 @@ impl TextRasterizer {
         transform_signature,
       );
 
-      let mut color_glyph = if let Ok(mut cache) = self.color_cache.lock() {
+      let cached_color_glyph = if let Ok(mut cache) = self.color_cache.lock() {
         if diag_enabled {
           let before = cache.stats();
           let value = cache.get(&color_key);
@@ -998,21 +1011,23 @@ impl TextRasterizer {
       } else {
         None
       };
-      if color_glyph.is_none() {
-        color_glyph = self.color_renderer.render(
-          font,
-          &instance,
-          glyph.glyph_id,
-          font_size,
-          palette_index,
-          palette_overrides,
-          palette_override_hash,
-          color_for_glyph,
-          0.0,
-          variations,
-          Some((pixmap.width(), pixmap.height())),
-        );
-        if let Some(ref rendered) = color_glyph {
+
+      let color_glyph = match cached_color_glyph {
+        Some(value) => value,
+        None => {
+          let rendered = self.color_renderer.render(
+            font,
+            &instance,
+            glyph.glyph_id,
+            font_size,
+            palette_index,
+            palette_overrides,
+            palette_override_hash,
+            color_for_glyph,
+            0.0,
+            variations,
+            Some((pixmap.width(), pixmap.height())),
+          );
           if let Ok(mut cache) = self.color_cache.lock() {
             if diag_enabled {
               let before = cache.stats();
@@ -1027,8 +1042,9 @@ impl TextRasterizer {
               cache.insert(color_key, rendered.clone());
             }
           }
+          rendered
         }
-      }
+      };
 
       if let Some(color_image) = color_glyph {
         let combined_opacity = (glyph_opacity * state.opacity).clamp(0.0, 1.0);
@@ -1491,34 +1507,33 @@ impl TextRasterizer {
       synthetic_oblique,
       cache_transform_signature(Transform::identity(), None),
     );
-    let mut glyph = self
+    match self
       .color_cache
       .lock()
       .ok()
-      .and_then(|mut cache| cache.get(&color_key));
-
-    if glyph.is_none() {
-      glyph = self.color_renderer.render(
-        font,
-        &instance,
-        glyph_id,
-        font_size,
-        palette_index,
-        palette_overrides,
-        palette_override_hash,
-        color,
-        0.0,
-        variations,
-        None,
-      );
-      if let Some(ref rendered) = glyph {
+      .and_then(|mut cache| cache.get(&color_key))
+    {
+      Some(value) => value,
+      None => {
+        let rendered = self.color_renderer.render(
+          font,
+          &instance,
+          glyph_id,
+          font_size,
+          palette_index,
+          palette_overrides,
+          palette_override_hash,
+          color,
+          0.0,
+          variations,
+          None,
+        );
         if let Ok(mut cache) = self.color_cache.lock() {
           cache.insert(color_key, rendered.clone());
         }
+        rendered
       }
     }
-
-    glyph
   }
 }
 
@@ -1624,8 +1639,11 @@ pub fn glyph_advance(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Result
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::text::color_fonts::{color_font_render_count, ColorFontRenderCountGuard};
   use crate::text::face_cache;
+  use crate::text::font_db::{FontStretch, FontStyle, FontWeight};
   use crate::text::font_loader::FontContext;
+  use std::path::PathBuf;
 
   fn get_test_font() -> Option<LoadedFont> {
     let ctx = FontContext::new();
@@ -1838,23 +1856,17 @@ mod tests {
     let variations: &[Variation] = &[];
     let instance = FontInstance::new(&font, variations).unwrap();
 
-    assert!(cache
-      .get_or_build(&font, &instance, glyph_a)
-      .is_some());
+    assert!(cache.get_or_build(&font, &instance, glyph_a).is_some());
     let stats = cache.stats();
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, 0);
 
-    assert!(cache
-      .get_or_build(&font, &instance, glyph_a)
-      .is_some());
+    assert!(cache.get_or_build(&font, &instance, glyph_a).is_some());
     let stats = cache.stats();
     assert_eq!(stats.hits, 1);
 
     // Insert another glyph to trigger eviction
-    assert!(cache
-      .get_or_build(&font, &instance, glyph_b)
-      .is_some());
+    assert!(cache.get_or_build(&font, &instance, glyph_b).is_some());
     let stats = cache.stats();
     assert!(stats.evictions >= 1);
     assert!(cache.len() <= 1);
@@ -1911,6 +1923,89 @@ mod tests {
     let stats = rasterizer.cache_stats();
     assert_eq!(stats.misses, 1);
     assert!(stats.hits >= 1);
+  }
+
+  #[test]
+  fn color_glyph_cache_caches_negative_results() {
+    let font_path =
+      PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/colrv1-test.ttf");
+    let font_bytes = std::fs::read(&font_path).expect("read colrv1-test font fixture");
+    let font = LoadedFont {
+      id: None,
+      data: Arc::new(font_bytes),
+      index: 0,
+      family: "Test COLRv1".to_string(),
+      weight: FontWeight::NORMAL,
+      style: FontStyle::Normal,
+      stretch: FontStretch::Normal,
+    };
+
+    // The fixture is generated with glyph order ['.notdef', 'colr', 'box', 'triangle'] where only
+    // the `colr` glyph is addressable via COLR paint graphs. The `box` outline is therefore a
+    // stable non-color glyph that should always fall back to outline rendering.
+    let glyph_id = 2_u32;
+
+    // Sanity check: ensure this glyph does not render through the color font renderer.
+    let instance = FontInstance::new(&font, &[]).expect("parse colrv1-test font");
+    assert!(
+      ColorFontRenderer::new()
+        .render(
+          &font,
+          &instance,
+          glyph_id,
+          32.0,
+          0,
+          &[],
+          0,
+          Rgba::BLACK,
+          0.0,
+          &[],
+          None,
+        )
+        .is_none(),
+      "expected fixture glyph to fall back to outlines"
+    );
+
+    let _render_guard = ColorFontRenderCountGuard::start();
+    let mut rasterizer = TextRasterizer::new();
+    rasterizer.reset_cache_stats();
+
+    let glyphs = vec![GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 10.0,
+      y_advance: 0.0,
+    }];
+
+    let mut pixmap = new_pixmap(64, 64).unwrap();
+    rasterizer
+      .render_glyphs(&glyphs, &font, 32.0, 0.0, 48.0, Rgba::BLACK, &mut pixmap)
+      .unwrap();
+
+    let color_stats_first = rasterizer.color_cache.lock().unwrap().stats();
+    assert_eq!(color_stats_first.misses, 1);
+    assert_eq!(color_stats_first.hits, 0);
+    assert_eq!(
+      color_font_render_count(),
+      1,
+      "first render should attempt color rasterization once"
+    );
+
+    let mut pixmap2 = new_pixmap(64, 64).unwrap();
+    rasterizer
+      .render_glyphs(&glyphs, &font, 32.0, 0.0, 48.0, Rgba::BLACK, &mut pixmap2)
+      .unwrap();
+
+    let color_stats_second = rasterizer.color_cache.lock().unwrap().stats();
+    assert_eq!(color_stats_second.misses, 1);
+    assert_eq!(color_stats_second.hits, 1);
+    assert_eq!(
+      color_font_render_count(),
+      1,
+      "cached negative color lookup should skip subsequent color rasterization attempts"
+    );
   }
 
   #[test]

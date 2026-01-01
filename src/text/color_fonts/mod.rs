@@ -18,6 +18,8 @@ use crate::text::variations::{apply_rustybuzz_variations, normalized_coords};
 use limits::GlyphRasterLimits;
 use lru::LruCache;
 use rustybuzz::Variation;
+#[cfg(test)]
+use std::cell::Cell;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -37,6 +39,48 @@ pub struct ColorGlyphRaster {
   pub left: f32,
   /// Y offset from baseline to the top-left corner (pixels, Y-down).
   pub top: f32,
+}
+
+#[cfg(test)]
+thread_local! {
+  static TEST_COLOR_RENDER_COUNTING_ENABLED: Cell<bool> = Cell::new(false);
+  static TEST_COLOR_RENDER_COUNTER: Cell<u64> = Cell::new(0);
+}
+
+#[cfg(test)]
+#[inline]
+fn record_color_font_render() {
+  TEST_COLOR_RENDER_COUNTING_ENABLED.with(|enabled| {
+    if enabled.get() {
+      TEST_COLOR_RENDER_COUNTER.with(|counter| counter.set(counter.get().saturating_add(1)));
+    }
+  });
+}
+
+#[cfg(test)]
+pub(crate) fn color_font_render_count() -> u64 {
+  TEST_COLOR_RENDER_COUNTER.with(|counter| counter.get())
+}
+
+#[cfg(test)]
+pub(crate) struct ColorFontRenderCountGuard {
+  _private: (),
+}
+
+#[cfg(test)]
+impl ColorFontRenderCountGuard {
+  pub fn start() -> Self {
+    TEST_COLOR_RENDER_COUNTER.with(|counter| counter.set(0));
+    TEST_COLOR_RENDER_COUNTING_ENABLED.with(|enabled| enabled.set(true));
+    Self { _private: () }
+  }
+}
+
+#[cfg(test)]
+impl Drop for ColorFontRenderCountGuard {
+  fn drop(&mut self) {
+    TEST_COLOR_RENDER_COUNTING_ENABLED.with(|enabled| enabled.set(false));
+  }
 }
 
 /// Renders color glyphs from OpenType color tables.
@@ -77,6 +121,8 @@ impl ColorFontRenderer {
     variations: &[Variation],
     target_size: Option<(u32, u32)>,
   ) -> Option<ColorGlyphRaster> {
+    #[cfg(test)]
+    record_color_font_render();
     let cached_face = face_cache::get_ttf_face(font)?;
     let normalized_coords = normalized_coords(cached_face.face(), variations);
     let mut face = cached_face.clone_face();
