@@ -32,6 +32,14 @@ impl CssImportLoader for NoImportLoader {
   }
 }
 
+struct StaticImportLoader;
+
+impl CssImportLoader for StaticImportLoader {
+  fn load(&self, _url: &str) -> fastrender::error::Result<String> {
+    Ok(".imported { color: red; }\n".to_string())
+  }
+}
+
 struct CountingAllocator;
 
 static COUNT_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
@@ -294,6 +302,55 @@ fn bench_css_parse_pageset(c: &mut Criterion) {
       black_box(sheet);
     });
   });
+
+  let synthetic_import_css = format!("@import \"imported.css\";\n{synthetic_css}");
+  let import_loader = StaticImportLoader;
+  group.bench_function(
+    "synthetic_import_25k_decls/resolve_imports_owned",
+    |b| {
+      b.iter(|| {
+        let mut cache = MediaQueryCache::default();
+        let sheet = parse_stylesheet_with_media(
+          black_box(&synthetic_import_css),
+          &media_ctx,
+          Some(&mut cache),
+        )
+        .expect("parse stylesheet with media pruning");
+        let resolved = sheet
+          .resolve_imports_owned_with_cache(
+            &import_loader,
+            Some("https://example.com/synthetic.css"),
+            &media_ctx,
+            Some(&mut cache),
+          )
+          .expect("resolve imports");
+        black_box(resolved);
+      });
+    },
+  );
+  group.bench_function(
+    "synthetic_import_25k_decls/resolve_imports_borrowed",
+    |b| {
+      b.iter(|| {
+        let mut cache = MediaQueryCache::default();
+        let sheet = parse_stylesheet_with_media(
+          black_box(&synthetic_import_css),
+          &media_ctx,
+          Some(&mut cache),
+        )
+        .expect("parse stylesheet with media pruning");
+        let resolved = sheet
+          .resolve_imports_with_cache(
+            &import_loader,
+            Some("https://example.com/synthetic.css"),
+            &media_ctx,
+            Some(&mut cache),
+          )
+          .expect("resolve imports");
+        black_box(resolved);
+      });
+    },
+  );
 
   static PRINTED_SYNTHETIC: AtomicBool = AtomicBool::new(false);
   if !PRINTED_SYNTHETIC.swap(true, Ordering::Relaxed) {

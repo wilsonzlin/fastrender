@@ -5495,7 +5495,7 @@ impl FastRender {
                 resource_context.clone(),
                 stylesheet_fetch_counter.clone(),
               );
-              sheet.resolve_imports_with_cache(
+              sheet.resolve_imports_owned_with_cache(
                 &loader,
                 document_base_url.as_deref(),
                 media_ctx,
@@ -5570,7 +5570,7 @@ impl FastRender {
                 resource_context.clone(),
                 stylesheet_fetch_counter.clone(),
               );
-              sheet.resolve_imports_with_cache(
+              sheet.resolve_imports_owned_with_cache(
                 &loader,
                 Some(&sheet_base),
                 media_ctx,
@@ -5767,7 +5767,7 @@ impl FastRender {
           let sheet =
             parse_stylesheet_with_media(&inline.css, media_ctx, Some(media_query_cache))?;
           if sheet.contains_imports() {
-            let resolved = sheet.resolve_imports_with_cache(
+            let resolved = sheet.resolve_imports_owned_with_cache(
               &inline_loader,
               self.base_url.as_deref(),
               media_ctx,
@@ -5868,7 +5868,7 @@ impl FastRender {
                   resource_context.cloned(),
                   stylesheet_fetch_counter.clone(),
                 );
-                let resolved = sheet.resolve_imports_with_cache(
+                let resolved = sheet.resolve_imports_owned_with_cache(
                   &loader,
                   Some(&sheet_base),
                   media_ctx,
