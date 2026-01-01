@@ -1511,10 +1511,15 @@ fn sync(args: SyncArgs) -> io::Result<()> {
   Ok(())
 }
 
-/// Collapse detailed render diagnostics timings into coarse stage buckets used by progress JSON.
+/// Collapse detailed render timing stats into coarse stage buckets used by progress JSON.
 ///
-/// - Text shaping is grouped under `layout` because glyph positioning is part of line building.
-/// - Text rasterization and final encode time are grouped under `paint` to capture rendering/output costs.
+/// These buckets are **wall-clock stage timers** and are intended to be roughly additive (i.e.
+/// `stages_ms.sum()` should approximately match `total_ms` for successful renders).
+///
+/// Note: `text_*` timings are **subsystem breakdown** counters (and may be CPU-summed), so they are
+/// intentionally *not* mixed into stage buckets to avoid double-counting and nonsense totals.
+///
+/// Keep this consistent with `perf_smoke` (`stage_breakdown_from_stats`).
 fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
   let Some(stats) = diag.stats.as_ref() else {
     return StageBuckets::default();
@@ -1527,12 +1532,10 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
     + t.dom_top_layer_ms.unwrap_or(0.0);
   let css = t.css_inlining_ms.unwrap_or(0.0) + t.css_parse_ms.unwrap_or(0.0);
   let cascade = t.cascade_ms.unwrap_or(0.0) + t.box_tree_ms.unwrap_or(0.0);
-  let layout =
-    t.layout_ms.unwrap_or(0.0) + t.text_fallback_ms.unwrap_or(0.0) + t.text_shape_ms.unwrap_or(0.0);
+  let layout = t.layout_ms.unwrap_or(0.0);
   let paint = t.paint_build_ms.unwrap_or(0.0)
     + t.paint_optimize_ms.unwrap_or(0.0)
     + t.paint_rasterize_ms.unwrap_or(0.0)
-    + t.text_rasterize_ms.unwrap_or(0.0)
     + t.encode_ms.unwrap_or(0.0);
   StageBuckets {
     fetch,
@@ -6363,7 +6366,7 @@ mod tests {
   }
 
   #[test]
-  fn buckets_from_diagnostics_include_text_and_encode_timings() {
+  fn buckets_from_diagnostics_excludes_text_timings() {
     let timings = RenderStageTimings {
       html_decode_ms: Some(1.0),
       dom_parse_ms: Some(2.0),
@@ -6395,8 +6398,8 @@ mod tests {
     assert_eq!(buckets.fetch, 4.5);
     assert_eq!(buckets.css, 7.0);
     assert_eq!(buckets.cascade, 11.0);
-    assert_eq!(buckets.layout, 16.0);
-    assert_eq!(buckets.paint, 55.0);
+    assert_eq!(buckets.layout, 7.0);
+    assert_eq!(buckets.paint, 43.0);
   }
 
   #[test]

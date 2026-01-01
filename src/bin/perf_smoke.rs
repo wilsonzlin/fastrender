@@ -989,9 +989,11 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
 
 /// Collapse detailed render diagnostics timings into coarse stage buckets.
 ///
-/// Keep this consistent with `pageset_progress` so regressions attribute similarly across tools:
-/// - Text shaping is grouped under `layout` because glyph positioning is part of line building.
-/// - Text rasterization and final encode time are grouped under `paint` to capture output costs.
+/// Keep this consistent with `pageset_progress` so regressions attribute similarly across tools.
+///
+/// Buckets are **wall-clock stage timers**; `text_*` timings are subsystem breakdown counters (and
+/// may be CPU-summed), so they are intentionally excluded from stage buckets to avoid
+/// double-counting.
 fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown {
   let t = &stats.timings;
   StageBreakdown {
@@ -1004,12 +1006,11 @@ fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown
     ])),
     css: round_ms(sum_timings(&[t.css_inlining_ms, t.css_parse_ms])),
     cascade: round_ms(sum_timings(&[t.cascade_ms, t.box_tree_ms])),
-    layout: round_ms(sum_timings(&[t.layout_ms, t.text_fallback_ms, t.text_shape_ms])),
+    layout: round_ms(sum_timings(&[t.layout_ms])),
     paint: round_ms(sum_timings(&[
       t.paint_build_ms,
       t.paint_optimize_ms,
       t.paint_rasterize_ms,
-      t.text_rasterize_ms,
       t.encode_ms,
     ])),
   }
@@ -1219,7 +1220,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn stage_breakdown_includes_text_timings() {
+  fn stage_breakdown_excludes_text_timings() {
     let mut stats = fastrender::RenderStats::default();
     stats.timings.layout_ms = Some(1.0);
     stats.timings.text_fallback_ms = Some(2.0);
@@ -1231,7 +1232,7 @@ mod tests {
     stats.timings.encode_ms = Some(8.0);
 
     let breakdown = stage_breakdown_from_stats(&stats);
-    assert_eq!(breakdown.layout, 6.0);
-    assert_eq!(breakdown.paint, 30.0);
+    assert_eq!(breakdown.layout, 1.0);
+    assert_eq!(breakdown.paint, 23.0);
   }
 }
