@@ -4389,18 +4389,6 @@ fn prioritize_starting_style_rules(rules: &mut [MatchedRule<'_>]) {
   }
 }
 
-/// A single declaration annotated with cascade ordering keys.
-struct MatchedDeclaration<'a> {
-  important: bool,
-  origin: StyleOrigin,
-  specificity: u32,
-  rule_order: usize,
-  decl_order: usize,
-  layer_order_idx: usize,
-  is_custom_property: bool,
-  declaration: Cow<'a, Declaration>,
-}
-
 const INLINE_SPECIFICITY: u32 = 1 << 30;
 const INLINE_RULE_ORDER: usize = usize::MAX / 2;
 
@@ -10990,6 +10978,288 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn cascaded_declarations_preserve_origin_and_inline_precedence() {
+    let layer_order: Arc<[u32]> = Arc::from([u32::MAX].as_slice());
+    let rules = vec![
+      MatchedRule {
+        origin: StyleOrigin::UserAgent,
+        specificity: 0,
+        order: 0,
+        layer_order: layer_order.clone(),
+        declarations: Cow::Owned(parse_declarations("color: rgb(1, 2, 3);")),
+        starting_style: false,
+      },
+      MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order: 0,
+        layer_order: layer_order.clone(),
+        declarations: Cow::Owned(parse_declarations("color: rgb(4, 5, 6);")),
+        starting_style: false,
+      },
+    ];
+
+    let parent = ComputedStyle::default();
+    let viewport = Size::new(800.0, 600.0);
+    let mut styles = ComputedStyle::default();
+    apply_cascaded_declarations(
+      &mut styles,
+      rules.clone(),
+      None,
+      None,
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+    assert_eq!(styles.color, Rgba::rgb(4, 5, 6));
+
+    let mut styles = ComputedStyle::default();
+    apply_cascaded_declarations(
+      &mut styles,
+      rules,
+      Some(Cow::Owned(parse_declarations("color: rgb(7, 8, 9);"))),
+      Some(layer_order),
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+    assert_eq!(styles.color, Rgba::rgb(7, 8, 9));
+  }
+
+  #[test]
+  fn cascaded_declarations_reverse_layer_order_for_important() {
+    let base_layer: Arc<[u32]> = Arc::from([0u32, 1].as_slice());
+    let theme_layer: Arc<[u32]> = Arc::from([0u32, 2].as_slice());
+    let parent = ComputedStyle::default();
+    let viewport = Size::new(800.0, 600.0);
+
+    let normal_rules = vec![
+      MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order: 0,
+        layer_order: base_layer.clone(),
+        declarations: Cow::Owned(parse_declarations("color: rgb(1, 2, 3);")),
+        starting_style: false,
+      },
+      MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order: 0,
+        layer_order: theme_layer.clone(),
+        declarations: Cow::Owned(parse_declarations("color: rgb(4, 5, 6);")),
+        starting_style: false,
+      },
+    ];
+    let mut styles = ComputedStyle::default();
+    apply_cascaded_declarations(
+      &mut styles,
+      normal_rules,
+      None,
+      None,
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+    assert_eq!(styles.color, Rgba::rgb(4, 5, 6));
+
+    let important_rules = vec![
+      MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order: 0,
+        layer_order: base_layer,
+        declarations: Cow::Owned(parse_declarations("color: rgb(1, 2, 3) !important;")),
+        starting_style: false,
+      },
+      MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order: 0,
+        layer_order: theme_layer,
+        declarations: Cow::Owned(parse_declarations("color: rgb(4, 5, 6) !important;")),
+        starting_style: false,
+      },
+    ];
+    let mut styles = ComputedStyle::default();
+    apply_cascaded_declarations(
+      &mut styles,
+      important_rules,
+      None,
+      None,
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+    assert_eq!(styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn cascaded_declarations_specificity_outranks_rule_order() {
+    let layer_order: Arc<[u32]> = Arc::from([u32::MAX].as_slice());
+    let parent = ComputedStyle::default();
+    let viewport = Size::new(800.0, 600.0);
+    let mut styles = ComputedStyle::default();
+
+    apply_cascaded_declarations(
+      &mut styles,
+      vec![
+        MatchedRule {
+          origin: StyleOrigin::Author,
+          specificity: 100,
+          order: 0,
+          layer_order: layer_order.clone(),
+          declarations: Cow::Owned(parse_declarations("color: rgb(1, 2, 3);")),
+          starting_style: false,
+        },
+        MatchedRule {
+          origin: StyleOrigin::Author,
+          specificity: 1,
+          order: 10,
+          layer_order,
+          declarations: Cow::Owned(parse_declarations("color: rgb(4, 5, 6);")),
+          starting_style: false,
+        },
+      ],
+      None,
+      None,
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+
+    assert_eq!(styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn cascaded_declarations_preserve_declaration_order_within_rule() {
+    let layer_order: Arc<[u32]> = Arc::from([u32::MAX].as_slice());
+    let parent = ComputedStyle::default();
+    let viewport = Size::new(800.0, 600.0);
+    let mut styles = ComputedStyle::default();
+
+    apply_cascaded_declarations(
+      &mut styles,
+      vec![MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order: 0,
+        layer_order,
+        declarations: Cow::Owned(parse_declarations(
+          "color: rgb(1, 2, 3); color: rgb(4, 5, 6);",
+        )),
+        starting_style: false,
+      }],
+      None,
+      None,
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+
+    assert_eq!(styles.color, Rgba::rgb(4, 5, 6));
+  }
+
+  #[test]
+  fn cascaded_declarations_handle_mixed_importance_within_rule() {
+    let layer_order: Arc<[u32]> = Arc::from([u32::MAX].as_slice());
+    let parent = ComputedStyle::default();
+    let viewport = Size::new(800.0, 600.0);
+    let mut styles = ComputedStyle::default();
+
+    apply_cascaded_declarations(
+      &mut styles,
+      vec![MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order: 0,
+        layer_order,
+        // The later non-important declaration must not override the earlier !important one.
+        declarations: Cow::Owned(parse_declarations(
+          "color: rgb(1, 2, 3) !important; color: rgb(4, 5, 6);",
+        )),
+        starting_style: false,
+      }],
+      None,
+      None,
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+
+    assert_eq!(styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn cascaded_declarations_apply_custom_properties_before_var_resolution() {
+    let layer_order: Arc<[u32]> = Arc::from([u32::MAX].as_slice());
+    let parent = ComputedStyle::default();
+    let viewport = Size::new(800.0, 600.0);
+    let mut styles = ComputedStyle::default();
+
+    apply_cascaded_declarations(
+      &mut styles,
+      vec![
+        MatchedRule {
+          origin: StyleOrigin::Author,
+          specificity: 0,
+          order: 0,
+          layer_order: layer_order.clone(),
+          declarations: Cow::Owned(parse_declarations("--x: rgb(1, 2, 3) !important;")),
+          starting_style: false,
+        },
+        MatchedRule {
+          origin: StyleOrigin::Author,
+          specificity: 0,
+          order: 1,
+          layer_order: layer_order.clone(),
+          declarations: Cow::Owned(parse_declarations("--x: rgb(4, 5, 6);")),
+          starting_style: false,
+        },
+        MatchedRule {
+          origin: StyleOrigin::Author,
+          specificity: 0,
+          order: 2,
+          layer_order,
+          declarations: Cow::Owned(parse_declarations("color: var(--x);")),
+          starting_style: false,
+        },
+      ],
+      None,
+      None,
+      &parent,
+      parent.font_size,
+      16.0,
+      viewport,
+      default_computed_style(),
+      |_| true,
+    );
+
+    assert_eq!(styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
   fn type_and_class_selector_applies_properties() {
     let dom = DomNode {
       node_type: DomNodeType::Element {
@@ -16929,7 +17199,7 @@ fn find_pseudo_element_rules<'a>(
 
 fn apply_cascaded_declarations<'a, F>(
   styles: &mut ComputedStyle,
-  matched_rules: Vec<MatchedRule<'a>>,
+  mut matched_rules: Vec<MatchedRule<'a>>,
   inline_declarations: Option<Cow<'a, [Declaration]>>,
   inline_layer_order: Option<Arc<[u32]>>,
   parent_styles: &ComputedStyle,
@@ -16941,101 +17211,28 @@ fn apply_cascaded_declarations<'a, F>(
 ) where
   F: Fn(&Declaration) -> bool,
 {
-  let mut flattened: Vec<MatchedDeclaration<'a>> = Vec::new();
-  let mut total_decls = 0usize;
-  for rule in matched_rules.iter() {
-    total_decls += rule.declarations.len();
-  }
+  let mut total_decls = matched_rules
+    .iter()
+    .map(|rule| rule.declarations.len())
+    .sum::<usize>();
   if let Some(inline) = inline_declarations.as_ref() {
-    total_decls += inline.len();
+    total_decls = total_decls.saturating_add(inline.len());
   }
   if total_decls == 0 {
     resolve_pending_logical_properties(styles);
     resolve_absolute_lengths(styles, root_font_size, viewport);
     return;
   }
-  flattened.reserve(total_decls);
-  // Store layer orders once per matched rule (and inline style) and reference them by index from
-  // each flattened declaration. This avoids an `Arc` clone per declaration.
-  let mut layer_orders: Vec<Arc<[u32]>> = Vec::with_capacity(matched_rules.len().saturating_add(1));
-
-  for rule in matched_rules {
-    let origin = rule.origin;
-    let specificity = rule.specificity;
-    let order = rule.order;
-    let layer_order_idx = layer_orders.len();
-    layer_orders.push(rule.layer_order);
-
-    match rule.declarations {
-      Cow::Borrowed(decls) => {
-        for (decl_order, declaration) in decls.iter().enumerate() {
-          let is_custom_property = declaration.property.is_custom();
-          flattened.push(MatchedDeclaration {
-            important: declaration.important,
-            origin,
-            specificity,
-            rule_order: order,
-            decl_order,
-            layer_order_idx,
-            is_custom_property,
-            declaration: Cow::Borrowed(declaration),
-          });
-        }
-      }
-      Cow::Owned(decls) => {
-        for (decl_order, declaration) in decls.into_iter().enumerate() {
-          let is_custom_property = declaration.property.is_custom();
-          flattened.push(MatchedDeclaration {
-            important: declaration.important,
-            origin,
-            specificity,
-            rule_order: order,
-            decl_order,
-            layer_order_idx,
-            is_custom_property,
-            declaration: Cow::Owned(declaration),
-          });
-        }
-      }
-    }
-  }
-
   if let Some(inline) = inline_declarations {
     let inline_layer_order = inline_layer_order.expect("inline layer order missing");
-    let layer_order_idx = layer_orders.len();
-    layer_orders.push(inline_layer_order);
-    match inline {
-      Cow::Borrowed(decls) => {
-        for (decl_order, declaration) in decls.iter().enumerate() {
-          let is_custom_property = declaration.property.is_custom();
-          flattened.push(MatchedDeclaration {
-            important: declaration.important,
-            origin: StyleOrigin::Inline,
-            specificity: INLINE_SPECIFICITY,
-            rule_order: INLINE_RULE_ORDER,
-            decl_order,
-            layer_order_idx,
-            is_custom_property,
-            declaration: Cow::Borrowed(declaration),
-          });
-        }
-      }
-      Cow::Owned(decls) => {
-        for (decl_order, declaration) in decls.into_iter().enumerate() {
-          let is_custom_property = declaration.property.is_custom();
-          flattened.push(MatchedDeclaration {
-            important: declaration.important,
-            origin: StyleOrigin::Inline,
-            specificity: INLINE_SPECIFICITY,
-            rule_order: INLINE_RULE_ORDER,
-            decl_order,
-            layer_order_idx,
-            is_custom_property,
-            declaration: Cow::Owned(declaration),
-          });
-        }
-      }
-    }
+    matched_rules.push(MatchedRule {
+      origin: StyleOrigin::Inline,
+      specificity: INLINE_SPECIFICITY,
+      order: INLINE_RULE_ORDER,
+      layer_order: inline_layer_order,
+      declarations: inline,
+      starting_style: false,
+    });
   }
 
   fn cmp_layer_order_normal(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
@@ -17047,129 +17244,293 @@ fn apply_cascaded_declarations<'a, F>(
     a.len().cmp(&b.len())
   }
 
-  // Per CSS Cascade Layers, important declarations reverse layer order so earlier layers win.
-  // Unlayered rules use u32::MAX; reversing the comparator ensures layered !important rules
-  // outrank unlayered ones.
-  fn cmp_layer_order_important(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
-    cmp_layer_order_normal(b, a)
-  }
-
-  flattened.sort_unstable_by(|a, b| {
-    a.important
-      .cmp(&b.important)
-      .then(a.origin.rank().cmp(&b.origin.rank()))
-      .then_with(|| {
-        let a_layer_order = &layer_orders[a.layer_order_idx];
-        let b_layer_order = &layer_orders[b.layer_order_idx];
-        if Arc::ptr_eq(a_layer_order, b_layer_order) {
-          return std::cmp::Ordering::Equal;
-        }
-        if a.important {
-          cmp_layer_order_important(a_layer_order.as_ref(), b_layer_order.as_ref())
-        } else {
-          cmp_layer_order_normal(a_layer_order.as_ref(), b_layer_order.as_ref())
-        }
-      })
-      .then(a.specificity.cmp(&b.specificity))
-      .then(a.rule_order.cmp(&b.rule_order))
-      .then(a.decl_order.cmp(&b.decl_order))
-  });
-
   let defaults = default_computed_style();
 
+  const HAS_CUSTOM_NORMAL: u8 = 1 << 0;
+  const HAS_CUSTOM_IMPORTANT: u8 = 1 << 1;
+  const HAS_OTHER_NORMAL: u8 = 1 << 2;
+  const HAS_OTHER_IMPORTANT: u8 = 1 << 3;
+
+  let mut rule_decl_kinds: Vec<u8> = Vec::with_capacity(matched_rules.len());
+  let mut important_custom_decl_orders: Vec<usize> = Vec::new();
+  let mut important_other_decl_orders: Vec<usize> = Vec::new();
+  let mut important_custom_ranges: Vec<(usize, usize)> = Vec::with_capacity(matched_rules.len());
+  let mut important_other_ranges: Vec<(usize, usize)> = Vec::with_capacity(matched_rules.len());
+  let mut any_custom_normal = false;
+  let mut any_custom_important = false;
+  let mut any_other_normal = false;
+  let mut any_other_important = false;
+  let mut any_non_custom_revert_layer = false;
+  for rule in matched_rules.iter() {
+    let important_custom_start = important_custom_decl_orders.len();
+    let important_other_start = important_other_decl_orders.len();
+    let mut mask = 0u8;
+    for (decl_order, declaration) in rule.declarations.iter().enumerate() {
+      let is_custom = declaration.property.is_custom();
+      if is_custom {
+        if declaration.important {
+          mask |= HAS_CUSTOM_IMPORTANT;
+          important_custom_decl_orders.push(decl_order);
+        } else {
+          mask |= HAS_CUSTOM_NORMAL;
+        }
+      } else {
+        if declaration.important {
+          mask |= HAS_OTHER_IMPORTANT;
+          important_other_decl_orders.push(decl_order);
+        } else {
+          mask |= HAS_OTHER_NORMAL;
+        }
+        if !any_non_custom_revert_layer {
+          if let PropertyValue::Keyword(kw) = &declaration.value {
+            any_non_custom_revert_layer =
+              crate::style::custom_property_store::contains_revert_layer_token(kw);
+          }
+        }
+      }
+    }
+    any_custom_normal |= mask & HAS_CUSTOM_NORMAL != 0;
+    any_custom_important |= mask & HAS_CUSTOM_IMPORTANT != 0;
+    any_other_normal |= mask & HAS_OTHER_NORMAL != 0;
+    any_other_important |= mask & HAS_OTHER_IMPORTANT != 0;
+    rule_decl_kinds.push(mask);
+    important_custom_ranges.push((important_custom_start, important_custom_decl_orders.len()));
+    important_other_ranges.push((important_other_start, important_other_decl_orders.len()));
+  }
+
+  let need_important_order = any_custom_important || any_other_important;
+
+  #[inline]
+  fn layer_order_eq(a: &Arc<[u32]>, b: &Arc<[u32]>) -> bool {
+    Arc::ptr_eq(a, b) || a.as_ref() == b.as_ref()
+  }
+
+  // Sort rules in normal cascade order (origin.rank + layer order + specificity + rule order).
+  //
+  // Important declarations reverse layer order, but within a given layer the ordering by
+  // specificity and rule order remains the same. This lets us derive the important rule order by
+  // reversing the layer-order groups within each origin rank, avoiding a second sort.
+  let mut rule_order: Vec<usize> = (0..matched_rules.len()).collect();
+  if rule_order.len() > 1 {
+    rule_order.sort_unstable_by(|&a_idx, &b_idx| {
+      let a = &matched_rules[a_idx];
+      let b = &matched_rules[b_idx];
+      a.origin
+        .rank()
+        .cmp(&b.origin.rank())
+        .then_with(|| {
+          if Arc::ptr_eq(&a.layer_order, &b.layer_order) {
+            return CmpOrdering::Equal;
+          }
+          cmp_layer_order_normal(a.layer_order.as_ref(), b.layer_order.as_ref())
+        })
+        .then(a.specificity.cmp(&b.specificity))
+        .then(a.order.cmp(&b.order))
+    });
+  }
+
+  let important_rule_order: Vec<usize> = if need_important_order {
+    let mut out = Vec::with_capacity(rule_order.len());
+    let mut i = 0usize;
+    while i < rule_order.len() {
+      let origin_rank = matched_rules[rule_order[i]].origin.rank();
+      let origin_start = i;
+      i += 1;
+      while i < rule_order.len() && matched_rules[rule_order[i]].origin.rank() == origin_rank {
+        i += 1;
+      }
+      let origin_slice = &rule_order[origin_start..i];
+      let mut end = origin_slice.len();
+      while end > 0 {
+        let mut start = end - 1;
+        let layer_order = &matched_rules[origin_slice[start]].layer_order;
+        while start > 0 {
+          let prev_layer = &matched_rules[origin_slice[start - 1]].layer_order;
+          if layer_order_eq(prev_layer, layer_order) {
+            start -= 1;
+          } else {
+            break;
+          }
+        }
+        out.extend_from_slice(&origin_slice[start..end]);
+        end = start;
+      }
+    }
+    out
+  } else {
+    Vec::new()
+  };
+
   // First apply custom properties so later var() resolutions can see them
-  // Avoid repeated property.starts_with for the hot loop by checking once.
-  for entry in flattened.iter() {
-    if entry.is_custom_property {
-      if !filter(entry.declaration.as_ref()) {
+  if any_custom_normal {
+    for &rule_idx in rule_order.iter() {
+      if rule_decl_kinds[rule_idx] & HAS_CUSTOM_NORMAL == 0 {
         continue;
       }
-      // Custom properties are handled via a fast-path in `apply_declaration_with_base` and do not
-      // participate in `revert-layer`, so we can skip all snapshot bookkeeping here.
-      apply_declaration_with_base(
-        styles,
-        entry.declaration.as_ref(),
-        parent_styles,
-        defaults,
-        None,
-        parent_font_size,
-        root_font_size,
-        viewport,
-      );
+      let rule = &matched_rules[rule_idx];
+      for declaration in rule.declarations.iter() {
+        if declaration.important || !declaration.property.is_custom() {
+          continue;
+        }
+        if !filter(declaration) {
+          continue;
+        }
+        // Custom properties are handled via a fast-path in `apply_declaration_with_base` and do not
+        // participate in `revert-layer`, so we can skip all snapshot bookkeeping here.
+        apply_declaration_with_base(
+          styles,
+          declaration,
+          parent_styles,
+          defaults,
+          None,
+          parent_font_size,
+          root_font_size,
+          viewport,
+        );
+      }
+    }
+  }
+  if any_custom_important {
+    for &rule_idx in important_rule_order.iter() {
+      if rule_decl_kinds[rule_idx] & HAS_CUSTOM_IMPORTANT == 0 {
+        continue;
+      }
+      let rule = &matched_rules[rule_idx];
+      let (start, end) = important_custom_ranges[rule_idx];
+      let decls = rule.declarations.as_ref();
+      for &decl_order in important_custom_decl_orders[start..end].iter() {
+        let declaration = &decls[decl_order];
+        debug_assert!(declaration.important);
+        debug_assert!(declaration.property.is_custom());
+        if !filter(declaration) {
+          continue;
+        }
+        apply_declaration_with_base(
+          styles,
+          declaration,
+          parent_styles,
+          defaults,
+          None,
+          parent_font_size,
+          root_font_size,
+          viewport,
+        );
+      }
     }
   }
 
   // `revert-layer` is rare, but when we track layer bases we clone the current `ComputedStyle` at
   // each layer boundary. This is expensive for large pages (especially with many custom
   // properties), so avoid the work unless `revert-layer` is actually in play.
-  let mut track_revert_layer = styles.custom_properties.has_revert_layer_token();
-  if !track_revert_layer {
-    track_revert_layer = flattened.iter().any(|entry| {
-      if entry.is_custom_property {
-        return false;
-      }
-      match &entry.declaration.value {
-        PropertyValue::Keyword(kw) => {
-          crate::style::custom_property_store::contains_revert_layer_token(kw)
-        }
-        _ => false,
-      }
-    });
-  }
+  let track_revert_layer =
+    styles.custom_properties.has_revert_layer_token() || any_non_custom_revert_layer;
 
   // Scope revert-layer bases to the current cascade stratum (origin + importance) so that
   // important declarations don't reuse snapshots from the normal cascade segment.
   let mut layer_snapshots: FxHashMap<Arc<[u32]>, ComputedStyle> = FxHashMap::default();
   let mut layer_snapshot_stratum: Option<(u8, bool)> = None;
 
-  let mut apply_entry = |entry: &MatchedDeclaration<'_>| {
-    if !filter(entry.declaration.as_ref()) {
-      return;
-    }
-    let revert_base = match entry.origin {
-      StyleOrigin::UserAgent => defaults,
-      StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
-    };
-    let revert_layer_base = if track_revert_layer {
-      let stratum = (entry.origin.rank(), entry.important);
-      if layer_snapshot_stratum != Some(stratum) {
-        layer_snapshots.clear();
-        layer_snapshot_stratum = Some(stratum);
-      }
-      let layer_order = &layer_orders[entry.layer_order_idx];
-      // `layer_snapshots` is keyed by the declaration's `Arc<[u32]>` layer order. Most
-      // declarations in a rule set share the same layer order, so avoid cloning the `Arc` on
-      // lookup hits by probing with the borrowed slice and cloning only when we need to insert a
-      // new snapshot.
-      let layer_base = match layer_snapshots.get_mut(layer_order.as_ref()) {
-        Some(existing) => existing,
-        None => {
-          layer_snapshots.insert(Arc::clone(layer_order), styles.clone());
-          layer_snapshots
-            .get_mut(layer_order.as_ref())
-            .expect("layer snapshot inserted")
-        }
-      };
-      Some(&*layer_base)
-    } else {
-      None
-    };
-    apply_declaration_with_base(
-      styles,
-      entry.declaration.as_ref(),
-      parent_styles,
-      revert_base,
-      revert_layer_base,
-      parent_font_size,
-      root_font_size,
-      viewport,
-    );
-  };
-
   // Then apply all other declarations in cascade order
-  for entry in flattened.iter() {
-    if !entry.is_custom_property {
-      apply_entry(entry);
+  if any_other_normal {
+    for &rule_idx in rule_order.iter() {
+      if rule_decl_kinds[rule_idx] & HAS_OTHER_NORMAL == 0 {
+        continue;
+      }
+      let rule = &matched_rules[rule_idx];
+      let revert_base = match rule.origin {
+        StyleOrigin::UserAgent => defaults,
+        StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
+      };
+      for declaration in rule.declarations.iter() {
+        if declaration.important || declaration.property.is_custom() {
+          continue;
+        }
+        if !filter(declaration) {
+          continue;
+        }
+        let revert_layer_base = if track_revert_layer {
+          let stratum = (rule.origin.rank(), false);
+          if layer_snapshot_stratum != Some(stratum) {
+            layer_snapshots.clear();
+            layer_snapshot_stratum = Some(stratum);
+          }
+          let layer_order = &rule.layer_order;
+          let layer_base = match layer_snapshots.get_mut(layer_order.as_ref()) {
+            Some(existing) => existing,
+            None => {
+              layer_snapshots.insert(Arc::clone(layer_order), styles.clone());
+              layer_snapshots
+                .get_mut(layer_order.as_ref())
+                .expect("layer snapshot inserted")
+            }
+          };
+          Some(&*layer_base)
+        } else {
+          None
+        };
+        apply_declaration_with_base(
+          styles,
+          declaration,
+          parent_styles,
+          revert_base,
+          revert_layer_base,
+          parent_font_size,
+          root_font_size,
+          viewport,
+        );
+      }
+    }
+  }
+  if any_other_important {
+    for &rule_idx in important_rule_order.iter() {
+      if rule_decl_kinds[rule_idx] & HAS_OTHER_IMPORTANT == 0 {
+        continue;
+      }
+      let rule = &matched_rules[rule_idx];
+      let revert_base = match rule.origin {
+        StyleOrigin::UserAgent => defaults,
+        StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
+      };
+      let (start, end) = important_other_ranges[rule_idx];
+      let decls = rule.declarations.as_ref();
+      for &decl_order in important_other_decl_orders[start..end].iter() {
+        let declaration = &decls[decl_order];
+        debug_assert!(declaration.important);
+        debug_assert!(!declaration.property.is_custom());
+        if !filter(declaration) {
+          continue;
+        }
+        let revert_layer_base = if track_revert_layer {
+          let stratum = (rule.origin.rank(), true);
+          if layer_snapshot_stratum != Some(stratum) {
+            layer_snapshots.clear();
+            layer_snapshot_stratum = Some(stratum);
+          }
+          let layer_order = &rule.layer_order;
+          let layer_base = match layer_snapshots.get_mut(layer_order.as_ref()) {
+            Some(existing) => existing,
+            None => {
+              layer_snapshots.insert(Arc::clone(layer_order), styles.clone());
+              layer_snapshots
+                .get_mut(layer_order.as_ref())
+                .expect("layer snapshot inserted")
+            }
+          };
+          Some(&*layer_base)
+        } else {
+          None
+        };
+        apply_declaration_with_base(
+          styles,
+          declaration,
+          parent_styles,
+          revert_base,
+          revert_layer_base,
+          parent_font_size,
+          root_font_size,
+          viewport,
+        );
+      }
     }
   }
   resolve_pending_logical_properties(styles);
