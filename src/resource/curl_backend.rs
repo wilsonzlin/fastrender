@@ -398,11 +398,15 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
     )
   };
 
-  let mut jar_guard = lock_cookie_jar(fetcher);
-  let cookie_path = jar_guard
-    .ensure_path()
-    .map_err(|e| Error::Resource(ResourceError::new(url.to_string(), e.to_string()).with_source(e)))?
-    .to_path_buf();
+  let cookie_path = {
+    let mut jar_guard = lock_cookie_jar(fetcher);
+    jar_guard
+      .ensure_path()
+      .map_err(|e| {
+        Error::Resource(ResourceError::new(url.to_string(), e.to_string()).with_source(e))
+      })?
+      .to_path_buf()
+  };
 
   let mut force_http1 = false;
 
@@ -443,14 +447,17 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       );
 
       let network_timer = super::start_network_fetch_diagnostics();
-      let response = run_curl(
-        &current,
-        &cookie_path,
-        (!effective_timeout.is_zero()).then_some(effective_timeout),
-        &headers,
-        allowed_limit,
-        force_http1,
-      );
+      let response = {
+        let _jar_guard = lock_cookie_jar(fetcher);
+        run_curl(
+          &current,
+          &cookie_path,
+          (!effective_timeout.is_zero()).then_some(effective_timeout),
+          &headers,
+          allowed_limit,
+          force_http1,
+        )
+      };
       super::finish_network_fetch_diagnostics(network_timer);
 
       let response = match response {
@@ -613,7 +620,6 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
           return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
         }
         Err(super::ContentDecodeError::DecompressionFailed { .. }) if accept_encoding.is_none() => {
-          drop(jar_guard);
           return fetch_http_with_accept_inner(
             fetcher,
             &current,
