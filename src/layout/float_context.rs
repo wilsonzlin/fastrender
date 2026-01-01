@@ -203,6 +203,17 @@ struct FloatEvent {
   float_id: usize,
 }
 
+fn float_event_cmp(a: &FloatEvent, b: &FloatEvent) -> Ordering {
+  match a.y.partial_cmp(&b.y).unwrap_or(Ordering::Equal) {
+    Ordering::Equal => match (a.kind, b.kind) {
+      (FloatEventKind::Start, FloatEventKind::End) => Ordering::Less,
+      (FloatEventKind::End, FloatEventKind::Start) => Ordering::Greater,
+      _ => a.float_id.cmp(&b.float_id),
+    },
+    other => other,
+  }
+}
+
 #[derive(Debug, Clone)]
 struct FloatSweepState {
   current_y: f32,
@@ -492,17 +503,11 @@ impl FloatContext {
     }
   }
 
-  fn sort_events(&mut self) {
-    self.events.sort_by(
-      |a, b| match a.y.partial_cmp(&b.y).unwrap_or(Ordering::Equal) {
-        Ordering::Equal => match (a.kind, b.kind) {
-          (FloatEventKind::Start, FloatEventKind::End) => Ordering::Less,
-          (FloatEventKind::End, FloatEventKind::Start) => Ordering::Greater,
-          _ => a.float_id.cmp(&b.float_id),
-        },
-        other => other,
-      },
-    );
+  fn insert_event_sorted(&mut self, event: FloatEvent) {
+    let idx = self
+      .events
+      .partition_point(|probe| float_event_cmp(probe, &event) == Ordering::Less);
+    self.events.insert(idx, event);
   }
 
   fn ensure_sweep_state(&self, y: f32) -> std::cell::RefMut<FloatSweepState> {
@@ -862,18 +867,55 @@ impl FloatContext {
     let id = self.float_map.len();
     self.float_map.push(FloatRef { side, index });
 
-    self.events.push(FloatEvent {
+    self.insert_event_sorted(FloatEvent {
       y: start_y,
       kind: FloatEventKind::Start,
       float_id: id,
     });
-    self.events.push(FloatEvent {
+    self.insert_event_sorted(FloatEvent {
       y: end_y,
       kind: FloatEventKind::End,
       float_id: id,
     });
-    self.sort_events();
-    self.reset_sweep_state();
+
+    // Keep the sweep state usable across interleaved insertions + monotonic queries (the common
+    // pattern during BFC layout). Resetting here destroys the incremental sweep and turns
+    // float-heavy pages into O(n^2) boundary rescans.
+    let mut state = self.sweep_state.borrow_mut();
+    state.active.push(false);
+
+    // If the sweep has already advanced to a concrete Y, ensure:
+    // - the new float is marked active if it overlaps the current sweep position, and
+    // - the event cursor accounts for the newly inserted events.
+    let current_y = state.current_y;
+    if current_y.is_finite() {
+      let float = self.float_info(id);
+      if float.contains_y(current_y) {
+        state.active[id] = true;
+        match float.side {
+          FloatSide::Left => {
+            if float.shape.is_some() {
+              state.active_shape_left.push(id);
+            } else {
+              state.active_left.push((FloatKey(float.right_edge()), id));
+            }
+          }
+          FloatSide::Right => {
+            if float.shape.is_some() {
+              state.active_shape_right.push(id);
+            } else {
+              state
+                .active_right
+                .push((Reverse(FloatKey(float.left_edge())), id));
+            }
+          }
+        }
+      }
+
+      // Match `advance_sweep_to`: events are processed until we see `event.y > current_y`.
+      state.event_cursor = self.events.partition_point(|e| !(e.y > current_y));
+      self.prune_heaps(&mut state);
+    }
   }
 
   fn clearance_side_max_bottom(
@@ -1910,6 +1952,31 @@ mod tests {
     assert_eq!(stats.width_queries, 500);
     assert!(
       stats.boundary_steps <= 210,
+      "boundary steps should scale with float events, got {}",
+      stats.boundary_steps
+    );
+  }
+
+  #[test]
+  fn float_sweep_reuses_state_across_insertions() {
+    let _guard = FloatProfileGuard::new(true);
+    reset_float_profile_counters();
+    let mut ctx = FloatContext::new(200.0);
+
+    // The layout pipeline typically alternates between inserting new floats and asking "what width
+    // is available at this Y?". Rebuilding the sweep state on every insertion makes this pattern
+    // quadratic in the number of floats.
+    for i in 0..200 {
+      let y = i as f32;
+      ctx.add_float_at(FloatSide::Left, 0.0, y, 20.0, 1.0);
+      let _ = ctx.available_width_at_y(y);
+    }
+
+    let stats = float_profile_stats();
+    assert_eq!(stats.range_queries, 0);
+    assert_eq!(stats.width_queries, 200);
+    assert!(
+      stats.boundary_steps <= 2000,
       "boundary steps should scale with float events, got {}",
       stats.boundary_steps
     );
