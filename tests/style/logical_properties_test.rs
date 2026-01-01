@@ -11,9 +11,9 @@ use fastrender::style::types::WritingMode;
 use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 
-fn decl(property: &str, value: PropertyValue) -> Declaration {
+fn decl(property: &'static str, value: PropertyValue) -> Declaration {
   Declaration {
-    property: property.to_string(),
+    property: property.into(),
     value,
     raw_value: String::new(),
     important: false,

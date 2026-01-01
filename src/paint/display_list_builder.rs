@@ -7466,7 +7466,7 @@ mod tests {
       apply_declaration(
         &mut style,
         &Declaration {
-          property: "background-image".to_string(),
+          property: "background-image".into(),
           value: PropertyValue::Keyword(format!(
             "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
             low, high
@@ -7556,7 +7556,7 @@ mod tests {
       apply_declaration(
         &mut style,
         &Declaration {
-          property: "list-style-image".to_string(),
+          property: "list-style-image".into(),
           value: PropertyValue::Keyword(format!(
             "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
             low, high

@@ -1,3 +1,6 @@
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::fmt::Write;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -29,6 +32,80 @@ impl CssImportLoader for NoImportLoader {
   }
 }
 
+struct CountingAllocator;
+
+static COUNT_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
+static ALLOC_CALLS: AtomicUsize = AtomicUsize::new(0);
+static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for CountingAllocator {
+  unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    if COUNT_ALLOCATIONS.load(Ordering::Relaxed) {
+      ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+      ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+    }
+    System.alloc(layout)
+  }
+
+  unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+    if COUNT_ALLOCATIONS.load(Ordering::Relaxed) {
+      ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+      ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+    }
+    System.alloc_zeroed(layout)
+  }
+
+  unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    if COUNT_ALLOCATIONS.load(Ordering::Relaxed) {
+      ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+      ALLOC_BYTES.fetch_add(new_size, Ordering::Relaxed);
+    }
+    System.realloc(ptr, layout, new_size)
+  }
+
+  unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+    System.dealloc(ptr, layout)
+  }
+}
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn allocation_counts() -> (usize, usize) {
+  (
+    ALLOC_CALLS.load(Ordering::Relaxed),
+    ALLOC_BYTES.load(Ordering::Relaxed),
+  )
+}
+
+struct AllocationCountGuard;
+
+impl AllocationCountGuard {
+  fn new() -> Self {
+    COUNT_ALLOCATIONS.store(true, Ordering::Relaxed);
+    Self
+  }
+}
+
+impl Drop for AllocationCountGuard {
+  fn drop(&mut self) {
+    COUNT_ALLOCATIONS.store(false, Ordering::Relaxed);
+  }
+}
+
+fn allocation_delta<R>(f: impl FnOnce() -> R) -> (usize, usize, R) {
+  let (calls_start, bytes_start) = allocation_counts();
+  let _guard = AllocationCountGuard::new();
+  let result = f();
+  drop(_guard);
+  let (calls_end, bytes_end) = allocation_counts();
+  (
+    calls_end.saturating_sub(calls_start),
+    bytes_end.saturating_sub(bytes_start),
+    result,
+  )
+}
+
 fn bench_css_parse_pageset(c: &mut Criterion) {
   let mut group = c.benchmark_group("css_parse_pageset");
   group
@@ -42,6 +119,17 @@ fn bench_css_parse_pageset(c: &mut Criterion) {
       black_box(sheet);
     });
   });
+
+  // Print allocation stats once for the full stylesheet parse so changes that reduce allocator
+  // pressure (like interned property names) are easy to validate locally.
+  static PRINTED_APPLE: AtomicBool = AtomicBool::new(false);
+  if !PRINTED_APPLE.swap(true, Ordering::Relaxed) {
+    // Warm caches (e.g. known-property tables) so the allocation delta is closer to steady state.
+    let _ = parse_stylesheet(APPLE_STYLESHEET).expect("warm parse stylesheet");
+    let (calls, bytes, result) = allocation_delta(|| parse_stylesheet(APPLE_STYLESHEET));
+    let _ = result.expect("allocation-count parse stylesheet");
+    eprintln!("apple.com/full allocations/parse: calls={calls} bytes={bytes}");
+  }
 
   let media_ctx = MediaContext::screen(1200.0, 800.0);
   group.bench_function("apple.com/pruned_media_1200x800", |b| {
@@ -174,6 +262,46 @@ fn bench_css_parse_pageset(c: &mut Criterion) {
       black_box(sheet);
     });
   });
+
+  // Micro-benchmark: large stylesheet with many declarations that do not reference `var()`.
+  fn synthetic_no_var_stylesheet(declarations: usize) -> String {
+    let mut css = String::with_capacity(declarations.saturating_mul(32));
+    css.push_str(".synthetic{");
+    for idx in 0..declarations {
+      match idx % 6 {
+        0 => {
+          let _ = write!(css, "margin-left:{}px;", (idx % 16) + 1);
+        }
+        1 => {
+          let _ = write!(css, "padding-top:{}px;", (idx % 12) + 1);
+        }
+        2 => css.push_str("opacity:0.5;"),
+        3 => {
+          let _ = write!(css, "z-index:{};", (idx % 10) as i32);
+        }
+        4 => css.push_str("display:block;"),
+        _ => css.push_str("position:relative;"),
+      }
+    }
+    css.push_str("}\n");
+    css
+  }
+
+  let synthetic_css = synthetic_no_var_stylesheet(25_000);
+  group.bench_function("synthetic_no_var_25k_decls", |b| {
+    b.iter(|| {
+      let sheet = parse_stylesheet(black_box(&synthetic_css)).expect("parse stylesheet");
+      black_box(sheet);
+    });
+  });
+
+  static PRINTED_SYNTHETIC: AtomicBool = AtomicBool::new(false);
+  if !PRINTED_SYNTHETIC.swap(true, Ordering::Relaxed) {
+    let _ = parse_stylesheet(&synthetic_css).expect("warm parse synthetic stylesheet");
+    let (calls, bytes, result) = allocation_delta(|| parse_stylesheet(&synthetic_css));
+    let _ = result.expect("allocation-count parse synthetic stylesheet");
+    eprintln!("synthetic_no_var_25k_decls allocations/parse: calls={calls} bytes={bytes}");
+  }
 
   group.finish();
 }

@@ -217,7 +217,7 @@ fn background_image_set_chooses_best_density_for_display_list() {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Keyword(format!(
           "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
           low, high

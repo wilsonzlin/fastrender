@@ -4,9 +4,9 @@ use fastrender::style::properties::apply_declaration;
 use fastrender::style::types::GridTrack;
 use fastrender::style::ComputedStyle;
 
-fn decl(name: &str, value: PropertyValue) -> Declaration {
+fn decl(name: &'static str, value: PropertyValue) -> Declaration {
   Declaration {
-    property: name.to_string(),
+    property: name.into(),
     value,
     raw_value: String::new(),
     important: false,

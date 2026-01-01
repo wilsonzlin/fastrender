@@ -427,16 +427,20 @@ const KNOWN_PAGE_PROPERTIES: &[&str] = &[
 static KNOWN_STYLE_PROPERTIES_SET: OnceLock<FxHashSet<&'static str>> = OnceLock::new();
 static KNOWN_PAGE_PROPERTIES_SET: OnceLock<FxHashSet<&'static str>> = OnceLock::new();
 
+pub(crate) fn known_style_property_set() -> &'static FxHashSet<&'static str> {
+  KNOWN_STYLE_PROPERTIES_SET.get_or_init(|| KNOWN_STYLE_PROPERTIES.iter().copied().collect())
+}
+
+pub(crate) fn known_page_property_set() -> &'static FxHashSet<&'static str> {
+  KNOWN_PAGE_PROPERTIES_SET.get_or_init(|| KNOWN_PAGE_PROPERTIES.iter().copied().collect())
+}
+
 pub(crate) fn is_known_style_property(property: &str) -> bool {
-  KNOWN_STYLE_PROPERTIES_SET
-    .get_or_init(|| KNOWN_STYLE_PROPERTIES.iter().copied().collect())
-    .contains(property)
+  known_style_property_set().contains(property)
 }
 
 fn is_known_page_property(property: &str) -> bool {
-  KNOWN_PAGE_PROPERTIES_SET
-    .get_or_init(|| KNOWN_PAGE_PROPERTIES.iter().copied().collect())
-    .contains(property)
+  known_page_property_set().contains(property)
 }
 
 fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> Vec<&'a str> {

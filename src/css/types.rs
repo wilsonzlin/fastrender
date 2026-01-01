@@ -2189,10 +2189,72 @@ pub enum FontFaceStyle {
   },
 }
 
+/// A CSS property name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PropertyName {
+  /// A known, supported property name.
+  ///
+  /// This stores the canonical lowercase spelling from the engine's known-property tables so we
+  /// can avoid allocating a `String` for each declaration during parsing.
+  Known(&'static str),
+  /// A custom property name (`--*`), which is case-sensitive and must preserve the authored
+  /// spelling.
+  Custom(String),
+}
+
+impl PropertyName {
+  #[inline]
+  pub fn as_str(&self) -> &str {
+    match self {
+      Self::Known(name) => name,
+      Self::Custom(name) => name,
+    }
+  }
+
+  #[inline]
+  pub fn is_custom(&self) -> bool {
+    matches!(self, Self::Custom(_))
+  }
+}
+
+impl std::ops::Deref for PropertyName {
+  type Target = str;
+
+  #[inline]
+  fn deref(&self) -> &Self::Target {
+    self.as_str()
+  }
+}
+
+impl AsRef<str> for PropertyName {
+  #[inline]
+  fn as_ref(&self) -> &str {
+    self.as_str()
+  }
+}
+
+impl std::borrow::Borrow<str> for PropertyName {
+  #[inline]
+  fn borrow(&self) -> &str {
+    self.as_str()
+  }
+}
+
+impl From<&'static str> for PropertyName {
+  #[inline]
+  fn from(name: &'static str) -> Self {
+    if name.starts_with("--") {
+      PropertyName::Custom(name.to_string())
+    } else {
+      PropertyName::Known(name)
+    }
+  }
+}
+
 /// A CSS property declaration
 #[derive(Debug, Clone)]
 pub struct Declaration {
-  pub property: String,
+  pub property: PropertyName,
   pub value: PropertyValue,
   /// Raw token string as authored (after stripping !important/semicolon).
   ///

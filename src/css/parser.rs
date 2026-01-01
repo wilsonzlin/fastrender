@@ -6,6 +6,8 @@
 //! it attempts to skip to the next valid rule and continue parsing.
 //! Errors are collected and returned alongside the parsed stylesheet.
 
+use super::properties::known_page_property_set;
+use super::properties::known_style_property_set;
 use super::properties::parse_property_value_in_context;
 use super::properties::DeclarationContext;
 use super::selectors::FastRenderSelectorImpl;
@@ -37,6 +39,7 @@ use super::types::PageMarginRule;
 use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
+use super::types::PropertyName;
 use super::types::PropertyRule;
 use super::types::PropertyValue;
 use super::types::ScopeRule;
@@ -58,17 +61,17 @@ use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
+use lru::LruCache;
+use rustc_hash::FxHasher;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::Hasher;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, OnceLock};
-use lru::LruCache;
-use rustc_hash::FxHasher;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 const CSS_DEADLINE_STRIDE: usize = 64;
 
@@ -189,7 +192,8 @@ static PARSED_STYLESHEET_CACHE: OnceLock<
   Mutex<LruCache<ParsedStylesheetCacheKey, Arc<StyleSheet>>>,
 > = OnceLock::new();
 
-fn parsed_stylesheet_cache() -> &'static Mutex<LruCache<ParsedStylesheetCacheKey, Arc<StyleSheet>>> {
+fn parsed_stylesheet_cache() -> &'static Mutex<LruCache<ParsedStylesheetCacheKey, Arc<StyleSheet>>>
+{
   PARSED_STYLESHEET_CACHE.get_or_init(|| {
     Mutex::new(LruCache::new(
       NonZeroUsize::new(PARSED_STYLESHEET_CACHE_CAPACITY)
@@ -888,7 +892,8 @@ fn parse_media_rule<'i, 't>(
   if let Some(media_ctx) = media_ctx {
     if !media_ctx.evaluate_list_with_cache(&queries, media_query_cache.as_deref_mut()) {
       // Consume the block but avoid parsing nested rules that cannot match.
-      let _ = parser.parse_nested_block(|_| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(()));
+      let _ =
+        parser.parse_nested_block(|_| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(()));
       return Ok(None);
     }
   }
@@ -3042,7 +3047,10 @@ fn parse_unicode_range_list(value: &str) -> Vec<(u32, u32)> {
 
 fn parse_unicode_range(part: &str) -> Option<(u32, u32)> {
   let part = part.trim();
-  if !part.get(0..2).is_some_and(|prefix| prefix.eq_ignore_ascii_case("u+")) {
+  if !part
+    .get(0..2)
+    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("u+"))
+  {
     return None;
   }
   let body = &part[2..];
@@ -3841,16 +3849,13 @@ fn parse_declaration<'i, 't>(
   parser: &mut Parser<'i, 't>,
   context: DeclarationContext,
 ) -> Option<Declaration> {
-  let mut property = match parser.expect_ident() {
-    Ok(ident) => ident.to_string(),
+  let property = match parser.expect_ident() {
+    Ok(ident) => intern_property_name(ident.as_ref(), context),
     Err(_) => {
       skip_to_semicolon(parser);
       return None;
     }
   };
-  if !property.starts_with("--") {
-    property.make_ascii_lowercase();
-  }
 
   if parser.expect_colon().is_err() {
     skip_to_semicolon(parser);
@@ -3896,7 +3901,8 @@ fn parse_declaration<'i, 't>(
     full_slice_raw.trim_end_matches(';').trim_end()
   };
 
-  let parsed_value = parse_property_value_in_context_cached(context, &property, value)?;
+  let property = property?;
+  let parsed_value = parse_property_value_in_context_cached(context, property.as_str(), value)?;
   let raw_value = if property_needs_raw_value(&property) {
     value.to_string()
   } else {
@@ -3910,7 +3916,33 @@ fn parse_declaration<'i, 't>(
   })
 }
 
-fn property_needs_raw_value(_property: &str) -> bool {
+fn intern_property_name(property: &str, context: DeclarationContext) -> Option<PropertyName> {
+  if property.starts_with("--") {
+    return Some(PropertyName::Custom(property.to_string()));
+  }
+
+  let needs_lowercase = property.as_bytes().iter().any(|b| b.is_ascii_uppercase());
+
+  if needs_lowercase {
+    let mut lower = property.to_string();
+    lower.make_ascii_lowercase();
+    lookup_known_property(&lower, context).map(PropertyName::Known)
+  } else {
+    lookup_known_property(property, context).map(PropertyName::Known)
+  }
+}
+
+fn lookup_known_property(property: &str, context: DeclarationContext) -> Option<&'static str> {
+  match context {
+    DeclarationContext::Style => known_style_property_set().get(property).copied(),
+    DeclarationContext::Page => known_page_property_set()
+      .get(property)
+      .copied()
+      .or_else(|| known_style_property_set().get(property).copied()),
+  }
+}
+
+fn property_needs_raw_value(_property: &PropertyName) -> bool {
   false
 }
 
@@ -3921,24 +3953,23 @@ fn parse_declaration_collecting_errors<'i, 't>(
   css_source: &str,
 ) -> Option<Declaration> {
   let decl_location = parser.current_source_location();
-  let mut property = match parser.expect_ident() {
-    Ok(ident) => ident.to_string(),
+  let property = match parser.expect_ident() {
+    Ok(ident) => intern_property_name(ident.as_ref(), context),
     Err(_) => {
       skip_to_semicolon(parser);
       return None;
     }
   };
-  if !property.starts_with("--") {
-    property.make_ascii_lowercase();
-  }
 
   if parser.expect_colon().is_err() {
-    errors.push(CssParseError::with_snippet(
-      format!("expected ':' after `{property}`"),
-      decl_location.line + 1,
-      decl_location.column + 1,
-      css_source,
-    ));
+    if let Some(property) = property.as_ref() {
+      errors.push(CssParseError::with_snippet(
+        format!("expected ':' after `{}`", property.as_str()),
+        decl_location.line + 1,
+        decl_location.column + 1,
+        css_source,
+      ));
+    }
     skip_to_semicolon(parser);
     return None;
   }
@@ -3983,9 +4014,15 @@ fn parse_declaration_collecting_errors<'i, 't>(
     full_slice_raw.trim_end_matches(';').trim_end()
   };
 
-  let Some(parsed_value) = parse_property_value_in_context_cached(context, &property, value) else {
+  let Some(property) = property else {
+    return None;
+  };
+
+  let Some(parsed_value) =
+    parse_property_value_in_context_cached(context, property.as_str(), value)
+  else {
     errors.push(CssParseError::with_snippet(
-      format!("invalid value for `{property}`"),
+      format!("invalid value for `{}`", property.as_str()),
       value_location.line + 1,
       value_location.column + 1,
       css_source,
@@ -4631,7 +4668,7 @@ mod tests {
     let css = "--foo:  10px  var(--bar) ;";
     let decls = parse_declarations(css);
     assert_eq!(decls.len(), 1);
-    assert_eq!(decls[0].property, "--foo");
+    assert_eq!(decls[0].property.as_str(), "--foo");
     match &decls[0].value {
       PropertyValue::Custom(raw) => assert_eq!(raw, "  10px  var(--bar)"),
       other => panic!("expected custom value, got {:?}", other),
@@ -4643,7 +4680,7 @@ mod tests {
   fn non_custom_properties_do_not_store_raw_value() {
     let decls = parse_declarations("color:red;");
     assert_eq!(decls.len(), 1);
-    assert_eq!(decls[0].property, "color");
+    assert_eq!(decls[0].property.as_str(), "color");
     assert!(decls[0].raw_value.is_empty());
   }
 
@@ -4651,7 +4688,7 @@ mod tests {
   fn transition_declarations_parse_as_raw_keyword() {
     let decls = parse_declarations("transition:opacity 1s;");
     assert_eq!(decls.len(), 1);
-    assert_eq!(decls[0].property, "transition");
+    assert_eq!(decls[0].property.as_str(), "transition");
     assert!(decls[0].raw_value.is_empty());
     match &decls[0].value {
       PropertyValue::Keyword(raw) => assert_eq!(raw, "opacity 1s"),
@@ -4663,8 +4700,26 @@ mod tests {
   fn property_names_parse_case_insensitively() {
     let decls = parse_declarations("COLOR: red; --Foo: 1;");
     assert_eq!(decls.len(), 2);
-    assert_eq!(decls[0].property, "color");
-    assert_eq!(decls[1].property, "--Foo");
+    assert!(matches!(decls[0].property, PropertyName::Known("color")));
+    assert_eq!(decls[0].property.as_str(), "color");
+    assert!(matches!(decls[1].property, PropertyName::Custom(_)));
+    assert_eq!(decls[1].property.as_str(), "--Foo");
+  }
+
+  #[test]
+  fn unknown_properties_are_ignored_without_errors() {
+    let css = "div { totally-unknown: ; color: red; }";
+    let result = parse_stylesheet_with_errors(css).unwrap();
+    assert_eq!(result.error_count(), 0, "parse errors: {:?}", result.errors);
+    assert_eq!(result.stylesheet.rules.len(), 1);
+
+    match &result.stylesheet.rules[0] {
+      CssRule::Style(rule) => {
+        assert_eq!(rule.declarations.len(), 1);
+        assert_eq!(rule.declarations[0].property.as_str(), "color");
+      }
+      other => panic!("expected style rule, got {:?}", other),
+    }
   }
 
   #[test]
@@ -4675,8 +4730,8 @@ mod tests {
     match &stylesheet.rules[0] {
       CssRule::Page(page) => {
         assert_eq!(page.declarations.len(), 2);
-        assert_eq!(page.declarations[0].property, "size");
-        assert_eq!(page.declarations[1].property, "bleed");
+        assert_eq!(page.declarations[0].property.as_str(), "size");
+        assert_eq!(page.declarations[1].property.as_str(), "bleed");
       }
       other => panic!("expected page rule, got {:?}", other),
     }
@@ -4690,7 +4745,7 @@ mod tests {
     match &stylesheet.rules[0] {
       CssRule::Style(rule) => {
         assert_eq!(rule.declarations.len(), 1);
-        assert_eq!(rule.declarations[0].property, "color");
+        assert_eq!(rule.declarations[0].property.as_str(), "color");
       }
       other => panic!("expected style rule, got {:?}", other),
     }

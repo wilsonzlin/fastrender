@@ -8,9 +8,9 @@ use fastrender::style::types::{
 use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 
-fn decl(name: &str, value: &str) -> Declaration {
+fn decl(name: &'static str, value: &str) -> Declaration {
   Declaration {
-    property: name.to_string(),
+    property: name.into(),
     value: parse_property_value(name, value).expect("parse property value"),
     raw_value: value.to_string(),
     important: false,

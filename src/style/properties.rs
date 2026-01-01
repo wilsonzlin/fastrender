@@ -31,8 +31,8 @@ use crate::style::inline_axis_is_horizontal;
 use crate::style::position::Position;
 use crate::style::string_set::parse_string_set_value;
 use crate::style::types::*;
-use crate::style::values::CustomPropertyValue;
 use crate::style::values::CustomPropertySyntax;
+use crate::style::values::CustomPropertyValue;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::var_resolution::resolve_var_for_property;
@@ -4257,18 +4257,21 @@ pub fn apply_declaration_with_base(
   viewport: crate::geometry::Size,
 ) {
   // Handle CSS Custom Properties (--*)
-  if decl.property.starts_with("--") {
+  if decl.property.is_custom() {
     let raw_text = decl_raw_text(decl);
     let raw_trimmed = raw_text.trim();
-    let registration = styles.custom_property_registry.get(&decl.property);
+    let registration = styles.custom_property_registry.get(decl.property.as_str());
 
     // Unregistered custom properties (or those registered with `syntax: *`) behave like token
     // streams: keep the authored value verbatim and do not perform eager var() substitution.
     if registration.is_none()
-      || matches!(registration.unwrap().syntax, CustomPropertySyntax::Universal)
+      || matches!(
+        registration.unwrap().syntax,
+        CustomPropertySyntax::Universal
+      )
     {
       styles.custom_properties.insert(
-        decl.property.clone(),
+        decl.property.as_str().to_string(),
         CustomPropertyValue::new(raw_text.to_string(), None),
       );
       return;
@@ -4298,7 +4301,7 @@ pub fn apply_declaration_with_base(
         return;
       };
       styles.custom_properties.insert(
-        decl.property.clone(),
+        decl.property.as_str().to_string(),
         CustomPropertyValue::new(resolved, Some(typed)),
       );
     } else {
@@ -4306,7 +4309,7 @@ pub fn apply_declaration_with_base(
         return;
       };
       styles.custom_properties.insert(
-        decl.property.clone(),
+        decl.property.as_str().to_string(),
         CustomPropertyValue::new(raw_text.to_string(), Some(typed)),
       );
     }
@@ -7344,7 +7347,7 @@ pub fn apply_declaration_with_base(
     }
     "break-inside" | "column-break-inside" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        let column_alias = decl.property == "column-break-inside";
+        let column_alias = decl.property.as_str() == "column-break-inside";
         styles.break_inside = match kw.as_str() {
           "auto" => BreakInside::Auto,
           "avoid" => {
@@ -11470,18 +11473,24 @@ fn parse_background_position_component_x(
   value: &PropertyValue,
 ) -> Option<BackgroundPositionComponent> {
   match value {
-    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("left") => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("left") => {
+      Some(BackgroundPositionComponent {
         alignment: 0.0,
         offset: Length::px(0.0),
-      }),
-    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("right") => Some(BackgroundPositionComponent {
+      })
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("right") => {
+      Some(BackgroundPositionComponent {
         alignment: 1.0,
         offset: Length::px(0.0),
-      }),
-    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("center") => Some(BackgroundPositionComponent {
+      })
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("center") => {
+      Some(BackgroundPositionComponent {
         alignment: 0.5,
         offset: Length::px(0.0),
-      }),
+      })
+    }
     PropertyValue::Length(len) => Some(BackgroundPositionComponent {
       alignment: 0.0,
       offset: *len,
@@ -11502,18 +11511,24 @@ fn parse_background_position_component_y(
   value: &PropertyValue,
 ) -> Option<BackgroundPositionComponent> {
   match value {
-    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("top") => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("top") => {
+      Some(BackgroundPositionComponent {
         alignment: 0.0,
         offset: Length::px(0.0),
-      }),
-    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("bottom") => Some(BackgroundPositionComponent {
+      })
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("bottom") => {
+      Some(BackgroundPositionComponent {
         alignment: 1.0,
         offset: Length::px(0.0),
-      }),
-    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("center") => Some(BackgroundPositionComponent {
+      })
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("center") => {
+      Some(BackgroundPositionComponent {
         alignment: 0.5,
         offset: Length::px(0.0),
-      }),
+      })
+    }
     PropertyValue::Length(len) => Some(BackgroundPositionComponent {
       alignment: 0.0,
       offset: *len,
@@ -13054,7 +13069,7 @@ mod tests {
   fn parses_object_fit_keyword() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "object-fit".to_string(),
+      property: "object-fit".into(),
       value: PropertyValue::Keyword("cover".to_string()),
       raw_value: String::new(),
       important: false,
@@ -13069,7 +13084,7 @@ mod tests {
     let decls = parse_declarations("transition: opacity 1s linear 2s;");
     assert_eq!(decls.len(), 1);
     let decl = &decls[0];
-    assert_eq!(decl.property, "transition");
+    assert_eq!(decl.property.as_str(), "transition");
     assert!(decl.raw_value.is_empty());
     match &decl.value {
       PropertyValue::Keyword(raw) => assert_eq!(raw, "opacity 1s linear 2s"),
@@ -13106,7 +13121,7 @@ mod tests {
     let decls = parse_declarations("animation-name: fade, slide;");
     assert_eq!(decls.len(), 1);
     let decl = &decls[0];
-    assert_eq!(decl.property, "animation-name");
+    assert_eq!(decl.property.as_str(), "animation-name");
     assert!(decl.raw_value.is_empty());
     match &decl.value {
       PropertyValue::Keyword(raw) => assert_eq!(raw, "fade, slide"),
@@ -13138,7 +13153,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-rendering".to_string(),
+        property: "image-rendering".into(),
         value: PropertyValue::Keyword("pixelated".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13152,7 +13167,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-rendering".to_string(),
+        property: "image-rendering".into(),
         value: PropertyValue::Keyword("crisp-edges".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13170,7 +13185,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("nowrap".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13184,7 +13199,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("balance".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13198,7 +13213,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("pretty".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13212,7 +13227,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("wrap".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13231,7 +13246,7 @@ mod tests {
     apply_declaration(
       &mut styles,
       &Declaration {
-        property: "--x".to_string(),
+        property: "--x".into(),
         value: PropertyValue::Custom("10px".to_string()),
         raw_value: "10px".to_string(),
         important: false,
@@ -13244,7 +13259,7 @@ mod tests {
     apply_declaration(
       &mut styles,
       &Declaration {
-        property: "color".to_string(),
+        property: "color".into(),
         value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
         raw_value: String::new(),
         important: false,
@@ -13258,7 +13273,7 @@ mod tests {
     apply_declaration(
       &mut styles,
       &Declaration {
-        property: "all".to_string(),
+        property: "all".into(),
         value: PropertyValue::Keyword("initial".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13280,7 +13295,7 @@ mod tests {
     apply_declaration(
       &mut styles,
       &Declaration {
-        property: "color".to_string(),
+        property: "color".into(),
         value: PropertyValue::Color(Color::Rgba(Rgba::GREEN)),
         raw_value: String::new(),
         important: false,
@@ -13294,7 +13309,7 @@ mod tests {
     apply_declaration(
       &mut styles,
       &Declaration {
-        property: "all".to_string(),
+        property: "all".into(),
         value: PropertyValue::Keyword("unset".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13393,7 +13408,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "word-break".to_string(),
+        property: "word-break".into(),
         value: PropertyValue::Keyword("anywhere".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13410,7 +13425,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex-flow".to_string(),
+        property: "flex-flow".into(),
         value: PropertyValue::Keyword("column wrap-reverse".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13425,7 +13440,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex-flow".to_string(),
+        property: "flex-flow".into(),
         value: PropertyValue::Keyword("wrap row-reverse".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13447,7 +13462,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex-flow".to_string(),
+        property: "flex-flow".into(),
         value: PropertyValue::Keyword("wrap".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13468,7 +13483,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex".to_string(),
+        property: "flex".into(),
         value: PropertyValue::Keyword("none".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13484,7 +13499,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex".to_string(),
+        property: "flex".into(),
         value: PropertyValue::Keyword("auto".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13508,7 +13523,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex".to_string(),
+        property: "flex".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Number(2.0),
           PropertyValue::Number(3.0),
@@ -13528,7 +13543,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex".to_string(),
+        property: "flex".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Number(4.0),
           PropertyValue::Number(5.0),
@@ -13550,7 +13565,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex".to_string(),
+        property: "flex".into(),
         value: PropertyValue::Number(6.0),
         raw_value: String::new(),
         important: false,
@@ -13569,7 +13584,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex".to_string(),
+        property: "flex".into(),
         value: PropertyValue::Length(Length::px(12.0)),
         raw_value: String::new(),
         important: false,
@@ -13594,7 +13609,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "flex".to_string(),
+        property: "flex".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Number(-1.0),
           PropertyValue::Number(3.0),
@@ -13616,7 +13631,7 @@ mod tests {
   #[test]
   fn parses_clip_path_basic_shapes() {
     let decl = Declaration {
-      property: "clip-path".to_string(),
+      property: "clip-path".into(),
       value: PropertyValue::Keyword("inset(10px 20% round 5px)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -13653,7 +13668,7 @@ mod tests {
   #[test]
   fn parses_clip_path_circle_position() {
     let decl = Declaration {
-      property: "clip-path".to_string(),
+      property: "clip-path".into(),
       value: PropertyValue::Keyword("circle(30% at left 10px top 20%)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -13687,7 +13702,7 @@ mod tests {
   #[test]
   fn parses_clip_rect_values() {
     let decl = Declaration {
-      property: "clip".to_string(),
+      property: "clip".into(),
       value: PropertyValue::Keyword("rect(1px, 10px, 9px, 2px)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -13702,7 +13717,7 @@ mod tests {
     assert_eq!(rect.left, ClipComponent::Length(Length::px(2.0)));
 
     let auto_decl = Declaration {
-      property: "clip".to_string(),
+      property: "clip".into(),
       value: PropertyValue::Keyword("auto".to_string()),
       raw_value: String::new(),
       important: false,
@@ -13728,7 +13743,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "transform-box".to_string(),
+        property: "transform-box".into(),
         value: PropertyValue::Keyword("view-box".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13742,7 +13757,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "transform-box".to_string(),
+        property: "transform-box".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13756,7 +13771,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "transform-box".to_string(),
+        property: "transform-box".into(),
         value: PropertyValue::Keyword("bogus".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13780,7 +13795,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "transform-style".to_string(),
+        property: "transform-style".into(),
         value: PropertyValue::Keyword("preserve-3d".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13794,7 +13809,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "transform-style".to_string(),
+        property: "transform-style".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13808,7 +13823,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "transform-style".to_string(),
+        property: "transform-style".into(),
         value: PropertyValue::Keyword("flat".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13822,7 +13837,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "backface-visibility".to_string(),
+        property: "backface-visibility".into(),
         value: PropertyValue::Keyword("hidden".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13836,7 +13851,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "backface-visibility".to_string(),
+        property: "backface-visibility".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13850,7 +13865,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "backface-visibility".to_string(),
+        property: "backface-visibility".into(),
         value: PropertyValue::Keyword("visible".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13870,7 +13885,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "transform-box".to_string(),
+        property: "transform-box".into(),
         value: PropertyValue::Keyword("invalid-value".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13892,7 +13907,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-resolution".to_string(),
+        property: "image-resolution".into(),
         value: PropertyValue::Keyword("2dppx".to_string()),
         raw_value: String::new(),
         important: false,
@@ -13913,7 +13928,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-resolution".to_string(),
+        property: "image-resolution".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("from-image".to_string()),
           PropertyValue::Keyword("192dpi".to_string()),
@@ -13936,7 +13951,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-resolution".to_string(),
+        property: "image-resolution".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("from-image".to_string()),
           PropertyValue::Keyword("2dppx".to_string()),
@@ -13996,7 +14011,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-overflow".to_string(),
+        property: "text-overflow".into(),
         value: PropertyValue::Keyword("ellipsis".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14018,7 +14033,7 @@ mod tests {
     apply_declaration(
       &mut two_value,
       &Declaration {
-        property: "text-overflow".to_string(),
+        property: "text-overflow".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("clip".to_string()),
           PropertyValue::Keyword("ellipsis".to_string()),
@@ -14046,7 +14061,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-overflow".to_string(),
+        property: "text-overflow".into(),
         value: PropertyValue::String("--".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14109,7 +14124,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-orientation".to_string(),
+        property: "image-orientation".into(),
         value: PropertyValue::Keyword("none".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14123,7 +14138,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-orientation".to_string(),
+        property: "image-orientation".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("90deg".into()),
           PropertyValue::Keyword("flip".into()),
@@ -14146,7 +14161,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-orientation".to_string(),
+        property: "image-orientation".into(),
         value: PropertyValue::Keyword("45deg".into()),
         raw_value: String::new(),
         important: false,
@@ -14166,7 +14181,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "image-orientation".to_string(),
+        property: "image-orientation".into(),
         value: PropertyValue::Keyword("flip".into()),
         raw_value: String::new(),
         important: false,
@@ -14190,7 +14205,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "contain".to_string(),
+        property: "contain".into(),
         value: PropertyValue::Keyword("paint".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14206,7 +14221,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "contain".to_string(),
+        property: "contain".into(),
         value: PropertyValue::Keyword("strict".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14220,7 +14235,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "contain".to_string(),
+        property: "contain".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("layout".into()),
           PropertyValue::Keyword("style".into()),
@@ -14503,7 +14518,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "aspect-ratio".to_string(),
+        property: "aspect-ratio".into(),
         value: PropertyValue::Keyword("16/9".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14517,7 +14532,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "aspect-ratio".to_string(),
+        property: "aspect-ratio".into(),
         value: PropertyValue::Number(2.0),
         raw_value: String::new(),
         important: false,
@@ -14531,7 +14546,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "aspect-ratio".to_string(),
+        property: "aspect-ratio".into(),
         value: PropertyValue::Keyword("auto".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14549,7 +14564,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "color-scheme".to_string(),
+        property: "color-scheme".into(),
         value: PropertyValue::Keyword("light dark".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14569,7 +14584,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "color-scheme".to_string(),
+        property: "color-scheme".into(),
         value: PropertyValue::Keyword("only dark".to_string()),
         raw_value: String::new(),
         important: false,
@@ -14598,7 +14613,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "color-scheme".to_string(),
+        property: "color-scheme".into(),
         value: PropertyValue::Keyword("only".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15831,7 +15846,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "align-items".to_string(),
+        property: "align-items".into(),
         value: PropertyValue::Keyword("start".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15845,7 +15860,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "align-self".to_string(),
+        property: "align-self".into(),
         value: PropertyValue::Keyword("self-end".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15859,7 +15874,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "justify-items".to_string(),
+        property: "justify-items".into(),
         value: PropertyValue::Keyword("right".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15873,7 +15888,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "justify-self".to_string(),
+        property: "justify-self".into(),
         value: PropertyValue::Keyword("auto".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15887,7 +15902,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "justify-self".to_string(),
+        property: "justify-self".into(),
         value: PropertyValue::Keyword("center".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15906,7 +15921,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "place-items".to_string(),
+        property: "place-items".into(),
         value: PropertyValue::Keyword("center stretch".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15921,7 +15936,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "place-self".to_string(),
+        property: "place-self".into(),
         value: PropertyValue::Keyword("end start".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15936,7 +15951,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "place-content".to_string(),
+        property: "place-content".into(),
         value: PropertyValue::Keyword("space-between center".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15955,7 +15970,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "writing-mode".to_string(),
+        property: "writing-mode".into(),
         value: PropertyValue::Keyword("vertical-rl".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15969,7 +15984,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "writing-mode".to_string(),
+        property: "writing-mode".into(),
         value: PropertyValue::Keyword("sideways-lr".to_string()),
         raw_value: String::new(),
         important: false,
@@ -15995,7 +16010,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "inset".to_string(),
+        property: "inset".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -16025,7 +16040,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "margin".to_string(),
+        property: "margin".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -16055,7 +16070,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "padding".to_string(),
+        property: "padding".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -16085,7 +16100,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "scroll-margin".to_string(),
+        property: "scroll-margin".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -16114,7 +16129,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "gap".to_string(),
+        property: "gap".into(),
         value: gap_value,
         raw_value: String::new(),
         important: false,
@@ -16133,7 +16148,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "row-gap".to_string(),
+        property: "row-gap".into(),
         value: row_gap_value,
         raw_value: String::new(),
         important: false,
@@ -16149,7 +16164,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "column-gap".to_string(),
+        property: "column-gap".into(),
         value: column_gap_value,
         raw_value: String::new(),
         important: false,
@@ -16166,7 +16181,7 @@ mod tests {
   fn parses_object_position_keywords() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "object-position".to_string(),
+      property: "object-position".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("right".to_string()),
         PropertyValue::Keyword("bottom".to_string()),
@@ -16192,7 +16207,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "box-sizing".to_string(),
+        property: "box-sizing".into(),
         value: PropertyValue::Keyword("border-box".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16211,7 +16226,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "box-decoration-break".to_string(),
+        property: "box-decoration-break".into(),
         value: PropertyValue::Keyword("clone".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16345,7 +16360,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "gap".to_string(),
+        property: "gap".into(),
         value: PropertyValue::Keyword("10px 20%".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16366,7 +16381,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "row-gap".to_string(),
+        property: "row-gap".into(),
         value: PropertyValue::Keyword("normal".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16381,7 +16396,7 @@ mod tests {
     apply_declaration(
       &mut style2,
       &Declaration {
-        property: "column-gap".to_string(),
+        property: "column-gap".into(),
         value: PropertyValue::Percentage(15.0),
         raw_value: String::new(),
         important: false,
@@ -16400,7 +16415,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "column-count".to_string(),
+        property: "column-count".into(),
         value: PropertyValue::Number(2.0),
         raw_value: String::new(),
         important: false,
@@ -16412,7 +16427,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "column-width".to_string(),
+        property: "column-width".into(),
         value: PropertyValue::Length(Length::px(120.0)),
         raw_value: String::new(),
         important: false,
@@ -16424,7 +16439,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "column-fill".to_string(),
+        property: "column-fill".into(),
         value: PropertyValue::Keyword("auto".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16436,7 +16451,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "column-span".to_string(),
+        property: "column-span".into(),
         value: PropertyValue::Keyword("all".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16448,7 +16463,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "column-rule".to_string(),
+        property: "column-rule".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Length(Length::px(5.0)),
           PropertyValue::Keyword("solid".to_string()),
@@ -16474,7 +16489,7 @@ mod tests {
     apply_declaration(
       &mut shorthand,
       &Declaration {
-        property: "columns".to_string(),
+        property: "columns".into(),
         value: PropertyValue::Keyword("4 60px".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16497,7 +16512,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "outline".to_string(),
+        property: "outline".into(),
         value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
         raw_value: String::new(),
         important: false,
@@ -16521,7 +16536,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "outline".to_string(),
+        property: "outline".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("solid".to_string()),
           PropertyValue::Keyword("thin".to_string()),
@@ -16547,7 +16562,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "outline-width".to_string(),
+        property: "outline-width".into(),
         value: PropertyValue::Number(-3.0),
         raw_value: String::new(),
         important: false,
@@ -16566,7 +16581,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "padding-left".to_string(),
+        property: "padding-left".into(),
         value: PropertyValue::Length(Length::px(-4.0)),
         raw_value: String::new(),
         important: false,
@@ -16578,7 +16593,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-left-width".to_string(),
+        property: "border-left-width".into(),
         value: PropertyValue::Number(-3.0),
         raw_value: String::new(),
         important: false,
@@ -16599,7 +16614,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-radius".to_string(),
+        property: "border-radius".into(),
         value,
         raw_value: "10px".to_string(),
         important: false,
@@ -16623,7 +16638,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-radius".to_string(),
+        property: "border-radius".into(),
         value,
         raw_value: "10px 20px".to_string(),
         important: false,
@@ -16658,7 +16673,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-radius".to_string(),
+        property: "border-radius".into(),
         value,
         raw_value: "10px 20px 30px".to_string(),
         important: false,
@@ -16693,7 +16708,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-radius".to_string(),
+        property: "border-radius".into(),
         value,
         raw_value: "1px 2px 3px 4px".to_string(),
         important: false,
@@ -16727,7 +16742,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-radius".to_string(),
+        property: "border-radius".into(),
         value: PropertyValue::Length(Length::px(-10.0)),
         raw_value: String::new(),
         important: false,
@@ -16750,7 +16765,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-radius".to_string(),
+        property: "border-radius".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Length(Length::px(10.0)),
           PropertyValue::Keyword("/".to_string()),
@@ -16780,7 +16795,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "border-radius".to_string(),
+        property: "border-radius".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Length(Length::px(10.0)),
           PropertyValue::Length(Length::px(20.0)),
@@ -16832,7 +16847,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "overflow".to_string(),
+        property: "overflow".into(),
         value: PropertyValue::Keyword("clip".to_string()),
         raw_value: String::new(),
         important: false,
@@ -16850,7 +16865,7 @@ mod tests {
   fn parses_background_position_keywords() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "background-position".to_string(),
+      property: "background-position".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("left".to_string()),
         PropertyValue::Keyword("top".to_string()),
@@ -16873,7 +16888,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("left".to_string()),
           PropertyValue::Percentage(20.0),
@@ -16898,7 +16913,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("top".to_string()),
           PropertyValue::Keyword("right".to_string()),
@@ -16922,7 +16937,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("top".to_string()),
           PropertyValue::Percentage(30.0),
@@ -16948,7 +16963,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("center".to_string()),
           PropertyValue::Keyword("left".to_string()),
@@ -16971,7 +16986,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("center".to_string()),
           PropertyValue::Keyword("bottom".to_string()),
@@ -16994,7 +17009,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("left".to_string()),
           PropertyValue::Length(Length::px(10.0)),
@@ -17020,7 +17035,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("bottom".to_string()),
           PropertyValue::Length(Length::px(5.0)),
@@ -17046,7 +17061,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("right".to_string()),
           PropertyValue::Length(Length::px(20.0)),
@@ -17073,7 +17088,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("top".to_string()),
           PropertyValue::Length(Length::px(10.0)),
@@ -17100,7 +17115,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("bottom".to_string()),
           PropertyValue::Length(Length::px(12.0)),
@@ -17128,7 +17143,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Url("a.png".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -17145,7 +17160,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position-y".to_string(),
+        property: "background-position-y".into(),
         value: PropertyValue::Keyword("bottom".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17158,7 +17173,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position-x".to_string(),
+        property: "background-position-x".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("left".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -17189,7 +17204,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Url("a.png".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -17206,7 +17221,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position-y".to_string(),
+        property: "background-position-y".into(),
         value: PropertyValue::Percentage(10.0),
         raw_value: String::new(),
         important: false,
@@ -17226,7 +17241,7 @@ mod tests {
   fn parses_background_position_end_offsets() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "background-position".to_string(),
+      property: "background-position".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("right".to_string()),
         PropertyValue::Percentage(10.0),
@@ -17248,7 +17263,7 @@ mod tests {
   fn parses_background_position_with_offsets_and_axis_defaults() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "background-position".to_string(),
+      property: "background-position".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("right".to_string()),
         PropertyValue::Length(Length::px(10.0)),
@@ -17267,7 +17282,7 @@ mod tests {
 
     // Default the missing axis to center when only one axis is provided.
     let decl = Declaration {
-      property: "background-position".to_string(),
+      property: "background-position".into(),
       value: PropertyValue::Keyword("top".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17284,7 +17299,7 @@ mod tests {
     let mut style = ComputedStyle::default();
 
     let decl = Declaration {
-      property: "text-decoration-line".to_string(),
+      property: "text-decoration-line".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("underline".to_string()),
         PropertyValue::Keyword("overline".to_string()),
@@ -17303,7 +17318,7 @@ mod tests {
       .contains(TextDecorationLine::OVERLINE));
 
     let decl = Declaration {
-      property: "text-decoration-style".to_string(),
+      property: "text-decoration-style".into(),
       value: PropertyValue::Keyword("dashed".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17312,7 +17327,7 @@ mod tests {
     assert_eq!(style.text_decoration.style, TextDecorationStyle::Dashed);
 
     let decl = Declaration {
-      property: "text-decoration-color".to_string(),
+      property: "text-decoration-color".into(),
       value: PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
       raw_value: String::new(),
       important: false,
@@ -17321,7 +17336,7 @@ mod tests {
     assert_eq!(style.text_decoration.color, Some(Rgba::BLUE));
 
     let decl = Declaration {
-      property: "text-decoration-thickness".to_string(),
+      property: "text-decoration-thickness".into(),
       value: PropertyValue::Length(Length::px(3.0)),
       raw_value: String::new(),
       important: false,
@@ -17333,7 +17348,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "text-decoration-thickness".to_string(),
+      property: "text-decoration-thickness".into(),
       value: PropertyValue::Keyword("from-font".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17345,7 +17360,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "text-underline-position".to_string(),
+      property: "text-underline-position".into(),
       value: PropertyValue::Keyword("under".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17357,7 +17372,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "text-underline-position".to_string(),
+      property: "text-underline-position".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("left".to_string()),
         PropertyValue::Keyword("under".to_string()),
@@ -17377,7 +17392,7 @@ mod tests {
     let mut style = ComputedStyle::default();
 
     let decl = Declaration {
-      property: "text-emphasis-style".to_string(),
+      property: "text-emphasis-style".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("open".to_string()),
         PropertyValue::Keyword("sesame".to_string()),
@@ -17395,7 +17410,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "text-emphasis-color".to_string(),
+      property: "text-emphasis-color".into(),
       value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
       raw_value: String::new(),
       important: false,
@@ -17404,7 +17419,7 @@ mod tests {
     assert_eq!(style.text_emphasis_color, Some(Rgba::RED));
 
     let decl = Declaration {
-      property: "text-emphasis-position".to_string(),
+      property: "text-emphasis-position".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("under".to_string()),
         PropertyValue::Keyword("right".to_string()),
@@ -17419,7 +17434,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "text-emphasis".to_string(),
+      property: "text-emphasis".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("circle".to_string()),
         PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
@@ -17445,7 +17460,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-size-adjust".to_string(),
+        property: "text-size-adjust".into(),
         value: PropertyValue::Keyword("none".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17459,7 +17474,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-size-adjust".to_string(),
+        property: "text-size-adjust".into(),
         value: PropertyValue::Percentage(125.0),
         raw_value: String::new(),
         important: false,
@@ -17475,7 +17490,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-size-adjust".to_string(),
+        property: "text-size-adjust".into(),
         value: PropertyValue::Percentage(-10.0),
         raw_value: String::new(),
         important: false,
@@ -17501,7 +17516,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-size-adjust".to_string(),
+        property: "text-size-adjust".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17522,7 +17537,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "forced-color-adjust".to_string(),
+        property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("none".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17536,7 +17551,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "forced-color-adjust".to_string(),
+        property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("preserve-parent-color".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17558,7 +17573,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "forced-color-adjust".to_string(),
+        property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17572,7 +17587,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "forced-color-adjust".to_string(),
+        property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("unset".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17590,7 +17605,7 @@ mod tests {
     style.text_underline_position = TextUnderlinePosition::Under;
 
     let decl = Declaration {
-      property: "text-underline-position".to_string(),
+      property: "text-underline-position".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("auto".to_string()),
         PropertyValue::Keyword("under".to_string()),
@@ -17615,7 +17630,7 @@ mod tests {
     style.text_decoration.thickness = TextDecorationThickness::Length(Length::px(2.0));
 
     let decl = Declaration {
-      property: "text-decoration".to_string(),
+      property: "text-decoration".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("underline".to_string()),
         PropertyValue::Keyword("dotted".to_string()),
@@ -17643,7 +17658,7 @@ mod tests {
 
     // currentcolor leaves color unset, shorthand resets missing pieces back to initial
     let decl = Declaration {
-      property: "text-decoration".to_string(),
+      property: "text-decoration".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("line-through".to_string()),
         PropertyValue::Keyword("wavy".to_string()),
@@ -17666,7 +17681,7 @@ mod tests {
 
     // thickness in shorthand
     let decl = Declaration {
-      property: "text-decoration".to_string(),
+      property: "text-decoration".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("overline".to_string()),
         PropertyValue::Keyword("double".to_string()),
@@ -17696,7 +17711,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-decoration-line".to_string(),
+        property: "text-decoration-line".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("UNDERLINE".to_string()),
           PropertyValue::Keyword("OVERLINE".to_string()),
@@ -17720,7 +17735,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-decoration-style".to_string(),
+        property: "text-decoration-style".into(),
         value: PropertyValue::Keyword("DASHED".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17734,7 +17749,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-decoration-thickness".to_string(),
+        property: "text-decoration-thickness".into(),
         value: PropertyValue::Keyword("FROM-FONT".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17751,7 +17766,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-decoration-skip-ink".to_string(),
+        property: "text-decoration-skip-ink".into(),
         value: PropertyValue::Keyword("ALL".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17765,7 +17780,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-underline-position".to_string(),
+        property: "text-underline-position".into(),
         value: PropertyValue::Keyword("UNDER RIGHT".to_string()),
         raw_value: String::new(),
         important: false,
@@ -17784,7 +17799,7 @@ mod tests {
   fn parses_list_style_properties() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::Keyword("square".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17793,7 +17808,7 @@ mod tests {
     assert_eq!(style.list_style_type, ListStyleType::Square);
 
     let decl = Declaration {
-      property: "list-style-position".to_string(),
+      property: "list-style-position".into(),
       value: PropertyValue::Keyword("inside".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17802,7 +17817,7 @@ mod tests {
     assert_eq!(style.list_style_position, ListStylePosition::Inside);
 
     let decl = Declaration {
-      property: "list-style-image".to_string(),
+      property: "list-style-image".into(),
       value: PropertyValue::Url("marker.png".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17814,7 +17829,7 @@ mod tests {
     );
 
     let decl = Declaration {
-      property: "list-style".to_string(),
+      property: "list-style".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("upper-roman".to_string()),
         PropertyValue::Keyword("outside".to_string()),
@@ -17828,7 +17843,7 @@ mod tests {
     assert_eq!(style.list_style_image, ListStyleImage::None);
 
     let decl = Declaration {
-      property: "list-style".to_string(),
+      property: "list-style".into(),
       value: PropertyValue::Url("img.png".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17842,7 +17857,7 @@ mod tests {
     assert_eq!(style.list_style_position, ListStylePosition::Outside);
 
     let decl = Declaration {
-      property: "list-style".to_string(),
+      property: "list-style".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17852,7 +17867,7 @@ mod tests {
     assert_eq!(style.list_style_image, ListStyleImage::None);
 
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::Keyword("lower-greek".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17861,7 +17876,7 @@ mod tests {
     assert_eq!(style.list_style_type, ListStyleType::LowerGreek);
 
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::Keyword("armenian".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17870,7 +17885,7 @@ mod tests {
     assert_eq!(style.list_style_type, ListStyleType::Armenian);
 
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::Keyword("lower-armenian".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17879,7 +17894,7 @@ mod tests {
     assert_eq!(style.list_style_type, ListStyleType::LowerArmenian);
 
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::Keyword("georgian".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17888,7 +17903,7 @@ mod tests {
     assert_eq!(style.list_style_type, ListStyleType::Georgian);
 
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::Keyword("disclosure-open".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17897,7 +17912,7 @@ mod tests {
     assert_eq!(style.list_style_type, ListStyleType::DisclosureOpen);
 
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::Keyword("disclosure-closed".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17906,7 +17921,7 @@ mod tests {
     assert_eq!(style.list_style_type, ListStyleType::DisclosureClosed);
 
     let decl = Declaration {
-      property: "list-style-type".to_string(),
+      property: "list-style-type".into(),
       value: PropertyValue::String("★".to_string()),
       raw_value: "\"★\"".to_string(),
       important: false,
@@ -17922,7 +17937,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "cursor".to_string(),
+        property: "cursor".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -17943,7 +17958,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "cursor".to_string(),
+        property: "cursor".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -17967,7 +17982,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "cursor".to_string(),
+        property: "cursor".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -17996,7 +18011,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "cursor".to_string(),
+        property: "cursor".into(),
         value,
         raw_value: String::new(),
         important: false,
@@ -18023,7 +18038,7 @@ mod tests {
       apply_declaration(
         &mut style,
         &Declaration {
-          property: "cursor".to_string(),
+          property: "cursor".into(),
           value,
           raw_value: String::new(),
           important: false,
@@ -18045,7 +18060,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "list-style-image".to_string(),
+        property: "list-style-image".into(),
         value: PropertyValue::Keyword(
           "image-set(url(\"marker-1x.png\") 1x, url(\"marker-2x.png\") 2x)".to_string(),
         ),
@@ -18067,7 +18082,7 @@ mod tests {
   fn parses_quotes_property() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "quotes".to_string(),
+      property: "quotes".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::String("«".to_string()),
         PropertyValue::String("»".to_string()),
@@ -18088,7 +18103,7 @@ mod tests {
     );
 
     let decl = Declaration {
-      property: "quotes".to_string(),
+      property: "quotes".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18101,7 +18116,7 @@ mod tests {
   fn parses_string_set_property() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "string-set".to_string(),
+      property: "string-set".into(),
       value: PropertyValue::Keyword("chapter content() section \"Intro\"".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18127,7 +18142,7 @@ mod tests {
     });
 
     let decl = Declaration {
-      property: "string-set".to_string(),
+      property: "string-set".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18143,7 +18158,7 @@ mod tests {
     style.letter_spacing = 3.0;
 
     let decl = Declaration {
-      property: "letter-spacing".to_string(),
+      property: "letter-spacing".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18152,7 +18167,7 @@ mod tests {
     assert_eq!(style.letter_spacing, 0.0);
 
     let decl = Declaration {
-      property: "letter-spacing".to_string(),
+      property: "letter-spacing".into(),
       value: PropertyValue::Length(Length::em(0.25)),
       raw_value: String::new(),
       important: false,
@@ -18161,7 +18176,7 @@ mod tests {
     assert!((style.letter_spacing - 5.0).abs() < 0.01);
 
     let decl = Declaration {
-      property: "word-spacing".to_string(),
+      property: "word-spacing".into(),
       value: PropertyValue::Percentage(50.0),
       raw_value: String::new(),
       important: false,
@@ -18170,7 +18185,7 @@ mod tests {
     assert!((style.word_spacing - 10.0).abs() < 0.01);
 
     let decl = Declaration {
-      property: "word-spacing".to_string(),
+      property: "word-spacing".into(),
       value: PropertyValue::Length(Length::em(-0.5)),
       raw_value: String::new(),
       important: false,
@@ -18185,7 +18200,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "word-break".to_string(),
+        property: "word-break".into(),
         value: PropertyValue::Keyword("anywhere".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18203,7 +18218,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "word-break".to_string(),
+        property: "word-break".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18217,7 +18232,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "word-break".to_string(),
+        property: "word-break".into(),
         value: PropertyValue::Keyword("initial".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18235,7 +18250,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("nowrap".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18253,7 +18268,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18267,7 +18282,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("auto".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18281,7 +18296,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "text-wrap".to_string(),
+        property: "text-wrap".into(),
         value: PropertyValue::Keyword("initial".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18297,7 +18312,7 @@ mod tests {
   fn parses_counter_properties() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "counter-reset".to_string(),
+      property: "counter-reset".into(),
       value: PropertyValue::Keyword("chapter 3 section".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18311,7 +18326,7 @@ mod tests {
     assert_eq!(reset.items[1].value, 0);
 
     let decl = Declaration {
-      property: "counter-increment".to_string(),
+      property: "counter-increment".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("item".to_string()),
         PropertyValue::Number(2.0),
@@ -18326,7 +18341,7 @@ mod tests {
     assert_eq!(increment.items[0].value, 2);
 
     let decl = Declaration {
-      property: "counter-set".to_string(),
+      property: "counter-set".into(),
       value: PropertyValue::Keyword("item 7".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18338,7 +18353,7 @@ mod tests {
     assert_eq!(set.items[0].value, 7);
 
     let decl = Declaration {
-      property: "counter-increment".to_string(),
+      property: "counter-increment".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18378,7 +18393,7 @@ mod tests {
     }]);
 
     let decl = Declaration {
-      property: "background".to_string(),
+      property: "background".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Url("example.png".to_string()),
         PropertyValue::Keyword("no-repeat".to_string()),
@@ -18420,7 +18435,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Url("a.png".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -18438,7 +18453,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-size".to_string(),
+        property: "background-size".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Length(Length::px(10.0)),
           PropertyValue::Length(Length::px(20.0)),
@@ -18468,7 +18483,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-repeat".to_string(),
+        property: "background-repeat".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("no-repeat".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -18497,7 +18512,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Url("one.png".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18510,7 +18525,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-position".to_string(),
+        property: "background-position".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("left".to_string()),
           PropertyValue::Keyword("top".to_string()),
@@ -18537,7 +18552,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Keyword(
           "image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string(),
         ),
@@ -18563,7 +18578,7 @@ mod tests {
       apply_declaration(
         &mut style,
         &Declaration {
-          property: "background-image".to_string(),
+          property: "background-image".into(),
           value: PropertyValue::Keyword(
             "image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string(),
           ),
@@ -18588,7 +18603,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Keyword("image-set(url(\"hi.png\") 192dpi)".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18605,7 +18620,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Keyword(
           "image-set(url(\"smaller.png\") 0.5x, url(\"bigger.png\") 0.75x)".to_string(),
         ),
@@ -18628,7 +18643,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background".to_string(),
+        property: "background".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword(
             "image-set(url(\"one-x.png\") 1x, url(\"two-x.png\") 2x)".to_string(),
@@ -18657,7 +18672,7 @@ mod tests {
     let value =
       parse_property_value("background", "url(a) center/cover no-repeat").expect("valid shorthand");
     let decl = Declaration {
-      property: "background".to_string(),
+      property: "background".into(),
       value,
       raw_value: String::new(),
       important: false,
@@ -18691,7 +18706,7 @@ mod tests {
     )
     .expect("valid layered shorthand");
     let decl = Declaration {
-      property: "background".to_string(),
+      property: "background".into(),
       value,
       raw_value: String::new(),
       important: false,
@@ -18734,7 +18749,7 @@ mod tests {
     let value =
       parse_property_value("background", "blue url(a), url(b) repeat").expect("valid shorthand");
     let decl = Declaration {
-      property: "background".to_string(),
+      property: "background".into(),
       value,
       raw_value: String::new(),
       important: false,
@@ -18746,7 +18761,7 @@ mod tests {
     let value =
       parse_property_value("background", "url(a) no-repeat, blue").expect("color on last layer");
     let decl = Declaration {
-      property: "background".to_string(),
+      property: "background".into(),
       value,
       raw_value: String::new(),
       important: false,
@@ -18767,7 +18782,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Url("a.png".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -18784,7 +18799,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-blend-mode".to_string(),
+        property: "background-blend-mode".into(),
         value: PropertyValue::Keyword("screen".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18799,7 +18814,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-blend-mode".to_string(),
+        property: "background-blend-mode".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("multiply".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -18821,7 +18836,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-image".to_string(),
+        property: "background-image".into(),
         value: PropertyValue::Url("single.png".to_string()),
         raw_value: String::new(),
         important: false,
@@ -18833,7 +18848,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "background-blend-mode".to_string(),
+        property: "background-blend-mode".into(),
         value: PropertyValue::Multiple(vec![
           PropertyValue::Keyword("darken".to_string()),
           PropertyValue::Keyword(",".to_string()),
@@ -18865,7 +18880,7 @@ mod tests {
     }]);
 
     let decl = Declaration {
-      property: "background".to_string(),
+      property: "background".into(),
       value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
       raw_value: String::new(),
       important: false,
@@ -18904,7 +18919,7 @@ mod tests {
     }]);
 
     let decl = Declaration {
-      property: "background".to_string(),
+      property: "background".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18924,7 +18939,7 @@ mod tests {
   fn parses_background_repeat_keywords_and_pairs() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "background-repeat".to_string(),
+      property: "background-repeat".into(),
       value: PropertyValue::Keyword("space".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18940,7 +18955,7 @@ mod tests {
     );
 
     let decl = Declaration {
-      property: "background-repeat".to_string(),
+      property: "background-repeat".into(),
       value: PropertyValue::Keyword("repeat-x".to_string()),
       raw_value: String::new(),
       important: false,
@@ -18956,7 +18971,7 @@ mod tests {
     );
 
     let decl = Declaration {
-      property: "background-repeat".to_string(),
+      property: "background-repeat".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("space".to_string()),
         PropertyValue::Keyword("round".to_string()),
@@ -18979,7 +18994,7 @@ mod tests {
   fn parses_background_size_components_and_defaults() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "background-size".to_string(),
+      property: "background-size".into(),
       value: PropertyValue::Length(Length::px(25.0)),
       raw_value: String::new(),
       important: false,
@@ -18994,7 +19009,7 @@ mod tests {
     );
 
     let decl = Declaration {
-      property: "background-size".to_string(),
+      property: "background-size".into(),
       value: PropertyValue::Multiple(vec![
         PropertyValue::Keyword("auto".to_string()),
         PropertyValue::Percentage(50.0),
@@ -19012,7 +19027,7 @@ mod tests {
     );
 
     let decl = Declaration {
-      property: "background-size".to_string(),
+      property: "background-size".into(),
       value: PropertyValue::Keyword("contain".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19028,7 +19043,7 @@ mod tests {
   fn parses_white_space_break_spaces() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "white-space".to_string(),
+      property: "white-space".into(),
       value: PropertyValue::Keyword("break-spaces".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19042,7 +19057,7 @@ mod tests {
   fn parses_line_break_anywhere() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "line-break".to_string(),
+      property: "line-break".into(),
       value: PropertyValue::Keyword("anywhere".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19057,7 +19072,7 @@ mod tests {
     let mut style = ComputedStyle::default();
 
     let origin_decl = Declaration {
-      property: "background-origin".to_string(),
+      property: "background-origin".into(),
       value: PropertyValue::Keyword("content-box".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19072,7 +19087,7 @@ mod tests {
     assert_eq!(style.background_layers[0].origin, BackgroundBox::ContentBox);
 
     let clip_decl = Declaration {
-      property: "background-clip".to_string(),
+      property: "background-clip".into(),
       value: PropertyValue::Keyword("padding-box".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19229,7 +19244,7 @@ mod tests {
   fn parses_plus_lighter_mix_blend_mode() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "mix-blend-mode".to_string(),
+      property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("plus-lighter".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19242,7 +19257,7 @@ mod tests {
   fn parses_plus_darker_and_color_spaces_mix_blend_mode() {
     let mut style = ComputedStyle::default();
     let darker = Declaration {
-      property: "mix-blend-mode".to_string(),
+      property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("plus-darker".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19251,7 +19266,7 @@ mod tests {
     assert!(matches!(style.mix_blend_mode, MixBlendMode::PlusDarker));
 
     let hsv = Declaration {
-      property: "mix-blend-mode".to_string(),
+      property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("hue-hsv".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19260,7 +19275,7 @@ mod tests {
     assert!(matches!(style.mix_blend_mode, MixBlendMode::HueHsv));
 
     let oklch = Declaration {
-      property: "mix-blend-mode".to_string(),
+      property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("color-oklch".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19273,7 +19288,7 @@ mod tests {
   fn parses_backdrop_filter_as_filter_list() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "backdrop-filter".to_string(),
+      property: "backdrop-filter".into(),
       value: PropertyValue::Keyword("blur(5px)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19325,7 +19340,7 @@ mod tests {
   fn parses_tab_size_number_and_length() {
     let mut style = ComputedStyle::default();
     let number_decl = Declaration {
-      property: "tab-size".to_string(),
+      property: "tab-size".into(),
       value: PropertyValue::Number(4.0),
       raw_value: String::new(),
       important: false,
@@ -19340,7 +19355,7 @@ mod tests {
     assert!(matches!(style.tab_size, TabSize::Number(n) if (n - 4.0).abs() < 0.001));
 
     let length_decl = Declaration {
-      property: "tab-size".to_string(),
+      property: "tab-size".into(),
       value: PropertyValue::Length(Length::px(20.0)),
       raw_value: String::new(),
       important: false,
@@ -19362,7 +19377,7 @@ mod tests {
   fn parses_font_shorthand_with_style_weight_size_line_height_and_family() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("italic 700 20px/30px \"Fira Sans\", serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19390,7 +19405,7 @@ mod tests {
   fn oblique_font_angle_accepts_calc() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("oblique calc(60deg - 10deg) 16px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19408,7 +19423,7 @@ mod tests {
   fn parses_font_shorthand_with_relative_size_and_percentage_line_height() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("bold larger/125% serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19426,7 +19441,7 @@ mod tests {
   fn parses_font_shorthand_with_calc_line_height() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("bold 20px/calc(50% + 25%) serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19443,7 +19458,7 @@ mod tests {
   fn parses_font_shorthand_with_calc_font_size() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("bold calc(10px + 5px)/normal serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19460,7 +19475,7 @@ mod tests {
   fn font_shorthand_with_negative_calc_font_size_is_ignored() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("bold calc(-10px + 2px)/normal serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19478,7 +19493,7 @@ mod tests {
   fn font_shorthand_with_negative_line_height_is_ignored() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("bold 20px/-1px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19498,7 +19513,7 @@ mod tests {
     let value = parse_property_value("font-family", "\"Font, With, Commas\", Open Sans, serif")
       .expect("font-family parse");
     let decl = Declaration {
-      property: "font-family".to_string(),
+      property: "font-family".into(),
       value,
       raw_value: String::new(),
       important: false,
@@ -19524,7 +19539,7 @@ mod tests {
     style.font_family = vec!["ChildDefault".to_string()].into();
 
     let decl = Declaration {
-      property: "font-family".to_string(),
+      property: "font-family".into(),
       value: parse_property_value("font-family", "inherit").expect("font-family inherit"),
       raw_value: String::new(),
       important: false,
@@ -19538,7 +19553,7 @@ mod tests {
   fn font_shorthand_without_family_is_ignored() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("italic 16px".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19559,7 +19574,7 @@ mod tests {
   fn parses_font_variation_settings() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variation-settings".to_string(),
+      property: "font-variation-settings".into(),
       value: PropertyValue::Keyword("\"wght\" 600, \"wdth\" 80".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19583,7 +19598,7 @@ mod tests {
     .into();
 
     let decl = Declaration {
-      property: "font-variation-settings".to_string(),
+      property: "font-variation-settings".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19596,7 +19611,7 @@ mod tests {
   fn parses_font_optical_sizing() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-optical-sizing".to_string(),
+      property: "font-optical-sizing".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19605,7 +19620,7 @@ mod tests {
     assert!(matches!(style.font_optical_sizing, FontOpticalSizing::None));
 
     let decl2 = Declaration {
-      property: "font-optical-sizing".to_string(),
+      property: "font-optical-sizing".into(),
       value: PropertyValue::Keyword("auto".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19618,7 +19633,7 @@ mod tests {
   fn parses_font_language_override() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-language-override".to_string(),
+      property: "font-language-override".into(),
       value: PropertyValue::Keyword("\"SRB\"".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19630,7 +19645,7 @@ mod tests {
     ));
 
     let decl2 = Declaration {
-      property: "font-language-override".to_string(),
+      property: "font-language-override".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19647,25 +19662,25 @@ mod tests {
     let mut style = ComputedStyle::default();
     let decls = vec![
       Declaration {
-        property: "font-feature-settings".to_string(),
+        property: "font-feature-settings".into(),
         value: PropertyValue::Keyword("\"kern\" off".to_string()),
         raw_value: String::new(),
         important: false,
       },
       Declaration {
-        property: "font-variation-settings".to_string(),
+        property: "font-variation-settings".into(),
         value: PropertyValue::Keyword("\"wght\" 700".to_string()),
         raw_value: String::new(),
         important: false,
       },
       Declaration {
-        property: "font-language-override".to_string(),
+        property: "font-language-override".into(),
         value: PropertyValue::Keyword("\"SRB\"".to_string()),
         raw_value: String::new(),
         important: false,
       },
       Declaration {
-        property: "font".to_string(),
+        property: "font".into(),
         value: PropertyValue::Keyword("italic 16px/20px serif".to_string()),
         raw_value: String::new(),
         important: false,
@@ -19688,7 +19703,7 @@ mod tests {
   fn line_height_percentage_is_resolved_to_number() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Percentage(150.0),
       raw_value: String::new(),
       important: false,
@@ -19703,7 +19718,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     let len = parse_length("calc(10px + 20px)").expect("calc length");
     let decl = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Length(len),
       raw_value: String::new(),
       important: false,
@@ -19718,7 +19733,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     let len = parse_length("calc(50% + 25%)").expect("calc percent");
     let decl = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Length(len),
       raw_value: String::new(),
       important: false,
@@ -19734,7 +19749,7 @@ mod tests {
     style.line_height = LineHeight::Number(1.2);
     let len = parse_length("calc(5px - 10px)").expect("calc length");
     let decl = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Length(len),
       raw_value: String::new(),
       important: false,
@@ -19748,7 +19763,7 @@ mod tests {
   fn line_height_percentage_length_is_normalized_to_percentage_variant() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Length(Length::percent(125.0)),
       raw_value: String::new(),
       important: false,
@@ -19764,7 +19779,7 @@ mod tests {
     style.line_height = LineHeight::Number(1.2);
 
     let negative_number = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Number(-1.0),
       raw_value: String::new(),
       important: false,
@@ -19779,7 +19794,7 @@ mod tests {
     assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
 
     let negative_percent = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Percentage(-50.0),
       raw_value: String::new(),
       important: false,
@@ -19794,7 +19809,7 @@ mod tests {
     assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
 
     let negative_length = Declaration {
-      property: "line-height".to_string(),
+      property: "line-height".into(),
       value: PropertyValue::Length(Length::px(-10.0)),
       raw_value: String::new(),
       important: false,
@@ -19814,7 +19829,7 @@ mod tests {
     let mut style = ComputedStyle::default();
 
     let decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Keyword("large".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19823,7 +19838,7 @@ mod tests {
     assert!((style.font_size - 19.2).abs() < 0.01);
 
     let decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Percentage(150.0),
       raw_value: String::new(),
       important: false,
@@ -19832,7 +19847,7 @@ mod tests {
     assert!((style.font_size - 30.0).abs() < 0.01);
 
     let decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Length(Length::em(2.0)),
       raw_value: String::new(),
       important: false,
@@ -19841,7 +19856,7 @@ mod tests {
     assert!((style.font_size - 20.0).abs() < 0.01);
 
     let decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Length(parse_length("calc(10px + 5px)").unwrap()),
       raw_value: String::new(),
       important: false,
@@ -19850,7 +19865,7 @@ mod tests {
     assert!((style.font_size - 15.0).abs() < 0.01);
 
     let decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Length(parse_length("calc(50% + 0%)").unwrap()),
       raw_value: String::new(),
       important: false,
@@ -19859,7 +19874,7 @@ mod tests {
     assert!((style.font_size - 10.0).abs() < 0.01);
 
     let decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Length(parse_length("calc(-10px + 2px)").unwrap()),
       raw_value: String::new(),
       important: false,
@@ -19875,7 +19890,7 @@ mod tests {
     let viewport = Size::new(1000.0, 500.0);
 
     let decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Length(parse_length("10vw").unwrap()),
       raw_value: String::new(),
       important: false,
@@ -19891,7 +19906,7 @@ mod tests {
     assert!((style.font_size - 100.0).abs() < 0.01);
 
     let vh_decl = Declaration {
-      property: "font-size".to_string(),
+      property: "font-size".into(),
       value: PropertyValue::Length(parse_length("5vh").unwrap()),
       raw_value: String::new(),
       important: false,
@@ -19911,7 +19926,7 @@ mod tests {
   fn font_style_oblique_angle_parses_and_ranges() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-style".to_string(),
+      property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 20deg".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19920,7 +19935,7 @@ mod tests {
     assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 20.0).abs() < 0.01));
 
     let invalid = Declaration {
-      property: "font-style".to_string(),
+      property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 120deg".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19934,7 +19949,7 @@ mod tests {
   fn font_style_oblique_angle_rejects_out_of_range_calc() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-style".to_string(),
+      property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 10deg".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19943,7 +19958,7 @@ mod tests {
     assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 10.0).abs() < 0.01));
 
     let invalid = Declaration {
-      property: "font-style".to_string(),
+      property: "font-style".into(),
       value: PropertyValue::Keyword("oblique calc(120deg - 10deg)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19963,7 +19978,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "inset".to_string(),
+        property: "inset".into(),
         value: PropertyValue::Keyword("calc(0)".into()),
         raw_value: String::new(),
         important: false,
@@ -19982,7 +19997,7 @@ mod tests {
   fn font_shorthand_oblique_angle_parses_and_rejects_out_of_range() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("oblique 15deg 16px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -19992,7 +20007,7 @@ mod tests {
     assert!((style.font_size - 16.0).abs() < 0.01);
 
     let invalid = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("oblique 100deg 20px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20007,7 +20022,7 @@ mod tests {
   fn oblique_font_style_rejects_out_of_range_angle() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-style".to_string(),
+      property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 120deg".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20022,7 +20037,7 @@ mod tests {
   fn font_shorthand_oblique_angle_rejects_out_of_range_calc() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("oblique 12deg 16px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20031,7 +20046,7 @@ mod tests {
     assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 12.0).abs() < 0.01));
 
     let invalid = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("oblique calc(95deg + 10deg) 18px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20046,7 +20061,7 @@ mod tests {
   fn parses_font_stretch_longhand_keywords_and_percentages() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-stretch".to_string(),
+      property: "font-stretch".into(),
       value: PropertyValue::Keyword("expanded".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20055,7 +20070,7 @@ mod tests {
     assert!(matches!(style.font_stretch, FontStretch::Expanded));
 
     let decl = Declaration {
-      property: "font-stretch".to_string(),
+      property: "font-stretch".into(),
       value: PropertyValue::Percentage(125.0),
       raw_value: String::new(),
       important: false,
@@ -20068,7 +20083,7 @@ mod tests {
   fn font_shorthand_accepts_font_stretch_keyword() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("italic bold condensed 16px/20px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20101,7 +20116,7 @@ mod tests {
     style.font_variant_emoji = FontVariantEmoji::Emoji;
 
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("italic bold small-caps 16px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20139,7 +20154,7 @@ mod tests {
   fn parses_font_variant_longhand_and_shorthand() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20148,7 +20163,7 @@ mod tests {
     assert!(matches!(style.font_variant, FontVariant::SmallCaps));
 
     let decl = Declaration {
-      property: "font".to_string(),
+      property: "font".into(),
       value: PropertyValue::Keyword("small-caps 16px serif".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20162,7 +20177,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_caps = FontVariantCaps::AllSmallCaps;
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps bogus".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20179,7 +20194,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_caps = FontVariantCaps::AllSmallCaps;
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps all-petite-caps".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20204,7 +20219,7 @@ mod tests {
     style.font_variant_position = FontVariantPosition::Super;
 
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20236,7 +20251,7 @@ mod tests {
   fn font_variant_shorthand_sets_components() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword(
         "small-caps oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero \
                  jis90 proportional-width ruby no-common-ligatures discretionary-ligatures \
@@ -20296,7 +20311,7 @@ mod tests {
   fn font_variant_shorthand_allows_whitespace_inside_function_tokens() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps styleset(1 2 3) swash(4)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20322,7 +20337,7 @@ mod tests {
     style.font_variant_position = FontVariantPosition::Super;
 
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps oldstyle-nums".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20373,7 +20388,7 @@ mod tests {
     style.font_variant_position = FontVariantPosition::Super;
 
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps tabular-nums proportional-nums".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20399,7 +20414,7 @@ mod tests {
   fn parses_font_variant_caps_longhand() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant-caps".to_string(),
+      property: "font-variant-caps".into(),
       value: PropertyValue::Keyword("all-small-caps".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20411,7 +20426,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "font-variant".to_string(),
+      property: "font-variant".into(),
       value: PropertyValue::Keyword("all-petite-caps titling-caps".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20427,7 +20442,7 @@ mod tests {
   fn parses_font_variant_position() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant-position".to_string(),
+      property: "font-variant-position".into(),
       value: PropertyValue::Keyword("super".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20439,7 +20454,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "font-variant-position".to_string(),
+      property: "font-variant-position".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20455,7 +20470,7 @@ mod tests {
   fn parses_font_size_adjust() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-size-adjust".to_string(),
+      property: "font-size-adjust".into(),
       value: PropertyValue::Number(0.7),
       raw_value: String::new(),
       important: false,
@@ -20464,7 +20479,7 @@ mod tests {
     assert!(matches!(style.font_size_adjust, FontSizeAdjust::Number(v) if (v - 0.7).abs() < 1e-6));
 
     let decl = Declaration {
-      property: "font-size-adjust".to_string(),
+      property: "font-size-adjust".into(),
       value: PropertyValue::Keyword("from-font".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20473,7 +20488,7 @@ mod tests {
     assert!(matches!(style.font_size_adjust, FontSizeAdjust::FromFont));
 
     let decl = Declaration {
-      property: "font-size-adjust".to_string(),
+      property: "font-size-adjust".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20486,7 +20501,7 @@ mod tests {
   fn parses_font_synthesis() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-synthesis".to_string(),
+      property: "font-synthesis".into(),
       value: PropertyValue::Keyword("weight style position".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20498,7 +20513,7 @@ mod tests {
     assert!(style.font_synthesis.position);
 
     let decl = Declaration {
-      property: "font-synthesis".to_string(),
+      property: "font-synthesis".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20514,7 +20529,7 @@ mod tests {
   fn parses_font_variant_emoji() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant-emoji".to_string(),
+      property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("emoji".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20526,7 +20541,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "font-variant-emoji".to_string(),
+      property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("text".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20538,7 +20553,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "font-variant-emoji".to_string(),
+      property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("unicode".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20550,7 +20565,7 @@ mod tests {
     ));
 
     let decl = Declaration {
-      property: "font-variant-emoji".to_string(),
+      property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20572,7 +20587,7 @@ mod tests {
       ("--Custom", FontPalette::Named("--custom".into())),
     ] {
       let decl = Declaration {
-        property: "font-palette".to_string(),
+        property: "font-palette".into(),
         value: PropertyValue::Keyword(value.to_string()),
         raw_value: String::new(),
         important: false,
@@ -20596,7 +20611,7 @@ mod tests {
     let mut style = ComputedStyle::default();
 
     let decl = Declaration {
-      property: "font-synthesis-weight".to_string(),
+      property: "font-synthesis-weight".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20605,7 +20620,7 @@ mod tests {
     assert!(!style.font_synthesis.weight);
 
     let decl = Declaration {
-      property: "font-synthesis-style".to_string(),
+      property: "font-synthesis-style".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20614,7 +20629,7 @@ mod tests {
     assert!(!style.font_synthesis.style);
 
     let decl = Declaration {
-      property: "font-synthesis-small-caps".to_string(),
+      property: "font-synthesis-small-caps".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20623,7 +20638,7 @@ mod tests {
     assert!(!style.font_synthesis.small_caps);
 
     let decl = Declaration {
-      property: "font-synthesis-position".to_string(),
+      property: "font-synthesis-position".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20632,7 +20647,7 @@ mod tests {
     assert!(!style.font_synthesis.position);
 
     let reset = Declaration {
-      property: "font-synthesis".to_string(),
+      property: "font-synthesis".into(),
       value: PropertyValue::Keyword("weight style small-caps position".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20648,7 +20663,7 @@ mod tests {
   fn parses_font_variant_east_asian() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant-east-asian".to_string(),
+      property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("jis90 proportional-width ruby".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20665,7 +20680,7 @@ mod tests {
     assert!(style.font_variant_east_asian.ruby);
 
     let decl = Declaration {
-      property: "font-variant-east-asian".to_string(),
+      property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20681,7 +20696,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_east_asian.variant = Some(EastAsianVariant::Jis78);
     let decl = Declaration {
-      property: "font-variant-east-asian".to_string(),
+      property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("bogus".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20698,7 +20713,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_east_asian.width = Some(EastAsianWidth::FullWidth);
     let decl = Declaration {
-      property: "font-variant-east-asian".to_string(),
+      property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("full-width proportional-width".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20714,7 +20729,7 @@ mod tests {
   fn parses_font_variant_numeric_longhand() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant-numeric".to_string(),
+      property: "font-variant-numeric".into(),
       value: PropertyValue::Keyword(
         "oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero".to_string(),
       ),
@@ -20738,7 +20753,7 @@ mod tests {
     assert!(style.font_variant_numeric.slashed_zero);
 
     let decl = Declaration {
-      property: "font-variant-numeric".to_string(),
+      property: "font-variant-numeric".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20765,7 +20780,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_alternates.historical_forms = true;
     let decl = Declaration {
-      property: "font-variant-alternates".to_string(),
+      property: "font-variant-alternates".into(),
       value: PropertyValue::Keyword("bogus".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20779,7 +20794,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_alternates.stylistic = Some(1);
     let decl = Declaration {
-      property: "font-variant-alternates".to_string(),
+      property: "font-variant-alternates".into(),
       value: PropertyValue::Keyword("stylistic(1) stylistic(2)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20792,7 +20807,7 @@ mod tests {
   fn font_variant_alternates_allows_whitespace_inside_functions() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-variant-alternates".to_string(),
+      property: "font-variant-alternates".into(),
       value: PropertyValue::Keyword("styleset(1 2 3) character-variant(4 5) swash(6)".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20808,7 +20823,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_numeric.figure = NumericFigure::Lining;
     let decl = Declaration {
-      property: "font-variant-numeric".to_string(),
+      property: "font-variant-numeric".into(),
       value: PropertyValue::Keyword("bogus".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20825,7 +20840,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_numeric.spacing = NumericSpacing::Proportional;
     let decl = Declaration {
-      property: "font-variant-numeric".to_string(),
+      property: "font-variant-numeric".into(),
       value: PropertyValue::Keyword("tabular-nums proportional-nums".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20842,7 +20857,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_ligatures.common = false;
     let decl = Declaration {
-      property: "font-variant-ligatures".to_string(),
+      property: "font-variant-ligatures".into(),
       value: PropertyValue::Keyword("foo".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20856,7 +20871,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_variant_ligatures.contextual = false;
     let decl = Declaration {
-      property: "font-variant-ligatures".to_string(),
+      property: "font-variant-ligatures".into(),
       value: PropertyValue::Keyword("contextual no-contextual".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20869,7 +20884,7 @@ mod tests {
   fn parses_font_kerning() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "font-kerning".to_string(),
+      property: "font-kerning".into(),
       value: PropertyValue::Keyword("none".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20878,7 +20893,7 @@ mod tests {
     assert!(matches!(style.font_kerning, FontKerning::None));
 
     let decl = Declaration {
-      property: "font-kerning".to_string(),
+      property: "font-kerning".into(),
       value: PropertyValue::Keyword("normal".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20891,7 +20906,7 @@ mod tests {
   fn parses_float_and_clear() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "float".to_string(),
+      property: "float".into(),
       value: PropertyValue::Keyword("left".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20900,7 +20915,7 @@ mod tests {
     assert!(matches!(style.float, crate::style::float::Float::Left));
 
     let decl = Declaration {
-      property: "clear".to_string(),
+      property: "clear".into(),
       value: PropertyValue::Keyword("both".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20909,7 +20924,7 @@ mod tests {
     assert!(matches!(style.clear, crate::style::float::Clear::Both));
 
     let decl = Declaration {
-      property: "float".to_string(),
+      property: "float".into(),
       value: PropertyValue::Keyword("invalid".to_string()),
       raw_value: String::new(),
       important: false,
@@ -20926,7 +20941,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "shape-margin".to_string(),
+        property: "shape-margin".into(),
         value: margin,
         raw_value: String::new(),
         important: false,
@@ -20941,7 +20956,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "shape-image-threshold".to_string(),
+        property: "shape-image-threshold".into(),
         value: threshold,
         raw_value: String::new(),
         important: false,
@@ -20960,7 +20975,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "shape-outside".to_string(),
+        property: "shape-outside".into(),
         value: parse_property_value("shape-outside", "circle(50% at 50% 50%) margin-box").unwrap(),
         raw_value: String::new(),
         important: false,
@@ -20992,7 +21007,7 @@ mod tests {
     apply_declaration(
       &mut style,
       &Declaration {
-        property: "shape-outside".to_string(),
+        property: "shape-outside".into(),
         value: parse_property_value("shape-outside", "url(a.png)").unwrap(),
         raw_value: String::new(),
         important: false,
@@ -21012,7 +21027,7 @@ mod tests {
   fn parses_break_properties_and_column_aliases() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
-      property: "break-before".to_string(),
+      property: "break-before".into(),
       value: PropertyValue::Keyword("avoid-page".to_string()),
       raw_value: String::new(),
       important: false,
@@ -21021,7 +21036,7 @@ mod tests {
     assert!(matches!(style.break_before, BreakBetween::AvoidPage));
 
     let decl = Declaration {
-      property: "break-after".to_string(),
+      property: "break-after".into(),
       value: PropertyValue::Keyword("avoid-column".to_string()),
       raw_value: String::new(),
       important: false,
@@ -21030,7 +21045,7 @@ mod tests {
     assert!(matches!(style.break_after, BreakBetween::AvoidColumn));
 
     let decl = Declaration {
-      property: "column-break-before".to_string(),
+      property: "column-break-before".into(),
       value: PropertyValue::Keyword("always".to_string()),
       raw_value: String::new(),
       important: false,
@@ -21039,7 +21054,7 @@ mod tests {
     assert!(matches!(style.break_before, BreakBetween::Column));
 
     let decl = Declaration {
-      property: "column-break-inside".to_string(),
+      property: "column-break-inside".into(),
       value: PropertyValue::Keyword("avoid".to_string()),
       raw_value: String::new(),
       important: false,

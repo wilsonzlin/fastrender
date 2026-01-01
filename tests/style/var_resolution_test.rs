@@ -33,9 +33,9 @@ fn make_props(pairs: &[(&str, &str)]) -> CustomPropertyStore {
   store
 }
 
-fn decl(property: &str, value: PropertyValue, raw_value: &str) -> Declaration {
+fn decl(property: &'static str, value: PropertyValue, raw_value: &str) -> Declaration {
   Declaration {
-    property: property.to_string(),
+    property: property.into(),
     value,
     raw_value: raw_value.to_string(),
     important: false,

@@ -744,7 +744,7 @@ fn select_color_scheme(
 
 fn selector_has_nonempty_content(decls: &[Declaration]) -> bool {
   for decl in decls {
-    if decl.property == "content" {
+    if decl.property.as_str() == "content" {
       // Treat any value other than 'none' or 'normal' as generating content (including empty strings)
       if let PropertyValue::Keyword(kw) = &decl.value {
         if kw.eq_ignore_ascii_case("none") || kw.eq_ignore_ascii_case("normal") {
@@ -3398,7 +3398,7 @@ impl<'a> RuleIndex<'a> {
         .rule
         .declarations
         .iter()
-        .any(|decl| decl.property == "content");
+        .any(|decl| decl.property.as_str() == "content");
       let rule_idx = index.rules.len();
       index.rules.push(rule);
       index.rule_sets_content.push(sets_content);
@@ -16769,7 +16769,7 @@ fn apply_cascaded_declarations<'a, F>(
     match rule.declarations {
       Cow::Borrowed(decls) => {
         for (decl_order, declaration) in decls.iter().enumerate() {
-          let is_custom_property = declaration.property.starts_with("--");
+          let is_custom_property = declaration.property.is_custom();
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin,
@@ -16784,7 +16784,7 @@ fn apply_cascaded_declarations<'a, F>(
       }
       Cow::Owned(decls) => {
         for (decl_order, declaration) in decls.into_iter().enumerate() {
-          let is_custom_property = declaration.property.starts_with("--");
+          let is_custom_property = declaration.property.is_custom();
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin,
@@ -16807,7 +16807,7 @@ fn apply_cascaded_declarations<'a, F>(
     match inline {
       Cow::Borrowed(decls) => {
         for (decl_order, declaration) in decls.iter().enumerate() {
-          let is_custom_property = declaration.property.starts_with("--");
+          let is_custom_property = declaration.property.is_custom();
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin: StyleOrigin::Inline,
@@ -16822,7 +16822,7 @@ fn apply_cascaded_declarations<'a, F>(
       }
       Cow::Owned(decls) => {
         for (decl_order, declaration) in decls.into_iter().enumerate() {
-          let is_custom_property = declaration.property.starts_with("--");
+          let is_custom_property = declaration.property.is_custom();
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin: StyleOrigin::Inline,
@@ -17057,7 +17057,7 @@ fn list_type_presentational_hint(
     None
   }?;
   let declarations = vec![Declaration {
-    property: "list-style-type".to_string(),
+    property: "list-style-type".into(),
     value: PropertyValue::Keyword(mapped.to_string()),
     raw_value: String::new(),
     important: false,
@@ -17131,7 +17131,7 @@ fn alignment_presentational_hint(
         || tag.eq_ignore_ascii_case("h6")
       {
         declarations.push(Declaration {
-          property: "text-align".to_string(),
+          property: "text-align".into(),
           value: PropertyValue::Keyword(mapped.to_string()),
           raw_value: String::new(),
           important: false,
@@ -17141,13 +17141,13 @@ fn alignment_presentational_hint(
         match mapped {
           "center" => {
             declarations.push(Declaration {
-              property: "margin-left".to_string(),
+              property: "margin-left".into(),
               value: PropertyValue::Keyword("auto".to_string()),
               raw_value: String::new(),
               important: false,
             });
             declarations.push(Declaration {
-              property: "margin-right".to_string(),
+              property: "margin-right".into(),
               value: PropertyValue::Keyword("auto".to_string()),
               raw_value: String::new(),
               important: false,
@@ -17155,13 +17155,13 @@ fn alignment_presentational_hint(
           }
           "right" => {
             declarations.push(Declaration {
-              property: "margin-left".to_string(),
+              property: "margin-left".into(),
               value: PropertyValue::Keyword("auto".to_string()),
               raw_value: String::new(),
               important: false,
             });
             declarations.push(Declaration {
-              property: "margin-right".to_string(),
+              property: "margin-right".into(),
               value: PropertyValue::Length(Length::px(0.0)),
               raw_value: String::new(),
               important: false,
@@ -17169,13 +17169,13 @@ fn alignment_presentational_hint(
           }
           "left" => {
             declarations.push(Declaration {
-              property: "margin-left".to_string(),
+              property: "margin-left".into(),
               value: PropertyValue::Length(Length::px(0.0)),
               raw_value: String::new(),
               important: false,
             });
             declarations.push(Declaration {
-              property: "margin-right".to_string(),
+              property: "margin-right".into(),
               value: PropertyValue::Keyword("auto".to_string()),
               raw_value: String::new(),
               important: false,
@@ -17191,7 +17191,7 @@ fn alignment_presentational_hint(
     if let Some(valign) = valign {
       if let Some(mapped) = map_valign(valign) {
         declarations.push(Declaration {
-          property: "vertical-align".to_string(),
+          property: "vertical-align".into(),
           value: PropertyValue::Keyword(mapped.to_string()),
           raw_value: String::new(),
           important: false,
@@ -17233,7 +17233,7 @@ fn dimension_presentational_hint(
   let mut declarations = Vec::with_capacity(width.is_some() as usize + height.is_some() as usize);
   if let Some(w) = width {
     declarations.push(Declaration {
-      property: "width".to_string(),
+      property: "width".into(),
       value: PropertyValue::Length(w),
       raw_value: String::new(),
       important: false,
@@ -17241,7 +17241,7 @@ fn dimension_presentational_hint(
   }
   if let Some(h) = height {
     declarations.push(Declaration {
-      property: "height".to_string(),
+      property: "height".into(),
       value: PropertyValue::Length(h),
       raw_value: String::new(),
       important: false,
@@ -17267,7 +17267,7 @@ fn bgcolor_presentational_hint(
     .get_attribute_ref("bgcolor")
     .and_then(parse_color_attribute)?;
   let declarations = vec![Declaration {
-    property: "background-color".to_string(),
+    property: "background-color".into(),
     value: PropertyValue::Color(Color::Rgba(color)),
     raw_value: String::new(),
     important: false,
@@ -17291,7 +17291,7 @@ fn bordercolor_presentational_hint(
     .get_attribute_ref("bordercolor")
     .and_then(parse_color_attribute)?;
   let declarations = vec![Declaration {
-    property: "border-color".to_string(),
+    property: "border-color".into(),
     value: PropertyValue::Color(Color::Rgba(color)),
     raw_value: String::new(),
     important: false,
@@ -17384,13 +17384,13 @@ fn border_presentational_hint(
 
   let mut declarations = Vec::with_capacity(4);
   declarations.push(Declaration {
-    property: "border-width".to_string(),
+    property: "border-width".into(),
     value: PropertyValue::Length(border_len),
     raw_value: String::new(),
     important: false,
   });
   declarations.push(Declaration {
-    property: "border-style".to_string(),
+    property: "border-style".into(),
     value: PropertyValue::Keyword("solid".to_string()),
     raw_value: String::new(),
     important: false,
@@ -17398,14 +17398,14 @@ fn border_presentational_hint(
   // Match the `border: <width> solid` shorthand behavior: unspecified border-color resets to
   // currentColor (not the ComputedStyle default black).
   declarations.push(Declaration {
-    property: "border-color".to_string(),
+    property: "border-color".into(),
     value: PropertyValue::Keyword("currentcolor".to_string()),
     raw_value: String::new(),
     important: false,
   });
   if is_table && border_len.to_px() > 0.0 {
     declarations.push(Declaration {
-      property: "border-collapse".to_string(),
+      property: "border-collapse".into(),
       value: PropertyValue::Keyword("collapse".to_string()),
       raw_value: String::new(),
       important: false,
@@ -17434,7 +17434,7 @@ fn cellspacing_presentational_hint(
   let spacing = node.get_attribute_ref("cellspacing")?;
   let length = parse_dimension_attribute(spacing)?;
   let declarations = vec![Declaration {
-    property: "border-spacing".to_string(),
+    property: "border-spacing".into(),
     value: PropertyValue::Length(length),
     raw_value: String::new(),
     important: false,
@@ -17483,7 +17483,7 @@ fn cellpadding_presentational_hint(
   }
   let padding = find_cellpadding(ancestors, node)?;
   let declarations = vec![Declaration {
-    property: "padding".to_string(),
+    property: "padding".into(),
     value: PropertyValue::Length(padding),
     raw_value: String::new(),
     important: false,
@@ -17572,7 +17572,7 @@ fn replaced_alignment_presentational_hint(
   let mut declarations = Vec::with_capacity(float.is_some() as usize + valign.is_some() as usize);
   if let Some(float) = float {
     declarations.push(Declaration {
-      property: "float".to_string(),
+      property: "float".into(),
       value: PropertyValue::Keyword(float.to_string()),
       raw_value: String::new(),
       important: false,
@@ -17580,7 +17580,7 @@ fn replaced_alignment_presentational_hint(
   }
   if let Some(valign) = valign {
     declarations.push(Declaration {
-      property: "vertical-align".to_string(),
+      property: "vertical-align".into(),
       value: PropertyValue::Keyword(valign.to_string()),
       raw_value: String::new(),
       important: false,
