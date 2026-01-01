@@ -50,10 +50,10 @@
 //! - ttf-parser: <https://docs.rs/ttf-parser/>
 //! - tiny-skia: <https://docs.rs/tiny-skia/>
 
-use crate::error::RenderError;
-use crate::error::Result;
+use crate::error::{Error, RenderError, RenderStage, Result};
 #[cfg(test)]
 use crate::paint::pixmap::new_pixmap;
+use crate::render_control::check_active_periodic;
 use crate::style::color::Rgba;
 use crate::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use crate::text::font_db::LoadedFont;
@@ -82,6 +82,7 @@ use tiny_skia::Transform;
 
 const DEFAULT_GLYPH_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const SCALE_QUANTIZATION: f32 = 512.0;
+const DEADLINE_STRIDE: usize = 256;
 
 /// Computes the advance width of a glyph with the given variation settings applied.
 pub fn glyph_advance_with_variations(
@@ -926,6 +927,7 @@ impl TextRasterizer {
     let raster_timer = text_diagnostics_timer(TextDiagnosticsStage::Rasterize);
     let diag_enabled = raster_timer.is_some();
     let mut color_glyph_rasters = 0usize;
+    let mut deadline_counter = 0usize;
     // Note: The shared glyph/color caches are used from multiple threads when paint parallelism is
     // enabled. Computing cache deltas from "before" and "after" snapshots taken outside the cache
     // lock can double-count (other threads can bump the counters between snapshots). To keep
@@ -974,6 +976,8 @@ impl TextRasterizer {
 
     // Render each glyph
     for glyph in glyphs {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       // Calculate glyph position
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + cursor_y + glyph.y_offset;
@@ -1640,11 +1644,13 @@ pub fn glyph_advance(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Result
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::render_control::{with_deadline, RenderDeadline};
   use crate::text::color_fonts::{color_font_render_count, ColorFontRenderCountGuard};
   use crate::text::face_cache;
   use crate::text::font_db::{FontStretch, FontStyle, FontWeight};
   use crate::text::font_loader::FontContext;
   use std::path::PathBuf;
+  use std::time::Duration;
 
   fn get_test_font() -> Option<LoadedFont> {
     let ctx = FontContext::new();
@@ -1801,6 +1807,65 @@ mod tests {
       rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 80.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
+  }
+
+  #[test]
+  fn text_rasterize_respects_deadline_timeout_in_glyph_loop() {
+    let font = FontContext::new()
+      .get_sans_serif()
+      .expect("expected bundled sans-serif font for tests");
+    let face = font.as_ttf_face().expect("parse test font");
+    let glyph_id = face
+      .glyph_index(' ')
+      .or_else(|| face.glyph_index('A'))
+      .expect("resolve glyph for deadline timeout test")
+      .0 as u32;
+
+    let glyphs: Vec<GlyphPosition> = (0..10_000u32)
+      .map(|cluster| GlyphPosition {
+        glyph_id,
+        cluster,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 0.0,
+        y_advance: 0.0,
+      })
+      .collect();
+
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    let mut rasterizer = TextRasterizer::new();
+    let mut pixmap = new_pixmap(4, 4).unwrap();
+
+    let result = with_deadline(Some(&deadline), || {
+      rasterizer.render_glyph_run(
+        &glyphs,
+        &font,
+        16.0,
+        0.0,
+        0.0,
+        0,
+        &[],
+        0,
+        &[],
+        None,
+        0.0,
+        0.0,
+        Rgba::BLACK,
+        TextRenderState::default(),
+        &mut pixmap,
+      )
+    });
+
+    assert!(
+      matches!(
+        result,
+        Err(Error::Render(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        }))
+      ),
+      "expected paint-stage timeout, got {result:?}"
+    );
   }
 
   #[test]
