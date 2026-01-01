@@ -170,17 +170,42 @@ jobs:
           {
             echo "## perf_smoke pageset-timeouts regression check"
             echo
-             echo "Baseline: ${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}"
-             echo "Threshold: ${PERF_SMOKE_REGRESSION_THRESHOLD} (relative)"
-             echo "Count threshold: ${PERF_SMOKE_COUNT_REGRESSION_THRESHOLD} (relative)"
-             echo
-            if grep -q "Regressions detected vs baseline" "${report_path}"; then
-              echo "**Result: regressions detected**"
-            elif grep -q "baseline schema_version" "${report_path}"; then
-              echo "**Result: baseline incompatible (schema mismatch); skipping regression gate**"
+            echo "Baseline: ${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}"
+            echo "Threshold: ${PERF_SMOKE_REGRESSION_THRESHOLD} (relative)"
+            echo "Count threshold: ${PERF_SMOKE_COUNT_REGRESSION_THRESHOLD} (relative)"
+            if [ "${PERF_SMOKE_FAIL_ON_BUDGET}" = "1" ]; then
+              echo "Budget gate: enabled"
             else
-              echo "**Result: no regressions detected**"
+              echo "Budget gate: disabled (set PERF_SMOKE_FAIL_ON_BUDGET=1 to enable)"
             fi
+            echo
+
+            result="no regressions detected"
+            if grep -q "Regressions detected vs baseline" "${report_path}"; then
+              result="regressions detected"
+            fi
+            if grep -q "Budget failures" "${report_path}"; then
+              if [ "$result" = "no regressions detected" ]; then
+                result="budget failures detected"
+              else
+                result="${result}; budget failures detected"
+              fi
+            fi
+            if grep -q "Fixture failures" "${report_path}"; then
+              if [ "$result" = "no regressions detected" ]; then
+                result="fixture failures detected"
+              else
+                result="${result}; fixture failures detected"
+              fi
+            fi
+            if grep -q "Missing pageset-timeouts fixtures" "${report_path}"; then
+              result="missing pageset-timeouts fixtures"
+            fi
+            if grep -q "baseline schema_version" "${report_path}"; then
+              result="baseline incompatible (schema mismatch); skipping regression gate"
+            fi
+
+            echo "**Result: ${result}**"
             echo
             echo '```'
             cat "${report_path}"
