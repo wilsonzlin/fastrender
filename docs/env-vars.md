@@ -45,6 +45,7 @@ These env vars tune the retry/backoff behavior for HTTP(S) requests made by the 
 
 They map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs) and are parsed once at process startup; invalid values are ignored.
 
+- `FASTR_HTTP_BACKEND=auto|ureq|curl` – choose the HTTP backend. `auto` (default) uses the Rust client and falls back to the system `curl` binary for retryable network/TLS/HTTP2 errors. `curl` forces the cURL backend for all requests; `ureq` disables the fallback and forces the Rust backend.
 - `FASTR_HTTP_MAX_ATTEMPTS=<N>` – total attempts per HTTP request (initial request + retries). Set to `1` to disable retries (default `3`).
 - `FASTR_HTTP_BACKOFF_BASE_MS=<ms>` – base delay for exponential backoff (default `50`).
 - `FASTR_HTTP_BACKOFF_CAP_MS=<ms>` – maximum delay between retries (default `500`).

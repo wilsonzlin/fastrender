@@ -51,6 +51,7 @@ use url::Url;
 
 pub mod bundle;
 mod data_url;
+mod curl_backend;
 #[cfg(feature = "disk_cache")]
 pub mod disk_cache;
 #[cfg(feature = "disk_cache")]
@@ -671,6 +672,53 @@ fn http_retry_logging_enabled() -> bool {
       })
       .unwrap_or(false)
   })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HttpBackendMode {
+  Ureq,
+  Curl,
+  Auto,
+}
+
+fn http_backend_mode() -> HttpBackendMode {
+  static MODE: OnceLock<HttpBackendMode> = OnceLock::new();
+  *MODE.get_or_init(|| {
+    let raw = std::env::var("FASTR_HTTP_BACKEND")
+      .ok()
+      .unwrap_or_default();
+    let lowered = raw.trim().to_ascii_lowercase();
+    match lowered.as_str() {
+      "" | "auto" | "fallback" => HttpBackendMode::Auto,
+      "ureq" | "rust" | "native" => HttpBackendMode::Ureq,
+      "curl" => HttpBackendMode::Curl,
+      _ => HttpBackendMode::Auto,
+    }
+  })
+}
+
+fn should_fallback_to_curl(err: &Error) -> bool {
+  if !matches!(err, Error::Resource(_)) {
+    return false;
+  }
+
+  let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+  while let Some(current) = source {
+    if let Some(io_err) = current.downcast_ref::<io::Error>() {
+      if is_retryable_io_error(io_err) {
+        return true;
+      }
+    }
+    source = current.source();
+  }
+
+  let msg = err.to_string().to_ascii_lowercase();
+  msg.contains("timeout")
+    || msg.contains("timed out")
+    || msg.contains("connection reset")
+    || msg.contains("connection aborted")
+    || msg.contains("broken pipe")
+    || msg.contains("http2")
 }
 
 fn log_http_retry(reason: &str, attempt: usize, max_attempts: usize, url: &str, backoff: Duration) {
@@ -1626,12 +1674,77 @@ pub struct HttpFetcher {
   policy: ResourcePolicy,
   agent: Arc<ureq::Agent>,
   retry_policy: HttpRetryPolicy,
+  curl_cookie_jar: Arc<Mutex<curl_backend::CookieJarState>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct HttpCacheValidators<'a> {
   etag: Option<&'a str>,
   last_modified: Option<&'a str>,
+}
+
+fn build_http_header_pairs<'a>(
+  url: &str,
+  user_agent: &str,
+  accept_language: &str,
+  accept_encoding: &str,
+  validators: Option<HttpCacheValidators<'a>>,
+) -> Vec<(String, String)> {
+  let mut headers = vec![
+    ("User-Agent".to_string(), user_agent.to_string()),
+    (
+      "Accept-Language".to_string(),
+      accept_language.to_string(),
+    ),
+    (
+      "Accept-Encoding".to_string(),
+      accept_encoding.to_string(),
+    ),
+  ];
+
+  if http_browser_headers_enabled() {
+    let profile = http_browser_request_profile_for_url(url);
+    headers.push(("Accept".to_string(), profile.accept().to_string()));
+    headers.push((
+      "Sec-Fetch-Dest".to_string(),
+      profile.sec_fetch_dest().to_string(),
+    ));
+    headers.push((
+      "Sec-Fetch-Mode".to_string(),
+      profile.sec_fetch_mode().to_string(),
+    ));
+    headers.push((
+      "Sec-Fetch-Site".to_string(),
+      profile.sec_fetch_site().to_string(),
+    ));
+    if let Some(user) = profile.sec_fetch_user() {
+      headers.push(("Sec-Fetch-User".to_string(), user.to_string()));
+    }
+    if let Some(value) = profile.upgrade_insecure_requests() {
+      headers.push(("Upgrade-Insecure-Requests".to_string(), value.to_string()));
+    }
+    if profile == HttpBrowserRequestProfile::Font {
+      if let Ok(parsed) = Url::parse(url) {
+        if let Some((origin, referer)) = profile.origin_and_referer(&parsed) {
+          headers.push(("Origin".to_string(), origin));
+          headers.push(("Referer".to_string(), referer));
+        }
+      }
+    }
+  } else {
+    headers.push(("Accept".to_string(), DEFAULT_ACCEPT.to_string()));
+  }
+
+  if let Some(v) = validators {
+    if let Some(tag) = v.etag {
+      headers.push(("If-None-Match".to_string(), tag.to_string()));
+    }
+    if let Some(modified) = v.last_modified {
+      headers.push(("If-Modified-Since".to_string(), modified.to_string()));
+    }
+  }
+
+  headers
 }
 
 impl std::fmt::Debug for HttpFetcher {
@@ -1764,10 +1877,60 @@ impl HttpFetcher {
   ) -> Result<FetchedResource> {
     let deadline = render_control::active_deadline();
     let started = Instant::now();
-    self.fetch_http_with_accept_inner(url, accept_encoding, validators, &deadline, started)
+    match http_backend_mode() {
+      HttpBackendMode::Curl => curl_backend::fetch_http_with_accept_inner(
+        self,
+        url,
+        accept_encoding,
+        validators,
+        &deadline,
+        started,
+      ),
+      HttpBackendMode::Ureq => self.fetch_http_with_accept_inner_ureq(
+        url,
+        accept_encoding,
+        validators,
+        &deadline,
+        started,
+      ),
+      HttpBackendMode::Auto => {
+        match self.fetch_http_with_accept_inner_ureq(
+          url,
+          accept_encoding,
+          validators,
+          &deadline,
+          started,
+        ) {
+          Ok(res) => Ok(res),
+          Err(err) => {
+            if should_fallback_to_curl(&err) {
+              match curl_backend::fetch_http_with_accept_inner(
+                self,
+                url,
+                accept_encoding,
+                validators,
+                &deadline,
+                started,
+              ) {
+                Ok(res) => Ok(res),
+                Err(curl_err) => {
+                  let mut err = err;
+                  if let Error::Resource(ref mut res) = err {
+                    res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
+                  }
+                  Err(err)
+                }
+              }
+            } else {
+              Err(err)
+            }
+          }
+        }
+      }
+    }
   }
 
-  fn fetch_http_with_accept_inner<'a>(
+  fn fetch_http_with_accept_inner_ureq<'a>(
     &self,
     url: &str,
     accept_encoding: Option<&str>,
@@ -1834,33 +1997,16 @@ impl HttpFetcher {
         }
 
         let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
-        let mut request = agent
-          .get(&current)
-          .header("User-Agent", &self.user_agent)
-          .header("Accept-Language", &self.accept_language)
-          .header("Accept-Encoding", accept_encoding_value);
-        if http_browser_headers_enabled() {
-          let profile = http_browser_request_profile_for_url(&current);
-          request = request
-            .header("Accept", profile.accept())
-            .header("Sec-Fetch-Dest", profile.sec_fetch_dest())
-            .header("Sec-Fetch-Mode", profile.sec_fetch_mode())
-            .header("Sec-Fetch-Site", profile.sec_fetch_site());
-          if let Some(user) = profile.sec_fetch_user() {
-            request = request.header("Sec-Fetch-User", user);
-          }
-          if let Some(value) = profile.upgrade_insecure_requests() {
-            request = request.header("Upgrade-Insecure-Requests", value);
-          }
-          if profile == HttpBrowserRequestProfile::Font {
-            if let Ok(parsed) = Url::parse(&current) {
-              if let Some((origin, referer)) = profile.origin_and_referer(&parsed) {
-                request = request.header("Origin", &origin).header("Referer", &referer);
-              }
-            }
-          }
-        } else {
-          request = request.header("Accept", DEFAULT_ACCEPT);
+        let headers = build_http_header_pairs(
+          &current,
+          &self.user_agent,
+          &self.accept_language,
+          accept_encoding_value,
+          validators,
+        );
+        let mut request = agent.get(&current);
+        for (name, value) in &headers {
+          request = request.header(name, value);
         }
 
         if !effective_timeout.is_zero() {
@@ -1868,15 +2014,6 @@ impl HttpFetcher {
             .config()
             .timeout_global(Some(effective_timeout))
             .build();
-        }
-
-        if let Some(v) = validators {
-          if let Some(tag) = v.etag {
-            request = request.header("If-None-Match", tag);
-          }
-          if let Some(modified) = v.last_modified {
-            request = request.header("If-Modified-Since", modified);
-          }
         }
 
         let mut network_timer = start_network_fetch_diagnostics();
@@ -2019,7 +2156,7 @@ impl HttpFetcher {
                   if accept_encoding.is_none() =>
                 {
                   finish_network_fetch_diagnostics(network_timer.take());
-                  return self.fetch_http_with_accept_inner(
+                  return self.fetch_http_with_accept_inner_ureq(
                     &current,
                     Some("identity"),
                     validators,
@@ -2376,6 +2513,7 @@ impl Default for HttpFetcher {
       agent: Self::build_agent(&policy),
       policy,
       retry_policy: HttpRetryPolicy::default(),
+      curl_cookie_jar: Arc::new(Mutex::new(curl_backend::CookieJarState::default())),
     }
   }
 }
