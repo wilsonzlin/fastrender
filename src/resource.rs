@@ -462,6 +462,29 @@ fn auto_backend_ureq_timeout_slice(total: Duration) -> Duration {
   half.min(AUTO_BACKEND_UREQ_TIMEOUT_CAP)
 }
 
+fn rewrite_known_pageset_hosts(url: &str) -> Option<String> {
+  Url::parse(url).ok().and_then(|mut parsed| {
+    if parsed.scheme() != "https" {
+      return None;
+    }
+    let host = parsed.host_str()?;
+    // Some pageset domains (notably `tesco.com` and `nhk.or.jp`) do not resolve/reply reliably
+    // without the `www.` subdomain in certain environments. Rewrite to the canonical host so the
+    // pageset can still fetch and render deterministically.
+    //
+    // Note: this is intentionally scoped to a small allowlist to avoid surprising callers with
+    // implicit host changes.
+    if host.eq_ignore_ascii_case("tesco.com") {
+      parsed.set_host(Some("www.tesco.com")).ok()?;
+    } else if host.eq_ignore_ascii_case("nhk.or.jp") {
+      parsed.set_host(Some("www.nhk.or.jp")).ok()?;
+    } else {
+      return None;
+    }
+    Some(parsed.to_string())
+  })
+}
+
 fn http_browser_headers_enabled() -> bool {
   static ENABLED: OnceLock<bool> = OnceLock::new();
   *ENABLED.get_or_init(|| {
@@ -2078,20 +2101,7 @@ impl HttpFetcher {
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
   ) -> Result<FetchedResource> {
-    let rewritten_url = Url::parse(url).ok().and_then(|mut parsed| {
-      if parsed.scheme() != "https" {
-        return None;
-      }
-      if !parsed
-        .host_str()
-        .map(|host| host.eq_ignore_ascii_case("tesco.com"))
-        .unwrap_or(false)
-      {
-        return None;
-      }
-      parsed.set_host(Some("www.tesco.com")).ok()?;
-      Some(parsed.to_string())
-    });
+    let rewritten_url = rewrite_known_pageset_hosts(url);
     let effective_url = rewritten_url.as_deref().unwrap_or(url);
 
     match http_backend_mode() {
@@ -6107,6 +6117,20 @@ mod tests {
       auto_backend_ureq_timeout_slice(Duration::ZERO),
       Duration::ZERO
     );
+  }
+
+  #[test]
+  fn rewrite_known_pageset_hosts_examples() {
+    assert_eq!(
+      rewrite_known_pageset_hosts("https://tesco.com").as_deref(),
+      Some("https://www.tesco.com/")
+    );
+    assert_eq!(
+      rewrite_known_pageset_hosts("https://nhk.or.jp").as_deref(),
+      Some("https://www.nhk.or.jp/")
+    );
+    assert_eq!(rewrite_known_pageset_hosts("https://example.com"), None);
+    assert_eq!(rewrite_known_pageset_hosts("http://tesco.com"), None);
   }
 
   static RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
