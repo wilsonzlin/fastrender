@@ -1011,6 +1011,7 @@ pub fn parse_property_value_after_var_resolution(
     value_str,
     true,
     false,
+    false,
   )
 }
 
@@ -1020,7 +1021,7 @@ pub fn parse_property_value_in_context(
   property: &str,
   value_str: &str,
 ) -> Option<PropertyValue> {
-  parse_property_value_in_context_internal(context, property, value_str, false, false)
+  parse_property_value_in_context_internal(context, property, value_str, false, false, false)
 }
 
 fn parse_property_value_in_context_internal(
@@ -1029,6 +1030,7 @@ fn parse_property_value_in_context_internal(
   value_str: &str,
   skip_var_guard: bool,
   skip_allowed_check: bool,
+  skip_value_cache: bool,
 ) -> Option<PropertyValue> {
   // Custom properties store their tokens verbatim (post !important stripping handled by caller).
   if property.starts_with("--") {
@@ -1067,15 +1069,19 @@ fn parse_property_value_in_context_internal(
     return Some(PropertyValue::Keyword(trimmed.to_string()));
   }
 
-  let cache_key =
-    value_cache::ParsedPropertyValueCacheKey::new(context, property, trimmed, skip_var_guard);
-  if let Some(cached) = value_cache::get(&cache_key) {
-    return Some(cached);
+  if !skip_value_cache {
+    let cache_key =
+      value_cache::ParsedPropertyValueCacheKey::new(context, property, trimmed, skip_var_guard);
+    if let Some(cached) = value_cache::get(&cache_key) {
+      return Some(cached);
+    }
+
+    let parsed = parse_known_property_value(property, value_str)?;
+    value_cache::put(cache_key, parsed.clone());
+    return Some(parsed);
   }
 
-  let parsed = parse_known_property_value(property, value_str)?;
-  value_cache::put(cache_key, parsed.clone());
-  Some(parsed)
+  parse_known_property_value(property, value_str)
 }
 
 /// Parse a CSS property value when the property name has already been validated/interned.
@@ -1088,7 +1094,23 @@ pub(crate) fn parse_property_value_in_context_known_property(
   property: &str,
   value_str: &str,
 ) -> Option<PropertyValue> {
-  parse_property_value_in_context_internal(context, property, value_str, false, true)
+  parse_property_value_in_context_internal(context, property, value_str, false, true, false)
+}
+
+pub(crate) fn parse_property_value_in_context_known_property_uncached(
+  context: DeclarationContext,
+  property: &str,
+  value_str: &str,
+  skip_var_guard: bool,
+) -> Option<PropertyValue> {
+  parse_property_value_in_context_internal(
+    context,
+    property,
+    value_str,
+    skip_var_guard,
+    true,
+    true,
+  )
 }
 
 pub(crate) fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
@@ -3227,6 +3249,7 @@ mod tests {
         "16px",
         false,
         false,
+        false,
       )
       .expect("width parsed");
       let width_dbg = format!("{width:?}");
@@ -3239,6 +3262,7 @@ mod tests {
         DeclarationContext::Style,
         "height",
         "16px",
+        false,
         false,
         false,
       )
@@ -3255,6 +3279,7 @@ mod tests {
         "#fff",
         false,
         false,
+        false,
       )
       .expect("color parsed");
       let color_dbg = format!("{color:?}");
@@ -3267,6 +3292,7 @@ mod tests {
         DeclarationContext::Style,
         "display",
         "none",
+        false,
         false,
         false,
       )

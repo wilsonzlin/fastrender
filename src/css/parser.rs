@@ -10,6 +10,7 @@ use super::properties::known_page_property_set;
 use super::properties::known_style_property_set;
 use super::properties::parse_property_value_in_context;
 use super::properties::parse_property_value_in_context_known_property;
+use super::properties::parse_property_value_in_context_known_property_uncached;
 use super::properties::DeclarationContext;
 use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
@@ -3912,7 +3913,8 @@ fn parse_property_value_in_context_cached(
     return Some(hit);
   }
 
-  let parsed = parse_property_value_in_context_known_property(context, property, value)?;
+  let parsed =
+    parse_property_value_in_context_known_property_uncached(context, property, value, true)?;
   let parsed_for_cache = parsed.clone();
   DECLARATION_VALUE_CACHE.with(|cache| {
     let mut cache = cache.borrow_mut();
