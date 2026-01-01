@@ -182,6 +182,104 @@ fn pageset_progress_report_outputs_descriptor_samples_when_verbose() {
 }
 
 #[test]
+fn pageset_progress_report_includes_text_cache_stats_tokens() {
+  let temp = tempdir().expect("tempdir");
+  let progress = json!({
+    "url": "https://text-stats.test/",
+    "status": "ok",
+    "total_ms": 10.0,
+    "stages_ms": {
+      "fetch": 1.0,
+      "css": 0.0,
+      "cascade": 0.0,
+      "layout": 0.0,
+      "paint": 0.0
+    },
+    "notes": "",
+    "hotspot": "layout",
+    "last_good_commit": "",
+    "last_regression_commit": "",
+    "diagnostics": {
+      "stats": {
+        "timings": {
+          "text_shape_ms": 1.23,
+          "text_fallback_ms": 4.56
+        },
+        "counts": {
+          "shaped_runs": 1,
+          "glyphs": 2,
+          "shaping_cache_hits": 3,
+          "shaping_cache_misses": 4,
+          "shaping_cache_evictions": 5,
+          "shaping_cache_entries": 6,
+          "fallback_cache_hits": 7,
+          "fallback_cache_misses": 8,
+          "fallback_cache_glyph_entries": 9,
+          "fallback_cache_cluster_entries": 10,
+          "fallback_cache_glyph_capacity": 11,
+          "fallback_cache_cluster_capacity": 12,
+          "fallback_cache_shards": 13,
+          "fallback_cache_glyph_evictions": 14,
+          "fallback_cache_cluster_evictions": 15,
+          "fallback_cache_clears": 16,
+          "fallback_descriptor_stats": {
+            "unique_descriptors": 17,
+            "unique_family_signatures": 18,
+            "unique_languages": 19,
+            "unique_weights": 20,
+            "samples": ["lang=en families=[Arial]"]
+          }
+        }
+      }
+    }
+  });
+
+  let path = temp.path().join("text_stats.json");
+  fs::write(&path, serde_json::to_string_pretty(&progress).unwrap())
+    .unwrap_or_else(|_| panic!("write {}", path.display()));
+
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      temp.path().to_str().unwrap(),
+      "--top",
+      "1",
+      "--verbose-stats",
+    ])
+    .output()
+    .expect("run pageset_progress report --verbose-stats");
+  assert!(output.status.success(), "expected success for report");
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  for token in [
+    "shape_cache_hits=3",
+    "shape_cache_misses=4",
+    "shape_cache_evict=5",
+    "shape_cache_entries=6",
+    "fallback_entries=9/11",
+    "fallback_cluster_entries=10/12",
+    "fallback_shards=13",
+    "fallback_glyph_evict=14",
+    "fallback_cluster_evict=15",
+    "fallback_clears=16",
+    "fallback_desc_unique=17",
+    "fallback_desc_families=18",
+    "fallback_desc_lang=19",
+    "fallback_desc_weights=20",
+  ] {
+    assert!(
+      stdout.contains(token),
+      "expected report output to contain {token:?}\n--- output ---\n{stdout}\n--- end output ---"
+    );
+  }
+  assert!(
+    !stdout.contains("fallback_desc_samples="),
+    "descriptor samples should not print without --verbose"
+  );
+}
+
+#[test]
 fn pageset_progress_report_fail_on_bad_exits_non_zero() {
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .args([
