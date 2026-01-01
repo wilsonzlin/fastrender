@@ -605,10 +605,8 @@ impl FormattingContext for FlexFormattingContext {
         .with_parallelism(self.parallelism),
     );
     let this = self.clone();
-    let mut pass_cache: FxHashMap<u64, FlexCacheEntry> = FxHashMap::with_capacity_and_hasher(
-      in_flow_children.len(),
-      Default::default(),
-    );
+    let mut pass_cache: FxHashMap<u64, FlexCacheEntry> =
+      FxHashMap::with_capacity_and_hasher(in_flow_children.len(), Default::default());
     let compute_timer = flex_profile::timer();
     let log_root = toggles.truthy("FASTR_LOG_FLEX_ROOT");
     if log_root {
@@ -1057,7 +1055,6 @@ impl FormattingContext for FlexFormattingContext {
                     // minimum (per CSS Flexbox §4.5). Keep min-width/max-width intact so explicit
                     // constraints still apply.
                     let mut cloned_style: Option<ComputedStyle> = None;
-                    let mut alt_box: Option<BoxNode> = None;
                     // When the available inline size is intrinsic (min-/max-content), percentage
                     // widths/min/max can't be resolved (§10.5). Treat them as auto so intrinsic
                     // sizing uses content-driven sizes instead of forcing 100% of an unknown base.
@@ -1116,14 +1113,23 @@ impl FormattingContext for FlexFormattingContext {
                         let style = cloned_style.get_or_insert_with(|| (*box_node.style).clone());
                         style.width = None;
                     }
-                    let measure_box: &BoxNode = if let Some(style) = cloned_style {
+                    let override_style = cloned_style.map(Arc::new);
+                    let fc_type =
+                        box_node.formatting_context().unwrap_or(FormattingContextType::Block);
+                    let mut alt_box: Option<BoxNode> = None;
+                    let measure_box: &BoxNode = match (&override_style, fc_type) {
+                      (Some(_), FormattingContextType::Block) => box_node,
+                      (Some(style), _) => {
                         let mut cloned = box_node.clone();
-                        cloned.style = Arc::new(style);
+                        cloned.style = Arc::clone(style);
                         &*alt_box.insert(cloned)
-                    } else {
-                        box_node
+                      }
+                      (None, _) => box_node,
                     };
-                    let cache_key = flex_cache_key(measure_box);
+                    let measure_style: &ComputedStyle = override_style
+                      .as_deref()
+                      .unwrap_or_else(|| measure_box.style.as_ref());
+                    let cache_key = flex_cache_key_with_style(measure_box, measure_style);
                     if let Some((size, _)) = pass_cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
                         record_node_measure_hit(measure_box.id);
                         flex_profile::record_measure_hit();
@@ -1211,9 +1217,9 @@ impl FormattingContext for FlexFormattingContext {
                                 seq,
                                 measure_box.id,
                                 selector,
-                                measure_box.style.display,
-                                measure_box.style.flex_basis,
-                                measure_box.style.width,
+                                measure_style.display,
+                                measure_style.flex_basis,
+                                measure_style.width,
                                 avail.width,
                                 known_dimensions.width,
                                 avail.width,
@@ -1239,9 +1245,9 @@ impl FormattingContext for FlexFormattingContext {
                                     avail.height,
                                     constraints.available_width,
                                     constraints.available_height,
-                                    measure_box.style.width,
-                                    measure_box.style.min_width,
-                                    measure_box.style.max_width,
+                                    measure_style.width,
+                                    measure_style.min_width,
+                                    measure_style.max_width,
                                     fc_type,
                                 );
                             }
@@ -1262,7 +1268,7 @@ impl FormattingContext for FlexFormattingContext {
                                 .unwrap_or_else(|| "<anon>".to_string());
                             eprintln!(
                                 "[skinny-flex-root-constraint] id={} selector={} known_w={:?} avail_w={:?} constraint_w={:.1} width_decl={:?}",
-                                measure_box.id, selector, known_dimensions.width, avail.width, w, measure_box.style.width
+                                measure_box.id, selector, known_dimensions.width, avail.width, w, measure_style.width
                             );
                         }
                     }
@@ -1280,7 +1286,7 @@ impl FormattingContext for FlexFormattingContext {
                         }).unwrap_or(this.viewport_size.height);
                         let percentage_base = Some(Size::new(avail_width, avail_height));
                         let size = crate::layout::utils::compute_replaced_size(
-                            &measure_box.style,
+                            measure_style,
                             replaced_box,
                             percentage_base,
                             this.viewport_size,
@@ -1301,13 +1307,24 @@ impl FormattingContext for FlexFormattingContext {
                     let selector_for_profile = node_timer
                         .as_ref()
                         .and_then(|_| measure_box.debug_info.as_ref().map(|d| d.to_selector()));
-                    let mut fragment = match fc.layout(measure_box, &constraints) {
+                    let layout_result = if matches!(fc_type, FormattingContextType::Block) {
+                      if let Some(style) = override_style.clone() {
+                        crate::layout::style_override::with_style_override(measure_box.id, style, || {
+                          fc.layout(measure_box, &constraints)
+                        })
+                      } else {
+                        fc.layout(measure_box, &constraints)
+                      }
+                    } else {
+                      fc.layout(measure_box, &constraints)
+                    };
+                    let fragment = match layout_result {
                          Ok(f) => {
-                              flex_profile::record_node_layout(
-                                  measure_box.id,
-                                 selector_for_profile.as_deref(),
-                                 node_timer,
-                             );
+                               flex_profile::record_node_layout(
+                                    measure_box.id,
+                                   selector_for_profile.as_deref(),
+                                   node_timer,
+                              );
                              f
                          }
                          Err(LayoutError::Timeout { .. }) => {
@@ -1361,9 +1378,9 @@ impl FormattingContext for FlexFormattingContext {
                     if matches!(
                         constraints.available_width,
                         CrateAvailableSpace::MaxContent | CrateAvailableSpace::MinContent
-                    ) && measure_box.style.width.is_none()
-                        && measure_box.style.min_width.is_none()
-                        && measure_box.style.max_width.is_none()
+                    ) && measure_style.width.is_none()
+                        && measure_style.min_width.is_none()
+                        && measure_style.max_width.is_none()
                     {
                         if let Some(span) = descendant_span {
                             if span.width > eps
@@ -1391,12 +1408,24 @@ impl FormattingContext for FlexFormattingContext {
                         _ => known_dimensions.height,
                     };
                     let resolve_if_base = |len: &Length, base: Option<f32>| {
-                        base.map(|b| this.resolve_length_for_width(*len, b, &measure_box.style))
+                        base.map(|b| this.resolve_length_for_width(*len, b, measure_style))
                     };
-                    let resolved_max_w = measure_box.style.max_width.as_ref().and_then(|l| resolve_if_base(l, percentage_base_w));
-                    let resolved_min_w = measure_box.style.min_width.as_ref().and_then(|l| resolve_if_base(l, percentage_base_w));
-                    let resolved_max_h = measure_box.style.max_height.as_ref().and_then(|l| resolve_if_base(l, percentage_base_h));
-                    let resolved_min_h = measure_box.style.min_height.as_ref().and_then(|l| resolve_if_base(l, percentage_base_h));
+                    let resolved_max_w = measure_style
+                        .max_width
+                        .as_ref()
+                        .and_then(|l| resolve_if_base(l, percentage_base_w));
+                    let resolved_min_w = measure_style
+                        .min_width
+                        .as_ref()
+                        .and_then(|l| resolve_if_base(l, percentage_base_w));
+                    let resolved_max_h = measure_style
+                        .max_height
+                        .as_ref()
+                        .and_then(|l| resolve_if_base(l, percentage_base_h));
+                    let resolved_min_h = measure_style
+                        .min_height
+                        .as_ref()
+                        .and_then(|l| resolve_if_base(l, percentage_base_h));
                     let mut max_w_bound = resolved_max_w.unwrap_or_else(|| match avail.width {
                         AvailableSpace::Definite(w) => w.min(this.viewport_size.width),
                         _ => this.viewport_size.width,
@@ -1522,7 +1551,7 @@ impl FormattingContext for FlexFormattingContext {
                         .unwrap_or(false);
                     let mut fragment = Some(fragment);
                     let mut normalized_fragment: Option<std::sync::Arc<FragmentNode>> = None;
-                    let mut normalize_for_cache = |fragment: &mut Option<FragmentNode>,
+                    let normalize_for_cache = |fragment: &mut Option<FragmentNode>,
                                                    normalized_fragment: &mut Option<
                         std::sync::Arc<FragmentNode>,
                       >| {
@@ -1952,21 +1981,12 @@ impl FormattingContext for FlexFormattingContext {
     if in_flow_children.len() == fragment.children.len() {
       let cb_width = fragment.bounds.width();
       let cb_height = fragment.bounds.height();
-      let border_left = self.resolve_length_for_width(
-        box_node.style.border_left_width,
-        cb_width,
-        &box_node.style,
-      );
-      let border_right = self.resolve_length_for_width(
-        box_node.style.border_right_width,
-        cb_width,
-        &box_node.style,
-      );
-      let border_top = self.resolve_length_for_width(
-        box_node.style.border_top_width,
-        cb_width,
-        &box_node.style,
-      );
+      let border_left =
+        self.resolve_length_for_width(box_node.style.border_left_width, cb_width, &box_node.style);
+      let border_right =
+        self.resolve_length_for_width(box_node.style.border_right_width, cb_width, &box_node.style);
+      let border_top =
+        self.resolve_length_for_width(box_node.style.border_top_width, cb_width, &box_node.style);
       let border_bottom = self.resolve_length_for_width(
         box_node.style.border_bottom_width,
         cb_width,
@@ -1984,11 +2004,7 @@ impl FormattingContext for FlexFormattingContext {
         (cb_width - border_left - border_right - padding_left - padding_right).max(0.0);
       let content_height =
         (cb_height - border_top - border_bottom - padding_top - padding_bottom).max(0.0);
-      let block_base = box_node
-        .style
-        .height
-        .is_some()
-        .then_some(content_height);
+      let block_base = box_node.style.height.is_some().then_some(content_height);
       let containing_block = ContainingBlock::with_viewport_and_bases(
         Rect::new(Point::ZERO, Size::new(content_width, content_height)),
         self.viewport_size,
@@ -2376,10 +2392,8 @@ impl FormattingContext for FlexFormattingContext {
     }
 
     if !running_children.is_empty() {
-      let mut id_to_bounds: FxHashMap<usize, Rect> = FxHashMap::with_capacity_and_hasher(
-        fragment.children.len(),
-        Default::default(),
-      );
+      let mut id_to_bounds: FxHashMap<usize, Rect> =
+        FxHashMap::with_capacity_and_hasher(fragment.children.len(), Default::default());
       let mut deadline_counter = 0usize;
       for child in fragment.children.iter() {
         check_layout_deadline(&mut deadline_counter)?;
@@ -2523,13 +2537,16 @@ impl FormattingContext for FlexFormattingContext {
       box_node
         .children
         .par_iter()
-        .map_init(|| 0usize, |deadline_counter, child| {
-          with_deadline(deadline.as_ref(), || {
-            crate::layout::engine::debug_record_parallel_work();
-            check_layout_deadline(deadline_counter)?;
-            compute_child_contribution(child)
-          })
-        })
+        .map_init(
+          || 0usize,
+          |deadline_counter, child| {
+            with_deadline(deadline.as_ref(), || {
+              crate::layout::engine::debug_record_parallel_work();
+              check_layout_deadline(deadline_counter)?;
+              compute_child_contribution(child)
+            })
+          },
+        )
         .collect::<Result<Vec<_>, _>>()?
     } else {
       box_node
@@ -2780,7 +2797,7 @@ fn flex_style_fingerprint(style: &ComputedStyle) -> u64 {
   h.finish()
 }
 
-fn flex_cache_key(box_node: &BoxNode) -> u64 {
+fn flex_cache_key_with_style(box_node: &BoxNode, style: &ComputedStyle) -> u64 {
   let mut h = FingerprintHasher::default();
   box_node.styled_node_id.hash(&mut h);
   // Anonymous boxes (no originating styled node) must not share cached fragments across
@@ -2789,7 +2806,7 @@ fn flex_cache_key(box_node: &BoxNode) -> u64 {
   if box_node.styled_node_id.is_none() {
     box_node.id.hash(&mut h);
   }
-  let fingerprint = flex_style_fingerprint(&box_node.style);
+  let fingerprint = flex_style_fingerprint(style);
   fingerprint.hash(&mut h);
   // Incorporate a simplified key for common carousel templates to merge otherwise identical
   // repeated items without formatting selectors (which allocates).
@@ -2797,6 +2814,10 @@ fn flex_cache_key(box_node: &BoxNode) -> u64 {
     debug.hash_components(&mut h);
   }
   h.finish()
+}
+
+fn flex_cache_key(box_node: &BoxNode) -> u64 {
+  flex_cache_key_with_style(box_node, box_node.style.as_ref())
 }
 
 fn layout_cache_key(
@@ -3239,19 +3260,27 @@ impl FlexFormattingContext {
         // ignores the preferred size (CSS Flexbox §4.5). When a definite preferred size exists,
         // the content-based minimum is the smaller of the preferred size suggestion and the
         // content size suggestion.
-        let mut intrinsic_box_storage: Option<BoxNode> = None;
-        let intrinsic_box: &BoxNode =
-          if specified_size_suggestion.is_some() && style.width.is_some() {
+        let needs_override = specified_size_suggestion.is_some() && style.width.is_some();
+        let intrinsic_result =
+          if needs_override && matches!(item_fc_type, FormattingContextType::Block) {
+            let mut cloned_style: ComputedStyle = (*box_node.style).clone();
+            cloned_style.width = None;
+            crate::layout::style_override::with_style_override(
+              box_node.id,
+              Arc::new(cloned_style),
+              || item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent),
+            )
+          } else if needs_override {
             let mut cloned = box_node.clone();
             let mut cloned_style: ComputedStyle = (*box_node.style).clone();
             cloned_style.width = None;
             cloned.style = Arc::new(cloned_style);
-            intrinsic_box_storage.insert(cloned)
+            item_fc.compute_intrinsic_inline_size(&cloned, IntrinsicSizingMode::MinContent)
           } else {
-            box_node
+            item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
           };
 
-        match item_fc.compute_intrinsic_inline_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
+        match intrinsic_result {
           Ok(content_size_suggestion) => {
             let mut min_candidate = content_size_suggestion;
             if let Some(specified) = specified_size_suggestion {
@@ -3280,19 +3309,27 @@ impl FlexFormattingContext {
         Some(value.max(0.0))
       });
 
-      let mut intrinsic_box_storage: Option<BoxNode> = None;
-      let intrinsic_box: &BoxNode =
-        if specified_size_suggestion.is_some() && style.height.is_some() {
+      let needs_override = specified_size_suggestion.is_some() && style.height.is_some();
+      let intrinsic_result =
+        if needs_override && matches!(item_fc_type, FormattingContextType::Block) {
+          let mut cloned_style: ComputedStyle = (*box_node.style).clone();
+          cloned_style.height = None;
+          crate::layout::style_override::with_style_override(
+            box_node.id,
+            Arc::new(cloned_style),
+            || item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent),
+          )
+        } else if needs_override {
           let mut cloned = box_node.clone();
           let mut cloned_style: ComputedStyle = (*box_node.style).clone();
           cloned_style.height = None;
           cloned.style = Arc::new(cloned_style);
-          intrinsic_box_storage.insert(cloned)
+          item_fc.compute_intrinsic_block_size(&cloned, IntrinsicSizingMode::MinContent)
         } else {
-          box_node
+          item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
         };
 
-      match item_fc.compute_intrinsic_block_size(intrinsic_box, IntrinsicSizingMode::MinContent) {
+      match intrinsic_result {
         Ok(content_size_suggestion) => {
           let mut min_candidate = content_size_suggestion;
           if let Some(specified) = specified_size_suggestion {
@@ -3808,12 +3845,15 @@ impl FlexFormattingContext {
       let outputs = if should_parallel_layout {
         layout_work
           .par_iter()
-          .map_init(|| 0usize, |thread_deadline_counter, work| {
-            with_deadline(deadline.as_ref(), || {
-              crate::layout::engine::debug_record_parallel_work();
-              run_layout(thread_deadline_counter, work)
-            })
-          })
+          .map_init(
+            || 0usize,
+            |thread_deadline_counter, work| {
+              with_deadline(deadline.as_ref(), || {
+                crate::layout::engine::debug_record_parallel_work();
+                run_layout(thread_deadline_counter, work)
+              })
+            },
+          )
           .collect::<Result<Vec<_>, LayoutError>>()?
       } else {
         layout_work
@@ -4284,10 +4324,8 @@ impl FlexFormattingContext {
         let mut total_main = 0.0;
         let mut total_weight = 0.0;
         let mut child_count = 0usize;
-        let mut box_lookup: FxHashMap<usize, &BoxNode> = FxHashMap::with_capacity_and_hasher(
-          box_node.children.len(),
-          Default::default(),
-        );
+        let mut box_lookup: FxHashMap<usize, &BoxNode> =
+          FxHashMap::with_capacity_and_hasher(box_node.children.len(), Default::default());
         for child in &box_node.children {
           check_layout_deadline(&mut deadline_counter)?;
           box_lookup.insert(child.id, child);
@@ -6011,7 +6049,7 @@ mod tests {
       super::flex_child_fingerprint(&children_a, &mut deadline_counter).expect("fingerprint"),
       fc.viewport_size,
     );
- 
+
     let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
     let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
     let constraints = LayoutConstraints::definite(100.0, 100.0);

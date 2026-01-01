@@ -224,8 +224,9 @@ impl BlockFormattingContext {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
   ) -> Self {
-    let factory = FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
-      .with_positioned_cb(nearest_positioned_cb);
+    let factory =
+      FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
+        .with_positioned_cb(nearest_positioned_cb);
     Self::with_factory(factory)
   }
 
@@ -254,8 +255,9 @@ impl BlockFormattingContext {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
   ) -> Self {
-    let factory = FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
-      .with_positioned_cb(nearest_positioned_cb);
+    let factory =
+      FormattingContextFactory::with_font_context_and_viewport(font_context, viewport_size)
+        .with_positioned_cb(nearest_positioned_cb);
     Self::for_flex_item_with_factory(factory)
   }
 
@@ -2775,15 +2777,19 @@ impl FormattingContext for BlockFormattingContext {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
-    if let Some(cached) = layout_cache_lookup(
-      box_node,
-      FormattingContextType::Block,
-      constraints,
-      self.viewport_size,
-    ) {
-      return Ok(cached);
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let override_active = style_override.is_some();
+    if !override_active {
+      if let Some(cached) = layout_cache_lookup(
+        box_node,
+        FormattingContextType::Block,
+        constraints,
+        self.viewport_size,
+      ) {
+        return Ok(cached);
+      }
     }
-    let style = &box_node.style;
+    let style = style_override.as_ref().unwrap_or(&box_node.style);
     let toggles = crate::debug::runtime::runtime_toggles();
     let inline_is_horizontal = inline_axis_is_horizontal(style.writing_mode);
     let _inline_positive = inline_axis_positive(style.writing_mode, style.direction);
@@ -3386,8 +3392,9 @@ impl FormattingContext for BlockFormattingContext {
     child_ctx.nearest_positioned_cb = nearest_cb;
     if nearest_cb != self.nearest_positioned_cb {
       child_ctx.factory = child_ctx.factory.with_positioned_cb(nearest_cb);
-      child_ctx.intrinsic_inline_fc =
-        Arc::new(InlineFormattingContext::with_factory(child_ctx.factory.clone()));
+      child_ctx.intrinsic_inline_fc = Arc::new(InlineFormattingContext::with_factory(
+        child_ctx.factory.clone(),
+      ));
     }
     let use_columns = Self::is_multicol_container(style);
     let (mut child_fragments, mut content_height, positioned_children, column_info) = if use_columns
@@ -3670,13 +3677,15 @@ impl FormattingContext for BlockFormattingContext {
       style.direction,
     );
 
-    layout_cache_store(
-      box_node,
-      FormattingContextType::Block,
-      constraints,
-      &converted,
-      self.viewport_size,
-    );
+    if !override_active {
+      layout_cache_store(
+        box_node,
+        FormattingContextType::Block,
+        constraints,
+        &converted,
+        self.viewport_size,
+      );
+    }
 
     Ok(converted)
   }
@@ -3914,11 +3923,15 @@ impl FormattingContext for BlockFormattingContext {
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
     count_block_intrinsic_call();
-    if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
-      return Ok(cached);
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let override_active = style_override.is_some();
+    if !override_active {
+      if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
+        return Ok(cached);
+      }
     }
 
-    let style = &box_node.style;
+    let style = style_override.as_ref().unwrap_or(&box_node.style);
     let edges = horizontal_padding_and_borders(style, 0.0, self.viewport_size, &self.font_context);
     // Honor specified widths that resolve without a containing block
     if let Some(specified) = style.width.as_ref() {
@@ -3932,13 +3945,17 @@ impl FormattingContext for BlockFormattingContext {
       // Ignore auto/relative cases that resolve to 0.0
       if resolved > 0.0 {
         let result = border_size_from_box_sizing(resolved, edges, style.box_sizing);
-        intrinsic_cache_store(box_node, mode, result);
+        if !override_active {
+          intrinsic_cache_store(box_node, mode, result);
+        }
         return Ok(result);
       }
     }
 
     if style.containment.size || style.containment.inline_size {
-      intrinsic_cache_store(box_node, mode, edges);
+      if !override_active {
+        intrinsic_cache_store(box_node, mode, edges);
+      }
       return Ok(edges);
     }
 
@@ -3948,7 +3965,9 @@ impl FormattingContext for BlockFormattingContext {
       let edges =
         horizontal_padding_and_borders(style, size.width, self.viewport_size, &self.font_context);
       let result = size.width + edges;
-      intrinsic_cache_store(box_node, mode, result);
+      if !override_active {
+        intrinsic_cache_store(box_node, mode, result);
+      }
       return Ok(result);
     }
 
@@ -3965,27 +3984,24 @@ impl FormattingContext for BlockFormattingContext {
     let mut inline_width = 0.0f32;
     let mut block_child_width = 0.0f32;
     let mut inline_run: Vec<&BoxNode> = Vec::new();
-    let flush_inline_run =
-      |run: &mut Vec<&BoxNode>,
-       widest: &mut f32|
-       -> Result<(), LayoutError> {
-        if run.is_empty() {
-          return Ok(());
-        }
+    let flush_inline_run = |run: &mut Vec<&BoxNode>, widest: &mut f32| -> Result<(), LayoutError> {
+      if run.is_empty() {
+        return Ok(());
+      }
 
-        let width = inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode)?;
-        if log_children {
-          let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
-          eprintln!(
-            "[intrinsic-inline-run] parent_id={} mode={:?} ids={:?} width={:.2}",
-            box_node.id, mode, ids, width
-          );
-        }
+      let width = inline_fc.intrinsic_width_for_children(style, run.as_slice(), mode)?;
+      if log_children {
+        let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
+        eprintln!(
+          "[intrinsic-inline-run] parent_id={} mode={:?} ids={:?} width={:.2}",
+          box_node.id, mode, ids, width
+        );
+      }
 
-        *widest = widest.max(width);
-        run.clear();
-        Ok(())
-      };
+      *widest = widest.max(width);
+      run.clear();
+      Ok(())
+    };
 
     let mut inline_child_debug: Vec<(usize, Display)> = Vec::new();
     let mut deadline_counter = 0usize;
@@ -4011,10 +4027,7 @@ impl FormattingContext for BlockFormattingContext {
       };
 
       if treated_as_block {
-        flush_inline_run(
-          &mut inline_run,
-          &mut inline_width,
-        )?;
+        flush_inline_run(&mut inline_run, &mut inline_width)?;
 
         // Block-level in-flow children contribute their own intrinsic widths.
         let fc_type = child
@@ -4052,10 +4065,7 @@ impl FormattingContext for BlockFormattingContext {
         inline_run.push(child);
       }
     }
-    flush_inline_run(
-      &mut inline_run,
-      &mut inline_width,
-    )?;
+    flush_inline_run(&mut inline_run, &mut inline_width)?;
 
     let content_width = inline_width.max(block_child_width);
 
@@ -4108,7 +4118,9 @@ impl FormattingContext for BlockFormattingContext {
                 clamped
             );
     }
-    intrinsic_cache_store(box_node, mode, clamped);
+    if !override_active {
+      intrinsic_cache_store(box_node, mode, clamped);
+    }
     Ok(clamped)
   }
 }
@@ -5724,7 +5736,11 @@ mod tests {
     let children = (0..64usize)
       .map(|idx| {
         let text = BoxNode::new_text(text_style.clone(), format!("hello {idx}"));
-        BoxNode::new_block(child_style.clone(), FormattingContextType::Block, vec![text])
+        BoxNode::new_block(
+          child_style.clone(),
+          FormattingContextType::Block,
+          vec![text],
+        )
       })
       .collect();
     let root = BoxNode::new_block(root_style, FormattingContextType::Block, children);
@@ -5734,6 +5750,9 @@ mod tests {
     let constraints = LayoutConstraints::definite(800.0, 600.0);
     let _fragment = fc.layout(&root, &constraints).expect("layout");
 
-    assert_eq!(crate::text::pipeline::ShapingPipeline::debug_new_call_count(), 1);
+    assert_eq!(
+      crate::text::pipeline::ShapingPipeline::debug_new_call_count(),
+      1
+    );
   }
 }

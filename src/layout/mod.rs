@@ -94,6 +94,7 @@ pub mod table;
 
 // Fragmentation / pagination helpers
 pub mod fragmentation;
+pub(crate) mod style_override;
 
 // Future modules (to be implemented in Wave 3+):
 // pub mod block;        // W3.T04

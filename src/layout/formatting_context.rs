@@ -566,7 +566,7 @@ fn subtree_contains_subgrid(node: &BoxNode, epoch: usize) -> bool {
 fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
   let mut h = DefaultHasher::default();
   let hash_space = |space: &crate::layout::constraints::AvailableSpace,
-                     hasher: &mut DefaultHasher| match space {
+                    hasher: &mut DefaultHasher| match space {
     crate::layout::constraints::AvailableSpace::Definite(v) => {
       0u8.hash(hasher);
       v.to_bits().hash(hasher);
@@ -1169,8 +1169,15 @@ pub trait FormattingContext: Send + Sync {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    if let Some(cached) = intrinsic_block_cache_lookup(box_node, mode) {
-      return Ok(cached);
+    // Intrinsic block-size caching keys off the `Arc<ComputedStyle>` pointer. Some callers (notably
+    // flex/grid measurement) temporarily override the root node's style to ignore authored sizing
+    // hints during intrinsic probes. In those cases, bypass the shared cache to avoid reusing
+    // entries computed for a different effective style.
+    let override_active = crate::layout::style_override::has_style_override(box_node.id());
+    if !override_active {
+      if let Some(cached) = intrinsic_block_cache_lookup(box_node, mode) {
+        return Ok(cached);
+      }
     }
 
     // The intrinsic block-size depends on layout in the opposite axis. Mirror the intrinsic inline
@@ -1192,12 +1199,17 @@ pub trait FormattingContext: Send + Sync {
     } else {
       fragment.bounds.width()
     };
-    intrinsic_block_cache_store(box_node, mode, block_size);
+    if !override_active {
+      intrinsic_block_cache_store(box_node, mode, block_size);
+    }
     Ok(block_size)
   }
 }
 
-pub(crate) fn intrinsic_block_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
+pub(crate) fn intrinsic_block_cache_lookup(
+  node: &BoxNode,
+  mode: IntrinsicSizingMode,
+) -> Option<f32> {
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   let key = cache_key(node, mode, epoch)?;
   INTRINSIC_BLOCK_CACHE.with(|cache| {

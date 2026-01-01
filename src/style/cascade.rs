@@ -9417,7 +9417,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9488,7 +9491,10 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -9506,8 +9512,7 @@ mod tests {
     );
     let desc = index.fast_reject(fast_reject_id).expect("fast reject");
     assert_eq!(
-      desc.class_len as usize,
-      RIGHTMOST_FAST_REJECT_MAX_KEYS,
+      desc.class_len as usize, RIGHTMOST_FAST_REJECT_MAX_KEYS,
       "expected class keys to be capped at RIGHTMOST_FAST_REJECT_MAX_KEYS"
     );
 
