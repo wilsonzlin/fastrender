@@ -10,7 +10,9 @@ use crate::tree::{
   Layout, LayoutInput, LayoutOutput, LayoutPartialTreeExt, NodeId, RunMode, SizingMode,
 };
 use crate::util::debug::debug_log;
-use crate::util::sys::{f32_max, GridTrackVec, Map, Vec};
+use crate::util::sys::{f32_max, GridTrackVec, Vec};
+#[cfg(not(feature = "std"))]
+use crate::util::sys::Map;
 use crate::util::MaybeMath;
 use crate::util::{MaybeResolve, ResolveOrZero};
 use crate::{
@@ -18,6 +20,8 @@ use crate::{
   GridItemStyle, JustifyContent, LayoutGridContainer, Style, TrackSizingFunction,
 };
 use crate::{sys::DefaultCheapStr, tree::LayoutPartialTree};
+#[cfg(feature = "std")]
+use rustc_hash::FxHashMap;
 use alignment::{align_and_position_item, align_tracks};
 use explicit_grid::{
   compute_explicit_grid_size_in_axis, initialize_grid_tracks, AutoRepeatStrategy,
@@ -37,8 +41,8 @@ use types::{
 // enabled. In `no_std` builds we fall back to no-ops so that the crate continues to compile.
 #[cfg(feature = "std")]
 thread_local! {
-    static SUBGRID_OVERRIDES: std::cell::RefCell<Map<NodeId, SubgridOverride>> =
-        std::cell::RefCell::new(Map::new());
+    static SUBGRID_OVERRIDES: std::cell::RefCell<SubgridOverrideMap> =
+        std::cell::RefCell::new(Default::default());
     static SUBGRID_OVERRIDE_DEPTH: std::cell::Cell<usize> = std::cell::Cell::new(0);
 }
 
@@ -57,6 +61,12 @@ struct SubgridOverride {
   columns: Option<SubgridAxisOverride>,
 }
 
+#[cfg(feature = "std")]
+type SubgridOverrideMap = FxHashMap<NodeId, SubgridOverride>;
+
+#[cfg(not(feature = "std"))]
+type SubgridOverrideMap = Map<NodeId, SubgridOverride>;
+
 /// A scoped guard that isolates subgrid overrides for the duration of a layout run.
 ///
 /// Subgrid overrides are stored in a thread-local map keyed by `NodeId`. Layout implementations
@@ -69,7 +79,7 @@ struct SubgridOverride {
 /// - Nested layout runs swap the current map out and restore it on exit.
 #[cfg(feature = "std")]
 pub(crate) struct SubgridOverrideGuard {
-  previous: Option<Map<NodeId, SubgridOverride>>,
+  previous: Option<SubgridOverrideMap>,
 }
 
 #[cfg(feature = "std")]
