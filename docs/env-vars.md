@@ -53,6 +53,7 @@ Unless noted otherwise, they are parsed once at process startup; invalid values 
     - Fallback is not triggered for all failure modes (for example, `empty HTTP response body` / 0 bytes); set `FASTR_HTTP_BACKEND=curl` explicitly when comparing behavior on hard sites.
   - `ureq`: force the Rust backend (disables the `curl` fallback; useful to confirm a failure is backend-specific).
   - `curl`: force the `curl` backend for all requests (HTTP/2-capable when your system `curl` has HTTP/2 support; useful for hard sites and differential diagnosis; requires `curl` on `$PATH`).
+  - Accepted aliases: `fallback` (auto) and `rust`/`native` (ureq). Unknown values behave like `auto`.
 - `FASTR_HTTP_BROWSER_HEADERS=0|1` – enable/disable browser-like request headers (per-resource `Accept` + `Sec-Fetch-*` + `Upgrade-Insecure-Requests`; fonts also get `Origin` + `Referer`). Defaults to `1`; set to `0` to preserve the legacy minimal header set for debugging.
   - When built with `disk_cache`, `FASTR_HTTP_BROWSER_HEADERS=0` also partitions the disk cache namespace so you don’t accidentally reuse subresources fetched under the browser-header profile.
 - `FASTR_HTTP_LOG_RETRIES=0|1` – log retry attempts + backoff sleeps to stderr (default off; printed by the fetcher itself, so it also applies to library users). When running `pageset_progress`, these lines end up in `target/pageset/logs/<stem>.stderr.log`.
