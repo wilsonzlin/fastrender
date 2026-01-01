@@ -230,6 +230,90 @@ struct RecordingFetcher {
   recorded: Arc<Mutex<HashMap<String, FetchedResource>>>,
 }
 
+#[cfg(feature = "disk_cache")]
+#[derive(Clone)]
+struct CacheOfflineNetworkFetcher {
+  inner: fastrender::resource::HttpFetcher,
+}
+
+#[cfg(feature = "disk_cache")]
+impl CacheOfflineNetworkFetcher {
+  fn new(user_agent: &str, accept_language: &str) -> Self {
+    let offline_policy = ResourcePolicy::new().allow_http(false).allow_https(false);
+    let inner = build_http_fetcher(user_agent, accept_language, None).with_policy(offline_policy);
+    Self { inner }
+  }
+
+  fn is_http_like(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+      return false;
+    }
+
+    match url::Url::parse(trimmed) {
+      Ok(parsed) => matches!(parsed.scheme(), "http" | "https"),
+      Err(_) => {
+        let lower = trimmed.to_ascii_lowercase();
+        lower.starts_with("http://") || lower.starts_with("https://")
+      }
+    }
+  }
+
+  fn cache_miss_error() -> fastrender::Error {
+    fastrender::Error::Other("cache miss (offline): not present in disk cache".to_string())
+  }
+}
+
+#[cfg(feature = "disk_cache")]
+impl ResourceFetcher for CacheOfflineNetworkFetcher {
+  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    if Self::is_http_like(url) {
+      return Err(Self::cache_miss_error());
+    }
+    self.inner.fetch(url)
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    if Self::is_http_like(req.url) {
+      return Err(Self::cache_miss_error());
+    }
+    self.inner.fetch_with_request(req)
+  }
+
+  fn fetch_with_request_and_validation(
+    &self,
+    req: FetchRequest<'_>,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    if Self::is_http_like(req.url) {
+      return Err(Self::cache_miss_error());
+    }
+    self
+      .inner
+      .fetch_with_request_and_validation(req, etag, last_modified)
+  }
+
+  fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    if Self::is_http_like(url) {
+      return Err(Self::cache_miss_error());
+    }
+    self.inner.fetch_partial(url, max_bytes)
+  }
+
+  fn fetch_with_validation(
+    &self,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    if Self::is_http_like(url) {
+      return Err(Self::cache_miss_error());
+    }
+    self.inner.fetch_with_validation(url, etag, last_modified)
+  }
+}
+
 impl RecordingFetcher {
   fn new(inner: Arc<dyn ResourceFetcher>) -> Self {
     Self {
@@ -525,9 +609,7 @@ fn cache_bundle_disk_cache(args: CacheArgs) -> Result<()> {
   };
   apply_full_page_env(render.full_page);
 
-  let offline_policy = ResourcePolicy::new().allow_http(false).allow_https(false);
-  let http = build_http_fetcher(&args.user_agent, &args.accept_language, None)
-    .with_policy(offline_policy);
+  let http = CacheOfflineNetworkFetcher::new(&args.user_agent, &args.accept_language);
 
   let memory_config = CachingFetcherConfig {
     honor_http_cache_headers: false,

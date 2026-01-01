@@ -196,16 +196,26 @@ fn bundle_page_cache_fails_when_resource_missing() {
   cache_writer.fetch(&css_url).expect("warm css");
 
   let bundle_dir = tmp.path().join("bundle");
-  let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
+  let output = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
     .current_dir(tmp.path())
     .args(["cache", stem, "--out"])
     .arg(bundle_dir.to_string_lossy().as_ref())
-    .status()
+    .output()
     .expect("run bundle_page cache");
 
   assert!(
-    !status.success(),
+    !output.status.success(),
     "expected cache capture to fail when {img_url} is missing"
+  );
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    stderr.contains("cache miss (offline)"),
+    "expected offline cache capture failures to report a cache miss, got stderr:\n{stderr}"
+  );
+  assert!(
+    !stderr.contains("fetch blocked by policy"),
+    "expected offline cache capture to avoid policy errors, got stderr:\n{stderr}"
   );
 }
 
