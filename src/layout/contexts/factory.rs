@@ -105,6 +105,24 @@ impl std::fmt::Debug for FormattingContextFactory {
 }
 
 impl FormattingContextFactory {
+  /// Clone this factory while detaching the per-factory cached formatting contexts.
+  ///
+  /// The clone continues to share heavyweight caches (flex measurement/layout caches, taffy
+  /// node caches, the shaping pipeline, and the font context), but it gets a fresh
+  /// `cached_contexts` store.
+  ///
+  /// This is intended for embedding a `FormattingContextFactory` inside formatting contexts:
+  /// cached formatting contexts (e.g. flex/grid) are themselves stored inside `cached_contexts`,
+  /// so storing a factory clone that shares `cached_contexts` would create a strong reference
+  /// cycle:
+  ///
+  /// `cached_contexts -> Arc<dyn FormattingContext> -> FormattingContextFactory -> cached_contexts`
+  pub(crate) fn detached(&self) -> Self {
+    let mut clone = self.clone();
+    clone.reset_cached_contexts();
+    clone
+  }
+
   fn block_context(&self) -> BlockFormattingContext {
     BlockFormattingContext::with_font_context_viewport_and_cb(
       self.font_context.clone(),
@@ -125,11 +143,11 @@ impl FormattingContextFactory {
   }
 
   fn flex_context(&self) -> FlexFormattingContext {
-    FlexFormattingContext::with_factory(self.clone())
+    FlexFormattingContext::with_factory(self.detached())
   }
 
   fn grid_context(&self) -> GridFormattingContext {
-    GridFormattingContext::with_factory(self.clone())
+    GridFormattingContext::with_factory(self.detached())
   }
 
   fn table_context(&self) -> TableFormattingContext {
@@ -639,5 +657,25 @@ mod tests {
     let parallel = factory.with_parallelism(LayoutParallelism::enabled(2));
     let parallel_fc = parallel.get(FormattingContextType::Block);
     assert!(!Arc::ptr_eq(&original, &parallel_fc));
+  }
+
+  #[test]
+  fn test_get_does_not_leak_cached_contexts_via_factory_cycles() {
+    let factory = FormattingContextFactory::new();
+    let weak_cached_contexts = Arc::downgrade(&factory.cached_contexts);
+
+    let flex = factory.get(FormattingContextType::Flex);
+    let grid = factory.get(FormattingContextType::Grid);
+    assert!(factory.cached_context_is_initialized(FormattingContextType::Flex));
+    assert!(factory.cached_context_is_initialized(FormattingContextType::Grid));
+
+    drop(flex);
+    drop(grid);
+    drop(factory);
+
+    assert!(
+      weak_cached_contexts.upgrade().is_none(),
+      "cached_contexts should be freed after dropping the factory and its cached contexts",
+    );
   }
 }
