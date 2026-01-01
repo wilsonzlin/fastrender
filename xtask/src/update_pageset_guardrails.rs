@@ -563,6 +563,7 @@ fn select_pages_slowest(entries: &[ProgressEntry], count: usize) -> Vec<Progress
 enum HotspotCategory {
   Css,
   Cascade,
+  BoxTree,
   Layout,
   Paint,
   Unknown,
@@ -577,6 +578,7 @@ impl HotspotCategory {
     match normalized.as_str() {
       "css" => HotspotCategory::Css,
       "cascade" => HotspotCategory::Cascade,
+      "box_tree" => HotspotCategory::BoxTree,
       "layout" => HotspotCategory::Layout,
       "paint" => HotspotCategory::Paint,
       "unknown" | "" => HotspotCategory::Unknown,
@@ -925,6 +927,18 @@ mod tests {
     assert_eq!(parsed[0].status, ProgressStatus::Ok);
     assert_eq!(parsed[0].total_ms, 123.0);
     assert_eq!(parsed[0].hotspot, None);
+  }
+
+  #[test]
+  fn parses_box_tree_hotspot_category() {
+    assert_eq!(
+      HotspotCategory::from_hotspot(Some("box_tree")),
+      HotspotCategory::BoxTree
+    );
+    assert_eq!(
+      HotspotCategory::from_hotspot(Some("BOX_TREE")),
+      HotspotCategory::BoxTree
+    );
   }
 
   #[test]

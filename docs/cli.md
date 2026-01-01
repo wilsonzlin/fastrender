@@ -249,7 +249,7 @@ Notes:
   - For temporary/test runs, `FASTR_PAGESET_URLS="https://a.com,https://b.com"` overrides the built-in pageset everywhere.
 - Triage reruns (reuse existing `progress/pages/*.json` instead of typing stems):
   - `--from-progress <dir>` enables selection from saved progress files (default intersection of filters, use `--union` to OR them).
-  - Filters: `--only-failures`, `--only-status timeout,panic,error`, `--slow-ms <ms> [--slow-ok-only]`, `--hotspot cascade|layout|paint|...`, `--top-slowest <n>`.
+  - Filters: `--only-failures`, `--only-status timeout,panic,error`, `--slow-ms <ms> [--slow-ok-only]`, `--hotspot css|cascade|box_tree|layout|paint|...`, `--top-slowest <n>`.
   - The deterministic stem list is printed before running; if nothing matches, the command exits cleanly without touching caches.
 - Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad --compare <other> --fail-on-regression --regression-threshold-percent 10 --fail-on-slow-ok-ms <ms> --fail-on-stage-sum-exceeds-total]` prints status counts, slowest pages, and hotspot histograms for the saved progress files. With `--compare`, it also prints status transitions plus the top regressions/improvements by `total_ms`; `--fail-on-regression` exits non-zero for ok→bad or > threshold slowdowns. `--fail-on-slow-ok-ms 5000` enforces the hard 5s/page budget for ok pages (entries missing `total_ms` are ignored by this gate).
   - `--include-trace` lists saved Chrome traces (from `target/pageset/traces/` + `target/pageset/trace-progress/`).
