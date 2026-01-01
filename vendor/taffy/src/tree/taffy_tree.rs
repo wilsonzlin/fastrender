@@ -13,7 +13,7 @@ use crate::tree::{
   RoundTree, RunMode, TraversePartialTree, TraverseTree,
 };
 use crate::util::debug::{debug_log, debug_log_node};
-use crate::util::sys::{new_vec_with_capacity, ChildrenVec, Vec};
+use crate::util::sys::{new_vec_with_capacity, ChildrenVec, Map, Vec};
 
 use crate::compute::{
   compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_root_layout,
@@ -293,6 +293,59 @@ impl<NodeContext> PrintTree for TaffyTree<NodeContext> {
   }
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+enum LeafMeasureAvailableSpaceKey {
+  Definite(u32),
+  MinContent,
+  MaxContent,
+}
+
+impl LeafMeasureAvailableSpaceKey {
+  #[inline(always)]
+  fn from_available_space(space: AvailableSpace) -> Self {
+    match space {
+      AvailableSpace::Definite(value) => Self::Definite(quantize_measure_cache_f32(value)),
+      AvailableSpace::MinContent => Self::MinContent,
+      AvailableSpace::MaxContent => Self::MaxContent,
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct LeafMeasureCacheKey {
+  node_id: u64,
+  known_width: Option<u32>,
+  known_height: Option<u32>,
+  available_width: LeafMeasureAvailableSpaceKey,
+  available_height: LeafMeasureAvailableSpaceKey,
+}
+
+impl LeafMeasureCacheKey {
+  #[inline(always)]
+  fn new(
+    node_id: NodeId,
+    known_dimensions: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+  ) -> Self {
+    Self {
+      node_id: node_id.into(),
+      known_width: known_dimensions.width.map(quantize_measure_cache_f32),
+      known_height: known_dimensions.height.map(quantize_measure_cache_f32),
+      available_width: LeafMeasureAvailableSpaceKey::from_available_space(available_space.width),
+      available_height: LeafMeasureAvailableSpaceKey::from_available_space(available_space.height),
+    }
+  }
+}
+
+#[inline(always)]
+fn quantize_measure_cache_f32(value: f32) -> u32 {
+  if value == 0.0 {
+    0.0f32.to_bits()
+  } else {
+    value.to_bits()
+  }
+}
+
 /// View over the Taffy tree that holds the tree itself along with a reference to the context
 /// and implements LayoutTree. This allows the context to be stored outside of the TaffyTree struct
 /// which makes the lifetimes of the context much more flexible.
@@ -310,6 +363,7 @@ where
   pub(crate) taffy: &'t mut TaffyTree<NodeContext>,
   /// The context provided for passing to measure functions if layout is run over this struct
   pub(crate) measure_function: MeasureFunction,
+  leaf_measure_cache: Map<LeafMeasureCacheKey, Size<f32>>,
 }
 
 // TraversePartialTree impl for TaffyView
@@ -430,11 +484,23 @@ where
           let node_key = node.into();
           let style = &tree.taffy.nodes[node_key].style;
           let has_context = tree.taffy.nodes[node_key].has_context;
-          let node_context = has_context
-            .then(|| tree.taffy.node_context_data.get_mut(node_key))
-            .flatten();
+          let leaf_measure_cache = &mut tree.leaf_measure_cache;
+          let measure_callback = &mut tree.measure_function;
+          let node_context_data = &mut tree.taffy.node_context_data;
+
           let measure_function = |known_dimensions, available_space| {
-            (tree.measure_function)(known_dimensions, available_space, node, node_context, style)
+            let key = LeafMeasureCacheKey::new(node, known_dimensions, available_space);
+            if let Some(cached) = leaf_measure_cache.get(&key) {
+              return *cached;
+            }
+
+            let node_context = has_context
+              .then(|| node_context_data.get_mut(node_key))
+              .flatten();
+            let measured =
+              (measure_callback)(known_dimensions, available_space, node, node_context, style);
+            leaf_measure_cache.insert(key, measured);
+            measured
           };
           // TODO: implement calc() in high-level API
           compute_leaf_layout(inputs, style, |_, _| 0.0, measure_function)
@@ -1058,6 +1124,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
     let mut taffy_view = TaffyView {
       taffy: self,
       measure_function,
+      leaf_measure_cache: Default::default(),
     };
 
     #[cfg(feature = "std")]
@@ -1147,6 +1214,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
     TaffyView {
       taffy: self,
       measure_function: |_, _, _, _, _| Size::ZERO,
+      leaf_measure_cache: Default::default(),
     }
   }
 }
@@ -1167,6 +1235,108 @@ mod tests {
     _style: &Style,
   ) -> Size<f32> {
     known_dimensions.unwrap_or(node_context.cloned().unwrap_or(Size::ZERO))
+  }
+
+  #[test]
+  fn leaf_measure_cache_deduplicates_compute_size_measures_across_cache_eviction() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_cb = Arc::clone(&calls);
+
+    let mut taffy: TaffyTree<()> = TaffyTree::new();
+    let leaf = taffy.new_leaf(Style::default()).unwrap();
+
+    let mut view = TaffyView {
+      taffy: &mut taffy,
+      measure_function: move |_, _, _, _, _| {
+        calls_for_cb.fetch_add(1, Ordering::Relaxed);
+        Size {
+          width: 10.0,
+          height: 10.0,
+        }
+      },
+      leaf_measure_cache: Default::default(),
+    };
+
+    let input_a = LayoutInput {
+      run_mode: RunMode::ComputeSize,
+      sizing_mode: crate::tree::SizingMode::InherentSize,
+      axis: crate::tree::RequestedAxis::Both,
+      known_dimensions: Size::NONE,
+      parent_size: Size::NONE,
+      available_space: Size {
+        width: AvailableSpace::Definite(100.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      vertical_margins_are_collapsible: crate::geometry::Line::FALSE,
+    };
+
+    let input_b = LayoutInput {
+      available_space: Size {
+        width: AvailableSpace::Definite(200.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      ..input_a
+    };
+
+    view.compute_child_layout(leaf, input_a);
+    view.compute_child_layout(leaf, input_b);
+    view.compute_child_layout(leaf, input_a);
+
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+  }
+
+  #[test]
+  fn leaf_measure_cache_deduplicates_perform_layout_measures_across_cache_eviction() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_cb = Arc::clone(&calls);
+
+    let mut taffy: TaffyTree<()> = TaffyTree::new();
+    let leaf = taffy.new_leaf(Style::default()).unwrap();
+
+    let mut view = TaffyView {
+      taffy: &mut taffy,
+      measure_function: move |_, _, _, _, _| {
+        calls_for_cb.fetch_add(1, Ordering::Relaxed);
+        Size {
+          width: 10.0,
+          height: 10.0,
+        }
+      },
+      leaf_measure_cache: Default::default(),
+    };
+
+    let input_a = LayoutInput {
+      run_mode: RunMode::PerformLayout,
+      sizing_mode: crate::tree::SizingMode::InherentSize,
+      axis: crate::tree::RequestedAxis::Both,
+      known_dimensions: Size::NONE,
+      parent_size: Size::NONE,
+      available_space: Size {
+        width: AvailableSpace::Definite(100.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      vertical_margins_are_collapsible: crate::geometry::Line::FALSE,
+    };
+
+    let input_b = LayoutInput {
+      available_space: Size {
+        width: AvailableSpace::Definite(200.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      ..input_a
+    };
+
+    view.compute_child_layout(leaf, input_a);
+    view.compute_child_layout(leaf, input_b);
+    view.compute_child_layout(leaf, input_a);
+
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
   }
 
   #[cfg(all(feature = "std", panic = "unwind"))]
