@@ -99,7 +99,7 @@ These are emitted by the paint pipeline:
 - `FASTR_LOG_FRAG_BOUNDS=1` – log fragment-tree bounds vs the viewport.
 - `FASTR_DUMP_TEXT_FRAGMENTS=<N>` – sample text fragments (default 20 when enabled).
 - `FASTR_TEXT_DIAGNOSTICS=verbose` – log sampled clusters that relied on last-resort font fallback.
-- `FASTR_TEXT_FALLBACK_DESCRIPTOR_STATS=1` – collect per-render font fallback descriptor keyspace statistics (unique descriptor/family/language/weight counts + a small sample of descriptor summaries) and surface them in render diagnostics stats/progress JSON.
+- `FASTR_TEXT_FALLBACK_DESCRIPTOR_STATS=1` – collect per-render font fallback descriptor keyspace statistics (unique descriptor/family/language/weight counts + a small sample of descriptor summaries). When render diagnostics are enabled, this populates `RenderStats.counts.fallback_descriptor_stats` (and therefore appears in pageset progress JSON / `RenderDiagnostics.stats`).
 - `FASTR_TRACE_TEXT=<substring>` – walk the fragment tree and print a containment trail for the first text fragment containing the substring.
 - `FASTR_TRACE_FRAGMENTATION=1` – trace fragmentation break opportunities/boundary choices (also available via `inspect_frag --trace-fragmentation`).
 - `FASTR_FIND_TEXT` / `FASTR_FIND_BOX_TEXT` / `FASTR_INSPECT_MASK` – search for matching text fragments/boxes.
@@ -118,16 +118,23 @@ These are emitted by the paint pipeline:
 - `FASTR_LAYOUT_CACHE_STATS=1` – layout cache stats (intrinsic cache hits/misses and pass counts).
 - `FASTR_TABLE_STATS=1` – table auto-layout counters (cell intrinsic measurements + per-cell layout calls).
 - `FASTR_LAYOUT_CACHE_MAX_ENTRIES=<N>` – per-thread layout cache entry cap (default 8192; set to 0 to disable).
-- `FASTR_TEXT_SHAPING_CACHE_CAPACITY=<N>` – shaping cache entry cap (default 2048).
+- `FASTR_TEXT_SHAPING_CACHE_CAPACITY=<N>` – shaping cache entry cap (default 2048; 0/empty/unset uses the default).
 - `FASTR_TAFFY_CACHE_LIMIT=<N>` – Taffy flex/grid template cache capacity (default 512; auto-scaled for large box trees). Use `FASTR_TAFFY_FLEX_CACHE_LIMIT` / `FASTR_TAFFY_GRID_CACHE_LIMIT` to override adapters independently.
 - `FASTR_TRACE_OUT=/path/to/trace.json` – emit Chrome trace events for parse/style/layout/paint.
 - `FASTR_DISABLE_LAYOUT_CACHE=1` / `FASTR_DISABLE_FLEX_CACHE=1` – disable layout/flex caches.
 - `FASTR_IMAGE_PROFILE_MS=<ms>` / `FASTR_STACK_PROFILE_MS=<ms>` / `FASTR_TEXT_PROFILE_MS=<ms>` / `FASTR_CMD_PROFILE_MS=<ms>` – emit timing when operations exceed the threshold.
-- `FASTR_TEXT_FALLBACK_CACHE_CAPACITY=<N>` – capacity for the font fallback resolution caches (default 131072; clamped to >= 1). This applies separately to the glyph and cluster fallback caches.
+- `FASTR_TEXT_FALLBACK_CACHE_CAPACITY=<N>` – override the font fallback cache capacity in entries (default 131072). This applies separately to the glyph and cluster fallback caches; 0/empty/unset disables the override (use the default). Applied values are clamped to >= 1.
+
+How to interpret fallback-cache diagnostics (when render diagnostics are enabled and `RenderStats` is available):
+
+- `fallback_cache_*_evictions` and `fallback_cache_clears` are the primary pressure signals.
+- `fallback_cache_*_{entries,capacity}` and `fallback_cache_shards` provide context on cache sizing/sharding.
+
+High eviction counts typically imply cache pressure (raise `FASTR_TEXT_FALLBACK_CACHE_CAPACITY`). High `RenderStats.counts.fallback_descriptor_stats.unique_descriptors` (enable `FASTR_TEXT_FALLBACK_DESCRIPTOR_STATS=1`) suggests a descriptor keyspace explosion, which can keep hit rates low even with a large cache.
+
 - `FASTR_SELECTOR_BLOOM=0` – disable selector bloom-filter hashing (useful for perf A/B checks).
 - `FASTR_SELECTOR_BLOOM_BITS=256|512|1024` – selector bloom summary bit size used for `:has()` pruning (default 1024; larger reduces false positives on large subtrees but costs more memory/build time).
 - `FASTR_ANCESTOR_BLOOM=0` – disable the cascade's ancestor bloom filter fast-reject for descendant selectors.
-- `FASTR_TEXT_FALLBACK_CACHE_CAPACITY=<N>` – override the font fallback cache capacity (entries) used during shaping (0/empty disables override).
 - `FASTR_SVG_FILTER_CACHE_ITEMS=<N>` – SVG filter cache capacity (default 256).
 - `FASTR_SVG_FILTER_CACHE_BYTES=<N>` – approximate SVG filter cache size limit in bytes (default 4 MiB).
 
