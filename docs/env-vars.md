@@ -49,6 +49,7 @@ Unless noted otherwise, they are parsed once at process startup; invalid values 
 
 - `FASTR_HTTP_BACKEND=auto|ureq|curl` – choose the HTTP backend.
   - `auto` (default): use the Rust backend and fall back to the system `curl` binary for retryable network/TLS/HTTP2 errors.
+    - If the fallback also fails, the original error message is annotated with `curl fallback failed: ...` to make it obvious both backends were attempted.
   - `ureq`: force the Rust backend (disables the `curl` fallback; useful to confirm a failure is backend-specific).
   - `curl`: force the `curl` backend for all requests (HTTP/2-capable when your system `curl` has HTTP/2 support; useful for hard sites and differential diagnosis; requires `curl` on `$PATH`).
 - `FASTR_HTTP_BROWSER_HEADERS=0|1` – enable/disable browser-like request headers (per-resource `Accept` + `Sec-Fetch-*` + `Upgrade-Insecure-Requests`; fonts also get `Origin` + `Referer`). Defaults to `1`; set to `0` to preserve the legacy minimal header set for debugging.
