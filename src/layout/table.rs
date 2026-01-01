@@ -6975,6 +6975,7 @@ mod tests {
   use crate::layout::contexts::factory::FormattingContextFactory;
   use crate::layout::engine::LayoutParallelism;
   use crate::layout::formatting_context::intrinsic_cache_epoch;
+  use crate::layout::formatting_context::intrinsic_cache_test_lock;
   use crate::layout::formatting_context::intrinsic_cache_use_epoch;
   use crate::render_control::{with_deadline, RenderDeadline};
   use crate::style::color::Rgba;
@@ -7500,6 +7501,7 @@ mod tests {
 
   #[test]
   fn table_structure_cache_respects_epoch() {
+    let _guard = intrinsic_cache_test_lock();
     let starting_epoch = intrinsic_cache_epoch();
     intrinsic_cache_use_epoch(starting_epoch.saturating_add(1), true);
 

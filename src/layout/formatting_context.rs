@@ -56,6 +56,7 @@ use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 /// Intrinsic sizing mode for content-based size queries
 ///
@@ -120,13 +121,77 @@ thread_local! {
   static SUBGRID_CACHE_EPOCH: Cell<usize> = const { Cell::new(0) };
 }
 
-static CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
-static CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
-static CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
+const COUNTER_SHARDS: usize = 64;
+
+#[repr(align(64))]
+struct PaddedAtomicUsize(AtomicUsize);
+
+impl PaddedAtomicUsize {
+  const fn new(value: usize) -> Self {
+    Self(AtomicUsize::new(value))
+  }
+
+  fn fetch_add(&self, value: usize) {
+    self.0.fetch_add(value, Ordering::Relaxed);
+  }
+
+  fn store(&self, value: usize) {
+    self.0.store(value, Ordering::Relaxed);
+  }
+
+  fn load(&self) -> usize {
+    self.0.load(Ordering::Relaxed)
+  }
+}
+
+struct ShardedCounter {
+  shards: [PaddedAtomicUsize; COUNTER_SHARDS],
+}
+
+impl ShardedCounter {
+  fn new() -> Self {
+    Self {
+      shards: std::array::from_fn(|_| PaddedAtomicUsize::new(0)),
+    }
+  }
+
+  #[inline]
+  fn shard_index() -> usize {
+    rayon::current_thread_index().unwrap_or(0) % COUNTER_SHARDS
+  }
+
+  #[inline]
+  fn inc(&self) {
+    self.shards[Self::shard_index()].fetch_add(1);
+  }
+
+  fn store(&self, value: usize) {
+    for shard in &self.shards {
+      shard.store(value);
+    }
+  }
+
+  fn load_sum(&self) -> usize {
+    self.shards.iter().map(|shard| shard.load()).sum()
+  }
+}
+
+static CACHE_LOOKUPS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static CACHE_HITS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static CACHE_STORES: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
 static CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
-static BLOCK_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
-static FLEX_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
-static INLINE_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
+static BLOCK_INTRINSIC_CALLS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static FLEX_INTRINSIC_CALLS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+static INLINE_INTRINSIC_CALLS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+
+#[cfg(test)]
+static INTRINSIC_CACHE_TEST_LOCK: LazyLock<parking_lot::ReentrantMutex<()>> =
+  LazyLock::new(|| parking_lot::ReentrantMutex::new(()));
+
+#[cfg(test)]
+pub(crate) fn intrinsic_cache_test_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+  INTRINSIC_CACHE_TEST_LOCK.lock()
+}
 
 fn clear_subgrid_cache() {
   SUBGRID_DEPENDENT_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -157,7 +222,7 @@ fn cache_key(
 }
 
 pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
-  CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
+  CACHE_LOOKUPS.inc();
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   let key = cache_key(node, mode, epoch)?;
   let hit = INTRINSIC_INLINE_CACHE.with(|cache| {
@@ -167,7 +232,7 @@ pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) 
       .and_then(|(entry_epoch, value)| (*entry_epoch == epoch).then_some(*value))
   });
   if hit.is_some() {
-    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+    CACHE_HITS.inc();
   }
   hit
 }
@@ -178,7 +243,7 @@ pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, v
     INTRINSIC_INLINE_CACHE.with(|cache| {
       cache.borrow_mut().insert(key, (epoch, value));
     });
-    CACHE_STORES.fetch_add(1, Ordering::Relaxed);
+    CACHE_STORES.inc();
   }
 }
 
@@ -193,6 +258,9 @@ pub(crate) fn intrinsic_cache_clear() {
 /// Epochs are used instead of raw clears so callers can opt-in to cache reuse (by
 /// reusing the same epoch) or enforce invalidation (by bumping the epoch).
 pub(crate) fn intrinsic_cache_use_epoch(epoch: usize, reset_counters: bool) {
+  #[cfg(test)]
+  let _guard = intrinsic_cache_test_lock();
+
   let requested_epoch = epoch;
   let epoch = epoch.max(1);
   let previous = CACHE_EPOCH.swap(epoch, Ordering::Relaxed);
@@ -213,35 +281,35 @@ pub(crate) fn intrinsic_cache_epoch() -> usize {
 
 /// Resets tracked counts for intrinsic sizing cache metrics.
 pub(crate) fn intrinsic_cache_reset_counters() {
-  CACHE_LOOKUPS.store(0, Ordering::Relaxed);
-  CACHE_HITS.store(0, Ordering::Relaxed);
-  CACHE_STORES.store(0, Ordering::Relaxed);
-  BLOCK_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
-  FLEX_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
-  INLINE_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
+  CACHE_LOOKUPS.store(0);
+  CACHE_HITS.store(0);
+  CACHE_STORES.store(0);
+  BLOCK_INTRINSIC_CALLS.store(0);
+  FLEX_INTRINSIC_CALLS.store(0);
+  INLINE_INTRINSIC_CALLS.store(0);
 }
 
 pub(crate) fn intrinsic_cache_stats() -> (usize, usize, usize, usize, usize, usize) {
   (
-    CACHE_LOOKUPS.load(Ordering::Relaxed),
-    CACHE_HITS.load(Ordering::Relaxed),
-    CACHE_STORES.load(Ordering::Relaxed),
-    BLOCK_INTRINSIC_CALLS.load(Ordering::Relaxed),
-    FLEX_INTRINSIC_CALLS.load(Ordering::Relaxed),
-    INLINE_INTRINSIC_CALLS.load(Ordering::Relaxed),
+    CACHE_LOOKUPS.load_sum(),
+    CACHE_HITS.load_sum(),
+    CACHE_STORES.load_sum(),
+    BLOCK_INTRINSIC_CALLS.load_sum(),
+    FLEX_INTRINSIC_CALLS.load_sum(),
+    INLINE_INTRINSIC_CALLS.load_sum(),
   )
 }
 
 pub(crate) fn count_block_intrinsic_call() {
-  BLOCK_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+  BLOCK_INTRINSIC_CALLS.inc();
 }
 
 pub(crate) fn count_flex_intrinsic_call() {
-  FLEX_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+  FLEX_INTRINSIC_CALLS.inc();
 }
 
 pub(crate) fn count_inline_intrinsic_call() {
-  INLINE_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+  INLINE_INTRINSIC_CALLS.inc();
 }
 
 // === Layout result cache ====================================================
@@ -1315,6 +1383,7 @@ mod tests {
 
   #[test]
   fn intrinsic_cache_epoch_invalidation() {
+    let _guard = intrinsic_cache_test_lock();
     intrinsic_cache_use_epoch(1, true);
 
     let mut node = BoxNode::new_block(
@@ -1341,6 +1410,7 @@ mod tests {
 
   #[test]
   fn subgrid_memoization_matches_recursive_and_reuses() {
+    let _guard = intrinsic_cache_test_lock();
     intrinsic_cache_use_epoch(1, true);
     reset_subgrid_walk_count();
 
@@ -1393,6 +1463,7 @@ mod tests {
 
   #[test]
   fn subgrid_memoization_invalidation_on_epoch_change() {
+    let _guard = intrinsic_cache_test_lock();
     intrinsic_cache_use_epoch(7, true);
 
     let child = BoxNode::new_block(
