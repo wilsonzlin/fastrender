@@ -170,12 +170,19 @@ fn take_css_deadline_error() -> Option<RenderError> {
 const PARSED_STYLESHEET_CACHE_CAPACITY: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ParsedStylesheetCacheKey {
-  css_hash: u64,
-  css_len: usize,
-  base_url_hash: u64,
-  base_url_len: usize,
-  media: MediaContextFingerprint,
+enum ParsedStylesheetCacheKey {
+  ContentHash {
+    css_hash: u64,
+    css_len: usize,
+    base_url_hash: u64,
+    base_url_len: usize,
+    media: MediaContextFingerprint,
+  },
+  Url {
+    stylesheet_url_hash: u64,
+    stylesheet_url_len: usize,
+    media: MediaContextFingerprint,
+  },
 }
 
 static PARSED_STYLESHEET_CACHE: OnceLock<
@@ -234,11 +241,22 @@ fn stylesheet_cache_key(
     .map(|url| (hash_bytes_for_stylesheet_cache(url.as_bytes()), url.len()))
     .unwrap_or((0, 0));
 
-  ParsedStylesheetCacheKey {
+  ParsedStylesheetCacheKey::ContentHash {
     css_hash: hash_bytes_for_stylesheet_cache(css.as_bytes()),
     css_len: css.len(),
     base_url_hash,
     base_url_len,
+    media: media_ctx.fingerprint(),
+  }
+}
+
+fn stylesheet_cache_key_by_url(
+  stylesheet_url: &str,
+  media_ctx: &MediaContext,
+) -> ParsedStylesheetCacheKey {
+  ParsedStylesheetCacheKey::Url {
+    stylesheet_url_hash: hash_bytes_for_stylesheet_cache(stylesheet_url.as_bytes()),
+    stylesheet_url_len: stylesheet_url.len(),
     media: media_ctx.fingerprint(),
   }
 }
@@ -353,6 +371,68 @@ pub(crate) fn parse_stylesheet_with_media_cached_shared(
   }
   cache.put(key, Arc::clone(&sheet));
   Ok(sheet)
+}
+
+pub(crate) fn parse_stylesheet_with_media_cached_by_url_shared(
+  css: &str,
+  stylesheet_url: &str,
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+) -> Result<Arc<StyleSheet>> {
+  // Ensure render cancellation propagates even on cache hits.
+  if let Err(err) = check_active(RenderStage::Css) {
+    return Err(Error::Render(err));
+  }
+
+  let key = stylesheet_cache_key_by_url(stylesheet_url, media_ctx);
+
+  {
+    let mut cache = parsed_stylesheet_cache()
+      .lock()
+      .unwrap_or_else(|err| err.into_inner());
+    if let Some(hit) = cache.get(&key) {
+      return Ok(Arc::clone(hit));
+    }
+  }
+
+  let parsed =
+    parse_stylesheet_collecting_errors_with_context(css, Some(media_ctx), cache, false)?;
+  let sheet = Arc::new(parsed.stylesheet);
+
+  let mut cache = parsed_stylesheet_cache()
+    .lock()
+    .unwrap_or_else(|err| err.into_inner());
+  if let Some(hit) = cache.get(&key) {
+    return Ok(Arc::clone(hit));
+  }
+  cache.put(key, Arc::clone(&sheet));
+  Ok(sheet)
+}
+
+/// Internal benchmark harness for measuring parsed stylesheet cache hits without cloning.
+///
+/// The render pipeline uses the Arc-returning variants so cache hits remain cheap. These helpers
+/// are `#[doc(hidden)]` because callers outside the renderer should generally prefer the
+/// `StyleSheet`-by-value APIs.
+#[doc(hidden)]
+pub fn parse_stylesheet_with_media_cached_arc(
+  css: &str,
+  base_url: Option<&str>,
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+) -> Result<Arc<StyleSheet>> {
+  parse_stylesheet_with_media_cached_shared(css, base_url, media_ctx, cache)
+}
+
+/// Internal benchmark harness for measuring URL-keyed stylesheet cache hits without cloning.
+#[doc(hidden)]
+pub fn parse_stylesheet_with_media_cached_by_url_arc(
+  css: &str,
+  stylesheet_url: &str,
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+) -> Result<Arc<StyleSheet>> {
+  parse_stylesheet_with_media_cached_by_url_shared(css, stylesheet_url, media_ctx, cache)
 }
 
 /// Internal function that does the actual parsing with error collection
@@ -4379,6 +4459,38 @@ mod tests {
         .iter()
         .any(|rule| matches!(rule, CssRule::Style(_))),
       "top-level style rule should still be present"
+    );
+  }
+
+  #[test]
+  fn url_keyed_stylesheet_cache_returns_first_parse_for_same_url() {
+    // NOTE: The URL-keyed parsed stylesheet cache deliberately does *not* hash the CSS bytes on
+    // lookup. This keeps cache hits cheap for large external/imported stylesheets, but it also
+    // means we assume that within a single render the same URL always maps to the same body
+    // bytes (enforced by the renderer's resource cache / disk cache layer).
+    //
+    // If the same URL is parsed twice with different contents in the same process, we'll return
+    // the stylesheet from the first parse.
+    let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let url = "https://example.test/url-keyed-cache.css";
+    let first = "a { color: red; }";
+    let second = "a { color: red; } b { color: blue; }";
+
+    let sheet_first =
+      parse_stylesheet_with_media_cached_by_url_shared(first, url, &media_ctx, None)
+        .expect("first parse should succeed");
+    let sheet_second =
+      parse_stylesheet_with_media_cached_by_url_shared(second, url, &media_ctx, None)
+        .expect("second parse should succeed");
+
+    assert!(
+      std::sync::Arc::ptr_eq(&sheet_first, &sheet_second),
+      "expected URL-keyed cache to return the first parsed stylesheet for subsequent hits"
+    );
+    assert_eq!(
+      sheet_second.rules.len(),
+      1,
+      "second parse should return the cached first stylesheet, not re-parse new rules"
     );
   }
 

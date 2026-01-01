@@ -2366,8 +2366,9 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
         match loader.load(&resolved_href) {
           Ok(css_text) => {
             seen.insert(resolved_href.clone());
-            let sheet = match crate::css::parser::parse_stylesheet_with_media(
+            let sheet = match crate::css::parser::parse_stylesheet_with_media_cached_by_url_shared(
               &css_text,
+              &resolved_href,
               media_ctx,
               cache.as_deref_mut(),
             ) {
@@ -2377,7 +2378,7 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
             };
             let mut resolved_children = Vec::new();
             resolve_rules_owned(
-              sheet.rules,
+              sheet.rules.clone(),
               loader,
               Some(&resolved_href),
               media_ctx,

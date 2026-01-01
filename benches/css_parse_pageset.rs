@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use fastrender::css::parser::{parse_stylesheet, parse_stylesheet_with_media};
+use fastrender::css::parser::{
+  parse_stylesheet, parse_stylesheet_with_media, parse_stylesheet_with_media_cached_arc,
+  parse_stylesheet_with_media_cached_by_url_arc,
+};
 use fastrender::css::types::CssImportLoader;
 use fastrender::style::media::{MediaContext, MediaQueryCache};
 
@@ -127,6 +130,47 @@ fn bench_css_parse_pageset(c: &mut Criterion) {
       let sheet =
         parse_stylesheet_with_media(black_box(DISCORD_STYLESHEET), &media_ctx, Some(&mut cache))
           .expect("parse stylesheet with media pruning");
+      black_box(sheet);
+    });
+  });
+
+  let cached_base_url = "https://example.test/assets/apple-content-hash.css";
+  let cached_url = "https://example.test/assets/apple-url-keyed.css";
+
+  // Prime the process-wide parsed stylesheet caches so the benchmark measures cache-hit overhead.
+  let _ = parse_stylesheet_with_media_cached_arc(
+    APPLE_STYLESHEET,
+    Some(cached_base_url),
+    &media_ctx,
+    None,
+  )
+  .expect("cached parse should succeed");
+  let _ =
+    parse_stylesheet_with_media_cached_by_url_arc(APPLE_STYLESHEET, cached_url, &media_ctx, None)
+      .expect("cached parse should succeed");
+
+  group.bench_function("apple.com/pruned_media_cached_hit_content_hash", |b| {
+    b.iter(|| {
+      let sheet = parse_stylesheet_with_media_cached_arc(
+        black_box(APPLE_STYLESHEET),
+        Some(cached_base_url),
+        &media_ctx,
+        None,
+      )
+      .expect("cached parse hit");
+      black_box(sheet);
+    });
+  });
+
+  group.bench_function("apple.com/pruned_media_cached_hit_url_keyed", |b| {
+    b.iter(|| {
+      let sheet = parse_stylesheet_with_media_cached_by_url_arc(
+        black_box(APPLE_STYLESHEET),
+        cached_url,
+        &media_ctx,
+        None,
+      )
+      .expect("cached parse hit");
       black_box(sheet);
     });
   });
