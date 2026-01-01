@@ -11,3 +11,4 @@ Small, durable writeups that explain “why/how” decisions that are worth keep
 - [variable-font-decoration-metrics.md](variable-font-decoration-metrics.md) — variation-aware underline/strike metrics and current fixture coverage.
 - [http-agent-pooling.md](http-agent-pooling.md) — shared `ureq::Agent` connection pooling for cheaper resource fetches.
 - [bundled-fonts.md](bundled-fonts.md) — policy for keeping bundled font coverage deterministic and small.
+- [layout-timeouts-profiling.md](layout-timeouts-profiling.md) — baseline CPU profiles for layout timeouts + layout hotspots.
