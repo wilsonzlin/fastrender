@@ -299,15 +299,20 @@ pub struct GridFormattingContext {
 }
 
 impl GridFormattingContext {
-  fn is_simple_grid(&self, style: &ComputedStyle, children: &[&BoxNode]) -> bool {
+  fn is_simple_grid(
+    &self,
+    style: &ComputedStyle,
+    children: &[&BoxNode],
+    deadline_counter: &mut usize,
+  ) -> Result<bool, LayoutError> {
     if !matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid) {
-      return false;
+      return Ok(false);
     }
     if style.grid_row_subgrid || style.grid_column_subgrid {
-      return false;
+      return Ok(false);
     }
     if !style.grid_template_columns.is_empty() || !style.grid_template_rows.is_empty() {
-      return false;
+      return Ok(false);
     }
     if !style.grid_template_areas.is_empty()
       || !style.grid_column_names.is_empty()
@@ -315,30 +320,43 @@ impl GridFormattingContext {
       || !style.grid_column_line_names.is_empty()
       || !style.grid_row_line_names.is_empty()
     {
-      return false;
+      return Ok(false);
     }
-    let auto_track = |tracks: &[GridTrack]| tracks.iter().all(|t| matches!(t, GridTrack::Auto));
-    if !auto_track(&style.grid_auto_rows) || !auto_track(&style.grid_auto_columns) {
-      return false;
+    let auto_track = |tracks: &[GridTrack],
+                      deadline_counter: &mut usize|
+     -> Result<bool, LayoutError> {
+      for track in tracks {
+        check_layout_deadline(deadline_counter)?;
+        if !matches!(track, GridTrack::Auto) {
+          return Ok(false);
+        }
+      }
+      Ok(true)
+    };
+    if !auto_track(&style.grid_auto_rows, deadline_counter)?
+      || !auto_track(&style.grid_auto_columns, deadline_counter)?
+    {
+      return Ok(false);
     }
     if style.grid_gap.value != 0.0
       || style.grid_row_gap.value != 0.0
       || style.grid_column_gap.value != 0.0
     {
-      return false;
+      return Ok(false);
     }
     if style.grid_auto_flow != GridAutoFlow::Row {
-      return false;
+      return Ok(false);
     }
     if style.align_items != AlignItems::Stretch
       || style.justify_items != AlignItems::Stretch
       || style.align_content != AlignContent::Stretch
       || style.justify_content != JustifyContent::FlexStart
     {
-      return false;
+      return Ok(false);
     }
 
     for child in children {
+      check_layout_deadline(deadline_counter)?;
       let cs = &child.style;
       if cs.grid_column_start != 0
         || cs.grid_column_end != 0
@@ -347,11 +365,11 @@ impl GridFormattingContext {
         || cs.align_self.is_some()
         || cs.justify_self.is_some()
       {
-        return false;
+        return Ok(false);
       }
     }
 
-    true
+    Ok(true)
   }
 
   /// Creates a new GridFormattingContext
@@ -649,7 +667,7 @@ impl GridFormattingContext {
             false,
           ))));
         }
-        let simple_grid = self.is_simple_grid(&box_node.style, &in_flow_children);
+        let simple_grid = self.is_simple_grid(&box_node.style, &in_flow_children, &mut deadline_counter)?;
         let root_style = std::sync::Arc::new(SendSyncStyle(self.convert_style(
           &box_node.style,
           None,
@@ -758,7 +776,7 @@ impl GridFormattingContext {
     }
 
     let simple_grid =
-      include_children && is_root && self.is_simple_grid(&box_node.style, &children_iter);
+      include_children && is_root && self.is_simple_grid(&box_node.style, &children_iter, deadline_counter)?;
     let taffy_style = self.convert_style(
       &box_node.style,
       containing_grid,
