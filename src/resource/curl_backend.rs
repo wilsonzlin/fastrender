@@ -832,6 +832,22 @@ mod tests {
   }
 
   #[test]
+  fn header_parsing_skips_proxy_connect_block() {
+    let input =
+      b"HTTP/1.1 200 Connection established\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n";
+    let mut reader = BufReader::new(&input[..]);
+    let (_status_line, status, headers) = read_curl_headers(&mut reader).expect("parse");
+    assert_eq!(status, 200);
+    assert_eq!(
+      headers
+        .get("content-type")
+        .and_then(|h| h.to_str().ok())
+        .unwrap(),
+      "text/html"
+    );
+  }
+
+  #[test]
   fn build_args_are_separate_and_include_headers() {
     let cookie = PathBuf::from("/tmp/cookies.txt");
     let headers = super::super::build_http_header_pairs(
