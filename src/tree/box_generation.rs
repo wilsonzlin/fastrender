@@ -491,11 +491,24 @@ pub fn generate_box_tree_with_anonymous_fixup_with_options(
   styled: &StyledNode,
   options: &BoxGenerationOptions,
 ) -> Result<BoxTree> {
+  let timings_enabled = runtime::runtime_toggles().truthy("FASTR_RENDER_TIMINGS");
   let mut deadline_counter = 0usize;
+  let build_start = timings_enabled.then(Instant::now);
   let root = build_box_tree_root(styled, options, &mut deadline_counter)?;
+  if let Some(start) = build_start {
+    eprintln!("timing:box_gen_build_root {:?}", start.elapsed());
+  }
+  let anon_start = timings_enabled.then(Instant::now);
   let fixed_root = AnonymousBoxCreator::fixup_tree_with_deadline(root, &mut deadline_counter)?;
+  if let Some(start) = anon_start {
+    eprintln!("timing:box_gen_anon_fixup {:?}", start.elapsed());
+  }
+  let table_start = timings_enabled.then(Instant::now);
   let fixed_root =
     TableStructureFixer::fixup_tree_internals_with_deadline(fixed_root, &mut deadline_counter)?;
+  if let Some(start) = table_start {
+    eprintln!("timing:box_gen_table_fixup {:?}", start.elapsed());
+  }
   Ok(BoxTree::new(fixed_root))
 }
 
@@ -3016,7 +3029,9 @@ fn create_replaced_box_from_styled(
 
       let intrinsic_size = match (intrinsic_width, intrinsic_height) {
         (Some(w), Some(h)) => Some(Size::new(w, h)),
-        _ => None,
+        (Some(w), None) => Some(Size::new(w, 0.0)),
+        (None, Some(h)) => Some(Size::new(0.0, h)),
+        (None, None) => None,
       };
 
       let aspect_ratio = match (intrinsic_width, intrinsic_height) {
@@ -3117,6 +3132,50 @@ mod tests {
 
   fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> BoxTree {
     generate_box_tree_with_anonymous_fixup_result(styled).expect("anonymous box generation failed")
+  }
+
+  #[test]
+  fn img_intrinsic_size_tracks_single_dimension_attributes() {
+    fn set_attr(node: &mut StyledNode, name: &str, value: &str) {
+      match &mut node.node.node_type {
+        DomNodeType::Element { attributes, .. } => {
+          attributes.push((name.to_string(), value.to_string()));
+        }
+        _ => panic!("expected element node"),
+      }
+    }
+
+    let mut img_width = styled_element("img");
+    img_width.node_id = 1;
+    set_attr(&mut img_width, "src", "test.png");
+    set_attr(&mut img_width, "width", "120");
+
+    let mut img_height = styled_element("img");
+    img_height.node_id = 2;
+    set_attr(&mut img_height, "src", "test.png");
+    set_attr(&mut img_height, "height", "80");
+
+    let mut root = styled_element("div");
+    root.children = vec![img_width, img_height];
+
+    let tree = generate_box_tree(&root);
+    assert_eq!(tree.root.children.len(), 2);
+
+    let width_box = &tree.root.children[0];
+    match &width_box.box_type {
+      BoxType::Replaced(replaced) => {
+        assert_eq!(replaced.intrinsic_size, Some(Size::new(120.0, 0.0)));
+      }
+      other => panic!("expected replaced box, got {other:?}"),
+    }
+
+    let height_box = &tree.root.children[1];
+    match &height_box.box_type {
+      BoxType::Replaced(replaced) => {
+        assert_eq!(replaced.intrinsic_size, Some(Size::new(0.0, 80.0)));
+      }
+      other => panic!("expected replaced box, got {other:?}"),
+    }
   }
 
   #[test]

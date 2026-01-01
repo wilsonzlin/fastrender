@@ -234,7 +234,6 @@ thread_local! {
 #[derive(Clone)]
 struct ImageIntrinsicProbeJob {
   box_id: usize,
-  url: String,
   density: Option<f32>,
   style: Arc<ComputedStyle>,
 }
@@ -8104,7 +8103,21 @@ impl FastRender {
   }
 
   fn intrinsic_probe_parallelism(&self) -> usize {
-    let default_parallelism = num_cpus::get().min(8).max(1);
+    // Image metadata probing is mostly I/O bound (HTTP range requests + disk reads). When we're
+    // running a single page in-process we can use a fairly high parallelism to hide network
+    // latency, but when pageset runners spawn many worker processes we need to keep the per-worker
+    // thread count under control.
+    //
+    // `scripts/pageset.sh` and friends cap per-worker Rayon threads via `RAYON_NUM_THREADS`; use it
+    // as the default scaling input when present so the intrinsic probe pool tracks the same
+    // "threads per worker" intent.
+    let base_parallelism = std::env::var("RAYON_NUM_THREADS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|threads| *threads > 0)
+      .unwrap_or_else(num_cpus::get)
+      .max(1);
+    let default_parallelism = base_parallelism.saturating_mul(8).min(64).max(1);
     self
       .runtime_toggles
       .usize("FASTR_INTRINSIC_PROBE_PARALLELISM")
@@ -8137,7 +8150,7 @@ impl FastRender {
     viewport: Size,
     media_ctx: &MediaContext,
     profile_enabled: bool,
-    jobs: &mut Vec<ImageIntrinsicProbeJob>,
+    jobs: &mut HashMap<String, Vec<ImageIntrinsicProbeJob>>,
   ) {
     fn should_skip_image_probe(style: &ComputedStyle) -> bool {
       matches!(style.aspect_ratio, crate::style::types::AspectRatio::Ratio(r) if r > 0.0)
@@ -8146,11 +8159,11 @@ impl FastRender {
 
     let maybe_collect = |box_id: usize,
                          replaced_box: &ReplacedBox,
-                         style: &Arc<ComputedStyle>,
-                         viewport: Size,
-                         media_ctx: &MediaContext,
-                         profile_enabled: bool,
-                         jobs: &mut Vec<ImageIntrinsicProbeJob>| {
+                          style: &Arc<ComputedStyle>,
+                          viewport: Size,
+                          media_ctx: &MediaContext,
+                          profile_enabled: bool,
+                          jobs: &mut HashMap<String, Vec<ImageIntrinsicProbeJob>>| {
       let ReplacedType::Image {
         src,
         srcset,
@@ -8173,41 +8186,62 @@ impl FastRender {
         return;
       }
 
-      let has_image_source = !src.is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
+      let has_image_source = !src.trim().is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
       if !has_image_source {
         return;
       }
 
-      let select_start = profile_enabled.then(Instant::now);
-      let selected = replaced_box
-        .replaced_type
-        .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-          device_pixel_ratio: self.device_pixel_ratio,
-          slot_width: None,
-          viewport: Some(viewport),
-          media_context: Some(media_ctx),
-          font_size: Some(style.font_size),
-          base_url: self.base_url.as_deref(),
-        });
-      if let Some(start) = select_start {
-        let ms = start.elapsed().as_secs_f64() * 1000.0;
-        REPLACED_INTRINSIC_PROFILE.with(|state| {
-          let mut state = state.borrow_mut();
-          state.selection_calls += 1;
-          state.selection_ms += ms;
-        });
-      }
+      let selected = if srcset.is_empty() && picture_sources.is_empty() {
+        crate::tree::box_tree::SelectedImageSource {
+          url: src.as_str(),
+          descriptor: None,
+          density: None,
+          from_picture: false,
+        }
+      } else {
+        let select_start = profile_enabled.then(Instant::now);
+        let selected = replaced_box
+          .replaced_type
+          .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+            device_pixel_ratio: self.device_pixel_ratio,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(media_ctx),
+            font_size: Some(style.font_size),
+            base_url: self.base_url.as_deref(),
+          });
+        if let Some(start) = select_start {
+          let ms = start.elapsed().as_secs_f64() * 1000.0;
+          REPLACED_INTRINSIC_PROFILE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.selection_calls += 1;
+            state.selection_ms += ms;
+          });
+        }
+        selected
+      };
 
-      if selected.url.is_empty() {
+      let selected_url = selected.url.trim();
+      if selected_url.is_empty() {
         return;
       }
 
-      jobs.push(ImageIntrinsicProbeJob {
-        box_id,
-        url: selected.url.to_string(),
-        density: selected.density,
-        style: Arc::clone(style),
-      });
+      let resolved_url = if selected_url.starts_with('<') {
+        selected_url.to_string()
+      } else {
+        self.image_cache.resolve_url(selected_url)
+      };
+      if resolved_url.is_empty() {
+        return;
+      }
+      jobs
+        .entry(resolved_url)
+        .or_default()
+        .push(ImageIntrinsicProbeJob {
+          box_id,
+          density: selected.density,
+          style: Arc::clone(style),
+        });
     };
 
     if let BoxType::Marker(marker_box) = &node.box_type {
@@ -8249,70 +8283,83 @@ impl FastRender {
 
   fn execute_image_intrinsic_probe_jobs(
     &self,
-    jobs: Vec<ImageIntrinsicProbeJob>,
+    jobs: HashMap<String, Vec<ImageIntrinsicProbeJob>>,
     profile_enabled: bool,
   ) -> HashMap<usize, ImageIntrinsicProbeOutcome> {
     if jobs.is_empty() {
       return HashMap::new();
     }
 
+    let job_groups: Vec<(String, Vec<ImageIntrinsicProbeJob>)> = jobs.into_iter().collect();
+    let box_jobs = job_groups.iter().map(|(_, group)| group.len()).sum::<usize>();
+
     let parallelism = self.intrinsic_probe_parallelism();
-    let pool = (parallelism > 1 && jobs.len() > 1).then(|| Self::intrinsic_probe_pool(parallelism));
+    let pool = (parallelism > 1 && job_groups.len() > 1).then(|| Self::intrinsic_probe_pool(parallelism));
     let deadline = crate::render_control::active_deadline();
     let image_cache = self.image_cache.clone();
     let device_pixel_ratio = self.device_pixel_ratio;
 
-    let run_job = |job: ImageIntrinsicProbeJob| {
+    let run_job = |(url, jobs): (String, Vec<ImageIntrinsicProbeJob>)| {
       let _deadline_guard = DeadlineGuard::install(deadline.as_ref());
       let probe_start = profile_enabled.then(Instant::now);
-      let probe_result = image_cache.probe(job.url.as_str());
+      let probe_result = if url.trim_start().starts_with('<') {
+        image_cache.probe(url.as_str())
+      } else {
+        image_cache.probe_resolved(url.as_str())
+      };
       let probe_ms = probe_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
       let probe_ok = probe_result.is_ok();
 
-      let mut outcome = ImageIntrinsicProbeOutcome {
-        intrinsic_size: None,
-        aspect_ratio: None,
-        explicit_no_ratio: false,
-      };
+      let meta = probe_result.ok();
+      let mut outcomes = Vec::with_capacity(jobs.len());
 
-      if let Ok(meta) = probe_result {
-        let orientation = job
-          .style
-          .image_orientation
-          .resolve(meta.orientation, false);
-        outcome.explicit_no_ratio = meta.aspect_ratio_none;
-        if let Some((w, h)) = meta.css_dimensions(
-          orientation,
-          &job.style.image_resolution,
-          device_pixel_ratio,
-          job.density,
-        ) {
-          outcome.intrinsic_size = Some(Size::new(w, h));
-          if !outcome.explicit_no_ratio {
-            outcome.aspect_ratio = meta
-              .intrinsic_ratio(orientation)
-              .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+      for job in jobs {
+        let mut outcome = ImageIntrinsicProbeOutcome {
+          intrinsic_size: None,
+          aspect_ratio: None,
+          explicit_no_ratio: false,
+        };
+
+        if let Some(meta) = meta.as_ref() {
+          let orientation = job.style.image_orientation.resolve(meta.orientation, false);
+          outcome.explicit_no_ratio = meta.aspect_ratio_none;
+          if let Some((w, h)) = meta.css_dimensions(
+            orientation,
+            &job.style.image_resolution,
+            device_pixel_ratio,
+            job.density,
+          ) {
+            outcome.intrinsic_size = Some(Size::new(w, h));
+            if !outcome.explicit_no_ratio {
+              outcome.aspect_ratio = meta
+                .intrinsic_ratio(orientation)
+                .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+            }
           }
         }
+
+        outcomes.push((job.box_id, outcome));
       }
 
-      (job.box_id, outcome, probe_ms, probe_ok)
+      (outcomes, probe_ms, probe_ok)
     };
 
-    let job_results: Vec<(usize, ImageIntrinsicProbeOutcome, Option<f64>, bool)> = match pool {
-      Some(pool) => pool.install(|| jobs.into_par_iter().map(run_job).collect()),
-      None => jobs.into_iter().map(run_job).collect(),
+    let job_results: Vec<(Vec<(usize, ImageIntrinsicProbeOutcome)>, Option<f64>, bool)> = match pool {
+      Some(pool) => pool.install(|| job_groups.into_par_iter().map(run_job).collect()),
+      None => job_groups.into_iter().map(run_job).collect(),
     };
 
-    let mut results = HashMap::with_capacity(job_results.len());
+    let mut results = HashMap::with_capacity(box_jobs);
 
     if profile_enabled {
       let mut probe_calls = 0usize;
       let mut probe_ms_total = 0.0f64;
       let mut probe_ok = 0usize;
       let mut probe_err = 0usize;
-      for (box_id, outcome, probe_ms, ok) in job_results {
-        results.insert(box_id, outcome);
+      for (outcomes, probe_ms, ok) in job_results {
+        for (box_id, outcome) in outcomes {
+          results.insert(box_id, outcome);
+        }
         probe_calls += 1;
         if let Some(ms) = probe_ms {
           probe_ms_total += ms;
@@ -8331,8 +8378,10 @@ impl FastRender {
         state.probe_err += probe_err;
       });
     } else {
-      for (box_id, outcome, _, _) in job_results {
-        results.insert(box_id, outcome);
+      for (outcomes, _, _) in job_results {
+        for (box_id, outcome) in outcomes {
+          results.insert(box_id, outcome);
+        }
       }
     }
 
@@ -8491,6 +8540,7 @@ impl FastRender {
     viewport: Size,
     media_type: MediaType,
   ) {
+    let timings_enabled = self.runtime_toggles.truthy("FASTR_RENDER_TIMINGS");
     let profile_enabled = Self::replaced_intrinsic_profile_enabled();
     if profile_enabled {
       REPLACED_INTRINSIC_PROFILE.with(|state| {
@@ -8501,7 +8551,8 @@ impl FastRender {
     }
 
     let media_ctx = self.media_context_for_media(media_type, viewport.width, viewport.height);
-    let mut probe_jobs = Vec::new();
+    let mut probe_jobs: HashMap<String, Vec<ImageIntrinsicProbeJob>> = HashMap::new();
+    let collect_start = timings_enabled.then(Instant::now);
     self.collect_image_intrinsic_probe_jobs_for_node(
       node,
       viewport,
@@ -8509,8 +8560,16 @@ impl FastRender {
       profile_enabled,
       &mut probe_jobs,
     );
+    if let Some(start) = collect_start {
+      eprintln!("timing:intrinsic_collect_jobs {:?}", start.elapsed());
+    }
+    let probe_start = timings_enabled.then(Instant::now);
     let probe_results = self.execute_image_intrinsic_probe_jobs(probe_jobs, profile_enabled);
+    if let Some(start) = probe_start {
+      eprintln!("timing:intrinsic_probe_jobs {:?}", start.elapsed());
+    }
 
+    let apply_start = timings_enabled.then(Instant::now);
     self.apply_replaced_intrinsic_sizes_with_image_probes(
       node,
       viewport,
@@ -8518,6 +8577,9 @@ impl FastRender {
       &probe_results,
       profile_enabled,
     );
+    if let Some(start) = apply_start {
+      eprintln!("timing:intrinsic_apply {:?}", start.elapsed());
+    }
 
     if profile_enabled {
       REPLACED_INTRINSIC_PROFILE.with(|state| {

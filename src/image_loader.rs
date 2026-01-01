@@ -1817,6 +1817,49 @@ impl ImageCache {
     result
   }
 
+  pub fn probe_resolved(&self, resolved_url: &str) -> Result<Arc<CachedImageMetadata>> {
+    let resolved_url = resolved_url.trim();
+    let trimmed = resolved_url.trim_start();
+    if trimmed.starts_with('<') {
+      return self.probe(trimmed);
+    }
+    if resolved_url.is_empty() {
+      return Err(Error::Image(ImageError::LoadFailed {
+        url: resolved_url.to_string(),
+        reason: "image probe URL is empty".to_string(),
+      }));
+    }
+
+    self.enforce_image_policy(resolved_url)?;
+    record_image_cache_request();
+    if let Some(img) = self.get_cached(resolved_url) {
+      record_image_cache_hit();
+      return Ok(Arc::new(CachedImageMetadata::from(&*img)));
+    }
+
+    if let Some(meta) = self.get_cached_meta(resolved_url) {
+      record_image_cache_hit();
+      return Ok(meta);
+    }
+    let (flight, is_owner) = self.join_meta_inflight(resolved_url);
+    if !is_owner {
+      record_image_cache_hit();
+      return flight.wait(resolved_url);
+    }
+
+    let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, resolved_url, flight);
+
+    record_image_cache_miss();
+    let result = self.fetch_and_probe(resolved_url);
+    let shared = match &result {
+      Ok(meta) => SharedMetaResult::Success(Arc::clone(meta)),
+      Err(err) => SharedMetaResult::Error(err.clone()),
+    };
+    inflight_guard.finish(shared);
+
+    result
+  }
+
   fn get_cached(&self, resolved_url: &str) -> Option<Arc<CachedImage>> {
     self
       .cache
