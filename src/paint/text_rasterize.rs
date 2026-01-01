@@ -53,7 +53,7 @@
 use crate::error::{Error, RenderError, RenderStage, Result};
 #[cfg(test)]
 use crate::paint::pixmap::new_pixmap;
-use crate::render_control::check_active_periodic;
+use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Rgba;
 use crate::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use crate::text::font_db::LoadedFont;
@@ -928,6 +928,9 @@ impl TextRasterizer {
     let diag_enabled = raster_timer.is_some();
     let mut color_glyph_rasters = 0usize;
     let mut deadline_counter = 0usize;
+    // Fast path: when a render deadline is already expired, avoid doing any work (and avoid
+    // burning ~DEADLINE_STRIDE iterations before the first periodic check trips).
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     // Note: The shared glyph/color caches are used from multiple threads when paint parallelism is
     // enabled. Computing cache deltas from "before" and "after" snapshots taken outside the cache
     // lock can double-count (other threads can bump the counters between snapshots). To keep
