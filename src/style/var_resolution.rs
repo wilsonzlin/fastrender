@@ -4,7 +4,7 @@
 //! so that nested functions, fallbacks with commas, and repeated substitutions
 //! are handled correctly.
 
-use crate::css::properties::{parse_length, parse_property_value};
+use crate::css::properties::{parse_length, parse_property_value_after_var_resolution};
 use crate::css::types::PropertyValue;
 use crate::style::custom_property_store::CustomPropertyStore;
 use cssparser::ParseError;
@@ -382,11 +382,83 @@ fn resolve_variable_reference(
 }
 
 fn parse_value_after_resolution(value: &str, property_name: &str) -> Option<PropertyValue> {
+  if resolved_text_contains_var_function(value) {
+    return None;
+  }
+
   if property_name.is_empty() {
     Some(parse_untyped_value(value))
   } else {
-    parse_property_value(property_name, value)
+    parse_property_value_after_var_resolution(property_name, value)
   }
+}
+
+fn resolved_text_contains_var_function(haystack: &str) -> bool {
+  fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' || byte >= 0x80
+  }
+
+  let bytes = haystack.as_bytes();
+  if bytes.contains(&b'\\') {
+    // Slow path: backslashes can form escaped `var()` identifiers (e.g. `v\\61 r(...)`), so
+    // re-tokenize to catch those. This also avoids needing a full escape-aware lexer here.
+    return contains_var(haystack);
+  }
+
+  let mut in_string: Option<u8> = None;
+  let mut in_comment = false;
+
+  let mut i = 0usize;
+  while i < bytes.len() {
+    let byte = bytes[i];
+
+    if in_comment {
+      if byte == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+        in_comment = false;
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if let Some(quote) = in_string {
+      if byte == quote {
+        in_string = None;
+      }
+      i += 1;
+      continue;
+    }
+
+    // Not inside a string/comment.
+    if byte == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+      in_comment = true;
+      i += 2;
+      continue;
+    }
+
+    if byte == b'"' || byte == b'\'' {
+      in_string = Some(byte);
+      i += 1;
+      continue;
+    }
+
+    if i + 3 < bytes.len()
+      && byte.to_ascii_lowercase() == b'v'
+      && bytes[i + 1].to_ascii_lowercase() == b'a'
+      && bytes[i + 2].to_ascii_lowercase() == b'r'
+      && bytes[i + 3] == b'('
+    {
+      let prev = i.checked_sub(1).and_then(|idx| bytes.get(idx).copied());
+      if prev.map_or(true, |b| !is_ident_byte(b)) {
+        return true;
+      }
+    }
+
+    i += 1;
+  }
+
+  false
 }
 
 fn parse_untyped_value(value: &str) -> PropertyValue {
@@ -723,6 +795,41 @@ mod tests {
     let value = PropertyValue::Keyword("var(--missing, var(--fallback))".to_string());
     let resolved = resolve_var_for_property(&value, &props, "color");
     assert!(matches!(resolved, VarResolutionResult::NotFound(_)));
+  }
+
+  #[test]
+  fn resolved_width_parses_length_after_var_resolution() {
+    let props = make_props(&[("--x", "10px")]);
+    let value = PropertyValue::Keyword("var(--x)".to_string());
+    let resolved = resolve_var_for_property(&value, &props, "width");
+
+    let VarResolutionResult::Resolved { value, .. } = resolved else {
+      panic!("expected successful var() resolution, got {resolved:?}");
+    };
+
+    match value.as_ref() {
+      PropertyValue::Length(len) => {
+        assert!((len.value - 10.0).abs() < f32::EPSILON);
+        assert_eq!(len.unit, LengthUnit::Px);
+      }
+      other => panic!("expected Length(10px), got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn parse_value_after_resolution_rejects_unresolved_var_function() {
+    assert!(
+      parse_value_after_resolution("var(--x)", "width").is_none(),
+      "unresolved var() should invalidate the resolved value"
+    );
+  }
+
+  #[test]
+  fn parse_value_after_resolution_detects_escaped_var_function_name() {
+    assert!(
+      parse_value_after_resolution("v\\61 r(--x)", "width").is_none(),
+      "escaped var() should invalidate the resolved value"
+    );
   }
 
   // Recursion limit tests

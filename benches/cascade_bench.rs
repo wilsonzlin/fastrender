@@ -3,19 +3,18 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use fastrender::css::parser::parse_stylesheet;
+use fastrender::css::types::PropertyValue;
 use fastrender::dom::{parse_html, DomNode, DomNodeType, HTML_NAMESPACE};
 use fastrender::style::cascade::{
   apply_starting_style_set_with_media_target_and_imports_cached_with_deadline,
-  apply_styles_with_media,
-  capture_cascade_profile,
-  cascade_profile_enabled,
-  reset_cascade_profile,
+  apply_styles_with_media, capture_cascade_profile, cascade_profile_enabled, reset_cascade_profile,
   set_cascade_profile_enabled,
 };
 use fastrender::style::media::MediaContext;
 use fastrender::style::style_set::StyleSet;
 use selectors::context::QuirksMode;
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -489,25 +488,28 @@ fn inline_style_starting_style_benchmark(c: &mut Criterion) {
   let style_set = StyleSet::from_document(stylesheet);
   let media = MediaContext::screen(1280.0, 720.0);
 
-  c.bench_function("cascade apply_styles @starting-style inline-style heavy", |b| {
-    b.iter(|| {
-      let styled = apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
-        black_box(&dom),
-        black_box(&style_set),
-        &media,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-      )
-      .expect("starting-style cascade");
-      black_box(styled);
-    });
-  });
+  c.bench_function(
+    "cascade apply_styles @starting-style inline-style heavy",
+    |b| {
+      b.iter(|| {
+        let styled = apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
+          black_box(&dom),
+          black_box(&style_set),
+          &media,
+          None,
+          None,
+          None,
+          None,
+          None,
+          None,
+          None,
+          None,
+        )
+        .expect("starting-style cascade");
+        black_box(styled);
+      });
+    },
+  );
 }
 
 fn generate_has_bench_html(depth: usize, fan_out: usize) -> String {
@@ -682,6 +684,54 @@ fn cascade_setup_many_selectors_benchmark(c: &mut Criterion) {
   });
 }
 
+fn var_resolution_width_benchmark(c: &mut Criterion) {
+  use fastrender::style::values::CustomPropertyValue;
+  use fastrender::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
+
+  let mut custom_properties = HashMap::new();
+  custom_properties.insert("--x".to_string(), CustomPropertyValue::new("10px", None));
+  let value = PropertyValue::Keyword("var(--x)".to_string());
+
+  // Ensure the benchmark keeps exercising the typed post-resolution parser.
+  let VarResolutionResult::Resolved {
+    value: resolved, ..
+  } = resolve_var_for_property(&value, &custom_properties, "width")
+  else {
+    panic!("expected var() resolution to succeed");
+  };
+  assert!(matches!(resolved.as_ref(), PropertyValue::Length(_)));
+
+  static PRINTED: AtomicBool = AtomicBool::new(false);
+  c.bench_function("var_resolution width var(--x)->10px", |b| {
+    b.iter_custom(|iters| {
+      let (calls_start, bytes_start) = allocation_counts();
+      let start = Instant::now();
+      for _ in 0..iters {
+        let resolved =
+          resolve_var_for_property(black_box(&value), black_box(&custom_properties), "width");
+        black_box(resolved);
+      }
+      let duration = start.elapsed();
+
+      let (calls_end, bytes_end) = allocation_counts();
+      let calls = calls_end.saturating_sub(calls_start);
+      let bytes = bytes_end.saturating_sub(bytes_start);
+      black_box((calls, bytes));
+
+      if !PRINTED.swap(true, Ordering::Relaxed) {
+        let iters_usize = iters as usize;
+        let per_call_calls = calls / iters_usize.max(1);
+        let per_call_bytes = bytes / iters_usize.max(1);
+        eprintln!(
+          "var() resolution allocations/call: calls={per_call_calls} bytes={per_call_bytes}"
+        );
+      }
+
+      duration
+    });
+  });
+}
+
 fn cascade_bench_config() -> Criterion {
   if std::env::var("FASTR_CASCADE_PROFILE")
     .map(|value| !value.trim().is_empty() && value.trim() != "0")
@@ -708,6 +758,7 @@ criterion_group!(
     has_selector_benchmark,
     pseudo_selector_candidate_benchmark,
     candidate_heavy_benchmark,
-    cascade_setup_many_selectors_benchmark
+    cascade_setup_many_selectors_benchmark,
+    var_resolution_width_benchmark
 );
 criterion_main!(benches);

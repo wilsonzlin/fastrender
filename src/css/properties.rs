@@ -867,11 +867,32 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
   parse_property_value_in_context(DeclarationContext::Style, property, value_str)
 }
 
+/// Parse a CSS property value *after* custom properties have been resolved.
+///
+/// After `var()` resolution succeeds, the resulting value should not contain `var()` tokens. The
+/// normal parsing entry points preserve any `var()`-containing value as a raw keyword so it can be
+/// resolved later during cascade; that guard is wasted work on the post-resolution hot path.
+pub fn parse_property_value_after_var_resolution(
+  property: &str,
+  value_str: &str,
+) -> Option<PropertyValue> {
+  parse_property_value_in_context_internal(DeclarationContext::Style, property, value_str, true)
+}
+
 /// Parse a CSS property value with knowledge of the declaration context.
 pub fn parse_property_value_in_context(
   context: DeclarationContext,
   property: &str,
   value_str: &str,
+) -> Option<PropertyValue> {
+  parse_property_value_in_context_internal(context, property, value_str, false)
+}
+
+fn parse_property_value_in_context_internal(
+  context: DeclarationContext,
+  property: &str,
+  value_str: &str,
+  skip_var_guard: bool,
 ) -> Option<PropertyValue> {
   // Custom properties store their tokens verbatim (post !important stripping handled by caller).
   if property.starts_with("--") {
@@ -888,7 +909,7 @@ pub fn parse_property_value_in_context(
     return None;
   }
 
-  parse_known_property_value(property, value_str)
+  parse_known_property_value(property, value_str, skip_var_guard)
 }
 
 fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
@@ -1053,7 +1074,11 @@ fn parse_box_shadow_list(value_str: &str) -> Option<Vec<BoxShadow>> {
   Some(shadows)
 }
 
-fn parse_known_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
+fn parse_known_property_value(
+  property: &str,
+  value_str: &str,
+  skip_var_guard: bool,
+) -> Option<PropertyValue> {
   let value_str = value_str.trim();
   if value_str.is_empty() {
     return None;
@@ -1065,7 +1090,7 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
   // If the value contains a CSS variable, keep the raw string so it can be resolved later
   // during cascade/computed value resolution. Many author styles use var() with colors,
   // sizes, etc., which would otherwise be rejected here.
-  if crate::style::var_resolution::contains_var(value_str) {
+  if !skip_var_guard && crate::style::var_resolution::contains_var(value_str) {
     return Some(PropertyValue::Keyword(value_str.to_string()));
   }
 
