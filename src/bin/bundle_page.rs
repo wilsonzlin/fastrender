@@ -188,8 +188,12 @@ impl ResourceFetcher for RecordingFetcher {
     }
 
     let result = self.inner.fetch(url)?;
-    if let Ok(mut map) = self.recorded.lock() {
-      map.insert(url.to_string(), result.clone());
+    // Don't store `data:` URLs in bundle manifests: they can be extremely large (embedded
+    // fonts/images) and are already self-contained.
+    if !url.starts_with("data:") {
+      if let Ok(mut map) = self.recorded.lock() {
+        map.insert(url.to_string(), result.clone());
+      }
     }
     Ok(result)
   }
@@ -203,8 +207,10 @@ impl ResourceFetcher for RecordingFetcher {
 
     let url = req.url.to_string();
     let result = self.inner.fetch_with_request(req)?;
-    if let Ok(mut map) = self.recorded.lock() {
-      map.insert(url, result.clone());
+    if !url.starts_with("data:") {
+      if let Ok(mut map) = self.recorded.lock() {
+        map.insert(url, result.clone());
+      }
     }
     Ok(result)
   }
@@ -222,8 +228,10 @@ impl ResourceFetcher for RecordingFetcher {
     }
 
     let result = self.inner.fetch_with_validation(url, etag, last_modified)?;
-    if let Ok(mut map) = self.recorded.lock() {
-      map.insert(url.to_string(), result.clone());
+    if !url.starts_with("data:") {
+      if let Ok(mut map) = self.recorded.lock() {
+        map.insert(url.to_string(), result.clone());
+      }
     }
     Ok(result)
   }

@@ -27,6 +27,10 @@ fn bundles_and_renders_local_fixture() {
   let manifest: Value = serde_json::from_slice(&manifest_bytes).expect("parse manifest");
 
   let resources = manifest["resources"].as_object().expect("resources object");
+  assert!(
+    resources.keys().all(|url| !url.starts_with("data:")),
+    "data: URLs should not be persisted in bundle manifests"
+  );
   let css_url = format!("file://{}", css_path.display());
   let image_url = format!("file://{}", image_path.display());
   let font_url = format!("file://{}", font_path.display());
@@ -107,6 +111,10 @@ fn bundles_and_renders_local_fixture_without_rendering_capture() {
   let manifest: Value = serde_json::from_slice(&manifest_bytes).expect("parse manifest");
 
   let resources = manifest["resources"].as_object().expect("resources object");
+  assert!(
+    resources.keys().all(|url| !url.starts_with("data:")),
+    "data: URLs should not be persisted in bundle manifests"
+  );
   let css_url = format!("file://{}", css_path.display());
   let imported_css_url = format!("file://{}", imported_css_path.display());
   let imported2_css_url = format!("file://{}", imported2_css_path.display());

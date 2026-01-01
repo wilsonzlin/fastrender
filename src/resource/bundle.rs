@@ -285,6 +285,13 @@ impl ResourceFetcher for BundledFetcher {
       return Ok(resource.as_fetched());
     }
 
+    // Bundles are meant to be replayable without network access, but data: URLs encode their
+    // payload in the URL itself. Decode them directly so bundles don't need to persist huge
+    // `data:` strings in the manifest for correctness.
+    if url.starts_with("data:") {
+      return super::data_url::decode_data_url(url);
+    }
+
     Err(Error::Other(format!(
       "Resource not found in bundle: {}",
       url
