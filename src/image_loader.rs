@@ -13,6 +13,7 @@ use crate::resource::ensure_http_success;
 use crate::resource::ensure_image_mime_sane;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
+use crate::resource::FetchContextKind;
 use crate::resource::FetchDestination;
 use crate::resource::FetchRequest;
 use crate::resource::FetchedResource;
@@ -2099,7 +2100,10 @@ impl ImageCache {
       .clamp(1, 64 * 1024 * 1024);
 
     for (idx, limit) in [probe_limit, retry_limit].into_iter().enumerate() {
-      let resource = match self.fetcher.fetch_partial(resolved_url, limit) {
+      let resource = match self
+        .fetcher
+        .fetch_partial_with_context(FetchContextKind::Image, resolved_url, limit)
+      {
         Ok(res) => res,
         Err(err) => {
           let _ = err;

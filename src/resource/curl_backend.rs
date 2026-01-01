@@ -357,10 +357,10 @@ fn lock_cookie_jar(
 
 pub(super) fn fetch_http_with_accept_inner<'a>(
   fetcher: &HttpFetcher,
+  kind: super::FetchContextKind,
   url: &str,
   accept_encoding: Option<&str>,
   validators: Option<super::HttpCacheValidators<'a>>,
-  destination: Option<super::FetchDestination>,
   referrer: Option<&str>,
   deadline: &Option<render_control::RenderDeadline>,
   started: Instant,
@@ -413,13 +413,13 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
     for attempt in 1..=max_attempts {
       fetcher.policy.ensure_url_allowed(&current)?;
 
-      let stage_hint = super::render_stage_hint_from_url(&current);
+      let stage_hint = super::render_stage_hint_for_context(kind, &current);
       if let Some(deadline) = deadline.as_ref().filter(|d| d.is_enabled()) {
         deadline.check(stage_hint).map_err(Error::Render)?;
       }
 
       let allowed_limit = fetcher.policy.allowed_response_limit()?;
-      let per_request_timeout = fetcher.deadline_aware_timeout(deadline.as_ref(), &current)?;
+      let per_request_timeout = fetcher.deadline_aware_timeout(kind, deadline.as_ref(), &current)?;
       let mut effective_timeout = per_request_timeout.unwrap_or(fetcher.policy.request_timeout);
 
       if let Some(budget) = timeout_budget {
@@ -439,7 +439,7 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         &fetcher.accept_language,
         accept_encoding_value,
         validators,
-        destination,
+        kind,
         referrer,
       );
 
@@ -619,10 +619,10 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         Err(super::ContentDecodeError::DecompressionFailed { .. }) if accept_encoding.is_none() => {
           return fetch_http_with_accept_inner(
             fetcher,
+            kind,
             &current,
             Some("identity"),
             validators,
-            destination,
             referrer,
             deadline,
             started,
@@ -853,7 +853,7 @@ mod tests {
       DEFAULT_ACCEPT_LANGUAGE,
       "gzip, deflate, br",
       None,
-      None,
+      super::super::FetchContextKind::Other,
       None,
     );
     let args = build_curl_args(

@@ -5067,7 +5067,10 @@ impl FastRender {
     let result = (|| -> Result<RenderReport> {
       let resource = {
         let _span = trace_handle.span("html_fetch", "network");
-        match self.fetcher.fetch(url) {
+        match self
+          .fetcher
+          .fetch_with_request(FetchRequest::document(url))
+        {
           Ok(res) => res,
           Err(e) => {
             if let Ok(mut guard) = diagnostics.lock() {
@@ -5647,9 +5650,9 @@ impl FastRender {
             Ok((Some(resolved), local_media_cache))
           }
           StylesheetTask::External { url } => {
-            if let Some(counter) = stylesheet_fetch_counter.as_ref() {
-              counter.fetch_add(1, Ordering::Relaxed);
-            }
+          if let Some(counter) = stylesheet_fetch_counter.as_ref() {
+            counter.fetch_add(1, Ordering::Relaxed);
+          }
             let referrer = resource_context
               .as_ref()
               .and_then(|ctx| ctx.document_url.as_deref());

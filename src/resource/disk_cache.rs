@@ -3,10 +3,12 @@
 //! Enabled via the `disk_cache` crate feature.
 
 use super::CacheAction;
+use super::CacheKey;
 use super::CachedHttpMetadata;
 use super::CachedSnapshot;
 use super::CachingFetcher;
 use super::CachingFetcherConfig;
+use super::FetchContextKind;
 use super::FetchRequest;
 use super::FetchedResource;
 use super::HttpCachePolicy;
@@ -70,8 +72,9 @@ pub struct DiskCacheConfig {
   pub lock_stale_after: Duration,
   /// Optional namespace used to partition the cache across differing request headers.
   ///
-  /// When unset or empty, keys are hashed exactly like the legacy cache (`sha256(url)`) for
-  /// backwards compatibility.
+  /// Disk cache keys are derived from the tuple `(FetchContextKind, url)` (and the optional
+  /// namespace) to avoid serving cached bytes fetched under one header profile to a different
+  /// profile.
   pub namespace: Option<String>,
 }
 
@@ -532,13 +535,16 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     final_url.unwrap_or(requested).to_string()
   }
 
-  fn cache_key(&self, url: &str) -> String {
+  fn cache_key(&self, kind: FetchContextKind, url: &str) -> String {
     let mut hasher = Sha256::new();
     let namespace = self.disk_config.namespace.as_deref().unwrap_or("");
     if !namespace.is_empty() {
       hasher.update(namespace.as_bytes());
       hasher.update(b"\n");
     }
+    hasher.update(b"kind:");
+    hasher.update(&[b'0' + kind.cache_id()]);
+    hasher.update(b"\n");
     hasher.update(url.as_bytes());
     let digest = hasher.finalize();
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -550,8 +556,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     out
   }
 
-  fn data_path(&self, url: &str) -> PathBuf {
-    self.data_path_for_key(&self.cache_key(url))
+  fn data_path(&self, kind: FetchContextKind, url: &str) -> PathBuf {
+    self.data_path_for_key(&self.cache_key(kind, url))
   }
 
   fn data_path_for_key(&self, key: &str) -> PathBuf {
@@ -564,8 +570,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     meta_path
   }
 
-  fn alias_path(&self, url: &str) -> PathBuf {
-    self.alias_path_for_key(&self.cache_key(url))
+  fn alias_path(&self, kind: FetchContextKind, url: &str) -> PathBuf {
+    self.alias_path_for_key(&self.cache_key(kind, url))
   }
 
   fn alias_path_for_key(&self, key: &str) -> PathBuf {
@@ -751,7 +757,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
-  fn read_disk_entry(&self, url: &str) -> Result<Option<(String, CachedSnapshot)>> {
+  fn read_disk_entry(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+  ) -> Result<Option<(String, CachedSnapshot)>> {
     let mut disk_timer = super::start_disk_cache_diagnostics();
     let mut current = url.to_string();
     let mut hops = 0usize;
@@ -762,7 +772,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         return Err(Error::Render(err));
       }
 
-      let key = self.cache_key(&current);
+      let key = self.cache_key(kind, &current);
       let data_path = self.data_path_for_key(&key);
       let meta_path = self.meta_path_for_data(&data_path);
 
@@ -811,14 +821,14 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         SnapshotRead::Miss => {}
       }
 
-      let Some(next) = self.read_alias_target(&current) else {
+      let Some(next) = self.read_alias_target(kind, &current) else {
         super::record_disk_cache_miss();
         super::finish_disk_cache_diagnostics(disk_timer.take());
         return Ok(None);
       };
 
       if hops >= MAX_ALIAS_HOPS || next == current {
-        self.remove_alias_for(&current);
+        self.remove_alias_for(kind, &current);
         super::record_disk_cache_miss();
         super::finish_disk_cache_diagnostics(disk_timer.take());
         return Ok(None);
@@ -831,6 +841,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
   fn read_disk_entry_prefix(
     &self,
+    kind: FetchContextKind,
     url: &str,
     max_bytes: usize,
   ) -> Result<Option<(String, FetchedResource)>> {
@@ -844,7 +855,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         return Err(Error::Render(err));
       }
 
-      let key = self.cache_key(&current);
+      let key = self.cache_key(kind, &current);
       let data_path = self.data_path_for_key(&key);
       let meta_path = self.meta_path_for_data(&data_path);
 
@@ -886,14 +897,14 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         SnapshotPrefixRead::Miss => {}
       }
 
-      let Some(next) = self.read_alias_target(&current) else {
+      let Some(next) = self.read_alias_target(kind, &current) else {
         super::record_disk_cache_miss();
         super::finish_disk_cache_diagnostics(disk_timer.take());
         return Ok(None);
       };
 
       if hops >= MAX_ALIAS_HOPS || next == current {
-        self.remove_alias_for(&current);
+        self.remove_alias_for(kind, &current);
         super::record_disk_cache_miss();
         super::finish_disk_cache_diagnostics(disk_timer.take());
         return Ok(None);
@@ -1058,24 +1069,24 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     SnapshotPrefixRead::Hit(resource)
   }
 
-  fn read_alias_target(&self, url: &str) -> Option<String> {
-    let alias_path = self.alias_path(url);
+  fn read_alias_target(&self, kind: FetchContextKind, url: &str) -> Option<String> {
+    let alias_path = self.alias_path(kind, url);
     fs::read(&alias_path)
       .ok()
       .and_then(|bytes| serde_json::from_slice::<StoredAlias>(&bytes).ok())
       .map(|alias| alias.target)
   }
 
-  fn remove_alias_for(&self, url: &str) {
+  fn remove_alias_for(&self, kind: FetchContextKind, url: &str) {
     if self.disk_writeback_disabled() {
       return;
     }
-    let alias_path = self.alias_path(url);
+    let alias_path = self.alias_path(kind, url);
     let _ = fs::remove_file(tmp_path(&alias_path));
     let _ = fs::remove_file(&alias_path);
   }
 
-  fn persist_alias(&self, alias: &str, canonical: &str) {
+  fn persist_alias(&self, kind: FetchContextKind, alias: &str, canonical: &str) {
     if self.disk_writeback_disabled() {
       return;
     }
@@ -1083,7 +1094,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
-    let alias_path = self.alias_path(alias);
+    let alias_path = self.alias_path(kind, alias);
     if let Some(parent) = alias_path.parent() {
       let _ = fs::create_dir_all(parent);
     }
@@ -1102,12 +1113,13 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
-  fn persist_snapshot(&self, url: &str, snapshot: &CachedSnapshot) {
+  fn persist_snapshot(&self, kind: FetchContextKind, url: &str, snapshot: &CachedSnapshot) {
     if self.disk_writeback_disabled() {
       return;
     }
     if let Some(resource) = snapshot.as_resource() {
       self.persist_resource(
+        kind,
         url,
         &resource,
         snapshot.etag.as_deref(),
@@ -1119,6 +1131,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
   fn persist_resource(
     &self,
+    kind: FetchContextKind,
     url: &str,
     resource: &FetchedResource,
     etag: Option<&str>,
@@ -1135,9 +1148,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
-    self.remove_alias_for(url);
+    self.remove_alias_for(kind, url);
 
-    let key = self.cache_key(url);
+    let key = self.cache_key(kind, url);
     let data_path = self.data_path_for_key(&key);
     if let Some(parent) = data_path.parent() {
       let _ = fs::create_dir_all(parent);
@@ -1282,15 +1295,15 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     Ok(())
   }
 
-  fn remove_entry_for_url(&self, url: &str) {
+  fn remove_entry_for_url(&self, kind: FetchContextKind, url: &str) {
     if self.disk_writeback_disabled() {
       return;
     }
-    let key = self.cache_key(url);
+    let key = self.cache_key(kind, url);
     let data_path = self.data_path_for_key(&key);
     let meta_path = self.meta_path_for_data(&data_path);
     let _ = self.remove_entry(&key, &data_path, &meta_path);
-    self.remove_alias_for(url);
+    self.remove_alias_for(kind, url);
   }
 
   #[cfg(test)]
@@ -1298,28 +1311,34 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     self.index.debug_stats()
   }
 
-  fn fetch_with_network<FN>(&self, url: &str, fetch_network: FN) -> Result<FetchedResource>
-  where
-    FN: FnOnce(Option<(Option<&str>, Option<&str>)>) -> Result<FetchedResource>,
-  {
+  fn fetch_cached<'a>(
+    &self,
+    kind: FetchContextKind,
+    url: &'a str,
+    request: Option<FetchRequest<'a>>,
+  ) -> Result<FetchedResource> {
     if let Some(policy) = &self.policy {
       policy.ensure_url_allowed(url)?;
     }
 
+    let key = CacheKey::new(kind, url.to_string());
+
     let mut disk_snapshot: Option<(String, CachedSnapshot)> = None;
-    let mut cached = self.memory.cached_snapshot(url);
+    let mut cached = self.memory.cached_snapshot(kind, url);
     let should_read_disk = match cached.as_ref() {
       Some(snapshot) => matches!(snapshot.value, super::CacheValue::Error(_)),
       None => true,
     };
     if should_read_disk {
-      disk_snapshot = self.read_disk_entry(url)?;
+      disk_snapshot = self.read_disk_entry(kind, url)?;
       if let Some((ref canonical, ref snapshot)) = disk_snapshot {
-        self.memory.prime_cache_with_snapshot(url, snapshot.clone());
+        self
+          .memory
+          .prime_cache_with_snapshot(kind, url, snapshot.clone());
         if canonical != url {
-          self.persist_alias(url, canonical);
+          self.persist_alias(kind, url, canonical);
         }
-        cached = self.memory.cached_snapshot(url);
+        cached = self.memory.cached_snapshot(kind, url);
       }
     }
 
@@ -1344,10 +1363,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       }
     }
 
-    let (flight, is_owner) = self.memory.join_inflight(url);
+    let (flight, is_owner) = self.memory.join_inflight(&key);
     if !is_owner {
       let inflight_timer = super::start_fetch_inflight_wait_diagnostics();
-      let result = flight.wait(url);
+      let result = flight.wait(&key);
       super::finish_fetch_inflight_wait_diagnostics(inflight_timer);
       if let Ok(ref res) = result {
         super::reserve_policy_bytes(&self.policy, res)?;
@@ -1355,7 +1374,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return result;
     }
 
-    let mut inflight_guard = super::InFlightOwnerGuard::new(&self.memory, url, flight);
+    let mut inflight_guard = super::InFlightOwnerGuard::new(&self.memory, key.clone(), flight);
 
     let validators = match &plan.action {
       CacheAction::Validate {
@@ -1365,7 +1384,22 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       _ => None,
     };
 
-    let fetch_result = fetch_network(validators);
+    let fetch_result = match request {
+      Some(req) => match validators {
+        Some((etag, last_modified)) => self
+          .memory
+          .inner
+          .fetch_with_request_and_validation(req, etag, last_modified),
+        None => self.memory.inner.fetch_with_request(req),
+      },
+      None => match validators {
+        Some((etag, last_modified)) => self
+          .memory
+          .inner
+          .fetch_with_validation_and_context(kind, url, etag, last_modified),
+        None => self.memory.inner.fetch_with_context(kind, url),
+      },
+    };
 
     let (mut result, charge_budget) = match fetch_result {
       Ok(res) => {
@@ -1393,7 +1427,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
               if should_store {
                 let canonical = self.memory.cache_entry(
-                  url,
+                  &key,
                   super::CacheEntry {
                     value: super::CacheValue::Resource(ok.clone()),
                     etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
@@ -1405,18 +1439,18 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
                   },
                   ok.final_url.as_deref(),
                 );
-                if let Some(snapshot) = self.memory.cached_snapshot(&canonical) {
-                  self.persist_snapshot(&canonical, &snapshot);
-                  if canonical != url {
-                    self.persist_alias(url, &canonical);
+                if let Some(snapshot) = self.memory.cached_snapshot(kind, &canonical.url) {
+                  self.persist_snapshot(kind, &canonical.url, &snapshot);
+                  if canonical.url != url {
+                    self.persist_alias(kind, url, &canonical.url);
                   }
                 }
               } else {
-                self.memory.remove_cached(url);
+                self.memory.remove_cached(&key);
                 let canonical = self.canonical_url(url, ok.final_url.as_deref());
-                self.remove_entry_for_url(&canonical);
+                self.remove_entry_for_url(kind, &canonical);
                 if canonical != url {
-                  self.remove_alias_for(url);
+                  self.remove_alias_for(kind, url);
                 }
               }
             }
@@ -1434,65 +1468,64 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
               false,
             )
           }
-        } else {
-          if res
-            .status
-            .map(super::is_transient_http_status)
-            .unwrap_or(false)
-          {
-            if let Some(snapshot) = plan.cached.as_ref() {
-              super::record_cache_stale_hit();
-              let fallback = snapshot.value.as_result();
-              if let Ok(ref ok) = fallback {
-                super::record_resource_cache_bytes(ok.bytes.len());
-              }
-              let is_ok = fallback.is_ok();
-              (fallback, is_ok)
-            } else {
-              super::record_cache_miss();
-              (Ok(res), false)
+        } else if res
+          .status
+          .map(super::is_transient_http_status)
+          .unwrap_or(false)
+        {
+          if let Some(snapshot) = plan.cached.as_ref() {
+            super::record_cache_stale_hit();
+            let fallback = snapshot.value.as_result();
+            if let Ok(ref ok) = fallback {
+              super::record_resource_cache_bytes(ok.bytes.len());
             }
+            let is_ok = fallback.is_ok();
+            (fallback, is_ok)
           } else {
-            let stored_at = SystemTime::now();
-            if let Some(entry) = self.memory.build_cache_entry(&res, stored_at) {
-              let canonical = self
-                .memory
-                .cache_entry(url, entry, res.final_url.as_deref());
-              if let Some(snapshot) = self.memory.cached_snapshot(&canonical) {
-                self.persist_snapshot(&canonical, &snapshot);
-              } else {
-                let http_cache = res
-                  .cache_policy
-                  .as_ref()
-                  .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
-                self.persist_resource(
-                  &canonical,
-                  &res,
-                  res.etag.as_deref(),
-                  res.last_modified.as_deref(),
-                  http_cache.as_ref(),
-                );
-              }
-              if canonical != url {
-                self.persist_alias(url, &canonical);
-              }
-            } else if res
-              .cache_policy
-              .as_ref()
-              .map(|p| p.no_store)
-              .unwrap_or(false)
-              && !self.memory.config.allow_no_store
-            {
-              self.memory.remove_cached(url);
-              let canonical = self.canonical_url(url, res.final_url.as_deref());
-              self.remove_entry_for_url(&canonical);
-              if canonical != url {
-                self.remove_alias_for(url);
-              }
-            }
             super::record_cache_miss();
             (Ok(res), false)
           }
+        } else {
+          let stored_at = SystemTime::now();
+          if let Some(entry) = self.memory.build_cache_entry(&res, stored_at) {
+            let canonical = self
+              .memory
+              .cache_entry(&key, entry, res.final_url.as_deref());
+            if let Some(snapshot) = self.memory.cached_snapshot(kind, &canonical.url) {
+              self.persist_snapshot(kind, &canonical.url, &snapshot);
+            } else {
+              let http_cache = res
+                .cache_policy
+                .as_ref()
+                .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
+              self.persist_resource(
+                kind,
+                &canonical.url,
+                &res,
+                res.etag.as_deref(),
+                res.last_modified.as_deref(),
+                http_cache.as_ref(),
+              );
+            }
+            if canonical.url != url {
+              self.persist_alias(kind, url, &canonical.url);
+            }
+          } else if res
+            .cache_policy
+            .as_ref()
+            .map(|p| p.no_store)
+            .unwrap_or(false)
+            && !self.memory.config.allow_no_store
+          {
+            self.memory.remove_cached(&key);
+            let canonical = self.canonical_url(url, res.final_url.as_deref());
+            self.remove_entry_for_url(kind, &canonical);
+            if canonical != url {
+              self.remove_alias_for(kind, url);
+            }
+          }
+          super::record_cache_miss();
+          (Ok(res), false)
         }
       }
       Err(err) => {
@@ -1507,7 +1540,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         } else {
           if self.memory.config.cache_errors {
             self.memory.cache_entry(
-              url,
+              &key,
               super::CacheEntry {
                 value: super::CacheValue::Error(err.clone()),
                 etag: None,
@@ -1542,36 +1575,33 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
 impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    self.fetch_with_network(url, |validators| match validators {
-      Some((etag, last_modified)) => {
-        self
-          .memory
-          .inner
-          .fetch_with_validation(url, etag, last_modified)
-      }
-      None => self.memory.inner.fetch(url),
-    })
+    self.fetch_with_context(FetchContextKind::Other, url)
   }
 
   fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
-    let url = req.url;
-    self.fetch_with_network(url, |validators| match validators {
-      Some((etag, last_modified)) => {
-        self
-          .memory
-          .inner
-          .fetch_with_request_and_validation(req, etag, last_modified)
-      }
-      None => self.memory.inner.fetch_with_request(req),
-    })
+    let kind: FetchContextKind = req.destination.into();
+    self.fetch_cached(kind, req.url, Some(req))
+  }
+
+  fn fetch_with_context(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
+    self.fetch_cached(kind, url, None)
   }
 
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    self.fetch_partial_with_context(FetchContextKind::Other, url, max_bytes)
+  }
+
+  fn fetch_partial_with_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<FetchedResource> {
     if let Some(policy) = &self.policy {
       policy.ensure_url_allowed(url)?;
     }
 
-    if let Some(snapshot) = self.memory.cached_snapshot(url) {
+    if let Some(snapshot) = self.memory.cached_snapshot(kind, url) {
       let result = snapshot.value.as_result();
       if let Ok(mut res) = result {
         if res.bytes.len() > max_bytes {
@@ -1585,7 +1615,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       return result;
     }
 
-    if let Some((_canonical, mut res)) = self.read_disk_entry_prefix(url, max_bytes)? {
+    if let Some((_canonical, mut res)) = self.read_disk_entry_prefix(kind, url, max_bytes)? {
       if res.bytes.len() > max_bytes {
         res.bytes.truncate(max_bytes);
       }
@@ -1595,7 +1625,10 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       return Ok(res);
     }
 
-    self.memory.inner.fetch_partial(url, max_bytes)
+    self
+      .memory
+      .inner
+      .fetch_partial_with_context(kind, url, max_bytes)
   }
 }
 
@@ -1695,6 +1728,8 @@ mod tests {
   use std::sync::Arc;
   use std::sync::Mutex;
   use std::thread;
+
+  const TEST_KIND: FetchContextKind = FetchContextKind::Other;
 
   fn try_bind_localhost(context: &str) -> Option<TcpListener> {
     match TcpListener::bind("127.0.0.1:0") {
@@ -1963,7 +1998,7 @@ mod tests {
 
     let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
     resource.final_url = Some(url.to_string());
-    disk.persist_resource(url, &resource, None, None, None);
+    disk.persist_resource(TEST_KIND, url, &resource, None, None, None);
 
     let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(0)), None);
     let err = render_control::with_deadline(Some(&deadline), || disk.fetch(url))
@@ -1990,7 +2025,7 @@ mod tests {
     assert_eq!(res.bytes, b"hello");
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     assert!(!data_path.exists());
     assert!(!meta_path.exists());
@@ -2022,7 +2057,7 @@ mod tests {
     assert_eq!(res.bytes, b"hello");
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     assert!(
       data_path.exists(),
@@ -2078,7 +2113,7 @@ mod tests {
       "test requires the deadline to trigger after the write starts"
     );
 
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     let lock_path = lock_path_for(&data_path);
 
@@ -2183,7 +2218,7 @@ mod tests {
     let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
 
     let bytes = b"legacy".to_vec();
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     fs::write(&data_path, &bytes).unwrap();
 
@@ -2349,7 +2384,7 @@ mod tests {
 
     let url = "https://example.com/stale-fallback";
     let cached_bytes = b"cached".to_vec();
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     fs::write(&data_path, &cached_bytes).unwrap();
     let meta = StoredMetadata {
@@ -2400,7 +2435,7 @@ mod tests {
 
     let url = "https://example.com/stale-refresh";
     let cached_bytes = b"cached".to_vec();
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     fs::write(&data_path, &cached_bytes).unwrap();
     let meta = StoredMetadata {
@@ -2425,6 +2460,25 @@ mod tests {
       "stale entry should trigger a network call"
     );
     assert_eq!(res.bytes, b"hello");
+  }
+
+  #[test]
+  fn partitions_cache_by_kind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::new(
+      CountingFetcher {
+        count: Arc::clone(&counter),
+      },
+      tmp.path(),
+    );
+    let url = "https://example.com/resource";
+    let doc_key = disk.cache_key(FetchContextKind::Document, url);
+    let font_key = disk.cache_key(FetchContextKind::Font, url);
+    assert_ne!(
+      doc_key, font_key,
+      "cache key should incorporate FetchContextKind"
+    );
   }
 
   #[test]
@@ -2727,7 +2781,7 @@ mod tests {
     assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
     assert_eq!(calls[1].last_modified.as_deref(), Some("lm1"));
 
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     let meta_bytes = fs::read(meta_path).expect("meta present");
     let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).expect("valid meta");
@@ -2832,7 +2886,7 @@ mod tests {
       let mut resource =
         FetchedResource::new(vec![byte; entry_size], Some("text/plain".to_string()));
       resource.final_url = Some(url.to_string());
-      seeder.persist_resource(url, &resource, None, None, None);
+      seeder.persist_resource(TEST_KIND, url, &resource, None, None, None);
     }
 
     let hook = PersistResourceHook::new();
@@ -2848,7 +2902,7 @@ mod tests {
       let mut refreshed =
         FetchedResource::new(vec![b'r'; entry_size], Some("text/plain".to_string()));
       refreshed.final_url = Some(url_target.to_string());
-      disk.persist_resource(url_target, &refreshed, None, None, None);
+      disk.persist_resource(TEST_KIND, url_target, &refreshed, None, None, None);
     });
 
     let cache_dir = tmp.path().to_path_buf();
@@ -2864,6 +2918,7 @@ mod tests {
         FetchedResource::new(vec![b'n'; entry_size], Some("text/plain".to_string()));
       resource.final_url = Some("https://example.com/race-new".to_string());
       disk.persist_resource(
+        TEST_KIND,
         resource.final_url.as_ref().unwrap(),
         &resource,
         None,
@@ -2929,16 +2984,18 @@ mod tests {
     let mut resource =
       FetchedResource::new(b"complete-body".to_vec(), Some("text/plain".to_string()));
     resource.final_url = Some(url.to_string());
-    disk.persist_resource(url, &resource, None, None, None);
+    disk.persist_resource(TEST_KIND, url, &resource, None, None, None);
 
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     assert!(data_path.exists());
     assert!(meta_path.exists());
 
     fs::write(&data_path, b"tiny").unwrap();
 
-    let snapshot = disk.read_disk_entry(url).expect("read_disk_entry");
+    let snapshot = disk
+      .read_disk_entry(TEST_KIND, url)
+      .expect("read_disk_entry");
     assert!(snapshot.is_none(), "corrupted entry should be discarded");
     assert!(!data_path.exists());
     assert!(!meta_path.exists());
@@ -2956,15 +3013,15 @@ mod tests {
 
     let mut resource = FetchedResource::new(b"persistent".to_vec(), Some("text/plain".to_string()));
     resource.final_url = Some(url.to_string());
-    disk.persist_resource(url, &resource, None, None, None);
+    disk.persist_resource(TEST_KIND, url, &resource, None, None, None);
 
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     fs::write(tmp_path(&data_path), b"junk").unwrap();
     fs::write(tmp_path(&meta_path), b"junk").unwrap();
 
     let (_, snapshot) = disk
-      .read_disk_entry(url)
+      .read_disk_entry(TEST_KIND, url)
       .expect("read_disk_entry")
       .expect("entry should be readable");
     let cached = snapshot
@@ -2997,7 +3054,7 @@ mod tests {
       handles.push(thread::spawn(move || {
         let mut resource = FetchedResource::new(body, Some("text/plain".to_string()));
         resource.final_url = Some(url.clone());
-        disk.persist_resource(&url, &resource, None, None, None);
+        disk.persist_resource(TEST_KIND, &url, &resource, None, None, None);
       }));
     }
 
@@ -3006,7 +3063,7 @@ mod tests {
     }
 
     let (_, snapshot) = disk
-      .read_disk_entry(url)
+      .read_disk_entry(TEST_KIND, url)
       .expect("read_disk_entry")
       .expect("entry should be present after concurrent persists");
     let resource = snapshot
@@ -3092,7 +3149,14 @@ mod tests {
     let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/css".to_string()));
     resource.final_url = Some(url.to_string());
     resource.etag = Some("etag1".to_string());
-    disk.persist_resource(url, &resource, resource.etag.as_deref(), None, None);
+    disk.persist_resource(
+      TEST_KIND,
+      url,
+      &resource,
+      resource.etag.as_deref(),
+      None,
+      None,
+    );
 
     let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
     let fetched =
@@ -3105,7 +3169,7 @@ mod tests {
     let tmp = tempfile::tempdir().unwrap();
     let url = "https://example.com/stale-lock";
     let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let lock_path = lock_path_for(&data_path);
 
     // Simulate a crash right after creating the lock file (before the writer
@@ -3122,7 +3186,7 @@ mod tests {
     let tmp = tempfile::tempdir().unwrap();
     let url = "https://example.com/lock-timeout";
     let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let lock_path = lock_path_for(&data_path);
 
     let contents = LockFileContents {
@@ -3148,7 +3212,7 @@ mod tests {
     let tmp = tempfile::tempdir().unwrap();
     let url = "https://example.com/dead-pid-lock";
     let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let lock_path = lock_path_for(&data_path);
 
     // Pick a PID value that should never exist on typical systems (Linux pid_max defaults to a
@@ -3175,7 +3239,7 @@ mod tests {
     let tmp = tempfile::tempdir().unwrap();
     let url = "https://example.com/deadline-buffer-lock";
     let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let lock_path = lock_path_for(&data_path);
 
     let contents = LockFileContents {
@@ -3204,7 +3268,7 @@ mod tests {
     let tmp = tempfile::tempdir().unwrap();
     let url = "https://example.com/unremovable-stale-lock";
     let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let lock_path = lock_path_for(&data_path);
 
     // Make lock removal fail deterministically by creating a directory at the lock path.
@@ -3226,7 +3290,7 @@ mod tests {
     let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
 
     let bytes = b"from-disk".to_vec();
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
     fs::write(&data_path, &bytes).unwrap();
     let meta = StoredMetadata {
@@ -3274,7 +3338,7 @@ mod tests {
     assert_eq!(first.bytes, b"hello");
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     let lock_path = lock_path_for(&data_path);
     let contents = LockFileContents {
       pid: std::process::id(),
@@ -3332,7 +3396,7 @@ mod tests {
       tmp.path(),
     );
     let url = "https://example.com/locked-miss";
-    let data_path = disk.data_path(url);
+    let data_path = disk.data_path(TEST_KIND, url);
     fs::write(lock_path_for(&data_path), b"").unwrap();
 
     let res = disk.fetch(url).expect("fetch");

@@ -38,8 +38,7 @@ use crate::error::Result;
 use crate::render_control;
 use crate::resource::{
   ensure_font_mime_sane, ensure_http_success, FetchDestination, FetchRequest, FetchedResource,
-  HttpFetcher, HttpRetryPolicy,
-  ResourceFetcher,
+  HttpFetcher, HttpRetryPolicy, ResourceFetcher,
 };
 use crate::text::face_cache;
 use crate::text::font_db::FontCacheConfig;

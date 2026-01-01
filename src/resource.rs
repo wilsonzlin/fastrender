@@ -1858,6 +1858,66 @@ pub fn parse_cached_html_meta(meta: &str) -> CachedHtmlMetadata {
 // ResourceFetcher trait
 // ============================================================================
 
+/// High-level request context for resource fetching.
+///
+/// This is intentionally defined in the `resource` layer (instead of reusing `api::ResourceKind`)
+/// to avoid cyclic dependencies: low-level fetch/caching code must not depend on the public API
+/// module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FetchContextKind {
+  Document,
+  Stylesheet,
+  Image,
+  Font,
+  Other,
+}
+
+impl FetchContextKind {
+  const fn cache_id(self) -> u8 {
+    match self {
+      Self::Document => 0,
+      Self::Stylesheet => 1,
+      Self::Image => 2,
+      Self::Font => 3,
+      Self::Other => 4,
+    }
+  }
+
+  const fn as_str(self) -> &'static str {
+    match self {
+      Self::Document => "document",
+      Self::Stylesheet => "stylesheet",
+      Self::Image => "image",
+      Self::Font => "font",
+      Self::Other => "other",
+    }
+  }
+}
+
+impl From<FetchDestination> for FetchContextKind {
+  fn from(value: FetchDestination) -> Self {
+    match value {
+      FetchDestination::Document => Self::Document,
+      FetchDestination::Style => Self::Stylesheet,
+      FetchDestination::Image => Self::Image,
+      FetchDestination::Font => Self::Font,
+      FetchDestination::Other => Self::Other,
+    }
+  }
+}
+
+impl From<FetchContextKind> for FetchDestination {
+  fn from(value: FetchContextKind) -> Self {
+    match value {
+      FetchContextKind::Document => Self::Document,
+      FetchContextKind::Stylesheet => Self::Style,
+      FetchContextKind::Image => Self::Image,
+      FetchContextKind::Font => Self::Font,
+      FetchContextKind::Other => Self::Other,
+    }
+  }
+}
+
 /// Trait for fetching external resources
 ///
 /// This abstraction allows different fetch implementations:
@@ -1913,21 +1973,45 @@ pub trait ResourceFetcher: Send + Sync {
     self.fetch_with_request(req)
   }
 
+  /// Fetch a resource with an explicit request context.
+  ///
+  /// Fetchers that vary request headers (e.g. `Accept`, `Sec-Fetch-*`, `Origin`, `Referer`) should
+  /// use `kind` to select the appropriate header profile. The default implementation delegates to
+  /// [`ResourceFetcher::fetch_with_request`] so any fetcher that overrides `fetch_with_request`
+  /// automatically becomes context-aware.
+  fn fetch_with_context(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
+    self.fetch_with_request(FetchRequest::new(url, kind.into()))
+  }
+
   /// Fetch a prefix of a resource body.
   ///
   /// Returns up to the first `max_bytes` of the response body. Callers must treat truncated bodies
   /// as success (e.g. for probing headers/metadata).
   ///
-  /// The default implementation falls back to [`ResourceFetcher::fetch`] and then truncates the
-  /// returned bytes (correct but not fast).
+  /// The default implementation delegates to [`ResourceFetcher::fetch_partial_with_context`] with
+  /// [`FetchContextKind::Other`].
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    self.fetch_partial_with_context(FetchContextKind::Other, url, max_bytes)
+  }
+
+  /// Fetch a prefix of a resource body with an explicit request context.
+  ///
+  /// HTTP fetchers can use `kind` to set destination-specific headers (e.g. `Sec-Fetch-Dest`) even
+  /// for partial/range requests. The default implementation delegates to
+  /// [`ResourceFetcher::fetch_with_context`] and truncates the returned bytes.
+  fn fetch_partial_with_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<FetchedResource> {
     if max_bytes == 0 {
-      let mut res = self.fetch(url)?;
+      let mut res = self.fetch_with_context(kind, url)?;
       res.bytes.clear();
       return Ok(res);
     }
 
-    let mut res = self.fetch(url)?;
+    let mut res = self.fetch_with_context(kind, url)?;
     if res.bytes.len() > max_bytes {
       res.bytes.truncate(max_bytes);
     }
@@ -1946,6 +2030,21 @@ pub trait ResourceFetcher: Send + Sync {
   ) -> Result<FetchedResource> {
     let _ = (etag, last_modified);
     self.fetch(url)
+  }
+
+  /// Fetch a resource with validators and an explicit request context.
+  ///
+  /// This is the context-aware variant of [`ResourceFetcher::fetch_with_validation`]. The default
+  /// implementation delegates to `fetch_with_validation` to preserve compatibility.
+  fn fetch_with_validation_and_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    let _ = kind;
+    self.fetch_with_validation(url, etag, last_modified)
   }
 }
 
@@ -1968,8 +2067,21 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
     (**self).fetch_with_request_and_validation(req, etag, last_modified)
   }
 
+  fn fetch_with_context(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
+    (**self).fetch_with_context(kind, url)
+  }
+
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
     (**self).fetch_partial(url, max_bytes)
+  }
+
+  fn fetch_partial_with_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<FetchedResource> {
+    (**self).fetch_partial_with_context(kind, url, max_bytes)
   }
 
   fn fetch_with_validation(
@@ -1979,6 +2091,16 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
     last_modified: Option<&str>,
   ) -> Result<FetchedResource> {
     (**self).fetch_with_validation(url, etag, last_modified)
+  }
+
+  fn fetch_with_validation_and_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    (**self).fetch_with_validation_and_context(kind, url, etag, last_modified)
   }
 }
 
@@ -2029,7 +2151,7 @@ fn build_http_header_pairs<'a>(
   accept_language: &str,
   accept_encoding: &str,
   validators: Option<HttpCacheValidators<'a>>,
-  destination: Option<FetchDestination>,
+  kind: FetchContextKind,
   referrer: Option<&str>,
 ) -> Vec<(String, String)> {
   let mut headers = vec![
@@ -2039,7 +2161,7 @@ fn build_http_header_pairs<'a>(
   ];
 
   if http_browser_headers_enabled() {
-    let profile = destination.unwrap_or_else(|| http_browser_request_profile_for_url(url));
+    let profile: FetchDestination = kind.into();
     let sec_fetch_site = if let Some(referrer) = referrer {
       match (Url::parse(referrer), Url::parse(url)) {
         (Ok(referrer_url), Ok(target_url)) => {
@@ -2229,6 +2351,7 @@ impl HttpFetcher {
 
   fn deadline_aware_timeout(
     &self,
+    kind: FetchContextKind,
     deadline: Option<&render_control::RenderDeadline>,
     url: &str,
   ) -> Result<Option<Duration>> {
@@ -2240,7 +2363,7 @@ impl HttpFetcher {
     }
     let Some(remaining) = deadline.remaining_timeout() else {
       return Err(Error::Render(RenderError::Timeout {
-        stage: render_stage_hint_from_url(url),
+        stage: render_stage_hint_for_context(kind, url),
         elapsed: deadline.elapsed(),
       }));
     };
@@ -2260,55 +2383,48 @@ impl HttpFetcher {
   }
 
   /// Fetch from an HTTP/HTTPS URL
-  fn fetch_http(&self, url: &str) -> Result<FetchedResource> {
-    self.fetch_http_with_accept(url, None, None)
+  fn fetch_http(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
+    self.fetch_http_with_context(kind, url, None, None, None)
   }
 
-  fn fetch_http_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
-    let deadline = render_control::active_deadline();
-    let started = Instant::now();
-    self.fetch_http_partial_inner(url, max_bytes, &deadline, started)
-  }
-
-  fn fetch_http_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
-    let deadline = render_control::active_deadline();
-    let started = Instant::now();
-    self.fetch_http_with_accept_inner(
-      req.url,
-      None,
-      None,
-      Some(req.destination),
-      req.referrer,
-      &deadline,
-      started,
-    )
-  }
-
-  fn fetch_http_with_accept(
+  fn fetch_http_partial(
     &self,
+    kind: FetchContextKind,
     url: &str,
-    accept_encoding: Option<&str>,
-    validators: Option<HttpCacheValidators<'_>>,
+    max_bytes: usize,
   ) -> Result<FetchedResource> {
     let deadline = render_control::active_deadline();
     let started = Instant::now();
-    self.fetch_http_with_accept_inner(
+    self.fetch_http_partial_inner(kind, url, max_bytes, &deadline, started)
+  }
+
+  fn fetch_http_with_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    accept_encoding: Option<&str>,
+    validators: Option<HttpCacheValidators<'_>>,
+    referrer: Option<&str>,
+  ) -> Result<FetchedResource> {
+    let deadline = render_control::active_deadline();
+    let started = Instant::now();
+    self.fetch_http_with_context_inner(
+      kind,
       url,
       accept_encoding,
       validators,
-      None,
-      None,
+      referrer,
       &deadline,
       started,
     )
   }
 
-  fn fetch_http_with_accept_inner<'a>(
+  fn fetch_http_with_context_inner<'a>(
     &self,
+    kind: FetchContextKind,
     url: &str,
     accept_encoding: Option<&str>,
     validators: Option<HttpCacheValidators<'a>>,
-    destination: Option<FetchDestination>,
     referrer: Option<&str>,
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
@@ -2325,29 +2441,29 @@ impl HttpFetcher {
       let result = match http_backend_mode() {
         HttpBackendMode::Curl => curl_backend::fetch_http_with_accept_inner(
           self,
+          kind,
           effective_url.as_ref(),
           accept_encoding,
           validators,
-          destination,
           referrer,
           deadline,
           started,
         ),
         HttpBackendMode::Ureq => self.fetch_http_with_accept_inner_ureq(
+          kind,
           effective_url.as_ref(),
           accept_encoding,
           validators,
-          destination,
           referrer,
           deadline,
           started,
           false,
         ),
         HttpBackendMode::Reqwest => self.fetch_http_with_accept_inner_reqwest(
+          kind,
           effective_url.as_ref(),
           accept_encoding,
           validators,
-          destination,
           referrer,
           deadline,
           started,
@@ -2361,10 +2477,10 @@ impl HttpFetcher {
             .unwrap_or(false);
           let result = if prefer_reqwest {
             self.fetch_http_with_accept_inner_reqwest(
+              kind,
               effective_url.as_ref(),
               accept_encoding,
               validators,
-              destination,
               referrer,
               deadline,
               started,
@@ -2372,10 +2488,10 @@ impl HttpFetcher {
             )
           } else {
             self.fetch_http_with_accept_inner_ureq(
+              kind,
               effective_url.as_ref(),
               accept_encoding,
               validators,
-              destination,
               referrer,
               deadline,
               started,
@@ -2389,10 +2505,10 @@ impl HttpFetcher {
               if curl_available && should_fallback_to_curl(&err) {
                 match curl_backend::fetch_http_with_accept_inner(
                   self,
+                  kind,
                   effective_url.as_ref(),
                   accept_encoding,
                   validators,
-                  destination,
                   referrer,
                   deadline,
                   started,
@@ -2401,7 +2517,8 @@ impl HttpFetcher {
                   Err(curl_err) => {
                     let mut err = err;
                     if let Error::Resource(ref mut res) = err {
-                      res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
+                      res.message =
+                        format!("{}; curl fallback failed: {}", res.message, curl_err);
                     }
                     Err(err)
                   }
@@ -2456,6 +2573,7 @@ impl HttpFetcher {
 
   fn fetch_http_partial_inner(
     &self,
+    kind: FetchContextKind,
     url: &str,
     max_bytes: usize,
     deadline: &Option<render_control::RenderDeadline>,
@@ -2470,19 +2588,19 @@ impl HttpFetcher {
 
     match http_backend_mode() {
       HttpBackendMode::Ureq => {
-        self.fetch_http_partial_inner_ureq(effective_url, max_bytes, deadline, started)
+        self.fetch_http_partial_inner_ureq(kind, effective_url, max_bytes, deadline, started)
       }
       HttpBackendMode::Reqwest => {
-        self.fetch_http_partial_inner_reqwest(effective_url, max_bytes, deadline, started)
+        self.fetch_http_partial_inner_reqwest(kind, effective_url, max_bytes, deadline, started)
       }
       // The cURL backend shells out to the system binary and reads the entire response body before
       // returning. For partial probes we instead use the Rust backends, falling back to a full
       // `fetch()` when needed (the image probe path already does this).
       HttpBackendMode::Curl | HttpBackendMode::Auto => {
         if prefer_reqwest {
-          self.fetch_http_partial_inner_reqwest(effective_url, max_bytes, deadline, started)
+          self.fetch_http_partial_inner_reqwest(kind, effective_url, max_bytes, deadline, started)
         } else {
-          self.fetch_http_partial_inner_ureq(effective_url, max_bytes, deadline, started)
+          self.fetch_http_partial_inner_ureq(kind, effective_url, max_bytes, deadline, started)
         }
       }
     }
@@ -2490,6 +2608,7 @@ impl HttpFetcher {
 
   fn fetch_http_partial_inner_ureq(
     &self,
+    kind: FetchContextKind,
     url: &str,
     max_bytes: usize,
     deadline: &Option<render_control::RenderDeadline>,
@@ -2528,13 +2647,13 @@ impl HttpFetcher {
       self.policy.ensure_url_allowed(&current)?;
       for attempt in 1..=max_attempts {
         self.policy.ensure_url_allowed(&current)?;
-        let stage_hint = render_stage_hint_from_url(&current);
+        let stage_hint = render_stage_hint_for_context(kind, &current);
         if let Some(deadline) = deadline.as_ref().filter(|d| d.is_enabled()) {
           deadline.check(stage_hint).map_err(Error::Render)?;
         }
         let allowed_limit = self.policy.allowed_response_limit()?;
         let read_limit = max_bytes.min(allowed_limit).max(1);
-        let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
+        let per_request_timeout = self.deadline_aware_timeout(kind, deadline.as_ref(), &current)?;
         let mut effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
 
         if let Some(budget) = timeout_budget {
@@ -2556,7 +2675,7 @@ impl HttpFetcher {
           // identity encoding so that `Range` applies directly to the image bytes we want to probe.
           "identity",
           None,
-          None,
+          kind,
           None,
         );
         headers.push((
@@ -2926,6 +3045,7 @@ impl HttpFetcher {
 
   fn fetch_http_partial_inner_reqwest(
     &self,
+    kind: FetchContextKind,
     url: &str,
     max_bytes: usize,
     deadline: &Option<render_control::RenderDeadline>,
@@ -2964,13 +3084,13 @@ impl HttpFetcher {
       self.policy.ensure_url_allowed(&current)?;
       for attempt in 1..=max_attempts {
         self.policy.ensure_url_allowed(&current)?;
-        let stage_hint = render_stage_hint_from_url(&current);
+        let stage_hint = render_stage_hint_for_context(kind, &current);
         if let Some(deadline) = deadline.as_ref().filter(|d| d.is_enabled()) {
           deadline.check(stage_hint).map_err(Error::Render)?;
         }
         let allowed_limit = self.policy.allowed_response_limit()?;
         let read_limit = max_bytes.min(allowed_limit).max(1);
-        let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
+        let per_request_timeout = self.deadline_aware_timeout(kind, deadline.as_ref(), &current)?;
         let mut effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
 
         if let Some(budget) = timeout_budget {
@@ -2989,7 +3109,7 @@ impl HttpFetcher {
           &self.accept_language,
           "identity",
           None,
-          None,
+          kind,
           None,
         );
         headers.push((
@@ -3354,10 +3474,10 @@ impl HttpFetcher {
 
   fn fetch_http_with_accept_inner_ureq<'a>(
     &self,
+    kind: FetchContextKind,
     url: &str,
     accept_encoding: Option<&str>,
     validators: Option<HttpCacheValidators<'a>>,
-    destination: Option<FetchDestination>,
     referrer: Option<&str>,
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
@@ -3397,12 +3517,12 @@ impl HttpFetcher {
       self.policy.ensure_url_allowed(&current)?;
       for attempt in 1..=max_attempts {
         self.policy.ensure_url_allowed(&current)?;
-        let stage_hint = render_stage_hint_from_url(&current);
+        let stage_hint = render_stage_hint_for_context(kind, &current);
         if let Some(deadline) = deadline.as_ref().filter(|d| d.is_enabled()) {
           deadline.check(stage_hint).map_err(Error::Render)?;
         }
         let allowed_limit = self.policy.allowed_response_limit()?;
-        let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
+        let per_request_timeout = self.deadline_aware_timeout(kind, deadline.as_ref(), &current)?;
         let mut effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
 
         // In `auto` backend mode we may fall back to cURL (HTTP/2 capable). To avoid HTTP/1.1 hangs
@@ -3437,7 +3557,7 @@ impl HttpFetcher {
           &self.accept_language,
           accept_encoding_value,
           validators,
-          destination,
+          kind,
           referrer,
         );
         let mut request = agent.get(&current);
@@ -3593,10 +3713,10 @@ impl HttpFetcher {
                 {
                   finish_network_fetch_diagnostics(network_timer.take());
                   return self.fetch_http_with_accept_inner_ureq(
+                    kind,
                     &current,
                     Some("identity"),
                     validators,
-                    destination,
                     referrer,
                     deadline,
                     started,
@@ -3861,10 +3981,10 @@ impl HttpFetcher {
 
   fn fetch_http_with_accept_inner_reqwest<'a>(
     &self,
+    kind: FetchContextKind,
     url: &str,
     accept_encoding: Option<&str>,
     validators: Option<HttpCacheValidators<'a>>,
-    destination: Option<FetchDestination>,
     referrer: Option<&str>,
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
@@ -3906,12 +4026,12 @@ impl HttpFetcher {
       self.policy.ensure_url_allowed(&current)?;
       for attempt in 1..=max_attempts {
         self.policy.ensure_url_allowed(&current)?;
-        let stage_hint = render_stage_hint_from_url(&current);
+        let stage_hint = render_stage_hint_for_context(kind, &current);
         if let Some(deadline) = deadline.as_ref().filter(|d| d.is_enabled()) {
           deadline.check(stage_hint).map_err(Error::Render)?;
         }
         let allowed_limit = self.policy.allowed_response_limit()?;
-        let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
+        let per_request_timeout = self.deadline_aware_timeout(kind, deadline.as_ref(), &current)?;
         let mut effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
 
         if let Some(budget) = timeout_budget {
@@ -3931,7 +4051,7 @@ impl HttpFetcher {
           &self.accept_language,
           accept_encoding_value,
           validators,
-          destination,
+          kind,
           referrer,
         );
         let mut request = client.get(&current);
@@ -4109,14 +4229,15 @@ impl HttpFetcher {
                   if accept_encoding.is_none() =>
                 {
                   finish_network_fetch_diagnostics(network_timer.take());
-                  return self.fetch_http_with_accept_inner(
+                  return self.fetch_http_with_accept_inner_reqwest(
+                    kind,
                     &current,
                     Some("identity"),
                     validators,
-                    destination,
                     referrer,
                     deadline,
                     started,
+                    auto_fallback,
                   );
                 }
                 Err(err) => {
@@ -4372,7 +4493,7 @@ impl HttpFetcher {
   }
 
   /// Fetch from a file:// URL
-  fn fetch_file(&self, url: &str) -> Result<FetchedResource> {
+  fn fetch_file(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
     let path = url.strip_prefix("file://").unwrap_or(url);
     let limit = self.policy.allowed_response_limit()?;
     if let Ok(meta) = std::fs::metadata(path) {
@@ -4422,7 +4543,8 @@ impl HttpFetcher {
     self.policy.reserve_budget(bytes.len())?;
 
     let content_type = guess_content_type_from_path(path);
-    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+    render_control::check_active(render_stage_hint_for_context(kind, url))
+      .map_err(Error::Render)?;
     Ok(FetchedResource::with_final_url(
       bytes,
       content_type,
@@ -4461,7 +4583,7 @@ impl HttpFetcher {
   }
 
   /// Decode a data: URL
-  fn fetch_data(&self, url: &str) -> Result<FetchedResource> {
+  fn fetch_data(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
     let limit = self.policy.allowed_response_limit()?;
     let resource = data_url::decode_data_url(url)?;
     let len = resource.bytes.len();
@@ -4480,7 +4602,8 @@ impl HttpFetcher {
       )));
     }
     self.policy.reserve_budget(len)?;
-    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+    render_control::check_active(render_stage_hint_for_context(kind, url))
+      .map_err(Error::Render)?;
     Ok(resource)
   }
 
@@ -4513,23 +4636,32 @@ impl Default for HttpFetcher {
 
 impl ResourceFetcher for HttpFetcher {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+    self.fetch_with_context(FetchContextKind::Other, url)
+  }
+
+  fn fetch_with_context(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
+    render_control::check_active(render_stage_hint_for_context(kind, url))
+      .map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
-      ResourceScheme::Data => self.fetch_data(url),
-      ResourceScheme::File => self.fetch_file(url),
-      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http(url),
-      ResourceScheme::Relative => self.fetch_file(&format!("file://{}", url)),
+      ResourceScheme::Data => self.fetch_data(kind, url),
+      ResourceScheme::File => self.fetch_file(kind, url),
+      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http(kind, url),
+      ResourceScheme::Relative => self.fetch_file(kind, &format!("file://{}", url)),
       ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
   }
 
   fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
-    render_control::check_active(render_stage_hint_from_url(req.url)).map_err(Error::Render)?;
+    let kind: FetchContextKind = req.destination.into();
+    render_control::check_active(render_stage_hint_for_context(kind, req.url))
+      .map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(req.url)? {
-      ResourceScheme::Data => self.fetch_data(req.url),
-      ResourceScheme::File => self.fetch_file(req.url),
-      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_with_request(req),
-      ResourceScheme::Relative => self.fetch_file(&format!("file://{}", req.url)),
+      ResourceScheme::Data => self.fetch_data(kind, req.url),
+      ResourceScheme::File => self.fetch_file(kind, req.url),
+      ResourceScheme::Http | ResourceScheme::Https => {
+        self.fetch_http_with_context(kind, req.url, None, None, req.referrer)
+      }
+      ResourceScheme::Relative => self.fetch_file(kind, &format!("file://{}", req.url)),
       ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
   }
@@ -4540,43 +4672,49 @@ impl ResourceFetcher for HttpFetcher {
     etag: Option<&str>,
     last_modified: Option<&str>,
   ) -> Result<FetchedResource> {
-    render_control::check_active(render_stage_hint_from_url(req.url)).map_err(Error::Render)?;
+    let kind: FetchContextKind = req.destination.into();
+    render_control::check_active(render_stage_hint_for_context(kind, req.url))
+      .map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(req.url)? {
-      ResourceScheme::Http | ResourceScheme::Https => {
-        let deadline = render_control::active_deadline();
-        let started = Instant::now();
-        self.fetch_http_with_accept_inner(
-          req.url,
-          None,
-          Some(HttpCacheValidators {
-            etag,
-            last_modified,
-          }),
-          Some(req.destination),
-          req.referrer,
-          &deadline,
-          started,
-        )
-      }
-      ResourceScheme::Data => self.fetch_data(req.url),
-      ResourceScheme::File => self.fetch_file(req.url),
-      ResourceScheme::Relative => self.fetch_file(&format!("file://{}", req.url)),
+      ResourceScheme::Data => self.fetch_data(kind, req.url),
+      ResourceScheme::File => self.fetch_file(kind, req.url),
+      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_with_context(
+        kind,
+        req.url,
+        None,
+        Some(HttpCacheValidators {
+          etag,
+          last_modified,
+        }),
+        req.referrer,
+      ),
+      ResourceScheme::Relative => self.fetch_file(kind, &format!("file://{}", req.url)),
       ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
   }
 
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    self.fetch_partial_with_context(FetchContextKind::Other, url, max_bytes)
+  }
+
+  fn fetch_partial_with_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<FetchedResource> {
     if max_bytes == 0 {
-      let mut res = self.fetch(url)?;
+      let mut res = self.fetch_with_context(kind, url)?;
       res.bytes.clear();
       return Ok(res);
     }
 
-    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+    render_control::check_active(render_stage_hint_for_context(kind, url))
+      .map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
       ResourceScheme::Data => self.fetch_data_prefix(url, max_bytes),
       ResourceScheme::File => self.fetch_file_prefix(url, max_bytes),
-      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_partial(url, max_bytes),
+      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_partial(kind, url, max_bytes),
       ResourceScheme::Relative => self.fetch_file_prefix(&format!("file://{}", url), max_bytes),
       ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
@@ -4588,17 +4726,30 @@ impl ResourceFetcher for HttpFetcher {
     etag: Option<&str>,
     last_modified: Option<&str>,
   ) -> Result<FetchedResource> {
-    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+    self.fetch_with_validation_and_context(FetchContextKind::Other, url, etag, last_modified)
+  }
+
+  fn fetch_with_validation_and_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    render_control::check_active(render_stage_hint_for_context(kind, url))
+      .map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
-      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_with_accept(
+      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_with_context(
+        kind,
         url,
         None,
         Some(HttpCacheValidators {
           etag,
           last_modified,
         }),
+        None,
       ),
-      _ => self.fetch(url),
+      _ => self.fetch_with_context(kind, url),
     }
   }
 }
@@ -5197,10 +5348,25 @@ fn reserve_policy_bytes(policy: &Option<ResourcePolicy>, resource: &FetchedResou
   Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct CacheKey {
+  kind: FetchContextKind,
+  url: String,
+}
+
+impl CacheKey {
+  fn new(kind: FetchContextKind, url: impl Into<String>) -> Self {
+    Self {
+      kind,
+      url: url.into(),
+    }
+  }
+}
+
 struct CacheState {
-  lru: LruCache<String, CacheEntry>,
+  lru: LruCache<CacheKey, CacheEntry>,
   current_bytes: usize,
-  aliases: HashMap<String, String>,
+  aliases: HashMap<CacheKey, CacheKey>,
 }
 
 impl CacheState {
@@ -5252,13 +5418,13 @@ impl InFlight {
     self.cv.notify_all();
   }
 
-  fn wait(&self, url: &str) -> Result<FetchedResource> {
+  fn wait(&self, key: &CacheKey) -> Result<FetchedResource> {
     let mut guard = self
       .result
       .lock()
       .unwrap_or_else(|poisoned| poisoned.into_inner());
     let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
-    let stage = render_stage_hint_from_url(url);
+    let stage = render_stage_hint_for_context(key.kind, &key.url);
 
     while guard.is_none() {
       if let Some(deadline) = deadline.as_ref() {
@@ -5307,13 +5473,22 @@ fn render_stage_hint_from_url(url: &str) -> RenderStage {
   decode_stage_for_content_type(content_type.as_deref())
 }
 
+fn render_stage_hint_for_context(kind: FetchContextKind, url: &str) -> RenderStage {
+  match kind {
+    FetchContextKind::Document => RenderStage::DomParse,
+    FetchContextKind::Stylesheet | FetchContextKind::Font => RenderStage::Css,
+    FetchContextKind::Image => RenderStage::Paint,
+    FetchContextKind::Other => render_stage_hint_from_url(url),
+  }
+}
+
 /// In-memory caching [`ResourceFetcher`] with LRU eviction and single-flight
 /// de-duplication of concurrent requests.
 #[derive(Clone)]
 pub struct CachingFetcher<F: ResourceFetcher> {
   inner: F,
   state: Arc<Mutex<CacheState>>,
-  in_flight: Arc<Mutex<HashMap<String, Arc<InFlight>>>>,
+  in_flight: Arc<Mutex<HashMap<CacheKey, Arc<InFlight>>>>,
   config: CachingFetcherConfig,
   policy: Option<ResourcePolicy>,
 }
@@ -5551,25 +5726,25 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     }
   }
 
-  fn insert_canonical_locked(&self, state: &mut CacheState, url: &str, entry: CacheEntry) {
-    if let Some(existing) = state.lru.peek(url) {
+  fn insert_canonical_locked(&self, state: &mut CacheState, key: &CacheKey, entry: CacheEntry) {
+    if let Some(existing) = state.lru.peek(key) {
       state.current_bytes = state.current_bytes.saturating_sub(existing.weight());
     }
     state.current_bytes = state.current_bytes.saturating_add(entry.weight());
-    state.aliases.remove(url);
-    state.lru.put(url.to_string(), entry);
+    state.aliases.remove(key);
+    state.lru.put(key.clone(), entry);
     self.evict_locked(state);
   }
 
-  fn set_alias_locked(&self, state: &mut CacheState, alias: &str, canonical: &str) {
+  fn set_alias_locked(&self, state: &mut CacheState, alias: &CacheKey, canonical: &CacheKey) {
     if alias == canonical {
       state.aliases.remove(alias);
       return;
     }
 
-    let mut target = canonical.to_string();
+    let mut target = canonical.clone();
     let mut hops = 0usize;
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<CacheKey> = HashSet::new();
     while let Some(next) = state.aliases.get(&target) {
       if hops >= MAX_ALIAS_HOPS || !visited.insert(target.clone()) {
         return;
@@ -5578,45 +5753,51 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       hops += 1;
     }
 
-    if target == alias {
+    if &target == alias {
       return;
     }
 
-    state.aliases.insert(alias.to_string(), target);
+    state.aliases.insert(alias.clone(), target);
   }
 
-  fn remove_aliases_targeting(&self, state: &mut CacheState, key: &str) {
+  fn remove_aliases_targeting(&self, state: &mut CacheState, key: &CacheKey) {
     state
       .aliases
       .retain(|alias, target| alias != key && target != key);
   }
 
-  fn cache_entry(&self, requested_url: &str, entry: CacheEntry, final_url: Option<&str>) -> String {
-    if self.config.max_bytes > 0 && entry.weight() > self.config.max_bytes {
-      return self.canonical_url(requested_url, final_url);
-    }
+  fn cache_entry(
+    &self,
+    requested: &CacheKey,
+    entry: CacheEntry,
+    final_url: Option<&str>,
+  ) -> CacheKey {
+    let canonical_url = self.canonical_url(&requested.url, final_url);
+    let canonical = CacheKey::new(requested.kind, canonical_url.clone());
 
-    let canonical = self.canonical_url(requested_url, final_url);
+    if self.config.max_bytes > 0 && entry.weight() > self.config.max_bytes {
+      return canonical;
+    }
 
     if let Ok(mut state) = self.state.lock() {
       self.insert_canonical_locked(&mut state, &canonical, entry);
-      if requested_url != canonical {
-        self.set_alias_locked(&mut state, requested_url, &canonical);
+      if requested.url != canonical_url {
+        self.set_alias_locked(&mut state, requested, &canonical);
       }
     }
 
     canonical
   }
 
-  fn remove_cached(&self, url: &str) {
+  fn remove_cached(&self, key: &CacheKey) {
     if let Ok(mut state) = self.state.lock() {
-      let canonical = self.resolve_alias_locked(&mut state, url);
+      let canonical = self.resolve_alias_locked(&mut state, key);
       if let Some((_k, entry)) = state.lru.pop_entry(&canonical) {
         state.current_bytes = state.current_bytes.saturating_sub(entry.weight());
       }
       self.remove_aliases_targeting(&mut state, &canonical);
-      if canonical != url {
-        state.aliases.remove(url);
+      if &canonical != key {
+        state.aliases.remove(key);
       }
     }
   }
@@ -5662,11 +5843,11 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     }
   }
 
-  fn resolve_alias_locked(&self, state: &mut CacheState, url: &str) -> String {
-    let origin = url.to_string();
+  fn resolve_alias_locked(&self, state: &mut CacheState, key: &CacheKey) -> CacheKey {
+    let origin = key.clone();
     let mut current = origin.clone();
     let mut hops = 0usize;
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<CacheKey> = HashSet::new();
     let mut removed = false;
 
     while let Some(next) = state.aliases.get(&current).cloned() {
@@ -5686,16 +5867,16 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     current
   }
 
-  fn cached_entry(&self, url: &str) -> Option<CachedSnapshot> {
+  fn cached_entry(&self, key: &CacheKey) -> Option<CachedSnapshot> {
     self
       .state
       .lock()
       .ok()
       .and_then(|mut state| {
-        let canonical = self.resolve_alias_locked(&mut state, url);
+        let canonical = self.resolve_alias_locked(&mut state, key);
         let snapshot = state.lru.get(&canonical).cloned();
-        if snapshot.is_none() && canonical != url {
-          state.aliases.remove(url);
+        if snapshot.is_none() && &canonical != key {
+          state.aliases.remove(key);
         }
         snapshot
       })
@@ -5708,37 +5889,57 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   }
 
   #[cfg(feature = "disk_cache")]
-  pub(crate) fn cached_snapshot(&self, url: &str) -> Option<CachedSnapshot> {
-    self.cached_entry(url)
+  pub(crate) fn cached_snapshot(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+  ) -> Option<CachedSnapshot> {
+    self.cached_entry(&CacheKey::new(kind, url.to_string()))
   }
 
   #[cfg(feature = "disk_cache")]
-  pub(crate) fn prime_cache_with_snapshot(&self, url: &str, snapshot: CachedSnapshot) -> String {
+  pub(crate) fn prime_cache_with_snapshot(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    snapshot: CachedSnapshot,
+  ) -> String {
     let final_url = match &snapshot.value {
       CacheValue::Resource(res) => res.final_url.clone(),
       CacheValue::Error(_) => None,
     };
-    self.cache_entry(
-      url,
-      CacheEntry {
-        etag: snapshot.etag.clone(),
-        last_modified: snapshot.last_modified.clone(),
-        http_cache: snapshot.http_cache.clone(),
-        value: snapshot.value,
-      },
-      final_url.as_deref(),
-    )
+    self
+      .cache_entry(
+        &CacheKey::new(kind, url.to_string()),
+        CacheEntry {
+          etag: snapshot.etag.clone(),
+          last_modified: snapshot.last_modified.clone(),
+          http_cache: snapshot.http_cache.clone(),
+          value: snapshot.value,
+        },
+        final_url.as_deref(),
+      )
+      .url
   }
 
   #[cfg(feature = "disk_cache")]
-  pub(crate) fn prime_cache_with_resource(&self, url: &str, resource: FetchedResource) {
+  pub(crate) fn prime_cache_with_resource(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    resource: FetchedResource,
+  ) {
     let stored_at = SystemTime::now();
     if let Some(entry) = self.build_cache_entry(&resource, stored_at) {
-      self.cache_entry(url, entry, resource.final_url.as_deref());
+      self.cache_entry(
+        &CacheKey::new(kind, url.to_string()),
+        entry,
+        resource.final_url.as_deref(),
+      );
     }
   }
 
-  fn join_inflight(&self, url: &str) -> (Arc<InFlight>, bool) {
+  fn join_inflight(&self, key: &CacheKey) -> (Arc<InFlight>, bool) {
     let mut map = match self.in_flight.lock() {
       Ok(map) => map,
       Err(poisoned) => {
@@ -5747,33 +5948,81 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
         map
       }
     };
-    if let Some(existing) = map.get(url) {
+    if let Some(existing) = map.get(key) {
       return (Arc::clone(existing), false);
     }
 
     let flight = Arc::new(InFlight::new());
-    map.insert(url.to_string(), Arc::clone(&flight));
+    map.insert(key.clone(), Arc::clone(&flight));
     (flight, true)
   }
 
-  fn finish_inflight(&self, url: &str, flight: &Arc<InFlight>, result: SharedResult) {
+  fn finish_inflight(&self, key: &CacheKey, flight: &Arc<InFlight>, result: SharedResult) {
     flight.set(result);
     let mut map = self
       .in_flight
       .lock()
       .unwrap_or_else(|poisoned| poisoned.into_inner());
-    map.remove(url);
+    map.remove(key);
+  }
+}
+struct InFlightOwnerGuard<'a, F: ResourceFetcher> {
+  fetcher: &'a CachingFetcher<F>,
+  key: CacheKey,
+  flight: Arc<InFlight>,
+  finished: bool,
+}
+
+impl<'a, F: ResourceFetcher> InFlightOwnerGuard<'a, F> {
+  fn new(fetcher: &'a CachingFetcher<F>, key: CacheKey, flight: Arc<InFlight>) -> Self {
+    Self {
+      fetcher,
+      key,
+      flight,
+      finished: false,
+    }
   }
 
-  fn fetch_with_network<FN>(&self, url: &str, fetch_network: FN) -> Result<FetchedResource>
-  where
-    FN: FnOnce(Option<(Option<&str>, Option<&str>)>) -> Result<FetchedResource>,
-  {
+  fn finish(&mut self, result: SharedResult) {
+    if self.finished {
+      return;
+    }
+    self.finished = true;
+    self
+      .fetcher
+      .finish_inflight(&self.key, &self.flight, result);
+  }
+}
+
+impl<'a, F: ResourceFetcher> Drop for InFlightOwnerGuard<'a, F> {
+  fn drop(&mut self) {
+    if self.finished {
+      return;
+    }
+
+    self.finished = true;
+    let err = Error::Resource(ResourceError::new(
+      self.key.url.to_string(),
+      "in-flight fetch owner dropped without resolving",
+    ));
+    self
+      .fetcher
+      .finish_inflight(&self.key, &self.flight, SharedResult::Error(err));
+  }
+}
+
+impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
+  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    self.fetch_with_context(FetchContextKind::Other, url)
+  }
+
+  fn fetch_with_context(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
     if let Some(policy) = &self.policy {
       policy.ensure_url_allowed(url)?;
     }
 
-    let cached = self.cached_entry(url);
+    let key = CacheKey::new(kind, url.to_string());
+    let cached = self.cached_entry(&key);
     let plan = self.plan_cache_use(url, cached.clone(), None);
     if let CacheAction::UseCached = plan.action {
       if let Some(snapshot) = plan.cached.as_ref() {
@@ -5791,10 +6040,10 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       }
     }
 
-    let (flight, is_owner) = self.join_inflight(url);
+    let (flight, is_owner) = self.join_inflight(&key);
     if !is_owner {
       let inflight_timer = start_fetch_inflight_wait_diagnostics();
-      let result = flight.wait(url);
+      let result = flight.wait(&key);
       finish_fetch_inflight_wait_diagnostics(inflight_timer);
       if let Ok(ref res) = result {
         reserve_policy_bytes(&self.policy, res)?;
@@ -5802,7 +6051,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       return result;
     }
 
-    let mut inflight_guard = InFlightOwnerGuard::new(self, url, flight);
+    let mut inflight_guard = InFlightOwnerGuard::new(self, key.clone(), flight);
 
     let validators = match &plan.action {
       CacheAction::Validate {
@@ -5812,7 +6061,14 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       _ => None,
     };
 
-    let fetch_result = fetch_network(validators);
+    let fetch_result = match validators {
+      Some((etag, last_modified)) => {
+        self
+          .inner
+          .fetch_with_validation_and_context(kind, url, etag, last_modified)
+      }
+      None => self.inner.fetch_with_context(kind, url),
+    };
 
     let (mut result, charge_budget) = match fetch_result {
       Ok(res) => {
@@ -5839,8 +6095,8 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
                 });
 
               if should_store {
-                self.cache_entry(
-                  url,
+                let _ = self.cache_entry(
+                  &key,
                   CacheEntry {
                     value: CacheValue::Resource(ok.clone()),
                     etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
@@ -5853,7 +6109,192 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
                   ok.final_url.as_deref(),
                 );
               } else {
-                self.remove_cached(url);
+                self.remove_cached(&key);
+              }
+            }
+            record_cache_revalidated_hit();
+            if let Ok(ref ok) = value {
+              record_resource_cache_bytes(ok.bytes.len());
+            }
+            let is_ok = value.is_ok();
+            (value, is_ok)
+          } else {
+            (
+              Err(Error::Resource(
+                ResourceError::new(url.to_string(), "received 304 without cached entry")
+                  .with_final_url(url.to_string()),
+              )),
+              false,
+            )
+          }
+        } else if res.status.map(is_transient_http_status).unwrap_or(false) {
+          if let Some(snapshot) = plan.cached.as_ref() {
+            record_cache_stale_hit();
+            let fallback = snapshot.value.as_result();
+            if let Ok(ref ok) = fallback {
+              record_resource_cache_bytes(ok.bytes.len());
+            }
+            let is_ok = fallback.is_ok();
+            (fallback, is_ok)
+          } else {
+            record_cache_miss();
+            (Ok(res), false)
+          }
+        } else {
+          let stored_at = SystemTime::now();
+          if let Some(entry) = self.build_cache_entry(&res, stored_at) {
+            let _ = self.cache_entry(&key, entry, res.final_url.as_deref());
+          } else if !self.config.allow_no_store
+            && res
+              .cache_policy
+              .as_ref()
+              .map(|p| p.no_store)
+              .unwrap_or(false)
+          {
+            self.remove_cached(&key);
+          }
+          record_cache_miss();
+          (Ok(res), false)
+        }
+      }
+      Err(err) => {
+        if let Some(snapshot) = plan.cached.as_ref() {
+          record_cache_stale_hit();
+          let fallback = snapshot.value.as_result();
+          if let Ok(ref ok) = fallback {
+            record_resource_cache_bytes(ok.bytes.len());
+          }
+          let is_ok = fallback.is_ok();
+          (fallback, is_ok)
+        } else {
+          if self.config.cache_errors {
+            let _ = self.cache_entry(
+              &key,
+              CacheEntry {
+                value: CacheValue::Error(err.clone()),
+                etag: None,
+                last_modified: None,
+                http_cache: None,
+              },
+              None,
+            );
+          }
+          (Err(err), false)
+        }
+      }
+    };
+
+    if charge_budget {
+      if let Ok(ref res) = result {
+        if let Err(err) = reserve_policy_bytes(&self.policy, res) {
+          result = Err(err);
+        }
+      }
+    }
+
+    let notify = match &result {
+      Ok(res) => SharedResult::Success(res.clone()),
+      Err(err) => SharedResult::Error(err.clone()),
+    };
+    inflight_guard.finish(notify);
+
+    result
+  }
+
+  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+    let kind: FetchContextKind = req.destination.into();
+    let url = req.url;
+    if let Some(policy) = &self.policy {
+      policy.ensure_url_allowed(url)?;
+    }
+
+    let key = CacheKey::new(kind, url.to_string());
+    let cached = self.cached_entry(&key);
+    let plan = self.plan_cache_use(url, cached.clone(), None);
+    if let CacheAction::UseCached = plan.action {
+      if let Some(snapshot) = plan.cached.as_ref() {
+        if plan.is_stale {
+          record_cache_stale_hit();
+        } else {
+          record_cache_fresh_hit();
+        }
+        let result = snapshot.value.as_result();
+        if let Ok(ref res) = result {
+          record_resource_cache_bytes(res.bytes.len());
+          reserve_policy_bytes(&self.policy, res)?;
+        }
+        return result;
+      }
+    }
+
+    let (flight, is_owner) = self.join_inflight(&key);
+    if !is_owner {
+      let inflight_timer = start_fetch_inflight_wait_diagnostics();
+      let result = flight.wait(&key);
+      finish_fetch_inflight_wait_diagnostics(inflight_timer);
+      if let Ok(ref res) = result {
+        reserve_policy_bytes(&self.policy, res)?;
+      }
+      return result;
+    }
+
+    let mut inflight_guard = InFlightOwnerGuard::new(self, key.clone(), flight);
+
+    let validators = match &plan.action {
+      CacheAction::Validate {
+        etag,
+        last_modified,
+      } => Some((etag.as_deref(), last_modified.as_deref())),
+      _ => None,
+    };
+
+    let fetch_result = match validators {
+      Some((etag, last_modified)) => self
+        .inner
+        .fetch_with_request_and_validation(req, etag, last_modified),
+      None => self.inner.fetch_with_request(req),
+    };
+
+    let (mut result, charge_budget) = match fetch_result {
+      Ok(res) => {
+        if res.is_not_modified() {
+          if let Some(snapshot) = plan.cached.as_ref() {
+            let value = snapshot.value.as_result();
+            if let Ok(ref ok) = value {
+              let stored_at = SystemTime::now();
+              let should_store = self.config.allow_no_store
+                || !res
+                  .cache_policy
+                  .as_ref()
+                  .map(|p| p.no_store)
+                  .unwrap_or(false);
+              let updated_meta = snapshot
+                .http_cache
+                .as_ref()
+                .and_then(|meta| meta.with_updated_policy(res.cache_policy.as_ref(), stored_at))
+                .or_else(|| {
+                  res
+                    .cache_policy
+                    .as_ref()
+                    .and_then(|policy| CachedHttpMetadata::from_policy(policy, stored_at))
+                });
+
+              if should_store {
+                let _ = self.cache_entry(
+                  &key,
+                  CacheEntry {
+                    value: CacheValue::Resource(ok.clone()),
+                    etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
+                    last_modified: res
+                      .last_modified
+                      .clone()
+                      .or_else(|| snapshot.last_modified.clone()),
+                    http_cache: updated_meta,
+                  },
+                  ok.final_url.as_deref(),
+                );
+              } else {
+                self.remove_cached(&key);
               }
             }
             record_cache_revalidated_hit();
@@ -5888,7 +6329,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
           } else {
             let stored_at = SystemTime::now();
             if let Some(entry) = self.build_cache_entry(&res, stored_at) {
-              self.cache_entry(url, entry, res.final_url.as_deref());
+              let _ = self.cache_entry(&key, entry, res.final_url.as_deref());
             } else if !self.config.allow_no_store
               && res
                 .cache_policy
@@ -5896,7 +6337,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
                 .map(|p| p.no_store)
                 .unwrap_or(false)
             {
-              self.remove_cached(url);
+              self.remove_cached(&key);
             }
             record_cache_miss();
             (Ok(res), false)
@@ -5914,8 +6355,8 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
           (fallback, is_ok)
         } else {
           if self.config.cache_errors {
-            self.cache_entry(
-              url,
+            let _ = self.cache_entry(
+              &key,
               CacheEntry {
                 value: CacheValue::Error(err.clone()),
                 etag: None,
@@ -5946,77 +6387,23 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
 
     result
   }
-}
-
-struct InFlightOwnerGuard<'a, F: ResourceFetcher> {
-  fetcher: &'a CachingFetcher<F>,
-  url: &'a str,
-  flight: Arc<InFlight>,
-  finished: bool,
-}
-
-impl<'a, F: ResourceFetcher> InFlightOwnerGuard<'a, F> {
-  fn new(fetcher: &'a CachingFetcher<F>, url: &'a str, flight: Arc<InFlight>) -> Self {
-    Self {
-      fetcher,
-      url,
-      flight,
-      finished: false,
-    }
-  }
-
-  fn finish(&mut self, result: SharedResult) {
-    if self.finished {
-      return;
-    }
-    self.finished = true;
-    self.fetcher.finish_inflight(self.url, &self.flight, result);
-  }
-}
-
-impl<'a, F: ResourceFetcher> Drop for InFlightOwnerGuard<'a, F> {
-  fn drop(&mut self) {
-    if self.finished {
-      return;
-    }
-
-    self.finished = true;
-    let err = Error::Resource(ResourceError::new(
-      self.url.to_string(),
-      "in-flight fetch owner dropped without resolving",
-    ));
-    self
-      .fetcher
-      .finish_inflight(self.url, &self.flight, SharedResult::Error(err));
-  }
-}
-
-impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
-  fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    self.fetch_with_network(url, |validators| match validators {
-      Some((etag, last_modified)) => self.inner.fetch_with_validation(url, etag, last_modified),
-      None => self.inner.fetch(url),
-    })
-  }
-
-  fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
-    let url = req.url;
-    self.fetch_with_network(url, |validators| match validators {
-      Some((etag, last_modified)) => {
-        self
-          .inner
-          .fetch_with_request_and_validation(req, etag, last_modified)
-      }
-      None => self.inner.fetch_with_request(req),
-    })
-  }
 
   fn fetch_partial(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+    self.fetch_partial_with_context(FetchContextKind::Other, url, max_bytes)
+  }
+
+  fn fetch_partial_with_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<FetchedResource> {
     if let Some(policy) = &self.policy {
       policy.ensure_url_allowed(url)?;
     }
 
-    if let Some(snapshot) = self.cached_entry(url) {
+    let key = CacheKey::new(kind, url.to_string());
+    if let Some(snapshot) = self.cached_entry(&key) {
       let result = snapshot.value.as_result();
       if let Ok(mut res) = result {
         if res.bytes.len() > max_bytes {
@@ -6030,7 +6417,9 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
       return result;
     }
 
-    self.inner.fetch_partial(url, max_bytes)
+    self
+      .inner
+      .fetch_partial_with_context(kind, url, max_bytes)
   }
 }
 
@@ -6365,8 +6754,12 @@ mod tests {
         vec![1, 2, 3],
         Some("text/plain".to_string()),
       )));
+      let key = CacheKey::new(
+        FetchContextKind::Other,
+        "https://example.com/test.txt".to_string(),
+      );
       let res = inflight
-        .wait("https://example.com/test.txt")
+        .wait(&key)
         .expect("wait result");
       assert_eq!(res.bytes, vec![1, 2, 3]);
     });
@@ -6458,7 +6851,16 @@ mod tests {
     let started = Instant::now();
     let url = format!("http://{addr}/");
     let err = fetcher
-      .fetch_http_with_accept_inner_reqwest(&url, None, None, None, None, &deadline, started, true)
+      .fetch_http_with_accept_inner_reqwest(
+        FetchContextKind::Other,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        true,
+      )
       .expect_err("reqwest should error when no server is listening");
     let msg = err.to_string();
     assert!(
@@ -7084,6 +7486,76 @@ mod tests {
   }
 
   #[test]
+  fn caching_fetcher_partitions_entries_by_context() {
+    #[derive(Debug)]
+    struct SeenCall {
+      kind: FetchContextKind,
+      url: String,
+    }
+
+    #[derive(Clone)]
+    struct KindAwareFetcher {
+      calls: Arc<Mutex<Vec<SeenCall>>>,
+    }
+
+    impl ResourceFetcher for KindAwareFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.fetch_with_context(FetchContextKind::Other, url)
+      }
+
+      fn fetch_with_context(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push(SeenCall {
+          kind,
+          url: url.to_string(),
+        });
+        let mut resource = FetchedResource::new(
+          format!("kind={}", kind.as_str()).into_bytes(),
+          Some("text/plain".to_string()),
+        );
+        resource.final_url = Some(url.to_string());
+        Ok(resource)
+      }
+    }
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let fetcher = CachingFetcher::new(KindAwareFetcher {
+      calls: Arc::clone(&calls),
+    });
+    let url = "https://example.com/asset";
+
+    let doc = fetcher
+      .fetch_with_context(FetchContextKind::Document, url)
+      .expect("document fetch");
+    assert_eq!(doc.bytes, b"kind=document".to_vec());
+
+    let font = fetcher
+      .fetch_with_context(FetchContextKind::Font, url)
+      .expect("font fetch");
+    assert_eq!(font.bytes, b"kind=font".to_vec());
+
+    // Both entries should be cached separately.
+    let doc_again = fetcher
+      .fetch_with_context(FetchContextKind::Document, url)
+      .expect("document cache hit");
+    assert_eq!(doc_again.bytes, b"kind=document".to_vec());
+    let font_again = fetcher
+      .fetch_with_context(FetchContextKind::Font, url)
+      .expect("font cache hit");
+    assert_eq!(font_again.bytes, b"kind=font".to_vec());
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+      calls.len(),
+      2,
+      "expected cache entries to be isolated by kind (calls={calls:?})"
+    );
+    assert_eq!(calls[0].kind, FetchContextKind::Document);
+    assert_eq!(calls[1].kind, FetchContextKind::Font);
+    assert_eq!(calls[0].url, url);
+    assert_eq!(calls[1].url, url);
+  }
+
+  #[test]
   fn url_to_filename_trims_trailing_slashes() {
     assert_eq!(url_to_filename("https://example.com/"), "example.com");
     assert_eq!(
@@ -7653,7 +8125,9 @@ mod tests {
 
     let fetcher = HttpFetcher::new();
     let url = format!("http://{}/", addr);
-    let res = fetcher.fetch(&url).expect("fetch accept header");
+    let res = fetcher
+      .fetch_with_context(FetchContextKind::Document, &url)
+      .expect("fetch accept header");
     handle.join().unwrap();
 
     assert_eq!(res.bytes, b"hi");
@@ -7695,7 +8169,9 @@ mod tests {
 
     let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
     let url = format!("http://{}/asset.woff2", addr);
-    let res = fetcher.fetch(&url).expect("fetch font");
+    let res = fetcher
+      .fetch_with_context(FetchContextKind::Font, &url)
+      .expect("fetch font");
     handle.join().unwrap();
 
     assert_eq!(res.bytes, b"font");
@@ -7771,7 +8247,9 @@ mod tests {
 
     let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
     let url = format!("http://{}/style.css", addr);
-    let res = fetcher.fetch(&url).expect("fetch stylesheet");
+    let res = fetcher
+      .fetch_with_context(FetchContextKind::Stylesheet, &url)
+      .expect("fetch stylesheet");
     handle.join().unwrap();
 
     assert_eq!(res.bytes, b"body { color: red; }");
@@ -7791,6 +8269,123 @@ mod tests {
     assert!(
       req.contains("sec-fetch-site: same-origin"),
       "expected Sec-Fetch-Site same-origin for stylesheet, got: {req}"
+    );
+  }
+
+  #[test]
+  fn http_fetcher_selects_headers_from_context_not_url() {
+    let Some(listener) = try_bind_localhost("http_fetcher_selects_headers_from_context_not_url")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured_req = Arc::clone(&captured);
+    let handle = thread::spawn(move || {
+      let start = Instant::now();
+      let mut handled = 0usize;
+      while handled < 2 && start.elapsed() < Duration::from_secs(3) {
+        match listener.accept() {
+          Ok((mut stream, _)) => {
+            stream
+              .set_read_timeout(Some(Duration::from_millis(500)))
+              .unwrap();
+            let request = read_http_request(&mut stream)
+              .unwrap()
+              .expect("expected HTTP request");
+            captured_req
+              .lock()
+              .unwrap()
+              .push(String::from_utf8_lossy(&request).to_ascii_lowercase());
+
+            let body = b"ok";
+            let headers = format!(
+              "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+              body.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            stream.write_all(body).unwrap();
+            handled += 1;
+          }
+          Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+            thread::sleep(Duration::from_millis(5));
+          }
+          Err(err) => panic!("accept http_fetcher_selects_headers_from_context_not_url: {err}"),
+        }
+      }
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let doc_url = format!("http://{}/font.woff2", addr);
+    let font_url = format!("http://{}/index.html", addr);
+
+    let doc = fetcher
+      .fetch_with_context(FetchContextKind::Document, &doc_url)
+      .expect("document fetch");
+    assert_eq!(doc.bytes, b"ok");
+    let font = fetcher
+      .fetch_with_context(FetchContextKind::Font, &font_url)
+      .expect("font fetch");
+    assert_eq!(font.bytes, b"ok");
+
+    handle.join().unwrap();
+
+    let captured = captured.lock().unwrap();
+    assert_eq!(captured.len(), 2, "expected two captured requests");
+
+    let document_req = &captured[0];
+    assert!(
+      document_req.contains(&format!("accept: {DEFAULT_ACCEPT}").to_ascii_lowercase()),
+      "expected document request to use HTML Accept header, got: {document_req}"
+    );
+    assert!(
+      document_req.contains("sec-fetch-dest: document"),
+      "expected document request sec-fetch-dest=document, got: {document_req}"
+    );
+    assert!(
+      document_req.contains("sec-fetch-mode: navigate"),
+      "expected document request sec-fetch-mode=navigate, got: {document_req}"
+    );
+    assert!(
+      document_req.contains("sec-fetch-site: none"),
+      "expected document request sec-fetch-site=none, got: {document_req}"
+    );
+    assert!(
+      document_req.contains("sec-fetch-user: ?1"),
+      "expected document request sec-fetch-user=?1, got: {document_req}"
+    );
+    assert!(
+      document_req.contains("upgrade-insecure-requests: 1"),
+      "expected document request upgrade-insecure-requests, got: {document_req}"
+    );
+
+    let font_req = &captured[1];
+    assert!(
+      font_req.contains("accept: */*"),
+      "expected font request to use */* Accept header, got: {font_req}"
+    );
+    assert!(
+      font_req.contains("sec-fetch-dest: font"),
+      "expected font request sec-fetch-dest=font, got: {font_req}"
+    );
+    assert!(
+      font_req.contains("sec-fetch-mode: cors"),
+      "expected font request sec-fetch-mode=cors, got: {font_req}"
+    );
+    assert!(
+      font_req.contains("sec-fetch-site: same-origin"),
+      "expected font request sec-fetch-site=same-origin, got: {font_req}"
+    );
+    let origin = format!("http://127.0.0.1:{}", addr.port()).to_ascii_lowercase();
+    assert!(
+      font_req.contains(&format!("origin: {origin}")),
+      "expected font request origin header, got: {font_req}"
+    );
+    assert!(
+      font_req.contains(&format!("referer: {origin}/")),
+      "expected font request referer header, got: {font_req}"
     );
   }
 
@@ -9087,17 +9682,29 @@ mod tests {
     assert_eq!(snapshot[0].destination, FetchDestination::Style);
     assert_eq!(snapshot[0].referrer.as_deref(), Some("http://example.com/"));
 
-    // Cache key remains URL-only: a subsequent request with different context should
-    // still hit the cache and avoid a second network call.
+    // Cache key ignores referrer: a subsequent request with the same destination but a different
+    // referrer should still hit the cache and avoid a second network call.
     let req2 =
-      FetchRequest::new(url, FetchDestination::Image).with_referrer("http://other.example/");
+      FetchRequest::new(url, FetchDestination::Style).with_referrer("http://other.example/");
     let res = cache.fetch_with_request(req2).expect("cached fetch");
     assert_eq!(res.bytes, b"ok");
     assert_eq!(
       calls.lock().unwrap().len(),
       1,
-      "expected request context fetch to be cached by URL"
+      "expected request fetches with differing referrers to share a cache entry"
     );
+
+    // Cache key includes destination: a request for the same URL with a different destination is
+    // fetched separately so differing header profiles (e.g. Accept/Sec-Fetch-*) can't poison each
+    // other.
+    let req3 =
+      FetchRequest::new(url, FetchDestination::Image).with_referrer("http://other.example/");
+    let res = cache.fetch_with_request(req3).expect("second fetch");
+    assert_eq!(res.bytes, b"ok");
+    let snapshot = calls.lock().unwrap().clone();
+    assert_eq!(snapshot.len(), 2);
+    assert_eq!(snapshot[1].destination, FetchDestination::Image);
+    assert_eq!(snapshot[1].referrer.as_deref(), Some("http://other.example/"));
   }
 
   #[derive(Clone, Debug)]

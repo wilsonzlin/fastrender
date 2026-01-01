@@ -866,7 +866,9 @@ mod disk_cache_main {
 
       match self
         .fetcher
-        .fetch_with_request(FetchRequest::new(url, FetchDestination::Style).with_referrer(self.referrer))
+        .fetch_with_request(
+          FetchRequest::new(url, FetchDestination::Style).with_referrer(self.referrer),
+        )
       {
         Ok(res) => {
           self.summary.borrow_mut().fetched_imports += 1;
@@ -1430,7 +1432,7 @@ mod disk_cache_main {
               }
             }
             Err(_) => summary.borrow_mut().failed_css += 1,
-          },
+          }
         }
       }
     }

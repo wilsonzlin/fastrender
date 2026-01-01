@@ -19,8 +19,8 @@ use fastrender::resource::bundle::{
   BUNDLE_MANIFEST, BUNDLE_VERSION,
 };
 use fastrender::resource::{
-  origin_from_url, FetchDestination, FetchRequest, FetchedResource, ResourceAccessPolicy,
-  ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+  origin_from_url, FetchContextKind, FetchDestination, FetchRequest, FetchedResource,
+  ResourceAccessPolicy, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::{
@@ -408,6 +408,28 @@ impl ResourceFetcher for RecordingFetcher {
       if let Ok(mut map) = self.recorded.lock() {
         map.insert(url.to_string(), result.clone());
       }
+    }
+    Ok(result)
+  }
+
+  fn fetch_with_validation_and_context(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    if let Ok(map) = self.recorded.lock() {
+      if let Some(existing) = map.get(url) {
+        return Ok(existing.clone());
+      }
+    }
+
+    let result = self
+      .inner
+      .fetch_with_validation_and_context(kind, url, etag, last_modified)?;
+    if let Ok(mut map) = self.recorded.lock() {
+      map.insert(url.to_string(), result.clone());
     }
     Ok(result)
   }
