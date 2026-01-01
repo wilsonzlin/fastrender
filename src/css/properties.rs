@@ -1799,7 +1799,8 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
         b')' => {
           depth -= 1;
           if depth == 0 {
-            return trimmed[idx + 1..].trim().is_empty();
+            // CSS whitespace is ASCII only; avoid `str::trim`'s Unicode-aware scanning.
+            return bytes[idx + 1..].iter().all(|b| b.is_ascii_whitespace());
           }
           if depth < 0 {
             return false;
