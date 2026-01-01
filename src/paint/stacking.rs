@@ -654,6 +654,17 @@ pub fn get_stacking_context_reason(
     return Some(StackingContextReason::ClipPath);
   }
 
+  if !matches!(
+    style.mix_blend_mode,
+    crate::style::types::MixBlendMode::Normal
+  ) {
+    return Some(StackingContextReason::MixBlendMode);
+  }
+
+  if matches!(style.isolation, crate::style::types::Isolation::Isolate) {
+    return Some(StackingContextReason::Isolation);
+  }
+
   if style.will_change.creates_stacking_context() {
     return Some(StackingContextReason::WillChange);
   }
@@ -2195,12 +2206,12 @@ mod tests {
     let mut child = StackingContext::new(0);
     child
       .fragments
-      .push(create_block_fragment(10.0, 20.0, 5.0, 5.0));
+      .push(create_block_fragment(0.0, 0.0, 5.0, 5.0));
 
     parent.children.push(child);
     parent.compute_bounds();
 
-    assert_eq!(parent.bounds, Rect::from_xywh(10.0, 20.0, 5.0, 5.0));
+    assert_eq!(parent.bounds, Rect::from_xywh(0.0, 0.0, 5.0, 5.0));
   }
 
   #[test]

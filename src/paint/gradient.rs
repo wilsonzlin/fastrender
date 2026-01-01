@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tiny_skia::{Pixmap, PremultipliedColorU8, SpreadMode};
+use tiny_skia::{ColorU8, Pixmap, PremultipliedColorU8, SpreadMode};
 
 const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
 const GRADIENT_PARALLEL_THRESHOLD_PIXELS: usize = 1_000_000;
@@ -238,7 +238,6 @@ fn build_gradient_lut(
   let max_idx = max_idx as f32;
   let mut colors = Vec::with_capacity(step_count);
   let mut window = stops.windows(2).peekable();
-  let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
   for i in 0..step_count {
     let pos = (i as f32 / max_idx) * period;
     while let Some(segment) = window.peek() {
@@ -271,15 +270,8 @@ fn build_gradient_lut(
     } else {
       stops.last().map(|(_, c)| *c).unwrap_or(Rgba::TRANSPARENT)
     };
-    colors.push(
-      PremultipliedColorU8::from_rgba(
-        color.r,
-        color.g,
-        color.b,
-        (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
-      )
-      .unwrap_or(transparent),
-    );
+    let alpha_u8 = (color.a * 255.0).round().clamp(0.0, 255.0) as u8;
+    colors.push(ColorU8::from_rgba(color.r, color.g, color.b, alpha_u8).premultiply());
   }
 
   let colors = Arc::new(colors);
@@ -844,6 +836,35 @@ mod tests {
   }
 
   #[test]
+  fn linear_gradient_premultiplies_semi_transparent_stops() {
+    let color = Rgba {
+      r: 0,
+      g: 255,
+      b: 0,
+      a: 0.5,
+    };
+    let stops = vec![(0.0, color), (1.0, color)];
+    let cache = GradientLutCache::default();
+    let pixmap = rasterize_linear_gradient(
+      1,
+      1,
+      Point::new(0.0, 0.0),
+      Point::new(0.0, 0.0),
+      SpreadMode::Pad,
+      &stops,
+      &cache,
+      1,
+    )
+    .expect("gradient rasterize")
+    .expect("gradient pixmap");
+    let px = pixmap.pixel(0, 0).expect("pixel");
+    assert_eq!(px.red(), 0);
+    assert_eq!(px.green(), 128);
+    assert_eq!(px.blue(), 0);
+    assert_eq!(px.alpha(), 128);
+  }
+
+  #[test]
   fn conic_lut_scaled_matches_naive_with_low_error() {
     let stops = vec![(0.0, Rgba::RED), (0.5, Rgba::GREEN), (1.0, Rgba::BLUE)];
     let cache = GradientLutCache::default();
@@ -866,7 +887,16 @@ mod tests {
     )
     .expect("lut rasterize")
     .expect("lut pixmap");
-    let naive = naive_conic_scaled(width, height, center, 0.0, &stops, SpreadMode::Repeat, scale_x, scale_y);
+    let naive = naive_conic_scaled(
+      width,
+      height,
+      center,
+      0.0,
+      &stops,
+      SpreadMode::Repeat,
+      scale_x,
+      scale_y,
+    );
     let diff = max_diff(&lut_pixmap, &naive);
     assert!(
       diff <= 2,

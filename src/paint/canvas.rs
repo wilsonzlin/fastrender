@@ -54,7 +54,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::GlyphInstance;
-use crate::paint::pixmap::new_pixmap_with_context;
+use crate::paint::pixmap::{new_pixmap, new_pixmap_with_context};
 use crate::paint::text_rasterize::{
   concat_transforms, GlyphCacheStats, TextRasterizer, TextRenderState,
 };
@@ -68,12 +68,14 @@ use rustybuzz::Variation as HbVariation;
 use std::rc::Rc;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
+use tiny_skia::FilterQuality;
 use tiny_skia::IntSize;
 use tiny_skia::Mask;
 use tiny_skia::Paint;
 use tiny_skia::PathBuilder;
 use tiny_skia::Pixmap;
 use tiny_skia::PixmapPaint;
+use tiny_skia::PixmapRef;
 use tiny_skia::Rect as SkiaRect;
 use tiny_skia::Stroke;
 use tiny_skia::Transform;
@@ -586,9 +588,22 @@ impl Canvas {
     let clip = self.current_state.clip_mask.as_deref();
     let transform = self.current_state.transform;
 
-    self
-      .pixmap
-      .draw_pixmap(origin.0, origin.1, layer.as_ref(), &paint, transform, clip);
+    if paint.blend_mode == SkiaBlendMode::Plus {
+      draw_pixmap_with_plus_blend(
+        &mut self.pixmap,
+        origin.0,
+        origin.1,
+        layer.as_ref(),
+        paint.opacity,
+        paint.quality,
+        transform,
+        clip,
+      );
+    } else {
+      self
+        .pixmap
+        .draw_pixmap(origin.0, origin.1, layer.as_ref(), &paint, transform, clip);
+    }
   }
 
   /// Returns the current blend mode.
@@ -1383,6 +1398,173 @@ impl Canvas {
 
     pb.close();
     pb.finish()
+  }
+}
+
+pub(crate) fn draw_pixmap_with_plus_blend(
+  target: &mut Pixmap,
+  x: i32,
+  y: i32,
+  src: PixmapRef<'_>,
+  opacity: f32,
+  quality: FilterQuality,
+  transform: Transform,
+  clip: Option<&Mask>,
+) {
+  let opacity = opacity.clamp(0.0, 1.0);
+  if opacity <= 0.0 {
+    return;
+  }
+
+  let src_w = src.width();
+  let src_h = src.height();
+  if src_w == 0 || src_h == 0 {
+    return;
+  }
+
+  // Fast path: integer translation-only draws can just saturating-add premultiplied pixels.
+  if clip.is_none()
+    && (transform.sx - 1.0).abs() < 1e-6
+    && (transform.sy - 1.0).abs() < 1e-6
+    && transform.kx.abs() < 1e-6
+    && transform.ky.abs() < 1e-6
+  {
+    let tx = transform.tx + x as f32;
+    let ty = transform.ty + y as f32;
+    if tx.is_finite() && ty.is_finite() {
+      let tx_rounded = tx.round();
+      let ty_rounded = ty.round();
+      if (tx - tx_rounded).abs() < 1e-6 && (ty - ty_rounded).abs() < 1e-6 {
+        let dst_x = tx_rounded as i32;
+        let dst_y = ty_rounded as i32;
+        let dst_w = target.width() as i32;
+        let dst_h = target.height() as i32;
+        let src_w_i = src_w as i32;
+        let src_h_i = src_h as i32;
+
+        let dst_start_x = dst_x.max(0);
+        let dst_start_y = dst_y.max(0);
+        let src_start_x = (-dst_x).max(0);
+        let src_start_y = (-dst_y).max(0);
+        let copy_w = (src_w_i - src_start_x).min(dst_w - dst_start_x);
+        let copy_h = (src_h_i - src_start_y).min(dst_h - dst_start_y);
+        if copy_w <= 0 || copy_h <= 0 {
+          return;
+        }
+
+        let opaque = opacity >= 1.0 - 1e-6;
+        let opacity_u16 = if opaque {
+          256
+        } else {
+          (opacity * 256.0).round().clamp(0.0, 256.0) as u16
+        };
+
+        let dst_stride = target.width() as usize * 4;
+        let src_stride = src_w as usize * 4;
+        let dst_data = target.data_mut();
+        let src_data = src.data();
+        let row_bytes = copy_w as usize * 4;
+        for row in 0..copy_h as usize {
+          let dst_off = (dst_start_y as usize + row) * dst_stride + dst_start_x as usize * 4;
+          let src_off = (src_start_y as usize + row) * src_stride + src_start_x as usize * 4;
+          let dst_row = &mut dst_data[dst_off..dst_off + row_bytes];
+          let src_row = &src_data[src_off..src_off + row_bytes];
+          if opaque {
+            for (dst_byte, src_byte) in dst_row.iter_mut().zip(src_row.iter()) {
+              *dst_byte = dst_byte.saturating_add(*src_byte);
+            }
+          } else {
+            for (dst_byte, src_byte) in dst_row.iter_mut().zip(src_row.iter()) {
+              let scaled = ((*src_byte as u16 * opacity_u16 + 128) >> 8) as u8;
+              *dst_byte = dst_byte.saturating_add(scaled);
+            }
+          }
+        }
+        return;
+      }
+    }
+  }
+
+  // Slow path: rasterize into a transparent scratch pixmap using SourceOver (honors transforms
+  // and clip masks), then saturating-add the result into the destination.
+  let Some(mut scratch) = new_pixmap(target.width(), target.height()) else {
+    let mut paint = PixmapPaint::default();
+    paint.opacity = opacity;
+    paint.quality = quality;
+    paint.blend_mode = SkiaBlendMode::SourceOver;
+    target.draw_pixmap(x, y, src, &paint, transform, clip);
+    return;
+  };
+
+  let mut paint = PixmapPaint::default();
+  paint.opacity = opacity;
+  paint.quality = quality;
+  paint.blend_mode = SkiaBlendMode::SourceOver;
+  scratch.draw_pixmap(x, y, src, &paint, transform, clip);
+
+  let mut combined = transform;
+  combined.tx += x as f32;
+  combined.ty += y as f32;
+  let w = src_w as f32;
+  let h = src_h as f32;
+  let map = |x: f32, y: f32| -> (f32, f32) {
+    (
+      x * combined.sx + y * combined.kx + combined.tx,
+      x * combined.ky + y * combined.sy + combined.ty,
+    )
+  };
+  let (x0, y0) = map(0.0, 0.0);
+  let (x1, y1) = map(w, 0.0);
+  let (x2, y2) = map(w, h);
+  let (x3, y3) = map(0.0, h);
+  let mut min_x = x0.min(x1).min(x2).min(x3);
+  let mut max_x = x0.max(x1).max(x2).max(x3);
+  let mut min_y = y0.min(y1).min(y2).min(y3);
+  let mut max_y = y0.max(y1).max(y2).max(y3);
+  if !(min_x.is_finite()
+    && max_x.is_finite()
+    && min_y.is_finite()
+    && max_y.is_finite()
+    && min_x <= max_x
+    && min_y <= max_y)
+  {
+    min_x = 0.0;
+    min_y = 0.0;
+    max_x = target.width() as f32;
+    max_y = target.height() as f32;
+  }
+
+  // Account for bilinear filtering bleeding slightly outside of the source quad.
+  let pad = match quality {
+    FilterQuality::Nearest => 0,
+    _ => 1,
+  };
+  let left = (min_x.floor() as i32).saturating_sub(pad);
+  let top = (min_y.floor() as i32).saturating_sub(pad);
+  let right = (max_x.ceil() as i32).saturating_add(pad);
+  let bottom = (max_y.ceil() as i32).saturating_add(pad);
+
+  let dst_w = target.width() as i32;
+  let dst_h = target.height() as i32;
+  let left = left.clamp(0, dst_w);
+  let top = top.clamp(0, dst_h);
+  let right = right.clamp(0, dst_w);
+  let bottom = bottom.clamp(0, dst_h);
+  if right <= left || bottom <= top {
+    return;
+  }
+
+  let dst_stride = target.width() as usize * 4;
+  let dst_data = target.data_mut();
+  let src_data = scratch.data();
+  let row_bytes = (right - left) as usize * 4;
+  for row in top..bottom {
+    let off = row as usize * dst_stride + left as usize * 4;
+    let dst_row = &mut dst_data[off..off + row_bytes];
+    let src_row = &src_data[off..off + row_bytes];
+    for (dst_byte, src_byte) in dst_row.iter_mut().zip(src_row.iter()) {
+      *dst_byte = dst_byte.saturating_add(*src_byte);
+    }
   }
 }
 

@@ -40,6 +40,7 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::blur::apply_gaussian_blur;
+use crate::paint::canvas::draw_pixmap_with_plus_blend;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::BorderRadii;
@@ -2962,17 +2963,43 @@ impl Painter {
               let mut paint = PixmapPaint::default();
               paint.opacity = opacity.min(1.0);
               paint.blend_mode = fallback_blend;
-              self
-                .pixmap
-                .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
+              if paint.blend_mode == SkiaBlendMode::Plus {
+                draw_pixmap_with_plus_blend(
+                  &mut self.pixmap,
+                  0,
+                  0,
+                  layer_pixmap.as_ref(),
+                  paint.opacity,
+                  paint.quality,
+                  final_transform,
+                  None,
+                );
+              } else {
+                self
+                  .pixmap
+                  .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
+              }
             }
           } else {
             let mut paint = PixmapPaint::default();
             paint.opacity = opacity.min(1.0);
             paint.blend_mode = fallback_blend;
-            self
-              .pixmap
-              .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
+            if paint.blend_mode == SkiaBlendMode::Plus {
+              draw_pixmap_with_plus_blend(
+                &mut self.pixmap,
+                0,
+                0,
+                layer_pixmap.as_ref(),
+                paint.opacity,
+                paint.quality,
+                final_transform,
+                None,
+              );
+            } else {
+              self
+                .pixmap
+                .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
+            }
           }
         } else if let Some(homography) = Homography::from_quads(src_quad, dest_quad_device) {
           let dst_quad: [(f32, f32); 4] = dest_quad_device.map(|p| (p.x, p.y));
@@ -3007,14 +3034,27 @@ impl Painter {
                 let mut paint = PixmapPaint::default();
                 paint.opacity = opacity.min(1.0);
                 paint.blend_mode = fallback_blend;
-                self.pixmap.draw_pixmap(
-                  warped.offset.0,
-                  warped.offset.1,
-                  warped.pixmap.as_ref(),
-                  &paint,
-                  Transform::identity(),
-                  None,
-                );
+                if paint.blend_mode == SkiaBlendMode::Plus {
+                  draw_pixmap_with_plus_blend(
+                    &mut self.pixmap,
+                    warped.offset.0,
+                    warped.offset.1,
+                    warped.pixmap.as_ref(),
+                    paint.opacity,
+                    paint.quality,
+                    Transform::identity(),
+                    None,
+                  );
+                } else {
+                  self.pixmap.draw_pixmap(
+                    warped.offset.0,
+                    warped.offset.1,
+                    warped.pixmap.as_ref(),
+                    &paint,
+                    Transform::identity(),
+                    None,
+                  );
+                }
               }
             }
           } else if let Some(warped) =
@@ -3023,14 +3063,27 @@ impl Painter {
             let mut paint = PixmapPaint::default();
             paint.opacity = opacity.min(1.0);
             paint.blend_mode = fallback_blend;
-            self.pixmap.draw_pixmap(
-              warped.offset.0,
-              warped.offset.1,
-              warped.pixmap.as_ref(),
-              &paint,
-              Transform::identity(),
-              None,
-            );
+            if paint.blend_mode == SkiaBlendMode::Plus {
+              draw_pixmap_with_plus_blend(
+                &mut self.pixmap,
+                warped.offset.0,
+                warped.offset.1,
+                warped.pixmap.as_ref(),
+                paint.opacity,
+                paint.quality,
+                Transform::identity(),
+                None,
+              );
+            } else {
+              self.pixmap.draw_pixmap(
+                warped.offset.0,
+                warped.offset.1,
+                warped.pixmap.as_ref(),
+                &paint,
+                Transform::identity(),
+                None,
+              );
+            }
           }
         }
         if let Some(start) = composite_start {
@@ -4027,14 +4080,27 @@ impl Painter {
     let mut paint = PixmapPaint::default();
     paint.blend_mode = map_blend_mode(blend_mode);
     let transform = Transform::from_translate(paint_rect.x(), paint_rect.y());
-    self.pixmap.draw_pixmap(
-      0,
-      0,
-      pix.as_ref(),
-      &paint,
-      transform,
-      clip_mask.cloned().as_ref(),
-    );
+    if paint.blend_mode == SkiaBlendMode::Plus {
+      draw_pixmap_with_plus_blend(
+        &mut self.pixmap,
+        0,
+        0,
+        pix.as_ref(),
+        paint.opacity,
+        paint.quality,
+        transform,
+        clip_mask.cloned().as_ref(),
+      );
+    } else {
+      self.pixmap.draw_pixmap(
+        0,
+        0,
+        pix.as_ref(),
+        &paint,
+        transform,
+        clip_mask.cloned().as_ref(),
+      );
+    }
   }
 
   #[allow(dead_code)]
@@ -6614,7 +6680,10 @@ impl Painter {
         Ok(img) => img,
         Err(e) => {
           if log_image_fail {
-            eprintln!("[image-load-fail] src={} stage=render-svg err={}", src.url, e);
+            eprintln!(
+              "[image-load-fail] src={} stage=render-svg err={}",
+              src.url, e
+            );
           }
           return false;
         }
@@ -9831,8 +9900,7 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) -> RenderResult<()> {
     }
   }
 
-  let mut scratch =
-    DROP_SHADOW_SPREAD_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+  let mut scratch = DROP_SHADOW_SPREAD_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
   scratch.alpha0.resize(len, 0);
   scratch.alpha1.resize(len, 0);
 
