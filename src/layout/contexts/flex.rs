@@ -1042,13 +1042,16 @@ impl FormattingContext for FlexFormattingContext {
                         if let Some(threshold) = log_measure_first_above {
                             let elapsed = measure_timer.map(|s| s.elapsed().as_millis()).unwrap_or(0);
                             if elapsed >= threshold {
-                                let seq = {
-                                    let mut count =
-                                        LOG_MEASURE_FIRST_COUNT.get_or_init(|| Mutex::new(0)).lock().unwrap();
-                                    (*count < log_measure_first).then(|| {
-                                        *count += 1;
-                                        *count
-                                    })
+                                 let seq = {
+                                     let mut count =
+                                         LOG_MEASURE_FIRST_COUNT
+                                           .get_or_init(|| Mutex::new(0))
+                                           .lock()
+                                           .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                     (*count < log_measure_first).then(|| {
+                                         *count += 1;
+                                         *count
+                                     })
                                 };
                                 if let Some(seq) = seq {
                                     let selector = box_node
@@ -1070,13 +1073,16 @@ impl FormattingContext for FlexFormattingContext {
                                 }
                             }
                         }
-                    }
-                    if trace_enabled {
-                        let mut remaining = TRACE_COUNT.get_or_init(|| Mutex::new(50)).lock().unwrap();
-                        if *remaining > 0 {
-                            eprintln!(
-                                "flex-trace node={:?} display={:?} known=({:?},{:?}) avail=({:?},{:?}) flex=({}, {}, {:?})",
-                                box_node
+                     }
+                     if trace_enabled {
+                         let mut remaining = TRACE_COUNT
+                           .get_or_init(|| Mutex::new(50))
+                           .lock()
+                           .unwrap_or_else(|poisoned| poisoned.into_inner());
+                         if *remaining > 0 {
+                             eprintln!(
+                                 "flex-trace node={:?} display={:?} known=({:?},{:?}) avail=({:?},{:?}) flex=({}, {}, {:?})",
+                                 box_node
                                     .debug_info
                                     .as_ref()
                                     .and_then(|d| d.tag_name.clone())
