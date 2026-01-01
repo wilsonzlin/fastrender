@@ -1,6 +1,8 @@
 #[cfg(feature = "disk_cache")]
 use criterion::{criterion_group, criterion_main, Criterion};
 #[cfg(feature = "disk_cache")]
+use criterion::{BatchSize, Throughput};
+#[cfg(feature = "disk_cache")]
 use fastrender::resource::{CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher};
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::{FetchedResource, ResourceFetcher};
@@ -8,6 +10,10 @@ use fastrender::resource::{FetchedResource, ResourceFetcher};
 use fastrender::Result;
 #[cfg(feature = "disk_cache")]
 use rayon::prelude::*;
+#[cfg(feature = "disk_cache")]
+use rayon::ThreadPoolBuilder;
+#[cfg(feature = "disk_cache")]
+use std::fs;
 #[cfg(feature = "disk_cache")]
 use std::sync::Arc;
 
@@ -139,7 +145,69 @@ fn bench_disk_cache_parallel_hits(c: &mut Criterion) {
 }
 
 #[cfg(feature = "disk_cache")]
-criterion_group!(benches, bench_disk_cache_parallel_hits);
+fn bench_disk_cache_parallel_inserts_with_eviction(c: &mut Criterion) {
+  let workers = std::cmp::max(1, num_cpus::get());
+  let inserts_per_worker = 64usize;
+  let body: Arc<Vec<u8>> = Arc::new(vec![42u8; 64]);
+
+  let memory_config = CachingFetcherConfig {
+    honor_http_cache_freshness: true,
+    ..CachingFetcherConfig::default()
+  };
+
+  // Keep the byte budget tiny so every iteration does eviction work.
+  let disk_config = DiskCacheConfig {
+    max_bytes: (body.len() as u64) * 4,
+    ..DiskCacheConfig::default()
+  };
+
+  let pool = ThreadPoolBuilder::new()
+    .num_threads(workers)
+    .build()
+    .expect("build rayon pool");
+
+  let mut group = c.benchmark_group("disk_cache");
+  group.throughput(Throughput::Elements((workers * inserts_per_worker) as u64));
+  group.bench_function("parallel_inserts_with_eviction", |b| {
+    b.iter_batched(
+      || {
+        let tmp = tempfile::tempdir().expect("create tempdir for disk cache bench");
+        // Avoid forcing the first writer to rebuild by seeding an empty journal.
+        fs::write(tmp.path().join("index.jsonl"), b"").expect("seed empty journal");
+
+        let fetcher = Arc::new(DiskCachingFetcher::with_configs(
+          StaticFetcher {
+            body: Arc::clone(&body),
+          },
+          tmp.path(),
+          memory_config,
+          disk_config.clone(),
+        ));
+        (tmp, fetcher)
+      },
+      |(_tmp, fetcher)| {
+        pool.install(|| {
+          (0..workers).into_par_iter().for_each(|t| {
+            for i in 0..inserts_per_worker {
+              let url = format!("https://example.com/bench_insert/{t}/{i}");
+              let res = fetcher.fetch(&url).expect("fetch");
+              assert_eq!(res.bytes.len(), body.len());
+            }
+          });
+        });
+      },
+      BatchSize::SmallInput,
+    );
+  });
+  group.finish();
+}
+
+#[cfg(feature = "disk_cache")]
+criterion_group!(
+  benches,
+  bench_disk_cache_parallel_hits,
+  bench_disk_cache_parallel_inserts_with_eviction
+);
 #[cfg(feature = "disk_cache")]
 criterion_main!(benches);
 

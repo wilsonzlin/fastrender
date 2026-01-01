@@ -5,7 +5,7 @@ use super::StoredMetadata;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -64,6 +64,17 @@ enum JournalRecord {
   },
 }
 
+#[derive(Debug, Clone)]
+struct EvictionCandidate {
+  key: String,
+  order_key: OrderKey,
+  len: u64,
+  data_path: PathBuf,
+  meta_path: PathBuf,
+}
+
+const EVICTION_LOOKAHEAD: usize = 64;
+
 #[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct DebugStats {
@@ -111,7 +122,7 @@ impl DiskCacheIndex {
       meta_file: self.relative_path(meta_path),
     };
 
-    if self.append_record_locked(&mut state, &record).is_err() {
+    if self.append_record_locked(&mut state, record).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
     self.loaded.store(state.loaded, Ordering::Release);
@@ -142,15 +153,20 @@ impl DiskCacheIndex {
       meta_file: self.relative_path(meta_path),
     };
 
-    if self.append_record_locked(&mut state, &record).is_err() {
+    if self.append_record_locked(&mut state, record).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
       self.loaded.store(state.loaded, Ordering::Release);
       return;
     }
 
-    if let Err(_) = self.evict_if_needed_locked(&mut state, max_bytes, &mut can_remove) {
-      let _ = self.rebuild_from_disk(&mut state);
-    }
+    let state = match self.evict_if_needed_two_phase(state, max_bytes, &mut can_remove) {
+      Ok(state) => state,
+      Err((mut state, _err)) => {
+        let _ = self.rebuild_from_disk(&mut state);
+        self.loaded.store(state.loaded, Ordering::Release);
+        return;
+      }
+    };
     self.loaded.store(state.loaded, Ordering::Release);
   }
 
@@ -165,7 +181,7 @@ impl DiskCacheIndex {
     let record = JournalRecord::Remove {
       key: key.to_string(),
     };
-    if self.append_record_locked(&mut state, &record).is_err() {
+    if self.append_record_locked(&mut state, record).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
     self.loaded.store(state.loaded, Ordering::Release);
@@ -221,9 +237,15 @@ impl DiskCacheIndex {
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
-    if let Err(_) = self.evict_if_needed_locked(&mut state, max_bytes, &mut can_remove) {
-      let _ = self.rebuild_from_disk(&mut state);
-    }
+
+    let state = match self.evict_if_needed_two_phase(state, max_bytes, &mut can_remove) {
+      Ok(state) => state,
+      Err((mut state, _err)) => {
+        let _ = self.rebuild_from_disk(&mut state);
+        self.loaded.store(state.loaded, Ordering::Release);
+        return;
+      }
+    };
     self.loaded.store(state.loaded, Ordering::Release);
   }
 
@@ -263,7 +285,7 @@ impl DiskCacheIndex {
   fn append_records_locked(
     &self,
     state: &mut IndexState,
-    records: &[JournalRecord],
+    records: Vec<JournalRecord>,
   ) -> std::io::Result<()> {
     if records.is_empty() && state.pending_backfills.is_empty() {
       return Ok(());
@@ -274,9 +296,8 @@ impl DiskCacheIndex {
 
     let mut buf = Vec::new();
     for record in pending.iter().chain(records.iter()) {
-      let mut line = serde_json::to_vec(record)?;
-      line.push(b'\n');
-      buf.extend_from_slice(&line);
+      serde_json::to_writer(&mut buf, record)?;
+      buf.push(b'\n');
     }
 
     let end_offset = {
@@ -290,7 +311,7 @@ impl DiskCacheIndex {
     if actual_start == start_offset {
       // `pending_backfills` were already applied to the in-memory index.
       for record in records {
-        self.apply_record(state, record.clone());
+        self.apply_record(state, record);
       }
       state.loaded = true;
       state.journal_len = end_offset;
@@ -307,53 +328,136 @@ impl DiskCacheIndex {
     }
   }
 
-  fn evict_if_needed_locked<F>(
+  fn remove_paths_best_effort(&self, data_path: &Path, meta_path: &Path) -> bool {
+    let data_ok = match fs::remove_file(data_path) {
+      Ok(()) => true,
+      Err(err) if err.kind() == ErrorKind::NotFound => true,
+      Err(_) => false,
+    };
+
+    let _ = fs::remove_file(meta_path);
+
+    data_ok
+  }
+
+  fn select_eviction_candidates_locked(
     &self,
-    state: &mut IndexState,
+    state: &IndexState,
     max_bytes: u64,
-    can_remove: &mut F,
-  ) -> std::io::Result<()>
-  where
-    F: FnMut(&Path) -> bool,
-  {
+  ) -> Vec<EvictionCandidate> {
     if max_bytes == 0 || state.total_bytes <= max_bytes {
-      return Ok(());
+      return Vec::new();
     }
 
-    let mut to_remove: Vec<String> = Vec::new();
-    let mut projected_total = state.total_bytes;
+    let bytes_needed = state.total_bytes.saturating_sub(max_bytes);
+    let mut candidates: Vec<EvictionCandidate> = Vec::new();
+    let mut potential_freed: u64 = 0;
+    let mut remaining_lookahead: usize = 0;
+
     for (_, key) in state.order.iter() {
-      if projected_total <= max_bytes {
-        break;
-      }
       let Some(entry) = state.entries.get(key) else {
         continue;
       };
-      if !can_remove(&entry.data_path) {
+      candidates.push(EvictionCandidate {
+        key: key.clone(),
+        order_key: entry.order_key,
+        len: entry.len,
+        data_path: entry.data_path.clone(),
+        meta_path: entry.meta_path.clone(),
+      });
+      potential_freed = potential_freed.saturating_add(entry.len);
+
+      if remaining_lookahead > 0 {
+        remaining_lookahead -= 1;
+        if remaining_lookahead == 0 {
+          break;
+        }
         continue;
       }
-      to_remove.push(key.clone());
-      projected_total = projected_total.saturating_sub(entry.len);
+
+      if potential_freed >= bytes_needed {
+        remaining_lookahead = EVICTION_LOOKAHEAD;
+        if remaining_lookahead == 0 {
+          break;
+        }
+      }
     }
 
-    if to_remove.is_empty() {
-      return Ok(());
+    candidates
+  }
+
+  fn evict_if_needed_two_phase<'a, F>(
+    &'a self,
+    mut state: std::sync::MutexGuard<'a, IndexState>,
+    max_bytes: u64,
+    can_remove: &mut F,
+  ) -> Result<
+    std::sync::MutexGuard<'a, IndexState>,
+    (std::sync::MutexGuard<'a, IndexState>, std::io::Error),
+  >
+  where
+    F: FnMut(&Path) -> bool,
+  {
+    if max_bytes == 0 {
+      return Ok(state);
     }
 
-    let mut records: Vec<JournalRecord> = Vec::with_capacity(to_remove.len());
-    for key in to_remove {
-      let Some(entry) = state.entries.get(&key).cloned() else {
-        continue;
-      };
-      let _ = self.remove_paths(&entry.data_path, &entry.meta_path);
-      self.apply_remove(state, &key);
-      records.push(JournalRecord::Remove { key });
+    loop {
       if state.total_bytes <= max_bytes {
-        break;
+        return Ok(state);
+      }
+
+      let bytes_needed = state.total_bytes.saturating_sub(max_bytes);
+      let candidates = self.select_eviction_candidates_locked(&state, max_bytes);
+      if candidates.is_empty() {
+        return Ok(state);
+      }
+
+      drop(state);
+
+      // Phase B: perform expensive checks + fs removals outside the index mutex.
+      let mut removed: Vec<EvictionCandidate> = Vec::new();
+      let mut freed: u64 = 0;
+      for candidate in candidates {
+        if freed >= bytes_needed {
+          break;
+        }
+        if !can_remove(&candidate.data_path) {
+          continue;
+        }
+        if !self.remove_paths_best_effort(&candidate.data_path, &candidate.meta_path) {
+          continue;
+        }
+        freed = freed.saturating_add(candidate.len);
+        removed.push(candidate);
+      }
+
+      state = self.state.lock().unwrap();
+
+      if removed.is_empty() {
+        return Ok(state);
+      }
+
+      // Phase C: apply successful removals + journal appends under the mutex.
+      let mut records: Vec<JournalRecord> = Vec::with_capacity(removed.len());
+      for candidate in removed {
+        let Some(entry) = state.entries.get(&candidate.key) else {
+          continue;
+        };
+        if entry.order_key != candidate.order_key {
+          continue;
+        }
+        records.push(JournalRecord::Remove { key: candidate.key });
+      }
+
+      if records.is_empty() {
+        return Ok(state);
+      }
+
+      if let Err(err) = self.append_records_locked(&mut state, records) {
+        return Err((state, err));
       }
     }
-
-    self.append_records_locked(state, &records)
   }
 
   fn replay_from_offset(&self, state: &mut IndexState, offset: u64) -> std::io::Result<()> {
@@ -563,6 +667,7 @@ impl DiskCacheIndex {
       .open(&self.journal_path)?;
 
     let mut written: u64 = 0;
+    let mut buf = Vec::new();
     for (_, key) in state.order.iter() {
       if let Some(entry) = state.entries.get(key) {
         let record = JournalRecord::Insert {
@@ -572,10 +677,11 @@ impl DiskCacheIndex {
           data_file: self.relative_path(&entry.data_path),
           meta_file: self.relative_path(&entry.meta_path),
         };
-        let mut line = serde_json::to_vec(&record)?;
-        line.push(b'\n');
-        file.write_all(&line)?;
-        written = written.saturating_add(line.len() as u64);
+        buf.clear();
+        serde_json::to_writer(&mut buf, &record)?;
+        buf.push(b'\n');
+        file.write_all(&buf)?;
+        written = written.saturating_add(buf.len() as u64);
       }
     }
     file.flush()?;
@@ -586,9 +692,42 @@ impl DiskCacheIndex {
   fn append_record_locked(
     &self,
     state: &mut IndexState,
-    record: &JournalRecord,
+    record: JournalRecord,
   ) -> std::io::Result<()> {
-    self.append_records_locked(state, std::slice::from_ref(record))
+    let start_offset = state.journal_len;
+    let pending = std::mem::take(&mut state.pending_backfills);
+
+    let mut buf = Vec::new();
+    for record in pending.iter() {
+      serde_json::to_writer(&mut buf, record)?;
+      buf.push(b'\n');
+    }
+    serde_json::to_writer(&mut buf, &record)?;
+    buf.push(b'\n');
+
+    let end_offset = {
+      let file = self.append_file_locked(state)?;
+      file.write_all(&buf)?;
+      file.flush()?;
+      file.stream_position()?
+    };
+
+    let actual_start = end_offset.saturating_sub(buf.len() as u64);
+    if actual_start == start_offset {
+      self.apply_record(state, record);
+      state.loaded = true;
+      state.journal_len = end_offset;
+      Ok(())
+    } else if actual_start > start_offset {
+      self.replay_from_offset(state, start_offset)?;
+      state.loaded = true;
+      Ok(())
+    } else {
+      self.reset_for_replay(state);
+      self.replay_from_offset(state, 0)?;
+      state.loaded = true;
+      Ok(())
+    }
   }
 
   fn meta_path_for_data(&self, data_path: &Path) -> PathBuf {
@@ -753,6 +892,74 @@ mod tests {
           let data_path = cache_dir.join(format!("{key}.bin"));
           let meta_path = cache_dir.join(format!("{key}.bin.meta"));
           index.record_insert(&key, 1_700_000_000, 1, &data_path, &meta_path);
+        }
+      }));
+    }
+
+    for handle in handles {
+      handle.join().expect("thread should not panic");
+    }
+
+    let journal = fs::read_to_string(&journal_path).expect("read journal");
+    for (idx, line) in journal.lines().enumerate() {
+      if line.trim().is_empty() {
+        continue;
+      }
+      serde_json::from_str::<JournalRecord>(line)
+        .unwrap_or_else(|err| panic!("invalid journal line {idx}: {err} (raw={line:?})"));
+    }
+  }
+
+  #[test]
+  fn shared_index_concurrent_writes_remain_parseable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let journal_path = tmp.path().join("index.jsonl");
+    fs::write(&journal_path, b"").expect("seed empty journal");
+
+    let index = Arc::new(DiskCacheIndex::new(tmp.path().to_path_buf()));
+    index.refresh();
+
+    let threads = 8usize;
+    let inserts_per_thread = 64usize;
+    let max_bytes = 256u64;
+    let barrier = Arc::new(Barrier::new(threads));
+
+    let mut handles = Vec::new();
+    for t in 0..threads {
+      let barrier = Arc::clone(&barrier);
+      let cache_dir = tmp.path().to_path_buf();
+      let index = Arc::clone(&index);
+      handles.push(thread::spawn(move || {
+        barrier.wait();
+        for i in 0..inserts_per_thread {
+          let key = format!("k{t}_{i}");
+          let data_path = cache_dir.join(format!("{key}.bin"));
+          let meta_path = cache_dir.join(format!("{key}.bin.meta"));
+          let body = vec![42u8; 16];
+          fs::write(&data_path, &body).expect("write data");
+          let stored_at = 1_700_000_000;
+          let meta = StoredMetadata {
+            url: format!("https://example.com/{key}"),
+            content_type: Some("application/octet-stream".to_string()),
+            etag: None,
+            last_modified: None,
+            final_url: Some(format!("https://example.com/{key}")),
+            stored_at,
+            len: body.len(),
+            cache: None,
+          };
+          let meta_bytes = serde_json::to_vec(&meta).expect("serialize meta");
+          fs::write(&meta_path, meta_bytes).expect("write meta");
+
+          index.record_insert_and_evict_if_needed(
+            &key,
+            stored_at,
+            body.len() as u64,
+            &data_path,
+            &meta_path,
+            max_bytes,
+            |_| true,
+          );
         }
       }));
     }
