@@ -133,12 +133,7 @@ impl FormattingContextFactory {
   }
 
   fn block_context(&self) -> BlockFormattingContext {
-    BlockFormattingContext::with_font_context_viewport_and_cb(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-    )
-    .with_parallelism(self.parallelism)
+    BlockFormattingContext::with_factory(self.clone())
   }
 
   fn inline_context(&self) -> InlineFormattingContext {

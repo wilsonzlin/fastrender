@@ -564,17 +564,12 @@ impl FormattingContext for FlexFormattingContext {
     // Phase 2: Compute layout using Taffy
     let available_space = self.constraints_to_available_space(&constraints);
     let viewport_size = self.viewport_size;
-    let nearest_positioned_cb = self.nearest_positioned_cb;
     let measured_fragments = self.measured_fragments.clone();
     let base_factory = self.child_factory();
     let factory = base_factory.clone();
     let flex_item_block_fc: Arc<dyn FormattingContext> = Arc::new(
-      BlockFormattingContext::for_flex_item_with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        viewport_size,
-        nearest_positioned_cb,
-      )
-      .with_parallelism(self.parallelism),
+      BlockFormattingContext::for_flex_item_with_factory(base_factory.clone())
+        .with_parallelism(self.parallelism),
     );
     let this = self.clone();
     let mut pass_cache: FxHashMap<u64, FlexCacheEntry> = FxHashMap::default();
