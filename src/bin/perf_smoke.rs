@@ -54,6 +54,19 @@ struct Args {
   /// Exit with a non-zero status when any stage exceeds the regression threshold
   #[arg(long)]
   fail_on_regression: bool,
+
+  /// Exit with a non-zero status when a pageset-timeouts manifest fixture is missing locally.
+  ///
+  /// Without this flag, missing pageset-timeouts fixtures are skipped so local runs can operate on
+  /// a subset of captured pages.
+  #[arg(long)]
+  fail_on_missing_fixtures: bool,
+
+  /// Exit with a non-zero status when any fixture exceeds its `budget_ms` (if provided).
+  ///
+  /// Budget checks are independent of baseline regression checking.
+  #[arg(long)]
+  fail_on_budget: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -67,6 +80,7 @@ enum Suite {
 struct FixtureSpec {
   name: String,
   path: String,
+  html_path: PathBuf,
   viewport: (u32, u32),
   dpr: f32,
   media: MediaType,
@@ -214,6 +228,8 @@ const CORE_FIXTURES: &[CoreFixture] = &[
 const PERF_SMOKE_SCHEMA_VERSION: u32 = 4;
 const PAGESET_TIMEOUT_MANIFEST_VERSION: u32 = 1;
 const PAGESET_TIMEOUT_MANIFEST: &str = include_str!("../../tests/pages/pageset_timeouts.json");
+
+const PAGESET_TIMEOUT_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_TIMEOUT_MANIFEST";
 
 #[derive(Deserialize)]
 struct PagesetTimeoutManifest {
@@ -469,7 +485,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     return Err("--fail-on-regression requires --baseline".into());
   }
 
-  let mut specs = fixture_specs_for_suite(args.suite)?;
+  let mut specs = fixture_specs_for_suite(args.suite, args.fail_on_missing_fixtures)?;
   specs = filter_specs(specs, filters)?;
   if specs.is_empty() {
     if matches!(args.suite, Suite::PagesetTimeouts) {
@@ -528,6 +544,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   print_dom_parse_note(&summary);
 
+  let mut exit_code = 0;
+
   if let Some(baseline) = baseline {
     let regressions = find_regressions(&summary, &baseline, args.threshold);
     if !regressions.is_empty() {
@@ -546,9 +564,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
       }
       if args.fail_on_regression {
-        std::process::exit(1);
+        exit_code = 1;
       }
     }
+  }
+
+  if args.fail_on_budget {
+    let budget_failures = find_budget_failures(&summary.fixtures);
+    if !budget_failures.is_empty() {
+      eprintln!("Budget failures ({} fixtures exceeded budget_ms):", budget_failures.len());
+      for failure in &budget_failures {
+        if let Some((stage, stage_ms)) = failure.dominant_stage {
+          eprintln!(
+            "  {:<30} total_ms={:>8.3} budget_ms={:>8.3} dominant={stage}({stage_ms:.3})",
+            failure.fixture, failure.total_ms, failure.budget_ms
+          );
+        } else {
+          eprintln!(
+            "  {:<30} total_ms={:>8.3} budget_ms={:>8.3}",
+            failure.fixture, failure.total_ms, failure.budget_ms
+          );
+        }
+      }
+      exit_code = 1;
+    }
+  }
+
+  if exit_code != 0 {
+    std::process::exit(exit_code);
   }
 
   Ok(())
@@ -572,7 +615,10 @@ fn print_dom_parse_note(summary: &PerfSmokeSummary) {
   );
 }
 
-fn fixture_specs_for_suite(suite: Suite) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
+fn fixture_specs_for_suite(
+  suite: Suite,
+  fail_on_missing_fixtures: bool,
+) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
   let mut specs = match suite {
     Suite::Core => core_fixture_specs(),
     Suite::PagesetTimeouts => Vec::new(),
@@ -580,18 +626,20 @@ fn fixture_specs_for_suite(suite: Suite) -> Result<Vec<FixtureSpec>, Box<dyn std
   };
 
   if matches!(suite, Suite::PagesetTimeouts | Suite::All) {
-    specs.extend(pageset_timeout_fixture_specs()?);
+    specs.extend(pageset_timeout_fixture_specs(fail_on_missing_fixtures)?);
   }
 
   Ok(specs)
 }
 
 fn core_fixture_specs() -> Vec<FixtureSpec> {
+  let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
   CORE_FIXTURES
     .iter()
     .map(|(name, path, viewport, dpr, media)| FixtureSpec {
       name: (*name).to_string(),
       path: (*path).to_string(),
+      html_path: root.join(path),
       viewport: *viewport,
       dpr: *dpr,
       media: *media,
@@ -600,8 +648,11 @@ fn core_fixture_specs() -> Vec<FixtureSpec> {
     .collect()
 }
 
-fn pageset_timeout_fixture_specs() -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
-  let manifest: PagesetTimeoutManifest = serde_json::from_str(PAGESET_TIMEOUT_MANIFEST)?;
+fn pageset_timeout_fixture_specs(
+  fail_on_missing_fixtures: bool,
+) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
+  let manifest_contents = load_pageset_timeout_manifest_contents()?;
+  let manifest: PagesetTimeoutManifest = serde_json::from_str(&manifest_contents)?;
   if manifest.schema_version != PAGESET_TIMEOUT_MANIFEST_VERSION {
     return Err(
       format!(
@@ -616,6 +667,7 @@ fn pageset_timeout_fixture_specs() -> Result<Vec<FixtureSpec>, Box<dyn std::erro
   let mut specs = Vec::new();
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
   let fixtures_root = root.join("tests/pages/fixtures");
+  let mut missing = Vec::new();
   for fixture in manifest.fixtures {
     if fixture.viewport.len() != 2 {
       return Err(
@@ -629,21 +681,37 @@ fn pageset_timeout_fixture_specs() -> Result<Vec<FixtureSpec>, Box<dyn std::erro
     let path = format!("tests/pages/fixtures/{}/index.html", fixture.name);
     let full_path = root.join(&path);
     if !full_path.exists() {
-      eprintln!(
-        "Skipping pageset timeout fixture {} (missing {})",
-        fixture.name,
-        full_path.display()
-      );
+      if fail_on_missing_fixtures {
+        missing.push((fixture.name.clone(), full_path));
+      } else {
+        eprintln!(
+          "Skipping pageset timeout fixture {} (missing {})",
+          fixture.name,
+          full_path.display()
+        );
+      }
       continue;
     }
     specs.push(FixtureSpec {
       name: fixture.name.clone(),
       path,
+      html_path: full_path,
       viewport: (fixture.viewport[0], fixture.viewport[1]),
       dpr: fixture.dpr,
       media: media_from_label(&fixture.media)?,
       budget_ms: fixture.budget_ms.or(default_budget),
     });
+  }
+
+  if fail_on_missing_fixtures && !missing.is_empty() {
+    eprintln!(
+      "Missing pageset-timeouts fixtures ({}):",
+      missing.len()
+    );
+    for (name, path) in &missing {
+      eprintln!("  {} ({})", name, path.display());
+    }
+    return Err("pageset-timeouts suite missing required fixtures".into());
   }
 
   if specs.is_empty() {
@@ -773,10 +841,8 @@ fn run_fixture_isolated(
 }
 
 fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
-  let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let html_path = root.join(&spec.path);
-  let html = fs::read_to_string(&html_path)?;
-  let base_url = base_url_for(&html_path)?;
+  let html = fs::read_to_string(&spec.html_path)?;
+  let base_url = base_url_for(&spec.html_path)?;
 
   let policy = ResourcePolicy::default()
     .allow_http(false)
@@ -822,6 +888,53 @@ fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error:
     counts: counts_from_stats(&stats),
     paint: paint_from_stats(&stats),
   })
+}
+
+struct BudgetFailure {
+  fixture: String,
+  total_ms: f64,
+  budget_ms: f64,
+  dominant_stage: Option<(&'static str, f64)>,
+}
+
+fn find_budget_failures(fixtures: &[FixtureSummary]) -> Vec<BudgetFailure> {
+  let mut failures = Vec::new();
+  for fixture in fixtures {
+    let Some(budget_ms) = fixture.budget_ms else {
+      continue;
+    };
+    if fixture.total_ms > budget_ms {
+      let dominant_stage = fixture
+        .stage_ms
+        .entries()
+        .into_iter()
+        .filter(|(_, value)| *value > 0.0)
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+      failures.push(BudgetFailure {
+        fixture: fixture.name.clone(),
+        total_ms: fixture.total_ms,
+        budget_ms,
+        dominant_stage,
+      });
+    }
+  }
+  failures
+}
+
+fn load_pageset_timeout_manifest_contents() -> Result<String, Box<dyn std::error::Error>> {
+  if let Some(path) = std::env::var_os(PAGESET_TIMEOUT_MANIFEST_ENV) {
+    let path = PathBuf::from(path);
+    Ok(fs::read_to_string(&path).map_err(|e| {
+      format!(
+        "failed to read pageset timeout manifest at {}: {}",
+        path.display(),
+        e
+      )
+    })?)
+  } else {
+    Ok(PAGESET_TIMEOUT_MANIFEST.to_string())
+  }
 }
 
 fn media_label(media: MediaType) -> &'static str {

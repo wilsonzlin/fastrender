@@ -4,6 +4,8 @@ use std::process::Command;
 use serde_json::Value;
 use tempfile::tempdir;
 
+const PAGESET_TIMEOUT_MANIFEST_ENV: &str = "FASTR_PERF_SMOKE_PAGESET_TIMEOUT_MANIFEST";
+
 #[test]
 fn perf_smoke_emits_stage_breakdowns() {
   let temp = tempdir().expect("create temp dir");
@@ -49,4 +51,101 @@ fn perf_smoke_emits_stage_breakdowns() {
       "fixture timings_ms should contain numeric {key}"
     );
   }
+}
+
+#[test]
+fn perf_smoke_fail_on_missing_fixtures_exits_non_zero() {
+  let temp = tempdir().expect("create temp dir");
+  let output = temp.path().join("perf-smoke.json");
+  let manifest_path = temp.path().join("manifest.json");
+  let manifest = serde_json::json!({
+    "schema_version": 1,
+    "fixtures": [
+      {
+        "name": "flex_dashboard",
+        "viewport": [1040, 1240],
+        "dpr": 1.0,
+        "media": "screen",
+        "budget_ms": 100000.0
+      },
+      {
+        "name": "this_fixture_should_not_exist_12345",
+        "viewport": [1040, 1240],
+        "dpr": 1.0,
+        "media": "screen",
+        "budget_ms": 100000.0
+      }
+    ]
+  });
+  fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+  let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
+    .env(PAGESET_TIMEOUT_MANIFEST_ENV, manifest_path)
+    .args([
+      "--suite",
+      "pageset-timeouts",
+      "--fail-on-missing-fixtures",
+      "--no-isolate",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .output()
+    .expect("run perf_smoke");
+
+  assert!(
+    !result.status.success(),
+    "perf_smoke should fail when pageset-timeouts fixtures are missing"
+  );
+  let stderr = String::from_utf8_lossy(&result.stderr);
+  assert!(
+    stderr.contains("this_fixture_should_not_exist_12345"),
+    "stderr should mention missing fixture name; got: {stderr}"
+  );
+}
+
+#[test]
+fn perf_smoke_fail_on_budget_exits_non_zero() {
+  let temp = tempdir().expect("create temp dir");
+  let output = temp.path().join("perf-smoke.json");
+  let manifest_path = temp.path().join("manifest.json");
+  let manifest = serde_json::json!({
+    "schema_version": 1,
+    "fixtures": [
+      {
+        "name": "flex_dashboard",
+        "viewport": [1040, 1240],
+        "dpr": 1.0,
+        "media": "screen",
+        "budget_ms": 0.0
+      }
+    ]
+  });
+  fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+  let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
+    .env(PAGESET_TIMEOUT_MANIFEST_ENV, manifest_path)
+    .args([
+      "--suite",
+      "pageset-timeouts",
+      "--fail-on-budget",
+      "--no-isolate",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .output()
+    .expect("run perf_smoke");
+
+  assert!(
+    !result.status.success(),
+    "perf_smoke should fail when a fixture exceeds its budget"
+  );
+  let stderr = String::from_utf8_lossy(&result.stderr);
+  assert!(
+    stderr.contains("Budget failures"),
+    "stderr should include budget failure report; got: {stderr}"
+  );
+  assert!(
+    stderr.contains("flex_dashboard"),
+    "stderr should mention the budget-failing fixture; got: {stderr}"
+  );
 }
