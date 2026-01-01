@@ -37,6 +37,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - Disk cache tuning flags passed after `--` (e.g. `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--disk-cache-lock-stale-secs`) are also forwarded to `prefetch_assets` when it runs.
   - Cascade triage: `--cascade-diagnostics` re-runs slow-cascade ok pages (defaults to 500ms threshold; override with `--cascade-diagnostics-slow-ms`) plus cascade timeouts with cascade profiling enabled, then merges `diagnostics.stats.cascade` into the committed progress JSON.
 - Pageset diff: `cargo xtask pageset-diff [--baseline <dir>|--baseline-ref <git-ref>] [--no-run] [--fail-on-regression] [--fail-on-missing-stages] [--fail-on-missing-stage-timings] [--fail-on-slow-ok-ms <ms>]` (extracts `progress/pages` from the chosen git ref by default and compares it to the freshly updated scoreboard). `--fail-on-regression` also enables the missing-stage gates and `--fail-on-slow-ok-ms=5000` by default (use `--no-fail-on-missing-stages` / `--no-fail-on-missing-stage-timings` / `--no-fail-on-slow-ok` to opt out, or pass `--fail-on-slow-ok-ms <ms>` to override the default threshold).
+  - Stage-bucket sanity guardrail: when changing stage timing accounting, run `pageset_progress report --fail-on-stage-sum-exceeds-total` (tune `--stage-sum-tolerance-percent`, default 10%) to catch double-counting/CPU-sum mixups early.
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
@@ -176,9 +177,17 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - `--from-progress <dir>` enables selection from saved progress files (default intersection of filters, use `--union` to OR them).
   - Filters: `--only-failures`, `--only-status timeout,panic,error`, `--slow-ms <ms> [--slow-ok-only]`, `--hotspot cascade|layout|paint|...`, `--top-slowest <n>`.
   - The deterministic stem list is printed before running; if nothing matches, the command exits cleanly without touching caches.
-- Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad --compare <other> --fail-on-regression --regression-threshold-percent 10 --fail-on-slow-ok-ms <ms>]` prints status counts, slowest pages, and hotspot histograms for the saved progress files. With `--compare`, it also prints status transitions plus the top regressions/improvements by `total_ms`; `--fail-on-regression` exits non-zero for ok→bad or > threshold slowdowns. `--fail-on-slow-ok-ms 5000` enforces the hard 5s/page budget for ok pages (entries missing `total_ms` are ignored by this gate).
+- Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad --compare <other> --fail-on-regression --regression-threshold-percent 10 --fail-on-slow-ok-ms <ms> --fail-on-stage-sum-exceeds-total]` prints status counts, slowest pages, and hotspot histograms for the saved progress files. With `--compare`, it also prints status transitions plus the top regressions/improvements by `total_ms`; `--fail-on-regression` exits non-zero for ok→bad or > threshold slowdowns. `--fail-on-slow-ok-ms 5000` enforces the hard 5s/page budget for ok pages (entries missing `total_ms` are ignored by this gate).
   - `--include-trace` lists saved Chrome traces (from `target/pageset/traces/` + `target/pageset/trace-progress/`).
   - `--verbose-stats` prints structured per-page stats when present (including resource cache hit/miss/bytes breakdowns, single-flight inflight wait time, disk cache lock waits, and network fetch totals). It also prints an aggregated "Resource totals" summary plus top-N rankings for network/inflight/disk cache time (including disk lock wait time), and top-N rankings per stage bucket (fetch/css/cascade/layout/paint).
+  - Stage-bucket sanity guardrail (off by default): `--fail-on-stage-sum-exceeds-total` checks `status=ok` entries that have both `total_ms` and non-zero stage buckets, failing when `stages_ms.sum()` exceeds `total_ms` by more than `--stage-sum-tolerance-percent` (default 10%). This is intended as a regression guardrail for catching stage timing accounting bugs (double-counting or accidentally mixing CPU-summed metrics into wall-clock stage buckets).
+  - Example:
+
+    ```bash
+    cargo run --release --bin pageset_progress -- report \
+      --progress-dir progress/pages \
+      --fail-on-stage-sum-exceeds-total
+    ```
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
 - Outputs:
   - `progress/pages/<stem>.json` — small, committed per-page progress artifact

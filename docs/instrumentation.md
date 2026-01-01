@@ -52,6 +52,17 @@ should not be interpreted as “share of total render time”.
 `pageset_progress` stage buckets (`stages_ms`) intentionally use **only wall-clock stage timers** and
 exclude `_cpu_ms` fields so that `hotspot` classification stays meaningful.
 
+Stage buckets should be roughly additive for successful renders (`fetch + css + cascade + layout +
+paint ≈ total_ms`). When changing stage timing accounting, you can enable an opt-in sanity check in
+`pageset_progress report`:
+
+- `--fail-on-stage-sum-exceeds-total` checks `status=ok` entries that have both `total_ms` and
+  non-zero stage buckets, failing if the bucket sum materially exceeds `total_ms`.
+- Tune the allowance with `--stage-sum-tolerance-percent` (default 10%).
+
+This is off by default and is meant as a regression guardrail against double-counting or mixing
+CPU-summed instrumentation into wall-clock stage buckets.
+
 When diagnostics are enabled, `RenderDiagnostics.stats.resources` also captures lightweight
 resource/cache counters to explain slow fetch-heavy pagesets (e.g. cache misses vs revalidation,
 disk cache reads, single-flight inflight waits, and total network fetch time). These are surfaced in
