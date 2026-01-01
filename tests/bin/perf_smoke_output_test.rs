@@ -1,5 +1,5 @@
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde_json::Value;
 use tempfile::tempdir;
@@ -18,6 +18,7 @@ fn perf_smoke_emits_stage_breakdowns() {
       "--only",
       "flex_dashboard",
     ])
+    .stdout(Stdio::null())
     .status()
     .expect("run perf_smoke");
 
