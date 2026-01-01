@@ -3054,7 +3054,7 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
+    let Some(stops) = self.convert_stops(&item.stops) else {
       return Ok(());
     };
 
@@ -3068,11 +3068,11 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let start = Point::new(
+    let start = SkiaPoint::from_xy(
       self.ds_len(item.start.x) * raster_scale_x,
       self.ds_len(item.start.y) * raster_scale_y,
     );
-    let end = Point::new(
+    let end = SkiaPoint::from_xy(
       self.ds_len(item.end.x) * raster_scale_x,
       self.ds_len(item.end.y) * raster_scale_y,
     );
@@ -3087,19 +3087,48 @@ impl DisplayListRenderer {
       .as_ref()
       .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
-    let Some(tile) = rasterize_linear_gradient(
-      width,
-      height,
-      start,
-      end,
-      spread,
-      &stops,
-      &self.gradient_cache,
-      gradient_bucket(width.max(height)),
-    )?
-    else {
+
+    let Some(mut tile) = new_pixmap(width, height) else {
       return Ok(());
     };
+    let Some(tile_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+      return Ok(());
+    };
+    let path = PathBuilder::from_rect(tile_rect);
+    let mut paint = tiny_skia::Paint::default();
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let denom = dx * dx + dy * dy;
+    if denom <= f32::EPSILON {
+      if let Some(first) = item.stops.first() {
+        let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+        paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
+      } else {
+        return Ok(());
+      }
+    } else if let Some(shader) = tiny_skia::LinearGradient::new(
+      start,
+      end,
+      stops,
+      spread,
+      tiny_skia::Transform::identity(),
+    ) {
+      paint.shader = shader;
+    } else if let Some(first) = item.stops.first() {
+      let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+      paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
+    } else {
+      return Ok(());
+    }
+    paint.anti_alias = false;
+    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+    tile.fill_path(
+      &path,
+      &paint,
+      tiny_skia::FillRule::Winding,
+      Transform::identity(),
+      None,
+    );
     if let Some(start) = timer {
       self.record_gradient_usage((width * height) as u64, start);
     }
