@@ -1,12 +1,16 @@
 use crate::error::{RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::paint::pixmap::new_pixmap;
-use crate::render_control::{check_active, check_active_periodic};
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::style::color::Rgba;
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tiny_skia::{Pixmap, PremultipliedColorU8, SpreadMode};
+
+const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
+const GRADIENT_PARALLEL_THRESHOLD_PIXELS: usize = 1_000_000;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub enum SpreadModeKey {
@@ -88,59 +92,96 @@ impl GradientCacheKey {
 pub struct GradientLut {
   colors: Arc<Vec<PremultipliedColorU8>>,
   spread: SpreadModeKey,
-  scale: f32,
   period: f32,
+  scale: f32,
+  last_idx: usize,
+  first: PremultipliedColorU8,
+  last: PremultipliedColorU8,
 }
 
 impl GradientLut {
-  fn sample(&self, mut t: f32) -> PremultipliedColorU8 {
-    if self.colors.len() == 1 {
-      return self.colors[0];
-    }
-    if !t.is_finite() {
-      return self.colors[0];
-    }
-    match self.spread {
-      SpreadModeKey::Pad => {
-        if t <= 0.0 {
-          return self.colors[0];
-        }
-        if t >= self.period {
-          return *self.colors.last().unwrap();
-        }
-      }
-      SpreadModeKey::Repeat => {
-        if self.period > 0.0 {
-          t = t.rem_euclid(self.period);
-        } else {
-          t = 0.0;
-        }
-      }
-      SpreadModeKey::Reflect => {
-        if self.period > 0.0 {
-          let two_p = self.period * 2.0;
-          t = t.rem_euclid(two_p);
-          if t > self.period {
-            t = two_p - t;
-          }
-        } else {
-          t = 0.0;
-        }
-      }
+  #[inline(always)]
+  fn sample_mapped(&self, t: f32) -> PremultipliedColorU8 {
+    debug_assert!(t.is_finite());
+    debug_assert!(t >= 0.0);
+    if self.last_idx == 0 {
+      return self.first;
     }
 
-    let scaled = (t * self.scale).max(0.0);
-    let idx = scaled.floor() as usize;
-    if idx >= self.colors.len().saturating_sub(1) {
-      return *self.colors.last().unwrap();
+    let scaled = t * self.scale;
+    let idx = scaled as usize;
+    if idx >= self.last_idx {
+      return self.last;
     }
+    // Fast path: exact hit on a LUT entry.
     let frac = scaled - idx as f32;
     if frac <= 0.0 {
-      return self.colors[idx];
+      // SAFETY: idx < last_idx implies idx is within the LUT.
+      return unsafe { *self.colors.get_unchecked(idx) };
     }
-    let c0 = self.colors[idx];
-    let c1 = self.colors[idx + 1];
+    // SAFETY: idx < last_idx implies idx+1 is within the LUT.
+    let c0 = unsafe { *self.colors.get_unchecked(idx) };
+    let c1 = unsafe { *self.colors.get_unchecked(idx + 1) };
     blend_premul(c0, c1, frac)
+  }
+
+  #[inline(always)]
+  fn sample_pad(&self, t: f32) -> PremultipliedColorU8 {
+    if self.last_idx == 0 || !t.is_finite() {
+      return self.first;
+    }
+    if t <= 0.0 {
+      return self.first;
+    }
+    if t >= self.period {
+      return self.last;
+    }
+    self.sample_mapped(t)
+  }
+
+  #[inline(always)]
+  fn sample_repeat(&self, mut t: f32) -> PremultipliedColorU8 {
+    if self.last_idx == 0 || !t.is_finite() {
+      return self.first;
+    }
+    let p = self.period;
+    if p <= 0.0 {
+      return self.first;
+    }
+    t = t % p;
+    if t < 0.0 {
+      t += p;
+    }
+    self.sample_mapped(t)
+  }
+
+  #[inline(always)]
+  fn sample_reflect(&self, mut t: f32) -> PremultipliedColorU8 {
+    if self.last_idx == 0 || !t.is_finite() {
+      return self.first;
+    }
+    let p = self.period;
+    if p <= 0.0 {
+      return self.first;
+    }
+    let two_p = p * 2.0;
+    t = t % two_p;
+    if t < 0.0 {
+      t += two_p;
+    }
+    if t > p {
+      t = two_p - t;
+    }
+    self.sample_mapped(t)
+  }
+
+  #[inline(always)]
+  fn sample(&self, t: f32) -> PremultipliedColorU8 {
+    match self.spread {
+      SpreadModeKey::Pad => self.sample_pad(t),
+      SpreadModeKey::Repeat => self.sample_repeat(t),
+      SpreadModeKey::Reflect => self.sample_reflect(t),
+    }
   }
 }
 
@@ -163,20 +204,17 @@ impl GradientLutCache {
   }
 }
 
+#[inline(always)]
 fn blend_premul(a: PremultipliedColorU8, b: PremultipliedColorU8, t: f32) -> PremultipliedColorU8 {
+  debug_assert!(t.is_finite());
+  debug_assert!((0.0..=1.0).contains(&t));
+
   let inv = 1.0 - t;
-  let r = (a.red() as f32 * inv + b.red() as f32 * t)
-    .round()
-    .clamp(0.0, 255.0) as u8;
-  let g = (a.green() as f32 * inv + b.green() as f32 * t)
-    .round()
-    .clamp(0.0, 255.0) as u8;
-  let blue = (a.blue() as f32 * inv + b.blue() as f32 * t)
-    .round()
-    .clamp(0.0, 255.0) as u8;
-  let alpha = (a.alpha() as f32 * inv + b.alpha() as f32 * t)
-    .round()
-    .clamp(0.0, 255.0) as u8;
+  let r = (a.red() as f32 * inv + b.red() as f32 * t + 0.5) as u8;
+  let g = (a.green() as f32 * inv + b.green() as f32 * t + 0.5) as u8;
+  let blue = (a.blue() as f32 * inv + b.blue() as f32 * t + 0.5) as u8;
+  let alpha = (a.alpha() as f32 * inv + b.alpha() as f32 * t + 0.5) as u8;
+
   PremultipliedColorU8::from_rgba(r, g, blue, alpha).unwrap_or(PremultipliedColorU8::TRANSPARENT)
 }
 
@@ -186,8 +224,9 @@ fn build_gradient_lut(
   period: f32,
   bucket: u16,
 ) -> GradientLut {
-  let step_count = bucket.max(2) as usize;
-  let max_idx = (step_count - 1) as f32;
+  let max_idx = bucket.max(1) as usize;
+  let step_count = max_idx + 1;
+  let max_idx = max_idx as f32;
   let mut colors = Vec::with_capacity(step_count);
   let mut window = stops.windows(2).peekable();
   let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
@@ -234,11 +273,23 @@ fn build_gradient_lut(
     );
   }
 
+  let colors = Arc::new(colors);
+  let last_idx = colors.len().saturating_sub(1);
+  let first = colors
+    .first()
+    .copied()
+    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  let last = colors.last().copied().unwrap_or(first);
+  let scale = max_idx / period.max(1e-6);
+
   GradientLut {
     spread: spread.into(),
-    scale: max_idx / period.max(1e-6),
     period,
-    colors: Arc::new(colors),
+    scale,
+    last_idx,
+    first,
+    last,
+    colors,
   }
 }
 
@@ -283,14 +334,28 @@ pub fn rasterize_linear_gradient(
   let Some(mut pixmap) = new_pixmap(width, height) else {
     return Ok(None);
   };
+  let pixels_len = width as usize * height as usize;
   if denom.abs() <= f32::EPSILON {
     let color = lut.sample(0.0);
     let pixels = pixmap.pixels_mut();
-    let mut deadline_counter = 0usize;
-    const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
-    for chunk in pixels.chunks_mut(DEADLINE_PIXELS_STRIDE) {
-      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
-      chunk.fill(color);
+    if pixels_len >= GRADIENT_PARALLEL_THRESHOLD_PIXELS {
+      let deadline = active_deadline();
+      pixels
+        .par_chunks_mut(DEADLINE_PIXELS_STRIDE)
+        .try_for_each(|chunk| {
+          with_deadline(deadline.as_ref(), || {
+            let mut counter = 0usize;
+            check_active_periodic(&mut counter, 1, RenderStage::Paint)?;
+            chunk.fill(color);
+            Ok(())
+          })
+        })?;
+    } else {
+      let mut deadline_counter = 0usize;
+      for chunk in pixels.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+        check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+        chunk.fill(color);
+      }
     }
     return Ok(Some(pixmap));
   }
@@ -299,22 +364,59 @@ pub fn rasterize_linear_gradient(
   let step_x = dx * inv_len;
   let step_y = dy * inv_len;
   let start_dot = (0.5 - start.x) * dx + (0.5 - start.y) * dy;
-  let mut row_start = start_dot * inv_len;
+  let row_start0 = start_dot * inv_len;
   let stride = width as usize;
   let pixels = pixmap.pixels_mut();
-  let mut deadline_counter = 0usize;
-  const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
-  for y in 0..height as usize {
-    let row_base = y * stride;
-    let mut t = row_start;
-    for chunk in pixels[row_base..row_base + stride].chunks_mut(DEADLINE_PIXELS_STRIDE) {
-      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
-      for pixel in chunk {
-        *pixel = lut.sample(t);
-        t += step_x;
+  let spread_key: SpreadModeKey = spread.into();
+  let sample_row = |y: usize, row: &mut [PremultipliedColorU8]| -> Result<(), RenderError> {
+    let mut t = row_start0 + y as f32 * step_y;
+    let mut deadline_counter = 0usize;
+    match spread_key {
+      SpreadModeKey::Pad => {
+        for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          for pixel in chunk {
+            *pixel = lut.sample_pad(t);
+            t += step_x;
+          }
+        }
       }
+      SpreadModeKey::Repeat => {
+        for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          for pixel in chunk {
+            *pixel = lut.sample_repeat(t);
+            t += step_x;
+          }
+        }
+      }
+      SpreadModeKey::Reflect => {
+        for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          for pixel in chunk {
+            *pixel = lut.sample_reflect(t);
+            t += step_x;
+          }
+        }
+      }
+    };
+    Ok(())
+  };
+
+  if pixels_len >= GRADIENT_PARALLEL_THRESHOLD_PIXELS {
+    let deadline = active_deadline();
+    pixels
+      .par_chunks_mut(stride)
+      .enumerate()
+      .try_for_each(|(y, row)| {
+        with_deadline(deadline.as_ref(), || -> Result<(), RenderError> {
+          sample_row(y, row)
+        })
+      })?;
+  } else {
+    for (y, row) in pixels.chunks_mut(stride).enumerate() {
+      sample_row(y, row)?;
     }
-    row_start += step_y;
   }
 
   Ok(Some(pixmap))
@@ -347,24 +449,75 @@ pub fn rasterize_conic_gradient(
   let stride = width as usize;
   let pixels = pixmap.pixels_mut();
   let dx0 = 0.5 - center.x;
-  let mut deadline_counter = 0usize;
-  const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
-  for y in 0..height as usize {
+  let pixels_len = width as usize * height as usize;
+  let spread_key: SpreadModeKey = spread.into();
+  let sample_row = |y: usize, row: &mut [PremultipliedColorU8]| -> Result<(), RenderError> {
     let dy = y as f32 + 0.5 - center.y;
     let mut dx = dx0;
-    let row_base = y * stride;
-    for chunk in pixels[row_base..row_base + stride].chunks_mut(DEADLINE_PIXELS_STRIDE) {
-      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
-      for pixel in chunk {
-        let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
-        if pos < 0.0 {
-          pos += period;
-        } else if pos >= period {
-          pos -= period;
+    let mut deadline_counter = 0usize;
+    match spread_key {
+      SpreadModeKey::Pad => {
+        for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          for pixel in chunk {
+            let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
+            if pos < 0.0 {
+              pos += period;
+            } else if pos >= period {
+              pos -= period;
+            }
+            *pixel = lut.sample_pad(pos);
+            dx += 1.0;
+          }
         }
-        *pixel = lut.sample(pos.max(0.0));
-        dx += 1.0;
       }
+      SpreadModeKey::Repeat => {
+        for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          for pixel in chunk {
+            let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
+            if pos < 0.0 {
+              pos += period;
+            } else if pos >= period {
+              pos -= period;
+            }
+            *pixel = lut.sample_repeat(pos);
+            dx += 1.0;
+          }
+        }
+      }
+      SpreadModeKey::Reflect => {
+        for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          for pixel in chunk {
+            let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
+            if pos < 0.0 {
+              pos += period;
+            } else if pos >= period {
+              pos -= period;
+            }
+            *pixel = lut.sample_reflect(pos);
+            dx += 1.0;
+          }
+        }
+      }
+    };
+    Ok(())
+  };
+
+  if pixels_len >= GRADIENT_PARALLEL_THRESHOLD_PIXELS {
+    let deadline = active_deadline();
+    pixels
+      .par_chunks_mut(stride)
+      .enumerate()
+      .try_for_each(|(y, row)| {
+        with_deadline(deadline.as_ref(), || -> Result<(), RenderError> {
+          sample_row(y, row)
+        })
+      })?;
+  } else {
+    for (y, row) in pixels.chunks_mut(stride).enumerate() {
+      sample_row(y, row)?;
     }
   }
 
@@ -570,7 +723,13 @@ mod tests {
     });
     let elapsed = start.elapsed();
     assert!(
-      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
       "expected timeout, got {result:?}"
     );
     assert!(

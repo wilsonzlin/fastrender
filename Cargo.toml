@@ -162,6 +162,10 @@ harness = false
 name = "paint_benches"
 harness = false
 
+[[bench]]
+name = "gradient_raster"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true
