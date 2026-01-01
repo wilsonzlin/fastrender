@@ -22,6 +22,7 @@ use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
 use selectors::parser::SelectorList;
+use std::cell::RefCell;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
@@ -60,10 +61,61 @@ impl CssParseError {
     column: u32,
     css_source: &str,
   ) -> Self {
-    let snippet = css_source
-      .lines()
-      .nth(line.saturating_sub(1) as usize)
-      .map(|line| line.trim_end().to_string());
+    #[derive(Default)]
+    struct SnippetCache {
+      ptr: *const u8,
+      len: usize,
+      line_starts: Vec<usize>,
+    }
+
+    impl SnippetCache {
+      fn ensure_index(&mut self, css_source: &str) {
+        let ptr = css_source.as_ptr();
+        let len = css_source.len();
+        if self.ptr == ptr && self.len == len {
+          return;
+        }
+
+        self.ptr = ptr;
+        self.len = len;
+        self.line_starts.clear();
+        self.line_starts.push(0);
+        for (idx, byte) in css_source.as_bytes().iter().enumerate() {
+          if *byte == b'\n' {
+            self.line_starts.push(idx + 1);
+          }
+        }
+      }
+
+      fn line_slice<'a>(&self, css_source: &'a str, line: u32) -> Option<&'a str> {
+        let idx = line.saturating_sub(1) as usize;
+        let start = *self.line_starts.get(idx)?;
+        let mut end = self
+          .line_starts
+          .get(idx + 1)
+          .copied()
+          .unwrap_or(css_source.len());
+        if end > start && css_source.as_bytes().get(end - 1) == Some(&b'\n') {
+          end = end.saturating_sub(1);
+        }
+        if end > start && css_source.as_bytes().get(end - 1) == Some(&b'\r') {
+          end = end.saturating_sub(1);
+        }
+        css_source.get(start..end)
+      }
+    }
+
+    thread_local! {
+      static SNIPPET_CACHE: RefCell<SnippetCache> = RefCell::new(SnippetCache::default());
+    }
+
+    let snippet = SNIPPET_CACHE.with(|cache| {
+      let mut cache = cache.borrow_mut();
+      cache.ensure_index(css_source);
+      cache
+        .line_slice(css_source, line)
+        .map(|line| line.trim_end().to_string())
+    });
     Self {
       message: message.into(),
       line,

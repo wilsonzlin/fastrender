@@ -60,7 +60,7 @@ use cssparser::ToCss;
 use cssparser::Token;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::Hasher;
 use std::num::NonZeroUsize;
@@ -74,6 +74,10 @@ const CSS_DEADLINE_STRIDE: usize = 64;
 
 thread_local! {
   static CSS_PARSE_DEADLINE: RefCell<CssParseDeadline> = RefCell::new(CssParseDeadline::new());
+}
+
+thread_local! {
+  static CSS_COLLECT_ERRORS: Cell<bool> = Cell::new(false);
 }
 
 #[cfg(test)]
@@ -110,6 +114,31 @@ fn reset_css_deadline_state() {
   CSS_PARSE_DEADLINE.with(|state| {
     *state.borrow_mut() = CssParseDeadline::new();
   });
+}
+
+struct CssCollectErrorsGuard {
+  prev: bool,
+}
+
+impl CssCollectErrorsGuard {
+  fn new(enabled: bool) -> Self {
+    let prev = CSS_COLLECT_ERRORS.with(|cell| {
+      let prev = cell.get();
+      cell.set(enabled);
+      prev
+    });
+    Self { prev }
+  }
+}
+
+impl Drop for CssCollectErrorsGuard {
+  fn drop(&mut self) {
+    CSS_COLLECT_ERRORS.with(|cell| cell.set(self.prev));
+  }
+}
+
+fn css_collect_errors_enabled() -> bool {
+  CSS_COLLECT_ERRORS.with(|cell| cell.get())
 }
 
 fn css_deadline_allows_progress() -> bool {
@@ -168,6 +197,34 @@ fn hash_bytes_for_stylesheet_cache(bytes: &[u8]) -> u64 {
   hasher.finish()
 }
 
+const DECLARATION_VALUE_CACHE_CAPACITY: usize = 8192;
+const DECLARATION_VALUE_CACHE_MAX_LEN: usize = 256;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct DeclarationValueCacheKey {
+  context: DeclarationContext,
+  property_hash: u64,
+  property_len: u16,
+  value_hash: u64,
+  value_len: u16,
+}
+
+#[derive(Debug, Clone)]
+struct DeclarationValueCacheEntry {
+  property: Box<str>,
+  value: Box<str>,
+  parsed: PropertyValue,
+}
+
+thread_local! {
+  static DECLARATION_VALUE_CACHE: RefCell<
+    LruCache<DeclarationValueCacheKey, Vec<DeclarationValueCacheEntry>>,
+  > = RefCell::new(LruCache::new(
+    NonZeroUsize::new(DECLARATION_VALUE_CACHE_CAPACITY)
+      .expect("Declaration value cache capacity must be non-zero"),
+  ));
+}
+
 fn stylesheet_cache_key(
   css: &str,
   base_url: Option<&str>,
@@ -198,7 +255,7 @@ fn stylesheet_cache_key(
 /// Errors are silently ignored for backward compatibility. Use
 /// [`parse_stylesheet_with_errors`] to capture parse errors.
 pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
-  let result = parse_stylesheet_collecting_errors(css)?;
+  let result = parse_stylesheet_collecting_errors(css, false)?;
   Ok(result.stylesheet)
 }
 
@@ -226,7 +283,7 @@ pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
 /// assert!(result.stylesheet.rules.len() > 0);
 /// ```
 pub fn parse_stylesheet_with_errors(css: &str) -> Result<CssParseResult> {
-  parse_stylesheet_collecting_errors(css)
+  parse_stylesheet_collecting_errors(css, true)
 }
 
 /// Parse a CSS stylesheet while pruning @media/@supports blocks that cannot match the provided
@@ -240,7 +297,8 @@ pub fn parse_stylesheet_with_media(
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
 ) -> Result<StyleSheet> {
-  let result = parse_stylesheet_collecting_errors_with_context(css, Some(media_ctx), cache)?;
+  let result =
+    parse_stylesheet_collecting_errors_with_context(css, Some(media_ctx), cache, false)?;
   Ok(result.stylesheet)
 }
 
@@ -283,7 +341,8 @@ pub(crate) fn parse_stylesheet_with_media_cached_shared(
     }
   }
 
-  let parsed = parse_stylesheet_collecting_errors_with_context(css, Some(media_ctx), cache)?;
+  let parsed =
+    parse_stylesheet_collecting_errors_with_context(css, Some(media_ctx), cache, false)?;
   let sheet = Arc::new(parsed.stylesheet);
 
   let mut cache = parsed_stylesheet_cache()
@@ -297,8 +356,8 @@ pub(crate) fn parse_stylesheet_with_media_cached_shared(
 }
 
 /// Internal function that does the actual parsing with error collection
-fn parse_stylesheet_collecting_errors(css: &str) -> Result<CssParseResult> {
-  parse_stylesheet_collecting_errors_with_context(css, None, None)
+fn parse_stylesheet_collecting_errors(css: &str, collect_errors: bool) -> Result<CssParseResult> {
+  parse_stylesheet_collecting_errors_with_context(css, None, None, collect_errors)
 }
 
 /// Internal function that does the actual parsing with error collection and optional media-aware
@@ -307,8 +366,10 @@ fn parse_stylesheet_collecting_errors_with_context(
   css: &str,
   media_ctx: Option<&MediaContext>,
   media_query_cache: Option<&mut MediaQueryCache>,
+  collect_errors: bool,
 ) -> Result<CssParseResult> {
   reset_css_deadline_state();
+  let _collect_errors_guard = CssCollectErrorsGuard::new(collect_errors);
   let mut input = ParserInput::new(css);
   let mut parser = Parser::new(&mut input);
   let mut errors = Vec::new();
@@ -340,6 +401,7 @@ fn parse_rule_list_collecting<'i, 't>(
 ) -> Vec<CssRule> {
   let mut rules = Vec::new();
   let mut media_query_cache = media_query_cache;
+  let collect_errors = css_collect_errors_enabled();
 
   while !parser.is_exhausted() {
     if !css_deadline_allows_progress() {
@@ -363,15 +425,17 @@ fn parse_rule_list_collecting<'i, 't>(
       }
       Ok(None) => {} // Comment or skipped at-rule
       Err(e) => {
-        // Collect the error
-        let location = e.location;
-        let message = format!("{:?}", e.kind);
-        errors.push(CssParseError::with_snippet(
-          message,
-          location.line + 1,
-          location.column + 1,
-          css_source,
-        ));
+        if collect_errors {
+          // Collect the error
+          let location = e.location;
+          let message = format!("{:?}", e.kind);
+          errors.push(CssParseError::with_snippet(
+            message,
+            location.line + 1,
+            location.column + 1,
+            css_source,
+          ));
+        }
 
         // Try to recover by skipping to next rule
         recover_from_error(parser);
@@ -439,67 +503,79 @@ fn parse_rule<'i, 't>(
   // because try_parse only restores position on ERROR
   if let Ok(result) = parser.try_parse(|p| {
     if let Ok(Token::AtKeyword(kw)) = p.next() {
-      let kw_str = kw.to_string();
-      match kw_str.as_str() {
-        "import" => parse_import_rule(p),
-        "media" => parse_media_rule(
+      let kw = kw.as_ref();
+      if kw.eq_ignore_ascii_case("import") {
+        parse_import_rule(p)
+      } else if kw.eq_ignore_ascii_case("media") {
+        parse_media_rule(
           p,
           errors,
           parent_selectors,
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
-        ),
-        "container" => parse_container_rule(
+        )
+      } else if kw.eq_ignore_ascii_case("container") {
+        parse_container_rule(
           p,
           errors,
           parent_selectors,
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
-        ),
-        "scope" => parse_scope_rule(
+        )
+      } else if kw.eq_ignore_ascii_case("scope") {
+        parse_scope_rule(
           p,
           errors,
           parent_selectors,
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
-        ),
-        "supports" => parse_supports_rule(
+        )
+      } else if kw.eq_ignore_ascii_case("supports") {
+        parse_supports_rule(
           p,
           errors,
           parent_selectors,
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
-        ),
-        "layer" => parse_layer_rule(
+        )
+      } else if kw.eq_ignore_ascii_case("layer") {
+        parse_layer_rule(
           p,
           errors,
           parent_selectors,
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
-        ),
-        "starting-style" => parse_starting_style_rule(
+        )
+      } else if kw.eq_ignore_ascii_case("starting-style") {
+        parse_starting_style_rule(
           p,
           errors,
           parent_selectors,
           css_source,
           media_ctx,
           media_query_cache.as_deref_mut(),
-        ),
-        "page" => parse_page_rule(p, css_source),
-        "counter-style" => parse_counter_style_rule(p),
-        "font-palette-values" => parse_font_palette_values_rule(p, css_source),
-        "font-face" => parse_font_face_rule(p),
-        "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p, css_source),
-        "property" => parse_property_rule(p),
-        _ => {
-          skip_at_rule(p);
-          Ok(None)
-        }
+        )
+      } else if kw.eq_ignore_ascii_case("page") {
+        parse_page_rule(p, css_source)
+      } else if kw.eq_ignore_ascii_case("counter-style") {
+        parse_counter_style_rule(p)
+      } else if kw.eq_ignore_ascii_case("font-palette-values") {
+        parse_font_palette_values_rule(p, css_source)
+      } else if kw.eq_ignore_ascii_case("font-face") {
+        parse_font_face_rule(p)
+      } else if kw.eq_ignore_ascii_case("keyframes") || kw.eq_ignore_ascii_case("-webkit-keyframes")
+      {
+        parse_keyframes_rule(p, css_source)
+      } else if kw.eq_ignore_ascii_case("property") {
+        parse_property_rule(p)
+      } else {
+        skip_at_rule(p);
+        Ok(None)
       }
     } else {
       // Not an at-rule, return error to restore position
@@ -3309,62 +3385,64 @@ fn parse_nested_at_rule<'i, 't>(
       )
     }
   };
-  let kw_lower = kw.to_ascii_lowercase();
-  match kw_lower.as_str() {
-    "media" => parse_media_rule(
+  let kw = kw.as_ref();
+  if kw.eq_ignore_ascii_case("media") {
+    parse_media_rule(
       parser,
       errors,
       Some(parent_selectors),
       css_source,
       media_ctx,
       media_query_cache,
-    ),
-    "supports" => parse_supports_rule(
+    )
+  } else if kw.eq_ignore_ascii_case("supports") {
+    parse_supports_rule(
       parser,
       errors,
       Some(parent_selectors),
       css_source,
       media_ctx,
       media_query_cache,
-    ),
-    "container" => parse_container_rule(
+    )
+  } else if kw.eq_ignore_ascii_case("container") {
+    parse_container_rule(
       parser,
       errors,
       Some(parent_selectors),
       css_source,
       media_ctx,
       media_query_cache,
-    ),
-    "layer" => parse_layer_rule(
+    )
+  } else if kw.eq_ignore_ascii_case("layer") {
+    parse_layer_rule(
       parser,
       errors,
       Some(parent_selectors),
       css_source,
       media_ctx,
       media_query_cache,
-    ),
-    "starting-style" => {
-      parse_starting_style_rule(
-        parser,
-        errors,
-        Some(parent_selectors),
-        css_source,
-        media_ctx,
-        media_query_cache,
-      )
-    }
-    "nest" => parse_nest_rule(
+    )
+  } else if kw.eq_ignore_ascii_case("starting-style") {
+    parse_starting_style_rule(
+      parser,
+      errors,
+      Some(parent_selectors),
+      css_source,
+      media_ctx,
+      media_query_cache,
+    )
+  } else if kw.eq_ignore_ascii_case("nest") {
+    parse_nest_rule(
       parser,
       errors,
       parent_selectors,
       css_source,
       media_ctx,
       media_query_cache,
-    ),
-    _ => {
-      skip_at_rule(parser);
-      Ok(None)
-    }
+    )
+  } else {
+    skip_at_rule(parser);
+    Ok(None)
   }
 }
 
@@ -3380,6 +3458,7 @@ fn parse_style_block<'i, 't>(
   let mut declarations = Vec::new();
   let mut nested_rules = Vec::new();
   let mut media_query_cache = media_query_cache;
+  let collect_errors = css_collect_errors_enabled();
 
   while !parser.is_exhausted() {
     if !css_deadline_allows_progress() {
@@ -3418,9 +3497,13 @@ fn parse_style_block<'i, 't>(
       continue;
     }
 
-    if let Some(decl) =
-      parse_declaration_collecting_errors(parser, errors, DeclarationContext::Style, css_source)
-    {
+    if collect_errors {
+      if let Some(decl) =
+        parse_declaration_collecting_errors(parser, errors, DeclarationContext::Style, css_source)
+      {
+        declarations.push(decl);
+      }
+    } else if let Some(decl) = parse_declaration(parser, DeclarationContext::Style) {
       declarations.push(decl);
     }
   }
@@ -3599,6 +3682,77 @@ fn parse_nest_rule<'i, 't>(
   })))
 }
 
+fn parse_property_value_in_context_cached(
+  context: DeclarationContext,
+  property: &str,
+  value: &str,
+) -> Option<PropertyValue> {
+  if property.starts_with("--") {
+    // Custom properties preserve their token stream verbatim; don't normalize or cache.
+    return parse_property_value_in_context(context, property, value);
+  }
+
+  // Most author stylesheets contain a long tail of unknown properties. Avoid hashing/caching work
+  // on the fast path by checking property support up-front (mirrors `parse_property_value_in_context`).
+  if matches!(context, DeclarationContext::Style)
+    && !super::properties::is_known_style_property(property)
+  {
+    return None;
+  }
+
+  // Declarations in @page blocks are rare relative to style rules; keep the cache focused on the
+  // hot path.
+  if matches!(context, DeclarationContext::Page) {
+    return parse_property_value_in_context(context, property, value);
+  }
+
+  let value = value.trim();
+  if value.is_empty() {
+    return None;
+  }
+
+  if value.len() > DECLARATION_VALUE_CACHE_MAX_LEN {
+    return parse_property_value_in_context(context, property, value);
+  }
+
+  let key = DeclarationValueCacheKey {
+    context,
+    property_hash: hash_bytes_for_stylesheet_cache(property.as_bytes()),
+    property_len: property.len() as u16,
+    value_hash: hash_bytes_for_stylesheet_cache(value.as_bytes()),
+    value_len: value.len() as u16,
+  };
+
+  if let Some(hit) = DECLARATION_VALUE_CACHE.with(|cache| {
+    let mut cache = cache.borrow_mut();
+    cache.get(&key).and_then(|entries| {
+      entries
+        .iter()
+        .find(|entry| entry.property.as_ref() == property && entry.value.as_ref() == value)
+        .map(|entry| entry.parsed.clone())
+    })
+  }) {
+    return Some(hit);
+  }
+
+  let parsed = parse_property_value_in_context(context, property, value)?;
+  let parsed_for_cache = parsed.clone();
+  DECLARATION_VALUE_CACHE.with(|cache| {
+    let mut cache = cache.borrow_mut();
+    let entry = DeclarationValueCacheEntry {
+      property: property.to_string().into_boxed_str(),
+      value: value.to_string().into_boxed_str(),
+      parsed: parsed_for_cache,
+    };
+    if let Some(entries) = cache.get_mut(&key) {
+      entries.push(entry);
+    } else {
+      cache.put(key, vec![entry]);
+    }
+  });
+  Some(parsed)
+}
+
 fn parse_declaration<'i, 't>(
   parser: &mut Parser<'i, 't>,
   context: DeclarationContext,
@@ -3658,7 +3812,7 @@ fn parse_declaration<'i, 't>(
     full_slice_raw.trim_end_matches(';').trim_end()
   };
 
-  let parsed_value = parse_property_value_in_context(context, &property, value)?;
+  let parsed_value = parse_property_value_in_context_cached(context, &property, value)?;
   let raw_value = if property_needs_raw_value(&property) {
     value.to_string()
   } else {
@@ -3757,7 +3911,7 @@ fn parse_declaration_collecting_errors<'i, 't>(
     full_slice_raw.trim_end_matches(';').trim_end()
   };
 
-  let Some(parsed_value) = parse_property_value_in_context(context, &property, value) else {
+  let Some(parsed_value) = parse_property_value_in_context_cached(context, &property, value) else {
     errors.push(CssParseError::with_snippet(
       format!("invalid value for `{property}`"),
       value_location.line + 1,
