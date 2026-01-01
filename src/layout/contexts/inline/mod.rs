@@ -6038,31 +6038,39 @@ fn merge_breaks(
 
   if !allow_soft_wrap {
     base.retain(|b| b.break_type == BreakType::Mandatory);
+    if forced.is_empty() {
+      return base;
+    }
+    // `base` and `forced` are both sorted by byte offset; avoid sorting by merging the mandatory
+    // lists directly.
+    let mut merged = Vec::with_capacity(base.len() + forced.len());
+    let mut base_iter = base.into_iter().peekable();
+    let mut forced_iter = forced.into_iter().peekable();
+    while base_iter.peek().is_some() || forced_iter.peek().is_some() {
+      match (base_iter.peek(), forced_iter.peek()) {
+        (Some(a), Some(b)) => {
+          if a.byte_offset < b.byte_offset {
+            merged.push(base_iter.next().unwrap());
+          } else if a.byte_offset > b.byte_offset {
+            merged.push(forced_iter.next().unwrap());
+          } else {
+            // Same byte offset: both are mandatory breaks, so keep a single entry.
+            merged.push(base_iter.next().unwrap());
+            forced_iter.next();
+          }
+        }
+        (Some(_), None) => merged.push(base_iter.next().unwrap()),
+        (None, Some(_)) => merged.push(forced_iter.next().unwrap()),
+        (None, None) => break,
+      }
+    }
+    return merged;
   }
 
+  // When soft wrapping is allowed, break opportunities will be sorted and deduplicated later when
+  // additional `word-break` / `overflow-wrap` opportunities are applied. Avoid doing that work
+  // twice by only appending here.
   base.extend(forced);
-  base.sort_by(|a, b| {
-    a.byte_offset
-      .cmp(&b.byte_offset)
-      .then_with(|| match (a.break_type, b.break_type) {
-        (BreakType::Mandatory, BreakType::Allowed) => std::cmp::Ordering::Less,
-        (BreakType::Allowed, BreakType::Mandatory) => std::cmp::Ordering::Greater,
-        _ => std::cmp::Ordering::Equal,
-      })
-  });
-
-  base.dedup_by(|a, b| {
-    if a.byte_offset != b.byte_offset {
-      return false;
-    }
-    if let BreakType::Mandatory = a.break_type {
-      *b = *a;
-    } else {
-      b.adds_hyphen |= a.adds_hyphen;
-    }
-    true
-  });
-
   base
 }
 
@@ -6583,27 +6591,43 @@ fn apply_break_properties(
     result.extend(char_boundary_breaks(text));
   }
 
-  result.sort_by_key(|b| b.byte_offset);
-  result.dedup_by(|a, b| {
-    if a.byte_offset != b.byte_offset {
-      return false;
+  let mut sorted = true;
+  let mut has_duplicates = false;
+  let mut prev_offset: Option<usize> = None;
+  for brk in &result {
+    if let Some(prev) = prev_offset {
+      if brk.byte_offset < prev {
+        sorted = false;
+        break;
+      }
+      if brk.byte_offset == prev {
+        has_duplicates = true;
+      }
     }
-    // Collapse to the strongest break at this offset, preserving any hyphen insertions.
-    let break_type = if matches!(a.break_type, BreakType::Mandatory)
-      || matches!(b.break_type, BreakType::Mandatory)
-    {
-      BreakType::Mandatory
-    } else {
-      BreakType::Allowed
-    };
-    let adds_hyphen = a.adds_hyphen || b.adds_hyphen;
-    *a = BreakOpportunity {
-      byte_offset: a.byte_offset,
-      break_type,
-      adds_hyphen,
-    };
-    true
-  });
+    prev_offset = Some(brk.byte_offset);
+  }
+
+  if !sorted {
+    result.sort_by_key(|b| b.byte_offset);
+    has_duplicates = true;
+  }
+
+  if has_duplicates {
+    result.dedup_by(|a, b| {
+      if a.byte_offset != b.byte_offset {
+        return false;
+      }
+      // Collapse to the strongest break at this offset, preserving any hyphen insertions.
+      if matches!(a.break_type, BreakType::Mandatory) || matches!(b.break_type, BreakType::Mandatory)
+      {
+        b.break_type = BreakType::Mandatory;
+      } else {
+        b.break_type = BreakType::Allowed;
+      }
+      b.adds_hyphen |= a.adds_hyphen;
+      true
+    });
+  }
 
   result
 }
@@ -13742,6 +13766,43 @@ mod tests {
     assert!(
       has_mandatory_at_newline,
       "mandatory newline break should survive deduplication against added anywhere breaks"
+    );
+  }
+
+  #[test]
+  fn apply_break_properties_merges_duplicate_breaks() {
+    // `apply_break_properties` may receive duplicate break entries at the same byte offset when we
+    // combine sources such as mandatory line breaks and hyphenation. Ensure we collapse duplicates
+    // to the strongest break while preserving hyphen insertion flags, even when the stronger break
+    // appears later in the input list.
+    let breaks = vec![
+      BreakOpportunity::allowed(1),
+      BreakOpportunity::mandatory(1),
+      BreakOpportunity::allowed(2),
+      BreakOpportunity::with_hyphen(2, BreakType::Allowed, true),
+    ];
+    let result = apply_break_properties(
+      "abc",
+      breaks,
+      WordBreak::Normal,
+      OverflowWrap::Normal,
+      true,
+    );
+
+    let mut at_1 = result.iter().filter(|b| b.byte_offset == 1);
+    let brk_1 = at_1.next().expect("break at 1");
+    assert!(at_1.next().is_none(), "expected a single break at 1");
+    assert!(
+      matches!(brk_1.break_type, BreakType::Mandatory),
+      "mandatory break should win when duplicates share an offset"
+    );
+
+    let mut at_2 = result.iter().filter(|b| b.byte_offset == 2);
+    let brk_2 = at_2.next().expect("break at 2");
+    assert!(at_2.next().is_none(), "expected a single break at 2");
+    assert!(
+      brk_2.adds_hyphen,
+      "hyphen insertion flags should survive deduplication"
     );
   }
 
