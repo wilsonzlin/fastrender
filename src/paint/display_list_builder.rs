@@ -1539,15 +1539,14 @@ impl DisplayListBuilder {
     if self.deadline_reached() {
       return;
     }
-    let mut children: Vec<&StackingContext> = context.children.iter().collect();
-    children.sort_by(|a, b| {
-      a.z_index
-        .cmp(&b.z_index)
-        .then_with(|| a.tree_order.cmp(&b.tree_order))
-    });
-
-    let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
-    let (_zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
+    // Children are already sorted by (z_index, tree_order) by the stacking tree builder.
+    // Split into negative and positive z-index slices; z-index==0 contexts are handled by
+    // layer 6 so they are not double-painted here.
+    let children = context.children.as_slice();
+    let first_non_neg = children.partition_point(|c| c.z_index < 0);
+    let first_pos = children.partition_point(|c| c.z_index <= 0);
+    let neg = &children[..first_non_neg];
+    let pos = &children[first_pos..];
 
     // Descendants are positioned relative to the stacking context's origin (the first fragment).
     let descendant_offset = Point::new(
@@ -1572,7 +1571,6 @@ impl DisplayListBuilder {
         )
       })
       .unwrap_or(offset);
-    let layer6_items = context.layer6_items();
     let mask = root_style.and_then(|style| self.resolve_mask(style, context_bounds));
     let root_background = if is_root {
       root_fragment.and_then(|fragment| {
@@ -1823,7 +1821,7 @@ impl DisplayListBuilder {
       self.emit_fragment_list(&context.layer3_blocks, descendant_offset, child_visibility);
       self.emit_fragment_list(&context.layer4_floats, descendant_offset, child_visibility);
       self.emit_fragment_list(&context.layer5_inlines, descendant_offset, child_visibility);
-      for item in &layer6_items {
+      for item in context.layer6_iter() {
         if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
           break;
         }
@@ -1928,7 +1926,7 @@ impl DisplayListBuilder {
     self.emit_fragment_list(&context.layer3_blocks, descendant_offset, child_visibility);
     self.emit_fragment_list(&context.layer4_floats, descendant_offset, child_visibility);
     self.emit_fragment_list(&context.layer5_inlines, descendant_offset, child_visibility);
-    for item in &layer6_items {
+    for item in context.layer6_iter() {
       if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
         break;
       }
@@ -4475,7 +4473,8 @@ impl DisplayListBuilder {
                       let max_y = image.height.saturating_sub(src_y);
                       let crop_w = src_w.min(max_x);
                       let crop_h = src_h.min(max_y);
-                      if src_x == 0 && src_y == 0 && crop_w == image.width && crop_h == image.height {
+                      if src_x == 0 && src_y == 0 && crop_w == image.width && crop_h == image.height
+                      {
                         None
                       } else {
                         Some(src_rect)
@@ -6682,6 +6681,8 @@ mod tests {
 
     root.add_child(neg);
     root.add_child(pos);
+    root.sort_children();
+    root.compute_bounds();
 
     let list = DisplayListBuilder::new().build_from_stacking(&root);
     let origins: Vec<f32> = list

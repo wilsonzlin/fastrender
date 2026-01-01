@@ -56,9 +56,9 @@
 //! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);
 //! ```
 
+use crate::error::{Error, RenderStage, Result};
 use crate::geometry::Point;
 use crate::geometry::Rect;
-use crate::error::{Error, RenderStage, Result};
 use crate::render_control::check_active_periodic;
 use crate::style::display::Display;
 use crate::style::position::Position;
@@ -352,17 +352,10 @@ impl StackingContext {
     positive
   }
 
-  /// Returns layer 6 items (positioned fragments and z-index 0 stacking contexts) in tree order.
-  pub fn layer6_items(&self) -> Vec<Layer6Item<'_>> {
-    let mut items: Vec<Layer6Item<'_>> = Vec::new();
-    for frag in &self.layer6_positioned {
-      items.push(Layer6Item::Positioned(frag));
-    }
-    for child in self.children.iter().filter(|c| c.z_index == 0) {
-      items.push(Layer6Item::ZeroContext(child));
-    }
-    items.sort_by_key(|item| item.tree_order());
-    items
+  /// Returns layer 6 items (positioned fragments + z-index: 0 child stacking contexts)
+  /// in tree order, without allocating.
+  pub fn layer6_iter(&self) -> Layer6Iter<'_> {
+    Layer6Iter::new(self)
   }
 
   /// Sorts all child stacking contexts by z-index (for paint order)
@@ -931,7 +924,10 @@ where
 /// This is the deadline-aware variant used by the display list pipeline so the
 /// builder can fall back to a different paint backend instead of getting
 /// hard-killed after the render timeout expires.
-pub fn build_stacking_tree_with_styles_checked<F>(root: &FragmentNode, get_style: F) -> Result<StackingContext>
+pub fn build_stacking_tree_with_styles_checked<F>(
+  root: &FragmentNode,
+  get_style: F,
+) -> Result<StackingContext>
 where
   F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>> + Clone,
 {
@@ -1002,7 +998,9 @@ pub fn build_stacking_tree_from_fragment_tree(root: &FragmentNode) -> StackingCo
 
 /// Builds a stacking context tree from a fragment tree using the fragment's embedded styles while
 /// surfacing timeouts.
-pub fn build_stacking_tree_from_fragment_tree_checked(root: &FragmentNode) -> Result<StackingContext> {
+pub fn build_stacking_tree_from_fragment_tree_checked(
+  root: &FragmentNode,
+) -> Result<StackingContext> {
   build_stacking_tree_with_styles_checked(root, |fragment| fragment.style.clone())
 }
 
@@ -1063,7 +1061,8 @@ fn build_stacking_tree_with_styles_internal_checked<F>(
 where
   F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>>,
 {
-  check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Paint).map_err(Error::Render)?;
+  check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+    .map_err(Error::Render)?;
 
   let current_order = *tree_order;
   *tree_order += 1;
@@ -1374,6 +1373,83 @@ impl<'a> Layer6Item<'a> {
   }
 }
 
+/// Iterator for the layer 6 paint order merge (positioned fragments + z-index: 0 contexts).
+///
+/// This is a hot path: display list building calls it for every stacking context. It performs
+/// a zero-allocation merge of two already-sorted sequences by `tree_order`.
+#[derive(Clone, Copy)]
+pub struct Layer6Iter<'a> {
+  positioned: &'a [OrderedFragment],
+  positioned_idx: usize,
+  zero_contexts: &'a [StackingContext],
+  zero_idx: usize,
+}
+
+impl<'a> Layer6Iter<'a> {
+  fn new(context: &'a StackingContext) -> Self {
+    let children = context.children.as_slice();
+    // Children are already sorted by (z_index, tree_order) via `StackingContext::sort_children()`.
+    // The z-index==0 subsequence is thus also in tree order and can be merged directly.
+    let first_non_neg = children.partition_point(|c| c.z_index < 0);
+    let first_pos = children.partition_point(|c| c.z_index <= 0);
+    let zero_contexts = &children[first_non_neg..first_pos];
+
+    Self {
+      positioned: context.layer6_positioned.as_slice(),
+      positioned_idx: 0,
+      zero_contexts,
+      zero_idx: 0,
+    }
+  }
+
+  fn is_done(&self) -> bool {
+    self.positioned_idx >= self.positioned.len() && self.zero_idx >= self.zero_contexts.len()
+  }
+}
+
+impl<'a> Iterator for Layer6Iter<'a> {
+  type Item = Layer6Item<'a>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    let next_positioned = self.positioned.get(self.positioned_idx);
+    let next_zero = self.zero_contexts.get(self.zero_idx);
+
+    match (next_positioned, next_zero) {
+      (Some(positioned), Some(zero_ctx)) => {
+        // If two items ever share a tree order (unlikely), preserve the prior stable-sort behavior:
+        // positioned fragments were inserted before contexts into the combined list, so they win ties.
+        if positioned.tree_order <= zero_ctx.tree_order {
+          self.positioned_idx += 1;
+          Some(Layer6Item::Positioned(positioned))
+        } else {
+          self.zero_idx += 1;
+          Some(Layer6Item::ZeroContext(zero_ctx))
+        }
+      }
+      (Some(positioned), None) => {
+        self.positioned_idx += 1;
+        Some(Layer6Item::Positioned(positioned))
+      }
+      (None, Some(zero_ctx)) => {
+        self.zero_idx += 1;
+        Some(Layer6Item::ZeroContext(zero_ctx))
+      }
+      (None, None) => None,
+    }
+  }
+
+  fn size_hint(&self) -> (usize, Option<usize>) {
+    let remaining = self
+      .positioned
+      .len()
+      .saturating_sub(self.positioned_idx)
+      .saturating_add(self.zero_contexts.len().saturating_sub(self.zero_idx));
+    (remaining, Some(remaining))
+  }
+}
+
+impl<'a> ExactSizeIterator for Layer6Iter<'a> {}
+
 /// Iterator for traversing stacking context in paint order
 ///
 /// Yields fragments in the correct 7-layer paint order.
@@ -1387,7 +1463,7 @@ enum PaintOrderItem<'a> {
   Layer3(&'a [FragmentNode], usize),
   Layer4(&'a [FragmentNode], usize),
   Layer5(&'a [FragmentNode], usize),
-  Layer6(Vec<Layer6Item<'a>>, usize),
+  Layer6(Layer6Iter<'a>),
   Fragments(&'a [FragmentNode], usize),
   NegativeChildren(Vec<&'a StackingContext>, usize),
   PositiveChildren(Vec<&'a StackingContext>, usize),
@@ -1419,9 +1495,9 @@ impl<'a> Iterator for PaintOrderIterator<'a> {
           }
 
           // Layer 6: Positioned with z-index 0 or auto
-          let layer6 = ctx.layer6_items();
-          if !layer6.is_empty() {
-            self.stack.push(PaintOrderItem::Layer6(layer6, 0));
+          let layer6 = ctx.layer6_iter();
+          if !layer6.is_done() {
+            self.stack.push(PaintOrderItem::Layer6(layer6));
           }
 
           // Layer 5: Inline-level
@@ -1486,16 +1562,17 @@ impl<'a> Iterator for PaintOrderIterator<'a> {
             return Some(&fragments[idx]);
           }
         }
-        PaintOrderItem::Layer6(items, idx) => {
-          if idx < items.len() {
-            self
-              .stack
-              .push(PaintOrderItem::Layer6(items.clone(), idx + 1));
-            match &items[idx] {
-              Layer6Item::Positioned(frag) => return Some(&frag.fragment),
-              Layer6Item::ZeroContext(ctx) => {
-                self.stack.push(PaintOrderItem::Context(ctx));
-              }
+        PaintOrderItem::Layer6(mut iter) => {
+          let Some(item) = iter.next() else {
+            continue;
+          };
+          if !iter.is_done() {
+            self.stack.push(PaintOrderItem::Layer6(iter));
+          }
+          match item {
+            Layer6Item::Positioned(frag) => return Some(&frag.fragment),
+            Layer6Item::ZeroContext(ctx) => {
+              self.stack.push(PaintOrderItem::Context(ctx));
             }
           }
         }
@@ -2005,6 +2082,59 @@ mod tests {
     let fragments: Vec<_> = root.iter_paint_order().collect();
     let origins: Vec<f32> = fragments.iter().map(|f| f.bounds.x()).collect();
     assert_eq!(origins, vec![0.0, 10.0, 20.0]);
+  }
+
+  #[test]
+  fn layer6_iter_merges_positioned_and_zero_contexts_by_tree_order() {
+    let mut root = StackingContext::new(0);
+
+    // Positioned fragments are already recorded in tree order.
+    root.layer6_positioned.push(OrderedFragment::new(
+      create_block_fragment(0.0, 0.0, 10.0, 10.0),
+      1,
+    ));
+    root.layer6_positioned.push(OrderedFragment::new(
+      create_block_fragment(0.0, 0.0, 10.0, 10.0),
+      4,
+    ));
+    root.layer6_positioned.push(OrderedFragment::new(
+      create_block_fragment(0.0, 0.0, 10.0, 10.0),
+      6,
+    ));
+
+    // Add multiple z-index: 0 child contexts whose tree_order values interleave with the
+    // positioned fragments above.
+    root.add_child(StackingContext::with_reason(
+      0,
+      StackingContextReason::Opacity,
+      5,
+    ));
+    root.add_child(StackingContext::with_reason(
+      0,
+      StackingContextReason::Opacity,
+      2,
+    ));
+    root.add_child(StackingContext::with_reason(
+      0,
+      StackingContextReason::Opacity,
+      3,
+    ));
+
+    // The merge iterator relies on children being sorted by (z_index, tree_order).
+    root.sort_children();
+
+    let items: Vec<(char, usize)> = root
+      .layer6_iter()
+      .map(|item| match item {
+        Layer6Item::Positioned(frag) => ('p', frag.tree_order),
+        Layer6Item::ZeroContext(ctx) => ('c', ctx.tree_order),
+      })
+      .collect();
+
+    assert_eq!(
+      items,
+      vec![('p', 1), ('c', 2), ('c', 3), ('p', 4), ('c', 5), ('p', 6)]
+    );
   }
 
   // Reason tests
