@@ -5626,12 +5626,31 @@ mod tests {
     let leaf = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), "x", 0.5);
     let mut fragment = leaf;
     // Ensure the baseline walk hits FLEX_DEADLINE_CHECK_STRIDE checks before reaching the leaf.
-    for _ in 0..80 {
+    for _ in 0..(FLEX_DEADLINE_CHECK_STRIDE + 16) {
       fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![fragment]);
     }
 
     let mut deadline_counter = 0usize;
     let result = fragment_first_baseline(&fragment, &mut deadline_counter);
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
+  fn flex_fragment_subtree_size_times_out_via_deadline_checks() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::time::Duration;
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let leaf = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), "x", 0.5);
+    let mut fragment = leaf;
+    for _ in 0..(FLEX_DEADLINE_CHECK_STRIDE + 16) {
+      fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![fragment]);
+    }
+
+    let mut deadline_counter = 0usize;
+    let result = FlexFormattingContext::fragment_subtree_size(&fragment, &mut deadline_counter);
     assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
