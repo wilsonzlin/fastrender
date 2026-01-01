@@ -1569,6 +1569,19 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
     })?;
     migrate_legacy_notes(&mut progress);
     normalize_missing_cache_placeholder(&mut progress, cache_exists);
+    // Historical progress files may have stage buckets that included `text_*` subsystem timings.
+    // When stats are present, recompute buckets using the current wall-clock-only definition so
+    // `migrate` can update committed progress artifacts without requiring a rerender.
+    if progress.status == ProgressStatus::Ok {
+      if let Some(stats) = progress
+        .diagnostics
+        .as_ref()
+        .and_then(|diag| diag.stats.as_ref())
+      {
+        progress.stages_ms = buckets_from_stats(stats);
+        progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
+      }
+    }
     let formatted = serialize_progress(&progress)?;
     if formatted != raw {
       atomic_write(&path, formatted.as_bytes())?;
@@ -1687,6 +1700,10 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
   let Some(stats) = diag.stats.as_ref() else {
     return StageBuckets::default();
   };
+  buckets_from_stats(stats)
+}
+
+fn buckets_from_stats(stats: &RenderStats) -> StageBuckets {
   let t = &stats.timings;
   let fetch = t.html_decode_ms.unwrap_or(0.0)
     + t.dom_parse_ms.unwrap_or(0.0)
