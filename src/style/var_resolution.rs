@@ -500,20 +500,44 @@ pub fn contains_var(value: &str) -> bool {
   //
   // Function tokens cannot contain whitespace between the name and `(`, so the literal `var(`
   // is sufficient for the fast path (with ASCII-case-insensitive matching).
-  const NEEDLE: &[u8] = b"var(";
   let bytes = value.as_bytes();
-  if bytes.len() >= NEEDLE.len() {
-    for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
-      let mut matched = true;
-      for (offset, &needle_byte) in NEEDLE.iter().enumerate() {
-        if bytes[start + offset].to_ascii_lowercase() != needle_byte {
-          matched = false;
-          break;
-        }
-      }
-      if matched {
-        return true;
-      }
+  if bytes.len() < 4 {
+    return false;
+  }
+
+  #[inline]
+  fn is_ascii_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')
+  }
+
+  let mut has_backslash = false;
+  let mut has_open_paren = false;
+
+  for (idx, b0) in bytes.iter().copied().enumerate() {
+    if b0 == b'\\' {
+      has_backslash = true;
+    } else if b0 == b'(' {
+      has_open_paren = true;
+    }
+
+    if idx + 3 >= bytes.len() {
+      continue;
+    }
+
+    if b0 != b'v' && b0 != b'V' {
+      continue;
+    }
+
+    // `var(` must be the full function name, so ensure the match is not preceded by an ASCII
+    // identifier character (e.g. `somevar(` should not match).
+    if idx > 0 && is_ascii_ident_byte(bytes[idx - 1]) {
+      continue;
+    }
+
+    let b1 = bytes[idx + 1];
+    let b2 = bytes[idx + 2];
+    if (b1 == b'a' || b1 == b'A') && (b2 == b'r' || b2 == b'R') && bytes[idx + 3] == b'(' {
+      return true;
     }
   }
 
@@ -521,7 +545,7 @@ pub fn contains_var(value: &str) -> bool {
   //
   // A function token also requires a literal `(` delimiter, so if the raw string contains
   // backslashes but *no* `(` at all, it's impossible for it to contain a `var()` call.
-  if bytes.contains(&b'\\') && bytes.contains(&b'(') {
+  if has_backslash && has_open_paren {
     return contains_var_via_cssparser(value);
   }
 
