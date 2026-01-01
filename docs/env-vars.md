@@ -43,6 +43,11 @@ They map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs) and ar
 - `FASTR_HTTP_BACKOFF_CAP_MS=<ms>` – maximum delay between retries (default `500`).
 - `FASTR_HTTP_RESPECT_RETRY_AFTER=0|false|no` – disable honoring `Retry-After` headers for retryable responses (enabled by default).
 
+When a CLI timeout is configured (e.g. `fetch_pages --timeout 60` or `prefetch_assets --timeout 30`),
+it is treated as a **total** wall-clock budget for a single fetch call when no render deadline is
+installed: retry attempts and backoff sleeps are bounded by the remaining budget, and per-attempt
+HTTP timeouts are clamped so one request cannot take `max_attempts × timeout`.
+
 This also applies to `fetch_pages` (migrated to `build_http_fetcher` in Task 13), so pageset fetch runs can be tuned without adding new flags.
 
 ## Resource limits

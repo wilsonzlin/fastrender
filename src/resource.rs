@@ -728,6 +728,9 @@ pub struct ResourcePolicy {
   pub total_bytes_budget: Option<usize>,
   /// Per-request timeout.
   pub request_timeout: Duration,
+  /// When true, treat [`ResourcePolicy::request_timeout`] as a total budget for the full HTTP
+  /// fetch attempt sequence (including retries and backoff) when no render deadline is active.
+  pub request_timeout_is_total_budget: bool,
   /// Maximum number of request attempts when following redirects.
   pub max_redirects: usize,
   /// Optional hostname allowlist applied to HTTP(S) requests.
@@ -747,6 +750,7 @@ impl Default for ResourcePolicy {
       max_response_bytes: 50 * 1024 * 1024,
       total_bytes_budget: None,
       request_timeout: Duration::from_secs(30),
+      request_timeout_is_total_budget: false,
       max_redirects: 10,
       host_allowlist: None,
       host_denylist: None,
@@ -807,6 +811,13 @@ impl ResourcePolicy {
   /// Override the per-request timeout.
   pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
     self.request_timeout = timeout;
+    self
+  }
+
+  /// Interpret [`ResourcePolicy::request_timeout`] as a total budget for retries/backoff when no
+  /// render deadline is active.
+  pub fn with_request_timeout_total_budget(mut self, enabled: bool) -> Self {
+    self.request_timeout_is_total_budget = enabled;
     self
   }
 
@@ -1339,6 +1350,18 @@ impl HttpFetcher {
   /// Set the request timeout
   pub fn with_timeout(mut self, timeout: Duration) -> Self {
     self.policy.request_timeout = timeout;
+    self.policy.request_timeout_is_total_budget = false;
+    self.rebuild_agent();
+    self
+  }
+
+  /// Set a total timeout budget for a single fetch call when no render deadline is active.
+  ///
+  /// This budget is shared across retries and backoff sleeps so a request cannot take
+  /// `max_attempts × timeout` wall time in CLI tooling.
+  pub fn with_timeout_budget(mut self, timeout: Duration) -> Self {
+    self.policy.request_timeout = timeout;
+    self.policy.request_timeout_is_total_budget = true;
     self.rebuild_agent();
     self
   }
@@ -1424,6 +1447,18 @@ impl HttpFetcher {
     validators: Option<HttpCacheValidators<'_>>,
   ) -> Result<FetchedResource> {
     let deadline = render_control::active_deadline();
+    let started = Instant::now();
+    self.fetch_http_with_accept_inner(url, accept_encoding, validators, &deadline, started)
+  }
+
+  fn fetch_http_with_accept_inner<'a>(
+    &self,
+    url: &str,
+    accept_encoding: Option<&str>,
+    validators: Option<HttpCacheValidators<'a>>,
+    deadline: &Option<render_control::RenderDeadline>,
+    started: Instant,
+  ) -> Result<FetchedResource> {
     let mut current = url.to_string();
     let mut validators = validators;
     let agent = &self.agent;
@@ -1436,6 +1471,29 @@ impl HttpFetcher {
     } else {
       self.retry_policy.max_attempts.max(1)
     };
+    let timeout_budget = if deadline.is_none()
+      && self.policy.request_timeout_is_total_budget
+      && !self.policy.request_timeout.is_zero()
+    {
+      Some(self.policy.request_timeout)
+    } else {
+      None
+    };
+
+    let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
+      let budget = timeout_budget.expect("budget mode should be active");
+      let elapsed = started.elapsed();
+      Error::Resource(
+        ResourceError::new(
+          current_url.to_string(),
+          format!(
+            "overall HTTP timeout budget exceeded (budget={budget:?}, elapsed={elapsed:?}){}",
+            format_attempt_suffix(attempt, max_attempts)
+          ),
+        )
+        .with_final_url(current_url.to_string()),
+      )
+    };
 
     'redirects: for _ in 0..self.policy.max_redirects {
       self.policy.ensure_url_allowed(&current)?;
@@ -1447,7 +1505,17 @@ impl HttpFetcher {
         }
         let allowed_limit = self.policy.allowed_response_limit()?;
         let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
-        let effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
+        let mut effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
+
+        if let Some(budget) = timeout_budget {
+          match budget.checked_sub(started.elapsed()) {
+            Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+              let budget_timeout = remaining.saturating_sub(HTTP_DEADLINE_BUFFER);
+              effective_timeout = effective_timeout.min(budget_timeout);
+            }
+            _ => return Err(budget_exhausted_error(&current, attempt)),
+          }
+        }
 
         let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
         let mut request = agent
@@ -1494,15 +1562,28 @@ impl HttpFetcher {
                   }
                 }
               }
-               if can_retry {
-                 let reason = err.to_string();
-                 log_http_retry(&reason, attempt, max_attempts, &current, backoff);
-                 if !backoff.is_zero() {
-                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
-                 }
-                 continue;
-               }
-             }
+              if let Some(budget) = timeout_budget {
+                match budget.checked_sub(started.elapsed()) {
+                  Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                    let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                    backoff = backoff.min(max_sleep);
+                  }
+                  _ => can_retry = false,
+                }
+              }
+              if can_retry {
+                let reason = err.to_string();
+                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
+                if !backoff.is_zero() {
+                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                    .map_err(Error::Render)?;
+                }
+                continue;
+              }
+              if timeout_budget.is_some() {
+                return Err(budget_exhausted_error(&current, attempt));
+              }
+            }
 
             let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
             let mut message = err.to_string();
@@ -1511,6 +1592,10 @@ impl HttpFetcher {
               if let Some(overall) = overall_timeout {
                 message.push_str(&format!(
                   " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout={overall:?})"
+                ));
+              } else if let Some(budget) = timeout_budget {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout_budget={budget:?})"
                 ));
               } else {
                 message.push_str(&format!(
@@ -1596,7 +1681,13 @@ impl HttpFetcher {
                   if accept_encoding.is_none() =>
                 {
                   finish_network_fetch_diagnostics(network_timer.take());
-                  return self.fetch_http_with_accept(&current, Some("identity"), validators);
+                  return self.fetch_http_with_accept_inner(
+                    &current,
+                    Some("identity"),
+                    validators,
+                    deadline,
+                    started,
+                  );
                 }
                 Err(err) => {
                   finish_network_fetch_diagnostics(network_timer.take());
@@ -1629,21 +1720,34 @@ impl HttpFetcher {
                     }
                   }
                 }
+                if let Some(budget) = timeout_budget {
+                  match budget.checked_sub(started.elapsed()) {
+                    Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
 
                 if can_retry {
-                   log_http_retry(
-                     &format!("empty body (status {status_code})"),
-                     attempt,
-                     max_attempts,
-                     &current,
-                     backoff,
-                   );
-                   if !backoff.is_zero() {
-                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
-                   }
-                   continue;
-                 }
-               }
+                  log_http_retry(
+                    &format!("empty body (status {status_code})"),
+                    attempt,
+                    max_attempts,
+                    &current,
+                    backoff,
+                  );
+                  if !backoff.is_zero() {
+                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                      .map_err(Error::Render)?;
+                  }
+                  continue;
+                }
+                if timeout_budget.is_some() {
+                  return Err(budget_exhausted_error(&current, attempt));
+                }
+              }
 
               let mut message = "empty HTTP response body".to_string();
               if attempt < max_attempts {
@@ -1675,20 +1779,33 @@ impl HttpFetcher {
                     }
                   }
                 }
-                if can_retry {
-                   log_http_retry(
-                     &format!("status {status_code}"),
-                     attempt,
-                     max_attempts,
-                     &current,
-                     backoff,
-                   );
-                   if !backoff.is_zero() {
-                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
-                   }
-                   continue;
+                if let Some(budget) = timeout_budget {
+                  match budget.checked_sub(started.elapsed()) {
+                    Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
                   }
                 }
+                if can_retry {
+                  log_http_retry(
+                    &format!("status {status_code}"),
+                    attempt,
+                    max_attempts,
+                    &current,
+                    backoff,
+                  );
+                  if !backoff.is_zero() {
+                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                      .map_err(Error::Render)?;
+                  }
+                  continue;
+                }
+                if timeout_budget.is_some() {
+                  return Err(budget_exhausted_error(&current, attempt));
+                }
+              }
 
               // 202 (Accepted) is a "success" status code that is often used to mean "poll again
               // later". We still treat it as transient and retryable, but once retries are
@@ -1766,15 +1883,28 @@ impl HttpFetcher {
                   }
                 }
               }
-               if can_retry {
-                 let reason = err.to_string();
-                 log_http_retry(&reason, attempt, max_attempts, &current, backoff);
-                 if !backoff.is_zero() {
-                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
-                 }
-                 continue;
-               }
-             }
+              if let Some(budget) = timeout_budget {
+                match budget.checked_sub(started.elapsed()) {
+                  Some(remaining) if remaining > HTTP_DEADLINE_BUFFER => {
+                    let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                    backoff = backoff.min(max_sleep);
+                  }
+                  _ => can_retry = false,
+                }
+              }
+              if can_retry {
+                let reason = err.to_string();
+                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
+                if !backoff.is_zero() {
+                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff)
+                    .map_err(Error::Render)?;
+                }
+                continue;
+              }
+              if timeout_budget.is_some() {
+                return Err(budget_exhausted_error(&current, attempt));
+              }
+            }
 
             let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
             let mut message = err.to_string();
@@ -1782,6 +1912,10 @@ impl HttpFetcher {
               if let Some(overall) = overall_timeout {
                 message.push_str(&format!(
                   " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout={overall:?})"
+                ));
+              } else if let Some(budget) = timeout_budget {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout_budget={budget:?})"
                 ));
               } else {
                 message.push_str(&format!(
@@ -3185,17 +3319,17 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             )
           }
         } else {
-            if res.status.map(is_transient_http_status).unwrap_or(false) {
-              if let Some(snapshot) = plan.cached.as_ref() {
-                record_cache_stale_hit();
-                let fallback = snapshot.value.as_result();
-                if let Ok(ref ok) = fallback {
-                  record_resource_cache_bytes(ok.bytes.len());
-                }
-                let is_ok = fallback.is_ok();
-                (fallback, is_ok)
-              } else {
-                record_cache_miss();
+          if res.status.map(is_transient_http_status).unwrap_or(false) {
+            if let Some(snapshot) = plan.cached.as_ref() {
+              record_cache_stale_hit();
+              let fallback = snapshot.value.as_result();
+              if let Ok(ref ok) = fallback {
+                record_resource_cache_bytes(ok.bytes.len());
+              }
+              let is_ok = fallback.is_ok();
+              (fallback, is_ok)
+            } else {
+              record_cache_miss();
               (Ok(res), false)
             }
           } else {

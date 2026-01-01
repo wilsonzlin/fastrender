@@ -100,13 +100,18 @@ pub fn build_http_fetcher(
     .with_user_agent(user_agent.to_string())
     .with_accept_language(accept_language.to_string());
   if let Some(secs) = timeout_secs {
-    fetcher = fetcher.with_timeout(Duration::from_secs(secs));
+    fetcher = fetcher.with_timeout_budget(Duration::from_secs(secs));
   }
   // CLI knobs for retry behavior without growing the flag surface area.
   // - `FASTR_HTTP_MAX_ATTEMPTS=1` disables retries.
   // - `FASTR_HTTP_BACKOFF_BASE_MS`, `FASTR_HTTP_BACKOFF_CAP_MS` tune backoff.
   // - `FASTR_HTTP_RESPECT_RETRY_AFTER=0|1` controls honoring Retry-After.
-  let mut retry = HttpRetryPolicy::default();
+  let mut retry = HttpRetryPolicy {
+    max_attempts: 3,
+    backoff_base: Duration::from_millis(50),
+    backoff_cap: Duration::from_millis(500),
+    respect_retry_after: true,
+  };
   if let Ok(raw) = std::env::var("FASTR_HTTP_MAX_ATTEMPTS") {
     if let Ok(value) = raw.trim().parse::<usize>() {
       retry.max_attempts = value.max(1);

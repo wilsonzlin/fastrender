@@ -233,3 +233,60 @@ fn http_fetch_retries_on_timeout() {
 
   handle.join().unwrap();
 }
+
+#[test]
+fn http_fetch_timeout_budget_bounds_total_time() {
+  let Some(listener) = try_bind_localhost("http_fetch_timeout_budget_bounds_total_time") else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let handle = spawn_server(listener, 4, move |_count, _req, stream| {
+    // Delay longer than the overall timeout budget so the client must stop without
+    // multiplying timeouts across retries.
+    thread::sleep(Duration::from_millis(500));
+    let body = b"late";
+    let response = format!(
+      "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+      body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.write_all(body);
+  });
+
+  let retry = HttpRetryPolicy {
+    max_attempts: 4,
+    backoff_base: Duration::from_millis(20),
+    backoff_cap: Duration::from_millis(40),
+    respect_retry_after: true,
+  };
+  let fetcher = HttpFetcher::new()
+    .with_retry_policy(retry)
+    .with_timeout_budget(Duration::from_millis(200));
+  let url = format!("http://{addr}/slow");
+  let start = Instant::now();
+  let err = fetcher
+    .fetch(&url)
+    .expect_err("fetch should fail once overall budget is exhausted");
+  let elapsed = start.elapsed();
+
+  assert!(
+    elapsed < Duration::from_millis(450),
+    "overall timeout budget should bound wall time (elapsed {elapsed:?})"
+  );
+
+  let msg = err.to_string();
+  assert!(
+    msg.contains("overall HTTP timeout budget exceeded"),
+    "error should mention overall timeout budget: {msg}"
+  );
+  assert!(
+    msg.contains("attempt"),
+    "error should include attempt info: {msg}"
+  );
+  assert!(
+    msg.contains("200ms"),
+    "error should include overall budget value: {msg}"
+  );
+
+  handle.join().unwrap();
+}
