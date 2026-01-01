@@ -33,15 +33,16 @@ mod disk_cache_main {
   use fastrender::html::asset_discovery::discover_html_asset_urls;
   use fastrender::html::image_prefetch::{discover_image_prefetch_urls, ImagePrefetchLimits};
   use fastrender::html::images::ImageSelectionContext;
+  use fastrender::image_loader::ImageCache;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
     is_data_url, CachingFetcherConfig, DiskCachingFetcher, FetchDestination, FetchRequest,
     FetchedResource, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
-  use regex::Regex;
   use rayon::prelude::*;
   use rayon::ThreadPoolBuilder;
+  use regex::Regex;
   use std::cell::RefCell;
   use std::collections::{BTreeSet, HashMap, HashSet};
   use std::path::{Path, PathBuf};
@@ -530,9 +531,8 @@ mod disk_cache_main {
     static ATTR_REL: OnceLock<Regex> = OnceLock::new();
     static ATTR_HREF: OnceLock<Regex> = OnceLock::new();
 
-    let link_tag = LINK_TAG.get_or_init(|| {
-      Regex::new("(?is)<link\\b[^>]*>").expect("valid link tag regex")
-    });
+    let link_tag =
+      LINK_TAG.get_or_init(|| Regex::new("(?is)<link\\b[^>]*>").expect("valid link tag regex"));
     let attr_rel = ATTR_REL.get_or_init(|| {
       Regex::new("(?is)(?:^|\\s)rel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
         .expect("valid rel attr regex")
@@ -608,22 +608,20 @@ mod disk_cache_main {
 
       if let Some(tag) = node.tag_name() {
         if tag.eq_ignore_ascii_case("link") {
-            let href = node.get_attribute_ref("href").unwrap_or("");
-            if !href.trim().is_empty() {
-              let rel_attr = node.get_attribute_ref("rel").unwrap_or("");
-              if !rel_attr.trim().is_empty() {
-                let rel_tokens = tokenize_rel_list(rel_attr);
-                if !rel_tokens.is_empty()
-                  && link_rel_is_icon_candidate(&rel_tokens)
-                {
-                  if let Some(resolved) = resolve_href(base_url, href) {
-                    let before = out.len();
-                    record_image_candidate(all, out, &resolved, max_total, max_total);
-                    if out.len() > before {
-                      inserted += 1;
-                    }
+          let href = node.get_attribute_ref("href").unwrap_or("");
+          if !href.trim().is_empty() {
+            let rel_attr = node.get_attribute_ref("rel").unwrap_or("");
+            if !rel_attr.trim().is_empty() {
+              let rel_tokens = tokenize_rel_list(rel_attr);
+              if !rel_tokens.is_empty() && link_rel_is_icon_candidate(&rel_tokens) {
+                if let Some(resolved) = resolve_href(base_url, href) {
+                  let before = out.len();
+                  record_image_candidate(all, out, &resolved, max_total, max_total);
+                  if out.len() > before {
+                    inserted += 1;
                   }
                 }
+              }
             }
           }
         }
@@ -887,12 +885,9 @@ mod disk_cache_main {
         return Ok(cached);
       }
 
-      match self
-        .fetcher
-        .fetch_with_request(
-          FetchRequest::new(url, FetchDestination::Style).with_referrer(self.referrer),
-        )
-      {
+      match self.fetcher.fetch_with_request(
+        FetchRequest::new(url, FetchDestination::Style).with_referrer(self.referrer),
+      ) {
         Ok(res) => {
           self.summary.borrow_mut().fetched_imports += 1;
           let base = res.final_url.as_deref().unwrap_or(url);
@@ -1089,7 +1084,7 @@ mod disk_cache_main {
     html: &str,
     base_hint: &str,
     base_url: &str,
-    fetcher: &dyn ResourceFetcher,
+    fetcher: &Arc<dyn ResourceFetcher>,
     media_ctx: &MediaContext,
     opts: PrefetchOptions,
   ) -> PageSummary {
@@ -1104,8 +1099,7 @@ mod disk_cache_main {
 
     let mut tasks: Vec<StylesheetTask> = match dom.as_ref() {
       Some(dom) => {
-        let tasks =
-          discover_dom_stylesheet_tasks(dom, base_url, media_ctx, &mut media_query_cache);
+        let tasks = discover_dom_stylesheet_tasks(dom, base_url, media_ctx, &mut media_query_cache);
         if tasks.is_empty() {
           // Pages that load their primary stylesheet dynamically (without emitting `<link rel="stylesheet">`
           // or `<style>`) are still best-effort handled by scanning the raw HTML for `.css`-looking
@@ -1173,7 +1167,10 @@ mod disk_cache_main {
         let selection_ctx = ImageSelectionContext {
           device_pixel_ratio: media_ctx.device_pixel_ratio,
           slot_width: None,
-          viewport: Some(Size::new(media_ctx.viewport_width, media_ctx.viewport_height)),
+          viewport: Some(Size::new(
+            media_ctx.viewport_width,
+            media_ctx.viewport_height,
+          )),
           media_context: Some(media_ctx),
           font_size: Some(media_ctx.base_font_size),
           base_url: Some(base_url),
@@ -1336,7 +1333,7 @@ mod disk_cache_main {
         None
       };
       let import_loader = PrefetchImportLoader::new(
-        fetcher,
+        fetcher.as_ref(),
         base_hint,
         &summary,
         &all_asset_urls,
@@ -1393,7 +1390,7 @@ mod disk_cache_main {
             if opts.prefetch_fonts {
               let mut summary = summary.borrow_mut();
               prefetch_fonts_from_stylesheet(
-                fetcher,
+                fetcher.as_ref(),
                 base_hint,
                 base_url,
                 &resolved,
@@ -1458,7 +1455,7 @@ mod disk_cache_main {
               if opts.prefetch_fonts {
                 let mut summary = summary.borrow_mut();
                 prefetch_fonts_from_stylesheet(
-                  fetcher,
+                  fetcher.as_ref(),
                   base_hint,
                   sheet_base,
                   &resolved,
@@ -1470,7 +1467,7 @@ mod disk_cache_main {
               }
             }
             Err(_) => summary.borrow_mut().failed_css += 1,
-          }
+          },
         }
       }
     }
@@ -1485,12 +1482,19 @@ mod disk_cache_main {
     }
 
     if opts.prefetch_images || opts.prefetch_icons || opts.prefetch_video_posters {
+      let image_cache = ImageCache::with_fetcher(Arc::clone(fetcher));
       let mut summary = summary.borrow_mut();
       for url in &image_urls {
         match fetcher.fetch_with_request(
           FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(base_hint),
         ) {
-          Ok(_) => summary.fetched_images += 1,
+          Ok(_) => {
+            summary.fetched_images += 1;
+            // Best-effort: probe now (outside the 5s render deadline) and persist intrinsic sizing
+            // metadata into the disk cache so subsequent renders can avoid repeating image header
+            // parsing during box-tree construction.
+            let _ = image_cache.probe(url.as_str());
+          }
           Err(_) => summary.failed_images += 1,
         }
       }
@@ -1558,7 +1562,7 @@ mod disk_cache_main {
 
   fn prefetch_page(
     entry: &PagesetEntry,
-    fetcher: &dyn ResourceFetcher,
+    fetcher: &Arc<dyn ResourceFetcher>,
     media_ctx: &MediaContext,
     opts: PrefetchOptions,
   ) -> PageSummary {
@@ -1620,13 +1624,7 @@ mod disk_cache_main {
       let mut document_urls = BTreeSet::<String>::new();
       let mut css_assets = BTreeSet::<String>::new();
 
-      record_image_candidate(
-        &all,
-        &mut image_urls,
-        "https://example.com/a.png",
-        2,
-        2,
-      );
+      record_image_candidate(&all, &mut image_urls, "https://example.com/a.png", 2, 2);
       record_document_candidate(
         &all,
         &mut document_urls,
@@ -1636,26 +1634,14 @@ mod disk_cache_main {
       );
 
       // A duplicate discovered via a different class should not be re-scheduled.
-      record_css_url_asset_candidate(
-        &all,
-        &mut css_assets,
-        "https://example.com/a.png",
-        2,
-        2,
-      );
+      record_css_url_asset_candidate(&all, &mut css_assets, "https://example.com/a.png", 2, 2);
       assert!(
         css_assets.is_empty(),
         "duplicates across classes should be suppressed"
       );
 
       // Global cap should prevent inserting additional unique URLs.
-      record_image_candidate(
-        &all,
-        &mut image_urls,
-        "https://example.com/b.png",
-        2,
-        2,
-      );
+      record_image_candidate(&all, &mut image_urls, "https://example.com/b.png", 2, 2);
 
       assert_eq!(all.borrow().len(), 2);
       assert_eq!(image_urls.len(), 1);
@@ -1734,11 +1720,13 @@ mod disk_cache_main {
         },
       };
 
-      let fetcher = RecordingFetcher::default();
+      let fetcher_impl = Arc::new(RecordingFetcher::default());
+      let fetcher: Arc<dyn ResourceFetcher> = fetcher_impl.clone();
       let summary = prefetch_assets_for_html(
         "test",
         document_url,
         html,
+        document_url,
         base_url,
         &fetcher,
         &media_ctx,
@@ -1749,7 +1737,7 @@ mod disk_cache_main {
       assert_eq!(summary.fetched_documents, 1);
       assert_eq!(summary.failed_documents, 0);
 
-      let calls = fetcher.calls.lock().unwrap();
+      let calls = fetcher_impl.calls.lock().unwrap();
       assert_eq!(calls.len(), 1);
       assert_eq!(calls[0].0, "https://example.com/base/frame.html");
       assert_eq!(calls[0].1, FetchDestination::Document);
@@ -1863,6 +1851,7 @@ mod disk_cache_main {
         },
         disk_config.clone(),
       );
+      let fetcher: Arc<dyn ResourceFetcher> = Arc::new(fetcher);
 
       let media_ctx = MediaContext::screen(800.0, 600.0);
       let opts = PrefetchOptions {
@@ -1934,7 +1923,12 @@ mod disk_cache_main {
         },
         disk_config,
       );
-      let res = offline.fetch(&format!("{base}/img.png")).expect("disk hit");
+      let res = offline
+        .fetch_with_request(FetchRequest::new(
+          &format!("{base}/img.png"),
+          FetchDestination::Image,
+        ))
+        .expect("disk hit");
       assert_eq!(res.bytes, IMG_BYTES);
     }
   }
@@ -2138,7 +2132,7 @@ mod disk_cache_main {
     let mut results: Vec<PageSummary> = pool.install(|| {
       selected
         .par_iter()
-        .map(|entry| prefetch_page(entry, fetcher.as_ref(), &media_ctx, opts))
+        .map(|entry| prefetch_page(entry, &fetcher, &media_ctx, opts))
         .collect()
     });
 

@@ -3,6 +3,7 @@
 //! Enabled via the `disk_cache` crate feature.
 
 use super::CacheAction;
+use super::CacheArtifactKind;
 use super::CacheKey;
 use super::CachedHttpMetadata;
 use super::CachedSnapshot;
@@ -115,6 +116,9 @@ const DISK_READ_MIN_CHUNK_SIZE: usize = 4 * 1024;
 /// data reads; once it grows for larger resources it is intentionally retained for reuse.)
 const DISK_META_READ_CHUNK_SIZE: usize = 8 * 1024;
 const DISK_META_READ_STAGE: RenderStage = RenderStage::Paint;
+
+const IMAGE_PROBE_METADATA_ARTIFACT_SUFFIX: &str = "imgprobe_meta_v1";
+const IMAGE_PROBE_METADATA_CONTENT_TYPE: &str = "application/x-fastrender-image-probe+json";
 
 thread_local! {
   /// Per-thread reusable scratch buffer for deadline-aware disk reads.
@@ -554,6 +558,21 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+  }
+
+  fn artifact_key(&self, kind: FetchContextKind, url: &str, artifact: CacheArtifactKind) -> String {
+    let base = self.cache_key(kind, url);
+    match artifact {
+      CacheArtifactKind::ImageProbeMetadata => {
+        format!("{base}.{IMAGE_PROBE_METADATA_ARTIFACT_SUFFIX}")
+      }
+    }
+  }
+
+  fn artifact_content_type(artifact: CacheArtifactKind) -> &'static str {
+    match artifact {
+      CacheArtifactKind::ImageProbeMetadata => IMAGE_PROBE_METADATA_CONTENT_TYPE,
+    }
   }
 
   fn data_path(&self, kind: FetchContextKind, url: &str) -> PathBuf {
@@ -1306,9 +1325,258 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     self.remove_alias_for(kind, url);
   }
 
+  fn remove_artifact_for_url(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+  ) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
+    let key = self.artifact_key(kind, url, artifact);
+    let data_path = self.data_path_for_key(&key);
+    let meta_path = self.meta_path_for_data(&data_path);
+    let _ = self.remove_entry(&key, &data_path, &meta_path);
+  }
+
   #[cfg(test)]
   fn debug_index_stats(&self) -> disk_cache_index::DebugStats {
     self.index.debug_stats()
+  }
+
+  fn read_disk_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+  ) -> Result<Option<(String, CachedSnapshot)>> {
+    if let Some(policy) = &self.policy {
+      policy.ensure_url_allowed(url)?;
+    }
+    if self.should_skip_disk(url) {
+      return Ok(None);
+    }
+
+    let mut disk_timer = super::start_disk_cache_diagnostics();
+    let mut current = url.to_string();
+    let mut hops = 0usize;
+
+    loop {
+      if let Err(err) = render_control::check_active(DISK_META_READ_STAGE) {
+        super::finish_disk_cache_diagnostics(disk_timer.take());
+        return Err(Error::Render(err));
+      }
+
+      let key = self.artifact_key(kind, &current, artifact);
+      let data_path = self.data_path_for_key(&key);
+      let meta_path = self.meta_path_for_data(&data_path);
+
+      match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
+        SnapshotRead::Hit(snapshot) => {
+          super::record_disk_cache_hit();
+          super::record_disk_cache_bytes(snapshot.value.size());
+          super::finish_disk_cache_diagnostics(disk_timer.take());
+          return Ok(Some((current, snapshot)));
+        }
+        SnapshotRead::Timeout(err) => {
+          super::finish_disk_cache_diagnostics(disk_timer.take());
+          return Err(Error::Render(err));
+        }
+        SnapshotRead::Locked => {
+          let max_wait = self.deadline_aware_lock_wait(READ_LOCK_WAIT_TIMEOUT);
+          if !max_wait.is_zero() {
+            let lock_wait_timer = super::start_disk_cache_lock_wait_diagnostics();
+            let unlocked = self.wait_for_unlock(&data_path, max_wait);
+            super::finish_disk_cache_lock_wait_diagnostics(lock_wait_timer);
+            if unlocked {
+              match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
+                SnapshotRead::Hit(snapshot) => {
+                  super::record_disk_cache_hit();
+                  super::record_disk_cache_bytes(snapshot.value.size());
+                  super::finish_disk_cache_diagnostics(disk_timer.take());
+                  return Ok(Some((current, snapshot)));
+                }
+                SnapshotRead::Timeout(err) => {
+                  super::finish_disk_cache_diagnostics(disk_timer.take());
+                  return Err(Error::Render(err));
+                }
+                _ => {}
+              }
+            }
+          }
+        }
+        SnapshotRead::Miss => {}
+      }
+
+      let Some(next) = self.read_alias_target(kind, &current) else {
+        super::record_disk_cache_miss();
+        super::finish_disk_cache_diagnostics(disk_timer.take());
+        return Ok(None);
+      };
+
+      if hops >= MAX_ALIAS_HOPS || next == current {
+        self.remove_alias_for(kind, &current);
+        super::record_disk_cache_miss();
+        super::finish_disk_cache_diagnostics(disk_timer.take());
+        return Ok(None);
+      }
+
+      current = next;
+      hops += 1;
+    }
+  }
+
+  fn persist_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+    bytes: &[u8],
+    source: Option<&FetchedResource>,
+  ) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
+    if self.should_skip_disk(url) {
+      return;
+    }
+    if !self.deadline_allows_disk_writeback() {
+      return;
+    }
+
+    let mut resource = FetchedResource::new(
+      bytes.to_vec(),
+      Some(Self::artifact_content_type(artifact).to_string()),
+    );
+    if let Some(source) = source {
+      resource.status = source.status;
+      resource.etag = source.etag.clone();
+      resource.last_modified = source.last_modified.clone();
+      resource.final_url = source.final_url.clone();
+      resource.cache_policy = source.cache_policy.clone();
+    }
+
+    let canonical = self.canonical_url(url, resource.final_url.as_deref());
+    let canonical_key = self.artifact_key(kind, &canonical, artifact);
+    let data_path = self.data_path_for_key(&canonical_key);
+    if let Some(parent) = data_path.parent() {
+      let _ = fs::create_dir_all(parent);
+    }
+
+    let Some(entry_lock) = self.acquire_lock(&data_path) else {
+      return;
+    };
+    if !self.deadline_allows_disk_writeback() {
+      return;
+    }
+
+    let stored_at = now_seconds();
+    let stored_time = UNIX_EPOCH
+      .checked_add(Duration::from_secs(stored_at))
+      .unwrap_or(SystemTime::now());
+
+    let cache_metadata = resource
+      .cache_policy
+      .as_ref()
+      .and_then(|p| CachedHttpMetadata::from_policy(p, stored_time));
+    if !self.disk_config.allow_no_store
+      && (cache_metadata.as_ref().map(|m| m.no_store).unwrap_or(false)
+        || resource
+          .cache_policy
+          .as_ref()
+          .map(|p| p.no_store)
+          .unwrap_or(false))
+    {
+      let meta_path = self.meta_path_for_data(&data_path);
+      let _ = self.remove_entry(&canonical_key, &data_path, &meta_path);
+      return;
+    }
+
+    let meta_path = self.meta_path_for_data(&data_path);
+    let data_tmp = tmp_path(&data_path);
+    let meta_tmp = tmp_path(&meta_path);
+    let stage = stage_for_cached_content_type(resource.content_type.as_deref());
+    let deadline_aware_write = render_control::active_deadline()
+      .map(|deadline| deadline.is_enabled())
+      .unwrap_or(false);
+
+    let meta = StoredMetadata {
+      url: canonical.clone(),
+      status: resource.status,
+      content_type: resource.content_type.clone(),
+      etag: resource.etag.clone(),
+      last_modified: resource.last_modified.clone(),
+      // The artifact entry is keyed by the canonical URL (after redirects). Store the canonical
+      // URL here as well so callers consuming the cached artifact can still enforce final-URL
+      // policies without hitting the network.
+      final_url: Some(canonical.clone()),
+      stored_at,
+      len: resource.bytes.len(),
+      cache: cache_metadata
+        .as_ref()
+        .and_then(StoredCacheMetadata::from_http),
+    };
+
+    let data_written = if deadline_aware_write {
+      write_path_with_deadline(&data_tmp, &resource.bytes, stage).is_ok()
+    } else {
+      fs::write(&data_tmp, &resource.bytes).is_ok()
+    };
+    if !data_written {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    let Ok(serialized) = serde_json::to_vec(&meta) else {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    };
+
+    let meta_written = if deadline_aware_write {
+      write_path_with_deadline(&meta_tmp, &serialized, stage).is_ok()
+    } else {
+      fs::write(&meta_tmp, &serialized).is_ok()
+    };
+    if !meta_written {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    if fs::rename(&data_tmp, &data_path).is_err() {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    if fs::rename(&meta_tmp, &meta_path).is_err() {
+      let _ = fs::remove_file(&meta_tmp);
+      let _ = self.remove_entry(&canonical_key, &data_path, &meta_path);
+      return;
+    }
+
+    self.index.record_insert(
+      &canonical_key,
+      stored_at,
+      resource.bytes.len() as u64,
+      &data_path,
+      &meta_path,
+    );
+
+    drop(entry_lock);
+
+    self
+      .index
+      .evict_if_needed(self.disk_config.max_bytes, |path| {
+        !self.lock_is_active(path)
+      });
+
+    if canonical != url {
+      self.persist_alias(kind, url, &canonical);
+    }
   }
 
   fn fetch_cached<'a>(
@@ -1386,17 +1654,21 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     let fetch_result = match request {
       Some(req) => match validators {
-        Some((etag, last_modified)) => self
-          .memory
-          .inner
-          .fetch_with_request_and_validation(req, etag, last_modified),
+        Some((etag, last_modified)) => {
+          self
+            .memory
+            .inner
+            .fetch_with_request_and_validation(req, etag, last_modified)
+        }
         None => self.memory.inner.fetch_with_request(req),
       },
       None => match validators {
-        Some((etag, last_modified)) => self
-          .memory
-          .inner
-          .fetch_with_validation_and_context(kind, url, etag, last_modified),
+        Some((etag, last_modified)) => {
+          self
+            .memory
+            .inner
+            .fetch_with_validation_and_context(kind, url, etag, last_modified)
+        }
         None => self.memory.inner.fetch_with_context(kind, url),
       },
     };
@@ -1629,6 +1901,40 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       .memory
       .inner
       .fetch_partial_with_context(kind, url, max_bytes)
+  }
+
+  fn read_cache_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+  ) -> Option<FetchedResource> {
+    let snapshot = self.read_disk_artifact(kind, url, artifact).ok().flatten();
+    let (_, snapshot) = snapshot?;
+    let plan = self
+      .memory
+      .plan_cache_use(url, Some(snapshot.clone()), self.disk_config.max_age);
+    match plan.action {
+      CacheAction::UseCached => plan
+        .cached
+        .and_then(|snapshot| snapshot.value.as_result().ok()),
+      _ => None,
+    }
+  }
+
+  fn write_cache_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+    bytes: &[u8],
+    source: Option<&FetchedResource>,
+  ) {
+    self.persist_artifact(kind, url, artifact, bytes, source);
+  }
+
+  fn remove_cache_artifact(&self, kind: FetchContextKind, url: &str, artifact: CacheArtifactKind) {
+    self.remove_artifact_for_url(kind, url, artifact);
   }
 }
 

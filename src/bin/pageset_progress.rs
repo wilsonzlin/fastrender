@@ -5649,6 +5649,13 @@ fn push_worker_args(
     .arg("--timeout")
     .arg(worker_timeout_secs.to_string());
 
+  if args.disk_cache.allow_no_store {
+    cmd.arg("--disk-cache-allow-no-store");
+  }
+  if args.disk_cache.writeback_under_deadline {
+    cmd.arg("--disk-cache-writeback-under-deadline");
+  }
+
   if args.no_http_freshness {
     cmd.arg("--no-http-freshness");
   }

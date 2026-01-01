@@ -11,6 +11,7 @@ use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
 use crate::render_control::{self, check_active, check_active_periodic};
 use crate::resource::ensure_http_success;
 use crate::resource::ensure_image_mime_sane;
+use crate::resource::CacheArtifactKind;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchContextKind;
@@ -40,6 +41,7 @@ use image::ImageReader;
 use image::RgbaImage;
 use lru::LruCache;
 use roxmltree::Document;
+use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -1019,6 +1021,79 @@ pub struct CachedImageMetadata {
   pub aspect_ratio_none: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct DiskCachedOrientationTransformV1 {
+  quarter_turns: u8,
+  flip_x: bool,
+}
+
+impl From<OrientationTransform> for DiskCachedOrientationTransformV1 {
+  fn from(value: OrientationTransform) -> Self {
+    Self {
+      quarter_turns: value.quarter_turns,
+      flip_x: value.flip_x,
+    }
+  }
+}
+
+impl From<DiskCachedOrientationTransformV1> for OrientationTransform {
+  fn from(value: DiskCachedOrientationTransformV1) -> Self {
+    Self {
+      quarter_turns: value.quarter_turns,
+      flip_x: value.flip_x,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DiskCachedImageProbeMetadataV1 {
+  width: u32,
+  height: u32,
+  orientation: Option<DiskCachedOrientationTransformV1>,
+  resolution: Option<f32>,
+  is_vector: bool,
+  intrinsic_ratio: Option<f32>,
+  aspect_ratio_none: bool,
+}
+
+impl From<&CachedImageMetadata> for DiskCachedImageProbeMetadataV1 {
+  fn from(meta: &CachedImageMetadata) -> Self {
+    Self {
+      width: meta.width,
+      height: meta.height,
+      orientation: meta.orientation.map(Into::into),
+      resolution: meta.resolution,
+      is_vector: meta.is_vector,
+      intrinsic_ratio: meta.intrinsic_ratio,
+      aspect_ratio_none: meta.aspect_ratio_none,
+    }
+  }
+}
+
+impl From<DiskCachedImageProbeMetadataV1> for CachedImageMetadata {
+  fn from(meta: DiskCachedImageProbeMetadataV1) -> Self {
+    Self {
+      width: meta.width,
+      height: meta.height,
+      orientation: meta.orientation.map(Into::into),
+      resolution: meta.resolution,
+      is_vector: meta.is_vector,
+      intrinsic_ratio: meta.intrinsic_ratio,
+      aspect_ratio_none: meta.aspect_ratio_none,
+    }
+  }
+}
+
+fn encode_probe_metadata_for_disk(meta: &CachedImageMetadata) -> Option<Vec<u8>> {
+  serde_json::to_vec(&DiskCachedImageProbeMetadataV1::from(meta)).ok()
+}
+
+fn decode_probe_metadata_from_disk(bytes: &[u8]) -> Option<CachedImageMetadata> {
+  serde_json::from_slice::<DiskCachedImageProbeMetadataV1>(bytes)
+    .ok()
+    .map(Into::into)
+}
+
 impl CachedImageMetadata {
   pub fn dimensions(&self) -> (u32, u32) {
     (self.width, self.height)
@@ -1964,6 +2039,41 @@ impl ImageCache {
       record_image_cache_hit();
       return Ok(meta);
     }
+
+    if let Some(cached) = self.fetcher.read_cache_artifact(
+      FetchContextKind::Image,
+      &resolved_url,
+      CacheArtifactKind::ImageProbeMetadata,
+    ) {
+      if let Some(ctx) = &self.resource_context {
+        let policy_url = cached.final_url.as_deref().unwrap_or(&resolved_url);
+        if let Err(err) = ctx.check_allowed(ResourceKind::Image, policy_url) {
+          let blocked = Error::Image(ImageError::LoadFailed {
+            url: resolved_url.to_string(),
+            reason: err.reason,
+          });
+          self.record_image_error(&resolved_url, &blocked);
+          return Err(blocked);
+        }
+      }
+
+      if let Some(decoded) = decode_probe_metadata_from_disk(&cached.bytes) {
+        let meta = Arc::new(decoded);
+        if let Ok(mut cache) = self.meta_cache.lock() {
+          cache.insert(resolved_url.clone(), Arc::clone(&meta));
+        }
+        record_image_cache_hit();
+        return Ok(meta);
+      }
+
+      // Corrupt or incompatible cache entry; evict so we don't repeatedly reparse it.
+      self.fetcher.remove_cache_artifact(
+        FetchContextKind::Image,
+        cached.final_url.as_deref().unwrap_or(&resolved_url),
+        CacheArtifactKind::ImageProbeMetadata,
+      );
+    }
+
     let (flight, is_owner) = self.join_meta_inflight(&resolved_url);
     if !is_owner {
       record_image_cache_hit();
@@ -2338,6 +2448,15 @@ impl ImageCache {
           if let Ok(mut cache) = self.meta_cache.lock() {
             cache.insert(resolved_url.to_string(), Arc::clone(&meta));
           }
+          if let Some(serialized) = encode_probe_metadata_for_disk(&meta) {
+            self.fetcher.write_cache_artifact(
+              FetchContextKind::Image,
+              resolved_url,
+              CacheArtifactKind::ImageProbeMetadata,
+              &serialized,
+              Some(resource.as_ref()),
+            );
+          }
 
           if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
             let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -2419,6 +2538,15 @@ impl ImageCache {
 
     if let Ok(mut cache) = self.meta_cache.lock() {
       cache.insert(resolved_url.to_string(), Arc::clone(&meta));
+    }
+    if let Some(serialized) = encode_probe_metadata_for_disk(&meta) {
+      self.fetcher.write_cache_artifact(
+        FetchContextKind::Image,
+        resolved_url,
+        CacheArtifactKind::ImageProbeMetadata,
+        &serialized,
+        Some(resource.as_ref()),
+      );
     }
 
     const RAW_RESOURCE_CACHE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
@@ -3840,6 +3968,252 @@ mod tests {
     let mut bytes = PNG_1X1.to_vec();
     bytes.resize(128 * 1024, 0);
     bytes
+  }
+
+  #[cfg(feature = "disk_cache")]
+  #[test]
+  fn image_probe_persists_metadata_to_disk_cache_and_reuses_it() {
+    use crate::resource::{CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct CountingPartialFetcher {
+      calls: Arc<AtomicUsize>,
+      body: Arc<Vec<u8>>,
+    }
+
+    impl ResourceFetcher for CountingPartialFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("expected partial fetch only");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        url: &str,
+        max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut res =
+          FetchedResource::new(self.body.as_ref().clone(), Some("image/png".to_string()));
+        res.status = Some(200);
+        res.final_url = Some(url.to_string());
+        if res.bytes.len() > max_bytes {
+          res.bytes.truncate(max_bytes);
+        }
+        Ok(res)
+      }
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cache_dir = tmp.path().join("assets");
+    let url = "https://example.com/probe.png";
+    let body = Arc::new(padded_png());
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::with_configs(
+      CountingPartialFetcher {
+        calls: Arc::clone(&calls),
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache = ImageCache::with_fetcher(Arc::new(disk));
+    let meta = cache.probe(url).expect("probe succeeds");
+    assert_eq!(meta.dimensions(), (1, 1));
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "first probe should hit the network via fetch_partial"
+    );
+
+    let calls2 = Arc::new(AtomicUsize::new(0));
+    let disk2 = DiskCachingFetcher::with_configs(
+      CountingPartialFetcher {
+        calls: Arc::clone(&calls2),
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache2 = ImageCache::with_fetcher(Arc::new(disk2));
+    let meta2 = cache2.probe(url).expect("probe succeeds from disk");
+    assert_eq!(meta2.dimensions(), (1, 1));
+    assert_eq!(
+      calls2.load(Ordering::SeqCst),
+      0,
+      "second probe should reuse persisted probe metadata without network calls"
+    );
+  }
+
+  #[cfg(feature = "disk_cache")]
+  #[test]
+  fn image_probe_disk_cache_respects_staleness_and_recovers_from_corruption() {
+    use crate::resource::{CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher};
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct CountingPartialFetcher {
+      calls: Arc<AtomicUsize>,
+      body: Arc<Vec<u8>>,
+    }
+
+    impl ResourceFetcher for CountingPartialFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("expected partial fetch only");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        url: &str,
+        max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut res =
+          FetchedResource::new(self.body.as_ref().clone(), Some("image/png".to_string()));
+        res.status = Some(200);
+        res.final_url = Some(url.to_string());
+        if res.bytes.len() > max_bytes {
+          res.bytes.truncate(max_bytes);
+        }
+        Ok(res)
+      }
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cache_dir = tmp.path().join("assets");
+    let url = "https://example.com/stale.png";
+    let body = Arc::new(padded_png());
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::with_configs(
+      CountingPartialFetcher {
+        calls: Arc::clone(&calls),
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(1)),
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache = ImageCache::with_fetcher(Arc::new(disk));
+    let meta = cache.probe(url).expect("probe succeeds");
+    assert_eq!(meta.dimensions(), (1, 1));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // Locate the probe-metadata cache entry and force it to be stale by setting stored_at=0.
+    let mut meta_path = None;
+    for entry in fs::read_dir(&cache_dir).expect("read cache dir") {
+      let path = entry.expect("dir entry").path();
+      if !path.to_string_lossy().ends_with(".bin.meta") {
+        continue;
+      }
+      let bytes = fs::read(&path).expect("read meta");
+      let value: serde_json::Value = serde_json::from_slice(&bytes).expect("parse meta json");
+      let ct = value
+        .get("content_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+      if ct == "application/x-fastrender-image-probe+json" {
+        meta_path = Some(path);
+        break;
+      }
+    }
+    let meta_path = meta_path.expect("probe metadata entry meta file");
+    let meta_bytes = fs::read(&meta_path).expect("read meta bytes");
+    let mut value: serde_json::Value =
+      serde_json::from_slice(&meta_bytes).expect("parse meta json");
+    value["stored_at"] = serde_json::Value::from(0u64);
+    fs::write(
+      &meta_path,
+      serde_json::to_vec(&value).expect("serialize meta"),
+    )
+    .expect("write meta");
+
+    let calls2 = Arc::new(AtomicUsize::new(0));
+    let disk2 = DiskCachingFetcher::with_configs(
+      CountingPartialFetcher {
+        calls: Arc::clone(&calls2),
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(1)),
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache2 = ImageCache::with_fetcher(Arc::new(disk2));
+    let meta2 = cache2.probe(url).expect("probe succeeds after staleness");
+    assert_eq!(meta2.dimensions(), (1, 1));
+    assert_eq!(
+      calls2.load(Ordering::SeqCst),
+      1,
+      "stale probe metadata should trigger a network refresh"
+    );
+
+    // Corrupt the on-disk probe data while keeping the length intact, then ensure we can recover.
+    let len = value.get("len").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let meta_string = meta_path.to_string_lossy();
+    let data_path =
+      std::path::PathBuf::from(meta_string.strip_suffix(".meta").expect("meta path suffix"));
+    fs::write(&data_path, vec![0u8; len.max(1)]).expect("write corrupt data");
+
+    let calls3 = Arc::new(AtomicUsize::new(0));
+    let disk3 = DiskCachingFetcher::with_configs(
+      CountingPartialFetcher {
+        calls: Arc::clone(&calls3),
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(1)),
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache3 = ImageCache::with_fetcher(Arc::new(disk3));
+    let meta3 = cache3.probe(url).expect("probe succeeds after corruption");
+    assert_eq!(meta3.dimensions(), (1, 1));
+    assert_eq!(
+      calls3.load(Ordering::SeqCst),
+      1,
+      "corrupt probe metadata should be treated as a miss and refreshed"
+    );
   }
 
   fn read_http_headers(stream: &mut std::net::TcpStream) -> String {

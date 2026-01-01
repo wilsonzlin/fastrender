@@ -2040,6 +2040,20 @@ impl FetchContextKind {
   }
 }
 
+/// Auxiliary artifacts that can be stored in a disk-backed cache alongside fetched resources.
+///
+/// These are keyed by the tuple `(FetchContextKind, url)` (plus any disk cache namespace) but use a
+/// different on-disk entry key than the primary resource bytes so they do not interfere with
+/// `fetch()` / `fetch_partial()` semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CacheArtifactKind {
+  /// Serialized image probe metadata (intrinsic dimensions, EXIF orientation, etc.).
+  ///
+  /// Used by [`crate::image_loader::ImageCache::probe`] to avoid re-fetching image bytes just to
+  /// compute intrinsic sizes across repeated runs.
+  ImageProbeMetadata,
+}
+
 impl From<FetchDestination> for FetchContextKind {
   fn from(value: FetchDestination) -> Self {
     match value {
@@ -2192,6 +2206,48 @@ pub trait ResourceFetcher: Send + Sync {
     let _ = kind;
     self.fetch_with_validation(url, etag, last_modified)
   }
+
+  /// Read a cached auxiliary artifact blob for the given `(kind, url)` tuple.
+  ///
+  /// This is primarily implemented by disk-backed fetchers so higher-level callers can persist
+  /// derived metadata (e.g. image probe results) without re-hitting the network across runs.
+  ///
+  /// The default implementation returns `None`.
+  fn read_cache_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+  ) -> Option<FetchedResource> {
+    let _ = (kind, url, artifact);
+    None
+  }
+
+  /// Persist an auxiliary artifact blob for the given `(kind, url)` tuple.
+  ///
+  /// Implementations should treat this as best-effort; failures must not surface to callers.
+  ///
+  /// `source` provides HTTP caching metadata (ETag/Last-Modified/Cache-Control) for staleness
+  /// checks. Implementations may ignore it.
+  ///
+  /// The default implementation is a no-op.
+  fn write_cache_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+    bytes: &[u8],
+    source: Option<&FetchedResource>,
+  ) {
+    let _ = (kind, url, artifact, bytes, source);
+  }
+
+  /// Remove a cached auxiliary artifact blob for the given `(kind, url)` tuple.
+  ///
+  /// The default implementation is a no-op.
+  fn remove_cache_artifact(&self, kind: FetchContextKind, url: &str, artifact: CacheArtifactKind) {
+    let _ = (kind, url, artifact);
+  }
 }
 
 // Allow Arc<dyn ResourceFetcher> to be used as ResourceFetcher
@@ -2247,6 +2303,30 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
     last_modified: Option<&str>,
   ) -> Result<FetchedResource> {
     (**self).fetch_with_validation_and_context(kind, url, etag, last_modified)
+  }
+
+  fn read_cache_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+  ) -> Option<FetchedResource> {
+    (**self).read_cache_artifact(kind, url, artifact)
+  }
+
+  fn write_cache_artifact(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    artifact: CacheArtifactKind,
+    bytes: &[u8],
+    source: Option<&FetchedResource>,
+  ) {
+    (**self).write_cache_artifact(kind, url, artifact, bytes, source)
+  }
+
+  fn remove_cache_artifact(&self, kind: FetchContextKind, url: &str, artifact: CacheArtifactKind) {
+    (**self).remove_cache_artifact(kind, url, artifact)
   }
 }
 
