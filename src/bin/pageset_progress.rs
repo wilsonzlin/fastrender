@@ -5932,7 +5932,7 @@ fn run_queue(
               progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
               if let Some(stage) = heartbeat_stage {
                 ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
-                progress.hotspot = stage.hotspot().to_string();
+                progress.hotspot = hotspot_from_heartbeat(stage).to_string();
               }
               if progress.hotspot.trim().is_empty() {
                 progress.hotspot = "unknown".to_string();
@@ -5966,7 +5966,7 @@ fn run_queue(
             progress.auto_notes = note.clone();
             progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
             if let Some(stage) = heartbeat_stage {
-              maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
+              maybe_apply_hotspot(&mut progress, previous.as_ref(), hotspot_from_heartbeat(stage), false);
             }
             if progress.hotspot.trim().is_empty() {
               progress.hotspot = "unknown".to_string();
@@ -5985,7 +5985,7 @@ fn run_queue(
             if let Some(stage) = heartbeat_stage {
               ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
               if is_hotspot_unset(&progress.hotspot) {
-                progress.hotspot = stage.hotspot().to_string();
+                progress.hotspot = hotspot_from_heartbeat(stage).to_string();
               }
             }
             let _ = write_progress(&entry.item.progress_path, &progress);
@@ -6015,7 +6015,7 @@ fn run_queue(
           progress.auto_notes = "worker try_wait failed".to_string();
           progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
           if let Some(stage) = heartbeat_stage {
-            maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
+            maybe_apply_hotspot(&mut progress, previous.as_ref(), hotspot_from_heartbeat(stage), false);
           }
           if progress.hotspot.trim().is_empty() {
             progress.hotspot = "unknown".to_string();
@@ -6034,7 +6034,7 @@ fn run_queue(
           if let Some(stage) = heartbeat_stage {
             ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
             if is_hotspot_unset(&progress.hotspot) {
-              progress.hotspot = stage.hotspot().to_string();
+              progress.hotspot = hotspot_from_heartbeat(stage).to_string();
             }
           }
           let _ = write_progress(&entry.item.progress_path, &progress);
@@ -6832,7 +6832,7 @@ fn worker_on_large_stack(args: WorkerArgs) -> io::Result<()> {
       progress.auto_notes = panic_msg;
       progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
       if let Some(stage) = heartbeat_stage {
-        maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
+        maybe_apply_hotspot(&mut progress, previous.as_ref(), hotspot_from_heartbeat(stage), false);
       }
       if progress.hotspot.trim().is_empty() {
         progress.hotspot = "unknown".to_string();
@@ -6841,7 +6841,7 @@ fn worker_on_large_stack(args: WorkerArgs) -> io::Result<()> {
       if let Some(stage) = heartbeat_stage {
         ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
         if is_hotspot_unset(&progress.hotspot) {
-          progress.hotspot = stage.hotspot().to_string();
+          progress.hotspot = hotspot_from_heartbeat(stage).to_string();
         }
       }
       let _ = write_progress_with_sentinel(&progress_path, stage_path.as_deref(), &progress);
@@ -8231,7 +8231,7 @@ mod tests {
     let progress = read_progress(&progress_path).expect("progress");
     assert_eq!(progress.status, ProgressStatus::Timeout);
     let heartbeat_stage = read_stage_heartbeat(&stage_path).expect("heartbeat");
-    assert_eq!(progress.hotspot, heartbeat_stage.hotspot().to_string());
+    assert_eq!(progress.hotspot, hotspot_from_heartbeat(heartbeat_stage).to_string());
     assert!(
       progress.auto_notes.contains(heartbeat_stage.as_str()),
       "auto_notes missing stage: {}",
