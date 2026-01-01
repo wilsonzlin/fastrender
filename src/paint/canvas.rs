@@ -47,6 +47,7 @@ use super::display_list::BorderRadii;
 use super::display_list::BorderRadius;
 use super::display_list::FontVariation;
 use crate::error::RenderError;
+use crate::error::RenderStage;
 use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
@@ -58,6 +59,7 @@ use crate::paint::text_rasterize::{
   concat_transforms, GlyphCacheStats, TextRasterizer, TextRenderState,
 };
 use crate::paint::text_shadow::PathBounds;
+use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Rgba;
 use crate::text::color_fonts::ColorGlyphRaster;
 use crate::text::font_db::LoadedFont;
@@ -75,6 +77,8 @@ use tiny_skia::PixmapPaint;
 use tiny_skia::Rect as SkiaRect;
 use tiny_skia::Stroke;
 use tiny_skia::Transform;
+
+type RenderResult<T> = std::result::Result<T, RenderError>;
 
 // ============================================================================
 // Canvas State
@@ -500,7 +504,7 @@ impl Canvas {
           origin_y as u32,
           width,
           height,
-        )
+        )?
         .map(Rc::new);
       }
     }
@@ -636,12 +640,12 @@ impl Canvas {
   /// Sets a clip rectangle
   ///
   /// Subsequent drawing operations will be clipped to this rectangle.
-  pub fn set_clip(&mut self, rect: Rect) {
-    self.set_clip_with_radii(rect, None);
+  pub fn set_clip(&mut self, rect: Rect) -> Result<()> {
+    self.set_clip_with_radii(rect, None)
   }
 
   /// Sets a clip rectangle with optional corner radii.
-  pub fn set_clip_with_radii(&mut self, rect: Rect, radii: Option<BorderRadii>) {
+  pub fn set_clip_with_radii(&mut self, rect: Rect, radii: Option<BorderRadii>) -> Result<()> {
     let transform = self.current_state.transform;
     let clip_bounds = if transform == Transform::identity() {
       rect
@@ -658,16 +662,17 @@ impl Canvas {
     let new_mask = self.build_clip_mask(rect, radii.unwrap_or(BorderRadii::ZERO));
     self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
       (Some(mut next), Some(existing)) => {
-        combine_masks(&mut next, existing.as_ref());
+        combine_masks(&mut next, existing.as_ref())?;
         Some(Rc::new(next))
       }
       (Some(mask), None) => Some(Rc::new(mask)),
       (None, existing) => existing,
     };
+    Ok(())
   }
 
   /// Sets an arbitrary clip path (basic shapes)
-  pub fn set_clip_path(&mut self, path: &ResolvedClipPath, scale: f32) {
+  pub fn set_clip_path(&mut self, path: &ResolvedClipPath, scale: f32) -> Result<()> {
     let bounds = path.bounds();
     let scaled_bounds = Rect::from_xywh(
       bounds.x() * scale,
@@ -685,12 +690,13 @@ impl Canvas {
       .and_then(|size| path.mask(scale, size, self.current_state.transform));
     self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
       (Some(mut next), Some(existing)) => {
-        combine_masks(&mut next, existing.as_ref());
+        combine_masks(&mut next, existing.as_ref())?;
         Some(Rc::new(next))
       }
       (Some(mask), None) => Some(Rc::new(mask)),
       (None, existing) => existing,
     };
+    Ok(())
   }
 
   /// Clears the clip rectangle
@@ -1380,9 +1386,9 @@ impl Canvas {
   }
 }
 
-fn combine_masks(into: &mut Mask, existing: &Mask) {
+fn combine_masks(into: &mut Mask, existing: &Mask) -> RenderResult<()> {
   if into.width() != existing.width() || into.height() != existing.height() {
-    return;
+    return Ok(());
   }
 
   #[inline]
@@ -1392,9 +1398,22 @@ fn combine_masks(into: &mut Mask, existing: &Mask) {
     ((prod + 255) >> 8) as u8
   }
 
-  for (dst, src) in into.data_mut().iter_mut().zip(existing.data().iter()) {
-    *dst = mul_div_255_round(*dst, *src);
+  check_active(RenderStage::Paint)?;
+  let width = into.width() as usize;
+  let height = into.height() as usize;
+  let dst = into.data_mut();
+  let src = existing.data();
+  let mut deadline_counter = 0usize;
+  for row in 0..height {
+    check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
+    let offset = row * width;
+    let dst_row = &mut dst[offset..offset + width];
+    let src_row = &src[offset..offset + width];
+    for (dst, src) in dst_row.iter_mut().zip(src_row.iter()) {
+      *dst = mul_div_255_round(*dst, *src);
+    }
   }
+  Ok(())
 }
 
 pub(crate) fn crop_mask(
@@ -1403,35 +1422,40 @@ pub(crate) fn crop_mask(
   origin_y: u32,
   width: u32,
   height: u32,
-) -> Option<Mask> {
+) -> RenderResult<Option<Mask>> {
   if width == 0 || height == 0 {
-    return None;
+    return Ok(None);
   }
 
   let mask_width = mask.width();
   let mask_height = mask.height();
   if origin_x >= mask_width || origin_y >= mask_height {
-    return None;
+    return Ok(None);
   }
 
   let crop_w = width.min(mask_width.saturating_sub(origin_x));
   let crop_h = height.min(mask_height.saturating_sub(origin_y));
   if crop_w == 0 || crop_h == 0 {
-    return None;
+    return Ok(None);
   }
 
-  let mut out = Mask::new(crop_w, crop_h)?;
+  check_active(RenderStage::Paint)?;
+  let Some(mut out) = Mask::new(crop_w, crop_h) else {
+    return Ok(None);
+  };
   let src = mask.data();
   let dst = out.data_mut();
   let src_stride = mask_width as usize;
   let dst_stride = crop_w as usize;
+  let mut deadline_counter = 0usize;
   for row in 0..crop_h as usize {
+    check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
     let src_idx = (origin_y as usize + row) * src_stride + origin_x as usize;
     let dst_idx = row * dst_stride;
     dst[dst_idx..dst_idx + dst_stride].copy_from_slice(&src[src_idx..src_idx + dst_stride]);
   }
 
-  Some(out)
+  Ok(Some(out))
 }
 
 /// Applies a mask that is positioned in a larger coordinate space.
@@ -1449,7 +1473,7 @@ pub(crate) fn apply_mask_with_offset(
   pixmap_origin: (i32, i32),
   mask: &Mask,
   mask_origin: (i32, i32),
-) -> bool {
+) -> RenderResult<bool> {
   #[inline]
   fn mul_div_255_round(value: u8, alpha: u8) -> u8 {
     // Match `tiny_skia::Pixmap::apply_mask` rounding behavior.
@@ -1460,7 +1484,7 @@ pub(crate) fn apply_mask_with_offset(
   let pixmap_w = pixmap.width() as i32;
   let pixmap_h = pixmap.height() as i32;
   if pixmap_w <= 0 || pixmap_h <= 0 {
-    return false;
+    return Ok(false);
   }
 
   let pix_x0 = pixmap_origin.0;
@@ -1479,7 +1503,7 @@ pub(crate) fn apply_mask_with_offset(
   let inter_y1 = pix_y1.min(mask_y1);
 
   if inter_x1 <= inter_x0 || inter_y1 <= inter_y0 {
-    return false;
+    return Ok(false);
   }
 
   let local_x0 = (inter_x0 - pix_x0) as usize;
@@ -1505,7 +1529,10 @@ pub(crate) fn apply_mask_with_offset(
 
   let mask_stride = mask.width() as usize;
   let mask_data = mask.data();
+  check_active(RenderStage::Paint)?;
+  let mut deadline_counter = 0usize;
   for row_offset in 0..(local_y1 - local_y0) {
+    check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
     let y = local_y0 + row_offset;
     let pix_row = &mut pix_data[y * pixmap_stride..(y + 1) * pixmap_stride];
 
@@ -1543,7 +1570,7 @@ pub(crate) fn apply_mask_with_offset(
     }
   }
 
-  true
+  Ok(true)
 }
 
 // ============================================================================
@@ -1819,7 +1846,9 @@ mod tests {
   fn test_canvas_clip() {
     let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
 
-    canvas.set_clip(Rect::from_xywh(20.0, 20.0, 60.0, 60.0));
+    canvas
+      .set_clip(Rect::from_xywh(20.0, 20.0, 60.0, 60.0))
+      .unwrap();
 
     // Draw a rectangle that extends beyond the clip
     canvas.draw_rect(
@@ -1835,7 +1864,9 @@ mod tests {
   #[test]
   fn clip_limits_rect_fill() {
     let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
-    canvas.set_clip(Rect::from_xywh(2.0, 2.0, 4.0, 4.0));
+    canvas
+      .set_clip(Rect::from_xywh(2.0, 2.0, 4.0, 4.0))
+      .unwrap();
     canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Rgba::rgb(255, 0, 0));
     let pixmap = canvas.into_pixmap();
 
@@ -1846,10 +1877,12 @@ mod tests {
   #[test]
   fn rounded_clip_masks_corners() {
     let mut canvas = Canvas::new(12, 12, Rgba::WHITE).unwrap();
-    canvas.set_clip_with_radii(
-      Rect::from_xywh(2.0, 2.0, 8.0, 8.0),
-      Some(BorderRadii::uniform(4.0)),
-    );
+    canvas
+      .set_clip_with_radii(
+        Rect::from_xywh(2.0, 2.0, 8.0, 8.0),
+        Some(BorderRadii::uniform(4.0)),
+      )
+      .unwrap();
     canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), Rgba::rgb(0, 0, 255));
     let pixmap = canvas.into_pixmap();
 
@@ -1862,7 +1895,9 @@ mod tests {
     let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
     canvas.translate(2.0, 1.0);
 
-    canvas.set_clip(Rect::from_xywh(1.0, 1.0, 4.0, 4.0));
+    canvas
+      .set_clip(Rect::from_xywh(1.0, 1.0, 4.0, 4.0))
+      .unwrap();
 
     if let Some(bounds) = canvas.clip_bounds() {
       assert_eq!(bounds, Rect::from_xywh(3.0, 2.0, 4.0, 4.0));
@@ -1908,7 +1943,7 @@ mod tests {
     canvas.set_transform(rotate_90_about_center);
 
     let clip_rect = Rect::from_xywh(6.0, 2.0, 3.0, 5.0);
-    canvas.set_clip(clip_rect);
+    canvas.set_clip(clip_rect).unwrap();
 
     if let Some(bounds) = canvas.clip_bounds() {
       assert_eq!(bounds, Rect::from_xywh(3.0, 6.0, 5.0, 3.0));
@@ -1931,7 +1966,7 @@ mod tests {
     };
 
     let mut canvas = Canvas::new(20, 15, Rgba::WHITE).unwrap();
-    canvas.set_clip_path(&circle, 1.0);
+    canvas.set_clip_path(&circle, 1.0).unwrap();
     canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 20.0, 15.0), Rgba::rgb(255, 0, 0));
     let pixmap = canvas.into_pixmap();
 
@@ -1939,7 +1974,7 @@ mod tests {
     assert_eq!(pixel(&pixmap, 12, 5), (255, 255, 255, 255));
 
     let mut hidpi = Canvas::new(40, 30, Rgba::WHITE).unwrap();
-    hidpi.set_clip_path(&circle, 2.0);
+    hidpi.set_clip_path(&circle, 2.0).unwrap();
     hidpi.draw_rect(Rect::from_xywh(0.0, 0.0, 40.0, 30.0), Rgba::rgb(0, 255, 0));
     let pixmap = hidpi.into_pixmap();
 
@@ -1962,7 +1997,7 @@ mod tests {
     let mut canvas = Canvas::new(20, 15, Rgba::WHITE).unwrap();
     let transform = Transform::from_rotate(90.0).post_concat(Transform::from_translate(10.0, 0.0));
     canvas.set_transform(transform);
-    canvas.set_clip_path(&triangle, 1.0);
+    canvas.set_clip_path(&triangle, 1.0).unwrap();
     canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 20.0, 15.0), Rgba::rgb(0, 0, 255));
 
     let pixmap = canvas.into_pixmap();
@@ -1976,7 +2011,7 @@ mod tests {
     let mut full = Canvas::new(12, 12, Rgba::WHITE).unwrap();
     full.push_layer(1.0).unwrap();
     full.translate(1.0, 1.0);
-    full.set_clip(Rect::from_xywh(2.0, 2.0, 6.0, 6.0));
+    full.set_clip(Rect::from_xywh(2.0, 2.0, 6.0, 6.0)).unwrap();
     full.draw_rect(Rect::from_xywh(2.0, 2.0, 3.0, 3.0), Rgba::rgb(255, 0, 0));
     full.pop_layer().unwrap();
     let full_pixmap = full.into_pixmap();
@@ -1986,7 +2021,9 @@ mod tests {
       .push_layer_bounded(1.0, None, Rect::from_xywh(1.0, 1.0, 8.0, 8.0))
       .unwrap();
     bounded.translate(1.0, 1.0);
-    bounded.set_clip(Rect::from_xywh(2.0, 2.0, 6.0, 6.0));
+    bounded
+      .set_clip(Rect::from_xywh(2.0, 2.0, 6.0, 6.0))
+      .unwrap();
     bounded.draw_rect(Rect::from_xywh(2.0, 2.0, 3.0, 3.0), Rgba::rgb(255, 0, 0));
     bounded.pop_layer().unwrap();
     let bounded_pixmap = bounded.into_pixmap();
@@ -2024,10 +2061,12 @@ mod tests {
   #[test]
   fn bounded_layer_preserves_parent_clip_mask() {
     let mut canvas = Canvas::new(8, 8, Rgba::WHITE).unwrap();
-    canvas.set_clip_with_radii(
-      Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
-      Some(BorderRadii::uniform(1.0)),
-    );
+    canvas
+      .set_clip_with_radii(
+        Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
+        Some(BorderRadii::uniform(1.0)),
+      )
+      .unwrap();
 
     canvas
       .push_layer_bounded(1.0, None, Rect::from_xywh(1.0, 1.0, 6.0, 6.0))
@@ -2079,7 +2118,9 @@ mod tests {
   fn rect_clip_fast_path_avoids_pixmap_allocation() {
     let mut canvas = Canvas::new_transparent(8, 8).unwrap();
     let recorder = NewPixmapAllocRecorder::start();
-    canvas.set_clip_with_radii(Rect::from_xywh(1.0, 1.0, 6.0, 6.0), None);
+    canvas
+      .set_clip_with_radii(Rect::from_xywh(1.0, 1.0, 6.0, 6.0), None)
+      .unwrap();
     let allocations = recorder.take();
     assert!(
       allocations.is_empty(),
@@ -2130,10 +2171,12 @@ mod tests {
   fn rounded_rect_clip_slow_path_avoids_pixmap_allocation() {
     let mut canvas = Canvas::new_transparent(8, 8).unwrap();
     let recorder = NewPixmapAllocRecorder::start();
-    canvas.set_clip_with_radii(
-      Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
-      Some(BorderRadii::uniform(2.0)),
-    );
+    canvas
+      .set_clip_with_radii(
+        Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
+        Some(BorderRadii::uniform(2.0)),
+      )
+      .unwrap();
     let allocations = recorder.take();
     assert!(
       allocations.is_empty(),
@@ -2146,7 +2189,9 @@ mod tests {
     let mut canvas = Canvas::new_transparent(8, 8).unwrap();
     canvas.translate(0.5, 0.25);
     let recorder = NewPixmapAllocRecorder::start();
-    canvas.set_clip(Rect::from_xywh(1.0, 1.0, 6.0, 6.0));
+    canvas
+      .set_clip(Rect::from_xywh(1.0, 1.0, 6.0, 6.0))
+      .unwrap();
     let allocations = recorder.take();
     assert!(
       allocations.is_empty(),
@@ -2161,7 +2206,7 @@ mod tests {
       *dst = (idx as u8).wrapping_mul(17);
     }
 
-    let cropped = crop_mask(&mask, 1, 1, 10, 10).unwrap();
+    let cropped = crop_mask(&mask, 1, 1, 10, 10).unwrap().unwrap();
     assert_eq!(cropped.width(), 4);
     assert_eq!(cropped.height(), 3);
 
@@ -2181,7 +2226,7 @@ mod tests {
     let mask = Mask::new(16, 16).unwrap();
 
     let recorder = NewPixmapAllocRecorder::start();
-    let _ = crop_mask(&mask, 0, 0, 8, 8).unwrap();
+    let _ = crop_mask(&mask, 0, 0, 8, 8).unwrap().unwrap();
     assert!(
       recorder.take().is_empty(),
       "crop_mask should not allocate Pixmaps"
@@ -2207,7 +2252,7 @@ mod tests {
     expected.apply_mask(&mask);
 
     let mut actual = base.clone();
-    assert!(apply_mask_with_offset(&mut actual, (0, 0), &mask, (0, 0)));
+    assert!(apply_mask_with_offset(&mut actual, (0, 0), &mask, (0, 0)).unwrap());
 
     assert_eq!(actual.data(), expected.data());
   }

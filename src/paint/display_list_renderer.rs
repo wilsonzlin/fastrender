@@ -71,7 +71,9 @@ use crate::paint::painter::{
 };
 use crate::paint::pixmap::new_pixmap;
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
-use crate::paint::rasterize::{estimate_box_shadow_work_pixels, render_box_shadow_cached, BoxShadow};
+use crate::paint::rasterize::{
+  estimate_box_shadow_work_pixels, render_box_shadow_cached, BoxShadow,
+};
 use crate::paint::text_rasterize::{
   shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache, GlyphCache,
   TextRasterizer, TextRenderState,
@@ -1271,12 +1273,16 @@ fn mul_div_255_round(value: u8, alpha: u8) -> u8 {
   ((prod + 255) >> 8) as u8
 }
 
-fn apply_mask_rect_rgba(pixmap: &mut Pixmap, mask: &Mask, rect: ClipMaskDirtyRect) {
+fn apply_mask_rect_rgba(
+  pixmap: &mut Pixmap,
+  mask: &Mask,
+  rect: ClipMaskDirtyRect,
+) -> RenderResult<()> {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
-    return;
+    return Ok(());
   }
   if pixmap.width() != mask.width() || pixmap.height() != mask.height() {
-    return;
+    return Ok(());
   }
 
   let width = pixmap.width() as usize;
@@ -1287,12 +1293,20 @@ fn apply_mask_rect_rgba(pixmap: &mut Pixmap, mask: &Mask, rect: ClipMaskDirtyRec
 
   let x0 = rect.x0 as usize;
   let x1 = rect.x1 as usize;
+  check_active(RenderStage::Paint)?;
+  let mut deadline_counter = 0usize;
+  let mut pixel_counter = 0usize;
   for y in rect.y0 as usize..rect.y1 as usize {
+    check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
     let pixel_row_start = y * pixel_stride;
     let mask_row_start = y * mask_stride;
     let row_pixels = &mut pixmap_data[pixel_row_start + x0 * 4..pixel_row_start + x1 * 4];
     let row_mask = &mask_data[mask_row_start + x0..mask_row_start + x1];
     for (px, m) in row_pixels.chunks_exact_mut(4).zip(row_mask.iter()) {
+      if pixel_counter & 4095 == 0 {
+        check_active(RenderStage::Paint)?;
+      }
+      pixel_counter = pixel_counter.wrapping_add(1);
       let m = *m;
       if m == 255 {
         continue;
@@ -1307,9 +1321,10 @@ fn apply_mask_rect_rgba(pixmap: &mut Pixmap, mask: &Mask, rect: ClipMaskDirtyRec
       px[3] = mul_div_255_round(px[3], m);
     }
   }
+  Ok(())
 }
 
-fn hard_clip_pixmap_outside_rect_rgba(pixmap: &mut Pixmap, rect: Rect) {
+fn hard_clip_pixmap_outside_rect_rgba(pixmap: &mut Pixmap, rect: Rect) -> RenderResult<()> {
   let width = pixmap.width();
   let height = pixmap.height();
 
@@ -1323,26 +1338,30 @@ fn hard_clip_pixmap_outside_rect_rgba(pixmap: &mut Pixmap, rect: Rect) {
   let x1 = (rect.x() + rect.width()).ceil().min(width as f32) as u32;
   let y1 = (rect.y() + rect.height()).ceil().min(height as f32) as u32;
   if x0 == 0 && y0 == 0 && x1 == width && y1 == height {
-    return;
+    return Ok(());
   }
 
   let stride = width as usize * 4;
   let data = pixmap.data_mut();
 
   // Clear fully outside rows in one contiguous fill.
+  check_active(RenderStage::Paint)?;
   data[..y0 as usize * stride].fill(0);
   data[y1 as usize * stride..].fill(0);
 
   let left_bytes = x0 as usize * 4;
   let right_start = x1 as usize * 4;
   if left_bytes != 0 || right_start != stride {
+    let mut deadline_counter = 0usize;
     for row in y0..y1 {
+      check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
       let offset = row as usize * stride;
       let row = &mut data[offset..offset + stride];
       row[..left_bytes].fill(0);
       row[right_start..].fill(0);
     }
   }
+  Ok(())
 }
 
 fn apply_clip_mask_rect(
@@ -1350,15 +1369,15 @@ fn apply_clip_mask_rect(
   rect: Rect,
   radii: BorderRadii,
   diagnostics: Option<&Arc<ClipMaskDiagnostics>>,
-) {
+) -> RenderResult<()> {
   if rect.width() <= 0.0 || rect.height() <= 0.0 {
-    return;
+    return Ok(());
   }
 
   let width = pixmap.width();
   let height = pixmap.height();
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
 
   let timer = diagnostics.map(|_| Instant::now());
@@ -1381,7 +1400,7 @@ fn apply_clip_mask_rect(
       && bottom >= height as f32 - 0.5
     {
       record(timer);
-      return;
+      return Ok(());
     }
   }
 
@@ -1391,7 +1410,7 @@ fn apply_clip_mask_rect(
   if right <= 0.0 || bottom <= 0.0 || rect.x() >= width as f32 || rect.y() >= height as f32 {
     pixmap.data_mut().fill(0);
     record(timer);
-    return;
+    return Ok(());
   }
 
   // Fast path: pure hard clip for pixel-aligned axis-aligned rects with no radii. For these
@@ -1400,15 +1419,15 @@ fn apply_clip_mask_rect(
   if radii.is_zero() {
     let is_int = |v: f32| v.is_finite() && (v - v.round()).abs() <= 1e-6;
     if is_int(rect.x()) && is_int(rect.y()) && is_int(rect.width()) && is_int(rect.height()) {
-      hard_clip_pixmap_outside_rect_rgba(pixmap, rect);
+      hard_clip_pixmap_outside_rect_rgba(pixmap, rect)?;
       record(timer);
-      return;
+      return Ok(());
     }
   }
 
   // Generate a rounded-rect alpha mask, reusing a thread-local scratch mask to avoid per-call
   // allocations.
-  let applied_mask = CLIP_MASK_SCRATCH.with(|cell| {
+  let applied_mask = CLIP_MASK_SCRATCH.with(|cell| -> RenderResult<bool> {
     let mut scratch = cell.borrow_mut();
     let replace = match scratch.mask.as_ref() {
       Some(existing) => existing.width() != width || existing.height() != height,
@@ -1426,7 +1445,7 @@ fn apply_clip_mask_rect(
 
     {
       let Some(mask) = scratch.mask.as_mut() else {
-        return false;
+        return Ok(false);
       };
 
       if needs_rebuild {
@@ -1445,7 +1464,7 @@ fn apply_clip_mask_rect(
           rect.height(),
           &clamped,
         ) else {
-          return false;
+          return Ok(false);
         };
 
         // Match `fill_rounded_rect` semantics (anti-aliased) without allocating an intermediate
@@ -1476,7 +1495,7 @@ fn apply_clip_mask_rect(
         let skip_y1 = skip_y1.clamp(dirty.y0, dirty.y1);
 
         if skip_x0 >= skip_x1 || skip_y0 >= skip_y1 {
-          apply_mask_rect_rgba(pixmap, mask, dirty);
+          apply_mask_rect_rgba(pixmap, mask, dirty)?;
         } else {
           if dirty.y0 < skip_y0 {
             apply_mask_rect_rgba(
@@ -1488,7 +1507,7 @@ fn apply_clip_mask_rect(
                 x1: dirty.x1,
                 y1: skip_y0,
               },
-            );
+            )?;
           }
           if skip_y0 < skip_y1 {
             if dirty.x0 < skip_x0 {
@@ -1501,7 +1520,7 @@ fn apply_clip_mask_rect(
                   x1: skip_x0,
                   y1: skip_y1,
                 },
-              );
+              )?;
             }
             if skip_x1 < dirty.x1 {
               apply_mask_rect_rgba(
@@ -1513,7 +1532,7 @@ fn apply_clip_mask_rect(
                   x1: dirty.x1,
                   y1: skip_y1,
                 },
-              );
+              )?;
             }
           }
           if skip_y1 < dirty.y1 {
@@ -1526,11 +1545,20 @@ fn apply_clip_mask_rect(
                 x1: dirty.x1,
                 y1: dirty.y1,
               },
-            );
+            )?;
           }
         }
       } else {
-        pixmap.apply_mask(mask);
+        apply_mask_rect_rgba(
+          pixmap,
+          mask,
+          ClipMaskDirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: width,
+            y1: height,
+          },
+        )?;
       }
     }
 
@@ -1538,16 +1566,18 @@ fn apply_clip_mask_rect(
       scratch.last_rect = Some(rect);
       scratch.last_radii = Some(clamped);
     }
-    true
+    Ok(true)
   });
 
+  let applied_mask = applied_mask?;
   if !applied_mask {
     record(timer);
-    return;
+    return Ok(());
   }
 
-  hard_clip_pixmap_outside_rect_rgba(pixmap, rect);
+  hard_clip_pixmap_outside_rect_rgba(pixmap, rect)?;
   record(timer);
+  Ok(())
 }
 
 fn rect_int_bounds(rect: &Rect) -> (i32, i32, i32, i32) {
@@ -1572,6 +1602,7 @@ fn apply_drop_shadow(
   if width == 0 || height == 0 {
     return Ok(());
   }
+  check_active(RenderStage::Paint)?;
 
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(pixmap) else {
     return Ok(());
@@ -1593,6 +1624,7 @@ fn apply_drop_shadow(
     let dst = shadow.pixels_mut();
     let mut deadline_counter = 0usize;
     for y in 0..bounds_h as usize {
+      check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
       let src_row = (min_y as usize + y) * src_stride;
       let dst_row = (pad as usize + y) * dst_stride;
       for x in 0..bounds_w as usize {
@@ -1663,7 +1695,6 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) -> RenderResult<()> {
     scratch.source.resize(len, [0u8; 4]);
     scratch.horizontal.resize(len, [0u8; 4]);
     scratch.transposed.resize(len, [0u8; 4]);
-
     let mut deadline_counter = 0usize;
     for (src, dst) in pixmap.pixels().iter().zip(scratch.source.iter_mut()) {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
@@ -1718,12 +1749,12 @@ fn apply_spread_horizontal(
   let window_size = radius * 2 + 1;
   let extended_len = width + radius * 2;
   let deadline = active_deadline();
-
   dst
     .par_chunks_mut(width)
     .enumerate()
     .try_for_each(|(y, dst_row)| {
       with_deadline(deadline.as_ref(), || -> RenderResult<()> {
+        check_active(RenderStage::Paint)?;
         let row_start = y * width;
         let mut queues = [
           VecDeque::with_capacity(window_size),
@@ -1731,11 +1762,10 @@ fn apply_spread_horizontal(
           VecDeque::with_capacity(window_size),
           VecDeque::with_capacity(window_size),
         ];
+        let mut deadline_counter = 0usize;
 
         for j in 0..extended_len {
-          if j % DEADLINE_STRIDE == 0 {
-            check_active(RenderStage::Paint)?;
-          }
+          check_active_periodic(&mut deadline_counter, 256, RenderStage::Paint)?;
           let src_x = if j < radius {
             0
           } else if j >= radius + width {
@@ -1801,8 +1831,10 @@ fn transpose_channels(
 ) -> RenderResult<()> {
   debug_assert_eq!(src.len(), width * height);
   debug_assert_eq!(dst.len(), width * height);
+  check_active(RenderStage::Paint)?;
   let mut deadline_counter = 0usize;
   for y in 0..height {
+    check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
     let row_start = y * width;
     for x in 0..width {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
@@ -1820,8 +1852,10 @@ fn write_transposed_to_pixmap(
 ) -> RenderResult<()> {
   debug_assert_eq!(src.len(), width * height);
   debug_assert_eq!(dst.len(), width * height);
+  check_active(RenderStage::Paint)?;
   let mut deadline_counter = 0usize;
   for y in 0..height {
+    check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
     for x in 0..width {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       let channels = src[x * height + y];
@@ -3449,10 +3483,10 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn render_border(&mut self, item: &BorderItem) {
+  fn render_border(&mut self, item: &BorderItem) -> Result<()> {
     let opacity = self.canvas.opacity().clamp(0.0, 1.0);
     if opacity <= 0.0 {
-      return;
+      return Ok(());
     }
 
     let transform = self.canvas.transform();
@@ -3479,7 +3513,7 @@ impl DisplayListRenderer {
 
     let pushed_clip = if radii.has_radius() {
       self.canvas.save();
-      self.canvas.set_clip_with_radii(rect, Some(radii));
+      self.canvas.set_clip_with_radii(rect, Some(radii))?;
       true
     } else {
       false
@@ -3496,11 +3530,11 @@ impl DisplayListRenderer {
         opacity,
         clip.as_ref(),
         transform,
-      ) {
+      )? {
         if pushed_clip {
           self.canvas.restore();
         }
-        return;
+        return Ok(());
       }
     }
 
@@ -3553,6 +3587,7 @@ impl DisplayListRenderer {
     if pushed_clip {
       self.canvas.restore();
     }
+    Ok(())
   }
 
   fn render_outline(&mut self, item: &OutlineItem) {
@@ -3662,7 +3697,7 @@ impl DisplayListRenderer {
     opacity: f32,
     clip: Option<&Mask>,
     transform: Transform,
-  ) -> bool {
+  ) -> RenderResult<bool> {
     let border_widths = BorderImageWidths {
       top,
       right,
@@ -3699,17 +3734,17 @@ impl DisplayListRenderer {
       outer_rect.height() - target_widths.top - target_widths.bottom,
     );
     if inner_rect.width() <= 0.0 || inner_rect.height() <= 0.0 {
-      return true;
+      return Ok(true);
     }
 
     let (pixmap, img_w, img_h) = match &border_image.source {
       BorderImageSourceItem::Raster(image) => {
-        let Some(pixmap) = self.image_data_to_pixmap(image) else {
-          return false;
+        let Some(pixmap) = self.image_data_to_pixmap(image)? else {
+          return Ok(false);
         };
         let (w, h) = (pixmap.width(), pixmap.height());
         if w == 0 || h == 0 {
-          return false;
+          return Ok(false);
         }
         (pixmap, w, h)
       }
@@ -3727,7 +3762,7 @@ impl DisplayListRenderer {
           border_image.viewport,
           &self.gradient_cache,
         ) else {
-          return false;
+          return Ok(false);
         };
         if let Some(start) = timer {
           self.record_gradient_usage((img_w * img_h) as u64, start);
@@ -3735,7 +3770,7 @@ impl DisplayListRenderer {
         let pixmap = Arc::new(pixmap);
         let (w, h) = (pixmap.width(), pixmap.height());
         if w == 0 || h == 0 {
-          return false;
+          return Ok(false);
         }
         (pixmap, w, h)
       }
@@ -3895,7 +3930,7 @@ impl DisplayListRenderer {
       );
     }
 
-    true
+    Ok(true)
   }
 
   fn render_border_edge(
@@ -4216,7 +4251,7 @@ impl DisplayListRenderer {
     }
   }
 
-  fn render_mask(&mut self, mask: &ResolvedMask) -> Option<OffsetMask> {
+  fn render_mask(&mut self, mask: &ResolvedMask) -> RenderResult<Option<OffsetMask>> {
     let mut reusable_mask = MASK_RENDER_SCRATCH.with(|cell| cell.borrow_mut().take());
 
     let viewport = (
@@ -4265,7 +4300,10 @@ impl DisplayListRenderer {
       else {
         combined = Some(match combined.take() {
           Some(existing) => {
-            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+              Some(mask) => mask,
+              None => return Ok(None),
+            }
           }
           None => CompositeMask::Transparent,
         });
@@ -4274,7 +4312,10 @@ impl DisplayListRenderer {
       if clip_rect_css.width() <= 0.0 || clip_rect_css.height() <= 0.0 {
         combined = Some(match combined.take() {
           Some(existing) => {
-            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+              Some(mask) => mask,
+              None => return Ok(None),
+            }
           }
           None => CompositeMask::Transparent,
         });
@@ -4359,7 +4400,10 @@ impl DisplayListRenderer {
       if positions_x.is_empty() || positions_y.is_empty() {
         combined = Some(match combined.take() {
           Some(existing) => {
-            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+              Some(mask) => mask,
+              None => return Ok(None),
+            }
           }
           None => CompositeMask::Transparent,
         });
@@ -4386,7 +4430,7 @@ impl DisplayListRenderer {
           }
           result.map(Arc::new)
         }
-        ResolvedMaskImage::Raster(image) => self.image_data_to_pixmap(image),
+        ResolvedMaskImage::Raster(image) => self.image_data_to_pixmap(image)?,
       };
       let Some(tile) = tile else { continue };
       let mut converted_tile = None;
@@ -4416,7 +4460,10 @@ impl DisplayListRenderer {
       if region_w == 0 || region_h == 0 {
         combined = Some(match combined.take() {
           Some(existing) => {
-            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+              Some(mask) => mask,
+              None => return Ok(None),
+            }
           }
           None => CompositeMask::Transparent,
         });
@@ -4428,13 +4475,21 @@ impl DisplayListRenderer {
       let mut layer_mask = if wants_reuse {
         match reusable_mask.take() {
           Some(mask) if mask.width() == region_w && mask.height() == region_h => mask,
-          Some(_) | None => Mask::new(region_w, region_h)?,
+          Some(_) | None => {
+            let Some(mask) = Mask::new(region_w, region_h) else {
+              return Ok(None);
+            };
+            mask
+          }
         }
       } else {
-        Mask::new(region_w, region_h)?
+        let Some(mask) = Mask::new(region_w, region_h) else {
+          return Ok(None);
+        };
+        mask
       };
 
-      MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      let rendered_layer = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
         let mut scratch = cell.borrow_mut();
         let replace = match scratch.pixmap.as_ref() {
           Some(existing) => existing.width() != region_w || existing.height() != region_h,
@@ -4470,7 +4525,10 @@ impl DisplayListRenderer {
           src_idx += 4;
         }
         Some(())
-      })?;
+      });
+      if rendered_layer.is_none() {
+        return Ok(None);
+      }
 
       let layer_mask = CompositeMask::Region(OffsetMask {
         mask: layer_mask,
@@ -4478,12 +4536,15 @@ impl DisplayListRenderer {
       });
 
       combined = Some(match combined.take() {
-        Some(existing) => apply_mask_composite(existing, layer_mask, layer.composite)?,
+        Some(existing) => match apply_mask_composite(existing, layer_mask, layer.composite) {
+          Some(mask) => mask,
+          None => return Ok(None),
+        },
         None => layer_mask,
       });
     }
 
-    match combined {
+    Ok(match combined {
       None => {
         MASK_RENDER_SCRATCH.with(|cell| {
           *cell.borrow_mut() = reusable_mask;
@@ -4495,14 +4556,16 @@ impl DisplayListRenderer {
         MASK_RENDER_SCRATCH.with(|cell| {
           *cell.borrow_mut() = reusable_mask;
         });
-        let mut mask = Mask::new(1, 1)?;
+        let Some(mut mask) = Mask::new(1, 1) else {
+          return Ok(None);
+        };
         mask.data_mut()[0] = 0;
         Some(OffsetMask {
           mask,
           origin: (0, 0),
         })
       }
-    }
+    })
   }
 
   fn convert_stops_rgba(
@@ -5216,7 +5279,10 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn render_parallel(&mut self, list: &DisplayList) -> Result<(Pixmap, usize, usize, usize, Duration)> {
+  fn render_parallel(
+    &mut self,
+    list: &DisplayList,
+  ) -> Result<(Pixmap, usize, usize, usize, Duration)> {
     let mut tiles = self.build_tiles(list)?;
     let tile_count = tiles.len();
     self.canvas.clear(self.background);
@@ -5238,7 +5304,7 @@ impl DisplayListRenderer {
     let layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
 
     let deadline = active_deadline();
- 
+
     let task_capacity = self.parallel_thread_budget(tile_count);
     let chunk_size = tile_count
       .checked_add(task_capacity.saturating_sub(1))
@@ -5252,54 +5318,52 @@ impl DisplayListRenderer {
     let task_count = chunks.len();
 
     let parallel_start = Instant::now();
-    let run_tiles =
-      || -> Result<Vec<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>>> {
-        chunks
-          .into_par_iter()
-          .map(|chunk| {
-            let _diagnostics_guard =
-              diagnostics_session.map(PaintDiagnosticsThreadGuard::enter);
-            with_deadline(deadline.as_ref(), || {
-              let mut out = Vec::with_capacity(chunk.len());
-              for work in chunk {
-                check_active(RenderStage::Paint).map_err(Error::Render)?;
-                let mut renderer = DisplayListRenderer::new_with_text_state(
-                  work.render_w,
-                  work.render_h,
-                  background,
-                  font_ctx.clone(),
-                  scale,
-                  color_renderer.clone(),
-                  color_cache.clone(),
-                  glyph_cache.clone(),
-                )?;
-                renderer.preserve_3d_disabled = preserve_3d_disabled;
-                renderer.paint_parallelism = PaintParallelism::disabled();
-                renderer.gradient_cache = gradient_cache.clone();
-                renderer.diagnostics_enabled = diagnostics_enabled;
-                renderer.image_pixmap_diagnostics = image_pixmap_diagnostics.clone();
-                renderer.background_paint_diagnostics = background_paint_diagnostics.clone();
-                renderer.clip_mask_diagnostics = clip_mask_diagnostics.clone();
-                renderer.layer_alloc_diagnostics = layer_alloc_diagnostics.clone();
-                if work.render_x > 0 || work.render_y > 0 {
-                  renderer
-                    .canvas
-                    .translate(-(work.render_x as f32), -(work.render_y as f32));
-                }
-                renderer.render_slice(&work.list)?;
-                let stats = renderer.gradient_stats;
-                out.push((
-                  work,
-                  renderer.canvas.into_pixmap(),
-                  stats,
-                  std::thread::current().id(),
-                ));
+    let run_tiles = || -> Result<Vec<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>>> {
+      chunks
+        .into_par_iter()
+        .map(|chunk| {
+          let _diagnostics_guard = diagnostics_session.map(PaintDiagnosticsThreadGuard::enter);
+          with_deadline(deadline.as_ref(), || {
+            let mut out = Vec::with_capacity(chunk.len());
+            for work in chunk {
+              check_active(RenderStage::Paint).map_err(Error::Render)?;
+              let mut renderer = DisplayListRenderer::new_with_text_state(
+                work.render_w,
+                work.render_h,
+                background,
+                font_ctx.clone(),
+                scale,
+                color_renderer.clone(),
+                color_cache.clone(),
+                glyph_cache.clone(),
+              )?;
+              renderer.preserve_3d_disabled = preserve_3d_disabled;
+              renderer.paint_parallelism = PaintParallelism::disabled();
+              renderer.gradient_cache = gradient_cache.clone();
+              renderer.diagnostics_enabled = diagnostics_enabled;
+              renderer.image_pixmap_diagnostics = image_pixmap_diagnostics.clone();
+              renderer.background_paint_diagnostics = background_paint_diagnostics.clone();
+              renderer.clip_mask_diagnostics = clip_mask_diagnostics.clone();
+              renderer.layer_alloc_diagnostics = layer_alloc_diagnostics.clone();
+              if work.render_x > 0 || work.render_y > 0 {
+                renderer
+                  .canvas
+                  .translate(-(work.render_x as f32), -(work.render_y as f32));
               }
-              Ok(out)
-            })
+              renderer.render_slice(&work.list)?;
+              let stats = renderer.gradient_stats;
+              out.push((
+                work,
+                renderer.canvas.into_pixmap(),
+                stats,
+                std::thread::current().id(),
+              ));
+            }
+            Ok(out)
           })
-          .collect()
-      };
+        })
+        .collect()
+    };
 
     let results = if let Some(pool) = paint_pool.pool {
       pool.install(run_tiles)
@@ -5325,7 +5389,13 @@ impl DisplayListRenderer {
     let threads_used = thread_set.len().max(1);
 
     let pixmap = self.canvas.pixmap().clone();
-    Ok((pixmap, tile_count, task_count, threads_used, parallel_duration))
+    Ok((
+      pixmap,
+      tile_count,
+      task_count,
+      threads_used,
+      parallel_duration,
+    ))
   }
 
   fn render_slice<T>(&mut self, items: &T) -> Result<()>
@@ -5334,10 +5404,8 @@ impl DisplayListRenderer {
   {
     check_active(RenderStage::Paint).map_err(Error::Render)?;
     let mut idx = 0;
-    let mut deadline_counter = 0usize;
     while idx < items.len() {
-      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
-        .map_err(Error::Render)?;
+      check_active(RenderStage::Paint).map_err(Error::Render)?;
       let item = items
         .get(idx)
         .expect("display list iteration should remain in-bounds");
@@ -5657,7 +5725,7 @@ impl DisplayListRenderer {
           image: None,
           radii: BorderRadii::ZERO,
         };
-        self.render_border(&border_item);
+        self.render_border(&border_item)?;
       }
     }
 
@@ -5721,7 +5789,7 @@ impl DisplayListRenderer {
           image: None,
           radii: BorderRadii::ZERO,
         };
-        self.render_border(&border_item);
+        self.render_border(&border_item)?;
       }
     }
 
@@ -5755,7 +5823,7 @@ impl DisplayListRenderer {
           image: None,
           radii: BorderRadii::ZERO,
         };
-        self.render_border(&border_item);
+        self.render_border(&border_item)?;
       }
     }
 
@@ -5815,7 +5883,7 @@ impl DisplayListRenderer {
       DisplayItem::RadialGradientPattern(item) => self.render_radial_gradient_pattern(item)?,
       DisplayItem::ConicGradient(item) => self.render_conic_gradient(item)?,
       DisplayItem::ConicGradientPattern(item) => self.render_conic_gradient_pattern(item)?,
-      DisplayItem::Border(item) => self.render_border(item),
+      DisplayItem::Border(item) => self.render_border(item)?,
       DisplayItem::TableCollapsedBorders(item) => self.render_table_collapsed_borders(item)?,
       DisplayItem::TextDecoration(item) => {
         let scaled = self.scale_decoration_item(item);
@@ -6047,12 +6115,12 @@ impl DisplayListRenderer {
             effect_bounds.and_then(|rect| self.layer_space_bounds(rect, origin, &layer));
 
           if let Some(mask_style) = record.mask.as_ref() {
-            if let Some(mask) = self.render_mask(mask_style) {
+            if let Some(mask) = self.render_mask(mask_style)? {
               let OffsetMask {
                 mask,
                 origin: mask_origin,
               } = mask;
-              let applied = apply_mask_with_offset(&mut layer, origin, &mask, mask_origin);
+              let applied = apply_mask_with_offset(&mut layer, origin, &mask, mask_origin)?;
               // Don't overwrite the reusable scratch with the 1x1 all-transparent sentinel mask;
               // that case is common for fully clipped masks and would otherwise destroy the
               // allocation we want to reuse for subsequent (larger) masks.
@@ -6097,7 +6165,7 @@ impl DisplayListRenderer {
                 local_clip,
                 record.radii,
                 self.clip_mask_diagnostics.as_ref(),
-              );
+              )?;
             }
           }
 
@@ -6193,7 +6261,8 @@ impl DisplayListRenderer {
                   origin.1 as u32,
                   layer.width(),
                   layer.height(),
-                ) else {
+                )?
+                else {
                   return Ok(());
                 };
                 layer.apply_mask(&cropped);
@@ -6212,7 +6281,8 @@ impl DisplayListRenderer {
                 origin.1 as u32,
                 layer.width(),
                 layer.height(),
-              ) else {
+              )?
+              else {
                 return Ok(());
               };
               layer.apply_mask(&cropped);
@@ -6227,7 +6297,7 @@ impl DisplayListRenderer {
           self.canvas.restore();
         }
       }
-      DisplayItem::PushClip(clip) => self.push_clip(clip),
+      DisplayItem::PushClip(clip) => self.push_clip(clip)?,
       DisplayItem::PopClip => self.pop_clip(),
       DisplayItem::PushOpacity(OpacityItem { opacity }) => {
         self.canvas.push_layer(*opacity)?;
@@ -7065,7 +7135,7 @@ impl DisplayListRenderer {
           .map(|_| Instant::now())
       })
       .flatten();
-    let Some(pixmap) = self.image_to_pixmap(item) else {
+    let Some(pixmap) = self.image_to_pixmap(item)? else {
       return Ok(());
     };
 
@@ -7134,7 +7204,7 @@ impl DisplayListRenderer {
       .background_paint_diagnostics
       .as_ref()
       .map(|_| Instant::now());
-    let Some(pixmap) = self.image_data_to_pixmap(&item.image) else {
+    let Some(pixmap) = self.image_data_to_pixmap(&item.image)? else {
       return Ok(());
     };
     let (img_w, img_h) = (pixmap.width() as f32, pixmap.height() as f32);
@@ -7190,7 +7260,7 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn push_clip(&mut self, clip: &ClipItem) {
+  fn push_clip(&mut self, clip: &ClipItem) -> Result<()> {
     let diag = self.clip_mask_diagnostics.as_ref();
     let timer = diag.map(|_| Instant::now());
     let pixels = diag
@@ -7201,16 +7271,19 @@ impl DisplayListRenderer {
     match &clip.shape {
       ClipShape::Rect { rect, radii } => {
         let radii = radii.map(|r| self.ds_radii(r));
-        self.canvas.set_clip_with_radii(self.ds_rect(*rect), radii);
+        self
+          .canvas
+          .set_clip_with_radii(self.ds_rect(*rect), radii)?;
       }
       ClipShape::Path { path } => {
-        self.canvas.set_clip_path(path, self.scale);
+        self.canvas.set_clip_path(path, self.scale)?;
       }
     }
 
     if let (Some(diag), Some(start)) = (diag, timer) {
       diag.record(pixels, start.elapsed());
     }
+    Ok(())
   }
 
   fn pop_clip(&mut self) {
@@ -7243,9 +7316,9 @@ impl DisplayListRenderer {
     self.font_ctx.get_sans_serif()
   }
 
-  fn image_to_pixmap(&mut self, item: &ImageItem) -> Option<Arc<Pixmap>> {
-    let Some(full) = self.image_data_to_pixmap(&item.image) else {
-      return None;
+  fn image_to_pixmap(&mut self, item: &ImageItem) -> RenderResult<Option<Arc<Pixmap>>> {
+    let Some(full) = self.image_data_to_pixmap(&item.image)? else {
+      return Ok(None);
     };
 
     if let Some(src) = item.src_rect {
@@ -7256,17 +7329,17 @@ impl DisplayListRenderer {
       let src_w = src.width().ceil() as u32;
       let src_h = src.height().ceil() as u32;
       if src_w == 0 || src_h == 0 {
-        return None;
+        return Ok(None);
       }
       let max_x = item.image.width.saturating_sub(src_x);
       let max_y = item.image.height.saturating_sub(src_y);
       let crop_w = src_w.min(max_x);
       let crop_h = src_h.min(max_y);
       if crop_w == 0 || crop_h == 0 {
-        return None;
+        return Ok(None);
       }
       if src_x == 0 && src_y == 0 && crop_w == item.image.width && crop_h == item.image.height {
-        return Some(full);
+        return Ok(Some(full));
       }
 
       let key = ImageCropKey {
@@ -7277,10 +7350,15 @@ impl DisplayListRenderer {
         crop_h,
       };
       if let Some(cached) = self.cropped_image_cache.get(&key) {
-        return Some(cached.clone());
+        return Ok(Some(cached.clone()));
       }
-      let mut cropped = new_pixmap(crop_w, crop_h)?;
+      check_active(RenderStage::Paint)?;
+      let Some(mut cropped) = new_pixmap(crop_w, crop_h) else {
+        return Ok(None);
+      };
+      let mut deadline_counter = 0usize;
       for row in 0..crop_h {
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
         let src_index = ((src_y + row) * item.image.width + src_x) as usize * 4;
         let dst_index = (row * crop_w) as usize * 4;
         cropped.data_mut()[dst_index..dst_index + (crop_w as usize * 4)]
@@ -7291,18 +7369,18 @@ impl DisplayListRenderer {
       }
       let cropped = Arc::new(cropped);
       self.cropped_image_cache.put(key, cropped.clone());
-      Some(cropped)
+      Ok(Some(cropped))
     } else {
-      Some(full)
+      Ok(Some(full))
     }
   }
-  fn image_data_to_pixmap(&mut self, image: &ImageData) -> Option<Arc<Pixmap>> {
+  fn image_data_to_pixmap(&mut self, image: &ImageData) -> RenderResult<Option<Arc<Pixmap>>> {
     let key = ImageKey::new(image);
     if let Some(cached) = self.image_cache.get(&key) {
       if let Some(diag) = self.image_pixmap_diagnostics.as_ref() {
         diag.record_hit();
       }
-      return Some(cached.clone());
+      return Ok(Some(cached.clone()));
     }
 
     let diag = self.image_pixmap_diagnostics.as_ref();
@@ -7310,25 +7388,36 @@ impl DisplayListRenderer {
       diag.record_miss();
     }
     let timer = diag.map(|_| Instant::now());
-    let pixmap = Arc::new(image_data_to_pixmap_inner(image)?);
+    let Some(pixmap) = image_data_to_pixmap_inner(image)? else {
+      return Ok(None);
+    };
+    let pixmap = Arc::new(pixmap);
     if let (Some(diag), Some(start)) = (diag, timer) {
       diag.record_duration(start.elapsed());
     }
     #[cfg(test)]
     self.image_cache_misses.fetch_add(1, Ordering::Relaxed);
     self.image_cache.insert(key, pixmap.clone());
-    Some(pixmap)
+    Ok(Some(pixmap))
   }
 }
 
-fn image_data_to_pixmap_inner(image: &ImageData) -> Option<Pixmap> {
-  let size = tiny_skia::IntSize::from_wh(image.width, image.height)?;
+fn image_data_to_pixmap_inner(image: &ImageData) -> RenderResult<Option<Pixmap>> {
+  let Some(size) = tiny_skia::IntSize::from_wh(image.width, image.height) else {
+    return Ok(None);
+  };
   if image.premultiplied {
-    return Pixmap::from_vec((*image.pixels).clone(), size);
+    return Ok(Pixmap::from_vec((*image.pixels).clone(), size));
   }
 
+  check_active(RenderStage::Paint)?;
   let mut data = Vec::with_capacity((image.width * image.height * 4) as usize);
+  let mut pixel_counter = 0usize;
   for chunk in image.pixels.chunks_exact(4) {
+    if (pixel_counter & 4095) == 0 {
+      check_active(RenderStage::Paint)?;
+    }
+    pixel_counter = pixel_counter.wrapping_add(1);
     let r = chunk[0] as f32;
     let g = chunk[1] as f32;
     let b = chunk[2] as f32;
@@ -7339,7 +7428,7 @@ fn image_data_to_pixmap_inner(image: &ImageData) -> Option<Pixmap> {
     data.push(chunk[3]);
   }
 
-  Pixmap::from_vec(data, size)
+  Ok(Pixmap::from_vec(data, size))
 }
 
 fn sample_conic_stops(
@@ -8755,6 +8844,7 @@ mod tests {
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
   use crate::paint::rasterize::render_box_shadow;
+  use crate::render_control::{CancelCallback, RenderDeadline};
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackfaceVisibility;
   use crate::style::types::BackgroundImage;
@@ -8783,6 +8873,7 @@ mod tests {
   use rayon::ThreadPoolBuilder;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
+  use std::time::Duration;
 
   struct EnvGuard {
     key: &'static str,
@@ -9079,7 +9170,7 @@ mod tests {
 
     let mut optimized = base.clone();
     let mut reference = base.clone();
-    apply_clip_mask_rect(&mut optimized, rect, radii, None);
+    apply_clip_mask_rect(&mut optimized, rect, radii, None).unwrap();
     apply_clip_mask_rect_reference(&mut reference, rect, radii);
 
     assert_eq!(optimized.data(), reference.data());
@@ -9093,7 +9184,7 @@ mod tests {
     let radii = BorderRadii::uniform(3.0);
 
     let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
-    apply_clip_mask_rect(&mut pixmap, rect, radii, None);
+    apply_clip_mask_rect(&mut pixmap, rect, radii, None).unwrap();
     let allocations = recorder.take();
 
     assert!(
@@ -9264,6 +9355,64 @@ mod tests {
   }
 
   #[test]
+  fn image_premultiply_aborts_on_expired_deadline() {
+    let width = 2048u32;
+    let height = 2048u32;
+    let pixels = vec![128u8; (width * height * 4) as usize];
+    let image = ImageData::new_pixels(width, height, pixels);
+
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    let result = with_deadline(Some(&deadline), || image_data_to_pixmap_inner(&image));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected premultiplication to abort with a paint timeout, got {:?}",
+      result.err()
+    );
+  }
+
+  #[test]
+  fn spread_horizontal_propagates_deadline_into_rayon_workers() {
+    let width = 2048usize;
+    let height = 512usize;
+    let radius = 8usize;
+    let len = width * height;
+    let src = vec![[128u8, 64u8, 32u8, 255u8]; len];
+    let mut dst = vec![[0u8; 4]; len];
+
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(4)
+      .build()
+      .expect("rayon thread pool");
+    let result = pool.install(|| {
+      let main_thread = std::thread::current().id();
+      let cancel: Arc<CancelCallback> =
+        Arc::new(move || std::thread::current().id() != main_thread);
+      let deadline = RenderDeadline::new(None, Some(cancel));
+      with_deadline(Some(&deadline), || {
+        apply_spread_horizontal(&src, &mut dst, width, height, radius, true)
+      })
+    });
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected spread to abort with a paint timeout, got {result:?}"
+    );
+  }
+
+  #[test]
   fn parallel_tiling_uses_dedicated_pool_when_current_pool_is_single_threaded() {
     let _guard = EnvGuard::set("FASTR_PAINT_THREADS", "4");
 
@@ -9291,8 +9440,15 @@ mod tests {
         .unwrap()
     });
 
-    assert!(report.parallel_used, "expected tiled parallel paint to activate");
-    assert!(report.tiles > 1, "expected multiple tiles, got {}", report.tiles);
+    assert!(
+      report.parallel_used,
+      "expected tiled parallel paint to activate"
+    );
+    assert!(
+      report.tiles > 1,
+      "expected multiple tiles, got {}",
+      report.tiles
+    );
     assert!(
       report.parallel_threads > 1,
       "expected dedicated paint pool to use >1 thread, got {}",
@@ -9464,10 +9620,13 @@ mod tests {
   }
 
   fn setup_clip_mask(renderer: &mut DisplayListRenderer) {
-    renderer.canvas.set_clip_with_radii(
-      Rect::from_xywh(8.0, 8.0, 40.0, 40.0),
-      Some(BorderRadii::uniform(6.0)),
-    );
+    renderer
+      .canvas
+      .set_clip_with_radii(
+        Rect::from_xywh(8.0, 8.0, 40.0, 40.0),
+        Some(BorderRadii::uniform(6.0)),
+      )
+      .unwrap();
   }
 
   fn setup_rotated_clip_mask(renderer: &mut DisplayListRenderer) {
@@ -11866,7 +12025,10 @@ mod tests {
       rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
     };
 
-    let rendered = renderer.render_mask(&mask).expect("mask rendered");
+    let rendered = renderer
+      .render_mask(&mask)
+      .expect("mask render ok")
+      .expect("mask rendered");
     assert_eq!(rendered.origin, (50, 60));
     assert_eq!(rendered.mask.width(), 10);
     assert_eq!(rendered.mask.height(), 10);
@@ -11911,10 +12073,16 @@ mod tests {
 
     let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
     {
-      let _first = renderer.render_mask(&mask).expect("mask rendered");
+      let _first = renderer
+        .render_mask(&mask)
+        .expect("mask render ok")
+        .expect("mask rendered");
     }
     {
-      let _second = renderer.render_mask(&mask).expect("mask rendered");
+      let _second = renderer
+        .render_mask(&mask)
+        .expect("mask render ok")
+        .expect("mask rendered");
     }
     let allocations = recorder.take();
     let scratch_allocs = allocations
@@ -11962,7 +12130,10 @@ mod tests {
     };
 
     let ptr_first = {
-      let rendered = renderer.render_mask(&mask).expect("mask rendered");
+      let rendered = renderer
+        .render_mask(&mask)
+        .expect("mask render ok")
+        .expect("mask rendered");
       let ptr = rendered.mask.data().as_ptr();
       MASK_RENDER_SCRATCH.with(|cell| {
         *cell.borrow_mut() = Some(rendered.mask);
@@ -11971,7 +12142,10 @@ mod tests {
     };
 
     let ptr_second = {
-      let rendered = renderer.render_mask(&mask).expect("mask rendered");
+      let rendered = renderer
+        .render_mask(&mask)
+        .expect("mask render ok")
+        .expect("mask rendered");
       rendered.mask.data().as_ptr()
     };
 

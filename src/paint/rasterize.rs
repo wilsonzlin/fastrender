@@ -37,7 +37,7 @@ use crate::paint::blur::{apply_gaussian_blur_cached, BlurCache};
 use crate::paint::display_list::BorderRadii;
 use crate::paint::display_list::BorderRadius;
 use crate::paint::pixmap::new_pixmap;
-use crate::render_control::check_active_periodic;
+use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Rgba;
 use tiny_skia::FillRule;
 use tiny_skia::LineCap;
@@ -203,8 +203,12 @@ pub(crate) fn estimate_box_shadow_work_pixels(width: f32, height: f32, shadow: &
   let spread = shadow.spread_radius;
 
   if shadow.inset {
-    let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil().max(0.0);
-    let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil().max(0.0);
+    let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs())
+      .ceil()
+      .max(0.0);
+    let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs())
+      .ceil()
+      .max(0.0);
     let w = (width + pad_x * 2.0).max(1.0).ceil() as u64;
     let h = (height + pad_y * 2.0).max(1.0).ceil() as u64;
     return w.saturating_mul(h);
@@ -1022,6 +1026,7 @@ pub fn render_box_shadow_cached(
   if shadow.color.a == 0.0 {
     return Ok(false);
   }
+  check_active(RenderStage::Paint)?;
 
   if shadow.inset {
     render_inset_shadow(pixmap, x, y, width, height, radii, shadow, cache)
@@ -1167,6 +1172,7 @@ fn render_inset_shadow(
   crate::render_control::check_active(RenderStage::Paint)?;
 
   // Clip to the outer box to keep inset shadows inside
+  check_active(RenderStage::Paint)?;
   let width_px = tmp.width() as usize;
   let height_px = tmp.height() as usize;
   let x_start = outer_x.ceil() as i32;

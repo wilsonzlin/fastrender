@@ -11792,6 +11792,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
   max_iframe_depth: usize,
 ) -> Result<Pixmap> {
   record_stage(StageHeartbeat::PaintBuild);
+  check_active(RenderStage::Paint).map_err(Error::Render)?;
   let diagnostics_enabled = paint_diagnostics_enabled();
   let build_start = diagnostics_enabled.then(Instant::now);
   let viewport = tree.viewport_size();
