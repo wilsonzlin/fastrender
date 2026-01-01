@@ -2769,15 +2769,19 @@ fn layout_cache_key(
   Some((w, h))
 }
 
-fn flex_child_fingerprint(children: &[&BoxNode]) -> u64 {
+fn flex_child_fingerprint(
+  children: &[&BoxNode],
+  deadline_counter: &mut usize,
+) -> Result<u64, LayoutError> {
   let mut h = DefaultHasher::new();
   children.len().hash(&mut h);
   for child in children {
+    check_layout_deadline(deadline_counter)?;
     std::mem::discriminant(&child.box_type).hash(&mut h);
     child.formatting_context().hash(&mut h);
     taffy_flex_style_fingerprint(child.style.as_ref()).hash(&mut h);
   }
-  h.finish()
+  Ok(h.finish())
 }
 
 impl FlexFormattingContext {
@@ -2807,7 +2811,7 @@ impl FlexFormattingContext {
     node_map: &mut FxHashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
     let mut deadline_counter = 0usize;
-    let child_fingerprint = flex_child_fingerprint(root_children);
+    let child_fingerprint = flex_child_fingerprint(root_children, &mut deadline_counter)?;
     let root_style_fingerprint = taffy_flex_style_fingerprint(box_node.style.as_ref());
     let cache_key = TaffyNodeCacheKey::new(
       TaffyAdapterKind::Flex,
@@ -5670,10 +5674,11 @@ mod tests {
     assert_eq!(fc.taffy_cache.template_count(), 0);
 
     let children_a: Vec<&BoxNode> = container_a.children.iter().collect();
+    let mut deadline_counter = 0usize;
     let key_a = TaffyNodeCacheKey::new(
       TaffyAdapterKind::Flex,
       taffy_flex_style_fingerprint(container_a.style.as_ref()),
-      super::flex_child_fingerprint(&children_a),
+      super::flex_child_fingerprint(&children_a, &mut deadline_counter).expect("fingerprint"),
       fc.viewport_size,
     );
  
@@ -5700,10 +5705,11 @@ mod tests {
       .expect("template should be cached after first build");
 
     let children_b: Vec<&BoxNode> = container_b.children.iter().collect();
+    let mut deadline_counter = 0usize;
     let key_b = TaffyNodeCacheKey::new(
       TaffyAdapterKind::Flex,
       taffy_flex_style_fingerprint(container_b.style.as_ref()),
-      super::flex_child_fingerprint(&children_b),
+      super::flex_child_fingerprint(&children_b, &mut deadline_counter).expect("fingerprint"),
       fc.viewport_size,
     );
     assert_eq!(

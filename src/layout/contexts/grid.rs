@@ -622,7 +622,7 @@ impl GridFormattingContext {
       .any(|child| child.style.grid_row_subgrid || child.style.grid_column_subgrid);
 
     if !has_subgrid && !child_has_subgrid {
-      let child_fingerprint = grid_child_fingerprint(&in_flow_children);
+      let child_fingerprint = grid_child_fingerprint(&in_flow_children, &mut deadline_counter)?;
       let root_style_fingerprint = taffy_grid_container_style_fingerprint(box_node.style.as_ref());
       let cache_key = TaffyNodeCacheKey::new(
         TaffyAdapterKind::Grid,
@@ -2673,18 +2673,22 @@ impl GridFormattingContext {
   }
 }
 
-fn grid_child_fingerprint(children: &[&BoxNode]) -> u64 {
+fn grid_child_fingerprint(
+  children: &[&BoxNode],
+  deadline_counter: &mut usize,
+) -> Result<u64, LayoutError> {
   use std::hash::Hash;
   use std::hash::Hasher;
 
   let mut h = std::collections::hash_map::DefaultHasher::new();
   children.len().hash(&mut h);
   for child in children {
+    check_layout_deadline(deadline_counter)?;
     std::mem::discriminant(&child.box_type).hash(&mut h);
     child.formatting_context().hash(&mut h);
     taffy_grid_item_style_fingerprint(child.style.as_ref()).hash(&mut h);
   }
-  h.finish()
+  Ok(h.finish())
 }
 
 fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
@@ -3730,10 +3734,11 @@ mod tests {
     assert_eq!(gc.taffy_cache.template_count(), 0);
 
     let children_a: Vec<&BoxNode> = container_a.children.iter().collect();
+    let mut deadline_counter = 0usize;
     let key_a = TaffyNodeCacheKey::new(
       TaffyAdapterKind::Grid,
       taffy_grid_container_style_fingerprint(container_a.style.as_ref()),
-      super::grid_child_fingerprint(&children_a),
+      super::grid_child_fingerprint(&children_a, &mut deadline_counter).expect("fingerprint"),
       gc.viewport_size,
     );
 
@@ -3761,10 +3766,11 @@ mod tests {
       .expect("template should be cached after first build");
 
     let children_b: Vec<&BoxNode> = container_b.children.iter().collect();
+    let mut deadline_counter = 0usize;
     let key_b = TaffyNodeCacheKey::new(
       TaffyAdapterKind::Grid,
       taffy_grid_container_style_fingerprint(container_b.style.as_ref()),
-      super::grid_child_fingerprint(&children_b),
+      super::grid_child_fingerprint(&children_b, &mut deadline_counter).expect("fingerprint"),
       gc.viewport_size,
     );
     assert_eq!(
