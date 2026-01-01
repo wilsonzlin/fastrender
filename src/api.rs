@@ -184,7 +184,7 @@ use crate::tree::fragment_tree::{
 use fontdb::Database as FontDbDatabase;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -2006,6 +2006,10 @@ fn diagnostics_session_mutex() -> &'static Mutex<()> {
   LOCK.get_or_init(|| Mutex::new(()))
 }
 
+thread_local! {
+  static DIAGNOSTICS_SESSION_DEPTH: Cell<usize> = Cell::new(0);
+}
+
 /// Ensures only one diagnostics-enabled render executes at a time.
 ///
 /// The various `*_diagnostics` modules use global state (enabled flag + accumulator). If multiple
@@ -2018,20 +2022,35 @@ pub(crate) struct DiagnosticsSessionGuard {
 
 impl DiagnosticsSessionGuard {
   pub(crate) fn acquire() -> Self {
+    DIAGNOSTICS_SESSION_DEPTH.with(|depth| {
+      if depth.get() != 0 {
+        panic!(
+          "nested diagnostics sessions are unsupported: DiagnosticsSessionGuard::acquire() was called while a diagnostics session is already active on this thread. This would deadlock because the session lock is backed by a non-reentrant std::sync::Mutex."
+        );
+      }
+    });
+
     // The lock only guards access to process-global diagnostics collectors. The protected value is
     // `()`, so poisoning does not indicate any state corruption we need to preserve. Clear the poison
     // flag so a panic in one diagnostics-enabled render doesn't permanently break diagnostics for the
     // remainder of the process (e.g. pageset runners that catch panics and continue).
     let mutex = diagnostics_session_mutex();
-    Self {
-      _guard: match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-          mutex.clear_poison();
-          poisoned.into_inner()
-        }
-      },
-    }
+    let guard = match mutex.lock() {
+      Ok(guard) => guard,
+      Err(poisoned) => {
+        mutex.clear_poison();
+        poisoned.into_inner()
+      }
+    };
+    DIAGNOSTICS_SESSION_DEPTH.with(|depth| depth.set(depth.get() + 1));
+
+    Self { _guard: guard }
+  }
+}
+
+impl Drop for DiagnosticsSessionGuard {
+  fn drop(&mut self) {
+    DIAGNOSTICS_SESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
   }
 }
 
@@ -10804,7 +10823,7 @@ mod tests {
 
   #[test]
   fn last_resort_fallback_samples_are_exposed_in_render_stats() {
-    let _session = DiagnosticsSessionGuard::acquire();
+    let _diagnostics_session = DiagnosticsSessionGuard::acquire();
     struct TextDiagnosticsGuard;
 
     impl Drop for TextDiagnosticsGuard {
@@ -10813,7 +10832,6 @@ mod tests {
       }
     }
 
-    let _diagnostics_session = DiagnosticsSessionGuard::acquire();
     crate::text::pipeline::enable_text_diagnostics();
     let _guard = TextDiagnosticsGuard;
 
@@ -10868,6 +10886,13 @@ mod tests {
       !diagnostics_session_mutex().is_poisoned(),
       "expected DiagnosticsSessionGuard to clear mutex poison"
     );
+  }
+
+  #[test]
+  #[should_panic(expected = "nested diagnostics sessions are unsupported")]
+  fn diagnostics_session_nested_acquire_panics_instead_of_deadlocking() {
+    let _diagnostics_session = DiagnosticsSessionGuard::acquire();
+    let _nested = DiagnosticsSessionGuard::acquire();
   }
 
   #[test]
