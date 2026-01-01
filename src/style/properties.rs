@@ -31,6 +31,8 @@ use crate::style::inline_axis_is_horizontal;
 use crate::style::position::Position;
 use crate::style::string_set::parse_string_set_value;
 use crate::style::types::*;
+use crate::style::values::CustomPropertyValue;
+use crate::style::values::CustomPropertySyntax;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::var_resolution::resolve_var_for_property;
@@ -4235,15 +4237,56 @@ pub fn apply_declaration_with_base(
 ) {
   // Handle CSS Custom Properties (--*)
   if decl.property.starts_with("--") {
-    if let Ok(mut value) = styles
-      .custom_property_registry
-      .parse_value(&decl.property, decl.raw_value.trim())
+    let raw_trimmed = decl.raw_value.trim();
+    let registration = styles.custom_property_registry.get(&decl.property);
+
+    // Unregistered custom properties (or those registered with `syntax: *`) behave like token
+    // streams: keep the authored value verbatim and do not perform eager var() substitution.
+    if registration.is_none()
+      || matches!(registration.unwrap().syntax, CustomPropertySyntax::Universal)
     {
-      // Preserve author-provided serialization for round-tripping even when typed.
-      value.value = decl.raw_value.clone();
-      styles
-        .custom_properties
-        .insert(decl.property.clone(), value);
+      styles.custom_properties.insert(
+        decl.property.clone(),
+        CustomPropertyValue::new(decl.raw_value.clone(), None),
+      );
+      return;
+    }
+
+    let rule = registration.expect("checked above");
+
+    // Registered custom properties with typed syntaxes parse at computed-value time. That means we
+    // must perform var() substitution before attempting to parse the typed grammar. If resolution
+    // fails (missing var, recursion, invalid syntax, or invalid after substitution), the
+    // declaration is ignored so the cascade falls back to a lower-priority declaration or the
+    // property’s inherited/initial value.
+    //
+    // Performance guard: only run the var() resolver when the value actually contains var().
+    let contains_var_call = if raw_trimmed.as_bytes().contains(&b'\\') {
+      crate::style::var_resolution::contains_var(raw_trimmed)
+    } else {
+      contains_ignore_ascii_case(raw_trimmed, "var(")
+    };
+
+    if contains_var_call {
+      let resolved = match resolve_var_for_property(&decl.value, &styles.custom_properties, "") {
+        VarResolutionResult::Resolved { css_text, .. } => css_text,
+        _ => return,
+      };
+      let Some(typed) = rule.syntax.parse_value(&resolved) else {
+        return;
+      };
+      styles.custom_properties.insert(
+        decl.property.clone(),
+        CustomPropertyValue::new(resolved, Some(typed)),
+      );
+    } else {
+      let Some(typed) = rule.syntax.parse_value(raw_trimmed) else {
+        return;
+      };
+      styles.custom_properties.insert(
+        decl.property.clone(),
+        CustomPropertyValue::new(decl.raw_value.clone(), Some(typed)),
+      );
     }
     return;
   }
