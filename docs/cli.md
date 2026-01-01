@@ -33,7 +33,7 @@ This includes backend selection (`FASTR_HTTP_BACKEND`), browser header profiles 
 Example:
 
 ```bash
-FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 cargo xtask pageset --pages tesco.com
+FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 cargo xtask pageset --pages tesco.com
 ```
 
 ## `cargo xtask`

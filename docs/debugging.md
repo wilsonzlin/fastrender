@@ -15,8 +15,8 @@ When a pageset run fails to fetch a page or subresource from a CDN-protected "ha
 
 Checklist (start here, in order):
 
-1. **Use an HTTP/2-capable backend**: `FASTR_HTTP_BACKEND=reqwest` (or try `FASTR_HTTP_BACKEND=curl` for differential diagnosis).
-2. **Enable browser-like headers**: `FASTR_HTTP_BROWSER_HEADERS=1`.
+1. **Use an HTTP/2-capable backend**: `FASTR_HTTP_BACKEND=curl` (or leave it at the default `auto` to use the Rust backend first with a `curl` fallback on retryable network/TLS/HTTP2 errors).
+2. **Enable browser-like headers**: `FASTR_HTTP_BROWSER_HEADERS=1` (this is the default; set it explicitly when debugging to ensure it wasn't disabled).
    - Some font/CDN endpoints are sensitive to `Accept: */*` plus `Origin`/`Referer`; the browser-header profile is intended to match those expectations.
 3. **Turn on retry logging** when debugging transient failures: `FASTR_HTTP_LOG_RETRIES=1`.
 4. **Make sure you’re testing the network path** (not stale caches): use `fetch_pages --refresh` for HTML and consider disabling the disk cache (`DISK_CACHE=0`) when chasing subresource fetch behavior.
@@ -24,7 +24,7 @@ Checklist (start here, in order):
 Example (pageset loop, targeted):
 
 ```bash
-FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
+FASTR_HTTP_BACKEND=curl FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1 \
   cargo xtask pageset --pages tesco.com,washingtonpost.com
 ```
 
