@@ -49,26 +49,47 @@ pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
 /// Extracts a literal URL from simple JavaScript redirects such as
 /// `window.location.href = "https://example.com"` or `location.replace('/next')`.
 pub fn extract_js_location_redirect(html: &str) -> Option<String> {
+  const MAX_REDIRECT_LEN: usize = 2048;
+
   let decoded = decode_refresh_entities(html);
   let lower = decoded.to_ascii_lowercase();
-  // Restrict to explicit navigations (replace/assign/href) to avoid false positives from
-  // innocuous property reads like `location.pathname`.
-  let patterns = [
-    "location.replace",
-    "window.location.replace",
-    "document.location.replace",
-    "location.assign",
-    "window.location.assign",
-    "document.location.assign",
-    "location.href",
-    "window.location.href",
-    "document.location.href",
+  #[derive(Clone, Copy)]
+  enum PatternKind {
+    Call,
+    Assign,
+  }
+
+  // Restrict to explicit navigations to avoid false positives from innocuous property reads like
+  // `location.pathname`. We also support direct assignment to the Location object (e.g. `location =
+  // "/next"`).
+  let patterns: [(&str, PatternKind); 15] = [
+    ("window.location.replace", PatternKind::Call),
+    ("document.location.replace", PatternKind::Call),
+    ("location.replace", PatternKind::Call),
+    ("window.location.assign", PatternKind::Call),
+    ("document.location.assign", PatternKind::Call),
+    ("location.assign", PatternKind::Call),
+    ("window.location.href", PatternKind::Assign),
+    ("document.location.href", PatternKind::Assign),
+    ("location.href", PatternKind::Assign),
+    ("window.location", PatternKind::Assign),
+    ("document.location", PatternKind::Assign),
+    ("top.location", PatternKind::Assign),
+    ("self.location", PatternKind::Assign),
+    ("parent.location", PatternKind::Assign),
+    ("location", PatternKind::Assign),
+    // Intentionally omit generic `.location` matches to avoid picking up unrelated object
+    // properties (e.g. `foo.location = ...`).
   ];
 
-  for pat in patterns.iter() {
-    if let Some(idx) = lower.find(pat) {
-      // Require the match to start on a non-identifier boundary to avoid
-      // picking up attributes like data-location="...".
+  for (pat, kind) in patterns.iter() {
+    let mut search_start = 0usize;
+    while let Some(found) = lower[search_start..].find(pat) {
+      let idx = search_start + found;
+      search_start = idx + pat.len();
+
+      // Require the match to start on a non-identifier boundary to avoid picking up attributes
+      // like data-location="...".
       if idx > 0 {
         let prev = lower.as_bytes()[idx - 1];
         if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'-' {
@@ -84,22 +105,57 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         }
       }
 
+      // If we are matching an unqualified `location*` token, ensure it isn't a property access
+      // (e.g. `foo.location = ...`).
+      if pat.starts_with("location") && idx > 0 && lower.as_bytes()[idx - 1] == b'.' {
+        continue;
+      }
+
+      // Avoid misclassifying `var/let/const location = ...` as a navigation.
+      if *pat == "location" {
+        let mut j = idx;
+        while j > 0 && lower.as_bytes()[j - 1].is_ascii_whitespace() {
+          j -= 1;
+        }
+        let mut k = j;
+        while k > 0
+          && (lower.as_bytes()[k - 1].is_ascii_alphanumeric() || lower.as_bytes()[k - 1] == b'_')
+        {
+          k -= 1;
+        }
+        if let Some(word) = lower.get(k..j) {
+          if matches!(word, "var" | "let" | "const") {
+            continue;
+          }
+        }
+      }
+
       let mut i = idx + pat.len();
       while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
         i += 1;
       }
-      if i < lower.len() && lower.as_bytes()[i] == b'=' {
-        i += 1;
-        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+
+      match kind {
+        PatternKind::Assign => {
+          if i >= lower.len() || lower.as_bytes()[i] != b'=' {
+            continue;
+          }
           i += 1;
+          while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+            i += 1;
+          }
+        }
+        PatternKind::Call => {
+          if i >= lower.len() || lower.as_bytes()[i] != b'(' {
+            continue;
+          }
+          i += 1;
+          while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+            i += 1;
+          }
         }
       }
-      if i < lower.len() && lower.as_bytes()[i] == b'(' {
-        i += 1;
-        while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
-          i += 1;
-        }
-      }
+
       if i < lower.len() && (lower.as_bytes()[i] == b'"' || lower.as_bytes()[i] == b'\'') {
         let quote = lower.as_bytes()[i];
         i += 1;
@@ -109,7 +165,7 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         }
         let end = i.min(decoded.len());
         let candidate = decoded[start..end].trim();
-        if !candidate.is_empty() {
+        if !candidate.is_empty() && candidate.len() <= MAX_REDIRECT_LEN {
           return Some(unescape_js_literal(candidate));
         }
       } else {
@@ -124,6 +180,7 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         if i > start {
           let candidate = decoded[start..i].trim();
           if !candidate.is_empty()
+            && candidate.len() <= MAX_REDIRECT_LEN
             && (candidate.starts_with("http")
               || candidate.starts_with("//")
               || candidate.starts_with('/')
@@ -152,7 +209,11 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
           idx += 1;
         }
         let end = idx.min(decoded.len());
-        let mut candidate = decoded[start..end].trim().to_string();
+        let raw_candidate = decoded[start..end].trim();
+        if raw_candidate.is_empty() || raw_candidate.len() > MAX_REDIRECT_LEN {
+          return None;
+        }
+        let mut candidate = raw_candidate.to_string();
         if candidate.starts_with("//") {
           candidate = format!("https:{}", candidate);
         }
@@ -495,6 +556,24 @@ mod tests {
   }
 
   #[test]
+  fn parses_common_meta_refresh_content_formats() {
+    let html = r#"<meta http-equiv="refresh" content="0; url=/next">"#;
+    assert_eq!(extract_meta_refresh_url(html), Some("/next".to_string()));
+
+    let html = r#"<meta http-equiv="REFRESH" content="0; URL=/caps">"#;
+    assert_eq!(extract_meta_refresh_url(html), Some("/caps".to_string()));
+
+    let html = r#"<meta http-equiv="refresh" content="0; url='https://example.com'">"#;
+    assert_eq!(
+      extract_meta_refresh_url(html),
+      Some("https://example.com".to_string())
+    );
+
+    let html = r#"<meta http-equiv="refresh" content=" 0 ;  URL =  '/spaced'  ">"#;
+    assert_eq!(extract_meta_refresh_url(html), Some("/spaced".to_string()));
+  }
+
+  #[test]
   fn extracts_js_location_href() {
     let html = "<script>window.location.href = 'https://example.com/next';</script>";
     assert_eq!(
@@ -563,6 +642,57 @@ mod tests {
       extract_js_location_redirect(html),
       Some("https://example.com/next".to_string())
     );
+  }
+
+  #[test]
+  fn extracts_js_location_assignments() {
+    let html = "<script>location = '/next';</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/next".to_string())
+    );
+
+    let html = "<script>window.location='/win';</script>";
+    assert_eq!(extract_js_location_redirect(html), Some("/win".to_string()));
+
+    let html = "<script>document.location = \"https:\\/\\/example.com\\/doc\";</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("https://example.com/doc".to_string())
+    );
+
+    let html = "<script>top.location = \"https:\\/\\/example.com\\/top?x=1\\u0026y=2\";</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("https://example.com/top?x=1&y=2".to_string())
+    );
+
+    let html = "<script>self.location = '/encoded%2Fpath%20with';</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/encoded/path with".to_string())
+    );
+  }
+
+  #[test]
+  fn ignores_location_pathname_reads() {
+    let html = "<script>var p = location.pathname; console.log(p);</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
+  }
+
+  #[test]
+  fn ignores_location_variable_declarations() {
+    let html = "<script>var location = '/shadowed';</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
+
+    let html = "<script>const location = '/shadowed';</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
+  }
+
+  #[test]
+  fn ignores_non_window_location_properties() {
+    let html = "<script>foo.location = '/not-a-redirect';</script>";
+    assert_eq!(extract_js_location_redirect(html), None);
   }
 
   #[test]
