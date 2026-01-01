@@ -221,6 +221,14 @@ fn ensure_box_id(node: &BoxNode) -> usize {
   EPHEMERAL_ID_BASE | (node as *const BoxNode as usize)
 }
 
+fn establishes_abs_cb(style: &ComputedStyle) -> bool {
+  style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some()
+}
+
+fn establishes_fixed_cb(style: &ComputedStyle) -> bool {
+  !style.transform.is_empty() || style.perspective.is_some()
+}
+
 impl InlineFormattingContext {
   /// Creates a new InlineFormattingContext
   pub fn new() -> Self {
@@ -471,7 +479,8 @@ impl InlineFormattingContext {
   ) -> Result<Vec<InlineItem>, LayoutError> {
     let mut pending_space: Option<PendingSpace> = None;
     let mut bidi_stack = vec![(box_node.style.unicode_bidi, box_node.style.direction)];
-    let mut positioned_cb_stack = Vec::new();
+    let mut abs_cb_stack = Vec::new();
+    let mut fixed_cb_stack = Vec::new();
     self.collect_inline_items_internal(
       box_node,
       available_width,
@@ -480,7 +489,8 @@ impl InlineFormattingContext {
       base_direction,
       positioned_children,
       &mut bidi_stack,
-      &mut positioned_cb_stack,
+      &mut abs_cb_stack,
+      &mut fixed_cb_stack,
       CombineBoundary::default(),
     )
   }
@@ -494,7 +504,8 @@ impl InlineFormattingContext {
     base_direction: crate::style::types::Direction,
     positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
-    positioned_cb_stack: &mut Vec<usize>,
+    abs_cb_stack: &mut Vec<usize>,
+    fixed_cb_stack: &mut Vec<usize>,
     boundary: CombineBoundary,
   ) -> Result<Vec<InlineFlowSegment>, LayoutError> {
     let mut pending_space: Option<PendingSpace> = None;
@@ -546,13 +557,11 @@ impl InlineFormattingContext {
       ) {
         let mut positioned = child.clone();
         positioned.id = ensure_box_id(child);
-        let containing_block_id = if matches!(
-          child.style.position,
-          crate::style::position::Position::Fixed
-        ) {
-          None
+        let containing_block_id = if matches!(child.style.position, crate::style::position::Position::Fixed)
+        {
+          fixed_cb_stack.last().copied()
         } else {
-          positioned_cb_stack.last().copied()
+          abs_cb_stack.last().copied()
         };
         let anchor = self.create_static_position_anchor(&positioned);
         positioned_children.push(PositionedChild {
@@ -682,7 +691,8 @@ impl InlineFormattingContext {
               base_direction,
               positioned_children,
               bidi_stack,
-              positioned_cb_stack,
+              abs_cb_stack,
+              fixed_cb_stack,
             )?;
             current_items.push(item);
             continue;
@@ -777,9 +787,13 @@ impl InlineFormattingContext {
           let content_offset_y = padding_top + border_top;
 
           let box_id = ensure_box_id(child);
-          let establishes_containing_block = child.style.position.is_positioned();
-          if establishes_containing_block {
-            positioned_cb_stack.push(box_id);
+          let establishes_abs_cb = establishes_abs_cb(&child.style);
+          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          if establishes_abs_cb {
+            abs_cb_stack.push(box_id);
+          }
+          if establishes_fixed_cb {
+            fixed_cb_stack.push(box_id);
           }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let mut child_boundary = CombineBoundary::default();
@@ -797,7 +811,8 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
-            positioned_cb_stack,
+            abs_cb_stack,
+            fixed_cb_stack,
             child_boundary,
           )?;
           if dump_text_enabled() {
@@ -840,8 +855,11 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
-          if establishes_containing_block {
-            positioned_cb_stack.pop();
+          if establishes_fixed_cb {
+            fixed_cb_stack.pop();
+          }
+          if establishes_abs_cb {
+            abs_cb_stack.pop();
           }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           if child_items.is_empty()
@@ -849,7 +867,7 @@ impl InlineFormattingContext {
             && end_edge == 0.0
             && content_offset_y == 0.0
             && (padding_bottom + border_bottom) == 0.0
-            && !establishes_containing_block
+            && !establishes_abs_cb
           {
             continue;
           }
@@ -983,9 +1001,13 @@ impl InlineFormattingContext {
           let content_offset_y = padding_top + border_top;
 
           let box_id = ensure_box_id(child);
-          let establishes_containing_block = child.style.position.is_positioned();
-          if establishes_containing_block {
-            positioned_cb_stack.push(box_id);
+          let establishes_abs_cb = establishes_abs_cb(&child.style);
+          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          if establishes_abs_cb {
+            abs_cb_stack.push(box_id);
+          }
+          if establishes_fixed_cb {
+            fixed_cb_stack.push(box_id);
           }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let mut child_boundary = CombineBoundary::default();
@@ -1003,7 +1025,8 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
-            positioned_cb_stack,
+            abs_cb_stack,
+            fixed_cb_stack,
             child_boundary,
           )?;
           if dump_text_enabled() {
@@ -1060,8 +1083,11 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
-          if establishes_containing_block {
-            positioned_cb_stack.pop();
+          if establishes_fixed_cb {
+            fixed_cb_stack.pop();
+          }
+          if establishes_abs_cb {
+            abs_cb_stack.pop();
           }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           if child_items.is_empty()
@@ -1069,7 +1095,7 @@ impl InlineFormattingContext {
             && end_edge == 0.0
             && content_offset_y == 0.0
             && (padding_bottom + border_bottom) == 0.0
-            && !establishes_containing_block
+            && !establishes_abs_cb
           {
             continue;
           }
@@ -1145,7 +1171,8 @@ impl InlineFormattingContext {
     base_direction: crate::style::types::Direction,
     positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
-    positioned_cb_stack: &mut Vec<usize>,
+    abs_cb_stack: &mut Vec<usize>,
+    fixed_cb_stack: &mut Vec<usize>,
     boundary: CombineBoundary,
   ) -> Result<Vec<InlineItem>, LayoutError> {
     if dump_text_enabled() {
@@ -1181,7 +1208,8 @@ impl InlineFormattingContext {
       base_direction,
       positioned_children,
       bidi_stack,
-      positioned_cb_stack,
+      abs_cb_stack,
+      fixed_cb_stack,
       boundary,
     )
   }
@@ -1197,7 +1225,8 @@ impl InlineFormattingContext {
     base_direction: crate::style::types::Direction,
     positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
-    positioned_cb_stack: &mut Vec<usize>,
+    abs_cb_stack: &mut Vec<usize>,
+    fixed_cb_stack: &mut Vec<usize>,
     boundary: CombineBoundary,
   ) -> Result<Vec<InlineItem>, LayoutError>
   where
@@ -1247,13 +1276,11 @@ impl InlineFormattingContext {
       ) {
         let mut positioned = child.clone();
         positioned.id = ensure_box_id(child);
-        let containing_block_id = if matches!(
-          child.style.position,
-          crate::style::position::Position::Fixed
-        ) {
-          None
+        let containing_block_id = if matches!(child.style.position, crate::style::position::Position::Fixed)
+        {
+          fixed_cb_stack.last().copied()
         } else {
-          positioned_cb_stack.last().copied()
+          abs_cb_stack.last().copied()
         };
         let anchor = self.create_static_position_anchor(&positioned);
         positioned_children.push(PositionedChild {
@@ -1422,7 +1449,8 @@ impl InlineFormattingContext {
               base_direction,
               positioned_children,
               bidi_stack,
-              positioned_cb_stack,
+              abs_cb_stack,
+              fixed_cb_stack,
             )?;
             items.push(item);
             continue;
@@ -1519,9 +1547,13 @@ impl InlineFormattingContext {
 
           // Recursively collect children first
           let box_id = ensure_box_id(child);
-          let establishes_containing_block = child.style.position.is_positioned();
-          if establishes_containing_block {
-            positioned_cb_stack.push(box_id);
+          let establishes_abs_cb = establishes_abs_cb(&child.style);
+          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          if establishes_abs_cb {
+            abs_cb_stack.push(box_id);
+          }
+          if establishes_fixed_cb {
+            fixed_cb_stack.push(box_id);
           }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let child_items = self.collect_inline_items_internal(
@@ -1532,7 +1564,8 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
-            positioned_cb_stack,
+            abs_cb_stack,
+            fixed_cb_stack,
             CombineBoundary::default(),
           )?;
           if dump_text_enabled() {
@@ -1586,8 +1619,11 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
-          if establishes_containing_block {
-            positioned_cb_stack.pop();
+          if establishes_fixed_cb {
+            fixed_cb_stack.pop();
+          }
+          if establishes_abs_cb {
+            abs_cb_stack.pop();
           }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           let metrics = compute_inline_box_metrics(
@@ -1714,9 +1750,13 @@ impl InlineFormattingContext {
           let content_offset_y = padding_top + border_top;
 
           let box_id = ensure_box_id(child);
-          let establishes_containing_block = child.style.position.is_positioned();
-          if establishes_containing_block {
-            positioned_cb_stack.push(box_id);
+          let establishes_abs_cb = establishes_abs_cb(&child.style);
+          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          if establishes_abs_cb {
+            abs_cb_stack.push(box_id);
+          }
+          if establishes_fixed_cb {
+            fixed_cb_stack.push(box_id);
           }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let child_items = self.collect_inline_items_internal(
@@ -1727,7 +1767,8 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
-            positioned_cb_stack,
+            abs_cb_stack,
+            fixed_cb_stack,
             CombineBoundary::default(),
           )?;
           if dump_text_enabled() {
@@ -1784,8 +1825,11 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
-          if establishes_containing_block {
-            positioned_cb_stack.pop();
+          if establishes_fixed_cb {
+            fixed_cb_stack.pop();
+          }
+          if establishes_abs_cb {
+            abs_cb_stack.pop();
           }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           let metrics = compute_inline_box_metrics(
@@ -2108,7 +2152,8 @@ impl InlineFormattingContext {
     base_direction: Direction,
     positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
-    positioned_cb_stack: &mut Vec<usize>,
+    abs_cb_stack: &mut Vec<usize>,
+    fixed_cb_stack: &mut Vec<usize>,
   ) -> Result<Vec<InlineItem>, LayoutError> {
     let container = BoxNode {
       style,
@@ -2132,7 +2177,8 @@ impl InlineFormattingContext {
       base_direction,
       positioned_children,
       bidi_stack,
-      positioned_cb_stack,
+      abs_cb_stack,
+      fixed_cb_stack,
       CombineBoundary::default(),
     )
   }
@@ -2145,7 +2191,8 @@ impl InlineFormattingContext {
     base_direction: Direction,
     positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
-    positioned_cb_stack: &mut Vec<usize>,
+    abs_cb_stack: &mut Vec<usize>,
+    fixed_cb_stack: &mut Vec<usize>,
   ) -> Result<InlineItem, LayoutError> {
     #[derive(Clone)]
     struct RubyAnnotationGroup {
@@ -2378,7 +2425,8 @@ impl InlineFormattingContext {
         base_direction,
         positioned_children,
         bidi_stack,
-        positioned_cb_stack,
+        abs_cb_stack,
+        fixed_cb_stack,
       )?;
 
       if base_items.is_empty() && seg.annotations.is_empty() {
@@ -2398,7 +2446,8 @@ impl InlineFormattingContext {
           base_direction,
           positioned_children,
           bidi_stack,
-          positioned_cb_stack,
+          abs_cb_stack,
+          fixed_cb_stack,
         )?;
         if items.is_empty() {
           continue;
@@ -4711,7 +4760,7 @@ impl InlineFormattingContext {
                                        positioned_containing_blocks: &mut Option<
           &mut HashMap<usize, ContainingBlock>,
         >| {
-          if box_item.box_id == 0 || !box_item.style.position.is_positioned() {
+          if box_item.box_id == 0 || !establishes_abs_cb(&box_item.style) {
             return;
           }
           let Some(map) = positioned_containing_blocks.as_deref_mut() else {
@@ -5434,7 +5483,8 @@ impl InlineFormattingContext {
   ) -> Result<Vec<InlineItem>, LayoutError> {
     let mut pending_space: Option<PendingSpace> = None;
     let mut bidi_stack = vec![(container_style.unicode_bidi, container_style.direction)];
-    let mut positioned_cb_stack = Vec::new();
+    let mut abs_cb_stack = Vec::new();
+    let mut fixed_cb_stack = Vec::new();
     self.collect_inline_items_internal_for_children(
       children.len(),
       |idx| children[idx],
@@ -5444,7 +5494,8 @@ impl InlineFormattingContext {
       base_direction,
       positioned_children,
       &mut bidi_stack,
-      &mut positioned_cb_stack,
+      &mut abs_cb_stack,
+      &mut fixed_cb_stack,
       CombineBoundary::default(),
     )
   }
@@ -7752,7 +7803,8 @@ impl InlineFormattingContext {
     // Collect inline items and block segments
     let mut positioned_children: Vec<PositionedChild> = Vec::new();
     let mut bidi_stack = vec![(box_node.style.unicode_bidi, box_node.style.direction)];
-    let mut positioned_cb_stack: Vec<usize> = Vec::new();
+    let mut abs_cb_stack: Vec<usize> = Vec::new();
+    let mut fixed_cb_stack: Vec<usize> = Vec::new();
     let segments = self.collect_inline_flow_segments_with_base(
       box_node,
       available_inline,
@@ -7760,7 +7812,8 @@ impl InlineFormattingContext {
       base_direction,
       &mut positioned_children,
       &mut bidi_stack,
-      &mut positioned_cb_stack,
+      &mut abs_cb_stack,
+      &mut fixed_cb_stack,
       CombineBoundary::default(),
     )?;
     if dump_text_enabled() {
@@ -8491,10 +8544,11 @@ impl InlineFormattingContext {
           child.style.position,
           crate::style::position::Position::Fixed
         ) {
-          (
-            ContainingBlock::viewport(viewport_size),
-            custom_cb.is_some(),
-          )
+          if let Some(cb) = custom_cb {
+            (cb, true)
+          } else {
+            (ContainingBlock::viewport(viewport_size), false)
+          }
         } else if let Some(cb) = custom_cb {
           (cb, true)
         } else {
@@ -9855,6 +9909,7 @@ fn width_span(lines: &[Line]) -> f32 {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::types::Transform;
   use crate::geometry::Size;
   use crate::layout::engine::{
     enable_layout_parallel_debug_counters, layout_parallel_debug_counters,
@@ -9911,6 +9966,22 @@ mod tests {
 
   fn make_inline_container(children: Vec<BoxNode>) -> BoxNode {
     BoxNode::new_block(default_style(), FormattingContextType::Block, children)
+  }
+
+  fn find_fragment_by_position<'a>(
+    root: &'a FragmentNode,
+    position: Position,
+  ) -> Option<&'a FragmentNode> {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+      if node.style.as_deref().map(|s| s.position) == Some(position) {
+        return Some(node);
+      }
+      for child in node.children.iter() {
+        stack.push(child);
+      }
+    }
+    None
   }
 
   fn assert_intrinsic_width_children_matches_container(
@@ -10103,6 +10174,97 @@ mod tests {
     assert!(
       matches!(parallel, Err(LayoutError::Timeout { .. })),
       "expected worker-thread deadline cancellation to surface as LayoutError::Timeout, got {parallel:?}"
+    );
+  }
+
+  #[test]
+  fn abspos_percent_resolves_against_transformed_inline_containing_block() {
+    let ifc = InlineFormattingContext::with_font_context_and_viewport(
+      FontContext::new(),
+      Size::new(300.0, 200.0),
+    );
+
+    let replaced = BoxNode::new_replaced(
+      default_style(),
+      ReplacedType::Canvas,
+      Some(Size::new(200.0, 10.0)),
+      None,
+    );
+
+    let mut wrapper_style = ComputedStyle::default();
+    wrapper_style.display = Display::Inline;
+    wrapper_style.font_size = 16.0;
+    wrapper_style.transform = vec![Transform::TranslateX(Length::px(0.0))];
+    let wrapper_style = Arc::new(wrapper_style);
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.display = Display::Block;
+    abs_style.font_size = 16.0;
+    abs_style.position = Position::Absolute;
+    abs_style.left = Some(Length::percent(50.0));
+    abs_style.top = Some(Length::px(0.0));
+    abs_style.width = Some(Length::px(10.0));
+    abs_style.height = Some(Length::px(10.0));
+    let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+
+    let wrapper = BoxNode::new_inline(wrapper_style, vec![replaced, abs_child]);
+    let root = make_inline_container(vec![wrapper]);
+
+    let constraints = LayoutConstraints::definite_width(300.0);
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+    let abs_fragment =
+      find_fragment_by_position(&fragment, Position::Absolute).expect("absolute fragment");
+
+    assert!(
+      (abs_fragment.bounds.x() - 100.0).abs() < 1e-3,
+      "expected abspos x≈100 (50% of 200px), got {}",
+      abs_fragment.bounds.x()
+    );
+  }
+
+  #[test]
+  fn fixedpos_percent_resolves_against_transformed_inline_containing_block() {
+    let ifc = InlineFormattingContext::with_font_context_and_viewport(
+      FontContext::new(),
+      Size::new(300.0, 200.0),
+    );
+
+    let replaced = BoxNode::new_replaced(
+      default_style(),
+      ReplacedType::Canvas,
+      Some(Size::new(200.0, 10.0)),
+      None,
+    );
+
+    let mut wrapper_style = ComputedStyle::default();
+    wrapper_style.display = Display::Inline;
+    wrapper_style.font_size = 16.0;
+    wrapper_style.transform = vec![Transform::TranslateX(Length::px(0.0))];
+    let wrapper_style = Arc::new(wrapper_style);
+
+    let mut fixed_style = ComputedStyle::default();
+    fixed_style.display = Display::Block;
+    fixed_style.font_size = 16.0;
+    fixed_style.position = Position::Fixed;
+    fixed_style.left = Some(Length::percent(50.0));
+    fixed_style.top = Some(Length::px(0.0));
+    fixed_style.width = Some(Length::px(10.0));
+    fixed_style.height = Some(Length::px(10.0));
+    let fixed_child =
+      BoxNode::new_block(Arc::new(fixed_style), FormattingContextType::Block, vec![]);
+
+    let wrapper = BoxNode::new_inline(wrapper_style, vec![replaced, fixed_child]);
+    let root = make_inline_container(vec![wrapper]);
+
+    let constraints = LayoutConstraints::definite_width(300.0);
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+    let fixed_fragment =
+      find_fragment_by_position(&fragment, Position::Fixed).expect("fixed fragment");
+
+    assert!(
+      (fixed_fragment.bounds.x() - 100.0).abs() < 1e-3,
+      "expected fixedpos x≈100 (50% of 200px), got {}",
+      fixed_fragment.bounds.x()
     );
   }
 
