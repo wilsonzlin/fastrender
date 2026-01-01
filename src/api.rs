@@ -1701,6 +1701,16 @@ pub struct RenderCounts {
   pub fallback_cache_cluster_evictions: Option<usize>,
   #[serde(default)]
   pub fallback_cache_clears: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_glyph_entries: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_cluster_entries: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_glyph_capacity: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_cluster_capacity: Option<usize>,
+  #[serde(default)]
+  pub fallback_cache_shards: Option<usize>,
   pub last_resort_font_fallbacks: Option<usize>,
   /// Bounded sample of clusters that required the last-resort font fallback, formatted as
   /// space-separated Unicode codepoints (e.g. "U+09AC U+09BE U+0982").
@@ -2039,6 +2049,11 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
     stats.counts.fallback_cache_glyph_evictions = Some(text.fallback_cache_glyph_evictions);
     stats.counts.fallback_cache_cluster_evictions = Some(text.fallback_cache_cluster_evictions);
     stats.counts.fallback_cache_clears = Some(text.fallback_cache_clears);
+    stats.counts.fallback_cache_glyph_entries = text.fallback_cache_glyph_entries;
+    stats.counts.fallback_cache_cluster_entries = text.fallback_cache_cluster_entries;
+    stats.counts.fallback_cache_glyph_capacity = text.fallback_cache_glyph_capacity;
+    stats.counts.fallback_cache_cluster_capacity = text.fallback_cache_cluster_capacity;
+    stats.counts.fallback_cache_shards = text.fallback_cache_shards;
     stats.counts.last_resort_font_fallbacks = Some(text.last_resort_fallbacks);
     if !text.last_resort_samples.is_empty() {
       stats.counts.last_resort_font_fallback_samples = Some(text.last_resort_samples);

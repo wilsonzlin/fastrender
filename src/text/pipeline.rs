@@ -127,11 +127,19 @@ type ShapingCacheHasher = BuildHasherDefault<FxHasher>;
 fn fallback_cache_capacity() -> usize {
   static CAPACITY: OnceLock<usize> = OnceLock::new();
   *CAPACITY.get_or_init(|| {
-    std::env::var(TEXT_FALLBACK_CACHE_CAPACITY_ENV)
-      .ok()
-      .and_then(|value| value.parse::<usize>().ok())
-      .map(|value| value.max(1))
-      .unwrap_or(FONT_RESOLUTION_CACHE_SIZE)
+    match std::env::var(TEXT_FALLBACK_CACHE_CAPACITY_ENV) {
+      Ok(raw) => {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+          return FONT_RESOLUTION_CACHE_SIZE;
+        }
+        match trimmed.parse::<usize>() {
+          Ok(0) | Err(_) => FONT_RESOLUTION_CACHE_SIZE,
+          Ok(value) => value,
+        }
+      }
+      Err(_) => FONT_RESOLUTION_CACHE_SIZE,
+    }
   })
 }
 
@@ -156,6 +164,11 @@ pub struct TextDiagnostics {
   pub fallback_cache_glyph_evictions: usize,
   pub fallback_cache_cluster_evictions: usize,
   pub fallback_cache_clears: usize,
+  pub fallback_cache_glyph_entries: Option<usize>,
+  pub fallback_cache_cluster_entries: Option<usize>,
+  pub fallback_cache_glyph_capacity: Option<usize>,
+  pub fallback_cache_cluster_capacity: Option<usize>,
+  pub fallback_cache_shards: Option<usize>,
   pub last_resort_fallbacks: usize,
   pub last_resort_samples: Vec<String>,
   pub fallback_descriptor_unique_descriptors: Option<usize>,
@@ -630,6 +643,21 @@ pub(crate) fn record_fallback_cache_stats_delta(
     diag.fallback_cache_clears = diag
       .fallback_cache_clears
       .saturating_add(clear_delta as usize);
+    diag.fallback_cache_glyph_entries = Some(
+      diag
+        .fallback_cache_glyph_entries
+        .unwrap_or(0)
+        .max(after.glyph_entries as usize),
+    );
+    diag.fallback_cache_cluster_entries = Some(
+      diag
+        .fallback_cache_cluster_entries
+        .unwrap_or(0)
+        .max(after.cluster_entries as usize),
+    );
+    diag.fallback_cache_glyph_capacity = Some(after.glyph_capacity as usize);
+    diag.fallback_cache_cluster_capacity = Some(after.cluster_capacity as usize);
+    diag.fallback_cache_shards = Some(after.shards as usize);
   });
 }
 

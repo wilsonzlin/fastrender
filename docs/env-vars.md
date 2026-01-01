@@ -115,6 +115,7 @@ These are emitted by the paint pipeline:
 - `FASTR_SELECTOR_BLOOM=0` – disable selector bloom-filter hashing (useful for perf A/B checks).
 - `FASTR_SELECTOR_BLOOM_BITS=256|512|1024` – selector bloom summary bit size used for `:has()` pruning (default 1024; larger reduces false positives on large subtrees but costs more memory/build time).
 - `FASTR_ANCESTOR_BLOOM=0` – disable the cascade's ancestor bloom filter fast-reject for descendant selectors.
+- `FASTR_TEXT_FALLBACK_CACHE_CAPACITY=<N>` – override the font fallback cache capacity (entries) used during shaping (0/empty disables override).
 - `FASTR_SVG_FILTER_CACHE_ITEMS=<N>` – SVG filter cache capacity (default 256).
 - `FASTR_SVG_FILTER_CACHE_BYTES=<N>` – approximate SVG filter cache size limit in bytes (default 4 MiB).
 
