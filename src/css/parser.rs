@@ -3869,7 +3869,6 @@ fn parse_declaration<'i, 't>(
   }
 
   let value_start = parser.position();
-  let mut important = false;
   let mut before_important_state = None;
 
   loop {
@@ -3880,10 +3879,8 @@ fn parse_declaration<'i, 't>(
         let after_bang = parser.state();
         parser.skip_whitespace();
         if parser.expect_ident_matching("important").is_ok() {
-          important = true;
           before_important_state = Some(state_before_token);
-          skip_to_semicolon(parser);
-          break;
+          continue;
         }
         parser.reset(&after_bang);
       }
@@ -3895,9 +3892,17 @@ fn parse_declaration<'i, 't>(
       }
       Ok(_) => {}
     }
+
+    // `!important` is only valid at the end of the declaration (followed only by whitespace and an
+    // optional semicolon). If we see any further tokens after a candidate `!important`, treat it
+    // as part of the value instead of truncating.
+    if before_important_state.is_some() {
+      before_important_state = None;
+    }
   }
 
   let end_state = parser.state();
+  let important = before_important_state.is_some();
   let full_slice_raw = if let Some(before_important_state) = before_important_state {
     parser.reset(&before_important_state);
     let raw = parser.slice_from(value_start);
@@ -3995,7 +4000,6 @@ fn parse_declaration_in_style_block<'i, 't>(
 
   let value_location = errors.enabled().then(|| parser.current_source_location());
   let value_start = parser.position();
-  let mut important = false;
   let mut before_important_state = None;
 
   loop {
@@ -4006,10 +4010,8 @@ fn parse_declaration_in_style_block<'i, 't>(
         let after_bang = parser.state();
         parser.skip_whitespace();
         if parser.expect_ident_matching("important").is_ok() {
-          important = true;
           before_important_state = Some(state_before_token);
-          skip_to_semicolon(parser);
-          break;
+          continue;
         }
         parser.reset(&after_bang);
       }
@@ -4023,9 +4025,17 @@ fn parse_declaration_in_style_block<'i, 't>(
       | Ok(Token::CurlyBracketBlock) => skip_nested_block_contents(parser),
       Ok(_) => {}
     }
+
+    // `!important` is only valid at the end of the declaration (followed only by whitespace and an
+    // optional semicolon). If we see any further tokens after a candidate `!important`, treat it
+    // as part of the value instead of truncating.
+    if before_important_state.is_some() {
+      before_important_state = None;
+    }
   }
 
   let end_state = parser.state();
+  let important = before_important_state.is_some();
   let full_slice_raw = if let Some(before_important_state) = before_important_state {
     parser.reset(&before_important_state);
     let raw = parser.slice_from(value_start);
@@ -4760,6 +4770,51 @@ mod tests {
       other => panic!("expected custom value, got {:?}", other),
     }
     assert!(decls[0].raw_value.is_empty());
+  }
+
+  #[test]
+  fn important_with_whitespace_is_recognized() {
+    let decls = parse_declarations("color: red ! important;");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property.as_str(), "color");
+    assert!(decls[0].important);
+    assert!(matches!(decls[0].value, PropertyValue::Color(_)));
+  }
+
+  #[test]
+  fn bang_not_followed_by_important_is_not_truncated() {
+    let decls = parse_declarations("color: red ! foo;");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property.as_str(), "color");
+    assert!(!decls[0].important);
+    match &decls[0].value {
+      PropertyValue::Keyword(raw) => assert!(raw.contains('!')),
+      other => panic!("expected keyword, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn important_is_only_recognized_at_end_of_declaration() {
+    let decls = parse_declarations("color: red !important foo;");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property.as_str(), "color");
+    assert!(!decls[0].important);
+    match &decls[0].value {
+      PropertyValue::Keyword(raw) => assert!(raw.to_ascii_lowercase().contains("!important")),
+      other => panic!("expected keyword, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn custom_properties_preserve_bang_tokens() {
+    let decls = parse_declarations("--foo: a ! b;");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property.as_str(), "--foo");
+    assert!(!decls[0].important);
+    match &decls[0].value {
+      PropertyValue::Custom(raw) => assert!(raw.contains('!')),
+      other => panic!("expected custom value, got {:?}", other),
+    }
   }
 
   #[test]
