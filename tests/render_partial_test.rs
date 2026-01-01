@@ -17,23 +17,6 @@ impl ResourceFetcher for AlwaysErrorFetcher {
   }
 }
 
-struct EnvVarGuard {
-  key: &'static str,
-}
-
-impl EnvVarGuard {
-  fn set(key: &'static str, value: &str) -> Self {
-    std::env::set_var(key, value);
-    Self { key }
-  }
-}
-
-impl Drop for EnvVarGuard {
-  fn drop(&mut self) {
-    std::env::remove_var(self.key);
-  }
-}
-
 #[test]
 fn missing_stylesheet_keeps_rendering_with_diagnostics() {
   let fetcher = Arc::new(AlwaysErrorFetcher::default()) as Arc<dyn ResourceFetcher>;
@@ -75,7 +58,7 @@ fn missing_image_renders_placeholder() {
       body { margin: 0; }
       img { display: block; width: 20px; height: 20px; }
     </style>
-    <img src="https://example.invalid/missing.png" alt="missing">
+    <img src="https://example.invalid/missing.png">
   "#;
   let options = RenderOptions::new()
     .with_viewport(32, 32)
@@ -98,11 +81,12 @@ fn missing_image_renders_placeholder() {
 
 #[test]
 fn timeouts_produce_overlay_with_stage_info() {
-  let _guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_MS", "20");
   let mut renderer = FastRender::new().unwrap();
   let options = RenderOptions::new()
     .with_viewport(16, 12)
-    .with_timeout(Some(Duration::from_millis(1)))
+    // Use a 0ms timeout so the overlay always reports the first deadline stage, independent of
+    // machine speed.
+    .with_timeout(Some(Duration::from_millis(0)))
     .allow_partial(true);
 
   let result = renderer
