@@ -223,7 +223,10 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
 ///
 /// This walks cssparser tokens so only real `url` tokens are rewritten (including nested
 /// `url()` calls inside other functions/blocks). Strings and comments are preserved verbatim.
-pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<String, RenderError> {
+pub fn absolutize_css_urls_cow<'a>(
+  css: &'a str,
+  base_url: &str,
+) -> std::result::Result<Cow<'a, str>, RenderError> {
   fn escape_url_for_css(url: &str) -> String {
     let mut escaped = String::with_capacity(url.len());
     for ch in url.chars() {
@@ -239,20 +242,60 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<Str
     escaped
   }
 
+  fn css_may_contain_url_tokens(css: &str) -> bool {
+    let bytes = css.as_bytes();
+    if bytes.len() < 4 {
+      return false;
+    }
+
+    let mut idx = 0usize;
+    while idx + 3 < bytes.len() {
+      if bytes[idx].to_ascii_lowercase() == b'u'
+        && bytes[idx + 1].to_ascii_lowercase() == b'r'
+        && bytes[idx + 2].to_ascii_lowercase() == b'l'
+        && bytes[idx + 3] == b'('
+      {
+        return true;
+      }
+      idx += 1;
+    }
+    false
+  }
+
+  fn looks_like_absolute_url(url: &str) -> bool {
+    let bytes = url.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_alphabetic() {
+      return false;
+    }
+    let mut idx = 1usize;
+    while idx < bytes.len() {
+      match bytes[idx] {
+        b':' => return true,
+        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.' => idx += 1,
+        _ => return false,
+      }
+    }
+    false
+  }
+
+  fn should_resolve_css_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+      return false;
+    }
+    !looks_like_absolute_url(trimmed)
+  }
+
   fn rewrite_urls_in_parser<'i, 't>(
     parser: &mut Parser<'i, 't>,
     base_url: &str,
     capacity_hint: usize,
     deadline_counter: &mut usize,
-  ) -> std::result::Result<String, RenderError> {
-    let mut out = if capacity_hint > 0 {
-      String::with_capacity(capacity_hint)
-    } else {
-      String::new()
-    };
-    let mut last_emitted = parser.position();
+  ) -> std::result::Result<Cow<'i, str>, RenderError> {
+    let start_pos = parser.position();
+    let mut out: Option<String> = None;
+    let mut last_emitted = start_pos;
 
-    check_active(RenderStage::Css)?;
     while !parser.is_exhausted() {
       check_active_periodic(deadline_counter, 256, RenderStage::Css)?;
       let token_start = parser.position();
@@ -263,34 +306,39 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<Str
 
       match token {
         Token::UnquotedUrl(url_value) => {
-          let url_value = url_value.as_ref().to_string();
+          let url_value = url_value.as_ref();
+          if !should_resolve_css_url(url_value) {
+            continue;
+          }
+          let Some(resolved) = resolve_href(base_url, url_value) else {
+            continue;
+          };
+
           let token_text = parser.slice_from(token_start);
           let chunk = parser.slice_from(last_emitted);
           let prefix_len = chunk.len().saturating_sub(token_text.len());
+          let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
           out.push_str(&chunk[..prefix_len]);
 
-          if let Some(resolved) = resolve_href(base_url, &url_value) {
-            let escaped = escape_url_for_css(&resolved);
-            out.push_str(&format!("url(\"{}\")", escaped));
-          } else {
-            out.push_str(token_text);
-          }
+          let escaped = escape_url_for_css(&resolved);
+          out.push_str("url(\"");
+          out.push_str(&escaped);
+          out.push_str("\")");
 
           last_emitted = parser.position();
         }
         Token::Function(ref name) if name.eq_ignore_ascii_case("url") => {
           let parse_result = parser.parse_nested_block(|nested| {
-            let start = nested.position();
-            let mut arg: Option<String> = None;
+            let mut arg: Option<cssparser::CowRcStr<'i>> = None;
 
             while !nested.is_exhausted() {
               match nested.next_including_whitespace_and_comments() {
                 Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
                 Ok(Token::QuotedString(s)) | Ok(Token::UnquotedUrl(s)) => {
-                  arg = Some(s.as_ref().to_string());
+                  arg = Some(s.clone());
                 }
                 Ok(Token::Ident(s)) => {
-                  arg = Some(s.as_ref().to_string());
+                  arg = Some(s.clone());
                 }
                 Ok(Token::BadUrl(_)) => {
                   arg = None;
@@ -300,27 +348,31 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<Str
               }
             }
 
-            let original_inner = nested.slice_from(start);
-            Ok::<_, cssparser::ParseError<'i, ()>>((arg, original_inner.len()))
+            Ok::<_, cssparser::ParseError<'i, ()>>(arg)
           });
+
+          let Ok(Some(url_arg)) = parse_result else {
+            continue;
+          };
+          let url_arg = url_arg.as_ref();
+          if !should_resolve_css_url(url_arg) {
+            continue;
+          }
+          let Some(resolved) = resolve_href(base_url, url_arg) else {
+            continue;
+          };
 
           let block_text = parser.slice_from(token_start);
           let chunk = parser.slice_from(last_emitted);
           let prefix_len = chunk.len().saturating_sub(block_text.len());
+          let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
           out.push_str(&chunk[..prefix_len]);
 
-          if let Ok((arg, _)) = parse_result {
-            if let Some(url_arg) = arg {
-              if let Some(resolved) = resolve_href(base_url, &url_arg) {
-                let escaped = escape_url_for_css(&resolved);
-                out.push_str(&format!("url(\"{}\")", escaped));
-                last_emitted = parser.position();
-                continue;
-              }
-            }
-          }
+          let escaped = escape_url_for_css(&resolved);
+          out.push_str("url(\"");
+          out.push_str(&escaped);
+          out.push_str("\")");
 
-          out.push_str(block_text);
           last_emitted = parser.position();
         }
         Token::Function(_)
@@ -330,62 +382,76 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<Str
           let mut nested_error: Option<RenderError> = None;
           let parse_result = parser.parse_nested_block(|nested| {
             let start = nested.position();
-            let rewritten = match rewrite_urls_in_parser(nested, base_url, 0, deadline_counter) {
-              Ok(r) => r,
-              Err(err) => {
-                nested_error = Some(err);
-                return Err(nested.new_custom_error(()));
-              }
-            };
             let original = nested.slice_from(start);
-            let changed = rewritten != original;
+            let rewritten =
+              match rewrite_urls_in_parser(nested, base_url, original.len(), deadline_counter) {
+                Ok(r) => r,
+                Err(err) => {
+                  nested_error = Some(err);
+                  return Err(nested.new_custom_error(()));
+                }
+              };
+            let changed = matches!(rewritten, Cow::Owned(_));
             Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, original.len(), changed))
           });
-
-          let block_text = parser.slice_from(token_start);
-          let chunk = parser.slice_from(last_emitted);
-          let prefix_len = chunk.len().saturating_sub(block_text.len());
-          out.push_str(&chunk[..prefix_len]);
 
           if let Some(err) = nested_error {
             return Err(err);
           }
-          if let Ok((inner_rewritten, inner_len, changed)) = parse_result {
-            const CLOSING_LEN: usize = 1;
-            if !changed {
-              out.push_str(block_text);
-              last_emitted = parser.position();
-              continue;
-            }
-            if block_text.len() >= inner_len + CLOSING_LEN {
-              let open_len = block_text.len() - inner_len - CLOSING_LEN;
-              if open_len <= block_text.len() {
-                let (open_part, _) = block_text.split_at(open_len);
-                let close_part = &block_text[block_text.len() - CLOSING_LEN..];
-                out.push_str(open_part);
-                out.push_str(&inner_rewritten);
-                out.push_str(close_part);
-                last_emitted = parser.position();
-                continue;
-              }
-            }
+          let Ok((inner_rewritten, inner_len, changed)) = parse_result else {
+            continue;
+          };
+          if !changed {
+            continue;
           }
 
-          out.push_str(block_text);
+          let block_text = parser.slice_from(token_start);
+          const CLOSING_LEN: usize = 1;
+          if block_text.len() < inner_len + CLOSING_LEN {
+            continue;
+          }
+          let open_len = block_text.len() - inner_len - CLOSING_LEN;
+          if open_len > block_text.len() {
+            continue;
+          }
+
+          let chunk = parser.slice_from(last_emitted);
+          let prefix_len = chunk.len().saturating_sub(block_text.len());
+          let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
+          out.push_str(&chunk[..prefix_len]);
+
+          let (open_part, _) = block_text.split_at(open_len);
+          let close_part = &block_text[block_text.len() - CLOSING_LEN..];
+          out.push_str(open_part);
+          out.push_str(inner_rewritten.as_ref());
+          out.push_str(close_part);
+
           last_emitted = parser.position();
         }
         _ => {}
       }
     }
 
+    let Some(mut out) = out else {
+      return Ok(Cow::Borrowed(parser.slice_from(start_pos)));
+    };
     out.push_str(parser.slice_from(last_emitted));
-    Ok(out)
+    Ok(Cow::Owned(out))
+  }
+
+  check_active(RenderStage::Css)?;
+  if !css_may_contain_url_tokens(css) {
+    return Ok(Cow::Borrowed(css));
   }
 
   let mut input = ParserInput::new(css);
   let mut parser = Parser::new(&mut input);
   let mut deadline_counter = 0usize;
   rewrite_urls_in_parser(&mut parser, base_url, css.len(), &mut deadline_counter)
+}
+
+pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<String, RenderError> {
+  Ok(absolutize_css_urls_cow(css, base_url)?.into_owned())
 }
 
 fn parse_import_target(rule: &str) -> Option<(&str, &str)> {
@@ -822,12 +888,13 @@ where
                 } else if let Some(cached) = state.cache.get(&resolved) {
                   inlined = Some(cached);
                 } else if let Ok(fetched) = fetch(&resolved) {
-                  let rewritten = absolutize_css_urls(&fetched, &resolved)?;
-                  if rewritten.len() > state.budget.remaining_bytes() {
+                  let rewritten = absolutize_css_urls_cow(&fetched, &resolved)?;
+                  let rewritten_str = rewritten.as_ref();
+                  if rewritten_str.len() > state.budget.remaining_bytes() {
                     diagnostics(&resolved, "stylesheet byte budget exhausted");
                   } else {
                     let nested = inline_imports_with_diagnostics(
-                      &rewritten,
+                      rewritten_str,
                       &resolved,
                       fetch,
                       state,
@@ -1860,6 +1927,7 @@ mod tests {
   use super::*;
   use crate::debug::runtime::{self, RuntimeToggles};
   use crate::style::media::MediaType;
+  use std::borrow::Cow;
   use std::collections::HashMap;
   use std::sync::Arc;
   use tempfile;
@@ -1881,9 +1949,39 @@ mod tests {
   }
 
   #[test]
-  fn absolutizes_css_urls_rewrites_urls() {
+  fn absolutizes_css_urls_cow_fast_path_skips_when_no_url_tokens() {
+    let css = "body { color: red; }";
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert!(matches!(out, Cow::Borrowed(_)));
+    assert_eq!(out.as_ref(), css);
+  }
+
+  #[test]
+  fn absolutizes_css_urls_cow_rewrites_relative_urls() {
     let css = "body { background: url(\"images/bg.png\"); }";
-    let out = absolutize_css_urls(css, "https://example.com/styles/main.css").unwrap();
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert!(matches!(out, Cow::Owned(_)));
+    assert!(out.contains("https://example.com/styles/images/bg.png"));
+  }
+
+  #[test]
+  fn absolutizes_css_urls_cow_leaves_absolute_urls_unchanged() {
+    let css = "body { background: URL(https://example.com/images/bg.png); }";
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert!(matches!(out, Cow::Borrowed(_)));
+    assert_eq!(out.as_ref(), css);
+
+    let css = "body { background: url(\"data:text/plain;base64,abc\"); }";
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert!(matches!(out, Cow::Borrowed(_)));
+    assert_eq!(out.as_ref(), css);
+  }
+
+  #[test]
+  fn absolutizes_css_urls_cow_rewrites_urls_inside_nested_blocks() {
+    let css = "@media screen { body { background: url(images/bg.png); } }";
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert!(matches!(out, Cow::Owned(_)));
     assert!(out.contains("https://example.com/styles/images/bg.png"));
   }
 

@@ -1516,11 +1516,14 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
     return Some(PropertyValue::Length(length));
   }
 
-  if value_str.starts_with("url(") && value_str.ends_with(')') {
-    let inner = value_str
-      .trim_start_matches("url(")
-      .trim_end_matches(')')
-      .trim();
+  if value_str.len() >= 5
+    && value_str.as_bytes()[0].to_ascii_lowercase() == b'u'
+    && value_str.as_bytes()[1].to_ascii_lowercase() == b'r'
+    && value_str.as_bytes()[2].to_ascii_lowercase() == b'l'
+    && value_str.as_bytes()[3] == b'('
+    && value_str.ends_with(')')
+  {
+    let inner = value_str[4..value_str.len() - 1].trim();
     let inner = inner.trim_matches(|c| c == '"' || c == '\'');
     return Some(PropertyValue::Url(inner.to_string()));
   }

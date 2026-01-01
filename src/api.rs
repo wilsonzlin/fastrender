@@ -62,7 +62,7 @@ use crate::animation;
 use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::{
-  absolutize_css_urls, extract_css_links, extract_embedded_css_urls_with_meta, infer_base_url,
+  absolutize_css_urls_cow, extract_css_links, extract_embedded_css_urls_with_meta, infer_base_url,
   inject_css_into_html, inline_imports_with_diagnostics, link_rel_is_stylesheet_candidate,
   resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
 };
@@ -5348,7 +5348,11 @@ impl FastRender {
 
             let sheet_base = resource.final_url.clone().unwrap_or_else(|| url.clone());
             let mut css_text = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-            css_text = absolutize_css_urls(&css_text, &sheet_base)?;
+            if let std::borrow::Cow::Owned(rewritten) =
+              absolutize_css_urls_cow(&css_text, &sheet_base)?
+            {
+              css_text = rewritten;
+            }
 
             let sheet = parse_stylesheet_with_media_cached_shared(
               &css_text,
@@ -5633,7 +5637,11 @@ impl FastRender {
               }
               let mut css_text =
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-              css_text = absolutize_css_urls(&css_text, &stylesheet_url)?;
+              if let std::borrow::Cow::Owned(rewritten) =
+                absolutize_css_urls_cow(&css_text, &stylesheet_url)?
+              {
+                css_text = rewritten;
+              }
 
               let sheet = parse_stylesheet_with_media_cached_shared(
                 &css_text,
@@ -7579,7 +7587,7 @@ impl FastRender {
             continue;
           }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-          let rewritten = absolutize_css_urls(&css_text, &css_url)?;
+          let rewritten = absolutize_css_urls_cow(&css_text, &css_url)?;
           let mut import_diags: Vec<(String, String)> = Vec::new();
           let inlined = {
             let mut import_fetch = |u: &str| -> Result<String> {
@@ -7629,7 +7637,7 @@ impl FastRender {
             };
 
             inline_imports_with_diagnostics(
-              &rewritten,
+              rewritten.as_ref(),
               &css_url,
               &mut import_fetch,
               &mut import_state,
@@ -8388,7 +8396,10 @@ impl CssImportLoader for CssImportFetcher {
 
     // Decode CSS bytes with charset handling
     let decoded = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-    Ok(absolutize_css_urls(&decoded, &resolved)?)
+    Ok(match absolutize_css_urls_cow(&decoded, &resolved)? {
+      std::borrow::Cow::Borrowed(_) => decoded,
+      std::borrow::Cow::Owned(rewritten) => rewritten,
+    })
   }
 }
 
