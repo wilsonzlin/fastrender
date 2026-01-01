@@ -31,12 +31,13 @@
 //! fill_rounded_rect(&mut pixmap, 20.0, 20.0, 60.0, 60.0, &radii, Rgba::rgb(0, 255, 0));
 //! ```
 
-use crate::error::RenderError;
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Rect;
 use crate::paint::blur::{apply_gaussian_blur_cached, BlurCache};
 use crate::paint::display_list::BorderRadii;
 use crate::paint::display_list::BorderRadius;
 use crate::paint::pixmap::new_pixmap;
+use crate::render_control::check_active_periodic;
 use crate::style::color::Rgba;
 use tiny_skia::FillRule;
 use tiny_skia::LineCap;
@@ -49,6 +50,8 @@ use tiny_skia::PixmapPaint;
 use tiny_skia::PremultipliedColorU8;
 use tiny_skia::Stroke;
 use tiny_skia::Transform;
+
+const DEADLINE_STRIDE: usize = 16 * 1024;
 
 /// Border widths for all four sides
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1015,6 +1018,7 @@ pub fn render_box_shadow_cached(
   shadow: &BoxShadow,
   cache: Option<&mut BlurCache>,
 ) -> Result<bool, RenderError> {
+  crate::render_control::check_active(RenderStage::Paint)?;
   if shadow.color.a == 0.0 {
     return Ok(false);
   }
@@ -1037,6 +1041,7 @@ fn render_outset_shadow(
   shadow: &BoxShadow,
   cache: Option<&mut BlurCache>,
 ) -> Result<bool, RenderError> {
+  crate::render_control::check_active(RenderStage::Paint)?;
   let sigma = shadow.blur_radius.max(0.0);
   let spread = shadow.spread_radius;
   let shadow_rect = Rect::from_xywh(
@@ -1093,10 +1098,12 @@ fn render_outset_shadow(
     &radii,
     shadow.color,
   );
+  crate::render_control::check_active(RenderStage::Paint)?;
 
   if sigma > 0.0 {
     apply_gaussian_blur_cached(&mut tmp, sigma, sigma, cache, 1.0)?;
   }
+  crate::render_control::check_active(RenderStage::Paint)?;
 
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
@@ -1122,6 +1129,7 @@ fn render_inset_shadow(
   shadow: &BoxShadow,
   cache: Option<&mut BlurCache>,
 ) -> Result<bool, RenderError> {
+  crate::render_control::check_active(RenderStage::Paint)?;
   let sigma = shadow.blur_radius.max(0.0);
   let blur_pad = (sigma * 3.0).ceil();
   let spread = shadow.spread_radius;
@@ -1151,32 +1159,56 @@ fn render_inset_shadow(
     &adjusted_radii,
     shadow.color,
   );
+  crate::render_control::check_active(RenderStage::Paint)?;
 
   if sigma > 0.0 {
     apply_gaussian_blur_cached(&mut tmp, sigma, sigma, cache, 1.0)?;
   }
+  crate::render_control::check_active(RenderStage::Paint)?;
 
   // Clip to the outer box to keep inset shadows inside
   let width_px = tmp.width() as usize;
   let height_px = tmp.height() as usize;
-  let pixels_ptr = tmp.pixels_mut().as_mut_ptr();
+  let x_start = outer_x.ceil() as i32;
+  let x_end = (outer_x + outer_w).floor() as i32;
+  let y_start = outer_y.ceil() as i32;
+  let y_end = (outer_y + outer_h).floor() as i32;
+
+  let x_start = x_start.clamp(0, width_px as i32);
+  let x_end = x_end.clamp(-1, width_px as i32 - 1);
+  let y_start = y_start.clamp(0, height_px as i32);
+  let y_end = y_end.clamp(-1, height_px as i32 - 1);
+
+  let pixels = tmp.pixels_mut();
+  let transparent = PremultipliedColorU8::TRANSPARENT;
+  let deadline_row_stride = (DEADLINE_STRIDE / width_px).max(1);
+  let mut deadline_counter = 0usize;
   for y_idx in 0..height_px {
-    let row = unsafe { std::slice::from_raw_parts_mut(pixels_ptr.add(y_idx * width_px), width_px) };
-    let y_coord = y_idx as f32;
-    let outside_y = y_coord < outer_y || y_coord > outer_y + outer_h;
-    if outside_y {
-      for px in row {
-        *px = PremultipliedColorU8::TRANSPARENT;
-      }
+    check_active_periodic(&mut deadline_counter, deadline_row_stride, RenderStage::Paint)?;
+    let row_base = y_idx * width_px;
+    let row = &mut pixels[row_base..row_base + width_px];
+
+    let y_coord = y_idx as i32;
+    if y_coord < y_start || y_coord > y_end {
+      row.fill(transparent);
       continue;
     }
-    for (x_idx, px) in row.iter_mut().enumerate() {
-      let x_coord = x_idx as f32;
-      if x_coord < outer_x || x_coord > outer_x + outer_w {
-        *px = PremultipliedColorU8::TRANSPARENT;
-      }
+
+    if x_start > x_end {
+      row.fill(transparent);
+      continue;
+    }
+
+    if x_start > 0 {
+      row[..x_start as usize].fill(transparent);
+    }
+
+    let right_start = (x_end + 1) as usize;
+    if right_start < width_px {
+      row[right_start..].fill(transparent);
     }
   }
+  crate::render_control::check_active(RenderStage::Paint)?;
 
   let mut final_paint = PixmapPaint::default();
   final_paint.blend_mode = tiny_skia::BlendMode::SourceOver;
@@ -1409,6 +1441,8 @@ pub fn fill_circle(pixmap: &mut Pixmap, cx: f32, cy: f32, radius: f32, color: Rg
 mod tests {
   use super::*;
   use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
+  use crate::render_control::{with_deadline, RenderDeadline};
+  use std::time::Duration;
 
   #[test]
   fn test_border_radii_uniform() {
@@ -1657,6 +1691,35 @@ mod tests {
     let shadow = BoxShadow::inset(5.0, 5.0, 10.0, 5.0, Rgba::from_rgba8(0, 0, 0, 128));
     let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow).unwrap();
     assert!(result);
+  }
+
+  #[test]
+  fn test_render_box_shadow_times_out_with_expired_deadline() {
+    let mut pixmap = new_pixmap(2048, 2048).unwrap();
+    let radii = BorderRadii::uniform(32.0);
+    let shadow = BoxShadow::inset(10.0, 10.0, 64.0, 16.0, Rgba::from_rgba8(0, 0, 0, 200));
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    let width = pixmap.width() as f32;
+    let height = pixmap.height() as f32;
+    let result = with_deadline(Some(&deadline), || {
+      render_box_shadow_cached(
+        &mut pixmap,
+        0.0,
+        0.0,
+        width,
+        height,
+        &radii,
+        &shadow,
+        None,
+      )
+    });
+    assert!(matches!(
+      result,
+      Err(RenderError::Timeout {
+        stage: RenderStage::Paint,
+        ..
+      })
+    ));
   }
 
   #[test]
