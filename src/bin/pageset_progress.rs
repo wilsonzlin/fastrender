@@ -73,6 +73,10 @@ const PROGRESS_NOTE_MAX_CHARS: usize = 240;
 // Cap quoted excerpts (e.g., parse/shaping text payloads) before the overall limit.
 const PROGRESS_NOTE_QUOTED_EXCERPT_MAX_CHARS: usize = 120;
 const PROGRESS_NOTE_ELLIPSIS: char = '…';
+const PROGRESS_URL_MAX_CHARS: usize = 240;
+const PROGRESS_URL_TAIL_CHARS: usize = 60;
+// Keep fetch error samples compact so progress JSON stays tiny.
+const FETCH_ERROR_SAMPLE_LIMIT: usize = 5;
 // Allow a small buffer past the cooperative render timeout for per-request fetch deadlines.
 const FETCH_TIMEOUT_SLACK_MS: u64 = 100;
 
@@ -972,6 +976,28 @@ pub(crate) fn normalize_progress_note(note: &str) -> String {
   cap_note_length(&normalized, PROGRESS_NOTE_MAX_CHARS)
 }
 
+fn normalize_progress_url(url: &str) -> String {
+  let trimmed = url.trim();
+  if PROGRESS_URL_MAX_CHARS == 0 || trimmed.chars().count() <= PROGRESS_URL_MAX_CHARS {
+    return trimmed.to_string();
+  }
+  if PROGRESS_URL_TAIL_CHARS == 0 || PROGRESS_URL_TAIL_CHARS + 1 >= PROGRESS_URL_MAX_CHARS {
+    return cap_note_length(trimmed, PROGRESS_URL_MAX_CHARS);
+  }
+
+  let head_chars = PROGRESS_URL_MAX_CHARS - 1 - PROGRESS_URL_TAIL_CHARS;
+  let head: String = trimmed.chars().take(head_chars).collect();
+  let tail: String = trimmed
+    .chars()
+    .rev()
+    .take(PROGRESS_URL_TAIL_CHARS)
+    .collect::<Vec<_>>()
+    .into_iter()
+    .rev()
+    .collect();
+  format!("{head}{PROGRESS_NOTE_ELLIPSIS}{tail}")
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct PageProgress {
   url: String,
@@ -1018,7 +1044,15 @@ impl PageProgress {
     }
     if self.status == ProgressStatus::Ok {
       self.notes = String::new();
-      self.auto_notes = String::new();
+      let has_failures = self.failure_stage.is_some()
+        || self
+          .diagnostics
+          .as_ref()
+          .and_then(|d| d.fetch_error_summary.as_ref())
+          .is_some_and(|s| s.total > 0);
+      if !has_failures {
+        self.auto_notes = String::new();
+      }
     }
     let Some(prev) = previous else {
       return self;
@@ -1088,9 +1122,104 @@ struct LoadedProgress {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
+struct ProgressFetchErrorSummary {
+  total: usize,
+  by_kind: BTreeMap<ResourceKind, usize>,
+  samples: Vec<ProgressFetchErrorSample>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProgressFetchErrorSample {
+  kind: ResourceKind,
+  url: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  status: Option<u16>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  final_url: Option<String>,
+  message: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct ProgressDiagnostics {
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   stats: Option<RenderStats>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  fetch_error_summary: Option<ProgressFetchErrorSummary>,
+}
+
+fn build_fetch_error_summary(diagnostics: &RenderDiagnostics) -> Option<ProgressFetchErrorSummary> {
+  if diagnostics.fetch_errors.is_empty() {
+    return None;
+  }
+
+  #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+  struct FetchErrorKey {
+    kind: ResourceKind,
+    url: String,
+    status: Option<u16>,
+    message: String,
+  }
+
+  let mut unique: BTreeMap<FetchErrorKey, ProgressFetchErrorSample> = BTreeMap::new();
+
+  for err in &diagnostics.fetch_errors {
+    let message = normalize_progress_note(&err.message);
+    let key = FetchErrorKey {
+      kind: err.kind,
+      url: err.url.clone(),
+      status: err.status,
+      message: message.clone(),
+    };
+
+    if unique.contains_key(&key) {
+      continue;
+    }
+
+    unique.insert(
+      key,
+      ProgressFetchErrorSample {
+        kind: err.kind,
+        url: normalize_progress_url(&err.url),
+        status: err.status,
+        final_url: err
+          .final_url
+          .as_ref()
+          .and_then(|u| (u != &err.url).then(|| normalize_progress_url(u))),
+        message,
+      },
+    );
+  }
+
+  if unique.is_empty() {
+    return None;
+  }
+
+  let mut by_kind: BTreeMap<ResourceKind, usize> = BTreeMap::new();
+  for sample in unique.values() {
+    *by_kind.entry(sample.kind).or_default() += 1;
+  }
+
+  let samples = unique
+    .values()
+    .take(FETCH_ERROR_SAMPLE_LIMIT)
+    .cloned()
+    .collect();
+
+  Some(ProgressFetchErrorSummary {
+    total: unique.len(),
+    by_kind,
+    samples,
+  })
+}
+
+fn resource_kind_label(kind: ResourceKind) -> &'static str {
+  match kind {
+    ResourceKind::Document => "doc",
+    ResourceKind::Stylesheet => "css",
+    ResourceKind::Image => "img",
+    ResourceKind::Font => "font",
+    ResourceKind::Other => "other",
+  }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1282,6 +1411,24 @@ fn serialize_progress(progress: &PageProgress) -> io::Result<String> {
   let mut normalized = progress.clone();
   normalized.notes = normalize_progress_note(&normalized.notes);
   normalized.auto_notes = normalize_progress_note(&normalized.auto_notes);
+  if let Some(diag) = normalized.diagnostics.as_mut() {
+    if let Some(summary) = diag.fetch_error_summary.as_mut() {
+      if summary.total == 0 {
+        diag.fetch_error_summary = None;
+      } else {
+        for sample in &mut summary.samples {
+          sample.url = normalize_progress_url(&sample.url);
+          if let Some(final_url) = sample.final_url.as_mut() {
+            *final_url = normalize_progress_url(final_url);
+            if *final_url == sample.url {
+              sample.final_url = None;
+            }
+          }
+          sample.message = normalize_progress_note(&sample.message);
+        }
+      }
+    }
+  }
   let json = serde_json::to_string_pretty(&normalized)
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
   Ok(format!("{json}\n"))
@@ -1966,15 +2113,41 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       progress.status = ProgressStatus::Ok;
       progress.stages_ms = buckets_from_diagnostics(&result.diagnostics);
       apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
+      let fetch_error_summary = build_fetch_error_summary(&result.diagnostics);
       if result.diagnostics.stats.is_none() {
         log.push_str("Render stats unavailable; stages_ms left at 0ms.\n");
       }
       progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
-      progress.diagnostics = result
-        .diagnostics
-        .stats
-        .clone()
-        .map(|stats| ProgressDiagnostics { stats: Some(stats) });
+      if progress.failure_stage.is_some() || fetch_error_summary.is_some() {
+        let mut note = String::from("ok with failures: ");
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(stage) = progress.failure_stage {
+          parts.push(format!("failure_stage={}", stage.as_str()));
+        }
+        if let Some(summary) = fetch_error_summary.as_ref() {
+          let mut kind_parts = Vec::new();
+          for (kind, count) in &summary.by_kind {
+            kind_parts.push(format!("{}={count}", resource_kind_label(*kind)));
+          }
+          let kinds = if kind_parts.is_empty() {
+            String::new()
+          } else {
+            format!(" ({})", kind_parts.join(", "))
+          };
+          parts.push(format!("fetch_errors={}{}", summary.total, kinds));
+        }
+        note.push_str(&parts.join(" "));
+        progress.auto_notes = note;
+      }
+      progress.diagnostics = if result.diagnostics.stats.is_some() || fetch_error_summary.is_some()
+      {
+        Some(ProgressDiagnostics {
+          stats: result.diagnostics.stats.clone(),
+          fetch_error_summary,
+        })
+      } else {
+        None
+      };
       log.push_str("Status: OK\n");
       append_fetch_error_summary(&mut log, &result.diagnostics);
       append_stage_summary(&mut log, &result.diagnostics);
@@ -3918,14 +4091,76 @@ fn report(args: ReportArgs) -> io::Result<()> {
           .failure_stage
           .expect("failure_stage should be present for ok-with-failures pages")
           .as_str();
+        let fetch_errors = entry
+          .progress
+          .diagnostics
+          .as_ref()
+          .and_then(|d| d.fetch_error_summary.as_ref())
+          .map(|s| s.total)
+          .filter(|total| *total > 0)
+          .map(|total| format!(" fetch_errors={total}"))
+          .unwrap_or_default();
         println!(
-          "  {}. {} total={total_ms:.2}ms hotspot={} failure_stage={failure_stage} url={}",
+          "  {}. {} total={total_ms:.2}ms hotspot={} failure_stage={failure_stage}{fetch_errors} url={}",
           idx + 1,
           entry.stem,
           normalize_hotspot(&entry.progress.hotspot),
           entry.progress.url
         );
       }
+    }
+    println!();
+  }
+
+  let ok_with_fetch_errors: Vec<&LoadedProgress> = progresses
+    .iter()
+    .filter(|p| {
+      p.progress.status == ProgressStatus::Ok
+        && p
+          .progress
+          .diagnostics
+          .as_ref()
+          .and_then(|d| d.fetch_error_summary.as_ref())
+          .is_some_and(|s| s.total > 0)
+    })
+    .collect();
+  println!(
+    "Ok pages with fetch errors (fetch_error_summary present): {}",
+    ok_with_fetch_errors.len()
+  );
+  if ok_with_fetch_errors.is_empty() {
+    println!("  (none)");
+    println!();
+  } else {
+    let mut kind_counts: BTreeMap<ResourceKind, usize> = BTreeMap::new();
+    let mut total = 0usize;
+    for entry in &ok_with_fetch_errors {
+      let Some(summary) = entry
+        .progress
+        .diagnostics
+        .as_ref()
+        .and_then(|d| d.fetch_error_summary.as_ref())
+      else {
+        continue;
+      };
+      total += summary.total;
+      for (kind, count) in &summary.by_kind {
+        *kind_counts.entry(*kind).or_default() += *count;
+      }
+    }
+    println!("  total unique errors: {total}");
+    for kind in [
+      ResourceKind::Document,
+      ResourceKind::Stylesheet,
+      ResourceKind::Image,
+      ResourceKind::Font,
+      ResourceKind::Other,
+    ] {
+      println!(
+        "  {}: {}",
+        resource_kind_label(kind),
+        kind_counts.get(&kind).copied().unwrap_or(0)
+      );
     }
     println!();
   }
