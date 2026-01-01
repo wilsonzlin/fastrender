@@ -128,6 +128,18 @@ struct CacheArgs {
   #[arg(long, default_value = "fetches/assets")]
   asset_cache_dir: PathBuf,
 
+  /// Override the User-Agent header used when computing the disk cache namespace.
+  ///
+  /// This must match the `--user-agent` value used when warming the pageset disk cache.
+  #[arg(long, default_value = DEFAULT_USER_AGENT)]
+  user_agent: String,
+
+  /// Override the Accept-Language header used when computing the disk cache namespace.
+  ///
+  /// This must match the `--accept-language` value used when warming the pageset disk cache.
+  #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
+  accept_language: String,
+
   /// Allow missing subresources by inserting empty placeholder bytes into the bundle.
   ///
   /// By default, cache capture fails when a required subresource is missing from the disk cache so
@@ -514,7 +526,7 @@ fn cache_bundle_disk_cache(args: CacheArgs) -> Result<()> {
   apply_full_page_env(render.full_page);
 
   let offline_policy = ResourcePolicy::new().allow_http(false).allow_https(false);
-  let http = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, None)
+  let http = build_http_fetcher(&args.user_agent, &args.accept_language, None)
     .with_policy(offline_policy);
 
   let memory_config = CachingFetcherConfig {
@@ -527,8 +539,8 @@ fn cache_bundle_disk_cache(args: CacheArgs) -> Result<()> {
   let mut disk_config = DiskCacheConfig::default();
   disk_config.allow_no_store = true;
   disk_config.namespace = Some(common::render_pipeline::disk_cache_namespace(
-    DEFAULT_USER_AGENT,
-    DEFAULT_ACCEPT_LANGUAGE,
+    &args.user_agent,
+    &args.accept_language,
   ));
 
   let disk_fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(

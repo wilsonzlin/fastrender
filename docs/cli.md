@@ -133,6 +133,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
   - Cache (offline, from pageset caches): `cargo run --release --bin bundle_page -- cache <stem> --out <bundle_dir|.tar>`
     - Reads HTML from `fetches/html/<stem>.html` (+ `.html.meta`) and subresources from the disk-backed cache under `fetches/assets/`.
     - Fails if a discovered subresource is missing from the cache; pass `--allow-missing` to insert empty placeholders.
+    - The disk cache key namespace depends on request headers. If you warmed `fetches/assets/` with non-default values (e.g. `pageset_progress --user-agent ... --accept-language ...`, or `FASTR_HTTP_BROWSER_HEADERS=0`), pass matching `bundle_page cache --user-agent ... --accept-language ...` (and the same env var) so cache capture hits the correct entries.
   - Render: `cargo run --release --bin bundle_page -- render <bundle> --out <png>`
     - `bundle_page render` is offline and ignores `FASTR_HTTP_*` env vars (it uses the bundle contents only).
 - Security: `--same-origin-subresources` (plus optional `--allow-subresource-origin`) applies both when capturing and replaying bundles to keep cross-origin assets out of offline artifacts.

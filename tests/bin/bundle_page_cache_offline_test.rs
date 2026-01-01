@@ -11,9 +11,9 @@ use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-fn disk_cache_namespace() -> String {
-  let ua = normalize_user_agent_for_log(DEFAULT_USER_AGENT).trim();
-  let lang = DEFAULT_ACCEPT_LANGUAGE.trim();
+fn disk_cache_namespace_for(user_agent: &str, accept_language: &str) -> String {
+  let ua = normalize_user_agent_for_log(user_agent).trim();
+  let lang = accept_language.trim();
   let browser_headers_enabled = std::env::var("FASTR_HTTP_BROWSER_HEADERS")
     .ok()
     .map(|raw| {
@@ -30,6 +30,10 @@ fn disk_cache_namespace() -> String {
       "fetch-profile:contextual-v1\nuser-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0"
     )
   }
+}
+
+fn disk_cache_namespace() -> String {
+  disk_cache_namespace_for(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
 }
 
 #[derive(Clone)]
@@ -279,5 +283,90 @@ fn bundle_page_cache_allow_missing_inserts_placeholders() {
   assert!(
     missing.bytes.is_empty(),
     "placeholder bytes should be empty"
+  );
+}
+
+#[test]
+fn bundle_page_cache_respects_user_agent_for_namespace() {
+  let tmp = TempDir::new().expect("tempdir");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+  let asset_dir = tmp.path().join("fetches/assets");
+  std::fs::create_dir_all(&asset_dir).expect("create asset dir");
+
+  let stem = "example.invalid";
+  let page_url = "https://example.invalid/";
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/a.css\"></head><body><img src=\"img.png\"></body></html>",
+  )
+  .expect("write html");
+  std::fs::write(
+    html_path.with_extension("html.meta"),
+    format!("content-type: text/html\nurl: {page_url}\n"),
+  )
+  .expect("write meta");
+
+  let css_url = "https://example.invalid/a.css".to_string();
+  let img_url = "https://example.invalid/img.png".to_string();
+  let bg_url = "https://example.invalid/bg.png".to_string();
+
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    css_url.clone(),
+    (
+      b"body { background-image: url(\"bg.png\"); }".to_vec(),
+      "text/css",
+    ),
+  );
+  responses.insert(img_url.clone(), (b"png-bytes-1".to_vec(), "image/png"));
+  responses.insert(bg_url.clone(), (b"png-bytes-2".to_vec(), "image/png"));
+
+  let custom_user_agent = "custom-test-ua/1.0";
+  let mut disk_config = DiskCacheConfig::default();
+  disk_config.namespace = Some(disk_cache_namespace_for(
+    custom_user_agent,
+    DEFAULT_ACCEPT_LANGUAGE,
+  ));
+  disk_config.allow_no_store = true;
+
+  let cache_writer = DiskCachingFetcher::with_configs(
+    StaticFetcher {
+      responses: Arc::new(responses),
+    },
+    asset_dir.clone(),
+    CachingFetcherConfig::default(),
+    disk_config,
+  );
+
+  cache_writer.fetch(&css_url).expect("warm css");
+  cache_writer.fetch(&img_url).expect("warm img");
+  cache_writer.fetch(&bg_url).expect("warm bg");
+
+  let mismatch_out = tmp.path().join("bundle-mismatch");
+  let mismatch_status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
+    .current_dir(tmp.path())
+    .args(["cache", stem, "--out"])
+    .arg(mismatch_out.to_string_lossy().as_ref())
+    .status()
+    .expect("run bundle_page cache (mismatch)");
+  assert!(
+    !mismatch_status.success(),
+    "expected cache capture to fail when disk cache namespace (User-Agent) does not match"
+  );
+
+  let match_out = tmp.path().join("bundle-match");
+  let match_status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
+    .current_dir(tmp.path())
+    .args(["cache", stem])
+    .args(["--user-agent", custom_user_agent])
+    .args(["--out", match_out.to_string_lossy().as_ref()])
+    .status()
+    .expect("run bundle_page cache (match)");
+  assert!(
+    match_status.success(),
+    "expected cache capture to succeed when --user-agent matches cache namespace"
   );
 }

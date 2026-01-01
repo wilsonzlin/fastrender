@@ -46,6 +46,20 @@ pub struct UpdatePagesetTimeoutsArgs {
   #[arg(long)]
   pub capture_missing_fixtures: bool,
 
+  /// Override the User-Agent value passed to `bundle_page cache`.
+  ///
+  /// This must match the User-Agent used when warming the pageset disk cache, otherwise cache
+  /// capture will miss subresources.
+  #[arg(long)]
+  pub user_agent: Option<String>,
+
+  /// Override the Accept-Language value passed to `bundle_page cache`.
+  ///
+  /// This must match the Accept-Language used when warming the pageset disk cache, otherwise cache
+  /// capture will miss subresources.
+  #[arg(long)]
+  pub accept_language: Option<String>,
+
   /// Overwrite existing fixture directories when capturing missing fixtures
   #[arg(long)]
   pub overwrite_fixtures: bool,
@@ -282,9 +296,19 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
       }
       FixtureCaptureMode::Cache => {
         eprintln!(
-          "      cargo run --release --features disk_cache --bin bundle_page -- cache '{}' --out '{}'{} --viewport {}x{} --dpr {}",
+          "      cargo run --release --features disk_cache --bin bundle_page -- cache '{}' --out '{}'{}{}{} --viewport {}x{} --dpr {}",
           entry.name,
           bundle_path.display(),
+          args
+            .user_agent
+            .as_deref()
+            .map(|ua| format!(" --user-agent '{ua}'"))
+            .unwrap_or_default(),
+          args
+            .accept_language
+            .as_deref()
+            .map(|lang| format!(" --accept-language '{lang}'"))
+            .unwrap_or_default(),
           allow_missing_flag,
           entry.viewport[0],
           entry.viewport[1],
@@ -346,6 +370,12 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs)
         bundle_cmd.args(["cache", &entry.name]);
         if args.allow_missing_resources {
           bundle_cmd.arg("--allow-missing");
+        }
+        if let Some(user_agent) = args.user_agent.as_deref() {
+          bundle_cmd.args(["--user-agent", user_agent]);
+        }
+        if let Some(accept_language) = args.accept_language.as_deref() {
+          bundle_cmd.args(["--accept-language", accept_language]);
         }
       }
     }

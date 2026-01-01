@@ -41,6 +41,20 @@ pub struct RecapturePageFixturesArgs {
   #[arg(long, value_enum, default_value_t = CaptureMode::Crawl)]
   pub capture_mode: CaptureMode,
 
+  /// Override the User-Agent value passed to `bundle_page cache`.
+  ///
+  /// This must match the User-Agent used when warming the pageset disk cache, otherwise cache
+  /// capture will miss subresources.
+  #[arg(long)]
+  pub user_agent: Option<String>,
+
+  /// Override the Accept-Language value passed to `bundle_page cache`.
+  ///
+  /// This must match the Accept-Language used when warming the pageset disk cache, otherwise cache
+  /// capture will miss subresources.
+  #[arg(long)]
+  pub accept_language: Option<String>,
+
   /// Per-request fetch timeout (seconds) passed to `bundle_page fetch`.
   #[arg(long)]
   pub bundle_fetch_timeout_secs: Option<u64>,
@@ -453,6 +467,12 @@ fn capture_bundle(
       if args.allow_missing_resources {
         cmd.arg("--allow-missing");
       }
+      if let Some(user_agent) = args.user_agent.as_deref() {
+        cmd.args(["--user-agent", user_agent]);
+      }
+      if let Some(accept_language) = args.accept_language.as_deref() {
+        cmd.args(["--accept-language", accept_language]);
+      }
     }
   }
   cmd.args(["--out", bundle_path.to_string_lossy().as_ref()]);
@@ -546,6 +566,8 @@ mod tests {
     assert_eq!(args.manifest, PathBuf::from(DEFAULT_MANIFEST));
     assert_eq!(args.fixtures_root, PathBuf::from(DEFAULT_FIXTURES_ROOT));
     assert_eq!(args.bundle_out_dir, PathBuf::from(DEFAULT_BUNDLE_OUT_DIR));
+    assert_eq!(args.user_agent, None);
+    assert_eq!(args.accept_language, None);
     assert_eq!(
       args.only,
       Some(vec!["b.test".to_string(), "a.test".to_string()])
@@ -585,6 +607,8 @@ mod tests {
       fixtures_root: fixtures_root.clone(),
       bundle_out_dir: temp.path().join("bundles"),
       capture_mode: CaptureMode::Crawl,
+      user_agent: None,
+      accept_language: None,
       bundle_fetch_timeout_secs: None,
       same_origin_subresources: false,
       allow_subresource_origin: Vec::new(),
@@ -621,6 +645,8 @@ mod tests {
       fixtures_root: temp.path().join("fixtures"),
       bundle_out_dir: temp.path().join("bundles"),
       capture_mode: CaptureMode::Crawl,
+      user_agent: None,
+      accept_language: None,
       bundle_fetch_timeout_secs: None,
       same_origin_subresources: false,
       allow_subresource_origin: Vec::new(),
