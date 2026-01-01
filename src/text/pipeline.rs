@@ -2172,6 +2172,49 @@ impl SeenFontIds {
   }
 }
 
+/// Inline set of unique codepoints (for run-level font coverage fast paths).
+struct SeenChars {
+  chars: [char; 128],
+  len: usize,
+}
+
+impl SeenChars {
+  #[inline]
+  fn new() -> Self {
+    Self {
+      chars: ['\0'; 128],
+      len: 0,
+    }
+  }
+
+  #[inline]
+  fn is_empty(&self) -> bool {
+    self.len == 0
+  }
+
+  #[inline]
+  fn as_slice(&self) -> &[char] {
+    &self.chars[..self.len]
+  }
+
+  /// Returns `true` if the char was already present. Returns `false` if it was newly inserted.
+  /// If the inline set is full, returns `None` to signal overflow.
+  #[inline]
+  fn contains_or_insert(&mut self, ch: char) -> Option<bool> {
+    for existing in &self.chars[..self.len] {
+      if *existing == ch {
+        return Some(true);
+      }
+    }
+    if self.len >= self.chars.len() {
+      return None;
+    }
+    self.chars[self.len] = ch;
+    self.len += 1;
+    Some(false)
+  }
+}
+
 fn cluster_signature(text: &str) -> u64 {
   use std::hash::Hash;
   use std::hash::Hasher;
@@ -2326,141 +2369,222 @@ fn assign_fonts_internal(
     // per-codepoint cluster handling, even when a single font covers the run.
     if enable_ascii_fast_path
       && !run.text.is_empty()
-      && run.text.is_ascii()
       && !matches!(style.font_variant_emoji, FontVariantEmoji::Emoji)
     {
       let emoji_pref = match style.font_variant_emoji {
         FontVariantEmoji::Text | FontVariantEmoji::Unicode => EmojiPreference::AvoidEmoji,
         _ => EmojiPreference::Neutral,
       };
-      let sample_char = run
-        .text
-        .bytes()
-        .find(|b| !(char::from(*b)).is_ascii_control())
-        .map(char::from)
-        .unwrap_or('A');
-      let require_base_glyph = !is_non_rendering_for_coverage(sample_char);
-      let descriptor = font_cache.map(|_| {
-        FallbackCacheDescriptor::new(
-          families_signature,
-          language_signature,
-          run.script as u8,
-          weight_value,
-          font_style,
-          font_stretch,
-          oblique_degrees,
-          emoji_pref,
-          require_base_glyph,
-        )
-      });
-      let char_cache_key = descriptor.map(|descriptor| GlyphFallbackCacheKey {
-        descriptor,
-        ch: sample_char,
-      });
-      let mut resolved: Option<Arc<LoadedFont>> = None;
-      let mut skip_resolution = false;
-      if let (Some(cache), Some(key)) = (font_cache, char_cache_key.as_ref()) {
-        let cached = cache.get_glyph(key);
-        match cached {
-          Some(Some(font)) => resolved = Some(font),
-          Some(None) => skip_resolution = true,
-          None => {}
-        }
-      }
-      if !skip_resolution && resolved.is_none() {
-        let mut picker = FontPreferencePicker::new(emoji_pref);
-        let candidate = resolve_font_for_char_with_preferences(
-          sample_char,
-          run.script,
-          language,
-          &families,
-          weight_value,
-          font_style,
-          requested_oblique,
-          font_stretch,
-          font_context,
-          &mut picker,
-          &weight_preferences,
-          &stretch_preferences,
-          slope_preferences,
-          math_families,
-        );
-        if let (Some(cache), Some(key)) = (font_cache, char_cache_key) {
-          cache.insert_glyph(key, candidate.clone());
-        }
-        resolved = candidate;
-      }
+      let resolve_for_sample = |sample_char: char| -> Option<Arc<LoadedFont>> {
+        let require_base_glyph = !is_non_rendering_for_coverage(sample_char);
+        let descriptor = font_cache.map(|_| {
+          FallbackCacheDescriptor::new(
+            families_signature,
+            language_signature,
+            run.script as u8,
+            weight_value,
+            font_style,
+            font_stretch,
+            oblique_degrees,
+            emoji_pref,
+            require_base_glyph,
+          )
+        });
+        let char_cache_key = descriptor.map(|descriptor| GlyphFallbackCacheKey {
+          descriptor,
+          ch: sample_char,
+        });
 
-      if resolved.is_none() {
-        resolved = last_resort_font(font_context);
-      }
-
-      if let Some(font_arc) = resolved {
-        let mut face = None;
-        let mut mask_low = 0u64;
-        let mut mask_high = 0u64;
-        for &b in run.text.as_bytes() {
-          // Only check printable ASCII for glyph coverage. Control bytes like newlines and tabs do
-          // not require glyph fallback, and including them here would defeat the fast path.
-          if (char::from(b)).is_ascii_control() {
-            continue;
-          }
-          if b < 64 {
-            mask_low |= 1u64 << b;
-          } else {
-            mask_high |= 1u64 << (b - 64);
+        let mut resolved: Option<Arc<LoadedFont>> = None;
+        let mut skip_resolution = false;
+        if let (Some(cache), Some(key)) = (font_cache, char_cache_key.as_ref()) {
+          let cached = cache.get_glyph(key);
+          match cached {
+            Some(Some(font)) => resolved = Some(font),
+            Some(None) => skip_resolution = true,
+            None => {}
           }
         }
-        let mut covers = true;
-        for bit in 0..64 {
-          if (mask_low >> bit) & 1 == 1 {
-            let ch = bit as u8 as char;
-            if !font_has_glyph_fast(db, font_arc.as_ref(), &mut face, ch) {
-              covers = false;
-              break;
+        if !skip_resolution && resolved.is_none() {
+          let mut picker = FontPreferencePicker::new(emoji_pref);
+          let candidate = resolve_font_for_char_with_preferences(
+            sample_char,
+            run.script,
+            language,
+            &families,
+            weight_value,
+            font_style,
+            requested_oblique,
+            font_stretch,
+            font_context,
+            &mut picker,
+            &weight_preferences,
+            &stretch_preferences,
+            slope_preferences,
+            math_families,
+          );
+          if let (Some(cache), Some(key)) = (font_cache, char_cache_key) {
+            cache.insert_glyph(key, candidate.clone());
+          }
+          resolved = candidate;
+        }
+
+        resolved.or_else(|| last_resort_font(font_context))
+      };
+
+      if run.text.is_ascii() {
+        let sample_char = run
+          .text
+          .bytes()
+          .find(|b| !(char::from(*b)).is_ascii_control())
+          .map(char::from)
+          .unwrap_or('A');
+        if let Some(font_arc) = resolve_for_sample(sample_char) {
+          let mut face = None;
+          let mut mask_low = 0u64;
+          let mut mask_high = 0u64;
+          for &b in run.text.as_bytes() {
+            // Only check printable ASCII for glyph coverage. Control bytes like newlines and tabs do
+            // not require glyph fallback, and including them here would defeat the fast path.
+            if (char::from(b)).is_ascii_control() {
+              continue;
+            }
+            if b < 64 {
+              mask_low |= 1u64 << b;
+            } else {
+              mask_high |= 1u64 << (b - 64);
             }
           }
-        }
-        if covers {
+          let mut covers = true;
           for bit in 0..64 {
-            if (mask_high >> bit) & 1 == 1 {
-              let ch = (bit as u8 + 64) as char;
+            if (mask_low >> bit) & 1 == 1 {
+              let ch = bit as u8 as char;
               if !font_has_glyph_fast(db, font_arc.as_ref(), &mut face, ch) {
                 covers = false;
                 break;
               }
             }
           }
+          if covers {
+            for bit in 0..64 {
+              if (mask_high >> bit) & 1 == 1 {
+                let ch = (bit as u8 + 64) as char;
+                if !font_has_glyph_fast(db, font_arc.as_ref(), &mut face, ch) {
+                  covers = false;
+                  break;
+                }
+              }
+            }
+          }
+
+          if covers {
+            let used_font_size =
+              compute_adjusted_font_size(style, font_arc.as_ref(), preferred_aspect);
+            let (mut synthetic_bold, synthetic_oblique) =
+              compute_synthetic_styles(style, font_arc.as_ref());
+            if style.font_size > 0.0 {
+              synthetic_bold *= used_font_size / style.font_size;
+            }
+            let (position_scale, baseline_shift) = synthetic_position_adjustment(
+              style,
+              font_arc.as_ref(),
+              used_font_size,
+              font_context,
+            );
+            let run_font_size = used_font_size * position_scale;
+            push_font_run(
+              &mut font_runs,
+              run,
+              0,
+              run.text.len(),
+              font_arc,
+              synthetic_bold,
+              synthetic_oblique,
+              run_font_size,
+              baseline_shift,
+              &hb_language,
+              &features,
+              &authored_variations,
+              style,
+              font_context,
+            );
+            continue;
+          }
+        }
+      } else if run.text.len() >= 64 {
+        // Many pages contain mostly Latin text plus a few non-ASCII punctuation characters
+        // (e.g. curly quotes). For sufficiently long runs, the Unicode grapheme segmentation +
+        // per-cluster coverage checks can dominate, even though a single font covers the entire run.
+        let mut unique = SeenChars::new();
+        let mut sample_char: Option<char> = None;
+        let mut sample_is_ascii_alnum = false;
+        let mut eligible = true;
+
+        for ch in run.text.chars() {
+          if ch.is_ascii_control() || is_bidi_control_char(ch) {
+            continue;
+          }
+          if emoji::is_emoji(ch) || is_unicode_mark(ch) || is_non_rendering_for_coverage(ch) {
+            eligible = false;
+            break;
+          }
+
+          if sample_char.is_none() || (!sample_is_ascii_alnum && ch.is_ascii_alphanumeric()) {
+            sample_char = Some(ch);
+            sample_is_ascii_alnum = ch.is_ascii_alphanumeric();
+          }
+          if unique.contains_or_insert(ch).is_none() {
+            eligible = false;
+            break;
+          }
         }
 
-        if covers {
-          let used_font_size =
-            compute_adjusted_font_size(style, font_arc.as_ref(), preferred_aspect);
-          let (mut synthetic_bold, synthetic_oblique) =
-            compute_synthetic_styles(style, font_arc.as_ref());
-          if style.font_size > 0.0 {
-            synthetic_bold *= used_font_size / style.font_size;
+        if eligible && !unique.is_empty() {
+          let sample_char = sample_char.unwrap_or_else(|| unique.as_slice()[0]);
+          if let Some(font_arc) = resolve_for_sample(sample_char) {
+            let mut face = None;
+            let mut covers = true;
+            for ch in unique.as_slice() {
+              if !font_has_glyph_fast(db, font_arc.as_ref(), &mut face, *ch) {
+                covers = false;
+                break;
+              }
+            }
+
+            if covers {
+              let used_font_size =
+                compute_adjusted_font_size(style, font_arc.as_ref(), preferred_aspect);
+              let (mut synthetic_bold, synthetic_oblique) =
+                compute_synthetic_styles(style, font_arc.as_ref());
+              if style.font_size > 0.0 {
+                synthetic_bold *= used_font_size / style.font_size;
+              }
+              let (position_scale, baseline_shift) = synthetic_position_adjustment(
+                style,
+                font_arc.as_ref(),
+                used_font_size,
+                font_context,
+              );
+              let run_font_size = used_font_size * position_scale;
+              push_font_run(
+                &mut font_runs,
+                run,
+                0,
+                run.text.len(),
+                font_arc,
+                synthetic_bold,
+                synthetic_oblique,
+                run_font_size,
+                baseline_shift,
+                &hb_language,
+                &features,
+                &authored_variations,
+                style,
+                font_context,
+              );
+              continue;
+            }
           }
-          let (position_scale, baseline_shift) =
-            synthetic_position_adjustment(style, font_arc.as_ref(), used_font_size, font_context);
-          let run_font_size = used_font_size * position_scale;
-          push_font_run(
-            &mut font_runs,
-            run,
-            0,
-            run.text.len(),
-            font_arc,
-            synthetic_bold,
-            synthetic_oblique,
-            run_font_size,
-            baseline_shift,
-            &hb_language,
-            &features,
-            &authored_variations,
-            style,
-            font_context,
-          );
-          continue;
         }
       }
     }
@@ -6140,6 +6264,79 @@ mod tests {
       false,
     )
     .expect("assign fonts without ASCII fast path");
+    assert_eq!(slow.len(), 1, "slow path should also keep a single font run");
+
+    assert_eq!(fast[0].text, text);
+    assert_eq!(slow[0].text, text);
+    assert_eq!(fast[0].font.family, slow[0].font.family);
+    assert_eq!(fast[0].font.index, slow[0].font.index);
+
+    let shaped_fast = shape_font_run(&fast[0]).expect("shape fast run");
+    let shaped_slow = shape_font_run(&slow[0]).expect("shape slow run");
+    assert_eq!(
+      shaped_fast.glyphs.len(),
+      shaped_slow.glyphs.len(),
+      "fast/slow shaping should produce the same number of glyphs"
+    );
+    for (a, b) in shaped_fast.glyphs.iter().zip(shaped_slow.glyphs.iter()) {
+      assert_eq!(a.glyph_id, b.glyph_id);
+      assert_eq!(a.cluster, b.cluster);
+      assert!((a.x_advance - b.x_advance).abs() < 0.0001);
+      assert!((a.y_advance - b.y_advance).abs() < 0.0001);
+      assert!((a.x_offset - b.x_offset).abs() < 0.0001);
+      assert!((a.y_offset - b.y_offset).abs() < 0.0001);
+    }
+    assert!((shaped_fast.advance - shaped_slow.advance).abs() < 0.0001);
+  }
+
+  #[test]
+  fn non_ascii_runs_use_single_font_run_and_match_slow_path_shaping() {
+    let ctx = FontContext::with_config(FontConfig::bundled_only());
+    assert!(
+      !ctx.database().is_empty(),
+      "bundled font context should load deterministic fonts for tests"
+    );
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()].into();
+    style.font_size = 16.0;
+
+    let text = "中".repeat(256);
+    assert!(!text.is_ascii());
+
+    let run = ItemizedRun {
+      start: 0,
+      end: text.len(),
+      text: text.clone(),
+      script: Script::Han,
+      direction: Direction::LeftToRight,
+      level: 0,
+    };
+
+    let fast = assign_fonts_internal(
+      &[run.clone()],
+      &style,
+      &ctx,
+      None,
+      ctx.font_generation(),
+      true,
+    )
+    .expect("assign fonts with run fast path enabled");
+    assert_eq!(
+      fast.len(),
+      1,
+      "non-ASCII run fast path should keep a single font run"
+    );
+
+    let slow = assign_fonts_internal(
+      &[run],
+      &style,
+      &ctx,
+      None,
+      ctx.font_generation(),
+      false,
+    )
+    .expect("assign fonts with run fast path disabled");
     assert_eq!(slow.len(), 1, "slow path should also keep a single font run");
 
     assert_eq!(fast[0].text, text);
