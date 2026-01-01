@@ -37,8 +37,24 @@ export RUSTFLAGS="${RUSTFLAGS:--C force-frame-pointers=yes}"
 FEATURE_ARGS=(--features disk_cache)
 cargo build --release "${FEATURE_ARGS[@]}" --bin pageset_progress
 
+BIN_PATH="target/release/pageset_progress"
+# For reliable post-hoc symbolication, keep the exact binary that produced the sampled addresses.
+# We prefer a hardlink (cheap; preserves the old inode if `cargo build` replaces the binary later).
+# If hardlinking fails (e.g. cross-filesystem), set `PROFILE_COPY_BINARY=1` to force a full copy.
+BIN_SNAPSHOT="${OUT_FILE%.profile.json.gz}.pageset_progress"
+if [[ "${PROFILE_SAVE_BINARY:-1}" != "0" ]]; then
+  if ln "${BIN_PATH}" "${BIN_SNAPSHOT}" 2>/dev/null; then
+    echo "Saved profiled binary (hardlink): ${BIN_SNAPSHOT}"
+  elif [[ "${PROFILE_COPY_BINARY:-0}" == "1" ]]; then
+    cp "${BIN_PATH}" "${BIN_SNAPSHOT}"
+    echo "Saved profiled binary (copy): ${BIN_SNAPSHOT}"
+  else
+    echo "Note: could not hardlink ${BIN_PATH} -> ${BIN_SNAPSHOT} (set PROFILE_COPY_BINARY=1 to copy)"
+  fi
+fi
+
 samply record --save-only --no-open -o "${OUT_FILE}" -- \
-  target/release/pageset_progress run --jobs 1 "${PAGE_ARGS[@]}"
+  "${BIN_PATH}" run --jobs 1 "${PAGE_ARGS[@]}"
 
 echo "Wrote: ${OUT_FILE}"
 echo "To view later: samply load ${OUT_FILE}"
@@ -48,5 +64,9 @@ if command -v python3 >/dev/null 2>&1; then
   echo "Summary (terminal-friendly):"
   # `samply` writes raw `0x...` frames into the JSON; symbolize them via llvm-addr2line using the
   # exact binary that was profiled (rebuilt binaries won't match the recorded addresses).
-  python3 scripts/samply_summary.py "${OUT_FILE}" --top 25 --addr2line-binary target/release/pageset_progress || true
+  ADDR2LINE_BIN="${BIN_PATH}"
+  if [[ -f "${BIN_SNAPSHOT}" ]]; then
+    ADDR2LINE_BIN="${BIN_SNAPSHOT}"
+  fi
+  python3 scripts/samply_summary.py "${OUT_FILE}" --top 25 --addr2line-binary "${ADDR2LINE_BIN}" || true
 fi

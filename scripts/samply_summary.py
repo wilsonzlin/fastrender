@@ -53,6 +53,7 @@ def _repo_root() -> str:
 
 _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]+$")
 _RUST_HASH_RE = re.compile(r"::h[0-9a-f]{8,}$")
+_BUILD_ID_RE = re.compile(r"Build ID: ([0-9a-fA-F]+)")
 
 
 def _strip_rust_hash(sym: str) -> str:
@@ -99,6 +100,121 @@ def _shorten_location(loc: str, repo_root: str) -> str:
     if rest:
         return f"{path}:{rest}"
     return path
+
+
+def _find_tool(candidates: List[str]) -> Optional[str]:
+    for c in candidates:
+        tool = shutil.which(c)
+        if tool:
+            return tool
+    return None
+
+
+def _elf_build_id(path: str) -> Optional[str]:
+    if not path or not os.path.exists(path):
+        return None
+    tool = _find_tool(["readelf", "llvm-readelf"])
+    if not tool:
+        return None
+    try:
+        res = subprocess.run(
+            [tool, "-n", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return None
+    for line in (res.stdout or "").splitlines():
+        m = _BUILD_ID_RE.search(line)
+        if m:
+            return m.group(1).lower()
+    return None
+
+
+def _profile_product(profile: Dict[str, Any]) -> Optional[str]:
+    meta = profile.get("meta") or {}
+    product = meta.get("product")
+    return product if isinstance(product, str) and product else None
+
+
+def _profile_primary_lib(profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    product = _profile_product(profile)
+    libs = profile.get("libs") or []
+    if not product or not isinstance(libs, list):
+        return None
+    for lib in libs:
+        if not isinstance(lib, dict):
+            continue
+        if lib.get("debugName") == product or lib.get("name") == product:
+            return lib
+    return None
+
+
+def _guess_sibling_binary(profile_path: str) -> Optional[str]:
+    for suffix in [".profile.json.gz", ".profile.json"]:
+        if profile_path.endswith(suffix):
+            return profile_path[: -len(suffix)] + ".pageset_progress"
+    return None
+
+
+def _verify_addr2line_binary(
+    profile: Dict[str, Any], binary: str
+) -> Tuple[Optional[bool], Optional[str], Optional[str]]:
+    """
+    Returns (matches, build_id, expected_code_id).
+
+    - matches=None means "could not verify" (no build ID tool / not ELF / etc).
+    - expected_code_id is taken from the profile's primary lib (meta.product), when available.
+    """
+    build_id = _elf_build_id(binary)
+    if not build_id:
+        return None, None, None
+
+    libs = profile.get("libs") or []
+    if isinstance(libs, list):
+        for lib in libs:
+            if not isinstance(lib, dict):
+                continue
+            code_id = lib.get("codeId")
+            if isinstance(code_id, str) and code_id.lower() == build_id:
+                return True, build_id, code_id.lower()
+
+    primary = _profile_primary_lib(profile)
+    expected = None
+    if primary is not None:
+        code_id = primary.get("codeId")
+        if isinstance(code_id, str) and code_id:
+            expected = code_id.lower()
+    return False, build_id, expected
+
+
+def _auto_addr2line_binary(profile_path: str, profile: Dict[str, Any]) -> Optional[str]:
+    # 1) Prefer a sibling binary snapshot saved by scripts/profile_samply.sh.
+    sibling = _guess_sibling_binary(profile_path)
+    if sibling and os.path.exists(sibling):
+        return sibling
+
+    # 2) Fall back to the binary path recorded in the profile itself, but only when we can verify
+    #    the ELF build ID matches the profile's codeId (so we don't print misleading symbols after
+    #    a rebuild).
+    primary = _profile_primary_lib(profile)
+    if primary is None:
+        return None
+    cand = primary.get("debugPath") or primary.get("path")
+    if not isinstance(cand, str) or not cand or not os.path.exists(cand):
+        return None
+    code_id = primary.get("codeId")
+    build_id = _elf_build_id(cand)
+    if (
+        isinstance(code_id, str)
+        and code_id
+        and build_id
+        and build_id.lower() == code_id.lower()
+    ):
+        return cand
+    return None
 
 
 class _Addr2LineSymbolizer:
@@ -357,7 +473,12 @@ def main() -> int:
     ap.add_argument(
         "--addr2line-binary",
         default=None,
-        help="If set, symbolize `0x...` frames via `llvm-addr2line -e <binary>` (best-effort)",
+        help=(
+            "Symbolize `0x...` frames via `llvm-addr2line -e <binary>` (best-effort). "
+            "If omitted, tries to auto-detect a sibling `<profile>.pageset_progress` snapshot "
+            "(saved by scripts/profile_samply.sh) or the binary path recorded in the profile "
+            "(only when ELF build IDs match)."
+        ),
     )
     args = ap.parse_args()
 
@@ -473,7 +594,28 @@ def main() -> int:
 
     repo_root = _repo_root()
     symbolizer: Optional[_Addr2LineSymbolizer] = None
-    if args.addr2line_binary:
+    addr2line_binary = args.addr2line_binary
+    if addr2line_binary is None:
+        addr2line_binary = _auto_addr2line_binary(args.profile, profile)
+    if addr2line_binary:
+        matches, build_id, expected = _verify_addr2line_binary(profile, addr2line_binary)
+        if matches is False:
+            exp = expected or "<unknown>"
+            msg = (
+                f"WARNING: --addr2line-binary build-id {build_id} does not match profile codeId {exp}; "
+                "symbols may be incorrect."
+            )
+            hint = _guess_sibling_binary(args.profile)
+            if hint:
+                msg += f" (hint: try {hint})"
+            if args.addr2line_binary is None:
+                # Auto-detected, but verification failed: don't print misleading symbols.
+                print(msg + " (auto-detected binary rejected)", file=sys.stderr)
+                addr2line_binary = None
+            else:
+                print(msg, file=sys.stderr)
+
+    if addr2line_binary:
         # Gather all addresses used by the upcoming output so we can symbolize in a single addr2line call.
         used_funcs: set[int] = set()
         for func_idx, _w in top_leaf_items:
@@ -499,7 +641,7 @@ def main() -> int:
             if _ADDR_RE.match(name):
                 addrs.add(name)
 
-        symbolizer = _Addr2LineSymbolizer(args.addr2line_binary, repo_root=repo_root)
+        symbolizer = _Addr2LineSymbolizer(addr2line_binary, repo_root=repo_root)
         symbolizer.preload(addrs)
 
     def func_label(func_idx: int) -> str:

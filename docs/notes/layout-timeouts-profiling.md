@@ -45,14 +45,18 @@ To get useful terminal summaries, run the summary script with **the exact binary
 
 ```bash
 python3 scripts/samply_summary.py <profile.json.gz> --top 25 \
-  --addr2line-binary target/release/pageset_progress
+  --addr2line-binary <profile-stem>.pageset_progress
 ```
+
+`scripts/profile_samply.sh` attempts to save a sibling `<profile-stem>.pageset_progress` binary
+(hardlink by default) alongside the `.profile.json.gz` so you can re-run summaries later even if
+`cargo build` overwrites `target/release/pageset_progress`. Set `PROFILE_SAVE_BINARY=0` to disable.
 
 To map individual addresses to symbols / file+line by hand, use `llvm-addr2line` (include `-i` to
 show inlined frames):
 
 ```bash
-llvm-addr2line -f -C -i -a -e target/release/pageset_progress 0xDEADBEEF
+llvm-addr2line -f -C -i -a -e <profile-stem>.pageset_progress 0xDEADBEEF
 ```
 
 ### Interpreting terminal summaries (gotchas)

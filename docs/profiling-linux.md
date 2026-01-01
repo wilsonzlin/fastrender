@@ -11,7 +11,7 @@ cargo run --release --bin pageset_progress -- run --timeout 5
 ```
 
 - Convenience wrappers (see `scripts/`):
-  - `scripts/profile_samply.sh <stem>`
+  - `scripts/profile_samply.sh <stem>` (writes a `.profile.json.gz` plus a sibling `.pageset_progress` binary snapshot for later symbolication)
   - `scripts/profile_perf.sh <stem>`
   - `scripts/samply_summary.py <profile.json.gz>` (terminal summary)
 
