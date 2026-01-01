@@ -49,6 +49,7 @@ They map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs) and ar
 - `FASTR_HTTP_BACKOFF_BASE_MS=<ms>` – base delay for exponential backoff (default `50`).
 - `FASTR_HTTP_BACKOFF_CAP_MS=<ms>` – maximum delay between retries (default `500`).
 - `FASTR_HTTP_RESPECT_RETRY_AFTER=0|false|no` – disable honoring `Retry-After` headers for retryable responses (enabled by default).
+- `FASTR_HTTP_BROWSER_HEADERS=0|1` – enable/disable browser-like request headers (per-resource `Accept` + `Sec-Fetch-*` + `Upgrade-Insecure-Requests`). Defaults to `1`; set to `0` to preserve the legacy minimal header set for debugging.
 
 When a CLI timeout is configured (e.g. `fetch_pages --timeout 60` or `prefetch_assets --timeout 30`),
 it is treated as a **total** wall-clock budget for a single fetch call when no render deadline is

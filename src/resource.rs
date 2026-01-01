@@ -436,8 +436,133 @@ pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 /// subresource requests (it includes `*/*`).
 const DEFAULT_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
+const BROWSER_ACCEPT_ALL: &str = "*/*";
+const BROWSER_ACCEPT_STYLESHEET: &str = "text/css,*/*;q=0.1";
+const BROWSER_ACCEPT_IMAGE: &str =
+  "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+
 /// Content-Encoding algorithms this fetcher can decode.
 const SUPPORTED_ACCEPT_ENCODING: &str = "gzip, deflate, br";
+
+fn http_browser_headers_enabled() -> bool {
+  static ENABLED: OnceLock<bool> = OnceLock::new();
+  *ENABLED.get_or_init(|| {
+    std::env::var("FASTR_HTTP_BROWSER_HEADERS")
+      .ok()
+      .map(|raw| {
+        !matches!(
+          raw.trim().to_ascii_lowercase().as_str(),
+          "0" | "false" | "no" | "off"
+        )
+      })
+      .unwrap_or(true)
+  })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HttpBrowserRequestProfile {
+  Document,
+  Stylesheet,
+  Image,
+  Font,
+  Other,
+}
+
+impl HttpBrowserRequestProfile {
+  fn accept(self) -> &'static str {
+    match self {
+      Self::Document => DEFAULT_ACCEPT,
+      Self::Stylesheet => BROWSER_ACCEPT_STYLESHEET,
+      Self::Image => BROWSER_ACCEPT_IMAGE,
+      Self::Font | Self::Other => BROWSER_ACCEPT_ALL,
+    }
+  }
+
+  fn sec_fetch_dest(self) -> &'static str {
+    match self {
+      Self::Document => "document",
+      Self::Stylesheet => "style",
+      Self::Image => "image",
+      Self::Font => "font",
+      Self::Other => "empty",
+    }
+  }
+
+  fn sec_fetch_mode(self) -> &'static str {
+    match self {
+      Self::Document => "navigate",
+      Self::Font => "cors",
+      Self::Stylesheet | Self::Image | Self::Other => "no-cors",
+    }
+  }
+
+  fn sec_fetch_site(self) -> &'static str {
+    match self {
+      Self::Document => "none",
+      Self::Stylesheet | Self::Image | Self::Font | Self::Other => "same-origin",
+    }
+  }
+
+  fn sec_fetch_user(self) -> Option<&'static str> {
+    match self {
+      Self::Document => Some("?1"),
+      _ => None,
+    }
+  }
+
+  fn upgrade_insecure_requests(self) -> Option<&'static str> {
+    match self {
+      Self::Document => Some("1"),
+      _ => None,
+    }
+  }
+}
+
+pub(crate) fn http_browser_request_profile_for_url(url: &str) -> HttpBrowserRequestProfile {
+  let Ok(parsed) = Url::parse(url) else {
+    return HttpBrowserRequestProfile::Document;
+  };
+  let ext = Path::new(parsed.path())
+    .extension()
+    .and_then(|e| e.to_str());
+  match ext {
+    None => HttpBrowserRequestProfile::Document,
+    Some(ext) if ext.eq_ignore_ascii_case("css") => HttpBrowserRequestProfile::Stylesheet,
+    Some(ext)
+      if ext.eq_ignore_ascii_case("woff")
+        || ext.eq_ignore_ascii_case("woff2")
+        || ext.eq_ignore_ascii_case("ttf")
+        || ext.eq_ignore_ascii_case("otf") =>
+    {
+      HttpBrowserRequestProfile::Font
+    }
+    Some(ext)
+      if ext.eq_ignore_ascii_case("png")
+        || ext.eq_ignore_ascii_case("jpg")
+        || ext.eq_ignore_ascii_case("jpeg")
+        || ext.eq_ignore_ascii_case("gif")
+        || ext.eq_ignore_ascii_case("webp")
+        || ext.eq_ignore_ascii_case("avif")
+        || ext.eq_ignore_ascii_case("svg")
+        || ext.eq_ignore_ascii_case("ico")
+        || ext.eq_ignore_ascii_case("bmp") =>
+    {
+      HttpBrowserRequestProfile::Image
+    }
+    Some(ext)
+      if ext.eq_ignore_ascii_case("html")
+        || ext.eq_ignore_ascii_case("htm")
+        || ext.eq_ignore_ascii_case("php")
+        || ext.eq_ignore_ascii_case("asp")
+        || ext.eq_ignore_ascii_case("aspx")
+        || ext.eq_ignore_ascii_case("jsp")
+        || ext.eq_ignore_ascii_case("cgi") =>
+    {
+      HttpBrowserRequestProfile::Document
+    }
+    Some(_) => HttpBrowserRequestProfile::Other,
+  }
+}
 
 /// Safety buffer subtracted from deadline-derived HTTP timeouts.
 ///
@@ -1678,9 +1803,24 @@ impl HttpFetcher {
         let mut request = agent
           .get(&current)
           .header("User-Agent", &self.user_agent)
-          .header("Accept", DEFAULT_ACCEPT)
           .header("Accept-Language", &self.accept_language)
           .header("Accept-Encoding", accept_encoding_value);
+        if http_browser_headers_enabled() {
+          let profile = http_browser_request_profile_for_url(&current);
+          request = request
+            .header("Accept", profile.accept())
+            .header("Sec-Fetch-Dest", profile.sec_fetch_dest())
+            .header("Sec-Fetch-Mode", profile.sec_fetch_mode())
+            .header("Sec-Fetch-Site", profile.sec_fetch_site());
+          if let Some(user) = profile.sec_fetch_user() {
+            request = request.header("Sec-Fetch-User", user);
+          }
+          if let Some(value) = profile.upgrade_insecure_requests() {
+            request = request.header("Upgrade-Insecure-Requests", value);
+          }
+        } else {
+          request = request.header("Accept", DEFAULT_ACCEPT);
+        }
 
         if !effective_timeout.is_zero() {
           request = request
@@ -3913,6 +4053,46 @@ mod tests {
     fn drop(&mut self) {
       let _ = take_resource_cache_diagnostics();
     }
+  }
+
+  #[test]
+  fn http_browser_request_profile_for_url_examples() {
+    let doc = http_browser_request_profile_for_url("https://tesco.com");
+    assert_eq!(doc, HttpBrowserRequestProfile::Document);
+    assert_eq!(doc.accept(), DEFAULT_ACCEPT);
+    assert_eq!(doc.sec_fetch_dest(), "document");
+    assert_eq!(doc.sec_fetch_mode(), "navigate");
+    assert_eq!(doc.sec_fetch_site(), "none");
+    assert_eq!(doc.sec_fetch_user(), Some("?1"));
+    assert_eq!(doc.upgrade_insecure_requests(), Some("1"));
+
+    let font =
+      http_browser_request_profile_for_url("https://www.tesco.com/fonts/TESCOModern-Regular.woff2");
+    assert_eq!(font, HttpBrowserRequestProfile::Font);
+    assert_eq!(font.accept(), BROWSER_ACCEPT_ALL);
+    assert_eq!(font.sec_fetch_dest(), "font");
+    assert_eq!(font.sec_fetch_mode(), "cors");
+    assert_eq!(font.sec_fetch_site(), "same-origin");
+    assert_eq!(font.sec_fetch_user(), None);
+    assert_eq!(font.upgrade_insecure_requests(), None);
+
+    let stylesheet = http_browser_request_profile_for_url("https://example.com/styles/site.css");
+    assert_eq!(stylesheet, HttpBrowserRequestProfile::Stylesheet);
+    assert_eq!(stylesheet.accept(), BROWSER_ACCEPT_STYLESHEET);
+    assert_eq!(stylesheet.sec_fetch_dest(), "style");
+    assert_eq!(stylesheet.sec_fetch_mode(), "no-cors");
+    assert_eq!(stylesheet.sec_fetch_site(), "same-origin");
+    assert_eq!(stylesheet.sec_fetch_user(), None);
+    assert_eq!(stylesheet.upgrade_insecure_requests(), None);
+
+    let image = http_browser_request_profile_for_url("https://example.com/images/logo.png");
+    assert_eq!(image, HttpBrowserRequestProfile::Image);
+    assert_eq!(image.accept(), BROWSER_ACCEPT_IMAGE);
+    assert_eq!(image.sec_fetch_dest(), "image");
+    assert_eq!(image.sec_fetch_mode(), "no-cors");
+    assert_eq!(image.sec_fetch_site(), "same-origin");
+    assert_eq!(image.sec_fetch_user(), None);
+    assert_eq!(image.upgrade_insecure_requests(), None);
   }
 
   #[test]
