@@ -1573,6 +1573,7 @@ fn apply_drop_shadow(
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(pixmap) else {
     return Ok(());
   };
+  check_active(RenderStage::Paint)?;
   let blur_pad = (blur_radius.abs() * 3.0).ceil() as u32;
   let spread_pad = spread.max(0.0).ceil() as u32;
   let pad = blur_pad + spread_pad;
@@ -1587,10 +1588,12 @@ fn apply_drop_shadow(
     let src_stride = width as usize;
     let dst_stride = shadow.width() as usize;
     let dst = shadow.pixels_mut();
+    let mut deadline_counter = 0usize;
     for y in 0..bounds_h as usize {
       let src_row = (min_y as usize + y) * src_stride;
       let dst_row = (pad as usize + y) * dst_stride;
       for x in 0..bounds_w as usize {
+        check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
         let src_px = src[src_row + min_x as usize + x];
         let alpha = src_px.alpha() as f32 / 255.0;
         let dst_idx = dst_row + pad as usize + x;
@@ -1615,7 +1618,7 @@ fn apply_drop_shadow(
   }
 
   if spread != 0.0 {
-    apply_spread(&mut shadow, spread);
+    apply_spread(&mut shadow, spread)?;
   }
 
   if blur_radius > 0.0 {
@@ -1635,59 +1638,64 @@ fn apply_drop_shadow(
   Ok(())
 }
 
-fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
+fn apply_spread(pixmap: &mut Pixmap, spread: f32) -> RenderResult<()> {
   // Run a separable square dilation/erosion with sliding-window extrema to avoid
   // the quadratic neighborhood scan.
   let radius = spread.abs().ceil() as i32;
   if radius <= 0 || spread == 0.0 {
-    return;
+    return Ok(());
   }
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
+  check_active(RenderStage::Paint)?;
   let expand = spread > 0.0;
   let radius = radius as usize;
   let len = width * height;
 
   let mut scratch = SPREAD_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
-  scratch.source.resize(len, [0u8; 4]);
-  scratch.horizontal.resize(len, [0u8; 4]);
-  scratch.transposed.resize(len, [0u8; 4]);
+  let result = (|| -> RenderResult<()> {
+    scratch.source.resize(len, [0u8; 4]);
+    scratch.horizontal.resize(len, [0u8; 4]);
+    scratch.transposed.resize(len, [0u8; 4]);
 
-  for (src, dst) in pixmap.pixels().iter().zip(scratch.source.iter_mut()) {
-    *dst = [src.red(), src.green(), src.blue(), src.alpha()];
-  }
+    let mut deadline_counter = 0usize;
+    for (src, dst) in pixmap.pixels().iter().zip(scratch.source.iter_mut()) {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+      *dst = [src.red(), src.green(), src.blue(), src.alpha()];
+    }
 
-  apply_spread_horizontal(
-    &scratch.source,
-    &mut scratch.horizontal,
-    width,
-    height,
-    radius,
-    expand,
-  );
+    apply_spread_horizontal(
+      &scratch.source,
+      &mut scratch.horizontal,
+      width,
+      height,
+      radius,
+      expand,
+    )?;
 
-  // Transpose so the vertical pass can reuse the horizontal sliding window.
-  transpose_channels(&scratch.horizontal, width, height, &mut scratch.transposed);
+    // Transpose so the vertical pass can reuse the horizontal sliding window.
+    transpose_channels(&scratch.horizontal, width, height, &mut scratch.transposed)?;
 
-  // Reuse the horizontal buffer to store the vertical pass output.
-  apply_spread_horizontal(
-    &scratch.transposed,
-    &mut scratch.horizontal,
-    height,
-    width,
-    radius,
-    expand,
-  );
+    // Reuse the horizontal buffer to store the vertical pass output.
+    apply_spread_horizontal(
+      &scratch.transposed,
+      &mut scratch.horizontal,
+      height,
+      width,
+      radius,
+      expand,
+    )?;
 
-  let dst = pixmap.pixels_mut();
-  write_transposed_to_pixmap(&scratch.horizontal, width, height, dst);
+    let dst = pixmap.pixels_mut();
+    write_transposed_to_pixmap(&scratch.horizontal, width, height, dst)?;
+    Ok(())
+  })();
 
-  SPREAD_SCRATCH.with(|cell| {
-    *cell.borrow_mut() = scratch;
-  });
+  SPREAD_SCRATCH.with(|cell| *cell.borrow_mut() = scratch);
+  result
 }
 
 fn apply_spread_horizontal(
@@ -1697,92 +1705,108 @@ fn apply_spread_horizontal(
   height: usize,
   radius: usize,
   expand: bool,
-) {
+) -> RenderResult<()> {
   debug_assert_eq!(src.len(), width * height);
   debug_assert_eq!(dst.len(), width * height);
   if radius == 0 {
     dst.copy_from_slice(src);
-    return;
+    return Ok(());
   }
   let window_size = radius * 2 + 1;
   let extended_len = width + radius * 2;
+  let deadline = active_deadline();
 
   dst
     .par_chunks_mut(width)
     .enumerate()
-    .for_each(|(y, dst_row)| {
-      let row_start = y * width;
-      let mut queues = [
-        VecDeque::with_capacity(window_size),
-        VecDeque::with_capacity(window_size),
-        VecDeque::with_capacity(window_size),
-        VecDeque::with_capacity(window_size),
-      ];
+    .try_for_each(|(y, dst_row)| {
+      with_deadline(deadline.as_ref(), || -> RenderResult<()> {
+        let row_start = y * width;
+        let mut queues = [
+          VecDeque::with_capacity(window_size),
+          VecDeque::with_capacity(window_size),
+          VecDeque::with_capacity(window_size),
+          VecDeque::with_capacity(window_size),
+        ];
 
-      for j in 0..extended_len {
-        let src_x = if j < radius {
-          0
-        } else if j >= radius + width {
-          width - 1
-        } else {
-          j - radius
-        };
-        let idx = row_start + src_x;
-        let value = src[idx];
-
-        for (channel, queue) in queues.iter_mut().enumerate() {
-          if expand {
-            while let Some(&(_, v)) = queue.back() {
-              if v >= value[channel] {
-                break;
-              }
-              queue.pop_back();
-            }
+        for j in 0..extended_len {
+          if j % DEADLINE_STRIDE == 0 {
+            check_active(RenderStage::Paint)?;
+          }
+          let src_x = if j < radius {
+            0
+          } else if j >= radius + width {
+            width - 1
           } else {
-            while let Some(&(_, v)) = queue.back() {
-              if v <= value[channel] {
-                break;
+            j - radius
+          };
+          let idx = row_start + src_x;
+          let value = src[idx];
+
+          for (channel, queue) in queues.iter_mut().enumerate() {
+            if expand {
+              while let Some(&(_, v)) = queue.back() {
+                if v >= value[channel] {
+                  break;
+                }
+                queue.pop_back();
               }
-              queue.pop_back();
+            } else {
+              while let Some(&(_, v)) = queue.back() {
+                if v <= value[channel] {
+                  break;
+                }
+                queue.pop_back();
+              }
+            }
+            queue.push_back((j, value[channel]));
+          }
+
+          if j >= window_size {
+            let expire = j - window_size;
+            for queue in queues.iter_mut() {
+              while let Some(&(idx, _)) = queue.front() {
+                if idx <= expire {
+                  queue.pop_front();
+                } else {
+                  break;
+                }
+              }
             }
           }
-          queue.push_back((j, value[channel]));
-        }
 
-        if j >= window_size {
-          let expire = j - window_size;
-          for queue in queues.iter_mut() {
-            while let Some(&(idx, _)) = queue.front() {
-              if idx <= expire {
-                queue.pop_front();
-              } else {
-                break;
-              }
+          if j + 1 >= window_size {
+            let out_x = j + 1 - window_size;
+            let mut out = [0u8; 4];
+            for (channel, queue) in queues.iter().enumerate() {
+              out[channel] = queue.front().map(|(_, v)| *v).unwrap_or(0);
             }
+            dst_row[out_x] = out;
           }
         }
-
-        if j + 1 >= window_size {
-          let out_x = j + 1 - window_size;
-          let mut out = [0u8; 4];
-          for (channel, queue) in queues.iter().enumerate() {
-            out[channel] = queue.front().map(|(_, v)| *v).unwrap_or(0);
-          }
-          dst_row[out_x] = out;
-        }
-      }
-    });
+        Ok(())
+      })
+    })?;
+  Ok(())
 }
 
-fn transpose_channels(src: &[[u8; 4]], width: usize, height: usize, dst: &mut [[u8; 4]]) {
+fn transpose_channels(
+  src: &[[u8; 4]],
+  width: usize,
+  height: usize,
+  dst: &mut [[u8; 4]],
+) -> RenderResult<()> {
   debug_assert_eq!(src.len(), width * height);
   debug_assert_eq!(dst.len(), width * height);
+  let mut deadline_counter = 0usize;
   for y in 0..height {
     let row_start = y * width;
     for x in 0..width {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       dst[x * height + y] = src[row_start + x];
     }
   }
+  Ok(())
 }
 
 fn write_transposed_to_pixmap(
@@ -1790,17 +1814,20 @@ fn write_transposed_to_pixmap(
   width: usize,
   height: usize,
   dst: &mut [PremultipliedColorU8],
-) {
+) -> RenderResult<()> {
   debug_assert_eq!(src.len(), width * height);
   debug_assert_eq!(dst.len(), width * height);
+  let mut deadline_counter = 0usize;
   for y in 0..height {
     for x in 0..width {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       let channels = src[x * height + y];
       dst[y * width + x] =
         PremultipliedColorU8::from_rgba(channels[0], channels[1], channels[2], channels[3])
           .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
   }
+  Ok(())
 }
 
 #[cfg(test)]
@@ -8861,7 +8888,7 @@ mod tests {
     for spread in [2.0, -2.0] {
       let mut optimized = base.clone();
       let mut reference = base.clone();
-      apply_spread(&mut optimized, spread);
+      apply_spread(&mut optimized, spread).expect("spread optimized");
       apply_spread_slow_reference(&mut reference, spread);
       assert_eq!(
         optimized.data(),

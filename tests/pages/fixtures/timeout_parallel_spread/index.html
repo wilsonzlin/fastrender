@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>timeout_parallel_spread</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 1024px;
+    height: 1024px;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  /*
+    A large, spread-only drop-shadow filter triggers the separable spread raster loop.
+
+    This fixture is intentionally heavy in paint, while keeping DOM/style/layout minimal, so
+    cooperative deadlines can be validated inside paint fan-out (Rayon + paint tiling).
+  */
+  .shadow {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1024px;
+    height: 1024px;
+    background: rgba(0, 0, 0, 1);
+    /*
+      A large, spread-only drop-shadow triggers the separable spread raster loop.
+
+      The spread is intentionally large so paint dominates even on fast machines, ensuring
+      render deadlines can be validated inside paint fan-out (Rayon + paint tiling).
+    */
+    filter: drop-shadow(0px 0px 0px 1200px rgba(0, 0, 0, 0.5));
+  }
+</style>
+<div class="shadow"></div>
