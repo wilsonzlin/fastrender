@@ -1103,14 +1103,7 @@ pub(crate) fn parse_property_value_in_context_known_property_uncached(
   value_str: &str,
   skip_var_guard: bool,
 ) -> Option<PropertyValue> {
-  parse_property_value_in_context_internal(
-    context,
-    property,
-    value_str,
-    skip_var_guard,
-    true,
-    true,
-  )
+  parse_property_value_in_context_internal(context, property, value_str, skip_var_guard, true, true)
 }
 
 pub(crate) fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
@@ -2634,12 +2627,16 @@ fn parse_color_stop_segment(token: &str, stops: &mut Vec<crate::css::types::Colo
 
 fn split_color_and_positions(token: &str) -> (&str, Option<f32>, Option<f32>) {
   fn split_last_segment(input: &str) -> Option<(&str, &str)> {
+    // Scan from the end for a top-level whitespace separator (`red 10%` / `red 10% 20%`), keeping
+    // parentheses balanced so we don't split inside `rgb(...)` etc.
+    let bytes = input.as_bytes();
     let mut depth = 0i32;
-    for (idx, ch) in input.char_indices().rev() {
-      match ch {
-        ')' => depth += 1,
-        '(' => depth -= 1,
-        ' ' | '\t' if depth == 0 => {
+    for idx in (0..bytes.len()).rev() {
+      let b = bytes[idx];
+      match b {
+        b')' => depth += 1,
+        b'(' => depth -= 1,
+        b if b.is_ascii_whitespace() && depth == 0 => {
           let head = input[..idx].trim_end();
           let tail = input[idx..].trim();
           if head.is_empty() || tail.is_empty() {
