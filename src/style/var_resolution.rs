@@ -14,13 +14,15 @@ use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 /// Maximum depth for recursive var() resolution to prevent infinite loops
 const MAX_RECURSION_DEPTH: usize = 10;
 
 #[cfg(test)]
-static TOKEN_RESOLVER_ENTRY_COUNT: AtomicUsize = AtomicUsize::new(0);
+std::thread_local! {
+  static TOKEN_RESOLVER_ENTRY_COUNT: Cell<usize> = Cell::new(0);
+}
 
 #[inline]
 fn contains_ascii_case_insensitive_var_call(raw: &str) -> bool {
@@ -212,7 +214,7 @@ fn resolve_tokens_from_parser<'i, 't>(
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
   #[cfg(test)]
-  TOKEN_RESOLVER_ENTRY_COUNT.fetch_add(1, Ordering::Relaxed);
+  TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(count.get() + 1));
 
   let mut output = Vec::new();
 
@@ -827,7 +829,7 @@ mod tests {
     let props = CustomPropertyStore::default();
     let value = PropertyValue::Keyword("block".to_string());
 
-    TOKEN_RESOLVER_ENTRY_COUNT.store(0, Ordering::Relaxed);
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
     let resolved = resolve_var_for_property(&value, &props, "display");
 
     match resolved {
@@ -841,7 +843,7 @@ mod tests {
       other => panic!("Expected Resolved, got {:?}", other),
     }
 
-    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.load(Ordering::Relaxed), 0);
+    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
   }
 
   #[test]
