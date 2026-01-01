@@ -1858,6 +1858,82 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
     None
   }
 
+  fn looks_like_prelude(text: &str) -> bool {
+    let text = text.trim_start();
+    if text.is_empty() {
+      return false;
+    }
+
+    // If the prelude starts with a number, it's definitely an explicit size (e.g. `10px 20px`).
+    // Skip attempting to parse it as a color stop, which would allocate an error string on
+    // failure.
+    let first_byte = text.as_bytes()[0];
+    if first_byte.is_ascii_digit() || matches!(first_byte, b'+' | b'-' | b'.') {
+      return true;
+    }
+
+    let Some(first_token) = text.split_whitespace().next() else {
+      return false;
+    };
+
+    first_token.eq_ignore_ascii_case("circle")
+      || first_token.eq_ignore_ascii_case("ellipse")
+      || first_token.eq_ignore_ascii_case("closest-side")
+      || first_token.eq_ignore_ascii_case("farthest-side")
+      || first_token.eq_ignore_ascii_case("closest-corner")
+      || first_token.eq_ignore_ascii_case("farthest-corner")
+      || first_token.eq_ignore_ascii_case("at")
+  }
+
+  fn parse_prelude(
+    text: &str,
+    shape: &mut RadialGradientShape,
+    size: &mut RadialGradientSize,
+    position: &mut GradientPosition,
+  ) -> Option<()> {
+    let (prelude, pos_part) = match find_at_separator(text) {
+      Some(idx) => (text.get(..idx)?.trim(), Some(text.get(idx + 4..)?.trim())),
+      None => (text, None),
+    };
+
+    if let Some(pos_str) = pos_part {
+      if let Some(pos) = parse_radial_position(pos_str) {
+        *position = pos;
+      }
+    }
+
+    let mut explicit_sizes = Vec::new();
+    for token in prelude.split_whitespace() {
+      if token.eq_ignore_ascii_case("circle") {
+        *shape = RadialGradientShape::Circle;
+      } else if token.eq_ignore_ascii_case("ellipse") {
+        *shape = RadialGradientShape::Ellipse;
+      } else if token.eq_ignore_ascii_case("closest-side") {
+        *size = RadialGradientSize::ClosestSide;
+      } else if token.eq_ignore_ascii_case("farthest-side") {
+        *size = RadialGradientSize::FarthestSide;
+      } else if token.eq_ignore_ascii_case("closest-corner") {
+        *size = RadialGradientSize::ClosestCorner;
+      } else if token.eq_ignore_ascii_case("farthest-corner") {
+        *size = RadialGradientSize::FarthestCorner;
+      } else if let Some(len) = parse_length_token(token) {
+        explicit_sizes.push(len);
+      } else {
+        return None;
+      }
+    }
+
+    if let Some((&first, rest)) = explicit_sizes.split_first() {
+      let second = rest.first().copied();
+      *size = RadialGradientSize::Explicit {
+        x: first,
+        y: second,
+      };
+    }
+
+    Some(())
+  }
+
   let parts = split_top_level_commas(inner);
   if parts.len() < 2 {
     return None;
@@ -1877,56 +1953,17 @@ fn parse_radial_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> 
   };
 
   let mut stops = Vec::new();
-  let mut start_idx = 1;
-  if let Some(cs) = parse_color_stops(parts[0]) {
-    stops.extend(cs);
+  if !looks_like_prelude(parts[0]) {
+    if let Some(cs) = parse_color_stops(parts[0]) {
+      stops.extend(cs);
+    } else {
+      parse_prelude(parts[0], &mut shape, &mut size, &mut position)?;
+    }
   } else {
-    start_idx = 1;
-    let (prelude, pos_part) = match find_at_separator(parts[0]) {
-      Some(idx) => (
-        parts[0].get(..idx)?.trim(),
-        Some(parts[0].get(idx + 4..)?.trim()),
-      ),
-      None => (parts[0], None),
-    };
-
-    if let Some(pos_str) = pos_part {
-      if let Some(pos) = parse_radial_position(pos_str) {
-        position = pos;
-      }
-    }
-
-    let mut explicit_sizes = Vec::new();
-    for token in prelude.split_whitespace() {
-      if token.eq_ignore_ascii_case("circle") {
-        shape = RadialGradientShape::Circle;
-      } else if token.eq_ignore_ascii_case("ellipse") {
-        shape = RadialGradientShape::Ellipse;
-      } else if token.eq_ignore_ascii_case("closest-side") {
-        size = RadialGradientSize::ClosestSide;
-      } else if token.eq_ignore_ascii_case("farthest-side") {
-        size = RadialGradientSize::FarthestSide;
-      } else if token.eq_ignore_ascii_case("closest-corner") {
-        size = RadialGradientSize::ClosestCorner;
-      } else if token.eq_ignore_ascii_case("farthest-corner") {
-        size = RadialGradientSize::FarthestCorner;
-      } else if let Some(len) = parse_length_token(token) {
-        explicit_sizes.push(len);
-      } else {
-        return None;
-      }
-    }
-
-    if let Some((&first, rest)) = explicit_sizes.split_first() {
-      let second = rest.first().copied();
-      size = RadialGradientSize::Explicit {
-        x: first,
-        y: second,
-      };
-    }
+    parse_prelude(parts[0], &mut shape, &mut size, &mut position)?;
   }
 
-  for part in parts.iter().skip(start_idx) {
+  for part in parts.iter().skip(1) {
     if let Some(cs) = parse_color_stops(part) {
       stops.extend(cs);
     }
@@ -2120,6 +2157,51 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
 }
 
 fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
+  fn split_first_whitespace(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim_start();
+    if input.is_empty() {
+      return None;
+    }
+
+    let bytes = input.as_bytes();
+    let mut end = bytes.len();
+    for (idx, byte) in bytes.iter().enumerate() {
+      if byte.is_ascii_whitespace() {
+        end = idx;
+        break;
+      }
+    }
+    Some((&input[..end], &input[end..]))
+  }
+
+  fn parse_prelude(text: &str, from_angle: &mut f32, position: &mut GradientPosition) {
+    let mut rest = text;
+    while let Some((token, tail)) = split_first_whitespace(rest) {
+      if token.eq_ignore_ascii_case("from") {
+        if let Some((angle_token, tail)) = split_first_whitespace(tail) {
+          if let Some(angle) = parse_stop_angle(angle_token) {
+            *from_angle = angle;
+          }
+          rest = tail;
+          continue;
+        }
+        break;
+      }
+      if token.eq_ignore_ascii_case("at") {
+        let pos_text = tail.trim();
+        if let Some(pos) = parse_radial_position(pos_text) {
+          *position = pos;
+          break;
+        }
+        // If the remainder does not parse as a position, treat `at` as an unknown token and keep
+        // scanning to preserve the previous lenient behaviour.
+        rest = tail;
+        continue;
+      }
+      rest = tail;
+    }
+  }
+
   let parts = split_top_level_commas(inner);
   if parts.len() < 2 {
     return None;
@@ -2138,38 +2220,26 @@ fn parse_conic_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
   };
 
   let prelude = parts[0].trim();
-  let mut first_stop_idx = 0;
-  if parse_color_stops(prelude).is_some() {
-    // No prelude; this is a stop.
+  let mut stops = Vec::new();
+
+  // Conic gradients may have an optional `from <angle>` and/or `at <position>` prelude.
+  //
+  // Avoid parsing the prelude as a color stop when it clearly starts with `from`/`at`, since a
+  // failed color parse allocates an owned error string.
+  let first_token = prelude.split_whitespace().next();
+  let looks_like_prelude =
+    first_token.is_some_and(|t| t.eq_ignore_ascii_case("from") || t.eq_ignore_ascii_case("at"));
+
+  if looks_like_prelude {
+    parse_prelude(prelude, &mut from_angle, &mut position);
+  } else if let Some(cs) = parse_color_stops(prelude) {
+    // No prelude; treat the first segment as a stop.
+    stops.extend(cs);
   } else {
-    first_stop_idx = 1;
-    let tokens: Vec<&str> = prelude.split_whitespace().collect();
-    let mut idx = 0;
-    while idx < tokens.len() {
-      let token = tokens[idx];
-      if token.eq_ignore_ascii_case("from") && idx + 1 < tokens.len() {
-        if let Some(angle) = parse_stop_angle(tokens[idx + 1]) {
-          from_angle = angle;
-        }
-        idx += 2;
-        continue;
-      }
-      if token.eq_ignore_ascii_case("at") && idx + 1 < tokens.len() {
-        let pos_text = tokens[idx + 1..].join(" ");
-        if let Some(pos) = parse_radial_position(&pos_text) {
-          position = pos;
-          idx = tokens.len();
-        } else {
-          idx += 1;
-        }
-        continue;
-      }
-      idx += 1;
-    }
+    parse_prelude(prelude, &mut from_angle, &mut position);
   }
 
-  let mut stops = Vec::new();
-  for part in parts.iter().skip(first_stop_idx) {
+  for part in parts.iter().skip(1) {
     if let Some(cs) = parse_color_stops(part) {
       stops.extend(cs);
     }
@@ -2769,6 +2839,52 @@ mod tests {
   }
 
   #[test]
+  fn parses_conic_gradient_without_prelude() {
+    let value = "conic-gradient(red, blue)";
+    let PropertyValue::ConicGradient {
+      from_angle,
+      position,
+      stops,
+    } = parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected conic gradient");
+    };
+
+    assert!((from_angle - 0.0).abs() < 1e-6);
+    assert!((position.x.alignment - 0.5).abs() < 1e-6);
+    assert!((position.y.alignment - 0.5).abs() < 1e-6);
+    assert_eq!(stops.len(), 2);
+    assert_eq!(stops[0].position, None);
+    assert_eq!(stops[1].position, None);
+  }
+
+  #[test]
+  fn parses_radial_gradient_explicit_size_and_position() {
+    let value = "radial-gradient(10px 20px at center, red, blue)";
+    let PropertyValue::RadialGradient {
+      size,
+      position,
+      stops,
+      ..
+    } = parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected radial gradient");
+    };
+
+    let RadialGradientSize::Explicit { x, y } = size else {
+      panic!("expected explicit size");
+    };
+    assert!((x.value - 10.0).abs() < 1e-6);
+    assert_eq!(x.unit, LengthUnit::Px);
+    let y = y.expect("second size");
+    assert!((y.value - 20.0).abs() < 1e-6);
+    assert_eq!(y.unit, LengthUnit::Px);
+    assert!((position.x.alignment - 0.5).abs() < 1e-6);
+    assert!((position.y.alignment - 0.5).abs() < 1e-6);
+    assert_eq!(stops.len(), 2);
+  }
+
+  #[test]
   fn parse_property_value_respects_known_properties_list() {
     // Unknown properties should be rejected outright.
     assert!(parse_property_value("not-a-property", "5").is_none());
@@ -2905,13 +3021,9 @@ mod tests {
     let mut expected_display: Option<String> = None;
 
     for _ in 0..repeats {
-      let width = parse_property_value_in_context_internal(
-        DeclarationContext::Style,
-        "width",
-        "16px",
-        false,
-      )
-      .expect("width parsed");
+      let width =
+        parse_property_value_in_context_internal(DeclarationContext::Style, "width", "16px", false)
+          .expect("width parsed");
       let width_dbg = format!("{width:?}");
       match expected_width {
         Some(ref expected) => assert_eq!(expected, &width_dbg),
@@ -2931,13 +3043,9 @@ mod tests {
         None => expected_height = Some(height_dbg),
       }
 
-      let color = parse_property_value_in_context_internal(
-        DeclarationContext::Style,
-        "color",
-        "#fff",
-        false,
-      )
-      .expect("color parsed");
+      let color =
+        parse_property_value_in_context_internal(DeclarationContext::Style, "color", "#fff", false)
+          .expect("color parsed");
       let color_dbg = format!("{color:?}");
       match expected_color {
         Some(ref expected) => assert_eq!(expected, &color_dbg),
