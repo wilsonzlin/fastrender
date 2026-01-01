@@ -444,6 +444,9 @@ fn is_known_page_property(property: &str) -> bool {
 }
 
 fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> Vec<&'a str> {
+  #[cfg(test)]
+  TOKENIZE_PROPERTY_VALUE_CALLS.with(|calls| calls.set(calls.get() + 1));
+
   #[inline]
   fn trim_ascii_whitespace(s: &str) -> &str {
     let bytes = s.as_bytes();
@@ -564,6 +567,75 @@ fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> Vec<&'
   }
 
   tokens
+}
+
+fn value_has_top_level_separator(value_str: &str, allow_commas: bool) -> bool {
+  let mut paren = 0i32;
+  let mut bracket = 0i32;
+  let mut brace = 0i32;
+  let mut in_string: Option<u8> = None;
+  let mut escape = false;
+
+  let bytes = value_str.as_bytes();
+  let mut idx = 0usize;
+  while idx < bytes.len() {
+    let b = bytes[idx];
+
+    if escape {
+      escape = false;
+      idx += 1;
+      continue;
+    }
+
+    if b == b'\\' {
+      escape = true;
+      idx += 1;
+      continue;
+    }
+
+    if let Some(q) = in_string {
+      if b == q {
+        in_string = None;
+      }
+      idx += 1;
+      continue;
+    }
+
+    match b {
+      b'"' | b'\'' => {
+        in_string = Some(b);
+      }
+      b'(' => paren += 1,
+      b')' => paren -= 1,
+      b'[' => bracket += 1,
+      b']' => bracket -= 1,
+      b'{' => brace += 1,
+      b'}' => brace -= 1,
+      b'/' if paren == 0 && bracket == 0 && brace == 0 => return true,
+      b',' if allow_commas && paren == 0 && bracket == 0 && brace == 0 => return true,
+      b if b.is_ascii_whitespace() && paren == 0 && bracket == 0 && brace == 0 => return true,
+      _ => {}
+    }
+
+    idx += 1;
+  }
+
+  false
+}
+
+#[cfg(test)]
+thread_local! {
+  static TOKENIZE_PROPERTY_VALUE_CALLS: std::cell::Cell<u32> = std::cell::Cell::new(0);
+}
+
+#[cfg(test)]
+fn reset_tokenize_property_value_calls() {
+  TOKENIZE_PROPERTY_VALUE_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+fn tokenize_property_value_calls() -> u32 {
+  TOKENIZE_PROPERTY_VALUE_CALLS.with(|calls| calls.get())
 }
 
 pub(crate) fn parse_transform_list(value: &str) -> Option<Vec<Transform>> {
@@ -1267,85 +1339,80 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
     }
   }
 
-  // Tokenize respecting commas (for background layering) and spaces.
-  let tokens = tokenize_property_value(value_str, allow_commas);
+  let wants_tokenization = matches!(
+    property,
+    "object-position"
+      | "border-spacing"
+      | "shape-outside"
+      | "border-radius"
+      | "border-top-left-radius"
+      | "border-top-right-radius"
+      | "border-bottom-left-radius"
+      | "border-bottom-right-radius"
+      | "border-start-start-radius"
+      | "border-start-end-radius"
+      | "border-end-start-radius"
+      | "border-end-end-radius"
+      | "background-position"
+      | "background-position-x"
+      | "background-position-y"
+      | "transform-origin"
+      | "touch-action"
+      | "cursor"
+      | "list-style"
+      | "flex"
+      | "background"
+      | "background-image"
+      | "background-repeat"
+      | "background-size"
+      | "background-attachment"
+      | "background-origin"
+      | "background-clip"
+      | "background-position-inline"
+      | "background-position-block"
+      | "background-size-inline"
+      | "background-size-block"
+      | "border-image"
+      | "border-image-source"
+      | "border-image-slice"
+      | "border-image-width"
+      | "border-image-outset"
+      | "border-image-repeat"
+      | "mask"
+      | "mask-image"
+      | "mask-position"
+      | "mask-size"
+      | "mask-repeat"
+      | "mask-mode"
+      | "mask-origin"
+      | "mask-clip"
+      | "mask-composite"
+      | "border"
+      | "border-top"
+      | "border-right"
+      | "border-bottom"
+      | "border-left"
+      | "image-orientation"
+      | "image-resolution"
+      | "scrollbar-color"
+      | "margin"
+      | "padding"
+      | "border-inline"
+      | "border-inline-start"
+      | "border-inline-end"
+      | "border-block"
+      | "border-block-start"
+      | "border-block-end"
+      | "outline"
+      | "quotes"
+      | "size"
+      | "text-combine-upright"
+  );
 
-  // Unitless zero should parse as a number for numeric-only properties (opacity, z-index, etc.).
-  // Our tokenize helper produces "0" so ensure we don't fall through to length parsing for those.
-  if tokens.len() == 1 && tokens[0] == "0" && matches!(property, "opacity" | "z-index") {
-    return Some(PropertyValue::Number(0.0));
-  }
-  if tokens.len() > 1
-    && matches!(
-      property,
-      "object-position"
-        | "border-spacing"
-        | "shape-outside"
-        | "border-radius"
-        | "border-top-left-radius"
-        | "border-top-right-radius"
-        | "border-bottom-left-radius"
-        | "border-bottom-right-radius"
-        | "border-start-start-radius"
-        | "border-start-end-radius"
-        | "border-end-start-radius"
-        | "border-end-end-radius"
-        | "background-position"
-        | "background-position-x"
-        | "background-position-y"
-        | "transform-origin"
-        | "touch-action"
-        | "cursor"
-        | "list-style"
-        | "flex"
-        | "background"
-        | "background-image"
-        | "background-repeat"
-        | "background-size"
-        | "background-attachment"
-        | "background-origin"
-        | "background-clip"
-        | "background-position-inline"
-        | "background-position-block"
-        | "background-size-inline"
-        | "background-size-block"
-        | "border-image"
-        | "border-image-source"
-        | "border-image-slice"
-        | "border-image-width"
-        | "border-image-outset"
-        | "border-image-repeat"
-        | "mask"
-        | "mask-image"
-        | "mask-position"
-        | "mask-size"
-        | "mask-repeat"
-        | "mask-mode"
-        | "mask-origin"
-        | "mask-clip"
-        | "mask-composite"
-        | "border"
-        | "border-top"
-        | "border-right"
-        | "border-bottom"
-        | "border-left"
-        | "image-orientation"
-        | "image-resolution"
-        | "scrollbar-color"
-        | "margin"
-        | "padding"
-        | "border-inline"
-        | "border-inline-start"
-        | "border-inline-end"
-        | "border-block"
-        | "border-block-start"
-        | "border-block-end"
-        | "outline"
-        | "quotes"
-        | "size"
-        | "text-combine-upright"
-    )
-  {
+  if wants_tokenization && value_has_top_level_separator(value_str, allow_commas) {
+    // Tokenize respecting commas (for background layering) and spaces.
+    let tokens = tokenize_property_value(value_str, allow_commas);
+
     let mut parts = Vec::new();
     for token in tokens {
       if token == "/" {
@@ -1360,11 +1427,6 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         parts.push(gradient);
       } else if let Some(v) = parse_simple_value(token) {
         parts.push(v);
-      } else if let Ok(color) = Color::parse(token) {
-        match color {
-          Color::CurrentColor => parts.push(PropertyValue::Keyword("currentColor".to_string())),
-          _ => parts.push(PropertyValue::Color(color)),
-        }
       } else {
         parts.push(PropertyValue::Keyword(token.to_string()));
       }
@@ -2643,6 +2705,47 @@ mod tests {
       parse_property_value("opacity", "0.5"),
       Some(PropertyValue::Number(n)) if (n - 0.5).abs() < 1e-6
     ));
+  }
+
+  #[test]
+  fn parse_property_value_skips_tokenization_for_simple_values() {
+    value_cache::reset_for_tests();
+    reset_tokenize_property_value_calls();
+
+    let parsed = parse_property_value("display", "block").expect("parsed");
+    assert!(matches!(parsed, PropertyValue::Keyword(ref kw) if kw == "block"));
+    assert_eq!(
+      tokenize_property_value_calls(),
+      0,
+      "simple properties should not allocate token vectors"
+    );
+  }
+
+  #[test]
+  fn parse_property_value_skips_tokenization_for_slash_values_when_not_needed() {
+    value_cache::reset_for_tests();
+    reset_tokenize_property_value_calls();
+
+    let parsed = parse_property_value("aspect-ratio", "16/9").expect("parsed");
+    assert!(matches!(parsed, PropertyValue::Keyword(ref kw) if kw == "16/9"));
+    assert_eq!(
+      tokenize_property_value_calls(),
+      0,
+      "properties that do not use token streams should not tokenize slash-separated values"
+    );
+  }
+
+  #[test]
+  fn parse_property_value_tokenizes_when_multiple_values_needed() {
+    value_cache::reset_for_tests();
+    reset_tokenize_property_value_calls();
+
+    let parsed = parse_property_value("margin", "10px 20px").expect("parsed");
+    assert!(matches!(parsed, PropertyValue::Multiple(_)));
+    assert!(
+      tokenize_property_value_calls() > 0,
+      "multi-token shorthands should still tokenize"
+    );
   }
 
   #[test]
