@@ -2630,10 +2630,12 @@ struct ScopeMatch<'a> {
   ancestors: Vec<&'a DomNode>,
 }
 
-fn push_key(keys: &mut Vec<SelectorKey>, key: SelectorKey) {
-  if !keys.contains(&key) {
-    keys.push(key);
+fn push_key(keys: &mut Vec<SelectorKey>, key: SelectorKey) -> bool {
+  if keys.contains(&key) {
+    return false;
   }
+  keys.push(key);
+  true
 }
 
 #[derive(Clone, Copy)]
@@ -2647,162 +2649,41 @@ fn merge_nested_keys<'a, I>(
   polarity: SelectorKeyPolarity,
   allow_universal: bool,
   out: &mut Vec<SelectorKey>,
-) where
+) -> bool
+where
   I: IntoIterator<Item = &'a Selector<crate::css::selectors::FastRenderSelectorImpl>>,
 {
+  let mut inserted = false;
   for selector in selectors {
     let nested = selector_keys_with_polarity(selector, polarity);
-    if nested.len() == 1 && matches!(nested[0], SelectorKey::Universal) && !allow_universal {
+    if nested.keys.len() == 1
+      && matches!(nested.keys[0], SelectorKey::Universal)
+      && !allow_universal
+    {
       // Avoid falling back to the universal bucket when the outer compound already
       // guarantees a more specific key (e.g., div:is(:not(.a))).
       continue;
     }
-    for key in nested {
-      push_key(out, key);
+    for key in nested.keys {
+      inserted |= push_key(out, key);
     }
   }
+  inserted
 }
 
-fn selector_keys_with_polarity(
-  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+struct SelectorKeyAnalysis {
+  keys: Vec<SelectorKey>,
+  required_and: bool,
+}
+
+fn collect_sequence_keys(
+  iter: &mut selectors::parser::SelectorIter<crate::css::selectors::FastRenderSelectorImpl>,
   polarity: SelectorKeyPolarity,
-) -> Vec<SelectorKey> {
+) -> SelectorKeyAnalysis {
   use selectors::parser::Component;
 
   let mut keys: Vec<SelectorKey> = Vec::new();
-  let mut iter = selector.iter();
-  loop {
-    if let Some(component) = iter.next() {
-      match component {
-        Component::ID(ident) => {
-          if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(
-              &mut keys,
-              SelectorKey::Id(selector_bucket_id(ident.as_str())),
-            );
-          }
-        }
-        Component::Class(cls) => {
-          if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(
-              &mut keys,
-              SelectorKey::Class(selector_bucket_class(cls.as_str())),
-            );
-          }
-        }
-        Component::LocalName(local) => {
-          if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(
-              &mut keys,
-              SelectorKey::Tag(selector_bucket_tag(local.lower_name.as_str())),
-            );
-          }
-        }
-        Component::AttributeInNoNamespaceExists {
-          local_name_lower, ..
-        } => {
-          if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(
-              &mut keys,
-              SelectorKey::Attribute(selector_bucket_attr(local_name_lower.as_str())),
-            );
-          }
-        }
-        Component::AttributeInNoNamespace { local_name, .. } => {
-          if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(
-              &mut keys,
-              SelectorKey::Attribute(selector_bucket_attr(local_name.as_str())),
-            );
-          }
-        }
-        Component::AttributeOther(other) => {
-          if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
-            push_key(
-              &mut keys,
-              SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str())),
-            );
-          }
-        }
-        Component::NthOf(nth) => {
-          if keys.is_empty() {
-            merge_nested_keys(nth.selectors().iter(), polarity, true, &mut keys);
-          }
-        }
-        Component::Host(Some(inner)) => {
-          if keys.is_empty() {
-            merge_nested_keys(std::iter::once(inner), polarity, true, &mut keys);
-          }
-        }
-        Component::NonTSPseudoClass(pc) => match pc {
-          PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
-            if keys.is_empty() {
-              merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
-            }
-          }
-          PseudoClass::Host(Some(list)) => {
-            if keys.is_empty() {
-              merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
-            }
-          }
-          _ => {}
-        },
-        Component::Is(list) => {
-          merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
-        }
-        Component::Where(list) => {
-          merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
-        }
-        Component::Negation(list) => {
-          let flipped = match polarity {
-            SelectorKeyPolarity::Matches => SelectorKeyPolarity::DoesNotMatch,
-            SelectorKeyPolarity::DoesNotMatch => SelectorKeyPolarity::Matches,
-          };
-          merge_nested_keys(list.slice().iter(), flipped, keys.is_empty(), &mut keys);
-        }
-        _ => {}
-      }
-      continue;
-    }
-    // Finished the rightmost sequence; stop before traversing combinators.
-    let _ = iter.next_sequence();
-    break;
-  }
-
-  if keys.is_empty() && matches!(polarity, SelectorKeyPolarity::Matches) {
-    keys.push(SelectorKey::Universal);
-  }
-
-  keys
-}
-
-fn selector_keys(
-  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
-) -> Vec<SelectorKey> {
-  selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches)
-}
-
-fn pseudo_selector_subject_keys(
-  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
-) -> Vec<SelectorKey> {
-  use selectors::parser::Combinator;
-  use selectors::parser::Component;
-
-  // Pseudo-elements are represented as their own (rightmost) sequence with a
-  // `Combinator::PseudoElement` separating them from the originating element's
-  // compound. Index pseudo-element rules using keys from that originating
-  // compound instead of the pseudo-element sequence, which often contains only
-  // `Component::PseudoElement(..)` and would fall back to universal.
-  let mut iter = selector.iter();
-  while iter.next().is_some() {}
-  let Some(Combinator::PseudoElement) = iter.next_sequence() else {
-    // Unexpected, but keep behavior safe by falling back to the regular
-    // rightmost-sequence extraction.
-    return selector_keys(selector);
-  };
-
-  let mut keys: Vec<SelectorKey> = Vec::new();
-  let polarity = SelectorKeyPolarity::Matches;
+  let mut required_and = true;
   while let Some(component) = iter.next() {
     match component {
       Component::ID(ident) => {
@@ -2856,50 +2737,82 @@ fn pseudo_selector_subject_keys(
         }
       }
       Component::NthOf(nth) => {
-        if keys.is_empty() {
-          merge_nested_keys(nth.selectors().iter(), polarity, true, &mut keys);
+        if keys.is_empty()
+          && merge_nested_keys(nth.selectors().iter(), polarity, true, &mut keys)
+        {
+          required_and = false;
         }
       }
       Component::Host(Some(inner)) => {
-        if keys.is_empty() {
-          merge_nested_keys(std::iter::once(inner), polarity, true, &mut keys);
+        if keys.is_empty()
+          && merge_nested_keys(std::iter::once(inner), polarity, true, &mut keys)
+        {
+          required_and = false;
         }
       }
       Component::NonTSPseudoClass(pc) => match pc {
         PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
-          if keys.is_empty() {
-            merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
+          if keys.is_empty() && merge_nested_keys(list.slice().iter(), polarity, true, &mut keys) {
+            required_and = false;
           }
         }
         PseudoClass::Host(Some(list)) => {
-          if keys.is_empty() {
-            merge_nested_keys(list.slice().iter(), polarity, true, &mut keys);
+          if keys.is_empty() && merge_nested_keys(list.slice().iter(), polarity, true, &mut keys) {
+            required_and = false;
           }
         }
         _ => {}
       },
       Component::Is(list) => {
-        merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
+        if merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys) {
+          required_and = false;
+        }
       }
       Component::Where(list) => {
-        merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
+        if merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys) {
+          required_and = false;
+        }
       }
       Component::Negation(list) => {
         let flipped = match polarity {
           SelectorKeyPolarity::Matches => SelectorKeyPolarity::DoesNotMatch,
           SelectorKeyPolarity::DoesNotMatch => SelectorKeyPolarity::Matches,
         };
-        merge_nested_keys(list.slice().iter(), flipped, keys.is_empty(), &mut keys);
+        if merge_nested_keys(list.slice().iter(), flipped, keys.is_empty(), &mut keys) {
+          required_and = false;
+        }
       }
       _ => {}
     }
   }
 
-  if keys.is_empty() {
+  if keys.is_empty() && matches!(polarity, SelectorKeyPolarity::Matches) {
     keys.push(SelectorKey::Universal);
   }
 
-  keys
+  SelectorKeyAnalysis { keys, required_and }
+}
+
+fn selector_keys_with_polarity(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+  polarity: SelectorKeyPolarity,
+) -> SelectorKeyAnalysis {
+  let mut iter = selector.iter();
+  collect_sequence_keys(&mut iter, polarity)
+}
+
+fn pseudo_selector_subject_key_analysis(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> SelectorKeyAnalysis {
+  use selectors::parser::Combinator;
+
+  let mut iter = selector.iter();
+  while iter.next().is_some() {}
+  let Some(Combinator::PseudoElement) = iter.next_sequence() else {
+    return selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches);
+  };
+
+  collect_sequence_keys(&mut iter, SelectorKeyPolarity::Matches)
 }
 
 fn merge_namespace_constraint(current: Option<String>, new: Option<String>) -> Option<String> {
@@ -3047,24 +2960,6 @@ fn rule_targets_shadow_host(rule: &StyleRule) -> bool {
     .any(selector_targets_shadow_host)
 }
 
-fn slotted_selector_keys(pe: &PseudoElement) -> Vec<SelectorKey> {
-  match pe {
-    PseudoElement::Slotted(selectors) => {
-      let mut keys: Vec<SelectorKey> = Vec::new();
-      for selector in selectors.iter() {
-        for key in selector_keys(selector) {
-          push_key(&mut keys, key);
-        }
-      }
-      if keys.is_empty() {
-        keys.push(SelectorKey::Universal);
-      }
-      keys
-    }
-    _ => vec![SelectorKey::Universal],
-  }
-}
-
 fn parse_slotted_prelude(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
 ) -> Option<Selector<crate::css::selectors::FastRenderSelectorImpl>> {
@@ -3126,6 +3021,37 @@ enum SelectorKey {
   Universal,
 }
 
+fn selector_key_type_rank(key: SelectorKey) -> u8 {
+  match key {
+    SelectorKey::Id(_) => 0,
+    SelectorKey::Class(_) => 1,
+    SelectorKey::Attribute(_) => 2,
+    SelectorKey::Tag(_) => 3,
+    SelectorKey::Universal => 4,
+  }
+}
+
+fn choose_anchor_key(keys: &[SelectorKey], frequencies: &FxHashMap<SelectorKey, usize>) -> SelectorKey {
+  debug_assert!(!keys.is_empty());
+  let mut best = keys[0];
+  let mut best_freq = *frequencies.get(&best).unwrap_or(&0);
+  let mut best_rank = selector_key_type_rank(best);
+  let mut best_pos = 0usize;
+
+  for (pos, &key) in keys.iter().enumerate().skip(1) {
+    let freq = *frequencies.get(&key).unwrap_or(&0);
+    let rank = selector_key_type_rank(key);
+    if freq < best_freq || (freq == best_freq && (rank, pos) < (best_rank, best_pos)) {
+      best = key;
+      best_freq = freq;
+      best_rank = rank;
+      best_pos = pos;
+    }
+  }
+
+  best
+}
+
 impl<'a> RuleIndex<'a> {
   fn new(rules: Vec<CascadeRule<'a>>, quirks_mode: QuirksMode) -> Self {
     let mut index = RuleIndex {
@@ -3147,6 +3073,14 @@ impl<'a> RuleIndex<'a> {
       part_lookup: SelectorBucketMap::default(),
     };
 
+    let mut selector_key_analyses: Vec<SelectorKeyAnalysis> = Vec::new();
+    let mut selector_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
+    let mut pseudo_key_analyses: Vec<(PseudoElement, SelectorKeyAnalysis)> = Vec::new();
+    let mut pseudo_key_frequencies: HashMap<PseudoElement, FxHashMap<SelectorKey, usize>> =
+      HashMap::new();
+    let mut slotted_arg_key_analyses: Vec<Vec<SelectorKeyAnalysis>> = Vec::new();
+    let mut slotted_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
+
     for rule in rules {
       let sets_content = rule
         .rule
@@ -3167,7 +3101,6 @@ impl<'a> RuleIndex<'a> {
 
         if let Some(pe) = selector.pseudo_element() {
           if matches!(pe, PseudoElement::Slotted(_)) {
-            let selector_idx = index.slotted_selectors.len();
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
             let prelude_ancestor_hashes = prelude
@@ -3197,45 +3130,26 @@ impl<'a> RuleIndex<'a> {
               args_ancestor_hashes,
               metadata,
             });
-            for key in slotted_selector_keys(pe) {
-              match key {
-                SelectorKey::Id(id) => index
-                  .slotted_buckets
-                  .by_id
-                  .entry(id)
-                  .or_default()
-                  .push(selector_idx),
-                SelectorKey::Class(cls) => index
-                  .slotted_buckets
-                  .by_class
-                  .entry(cls)
-                  .or_default()
-                  .push(selector_idx),
-                SelectorKey::Tag(tag) => index
-                  .slotted_buckets
-                  .by_tag
-                  .entry(tag)
-                  .or_default()
-                  .push(selector_idx),
-                SelectorKey::Attribute(attr) => index
-                  .slotted_buckets
-                  .by_attr
-                  .entry(attr)
-                  .or_default()
-                  .push(selector_idx),
-                SelectorKey::Universal => index.slotted_buckets.universal.push(selector_idx),
+
+            let arg_analyses: Vec<SelectorKeyAnalysis> = match pe {
+              PseudoElement::Slotted(args) => args
+                .iter()
+                .map(|sel| selector_keys_with_polarity(sel, SelectorKeyPolarity::Matches))
+                .collect(),
+              _ => Vec::new(),
+            };
+            for analysis in arg_analyses.iter() {
+              for &key in analysis.keys.iter() {
+                *slotted_key_frequencies.entry(key).or_default() += 1;
               }
             }
+            slotted_arg_key_analyses.push(arg_analyses);
             continue;
           }
-          let bucket = index
-            .pseudo_buckets
-            .entry(pe.clone())
-            .or_insert_with(PseudoBuckets::new);
+          let pseudo = pe.clone();
           if selector_has_nonempty_content(&stored_rule.rule.declarations) {
-            index.pseudo_content.insert(pe.clone());
+            index.pseudo_content.insert(pseudo.clone());
           }
-          let selector_idx = index.pseudo_selectors.len();
           let metadata = selector_metadata(selector);
           if metadata
             .has_requirement_groups
@@ -3252,21 +3166,16 @@ impl<'a> RuleIndex<'a> {
             ancestor_hashes,
             metadata,
           });
-          for key in pseudo_selector_subject_keys(selector) {
-            match key {
-              SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
-              SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
-              SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
-              SelectorKey::Attribute(attr) => {
-                bucket.by_attr.entry(attr).or_default().push(selector_idx)
-              }
-              SelectorKey::Universal => bucket.universal.push(selector_idx),
-            }
+
+          let analysis = pseudo_selector_subject_key_analysis(selector);
+          let freq = pseudo_key_frequencies.entry(pseudo.clone()).or_default();
+          for &key in analysis.keys.iter() {
+            *freq.entry(key).or_default() += 1;
           }
+          pseudo_key_analyses.push((pseudo, analysis));
           continue;
         }
 
-        let selector_idx = index.selectors.len();
         let metadata = selector_metadata(selector);
         if metadata
           .has_requirement_groups
@@ -3283,7 +3192,27 @@ impl<'a> RuleIndex<'a> {
           ancestor_hashes,
           metadata,
         });
-        for key in selector_keys(selector) {
+
+        let analysis = selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches);
+        for &key in analysis.keys.iter() {
+          *selector_key_frequencies.entry(key).or_default() += 1;
+        }
+        selector_key_analyses.push(analysis);
+      }
+    }
+
+    for (selector_idx, analysis) in selector_key_analyses.iter().enumerate() {
+      if analysis.required_and {
+        let anchor = choose_anchor_key(&analysis.keys, &selector_key_frequencies);
+        match anchor {
+          SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
+          SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
+          SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
+          SelectorKey::Universal => index.universal.push(selector_idx),
+        }
+      } else {
+        for &key in analysis.keys.iter() {
           match key {
             SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
             SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
@@ -3293,6 +3222,86 @@ impl<'a> RuleIndex<'a> {
             }
             SelectorKey::Universal => index.universal.push(selector_idx),
           }
+        }
+      }
+    }
+
+    for (selector_idx, (pseudo, analysis)) in pseudo_key_analyses.iter().enumerate() {
+      let Some(freq) = pseudo_key_frequencies.get(pseudo) else {
+        continue;
+      };
+      let bucket = index
+        .pseudo_buckets
+        .entry(pseudo.clone())
+        .or_insert_with(PseudoBuckets::new);
+      if analysis.required_and {
+        let anchor = choose_anchor_key(&analysis.keys, freq);
+        match anchor {
+          SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
+          SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+          SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
+          SelectorKey::Attribute(attr) => bucket.by_attr.entry(attr).or_default().push(selector_idx),
+          SelectorKey::Universal => bucket.universal.push(selector_idx),
+        }
+      } else {
+        for &key in analysis.keys.iter() {
+          match key {
+            SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
+            SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+            SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
+            SelectorKey::Attribute(attr) => {
+              bucket.by_attr.entry(attr).or_default().push(selector_idx)
+            }
+            SelectorKey::Universal => bucket.universal.push(selector_idx),
+          }
+        }
+      }
+    }
+
+    for (selector_idx, arg_analyses) in slotted_arg_key_analyses.iter().enumerate() {
+      let mut keys: Vec<SelectorKey> = Vec::new();
+      for analysis in arg_analyses.iter() {
+        if analysis.required_and {
+          push_key(
+            &mut keys,
+            choose_anchor_key(&analysis.keys, &slotted_key_frequencies),
+          );
+        } else {
+          for &key in analysis.keys.iter() {
+            push_key(&mut keys, key);
+          }
+        }
+      }
+      if keys.is_empty() {
+        keys.push(SelectorKey::Universal);
+      }
+      for key in keys {
+        match key {
+          SelectorKey::Id(id) => index
+            .slotted_buckets
+            .by_id
+            .entry(id)
+            .or_default()
+            .push(selector_idx),
+          SelectorKey::Class(cls) => index
+            .slotted_buckets
+            .by_class
+            .entry(cls)
+            .or_default()
+            .push(selector_idx),
+          SelectorKey::Tag(tag) => index
+            .slotted_buckets
+            .by_tag
+            .entry(tag)
+            .or_default()
+            .push(selector_idx),
+          SelectorKey::Attribute(attr) => index
+            .slotted_buckets
+            .by_attr
+            .entry(attr)
+            .or_default()
+            .push(selector_idx),
+          SelectorKey::Universal => index.slotted_buckets.universal.push(selector_idx),
         }
       }
     }
@@ -8156,6 +8165,149 @@ mod tests {
   }
 
   #[test]
+  fn rule_index_anchors_required_and_selectors_under_single_key() {
+    let stylesheet = parse_stylesheet("div.foo.bar[data-x] { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+
+    let count_bucket_occurrences =
+      |map: &SelectorBucketMap<Vec<usize>>| -> usize { map.values().flatten().filter(|&&i| i == 0).count() };
+    let total_occurrences = count_bucket_occurrences(&index.by_id)
+      + count_bucket_occurrences(&index.by_class)
+      + count_bucket_occurrences(&index.by_tag)
+      + count_bucket_occurrences(&index.by_attr)
+      + index.universal.iter().filter(|&&i| i == 0).count();
+    assert_eq!(total_occurrences, 1);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("class".to_string(), "foo bar".to_string()),
+          ("data-x".to_string(), "1".to_string()),
+        ],
+      },
+      children: vec![],
+    };
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates.as_slice(), &[0usize]);
+  }
+
+  #[test]
+  fn rule_index_indexes_is_selector_list_by_subject_keys() {
+    let stylesheet = parse_stylesheet(":is(.a, .b) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    assert!(
+      index.universal.is_empty(),
+      ":is(.a, .b) selector should not fall back to the universal bucket"
+    );
+
+    let class_a = selector_bucket_class("a");
+    let class_b = selector_bucket_class("b");
+    assert_eq!(
+      index
+        .by_class
+        .get(&class_a)
+        .expect("class a bucket")
+        .as_slice(),
+      &[0usize]
+    );
+    assert_eq!(
+      index
+        .by_class
+        .get(&class_b)
+        .expect("class b bucket")
+        .as_slice(),
+      &[0usize]
+    );
+
+    for cls in ["a", "b"] {
+      let node = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), cls.to_string())],
+        },
+        children: vec![],
+      };
+      let mut candidates = Vec::new();
+      let mut seen = CandidateSet::new(index.selectors.len());
+      let mut stats = CandidateStats::default();
+      let mut merge = CandidateMergeScratch::default();
+      let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+      let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+      let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
+      index.selector_candidates(
+        &node,
+        node_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut candidates,
+        &mut seen,
+        &mut stats,
+        &mut merge,
+      );
+      assert_eq!(candidates.as_slice(), &[0usize], "selector should match .{cls}");
+    }
+  }
+
+  #[test]
   fn rule_index_indexes_nth_child_of_selector_list_by_subject_keys() {
     let stylesheet = parse_stylesheet(":nth-child(odd of .a, .b) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
@@ -8387,13 +8539,12 @@ mod tests {
         .as_slice(),
       &[1usize]
     );
-    assert_eq!(
+    assert!(
       after_bucket
         .by_tag
         .get(&selector_bucket_tag("div"))
-        .expect("tag div bucket")
-        .as_slice(),
-      &[1usize]
+        .is_none(),
+      "required-AND subject compound should be indexed under a single anchor key"
     );
 
     // An element without the `.a` class should not consider `.a::before` a candidate.

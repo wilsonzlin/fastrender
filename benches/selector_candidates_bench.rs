@@ -69,6 +69,55 @@ fn generate_css(
   css
 }
 
+fn generate_css_with_required_and_compounds(
+  class_variants: usize,
+  class_len: usize,
+  attr_len: usize,
+) -> String {
+  let mut css = generate_css(class_variants, class_len, attr_len);
+
+  // Stress required-AND selector indexing by creating compound selectors with many keys.
+  let compound_class_rules = class_variants * 8;
+  for i in 0..compound_class_rules {
+    let cls_a = long_ident("c", (i.wrapping_mul(17)) % class_variants, class_len);
+    let cls_b = long_ident("c", (i.wrapping_mul(31).wrapping_add(1)) % class_variants, class_len);
+    let cls_c = long_ident("c", (i.wrapping_mul(47).wrapping_add(2)) % class_variants, class_len);
+    let cls_d = long_ident("c", (i.wrapping_mul(71).wrapping_add(3)) % class_variants, class_len);
+    let _ = writeln!(
+      css,
+      ".{cls_a}.{cls_b}.{cls_c}.{cls_d} {{ padding-left: {}px; }}",
+      (i % 8) + 1
+    );
+  }
+
+  let compound_attr_rules = class_variants * 4;
+  for i in 0..compound_attr_rules {
+    let a = long_ident("data-a", (i.wrapping_mul(13)) % class_variants, attr_len);
+    let b = long_ident(
+      "data-a",
+      (i.wrapping_mul(19).wrapping_add(1)) % class_variants,
+      attr_len,
+    );
+    let c = long_ident(
+      "data-a",
+      (i.wrapping_mul(23).wrapping_add(2)) % class_variants,
+      attr_len,
+    );
+    let d = long_ident(
+      "data-a",
+      (i.wrapping_mul(29).wrapping_add(3)) % class_variants,
+      attr_len,
+    );
+    let _ = writeln!(
+      css,
+      "[{a}][{b}][{c}][{d}] {{ padding-top: {}px; }}",
+      (i % 8) + 1
+    );
+  }
+
+  css
+}
+
 fn selector_candidates_benchmark(c: &mut Criterion) {
   let node_count = 2000;
   let class_variants = 256;
@@ -85,25 +134,31 @@ fn selector_candidates_benchmark(c: &mut Criterion) {
     attrs_per_node,
     attr_len,
   );
-  let css = generate_css(class_variants, class_len, attr_len);
 
   let dom = parse_html(&html).expect("parse html");
-  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
   let media = MediaContext::screen(1280.0, 720.0);
 
-  let mut bench = SelectorCandidateBench::new(&dom, &stylesheet, &media);
   let reps = 10usize;
 
-  let mut group = c.benchmark_group("selector_candidates");
-  group.bench_function("cached", |b| {
-    b.iter(|| black_box(bench.run_cached(black_box(reps))));
-  });
-  group.bench_function("uncached", |b| {
-    b.iter(|| black_box(bench.run_uncached(black_box(reps))));
-  });
-  group.finish();
+  for (name, css) in [
+    ("simple", generate_css(class_variants, class_len, attr_len)),
+    (
+      "required_and_compounds",
+      generate_css_with_required_and_compounds(class_variants, class_len, attr_len),
+    ),
+  ] {
+    let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+    let mut bench = SelectorCandidateBench::new(&dom, &stylesheet, &media);
+    let mut group = c.benchmark_group(format!("selector_candidates/{name}"));
+    group.bench_function("cached", |b| {
+      b.iter(|| black_box(bench.run_cached(black_box(reps))));
+    });
+    group.bench_function("uncached", |b| {
+      b.iter(|| black_box(bench.run_uncached(black_box(reps))));
+    });
+    group.finish();
+  }
 }
 
 criterion_group!(benches, selector_candidates_benchmark);
 criterion_main!(benches);
-
