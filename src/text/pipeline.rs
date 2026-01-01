@@ -1783,8 +1783,8 @@ pub struct FontRun {
   pub font_size: f32,
   /// Additional baseline shift in pixels (positive raises text).
   pub baseline_shift: f32,
-  /// BCP47 language tag (lowercased).
-  pub language: String,
+  /// HarfBuzz language for shaping, if one is provided and can be parsed.
+  pub language: Option<HbLanguage>,
   /// OpenType features to apply for this run.
   pub features: Arc<[Feature]>,
   /// Font variation settings to apply for this run.
@@ -2283,6 +2283,10 @@ fn assign_fonts_internal(
     FontLanguageOverride::Normal => style.language.as_str(),
     FontLanguageOverride::Override(tag) => tag.as_str(),
   };
+  let hb_language = {
+    let tag = language.trim();
+    (!tag.is_empty()).then(|| HbLanguage::from_str(tag).ok()).flatten()
+  };
   let language_signature = family_name_signature(language);
   let families_display =
     descriptor_stats_enabled.then(|| format_family_entries_for_sample(&families));
@@ -2446,6 +2450,7 @@ fn assign_fonts_internal(
             synthetic_oblique,
             run_font_size,
             baseline_shift,
+            &hb_language,
             &features,
             &authored_variations,
             style,
@@ -2539,6 +2544,7 @@ fn assign_fonts_internal(
                 cur.synthetic_oblique,
                 cur.font_size,
                 cur.baseline_shift,
+                &hb_language,
                 &features,
                 &authored_variations,
                 style,
@@ -2764,23 +2770,24 @@ fn assign_fonts_internal(
         continue;
       }
 
-      if let Some(cur) = current.take() {
-        push_font_run(
-          &mut font_runs,
-          run,
-          cur.start,
-          cluster_start,
-          cur.font,
-          cur.synthetic_bold,
-          cur.synthetic_oblique,
-          cur.font_size,
-          cur.baseline_shift,
-          &features,
-          &authored_variations,
-          style,
-          font_context,
-        );
-      }
+        if let Some(cur) = current.take() {
+          push_font_run(
+            &mut font_runs,
+            run,
+            cur.start,
+            cluster_start,
+            cur.font,
+            cur.synthetic_bold,
+            cur.synthetic_oblique,
+            cur.font_size,
+            cur.baseline_shift,
+            &hb_language,
+            &features,
+            &authored_variations,
+            style,
+            font_context,
+          );
+        }
 
       let used_font_size = compute_adjusted_font_size(style, font_arc.as_ref(), preferred_aspect);
       let (mut synthetic_bold, synthetic_oblique) = compute_synthetic_styles(style, font_arc.as_ref());
@@ -2815,6 +2822,7 @@ fn assign_fonts_internal(
         cur.synthetic_oblique,
         cur.font_size,
         cur.baseline_shift,
+        &hb_language,
         &features,
         &authored_variations,
         style,
@@ -4061,6 +4069,7 @@ fn push_font_run(
   synthetic_oblique: f32,
   font_size: f32,
   baseline_shift: f32,
+  language: &Option<HbLanguage>,
   features: &Arc<[Feature]>,
   authored_variations: &[Variation],
   style: &ComputedStyle,
@@ -4081,11 +4090,6 @@ fn push_font_run(
   let palette_index = select_palette_index(&font, resolved_palette.base);
   let palette_overrides = Arc::new(resolved_palette.overrides);
 
-  let language = match &style.font_language_override {
-    FontLanguageOverride::Normal => style.language.clone(),
-    FontLanguageOverride::Override(tag) => tag.clone(),
-  };
-
   out.push(FontRun {
     text: segment_text.to_string(),
     start: run.start + start,
@@ -4098,7 +4102,7 @@ fn push_font_run(
     level: run.level,
     font_size,
     baseline_shift,
-    language,
+    language: language.clone(),
     features: Arc::clone(features),
     variations,
     palette_index,
@@ -4345,7 +4349,7 @@ fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
     font: Arc::clone(&run.font),
     font_size: run.font_size,
     baseline_shift: run.baseline_shift,
-    language: None,
+    language: run.language.clone(),
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
     rotation: run.rotation,
@@ -4412,7 +4416,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   let (shape_text, cluster_map_override) = mirror_text_for_direction(&run.text, run.direction);
   buffer.push_str(&shape_text);
 
-  let mut language: Option<HbLanguage> = None;
+  let language = run.language.clone();
 
   // Set buffer properties
   let hb_direction = if run.vertical {
@@ -4424,12 +4428,8 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   if let Some(script) = run.script.to_harfbuzz() {
     buffer.set_script(script);
   }
-  let lang_tag = run.language.trim();
-  if !lang_tag.is_empty() {
-    if let Ok(lang) = HbLanguage::from_str(lang_tag) {
-      buffer.set_language(lang.clone());
-      language = Some(lang);
-    }
+  if let Some(lang) = language.as_ref() {
+    buffer.set_language(lang.clone());
   }
 
   let features = if run.vertical {
@@ -4517,17 +4517,32 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     None
   };
 
+  let bidi_control_mask = run
+    .text
+    .chars()
+    .any(is_bidi_control_char)
+    .then(|| {
+      let mut mask = vec![0u8; run.text.len().saturating_add(1)];
+      for (idx, ch) in run.text.char_indices() {
+        if is_bidi_control_char(ch) && idx < mask.len() {
+          mask[idx] = 1;
+        }
+      }
+      mask
+    });
+
   for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
     let cluster_in_shape = info.cluster as usize;
     let logical_cluster = cluster_map_override
       .as_ref()
       .map(|map| map_cluster_offset(cluster_in_shape, map))
       .unwrap_or(cluster_in_shape);
-    let char_at_cluster = run
-      .text
-      .get(logical_cluster..)
-      .and_then(|s| s.chars().next());
-    let is_bidi_control = char_at_cluster.is_some_and(is_bidi_control_char);
+    let is_bidi_control = bidi_control_mask
+      .as_ref()
+      .and_then(|mask| mask.get(logical_cluster))
+      .copied()
+      .unwrap_or(0)
+      != 0;
 
     if !is_bidi_control {
       if info.glyph_id == 0 {
