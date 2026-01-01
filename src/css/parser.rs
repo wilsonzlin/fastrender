@@ -3938,6 +3938,12 @@ fn parse_declaration<'i, 't>(
     return None;
   }
 
+  let Some(property) = property else {
+    // Unknown properties are ignored.
+    skip_to_semicolon(parser);
+    return None;
+  };
+
   let value_start = parser.position();
   let mut before_important_state = None;
 
@@ -3983,7 +3989,6 @@ fn parse_declaration<'i, 't>(
   };
   let value = full_slice_raw.trim_end_matches(';').trim_end();
 
-  let property = property?;
   let parsed_value = parse_property_value_in_context_cached(context, property.as_str(), value)?;
   Some(Declaration {
     property,
@@ -4068,6 +4073,25 @@ fn parse_declaration_in_style_block<'i, 't>(
     return Ok(None);
   }
 
+  // Unknown properties are ignored, but we still need to consume their value and disambiguate
+  // nested rules like `a:hover {}` that contain a colon.
+  if property.is_none() {
+    loop {
+      match parser.next() {
+        Ok(Token::Semicolon) | Err(_) => break,
+        Ok(Token::CurlyBracketBlock) => {
+          // Nested rules like `a:hover {}` contain a colon, but must not be treated as declarations.
+          return Err(parser.new_custom_error(SelectorParseErrorKind::EmptySelector));
+        }
+        Ok(Token::Function(_))
+        | Ok(Token::ParenthesisBlock)
+        | Ok(Token::SquareBracketBlock) => skip_nested_block_contents(parser),
+        Ok(_) => {}
+      }
+    }
+    return Ok(None);
+  }
+
   let value_location = errors.enabled().then(|| parser.current_source_location());
   let value_start = parser.position();
   let mut before_important_state = None;
@@ -4117,7 +4141,6 @@ fn parse_declaration_in_style_block<'i, 't>(
   let value = full_slice_raw.trim_end_matches(';').trim_end();
 
   let Some(property) = property else {
-    // Unknown properties are ignored.
     return Ok(None);
   };
 
@@ -4952,6 +4975,13 @@ mod tests {
     assert_eq!(decls[0].property.as_str(), "color");
     assert!(matches!(decls[1].property, PropertyName::Custom(_)));
     assert_eq!(decls[1].property.as_str(), "--Foo");
+  }
+
+  #[test]
+  fn inline_style_unknown_properties_are_ignored() {
+    let decls = parse_declarations("totally-unknown: whatever; color: red;");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property.as_str(), "color");
   }
 
   #[test]
