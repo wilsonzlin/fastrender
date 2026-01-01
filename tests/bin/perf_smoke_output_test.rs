@@ -40,6 +40,15 @@ fn perf_smoke_emits_stage_breakdowns() {
     "fixture filter should limit to one entry"
   );
   let fixture = &fixtures[0];
+  assert_eq!(
+    fixture["status"].as_str(),
+    Some("ok"),
+    "fixture status should be ok for successful render"
+  );
+  assert!(
+    fixture.get("error").is_some(),
+    "fixture should include an error field (null for ok fixtures)"
+  );
   for key in ["fetch", "css", "cascade", "layout", "paint"] {
     assert!(
       fixture["stage_ms"][key].as_f64().is_some(),
@@ -70,6 +79,70 @@ fn perf_smoke_emits_stage_breakdowns() {
       "fixture counts should contain numeric {key}"
     );
   }
+}
+
+#[test]
+fn perf_smoke_detects_count_regressions() {
+  let temp = tempdir().expect("create temp dir");
+  let baseline_path = temp.path().join("baseline.json");
+  let baseline_output = temp.path().join("baseline-out.json");
+
+  let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
+    .args([
+      "--output",
+      baseline_output.to_str().unwrap(),
+      "--only",
+      "flex_dashboard",
+    ])
+    .stdout(Stdio::null())
+    .output()
+    .expect("run perf_smoke to generate baseline");
+
+  assert!(
+    result.status.success(),
+    "baseline perf_smoke run should succeed; stderr: {}",
+    String::from_utf8_lossy(&result.stderr)
+  );
+
+  let data = fs::read_to_string(&baseline_output).expect("read baseline output");
+  let mut baseline: Value = serde_json::from_str(&data).expect("parse baseline json");
+
+  let dom_nodes = baseline["fixtures"][0]["counts"]["dom_nodes"]
+    .as_u64()
+    .expect("baseline should include dom_nodes");
+  // Ensure a deterministic counts regression by making the baseline value much smaller.
+  let reduced = (dom_nodes / 10).max(1);
+  baseline["fixtures"][0]["counts"]["dom_nodes"] = Value::from(reduced);
+  fs::write(&baseline_path, serde_json::to_string(&baseline).unwrap()).unwrap();
+
+  let latest_output = temp.path().join("latest.json");
+  let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
+    .args([
+      "--output",
+      latest_output.to_str().unwrap(),
+      "--only",
+      "flex_dashboard",
+      "--baseline",
+      baseline_path.to_str().unwrap(),
+      "--threshold",
+      "10.0",
+      "--count-threshold",
+      "0.01",
+      "--fail-on-regression",
+    ])
+    .stdout(Stdio::null())
+    .output()
+    .expect("run perf_smoke with baseline");
+
+  assert!(
+    !result.status.success(),
+    "perf_smoke should exit non-zero when counts regressions are detected"
+  );
+  let stderr = String::from_utf8_lossy(&result.stderr);
+  assert!(
+    stderr.contains("counts.dom_nodes"),
+    "stderr should include counts regression label; got: {stderr}"
+  );
 }
 
 #[test]

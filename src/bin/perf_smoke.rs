@@ -51,9 +51,30 @@ struct Args {
   #[arg(long, default_value_t = 0.05)]
   threshold: f64,
 
+  /// Relative regression threshold for deterministic count metrics (0.20 = 20%)
+  ///
+  /// Applies to stable complexity counters such as DOM nodes, fragments, glyphs, and display
+  /// items. Regressions are suppressed when the baseline value is 0.
+  #[arg(long, default_value_t = 0.20)]
+  count_threshold: f64,
+
   /// Exit with a non-zero status when any stage exceeds the regression threshold
   #[arg(long)]
   fail_on_regression: bool,
+
+  /// Stop after the first fixture failure instead of continuing to the end of the suite.
+  #[arg(long)]
+  fail_fast: bool,
+
+  /// Exit with a non-zero status when any fixture fails (status=error|panic|timeout).
+  ///
+  /// Defaults to enabled when the `CI` environment variable is set, otherwise disabled.
+  #[arg(long)]
+  fail_on_failure: bool,
+
+  /// Disable the default `CI` behavior that enables `--fail-on-failure`.
+  #[arg(long = "no-fail-on-failure", conflicts_with = "fail_on_failure")]
+  no_fail_on_failure: bool,
 
   /// Exit with a non-zero status when a pageset-timeouts manifest fixture is missing locally.
   ///
@@ -412,11 +433,36 @@ struct ViewportSummary {
   media: String,
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum FixtureStatus {
+  #[default]
+  Ok,
+  Error,
+  Panic,
+  Timeout,
+}
+
+impl FixtureStatus {
+  fn as_label(self) -> &'static str {
+    match self {
+      Self::Ok => "ok",
+      Self::Error => "error",
+      Self::Panic => "panic",
+      Self::Timeout => "timeout",
+    }
+  }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct FixtureSummary {
   name: String,
   path: String,
   viewport: ViewportSummary,
+  #[serde(default)]
+  status: FixtureStatus,
+  #[serde(default)]
+  error: Option<String>,
   total_ms: f64,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   budget_ms: Option<f64>,
@@ -444,14 +490,20 @@ struct Regression {
 }
 
 enum RegressionMetric {
-  Total,
-  Stage(&'static str),
+  TotalMs,
+  StageMs(&'static str),
+  TimingMs(&'static str),
+  Count(&'static str),
+  Paint(&'static str),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
   let args = Args::parse();
   if args.threshold < 0.0 {
     return Err("--threshold must be non-negative".into());
+  }
+  if args.count_threshold < 0.0 {
+    return Err("--count-threshold must be non-negative".into());
   }
   if std::env::var_os("FASTR_USE_BUNDLED_FONTS").is_none() {
     std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
@@ -464,6 +516,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   } else {
     args.isolate || auto_isolate
   };
+  let fail_on_failure = resolve_fail_on_failure(&args);
 
   let baseline = if let Some(path) = args.baseline.as_ref() {
     Some(read_summary(path)?)
@@ -509,12 +562,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut stage_totals = StageBreakdown::default();
   for spec in &specs {
     let fixture = if isolate {
-      run_fixture_isolated(spec, &args)?
+      run_fixture_isolated(spec, &args)
     } else {
-      run_fixture(spec)?
+      run_fixture_in_process(spec)
     };
-    stage_totals.add_assign(&fixture.stage_ms);
+    if fixture.status == FixtureStatus::Ok {
+      stage_totals.add_assign(&fixture.stage_ms);
+    }
+    let failed = fixture.status != FixtureStatus::Ok;
     fixtures.push(fixture);
+    if failed && args.fail_fast {
+      break;
+    }
   }
   fixtures.sort_by(|a, b| a.name.cmp(&b.name));
   let total_ms = round_ms(fixtures.iter().map(|f| f.total_ms).sum::<f64>());
@@ -535,31 +594,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   fs::write(&args.output, &json)?;
   println!("{json}");
 
-  let sorted_by_total = sorted_by_total(&summary.fixtures);
+  let sorted_by_total = sorted_by_total_ok(&summary.fixtures);
   if let Some(top) = args.top {
     print_top(&sorted_by_total, top);
     print_stage_breakdown(&sorted_by_total, top);
   } else {
     print_stage_breakdown(&sorted_by_total, sorted_by_total.len());
   }
+  print_fixture_failures(&summary.fixtures);
   print_dom_parse_note(&summary);
 
   let mut exit_code = 0;
 
+  if fail_on_failure {
+    let failures = summary
+      .fixtures
+      .iter()
+      .filter(|fixture| fixture.status != FixtureStatus::Ok)
+      .count();
+    if failures > 0 {
+      exit_code = 1;
+    }
+  }
+
   if let Some(baseline) = baseline {
-    let regressions = find_regressions(&summary, &baseline, args.threshold);
+    let regressions = find_regressions(&summary, &baseline, args.threshold, args.count_threshold);
     if !regressions.is_empty() {
       eprintln!(
-        "Regressions detected vs baseline (>{:.1}%):",
-        args.threshold * 100.0
+        "Regressions detected vs baseline (ms>{:.1}%, counts>{:.1}%):",
+        args.threshold * 100.0,
+        args.count_threshold * 100.0
       );
       for regression in &regressions {
         eprintln!(
-          "  {}: {} {:.3} -> {:.3} (+{:.2}%)",
+          "  {}: {} {} -> {} (+{:.2}%)",
           regression.fixture,
           regression.label(),
-          regression.baseline,
-          regression.latest,
+          regression.format_baseline(),
+          regression.format_latest(),
           regression.percent_delta() * 100.0
         );
       }
@@ -572,7 +644,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   if args.fail_on_budget {
     let budget_failures = find_budget_failures(&summary.fixtures);
     if !budget_failures.is_empty() {
-      eprintln!("Budget failures ({} fixtures exceeded budget_ms):", budget_failures.len());
+      eprintln!(
+        "Budget failures ({} fixtures exceeded budget_ms):",
+        budget_failures.len()
+      );
       for failure in &budget_failures {
         if let Some((stage, stage_ms)) = failure.dominant_stage {
           eprintln!(
@@ -597,12 +672,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
+fn resolve_fail_on_failure(args: &Args) -> bool {
+  if args.fail_on_failure {
+    return true;
+  }
+  if args.no_fail_on_failure {
+    return false;
+  }
+  std::env::var("CI")
+    .ok()
+    .filter(|value| !value.is_empty() && value != "0")
+    .is_some()
+}
+
+fn squash_error_message(message: &str) -> String {
+  const MAX_CHARS: usize = 400;
+
+  let squashed = message
+    .lines()
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
+
+  let mut chars = squashed.chars();
+  let head: String = chars.by_ref().take(MAX_CHARS).collect();
+  if chars.next().is_some() {
+    format!("{head}…")
+  } else {
+    head
+  }
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+  if let Some(message) = payload.downcast_ref::<&'static str>() {
+    (*message).to_string()
+  } else if let Some(message) = payload.downcast_ref::<String>() {
+    message.clone()
+  } else {
+    "panic".to_string()
+  }
+}
+
 fn print_dom_parse_note(summary: &PerfSmokeSummary) {
-  let Some(fixture) = summary
-    .fixtures
-    .iter()
-    .find(|fixture| fixture.name.eq_ignore_ascii_case("dom_parse_stress"))
-  else {
+  let Some(fixture) = summary.fixtures.iter().find(|fixture| {
+    fixture.status == FixtureStatus::Ok && fixture.name.eq_ignore_ascii_case("dom_parse_stress")
+  }) else {
     return;
   };
 
@@ -704,10 +819,7 @@ fn pageset_timeout_fixture_specs(
   }
 
   if fail_on_missing_fixtures && !missing.is_empty() {
-    eprintln!(
-      "Missing pageset-timeouts fixtures ({}):",
-      missing.len()
-    );
+    eprintln!("Missing pageset-timeouts fixtures ({}):", missing.len());
     for (name, path) in &missing {
       eprintln!("  {} ({})", name, path.display());
     }
@@ -766,12 +878,19 @@ fn temp_summary_path(spec: &FixtureSpec) -> PathBuf {
   ))
 }
 
-fn run_fixture_isolated(
-  spec: &FixtureSpec,
-  args: &Args,
-) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
+fn run_fixture_isolated(spec: &FixtureSpec, args: &Args) -> FixtureSummary {
   let summary_path = temp_summary_path(spec);
-  let mut cmd = Command::new(std::env::current_exe()?);
+  let exe = match std::env::current_exe() {
+    Ok(exe) => exe,
+    Err(err) => {
+      return fixture_failure_summary(
+        spec,
+        FixtureStatus::Error,
+        format!("failed to resolve current_exe for isolation: {err}"),
+      );
+    }
+  };
+  let mut cmd = Command::new(exe);
   cmd
     .arg("--suite")
     .arg(suite_cli_value(args.suite))
@@ -784,63 +903,127 @@ fn run_fixture_isolated(
     cmd.arg("--top").arg(top.to_string());
   }
   cmd.stdout(Stdio::null());
+  cmd.stderr(Stdio::null());
 
   let timeout_ms = spec
     .budget_ms
     .map(|ms| ms * 2.0)
     .unwrap_or(10_000.0)
     .max(1_000.0);
-  let mut child = cmd.spawn()?;
+  let mut child = match cmd.spawn() {
+    Ok(child) => child,
+    Err(err) => {
+      return fixture_failure_summary(
+        spec,
+        FixtureStatus::Error,
+        format!("failed to spawn isolated worker: {err}"),
+      );
+    }
+  };
   let timeout = Duration::from_millis(timeout_ms.ceil() as u64);
   let start = Instant::now();
   loop {
-    if let Some(status) = child.try_wait()? {
-      if !status.success() {
-        return Err(
-          format!(
-            "isolated perf_smoke run failed for {} (status: {})",
-            spec.name, status
-          )
-          .into(),
+    match child.try_wait() {
+      Ok(Some(status)) => {
+        let summary = read_summary(&summary_path);
+        let _ = fs::remove_file(&summary_path);
+
+        if let Ok(summary) = summary {
+          let mut fixtures = summary.fixtures;
+          if fixtures.len() == 1 {
+            return fixtures.remove(0);
+          }
+          return fixture_failure_summary(
+            spec,
+            FixtureStatus::Error,
+            format!(
+              "isolated perf_smoke run returned {} fixtures (expected 1)",
+              fixtures.len()
+            ),
+          );
+        }
+
+        let status_label = if !status.success() {
+          if status.code() == Some(101) {
+            FixtureStatus::Panic
+          } else {
+            FixtureStatus::Error
+          }
+        } else {
+          FixtureStatus::Error
+        };
+        return fixture_failure_summary(
+          spec,
+          status_label,
+          format!("isolated perf_smoke run failed to produce readable output (status: {status})"),
         );
       }
-      break;
+      Ok(None) => {}
+      Err(err) => {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(&summary_path);
+        return fixture_failure_summary(
+          spec,
+          FixtureStatus::Error,
+          format!("failed to poll isolated worker: {err}"),
+        );
+      }
     }
 
     if start.elapsed() >= timeout {
       let _ = child.kill();
       let _ = child.wait();
       let _ = fs::remove_file(&summary_path);
-      return Err(
+      return fixture_failure_summary(
+        spec,
+        FixtureStatus::Timeout,
         format!(
-          "isolated perf_smoke run for {} exceeded timeout ({:.1}ms)",
-          spec.name, timeout_ms
-        )
-        .into(),
+          "isolated perf_smoke run exceeded timeout ({:.0}ms)",
+          timeout.as_secs_f64() * 1000.0
+        ),
       );
     }
 
     thread::sleep(Duration::from_millis(50));
   }
-
-  let summary = read_summary(&summary_path)?;
-  let mut fixtures = summary.fixtures;
-  let _ = fs::remove_file(&summary_path);
-  if fixtures.len() != 1 {
-    return Err(
-      format!(
-        "isolated perf_smoke run for {} returned {} fixtures",
-        spec.name,
-        fixtures.len()
-      )
-      .into(),
-    );
-  }
-
-  Ok(fixtures.remove(0))
 }
 
-fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
+fn fixture_failure_summary(
+  spec: &FixtureSpec,
+  status: FixtureStatus,
+  error: String,
+) -> FixtureSummary {
+  FixtureSummary {
+    name: spec.name.clone(),
+    path: spec.path.clone(),
+    viewport: ViewportSummary {
+      width: spec.viewport.0,
+      height: spec.viewport.1,
+      dpr: spec.dpr,
+      media: media_label(spec.media).to_string(),
+    },
+    status,
+    error: Some(squash_error_message(&error)),
+    total_ms: 0.0,
+    budget_ms: spec.budget_ms,
+    stage_ms: StageBreakdown::default(),
+    timings_ms: StageTimingsSummary::default(),
+    counts: CountsSummary::default(),
+    paint: PaintSummary::default(),
+  }
+}
+
+fn run_fixture_in_process(spec: &FixtureSpec) -> FixtureSummary {
+  let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fixture_impl(spec)));
+  match result {
+    Ok(Ok(summary)) => summary,
+    Ok(Err(err)) => fixture_failure_summary(spec, FixtureStatus::Error, err.to_string()),
+    Err(payload) => fixture_failure_summary(spec, FixtureStatus::Panic, panic_message(payload)),
+  }
+}
+
+fn run_fixture_impl(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
   let html = fs::read_to_string(&spec.html_path)?;
   let base_url = base_url_for(&spec.html_path)?;
 
@@ -881,6 +1064,8 @@ fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error:
       dpr: spec.dpr,
       media: media_label(spec.media).to_string(),
     },
+    status: FixtureStatus::Ok,
+    error: None,
     total_ms,
     budget_ms: spec.budget_ms,
     stage_ms: stage_breakdown_from_stats(&stats),
@@ -900,6 +1085,9 @@ struct BudgetFailure {
 fn find_budget_failures(fixtures: &[FixtureSummary]) -> Vec<BudgetFailure> {
   let mut failures = Vec::new();
   for fixture in fixtures {
+    if fixture.status != FixtureStatus::Ok {
+      continue;
+    }
     let Some(budget_ms) = fixture.budget_ms else {
       continue;
     };
@@ -1080,7 +1268,8 @@ fn read_summary(path: &Path) -> Result<PerfSmokeSummary, Box<dyn std::error::Err
 fn find_regressions(
   latest: &PerfSmokeSummary,
   baseline: &PerfSmokeSummary,
-  threshold: f64,
+  ms_threshold: f64,
+  count_threshold: f64,
 ) -> Vec<Regression> {
   let mut regressions = Vec::new();
   let baseline_map = baseline
@@ -1091,10 +1280,14 @@ fn find_regressions(
 
   for fixture in &latest.fixtures {
     if let Some(base) = baseline_map.get(fixture.name.as_str()) {
-      if base.total_ms > 0.0 && is_regression(base.total_ms, fixture.total_ms, threshold) {
+      if fixture.status != FixtureStatus::Ok || base.status != FixtureStatus::Ok {
+        continue;
+      }
+
+      if base.total_ms > 0.0 && is_regression(base.total_ms, fixture.total_ms, ms_threshold) {
         regressions.push(Regression {
           fixture: fixture.name.clone(),
-          metric: RegressionMetric::Total,
+          metric: RegressionMetric::TotalMs,
           baseline: base.total_ms,
           latest: fixture.total_ms,
         });
@@ -1107,10 +1300,10 @@ fn find_regressions(
             .iter()
             .find_map(|(l, v)| if *l == label { Some(*v) } else { None });
         if let Some(base_value) = base_value {
-          if base_value > 0.0 && is_regression(base_value, value, threshold) {
+          if base_value > 0.0 && is_regression(base_value, value, ms_threshold) {
             regressions.push(Regression {
               fixture: fixture.name.clone(),
-              metric: RegressionMetric::Stage(label),
+              metric: RegressionMetric::TimingMs(label),
               baseline: base_value,
               latest: value,
             });
@@ -1125,14 +1318,64 @@ fn find_regressions(
             .iter()
             .find_map(|(l, v)| if *l == label { Some(*v) } else { None });
         if let Some(base_value) = base_value {
-          if base_value > 0.0 && is_regression(base_value, value, threshold) {
+          if base_value > 0.0 && is_regression(base_value, value, ms_threshold) {
             regressions.push(Regression {
               fixture: fixture.name.clone(),
-              metric: RegressionMetric::Stage(label),
+              metric: RegressionMetric::StageMs(label),
               baseline: base_value,
               latest: value,
             });
           }
+        }
+      }
+
+      for (label, base_value, latest_value) in [
+        ("dom_nodes", base.counts.dom_nodes, fixture.counts.dom_nodes),
+        (
+          "styled_nodes",
+          base.counts.styled_nodes,
+          fixture.counts.styled_nodes,
+        ),
+        ("box_nodes", base.counts.box_nodes, fixture.counts.box_nodes),
+        ("fragments", base.counts.fragments, fixture.counts.fragments),
+        (
+          "shaped_runs",
+          base.counts.shaped_runs,
+          fixture.counts.shaped_runs,
+        ),
+        ("glyphs", base.counts.glyphs, fixture.counts.glyphs),
+      ] {
+        if base_value > 0 && is_regression(base_value as f64, latest_value as f64, count_threshold)
+        {
+          regressions.push(Regression {
+            fixture: fixture.name.clone(),
+            metric: RegressionMetric::Count(label),
+            baseline: base_value as f64,
+            latest: latest_value as f64,
+          });
+        }
+      }
+
+      for (label, base_value, latest_value) in [
+        (
+          "display_items",
+          base.paint.display_items,
+          fixture.paint.display_items,
+        ),
+        (
+          "optimized_items",
+          base.paint.optimized_items,
+          fixture.paint.optimized_items,
+        ),
+      ] {
+        if base_value > 0 && is_regression(base_value as f64, latest_value as f64, count_threshold)
+        {
+          regressions.push(Regression {
+            fixture: fixture.name.clone(),
+            metric: RegressionMetric::Paint(label),
+            baseline: base_value as f64,
+            latest: latest_value as f64,
+          });
         }
       }
     }
@@ -1157,8 +1400,12 @@ fn print_top(fixtures: &[FixtureSummary], count: usize) {
   }
 }
 
-fn sorted_by_total(fixtures: &[FixtureSummary]) -> Vec<FixtureSummary> {
-  let mut sorted = fixtures.to_vec();
+fn sorted_by_total_ok(fixtures: &[FixtureSummary]) -> Vec<FixtureSummary> {
+  let mut sorted: Vec<FixtureSummary> = fixtures
+    .iter()
+    .filter(|fixture| fixture.status == FixtureStatus::Ok)
+    .cloned()
+    .collect();
   sorted.sort_by(|a, b| b.total_ms.partial_cmp(&a.total_ms).unwrap());
   sorted
 }
@@ -1177,6 +1424,27 @@ fn print_stage_breakdown(fixtures: &[FixtureSummary], count: usize) {
       budget,
       fixture.name,
       format_stage_breakdown(&fixture.timings_ms)
+    );
+  }
+}
+
+fn print_fixture_failures(fixtures: &[FixtureSummary]) {
+  let failures: Vec<&FixtureSummary> = fixtures
+    .iter()
+    .filter(|fixture| fixture.status != FixtureStatus::Ok)
+    .collect();
+  if failures.is_empty() {
+    return;
+  }
+
+  eprintln!("Fixture failures ({}):", failures.len());
+  for fixture in failures {
+    let message = fixture.error.as_deref().unwrap_or("fixture failed");
+    eprintln!(
+      "  {:<30} {:<7} {}",
+      fixture.name,
+      fixture.status.as_label(),
+      message
     );
   }
 }
@@ -1202,16 +1470,40 @@ fn format_budget(budget_ms: Option<f64>) -> String {
     .unwrap_or_default()
 }
 
+impl RegressionMetric {
+  fn label(&self) -> String {
+    match self {
+      Self::TotalMs => "total_ms".to_string(),
+      Self::StageMs(label) => format!("stage_ms.{label}"),
+      Self::TimingMs(label) => format!("timings_ms.{label}"),
+      Self::Count(label) => format!("counts.{label}"),
+      Self::Paint(label) => format!("paint.{label}"),
+    }
+  }
+
+  fn format_value(&self, value: f64) -> String {
+    match self {
+      Self::Count(_) | Self::Paint(_) => format!("{:.0}", value),
+      _ => format!("{value:.3}"),
+    }
+  }
+}
+
 impl Regression {
   fn percent_delta(&self) -> f64 {
     (self.latest - self.baseline) / self.baseline
   }
 
-  fn label(&self) -> &'static str {
-    match self.metric {
-      RegressionMetric::Total => "total_ms",
-      RegressionMetric::Stage(label) => label,
-    }
+  fn label(&self) -> String {
+    self.metric.label()
+  }
+
+  fn format_baseline(&self) -> String {
+    self.metric.format_value(self.baseline)
+  }
+
+  fn format_latest(&self) -> String {
+    self.metric.format_value(self.latest)
   }
 }
 
