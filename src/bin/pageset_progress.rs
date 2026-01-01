@@ -671,6 +671,37 @@ impl StageBuckets {
   fn sum(&self) -> f64 {
     self.fetch + self.css + self.cascade + self.layout + self.paint
   }
+
+  fn rescale_to_total(&mut self, total_ms: f64) {
+    if !total_ms.is_finite() || total_ms <= 0.0 {
+      return;
+    }
+    let sum = self.sum();
+    if !sum.is_finite() || sum <= 0.0 {
+      return;
+    }
+    let scale = total_ms / sum;
+    if !scale.is_finite() || scale <= 0.0 {
+      return;
+    }
+    self.fetch *= scale;
+    self.css *= scale;
+    self.cascade *= scale;
+    self.layout *= scale;
+    self.paint *= scale;
+  }
+}
+
+fn stage_buckets_for_progress_stage(stage: ProgressStage, total_ms: f64) -> StageBuckets {
+  let mut buckets = StageBuckets::default();
+  match stage {
+    ProgressStage::DomParse => buckets.fetch = total_ms,
+    ProgressStage::Css => buckets.css = total_ms,
+    ProgressStage::Cascade => buckets.cascade = total_ms,
+    ProgressStage::Layout => buckets.layout = total_ms,
+    ProgressStage::Paint => buckets.paint = total_ms,
+  }
+  buckets
 }
 
 pub(crate) fn current_git_sha() -> Option<String> {
@@ -1952,6 +1983,27 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       .last_stage()
       .and_then(progress_stage_from_heartbeat);
     progress.failure_stage = stage;
+  }
+
+  // Attribute cooperative failures using the on-disk stage timeline (also used by the parent for
+  // hard-killed workers). This keeps timeout/error artifacts useful for triage even when the
+  // renderer exits via a soft timeout and doesn't produce structured timing stats.
+  if is_bad_status(progress.status) && progress.total_ms.is_some() && progress.stages_ms.sum() == 0.0
+  {
+    let total_ms = progress.total_ms.unwrap_or(0.0);
+    let timeline_total_ms = total_ms.round().max(0.0) as u64;
+    progress.stages_ms = args
+      .stage_path
+      .as_deref()
+      .and_then(|path| stage_buckets_from_timeline(path, timeline_total_ms))
+      .or_else(|| {
+        progress
+          .timeout_stage
+          .or(progress.failure_stage)
+          .map(|stage| stage_buckets_for_progress_stage(stage, total_ms))
+      })
+      .unwrap_or_default();
+    progress.stages_ms.rescale_to_total(total_ms);
   }
 
   if progress.auto_notes.trim().is_empty() {
