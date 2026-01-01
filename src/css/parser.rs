@@ -3903,15 +3903,10 @@ fn parse_declaration<'i, 't>(
 
   let property = property?;
   let parsed_value = parse_property_value_in_context_cached(context, property.as_str(), value)?;
-  let raw_value = if property_needs_raw_value(&property) {
-    value.to_string()
-  } else {
-    String::new()
-  };
   Some(Declaration {
     property,
     value: parsed_value,
-    raw_value,
+    raw_value: String::new(),
     important,
   })
 }
@@ -3940,10 +3935,6 @@ fn lookup_known_property(property: &str, context: DeclarationContext) -> Option<
       .copied()
       .or_else(|| known_style_property_set().get(property).copied()),
   }
-}
-
-fn property_needs_raw_value(_property: &PropertyName) -> bool {
-  false
 }
 
 fn parse_declaration_collecting_errors<'i, 't>(
@@ -4030,15 +4021,10 @@ fn parse_declaration_collecting_errors<'i, 't>(
     return None;
   };
 
-  let raw_value = if property_needs_raw_value(&property) {
-    value.to_string()
-  } else {
-    String::new()
-  };
   Some(Declaration {
     property,
     value: parsed_value,
-    raw_value,
+    raw_value: String::new(),
     important,
   })
 }
