@@ -5,6 +5,7 @@ Generate subsetted bundled fonts (Noto families + STIX math) for text rendering.
 These subsets keep glyph coverage focused on common UI ranges so bundled-font
 pageset runs stay hermetic without pulling in multi-megabyte upstream files.
 """
+import argparse
 import pathlib
 import tempfile
 import urllib.request
@@ -47,6 +48,12 @@ FONT_SOURCES = {
     "hebrew": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanshebrew/NotoSansHebrew%5Bwdth,wght%5D.ttf",
     "devanagari": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth,wght%5D.ttf",
     "bengali": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansbengali/NotoSansBengali%5Bwdth,wght%5D.ttf",
+    "gurmukhi": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansgurmukhi/NotoSansGurmukhi%5Bwdth,wght%5D.ttf",
+    "gujarati": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansgujarati/NotoSansGujarati%5Bwdth,wght%5D.ttf",
+    "oriya": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansoriya/NotoSansOriya%5Bwdth,wght%5D.ttf",
+    "kannada": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskannada/NotoSansKannada%5Bwdth,wght%5D.ttf",
+    "malayalam": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansmalayalam/NotoSansMalayalam%5Bwdth,wght%5D.ttf",
+    "sinhala": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssinhala/NotoSansSinhala%5Bwdth,wght%5D.ttf",
     "myanmar": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansmyanmar/NotoSansMyanmar%5Bwdth,wght%5D.ttf",
     "telugu": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstelugu/NotoSansTelugu%5Bwdth,wght%5D.ttf",
     "javanese": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjavanese/NotoSansJavanese%5Bwght%5D.ttf",
@@ -55,6 +62,21 @@ FONT_SOURCES = {
     "thaana": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansthaana/NotoSansThaana%5Bwght%5D.ttf",
     "syriac": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssyriac/NotoSansSyriac%5Bwght%5D.ttf",
     "nko": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansnko/NotoSansNKo-Regular.ttf",
+    "armenian": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansarmenian/NotoSansArmenian%5Bwdth,wght%5D.ttf",
+    "georgian": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansgeorgian/NotoSansGeorgian%5Bwdth,wght%5D.ttf",
+    "ethiopic": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansethiopic/NotoSansEthiopic%5Bwdth,wght%5D.ttf",
+    "lao": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanslao/NotoSansLao%5Bwdth,wght%5D.ttf",
+    "tibetan": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoseriftibetan/NotoSerifTibetan%5Bwght%5D.ttf",
+    "cherokee": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanscherokee/NotoSansCherokee%5Bwght%5D.ttf",
+    "canadian_aboriginal": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanscanadianaboriginal/NotoSansCanadianAboriginal%5Bwght%5D.ttf",
+    "khmer": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskhmer/NotoSansKhmer%5Bwdth,wght%5D.ttf",
+    "tai_le": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstaile/NotoSansTaiLe-Regular.ttf",
+    "olchiki": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansolchiki/NotoSansOlChiki%5Bwght%5D.ttf",
+    "glagolitic": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansglagolitic/NotoSansGlagolitic-Regular.ttf",
+    "tifinagh": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstifinagh/NotoSansTifinagh-Regular.ttf",
+    "syloti_nagri": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssylotinagri/NotoSansSylotiNagri-Regular.ttf",
+    "meetei_mayek": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansmeeteimayek/NotoSansMeeteiMayek%5Bwght%5D.ttf",
+    "gothic": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansgothic/NotoSansGothic-Regular.ttf",
     "cjk_sc": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
     "cjk_jp": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
     "cjk_kr": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf",
@@ -203,6 +225,72 @@ FONT_DEFS = [
         ],
     },
     {
+        "source": "gurmukhi",
+        "output": "NotoSansGurmukhi-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0A00-0A7F",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "gujarati",
+        "output": "NotoSansGujarati-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0A80-0AFF",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "oriya",
+        "output": "NotoSansOriya-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0B00-0B7F",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "kannada",
+        "output": "NotoSansKannada-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0C80-0CFF",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "malayalam",
+        "output": "NotoSansMalayalam-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0D00-0D7F",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "sinhala",
+        "output": "NotoSansSinhala-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0D80-0DFF",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
         "source": "myanmar",
         "output": "NotoSansMyanmar-subset.ttf",
         "unicodes": [
@@ -289,6 +377,162 @@ FONT_DEFS = [
         ],
     },
     {
+        "source": "armenian",
+        "output": "NotoSansArmenian-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0530-058F",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "georgian",
+        "output": "NotoSansGeorgian-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+10A0-10FF",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "ethiopic",
+        "output": "NotoSansEthiopic-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+1200-139F",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "lao",
+        "output": "NotoSansLao-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0E80-0EFF",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "tibetan",
+        "output": "NotoSerifTibetan-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+0F00-0FFF",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+        "variations": {"wght": 400},
+    },
+    {
+        "source": "cherokee",
+        "output": "NotoSansCherokee-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+13A0-13FF",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "canadian_aboriginal",
+        "output": "NotoSansCanadianAboriginal-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+1400-167F",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "khmer",
+        "output": "NotoSansKhmer-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+1780-17FF",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "tai_le",
+        "output": "NotoSansTaiLe-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+1950-197F",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "olchiki",
+        "output": "NotoSansOlChiki-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+1C50-1C7F",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "glagolitic",
+        "output": "NotoSansGlagolitic-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+2C00-2C5F",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "tifinagh",
+        "output": "NotoSansTifinagh-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+2D30-2D7F",
+            "U+2000-206F",
+        ],
+    },
+    {
+        "source": "syloti_nagri",
+        "output": "NotoSansSylotiNagri-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+A800-A82F",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "meetei_mayek",
+        "output": "NotoSansMeeteiMayek-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+ABC0-ABFF",
+            "U+2000-206F",
+            "U+200C-200D",
+        ],
+    },
+    {
+        "source": "gothic",
+        "output": "NotoSansGothic-subset.ttf",
+        "unicodes": [
+            "U+0020-007E",
+            "U+0300-036F",
+            "U+10330-1034F",
+            "U+2000-206F",
+        ],
+    },
+    {
         "source": "cjk_sc",
         "output": "NotoSansSC-subset.ttf",
         "unicodes": CJK_SHARED_UNICODES,
@@ -360,12 +604,42 @@ def write_licenses() -> None:
   download(FONT_SOURCES["stix_license"], FIXTURES / "STIXTwoMath-OFL.txt")
 
 
+def parse_args() -> argparse.Namespace:
+  parser = argparse.ArgumentParser(
+    description="Generate subsetted bundled fonts (Noto families + STIX math) for text rendering.",
+  )
+  parser.add_argument(
+    "--only",
+    help=(
+      "Comma-separated list of output filenames to regenerate (defaults to regenerating all). "
+      "Example: --only NotoSansGujarati-subset.ttf,NotoSansTibetan-subset.ttf"
+    ),
+  )
+  return parser.parse_args()
+
+
 def main() -> None:
+  args = parse_args()
+  only_outputs = None
+  if args.only:
+    only_outputs = {name.strip() for name in args.only.split(",") if name.strip()}
+    if not only_outputs:
+      raise SystemExit("--only was provided but did not contain any filenames")
+
   with tempfile.TemporaryDirectory() as tmp:
     tmp_path = pathlib.Path(tmp)
     for font_def in FONT_DEFS:
+      if only_outputs is not None and font_def["output"] not in only_outputs:
+        continue
       subset_font(font_def, tmp_path)
-    write_licenses()
+
+    if only_outputs is None:
+      write_licenses()
+    else:
+      # Avoid rewriting license files during narrow regen runs; the repo already vendors the
+      # canonical license snapshots.
+      if not (FIXTURES / "Noto-LICENSE-OFL.txt").exists() or not (FIXTURES / "STIXTwoMath-OFL.txt").exists():
+        write_licenses()
 
 
 if __name__ == "__main__":

@@ -101,6 +101,30 @@ const BUNDLED_FONTS: &[BundledFont] = &[
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansBengali-subset.ttf"),
   },
   BundledFont {
+    name: "Noto Sans Gurmukhi",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansGurmukhi-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Gujarati",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansGujarati-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Oriya",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansOriya-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Kannada",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansKannada-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Malayalam",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansMalayalam-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Sinhala",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansSinhala-subset.ttf"),
+  },
+  BundledFont {
     name: "Noto Sans Myanmar",
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansMyanmar-subset.ttf"),
   },
@@ -131,6 +155,66 @@ const BUNDLED_FONTS: &[BundledFont] = &[
   BundledFont {
     name: "Noto Sans NKo",
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansNKo-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Armenian",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansArmenian-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Georgian",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansGeorgian-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Ethiopic",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansEthiopic-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Lao",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansLao-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Serif Tibetan",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSerifTibetan-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Cherokee",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansCherokee-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Canadian Aboriginal",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansCanadianAboriginal-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Khmer",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansKhmer-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Tai Le",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansTaiLe-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Ol Chiki",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansOlChiki-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Glagolitic",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansGlagolitic-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Tifinagh",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansTifinagh-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Syloti Nagri",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansSylotiNagri-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Meetei Mayek",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansMeeteiMayek-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Gothic",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansGothic-subset.ttf"),
   },
   BundledFont {
     name: "Noto Sans SC",

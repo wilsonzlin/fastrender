@@ -38,6 +38,18 @@ pip install -r tests/fixtures/fonts/requirements.txt
     Wikipedia-language-list coverage in bundled-font runs.
   - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners + combining marks (U+0300–036F).
   - `NotoSansBengali-subset.ttf`: Bengali + joiners + combining marks (U+0300–036F).
+  - `NotoSansGurmukhi-subset.ttf`: Gurmukhi (U+0A00–0A7F) plus joiners, punctuation, and combining marks
+    (U+0300–036F) for Punjabi language links in the pageset.
+  - `NotoSansGujarati-subset.ttf`: Gujarati (U+0A80–0AFF) plus joiners, punctuation, and combining marks
+    (U+0300–036F) for Gujarati language links in the pageset.
+  - `NotoSansOriya-subset.ttf`: Oriya/Odia (U+0B00–0B7F) plus joiners, punctuation, and combining marks
+    (U+0300–036F) for Wikipedia language samples in the pageset.
+  - `NotoSansKannada-subset.ttf`: Kannada (U+0C80–0CFF) plus joiners, punctuation, and combining marks
+    (U+0300–036F) for Wikipedia language samples (e.g. Kannada/Tulu).
+  - `NotoSansMalayalam-subset.ttf`: Malayalam (U+0D00–0D7F) plus joiners, punctuation, and combining marks
+    (U+0300–036F) for Wikipedia language samples.
+  - `NotoSansSinhala-subset.ttf`: Sinhala (U+0D80–0DFF) plus joiners, punctuation, and combining marks
+    (U+0300–036F) for BBC language links in the pageset.
   - `NotoSansMyanmar-subset.ttf`: Myanmar block (U+1000–109F) plus Myanmar Extended A/B (U+AA60–AA7F, U+A9E0–A9FF),
     joiners, punctuation, and combining marks (U+0300–036F).
   - `NotoSansTelugu-subset.ttf`: Telugu block (U+0C00–0C7F) with joiners, punctuation, and combining marks (U+0300–036F).
@@ -47,6 +59,31 @@ pip install -r tests/fixtures/fonts/requirements.txt
   - `NotoSansThaana-subset.ttf`: Thaana (U+0780–07BF) with joiners + combining marks (U+0300–036F).
   - `NotoSansSyriac-subset.ttf`: Syriac (U+0700–074F) with joiners + combining marks (U+0300–036F).
   - `NotoSansNKo-subset.ttf`: N’Ko (U+07C0–07FF) with joiners + combining marks (U+0300–036F).
+  - `NotoSansArmenian-subset.ttf`: Armenian (U+0530–058F) plus common punctuation and combining marks for Wikipedia
+    language list samples (e.g. Հայերեն).
+  - `NotoSansGeorgian-subset.ttf`: Georgian (U+10A0–10FF) plus common punctuation and combining marks for Wikipedia
+    language list samples (e.g. ქართული).
+  - `NotoSansEthiopic-subset.ttf`: Ethiopic (U+1200–139F) plus common punctuation and combining marks for BBC language
+    links (Amharic/Tigrinya) and Wikipedia samples.
+  - `NotoSansLao-subset.ttf`: Lao (U+0E80–0EFF) plus common punctuation and combining marks for Wikipedia language
+    list samples (e.g. ພາສາລາວ).
+  - `NotoSerifTibetan-subset.ttf`: Tibetan (U+0F00–0FFF) plus common punctuation/combining marks for Wikipedia
+    language list samples (e.g. བོད་ཡིག). Instanced at `wght=400` before subsetting to keep the file small.
+  - `NotoSansCherokee-subset.ttf`: Cherokee (U+13A0–13FF) plus common punctuation/combining marks for Wikipedia
+    language list samples (ᏣᎳᎩ).
+  - `NotoSansCanadianAboriginal-subset.ttf`: Unified Canadian Aboriginal Syllabics (U+1400–167F) plus common
+    punctuation/combining marks for Wikipedia language list samples (Inuktitut ᐃᓄᒃᑎᑐᑦ).
+  - `NotoSansKhmer-subset.ttf`: Khmer (U+1780–17FF) plus joiners, punctuation, and combining marks for Wikipedia
+    language list samples (ភាសាខ្មែរ).
+  - `NotoSansTaiLe-subset.ttf`: Tai Le (U+1950–197F) for Wikipedia language list samples (ᥖᥭᥰᥖᥬᥳᥑᥨᥒᥰ).
+  - `NotoSansOlChiki-subset.ttf`: Ol Chiki (U+1C50–1C7F) for Wikipedia language list samples (ᱥᱟᱱᱛᱟᱲᱤ).
+  - `NotoSansGlagolitic-subset.ttf`: Glagolitic (U+2C00–2C5F) for Wikipedia language list samples
+    (ⰔⰎⰑⰂⰡⰐⰠⰔⰍⰟ).
+  - `NotoSansTifinagh-subset.ttf`: Tifinagh (U+2D30–2D7F) for Wikipedia language list samples
+    (ⵜⴰⵎⴰⵣⵉⵖⵜ).
+  - `NotoSansSylotiNagri-subset.ttf`: Syloti Nagri (U+A800–A82F) for Wikipedia language list samples (ꠍꠤꠟꠐꠤ).
+  - `NotoSansMeeteiMayek-subset.ttf`: Meetei Mayek (U+ABC0–ABFF) for Wikipedia language list samples (ꯃꯤꯇꯩ ꯂꯣꯟ).
+  - `NotoSansGothic-subset.ttf`: Gothic (U+10330–1034F) for Wikipedia language list samples (𐌲𐌿𐍄𐌹𐍃𐌺).
   - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: CJK Unified Ideographs (U+3400–4DBF,
     U+4E00–9FFF), CJK punctuation/fullwidth forms, and common combining marks (U+0300–036F); JP adds kana (U+3040–31FF)
     and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
