@@ -13,7 +13,7 @@ use walkdir::WalkDir;
 mod import_page_fixture;
 mod recapture_page_fixtures;
 mod update_pageset_guardrails_budgets;
-mod update_pageset_timeouts;
+mod update_pageset_guardrails;
 
 fn main() -> Result<()> {
   let cli = Cli::parse();
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
       recapture_page_fixtures::run_recapture_page_fixtures(args)
     }
     Commands::UpdatePagesetGuardrails(args) => {
-      update_pageset_timeouts::run_update_pageset_timeouts(args)
+      update_pageset_guardrails::run_update_pageset_guardrails(args)
     }
     Commands::UpdatePagesetGuardrailsBudgets(args) => {
       update_pageset_guardrails_budgets::run_update_pageset_guardrails_budgets(args)
@@ -71,7 +71,7 @@ enum Commands {
   RecapturePageFixtures(recapture_page_fixtures::RecapturePageFixturesArgs),
   /// Update `tests/pages/pageset_guardrails.json` based on `progress/pages/*.json`
   #[command(alias = "update-pageset-timeouts")]
-  UpdatePagesetGuardrails(update_pageset_timeouts::UpdatePagesetTimeoutsArgs),
+  UpdatePagesetGuardrails(update_pageset_guardrails::UpdatePagesetGuardrailsArgs),
   /// Update `budget_ms` entries in `tests/pages/pageset_guardrails.json` based on offline `perf_smoke` timings
   ///
   /// Note: the legacy `update-pageset-timeout-budgets` command name is kept as an alias.

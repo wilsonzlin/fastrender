@@ -15,7 +15,7 @@ const DEFAULT_MANIFEST_PATH: &str = "tests/pages/pageset_guardrails.json";
 const LEGACY_MANIFEST_PATH: &str = "tests/pages/pageset_timeouts.json";
 
 #[derive(Args, Debug)]
-pub struct UpdatePagesetTimeoutsArgs {
+pub struct UpdatePagesetGuardrailsArgs {
   /// Directory containing `progress/pages/*.json`
   #[arg(long, default_value = "progress/pages")]
   pub progress_dir: PathBuf,
@@ -83,13 +83,13 @@ pub struct UpdatePagesetTimeoutsArgs {
   pub dry_run: bool,
 
   /// Selection strategy for picking fixtures from the pageset progress report
-  #[arg(long, value_enum, default_value_t = PagesetTimeoutSelectionStrategy::Coverage)]
-  pub strategy: PagesetTimeoutSelectionStrategy,
+  #[arg(long, value_enum, default_value_t = PagesetGuardrailsSelectionStrategy::Coverage)]
+  pub strategy: PagesetGuardrailsSelectionStrategy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[clap(rename_all = "snake_case")]
-pub enum PagesetTimeoutSelectionStrategy {
+pub enum PagesetGuardrailsSelectionStrategy {
   /// Pick the globally slowest pages by total_ms.
   ///
   /// Timeout/panic/error pages are always included first; remaining slots (up to `--count`) are
@@ -160,17 +160,17 @@ struct ProgressEntry {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct PagesetTimeoutManifest {
+struct PagesetGuardrailsManifest {
   schema_version: u32,
   #[serde(default)]
   default_budget_ms: Option<f64>,
-  fixtures: Vec<PagesetTimeoutFixture>,
+  fixtures: Vec<PagesetGuardrailsFixture>,
   #[serde(flatten)]
   extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct PagesetTimeoutFixture {
+struct PagesetGuardrailsFixture {
   name: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   url: Option<String>,
@@ -181,7 +181,7 @@ struct PagesetTimeoutFixture {
   budget_ms: Option<f64>,
 }
 
-pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()> {
+pub fn run_update_pageset_guardrails(args: UpdatePagesetGuardrailsArgs) -> Result<()> {
   if args.dry_run && args.capture_missing_fixtures {
     bail!("cannot combine --dry-run with --capture-missing-fixtures");
   }
@@ -346,7 +346,7 @@ fn default_bundle_path(name: &str) -> PathBuf {
   PathBuf::from("target/pageset-guardrails/bundles").join(format!("{name}.tar"))
 }
 
-fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetTimeoutsArgs) -> Result<()> {
+fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetGuardrailsArgs) -> Result<()> {
   if missing.is_empty() {
     return Ok(());
   }
@@ -427,10 +427,10 @@ struct MissingFixture {
 
 fn missing_fixtures(
   selected: &[ProgressEntry],
-  manifest: &PagesetTimeoutManifest,
+  manifest: &PagesetGuardrailsManifest,
   fixtures_root: &Path,
 ) -> Vec<MissingFixture> {
-  let fixture_map: BTreeMap<&str, &PagesetTimeoutFixture> = manifest
+  let fixture_map: BTreeMap<&str, &PagesetGuardrailsFixture> = manifest
     .fixtures
     .iter()
     .map(|fixture| (fixture.name.as_str(), fixture))
@@ -455,7 +455,7 @@ fn missing_fixtures(
     .collect()
 }
 
-fn load_manifest(path: &Path) -> Result<PagesetTimeoutManifest> {
+fn load_manifest(path: &Path) -> Result<PagesetGuardrailsManifest> {
   let data = fs::read_to_string(path)
     .with_context(|| format!("failed to read pageset guardrails manifest {}", path.display()))?;
   serde_json::from_str(&data).with_context(|| format!("invalid JSON in {}", path.display()))
@@ -499,11 +499,11 @@ fn ok_page_reserve(count: usize) -> usize {
 fn select_pages(
   entries: &[ProgressEntry],
   count: usize,
-  strategy: PagesetTimeoutSelectionStrategy,
+  strategy: PagesetGuardrailsSelectionStrategy,
 ) -> Vec<ProgressEntry> {
   match strategy {
-    PagesetTimeoutSelectionStrategy::Slowest => select_pages_slowest(entries, count),
-    PagesetTimeoutSelectionStrategy::Coverage => select_pages_coverage(entries, count),
+    PagesetGuardrailsSelectionStrategy::Slowest => select_pages_slowest(entries, count),
+    PagesetGuardrailsSelectionStrategy::Coverage => select_pages_coverage(entries, count),
   }
 }
 
@@ -650,9 +650,9 @@ fn select_ok_pages_coverage(ok: &[ProgressEntry], slots: usize) -> Vec<ProgressE
 }
 
 fn update_manifest(
-  mut existing: PagesetTimeoutManifest,
+  mut existing: PagesetGuardrailsManifest,
   selected: &[ProgressEntry],
-) -> PagesetTimeoutManifest {
+) -> PagesetGuardrailsManifest {
   let mut existing_map = BTreeMap::new();
   for fixture in existing.fixtures {
     existing_map.insert(fixture.name.clone(), fixture);
@@ -676,7 +676,7 @@ fn update_manifest(
         }
         fixture
       } else {
-        PagesetTimeoutFixture {
+        PagesetGuardrailsFixture {
           name: entry.name.clone(),
           url: Some(entry.url.clone()),
           viewport: DEFAULT_VIEWPORT,
@@ -711,7 +711,7 @@ mod tests {
   #[test]
   fn selects_failures_then_slowest_ok_pages() {
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
-    let selected = select_pages(&entries, 5, PagesetTimeoutSelectionStrategy::Slowest);
+    let selected = select_pages(&entries, 5, PagesetGuardrailsSelectionStrategy::Slowest);
     let names: Vec<&str> = selected.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(
       names,
@@ -729,8 +729,8 @@ mod tests {
   fn failures_are_always_included_even_when_count_is_smaller() {
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
     for strategy in [
-      PagesetTimeoutSelectionStrategy::Slowest,
-      PagesetTimeoutSelectionStrategy::Coverage,
+      PagesetGuardrailsSelectionStrategy::Slowest,
+      PagesetGuardrailsSelectionStrategy::Coverage,
     ] {
       let selected = select_pages(&entries, 1, strategy);
       let names: BTreeSet<&str> = selected.iter().map(|e| e.name.as_str()).collect();
@@ -761,7 +761,7 @@ mod tests {
 
     let existing = load_manifest(&manifest_path).expect("load manifest");
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
-    let selected = select_pages(&entries, 5, PagesetTimeoutSelectionStrategy::Slowest);
+    let selected = select_pages(&entries, 5, PagesetGuardrailsSelectionStrategy::Slowest);
     let updated = update_manifest(existing, &selected);
     fs::write(
       &manifest_path,
@@ -805,7 +805,7 @@ mod tests {
 
     let existing = load_manifest(&manifest_path).expect("load manifest");
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
-    let selected = select_pages(&entries, 1, PagesetTimeoutSelectionStrategy::Slowest);
+    let selected = select_pages(&entries, 1, PagesetGuardrailsSelectionStrategy::Slowest);
     let updated = update_manifest(existing, &selected);
     fs::write(
       &manifest_path,
@@ -859,7 +859,7 @@ mod tests {
 
     // count=1 would normally truncate to a single timeout fixture; coverage keeps OK hotspot
     // coverage even when failures exceed the target count.
-    let selected = select_pages(&entries, 1, PagesetTimeoutSelectionStrategy::Coverage);
+    let selected = select_pages(&entries, 1, PagesetGuardrailsSelectionStrategy::Coverage);
     let names: Vec<&str> = selected.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(
       names,
@@ -891,8 +891,8 @@ mod tests {
       mk_entry("slow-ok-css", ProgressStatus::Ok, 4400.0, Some("css")),
     ];
 
-    let a = select_pages(&entries, 3, PagesetTimeoutSelectionStrategy::Coverage);
-    let b = select_pages(&entries, 3, PagesetTimeoutSelectionStrategy::Coverage);
+    let a = select_pages(&entries, 3, PagesetGuardrailsSelectionStrategy::Coverage);
+    let b = select_pages(&entries, 3, PagesetGuardrailsSelectionStrategy::Coverage);
     let a_names: Vec<&str> = a.iter().map(|e| e.name.as_str()).collect();
     let b_names: Vec<&str> = b.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(a_names, b_names);
