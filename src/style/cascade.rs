@@ -3342,7 +3342,10 @@ fn selector_compound_fast_reject_from_iter(
       Component::Has(_) => {}
       Component::Invalid(_) => {}
       // Branching selector-lists do not add *mandatory* simple-selector requirements on the element
-      // itself. Ignore them so we can still fast-reject based on any other required
+      // itself, except for keys that are common to all branches (e.g. `:is(.a.b, .a.c)` requires
+      // `.a`).
+      //
+      // Ignore the branch-specific keys so we can still fast-reject based on any other required
       // tag/id/class/attribute selectors in the compound. If the compound only contains a single
       // required key, but includes one of these branching constructs, the selector index may still
       // union-bucket it by optional keys from inside the branch (e.g. `.a:is(.b, .c)`), so we allow
@@ -3351,8 +3354,63 @@ fn selector_compound_fast_reject_from_iter(
       // Examples where this helps:
       // - `.a.b:not(.c)` still requires `.a` and `.b`.
       // - `div.foo.bar:is(.x, .y)` still requires `div.foo.bar`.
-      Component::Is(_) | Component::Where(_) => {
+      Component::Is(list) | Component::Where(list) => {
         allow_single_key = true;
+        let mut shared: Option<Vec<SelectorKey>> = None;
+        for selector in list.slice().iter() {
+          let analysis =
+            selector_keys_with_polarity(selector, quirks_mode, SelectorKeyPolarity::Matches);
+          if let Some(shared) = shared.as_mut() {
+            shared.retain(|key| analysis.mandatory_keys.contains(key));
+          } else {
+            shared = Some(analysis.mandatory_keys);
+          }
+          if shared.as_ref().is_some_and(|keys| keys.is_empty()) {
+            break;
+          }
+        }
+
+        if let Some(shared) = shared {
+          for key in shared {
+            match key {
+              SelectorKey::Id(key) => {
+                if has_id && id_key != key {
+                  return None;
+                }
+                has_id = true;
+                id_key = key;
+              }
+              SelectorKey::Class(key) => {
+                if class_keys[..class_len].iter().any(|existing| *existing == key) {
+                  continue;
+                }
+                if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+                  continue;
+                }
+                class_keys[class_len] = key;
+                class_len += 1;
+              }
+              SelectorKey::Tag(key) => {
+                if has_tag && tag_key != key {
+                  return None;
+                }
+                has_tag = true;
+                tag_key = key;
+              }
+              SelectorKey::Attribute(key) => {
+                if attr_keys[..attr_len].iter().any(|existing| *existing == key) {
+                  continue;
+                }
+                if class_len.saturating_add(attr_len) >= RIGHTMOST_FAST_REJECT_MAX_KEYS {
+                  continue;
+                }
+                attr_keys[attr_len] = key;
+                attr_len += 1;
+              }
+              SelectorKey::Universal => {}
+            }
+          }
+        }
       }
       Component::Negation(_) => {}
       // Branching constructs, or components we don't know how to treat soundly.
@@ -9701,6 +9759,80 @@ mod tests {
         &mut attr_keys,
       )),
       "fast reject should pass when required class is present"
+    );
+  }
+
+  #[test]
+  fn rightmost_fast_reject_extracts_common_keys_from_is_selector_list() {
+    let stylesheet = parse_stylesheet(":is(.a.b, .a.c) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+    let fast_reject_id = index.selectors[0].fast_reject;
+    assert_ne!(
+      fast_reject_id, 0,
+      "expected fast-reject descriptor for :is() with shared mandatory key"
+    );
+    let desc = index.fast_reject(fast_reject_id).expect("fast reject");
+
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+
+    let node_missing = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let node_present = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b".to_string())],
+      },
+      children: vec![],
+    };
+
+    assert!(
+      !desc.matches(node_selector_keys(
+        &node_missing,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should require shared .a key from :is() selector list"
+    );
+    assert!(
+      desc.matches(node_selector_keys(
+        &node_present,
+        QuirksMode::NoQuirks,
+        &mut class_keys,
+        &mut attr_keys,
+      )),
+      "fast reject should pass when shared .a key is present"
     );
   }
 
