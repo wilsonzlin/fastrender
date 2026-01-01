@@ -36,13 +36,12 @@ pub(crate) fn wall_clock_stage_buckets_from_timings(
     + timings.dom_meta_viewport_ms.unwrap_or(0.0)
     + timings.dom_clone_ms.unwrap_or(0.0)
     + timings.dom_top_layer_ms.unwrap_or(0.0);
-  // `css_parse_ms` is the wall-clock timer for the overall CSS stage; `css_inlining_ms` is a
-  // sub-stage timer and can overlap. Prefer the stage timer and only fall back to inlining when the
-  // parse stage timing is absent.
-  let css = timings
-    .css_parse_ms
-    .or(timings.css_inlining_ms)
-    .unwrap_or(0.0);
+  // The CSS stage is split into two non-overlapping wall-clock timers:
+  // - `css_inlining_ms`: collect/inline stylesheets (including fetch/import work)
+  // - `css_parse_ms`: post-collection style prep (font face extraction, codepoint collection, etc)
+  //
+  // `pageset_progress` expects these to be summed.
+  let css = timings.css_inlining_ms.unwrap_or(0.0) + timings.css_parse_ms.unwrap_or(0.0);
   let cascade = timings.cascade_ms.unwrap_or(0.0) + timings.box_tree_ms.unwrap_or(0.0);
   let layout = timings.layout_ms.unwrap_or(0.0);
   let paint = timings.paint_build_ms.unwrap_or(0.0)

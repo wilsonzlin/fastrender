@@ -142,7 +142,7 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
   );
   // `text_*` subsystem timings should not affect wall-clock stage buckets (only the stage wall
   // timers are used, then rescaled to total_ms for share calculations).
-  let raw = (4.5, 4.0, 11.0, 7.0, 43.0);
+  let raw = (4.5, 7.0, 11.0, 7.0, 43.0);
   let raw_sum = raw.0 + raw.1 + raw.2 + raw.3 + raw.4;
   let scale = 123.0 / raw_sum;
   assert!((fetch - raw.0 * scale).abs() < 1e-6);

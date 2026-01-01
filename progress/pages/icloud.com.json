@@ -3,14 +3,14 @@
   "status": "ok",
   "total_ms": 478.540653,
   "stages_ms": {
-    "fetch": 1.8846543745283904,
-    "css": 36.61405625955498,
-    "cascade": 331.95760906605636,
-    "layout": 83.92033526073101,
-    "paint": 24.1639980391293
+    "fetch": 1.0751632612202489,
+    "css": 226.4290470773911,
+    "cascade": 189.37616911304983,
+    "layout": 47.87512371556326,
+    "paint": 13.785149832775659
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "css",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
