@@ -30,14 +30,13 @@ fn display_list_parallel_reports_text_metrics() {
       .with_viewport(160, 120)
       .with_diagnostics_level(DiagnosticsLevel::Basic)
       .with_paint_parallelism(PaintParallelism {
-        enabled: true,
         tile_size: 32,
         log_timing: false,
         min_display_items: 1,
         min_tiles: 1,
         min_build_fragments: 1,
         build_chunk_size: 1,
-        ..PaintParallelism::default()
+        ..PaintParallelism::enabled()
       });
     let warmed_options = options.clone();
     let third_options = options.clone();

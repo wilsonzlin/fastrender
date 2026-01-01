@@ -66,8 +66,7 @@ use crate::paint::optimize::DisplayListOptimizer;
 use crate::paint::painter::paint_diagnostics_enabled;
 use crate::paint::pixmap::new_pixmap;
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
-use crate::paint::rasterize::render_box_shadow_cached;
-use crate::paint::rasterize::BoxShadow;
+use crate::paint::rasterize::{estimate_box_shadow_work_pixels, render_box_shadow_cached, BoxShadow};
 use crate::paint::text_rasterize::{
   shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache, GlyphCache,
   TextRasterizer, TextRenderState,
@@ -1669,10 +1668,23 @@ fn apply_spread_slow_reference(pixmap: &mut Pixmap, spread: f32) {
 /// parallel, compositing the results back in paint order. The renderer
 /// automatically falls back to serial rendering when it encounters effects that
 /// depend on full-canvas backdrops (e.g., backdrop-filter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintParallelismMode {
+  Disabled,
+  Enabled,
+  Auto,
+}
+
+impl Default for PaintParallelismMode {
+  fn default() -> Self {
+    PaintParallelismMode::Auto
+  }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PaintParallelism {
-  /// Enable tiled, parallel painting.
-  pub enabled: bool,
+  /// How rasterization should be parallelized.
+  pub mode: PaintParallelismMode,
   /// Target tile size in device pixels (before scale is applied).
   pub tile_size: u32,
   /// Emit timing information when rendering.
@@ -1685,38 +1697,53 @@ pub struct PaintParallelism {
   pub min_build_fragments: usize,
   /// Target batch size when fan-out building the display list.
   pub build_chunk_size: usize,
+  /// Optional cap on the number of rayon threads used for tile fan-out.
+  ///
+  /// This does not reconfigure the global rayon pool. Instead, it limits how much work the
+  /// renderer exposes to the pool at once so callers can keep total CPU usage under control
+  /// (for example when `pageset_progress` is already running N worker processes).
+  pub max_threads: Option<usize>,
 }
 
 impl PaintParallelism {
   /// Enable parallel painting with conservative defaults and adaptive thresholds.
-  pub fn adaptive() -> Self {
+  pub fn auto() -> Self {
     Self {
-      enabled: true,
+      mode: PaintParallelismMode::Auto,
       tile_size: 256,
       log_timing: false,
       min_display_items: 128,
       min_tiles: 4,
       min_build_fragments: 128,
       build_chunk_size: 32,
+      max_threads: None,
     }
+  }
+
+  /// Force tiled rasterization (subject to safety fallbacks like backdrop filters).
+  pub fn enabled() -> Self {
+    Self {
+      mode: PaintParallelismMode::Enabled,
+      ..Self::auto()
+    }
+  }
+
+  /// Backwards-compatible alias for [`PaintParallelism::auto`].
+  pub fn adaptive() -> Self {
+    Self::auto()
   }
 
   pub fn disabled() -> Self {
     Self {
-      enabled: false,
-      tile_size: 256,
-      log_timing: false,
-      min_display_items: 128,
-      min_tiles: 4,
-      min_build_fragments: 128,
-      build_chunk_size: 32,
+      mode: PaintParallelismMode::Disabled,
+      ..Self::auto()
     }
   }
 }
 
 impl Default for PaintParallelism {
   fn default() -> Self {
-    Self::adaptive()
+    Self::auto()
   }
 }
 
@@ -4211,7 +4238,7 @@ impl DisplayListRenderer {
       self.should_render_parallel(&list, tile_estimate, &mut fallback_reason)?;
 
     if parallel_supported {
-      let (pixmap, tiles, threads_used, parallel_duration) = self.render_parallel(&list)?;
+      let (pixmap, tiles, tasks, threads_used, parallel_duration) = self.render_parallel(&list)?;
       // Ensure we catch deadlines that expire during the final tile render/blit.
       check_active(RenderStage::Paint).map_err(Error::Render)?;
       let duration = start.elapsed();
@@ -4261,7 +4288,7 @@ impl DisplayListRenderer {
         clip_mask_pixels: clip_stats.pixels,
         layer_allocations: layer_stats.allocations,
         layer_alloc_bytes: layer_stats.bytes,
-        parallel_tasks: tiles,
+        parallel_tasks: tasks,
         parallel_threads: threads_used,
         parallel_duration,
         serial_duration,
@@ -4374,24 +4401,36 @@ impl DisplayListRenderer {
     tiles_x.saturating_mul(tiles_y) as usize
   }
 
+  fn parallel_thread_budget(&self, tile_estimate: usize) -> usize {
+    let mut threads = rayon::current_num_threads().max(1);
+    if let Some(max_threads) = self.paint_parallelism.max_threads {
+      threads = threads.min(max_threads.max(1));
+    }
+    threads.min(tile_estimate.max(1)).max(1)
+  }
+
   fn should_render_parallel(
     &self,
     list: &DisplayList,
     tile_estimate: usize,
     fallback_reason: &mut Option<String>,
   ) -> Result<bool> {
-    if !self.paint_parallelism.enabled || self.paint_parallelism.tile_size == 0 {
+    if matches!(self.paint_parallelism.mode, PaintParallelismMode::Disabled)
+      || self.paint_parallelism.tile_size == 0
+    {
       *fallback_reason = Some("parallel painting disabled".to_string());
       return Ok(false);
     }
 
-    let threads = rayon::current_num_threads().max(1);
-    if threads <= 1 {
-      *fallback_reason = Some("rayon pool is single-threaded".to_string());
+    let task_capacity = self.parallel_thread_budget(tile_estimate);
+    if task_capacity <= 1 {
+      *fallback_reason = Some("parallel paint thread budget is single-threaded".to_string());
       return Ok(false);
     }
 
-    if tile_estimate < self.paint_parallelism.min_tiles {
+    if matches!(self.paint_parallelism.mode, PaintParallelismMode::Auto)
+      && tile_estimate < self.paint_parallelism.min_tiles
+    {
       *fallback_reason = Some("tile count below parallel threshold".to_string());
       return Ok(false);
     }
@@ -4410,7 +4449,10 @@ impl DisplayListRenderer {
       return Ok(false);
     }
 
-    let task_capacity = threads.min(tile_estimate.max(1)).max(1);
+    if matches!(self.paint_parallelism.mode, PaintParallelismMode::Enabled) {
+      return Ok(true);
+    }
+
     let work_estimate = list.len().saturating_mul(tile_estimate.max(1));
     let base_work = self
       .paint_parallelism
@@ -4422,12 +4464,134 @@ impl DisplayListRenderer {
       .saturating_mul(task_capacity);
     let work_threshold = base_work.max(scaled_work);
 
-    if work_estimate < work_threshold {
+    if work_estimate >= work_threshold {
+      return Ok(true);
+    }
+
+    let expensive_pixels = self.estimate_expensive_raster_pixels(list.items())?;
+    let tile = u64::from(self.paint_parallelism.tile_size.max(1));
+    let tile_pixels = tile.saturating_mul(tile);
+    let min_expensive_per_thread =
+      tile_pixels.saturating_mul(self.paint_parallelism.min_tiles.max(1) as u64);
+    let expensive_per_thread = expensive_pixels / task_capacity.max(1) as u64;
+    if expensive_per_thread < min_expensive_per_thread {
       *fallback_reason = Some("estimated paint work below parallel threshold".to_string());
       return Ok(false);
     }
 
     Ok(true)
+  }
+
+  fn estimate_expensive_raster_pixels(&self, items: &[DisplayItem]) -> Result<u64> {
+    const GRADIENT_WEIGHT: u64 = 4;
+    const IMAGE_LINEAR_WEIGHT: u64 = 2;
+
+    let viewport = Rect::from_xywh(
+      0.0,
+      0.0,
+      self.canvas.width() as f32,
+      self.canvas.height() as f32,
+    );
+    let mut total = 0u64;
+    let mut deadline_counter = 0usize;
+
+    let mut add_rect = |total: &mut u64, rect: Rect, weight: u64| {
+      if weight == 0 {
+        return;
+      }
+      let Some(intersection) = rect.intersection(viewport) else {
+        return;
+      };
+      let w = intersection.width().ceil().max(0.0) as u64;
+      let h = intersection.height().ceil().max(0.0) as u64;
+      if w == 0 || h == 0 {
+        return;
+      }
+      let area = w.saturating_mul(h);
+      *total = total.saturating_add(area.saturating_mul(weight));
+    };
+
+    for item in items {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
+      match item {
+        DisplayItem::LinearGradient(item) => {
+          add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
+        }
+        DisplayItem::RadialGradient(item) => {
+          add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
+        }
+        DisplayItem::ConicGradient(item) => {
+          add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
+        }
+        DisplayItem::Image(item) => {
+          let weight = match item.filter_quality {
+            ImageFilterQuality::Nearest => 1,
+            ImageFilterQuality::Linear => IMAGE_LINEAR_WEIGHT,
+          };
+          add_rect(&mut total, self.ds_rect(item.dest_rect), weight);
+        }
+        DisplayItem::ImagePattern(item) => {
+          let weight = match item.filter_quality {
+            ImageFilterQuality::Nearest => 1,
+            ImageFilterQuality::Linear => IMAGE_LINEAR_WEIGHT,
+          };
+          add_rect(&mut total, self.ds_rect(item.dest_rect), weight);
+        }
+        DisplayItem::BoxShadow(item) => {
+          let shadow = BoxShadow {
+            offset_x: self.ds_len(item.offset.x),
+            offset_y: self.ds_len(item.offset.y),
+            blur_radius: self.ds_len(item.blur_radius),
+            spread_radius: self.ds_len(item.spread_radius),
+            color: item.color,
+            inset: item.inset,
+          };
+          let rect = self.ds_rect(item.rect);
+          let tmp_pixels = estimate_box_shadow_work_pixels(rect.width(), rect.height(), &shadow);
+          let blur_weight = if shadow.blur_radius.abs() > 0.0 { 8 } else { 1 };
+          total = total.saturating_add(tmp_pixels.saturating_mul(blur_weight));
+        }
+        DisplayItem::PushStackingContext(sc) => {
+          if sc.filters.is_empty() {
+            continue;
+          }
+
+          let mut weight = 0u64;
+          for filter in &sc.filters {
+            weight += match filter {
+              ResolvedFilter::Blur(radius) => {
+                let r = self.ds_len(*radius).abs().round().min(32.0) as u64;
+                8 + r
+              }
+              ResolvedFilter::DropShadow { blur_radius, .. } => {
+                let r = self.ds_len(*blur_radius).abs().round().min(32.0) as u64;
+                8 + r
+              }
+              ResolvedFilter::SvgFilter(_) => 24,
+              _ => 4,
+            };
+          }
+
+          if weight == 0 {
+            continue;
+          }
+
+          let bounds = self.ds_rect(sc.bounds);
+          let outset = filter_outset_with_bounds(&sc.filters, self.scale, Some(sc.bounds));
+          let inflated = Rect::from_xywh(
+            bounds.x() - outset.left,
+            bounds.y() - outset.top,
+            bounds.width() + outset.left + outset.right,
+            bounds.height() + outset.top + outset.bottom,
+          );
+          add_rect(&mut total, inflated, weight);
+        }
+        _ => {}
+      }
+    }
+
+    Ok(total)
   }
 
   fn max_effect_padding(&self, items: &[DisplayItem]) -> Result<f32> {
@@ -4566,9 +4730,9 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn render_parallel(&mut self, list: &DisplayList) -> Result<(Pixmap, usize, usize, Duration)> {
-    let start = Instant::now();
-    let tiles = self.build_tiles(list)?;
+  fn render_parallel(&mut self, list: &DisplayList) -> Result<(Pixmap, usize, usize, usize, Duration)> {
+    let mut tiles = self.build_tiles(list)?;
+    let tile_count = tiles.len();
     self.canvas.clear(self.background);
 
     let font_ctx = self.font_ctx.clone();
@@ -4580,64 +4744,83 @@ impl DisplayListRenderer {
     let glyph_cache = self.glyph_cache.clone();
 
     let deadline = active_deadline();
-    let results: Result<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>> = tiles
+
+    let task_capacity = self.parallel_thread_budget(tile_count);
+    let chunk_size = tile_count
+      .checked_add(task_capacity.saturating_sub(1))
+      .unwrap_or(tile_count)
+      / task_capacity.max(1);
+    let mut chunks: Vec<Vec<TileWork<'_>>> = Vec::new();
+    while !tiles.is_empty() {
+      let take = chunk_size.min(tiles.len()).max(1);
+      chunks.push(tiles.drain(..take).collect());
+    }
+    let task_count = chunks.len();
+
+    let parallel_start = Instant::now();
+    let results: Result<Vec<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>>> = chunks
       .into_par_iter()
-      .map(|work| {
+      .map(|chunk| {
         with_deadline(deadline.as_ref(), || {
-          check_active(RenderStage::Paint).map_err(Error::Render)?;
-          let mut renderer = DisplayListRenderer::new_with_text_state(
-            work.render_w,
-            work.render_h,
-            background,
-            font_ctx.clone(),
-            scale,
-            color_renderer.clone(),
-            color_cache.clone(),
-            glyph_cache.clone(),
-          )?;
-          renderer.preserve_3d_disabled = preserve_3d_disabled;
-          renderer.paint_parallelism = PaintParallelism::disabled();
-          renderer.gradient_cache = self.gradient_cache.clone();
-          renderer.diagnostics_enabled = self.diagnostics_enabled;
-          renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
-          renderer.background_paint_diagnostics = self.background_paint_diagnostics.clone();
-          renderer.clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
-          renderer.layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
-          if work.render_x > 0 || work.render_y > 0 {
-            renderer
-              .canvas
-              .translate(-(work.render_x as f32), -(work.render_y as f32));
+          let mut out = Vec::with_capacity(chunk.len());
+          for work in chunk {
+            check_active(RenderStage::Paint).map_err(Error::Render)?;
+            let mut renderer = DisplayListRenderer::new_with_text_state(
+              work.render_w,
+              work.render_h,
+              background,
+              font_ctx.clone(),
+              scale,
+              color_renderer.clone(),
+              color_cache.clone(),
+              glyph_cache.clone(),
+            )?;
+            renderer.preserve_3d_disabled = preserve_3d_disabled;
+            renderer.paint_parallelism = PaintParallelism::disabled();
+            renderer.gradient_cache = self.gradient_cache.clone();
+            renderer.diagnostics_enabled = self.diagnostics_enabled;
+            renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
+            renderer.background_paint_diagnostics = self.background_paint_diagnostics.clone();
+            renderer.clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
+            renderer.layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
+            if work.render_x > 0 || work.render_y > 0 {
+              renderer
+                .canvas
+                .translate(-(work.render_x as f32), -(work.render_y as f32));
+            }
+            renderer.render_slice(&work.list)?;
+            let stats = renderer.gradient_stats;
+            out.push((
+              work,
+              renderer.canvas.into_pixmap(),
+              stats,
+              std::thread::current().id(),
+            ));
           }
-          renderer.render_slice(&work.list)?;
-          let stats = renderer.gradient_stats;
-          Ok((
-            work,
-            renderer.canvas.into_pixmap(),
-            stats,
-            std::thread::current().id(),
-          ))
+          Ok(out)
         })
       })
       .collect();
+    let parallel_duration = parallel_start.elapsed();
 
     let results = results?;
-    let tile_count = results.len();
     let mut thread_set = HashSet::new();
     let mut tile_stats = GradientStats::default();
     let mut deadline_counter = 0usize;
-    for (work, pixmap, stats, thread) in results {
-      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
-        .map_err(Error::Render)?;
-      thread_set.insert(thread);
-      tile_stats.merge(&stats);
-      self.blit_tile(&work, &pixmap)?;
+    for chunk in results {
+      for (work, pixmap, stats, thread) in chunk {
+        check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+          .map_err(Error::Render)?;
+        thread_set.insert(thread);
+        tile_stats.merge(&stats);
+        self.blit_tile(&work, &pixmap)?;
+      }
     }
     self.gradient_stats.merge(&tile_stats);
-    let parallel_duration = start.elapsed();
     let threads_used = thread_set.len().max(1);
 
     let pixmap = self.canvas.pixmap().clone();
-    Ok((pixmap, tile_count, threads_used, parallel_duration))
+    Ok((pixmap, tile_count, task_count, threads_used, parallel_duration))
   }
 
   fn render_slice<T>(&mut self, items: &T) -> Result<()>

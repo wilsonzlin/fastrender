@@ -3665,6 +3665,7 @@ fn parallel_renderer_uses_multiple_threads_on_large_list() {
   let font_ctx = FontContext::new();
   let serial = DisplayListRenderer::new(512, 512, Rgba::WHITE, font_ctx.clone())
     .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
     .render(&list)
     .expect("serial render");
 
@@ -3672,11 +3673,14 @@ fn parallel_renderer_uses_multiple_threads_on_large_list() {
     tile_size: 64,
     ..PaintParallelism::adaptive()
   };
-  let report = DisplayListRenderer::new(512, 512, Rgba::WHITE, font_ctx)
-    .unwrap()
-    .with_parallelism(parallelism)
-    .render_with_report(&list)
-    .expect("parallel render");
+  let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(512, 512, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel render")
+  });
 
   assert!(
     report.parallel_used,

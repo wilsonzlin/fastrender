@@ -186,6 +186,35 @@ impl BoxShadow {
   }
 }
 
+/// Estimates the pixel work required to rasterize a box shadow into its temporary surface.
+///
+/// This mirrors the temporary pixmap sizing logic used by `render_box_shadow_cached` so paint
+/// parallelism heuristics can account for expensive blur-heavy shadows without allocating.
+pub(crate) fn estimate_box_shadow_work_pixels(width: f32, height: f32, shadow: &BoxShadow) -> u64 {
+  if shadow.color.a == 0.0 {
+    return 0;
+  }
+
+  let sigma = shadow.blur_radius.max(0.0);
+  let blur_pad = (sigma * 3.0).ceil().max(0.0);
+  let spread = shadow.spread_radius;
+
+  if shadow.inset {
+    let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil().max(0.0);
+    let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil().max(0.0);
+    let w = (width + pad_x * 2.0).max(1.0).ceil() as u64;
+    let h = (height + pad_y * 2.0).max(1.0).ceil() as u64;
+    return w.saturating_mul(h);
+  }
+
+  // Outset shadows expand by spread radius and include 3σ blur padding.
+  let shadow_w = (width + spread * 2.0).max(0.0);
+  let shadow_h = (height + spread * 2.0).max(0.0);
+  let w = (shadow_w + blur_pad * 2.0).max(1.0).ceil() as u64;
+  let h = (shadow_h + blur_pad * 2.0).max(1.0).ceil() as u64;
+  w.saturating_mul(h)
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================

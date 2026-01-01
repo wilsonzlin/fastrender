@@ -458,11 +458,27 @@ pub struct FastRenderConfig {
 impl Default for FastRenderConfig {
   fn default() -> Self {
     let runtime_toggles = Arc::new(RuntimeToggles::from_env());
-    let paint_parallelism = if runtime_toggles.truthy_with_default("FASTR_PAINT_PARALLEL", true) {
-      PaintParallelism::default()
-    } else {
-      PaintParallelism::disabled()
+    let mut paint_parallelism = match runtime_toggles
+      .get("FASTR_PAINT_PARALLEL")
+      .map(|raw| raw.trim().to_ascii_lowercase())
+    {
+      Some(raw) => match raw.as_str() {
+        "0" | "false" | "off" => PaintParallelism::disabled(),
+        "1" | "true" | "on" => PaintParallelism::enabled(),
+        "auto" => PaintParallelism::default(),
+        _ => {
+          if runtime_toggles.truthy_with_default("FASTR_PAINT_PARALLEL", true) {
+            PaintParallelism::default()
+          } else {
+            PaintParallelism::disabled()
+          }
+        }
+      },
+      None => PaintParallelism::default(),
     };
+    if let Some(max_threads) = runtime_toggles.usize("FASTR_PAINT_PARALLEL_MAX_THREADS") {
+      paint_parallelism.max_threads = Some(max_threads.max(1));
+    }
     Self {
       background_color: Rgba::WHITE,
       default_width: 800,

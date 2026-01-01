@@ -9,6 +9,7 @@ use fastrender::render_control::{DeadlineGuard, RenderDeadline};
 use fastrender::style::types::{BackfaceVisibility, TransformStyle};
 use fastrender::text::font_loader::FontContext;
 use fastrender::{BorderRadii, Point, Rect, Rgba};
+use rayon::ThreadPoolBuilder;
 use std::time::Duration;
 
 struct EnvGuard(&'static str);
@@ -55,24 +56,27 @@ fn parallel_paint_matches_serial_output() {
 
   let serial = DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx.clone())
     .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
     .render(&list)
     .expect("serial paint");
 
   let parallelism = PaintParallelism {
-    enabled: true,
     tile_size: 32,
     log_timing: false,
     min_display_items: 1,
     min_tiles: 1,
     min_build_fragments: 1,
     build_chunk_size: 1,
-    ..PaintParallelism::default()
+    ..PaintParallelism::enabled()
   };
-  let report = DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx)
-    .unwrap()
-    .with_parallelism(parallelism)
-    .render_with_report(&list)
-    .expect("parallel paint");
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
 
   assert!(report.parallel_used, "expected tiling to be used");
   assert_eq!(serial.data(), report.pixmap.data());
@@ -102,24 +106,27 @@ fn thick_strokes_survive_tiling() {
 
   let serial = DisplayListRenderer::new(112, 112, Rgba::WHITE, font_ctx.clone())
     .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
     .render(&list)
     .expect("serial paint");
 
   let parallelism = PaintParallelism {
-    enabled: true,
     tile_size: 24,
     log_timing: false,
     min_display_items: 1,
     min_tiles: 1,
     min_build_fragments: 1,
     build_chunk_size: 1,
-    ..PaintParallelism::default()
+    ..PaintParallelism::enabled()
   };
-  let report = DisplayListRenderer::new(112, 112, Rgba::WHITE, font_ctx)
-    .unwrap()
-    .with_parallelism(parallelism)
-    .render_with_report(&list)
-    .expect("parallel paint");
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(112, 112, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
 
   assert!(report.parallel_used, "expected tiling to be used");
   assert_eq!(serial.data(), report.pixmap.data());
@@ -178,24 +185,27 @@ fn clip_transform_and_stacking_context_match_serial_output() {
   let font_ctx = FontContext::new();
   let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
     .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
     .render(&list)
     .expect("serial paint");
 
   let parallelism = PaintParallelism {
-    enabled: true,
     tile_size: 24,
     log_timing: false,
     min_display_items: 1,
     min_tiles: 1,
     min_build_fragments: 1,
     build_chunk_size: 1,
-    ..PaintParallelism::default()
+    ..PaintParallelism::enabled()
   };
-  let report = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
-    .unwrap()
-    .with_parallelism(parallelism)
-    .render_with_report(&list)
-    .expect("parallel paint");
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
 
   assert!(report.parallel_used, "expected tiling to be used");
   assert_eq!(serial.data(), report.pixmap.data());
@@ -230,24 +240,27 @@ fn backdrop_filters_trigger_serial_fallback() {
   let font_ctx = FontContext::new();
   let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
     .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
     .render(&list)
     .expect("serial paint");
 
   let parallelism = PaintParallelism {
-    enabled: true,
     tile_size: 24,
     log_timing: false,
     min_display_items: 1,
     min_tiles: 1,
     min_build_fragments: 1,
     build_chunk_size: 1,
-    ..PaintParallelism::default()
+    ..PaintParallelism::enabled()
   };
-  let report = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
-    .unwrap()
-    .with_parallelism(parallelism)
-    .render_with_report(&list)
-    .expect("parallel paint");
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
 
   assert!(
     !report.parallel_used,
@@ -259,28 +272,77 @@ fn backdrop_filters_trigger_serial_fallback() {
 #[test]
 fn parallel_paint_respects_deadline() {
   let _delay_guard = EnvGuard::set("FASTR_TEST_RENDER_DELAY_MS", "20");
-  let deadline = RenderDeadline::new(Some(Duration::from_millis(1)), None);
   let parallelism = PaintParallelism {
-    enabled: true,
     tile_size: 16,
     log_timing: false,
     min_display_items: 1,
     min_tiles: 1,
     min_build_fragments: 1,
     build_chunk_size: 1,
-    ..PaintParallelism::default()
+    ..PaintParallelism::enabled()
   };
-  let renderer = DisplayListRenderer::new(128, 128, Rgba::WHITE, FontContext::new())
-    .unwrap()
-    .with_parallelism(parallelism);
-
-  let err = {
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let err = pool.install(|| {
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(1)), None);
     let _guard = DeadlineGuard::install(Some(&deadline));
-    renderer.render(&basic_list()).unwrap_err()
-  };
+    DisplayListRenderer::new(128, 128, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render(&basic_list())
+      .unwrap_err()
+  });
 
   match err {
     Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Paint),
     other => panic!("expected paint timeout, got {other:?}"),
   }
+}
+
+#[test]
+fn auto_parallelizes_expensive_gradients() {
+  use fastrender::paint::display_list::{GradientSpread, GradientStop, LinearGradientItem};
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::LinearGradient(LinearGradientItem {
+    rect: Rect::from_xywh(0.0, 0.0, 512.0, 512.0),
+    start: Point::new(0.0, 0.0),
+    end: Point::new(512.0, 0.0),
+    spread: GradientSpread::Pad,
+    stops: vec![
+      GradientStop {
+        position: 0.0,
+        color: Rgba::rgb(255, 0, 0),
+      },
+      GradientStop {
+        position: 1.0,
+        color: Rgba::rgb(0, 0, 255),
+      },
+    ],
+  }));
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(512, 512, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial render");
+
+  // Force the item-count heuristic to fail so AUTO must rely on pixel-based cost estimation.
+  let parallelism = PaintParallelism {
+    tile_size: 64,
+    min_display_items: 10_000,
+    ..PaintParallelism::auto()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(512, 512, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("auto render")
+  });
+
+  assert!(report.parallel_used, "expected AUTO to enable tiling");
+  assert!(report.parallel_threads > 1, "expected multiple threads");
+  assert_eq!(serial.data(), report.pixmap.data());
 }

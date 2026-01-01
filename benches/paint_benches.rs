@@ -912,14 +912,13 @@ fn bench_parallel_display_list_raster(c: &mut Criterion) {
   });
   group.bench_function("parallel_tiles", |b| {
     let parallelism = PaintParallelism {
-      enabled: true,
       tile_size: 128,
       log_timing: false,
       min_display_items: 1,
       min_tiles: 1,
       min_build_fragments: 1,
       build_chunk_size: 1,
-      ..PaintParallelism::default()
+      ..PaintParallelism::enabled()
     };
     b.iter(|| {
       let renderer = DisplayListRenderer::new(width, height, Rgba::WHITE, font_ctx.clone())
