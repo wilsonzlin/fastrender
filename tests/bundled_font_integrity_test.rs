@@ -65,4 +65,8 @@ fn bundled_font_set_integrity() {
   assert_family_has_glyph(&ctx, "DejaVu Sans", 'W');
   assert_family_has_glyph(&ctx, "FastRender Emoji", '😀');
   assert_family_has_glyph(&ctx, "FastRender Emoji", '🇺');
+  assert_family_has_glyph(&ctx, "FastRender Emoji", '▶');
+  assert_family_has_glyph(&ctx, "FastRender Emoji", '✅');
+  assert_family_has_glyph(&ctx, "FastRender Emoji", '✨');
+  assert_family_has_glyph(&ctx, "FastRender Emoji", '🔮');
 }
