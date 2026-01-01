@@ -33,6 +33,7 @@ use fastrender::paint::display_list::ImageData;
 use fastrender::paint::display_list::ImageFilterQuality;
 use fastrender::paint::display_list::ImageItem;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
+use fastrender::paint::display_list_renderer::composite_manual_layer_pixmap;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::paint::gradient::{
@@ -1171,6 +1172,48 @@ fn bench_filter_blur(c: &mut Criterion) {
   group.finish();
 }
 
+/// Benchmark the manual mix-blend-mode compositor (used when tiny-skia cannot represent the mode
+/// directly).
+fn bench_manual_layer_composite(c: &mut Criterion) {
+  let size = 1024u32;
+  let mut src = Pixmap::new(size, size).expect("pixmap");
+  let mut dst = Pixmap::new(size, size).expect("pixmap");
+
+  // Deterministic pseudo-random premultiplied pixels.
+  let fill = |pixmap: &mut Pixmap, seed: u32| {
+    let width = pixmap.width() as usize;
+    let height = pixmap.height() as usize;
+    let pixels = pixmap.pixels_mut();
+    let mut state = seed;
+    for y in 0..height {
+      let row = y * width;
+      for x in 0..width {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        let a = (state >> 24) as u8;
+        let r = (state >> 16) as u8;
+        let g = (state >> 8) as u8;
+        let b = state as u8;
+        let premul = |c: u8| -> u8 { ((u16::from(c) * u16::from(a) + 127) / 255) as u8 };
+        pixels[row + x] =
+          PremultipliedColorU8::from_rgba(premul(r), premul(g), premul(b), a).unwrap();
+      }
+    }
+  };
+  fill(&mut src, 0x1234_5678);
+  fill(&mut dst, 0x8765_4321);
+
+  let mut group = c.benchmark_group("manual_layer_composite");
+  group.sample_size(10);
+  group.bench_function("color_oklch_1024", |b| {
+    b.iter(|| {
+      composite_manual_layer_pixmap(&mut dst, &src, 1.0, BlendMode::ColorOklch, (0, 0), None)
+        .unwrap();
+      black_box(&dst);
+    });
+  });
+  group.finish();
+}
+
 fn naive_conic_gradient(
   width: u32,
   height: u32,
@@ -1319,6 +1362,7 @@ criterion_group!(
   bench_display_list_box_shadow_blur_cache,
   bench_text_rasterizer_cache,
   bench_filter_blur,
+  bench_manual_layer_composite,
   bench_conic_gradient,
 );
 

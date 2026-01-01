@@ -115,6 +115,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::thread::ThreadId;
 use std::time::Duration;
 use std::time::Instant;
@@ -453,6 +454,186 @@ fn apply_manual_blend(
   }
 }
 
+#[inline]
+fn mul_div_255_round_u16(a: u16, b: u16) -> u16 {
+  // Exact rounding division by 255 for u8 products.
+  //
+  // This implements `round((a * b) / 255)` for `a, b ∈ [0, 255]` using only
+  // multiplies/shifts. The intermediate range fits in u32.
+  let prod = (a as u32) * (b as u32);
+  (((prod + 128) * 257) >> 16) as u16
+}
+
+#[inline]
+fn clamp01(value: f32) -> f32 {
+  value.clamp(0.0, 1.0)
+}
+
+static INV_U8_TO_F32: OnceLock<[f32; 256]> = OnceLock::new();
+
+/// Composite `layer` into `target` using manual mix-blend-mode evaluation.
+///
+/// This is used for blend modes that tiny-skia cannot represent directly (or where the CSS spec
+/// differs). The inner loop is optimized for large layers: cooperative deadline checks, reduced
+/// float work, and integer alpha compositing where possible.
+pub fn composite_manual_layer_pixmap(
+  target: &mut Pixmap,
+  layer: &Pixmap,
+  opacity: f32,
+  mode: BlendMode,
+  origin: (i32, i32),
+  region: Option<&Rect>,
+) -> Result<()> {
+  let opacity = opacity.clamp(0.0, 1.0);
+  if opacity == 0.0 {
+    return Ok(());
+  }
+
+  let (mut x0, mut y0, mut x1, mut y1) = (
+    origin.0,
+    origin.1,
+    origin.0 + layer.width() as i32,
+    origin.1 + layer.height() as i32,
+  );
+  if let Some(region) = region {
+    let (rx0, ry0, rx1, ry1) = rect_int_bounds(region);
+    x0 = x0.max(rx0);
+    y0 = y0.max(ry0);
+    x1 = x1.min(rx1);
+    y1 = y1.min(ry1);
+  }
+  x0 = x0.max(0);
+  y0 = y0.max(0);
+  x1 = x1
+    .min(target.width() as i32)
+    .min(origin.0 + layer.width() as i32);
+  y1 = y1
+    .min(target.height() as i32)
+    .min(origin.1 + layer.height() as i32);
+  if x0 >= x1 || y0 >= y1 {
+    return Ok(());
+  }
+
+  let opacity_is_one = opacity == 1.0;
+  let inv_u8 = INV_U8_TO_F32.get_or_init(|| {
+    let mut table = [0.0f32; 256];
+    for (idx, slot) in table.iter_mut().enumerate().skip(1) {
+      *slot = 1.0 / idx as f32;
+    }
+    table
+  });
+
+  let src_pixels = layer.pixels();
+  let src_stride = layer.width() as usize;
+  let dst_stride = target.width() as usize;
+  let dst_pixels = target.pixels_mut();
+
+  let mut deadline_counter = 0usize;
+
+  for y in y0..y1 {
+    check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+      .map_err(Error::Render)?;
+
+    let src_row = (y - origin.1) as usize;
+    let dst_row = y as usize;
+    let src_start = src_row * src_stride + (x0 - origin.0) as usize;
+    let dst_start = dst_row * dst_stride + x0 as usize;
+    let width = (x1 - x0) as usize;
+    let src_slice = &src_pixels[src_start..src_start + width];
+    let dst_slice = &mut dst_pixels[dst_start..dst_start + width];
+
+    for (src_px, dst_px) in src_slice.iter().zip(dst_slice.iter_mut()) {
+      let raw_sa_u8 = src_px.alpha();
+      if raw_sa_u8 == 0 {
+        continue;
+      }
+
+      // Fast-path for fully-opaque layer compositing (very common: mix-blend-mode with no parent
+      // opacity).
+      let sa_u16 = if opacity_is_one {
+        raw_sa_u8 as u16
+      } else {
+        // Quantize the effective alpha to u8-space. This keeps the alpha compositing path on
+        // integer arithmetic while staying visually close to the previous float pipeline.
+        ((raw_sa_u8 as f32) * opacity).round().clamp(0.0, 255.0) as u16
+      };
+      if sa_u16 == 0 {
+        continue;
+      }
+
+      let da_u16 = dst_px.alpha() as u16;
+
+      // Unpremultiply (normalized 0..1) for the blend-mode math.
+      let inv_raw_sa = inv_u8[raw_sa_u8 as usize];
+      let src_rgb = (
+        src_px.red() as f32 * inv_raw_sa,
+        src_px.green() as f32 * inv_raw_sa,
+        src_px.blue() as f32 * inv_raw_sa,
+      );
+      let dst_rgb = if da_u16 == 0 {
+        (0.0, 0.0, 0.0)
+      } else {
+        let inv_da = inv_u8[da_u16 as usize];
+        (
+          dst_px.red() as f32 * inv_da,
+          dst_px.green() as f32 * inv_da,
+          dst_px.blue() as f32 * inv_da,
+        )
+      };
+
+      let blended = apply_manual_blend(mode, src_rgb, dst_rgb);
+      let blended_r = (clamp01(blended.0) * 255.0).round().min(255.0) as u16;
+      let blended_g = (clamp01(blended.1) * 255.0).round().min(255.0) as u16;
+      let blended_b = (clamp01(blended.2) * 255.0).round().min(255.0) as u16;
+
+      let inv_sa_u16 = 255u16.saturating_sub(sa_u16);
+
+      // Fast-path: fully-opaque effective source alpha (skip dst scaling).
+      if inv_sa_u16 == 0 {
+        let out_a = 255u16;
+        let out_r = blended_r.min(out_a);
+        let out_g = blended_g.min(out_a);
+        let out_b = blended_b.min(out_a);
+        *dst_px = PremultipliedColorU8::from_rgba(out_r as u8, out_g as u8, out_b as u8, 255)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        continue;
+      }
+
+      let out_a = if da_u16 == 0 {
+        sa_u16
+      } else {
+        (sa_u16 + mul_div_255_round_u16(da_u16, inv_sa_u16)).min(255)
+      };
+
+      // Integer alpha compositing:
+      // out = src + dst * (1 - sa)
+      // where `src` is the blend-mode result premultiplied by `sa`.
+      let src_r = mul_div_255_round_u16(blended_r, sa_u16);
+      let src_g = mul_div_255_round_u16(blended_g, sa_u16);
+      let src_b = mul_div_255_round_u16(blended_b, sa_u16);
+
+      let (dst_r, dst_g, dst_b) = if da_u16 == 0 {
+        (0u16, 0u16, 0u16)
+      } else {
+        (
+          mul_div_255_round_u16(dst_px.red() as u16, inv_sa_u16),
+          mul_div_255_round_u16(dst_px.green() as u16, inv_sa_u16),
+          mul_div_255_round_u16(dst_px.blue() as u16, inv_sa_u16),
+        )
+      };
+
+      let out_r = (src_r + dst_r).min(out_a);
+      let out_g = (src_g + dst_g).min(out_a);
+      let out_b = (src_b + dst_b).min(out_a);
+
+      *dst_px = PremultipliedColorU8::from_rgba(out_r as u8, out_g as u8, out_b as u8, out_a as u8)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+
+  Ok(())
+}
+
 #[derive(Copy, Clone)]
 enum EdgeOrientation {
   Horizontal,
@@ -581,23 +762,29 @@ fn apply_filters(
           (crate::paint::css_filter::grayscale(c, *amount), a)
         })?
       }
-      ResolvedFilter::Sepia(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
-        (crate::paint::css_filter::sepia(c, *amount), a)
-      })?,
+      ResolvedFilter::Sepia(amount) => {
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+          (crate::paint::css_filter::sepia(c, *amount), a)
+        })?
+      }
       ResolvedFilter::Saturate(amount) => {
         crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
           (crate::paint::css_filter::saturate(c, *amount), a)
         })?
       }
-      ResolvedFilter::HueRotate(deg) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
-        (crate::paint::css_filter::hue_rotate(c, *deg), a)
-      })?,
-      ResolvedFilter::Invert(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
-        (crate::paint::css_filter::invert(c, *amount), a)
-      })?,
-      ResolvedFilter::Opacity(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
-        (c, a * *amount)
-      })?,
+      ResolvedFilter::HueRotate(deg) => {
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+          (crate::paint::css_filter::hue_rotate(c, *deg), a)
+        })?
+      }
+      ResolvedFilter::Invert(amount) => {
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+          (crate::paint::css_filter::invert(c, *amount), a)
+        })?
+      }
+      ResolvedFilter::Opacity(amount) => {
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| (c, a * *amount))?
+      }
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -4123,102 +4310,14 @@ impl DisplayListRenderer {
     origin: (i32, i32),
     region: Option<&Rect>,
   ) -> Result<()> {
-    let target = self.canvas.pixmap_mut();
-    let opacity = opacity.clamp(0.0, 1.0);
-    if opacity == 0.0 {
-      return Ok(());
-    }
-
-    let (mut x0, mut y0, mut x1, mut y1) = (
-      origin.0,
-      origin.1,
-      origin.0 + layer.width() as i32,
-      origin.1 + layer.height() as i32,
-    );
-    if let Some(region) = region {
-      let (rx0, ry0, rx1, ry1) = rect_int_bounds(region);
-      x0 = x0.max(rx0);
-      y0 = y0.max(ry0);
-      x1 = x1.min(rx1);
-      y1 = y1.min(ry1);
-    }
-    x0 = x0.max(0);
-    y0 = y0.max(0);
-    x1 = x1
-      .min(target.width() as i32)
-      .min(origin.0 + layer.width() as i32);
-    y1 = y1
-      .min(target.height() as i32)
-      .min(origin.1 + layer.height() as i32);
-    if x0 >= x1 || y0 >= y1 {
-      return Ok(());
-    }
-
-    let src_pixels = layer.pixels();
-    let src_stride = layer.width() as usize;
-    let dst_stride = target.width() as usize;
-    let dst_pixels = target.pixels_mut();
-
-    for y in y0..y1 {
-      let src_row = (y - origin.1) as usize;
-      let dst_row = y as usize;
-      let src_start = src_row * src_stride + (x0 - origin.0) as usize;
-      let dst_start = dst_row * dst_stride + x0 as usize;
-      let width = (x1 - x0) as usize;
-      let src_slice = &src_pixels[src_start..src_start + width];
-      let dst_slice = &mut dst_pixels[dst_start..dst_start + width];
-      for (src_px, dst_px) in src_slice.iter().zip(dst_slice.iter_mut()) {
-        let raw_sa = src_px.alpha() as f32 / 255.0;
-        if raw_sa == 0.0 || opacity == 0.0 {
-          continue;
-        }
-        let sa = (raw_sa * opacity).clamp(0.0, 1.0);
-        let da = dst_px.alpha() as f32 / 255.0;
-
-        let src_rgb = if raw_sa > 0.0 {
-          (
-            (src_px.red() as f32 / 255.0) / raw_sa,
-            (src_px.green() as f32 / 255.0) / raw_sa,
-            (src_px.blue() as f32 / 255.0) / raw_sa,
-          )
-        } else {
-          (0.0, 0.0, 0.0)
-        };
-
-        let dst_rgb = if da > 0.0 {
-          (
-            (dst_px.red() as f32 / 255.0) / da,
-            (dst_px.green() as f32 / 255.0) / da,
-            (dst_px.blue() as f32 / 255.0) / da,
-          )
-        } else {
-          (0.0, 0.0, 0.0)
-        };
-
-        let blended_rgb = apply_manual_blend(mode, src_rgb, dst_rgb);
-
-        let out_a = sa + da * (1.0 - sa);
-        let out_rgb = if out_a > 0.0 {
-          (
-            (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
-            (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
-            (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
-          )
-        } else {
-          (0.0, 0.0, 0.0)
-        };
-
-        let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-        let scale = out_a;
-        let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-        let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-        let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-        *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
-          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-      }
-    }
-
-    Ok(())
+    composite_manual_layer_pixmap(
+      self.canvas.pixmap_mut(),
+      layer,
+      opacity,
+      mode,
+      origin,
+      region,
+    )
   }
 
   /// Consumes the renderer and returns the painted pixmap.
@@ -8382,6 +8481,185 @@ mod tests {
     }
   }
 
+  #[cfg(test)]
+  fn composite_manual_layer_reference(
+    target: &mut Pixmap,
+    layer: &Pixmap,
+    opacity: f32,
+    mode: BlendMode,
+    origin: (i32, i32),
+    region: Option<&Rect>,
+  ) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity == 0.0 {
+      return;
+    }
+
+    let (mut x0, mut y0, mut x1, mut y1) = (
+      origin.0,
+      origin.1,
+      origin.0 + layer.width() as i32,
+      origin.1 + layer.height() as i32,
+    );
+    if let Some(region) = region {
+      let (rx0, ry0, rx1, ry1) = rect_int_bounds(region);
+      x0 = x0.max(rx0);
+      y0 = y0.max(ry0);
+      x1 = x1.min(rx1);
+      y1 = y1.min(ry1);
+    }
+    x0 = x0.max(0);
+    y0 = y0.max(0);
+    x1 = x1
+      .min(target.width() as i32)
+      .min(origin.0 + layer.width() as i32);
+    y1 = y1
+      .min(target.height() as i32)
+      .min(origin.1 + layer.height() as i32);
+    if x0 >= x1 || y0 >= y1 {
+      return;
+    }
+
+    let src_pixels = layer.pixels();
+    let src_stride = layer.width() as usize;
+    let dst_stride = target.width() as usize;
+    let dst_pixels = target.pixels_mut();
+
+    for y in y0..y1 {
+      let src_row = (y - origin.1) as usize;
+      let dst_row = y as usize;
+      let src_start = src_row * src_stride + (x0 - origin.0) as usize;
+      let dst_start = dst_row * dst_stride + x0 as usize;
+      let width = (x1 - x0) as usize;
+      let src_slice = &src_pixels[src_start..src_start + width];
+      let dst_slice = &mut dst_pixels[dst_start..dst_start + width];
+      for (src_px, dst_px) in src_slice.iter().zip(dst_slice.iter_mut()) {
+        let raw_sa = src_px.alpha() as f32 / 255.0;
+        if raw_sa == 0.0 || opacity == 0.0 {
+          continue;
+        }
+        let sa = (raw_sa * opacity).clamp(0.0, 1.0);
+        let da = dst_px.alpha() as f32 / 255.0;
+
+        let src_rgb = if raw_sa > 0.0 {
+          (
+            (src_px.red() as f32 / 255.0) / raw_sa,
+            (src_px.green() as f32 / 255.0) / raw_sa,
+            (src_px.blue() as f32 / 255.0) / raw_sa,
+          )
+        } else {
+          (0.0, 0.0, 0.0)
+        };
+
+        let dst_rgb = if da > 0.0 {
+          (
+            (dst_px.red() as f32 / 255.0) / da,
+            (dst_px.green() as f32 / 255.0) / da,
+            (dst_px.blue() as f32 / 255.0) / da,
+          )
+        } else {
+          (0.0, 0.0, 0.0)
+        };
+
+        let blended_rgb = apply_manual_blend(mode, src_rgb, dst_rgb);
+
+        let out_a = sa + da * (1.0 - sa);
+        let out_rgb = if out_a > 0.0 {
+          (
+            (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
+            (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
+            (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
+          )
+        } else {
+          (0.0, 0.0, 0.0)
+        };
+
+        let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        let scale = out_a;
+        let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+        let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+        let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+        *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
+  }
+
+  fn fill_premultiplied_pattern(pixmap: &mut Pixmap, seed: u32) {
+    let width = pixmap.width() as usize;
+    let height = pixmap.height() as usize;
+    let pixels = pixmap.pixels_mut();
+    let mut state = seed;
+    for y in 0..height {
+      let row = y * width;
+      for x in 0..width {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        let a = (state >> 24) as u8;
+        let r = (state >> 16) as u8;
+        let g = (state >> 8) as u8;
+        let b = state as u8;
+        let premul = |c: u8| -> u8 { ((u16::from(c) * u16::from(a) + 127) / 255) as u8 };
+        pixels[row + x] = PremultipliedColorU8::from_rgba(premul(r), premul(g), premul(b), a)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
+  }
+
+  #[test]
+  fn manual_layer_composite_matches_reference_with_bounded_error() {
+    // The optimized manual compositor uses integer alpha math and slightly different rounding from
+    // the historical float pipeline. Keep regressions bounded and deterministic.
+    let mut src = Pixmap::new(64, 64).unwrap();
+    fill_premultiplied_pattern(&mut src, 0x1234_5678);
+
+    let mut base_dst = Pixmap::new(96, 80).unwrap();
+    fill_premultiplied_pattern(&mut base_dst, 0x8765_4321);
+
+    let origin = (13, 9);
+    let region_rect = Rect::from_xywh(10.5, 12.25, 50.0, 44.5);
+    let region = Some(&region_rect);
+    let opacities = [1.0, 0.4];
+    let modes = [
+      BlendMode::Hue,
+      BlendMode::ColorHsv,
+      BlendMode::ColorOklch,
+      BlendMode::PlusDarker,
+    ];
+
+    for opacity in opacities {
+      for mode in modes {
+        let mut ref_dst = base_dst.clone();
+        let mut opt_dst = base_dst.clone();
+        composite_manual_layer_reference(&mut ref_dst, &src, opacity, mode, origin, region);
+        composite_manual_layer_pixmap(&mut opt_dst, &src, opacity, mode, origin, region).unwrap();
+
+        let ref_pixels = ref_dst.pixels();
+        let opt_pixels = opt_dst.pixels();
+        assert_eq!(ref_pixels.len(), opt_pixels.len());
+        for (idx, (a, b)) in ref_pixels.iter().zip(opt_pixels.iter()).enumerate() {
+          let diff = (
+            a.red().abs_diff(b.red()),
+            a.green().abs_diff(b.green()),
+            a.blue().abs_diff(b.blue()),
+            a.alpha().abs_diff(b.alpha()),
+          );
+          assert!(
+            diff.0 <= 2 && diff.1 <= 2 && diff.2 <= 2 && diff.3 <= 2,
+            "pixel {idx} mismatch for mode={mode:?} opacity={opacity}: ref=({},{},{},{}) opt=({},{},{},{}) diff={diff:?}",
+            a.red(),
+            a.green(),
+            a.blue(),
+            a.alpha(),
+            b.red(),
+            b.green(),
+            b.blue(),
+            b.alpha(),
+          );
+        }
+      }
+    }
+  }
+
   #[test]
   fn clip_mask_rect_matches_reference_for_fractional_bounds_and_radii() {
     let mut base = new_pixmap(12, 10).unwrap();
@@ -9687,8 +9965,7 @@ mod tests {
     }
 
     let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
-    apply_drop_shadow(&mut pixmap, 0.0, 0.0, 0.0, 0.0, Rgba::BLACK, None)
-      .expect("drop shadow");
+    apply_drop_shadow(&mut pixmap, 0.0, 0.0, 0.0, 0.0, Rgba::BLACK, None).expect("drop shadow");
     let allocations = recorder.take();
 
     assert_eq!(

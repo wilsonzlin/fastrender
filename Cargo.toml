@@ -148,6 +148,10 @@ harness = false
 name = "reshape_cache_bench"
 harness = false
 
+[[bench]]
+name = "paint_benches"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true
