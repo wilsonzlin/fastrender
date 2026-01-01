@@ -4268,6 +4268,12 @@ pub struct TableFormattingContext {
   structure: Option<TableStructure>,
   /// Formatting context factory carrying shared font resources for cell layout.
   factory: FormattingContextFactory,
+  /// Shared block formatting context used for table cell measurement and layout.
+  ///
+  /// Table layout invokes cell layout and intrinsic sizing in tight loops (often in parallel).
+  /// Reusing a single block formatting context avoids rebuilding its internal inline formatting
+  /// context and detached factory wiring each time.
+  cell_bfc: BlockFormattingContext,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: ContainingBlock,
   parallelism: LayoutParallelism,
@@ -4284,9 +4290,11 @@ impl TableFormattingContext {
     let parallelism = factory.parallelism();
     let viewport_size = factory.viewport_size();
     let nearest_positioned_cb = factory.nearest_positioned_cb();
+    let cell_bfc = BlockFormattingContext::with_factory(factory.detached());
     Self {
       structure: None,
       factory,
+      cell_bfc,
       viewport_size,
       nearest_positioned_cb,
       parallelism,
@@ -4394,7 +4402,7 @@ impl TableFormattingContext {
     percent_base: Option<f32>,
   ) -> (f32, f32) {
     let style_overrides = StyleOverrideCache::default();
-    let cell_bfc = BlockFormattingContext::with_factory(self.factory.detached());
+    let cell_bfc = &self.cell_bfc;
     let mut min_sum = 0.0;
     let mut max_sum = 0.0;
     for cell in cells {
@@ -4403,7 +4411,7 @@ impl TableFormattingContext {
           cell,
           border_collapse,
           percent_base,
-          &cell_bfc,
+          cell_bfc,
           &style_overrides,
         )
         .unwrap_or((0.0, 0.0));
@@ -4595,7 +4603,7 @@ impl TableFormattingContext {
   ) -> Result<(), LayoutError> {
     let mut deadline_counter = 0usize;
     let source_rows = collect_source_rows(table_box);
-    let cell_bfc = BlockFormattingContext::with_factory(self.factory.detached());
+    let cell_bfc = &self.cell_bfc;
     let measure_cells_in_parallel = self.parallelism.should_parallelize(structure.cells.len())
       || (structure.cells.len() > 256 && rayon::current_num_threads() > 1);
     let measurements: Vec<Option<(f32, f32)>> = if matches!(mode, DistributionMode::Auto) {
@@ -4616,7 +4624,7 @@ impl TableFormattingContext {
                 cell_box,
                 structure.border_collapse,
                 percent_base,
-                &cell_bfc,
+                cell_bfc,
                 style_overrides,
               )?))
             })
@@ -4638,7 +4646,7 @@ impl TableFormattingContext {
               cell_box,
               structure.border_collapse,
               percent_base,
-              &cell_bfc,
+              cell_bfc,
               style_overrides,
             )?))
           })
@@ -5231,6 +5239,7 @@ impl FormattingContext for TableFormattingContext {
           return Ok(());
         }
         let abs = AbsoluteLayout::with_font_context(self.factory.font_context().clone());
+        let positioned_factory = self.factory.with_positioned_cb(cb);
         for child in positioned_children.iter().copied() {
           let original_style = child.style.clone();
           let mut layout_child = child.clone();
@@ -5242,47 +5251,100 @@ impl FormattingContext for TableFormattingContext {
           style.left = None;
           layout_child.style = Arc::new(style);
 
-          let factory = self.factory.with_positioned_cb(cb);
           let fc_type = layout_child
             .formatting_context()
             .unwrap_or(crate::style::display::FormattingContextType::Block);
-          let fc = factory.create(fc_type);
           let child_constraints = LayoutConstraints::new(
             AvailableSpace::Definite(cb.rect.size.width),
             AvailableSpace::Definite(cb.rect.size.height),
           );
-          let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
-           let positioned_style = resolve_positioned_style(
-             &child.style,
-             &cb,
-             self.viewport_size,
-             self.factory.font_context(),
-           );
-           let preferred_min_inline =
-             match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-             {
-               Ok(value) => Some(value),
-               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-               Err(_) => None,
-             };
-           let preferred_inline =
-             match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-               Ok(value) => Some(value),
-               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-               Err(_) => None,
-             };
-           let preferred_min_block =
-             match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
-               Ok(value) => Some(value),
-               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-               Err(_) => None,
-             };
-           let preferred_block =
-             match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-               Ok(value) => Some(value),
-               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-               Err(_) => None,
-             };
+          let (
+            mut child_fragment,
+            preferred_min_inline,
+            preferred_inline,
+            preferred_min_block,
+            preferred_block,
+          ) = match fc_type {
+            FormattingContextType::Table => {
+              let fc = positioned_factory.create(fc_type);
+              let fragment = fc.layout(&layout_child, &child_constraints)?;
+              let preferred_min_inline = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let preferred_inline = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let preferred_min_block = match fc
+                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let preferred_block = match fc
+                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              (
+                fragment,
+                preferred_min_inline,
+                preferred_inline,
+                preferred_min_block,
+                preferred_block,
+              )
+            }
+            _ => positioned_factory.with_fc(fc_type, |fc| {
+              let fragment = fc.layout(&layout_child, &child_constraints)?;
+              let preferred_min_inline = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let preferred_inline = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let preferred_min_block = match fc
+                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              let preferred_block = match fc
+                .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+              {
+                Ok(value) => Some(value),
+                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                Err(_) => None,
+              };
+              Ok((
+                fragment,
+                preferred_min_inline,
+                preferred_inline,
+                preferred_min_block,
+                preferred_block,
+              ))
+            })?,
+          };
+          let positioned_style =
+            resolve_positioned_style(&child.style, &cb, self.viewport_size, self.factory.font_context());
           // Static position should start at the containing block origin; AbsoluteLayout
           // adds padding/border offsets, so use the content origin here to avoid double
           // counting padding.
@@ -5326,23 +5388,31 @@ impl FormattingContext for TableFormattingContext {
           snapshot_style.position = crate::style::position::Position::Static;
           snapshot_node.style = Arc::new(snapshot_style);
 
-           let fc_type = snapshot_node
-             .formatting_context()
-             .unwrap_or(FormattingContextType::Block);
-           let fc = self.factory.create(fc_type);
-           match fc.layout(&snapshot_node, &snapshot_constraints) {
-             Ok(snapshot_fragment) => {
-               let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
-               let mut anchor =
-                 FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
-               anchor.style = Some(running_child.style.clone());
-               fragment.children_mut().push(anchor);
-             }
-             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-             Err(_) => {}
-           }
-         }
-       }
+          let fc_type = snapshot_node
+            .formatting_context()
+            .unwrap_or(FormattingContextType::Block);
+          let snapshot_result = match fc_type {
+            FormattingContextType::Table => {
+              let fc = self.factory.create(fc_type);
+              fc.layout(&snapshot_node, &snapshot_constraints)
+            }
+            _ => self
+              .factory
+              .with_fc(fc_type, |fc| fc.layout(&snapshot_node, &snapshot_constraints)),
+          };
+          match snapshot_result {
+            Ok(snapshot_fragment) => {
+              let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
+              let mut anchor =
+                FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+              anchor.style = Some(running_child.style.clone());
+              fragment.children_mut().push(anchor);
+            }
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => {}
+          }
+        }
+      }
       if !positioned_children.is_empty() {
         let cb = if table_box.style.position.is_positioned() {
           let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
@@ -5552,7 +5622,7 @@ impl FormattingContext for TableFormattingContext {
       let next = col_prefix.last().copied().unwrap_or(0.0) + *width;
       col_prefix.push(next);
     }
-    let cell_bfc = BlockFormattingContext::with_factory(self.factory.detached());
+    let cell_bfc = &self.cell_bfc;
     let mut fragments = Vec::new();
 
     struct LaidOutCell {
@@ -5599,7 +5669,7 @@ impl FormattingContext for TableFormattingContext {
         cell_box,
         width,
         structure.border_collapse,
-        &cell_bfc,
+        cell_bfc,
         &style_override_cache,
       ) {
         Ok(fragment) => {
@@ -6568,23 +6638,31 @@ impl FormattingContext for TableFormattingContext {
           snapshot_style.position = crate::style::position::Position::Static;
           snapshot_node.style = Arc::new(snapshot_style);
 
-           let fc_type = snapshot_node
-             .formatting_context()
-             .unwrap_or(FormattingContextType::Block);
-           let fc = self.factory.create(fc_type);
-           match fc.layout(&snapshot_node, &snapshot_constraints) {
-             Ok(snapshot_fragment) => {
-               let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
-               let mut anchor =
-                 FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
-               anchor.style = Some(running_child.style.clone());
-               fragment.children_mut().push(anchor);
-             }
-             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-             Err(_) => {}
-           }
-         }
-       }
+          let fc_type = snapshot_node
+            .formatting_context()
+            .unwrap_or(FormattingContextType::Block);
+          let snapshot_result = match fc_type {
+            FormattingContextType::Table => {
+              let fc = self.factory.create(fc_type);
+              fc.layout(&snapshot_node, &snapshot_constraints)
+            }
+            _ => self
+              .factory
+              .with_fc(fc_type, |fc| fc.layout(&snapshot_node, &snapshot_constraints)),
+          };
+          match snapshot_result {
+            Ok(snapshot_fragment) => {
+              let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
+              let mut anchor =
+                FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+              anchor.style = Some(running_child.style.clone());
+              fragment.children_mut().push(anchor);
+            }
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => {}
+          }
+        }
+      }
       if !has_running_children {
         layout_cache_store(
           box_node,
@@ -6627,14 +6705,19 @@ impl FormattingContext for TableFormattingContext {
       let fc_type = caption
         .formatting_context()
         .unwrap_or(crate::style::display::FormattingContextType::Block);
-      let fc = self.factory.create(fc_type);
-      let mut frag = fc.layout(
-        caption,
-        &LayoutConstraints::new(
-          AvailableSpace::Definite(wrapper_width),
-          constraints.available_height,
-        ),
-      )?;
+      let caption_constraints = LayoutConstraints::new(
+        AvailableSpace::Definite(wrapper_width),
+        constraints.available_height,
+      );
+      let mut frag = match fc_type {
+        FormattingContextType::Table => {
+          let fc = self.factory.create(fc_type);
+          fc.layout(caption, &caption_constraints)
+        }
+        _ => self
+          .factory
+          .with_fc(fc_type, |fc| fc.layout(caption, &caption_constraints)),
+      }?;
       frag.bounds = Rect::from_xywh(0.0, 0.0, wrapper_width, frag.bounds.height());
       let height = frag.bounds.height();
       frag.bounds = frag.bounds.translate(Point::new(0.0, y));
@@ -6738,8 +6821,16 @@ impl FormattingContext for TableFormattingContext {
         let fc_type = snapshot_node
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
-        let fc = self.factory.create(fc_type);
-        match fc.layout(&snapshot_node, &snapshot_constraints) {
+        let snapshot_result = match fc_type {
+          FormattingContextType::Table => {
+            let fc = self.factory.create(fc_type);
+            fc.layout(&snapshot_node, &snapshot_constraints)
+          }
+          _ => self
+            .factory
+            .with_fc(fc_type, |fc| fc.layout(&snapshot_node, &snapshot_constraints)),
+        };
+        match snapshot_result {
           Ok(snapshot_fragment) => {
             let anchor_bounds =
               Rect::from_xywh(0.0, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
