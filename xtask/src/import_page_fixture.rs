@@ -95,10 +95,12 @@ pub fn run_import_page_fixture(args: ImportPageFixtureArgs) -> Result<()> {
   }
 
   catalog.rewrite_stylesheets()?;
+  catalog.rewrite_html_assets(args.legacy_rewrite)?;
 
   let rewritten_html = rewrite_html(
     &document_html,
     &effective_base,
+    ReferenceContext::Html,
     &mut catalog,
     args.legacy_rewrite,
   )?;
@@ -108,6 +110,7 @@ pub fn run_import_page_fixture(args: ImportPageFixtureArgs) -> Result<()> {
   if !args.allow_http_references {
     validate_no_remote_fetchable_subresources_in_html("index.html", &rewritten_html)?;
     catalog.validate_no_remote_fetchable_subresources_in_css()?;
+    catalog.validate_no_remote_fetchable_subresources_in_html_assets()?;
   }
 
   if args.dry_run {
@@ -186,8 +189,26 @@ impl AssetCatalog {
     info: &BundledResourceInfo,
     res: &FetchedResource,
   ) -> Result<()> {
-    let ext = extension_from_path(&info.path);
-    let filename = format!("{}.{}", hash_bytes(&res.bytes), ext);
+    let source_url = info.final_url.clone().unwrap_or_else(|| url.to_string());
+    let ext = extension_from_resource(&info.path, res.content_type.as_deref());
+    // HTML/CSS rewriting depends on the document's base URL, so byte-based deduplication can
+    // incorrectly collapse multiple distinct source URLs into one rewritten output.
+    let base_sensitive = is_html_extension(&ext)
+      || ext == "css"
+      || res
+        .content_type
+        .as_deref()
+        .map(|ct| {
+          let lower = ct.to_ascii_lowercase();
+          lower.contains("html") || lower.contains("css")
+        })
+        .unwrap_or(false);
+    let filename_hash = if base_sensitive {
+      hash_bytes(source_url.as_bytes())
+    } else {
+      hash_bytes(&res.bytes)
+    };
+    let filename = format!("{filename_hash}.{ext}");
     if let Some(existing) = self.assets.get(&filename) {
       if existing.bytes != res.bytes {
         bail!(
@@ -198,7 +219,6 @@ impl AssetCatalog {
       }
     }
 
-    let source_url = info.final_url.clone().unwrap_or_else(|| url.to_string());
     let data = AssetData {
       filename: filename.clone(),
       bytes: res.bytes.clone(),
@@ -242,7 +262,7 @@ impl AssetCatalog {
       let is_css = asset
         .content_type
         .as_deref()
-        .map(|ct| ct.contains("css"))
+        .map(|ct| ct.to_ascii_lowercase().contains("css"))
         .unwrap_or_else(|| name.to_ascii_lowercase().ends_with(".css"));
 
       if !is_css {
@@ -269,6 +289,48 @@ impl AssetCatalog {
       );
     }
 
+    Ok(())
+  }
+
+  fn rewrite_html_assets(&mut self, legacy_rewrite: bool) -> Result<()> {
+    let names: Vec<String> = self.assets.keys().cloned().collect();
+    for name in names {
+      let Some(asset) = self.assets.get(&name).cloned() else {
+        continue;
+      };
+      if !is_html_asset(&asset) {
+        continue;
+      }
+
+      let base = Url::parse(&asset.source_url).with_context(|| {
+        format!(
+          "HTML asset {} has unparsable URL {}",
+          name, asset.source_url
+        )
+      })?;
+      let html = String::from_utf8_lossy(&asset.bytes).to_string();
+      let effective_base = find_base_url(&html, &base);
+      // HTML assets are written under `assets/`, so their rewritten subresource URLs must be
+      // relative to the assets directory (same as CSS).
+      let rewritten = rewrite_html(
+        &html,
+        &effective_base,
+        ReferenceContext::Css,
+        self,
+        legacy_rewrite,
+      )
+      .with_context(|| format!("failed to rewrite HTML asset {}", name))?;
+
+      self.assets.insert(
+        name.clone(),
+        AssetData {
+          filename: asset.filename.clone(),
+          bytes: rewritten.into_bytes(),
+          content_type: asset.content_type.clone(),
+          source_url: asset.source_url.clone(),
+        },
+      );
+    }
     Ok(())
   }
 
@@ -333,7 +395,7 @@ impl AssetCatalog {
       let is_css = asset
         .content_type
         .as_deref()
-        .map(|ct| ct.contains("css"))
+        .map(|ct| ct.to_ascii_lowercase().contains("css"))
         .unwrap_or_else(|| asset.filename.to_ascii_lowercase().ends_with(".css"));
       if !is_css {
         continue;
@@ -359,11 +421,23 @@ impl AssetCatalog {
     }
     bail!(msg)
   }
+
+  fn validate_no_remote_fetchable_subresources_in_html_assets(&self) -> Result<()> {
+    for asset in self.assets.values() {
+      if !is_html_asset(asset) {
+        continue;
+      }
+      let html = String::from_utf8_lossy(&asset.bytes);
+      validate_no_remote_fetchable_subresources_in_html(&asset.filename, &html)?;
+    }
+    Ok(())
+  }
 }
 
 fn rewrite_html(
   input: &str,
   base_url: &Url,
+  ctx: ReferenceContext,
   catalog: &mut AssetCatalog,
   legacy_rewrite: bool,
 ) -> Result<String> {
@@ -378,7 +452,7 @@ fn rewrite_html(
     &base_tag_regex,
     &rewritten,
     base_url,
-    ReferenceContext::Html,
+    ctx,
     catalog,
     Some("."),
   )?;
@@ -392,7 +466,7 @@ fn rewrite_html(
       &attr_regex,
       &rewritten,
       base_url,
-      ReferenceContext::Html,
+      ctx,
       catalog,
       None,
     )?;
@@ -405,7 +479,7 @@ fn rewrite_html(
       &content_url_regex,
       &rewritten,
       base_url,
-      ReferenceContext::Html,
+      ctx,
       catalog,
       Some("."),
     )?;
@@ -417,7 +491,7 @@ fn rewrite_html(
     rewritten = srcset_regex
       .replace_all(
         &rewritten,
-        |caps: &regex::Captures<'_>| match rewrite_srcset(&caps["value"], base_url, catalog) {
+        |caps: &regex::Captures<'_>| match rewrite_srcset(&caps["value"], base_url, ctx, catalog) {
           Ok(value) => format!("{}{}{}", &caps["prefix"], value, &caps["suffix"]),
           Err(err) => {
             srcset_error = Some(err);
@@ -430,7 +504,7 @@ fn rewrite_html(
       return Err(err);
     }
   } else {
-    rewritten = rewrite_html_resource_attrs(&rewritten, base_url, catalog)?;
+    rewritten = rewrite_html_resource_attrs(&rewritten, base_url, ctx, catalog)?;
   }
 
   let mut style_attr_error: Option<anyhow::Error> = None;
@@ -440,7 +514,7 @@ fn rewrite_html(
   rewritten = style_attr_double
     .replace_all(&rewritten, |caps: &regex::Captures<'_>| {
       let css = &caps["css"];
-      match rewrite_css(css, base_url, catalog, ReferenceContext::Html) {
+      match rewrite_css(css, base_url, catalog, ctx) {
         Ok(css) => format!("{}{}{}", &caps["prefix"], css, &caps["suffix"]),
         Err(err) => {
           style_attr_error = Some(err);
@@ -456,7 +530,7 @@ fn rewrite_html(
   rewritten = style_attr_single
     .replace_all(&rewritten, |caps: &regex::Captures<'_>| {
       let css = &caps["css"];
-      match rewrite_css(css, base_url, catalog, ReferenceContext::Html) {
+      match rewrite_css(css, base_url, catalog, ctx) {
         Ok(css) => format!("{}{}{}", &caps["prefix"], css, &caps["suffix"]),
         Err(err) => {
           style_attr_error = Some(err);
@@ -476,7 +550,7 @@ fn rewrite_html(
   let mut style_tag_error: Option<anyhow::Error> = None;
   rewritten = style_tag_regex
     .replace_all(&rewritten, |caps: &regex::Captures<'_>| {
-      match rewrite_css(&caps["body"], base_url, catalog, ReferenceContext::Html) {
+      match rewrite_css(&caps["body"], base_url, catalog, ctx) {
         Ok(css) => format!("{}{}{}", &caps["prefix"], css, &caps["suffix"]),
         Err(err) => {
           style_tag_error = Some(err);
@@ -529,7 +603,12 @@ fn apply_rewrite(
   Ok(rewritten)
 }
 
-fn rewrite_srcset(input: &str, base_url: &Url, catalog: &mut AssetCatalog) -> Result<String> {
+fn rewrite_srcset(
+  input: &str,
+  base_url: &Url,
+  ctx: ReferenceContext,
+  catalog: &mut AssetCatalog,
+) -> Result<String> {
   let mut rewritten = Vec::new();
   for candidate in input.split(',') {
     let trimmed = candidate.trim();
@@ -540,7 +619,7 @@ fn rewrite_srcset(input: &str, base_url: &Url, catalog: &mut AssetCatalog) -> Re
     let Some(url_part) = parts.next() else {
       continue;
     };
-    let rewritten_url = rewrite_reference(url_part, base_url, ReferenceContext::Html, catalog)?
+    let rewritten_url = rewrite_reference(url_part, base_url, ctx, catalog)?
       .unwrap_or_else(|| url_part.to_string());
     let descriptors = parts.collect::<Vec<_>>().join(" ");
     let entry = if descriptors.is_empty() {
@@ -662,6 +741,42 @@ fn extension_from_path(path: &str) -> String {
     .to_ascii_lowercase()
 }
 
+fn extension_from_resource(path: &str, content_type: Option<&str>) -> String {
+  let ext = extension_from_path(path);
+  if ext != "bin" {
+    return ext;
+  }
+
+  let Some(ct) = content_type else {
+    return ext;
+  };
+  let lower = ct.to_ascii_lowercase();
+  if lower.contains("html") {
+    return "html".to_string();
+  }
+  if lower.contains("css") {
+    return "css".to_string();
+  }
+  ext
+}
+
+fn is_html_extension(ext: &str) -> bool {
+  matches!(ext, "html" | "htm" | "xhtml")
+}
+
+fn is_html_asset(asset: &AssetData) -> bool {
+  if asset
+    .content_type
+    .as_deref()
+    .map(|ct| ct.to_ascii_lowercase().contains("html"))
+    .unwrap_or(false)
+  {
+    return true;
+  }
+  let lower = asset.filename.to_ascii_lowercase();
+  lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
+}
+
 fn hash_bytes(bytes: &[u8]) -> String {
   let digest = Sha256::digest(bytes);
   digest
@@ -674,6 +789,7 @@ fn hash_bytes(bytes: &[u8]) -> String {
 fn rewrite_html_resource_attrs(
   input: &str,
   base_url: &Url,
+  ctx: ReferenceContext,
   catalog: &mut AssetCatalog,
 ) -> Result<String> {
   let stylesheet_urls: HashSet<String> = fastrender::css::loader::extract_css_links(
@@ -696,48 +812,48 @@ fn rewrite_html_resource_attrs(
     if !stylesheet_urls.contains(&resolved) {
       return Ok(None);
     }
-    rewrite_reference(raw, base_url, ReferenceContext::Html, catalog)
+    rewrite_reference(raw, base_url, ctx, catalog)
   })?;
 
   let img_src = Regex::new("(?is)<img[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
     .expect("img src regex must compile");
   rewritten = replace_attr_values_with(&img_src, &rewritten, &[1, 2, 3], |raw| {
-    rewrite_reference(raw, base_url, ReferenceContext::Html, catalog)
+    rewrite_reference(raw, base_url, ctx, catalog)
   })?;
 
   let iframe_src =
     Regex::new("(?is)<iframe[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
       .expect("iframe src regex must compile");
   rewritten = replace_attr_values_with(&iframe_src, &rewritten, &[1, 2, 3], |raw| {
-    rewrite_reference(raw, base_url, ReferenceContext::Html, catalog)
+    rewrite_reference(raw, base_url, ctx, catalog)
   })?;
 
   let embed_src =
     Regex::new("(?is)<embed[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
       .expect("embed src regex must compile");
   rewritten = replace_attr_values_with(&embed_src, &rewritten, &[1, 2, 3], |raw| {
-    rewrite_reference(raw, base_url, ReferenceContext::Html, catalog)
+    rewrite_reference(raw, base_url, ctx, catalog)
   })?;
 
   let object_data =
     Regex::new("(?is)<object[^>]*\\sdata\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
       .expect("object data regex must compile");
   rewritten = replace_attr_values_with(&object_data, &rewritten, &[1, 2, 3], |raw| {
-    rewrite_reference(raw, base_url, ReferenceContext::Html, catalog)
+    rewrite_reference(raw, base_url, ctx, catalog)
   })?;
 
   let video_poster =
     Regex::new("(?is)<video[^>]*\\sposter\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
       .expect("video poster regex must compile");
   rewritten = replace_attr_values_with(&video_poster, &rewritten, &[1, 2, 3], |raw| {
-    rewrite_reference(raw, base_url, ReferenceContext::Html, catalog)
+    rewrite_reference(raw, base_url, ctx, catalog)
   })?;
 
   const SRCSET_MAX_CANDIDATES: usize = 32;
   let img_srcset = Regex::new("(?is)<img[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     .expect("img srcset regex must compile");
   rewritten = replace_attr_values_with(&img_srcset, &rewritten, &[1, 2], |raw| {
-    rewrite_srcset(raw, base_url, catalog)
+    rewrite_srcset(raw, base_url, ctx, catalog)
       .map(Some)
       .or_else(|err| Err(err))
   })?;
@@ -746,7 +862,7 @@ fn rewrite_html_resource_attrs(
     .expect("source srcset regex must compile");
   rewritten = replace_attr_values_with(&source_srcset, &rewritten, &[1, 2], |raw| {
     // Unlike the legacy srcset rewrite, keep the candidate cap low to avoid pathological inputs.
-    rewrite_srcset_with_limit(raw, base_url, catalog, SRCSET_MAX_CANDIDATES)
+    rewrite_srcset_with_limit(raw, base_url, ctx, catalog, SRCSET_MAX_CANDIDATES)
       .map(Some)
       .or_else(|err| Err(err))
   })?;
@@ -959,6 +1075,7 @@ fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<String> {
 fn rewrite_srcset_with_limit(
   input: &str,
   base_url: &Url,
+  ctx: ReferenceContext,
   catalog: &mut AssetCatalog,
   max_candidates: usize,
 ) -> Result<String> {
@@ -975,7 +1092,7 @@ fn rewrite_srcset_with_limit(
     let Some(url_part) = parts.next() else {
       continue;
     };
-    let rewritten_url = rewrite_reference(url_part, base_url, ReferenceContext::Html, catalog)?
+    let rewritten_url = rewrite_reference(url_part, base_url, ctx, catalog)?
       .unwrap_or_else(|| url_part.to_string());
     let descriptors = parts.collect::<Vec<_>>().join(" ");
     let entry = if descriptors.is_empty() {
@@ -1170,4 +1287,219 @@ fn extract_fetchable_css_urls(css: &str) -> Vec<String> {
   let mut parser = Parser::new(&mut input);
   scan(&mut parser, &mut out);
   out
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+  use std::fs;
+  use tempfile::tempdir;
+
+  fn write_synthetic_bundle(dir: &Path, include_font: bool) -> Result<()> {
+    let resources_dir = dir.join("resources");
+    fs::create_dir_all(&resources_dir)?;
+
+    let document_html = r#"<!doctype html>
+<html>
+  <body>
+    <iframe src="https://example.test/frame.html"></iframe>
+  </body>
+</html>
+"#;
+    fs::write(dir.join("document.html"), document_html)?;
+
+    let frame_html = r#"<!doctype html>
+<html>
+  <head>
+    <style>@font-face{src:url(//cdn.example.test/font.woff2)}</style>
+  </head>
+  <body>
+    <img src="https://example.test/img.png">
+  </body>
+</html>
+"#;
+    fs::write(resources_dir.join("00000_frame.html"), frame_html)?;
+
+    fs::write(resources_dir.join("00001_img.png"), b"dummy png")?;
+    if include_font {
+      fs::write(resources_dir.join("00002_font.woff2"), b"dummy font")?;
+    }
+
+    let mut resources = serde_json::Map::new();
+    resources.insert(
+      "https://example.test/frame.html".to_string(),
+      json!({
+        "path": "resources/00000_frame.html",
+        "content_type": "text/html; charset=utf-8",
+        "status": 200,
+        "final_url": "https://example.test/frame.html",
+        "etag": null,
+        "last_modified": null
+      }),
+    );
+    resources.insert(
+      "https://example.test/img.png".to_string(),
+      json!({
+        "path": "resources/00001_img.png",
+        "content_type": "image/png",
+        "status": 200,
+        "final_url": "https://example.test/img.png",
+        "etag": null,
+        "last_modified": null
+      }),
+    );
+    if include_font {
+      resources.insert(
+        "https://cdn.example.test/font.woff2".to_string(),
+        json!({
+          "path": "resources/00002_font.woff2",
+          "content_type": "font/woff2",
+          "status": 200,
+          "final_url": "https://cdn.example.test/font.woff2",
+          "etag": null,
+          "last_modified": null
+        }),
+      );
+    }
+
+    let manifest = json!({
+      "version": 1,
+      "original_url": "https://example.test/",
+      "document": {
+        "path": "document.html",
+        "content_type": "text/html; charset=utf-8",
+        "final_url": "https://example.test/",
+        "status": 200,
+        "etag": null,
+        "last_modified": null
+      },
+      "render": {
+        "viewport": [800, 600],
+        "device_pixel_ratio": 1.0,
+        "scroll_x": 0.0,
+        "scroll_y": 0.0,
+        "full_page": false
+      },
+      "resources": resources
+    });
+    fs::write(
+      dir.join("bundle.json"),
+      serde_json::to_vec_pretty(&manifest).expect("manifest json"),
+    )?;
+
+    Ok(())
+  }
+
+  fn assert_no_remote_url_strings(content: &str) {
+    let lower = content.to_ascii_lowercase();
+    assert!(
+      !lower.contains("http://"),
+      "unexpected remote http:// reference: {content}"
+    );
+    assert!(
+      !lower.contains("https://"),
+      "unexpected remote https:// reference: {content}"
+    );
+    assert!(
+      !lower.contains("url(//"),
+      "unexpected scheme-relative url(): {content}"
+    );
+    assert!(
+      !lower.contains("src=\"//") && !lower.contains("src='//"),
+      "unexpected scheme-relative src= reference: {content}"
+    );
+  }
+
+  #[test]
+  fn imports_and_rewrites_nested_html_assets() -> Result<()> {
+    let bundle_dir = tempdir()?;
+    write_synthetic_bundle(bundle_dir.path(), true)?;
+
+    let output = tempdir()?;
+    let output_root = output.path().join("fixtures");
+    let fixture_name = "example_test";
+
+    run_import_page_fixture(ImportPageFixtureArgs {
+      bundle: bundle_dir.path().to_path_buf(),
+      fixture_name: fixture_name.to_string(),
+      output_root: output_root.clone(),
+      overwrite: true,
+      allow_missing: false,
+      allow_http_references: false,
+      legacy_rewrite: false,
+      dry_run: false,
+    })?;
+
+    let fixture_dir = output_root.join(fixture_name);
+    let index_html = fs::read_to_string(fixture_dir.join("index.html"))?;
+    assert_no_remote_url_strings(&index_html);
+
+    let assets_dir = fixture_dir.join(ASSETS_DIR);
+    let mut html_assets = Vec::new();
+    let mut png_asset = None;
+    let mut woff2_asset = None;
+    for entry in fs::read_dir(&assets_dir)? {
+      let entry = entry?;
+      if !entry.file_type()?.is_file() {
+        continue;
+      }
+      let filename = entry.file_name().to_string_lossy().to_string();
+      if filename.ends_with(".html") {
+        html_assets.push(filename);
+      } else if filename.ends_with(".png") {
+        png_asset = Some(filename);
+      } else if filename.ends_with(".woff2") {
+        woff2_asset = Some(filename);
+      }
+    }
+    assert_eq!(html_assets.len(), 1, "expected exactly one HTML asset");
+
+    let frame_asset = &html_assets[0];
+    assert!(
+      index_html.contains(&format!("{ASSETS_DIR}/{frame_asset}")),
+      "index.html should rewrite iframe src to point at the local HTML asset"
+    );
+
+    let frame_html = fs::read_to_string(assets_dir.join(frame_asset))?;
+    assert_no_remote_url_strings(&frame_html);
+
+    let png_asset = png_asset.expect("missing png asset");
+    let woff2_asset = woff2_asset.expect("missing woff2 asset");
+    assert!(
+      frame_html.contains(&png_asset),
+      "iframe HTML should reference local image asset {png_asset}"
+    );
+    assert!(
+      frame_html.contains(&woff2_asset),
+      "iframe HTML should reference local font asset {woff2_asset}"
+    );
+
+    Ok(())
+  }
+
+  #[test]
+  fn import_fails_when_nested_html_references_missing_asset() -> Result<()> {
+    let bundle_dir = tempdir()?;
+    write_synthetic_bundle(bundle_dir.path(), false)?;
+
+    let output = tempdir()?;
+    let output_root = output.path().join("fixtures");
+
+    let res = run_import_page_fixture(ImportPageFixtureArgs {
+      bundle: bundle_dir.path().to_path_buf(),
+      fixture_name: "example_test".to_string(),
+      output_root,
+      overwrite: true,
+      allow_missing: false,
+      allow_http_references: false,
+      legacy_rewrite: false,
+      dry_run: false,
+    });
+    assert!(
+      res.is_err(),
+      "import should fail when a fetchable asset is missing"
+    );
+    Ok(())
+  }
 }
