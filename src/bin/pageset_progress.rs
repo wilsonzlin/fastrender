@@ -24,6 +24,7 @@ use common::render_pipeline::{
   render_document_with_artifacts, PreparedDocument, RenderConfigBundle, RenderSurface,
   CLI_RENDER_STACK_SIZE,
 };
+use stage_buckets::StageBuckets;
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
   RenderArtifacts, RenderCounts, RenderDiagnostics, RenderStats, ResourceDiagnostics, ResourceKind,
@@ -688,40 +689,6 @@ impl From<ProgressStatusArg> for ProgressStatus {
       ProgressStatusArg::Panic => ProgressStatus::Panic,
       ProgressStatusArg::Error => ProgressStatus::Error,
     }
-  }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-struct StageBuckets {
-  fetch: f64,
-  css: f64,
-  cascade: f64,
-  layout: f64,
-  paint: f64,
-}
-
-impl StageBuckets {
-  fn sum(&self) -> f64 {
-    self.fetch + self.css + self.cascade + self.layout + self.paint
-  }
-
-  fn rescale_to_total(&mut self, total_ms: f64) {
-    if !total_ms.is_finite() || total_ms <= 0.0 {
-      return;
-    }
-    let sum = self.sum();
-    if !sum.is_finite() || sum <= 0.0 {
-      return;
-    }
-    let scale = total_ms / sum;
-    if !scale.is_finite() || scale <= 0.0 {
-      return;
-    }
-    self.fetch *= scale;
-    self.css *= scale;
-    self.cascade *= scale;
-    self.layout *= scale;
-    self.paint *= scale;
   }
 }
 
@@ -1730,14 +1697,7 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
 }
 
 fn buckets_from_stats(stats: &RenderStats) -> StageBuckets {
-  let buckets = stage_buckets::wall_clock_stage_buckets_from_stats(stats);
-  StageBuckets {
-    fetch: buckets.fetch,
-    css: buckets.css,
-    cascade: buckets.cascade,
-    layout: buckets.layout,
-    paint: buckets.paint,
-  }
+  stage_buckets::wall_clock_stage_buckets_from_stats(stats)
 }
 
 fn guess_hotspot(buckets: &StageBuckets) -> &'static str {
@@ -6780,7 +6740,6 @@ fn worker_on_large_stack(args: WorkerArgs) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use fastrender::api::RenderStageTimings;
   use std::collections::{HashSet, VecDeque};
   use std::fs;
   use std::io;
@@ -7161,43 +7120,6 @@ mod tests {
       .filter_map(|e| e.ok())
       .collect();
     assert_eq!(remaining.len(), 1);
-  }
-
-  #[test]
-  fn buckets_from_diagnostics_exclude_cpu_sum_timings() {
-    let timings = RenderStageTimings {
-      html_decode_ms: Some(1.0),
-      dom_parse_ms: Some(2.0),
-      dom_meta_viewport_ms: Some(0.5),
-      dom_clone_ms: Some(0.25),
-      dom_top_layer_ms: Some(0.75),
-      css_inlining_ms: Some(3.0),
-      css_parse_ms: Some(4.0),
-      cascade_ms: Some(5.0),
-      box_tree_ms: Some(6.0),
-      layout_ms: Some(7.0),
-      text_fallback_cpu_ms: Some(1000.0),
-      text_shape_cpu_ms: Some(2000.0),
-      paint_build_ms: Some(9.0),
-      paint_optimize_ms: Some(10.0),
-      paint_rasterize_ms: Some(11.0),
-      text_rasterize_cpu_ms: Some(3000.0),
-      encode_ms: Some(13.0),
-      ..RenderStageTimings::default()
-    };
-    let diag = RenderDiagnostics {
-      stats: Some(RenderStats {
-        timings,
-        ..RenderStats::default()
-      }),
-      ..RenderDiagnostics::default()
-    };
-    let buckets = buckets_from_diagnostics(&diag);
-    assert_eq!(buckets.fetch, 4.5);
-    assert_eq!(buckets.css, 7.0);
-    assert_eq!(buckets.cascade, 11.0);
-    assert_eq!(buckets.layout, 7.0);
-    assert_eq!(buckets.paint, 43.0);
   }
 
   #[test]

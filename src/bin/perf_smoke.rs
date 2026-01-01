@@ -6,6 +6,7 @@ use fastrender::image_output::OutputFormat;
 use fastrender::style::media::MediaType;
 use fastrender::{FontConfig, ResourcePolicy};
 use serde::{Deserialize, Serialize};
+use stage_buckets::StageBuckets as StageBreakdown;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -280,50 +281,6 @@ struct PagesetGuardrailsFixture {
   media: String,
   #[serde(default)]
   budget_ms: Option<f64>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-struct StageBreakdown {
-  #[serde(default)]
-  fetch: f64,
-  #[serde(default)]
-  css: f64,
-  #[serde(default)]
-  cascade: f64,
-  #[serde(default)]
-  layout: f64,
-  #[serde(default)]
-  paint: f64,
-}
-
-impl StageBreakdown {
-  fn entries(&self) -> [(&'static str, f64); 5] {
-    [
-      ("fetch", self.fetch),
-      ("css", self.css),
-      ("cascade", self.cascade),
-      ("layout", self.layout),
-      ("paint", self.paint),
-    ]
-  }
-
-  fn add_assign(&mut self, other: &StageBreakdown) {
-    self.fetch += other.fetch;
-    self.css += other.css;
-    self.cascade += other.cascade;
-    self.layout += other.layout;
-    self.paint += other.paint;
-  }
-
-  fn rounded(&self) -> Self {
-    Self {
-      fetch: round_ms(self.fetch),
-      css: round_ms(self.css),
-      cascade: round_ms(self.cascade),
-      layout: round_ms(self.layout),
-      paint: round_ms(self.paint),
-    }
-  }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -1269,14 +1226,7 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
 /// Buckets reflect wall-clock stage time; CPU-sum subsystem timings (e.g. `*_cpu_ms`) are excluded
 /// to avoid double-counting.
 fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown {
-  let buckets = stage_buckets::wall_clock_stage_buckets_from_stats(stats);
-  StageBreakdown {
-    fetch: round_ms(buckets.fetch),
-    css: round_ms(buckets.css),
-    cascade: round_ms(buckets.cascade),
-    layout: round_ms(buckets.layout),
-    paint: round_ms(buckets.paint),
-  }
+  stage_buckets::wall_clock_stage_buckets_from_stats(stats).rounded()
 }
 
 fn counts_from_stats(stats: &fastrender::RenderStats) -> CountsSummary {
@@ -1575,27 +1525,5 @@ impl Regression {
 
   fn format_latest(&self) -> String {
     self.metric.format_value(self.latest)
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn stage_breakdown_excludes_cpu_sum_timings() {
-    let mut stats = fastrender::RenderStats::default();
-    stats.timings.layout_ms = Some(1.0);
-    stats.timings.text_fallback_cpu_ms = Some(2000.0);
-    stats.timings.text_shape_cpu_ms = Some(3000.0);
-    stats.timings.paint_build_ms = Some(4.0);
-    stats.timings.paint_optimize_ms = Some(5.0);
-    stats.timings.paint_rasterize_ms = Some(6.0);
-    stats.timings.text_rasterize_cpu_ms = Some(7000.0);
-    stats.timings.encode_ms = Some(8.0);
-
-    let breakdown = stage_breakdown_from_stats(&stats);
-    assert_eq!(breakdown.layout, 1.0);
-    assert_eq!(breakdown.paint, 23.0);
   }
 }
