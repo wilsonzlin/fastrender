@@ -211,7 +211,7 @@ const CORE_FIXTURES: &[CoreFixture] = &[
   ),
 ];
 
-const PERF_SMOKE_SCHEMA_VERSION: u32 = 3;
+const PERF_SMOKE_SCHEMA_VERSION: u32 = 4;
 const PAGESET_TIMEOUT_MANIFEST_VERSION: u32 = 1;
 const PAGESET_TIMEOUT_MANIFEST: &str = include_str!("../../tests/pages/pageset_timeouts.json");
 
@@ -874,6 +874,11 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
   }
 }
 
+/// Collapse detailed render diagnostics timings into coarse stage buckets.
+///
+/// Keep this consistent with `pageset_progress` so regressions attribute similarly across tools:
+/// - Text shaping is grouped under `layout` because glyph positioning is part of line building.
+/// - Text rasterization and final encode time are grouped under `paint` to capture output costs.
 fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown {
   let t = &stats.timings;
   StageBreakdown {
@@ -892,6 +897,7 @@ fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown
       t.paint_optimize_ms,
       t.paint_rasterize_ms,
       t.text_rasterize_ms,
+      t.encode_ms,
     ])),
   }
 }
