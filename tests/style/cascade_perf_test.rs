@@ -174,3 +174,51 @@ fn cascade_handles_many_custom_properties_under_budget() {
   assert_eq!(first.styles.padding_left.value, 1.0);
   assert_eq!(first.styles.padding_left.unit, fastrender::LengthUnit::Px);
 }
+
+#[test]
+fn cascade_handles_many_keyword_declarations_under_budget() {
+  let variants = 400usize;
+  let node_count = 600usize;
+  let classes_per_node = 20usize;
+
+  let mut css = String::new();
+  for idx in 0..variants {
+    css.push_str(&format!(
+      ".c{idx} {{ display: block; position: relative; overflow: hidden; visibility: visible; float: none; clear: none; box-sizing: border-box; text-transform: none; white-space: normal; word-break: normal; }}\n"
+    ));
+  }
+  let stylesheet = parse_stylesheet(&css).expect("stylesheet parses");
+
+  let mut html = String::from("<div id=\"root\">");
+  for idx in 0..node_count {
+    let mut classes = String::new();
+    for class_idx in 0..classes_per_node {
+      if class_idx > 0 {
+        classes.push(' ');
+      }
+      classes.push_str(&format!("c{}", (idx + class_idx) % variants));
+    }
+
+    html.push_str(&format!("<div id=\"node{idx}\" class=\"{classes}\"></div>"));
+  }
+  html.push_str("</div>");
+  let dom = parse_html(&html).expect("html parses");
+
+  let media = MediaContext::screen(1280.0, 720.0);
+  let start = Instant::now();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+  let elapsed = start.elapsed();
+
+  assert!(
+    elapsed < Duration::from_millis(800),
+    "cascade perf regression: {}ms for {} rules over {} nodes",
+    elapsed.as_millis(),
+    variants,
+    node_count
+  );
+
+  assert_eq!(
+    display(find_by_id(&styled, "node0").expect("node0 styled")),
+    "block"
+  );
+}

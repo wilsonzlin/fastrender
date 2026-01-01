@@ -13,9 +13,36 @@ use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Maximum depth for recursive var() resolution to prevent infinite loops
 const MAX_RECURSION_DEPTH: usize = 10;
+
+#[cfg(test)]
+static TOKEN_RESOLVER_ENTRY_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[inline]
+fn contains_ascii_case_insensitive_var_call(raw: &str) -> bool {
+  let bytes = raw.as_bytes();
+  if bytes.len() < 4 {
+    return false;
+  }
+
+  let mut idx = 0usize;
+  while idx + 3 < bytes.len() {
+    let b0 = bytes[idx];
+    if b0 == b'v' || b0 == b'V' {
+      let b1 = bytes[idx + 1];
+      let b2 = bytes[idx + 2];
+      if (b1 == b'a' || b1 == b'A') && (b2 == b'r' || b2 == b'R') && bytes[idx + 3] == b'(' {
+        return true;
+      }
+    }
+    idx += 1;
+  }
+  false
+}
 
 /// Result of a var() resolution attempt
 #[derive(Debug, Clone)]
@@ -83,6 +110,23 @@ pub fn resolve_var_for_property(
   custom_properties: &CustomPropertyStore,
   property_name: &str,
 ) -> VarResolutionResult {
+  match value {
+    PropertyValue::Keyword(raw) | PropertyValue::Custom(raw) => {
+      // Most declarations are simple keywords (display, position, etc.) and do not contain any
+      // var() references. Avoid feeding such values through cssparser tokenization by doing a
+      // cheap ASCII-case-insensitive substring check for `var(` first.
+      //
+      // Note: If the value contains a backslash escape, conservatively fall back to token parsing
+      // so we don't miss an escaped `var()` function name.
+      if !contains_ascii_case_insensitive_var_call(raw) && !raw.as_bytes().contains(&b'\\') {
+        return VarResolutionResult::Resolved {
+          value: Box::new(value.clone()),
+          css_text: String::new(),
+        };
+      }
+    }
+    _ => {}
+  }
   resolve_var_recursive(value, custom_properties, 0, property_name)
 }
 
@@ -167,6 +211,9 @@ fn resolve_tokens_from_parser<'i, 't>(
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
+  #[cfg(test)]
+  TOKEN_RESOLVER_ENTRY_COUNT.fetch_add(1, Ordering::Relaxed);
+
   let mut output = Vec::new();
 
   while let Ok(token) = parser.next_including_whitespace_and_comments() {
@@ -773,6 +820,28 @@ mod tests {
     } else {
       panic!("Expected Length, got {:?}", resolved);
     }
+  }
+
+  #[test]
+  fn test_keyword_without_var_skips_tokenization() {
+    let props = CustomPropertyStore::default();
+    let value = PropertyValue::Keyword("block".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.store(0, Ordering::Relaxed);
+    let resolved = resolve_var_for_property(&value, &props, "display");
+
+    match resolved {
+      VarResolutionResult::Resolved {
+        value: boxed,
+        css_text,
+      } => {
+        assert!(css_text.is_empty());
+        assert!(matches!(*boxed, PropertyValue::Keyword(ref kw) if kw == "block"));
+      }
+      other => panic!("Expected Resolved, got {:?}", other),
+    }
+
+    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.load(Ordering::Relaxed), 0);
   }
 
   #[test]
