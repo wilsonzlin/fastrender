@@ -1777,33 +1777,39 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
       return false;
     }
 
-    let mut depth: usize = 0;
-    let mut in_string: Option<char> = None;
+    // This runs for every gradient value, so keep it allocation-free and avoid decoding UTF-8
+    // into `char`s; ASCII punctuation can't appear inside a multi-byte UTF-8 sequence.
+    let bytes = trimmed.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_string: Option<u8> = None;
     let mut escape = false;
 
-    for (rel_idx, ch) in trimmed[name_len..].char_indices() {
-      let idx = rel_idx + name_len;
+    for idx in name_len..bytes.len() {
+      let b = bytes[idx];
       if escape {
         escape = false;
         continue;
       }
-      if ch == '\\' {
+      if b == b'\\' {
         escape = true;
         continue;
       }
       if let Some(q) = in_string {
-        if ch == q {
+        if b == q {
           in_string = None;
         }
         continue;
       }
-      match ch {
-        '"' | '\'' => in_string = Some(ch),
-        '(' => depth += 1,
-        ')' => {
-          depth = depth.saturating_sub(1);
+      match b {
+        b'"' | b'\'' => in_string = Some(b),
+        b'(' => depth += 1,
+        b')' => {
+          depth -= 1;
           if depth == 0 {
             return trimmed[idx + 1..].trim().is_empty();
+          }
+          if depth < 0 {
+            return false;
           }
         }
         _ => {}
