@@ -6,8 +6,7 @@ use crate::image_loader::ImageCache;
 use crate::paint::display_list::ImageData;
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control;
-use crate::resource::origin_from_url;
-use crate::resource::ResourceAccessPolicy;
+use crate::resource::{origin_from_url, FetchDestination, FetchRequest, ResourceAccessPolicy};
 use crate::style::color::Rgba;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -529,7 +528,16 @@ pub(crate) fn render_iframe_src(
   }
   let mut owner_guard = IframeInFlightOwnerGuard::new(key, flight);
 
-  let resource = fetcher.fetch(&resolved).ok()?;
+  let base_url = image_cache.base_url();
+  let referrer = context
+    .as_ref()
+    .and_then(|ctx| ctx.document_url.as_deref())
+    .or(base_url.as_deref());
+  let mut request = FetchRequest::new(&resolved, FetchDestination::Document);
+  if let Some(referrer) = referrer {
+    request = request.with_referrer(referrer);
+  }
+  let resource = fetcher.fetch_with_request(request).ok()?;
   let final_url = resource
     .final_url
     .clone()
@@ -568,9 +576,13 @@ pub(crate) fn render_iframe_src(
   cache.set_base_url(final_url.clone());
   let nested_origin = origin_from_url(&final_url);
   let nested_context = context.as_ref().map(|ctx| {
-    ctx
-      .for_origin(nested_origin)
-      .with_iframe_depth(nested_depth)
+    let mut nested = ctx.for_origin(nested_origin).with_iframe_depth(nested_depth);
+    nested.document_url = resource
+      .final_url
+      .as_deref()
+      .map(|u| u.to_string())
+      .or_else(|| Some(resolved.clone()));
+    nested
   });
   let policy_for_render = nested_context
     .as_ref()

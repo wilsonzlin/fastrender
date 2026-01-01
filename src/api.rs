@@ -136,7 +136,8 @@ use crate::render_control::{
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{
   ensure_http_success, ensure_stylesheet_mime_sane, origin_from_url, CachingFetcher,
-  DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy, ResourceFetcher, ResourcePolicy,
+  DocumentOrigin, FetchDestination, FetchRequest, HttpFetcher, PolicyError, ResourceAccessPolicy,
+  ResourceFetcher, ResourcePolicy,
 };
 use crate::scroll::ScrollState;
 use crate::style::cascade::apply_starting_style_set_with_media_target_and_imports_cached_with_deadline;
@@ -346,6 +347,12 @@ pub struct FastRender {
 
   /// Base URL used for resolving links/targets
   base_url: Option<String>,
+
+  /// True document URL for this render (after redirects), used for origin/referrer policy.
+  ///
+  /// Note: This is intentionally distinct from [`FastRender::base_url`], which may incorporate a
+  /// `<base href>` override for resolving relative references.
+  document_url: Option<String>,
 
   /// Compatibility profile for opt-in site-specific behaviors
   compat_profile: CompatProfile,
@@ -1202,6 +1209,7 @@ impl ResourceFetchError {
 /// Shared resource-loading context combining policy and diagnostics.
 #[derive(Clone, Default)]
 pub struct ResourceContext {
+  pub document_url: Option<String>,
   pub policy: ResourceAccessPolicy,
   pub diagnostics: Option<SharedRenderDiagnostics>,
   pub iframe_depth_remaining: Option<usize>,
@@ -1270,6 +1278,7 @@ impl ResourceContext {
   /// Clone this context with a different document origin.
   pub fn for_origin(&self, origin: Option<DocumentOrigin>) -> Self {
     Self {
+      document_url: self.document_url.clone(),
       policy: self.policy.for_origin(origin),
       diagnostics: self.diagnostics.clone(),
       iframe_depth_remaining: self.iframe_depth_remaining,
@@ -3504,6 +3513,7 @@ impl FastRender {
       fit_canvas_to_content: config.fit_canvas_to_content,
       pending_device_size: None,
       base_url: config.base_url.clone(),
+      document_url: None,
       dom_compat_mode: config.dom_compat_mode,
       compat_profile: config.compat_profile,
       fragmentation: config.fragmentation,
@@ -3925,7 +3935,7 @@ impl FastRender {
       .map(|diag| SharedRenderDiagnostics {
         inner: Arc::clone(diag),
       });
-    let context = Some(self.build_resource_context(self.base_url.as_deref(), shared_diagnostics));
+    let context = Some(self.build_resource_context(self.document_url(), shared_diagnostics));
     let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
     let result = self.render_html_internal(
       html,
@@ -4919,6 +4929,7 @@ impl FastRender {
         }
       };
 
+      self.set_document_url(resource.final_url.as_deref().unwrap_or(url));
       let mut report = self.render_fetched_html_with_options_report_internal(
         &resource,
         Some(url),
@@ -5050,6 +5061,7 @@ impl FastRender {
       stats = Some(recorder);
     }
     let hint = resource.final_url.as_deref().or(base_hint).unwrap_or("");
+    self.set_document_url(hint);
     let decode_start = stats.as_deref().and_then(|rec| rec.timer());
     let html = {
       let _span = trace.span("html_decode", "parse");
@@ -5175,6 +5187,7 @@ impl FastRender {
         self.set_diagnostics_sink(Some(Arc::clone(&diag)));
         diag
       };
+      self.set_document_url(base_hint);
       let base_url = infer_base_url(html, base_hint).into_owned();
       self.set_base_url(base_url.clone());
       let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
@@ -5249,6 +5262,7 @@ impl FastRender {
       .viewport
       .unwrap_or((self.default_width, self.default_height));
 
+    self.set_document_url(base_hint);
     let base_url = infer_base_url(html, base_hint).into_owned();
     self.set_base_url(base_url.clone());
 
@@ -5448,7 +5462,14 @@ impl FastRender {
             if let Some(counter) = stylesheet_fetch_counter.as_ref() {
               counter.fetch_add(1, Ordering::Relaxed);
             }
-            let resource = match fetcher.fetch(&url) {
+            let referrer = resource_context
+              .as_ref()
+              .and_then(|ctx| ctx.document_url.as_deref());
+            let mut request = FetchRequest::new(url.as_str(), FetchDestination::Style);
+            if let Some(referrer) = referrer {
+              request = request.with_referrer(referrer);
+            }
+            let resource = match fetcher.fetch_with_request(request) {
               Ok(resource) => resource,
               Err(err) => {
                 // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -5749,7 +5770,12 @@ impl FastRender {
           if let Some(counter) = stylesheet_fetch_counter.as_ref() {
             counter.fetch_add(1, Ordering::Relaxed);
           }
-          match fetcher.fetch(&stylesheet_url) {
+          let mut request =
+            FetchRequest::new(stylesheet_url.as_str(), FetchDestination::Style);
+          if let Some(referrer) = self.document_url() {
+            request = request.with_referrer(referrer);
+          }
+          match fetcher.fetch_with_request(request) {
             Ok(resource) => {
               if let Some(ctx) = resource_context {
                 if ctx
@@ -7381,6 +7407,23 @@ impl FastRender {
     self.base_url = None;
   }
 
+  fn set_document_url(&mut self, document_url: impl Into<String>) {
+    let url = document_url.into();
+    if url.trim().is_empty() {
+      self.document_url = None;
+    } else {
+      self.document_url = Some(url);
+    }
+  }
+
+  fn clear_document_url(&mut self) {
+    self.document_url = None;
+  }
+
+  fn document_url(&self) -> Option<&str> {
+    self.document_url.as_deref()
+  }
+
   /// Attach or clear the diagnostics sink for downstream fetchers.
   fn set_diagnostics_sink(&mut self, sink: Option<Arc<Mutex<RenderDiagnostics>>>) {
     self.diagnostics = sink.clone();
@@ -7406,6 +7449,7 @@ impl FastRender {
   ) -> ResourceContext {
     let origin = document_url.and_then(origin_from_url);
     ResourceContext {
+      document_url: document_url.map(|url| url.to_string()),
       policy: self.resource_policy.for_origin(origin),
       diagnostics,
       iframe_depth_remaining: Some(self.max_iframe_depth),
@@ -7714,6 +7758,7 @@ impl FastRender {
 
     let mut combined_css = String::new();
     let mut import_state = InlineImportState::with_budget(budget);
+    let document_referrer = resource_context.and_then(|ctx| ctx.document_url.as_deref());
 
     for css_url in css_links {
       let mut budget_diag = |url: &str, reason: &str| {
@@ -7735,7 +7780,11 @@ impl FastRender {
       if let Some(rec) = stats.as_deref_mut() {
         rec.record_fetch(ResourceKind::Stylesheet);
       }
-      match fetcher.fetch(&css_url) {
+      let mut request = FetchRequest::new(css_url.as_str(), FetchDestination::Style);
+      if let Some(referrer) = document_referrer {
+        request = request.with_referrer(referrer);
+      }
+      match fetcher.fetch_with_request(request) {
         Ok(res) => {
           if let Some(ctx) = resource_context {
             if ctx
@@ -7772,7 +7821,11 @@ impl FastRender {
                   )));
                 }
               }
-              match fetcher.fetch(u) {
+              let mut request = FetchRequest::new(u, FetchDestination::Style);
+              if let Some(referrer) = document_referrer {
+                request = request.with_referrer(referrer);
+              }
+              match fetcher.fetch_with_request(request) {
                 Ok(res) => {
                   if let Some(ctx) = resource_context {
                     if let Err(err) = ctx.check_allowed_with_final(
@@ -8901,7 +8954,15 @@ impl CssImportLoader for CssImportFetcher {
     if let Some(counter) = self.stylesheet_fetch_counter.as_ref() {
       counter.fetch_add(1, Ordering::Relaxed);
     }
-    let resource = match self.fetcher.fetch(&resolved) {
+    let referrer = self
+      .resource_context
+      .as_ref()
+      .and_then(|ctx| ctx.document_url.as_deref());
+    let mut request = FetchRequest::new(resolved.as_str(), FetchDestination::Style);
+    if let Some(referrer) = referrer {
+      request = request.with_referrer(referrer);
+    }
+    let resource = match self.fetcher.fetch_with_request(request) {
       Ok(res) => res,
       Err(err) => {
         if let Some(ctx) = &self.resource_context {
@@ -10330,6 +10391,9 @@ pub(crate) fn render_html_with_shared_resources(
     fit_canvas_to_content: false,
     pending_device_size: None,
     base_url,
+    document_url: resource_context
+      .as_ref()
+      .and_then(|ctx| ctx.document_url.clone()),
     compat_profile: CompatProfile::default(),
     dom_compat_mode: DomCompatibilityMode::Standard,
     fragmentation: None,
@@ -10539,6 +10603,63 @@ mod tests {
             format!("missing resource: {url}"),
           ))
         })
+    }
+  }
+
+  #[derive(Clone, Default)]
+  struct RecordingRequestFetcher {
+    map: HashMap<String, (Vec<u8>, Option<String>)>,
+    requests: Arc<Mutex<Vec<RecordedFetchRequest>>>,
+  }
+
+  #[derive(Debug, Clone, PartialEq, Eq)]
+  struct RecordedFetchRequest {
+    url: String,
+    destination: FetchDestination,
+    referrer: Option<String>,
+  }
+
+  impl RecordingRequestFetcher {
+    fn with_entry(mut self, url: &str, content: &str, content_type: &str) -> Self {
+      self.map.insert(
+        url.to_string(),
+        (content.as_bytes().to_vec(), Some(content_type.to_string())),
+      );
+      self
+    }
+
+    fn requests(&self) -> Vec<RecordedFetchRequest> {
+      self
+        .requests
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+    }
+  }
+
+  impl ResourceFetcher for RecordingRequestFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      self
+        .map
+        .get(url)
+        .map(|(bytes, content_type)| FetchedResource::new(bytes.clone(), content_type.clone()))
+        .ok_or_else(|| {
+          Error::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("missing resource: {url}"),
+          ))
+        })
+    }
+
+    fn fetch_with_request(&self, request: FetchRequest<'_>) -> crate::error::Result<FetchedResource> {
+      if let Ok(mut guard) = self.requests.lock() {
+        guard.push(RecordedFetchRequest {
+          url: request.url.to_string(),
+          destination: request.destination,
+          referrer: request.referrer.map(|r| r.to_string()),
+        });
+      }
+      self.fetch(request.url)
     }
   }
 
@@ -13481,6 +13602,72 @@ mod tests {
 
     let color = text_color_for(&tree, "Order Test").unwrap();
     assert_eq!(color, Rgba::rgb(20, 40, 60));
+  }
+
+  #[test]
+  fn base_href_does_not_override_document_referrer_or_origin() {
+    let html = r#"<!doctype html><html><head>
+        <base href="https://b.example/">
+        <link rel="stylesheet" href="style.css">
+      </head><body><div id="target">hello</div></body></html>"#;
+    let document_url = "https://a.example/page.html";
+    let stylesheet_url = "https://b.example/style.css";
+
+    let fetcher = Arc::new(
+      RecordingRequestFetcher::default()
+        .with_entry(stylesheet_url, "#target { color: rgb(1, 2, 3); }", "text/css"),
+    );
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles.clone());
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+
+    let blocked_fetcher = Arc::new(
+      RecordingRequestFetcher::default()
+        .with_entry(stylesheet_url, "#target { color: rgb(1, 2, 3); }", "text/css"),
+    );
+    let blocked_config = FastRenderConfig::default()
+      .with_runtime_toggles(toggles)
+      .with_same_origin_subresources(true);
+    let mut blocked_renderer = FastRender::with_config_and_fetcher(
+      blocked_config,
+      Some(blocked_fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+    blocked_renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    assert!(
+      blocked_fetcher.requests().is_empty(),
+      "expected stylesheet to be blocked when derived from <base href> but same_origin_subresources is enabled (requests={:?})",
+      blocked_fetcher.requests()
+    );
   }
 
   #[test]

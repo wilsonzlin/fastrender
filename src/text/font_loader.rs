@@ -37,7 +37,8 @@ use crate::error::RenderStage;
 use crate::error::Result;
 use crate::render_control;
 use crate::resource::{
-  ensure_font_mime_sane, ensure_http_success, FetchedResource, HttpFetcher, HttpRetryPolicy,
+  ensure_font_mime_sane, ensure_http_success, FetchDestination, FetchRequest, FetchedResource,
+  HttpFetcher, HttpRetryPolicy,
   ResourceFetcher,
 };
 use crate::text::face_cache;
@@ -221,11 +222,21 @@ impl FontFetcher for DefaultFontFetcher {
 
 struct ResourceFontFetcher {
   fetcher: Arc<dyn ResourceFetcher>,
+  resource_context: Arc<RwLock<Option<ResourceContext>>>,
 }
 
 impl FontFetcher for ResourceFontFetcher {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    self.fetcher.fetch(url)
+    let referrer = self
+      .resource_context
+      .read()
+      .ok()
+      .and_then(|ctx| ctx.as_ref().and_then(|ctx| ctx.document_url.clone()));
+    let mut request = FetchRequest::new(url, FetchDestination::Font);
+    if let Some(referrer) = referrer.as_deref() {
+      request = request.with_referrer(referrer);
+    }
+    self.fetcher.fetch_with_request(request)
   }
 }
 
@@ -318,6 +329,7 @@ pub struct FontContext {
   web_families: Arc<RwLock<std::collections::HashSet<String>>>,
   feature_support: Arc<RwLock<std::collections::HashMap<(usize, u32, u32), bool>>>,
   fetcher: Arc<dyn FontFetcher>,
+  resource_context_shared: Option<Arc<RwLock<Option<ResourceContext>>>>,
   pending_async: Arc<(Mutex<usize>, Condvar)>,
   web_used_codepoints: Arc<RwLock<Vec<u32>>>,
   math_tables:
@@ -454,10 +466,14 @@ impl FontContext {
 
   /// Creates a new font context backed by a [`ResourceFetcher`] for remote fonts.
   pub fn with_resource_fetcher(fetcher: Arc<dyn ResourceFetcher>) -> Self {
-    Self::with_database_and_fetcher(
-      Self::build_database(&FontConfig::default()),
-      Arc::new(ResourceFontFetcher { fetcher }),
-    )
+    let shared = Arc::new(RwLock::new(None));
+    let font_fetcher: Arc<dyn FontFetcher> = Arc::new(ResourceFontFetcher {
+      fetcher,
+      resource_context: Arc::clone(&shared),
+    });
+    let mut ctx = Self::with_database_and_fetcher(Self::build_database(&FontConfig::default()), font_fetcher);
+    ctx.resource_context_shared = Some(shared);
+    ctx
   }
 
   /// Creates a new font context backed by a [`ResourceFetcher`] and custom fonts.
@@ -465,10 +481,14 @@ impl FontContext {
     font_config: FontConfig,
     fetcher: Arc<dyn ResourceFetcher>,
   ) -> Self {
-    Self::with_database_and_fetcher(
-      Self::build_database(&font_config),
-      Arc::new(ResourceFontFetcher { fetcher }),
-    )
+    let shared = Arc::new(RwLock::new(None));
+    let font_fetcher: Arc<dyn FontFetcher> = Arc::new(ResourceFontFetcher {
+      fetcher,
+      resource_context: Arc::clone(&shared),
+    });
+    let mut ctx = Self::with_database_and_fetcher(Self::build_database(&font_config), font_fetcher);
+    ctx.resource_context_shared = Some(shared);
+    ctx
   }
 
   /// Creates a font context with a custom font database
@@ -503,10 +523,17 @@ impl FontContext {
     fetcher: Arc<dyn ResourceFetcher>,
     cache: FontCacheConfig,
   ) -> Self {
-    Self::with_database_and_fetcher(
+    let shared = Arc::new(RwLock::new(None));
+    let font_fetcher: Arc<dyn FontFetcher> = Arc::new(ResourceFontFetcher {
+      fetcher,
+      resource_context: Arc::clone(&shared),
+    });
+    let mut ctx = Self::with_database_and_fetcher(
       Arc::new(FontDatabase::with_shared_db_and_cache(db, cache)),
-      Arc::new(ResourceFontFetcher { fetcher }),
-    )
+      font_fetcher,
+    );
+    ctx.resource_context_shared = Some(shared);
+    ctx
   }
 
   /// Creates a font context backed by a custom database and fetcher.
@@ -517,6 +544,7 @@ impl FontContext {
       web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
       feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
       fetcher,
+      resource_context_shared: None,
       pending_async: Arc::new((Mutex::new(0), Condvar::new())),
       web_used_codepoints: Arc::new(RwLock::new(Vec::new())),
       math_tables: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -567,7 +595,12 @@ impl FontContext {
 
   /// Set the active resource context used for remote font fetching.
   pub fn set_resource_context(&mut self, context: Option<ResourceContext>) {
-    self.resource_context = context;
+    self.resource_context = context.clone();
+    if let Some(shared) = self.resource_context_shared.as_ref() {
+      if let Ok(mut slot) = shared.write() {
+        *slot = context;
+      }
+    }
   }
 
   /// Get the current resource context.

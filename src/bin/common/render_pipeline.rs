@@ -161,12 +161,12 @@ pub fn disk_cache_namespace(user_agent: &str, accept_language: &str) -> String {
       )
     })
     .unwrap_or(true);
-  // Preserve cache key parity with legacy runs when browser headers are enabled (the default), but
-  // partition caches when debugging with `FASTR_HTTP_BROWSER_HEADERS=0`.
   if browser_headers_enabled {
-    format!("user-agent:{ua}\naccept-language:{lang}")
+    format!("fetch-profile:contextual-v1\nuser-agent:{ua}\naccept-language:{lang}")
   } else {
-    format!("user-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0")
+    format!(
+      "fetch-profile:contextual-v1\nuser-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0"
+    )
   }
 }
 

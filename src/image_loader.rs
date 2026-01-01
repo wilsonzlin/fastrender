@@ -13,6 +13,8 @@ use crate::resource::ensure_http_success;
 use crate::resource::ensure_image_mime_sane;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
+use crate::resource::FetchDestination;
+use crate::resource::FetchRequest;
 use crate::resource::FetchedResource;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
@@ -1906,7 +1908,15 @@ impl ImageCache {
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
 
-    let resource = match self.fetcher.fetch(resolved_url) {
+    let referrer = self
+      .resource_context
+      .as_ref()
+      .and_then(|ctx| ctx.document_url.as_deref());
+    let mut request = FetchRequest::new(resolved_url, FetchDestination::Image);
+    if let Some(referrer) = referrer {
+      request = request.with_referrer(referrer);
+    }
+    let resource = match self.fetcher.fetch_with_request(request) {
       Ok(res) => res,
       Err(err) => {
         self.record_image_error(resolved_url, &err);
@@ -2137,7 +2147,15 @@ impl ImageCache {
       record_probe_partial_fallback_full();
     }
 
-    let resource = match self.fetcher.fetch(resolved_url) {
+    let referrer = self
+      .resource_context
+      .as_ref()
+      .and_then(|ctx| ctx.document_url.as_deref());
+    let mut request = FetchRequest::new(resolved_url, FetchDestination::Image);
+    if let Some(referrer) = referrer {
+      request = request.with_referrer(referrer);
+    }
+    let resource = match self.fetcher.fetch_with_request(request) {
       Ok(res) => res,
       Err(err) => {
         self.record_image_error(resolved_url, &err);

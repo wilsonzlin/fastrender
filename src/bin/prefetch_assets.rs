@@ -35,7 +35,8 @@ mod disk_cache_main {
   use fastrender::html::images::ImageSelectionContext;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
-    CachingFetcherConfig, DiskCachingFetcher, FetchedResource, ResourceFetcher,
+    CachingFetcherConfig, DiskCachingFetcher, FetchDestination, FetchRequest, FetchedResource,
+    ResourceFetcher,
     DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
@@ -828,6 +829,7 @@ mod disk_cache_main {
 
   struct PrefetchImportLoader<'a> {
     fetcher: &'a dyn ResourceFetcher,
+    referrer: &'a str,
     css_cache: RefCell<HashMap<String, String>>,
     summary: &'a RefCell<PageSummary>,
     all_asset_urls: &'a RefCell<BTreeSet<String>>,
@@ -838,6 +840,7 @@ mod disk_cache_main {
   impl<'a> PrefetchImportLoader<'a> {
     fn new(
       fetcher: &'a dyn ResourceFetcher,
+      referrer: &'a str,
       summary: &'a RefCell<PageSummary>,
       all_asset_urls: &'a RefCell<BTreeSet<String>>,
       css_asset_urls: Option<&'a RefCell<BTreeSet<String>>>,
@@ -845,6 +848,7 @@ mod disk_cache_main {
     ) -> Self {
       Self {
         fetcher,
+        referrer,
         css_cache: RefCell::new(HashMap::new()),
         summary,
         all_asset_urls,
@@ -860,7 +864,10 @@ mod disk_cache_main {
         return Ok(cached);
       }
 
-      match self.fetcher.fetch(url) {
+      match self
+        .fetcher
+        .fetch_with_request(FetchRequest::new(url, FetchDestination::Style).with_referrer(self.referrer))
+      {
         Ok(res) => {
           self.summary.borrow_mut().fetched_imports += 1;
           let base = res.final_url.as_deref().unwrap_or(url);
@@ -1019,6 +1026,7 @@ mod disk_cache_main {
 
   fn prefetch_fonts_from_stylesheet(
     fetcher: &dyn ResourceFetcher,
+    referrer: &str,
     css_base_url: &str,
     sheet: &StyleSheet,
     media_ctx: &MediaContext,
@@ -1040,7 +1048,9 @@ mod disk_cache_main {
         if !seen_fonts.insert(resolved.clone()) {
           continue;
         }
-        match fetcher.fetch(&resolved) {
+        match fetcher.fetch_with_request(
+          FetchRequest::new(&resolved, FetchDestination::Font).with_referrer(referrer),
+        ) {
           Ok(_) => summary.fetched_fonts += 1,
           Err(_) => summary.failed_fonts += 1,
         }
@@ -1050,6 +1060,7 @@ mod disk_cache_main {
 
   fn prefetch_assets_for_html(
     stem: &str,
+    document_url: &str,
     html: &str,
     base_url: &str,
     fetcher: &dyn ResourceFetcher,
@@ -1300,6 +1311,7 @@ mod disk_cache_main {
       };
       let import_loader = PrefetchImportLoader::new(
         fetcher,
+        document_url,
         &summary,
         &all_asset_urls,
         css_asset_urls_ref,
@@ -1349,6 +1361,7 @@ mod disk_cache_main {
               let mut summary = summary.borrow_mut();
               prefetch_fonts_from_stylesheet(
                 fetcher,
+                document_url,
                 base_url,
                 &resolved,
                 media_ctx,
@@ -1358,7 +1371,9 @@ mod disk_cache_main {
               );
             }
           }
-          StylesheetTask::External(css_url) => match fetcher.fetch(&css_url) {
+          StylesheetTask::External(css_url) => match fetcher.fetch_with_request(
+            FetchRequest::new(css_url.as_str(), FetchDestination::Style).with_referrer(document_url),
+          ) {
             Ok(res) => {
               summary.borrow_mut().fetched_css += 1;
               let sheet_base = res.final_url.as_deref().unwrap_or(&css_url);
@@ -1404,6 +1419,7 @@ mod disk_cache_main {
                 let mut summary = summary.borrow_mut();
                 prefetch_fonts_from_stylesheet(
                   fetcher,
+                  document_url,
                   sheet_base,
                   &resolved,
                   media_ctx,
@@ -1431,7 +1447,9 @@ mod disk_cache_main {
     if opts.prefetch_images || opts.prefetch_icons || opts.prefetch_video_posters {
       let mut summary = summary.borrow_mut();
       for url in &image_urls {
-        match fetcher.fetch(url) {
+        match fetcher.fetch_with_request(
+          FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(document_url),
+        ) {
           Ok(_) => summary.fetched_images += 1,
           Err(_) => summary.failed_images += 1,
         }
@@ -1443,7 +1461,9 @@ mod disk_cache_main {
       {
         let mut summary = summary.borrow_mut();
         for url in &document_urls {
-          match fetcher.fetch(url) {
+          match fetcher.fetch_with_request(
+            FetchRequest::new(url.as_str(), FetchDestination::Document).with_referrer(document_url),
+          ) {
             Ok(res) => {
               summary.fetched_documents += 1;
               fetched_docs.push((url.clone(), res));
@@ -1469,6 +1489,7 @@ mod disk_cache_main {
         let doc = decode_html_resource(&res, base_hint);
         let nested_summary = prefetch_assets_for_html(
           &format!("{stem}::document:{url}"),
+          base_hint,
           &doc.html,
           &doc.base_url,
           fetcher,
@@ -1482,7 +1503,9 @@ mod disk_cache_main {
     if opts.prefetch_css_url_assets {
       let mut summary = summary.borrow_mut();
       for url in &css_asset_urls {
-        match fetcher.fetch(url) {
+        match fetcher.fetch_with_request(
+          FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(document_url),
+        ) {
           Ok(_) => summary.fetched_css_assets += 1,
           Err(_) => summary.failed_css_assets += 1,
         }
@@ -1520,6 +1543,7 @@ mod disk_cache_main {
 
     prefetch_assets_for_html(
       &entry.cache_stem,
+      entry.url.as_str(),
       &cached.document.html,
       &cached.document.base_url,
       fetcher,
@@ -1747,6 +1771,7 @@ mod disk_cache_main {
 
       let summary = prefetch_assets_for_html(
         "test",
+        &cached.document.base_hint,
         &cached.document.html,
         &cached.document.base_url,
         &fetcher,
