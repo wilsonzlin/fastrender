@@ -7149,6 +7149,53 @@ mod tests {
     );
   }
 
+  #[test]
+  fn cell_layout_reuses_table_factory_shaping_cache_in_fixed_layout() {
+    let viewport = crate::geometry::Size::new(800.0, 600.0);
+    let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+    let factory = FormattingContextFactory::with_font_context_and_viewport(font_ctx, viewport)
+      .with_parallelism(LayoutParallelism::disabled());
+    factory.reset_caches();
+    let tfc = TableFormattingContext::with_factory(factory.clone());
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.table_layout = TableLayout::Fixed;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.font_size = 16.0;
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+
+    let text = BoxNode::new_text(Arc::new(text_style), "fixed layout hello".to_string());
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![text]);
+    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+
+    let before = factory.shaping_cache_size();
+    let _ = tfc
+      .layout(&table, &LayoutConstraints::definite_width(800.0))
+      .expect("table layout should succeed");
+    let after = factory.shaping_cache_size();
+
+    assert!(
+      after > before,
+      "expected fixed-layout cell layout to reuse the table factory shaping cache (before={before}, after={after})"
+    );
+  }
+
   fn normalized_table_with_row_group() -> BoxNode {
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
