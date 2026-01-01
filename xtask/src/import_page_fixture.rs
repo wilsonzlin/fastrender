@@ -845,11 +845,15 @@ fn rewrite_html_resource_attrs(
     rewrite_reference(raw, base_url, ctx, catalog)
   })?;
 
+  // The bundler only captures a limited number of srcset candidates (to avoid pathological pages
+  // exploding bundle size). Keep the rewritten fixture aligned with that by truncating srcsets so
+  // FastRender won't pick a missing candidate at render time.
+  const IMG_SRCSET_MAX_CANDIDATES: usize = 1;
   const SRCSET_MAX_CANDIDATES: usize = 32;
   let img_srcset = Regex::new("(?is)<img[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     .expect("img srcset regex must compile");
   rewritten = replace_attr_values_with(&img_srcset, &rewritten, &[1, 2], |raw| {
-    rewrite_srcset(raw, base_url, ctx, catalog)
+    rewrite_srcset_with_limit(raw, base_url, ctx, catalog, IMG_SRCSET_MAX_CANDIDATES)
       .map(Some)
       .or_else(|err| Err(err))
   })?;

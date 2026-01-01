@@ -94,6 +94,20 @@ fn link_rel_is_preload_image(rel_value: &str, as_value: Option<&str>) -> bool {
 /// deterministic (input-order, first occurrence wins) and bounded (per-category caps and
 /// `srcset` candidate limits).
 pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
+  discover_html_asset_urls_with_srcset_limit(html, base_url, MAX_SRCSET_CANDIDATES)
+}
+
+/// Best-effort extraction of subresource URLs from raw HTML.
+///
+/// All returned URLs are resolved against `base_url` using [`resolve_href`]. Discovery is
+/// deterministic (input-order, first occurrence wins) and bounded (per-category caps and
+/// `srcset` candidate limits).
+pub fn discover_html_asset_urls_with_srcset_limit(
+  html: &str,
+  base_url: &str,
+  max_srcset_candidates: usize,
+) -> HtmlAssetUrls {
+  let max_srcset_candidates = max_srcset_candidates.min(MAX_SRCSET_CANDIDATES);
   static IMG_SRC: OnceLock<Regex> = OnceLock::new();
   static IMG_SRCSET: OnceLock<Regex> = OnceLock::new();
   static SOURCE_SRCSET: OnceLock<Regex> = OnceLock::new();
@@ -210,7 +224,7 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
     let Some(raw_srcset) = capture_first(&caps, &[1, 2]) else {
       continue;
     };
-    for candidate in parse_srcset_urls(raw_srcset, MAX_SRCSET_CANDIDATES) {
+    for candidate in parse_srcset_urls(raw_srcset, max_srcset_candidates) {
       push_image(candidate);
     }
   }
@@ -219,7 +233,7 @@ pub fn discover_html_asset_urls(html: &str, base_url: &str) -> HtmlAssetUrls {
     let Some(raw_srcset) = capture_first(&caps, &[1, 2]) else {
       continue;
     };
-    for candidate in parse_srcset_urls(raw_srcset, MAX_SRCSET_CANDIDATES) {
+    for candidate in parse_srcset_urls(raw_srcset, max_srcset_candidates) {
       push_image(candidate);
     }
   }
@@ -328,6 +342,13 @@ mod tests {
       out.images[MAX_SRCSET_CANDIDATES - 1],
       "https://example.com/img15.png"
     );
+  }
+
+  #[test]
+  fn honors_custom_srcset_limit() {
+    let html = r#"<img srcset="img0.png 1x, img1.png 2x">"#;
+    let out = discover_html_asset_urls_with_srcset_limit(html, "https://example.com/", 1);
+    assert_eq!(out.images, vec!["https://example.com/img0.png".to_string()]);
   }
 
   #[test]

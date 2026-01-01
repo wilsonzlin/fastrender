@@ -540,6 +540,84 @@ fn page_fixtures_present() {
   }
 }
 
+#[test]
+fn pageset_failure_fixtures_present() {
+  let progress_dir = Path::new("progress/pages");
+  let mut missing = Vec::new();
+
+  for entry in fs::read_dir(progress_dir)
+    .unwrap_or_else(|e| panic!("Failed to read {}: {}", progress_dir.display(), e))
+  {
+    let entry = entry.unwrap_or_else(|e| panic!("Failed to read progress entry: {}", e));
+    let path = entry.path();
+
+    if path.extension() != Some(std::ffi::OsStr::new("json")) {
+      continue;
+    }
+
+    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+      Some(stem) => stem,
+      None => continue,
+    };
+
+    let contents = fs::read_to_string(&path)
+      .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
+    let json: serde_json::Value = serde_json::from_str(&contents)
+      .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path.display(), e));
+    let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("ok");
+    if status == "ok" {
+      continue;
+    }
+
+    let fixture_path = fixtures_dir().join(stem).join("index.html");
+    if !fixture_path.exists() {
+      missing.push(format!("{} ({})", stem, fixture_path.display()));
+    }
+  }
+
+  assert!(
+    missing.is_empty(),
+    "progress/pages contains non-ok pages without an offline fixture:\n{}",
+    missing.join("\n")
+  );
+}
+
+#[test]
+fn pageset_timeouts_fixtures_present() {
+  #[derive(Deserialize)]
+  struct TimeoutsManifest {
+    schema_version: u32,
+    fixtures: Vec<TimeoutFixture>,
+  }
+
+  #[derive(Deserialize)]
+  struct TimeoutFixture {
+    name: String,
+  }
+
+  let manifest: TimeoutsManifest = serde_json::from_str(include_str!("pages/pageset_timeouts.json"))
+    .expect("failed to parse pageset timeout manifest");
+  assert_eq!(
+    manifest.schema_version, 1,
+    "unexpected pageset timeout manifest schema_version {}",
+    manifest.schema_version
+  );
+
+  let mut missing = Vec::new();
+  for fixture in manifest.fixtures {
+    let html_path = fixtures_dir().join(&fixture.name).join("index.html");
+    if !html_path.exists() {
+      missing.push(format!("{} ({})", fixture.name, html_path.display()));
+    }
+  }
+
+  assert!(
+    missing.is_empty(),
+    "pages/pageset_timeouts.json references fixtures missing from the repository:\n{}",
+    missing.join("\n")
+  );
+}
+
 mod pageset_guardrails {
   use super::*;
 
@@ -575,6 +653,25 @@ mod pageset_guardrails {
   }
 
   #[test]
+  fn pageset_guardrails_fixtures_present() {
+    let manifest = load_manifest().expect("failed to parse pageset guardrails manifest");
+    let mut missing = Vec::new();
+
+    for fixture in &manifest.fixtures {
+      let html_path = fixtures_dir().join(&fixture.name).join("index.html");
+      if !html_path.exists() {
+        missing.push(format!("{} ({})", fixture.name, html_path.display()));
+      }
+    }
+
+    assert!(
+      missing.is_empty(),
+      "pages/pageset_guardrails.json references fixtures missing from the repository:\n{}",
+      missing.join("\n")
+    );
+  }
+
+  #[test]
   fn pageset_guardrails_render_under_budget() {
     if cfg!(debug_assertions)
       && std::env::var_os("PAGESET_GUARDRAILS_IN_DEBUG").is_none()
@@ -597,18 +694,17 @@ mod pageset_guardrails {
           std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
         }
 
-        let mut skipped = Vec::new();
-        let mut ran = 0usize;
         for fixture in &manifest.fixtures {
           let html_path = fixtures_dir().join(&fixture.name).join("index.html");
-          if !html_path.exists() {
-            skipped.push((fixture.name.clone(), html_path));
-            continue;
-          }
+          assert!(
+            html_path.exists(),
+            "Fixture HTML missing: {} ({})",
+            fixture.name,
+            html_path.display()
+          );
 
           let run = render_guardrails_fixture(fixture, default_budget_ms, global_budget)
             .unwrap_or_else(|e| panic!("Failed to render {}: {}", fixture.name, e));
-          ran += 1;
           assert!(
             run.elapsed_ms <= run.budget_ms,
             "Fixture {} exceeded budget ({:.1}ms > {:.1}ms). Timings: {}",
@@ -617,26 +713,6 @@ mod pageset_guardrails {
             run.budget_ms,
             summarize_timings(&run.timings),
           );
-        }
-
-        if !skipped.is_empty() {
-          let skipped_paths: Vec<String> = skipped
-            .iter()
-            .map(|(name, path)| format!("{} ({})", name, path.display()))
-            .collect();
-          eprintln!(
-            "Skipped {} pageset guardrails fixtures missing locally: {}",
-            skipped.len(),
-            skipped_paths.join(", ")
-          );
-        }
-
-        if ran == 0 {
-          eprintln!(
-            "Skipping pageset guardrails fixtures: no fixture HTML found under {}",
-            fixtures_dir().display()
-          );
-          return;
         }
       })
       .unwrap()
@@ -706,7 +782,6 @@ mod pageset_guardrails {
     let (_, diagnostics) = rendered
       .encode(OutputFormat::Png)
       .map_err(|e| format!("encode failed for {}: {:?}", fixture.name, e))?;
-    assert_offline_fixture_complete(&fixture.name, &diagnostics)?;
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let stats = diagnostics.stats.ok_or_else(|| {
@@ -722,41 +797,6 @@ mod pageset_guardrails {
       budget_ms,
       timings: stats.timings,
     })
-  }
-
-  fn assert_offline_fixture_complete(
-    fixture_name: &str,
-    diagnostics: &fastrender::api::RenderDiagnostics,
-  ) -> Result<(), String> {
-    let fetch_error_count = diagnostics.fetch_errors.len();
-    if fetch_error_count == 0 && diagnostics.failure_stage.is_none() {
-      return Ok(());
-    }
-
-    const MAX_SAMPLES: usize = 10;
-    let mut urls: Vec<String> = diagnostics
-      .fetch_errors
-      .iter()
-      .map(|err| err.final_url.as_deref().unwrap_or(&err.url).to_string())
-      .collect();
-    urls.sort();
-    urls.dedup();
-    urls.truncate(MAX_SAMPLES);
-
-    let stage = diagnostics
-      .failure_stage
-      .map(|s| s.as_str().to_string())
-      .unwrap_or_else(|| "<none>".to_string());
-
-    let sample_text = if urls.is_empty() {
-      "<no urls captured>".to_string()
-    } else {
-      urls.join(", ")
-    };
-
-    Err(format!(
-      "offline fixture completeness failure for {fixture_name}: fetch_errors={fetch_error_count}, failure_stage={stage}, samples={sample_text}"
-    ))
   }
 
   fn summarize_timings(timings: &RenderStageTimings) -> String {

@@ -341,6 +341,12 @@ impl RecordingFetcher {
       map.remove(url);
     }
   }
+
+  fn replace(&self, url: &str, resource: FetchedResource) {
+    if let Ok(mut map) = self.recorded.lock() {
+      map.insert(url.to_string(), resource);
+    }
+  }
 }
 
 impl ResourceFetcher for RecordingFetcher {
@@ -1164,8 +1170,14 @@ fn crawl_document(
     }
   }
 
-  let html_assets =
-    fastrender::html::asset_discovery::discover_html_asset_urls(&document.html, &document.base_url);
+  // Avoid exploding crawl time/bundle size on pages with large responsive image srcsets.
+  // Missing candidates will be rewritten to local placeholders when importing fixtures.
+  const MAX_HTML_SRCSET_CANDIDATES: usize = 1;
+  let html_assets = fastrender::html::asset_discovery::discover_html_asset_urls_with_srcset_limit(
+    &document.html,
+    &document.base_url,
+    MAX_HTML_SRCSET_CANDIDATES,
+  );
   for url in html_assets.images {
     enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
   }
@@ -1175,6 +1187,10 @@ fn crawl_document(
   }
 
   const MAX_CRAWL_URLS: usize = 10_000;
+  // Keep offline bundles tractable by avoiding multi-megabyte image downloads becoming part of the
+  // deterministic fixture. The HTML/CSS rewrite step will still produce local references for these
+  // URLs, but the stored bytes are replaced with an empty placeholder.
+  const MAX_CRAWL_IMAGE_BYTES: usize = 1_000_000;
   while let Some((url, destination)) = queue.pop_front() {
     if seen.len() > MAX_CRAWL_URLS {
       eprintln!(
@@ -1222,6 +1238,17 @@ fn crawl_document(
       continue;
     }
 
+    if is_image_resource(&res, &url) && res.bytes.len() > MAX_CRAWL_IMAGE_BYTES {
+      eprintln!(
+        "Warning: truncating large image subresource {url} ({} bytes) for bundle size",
+        res.bytes.len()
+      );
+      let mut truncated = res.clone();
+      truncated.bytes.clear();
+      fetcher.replace(&url, truncated);
+      continue;
+    }
+
     if is_css_resource(&res, &url) {
       let css_base = res.final_url.as_deref().unwrap_or(&url);
       let css = decode_css_bytes(&res.bytes, res.content_type.as_deref());
@@ -1262,8 +1289,11 @@ fn crawl_document(
         }
       }
 
-      let html_assets =
-        fastrender::html::asset_discovery::discover_html_asset_urls(&doc.html, &doc.base_url);
+      let html_assets = fastrender::html::asset_discovery::discover_html_asset_urls_with_srcset_limit(
+        &doc.html,
+        &doc.base_url,
+        MAX_HTML_SRCSET_CANDIDATES,
+      );
       for url in html_assets.images {
         enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
       }
@@ -1478,6 +1508,27 @@ fn is_html_resource(res: &FetchedResource, url: &str) -> bool {
   };
   let lower = parsed.path().to_ascii_lowercase();
   lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
+}
+
+fn is_image_resource(res: &FetchedResource, url: &str) -> bool {
+  if res
+    .content_type
+    .as_deref()
+    .map(|ct| ct.to_ascii_lowercase().starts_with("image/"))
+    .unwrap_or(false)
+  {
+    return true;
+  }
+
+  let candidate = res.final_url.as_deref().unwrap_or(url);
+  if let Ok(parsed) = url::Url::parse(candidate) {
+    let path = parsed.path().to_ascii_lowercase();
+    return matches!(
+      path.rsplit('.').next().unwrap_or(""),
+      "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "svg"
+    );
+  }
+  false
 }
 
 #[cfg(test)]
