@@ -119,8 +119,11 @@ pub fn resolve_var_for_property(
       // cheap ASCII-case-insensitive substring check for `var(` first.
       //
       // Note: If the value contains a backslash escape, conservatively fall back to token parsing
-      // so we don't miss an escaped `var()` function name.
-      if !contains_ascii_case_insensitive_var_call(raw) && !raw.as_bytes().contains(&b'\\') {
+      // so we don't miss an escaped `var()` function name. Function tokens require a literal `(`,
+      // so values without any `(` can skip the slow-path even if they contain backslashes.
+      if !contains_ascii_case_insensitive_var_call(raw)
+        && (!raw.as_bytes().contains(&b'\\') || !raw.as_bytes().contains(&b'('))
+      {
         return VarResolutionResult::Resolved {
           value: Box::new(value.clone()),
           css_text: String::new(),
@@ -515,7 +518,10 @@ pub fn contains_var(value: &str) -> bool {
   }
 
   // Escaped function names (e.g. `v\61 r(`) require a proper tokenizer to interpret escapes.
-  if bytes.contains(&b'\\') {
+  //
+  // A function token also requires a literal `(` delimiter, so if the raw string contains
+  // backslashes but *no* `(` at all, it's impossible for it to contain a `var()` call.
+  if bytes.contains(&b'\\') && bytes.contains(&b'(') {
     return contains_var_via_cssparser(value);
   }
 
