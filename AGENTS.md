@@ -125,6 +125,7 @@ We need anchors. We track the pageset in-repo so progress/regressions are visibl
 Run `pageset_progress` to auto-create/update **one file per page** (avoid hot-spot merge conflicts):
 - `progress/pages/<normalized>.json`
 - `<normalized>` should match the cache filename stem (use the same normalization as the CLIs: strip scheme + leading `www.`, sanitize via `normalize_page_name`). Colliding URLs append a deterministic `--deadbeef`-style suffix to keep cache/progress filenames unique. Refresh `fetches/html` if you still have stale `www.`-prefixed cache filenames.
+- Use `pageset_progress migrate` to apply schema migrations to existing progress files (notably splitting legacy machine diagnostics out of `notes` into `auto_notes`) without fetching or rendering.
 
 ### Minimal schema (keep it small and stable)
 

@@ -165,6 +165,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Fonts: pass `--bundled-fonts` to skip system font discovery (default in the pageset wrappers) or
   `--font-dir <path>` to load fonts from a specific directory without hitting host fonts.
 - Sync: `cargo run --release --bin pageset_progress -- sync [--prune] [--html-dir fetches/html --progress-dir progress/pages]` bootstraps one JSON per pageset URL without needing any caches. `--prune` removes stale progress files for URLs no longer in the list. Stems are collision-aware (`example.com--deadbeef` when needed) to keep cache and progress filenames unique.
+- Migrate: `cargo run --release --bin pageset_progress -- migrate [--html-dir fetches/html --progress-dir progress/pages]` rewrites existing progress JSON without fetching or rendering. It applies legacy schema migrations (notably splitting mixed legacy `notes` into durable `notes` + machine `auto_notes`) and reserializes deterministically using the runner's canonical formatter.
 - Progress filenames use the cache stem from `pageset_stem` (strip scheme + leading `www.` plus a deterministic hash suffix on collisions); `--pages` filters accept the URL, canonical stem, or cache stem. If you have older `fetches/html` entries with `www.` prefixes in the filename, re-run `fetch_pages` so progress filenames line up.
   - For temporary/test runs, `FASTR_PAGESET_URLS="https://a.com,https://b.com"` overrides the built-in pageset everywhere.
 - Triage reruns (reuse existing `progress/pages/*.json` instead of typing stems):

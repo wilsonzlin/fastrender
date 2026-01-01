@@ -5,6 +5,7 @@ This directory contains the **committed pageset scoreboard**: one tiny JSON file
 - Bootstrap with `pageset_progress sync` (`cargo run --release --bin pageset_progress -- sync [--prune]`) to materialize one placeholder per official pageset URL, even on a fresh checkout with no caches.
 - `sync` writes minimal `status: error` entries with `auto_notes: "not run"` or `auto_notes: "missing cache"`; `--prune` removes files for URLs no longer in the pageset list.
 - `pageset_progress run` updates these files after caches exist.
+- `pageset_progress migrate` rewrites existing progress files without rendering, applying legacy schema migrations (e.g. splitting mixed legacy `notes` into durable `notes` + machine `auto_notes`) and reserializing deterministically.
 - Each `<stem>.json` should match the cached HTML filename stem under `fetches/html/<stem>.html` (same normalization as `fetch_pages`).
 - Keep these files small and stable (no raw HTML, no machine-local paths, no traces).
 - When diagnostics are enabled, successful renders may include `diagnostics.stats` (structured `RenderStats` timing/count summaries) to power `pageset_progress report --verbose-stats`. No giant blobs or logs.
