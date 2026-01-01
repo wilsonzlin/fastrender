@@ -98,6 +98,13 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
           "paint_rasterize_ms": 11.0,
           "text_rasterize_ms": 12.0,
           "encode_ms": 13.0
+        },
+        "counts": {},
+        "cascade": {},
+        "layout": {},
+        "paint": {},
+        "resources": {
+          "fetch_counts": {}
         }
       }
     }
@@ -124,7 +131,7 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
   let migrated: Value = serde_json::from_str(&migrated_raw).expect("parse migrated json value");
   let stages = migrated.get("stages_ms").expect("stages_ms object");
   assert_eq!(stages["fetch"].as_f64(), Some(4.5));
-  assert_eq!(stages["css"].as_f64(), Some(7.0));
+  assert_eq!(stages["css"].as_f64(), Some(4.0));
   assert_eq!(stages["cascade"].as_f64(), Some(11.0));
   // `text_*` subsystem timings should not affect wall-clock stage buckets.
   assert_eq!(stages["layout"].as_f64(), Some(7.0));

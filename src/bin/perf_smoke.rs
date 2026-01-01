@@ -1191,7 +1191,7 @@ fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown
       t.dom_clone_ms,
       t.dom_top_layer_ms,
     ])),
-    css: round_ms(sum_timings(&[t.css_inlining_ms, t.css_parse_ms])),
+    css: round_ms(t.css_parse_ms.or(t.css_inlining_ms).unwrap_or(0.0)),
     cascade: round_ms(sum_timings(&[t.cascade_ms, t.box_tree_ms])),
     layout: round_ms(sum_timings(&[t.layout_ms])),
     paint: round_ms(sum_timings(&[

@@ -1720,7 +1720,7 @@ fn buckets_from_stats(stats: &RenderStats) -> StageBuckets {
     + t.dom_meta_viewport_ms.unwrap_or(0.0)
     + t.dom_clone_ms.unwrap_or(0.0)
     + t.dom_top_layer_ms.unwrap_or(0.0);
-  let css = t.css_inlining_ms.unwrap_or(0.0) + t.css_parse_ms.unwrap_or(0.0);
+  let css = t.css_parse_ms.or(t.css_inlining_ms).unwrap_or(0.0);
   let cascade = t.cascade_ms.unwrap_or(0.0) + t.box_tree_ms.unwrap_or(0.0);
   let layout = t.layout_ms.unwrap_or(0.0);
   let paint = t.paint_build_ms.unwrap_or(0.0)
@@ -7077,7 +7077,7 @@ mod tests {
     };
     let buckets = buckets_from_diagnostics(&diag);
     assert_eq!(buckets.fetch, 4.5);
-    assert_eq!(buckets.css, 7.0);
+    assert_eq!(buckets.css, 4.0);
     assert_eq!(buckets.cascade, 11.0);
     assert_eq!(buckets.layout, 7.0);
     assert_eq!(buckets.paint, 43.0);
