@@ -81,7 +81,6 @@ use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::style::PhysicalSide;
 use crate::text::font_loader::FontContext;
-use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::ReplacedBox;
@@ -175,8 +174,9 @@ fn block_axis_sides(style: &ComputedStyle) -> (PhysicalSide, PhysicalSide) {
 /// Handles vertical stacking, margin collapsing, and width computation.
 #[derive(Clone)]
 pub struct BlockFormattingContext {
+  /// Shared factory used to create child formatting contexts without losing shared caches.
+  factory: FormattingContextFactory,
   font_context: FontContext,
-  shaping_pipeline: ShapingPipeline,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: ContainingBlock,
   /// When true, treat the root box as a flex item for width resolution (auto margins resolve to
@@ -222,9 +222,14 @@ impl BlockFormattingContext {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
   ) -> Self {
+    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+      font_context.clone(),
+      viewport_size,
+      nearest_positioned_cb,
+    );
     Self {
+      factory,
       font_context,
-      shaping_pipeline: ShapingPipeline::new(),
       viewport_size,
       nearest_positioned_cb,
       flex_item_mode: false,
@@ -233,13 +238,17 @@ impl BlockFormattingContext {
   }
 
   pub fn with_factory(factory: FormattingContextFactory) -> Self {
+    let viewport_size = factory.viewport_size();
+    let nearest_positioned_cb = factory.nearest_positioned_cb();
+    let font_context = factory.font_context().clone();
+    let parallelism = factory.parallelism();
     Self {
-      font_context: factory.font_context().clone(),
-      shaping_pipeline: factory.shaping_pipeline(),
-      viewport_size: factory.viewport_size(),
-      nearest_positioned_cb: factory.nearest_positioned_cb(),
+      factory,
+      font_context,
+      viewport_size,
+      nearest_positioned_cb,
       flex_item_mode: false,
-      parallelism: factory.parallelism(),
+      parallelism,
     }
   }
 
@@ -251,9 +260,14 @@ impl BlockFormattingContext {
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
   ) -> Self {
+    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+      font_context.clone(),
+      viewport_size,
+      nearest_positioned_cb,
+    );
     Self {
+      factory,
       font_context,
-      shaping_pipeline: ShapingPipeline::new(),
       viewport_size,
       nearest_positioned_cb,
       flex_item_mode: true,
@@ -262,19 +276,36 @@ impl BlockFormattingContext {
   }
 
   pub fn for_flex_item_with_factory(factory: FormattingContextFactory) -> Self {
+    let viewport_size = factory.viewport_size();
+    let nearest_positioned_cb = factory.nearest_positioned_cb();
+    let font_context = factory.font_context().clone();
+    let parallelism = factory.parallelism();
     Self {
-      font_context: factory.font_context().clone(),
-      shaping_pipeline: factory.shaping_pipeline(),
-      viewport_size: factory.viewport_size(),
-      nearest_positioned_cb: factory.nearest_positioned_cb(),
+      factory,
+      font_context,
+      viewport_size,
+      nearest_positioned_cb,
       flex_item_mode: true,
-      parallelism: factory.parallelism(),
+      parallelism,
     }
   }
 
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
     self.parallelism = parallelism;
+    self.factory = self.factory.clone().with_parallelism(parallelism);
     self
+  }
+
+  fn child_factory(&self) -> FormattingContextFactory {
+    self.factory.clone()
+  }
+
+  fn child_factory_for_cb(&self, cb: ContainingBlock) -> FormattingContextFactory {
+    if cb == self.nearest_positioned_cb {
+      self.child_factory()
+    } else {
+      self.factory.with_positioned_cb(cb)
+    }
   }
 
   /// Lays out a single block-level child and returns its fragment
@@ -476,17 +507,11 @@ impl BlockFormattingContext {
         })
         .unwrap_or(0.0);
 
-      let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        self.viewport_size,
-        *nearest_positioned_cb,
-      )
-      .with_shaping_pipeline(self.shaping_pipeline.clone())
-      .with_parallelism(self.parallelism);
+      let factory = self.child_factory_for_cb(*nearest_positioned_cb);
       let fc_type = child
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
-      let fc = factory.create(fc_type);
+      let fc = factory.get(fc_type);
       let preferred_min_content =
         fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)?;
       let preferred_content =
@@ -658,27 +683,8 @@ impl BlockFormattingContext {
     {
       if fc_type != FormattingContextType::Block {
         // Child establishes a non-block FC - use the appropriate FC
-        let fc = match fc_type {
-          FormattingContextType::Inline => Box::new(
-            InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
-              self.font_context.clone(),
-              self.viewport_size,
-              *nearest_positioned_cb,
-              self.shaping_pipeline.clone(),
-            )
-            .with_parallelism(self.parallelism),
-          ) as Box<dyn FormattingContext>,
-          other => {
-            let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-              self.font_context.clone(),
-              self.viewport_size,
-              *nearest_positioned_cb,
-            )
-            .with_shaping_pipeline(self.shaping_pipeline.clone())
-            .with_parallelism(self.parallelism);
-            factory.create(other)
-          }
-        };
+        let factory = self.child_factory_for_cb(*nearest_positioned_cb);
+        let fc = factory.get(fc_type);
 
         let log_skinny = toggles.truthy("FASTR_LOG_SKINNY_FLEX");
         if log_skinny && computed_width.content_width <= 1.0 {
@@ -841,13 +847,7 @@ impl BlockFormattingContext {
           ContainingBlockSource::ParentPadding => parent_padding_cb,
           ContainingBlockSource::Explicit(cb) => cb,
         };
-        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          cb,
-        )
-        .with_shaping_pipeline(self.shaping_pipeline.clone())
-        .with_parallelism(self.parallelism);
+        let factory = self.child_factory_for_cb(cb);
         // Layout the child as if it were in normal flow to obtain its intrinsic size.
         let mut layout_child = pos_child.clone();
         let mut style = (*layout_child.style).clone();
@@ -861,7 +861,7 @@ impl BlockFormattingContext {
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
-        let fc = factory.create(fc_type);
+        let fc = factory.get(fc_type);
         let height_available = cb.block_percentage_base().or(cb_block_base);
         let child_height_space = height_available
           .map(AvailableSpace::Definite)
@@ -1525,13 +1525,9 @@ impl BlockFormattingContext {
       return result;
     }
 
-    let inline_fc = InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
-      self.font_context.clone(),
-      self.viewport_size,
+    let inline_fc = InlineFormattingContext::with_factory(self.child_factory_for_cb(
       *nearest_positioned_cb,
-      self.shaping_pipeline.clone(),
-    )
-    .with_parallelism(self.parallelism);
+    ));
 
     let flush_inline_buffer = |buffer: &mut Vec<BoxNode>,
                                fragments: &mut Vec<FragmentNode>,
@@ -1720,13 +1716,7 @@ impl BlockFormattingContext {
         snapshot_style.position = Position::Static;
         snapshot_node.style = Arc::new(snapshot_style);
 
-        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          *nearest_positioned_cb,
-        )
-        .with_shaping_pipeline(self.shaping_pipeline.clone())
-        .with_parallelism(self.parallelism);
+        let factory = self.child_factory_for_cb(*nearest_positioned_cb);
         let fc_type = snapshot_node.formatting_context().unwrap_or_else(|| {
           if snapshot_node.is_block_level() {
             FormattingContextType::Block
@@ -1734,7 +1724,7 @@ impl BlockFormattingContext {
             FormattingContextType::Inline
           }
         });
-        let fc = factory.create(fc_type);
+        let fc = factory.get(fc_type);
         let snapshot_constraints = LayoutConstraints::new(
           AvailableSpace::Definite(containing_width),
           AvailableSpace::Indefinite,
@@ -1858,17 +1848,11 @@ impl BlockFormattingContext {
         );
 
         // CSS 2.1 shrink-to-fit formula for floats
-        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          *nearest_positioned_cb,
-        )
-        .with_shaping_pipeline(self.shaping_pipeline.clone())
-        .with_parallelism(self.parallelism);
+        let factory = self.child_factory_for_cb(*nearest_positioned_cb);
         let fc_type = child
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
-        let fc = factory.create(fc_type);
+        let fc = factory.get(fc_type);
         let preferred_min_content =
           match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent) {
             Ok(value) => value,
@@ -1946,11 +1930,7 @@ impl BlockFormattingContext {
           AvailableSpace::Definite(content_width),
           AvailableSpace::Indefinite,
         );
-        let child_bfc = BlockFormattingContext::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          *nearest_positioned_cb,
-        );
+        let child_bfc = BlockFormattingContext::with_factory(factory.clone());
         let mut fragment = child_bfc.layout(child, &child_constraints)?;
 
         let block_sides = block_axis_sides(&child.style);
@@ -3077,17 +3057,10 @@ impl FormattingContext for BlockFormattingContext {
         })
         .unwrap_or(0.0);
 
-      let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        self.viewport_size,
-        self.nearest_positioned_cb,
-      )
-      .with_shaping_pipeline(self.shaping_pipeline.clone())
-      .with_parallelism(self.parallelism);
       let fc_type = box_node
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
-      let fc = factory.create(fc_type);
+      let fc = self.factory.get(fc_type);
       let preferred_min_content =
         fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)?;
       let preferred_content =
@@ -3396,6 +3369,9 @@ impl FormattingContext for BlockFormattingContext {
     let mut child_ctx = self.clone();
     child_ctx.flex_item_mode = false;
     child_ctx.nearest_positioned_cb = nearest_cb;
+    if nearest_cb != self.nearest_positioned_cb {
+      child_ctx.factory = child_ctx.factory.with_positioned_cb(nearest_cb);
+    }
     let use_columns = Self::is_multicol_container(style);
     let (mut child_fragments, mut content_height, positioned_children, column_info) = if use_columns
     {
@@ -3499,13 +3475,7 @@ impl FormattingContext for BlockFormattingContext {
           ContainingBlockSource::ParentPadding => parent_padding_cb,
           ContainingBlockSource::Explicit(cb) => cb,
         };
-        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          cb,
-        )
-        .with_shaping_pipeline(self.shaping_pipeline.clone())
-        .with_parallelism(self.parallelism);
+        let factory = self.child_factory_for_cb(cb);
         // Layout the child as if it were in normal flow to obtain its intrinsic size.
         let mut layout_child = child.clone();
         let mut style = (*layout_child.style).clone();
@@ -3519,7 +3489,7 @@ impl FormattingContext for BlockFormattingContext {
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
-        let fc = factory.create(fc_type);
+        let fc = factory.get(fc_type);
         let child_height_space = cb_block_base
           .map(AvailableSpace::Definite)
           .unwrap_or(AvailableSpace::Indefinite);
@@ -3712,20 +3682,8 @@ impl FormattingContext for BlockFormattingContext {
       return Ok(result);
     }
 
-    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-    )
-    .with_shaping_pipeline(self.shaping_pipeline.clone())
-    .with_parallelism(self.parallelism);
-    let inline_fc = InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-      self.shaping_pipeline.clone(),
-    )
-    .with_parallelism(self.parallelism);
+    let factory = &self.factory;
+    let inline_fc = InlineFormattingContext::with_factory(self.factory.clone());
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     struct InlineRunCacheKey {
       hash: u64,
@@ -3854,8 +3812,9 @@ impl FormattingContext for BlockFormattingContext {
       let fc_type = child
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
-      let fc = factory.create(fc_type);
-      let child_width = fc.compute_intrinsic_inline_size(child, mode)?;
+      let child_width = factory
+        .get(fc_type)
+        .compute_intrinsic_inline_size(child, mode)?;
       block_child_width = block_child_width.max(child_width);
       if log_children {
         let sel = child

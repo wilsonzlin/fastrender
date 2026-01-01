@@ -133,7 +133,10 @@ impl FormattingContextFactory {
   }
 
   fn block_context(&self) -> BlockFormattingContext {
-    BlockFormattingContext::with_factory(self.clone())
+    // BlockFormattingContext stores a factory clone, so it must not share this factory's
+    // cached formatting context instances or we'd create an Arc cycle:
+    // `factory.cached_contexts.block -> Arc<BlockFormattingContext> -> factory`.
+    BlockFormattingContext::with_factory(self.detached())
   }
 
   fn inline_context(&self) -> InlineFormattingContext {
