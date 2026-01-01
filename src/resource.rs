@@ -32,6 +32,7 @@ use httpdate::parse_http_date;
 use lru::LruCache;
 use reqwest::blocking as reqwest_blocking;
 use reqwest::cookie::Jar as ReqwestCookieJar;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -808,6 +809,45 @@ fn should_fallback_to_curl(err: &Error) -> bool {
     || msg.contains("x509")
     || msg.contains("alpn")
     || msg.contains("alert")
+}
+
+fn error_looks_like_dns_failure(err: &Error) -> bool {
+  let Error::Resource(resource) = err else {
+    return false;
+  };
+  // Match on the error message (not the URL) so we don't trigger a fallback for domains that happen
+  // to include keywords in their hostname.
+  let msg = resource.message.to_ascii_lowercase();
+  msg.contains("could not resolve host")
+    || msg.contains("couldn't resolve host")
+    || msg.contains("failed to resolve host")
+    || msg.contains("no such host")
+    || msg.contains("name resolution")
+    || msg.contains("dns")
+    || msg.contains("getaddrinfo")
+}
+
+fn http_www_fallback_url(url: &str) -> Option<String> {
+  let mut parsed = Url::parse(url).ok()?;
+  if !matches!(parsed.scheme(), "http" | "https") {
+    return None;
+  }
+
+  let url::Host::Domain(domain) = parsed.host()? else {
+    return None;
+  };
+  let domain_lower = domain.to_ascii_lowercase();
+  if domain_lower.starts_with("www.") {
+    return None;
+  }
+  // Avoid turning single-label hosts like `localhost` into `www.localhost`.
+  if !domain_lower.contains('.') {
+    return None;
+  }
+
+  let new_host = format!("www.{domain}");
+  parsed.set_host(Some(&new_host)).ok()?;
+  Some(parsed.to_string())
 }
 
 fn log_http_retry(reason: &str, attempt: usize, max_attempts: usize, url: &str, backoff: Duration) {
@@ -2107,96 +2147,115 @@ impl HttpFetcher {
     started: Instant,
   ) -> Result<FetchedResource> {
     let rewritten_url = rewrite_known_pageset_hosts(url);
-    let effective_url = rewritten_url.as_deref().unwrap_or(url);
+    let mut effective_url = rewritten_url
+      .map(Cow::Owned)
+      .unwrap_or_else(|| Cow::Borrowed(url));
 
-    match http_backend_mode() {
-      HttpBackendMode::Curl => curl_backend::fetch_http_with_accept_inner(
-        self,
-        effective_url,
-        accept_encoding,
-        validators,
-        destination,
-        referrer,
-        deadline,
-        started,
-      ),
-      HttpBackendMode::Ureq => self.fetch_http_with_accept_inner_ureq(
-        effective_url,
-        accept_encoding,
-        validators,
-        destination,
-        referrer,
-        deadline,
-        started,
-        false,
-      ),
-      HttpBackendMode::Reqwest => self.fetch_http_with_accept_inner_reqwest(
-        effective_url,
-        accept_encoding,
-        validators,
-        destination,
-        referrer,
-        deadline,
-        started,
-        false,
-      ),
-      HttpBackendMode::Auto => {
-        let curl_available = curl_backend::curl_available();
-        let prefer_reqwest = effective_url
-          .get(..8)
-          .map(|prefix| prefix.eq_ignore_ascii_case("https://"))
-          .unwrap_or(false);
-        let result = if prefer_reqwest {
-          self.fetch_http_with_accept_inner_reqwest(
-            effective_url,
-            accept_encoding,
-            validators,
-            destination,
-            referrer,
-            deadline,
-            started,
-            curl_available,
-          )
-        } else {
-          self.fetch_http_with_accept_inner_ureq(
-            effective_url,
-            accept_encoding,
-            validators,
-            destination,
-            referrer,
-            deadline,
-            started,
-            curl_available,
-          )
-        };
+    let mut attempted_www_fallback = false;
+    loop {
+      let result = match http_backend_mode() {
+        HttpBackendMode::Curl => curl_backend::fetch_http_with_accept_inner(
+          self,
+          effective_url.as_ref(),
+          accept_encoding,
+          validators,
+          destination,
+          referrer,
+          deadline,
+          started,
+        ),
+        HttpBackendMode::Ureq => self.fetch_http_with_accept_inner_ureq(
+          effective_url.as_ref(),
+          accept_encoding,
+          validators,
+          destination,
+          referrer,
+          deadline,
+          started,
+          false,
+        ),
+        HttpBackendMode::Reqwest => self.fetch_http_with_accept_inner_reqwest(
+          effective_url.as_ref(),
+          accept_encoding,
+          validators,
+          destination,
+          referrer,
+          deadline,
+          started,
+          false,
+        ),
+        HttpBackendMode::Auto => {
+          let curl_available = curl_backend::curl_available();
+          let prefer_reqwest = effective_url
+            .get(..8)
+            .map(|prefix| prefix.eq_ignore_ascii_case("https://"))
+            .unwrap_or(false);
+          let result = if prefer_reqwest {
+            self.fetch_http_with_accept_inner_reqwest(
+              effective_url.as_ref(),
+              accept_encoding,
+              validators,
+              destination,
+              referrer,
+              deadline,
+              started,
+              curl_available,
+            )
+          } else {
+            self.fetch_http_with_accept_inner_ureq(
+              effective_url.as_ref(),
+              accept_encoding,
+              validators,
+              destination,
+              referrer,
+              deadline,
+              started,
+              curl_available,
+            )
+          };
 
-        match result {
-          Ok(res) => Ok(res),
-          Err(err) => {
-            if curl_available && should_fallback_to_curl(&err) {
-              match curl_backend::fetch_http_with_accept_inner(
-                self,
-                effective_url,
-                accept_encoding,
-                validators,
-                destination,
-                referrer,
-                deadline,
-                started,
-              ) {
-                Ok(res) => Ok(res),
-                Err(curl_err) => {
-                  let mut err = err;
-                  if let Error::Resource(ref mut res) = err {
-                    res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
+          match result {
+            Ok(res) => Ok(res),
+            Err(err) => {
+              if curl_available && should_fallback_to_curl(&err) {
+                match curl_backend::fetch_http_with_accept_inner(
+                  self,
+                  effective_url.as_ref(),
+                  accept_encoding,
+                  validators,
+                  destination,
+                  referrer,
+                  deadline,
+                  started,
+                ) {
+                  Ok(res) => Ok(res),
+                  Err(curl_err) => {
+                    let mut err = err;
+                    if let Error::Resource(ref mut res) = err {
+                      res.message = format!("{}; curl fallback failed: {}", res.message, curl_err);
+                    }
+                    Err(err)
                   }
-                  Err(err)
                 }
+              } else {
+                Err(err)
               }
-            } else {
-              Err(err)
             }
           }
+        }
+      };
+
+      match result {
+        Ok(res) => return Ok(res),
+        Err(err) => {
+          if !attempted_www_fallback && error_looks_like_dns_failure(&err) {
+            if let Some(url) = http_www_fallback_url(effective_url.as_ref()) {
+              attempted_www_fallback = true;
+              effective_url = Cow::Owned(url);
+              continue;
+            }
+          }
+          return Err(err);
         }
       }
     }
@@ -6294,6 +6353,40 @@ mod tests {
       msg.contains("attempt 3/3"),
       "expected retries to be attempted (message: {msg})"
     );
+  }
+
+  #[test]
+  fn http_www_fallback_url_prefixes_www_for_dns_failures() {
+    assert_eq!(
+      http_www_fallback_url("https://nhk.or.jp"),
+      Some("https://www.nhk.or.jp/".to_string())
+    );
+    assert_eq!(
+      http_www_fallback_url("http://example.com/path?x=1"),
+      Some("http://www.example.com/path?x=1".to_string())
+    );
+  }
+
+  #[test]
+  fn http_www_fallback_url_ignores_www_and_single_label_hosts() {
+    assert_eq!(http_www_fallback_url("https://www.example.com"), None);
+    assert_eq!(http_www_fallback_url("https://localhost"), None);
+    assert_eq!(http_www_fallback_url("https://127.0.0.1:1234"), None);
+  }
+
+  #[test]
+  fn error_looks_like_dns_failure_matches_common_phrases() {
+    let err = Error::Resource(ResourceError::new(
+      "https://nhk.or.jp",
+      "curl failed (exit code 6): Could not resolve host: nhk.or.jp",
+    ));
+    assert!(error_looks_like_dns_failure(&err));
+
+    let err = Error::Resource(ResourceError::new(
+      "https://example.com",
+      "TLS handshake failed",
+    ));
+    assert!(!error_looks_like_dns_failure(&err));
   }
 
   #[test]
