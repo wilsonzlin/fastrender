@@ -70,6 +70,21 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     haystack.len() >= needle.len() && haystack[..needle.len()].eq_ignore_ascii_case(needle)
   }
 
+  fn looks_like_absolute_url(bytes: &[u8]) -> bool {
+    if bytes.is_empty() || !bytes[0].is_ascii_alphabetic() {
+      return false;
+    }
+    let mut idx = 1usize;
+    while idx < bytes.len() {
+      match bytes[idx] {
+        b':' => return true,
+        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.' => idx += 1,
+        _ => return false,
+      }
+    }
+    false
+  }
+
   // CSS/HTML authors sometimes escape path characters with backslashes. The WHATWG URL parser
   // treats `\` as a path separator for special schemes, but for our resource fetching and URL
   // rewriting we want a stable percent-encoded representation instead.
@@ -96,8 +111,11 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     return None;
   }
 
-  if let Ok(abs) = Url::parse(href.as_ref()) {
-    return Some(abs.to_string());
+  // Avoid invoking the full WHATWG URL parser for the common relative-path case.
+  if looks_like_absolute_url(href_bytes) {
+    if let Ok(abs) = Url::parse(href.as_ref()) {
+      return Some(abs.to_string());
+    }
   }
 
   let mut base_candidate: Cow<'_, str> = Cow::Borrowed(base);
