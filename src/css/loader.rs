@@ -547,7 +547,14 @@ fn parse_import_target(rule: &str) -> Option<(&str, &str)> {
     .get(..7)
     .filter(|prefix| prefix.eq_ignore_ascii_case("@import"))?;
   let after_at = rule[after_at.len()..].trim_start();
-  let (target, rest) = if let Some(inner) = after_at.strip_prefix("url(") {
+  let bytes = after_at.as_bytes();
+  let (target, rest) = if bytes.len() >= 4
+    && matches!(bytes[0], b'u' | b'U')
+    && matches!(bytes[1], b'r' | b'R')
+    && matches!(bytes[2], b'l' | b'L')
+    && bytes[3] == b'('
+  {
+    let inner = &after_at[4..];
     let close = inner.find(')')?;
     let url_part = inner[..close].trim();
     let url_str = url_part.trim_matches(|c| c == '"' || c == '\'');
@@ -2076,6 +2083,28 @@ mod tests {
     assert_eq!(
       out.as_ref(),
       "@media screen { body { background: url(\"https://example.com/styles/images/bg.png\"); } }"
+    );
+  }
+
+  #[test]
+  fn inline_imports_parses_url_functions_case_insensitively() {
+    let mut state = InlineImportState::new();
+    let css = "@import URL(\"https://example.com/nested.css\");\nbody { color: black; }";
+    let mut fetched = |url: &str| -> Result<String> {
+      assert_eq!(url, "https://example.com/nested.css");
+      Ok("p { margin: 0; }".to_string())
+    };
+    let out = inline_imports(
+      css,
+      "https://example.com/base.css",
+      &mut fetched,
+      &mut state,
+      None,
+    )
+    .expect("inline imports");
+    assert!(
+      out.contains("p { margin: 0; }"),
+      "expected imported stylesheet to be inlined: {out}"
     );
   }
 
