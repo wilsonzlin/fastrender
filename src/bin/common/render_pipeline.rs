@@ -10,6 +10,7 @@ use fastrender::css::loader::{infer_base_url, resolve_href};
 use fastrender::dom::DomCompatibilityMode;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
+use fastrender::render_control::{with_deadline, RenderDeadline};
 use fastrender::resource::{
   parse_cached_html_meta, FetchRequest, FetchedResource, HttpFetcher, HttpRetryPolicy,
   ResourceFetcher,
@@ -394,6 +395,24 @@ pub fn follow_client_redirects(
   .doc
 }
 
+/// Follow client-side redirects (meta refresh and JS location) under a cooperative timeout.
+///
+/// Pageset worker processes are hard-killed after a fixed wall-clock budget. Bounding redirect
+/// fetches prevents a slow/unreachable redirect target from consuming the entire budget before
+/// rendering even begins.
+pub fn follow_client_redirects_with_deadline(
+  fetcher: &dyn ResourceFetcher,
+  doc: PreparedDocument,
+  timeout: Option<Duration>,
+  log: impl FnMut(&str),
+) -> PreparedDocument {
+  let Some(timeout) = timeout.filter(|t| !t.is_zero()) else {
+    return follow_client_redirects(fetcher, doc, log);
+  };
+  let deadline = RenderDeadline::new(Some(timeout), None);
+  with_deadline(Some(&deadline), || follow_client_redirects(fetcher, doc, log))
+}
+
 /// Follow client-side redirects for a fetched HTML resource, returning the final resource.
 pub fn follow_client_redirects_resource(
   fetcher: &dyn ResourceFetcher,
@@ -422,6 +441,77 @@ pub fn follow_client_redirects_resource(
   );
 
   resource.expect("keep_resource=true should preserve the last successful fetch")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use fastrender::render_control;
+  use fastrender::resource::FetchedResource;
+  use std::sync::atomic::{AtomicBool, Ordering};
+
+  struct DeadlineAssertingFetcher {
+    observed_deadline: AtomicBool,
+  }
+
+  impl DeadlineAssertingFetcher {
+    fn new() -> Self {
+      Self {
+        observed_deadline: AtomicBool::new(false),
+      }
+    }
+  }
+
+  impl ResourceFetcher for DeadlineAssertingFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      let deadline = render_control::active_deadline();
+      assert!(deadline.is_some(), "expected active deadline for redirect fetch");
+      let deadline = deadline.expect("deadline installed");
+      assert!(
+        deadline.timeout_limit().is_some(),
+        "deadline should have timeout configured"
+      );
+      self.observed_deadline.store(true, Ordering::Relaxed);
+      Ok(FetchedResource {
+        bytes: b"<html><head><title>ok</title></head><body>ok</body></html>".to_vec(),
+        content_type: Some("text/html".to_string()),
+        status: Some(200),
+        etag: None,
+        last_modified: None,
+        final_url: Some(url.to_string()),
+        cache_policy: None,
+      })
+    }
+  }
+
+  #[test]
+  fn follow_client_redirects_with_deadline_installs_and_clears_deadline() {
+    assert!(
+      render_control::active_deadline().is_none(),
+      "test should start with no active deadline"
+    );
+
+    let fetcher = DeadlineAssertingFetcher::new();
+    let doc = PreparedDocument::new(
+      "<meta http-equiv='refresh' content='0; url=https://example.com/next'>".to_string(),
+      "https://example.com/".to_string(),
+    );
+    let _doc = follow_client_redirects_with_deadline(
+      &fetcher,
+      doc,
+      Some(Duration::from_millis(50)),
+      |_line| {},
+    );
+
+    assert!(
+      fetcher.observed_deadline.load(Ordering::Relaxed),
+      "fetcher should have observed a deadline"
+    );
+    assert!(
+      render_control::active_deadline().is_none(),
+      "deadline should be cleared after redirect following"
+    );
+  }
 }
 
 /// Render prepared HTML using the shared render pipeline (including linked stylesheets).

@@ -19,9 +19,10 @@ use common::args::{
   LayoutParallelModeArg, ResourceAccessArgs,
 };
 use common::render_pipeline::{
-  build_http_fetcher, build_render_configs, follow_client_redirects, format_error_with_chain,
-  log_layout_parallelism, read_cached_document, render_document, render_document_with_artifacts,
-  PreparedDocument, RenderConfigBundle, RenderSurface, CLI_RENDER_STACK_SIZE,
+  build_http_fetcher, build_render_configs, follow_client_redirects_with_deadline,
+  format_error_with_chain, log_layout_parallelism, read_cached_document, render_document,
+  render_document_with_artifacts, PreparedDocument, RenderConfigBundle, RenderSurface,
+  CLI_RENDER_STACK_SIZE,
 };
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
@@ -2135,7 +2136,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let mut doc = cached.document;
   log.push_str(&format!("Resource base: {}\n", doc.base_url));
   record_stage(StageHeartbeat::FollowRedirects);
-  doc = follow_client_redirects(fetcher.as_ref(), doc, |line| {
+  let redirect_budget = options
+    .timeout
+    .and_then(|soft| Duration::from_secs(args.timeout).checked_sub(soft));
+  doc = follow_client_redirects_with_deadline(fetcher.as_ref(), doc, redirect_budget, |line| {
     log.push_str(line);
     log.push('\n');
   });
