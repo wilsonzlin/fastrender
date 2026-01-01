@@ -206,9 +206,15 @@ struct DeclarationValueCacheEntry {
   parsed: PropertyValue,
 }
 
+#[derive(Debug)]
+enum DeclarationValueCacheBucket {
+  One(DeclarationValueCacheEntry),
+  Many(Vec<DeclarationValueCacheEntry>),
+}
+
 thread_local! {
   static DECLARATION_VALUE_CACHE: RefCell<
-    LruCache<DeclarationValueCacheKey, Vec<DeclarationValueCacheEntry>>,
+    LruCache<DeclarationValueCacheKey, DeclarationValueCacheBucket>,
   > = RefCell::new(LruCache::new(
     NonZeroUsize::new(DECLARATION_VALUE_CACHE_CAPACITY)
       .expect("Declaration value cache capacity must be non-zero"),
@@ -3903,11 +3909,12 @@ fn parse_property_value_in_context_cached(
 
   if let Some(hit) = DECLARATION_VALUE_CACHE.with(|cache| {
     let mut cache = cache.borrow_mut();
-    cache.get(&key).and_then(|entries| {
-      entries
+    cache.get(&key).and_then(|bucket| match bucket {
+      DeclarationValueCacheBucket::One(entry) => (entry.value.as_ref() == value).then(|| entry.parsed.clone()),
+      DeclarationValueCacheBucket::Many(entries) => entries
         .iter()
         .find(|entry| entry.value.as_ref() == value)
-        .map(|entry| entry.parsed.clone())
+        .map(|entry| entry.parsed.clone()),
     })
   }) {
     return Some(hit);
@@ -3922,10 +3929,20 @@ fn parse_property_value_in_context_cached(
       value: value.to_string().into_boxed_str(),
       parsed: parsed_for_cache,
     };
-    if let Some(entries) = cache.get_mut(&key) {
-      entries.push(entry);
-    } else {
-      cache.put(key, vec![entry]);
+    match cache.get_mut(&key) {
+      Some(bucket) => match bucket {
+        DeclarationValueCacheBucket::One(_) => {
+          let old = std::mem::replace(bucket, DeclarationValueCacheBucket::Many(Vec::new()));
+          let DeclarationValueCacheBucket::One(existing) = old else {
+            unreachable!("expected single cache entry to be present");
+          };
+          *bucket = DeclarationValueCacheBucket::Many(vec![existing, entry]);
+        }
+        DeclarationValueCacheBucket::Many(entries) => entries.push(entry),
+      },
+      None => {
+        cache.put(key, DeclarationValueCacheBucket::One(entry));
+      }
     }
   });
   Some(parsed)
