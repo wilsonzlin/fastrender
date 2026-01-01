@@ -235,12 +235,13 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
 
     // Backwards compatibility: keep the historical pageset_timeouts.json in sync as a plain file
     // (no symlink; Windows-friendly).
-    let default_manifest = PathBuf::from(DEFAULT_MANIFEST_PATH);
-    let legacy_manifest = PathBuf::from(LEGACY_MANIFEST_PATH);
-    if args.manifest == default_manifest {
+    let manifest_path = normalize_manifest_path(&args.manifest);
+    let default_manifest = normalize_manifest_path(Path::new(DEFAULT_MANIFEST_PATH));
+    let legacy_manifest = normalize_manifest_path(Path::new(LEGACY_MANIFEST_PATH));
+    if manifest_path == default_manifest {
       fs::write(&legacy_manifest, format!("{json}\n"))
         .context("failed to write legacy pageset_timeouts manifest copy")?;
-    } else if args.manifest == legacy_manifest {
+    } else if manifest_path == legacy_manifest {
       fs::write(&default_manifest, format!("{json}\n"))
         .context("failed to write pageset_guardrails manifest copy")?;
     }
@@ -344,6 +345,15 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
 
 fn default_bundle_path(name: &str) -> PathBuf {
   PathBuf::from("target/pageset-guardrails/bundles").join(format!("{name}.tar"))
+}
+
+fn normalize_manifest_path(path: &Path) -> PathBuf {
+  let resolved = if path.is_absolute() {
+    path.to_path_buf()
+  } else {
+    crate::repo_root().join(path)
+  };
+  resolved.canonicalize().unwrap_or(resolved)
 }
 
 fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetGuardrailsArgs) -> Result<()> {
@@ -964,6 +974,17 @@ mod tests {
       manifest_path.display(),
       missing.join(", ")
     );
+  }
+
+  #[test]
+  fn normalize_manifest_path_matches_common_spellings() {
+    let root = repo_root();
+    let relative = super::normalize_manifest_path(Path::new(DEFAULT_MANIFEST_PATH));
+    let absolute = super::normalize_manifest_path(&root.join(DEFAULT_MANIFEST_PATH));
+    let dotted = super::normalize_manifest_path(Path::new(&format!("./{DEFAULT_MANIFEST_PATH}")));
+
+    assert_eq!(relative, absolute);
+    assert_eq!(relative, dotted);
   }
 
   #[test]
