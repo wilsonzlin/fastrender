@@ -210,7 +210,6 @@ pub use tiny_skia::Pixmap;
 
 #[derive(Default, Debug, Clone)]
 struct ReplacedIntrinsicProfileState {
-  depth: usize,
   start: Option<Instant>,
   replaced_nodes: usize,
   image_nodes: usize,
@@ -233,6 +232,21 @@ struct ReplacedIntrinsicProfileState {
 thread_local! {
   static REPLACED_INTRINSIC_PROFILE: RefCell<ReplacedIntrinsicProfileState> =
     RefCell::new(ReplacedIntrinsicProfileState::default());
+}
+
+#[derive(Clone)]
+struct ImageIntrinsicProbeJob {
+  box_id: usize,
+  url: String,
+  density: Option<f32>,
+  style: Arc<ComputedStyle>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ImageIntrinsicProbeOutcome {
+  intrinsic_size: Option<Size>,
+  aspect_ratio: Option<f32>,
+  explicit_no_ratio: bool,
 }
 
 /// Main entry point for the FastRender library
@@ -7808,6 +7822,386 @@ impl FastRender {
     runtime::runtime_toggles().truthy("FASTR_REPLACED_INTRINSIC_PROFILE")
   }
 
+  fn intrinsic_probe_parallelism(&self) -> usize {
+    let default_parallelism = num_cpus::get().min(8).max(1);
+    self
+      .runtime_toggles
+      .usize("FASTR_INTRINSIC_PROBE_PARALLELISM")
+      .unwrap_or(default_parallelism)
+      .max(1)
+  }
+
+  fn intrinsic_probe_pool(parallelism: usize) -> Arc<rayon::ThreadPool> {
+    static POOLS: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> = OnceLock::new();
+    let pools = POOLS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = pools.lock().expect("intrinsic probe pool lock poisoned");
+    if let Some(existing) = guard.get(&parallelism) {
+      return Arc::clone(existing);
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+      .num_threads(parallelism.max(1))
+      .thread_name(|idx| format!("fastr-intrinsic-probe-{idx}"))
+      .build()
+      .expect("build intrinsic probe pool");
+    let pool = Arc::new(pool);
+    guard.insert(parallelism, Arc::clone(&pool));
+    pool
+  }
+
+  fn collect_image_intrinsic_probe_jobs_for_node(
+    &self,
+    node: &BoxNode,
+    viewport: Size,
+    media_ctx: &MediaContext,
+    profile_enabled: bool,
+    jobs: &mut Vec<ImageIntrinsicProbeJob>,
+  ) {
+    fn should_skip_image_probe(style: &ComputedStyle) -> bool {
+      matches!(style.aspect_ratio, crate::style::types::AspectRatio::Ratio(r) if r > 0.0)
+        && (style.width.is_some() || style.height.is_some())
+    }
+
+    let maybe_collect = |box_id: usize,
+                         replaced_box: &ReplacedBox,
+                         style: &Arc<ComputedStyle>,
+                         viewport: Size,
+                         media_ctx: &MediaContext,
+                         profile_enabled: bool,
+                         jobs: &mut Vec<ImageIntrinsicProbeJob>| {
+      let ReplacedType::Image {
+        src,
+        srcset,
+        picture_sources,
+        ..
+      } = &replaced_box.replaced_type
+      else {
+        return;
+      };
+
+      // Mirrors the early-return logic in `resolve_intrinsic_for_replaced_for_media` so we don't
+      // schedule unnecessary probes.
+      if replaced_box.intrinsic_size.is_some() {
+        return;
+      }
+      if style.width.is_some() && style.height.is_some() {
+        return;
+      }
+      if should_skip_image_probe(style.as_ref()) {
+        return;
+      }
+
+      let has_image_source = !src.is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
+      if !has_image_source {
+        return;
+      }
+
+      let select_start = profile_enabled.then(Instant::now);
+      let selected = replaced_box
+        .replaced_type
+        .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+          device_pixel_ratio: self.device_pixel_ratio,
+          slot_width: None,
+          viewport: Some(viewport),
+          media_context: Some(media_ctx),
+          font_size: Some(style.font_size),
+          base_url: self.base_url.as_deref(),
+        });
+      if let Some(start) = select_start {
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        REPLACED_INTRINSIC_PROFILE.with(|state| {
+          let mut state = state.borrow_mut();
+          state.selection_calls += 1;
+          state.selection_ms += ms;
+        });
+      }
+
+      if selected.url.is_empty() {
+        return;
+      }
+
+      jobs.push(ImageIntrinsicProbeJob {
+        box_id,
+        url: selected.url.to_string(),
+        density: selected.density,
+        style: Arc::clone(style),
+      });
+    };
+
+    if let BoxType::Marker(marker_box) = &node.box_type {
+      if let MarkerContent::Image(replaced) = &marker_box.content {
+        maybe_collect(
+          node.id,
+          replaced,
+          &node.style,
+          viewport,
+          media_ctx,
+          profile_enabled,
+          jobs,
+        );
+      }
+    }
+
+    if let BoxType::Replaced(replaced_box) = &node.box_type {
+      maybe_collect(
+        node.id,
+        replaced_box,
+        &node.style,
+        viewport,
+        media_ctx,
+        profile_enabled,
+        jobs,
+      );
+    }
+
+    for child in &node.children {
+      self.collect_image_intrinsic_probe_jobs_for_node(
+        child,
+        viewport,
+        media_ctx,
+        profile_enabled,
+        jobs,
+      );
+    }
+  }
+
+  fn execute_image_intrinsic_probe_jobs(
+    &self,
+    jobs: Vec<ImageIntrinsicProbeJob>,
+    profile_enabled: bool,
+  ) -> HashMap<usize, ImageIntrinsicProbeOutcome> {
+    if jobs.is_empty() {
+      return HashMap::new();
+    }
+
+    let parallelism = self.intrinsic_probe_parallelism();
+    let pool = (parallelism > 1 && jobs.len() > 1).then(|| Self::intrinsic_probe_pool(parallelism));
+    let deadline = crate::render_control::active_deadline();
+    let image_cache = self.image_cache.clone();
+    let device_pixel_ratio = self.device_pixel_ratio;
+
+    let run_job = |job: ImageIntrinsicProbeJob| {
+      let _deadline_guard = DeadlineGuard::install(deadline.as_ref());
+      let probe_start = profile_enabled.then(Instant::now);
+      let probe_result = image_cache.probe(job.url.as_str());
+      let probe_ms = probe_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+      let probe_ok = probe_result.is_ok();
+
+      let mut outcome = ImageIntrinsicProbeOutcome {
+        intrinsic_size: None,
+        aspect_ratio: None,
+        explicit_no_ratio: false,
+      };
+
+      if let Ok(meta) = probe_result {
+        let orientation = job
+          .style
+          .image_orientation
+          .resolve(meta.orientation, false);
+        outcome.explicit_no_ratio = meta.aspect_ratio_none;
+        if let Some((w, h)) = meta.css_dimensions(
+          orientation,
+          &job.style.image_resolution,
+          device_pixel_ratio,
+          job.density,
+        ) {
+          outcome.intrinsic_size = Some(Size::new(w, h));
+          if !outcome.explicit_no_ratio {
+            outcome.aspect_ratio = meta
+              .intrinsic_ratio(orientation)
+              .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+          }
+        }
+      }
+
+      (job.box_id, outcome, probe_ms, probe_ok)
+    };
+
+    let job_results: Vec<(usize, ImageIntrinsicProbeOutcome, Option<f64>, bool)> = match pool {
+      Some(pool) => pool.install(|| jobs.into_par_iter().map(run_job).collect()),
+      None => jobs.into_iter().map(run_job).collect(),
+    };
+
+    let mut results = HashMap::with_capacity(job_results.len());
+
+    if profile_enabled {
+      let mut probe_calls = 0usize;
+      let mut probe_ms_total = 0.0f64;
+      let mut probe_ok = 0usize;
+      let mut probe_err = 0usize;
+      for (box_id, outcome, probe_ms, ok) in job_results {
+        results.insert(box_id, outcome);
+        probe_calls += 1;
+        if let Some(ms) = probe_ms {
+          probe_ms_total += ms;
+        }
+        if ok {
+          probe_ok += 1;
+        } else {
+          probe_err += 1;
+        }
+      }
+      REPLACED_INTRINSIC_PROFILE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.probe_calls += probe_calls;
+        state.probe_ms += probe_ms_total;
+        state.probe_ok += probe_ok;
+        state.probe_err += probe_err;
+      });
+    } else {
+      for (box_id, outcome, _, _) in job_results {
+        results.insert(box_id, outcome);
+      }
+    }
+
+    results
+  }
+
+  fn resolve_intrinsic_for_image_for_media_with_probes(
+    &self,
+    box_id: usize,
+    replaced_box: &mut ReplacedBox,
+    style: &ComputedStyle,
+    alt: Option<&str>,
+    probe_results: &HashMap<usize, ImageIntrinsicProbeOutcome>,
+    profile_enabled: bool,
+  ) {
+    // Keep this logic aligned with `resolve_intrinsic_for_replaced_for_media`'s image branch, but
+    // substitute precomputed probe outcomes to avoid serial network fetch latency.
+
+    if profile_enabled {
+      REPLACED_INTRINSIC_PROFILE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.replaced_nodes += 1;
+        state.image_nodes += 1;
+      });
+    }
+
+    // Preserve existing early-return skips.
+    if replaced_box.intrinsic_size.is_some() {
+      return;
+    }
+    if style.width.is_some() && style.height.is_some() {
+      return;
+    }
+    if matches!(style.aspect_ratio, crate::style::types::AspectRatio::Ratio(r) if r > 0.0)
+      && (style.width.is_some() || style.height.is_some())
+    {
+      return;
+    }
+
+    let ReplacedType::Image { alt: stored_alt, .. } = &replaced_box.replaced_type else {
+      return;
+    };
+
+    let mut explicit_no_ratio = false;
+    let mut have_resource_dimensions = false;
+
+    if let Some(outcome) = probe_results.get(&box_id) {
+      explicit_no_ratio = outcome.explicit_no_ratio;
+      if let Some(size) = outcome.intrinsic_size {
+        replaced_box.intrinsic_size = Some(size);
+        have_resource_dimensions = true;
+        if !explicit_no_ratio {
+          if let Some(ratio) = outcome.aspect_ratio {
+            replaced_box.aspect_ratio = replaced_box.aspect_ratio.or(Some(ratio));
+          }
+        }
+      }
+    }
+
+    if !have_resource_dimensions {
+      let candidate_alt = alt
+        .filter(|s| !s.is_empty())
+        .or_else(|| stored_alt.as_deref().filter(|s| !s.is_empty()));
+      if let Some(size) = candidate_alt.and_then(|text| self.alt_intrinsic_size(style, text)) {
+        replaced_box.intrinsic_size.get_or_insert(size);
+        if size.height > 0.0 && replaced_box.aspect_ratio.is_none() {
+          replaced_box.aspect_ratio = Some(size.width / size.height);
+        }
+      }
+    }
+
+    // If only intrinsic size is present, ensure aspect ratio is recorded.
+    if replaced_box.aspect_ratio.is_none() && !explicit_no_ratio {
+      if let Some(size) = replaced_box.intrinsic_size {
+        if size.height > 0.0 {
+          replaced_box.aspect_ratio = Some(size.width / size.height);
+        }
+      }
+    }
+  }
+
+  fn apply_replaced_intrinsic_sizes_with_image_probes(
+    &self,
+    node: &mut BoxNode,
+    viewport: Size,
+    media_type: MediaType,
+    probe_results: &HashMap<usize, ImageIntrinsicProbeOutcome>,
+    profile_enabled: bool,
+  ) {
+    if let BoxType::Marker(marker_box) = &mut node.box_type {
+      if let MarkerContent::Image(replaced) = &mut marker_box.content {
+        if matches!(&replaced.replaced_type, ReplacedType::Image { .. }) {
+          self.resolve_intrinsic_for_image_for_media_with_probes(
+            node.id,
+            replaced,
+            node.style.as_ref(),
+            None,
+            probe_results,
+            profile_enabled,
+          );
+        } else {
+          self.resolve_intrinsic_for_replaced_for_media(
+            replaced,
+            node.style.as_ref(),
+            None,
+            viewport,
+            media_type,
+          );
+        }
+      }
+    }
+
+    if let BoxType::Replaced(replaced_box) = &mut node.box_type {
+      if matches!(&replaced_box.replaced_type, ReplacedType::Image { .. }) {
+        let alt = match &replaced_box.replaced_type {
+          ReplacedType::Image { alt, .. } => alt.clone(),
+          _ => None,
+        };
+        self.resolve_intrinsic_for_image_for_media_with_probes(
+          node.id,
+          replaced_box,
+          node.style.as_ref(),
+          alt.as_deref(),
+          probe_results,
+          profile_enabled,
+        );
+      } else {
+        let alt = match &replaced_box.replaced_type {
+          ReplacedType::Image { alt, .. } => alt.clone(),
+          _ => None,
+        };
+        self.resolve_intrinsic_for_replaced_for_media(
+          replaced_box,
+          node.style.as_ref(),
+          alt.as_deref(),
+          viewport,
+          media_type,
+        );
+      }
+    }
+
+    for child in &mut node.children {
+      self.apply_replaced_intrinsic_sizes_with_image_probes(
+        child,
+        viewport,
+        media_type,
+        probe_results,
+        profile_enabled,
+      );
+    }
+  }
+
   fn resolve_replaced_intrinsic_sizes_for_media(
     &self,
     node: &mut BoxNode,
@@ -7818,74 +8212,57 @@ impl FastRender {
     if profile_enabled {
       REPLACED_INTRINSIC_PROFILE.with(|state| {
         let mut state = state.borrow_mut();
-        if state.depth == 0 {
-          *state = ReplacedIntrinsicProfileState::default();
-          state.start = Some(Instant::now());
-        }
-        state.depth += 1;
+        *state = ReplacedIntrinsicProfileState::default();
+        state.start = Some(Instant::now());
       });
     }
 
-    if let BoxType::Marker(marker_box) = &mut node.box_type {
-      if let MarkerContent::Image(replaced) = &mut marker_box.content {
-        self.resolve_intrinsic_for_replaced_for_media(
-          replaced,
-          node.style.as_ref(),
-          None,
-          viewport,
-          media_type,
-        );
-      }
-    }
+    let media_ctx = self.media_context_for_media(media_type, viewport.width, viewport.height);
+    let mut probe_jobs = Vec::new();
+    self.collect_image_intrinsic_probe_jobs_for_node(
+      node,
+      viewport,
+      &media_ctx,
+      profile_enabled,
+      &mut probe_jobs,
+    );
+    let probe_results = self.execute_image_intrinsic_probe_jobs(probe_jobs, profile_enabled);
 
-    if let BoxType::Replaced(replaced_box) = &mut node.box_type {
-      let alt = match &replaced_box.replaced_type {
-        ReplacedType::Image { alt, .. } => alt.clone(),
-        _ => None,
-      };
-      self.resolve_intrinsic_for_replaced_for_media(
-        replaced_box,
-        node.style.as_ref(),
-        alt.as_deref(),
-        viewport,
-        media_type,
-      );
-    }
-
-    for child in &mut node.children {
-      self.resolve_replaced_intrinsic_sizes_for_media(child, viewport, media_type);
-    }
+    self.apply_replaced_intrinsic_sizes_with_image_probes(
+      node,
+      viewport,
+      media_type,
+      &probe_results,
+      profile_enabled,
+    );
 
     if profile_enabled {
       REPLACED_INTRINSIC_PROFILE.with(|state| {
         let mut state = state.borrow_mut();
-        state.depth = state.depth.saturating_sub(1);
-        if state.depth == 0 {
-          let total_ms = state
-            .start
-            .take()
-            .map(|s| s.elapsed().as_secs_f64() * 1000.0)
-            .unwrap_or(0.0);
-          eprintln!(
-            "replaced_intrinsic_profile total_ms={total_ms:.2} replaced={} images={} form_controls={} videos={} svgs={} embeds={} selection_calls={} selection_ms={:.2} probe_calls={} probe_ms={:.2} probe_ok={} probe_err={} load_calls={} load_ms={:.2} render_svg_calls={} render_svg_ms={:.2}",
-            state.replaced_nodes,
-            state.image_nodes,
-            state.form_controls,
-            state.videos,
-            state.svgs,
-            state.embeds,
-            state.selection_calls,
-            state.selection_ms,
-            state.probe_calls,
-            state.probe_ms,
-            state.probe_ok,
-            state.probe_err,
-            state.load_calls,
-            state.load_ms,
-            state.render_svg_calls,
-            state.render_svg_ms
-          );
-        }
+        let total_ms = state
+          .start
+          .take()
+          .map(|s| s.elapsed().as_secs_f64() * 1000.0)
+          .unwrap_or(0.0);
+        eprintln!(
+          "replaced_intrinsic_profile total_ms={total_ms:.2} replaced={} images={} form_controls={} videos={} svgs={} embeds={} selection_calls={} selection_ms={:.2} probe_calls={} probe_ms={:.2} probe_ok={} probe_err={} load_calls={} load_ms={:.2} render_svg_calls={} render_svg_ms={:.2}",
+          state.replaced_nodes,
+          state.image_nodes,
+          state.form_controls,
+          state.videos,
+          state.svgs,
+          state.embeds,
+          state.selection_calls,
+          state.selection_ms,
+          state.probe_calls,
+          state.probe_ms,
+          state.probe_ok,
+          state.probe_err,
+          state.load_calls,
+          state.load_ms,
+          state.render_svg_calls,
+          state.render_svg_ms
+        );
       });
     }
   }
@@ -8024,6 +8401,13 @@ impl FastRender {
         // If both width and height are specified (non-auto), intrinsic data is unused per
         // replaced element sizing. Avoid network fetches in that case to speed up heavy pages.
         if style.width.is_some() && style.height.is_some() {
+          return;
+        }
+        // If an explicit CSS aspect ratio is provided and at least one dimension is specified,
+        // replaced sizing does not need the resource's intrinsic ratio. Skip probing in that case.
+        if matches!(style.aspect_ratio, crate::style::types::AspectRatio::Ratio(r) if r > 0.0)
+          && (style.width.is_some() || style.height.is_some())
+        {
           return;
         }
 
@@ -12146,6 +12530,196 @@ mod tests {
       replaced.aspect_ratio,
       Some(expected.width / expected.height),
       "alt text should set aspect ratio"
+    );
+  }
+
+  #[test]
+  fn resolve_intrinsic_sizes_populates_image_metadata_from_file_urls() {
+    let renderer = FastRender::builder()
+      .fetcher(Arc::new(HttpFetcher::new()) as Arc<dyn ResourceFetcher>)
+      .build()
+      .expect("init renderer");
+    let style = Arc::new(ComputedStyle::default());
+
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let wide_path = manifest_dir.join("tests/fixtures/images/wide_2x1.png");
+    let tall_path = manifest_dir.join("tests/fixtures/images/tall_1x2.png");
+
+    let wide_url = Url::from_file_path(wide_path)
+      .expect("wide fixture url")
+      .to_string();
+    let tall_url = Url::from_file_path(tall_path)
+      .expect("tall fixture url")
+      .to_string();
+
+    let root = BoxNode::new_anonymous_block(
+      style.clone(),
+      vec![
+        BoxNode::new_replaced(
+          style.clone(),
+          ReplacedType::Image {
+            src: wide_url,
+            alt: None,
+            sizes: None,
+            srcset: Vec::new(),
+            picture_sources: Vec::new(),
+          },
+          None,
+          None,
+        ),
+        BoxNode::new_replaced(
+          style.clone(),
+          ReplacedType::Image {
+            src: tall_url,
+            alt: None,
+            sizes: None,
+            srcset: Vec::new(),
+            picture_sources: Vec::new(),
+          },
+          None,
+          None,
+        ),
+      ],
+    );
+    let mut box_tree = BoxTree::new(root);
+
+    renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
+
+    let wide = match &box_tree.root.children[0].box_type {
+      BoxType::Replaced(replaced) => replaced,
+      _ => panic!("expected replaced node for wide fixture"),
+    };
+    assert_eq!(wide.intrinsic_size, Some(Size::new(2.0, 1.0)));
+    assert_eq!(wide.aspect_ratio, Some(2.0));
+
+    let tall = match &box_tree.root.children[1].box_type {
+      BoxType::Replaced(replaced) => replaced,
+      _ => panic!("expected replaced node for tall fixture"),
+    };
+    assert_eq!(tall.intrinsic_size, Some(Size::new(1.0, 2.0)));
+    assert_eq!(tall.aspect_ratio, Some(0.5));
+  }
+
+  #[test]
+  fn resolve_intrinsic_sizes_probes_images_in_parallel() {
+    #[derive(Debug)]
+    struct GateState {
+      arrivals: usize,
+      opened: bool,
+    }
+
+    #[derive(Clone)]
+    struct GateFetcher {
+      bytes: &'static [u8],
+      gate: Arc<(Mutex<GateState>, Condvar)>,
+      inflight: Arc<AtomicUsize>,
+      max_inflight: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for GateFetcher {
+      fn fetch(&self, _url: &str) -> crate::error::Result<FetchedResource> {
+        let current = self.inflight.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut observed = self.max_inflight.load(Ordering::SeqCst);
+        while current > observed {
+          match self.max_inflight.compare_exchange(
+            observed,
+            current,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+          ) {
+            Ok(_) => break,
+            Err(next) => observed = next,
+          }
+        }
+
+        let (lock, cvar) = &*self.gate;
+        let mut state = lock.lock().expect("gate lock poisoned");
+        state.arrivals += 1;
+        if state.arrivals >= 2 {
+          state.opened = true;
+          cvar.notify_all();
+        } else {
+          while !state.opened {
+            let (next, timeout) = cvar
+              .wait_timeout(state, Duration::from_millis(500))
+              .expect("gate wait poisoned");
+            state = next;
+            if timeout.timed_out() {
+              break;
+            }
+          }
+        }
+        drop(state);
+
+        self.inflight.fetch_sub(1, Ordering::SeqCst);
+        Ok(FetchedResource::new(
+          self.bytes.to_vec(),
+          Some("image/png".to_string()),
+        ))
+      }
+    }
+
+    let max_inflight = Arc::new(AtomicUsize::new(0));
+    let fetcher = GateFetcher {
+      bytes: include_bytes!("../tests/fixtures/images/wide_2x1.png"),
+      gate: Arc::new((
+        Mutex::new(GateState {
+          arrivals: 0,
+          opened: false,
+        }),
+        Condvar::new(),
+      )),
+      inflight: Arc::new(AtomicUsize::new(0)),
+      max_inflight: Arc::clone(&max_inflight),
+    };
+
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_INTRINSIC_PROBE_PARALLELISM".to_string(),
+      "2".to_string(),
+    )]));
+    let renderer = FastRender::builder()
+      .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(toggles)
+      .build()
+      .expect("init renderer");
+
+    let style = Arc::new(ComputedStyle::default());
+    let root = BoxNode::new_anonymous_block(
+      style.clone(),
+      vec![
+        BoxNode::new_replaced(
+          style.clone(),
+          ReplacedType::Image {
+            src: "https://example.com/a.png".to_string(),
+            alt: None,
+            sizes: None,
+            srcset: Vec::new(),
+            picture_sources: Vec::new(),
+          },
+          None,
+          None,
+        ),
+        BoxNode::new_replaced(
+          style.clone(),
+          ReplacedType::Image {
+            src: "https://example.com/b.png".to_string(),
+            alt: None,
+            sizes: None,
+            srcset: Vec::new(),
+            picture_sources: Vec::new(),
+          },
+          None,
+          None,
+        ),
+      ],
+    );
+    let mut box_tree = BoxTree::new(root);
+
+    renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
+
+    assert!(
+      max_inflight.load(Ordering::SeqCst) >= 2,
+      "expected at least two concurrent image fetches"
     );
   }
 
