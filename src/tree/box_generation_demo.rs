@@ -6,6 +6,7 @@
 
 use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::geometry::Size;
+use crate::html::image_attrs::parse_srcset;
 use crate::style::cascade::StartingStyleSet;
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
@@ -13,7 +14,7 @@ use crate::style::types::ListStyleType;
 use crate::style::types::TextTransform;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
-use crate::tree::box_generation::{marker_content_from_style, parse_srcset};
+use crate::tree::box_generation::marker_content_from_style;
 use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType, SvgContent};
 use crate::tree::debug::DebugInfo;
 use std::sync::Arc;

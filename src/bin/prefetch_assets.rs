@@ -26,8 +26,11 @@ mod disk_cache_main {
   use fastrender::css::types::CssImportLoader;
   use fastrender::css::types::{FontFaceSource, StyleSheet};
   use fastrender::debug::runtime;
-  use fastrender::dom::parse_html;
+  use fastrender::dom::{parse_html, DomNode};
+  use fastrender::geometry::Size;
   use fastrender::html::asset_discovery::discover_html_asset_urls;
+  use fastrender::html::image_prefetch::{discover_image_prefetch_urls, ImagePrefetchLimits};
+  use fastrender::html::images::ImageSelectionContext;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
     CachingFetcherConfig, DiskCachingFetcher, FetchedResource, ResourceFetcher,
@@ -94,6 +97,14 @@ mod disk_cache_main {
       default_missing_value = "true"
     )]
     prefetch_images: bool,
+
+    /// Maximum number of image elements to prefetch per page (bounds cache growth)
+    #[arg(long, default_value_t = 150)]
+    max_images_per_page: usize,
+
+    /// Maximum number of URLs to prefetch per image element (primary + fallback(s))
+    #[arg(long, default_value_t = 2)]
+    max_image_urls_per_element: usize,
 
     /// Prefetch iframe/object/embed documents referenced directly from HTML (true/false)
     ///
@@ -167,6 +178,7 @@ mod disk_cache_main {
     prefetch_iframes: bool,
     prefetch_css_url_assets: bool,
     max_discovered_assets_per_page: usize,
+    image_limits: ImagePrefetchLimits,
   }
 
   fn merge_page_summary(into: &mut PageSummary, other: PageSummary) {
@@ -420,13 +432,12 @@ mod disk_cache_main {
   }
 
   fn discover_dom_stylesheet_tasks(
-    html: &str,
+    dom: &DomNode,
     base_url: &str,
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
-  ) -> Option<Vec<StylesheetTask>> {
-    let dom = parse_html(html).ok()?;
-    let scoped_sources = extract_scoped_css_sources(&dom);
+  ) -> Vec<StylesheetTask> {
+    let scoped_sources = extract_scoped_css_sources(dom);
     let toggles = runtime::runtime_toggles();
     let fetch_link_css = toggles.truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let preload_stylesheets_enabled =
@@ -498,7 +509,7 @@ mod disk_cache_main {
       }
     }
 
-    Some(tasks)
+    tasks
   }
 
   fn prefetch_fonts_from_stylesheet(
@@ -545,40 +556,20 @@ mod disk_cache_main {
       ..PageSummary::default()
     });
 
+    let dom = parse_html(html).ok();
+
     let mut media_query_cache = MediaQueryCache::default();
 
-    let mut tasks: Vec<StylesheetTask> =
-      match discover_dom_stylesheet_tasks(html, base_url, media_ctx, &mut media_query_cache) {
-        Some(tasks) => {
-          if tasks.is_empty() {
-            // Pages that load their primary stylesheet dynamically (without emitting `<link rel="stylesheet">`
-            // or `<style>`) are still best-effort handled by scanning the raw HTML for `.css`-looking
-            // substrings.
-            let mut out = Vec::new();
-            let mut seen = HashSet::new();
-            if let Ok(urls) = extract_embedded_css_urls(html, base_url) {
-              for url in urls {
-                if seen.insert(url.clone()) {
-                  out.push(StylesheetTask::External(url));
-                }
-              }
-            }
-            out
-          } else {
-            tasks
-          }
-        }
-        None => {
-          // DOM parse failed; fall back to the string-based extraction used by older versions.
+    let mut tasks: Vec<StylesheetTask> = match dom.as_ref() {
+      Some(dom) => {
+        let tasks =
+          discover_dom_stylesheet_tasks(dom, base_url, media_ctx, &mut media_query_cache);
+        if tasks.is_empty() {
+          // Pages that load their primary stylesheet dynamically (without emitting `<link rel="stylesheet">`
+          // or `<style>`) are still best-effort handled by scanning the raw HTML for `.css`-looking
+          // substrings.
           let mut out = Vec::new();
           let mut seen = HashSet::new();
-          if let Ok(urls) = extract_css_links(html, base_url, media_ctx.media_type) {
-            for url in urls {
-              if seen.insert(url.clone()) {
-                out.push(StylesheetTask::External(url));
-              }
-            }
-          }
           if let Ok(urls) = extract_embedded_css_urls(html, base_url) {
             for url in urls {
               if seen.insert(url.clone()) {
@@ -587,8 +578,31 @@ mod disk_cache_main {
             }
           }
           out
+        } else {
+          tasks
         }
-      };
+      }
+      None => {
+        // DOM parse failed; fall back to the string-based extraction used by older versions.
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        if let Ok(urls) = extract_css_links(html, base_url, media_ctx.media_type) {
+          for url in urls {
+            if seen.insert(url.clone()) {
+              out.push(StylesheetTask::External(url));
+            }
+          }
+        }
+        if let Ok(urls) = extract_embedded_css_urls(html, base_url) {
+          for url in urls {
+            if seen.insert(url.clone()) {
+              out.push(StylesheetTask::External(url));
+            }
+          }
+        }
+        out
+      }
+    };
 
     summary.borrow_mut().discovered_css = tasks.len();
     if tasks.is_empty()
@@ -597,15 +611,45 @@ mod disk_cache_main {
       return summary.into_inner();
     }
 
-    let mut image_urls: BTreeSet<String> = BTreeSet::new();
+    let mut image_urls: Vec<String> = Vec::new();
     let mut document_urls: BTreeSet<String> = BTreeSet::new();
-    if opts.prefetch_images || opts.prefetch_iframes {
-      let html_assets = discover_html_asset_urls(html, base_url);
-      if opts.prefetch_images {
-        for url in html_assets.images {
-          record_image_candidate(&mut image_urls, &url, opts.max_discovered_assets_per_page);
+
+    if opts.prefetch_images {
+      if let Some(dom) = dom.as_ref() {
+        // Prefer renderer-aligned selection so we prefetch the same candidate that paint would
+        // request, instead of every `srcset` candidate.
+        let selection_ctx = ImageSelectionContext {
+          device_pixel_ratio: media_ctx.device_pixel_ratio,
+          slot_width: None,
+          viewport: Some(Size::new(media_ctx.viewport_width, media_ctx.viewport_height)),
+          media_context: Some(media_ctx),
+          font_size: Some(media_ctx.base_font_size),
+          base_url: Some(base_url),
+        };
+        let discovery = discover_image_prefetch_urls(dom, selection_ctx, opts.image_limits);
+
+        let max_urls = if opts.max_discovered_assets_per_page == 0 {
+          usize::MAX
+        } else {
+          opts.max_discovered_assets_per_page
+        };
+        let mut seen = HashSet::new();
+        for url in discovery.urls {
+          if image_urls.len() >= max_urls {
+            break;
+          }
+          let Some(normalized) = normalize_prefetch_url(&url) else {
+            continue;
+          };
+          if seen.insert(normalized.clone()) {
+            image_urls.push(normalized);
+          }
         }
       }
+    }
+
+    if opts.prefetch_iframes || (opts.prefetch_images && dom.is_none()) {
+      let html_assets = discover_html_asset_urls(html, base_url);
       if opts.prefetch_iframes {
         for url in html_assets.documents {
           record_document_candidate(
@@ -613,6 +657,29 @@ mod disk_cache_main {
             &url,
             opts.max_discovered_assets_per_page,
           );
+        }
+      }
+      // Fallback when the DOM parse failed: keep behavior best-effort and bounded using the
+      // same overall caps, but do not attempt to prefetch unlimited `srcset` candidates.
+      if opts.prefetch_images && dom.is_none() {
+        let mut seen = HashSet::new();
+        let mut max_urls = opts
+          .image_limits
+          .max_image_elements
+          .saturating_mul(opts.image_limits.max_urls_per_element);
+        if opts.max_discovered_assets_per_page != 0 {
+          max_urls = max_urls.min(opts.max_discovered_assets_per_page);
+        }
+        for url in html_assets.images {
+          if image_urls.len() >= max_urls {
+            break;
+          }
+          let Some(normalized) = normalize_prefetch_url(&url) else {
+            continue;
+          };
+          if seen.insert(normalized.clone()) {
+            image_urls.push(normalized);
+          }
         }
       }
     }
@@ -999,6 +1066,10 @@ mod disk_cache_main {
         prefetch_iframes: false,
         prefetch_css_url_assets: true,
         max_discovered_assets_per_page: 2000,
+        image_limits: ImagePrefetchLimits {
+          max_image_elements: 150,
+          max_urls_per_element: 2,
+        },
       };
 
       let summary = prefetch_assets_for_html(
@@ -1109,6 +1180,17 @@ mod disk_cache_main {
       std::process::exit(2);
     }
 
+    if args.prefetch_images {
+      if args.max_images_per_page == 0 {
+        eprintln!("max-images-per-page must be > 0 when --prefetch-images is enabled");
+        std::process::exit(2);
+      }
+      if args.max_image_urls_per_element == 0 {
+        eprintln!("max-image-urls-per-element must be > 0 when --prefetch-images is enabled");
+        std::process::exit(2);
+      }
+    }
+
     let timeout_secs = args.timeout.seconds(Some(30));
     let per_request_timeout_label = timeout_secs.unwrap_or(0);
 
@@ -1162,12 +1244,17 @@ mod disk_cache_main {
       disk_config,
     ));
 
+    let image_limits = ImagePrefetchLimits {
+      max_image_elements: args.max_images_per_page,
+      max_urls_per_element: args.max_image_urls_per_element,
+    };
     let opts = PrefetchOptions {
       prefetch_fonts: args.prefetch_fonts,
       prefetch_images: args.prefetch_images,
       prefetch_iframes: args.prefetch_iframes,
       prefetch_css_url_assets: args.prefetch_css_url_assets,
       max_discovered_assets_per_page: args.max_discovered_assets_per_page,
+      image_limits,
     };
 
     println!(
@@ -1185,6 +1272,12 @@ mod disk_cache_main {
       println!(
         "HTML assets: images={} iframes={}",
         args.prefetch_images, args.prefetch_iframes
+      );
+    }
+    if args.prefetch_images {
+      println!(
+        "Image prefetch limits: max_images_per_page={} max_urls_per_element={}",
+        args.max_images_per_page, args.max_image_urls_per_element
       );
     }
     if let Some((index, total)) = args.shard {

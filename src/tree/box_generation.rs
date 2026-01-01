@@ -14,6 +14,7 @@ use crate::dom::ElementRef;
 use crate::dom::SVG_NAMESPACE;
 use crate::error::{RenderStage, Result};
 use crate::geometry::Size;
+use crate::html::image_attrs;
 use crate::render_control::check_active_periodic;
 use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
@@ -32,8 +33,6 @@ use crate::style::types::Appearance;
 use crate::style::types::FontStyle;
 use crate::style::types::ListStyleType;
 use crate::style::types::TextTransform;
-use crate::style::values::Length;
-use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
 use crate::svg::parse_svg_length_px;
 use crate::svg::svg_intrinsic_dimensions_from_attributes;
@@ -49,17 +48,12 @@ use crate::tree::box_tree::MathReplaced;
 use crate::tree::box_tree::PictureSource;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
-use crate::tree::box_tree::SizesEntry;
 use crate::tree::box_tree::SizesList;
 use crate::tree::box_tree::SrcsetCandidate;
-use crate::tree::box_tree::SrcsetDescriptor;
 use crate::tree::box_tree::SvgContent;
 use crate::tree::box_tree::TextControlKind;
 use crate::tree::debug::DebugInfo;
 use crate::tree::table_fixup::TableStructureFixer;
-use cssparser::Parser;
-use cssparser::ParserInput;
-use cssparser::Token;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -71,212 +65,11 @@ pub use crate::tree::box_generation_demo::{
   BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,
 };
 pub(crate) fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
-  fn is_data_url(bytes: &[u8], start: usize) -> bool {
-    if start + 5 > bytes.len() {
-      return false;
-    }
-    let matches =
-      |offset: usize, expected: u8| bytes[start + offset].to_ascii_lowercase() == expected;
-    matches(0, b'd')
-      && matches(1, b'a')
-      && matches(2, b't')
-      && matches(3, b'a')
-      && bytes[start + 4] == b':'
-  }
-
-  let bytes = attr.as_bytes();
-  let mut out = Vec::new();
-  let mut idx = 0;
-
-  while idx < bytes.len() {
-    while idx < bytes.len() && (bytes[idx].is_ascii_whitespace() || bytes[idx] == b',') {
-      idx += 1;
-    }
-    if idx >= bytes.len() {
-      break;
-    }
-
-    let url_start = idx;
-    let data_url = is_data_url(bytes, url_start);
-    let mut data_commas_seen = 0usize;
-
-    while idx < bytes.len() {
-      let b = bytes[idx];
-      if b.is_ascii_whitespace() {
-        break;
-      }
-      if b == b',' {
-        if data_url && data_commas_seen == 0 {
-          // Data URLs contain a required comma separating metadata and payload.
-          // Treat the first comma as part of the URL.
-          data_commas_seen = 1;
-          idx += 1;
-          continue;
-        }
-        // Candidate separator (no descriptors).
-        break;
-      }
-      idx += 1;
-    }
-
-    let url = attr[url_start..idx].trim();
-    if url.is_empty() {
-      while idx < bytes.len() && bytes[idx] != b',' {
-        idx += 1;
-      }
-      continue;
-    }
-
-    while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
-      idx += 1;
-    }
-
-    let desc_start = idx;
-    while idx < bytes.len() && bytes[idx] != b',' {
-      idx += 1;
-    }
-    let desc_str = attr[desc_start..idx].trim();
-
-    let mut descriptor: Option<SrcsetDescriptor> = None;
-    let mut valid = true;
-    for desc in desc_str.split_whitespace() {
-      if descriptor.is_some() {
-        valid = false;
-        break;
-      }
-      let d = desc.trim();
-      if let Some(raw) = d.strip_suffix('x') {
-        if let Ok(val) = raw.parse::<f32>() {
-          descriptor = Some(SrcsetDescriptor::Density(val));
-        }
-      } else if let Some(raw) = d.strip_suffix("dppx") {
-        if let Ok(val) = raw.parse::<f32>() {
-          descriptor = Some(SrcsetDescriptor::Density(val));
-        }
-      } else if let Some(raw) = d.strip_suffix('w') {
-        if let Ok(val) = raw.parse::<u32>() {
-          descriptor = Some(SrcsetDescriptor::Width(val));
-        }
-      }
-    }
-    if valid {
-      out.push(SrcsetCandidate {
-        url: url.to_string(),
-        descriptor: descriptor.unwrap_or(SrcsetDescriptor::Density(1.0)),
-      });
-    }
-
-    if idx < bytes.len() && bytes[idx] == b',' {
-      idx += 1;
-    }
-  }
-
-  out
+  image_attrs::parse_srcset(attr)
 }
 
 pub(crate) fn parse_sizes(attr: &str) -> Option<SizesList> {
-  use crate::style::media::MediaQuery;
-
-  let mut entries = Vec::new();
-  for item in attr.split(',') {
-    let trimmed = item.trim();
-    if trimmed.is_empty() {
-      continue;
-    }
-    let mut parts = trimmed.rsplitn(2, char::is_whitespace);
-    let length_part = parts.next().map(str::trim);
-    let media_part = parts.next().map(str::trim);
-    let length = match length_part.and_then(parse_sizes_length) {
-      Some(l) => l,
-      None => continue,
-    };
-
-    let media = match media_part {
-      Some(cond) if !cond.is_empty() => MediaQuery::parse_list(cond).ok(),
-      _ => None,
-    };
-
-    entries.push(SizesEntry { media, length });
-  }
-
-  if entries.is_empty() {
-    None
-  } else {
-    Some(SizesList { entries })
-  }
-}
-pub(crate) fn parse_sizes_length(value: &str) -> Option<Length> {
-  use crate::css::properties::parse_calc_function_length;
-  use crate::css::properties::parse_clamp_function_length;
-  use crate::css::properties::parse_min_max_function_length;
-  use crate::css::properties::MathFn;
-
-  let mut input = ParserInput::new(value);
-  let mut parser = Parser::new(&mut input);
-
-  let parsed = match parser.next() {
-    Ok(Token::Dimension {
-      value, ref unit, ..
-    }) => {
-      let unit = unit.as_ref();
-      if unit.eq_ignore_ascii_case("px") {
-        Some(Length::px(*value))
-      } else if unit.eq_ignore_ascii_case("em") {
-        Some(Length::em(*value))
-      } else if unit.eq_ignore_ascii_case("rem") {
-        Some(Length::rem(*value))
-      } else if unit.eq_ignore_ascii_case("ex") {
-        Some(Length::ex(*value))
-      } else if unit.eq_ignore_ascii_case("ch") {
-        Some(Length::ch(*value))
-      } else if unit.eq_ignore_ascii_case("pt") {
-        Some(Length::pt(*value))
-      } else if unit.eq_ignore_ascii_case("pc") {
-        Some(Length::pc(*value))
-      } else if unit.eq_ignore_ascii_case("in") {
-        Some(Length::inches(*value))
-      } else if unit.eq_ignore_ascii_case("cm") {
-        Some(Length::cm(*value))
-      } else if unit.eq_ignore_ascii_case("mm") {
-        Some(Length::mm(*value))
-      } else if unit.eq_ignore_ascii_case("q") {
-        Some(Length::q(*value))
-      } else if unit.eq_ignore_ascii_case("vw") {
-        Some(Length::new(*value, LengthUnit::Vw))
-      } else if unit.eq_ignore_ascii_case("vh") {
-        Some(Length::new(*value, LengthUnit::Vh))
-      } else if unit.eq_ignore_ascii_case("vmin") {
-        Some(Length::new(*value, LengthUnit::Vmin))
-      } else if unit.eq_ignore_ascii_case("vmax") {
-        Some(Length::new(*value, LengthUnit::Vmax))
-      } else {
-        None
-      }
-    }
-    Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("calc") => {
-      parse_calc_function_length(&mut parser).ok()
-    }
-    Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("min") => {
-      parse_min_max_function_length(&mut parser, MathFn::Min).ok()
-    }
-    Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("max") => {
-      parse_min_max_function_length(&mut parser, MathFn::Max).ok()
-    }
-    Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("clamp") => {
-      parse_clamp_function_length(&mut parser).ok()
-    }
-    Ok(Token::Percentage { unit_value, .. }) => Some(Length::percent(*unit_value * 100.0)),
-    Ok(Token::Number { value, .. }) if *value == 0.0 => Some(Length::px(0.0)),
-    Err(_) => None,
-    _ => None,
-  }?;
-
-  parser.skip_whitespace();
-  if parser.is_exhausted() {
-    Some(parsed)
-  } else {
-    None
-  }
+  image_attrs::parse_sizes(attr)
 }
 
 // ============================================================================

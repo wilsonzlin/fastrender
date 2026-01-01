@@ -2,6 +2,8 @@
 
 pub mod encoding;
 pub mod asset_discovery;
+pub mod image_attrs;
+pub mod image_prefetch;
 pub mod images;
 pub mod meta_refresh;
 pub mod viewport;
