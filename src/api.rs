@@ -2727,6 +2727,30 @@ struct PoolState {
   total: usize,
 }
 
+struct PooledRenderer<'a> {
+  pool: &'a FastRenderPool,
+  renderer: Option<FastRender>,
+}
+
+impl Drop for PooledRenderer<'_> {
+  fn drop(&mut self) {
+    let Some(renderer) = self.renderer.take() else {
+      return;
+    };
+
+    // If rendering panicked while a renderer was checked out, assume its internal state may be
+    // inconsistent. Drop it and decrement the pool count so future renders can build a fresh
+    // instance instead of deadlocking on `total >= pool_size`.
+    if std::thread::panicking() {
+      self.pool.discard_renderer();
+      drop(renderer);
+      return;
+    }
+
+    self.pool.release_renderer(renderer);
+  }
+}
+
 fn font_db_for_pool(font_config: &FontConfig) -> Arc<FontDbDatabase> {
   // `FastRender::with_config` ultimately guarantees that at least the bundled fallback set
   // is available (even when `use_bundled_fonts` is false) so text shaping never runs with
@@ -2796,6 +2820,79 @@ mod pool_fontdb_tests {
     } else {
       assert!(Arc::ptr_eq(&pool.inner.shared.font_db, &system));
     }
+  }
+}
+
+#[cfg(test)]
+mod pool_panic_tests {
+  use super::*;
+
+  #[test]
+  fn fast_render_pool_releases_capacity_after_panic() {
+    let renderer = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+    let pool = FastRenderPool::with_config(
+      FastRenderPoolConfig::new()
+        .with_renderer_config(renderer)
+        .with_pool_size(1),
+    )
+    .expect("pool");
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let _ = pool.with_renderer(|_renderer| -> Result<()> {
+        panic!("poison renderer");
+      });
+    }));
+    assert!(result.is_err(), "expected panic to be caught");
+
+    let guard = pool
+      .inner
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(guard.total, 0, "renderer should be discarded on panic");
+    assert!(guard.idle.is_empty(), "renderer should not be returned to the pool");
+    drop(guard);
+
+    let pixmap = pool
+      .render_html("<!doctype html><html><body>Hello</body></html>", 10, 10)
+      .expect("render after panic should succeed");
+    assert_eq!(pixmap.width(), 10);
+    assert_eq!(pixmap.height(), 10);
+
+    let guard = pool
+      .inner
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(guard.total, 1, "expected renderer to be rebuilt after panic");
+    assert_eq!(guard.idle.len(), 1, "expected renderer to be returned to the pool");
+  }
+
+  #[test]
+  fn fast_render_pool_survives_poisoned_lock() {
+    let renderer = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+    let pool = FastRenderPool::with_config(
+      FastRenderPoolConfig::new()
+        .with_renderer_config(renderer)
+        .with_pool_size(1),
+    )
+    .expect("pool");
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let _guard = pool.inner.state.lock().unwrap();
+      panic!("poison pool mutex");
+    }));
+    assert!(result.is_err(), "expected panic to be caught");
+    assert!(
+      pool.inner.state.is_poisoned(),
+      "expected pool mutex to be poisoned"
+    );
+
+    let pixmap = pool
+      .render_html("<!doctype html><html><body>Hello</body></html>", 10, 10)
+      .expect("render after poisoned mutex should succeed");
+    assert_eq!(pixmap.width(), 10);
+    assert_eq!(pixmap.height(), 10);
   }
 }
 
@@ -2870,7 +2967,7 @@ impl FastRenderPool {
   }
 
   fn acquire_renderer(&self) -> Result<FastRender> {
-    let mut guard = self.inner.state.lock().unwrap();
+    let mut guard = self.lock_state();
     loop {
       if let Some(renderer) = guard.idle.pop() {
         return Ok(renderer);
@@ -2879,23 +2976,49 @@ impl FastRenderPool {
         guard.total += 1;
         let shared = Arc::clone(&self.inner.shared);
         drop(guard);
-        let built = shared.build_renderer();
+
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shared.build_renderer()));
         match built {
-          Ok(renderer) => return Ok(renderer),
-          Err(err) => {
-            let mut guard = self.inner.state.lock().unwrap();
+          Ok(Ok(renderer)) => return Ok(renderer),
+          Ok(Err(err)) => {
+            let mut guard = self.lock_state();
             guard.total = guard.total.saturating_sub(1);
             self.inner.available.notify_one();
             return Err(err);
           }
-        }
+          Err(payload) => {
+            let mut guard = self.lock_state();
+            guard.total = guard.total.saturating_sub(1);
+            self.inner.available.notify_one();
+            drop(guard);
+            std::panic::resume_unwind(payload);
+          }
+        };
       }
-      guard = self.inner.available.wait(guard).unwrap();
+      guard = self
+        .inner
+        .available
+        .wait(guard)
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
   }
 
+  fn lock_state(&self) -> std::sync::MutexGuard<'_, PoolState> {
+    self
+      .inner
+      .state
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+  }
+
+  fn discard_renderer(&self) {
+    let mut guard = self.lock_state();
+    guard.total = guard.total.saturating_sub(1);
+    self.inner.available.notify_one();
+  }
+
   fn release_renderer(&self, renderer: FastRender) {
-    let mut guard = self.inner.state.lock().unwrap();
+    let mut guard = self.lock_state();
     guard.idle.push(renderer);
     self.inner.available.notify_one();
   }
@@ -2904,10 +3027,12 @@ impl FastRenderPool {
   where
     F: FnOnce(&mut FastRender) -> Result<T>,
   {
-    let mut renderer = self.acquire_renderer()?;
-    let result = op(&mut renderer);
-    self.release_renderer(renderer);
-    result
+    let renderer = self.acquire_renderer()?;
+    let mut pooled = PooledRenderer {
+      pool: self,
+      renderer: Some(renderer),
+    };
+    op(pooled.renderer.as_mut().expect("renderer should be set"))
   }
 
   /// Render HTML to a pixmap using a pooled renderer.
@@ -3876,7 +4001,10 @@ impl FastRender {
     if let Some(previous) = restore_cascade_profile {
       crate::style::cascade::set_cascade_profile_enabled(previous);
     }
-    let diagnostics = diagnostics.lock().unwrap().clone();
+    let diagnostics = diagnostics
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .clone();
 
     Ok(RenderResult {
       pixmap: outputs.pixmap,
@@ -4958,7 +5086,10 @@ impl FastRender {
             }
             if options.allow_partial {
               let pixmap = self.render_error_overlay(width, height)?;
-              let diagnostics = diagnostics.lock().unwrap().clone();
+              let diagnostics = diagnostics
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
               return Ok(RenderReport {
                 pixmap,
                 accessibility: None,
@@ -4997,7 +5128,10 @@ impl FastRender {
           guard.stats = Some(stats);
         }
       }
-      report.diagnostics = diagnostics.lock().unwrap().clone();
+      report.diagnostics = diagnostics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
       Ok(report)
     })();
 
@@ -5148,7 +5282,10 @@ impl FastRender {
         return Err(err);
       }
     };
-    let diagnostics = diagnostics.lock().unwrap().clone();
+    let diagnostics = diagnostics
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .clone();
 
     let mut report = RenderReport {
       pixmap: outputs.pixmap,
@@ -5249,7 +5386,10 @@ impl FastRender {
           stats_recorder.as_mut(),
           trace_handle,
         )?;
-        let diagnostics = diagnostics.lock().unwrap().clone();
+        let diagnostics = diagnostics
+          .lock()
+          .unwrap_or_else(|poisoned| poisoned.into_inner())
+          .clone();
 
         Ok(RenderReport {
           pixmap: outputs.pixmap,
