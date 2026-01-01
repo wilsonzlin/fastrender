@@ -61,17 +61,17 @@ pub struct UpdatePagesetGuardrailsBudgetsArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct PagesetTimeoutManifest {
+struct PagesetGuardrailsManifest {
   schema_version: u32,
   #[serde(default)]
   default_budget_ms: Option<f64>,
-  fixtures: Vec<PagesetTimeoutFixture>,
+  fixtures: Vec<PagesetGuardrailsFixture>,
   #[serde(flatten)]
   extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct PagesetTimeoutFixture {
+struct PagesetGuardrailsFixture {
   name: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   url: Option<String>,
@@ -205,7 +205,7 @@ pub fn run_update_pageset_guardrails_budgets(args: UpdatePagesetGuardrailsBudget
   Ok(())
 }
 
-fn load_manifest(path: &Path) -> Result<PagesetTimeoutManifest> {
+fn load_manifest(path: &Path) -> Result<PagesetGuardrailsManifest> {
   let raw = fs::read_to_string(path)
     .with_context(|| format!("failed to read pageset guardrails manifest {}", path.display()))?;
   serde_json::from_str(&raw).with_context(|| format!("invalid JSON in {}", path.display()))
@@ -213,7 +213,7 @@ fn load_manifest(path: &Path) -> Result<PagesetTimeoutManifest> {
 
 fn run_perf_smoke(
   args: &UpdatePagesetGuardrailsBudgetsArgs,
-  _manifest: &PagesetTimeoutManifest,
+  _manifest: &PagesetGuardrailsManifest,
   output: &Path,
   _tempdir: &TempDir,
 ) -> Result<()> {
@@ -304,7 +304,7 @@ fn timings_map(perf: &PerfSmokeSummary) -> Result<BTreeMap<String, f64>> {
 }
 
 fn update_manifest_budgets(
-  manifest: &mut PagesetTimeoutManifest,
+  manifest: &mut PagesetGuardrailsManifest,
   timings_ms: &BTreeMap<String, f64>,
   default_budget_ms: u64,
   max_increase_percent: f64,
@@ -470,7 +470,7 @@ mod tests {
 
   #[test]
   fn update_manifest_preserves_fixture_settings() {
-    let mut manifest: PagesetTimeoutManifest = serde_json::from_value(json!({
+    let mut manifest: PagesetGuardrailsManifest = serde_json::from_value(json!({
       "schema_version": 1,
       "default_budget_ms": 5000.0,
       "fixtures": [
@@ -495,7 +495,7 @@ mod tests {
 
   #[test]
   fn rejects_large_budget_increase_without_override() {
-    let mut manifest: PagesetTimeoutManifest = serde_json::from_value(json!({
+    let mut manifest: PagesetGuardrailsManifest = serde_json::from_value(json!({
       "schema_version": 1,
       "default_budget_ms": 5000.0,
       "fixtures": [
