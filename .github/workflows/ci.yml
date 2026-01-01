@@ -114,6 +114,15 @@ jobs:
             --top 5 \
             --output target/perf_smoke_pageset_timeouts.json \
             | tee target/perf_smoke_pageset_timeouts.log
+          test -s target/perf_smoke_pageset_timeouts.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("target/perf_smoke_pageset_timeouts.json")
+          data = json.loads(path.read_text())
+          assert isinstance(data.get("schema_version"), int), "perf_smoke output missing schema_version"
+          assert isinstance(data.get("fixtures"), list), "perf_smoke output missing fixtures list"
+          PY
 
       - name: Download perf_smoke pageset-timeouts baseline (main)
         if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
