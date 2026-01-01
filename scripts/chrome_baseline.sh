@@ -139,7 +139,25 @@ fi
 
 mkdir -p "${OUT_DIR}"
 
-TMP_ROOT="$(mktemp -d)"
+# Snap-packaged Chromium runs under strict confinement (AppArmor + mount namespaces).
+# In that configuration, `/tmp` is private to the snap, and Chromium may be unable to
+# write screenshots to arbitrary repo paths. Use a temp dir under the snap's common
+# directory when available so the screenshot is visible to the host process.
+CHROME_PATH="$(command -v "${CHROME}" || true)"
+TMP_TEMPLATE=""
+if [[ "${CHROME_PATH}" == /snap/bin/chromium* ]]; then
+  SNAP_COMMON_DIR="${HOME}/snap/chromium/common"
+  mkdir -p "${SNAP_COMMON_DIR}" 2>/dev/null || true
+  if [[ -d "${SNAP_COMMON_DIR}" ]]; then
+    TMP_TEMPLATE="${SNAP_COMMON_DIR}/fastrender-chrome-baseline.XXXXXX"
+  fi
+fi
+
+if [[ -n "${TMP_TEMPLATE}" ]]; then
+  TMP_ROOT="$(mktemp -d "${TMP_TEMPLATE}")"
+else
+  TMP_ROOT="$(mktemp -d)"
+fi
 cleanup() {
   rm -rf "${TMP_ROOT}"
 }
@@ -194,15 +212,23 @@ for html_path in "${HTML_FILES[@]}"; do
   mkdir -p "${patched_dir}"
   patched_html="${patched_dir}/${stem}.html"
 
-  python3 - "${html_path}" "${patched_html}" "${base_url}" <<'PY'
+  disable_js="0"
+  if [[ "${JS,,}" == "off" ]]; then
+    disable_js="1"
+  fi
+
+  python3 - "${html_path}" "${patched_html}" "${base_url}" "${disable_js}" <<'PY'
 import sys
 
 in_path = sys.argv[1]
 out_path = sys.argv[2]
 base_url = sys.argv[3].strip()
+disable_js = False
+if len(sys.argv) >= 5:
+    disable_js = sys.argv[4].strip() == "1"
 
 data = open(in_path, "rb").read()
-if not base_url:
+if not base_url and not disable_js:
     open(out_path, "wb").write(data)
     sys.exit(0)
 
@@ -218,13 +244,24 @@ def insert_after_tag(tag: bytes, insertion: bytes):
     end += 1
     return data[:end] + b"\n" + insertion + data[end:]
 
-base_tag = (f'<base href="{base_url}">'.encode("utf-8") + b"\n")
+inserts = []
+if base_url:
+    inserts.append(f'<base href="{base_url}">'.encode("utf-8") + b"\n")
+if disable_js:
+    # Best-effort JS disable: inject a CSP that blocks script execution.
+    # This is more portable than Chromium flag hacks and matches our "no JS" renderer model.
+    inserts.append(b"<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none';\">\n")
 
-out = insert_after_tag(b"<head", base_tag)
+insertion = b"".join(inserts)
+if not insertion:
+    open(out_path, "wb").write(data)
+    sys.exit(0)
+
+out = insert_after_tag(b"<head", insertion)
 if out is None:
-    out = insert_after_tag(b"<html", b"<head>\n" + base_tag + b"</head>\n")
+    out = insert_after_tag(b"<html", b"<head>\n" + insertion + b"</head>\n")
 if out is None:
-    out = b"<head>\n" + base_tag + b"</head>\n" + data
+    out = b"<head>\n" + insertion + b"</head>\n" + data
 
 open(out_path, "wb").write(out)
 PY
@@ -232,6 +269,9 @@ PY
   url="file://${patched_html}"
   png_path="${OUT_DIR}/${stem}.png"
   chrome_log="${OUT_DIR}/${stem}.chrome.log"
+  tmp_png_dir="${TMP_ROOT}/screenshots"
+  mkdir -p "${tmp_png_dir}"
+  tmp_png_path="${tmp_png_dir}/${stem}.png"
 
   profile_dir="${TMP_ROOT}/profile-${stem}"
   mkdir -p "${profile_dir}"
@@ -247,28 +287,32 @@ PY
     --disable-web-security
     --allow-file-access-from-files
     --user-data-dir="${profile_dir}"
-    --screenshot="${png_path}"
+    # Snap-packaged Chromium can be sandboxed from writing to arbitrary repo paths.
+    # Always write the screenshot to a temp directory and then copy it into OUT_DIR.
+    --screenshot="${tmp_png_path}"
   )
 
-  if [[ "${JS,,}" == "off" ]]; then
-    chrome_args+=(--blink-settings=scriptEnabled=false)
-  fi
-
   # Use `timeout` if available; otherwise run without a hard kill.
+  ran_ok=0
   if command -v timeout >/dev/null 2>&1; then
     if timeout "${TIMEOUT}s" "${CHROME}" "${chrome_args[@]}" "${url}" >"${chrome_log}" 2>&1; then
-      ok=$((ok + 1))
-      echo "✓ ${stem}"
-    else
-      fail=$((fail + 1))
-      echo "✗ ${stem} (failed; see ${chrome_log})" >&2
+      ran_ok=1
     fi
   else
     if "${CHROME}" "${chrome_args[@]}" "${url}" >"${chrome_log}" 2>&1; then
-      ok=$((ok + 1))
-      echo "✓ ${stem}"
+      ran_ok=1
+    fi
+  fi
+
+  if [[ "${ran_ok}" -eq 1 && -s "${tmp_png_path}" ]]; then
+    cp -f "${tmp_png_path}" "${png_path}"
+    ok=$((ok + 1))
+    echo "✓ ${stem}"
+  else
+    fail=$((fail + 1))
+    if [[ "${ran_ok}" -eq 1 ]]; then
+      echo "✗ ${stem} (no screenshot produced; see ${chrome_log})" >&2
     else
-      fail=$((fail + 1))
       echo "✗ ${stem} (failed; see ${chrome_log})" >&2
     fi
   fi

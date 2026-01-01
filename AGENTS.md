@@ -43,6 +43,28 @@ scripts/profile_samply.sh example.com --timeout 5
 cargo run --release --bin inspect_frag -- --help
 ```
 
+**Accuracy triage loop (compare against a correct engine on the same cached HTML):**
+
+```bash
+# Ubuntu one-time setup (python + fonts + chrome/chromium):
+scripts/install_chrome_baseline_deps_ubuntu.sh
+
+# Ensure cached HTML exists:
+cargo run --release --bin fetch_pages
+
+# Produce a Chrome/Chromium baseline screenshot from cached HTML (JS disabled by default):
+scripts/chrome_baseline.sh example.com
+
+# Produce the FastRender render for the same cached HTML:
+cargo run --release --bin render_pages -- --pages example.com
+
+# Diff the images (writes an HTML report + per-page diff PNGs under target/):
+cargo run --release --bin diff_renders -- \
+  --before fetches/chrome_renders \
+  --after fetches/renders \
+  --html target/chrome_vs_fastrender.html
+```
+
 ## North-star KPI (what we optimize for)
 
 **The page set in `src/bin/fetch_pages.rs` is the KPI.**
@@ -70,6 +92,8 @@ You may temporarily focus on a single pageset page (or a minimized repro derived
 - **Performance is correctness**: a renderer that times out or loops is wrong.
 - **No vanity work**: changes that don’t improve pageset accuracy, eliminate a crash/timeout, or reduce uncertainty for an imminent fix are not acceptable. Instrumentation that never leads to a fix is waste.
 - **Accuracy needs evidence**: “looks better” is not enough. Prefer: a minimized fixture + golden update, a regression test, or a deterministic diff that shows *what* got more correct. If you can’t demonstrate an accuracy delta, you probably didn’t ship one.
+- **Compare against a correct engine**: when chasing accuracy, don’t argue from vibes. Generate a Chrome/Chromium baseline screenshot from the same cached HTML (`scripts/chrome_baseline.sh`) and diff it against FastRender output. Use the diff to localize *what* is wrong (missing boxes, wrong stacking, wrong text metrics, etc.).
+- **Freeze reality to make progress**: live pages drift. Convert pageset pages into offline repros/guardrails (bundles → fixtures → goldens) so correctness improvements can be repeated and regression-tested.
 - **Ruthless triage**: if you can’t turn a symptom into a task with a measurable outcome quickly, stop and split the work.
 - **Accountability**: progress must be visible, comparable, and committed. Regressions must be obvious.
 - **Worship data (in service of accuracy)**: we don’t “feel” performance or correctness — we measure it. Prefer evidence like `progress/pages/*.json` deltas, timings, traces, logs, and tests (unit/prop/fuzz/regressions). Use standard instrumentation when helpful (`tracing` spans/events, `metrics` counters/histograms). Data is only valuable if it helps us ship more correct pageset renders.
@@ -110,6 +134,19 @@ The main planner should **continuously**:
 
 Do NOT assign “one worker per page” long-term. Pages overlap in root causes. Split by **failure class / hotspot**.
 
+### Default accuracy workflow (what to do when output is wrong)
+
+When a pageset page “renders” but looks wrong, use this loop to force fast, evidence-based progress:
+1. **Pick one pageset page** (by URL/stem) and reproduce from cache (`fetches/html/<stem>.html`).
+2. **Generate a correct-engine baseline** from cached HTML:
+   - `scripts/chrome_baseline.sh <stem>` (JS off by default).
+3. **Generate FastRender output** for the same cached HTML:
+   - `cargo run --release --bin render_pages -- --pages <stem>`
+4. **Diff the images** and localize the error class:
+   - `cargo run --release --bin diff_renders -- --before fetches/chrome_renders --after fetches/renders --html target/chrome_vs_fastrender.html`
+5. **Freeze a repro** (so you can iterate deterministically): bundle → offline fixture → golden/regression where possible.
+6. **Fix the root cause** (spec-first; no post-layout nudges), then re-run the diff and the pageset.
+
 ### Workers: what “done” means
 
 A worker task is only “done” if it produces at least one of:
@@ -119,6 +156,10 @@ A worker task is only “done” if it produces at least one of:
 - A correctness fix that causes an observable improvement on the pageset **with evidence**:
   - ideally: a minimized fixture + golden (or a focused regression test),
   - alternatively: a deterministic diff / measurable signal that tracks correctness.
+
+For accuracy tasks, your “evidence” should usually be one of:
+- a fixture/golden/regression update, or
+- a repeatable Chrome-vs-FastRender diff report (generated locally under `target/`) that clearly shows the improvement.
 
 Instrumentation/perf work is only “done” if it directly enables one of the above within the same session (or very shortly after). Otherwise it’s tool-building for its own sake.
 
