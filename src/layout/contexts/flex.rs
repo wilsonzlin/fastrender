@@ -2377,14 +2377,16 @@ impl FormattingContext for FlexFormattingContext {
       Ok(Some(child_total))
     };
 
+    let mut deadline_counter = 0usize;
     let contributions = if self.parallelism.should_parallelize(box_node.children.len()) {
       let deadline = active_deadline();
       box_node
         .children
         .par_iter()
-        .map(|child| {
+        .map_init(|| 0usize, |deadline_counter, child| {
           with_deadline(deadline.as_ref(), || {
             crate::layout::engine::debug_record_parallel_work();
+            check_layout_deadline(deadline_counter)?;
             compute_child_contribution(child)
           })
         })
@@ -2393,12 +2395,16 @@ impl FormattingContext for FlexFormattingContext {
       box_node
         .children
         .iter()
-        .map(compute_child_contribution)
+        .map(|child| {
+          check_layout_deadline(&mut deadline_counter)?;
+          compute_child_contribution(child)
+        })
         .collect::<Result<Vec<_>, _>>()?
     };
 
     let mut contribution = 0.0f32;
     for child_total in contributions.into_iter().flatten() {
+      check_layout_deadline(&mut deadline_counter)?;
       if is_row_axis {
         contribution += child_total;
       } else {
@@ -5344,6 +5350,31 @@ mod tests {
       &constraints,
       &mut node_map,
     );
+
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
+  fn flex_intrinsic_inline_size_times_out_via_deadline_checks() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::time::Duration;
+
+    let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let children: Vec<BoxNode> = (0..64)
+      .map(|_| {
+        BoxNode::new_block(
+          create_item_style(10.0, 10.0),
+          FormattingContextType::Block,
+          vec![],
+        )
+      })
+      .collect();
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+
+    let fc = FlexFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+    let result = fc.compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MaxContent);
 
     assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
