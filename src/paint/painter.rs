@@ -11283,8 +11283,16 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) -> 
           }
         }
       } else {
-        check_active(RenderStage::Paint)?;
-        pixmap.apply_mask(mask);
+        apply_mask_rect_rgba(
+          pixmap,
+          mask,
+          ClipMaskDirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: width,
+            y1: height,
+          },
+        )?;
       }
     }
 

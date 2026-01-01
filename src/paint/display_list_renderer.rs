@@ -6326,7 +6326,22 @@ impl DisplayListRenderer {
                 else {
                   return Ok(());
                 };
-                layer.apply_mask(&cropped);
+                if active_deadline().as_ref().map_or(false, |d| d.is_enabled()) {
+                  let layer_width = layer.width();
+                  let layer_height = layer.height();
+                  apply_mask_rect_rgba(
+                    &mut layer,
+                    &cropped,
+                    ClipMaskDirtyRect {
+                      x0: 0,
+                      y0: 0,
+                      x1: layer_width,
+                      y1: layer_height,
+                    },
+                  )?;
+                } else {
+                  layer.apply_mask(&cropped);
+                }
               }
               self.composite_manual_layer(&layer, opacity, mode, origin, effect_bounds.as_ref())?;
             } else {
@@ -6346,7 +6361,22 @@ impl DisplayListRenderer {
               else {
                 return Ok(());
               };
-              layer.apply_mask(&cropped);
+              if active_deadline().as_ref().map_or(false, |d| d.is_enabled()) {
+                let layer_width = layer.width();
+                let layer_height = layer.height();
+                apply_mask_rect_rgba(
+                  &mut layer,
+                  &cropped,
+                  ClipMaskDirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: layer_width,
+                    y1: layer_height,
+                  },
+                )?;
+              } else {
+                layer.apply_mask(&cropped);
+              }
             }
             self.composite_manual_layer(&layer, opacity, mode, origin, effect_bounds.as_ref())?;
           } else {
