@@ -41,7 +41,7 @@
 //! ```
 
 use crate::error::{RenderStage, Result};
-use crate::render_control::check_active_periodic;
+use crate::render_control::{active_deadline, RenderDeadline};
 use crate::style::display::Display;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::AnonymousBox;
@@ -118,8 +118,9 @@ impl AnonymousBoxCreator {
     box_node: BoxNode,
     deadline_counter: &mut usize,
   ) -> Result<BoxNode> {
+    let deadline = active_deadline();
     let mut box_node = box_node;
-    Self::fixup_tree_with_parent_in_place(&mut box_node, None, deadline_counter)?;
+    Self::fixup_tree_with_parent_in_place(&mut box_node, None, deadline_counter, deadline.as_ref())?;
     Ok(box_node)
   }
 
@@ -127,18 +128,21 @@ impl AnonymousBoxCreator {
     box_node: &mut BoxNode,
     parent_style: Option<&Arc<ComputedStyle>>,
     deadline_counter: &mut usize,
+    deadline: Option<&RenderDeadline>,
   ) -> Result<()> {
-    check_active_periodic(
-      deadline_counter,
-      ANON_FIXUP_DEADLINE_STRIDE,
-      RenderStage::Cascade,
-    )?;
+    if let Some(deadline) = deadline {
+      deadline.check_periodic(
+        deadline_counter,
+        ANON_FIXUP_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      )?;
+    }
     // First, recursively fix children (bottom-up traversal) without moving them out of the Vec.
     // This avoids per-child placeholder cloning (via `mem::replace`) and keeps the original
     // children Vec allocation intact.
     let style = &box_node.style;
     for child in &mut box_node.children {
-      Self::fixup_tree_with_parent_in_place(child, Some(style), deadline_counter)?;
+      Self::fixup_tree_with_parent_in_place(child, Some(style), deadline_counter, deadline)?;
     }
 
     // Then fix this node's children based on its type
@@ -236,14 +240,17 @@ impl AnonymousBoxCreator {
   /// are lifted into the returned list so callers can place them directly in the block
   /// formatting context.
   fn split_inline_with_blocks(inline: BoxNode) -> Vec<BoxNode> {
-    let style = inline.style.clone();
-    let starting_style = inline.starting_style.clone();
-    let box_type = inline.box_type.clone();
-    let debug_info = inline.debug_info.clone();
-    let styled_node_id = inline.styled_node_id;
-    let children = inline.children;
+    let BoxNode {
+      style,
+      starting_style,
+      box_type,
+      debug_info,
+      styled_node_id,
+      children,
+      ..
+    } = inline;
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(children.len());
     let mut inline_run: Vec<BoxNode> = Vec::new();
 
     let flush_run = |run: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
@@ -394,8 +401,15 @@ impl AnonymousBoxCreator {
     let children = Self::split_inline_children_with_block_descendants(children);
 
     // Determine what kind of content we have after splitting
-    let has_block = children.iter().any(Self::is_block_level_child);
-    let has_inline = children.iter().any(Self::is_inline_level_child);
+    let mut has_block = false;
+    let mut has_inline = false;
+    for child in &children {
+      has_block |= Self::is_block_level_child(child);
+      has_inline |= Self::is_inline_level_child(child);
+      if has_block && has_inline {
+        break;
+      }
+    }
 
     if has_block && has_inline {
       // Mixed content - wrap inline runs in anonymous blocks
@@ -466,7 +480,7 @@ impl AnonymousBoxCreator {
     children: Vec<BoxNode>,
     parent_style: &ComputedStyle,
   ) -> Vec<BoxNode> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(children.len());
     let mut inline_run: Vec<BoxNode> = Vec::new();
     let mut anonymous_block_style: Option<Arc<ComputedStyle>> = None;
 
