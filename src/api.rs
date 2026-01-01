@@ -6358,7 +6358,7 @@ impl FastRender {
             .and_then(|child| child.styles.page.clone())
         })
         .or_else(|| styled_tree.styles.page.clone());
-      let base_style = Arc::new(base_style.clone());
+      let base_style = Arc::clone(base_style);
       let style = resolve_page_style(
         &page_rules,
         0,
@@ -9372,15 +9372,15 @@ fn collect_box_nodes<'a>(node: &'a BoxNode, map: &mut HashMap<usize, &'a BoxNode
 fn styled_style_map(root: &StyledNode) -> HashMap<usize, Arc<ComputedStyle>> {
   fn walk(node: &StyledNode, out: &mut HashMap<usize, Arc<ComputedStyle>>) {
     let base = node.node_id << 2;
-    out.insert(base, Arc::new(node.styles.clone()));
+    out.insert(base, Arc::clone(&node.styles));
     if let Some(before) = &node.before_styles {
-      out.insert(base | 1, Arc::new(before.as_ref().clone()));
+      out.insert(base | 1, Arc::clone(before));
     }
     if let Some(after) = &node.after_styles {
-      out.insert(base | 2, Arc::new(after.as_ref().clone()));
+      out.insert(base | 2, Arc::clone(after));
     }
     if let Some(marker) = &node.marker_styles {
-      out.insert(base | 3, Arc::new(marker.as_ref().clone()));
+      out.insert(base | 3, Arc::clone(marker));
     }
     for child in node.children.iter() {
       walk(child, out);

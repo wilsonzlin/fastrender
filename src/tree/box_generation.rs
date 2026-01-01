@@ -394,8 +394,8 @@ fn build_svg_cdata_style_element(css: &str) -> String {
   out
 }
 
-fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<ComputedStyle>> {
-  style.as_ref().map(|s| Arc::new((**s).clone()))
+fn clone_starting_style(style: &Option<Arc<ComputedStyle>>) -> Option<Arc<ComputedStyle>> {
+  style.as_ref().map(Arc::clone)
 }
 
 struct BoxGenerationPrepass<'a> {
@@ -1386,7 +1386,7 @@ fn serialize_svg_subtree(
       opacity: styled.styles.opacity,
       background,
       html,
-      style: Arc::new(styled.styles.clone()),
+      style: Arc::clone(&styled.styles),
       overflow_x: styled.styles.overflow_x,
       overflow_y: styled.styles.overflow_y,
     });
@@ -1634,7 +1634,7 @@ fn generate_boxes_for_styled_into(
   )?;
   if let Some(text) = styled.node.text_content() {
     if !text.is_empty() {
-      let style = Arc::new(styled.styles.clone());
+      let style = Arc::clone(&styled.styles);
       if let Some(needle) = runtime::runtime_toggles().get("FASTR_FIND_BOX_TEXT") {
         if text.contains(&needle) {
           eprintln!(
@@ -1685,7 +1685,7 @@ fn generate_boxes_for_styled_into(
         .unwrap_or_else(|| crate::math::MathNode::Row(Vec::new()));
       counters.leave_scope();
       let box_node = BoxNode::new_replaced(
-        Arc::new(styled.styles.clone()),
+        Arc::clone(&styled.styles),
         ReplacedType::Math(MathReplaced {
           root: math_root,
           layout: None,
@@ -1704,7 +1704,7 @@ fn generate_boxes_for_styled_into(
   if let Some(form_control) = create_form_control_replaced(styled) {
     counters.leave_scope();
     let box_node = BoxNode::new_replaced(
-      Arc::new(styled.styles.clone()),
+      Arc::clone(&styled.styles),
       ReplacedType::FormControl(form_control),
       None,
       None,
@@ -1742,7 +1742,7 @@ fn generate_boxes_for_styled_into(
         };
         let box_node = create_replaced_box_from_styled(
           styled,
-          Arc::new(styled.styles.clone()),
+          Arc::clone(&styled.styles),
           document_css,
           svg_document_css_style_element,
           picture_sources_for_img,
@@ -1866,7 +1866,7 @@ fn generate_boxes_for_styled_into(
     return Ok(());
   }
 
-  let style = Arc::new(styled.styles.clone());
+  let style = Arc::clone(&styled.styles);
   let fc_type = styled
     .styles
     .display
@@ -1906,14 +1906,8 @@ fn generate_boxes_for_styled_into(
   };
 
   box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-  box_node.first_line_style = styled
-    .first_line_styles
-    .as_ref()
-    .map(|style| Arc::new((**style).clone()));
-  box_node.first_letter_style = styled
-    .first_letter_styles
-    .as_ref()
-    .map(|style| Arc::new((**style).clone()));
+  box_node.first_line_style = styled.first_line_styles.as_ref().map(Arc::clone);
+  box_node.first_letter_style = styled.first_letter_styles.as_ref().map(Arc::clone);
 
   counters.leave_scope();
   out.push(attach_debug_info(box_node, styled));
@@ -1970,7 +1964,7 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
 /// Creates a box for a pseudo-element (::before or ::after)
 fn create_pseudo_element_box(
   styled: &StyledNode,
-  styles: &ComputedStyle,
+  styles: &Arc<ComputedStyle>,
   starting_style: Option<Arc<ComputedStyle>>,
   pseudo_name: &str,
   counters: &CounterManager,
@@ -1980,7 +1974,7 @@ fn create_pseudo_element_box(
     return None;
   }
 
-  let pseudo_style = Arc::new(styles.clone());
+  let pseudo_style = Arc::clone(styles);
 
   let mut context = ContentContext::new();
   for (name, value) in styled.node.attributes_iter() {
@@ -2129,7 +2123,7 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
   {
     (styles.clone(), true)
   } else {
-    (styled.styles.clone(), false)
+    (styled.styles.as_ref().clone(), false)
   };
   // ::marker boxes are inline and should not carry layout-affecting edges from the list item.
   crate::style::cascade::reset_marker_box_properties(&mut marker_style);
@@ -3113,7 +3107,7 @@ mod tests {
         },
         children: vec![],
       },
-      styles: ComputedStyle::default(),
+      styles: Arc::new(ComputedStyle::default()),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
@@ -3132,6 +3126,80 @@ mod tests {
 
   fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> BoxTree {
     generate_box_tree_with_anonymous_fixup_result(styled).expect("anonymous box generation failed")
+  }
+
+  #[test]
+  fn box_generation_reuses_computed_style_arcs() {
+    let root_style = Arc::new(ComputedStyle::default());
+    let text_style = Arc::new(ComputedStyle::default());
+    assert!(
+      !Arc::ptr_eq(&root_style, &text_style),
+      "test setup requires distinct style arcs"
+    );
+
+    let text_dom = DomNode {
+      node_type: DomNodeType::Text {
+        content: "hello".to_string(),
+      },
+      children: vec![],
+    };
+    let text_node = StyledNode {
+      node_id: 1,
+      node: text_dom,
+      styles: Arc::clone(&text_style),
+      starting_styles: StartingStyleSet::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: vec![],
+    };
+
+    let root_dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![],
+    };
+    let root_node = StyledNode {
+      node_id: 0,
+      node: root_dom,
+      styles: Arc::clone(&root_style),
+      starting_styles: StartingStyleSet::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: vec![text_node],
+    };
+
+    fn find_text_box<'a>(node: &'a BoxNode) -> Option<&'a BoxNode> {
+      if matches!(node.box_type, BoxType::Text(_)) {
+        return Some(node);
+      }
+      node.children.iter().find_map(find_text_box)
+    }
+
+    let tree = generate_box_tree(&root_node);
+
+    assert!(
+      Arc::ptr_eq(&tree.root.style, &root_style),
+      "expected box tree to reuse the computed style Arc for element boxes"
+    );
+
+    let text_box = find_text_box(&tree.root).expect("expected a text box");
+    assert!(
+      Arc::ptr_eq(&text_box.style, &text_style),
+      "expected box tree to reuse the computed style Arc for text boxes"
+    );
   }
 
   #[test]
@@ -3158,7 +3226,7 @@ mod tests {
     let text_node = StyledNode {
       node_id: 0,
       node: text_dom.clone(),
-      styles: ComputedStyle::default(),
+      styles: Arc::new(ComputedStyle::default()),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
@@ -3182,11 +3250,11 @@ mod tests {
     let li = StyledNode {
       node_id: 0,
       node: li_dom,
-      styles: li_style,
+      styles: Arc::new(li_style),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(Box::new(marker_style)),
+      marker_styles: Some(Arc::new(marker_style)),
       first_line_styles: None,
       first_letter_styles: None,
       assigned_slot: None,
@@ -3560,15 +3628,15 @@ mod tests {
   #[test]
   fn display_contents_splices_children_into_parent() {
     let mut root = styled_element("div");
-    root.styles.display = Display::Block;
+    Arc::make_mut(&mut root.styles).display = Display::Block;
 
     let mut contents = styled_element("section");
-    contents.styles.display = Display::Contents;
+    Arc::make_mut(&mut contents.styles).display = Display::Contents;
 
     let mut child1 = styled_element("p");
-    child1.styles.display = Display::Block;
+    Arc::make_mut(&mut child1.styles).display = Display::Block;
     let mut child2 = styled_element("p");
-    child2.styles.display = Display::Block;
+    Arc::make_mut(&mut child2.styles).display = Display::Block;
 
     contents.children = vec![child1, child2];
     root.children = vec![contents];
@@ -3591,9 +3659,9 @@ mod tests {
   #[test]
   fn whitespace_text_nodes_are_preserved() {
     let mut root = styled_element("div");
-    root.styles.display = Display::Block;
+    Arc::make_mut(&mut root.styles).display = Display::Block;
     let mut child = styled_element("span");
-    child.styles.display = Display::Inline;
+    Arc::make_mut(&mut child.styles).display = Display::Inline;
     child.node = dom::DomNode {
       node_type: dom::DomNodeType::Text {
         content: "   ".to_string(),
@@ -3750,7 +3818,7 @@ mod tests {
         },
         children: vec![],
       },
-      styles: li_style,
+      styles: Arc::new(li_style),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
@@ -3819,11 +3887,11 @@ mod tests {
         },
         children: vec![],
       },
-      styles: li_style,
+      styles: Arc::new(li_style),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(Box::new(marker_styles)),
+      marker_styles: Some(Arc::new(marker_styles)),
       first_line_styles: None,
       first_letter_styles: None,
       assigned_slot: None,
@@ -3881,11 +3949,11 @@ mod tests {
         },
         children: vec![],
       },
-      styles: li_style,
+      styles: Arc::new(li_style),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(Box::new(marker_styles)),
+      marker_styles: Some(Arc::new(marker_styles)),
       first_line_styles: None,
       first_letter_styles: None,
       assigned_slot: None,
@@ -3926,9 +3994,9 @@ mod tests {
         },
         children: vec![],
       },
-      styles: base_style,
+      styles: Arc::new(base_style),
       starting_styles: StartingStyleSet::default(),
-      before_styles: Some(Box::new(before_style)),
+      before_styles: Some(Arc::new(before_style)),
       after_styles: None,
       marker_styles: None,
       first_line_styles: None,
@@ -3942,7 +4010,7 @@ mod tests {
     counters.enter_scope();
     let before_box = create_pseudo_element_box(
       &styled,
-      styled.before_styles.as_deref().unwrap(),
+      styled.before_styles.as_ref().unwrap(),
       clone_starting_style(&styled.starting_styles.before),
       "before",
       &counters,
@@ -3991,9 +4059,9 @@ mod tests {
         },
         children: vec![],
       },
-      styles: base_style,
+      styles: Arc::new(base_style),
       starting_styles: StartingStyleSet::default(),
-      before_styles: Some(Box::new(before_style)),
+      before_styles: Some(Arc::new(before_style)),
       after_styles: None,
       marker_styles: None,
       first_line_styles: None,
@@ -4009,7 +4077,7 @@ mod tests {
 
     let before_box = create_pseudo_element_box(
       &styled,
-      styled.before_styles.as_deref().unwrap(),
+      styled.before_styles.as_ref().unwrap(),
       clone_starting_style(&styled.starting_styles.before),
       "before",
       &counters,
@@ -4061,11 +4129,11 @@ mod tests {
         },
         children: vec![],
       },
-      styles: base_style,
+      styles: Arc::new(base_style),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(Box::new(marker_style)),
+      marker_styles: Some(Arc::new(marker_style)),
       first_line_styles: None,
       first_letter_styles: None,
       assigned_slot: None,
@@ -4095,6 +4163,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.list_style_type = ListStyleType::String("★".to_string());
     style.display = Display::ListItem;
+    let style = Arc::new(style);
     let styled = StyledNode {
       node_id: 0,
       node: dom::DomNode {
@@ -4106,7 +4175,7 @@ mod tests {
         children: vec![],
       },
       styles: style.clone(),
-      marker_styles: Some(Box::new(style.clone())),
+      marker_styles: Some(style.clone()),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
@@ -4146,6 +4215,7 @@ mod tests {
     style.counter_styles = registry.clone();
     style.list_style_type = ListStyleType::Custom("custom-mark".to_string());
     style.display = Display::ListItem;
+    let style = Arc::new(style);
 
     let styled = StyledNode {
       node_id: 0,
@@ -4158,7 +4228,7 @@ mod tests {
         children: vec![],
       },
       styles: style.clone(),
-      marker_styles: Some(Box::new(style.clone())),
+      marker_styles: Some(style.clone()),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
@@ -4189,10 +4259,12 @@ mod tests {
   fn ordered_list_start_attribute_sets_initial_counter() {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let ol_dom = dom::DomNode {
       node_type: dom::DomNodeType::Element {
@@ -4235,7 +4307,7 @@ mod tests {
           },
           children: vec![],
         },
-        styles: ComputedStyle::default(),
+        styles: default_style(),
         starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
@@ -4286,10 +4358,12 @@ mod tests {
   fn ordered_list_defaults_start_at_one() {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let ol_dom = dom::DomNode {
       node_type: dom::DomNodeType::Element {
@@ -4332,7 +4406,7 @@ mod tests {
           },
           children: vec![],
         },
-        styles: ComputedStyle::default(),
+        styles: default_style(),
         starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
@@ -4383,10 +4457,12 @@ mod tests {
   fn reversed_ordered_list_counts_down() {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let ol_dom = dom::DomNode {
       node_type: dom::DomNodeType::Element {
@@ -4429,7 +4505,7 @@ mod tests {
           },
           children: vec![],
         },
-        styles: ComputedStyle::default(),
+        styles: default_style(),
         starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
@@ -4480,10 +4556,12 @@ mod tests {
   fn li_value_attribute_sets_counter_for_that_item() {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let ol_dom = dom::DomNode {
       node_type: dom::DomNodeType::Element {
@@ -4528,7 +4606,7 @@ mod tests {
           },
           children: vec![],
         },
-        styles: ComputedStyle::default(),
+        styles: default_style(),
         starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
@@ -4583,10 +4661,12 @@ mod tests {
   fn reversed_list_value_attribute_counts_down_from_value() {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let ol_dom = dom::DomNode {
       node_type: dom::DomNodeType::Element {
@@ -4631,7 +4711,7 @@ mod tests {
           },
           children: vec![],
         },
-        styles: ComputedStyle::default(),
+        styles: default_style(),
         starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
@@ -4686,10 +4766,12 @@ mod tests {
   fn reversed_list_ignores_nested_items_for_default_start() {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let nested_ol = StyledNode {
       node_id: 0,
@@ -4737,12 +4819,12 @@ mod tests {
         children: vec![StyledNode {
           node_id: 0,
           node: dom::DomNode {
-            node_type: dom::DomNodeType::Text {
-              content: "inner".to_string(),
-            },
-            children: vec![],
+          node_type: dom::DomNodeType::Text {
+            content: "inner".to_string(),
           },
-          styles: ComputedStyle::default(),
+          children: vec![],
+        },
+          styles: default_style(),
           starting_styles: StartingStyleSet::default(),
           before_styles: None,
           after_styles: None,
@@ -4806,9 +4888,9 @@ mod tests {
             node_type: dom::DomNodeType::Text {
               content: "outer1".to_string(),
             },
-            children: vec![],
-          },
-          styles: ComputedStyle::default(),
+        children: vec![],
+      },
+          styles: default_style(),
           starting_styles: StartingStyleSet::default(),
           before_styles: None,
           after_styles: None,
@@ -4847,14 +4929,17 @@ mod tests {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
     ol_style.list_style_type = ListStyleType::Decimal;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let mut menu_style = ComputedStyle::default();
     menu_style.display = Display::Block;
     menu_style.list_style_type = ListStyleType::Disc;
+    let menu_style = Arc::new(menu_style);
 
     let text_node = |content: &str| StyledNode {
       node_id: 0,
@@ -4864,7 +4949,7 @@ mod tests {
         },
         children: vec![],
       },
-      styles: ComputedStyle::default(),
+      styles: default_style(),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
@@ -4969,10 +5054,12 @@ mod tests {
     let mut ol_style = ComputedStyle::default();
     ol_style.display = Display::Block;
     ol_style.list_style_type = ListStyleType::Decimal;
+    let ol_style = Arc::new(ol_style);
 
     let mut li_style = ComputedStyle::default();
     li_style.display = Display::ListItem;
     li_style.list_style_type = ListStyleType::Decimal;
+    let li_style = Arc::new(li_style);
 
     let text_node = |content: &str| StyledNode {
       node_id: 0,
@@ -4982,7 +5069,7 @@ mod tests {
         },
         children: vec![],
       },
-      styles: ComputedStyle::default(),
+      styles: default_style(),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,

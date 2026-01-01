@@ -4295,12 +4295,12 @@ const INLINE_RULE_ORDER: usize = usize::MAX / 2;
 /// Starting-style snapshots for an element and its pseudos.
 #[derive(Debug, Default, Clone)]
 pub struct StartingStyleSet {
-  pub base: Option<Box<ComputedStyle>>,
-  pub before: Option<Box<ComputedStyle>>,
-  pub after: Option<Box<ComputedStyle>>,
-  pub marker: Option<Box<ComputedStyle>>,
-  pub first_line: Option<Box<ComputedStyle>>,
-  pub first_letter: Option<Box<ComputedStyle>>,
+  pub base: Option<Arc<ComputedStyle>>,
+  pub before: Option<Arc<ComputedStyle>>,
+  pub after: Option<Arc<ComputedStyle>>,
+  pub marker: Option<Arc<ComputedStyle>>,
+  pub first_line: Option<Arc<ComputedStyle>>,
+  pub first_letter: Option<Arc<ComputedStyle>>,
 }
 
 /// A styled DOM node with computed CSS styles
@@ -4311,19 +4311,19 @@ pub struct StyledNode {
   /// Shallow copy of the DOM node. The styled tree structure is represented by `children`;
   /// `node.children` is intentionally left empty to avoid duplicating the DOM subtree.
   pub node: DomNode,
-  pub styles: ComputedStyle,
+  pub styles: Arc<ComputedStyle>,
   /// Starting-style snapshots populated when @starting-style rules are present.
   pub starting_styles: StartingStyleSet,
   /// Styles for ::before pseudo-element (if content is set)
-  pub before_styles: Option<Box<ComputedStyle>>,
+  pub before_styles: Option<Arc<ComputedStyle>>,
   /// Styles for ::after pseudo-element (if content is set)
-  pub after_styles: Option<Box<ComputedStyle>>,
+  pub after_styles: Option<Arc<ComputedStyle>>,
   /// Styles for ::marker pseudo-element (list items only)
-  pub marker_styles: Option<Box<ComputedStyle>>,
+  pub marker_styles: Option<Arc<ComputedStyle>>,
   /// Styles for ::first-line pseudo-element (text overrides only)
-  pub first_line_styles: Option<Box<ComputedStyle>>,
+  pub first_line_styles: Option<Arc<ComputedStyle>>,
   /// Styles for ::first-letter pseudo-element (text overrides only)
-  pub first_letter_styles: Option<Box<ComputedStyle>>,
+  pub first_letter_styles: Option<Arc<ComputedStyle>>,
   /// Slot this light DOM node is assigned to, if any.
   pub assigned_slot: Option<crate::dom::AssignedSlot>,
   /// Slotted light DOM node ids assigned to this <slot> element.
@@ -6982,11 +6982,11 @@ fn compute_pseudo_styles(
   viewport: Size,
   include_starting_style: bool,
 ) -> (
-  Option<Box<ComputedStyle>>,
-  Option<Box<ComputedStyle>>,
-  Option<Box<ComputedStyle>>,
-  Option<Box<ComputedStyle>>,
-  Option<Box<ComputedStyle>>,
+  Option<Arc<ComputedStyle>>,
+  Option<Arc<ComputedStyle>>,
+  Option<Arc<ComputedStyle>>,
+  Option<Arc<ComputedStyle>>,
+  Option<Arc<ComputedStyle>>,
 ) {
   if !node.is_element() {
     styles.backdrop = None;
@@ -7045,7 +7045,7 @@ fn compute_pseudo_styles(
   )
   .map(|(line, ua)| {
     first_line_ua_styles = Some(ua);
-    Box::new(line)
+    Arc::new(line)
   });
   let base_first_letter_styles = first_line_styles.as_deref().unwrap_or(styles);
   let base_first_letter_ua_styles = first_line_ua_styles.as_ref().unwrap_or(ua_styles);
@@ -7068,7 +7068,7 @@ fn compute_pseudo_styles(
     viewport,
     include_starting_style,
   )
-  .map(Box::new);
+  .map(Arc::new);
   let before_styles =
     if scope_has_pseudo_content(rule_scopes, scope_host, node_id, &PseudoElement::Before) {
       compute_pseudo_element_styles(
@@ -7091,7 +7091,7 @@ fn compute_pseudo_styles(
         &PseudoElement::Before,
         include_starting_style,
       )
-      .map(Box::new)
+      .map(Arc::new)
     } else {
       None
     };
@@ -7117,7 +7117,7 @@ fn compute_pseudo_styles(
         &PseudoElement::After,
         include_starting_style,
       )
-      .map(Box::new)
+      .map(Arc::new)
     } else {
       None
     };
@@ -7140,7 +7140,7 @@ fn compute_pseudo_styles(
     viewport,
     include_starting_style,
   )
-  .map(Box::new);
+  .map(Arc::new);
   if let (true, Some(start)) = (prof, pseudo_start) {
     record_pseudo_time(start.elapsed());
   }
@@ -7558,7 +7558,7 @@ fn apply_styles_internal_with_ancestors<'a>(
         true,
       );
       starting_styles = StartingStyleSet {
-        base: Some(Box::new(start.styles)),
+        base: Some(Arc::new(start.styles)),
         before,
         after,
         marker,
@@ -7578,7 +7578,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     let styled = StyledNode {
       node_id,
       node: frame.node.clone_without_children(),
-      styles,
+      styles: Arc::new(styles),
       starting_styles,
       before_styles,
       after_styles,
@@ -8094,7 +8094,7 @@ mod tests {
     let mut target = StyledNode {
       node_id: 1,
       node: node.clone(),
-      styles: after_change.clone(),
+      styles: Arc::new(after_change.clone()),
       starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
@@ -8109,9 +8109,9 @@ mod tests {
     let starting_tree = StyledNode {
       node_id: 1,
       node,
-      styles: after_change,
+      styles: Arc::new(after_change),
       starting_styles: StartingStyleSet {
-        base: Some(Box::new(starting_snapshot.clone())),
+        base: Some(Arc::new(starting_snapshot.clone())),
         ..StartingStyleSet::default()
       },
       before_styles: None,
@@ -8176,7 +8176,7 @@ mod tests {
           container_type: ContainerType::InlineSize,
           names: Vec::new(),
           font_size: 16.0,
-          styles: Arc::new(legacy_first.styles.clone()),
+          styles: Arc::clone(&legacy_first.styles),
         },
       )]),
     };
@@ -8276,7 +8276,7 @@ mod tests {
           container_type: ContainerType::InlineSize,
           names: Vec::new(),
           font_size: 16.0,
-          styles: Arc::new(legacy_first.styles.clone()),
+          styles: Arc::clone(&legacy_first.styles),
         },
       )]),
     };
