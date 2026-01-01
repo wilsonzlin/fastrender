@@ -2249,13 +2249,36 @@ fn capture_dump_for_page(
 #[derive(Clone)]
 struct StageHeartbeatWriter {
   path: Option<PathBuf>,
+  timeline_path: Option<PathBuf>,
+  started: Instant,
   last: Arc<Mutex<Option<StageHeartbeat>>>,
 }
 
 impl StageHeartbeatWriter {
   fn new(path: Option<PathBuf>) -> Self {
+    let timeline_path = path.as_ref().map(|path| stage_timeline_path(path));
+    let started = Instant::now();
+    // Best-effort cleanup so a reused stage path doesn't leave stale timelines behind.
+    if let Some(timeline_path) = timeline_path.as_ref() {
+      let _ = (|| -> io::Result<()> {
+        if let Some(parent) = timeline_path.parent() {
+          if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+          }
+        }
+        let file = OpenOptions::new()
+          .write(true)
+          .create(true)
+          .truncate(true)
+          .open(timeline_path)?;
+        file.sync_all()?;
+        Ok(())
+      })();
+    }
     Self {
       path,
+      timeline_path,
+      started,
       last: Arc::new(Mutex::new(None)),
     }
   }
@@ -2308,6 +2331,25 @@ impl StageHeartbeatWriter {
       Ok(())
     })();
     if write_result.is_ok() {
+      if let Some(timeline_path) = &self.timeline_path {
+        let _ = (|| -> io::Result<()> {
+          let elapsed_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+          let line = format!("{elapsed_ms} {}\n", stage.as_str());
+          if let Some(parent) = timeline_path.parent() {
+            if !parent.as_os_str().is_empty() {
+              fs::create_dir_all(parent)?;
+            }
+          }
+          let mut timeline = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(timeline_path)?;
+          timeline.write_all(line.as_bytes())?;
+          timeline.sync_data()?;
+          Ok(())
+        })();
+      }
       if let Ok(mut guard) = self.last.lock() {
         *guard = Some(stage);
       }
@@ -2336,6 +2378,10 @@ fn stage_tmp_path(path: &Path) -> PathBuf {
     .map(|name| format!("{}.tmp", name.to_string_lossy()))
     .unwrap_or_else(|| "stage.tmp".to_string());
   path.with_file_name(tmp_name)
+}
+
+fn stage_timeline_path(path: &Path) -> PathBuf {
+  path.with_extension("stage.timeline")
 }
 
 fn progress_sentinel_path(stage_path: &Path) -> PathBuf {
@@ -2367,6 +2413,69 @@ fn read_stage_file(path: &Path) -> Option<StageHeartbeat> {
 
 fn read_stage_heartbeat(path: &Path) -> Option<StageHeartbeat> {
   read_stage_file(path).or_else(|| read_stage_file(&stage_tmp_path(path)))
+}
+
+fn stage_buckets_from_timeline(stage_path: &Path, total_ms: u64) -> Option<StageBuckets> {
+  let raw = fs::read_to_string(stage_timeline_path(stage_path)).ok()?;
+  let mut entries: Vec<(u64, StageHeartbeat)> = Vec::new();
+  for line in raw.lines() {
+    let mut parts = line.split_whitespace();
+    let Some(ms_raw) = parts.next() else {
+      continue;
+    };
+    let Some(stage_raw) = parts.next() else {
+      continue;
+    };
+    let Ok(ms) = ms_raw.parse::<u64>() else {
+      continue;
+    };
+    let Some(stage) = StageHeartbeat::from_str(stage_raw) else {
+      continue;
+    };
+    if stage == StageHeartbeat::Done {
+      continue;
+    }
+    entries.push((ms, stage));
+  }
+  let first_stage = entries.first().map(|(_, stage)| *stage)?;
+
+  let mut buckets = StageBuckets::default();
+  let mut prev_stage = first_stage;
+  let mut prev_ms = 0u64;
+  for (at_ms, stage) in entries.iter().skip(1) {
+    let at_ms = (*at_ms).min(total_ms);
+    if at_ms < prev_ms {
+      continue;
+    }
+    let dur_ms = at_ms - prev_ms;
+    match prev_stage.hotspot() {
+      "fetch" => buckets.fetch += dur_ms as f64,
+      "css" => buckets.css += dur_ms as f64,
+      "cascade" => buckets.cascade += dur_ms as f64,
+      "layout" => buckets.layout += dur_ms as f64,
+      "paint" => buckets.paint += dur_ms as f64,
+      _ => {}
+    }
+    prev_ms = at_ms;
+    prev_stage = *stage;
+    if prev_ms >= total_ms {
+      break;
+    }
+  }
+
+  if prev_ms < total_ms {
+    let dur_ms = total_ms - prev_ms;
+    match prev_stage.hotspot() {
+      "fetch" => buckets.fetch += dur_ms as f64,
+      "css" => buckets.css += dur_ms as f64,
+      "cascade" => buckets.cascade += dur_ms as f64,
+      "layout" => buckets.layout += dur_ms as f64,
+      "paint" => buckets.paint += dur_ms as f64,
+      _ => {}
+    }
+  }
+
+  Some(buckets)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4487,6 +4596,7 @@ fn run_queue(
       };
       let _ = fs::remove_file(&item.stage_path);
       let _ = fs::remove_file(stage_tmp_path(&item.stage_path));
+      let _ = fs::remove_file(stage_timeline_path(&item.stage_path));
       let _ = fs::remove_file(progress_sentinel_path(&item.stage_path));
       let child = spawn_worker(
         exe,
@@ -4539,7 +4649,10 @@ fn run_queue(
         let timeout_hotspot = hotspot_from_progress_stage(timeout_stage).to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = ProgressStatus::Timeout;
-        progress.total_ms = Some(worker_timeout.as_secs_f64() * 1000.0);
+        let total_ms = worker_timeout.as_millis() as u64;
+        progress.total_ms = Some(total_ms as f64);
+        progress.stages_ms =
+          stage_buckets_from_timeline(&entry.item.stage_path, total_ms).unwrap_or_default();
         progress.auto_notes = format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64());
         if let Some(stage) = heartbeat_stage {
           progress.auto_notes = format!("{}\nstage: {}", progress.auto_notes, stage.as_str());
