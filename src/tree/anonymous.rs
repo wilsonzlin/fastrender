@@ -408,7 +408,6 @@ impl AnonymousBoxCreator {
     // Wrap bare text nodes in anonymous inline boxes while reusing the existing Vec allocation.
     let mut children = children;
     let mut inline_style: Option<Arc<ComputedStyle>> = None;
-    let mut placeholder: Option<BoxNode> = None;
 
     for child in children.iter_mut() {
       if !child.is_text() {
@@ -425,11 +424,7 @@ impl AnonymousBoxCreator {
         }
       });
 
-      let placeholder = placeholder
-        .get_or_insert_with(|| BoxNode::new_text(style.clone(), String::new()))
-        .clone();
-      let text_node = std::mem::replace(child, placeholder);
-      *child = Self::create_anonymous_inline(style.clone(), vec![text_node]);
+      Self::wrap_text_in_anonymous_inline_in_place(child, style.clone());
     }
 
     children
@@ -502,7 +497,6 @@ impl AnonymousBoxCreator {
     parent_style: &ComputedStyle,
   ) -> Vec<BoxNode> {
     let mut inherited_inline_style: Option<Arc<ComputedStyle>> = None;
-    let mut placeholder: Option<BoxNode> = None;
     let mut children = children;
     for child in children.iter_mut() {
       if !child.is_text() {
@@ -514,14 +508,32 @@ impl AnonymousBoxCreator {
         inherited.display = Display::Inline;
         Arc::new(inherited)
       });
-      let placeholder = placeholder
-        .get_or_insert_with(|| BoxNode::new_text(style.clone(), String::new()))
-        .clone();
-      let text_node = std::mem::replace(child, placeholder);
-      *child = Self::create_anonymous_inline(style.clone(), vec![text_node]);
+      Self::wrap_text_in_anonymous_inline_in_place(child, style.clone());
     }
 
     children
+  }
+
+  fn wrap_text_in_anonymous_inline_in_place(node: &mut BoxNode, wrapper_style: Arc<ComputedStyle>) {
+    debug_assert!(node.is_text());
+
+    let wrapper_box_type = BoxType::Anonymous(AnonymousBox {
+      anonymous_type: AnonymousType::Inline,
+    });
+
+    let text_node = BoxNode {
+      style: std::mem::replace(&mut node.style, wrapper_style),
+      starting_style: node.starting_style.take(),
+      box_type: std::mem::replace(&mut node.box_type, wrapper_box_type),
+      children: std::mem::take(&mut node.children),
+      id: std::mem::replace(&mut node.id, 0),
+      debug_info: node.debug_info.take(),
+      styled_node_id: node.styled_node_id.take(),
+      first_line_style: node.first_line_style.take(),
+      first_letter_style: node.first_letter_style.take(),
+    };
+
+    node.children = vec![text_node];
   }
 
   /// Creates an anonymous block box
