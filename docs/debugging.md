@@ -4,7 +4,7 @@ When a render comes out blank/black or is missing content, use the debug/profili
 
 The canonical list lives in [env-vars.md](env-vars.md). This page highlights the most useful ones and the common workflow.
 
-`render_pages` writes per-page logs to `fetches/renders/<page>.log` and a summary to `fetches/renders/_summary.log`.
+`render_pages` writes per-page logs to `fetches/renders/<page>.log`, captures worker stdout/stderr in `fetches/renders/<page>.stderr.log`, and writes a summary to `fetches/renders/_summary.log`.
 
 ## Hard sites (Akamai) fetch checklist
 
@@ -24,6 +24,7 @@ Checklist (start here, in order):
    - Some font/CDN endpoints are sensitive to `Accept: */*` plus `Origin`/`Referer`; the browser-header profile is intended to match those expectations.
 3. **Turn on retry logging** when debugging transient failures: `FASTR_HTTP_LOG_RETRIES=1`.
    - `pageset_progress`: retry logs land in `target/pageset/logs/<stem>.stderr.log` (stdout/stderr from the worker process).
+   - `render_pages`: retry logs land in `fetches/renders/<stem>.stderr.log` (default worker mode).
 4. **Make sure you’re testing the network path** (not stale caches): use `fetch_pages --refresh` for HTML and consider disabling the disk cache (`DISK_CACHE=0`) when chasing subresource fetch behavior.
 
 Example (pageset loop, targeted):
