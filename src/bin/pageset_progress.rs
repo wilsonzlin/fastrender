@@ -80,6 +80,9 @@ const PROGRESS_URL_TAIL_CHARS: usize = 60;
 const FETCH_ERROR_SAMPLE_LIMIT: usize = 5;
 // Allow a small buffer past the cooperative render timeout for per-request fetch deadlines.
 const FETCH_TIMEOUT_SLACK_MS: u64 = 100;
+// Allow a small grace period after progress is written so the worker can flush logs/stage markers
+// and exit without being hard-killed at the exact render timeout boundary.
+const WORKER_POST_PROGRESS_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -5716,25 +5719,26 @@ fn run_queue(
     while i < running.len() {
       let elapsed = running[i].started.elapsed();
       let progress_written = progress_sentinel_path(&running[i].item.stage_path).exists();
+      let post_progress_timeout = worker_timeout.saturating_add(WORKER_POST_PROGRESS_GRACE);
       let effective_kill_timeout = if progress_written {
-        kill_timeout
+        kill_timeout.max(post_progress_timeout)
       } else {
         worker_timeout
       };
-      let timed_out = elapsed >= effective_kill_timeout;
 
-      if timed_out {
+      if elapsed >= effective_kill_timeout {
         let mut entry = running.swap_remove(i);
         let kill_result = entry.child.kill();
         let waited = entry.child.wait();
         let exit_summary = waited
           .as_ref()
-          .ok()
           .map(summarize_exit_status)
           .unwrap_or(ExitStatusSummary {
             code: None,
             signal: None,
           });
+        let exit_str = format_exit_status(exit_summary);
+        let crash_at_timeout = hard_timeout_exit_indicates_crash(exit_summary, &kill_result);
         let progress_written = progress_sentinel_path(&entry.item.stage_path).exists();
         if progress_written {
           // The worker already committed progress and is now likely stuck in optional dump capture.
@@ -5754,7 +5758,6 @@ fn run_queue(
         let timeout_stage = infer_hard_timeout_stage(heartbeat_stage, previous.as_ref());
         let timeout_hotspot = hotspot_from_progress_stage(timeout_stage).to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
-        let crash_at_timeout = hard_timeout_exit_indicates_crash(exit_summary, &kill_result);
         progress.status = if crash_at_timeout {
           ProgressStatus::Panic
         } else {
@@ -5766,56 +5769,51 @@ fn run_queue(
           .filter(|buckets| buckets.sum() > 0.0)
           .unwrap_or_else(|| stage_buckets_for_progress_stage(timeout_stage, total_ms as f64));
         progress.stages_ms.rescale_to_total(total_ms as f64);
-        progress.auto_notes = format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64());
+        progress.auto_notes = format!(
+          "hard timeout after {:.2}s (exit: {exit_str})",
+          worker_timeout.as_secs_f64()
+        );
         if let Some(stage) = heartbeat_stage {
           progress.auto_notes = format!("{}\nstage: {}", progress.auto_notes, stage.as_str());
         }
-        progress.auto_notes = format!(
-          "{}\nexit: {}",
-          progress.auto_notes,
-          format_exit_status(exit_summary)
-        );
         progress.hotspot = timeout_hotspot.clone();
         if crash_at_timeout {
-          progress.failure_stage = heartbeat_stage
-            .and_then(progress_stage_from_heartbeat)
-            .or(Some(timeout_stage));
-          progress.timeout_stage = None;
+          progress.failure_stage = Some(timeout_stage);
         } else {
           progress.timeout_stage = Some(timeout_stage);
         }
         let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
         progress.hotspot = timeout_hotspot;
         if crash_at_timeout {
-          progress.failure_stage = heartbeat_stage
-            .and_then(progress_stage_from_heartbeat)
-            .or(Some(timeout_stage));
+          progress.failure_stage = Some(timeout_stage);
           progress.timeout_stage = None;
         } else {
           progress.timeout_stage = Some(timeout_stage);
+          progress.failure_stage = None;
         }
         let _ = write_progress(&entry.item.progress_path, &progress);
 
+        let status_str = if crash_at_timeout { "PANIC" } else { "TIMEOUT" };
         let _ = write_text_file(
           &entry.item.log_path,
           &format!(
             "=== {} ===\nStatus: {}\nKilled after {:.2}s\nExit: {}\n",
             entry.item.cache_stem,
-            if crash_at_timeout { "PANIC" } else { "TIMEOUT" },
+            status_str,
             worker_timeout.as_secs_f64(),
-            format_exit_status(exit_summary)
+            exit_str
           ),
         );
 
-        if crash_at_timeout {
-          eprintln!("PANIC {} (crashed at hard timeout)", entry.item.cache_stem);
-        } else {
-          eprintln!("TIMEOUT {}", entry.item.cache_stem);
-        }
+        eprintln!("{} {}", status_str, entry.item.cache_stem);
         if let Some(trace_out) = &entry.item.trace_out {
           if let Some(msg) = trace_issue_message(
             trace_out,
-            Some("Trace likely incomplete: worker was killed at the hard timeout."),
+            Some(if crash_at_timeout {
+              "Trace likely incomplete: worker appears to have crashed around the hard timeout."
+            } else {
+              "Trace likely incomplete: worker was killed at the hard timeout."
+            }),
           ) {
             let _ = append_log_line(&entry.item.log_path, &msg);
           }
@@ -5888,7 +5886,7 @@ fn run_queue(
           continue;
         }
         Ok(None) => {
-          i += 1;
+          // Worker still running; fall through to timeout checks below.
         }
         Err(_) => {
           // Treat as crash and move on.
@@ -5936,6 +5934,8 @@ fn run_queue(
           continue;
         }
       }
+
+      i += 1;
     }
 
     if !queue.is_empty() || !running.is_empty() {

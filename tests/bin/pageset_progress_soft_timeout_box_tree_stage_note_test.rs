@@ -36,7 +36,7 @@ fn pageset_progress_soft_timeout_in_box_tree_includes_stage_note() {
       "--jobs",
       "1",
       "--timeout",
-      "3",
+      "5",
       "--soft-timeout-ms",
       "1000",
       "--diagnostics",

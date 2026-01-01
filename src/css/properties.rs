@@ -1071,7 +1071,7 @@ fn parse_property_value_in_context_internal(
   Some(parsed)
 }
 
-fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
+pub(crate) fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
   match context {
     DeclarationContext::Style => is_known_style_property(property),
     DeclarationContext::Page => {
