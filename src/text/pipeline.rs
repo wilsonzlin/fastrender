@@ -2319,6 +2319,11 @@ fn assign_fonts_internal(
         let mut mask_low = 0u64;
         let mut mask_high = 0u64;
         for &b in run.text.as_bytes() {
+          // Only check printable ASCII for glyph coverage. Control bytes like newlines and tabs do
+          // not require glyph fallback, and including them here would defeat the fast path.
+          if (char::from(b)).is_ascii_control() {
+            continue;
+          }
           if b < 64 {
             mask_low |= 1u64 << b;
           } else {
@@ -7882,13 +7887,16 @@ mod tests {
   fn ascii_runs_do_not_hit_fallback_cache_per_cluster() {
     let ctx = FontContext::new();
     let style = ComputedStyle::default();
-    let text = "a".repeat(10_000);
+    // Include an ASCII control character (newline) to ensure the ASCII fast path still applies
+    // without requiring glyph coverage for it.
+    let text = "a\n".repeat(5_000);
+    let text_len = text.len();
     assert!(text.is_ascii());
 
     let run = ItemizedRun {
       text,
       start: 0,
-      end: 10_000,
+      end: text_len,
       script: Script::Latin,
       direction: Direction::LeftToRight,
       level: 0,
