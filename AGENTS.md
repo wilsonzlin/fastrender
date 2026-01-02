@@ -18,6 +18,16 @@ Or (same thing, via the preferred wrapper):
 cargo xtask pageset
 ```
 
+**Inspect the committed scoreboard (`progress/pages/*.json`):**
+
+```bash
+# Tip: `target/` binaries are not versioned; prefer `cargo run` (or rebuild) after pulling.
+cargo run --release --bin pageset_progress -- report --top 15
+
+# Narrow to a single page (URL or stem; comma-separated):
+cargo run --release --bin pageset_progress -- report --pages example.com
+```
+
 Pageset wrappers:
 - Enable the disk-backed subresource cache (writes to `fetches/assets/` by default; override with `--cache-dir <dir>`) for faster, repeatable runs.
 - Prefetch external stylesheets and font subresources into that cache before rendering so the 5s render budget isn't spent on first-run network fetches.
