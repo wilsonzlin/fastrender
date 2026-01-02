@@ -168,8 +168,7 @@ jobs:
           #     --fail-on-regression \
           #     --threshold 0.10 \
           #     --count-threshold 0.20 \
-          #     # Optional once budgets are calibrated:
-          #     # --fail-on-budget
+          #     --fail-on-budget
           report_path=target/perf_smoke_pageset_guardrails_regression_report.txt
           status=0
           extra_args=()
