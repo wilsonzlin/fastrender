@@ -275,6 +275,7 @@ impl MeasureKey {
     known_dimensions: taffy::geometry::Size<Option<f32>>,
     available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
     viewport: Size,
+    drop_available_height: bool,
   ) -> Self {
     fn avail_key(space: taffy::style::AvailableSpace) -> MeasureAvailKey {
       match space {
@@ -320,11 +321,37 @@ impl MeasureKey {
       },
       available_height: if known_height.is_some() {
         MeasureAvailKey::Ignored
+      } else if drop_available_height {
+        MeasureAvailKey::Indefinite
       } else {
         avail_key(available_space.height)
       },
     }
   }
+}
+
+fn height_depends_on_available_height(style: &ComputedStyle) -> bool {
+  style.height.as_ref().is_some_and(Length::has_percentage)
+    || style
+      .min_height
+      .as_ref()
+      .is_some_and(Length::has_percentage)
+    || style
+      .max_height
+      .as_ref()
+      .is_some_and(Length::has_percentage)
+}
+
+fn node_or_in_flow_children_depend_on_available_height(node: &BoxNode) -> bool {
+  if height_depends_on_available_height(&node.style) {
+    return true;
+  }
+
+  // Absolute/fixed-positioned boxes don't contribute to a parent's intrinsic block size, so don't
+  // force cache key separation based on their percentage heights.
+  node.children.iter().any(|child| {
+    child.style.position.is_in_flow() && height_depends_on_available_height(&child.style)
+  })
 }
 
 fn push_measured_key(keys: &mut Vec<MeasureKey>, key: MeasureKey) -> Option<MeasureKey> {
@@ -2760,7 +2787,26 @@ impl GridFormattingContext {
             available_space.width = taffy::style::AvailableSpace::MaxContent;
           }
 
-          let key = MeasureKey::new(node_ptr, known_dimensions, available_space, viewport_size);
+          let fc_type = box_node
+            .formatting_context()
+            .unwrap_or(FormattingContextType::Block);
+          let drop_available_height = matches!(
+            available_space.height,
+            taffy::style::AvailableSpace::Definite(_)
+          ) && (known_dimensions.height.is_some()
+            || matches!(
+              fc_type,
+              FormattingContextType::Block
+                | FormattingContextType::Inline
+                | FormattingContextType::Table
+            ) && !node_or_in_flow_children_depend_on_available_height(box_node));
+          let key = MeasureKey::new(
+            node_ptr,
+            known_dimensions,
+            available_space,
+            viewport_size,
+            drop_available_height,
+          );
           if let Some(size) = cache.get(&key) {
             return *size;
           }
@@ -2768,9 +2814,6 @@ impl GridFormattingContext {
             cache.insert(key, size);
             return size;
           }
-          let fc_type = box_node
-            .formatting_context()
-            .unwrap_or(FormattingContextType::Block);
           let fc = factory.get(fc_type);
           let mut intrinsic_width: Option<f32> = None;
           if known_dimensions.width.is_none() {
@@ -2876,6 +2919,9 @@ impl GridFormattingContext {
     measured_node_keys: &mut FxHashMap<TaffyNodeId, Vec<MeasureKey>>,
   ) -> taffy::geometry::Size<f32> {
     let box_node = unsafe { &*node_ptr };
+    let fc_type = box_node
+      .formatting_context()
+      .unwrap_or(FormattingContextType::Block);
     let fallback_size = |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
       known.unwrap_or(match avail_dim {
         taffy::style::AvailableSpace::Definite(v) => v,
@@ -2883,7 +2929,21 @@ impl GridFormattingContext {
       })
     };
 
-    let key = MeasureKey::new(node_ptr, known_dimensions, available_space, self.viewport_size);
+    let drop_available_height = matches!(
+      available_space.height,
+      taffy::style::AvailableSpace::Definite(_)
+    ) && (known_dimensions.height.is_some()
+      || matches!(
+        fc_type,
+        FormattingContextType::Block | FormattingContextType::Inline | FormattingContextType::Table
+      ) && !node_or_in_flow_children_depend_on_available_height(box_node));
+    let key = MeasureKey::new(
+      node_ptr,
+      known_dimensions,
+      available_space,
+      self.viewport_size,
+      drop_available_height,
+    );
     if let Some(size) = measure_cache.get(&key) {
       return *size;
     }
@@ -2935,9 +2995,6 @@ impl GridFormattingContext {
       return size;
     }
 
-    let fc_type = box_node
-      .formatting_context()
-      .unwrap_or(FormattingContextType::Block);
     let fc = factory.get(fc_type);
 
     let mut intrinsic_width: Option<f32> = None;
@@ -4449,8 +4506,8 @@ mod tests {
       height: AvailableSpace::Definite(600.2),
     };
 
-    let key_a = MeasureKey::new(ptr, known_a, avail_a, viewport);
-    let key_b = MeasureKey::new(ptr, known_b, avail_b, viewport);
+    let key_a = MeasureKey::new(ptr, known_a, avail_a, viewport, false);
+    let key_b = MeasureKey::new(ptr, known_b, avail_b, viewport, false);
     assert_eq!(
       key_a, key_b,
       "near-identical definite sizes should quantize to the same key"
@@ -4468,6 +4525,7 @@ mod tests {
         height: avail_a.height,
       },
       viewport,
+      false,
     );
     let max_key = MeasureKey::new(
       ptr,
@@ -4477,6 +4535,7 @@ mod tests {
         height: avail_a.height,
       },
       viewport,
+      false,
     );
     assert_ne!(
       min_key.available_width, max_key.available_width,
@@ -4509,8 +4568,8 @@ mod tests {
       height: AvailableSpace::Definite(400.0),
     };
 
-    let key_a = MeasureKey::new(ptr, known_a, avail_a, viewport);
-    let key_b = MeasureKey::new(ptr, known_b, avail_b, viewport);
+    let key_a = MeasureKey::new(ptr, known_a, avail_a, viewport, false);
+    let key_b = MeasureKey::new(ptr, known_b, avail_b, viewport, false);
     assert_eq!(
       key_a, key_b,
       "definite widths larger than the viewport should clamp to the same cache key"
@@ -4537,6 +4596,7 @@ mod tests {
         height: AvailableSpace::Definite(0.0),
       },
       viewport,
+      false,
     );
     let one_key = MeasureKey::new(
       ptr,
@@ -4546,6 +4606,7 @@ mod tests {
         height: AvailableSpace::Definite(1.0),
       },
       viewport,
+      false,
     );
     assert_eq!(zero_key.available_width, MeasureAvailKey::Indefinite);
     assert_eq!(zero_key.available_height, MeasureAvailKey::Indefinite);
@@ -4562,6 +4623,7 @@ mod tests {
         height: AvailableSpace::Definite(2.0),
       },
       viewport,
+      false,
     );
     assert_ne!(zero_key.available_width, two_key.available_width);
     assert_ne!(zero_key.available_height, two_key.available_height);
@@ -4617,6 +4679,7 @@ mod tests {
         height: AvailableSpace::Definite(40.0),
       },
       gc.viewport_size,
+      false,
     );
     assert!(
       !node_keys.contains(&first_key),
@@ -4722,6 +4785,118 @@ mod tests {
     assert!(
       calls > 0 && calls <= nodes.len() * 3,
       "quantized keys should coalesce near-identical probes (calls={calls})"
+    );
+  }
+
+  #[test]
+  fn grid_measure_ignores_definite_available_height_when_safe() {
+    use taffy::style::AvailableSpace;
+
+    let gc = GridFormattingContext::new();
+    let factory = gc.factory.clone();
+    let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+    let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+    let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
+
+    reset_grid_measure_layout_calls();
+
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+    let width = 300.0;
+    let heights = [150.0, 400.0, 650.0];
+
+    let nodes: Vec<BoxNode> = (0..12)
+      .map(|_| BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]))
+      .collect();
+
+    for (i, node) in nodes.iter().enumerate() {
+      let node_id = TaffyNodeId::from((i + 1) as u64);
+      let node_ptr = node as *const _;
+      for height in heights {
+        let avail = taffy::geometry::Size {
+          width: AvailableSpace::Definite(width),
+          height: AvailableSpace::Definite(height),
+        };
+        let _ = gc.measure_grid_item(
+          node_ptr,
+          node_id,
+          known,
+          avail,
+          None,
+          AlignItems::Stretch,
+          &factory,
+          &mut measure_cache,
+          &mut measured_fragments,
+          &mut measured_node_keys,
+        );
+      }
+    }
+
+    let calls = grid_measure_layout_calls();
+    assert_eq!(
+      calls,
+      nodes.len(),
+      "available height differences should be ignored when measurement doesn't depend on them (calls={calls})"
+    );
+  }
+
+  #[test]
+  fn grid_measure_respects_definite_available_height_when_percentage_children_present() {
+    use taffy::style::AvailableSpace;
+
+    let gc = GridFormattingContext::new();
+    let factory = gc.factory.clone();
+    let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+    let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+    let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
+
+    reset_grid_measure_layout_calls();
+
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+    let width = 300.0;
+    let heights = [150.0, 400.0, 650.0];
+
+    let mut child_style = ComputedStyle::default();
+    child_style.height = Some(Length::percent(50.0));
+    let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+
+    let nodes: Vec<BoxNode> = (0..4)
+      .map(|_| BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![child.clone()]))
+      .collect();
+
+    for (i, node) in nodes.iter().enumerate() {
+      let node_id = TaffyNodeId::from((i + 1) as u64);
+      let node_ptr = node as *const _;
+      for height in heights {
+        let avail = taffy::geometry::Size {
+          width: AvailableSpace::Definite(width),
+          height: AvailableSpace::Definite(height),
+        };
+        let _ = gc.measure_grid_item(
+          node_ptr,
+          node_id,
+          known,
+          avail,
+          None,
+          AlignItems::Stretch,
+          &factory,
+          &mut measure_cache,
+          &mut measured_fragments,
+          &mut measured_node_keys,
+        );
+      }
+    }
+
+    let calls = grid_measure_layout_calls();
+    assert_eq!(
+      calls,
+      nodes.len() * heights.len(),
+      "percentage-height children should force distinct cache keys per definite height probe (calls={calls})"
     );
   }
 
@@ -5058,7 +5233,8 @@ mod tests {
               };
               let box_node = unsafe { &*node_ptr };
 
-              let key = MeasureKey::new(node_ptr, known_dimensions, available_space, viewport_size);
+              let key =
+                MeasureKey::new(node_ptr, known_dimensions, available_space, viewport_size, false);
               if let Some(size) = cache.get(&key) {
                 return *size;
               }
