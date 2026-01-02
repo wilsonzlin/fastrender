@@ -2857,6 +2857,60 @@ fn apply_dom_compatibility_mutations(
           attributes.push(("class".to_string(), class_value));
         }
       }
+
+      if tag_name.eq_ignore_ascii_case("img") {
+        // Some pages stash image URLs in nonstandard attributes (e.g. `data-gl-src` /
+        // `data-gl-srcset`) and rely on their bootstrap JS to populate `src`/`srcset`. When we
+        // don't execute scripts, CSS like `img:not([src]):not([srcset]) { visibility: hidden }`
+        // can permanently suppress the image. Compatibility mode mirrors this common bootstrap
+        // step by copying the URLs into the real attributes when they're missing.
+        let mut src_idx: Option<usize> = None;
+        let mut srcset_idx: Option<usize> = None;
+        let mut data_src: Option<String> = None;
+        let mut data_srcset: Option<String> = None;
+
+        for (idx, (name, value)) in attributes.iter().enumerate() {
+          if name.eq_ignore_ascii_case("src") {
+            src_idx = Some(idx);
+          } else if name.eq_ignore_ascii_case("srcset") {
+            srcset_idx = Some(idx);
+          } else if name.eq_ignore_ascii_case("data-gl-src") {
+            if !value.trim().is_empty() {
+              data_src = Some(value.clone());
+            }
+          } else if name.eq_ignore_ascii_case("data-gl-srcset") {
+            if !value.trim().is_empty() {
+              data_srcset = Some(value.clone());
+            }
+          }
+        }
+
+        if let Some(data_src) = data_src {
+          match src_idx {
+            Some(idx) => {
+              if attributes[idx].1.trim().is_empty() {
+                attributes[idx].1 = data_src;
+              }
+            }
+            None => {
+              attributes.push(("src".to_string(), data_src));
+            }
+          }
+        }
+
+        if let Some(data_srcset) = data_srcset {
+          match srcset_idx {
+            Some(idx) => {
+              if attributes[idx].1.trim().is_empty() {
+                attributes[idx].1 = data_srcset;
+              }
+            }
+            None => {
+              attributes.push(("srcset".to_string(), data_srcset));
+            }
+          }
+        }
+      }
     }
 
     let len = node.children.len();
@@ -9152,6 +9206,75 @@ mod tests {
     };
     assert!(classes.contains(&"portal"));
     assert!(classes.contains(&"jsl10n-visible"));
+  }
+
+  #[test]
+  fn parse_html_compat_mode_copies_data_gl_src_into_img_attrs() {
+    let dom = parse_html_with_options(
+      "<html><body><img data-gl-src='a.jpg' data-gl-srcset='a1.jpg 1x, a2.jpg 2x'></body></html>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
+    let html = dom
+      .children
+      .iter()
+      .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+      .expect("html child");
+    let body = html
+      .children
+      .iter()
+      .find(|c| matches!(&c.node_type, DomNodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("body")))
+      .expect("body child");
+    let img = body
+      .children
+      .iter()
+      .find(|c| matches!(&c.node_type, DomNodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("img")))
+      .expect("img child");
+    let attrs = match &img.node_type {
+      DomNodeType::Element { attributes, .. } => attributes,
+      _ => panic!("expected img element"),
+    };
+    let src = attrs
+      .iter()
+      .find(|(k, _)| k.eq_ignore_ascii_case("src"))
+      .map(|(_, v)| v.as_str());
+    let srcset = attrs
+      .iter()
+      .find(|(k, _)| k.eq_ignore_ascii_case("srcset"))
+      .map(|(_, v)| v.as_str());
+    assert_eq!(src, Some("a.jpg"));
+    assert_eq!(srcset, Some("a1.jpg 1x, a2.jpg 2x"));
+  }
+
+  #[test]
+  fn parse_html_standard_keeps_data_gl_src_out_of_img_attrs() {
+    let dom = parse_html(
+      "<html><body><img data-gl-src='a.jpg' data-gl-srcset='a1.jpg 1x, a2.jpg 2x'></body></html>",
+    )
+    .expect("parse");
+    let html = dom
+      .children
+      .iter()
+      .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+      .expect("html child");
+    let body = html
+      .children
+      .iter()
+      .find(|c| matches!(&c.node_type, DomNodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("body")))
+      .expect("body child");
+    let img = body
+      .children
+      .iter()
+      .find(|c| matches!(&c.node_type, DomNodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("img")))
+      .expect("img child");
+    assert!(
+      img.get_attribute_ref("src").is_none(),
+      "standard DOM parse should not synthesize src"
+    );
+    assert!(
+      img.get_attribute_ref("srcset").is_none(),
+      "standard DOM parse should not synthesize srcset"
+    );
   }
 
   #[test]

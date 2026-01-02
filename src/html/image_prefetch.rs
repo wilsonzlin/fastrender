@@ -196,9 +196,23 @@ pub fn discover_image_prefetch_urls(
           }
           *image_elements += 1;
 
-          let img_src = img.get_attribute_ref("src").unwrap_or("");
+          let img_src = img
+            .get_attribute_ref("src")
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+              img
+                .get_attribute_ref("data-gl-src")
+                .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or("");
           let img_srcset = img
             .get_attribute_ref("srcset")
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+              img
+                .get_attribute_ref("data-gl-srcset")
+                .filter(|value| !value.trim().is_empty())
+            })
             .map(parse_srcset)
             .unwrap_or_default();
           let img_sizes = img.get_attribute_ref("sizes").and_then(parse_sizes);
@@ -226,19 +240,29 @@ pub fn discover_image_prefetch_urls(
           *limited = true;
           return false;
         }
-        let img_src = node.get_attribute_ref("src").unwrap_or("");
+        let img_src = node
+          .get_attribute_ref("src")
+          .filter(|value| !value.trim().is_empty())
+          .or_else(|| {
+            node
+              .get_attribute_ref("data-gl-src")
+              .filter(|value| !value.trim().is_empty())
+          })
+          .unwrap_or("");
         let has_src = !img_src.trim().is_empty();
-        let has_srcset = node
+        let img_srcset_attr = node
           .get_attribute_ref("srcset")
-          .map(|s| !s.trim().is_empty())
-          .unwrap_or(false);
+          .filter(|value| !value.trim().is_empty())
+          .or_else(|| {
+            node
+              .get_attribute_ref("data-gl-srcset")
+              .filter(|value| !value.trim().is_empty())
+          });
+        let has_srcset = img_srcset_attr.is_some();
         if has_src || has_srcset {
           *image_elements += 1;
 
-          let img_srcset = node
-            .get_attribute_ref("srcset")
-            .map(parse_srcset)
-            .unwrap_or_default();
+          let img_srcset = img_srcset_attr.map(parse_srcset).unwrap_or_default();
           let img_sizes = node.get_attribute_ref("sizes").and_then(parse_sizes);
 
           for selected in
@@ -284,7 +308,12 @@ pub fn discover_image_prefetch_urls(
             let media_matches = match node.get_attribute_ref("media") {
               Some(media) => MediaQuery::parse_list(media)
                 .ok()
-                .map(|list| ctx.media_context.map(|m| m.evaluate_list(&list)).unwrap_or(true))
+                .map(|list| {
+                  ctx
+                    .media_context
+                    .map(|m| m.evaluate_list(&list))
+                    .unwrap_or(true)
+                })
                 .unwrap_or(true),
               None => true,
             };
@@ -297,9 +326,7 @@ pub fn discover_image_prefetch_urls(
                 .get_attribute_ref("imagesrcset")
                 .map(parse_srcset)
                 .unwrap_or_default();
-              let parsed_sizes = node
-                .get_attribute_ref("imagesizes")
-                .and_then(parse_sizes);
+              let parsed_sizes = node.get_attribute_ref("imagesizes").and_then(parse_sizes);
               if href.is_empty() && parsed_srcset.is_empty() {
                 return true;
               }
@@ -467,6 +494,48 @@ mod tests {
         "https://example.com/fallback.jpg".to_string(),
       ]
     );
+  }
+
+  #[test]
+  fn discovers_img_src_from_data_gl_src() {
+    let html = r#"<img data-gl-src="a.jpg">"#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/a.jpg".to_string()]);
+  }
+
+  #[test]
+  fn discovers_img_srcset_from_data_gl_srcset() {
+    let html = r#"<img data-gl-srcset="a1.jpg 1x, a2.jpg 2x">"#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 2.0);
+    let ctx = ctx_for((800.0, 600.0), 2.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 1,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/a2.jpg".to_string()]);
   }
 
   #[test]

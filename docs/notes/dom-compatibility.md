@@ -18,6 +18,10 @@ Compatibility mode applies a small, generic set of mutations:
 
 - If the `<html>` element has a `no-js` class, replace it with `js-enabled`
 - Add `jsl10n-visible` to `<html>` and `<body>` when missing
+- If an `<img>` element is missing `src`/`srcset` but includes Gannett's lazy-load
+  attributes (`data-gl-src` / `data-gl-srcset`), copy them into `src`/`srcset`
+  so CSS like `img:not([src]):not([srcset]) { visibility: hidden }` doesn't
+  permanently suppress the image in static renders.
 
 Leaving compatibility mode at `DomCompatibilityMode::Standard` (the default) keeps the
 parsed DOM spec-faithful.
