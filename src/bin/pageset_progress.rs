@@ -3409,12 +3409,21 @@ fn read_stage_from_timeline(stage_path: &Path) -> Option<StageHeartbeat> {
   let raw = fs::read_to_string(stage_timeline_path(stage_path)).ok()?;
   for line in raw.lines().rev() {
     let mut parts = line.split_whitespace();
-    let _ms_raw = parts.next()?;
-    let stage_raw = parts.next()?;
-    let stage = StageHeartbeat::from_str(stage_raw)?;
-    if stage != StageHeartbeat::Done {
-      return Some(stage);
+    // Timeline lines are "ms stage". Be resilient to partial writes by skipping malformed lines
+    // instead of bailing out on the first parse failure.
+    let Some(_ms_raw) = parts.next() else {
+      continue;
+    };
+    let Some(stage_raw) = parts.next() else {
+      continue;
+    };
+    let Some(stage) = StageHeartbeat::from_str(stage_raw) else {
+      continue;
+    };
+    if stage == StageHeartbeat::Done {
+      continue;
     }
+    return Some(stage);
   }
   None
 }
@@ -9418,6 +9427,30 @@ mod tests {
 
     drop(writer);
     fs::write(&stage_path, "garbage\n").expect("corrupt stage file");
+
+    assert_eq!(
+      read_stage_heartbeat(&stage_path),
+      Some(StageHeartbeat::Cascade)
+    );
+  }
+
+  #[test]
+  fn stage_heartbeat_reader_ignores_partial_timeline_lines() {
+    let dir = tempdir().unwrap();
+    let stage_path = dir.path().join("page.stage");
+    let writer = StageHeartbeatWriter::new(Some(stage_path.clone()));
+
+    writer.record(StageHeartbeat::ReadCache);
+    std::thread::sleep(Duration::from_millis(10));
+    writer.record(StageHeartbeat::Cascade);
+    drop(writer);
+
+    // Corrupt the stage marker and add an incomplete trailing timeline line.
+    fs::write(&stage_path, "garbage\n").expect("corrupt stage file");
+    let timeline_path = stage_timeline_path(&stage_path);
+    let mut timeline = fs::read_to_string(&timeline_path).expect("timeline");
+    timeline.push_str("9999 "); // missing stage token
+    fs::write(&timeline_path, timeline).expect("write corrupted timeline");
 
     assert_eq!(
       read_stage_heartbeat(&stage_path),
