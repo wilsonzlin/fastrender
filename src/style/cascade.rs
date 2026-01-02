@@ -4640,6 +4640,80 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
+    if merge.cursors.len() == 2 {
+      // Fast path: merge two already-sorted candidate lists without a heap.
+      //
+      // The general path uses a `BinaryHeap` to do a k-way merge, which is flexible but adds
+      // per-candidate log(k) heap churn. In the common case where a node only hits two buckets
+      // (e.g. class + tag, tag + universal), a straight two-way merge is cheaper.
+      //
+      // Ordering must match `CandidateHeapItem::cmp`:
+      //   (rule_idx asc, specificity desc, selector_idx asc, bucket_rank asc, cursor_idx asc)
+      let selectors = &self.selectors;
+      let (left, right) = merge.cursors.split_at_mut(1);
+      let a = &mut left[0];
+      let b = &mut right[0];
+      loop {
+        let a_idx = a.current();
+        let b_idx = b.current();
+        let (cursor_idx, selector_idx) = match (a_idx, b_idx) {
+          (None, None) => break,
+          (Some(idx), None) => (0usize, idx),
+          (None, Some(idx)) => (1usize, idx),
+          (Some(a_sel_idx), Some(b_sel_idx)) => {
+            let a_sel = &selectors[a_sel_idx];
+            let b_sel = &selectors[b_sel_idx];
+            let a_bucket_rank = a.bucket.rank();
+            let b_bucket_rank = b.bucket.rank();
+
+            let take_a = a_sel
+              .rule_idx
+              .cmp(&b_sel.rule_idx)
+              .then_with(|| b_sel.specificity.cmp(&a_sel.specificity))
+              .then_with(|| a_sel_idx.cmp(&b_sel_idx))
+              .then_with(|| a_bucket_rank.cmp(&b_bucket_rank))
+              .then_with(|| 0usize.cmp(&1usize))
+              == CmpOrdering::Less;
+
+            if take_a {
+              (0usize, a_sel_idx)
+            } else {
+              (1usize, b_sel_idx)
+            }
+          }
+        };
+
+        if cursor_idx == 0 {
+          a.pos += 1;
+        } else {
+          b.pos += 1;
+        }
+
+        if !seen.mark_seen(selector_idx) {
+          continue;
+        }
+        if !selector_metadata_matches_node(
+          &selectors[selector_idx].metadata,
+          node,
+          summary,
+          quirks_mode,
+        ) {
+          stats.pruned += 1;
+          continue;
+        }
+        out.push(selector_idx);
+        match if cursor_idx == 0 { a.bucket } else { b.bucket } {
+          CandidateBucket::Id => stats.by_id += 1,
+          CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::AttrValue => stats.by_attr += 1,
+          CandidateBucket::Tag => stats.by_tag += 1,
+          CandidateBucket::Attr => stats.by_attr += 1,
+          CandidateBucket::Universal => stats.universal += 1,
+        }
+      }
+      return;
+    }
+
     while let Some(item) = merge.heap.pop() {
       let cursor = &mut merge.cursors[item.cursor_idx];
       let Some(selector_idx) = cursor.current() else {
@@ -4786,6 +4860,76 @@ impl<'a> RuleIndex<'a> {
         }
         out.push(selector_idx);
         match cursor.bucket {
+          CandidateBucket::Id => stats.by_id += 1,
+          CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::AttrValue => stats.by_attr += 1,
+          CandidateBucket::Tag => stats.by_tag += 1,
+          CandidateBucket::Attr => stats.by_attr += 1,
+          CandidateBucket::Universal => stats.universal += 1,
+        }
+      }
+      return;
+    }
+
+    if merge.cursors.len() == 2 {
+      // Fast path: avoid heap churn for the common 2-list case.
+      //
+      // Ordering matches `CandidateHeapItem::cmp` as used by the general path, with specificity
+      // fixed at 0 for slotted selectors:
+      //   (rule_idx asc, selector_idx asc, bucket_rank asc, cursor_idx asc)
+      let selectors = &self.slotted_selectors;
+      let (left, right) = merge.cursors.split_at_mut(1);
+      let a = &mut left[0];
+      let b = &mut right[0];
+      loop {
+        let a_idx = a.current();
+        let b_idx = b.current();
+        let (cursor_idx, selector_idx) = match (a_idx, b_idx) {
+          (None, None) => break,
+          (Some(idx), None) => (0usize, idx),
+          (None, Some(idx)) => (1usize, idx),
+          (Some(a_sel_idx), Some(b_sel_idx)) => {
+            let a_sel = &selectors[a_sel_idx];
+            let b_sel = &selectors[b_sel_idx];
+            let a_bucket_rank = a.bucket.rank();
+            let b_bucket_rank = b.bucket.rank();
+
+            let take_a = a_sel
+              .rule_idx
+              .cmp(&b_sel.rule_idx)
+              .then_with(|| a_sel_idx.cmp(&b_sel_idx))
+              .then_with(|| a_bucket_rank.cmp(&b_bucket_rank))
+              .then_with(|| 0usize.cmp(&1usize))
+              == CmpOrdering::Less;
+
+            if take_a {
+              (0usize, a_sel_idx)
+            } else {
+              (1usize, b_sel_idx)
+            }
+          }
+        };
+
+        if cursor_idx == 0 {
+          a.pos += 1;
+        } else {
+          b.pos += 1;
+        }
+
+        if !seen.mark_seen(selector_idx) {
+          continue;
+        }
+        if !selector_metadata_matches_node(
+          &selectors[selector_idx].metadata,
+          node,
+          summary,
+          quirks_mode,
+        ) {
+          stats.pruned += 1;
+          continue;
+        }
+        out.push(selector_idx);
+        match if cursor_idx == 0 { a.bucket } else { b.bucket } {
           CandidateBucket::Id => stats.by_id += 1,
           CandidateBucket::Class => stats.by_class += 1,
           CandidateBucket::AttrValue => stats.by_attr += 1,
@@ -9741,6 +9885,155 @@ mod tests {
       &mut merge,
     );
     assert_eq!(candidates.as_slice(), &[0usize]);
+  }
+
+  #[test]
+  fn selector_candidates_two_cursor_merge_dedupes_by_preferential_bucket() {
+    let stylesheet = parse_stylesheet(":is(div, .foo) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+
+    // This selector has no mandatory anchor key, so it should be indexed under both candidates.
+    let class_key = selector_bucket_class_for_mode("foo", QuirksMode::NoQuirks);
+    assert_eq!(
+      index.by_class.get(&class_key).expect("class bucket").as_slice(),
+      &[0usize]
+    );
+    assert_eq!(
+      index
+        .by_tag
+        .get(&selector_bucket_tag("div"))
+        .expect("tag bucket")
+        .as_slice(),
+      &[0usize]
+    );
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "foo".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates, vec![0]);
+    // The same selector appears in both class and tag lists; the merge ordering should prefer the
+    // class bucket when de-duping.
+    assert_eq!(stats.by_class, 1);
+    assert_eq!(stats.by_tag, 0);
+  }
+
+  #[test]
+  fn selector_candidates_two_cursor_merge_orders_by_rule_index() {
+    let stylesheet = parse_stylesheet("div { color: red; } .foo { color: blue; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 2);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "foo".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates, vec![0, 1]);
   }
 
   #[test]
