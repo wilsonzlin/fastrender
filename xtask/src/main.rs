@@ -93,6 +93,14 @@ struct PagesetArgs {
   #[arg(long, default_value_t = 30)]
   fetch_timeout: u64,
 
+  /// Allow caching pages that return HTTP error statuses (>= 400)
+  ///
+  /// This forwards `--allow-http-error-status` to the `fetch_pages` step only so callers can
+  /// capture transient bot-mitigation pages (403/5xx) for debugging without breaking
+  /// `pageset_progress` arg parsing.
+  #[arg(long)]
+  allow_http_error_status: bool,
+
   /// Hard per-page render timeout (seconds)
   #[arg(long, default_value_t = 5)]
   render_timeout: u64,
@@ -642,6 +650,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     }
     if let Some(accept_language) = &args.accept_language {
       cmd.arg("--accept-language").arg(accept_language);
+    }
+    if args.allow_http_error_status {
+      cmd.arg("--allow-http-error-status");
     }
     if rayon_threads_env.is_none() {
       cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());

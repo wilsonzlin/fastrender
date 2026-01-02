@@ -19,6 +19,9 @@ set -euo pipefail
 # Note: `--pages` and `--shard` are also forwarded to `fetch_pages` and `prefetch_assets` so that
 # one-page debugging runs don't spend time fetching/prefetching the entire pageset.
 #
+# Note: `--allow-http-error-status` is forwarded to `fetch_pages` so pageset runs can cache
+# transient 4xx/5xx pages for debugging without breaking `pageset_progress` arg parsing.
+#
 # Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
 # `--prefetch-images` / `--prefetch-iframes` (alias `--prefetch-documents`) / `--prefetch-embeds` /
 # `--prefetch-icons` / `--prefetch-video-posters` / `--prefetch-css-url-assets` /
@@ -150,6 +153,7 @@ done
 FETCH_KNOB_ARGS=()
 PREFETCH_KNOB_ARGS=()
 PAGESET_KNOB_ARGS=()
+FETCH_EXTRA_ARGS=()
 
 if [[ -n "${USER_AGENT_ARG}" ]]; then
   FETCH_KNOB_ARGS+=(--user-agent "${USER_AGENT_ARG}")
@@ -454,6 +458,9 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
         PAGESET_ARGS+=("${arg}")
       fi
       ;;
+    --allow-http-error-status|--allow-http-error-status=*)
+      FETCH_EXTRA_ARGS+=("${arg}")
+      ;;
     *)
       PAGESET_ARGS+=("${arg}")
       ;;
@@ -466,7 +473,7 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
 fi
 
 echo "Fetching pages (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, disk_cache=${USE_DISK_CACHE})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${SELECTION_ARGS[@]}" "${FETCH_KNOB_ARGS[@]}"
+cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${SELECTION_ARGS[@]}" "${FETCH_KNOB_ARGS[@]}" "${FETCH_EXTRA_ARGS[@]}"
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   echo "Prefetching assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
