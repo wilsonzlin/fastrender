@@ -7931,6 +7931,50 @@ mod tests {
     );
   }
 
+  #[test]
+  fn fallback_cache_reuses_non_cjk_fallback_across_languages() {
+    let ctx = FontContext::with_config(FontConfig::bundled_only());
+    ctx.clear_web_fonts();
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()].into();
+    style.font_size = 16.0;
+
+    let pipeline = ShapingPipeline::new();
+    let text = "ܐ";
+
+    style.language = "en".into();
+    let before = pipeline.fallback_cache_stats();
+    let runs = pipeline.shape(text, &style, &ctx).expect("shape en");
+    assert!(!runs.is_empty());
+    let mid = pipeline.fallback_cache_stats();
+
+    style.language = "fr".into();
+    let runs = pipeline.shape(text, &style, &ctx).expect("shape fr");
+    assert!(!runs.is_empty());
+    let after = pipeline.fallback_cache_stats();
+
+    let miss_delta_first = (mid.glyph_misses + mid.cluster_misses)
+      .saturating_sub(before.glyph_misses + before.cluster_misses);
+    assert!(
+      miss_delta_first > 0,
+      "expected initial shaping to populate fallback cache"
+    );
+
+    let miss_delta_second = (after.glyph_misses + after.cluster_misses)
+      .saturating_sub(mid.glyph_misses + mid.cluster_misses);
+    let hit_delta_second =
+      (after.glyph_hits + after.cluster_hits).saturating_sub(mid.glyph_hits + mid.cluster_hits);
+    assert_eq!(
+      miss_delta_second, 0,
+      "expected non-CJK script fallback to ignore language tags in cache keys"
+    );
+    assert!(
+      hit_delta_second > 0,
+      "expected fallback cache hits when shaping the same non-CJK script under different languages"
+    );
+  }
+
   #[cfg(debug_assertions)]
   #[test]
   fn face_parse_counts_stop_scaling_with_length() {
