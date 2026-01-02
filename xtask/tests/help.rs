@@ -198,6 +198,25 @@ fn update_pageset_guardrails_help_mentions_strategy_flag() {
 }
 
 #[test]
+fn update_pageset_guardrails_help_mentions_cache_dir_alias() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["update-pageset-guardrails", "--help"])
+    .output()
+    .expect("run cargo xtask update-pageset-guardrails --help");
+
+  assert!(
+    output.status.success(),
+    "update-pageset-guardrails help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("aliases: --cache-dir"),
+    "help output should mention the --cache-dir alias for --asset-cache-dir; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn update_pageset_timeouts_alias_help_mentions_strategy_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["update-pageset-timeouts", "--help"])
@@ -213,6 +232,25 @@ fn update_pageset_timeouts_alias_help_mentions_strategy_flag() {
   assert!(
     stdout.contains("--strategy"),
     "update-pageset-timeouts help should mention the selection strategy; got:\n{stdout}"
+  );
+}
+
+#[test]
+fn recapture_page_fixtures_help_mentions_cache_dir_alias() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["recapture-page-fixtures", "--help"])
+    .output()
+    .expect("run cargo xtask recapture-page-fixtures --help");
+
+  assert!(
+    output.status.success(),
+    "recapture-page-fixtures help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("aliases: --cache-dir"),
+    "help output should mention the --cache-dir alias for --asset-cache-dir; got:\n{stdout}"
   );
 }
 
