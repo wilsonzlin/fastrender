@@ -276,7 +276,7 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
       .bundle_fetch_timeout_secs
       .map(|secs| format!(" --fetch-timeout-secs {secs}"))
       .unwrap_or_default();
-    let asset_cache_flag = format!(" --asset-cache-dir '{}'", args.asset_cache_dir.display());
+    let asset_cache_flag = format!(" --cache-dir '{}'", args.asset_cache_dir.display());
     let overwrite_flag = if args.overwrite_fixtures {
       " --overwrite"
     } else {
@@ -396,10 +396,8 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetGuardrailsArg
       }
       FixtureCaptureMode::Cache => {
         bundle_cmd.args(["cache", &entry.name]);
-        bundle_cmd.args([
-          "--asset-cache-dir",
-          args.asset_cache_dir.to_string_lossy().as_ref(),
-        ]);
+        bundle_cmd
+          .args(["--cache-dir", args.asset_cache_dir.to_string_lossy().as_ref()]);
         if args.allow_missing_resources {
           bundle_cmd.arg("--allow-missing");
         }

@@ -475,10 +475,7 @@ fn capture_bundle(
     }
     CaptureMode::Cache => {
       cmd.args(["cache", &fixture.name]);
-      cmd.args([
-        "--asset-cache-dir",
-        args.asset_cache_dir.to_string_lossy().as_ref(),
-      ]);
+      cmd.args(["--cache-dir", args.asset_cache_dir.to_string_lossy().as_ref()]);
       if args.allow_missing_resources {
         cmd.arg("--allow-missing");
       }
