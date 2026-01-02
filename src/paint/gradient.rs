@@ -3,14 +3,23 @@ use crate::geometry::Point;
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::style::color::Rgba;
+use lru::LruCache;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHasher;
+use std::hash::BuildHasherDefault;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tiny_skia::{ColorU8, Pixmap, PremultipliedColorU8, SpreadMode};
 
 const DEADLINE_PIXELS_STRIDE: usize = 16 * 1024;
 const GRADIENT_PARALLEL_THRESHOLD_PIXELS: usize = 1_000_000;
+
+const DEFAULT_GRADIENT_PIXMAP_CACHE_ITEMS: usize = 64;
+// Rasterized gradients can be extremely large (e.g. full-size mask/border-image gradients on
+// long-scrolling pages). Keep the cache modest and bounded via LRU eviction to avoid runaway
+// memory usage when a page triggers unique gradients.
+const DEFAULT_GRADIENT_PIXMAP_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub enum SpreadModeKey {
@@ -48,6 +57,336 @@ impl GradientStats {
 
   pub fn millis(&self) -> f64 {
     self.duration.as_secs_f64() * 1000.0
+  }
+}
+
+type GradientPixmapHasher = BuildHasherDefault<FxHasher>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct GradientPixmapCacheConfig {
+  pub max_items: usize,
+  pub max_bytes: usize,
+}
+
+impl Default for GradientPixmapCacheConfig {
+  fn default() -> Self {
+    Self {
+      max_items: DEFAULT_GRADIENT_PIXMAP_CACHE_ITEMS,
+      max_bytes: DEFAULT_GRADIENT_PIXMAP_CACHE_BYTES,
+    }
+  }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct GradientPixmapCacheKey {
+  kind: GradientPixmapCacheKeyKind,
+  width: u32,
+  height: u32,
+  params: Vec<u32>,
+  lut_key: Option<GradientCacheKey>,
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+enum GradientPixmapCacheKeyKind {
+  Linear,
+  Conic,
+  ConicScaled,
+  Radial,
+}
+
+impl GradientPixmapCacheKey {
+  pub fn linear(
+    width: u32,
+    height: u32,
+    start: Point,
+    end: Point,
+    spread: SpreadMode,
+    stops: &[(f32, Rgba)],
+    bucket: u16,
+  ) -> Option<Self> {
+    if width == 0 || height == 0 || stops.is_empty() {
+      return None;
+    }
+    if !start.x.is_finite() || !start.y.is_finite() || !end.x.is_finite() || !end.y.is_finite() {
+      return None;
+    }
+    let period = gradient_period(stops);
+    Some(Self {
+      kind: GradientPixmapCacheKeyKind::Linear,
+      width,
+      height,
+      params: vec![
+        start.x.to_bits(),
+        start.y.to_bits(),
+        end.x.to_bits(),
+        end.y.to_bits(),
+      ],
+      lut_key: Some(GradientCacheKey::new(stops, spread, period, bucket)),
+    })
+  }
+
+  pub fn conic(
+    width: u32,
+    height: u32,
+    center: Point,
+    start_angle: f32,
+    spread: SpreadMode,
+    stops: &[(f32, Rgba)],
+    bucket: u16,
+  ) -> Option<Self> {
+    if width == 0 || height == 0 || stops.is_empty() {
+      return None;
+    }
+    if !center.x.is_finite() || !center.y.is_finite() || !start_angle.is_finite() {
+      return None;
+    }
+    let period = gradient_period(stops);
+    // Canonicalize angle so angles that differ by 2π share cache entries.
+    let canonical_angle = start_angle.rem_euclid(std::f32::consts::PI * 2.0);
+    Some(Self {
+      kind: GradientPixmapCacheKeyKind::Conic,
+      width,
+      height,
+      params: vec![
+        center.x.to_bits(),
+        center.y.to_bits(),
+        canonical_angle.to_bits(),
+      ],
+      lut_key: Some(GradientCacheKey::new(stops, spread, period, bucket)),
+    })
+  }
+
+  pub fn conic_scaled(
+    width: u32,
+    height: u32,
+    center: Point,
+    start_angle: f32,
+    spread: SpreadMode,
+    stops: &[(f32, Rgba)],
+    bucket: u16,
+    scale_x: f32,
+    scale_y: f32,
+  ) -> Option<Self> {
+    if width == 0 || height == 0 || stops.is_empty() {
+      return None;
+    }
+    if !center.x.is_finite()
+      || !center.y.is_finite()
+      || !start_angle.is_finite()
+      || !scale_x.is_finite()
+      || !scale_y.is_finite()
+    {
+      return None;
+    }
+    let period = gradient_period(stops);
+    let canonical_angle = start_angle.rem_euclid(std::f32::consts::PI * 2.0);
+    Some(Self {
+      kind: GradientPixmapCacheKeyKind::ConicScaled,
+      width,
+      height,
+      params: vec![
+        center.x.to_bits(),
+        center.y.to_bits(),
+        canonical_angle.to_bits(),
+        scale_x.to_bits(),
+        scale_y.to_bits(),
+      ],
+      lut_key: Some(GradientCacheKey::new(stops, spread, period, bucket)),
+    })
+  }
+
+  pub fn radial(
+    width: u32,
+    height: u32,
+    center: Point,
+    radii: Point,
+    spread: SpreadMode,
+    stops: &[(f32, Rgba)],
+  ) -> Option<Self> {
+    if width == 0 || height == 0 || stops.is_empty() {
+      return None;
+    }
+    if !center.x.is_finite()
+      || !center.y.is_finite()
+      || !radii.x.is_finite()
+      || !radii.y.is_finite()
+      || radii.x <= 0.0
+      || radii.y <= 0.0
+    {
+      return None;
+    }
+    Some(Self {
+      kind: GradientPixmapCacheKeyKind::Radial,
+      width,
+      height,
+      params: vec![
+        center.x.to_bits(),
+        center.y.to_bits(),
+        radii.x.to_bits(),
+        radii.y.to_bits(),
+      ],
+      lut_key: Some(GradientCacheKey::new(
+        stops,
+        spread,
+        gradient_period(stops),
+        0,
+      )),
+    })
+  }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GradientPixmapCacheStats {
+  pub hits: u64,
+  pub misses: u64,
+  pub bytes: u64,
+  pub items: usize,
+}
+
+struct GradientPixmapCacheInner {
+  lru: LruCache<GradientPixmapCacheKey, Arc<Pixmap>, GradientPixmapHasher>,
+  hits: u64,
+  misses: u64,
+  bytes: usize,
+  config: GradientPixmapCacheConfig,
+}
+
+impl GradientPixmapCacheInner {
+  fn new(config: GradientPixmapCacheConfig) -> Self {
+    Self {
+      lru: LruCache::unbounded_with_hasher(GradientPixmapHasher::default()),
+      hits: 0,
+      misses: 0,
+      bytes: 0,
+      config,
+    }
+  }
+
+  fn evict(&mut self) {
+    while (self.config.max_items > 0 && self.lru.len() > self.config.max_items)
+      || (self.config.max_bytes > 0 && self.bytes > self.config.max_bytes)
+    {
+      if let Some((_key, value)) = self.lru.pop_lru() {
+        self.bytes = self.bytes.saturating_sub(value.data().len());
+      } else {
+        break;
+      }
+    }
+  }
+
+  fn stats(&self) -> GradientPixmapCacheStats {
+    GradientPixmapCacheStats {
+      hits: self.hits,
+      misses: self.misses,
+      bytes: self.bytes as u64,
+      items: self.lru.len(),
+    }
+  }
+}
+
+#[derive(Clone)]
+pub struct GradientPixmapCache {
+  inner: Arc<Mutex<GradientPixmapCacheInner>>,
+}
+
+impl Default for GradientPixmapCache {
+  fn default() -> Self {
+    Self::new(GradientPixmapCacheConfig::default())
+  }
+}
+
+impl GradientPixmapCache {
+  pub fn new(config: GradientPixmapCacheConfig) -> Self {
+    Self {
+      inner: Arc::new(Mutex::new(GradientPixmapCacheInner::new(config))),
+    }
+  }
+
+  pub fn snapshot(&self) -> GradientPixmapCacheStats {
+    let guard = self
+      .inner
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.stats()
+  }
+
+  pub fn get_or_insert<F>(
+    &self,
+    key: GradientPixmapCacheKey,
+    build: F,
+  ) -> Result<Option<Arc<Pixmap>>, RenderError>
+  where
+    F: FnOnce() -> Result<Option<Pixmap>, RenderError>,
+  {
+    // Fast path: caching disabled.
+    {
+      let guard = self
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+      if guard.config.max_items == 0 {
+        drop(guard);
+        return Ok(build()?.map(Arc::new));
+      }
+    }
+
+    {
+      let mut guard = match self.inner.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+          let mut guard = poisoned.into_inner();
+          // Cache is a performance optimization. If we panic while holding the lock, clear the
+          // cache so we don't keep partially inserted entries around.
+          guard.lru.clear();
+          guard.hits = 0;
+          guard.misses = 0;
+          guard.bytes = 0;
+          guard
+        }
+      };
+      if let Some(found) = guard.lru.get(&key).cloned() {
+        guard.hits = guard.hits.saturating_add(1);
+        return Ok(Some(found));
+      }
+      guard.misses = guard.misses.saturating_add(1);
+    }
+
+    let Some(pixmap) = build()? else {
+      return Ok(None);
+    };
+    let weight = pixmap.data().len();
+
+    let arc = Arc::new(pixmap);
+
+    let mut guard = match self.inner.lock() {
+      Ok(guard) => guard,
+      Err(poisoned) => {
+        let mut guard = poisoned.into_inner();
+        guard.lru.clear();
+        guard.hits = 0;
+        guard.misses = 0;
+        guard.bytes = 0;
+        guard
+      }
+    };
+
+    // Another thread may have inserted while we were rasterizing.
+    if let Some(found) = guard.lru.get(&key).cloned() {
+      guard.hits = guard.hits.saturating_add(1);
+      return Ok(Some(found));
+    }
+
+    if guard.config.max_bytes > 0 && weight > guard.config.max_bytes {
+      return Ok(Some(arc));
+    }
+
+    if let Some(existing) = guard.lru.peek(&key) {
+      guard.bytes = guard.bytes.saturating_sub(existing.data().len());
+    }
+    guard.bytes = guard.bytes.saturating_add(weight);
+    guard.lru.put(key, arc.clone());
+    guard.evict();
+    Ok(Some(arc))
   }
 }
 
@@ -423,6 +762,26 @@ pub fn rasterize_linear_gradient(
   Ok(Some(pixmap))
 }
 
+pub fn rasterize_linear_gradient_cached(
+  pixmap_cache: &GradientPixmapCache,
+  width: u32,
+  height: u32,
+  start: Point,
+  end: Point,
+  spread: SpreadMode,
+  stops: &[(f32, Rgba)],
+  cache: &GradientLutCache,
+  bucket: u16,
+) -> Result<Option<Arc<Pixmap>>, RenderError> {
+  let Some(key) = GradientPixmapCacheKey::linear(width, height, start, end, spread, stops, bucket)
+  else {
+    return Ok(None);
+  };
+  pixmap_cache.get_or_insert(key, || {
+    rasterize_linear_gradient(width, height, start, end, spread, stops, cache, bucket)
+  })
+}
+
 pub fn rasterize_conic_gradient(
   width: u32,
   height: u32,
@@ -525,6 +884,36 @@ pub fn rasterize_conic_gradient(
   Ok(Some(pixmap))
 }
 
+pub fn rasterize_conic_gradient_cached(
+  pixmap_cache: &GradientPixmapCache,
+  width: u32,
+  height: u32,
+  center: Point,
+  start_angle: f32,
+  spread: SpreadMode,
+  stops: &[(f32, Rgba)],
+  cache: &GradientLutCache,
+  bucket: u16,
+) -> Result<Option<Arc<Pixmap>>, RenderError> {
+  let Some(key) =
+    GradientPixmapCacheKey::conic(width, height, center, start_angle, spread, stops, bucket)
+  else {
+    return Ok(None);
+  };
+  pixmap_cache.get_or_insert(key, || {
+    rasterize_conic_gradient(
+      width,
+      height,
+      center,
+      start_angle,
+      spread,
+      stops,
+      cache,
+      bucket,
+    )
+  })
+}
+
 /// Rasterize a conic gradient into a pixmap where the sampling coordinate space is scaled.
 ///
 /// This is useful when the resulting pixmap will be drawn with a non-uniform scale (e.g. as a
@@ -589,6 +978,48 @@ pub fn rasterize_conic_gradient_scaled(
   }
 
   Ok(Some(pixmap))
+}
+
+pub fn rasterize_conic_gradient_scaled_cached(
+  pixmap_cache: &GradientPixmapCache,
+  width: u32,
+  height: u32,
+  center: Point,
+  start_angle: f32,
+  spread: SpreadMode,
+  stops: &[(f32, Rgba)],
+  cache: &GradientLutCache,
+  bucket: u16,
+  scale_x: f32,
+  scale_y: f32,
+) -> Result<Option<Arc<Pixmap>>, RenderError> {
+  let Some(key) = GradientPixmapCacheKey::conic_scaled(
+    width,
+    height,
+    center,
+    start_angle,
+    spread,
+    stops,
+    bucket,
+    scale_x,
+    scale_y,
+  ) else {
+    return Ok(None);
+  };
+  pixmap_cache.get_or_insert(key, || {
+    rasterize_conic_gradient_scaled(
+      width,
+      height,
+      center,
+      start_angle,
+      spread,
+      stops,
+      cache,
+      bucket,
+      scale_x,
+      scale_y,
+    )
+  })
 }
 
 #[cfg(test)]
@@ -698,13 +1129,64 @@ mod tests {
       panic!("poison gradient LUT cache lock");
     });
     assert!(result.is_err(), "expected panic to be caught");
-    assert!(cache.inner.is_poisoned(), "expected LUT cache mutex to be poisoned");
+    assert!(
+      cache.inner.is_poisoned(),
+      "expected LUT cache mutex to be poisoned"
+    );
 
     let stops = [(0.0, Rgba::BLACK), (1.0, Rgba::WHITE)];
     let key = GradientCacheKey::new(&stops, SpreadMode::Pad, 1.0, 16);
     let lut = cache.get_or_build(key, || build_gradient_lut(&stops, SpreadMode::Pad, 1.0, 16));
     assert_eq!(lut.period, 1.0);
     assert!(!lut.colors.is_empty());
+  }
+
+  #[test]
+  fn gradient_pixmap_cache_hits_on_second_render() {
+    let lut_cache = GradientLutCache::default();
+    let pixmap_cache = GradientPixmapCache::default();
+    let stops = vec![(0.0, Rgba::RED), (1.0, Rgba::BLUE)];
+    let width = 64;
+    let height = 32;
+    let bucket = gradient_bucket(width.max(height));
+    let start = Point::new(0.0, 0.0);
+    let end = Point::new(width as f32, 0.0);
+
+    let first = rasterize_linear_gradient_cached(
+      &pixmap_cache,
+      width,
+      height,
+      start,
+      end,
+      SpreadMode::Pad,
+      &stops,
+      &lut_cache,
+      bucket,
+    )
+    .expect("first rasterize")
+    .expect("first pixmap");
+    let after_first = pixmap_cache.snapshot();
+    assert_eq!(after_first.misses, 1);
+    assert_eq!(after_first.hits, 0);
+
+    let second = rasterize_linear_gradient_cached(
+      &pixmap_cache,
+      width,
+      height,
+      start,
+      end,
+      SpreadMode::Pad,
+      &stops,
+      &lut_cache,
+      bucket,
+    )
+    .expect("second rasterize")
+    .expect("second pixmap");
+    let after_second = pixmap_cache.snapshot();
+    assert_eq!(after_second.misses, 1);
+    assert_eq!(after_second.hits, 1);
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(first.data(), second.data());
   }
 
   fn max_diff(a: &Pixmap, b: &Pixmap) -> u8 {

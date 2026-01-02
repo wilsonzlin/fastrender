@@ -275,6 +275,9 @@ pub struct PaintDiagnosticsSummary {
   pub raster_ms: f64,
   pub gradient_ms: f64,
   pub gradient_pixels: u64,
+  pub gradient_pixmap_cache_hits: u64,
+  pub gradient_pixmap_cache_misses: u64,
+  pub gradient_pixmap_cache_bytes: u64,
   pub image_pixmap_cache_hits: u64,
   pub image_pixmap_cache_misses: u64,
   pub image_pixmap_ms: f64,
@@ -12441,6 +12444,15 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       diag.command_count = optimized.len();
       diag.gradient_ms = report.gradient_stats.millis();
       diag.gradient_pixels = report.gradient_stats.pixels;
+      diag.gradient_pixmap_cache_hits = diag
+        .gradient_pixmap_cache_hits
+        .saturating_add(report.gradient_pixmap_cache_hits);
+      diag.gradient_pixmap_cache_misses = diag
+        .gradient_pixmap_cache_misses
+        .saturating_add(report.gradient_pixmap_cache_misses);
+      diag.gradient_pixmap_cache_bytes = diag
+        .gradient_pixmap_cache_bytes
+        .max(report.gradient_pixmap_cache_bytes);
       diag.image_pixmap_cache_hits += report.image_pixmap_cache_hits;
       diag.image_pixmap_cache_misses += report.image_pixmap_cache_misses;
       diag.image_pixmap_ms += report.image_pixmap_ms;

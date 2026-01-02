@@ -61,7 +61,8 @@ use crate::paint::display_list::TransformItem;
 use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::gradient::{
-  gradient_bucket, rasterize_conic_gradient, rasterize_linear_gradient, GradientLutCache,
+  gradient_bucket, rasterize_conic_gradient_cached, rasterize_conic_gradient_scaled_cached,
+  rasterize_linear_gradient_cached, GradientLutCache, GradientPixmapCache, GradientPixmapCacheKey,
   GradientStats,
 };
 use crate::paint::homography::Homography;
@@ -2105,6 +2106,12 @@ pub struct RenderReport {
   pub fallback_reason: Option<String>,
   /// Gradient rasterization statistics collected during the render.
   pub gradient_stats: GradientStats,
+  /// Rasterized gradient pixmap cache hits.
+  pub gradient_pixmap_cache_hits: u64,
+  /// Rasterized gradient pixmap cache misses.
+  pub gradient_pixmap_cache_misses: u64,
+  /// Bytes currently held by the rasterized gradient pixmap cache.
+  pub gradient_pixmap_cache_bytes: u64,
   /// Image pixmap conversion cache hits during paint.
   pub image_pixmap_cache_hits: u64,
   /// Image pixmap conversion cache misses during paint.
@@ -2368,6 +2375,7 @@ pub struct DisplayListRenderer {
   warp_cache: WarpCache,
   blur_cache: BlurCache,
   gradient_cache: GradientLutCache,
+  gradient_pixmap_cache: GradientPixmapCache,
   gradient_stats: GradientStats,
   diagnostics_enabled: bool,
 }
@@ -2978,6 +2986,7 @@ impl DisplayListRenderer {
       warp_cache: WarpCache::new(WARP_CACHE_CAPACITY),
       blur_cache: BlurCache::default(),
       gradient_cache: GradientLutCache::default(),
+      gradient_pixmap_cache: GradientPixmapCache::default(),
       gradient_stats: GradientStats::default(),
       diagnostics_enabled,
     })
@@ -3038,9 +3047,6 @@ impl DisplayListRenderer {
   }
 
   fn render_linear_gradient(&mut self, item: &LinearGradientItem) -> Result<()> {
-    let Some(stops) = self.convert_stops(&item.stops) else {
-      return Ok(());
-    };
     let rect = self.ds_rect(item.rect);
     let visible_rect = match self.gradient_visible_rect(rect) {
       Some(r) => r,
@@ -3052,13 +3058,19 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let start = SkiaPoint::from_xy(
-      rect.x() + self.ds_len(item.start.x),
-      rect.y() + self.ds_len(item.start.y),
+    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
+      return Ok(());
+    };
+
+    let offset_x = visible_rect.x() - rect.x();
+    let offset_y = visible_rect.y() - rect.y();
+    let start = Point::new(
+      self.ds_len(item.start.x) - offset_x,
+      self.ds_len(item.start.y) - offset_y,
     );
-    let end = SkiaPoint::from_xy(
-      rect.x() + self.ds_len(item.end.x),
-      rect.y() + self.ds_len(item.end.y),
+    let end = Point::new(
+      self.ds_len(item.end.x) - offset_x,
+      self.ds_len(item.end.y) - offset_y,
     );
     let spread = match item.spread {
       crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
@@ -3066,57 +3078,50 @@ impl DisplayListRenderer {
       crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
     };
 
-    let Some(skia_rect) = tiny_skia::Rect::from_xywh(
-      visible_rect.x(),
-      visible_rect.y(),
-      visible_rect.width(),
-      visible_rect.height(),
-    ) else {
-      return Ok(());
-    };
-
-    let mut paint = tiny_skia::Paint::default();
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let denom = dx * dx + dy * dy;
-    if denom <= f32::EPSILON {
-      if let Some(first) = item.stops.first() {
-        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
-        let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
-        paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
-      } else {
-        return Ok(());
-      }
-    } else if let Some(shader) =
-      tiny_skia::LinearGradient::new(start, end, stops, spread, tiny_skia::Transform::identity())
-    {
-      paint.shader = shader;
-    } else if let Some(first) = item.stops.first() {
-      let opacity = self.canvas.opacity().clamp(0.0, 1.0);
-      let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
-      paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
-    } else {
-      return Ok(());
-    }
-    paint.anti_alias = false;
-    paint.blend_mode = self.canvas.blend_mode();
-
+    let original_width = rect.width().ceil().max(0.0) as u32;
+    let original_height = rect.height().ceil().max(0.0) as u32;
     let background_timer = self
       .background_paint_diagnostics
       .as_ref()
       .map(|_| Instant::now());
-
-    let transform = self.canvas.transform();
-    let clip_mask = self.canvas.clip_mask().cloned();
     let timer = self.diagnostics_enabled.then(Instant::now);
-    self
-      .canvas
-      .pixmap_mut()
-      .fill_rect(skia_rect, &paint, transform, clip_mask.as_ref());
+    let Some(pix) = rasterize_linear_gradient_cached(
+      &self.gradient_pixmap_cache,
+      width,
+      height,
+      start,
+      end,
+      spread,
+      &stops,
+      &self.gradient_cache,
+      gradient_bucket(original_width.max(original_height)),
+    )?
+    else {
+      return Ok(());
+    };
     if let Some(start) = timer {
-      let pixels = u64::from(width).saturating_mul(u64::from(height));
-      self.record_gradient_usage(pixels, start);
+      self.record_gradient_usage((width * height) as u64, start);
     }
+
+    let paint = tiny_skia::PixmapPaint {
+      opacity: 1.0,
+      blend_mode: self.canvas.blend_mode(),
+      ..Default::default()
+    };
+    let dest_x = visible_rect.x().floor() as i32;
+    let dest_y = visible_rect.y().floor() as i32;
+    let frac_x = visible_rect.x() - dest_x as f32;
+    let frac_y = visible_rect.y() - dest_y as f32;
+    let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
+    let clip = self.canvas.clip_mask().cloned();
+    self.canvas.pixmap_mut().draw_pixmap(
+      dest_x,
+      dest_y,
+      pix.as_ref().as_ref(),
+      &paint,
+      transform,
+      clip.as_ref(),
+    );
     self.record_background_paint(background_timer);
     Ok(())
   }
@@ -3147,7 +3152,7 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let Some(stops) = self.convert_stops(&item.stops) else {
+    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
       return Ok(());
     };
 
@@ -3161,11 +3166,11 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let start = SkiaPoint::from_xy(
+    let start = Point::new(
       self.ds_len(item.start.x) * raster_scale_x,
       self.ds_len(item.start.y) * raster_scale_y,
     );
-    let end = SkiaPoint::from_xy(
+    let end = Point::new(
       self.ds_len(item.end.x) * raster_scale_x,
       self.ds_len(item.end.y) * raster_scale_y,
     );
@@ -3181,43 +3186,20 @@ impl DisplayListRenderer {
       .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
 
-    let Some(mut tile) = new_pixmap(width, height) else {
+    let Some(tile) = rasterize_linear_gradient_cached(
+      &self.gradient_pixmap_cache,
+      width,
+      height,
+      start,
+      end,
+      spread,
+      &stops,
+      &self.gradient_cache,
+      gradient_bucket(width.max(height)),
+    )?
+    else {
       return Ok(());
     };
-    let Some(tile_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-      return Ok(());
-    };
-    let path = PathBuilder::from_rect(tile_rect);
-    let mut paint = tiny_skia::Paint::default();
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let denom = dx * dx + dy * dy;
-    if denom <= f32::EPSILON {
-      if let Some(first) = item.stops.first() {
-        let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
-        paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
-      } else {
-        return Ok(());
-      }
-    } else if let Some(shader) =
-      tiny_skia::LinearGradient::new(start, end, stops, spread, tiny_skia::Transform::identity())
-    {
-      paint.shader = shader;
-    } else if let Some(first) = item.stops.first() {
-      let alpha = (first.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
-      paint.set_color_rgba8(first.color.r, first.color.g, first.color.b, alpha);
-    } else {
-      return Ok(());
-    }
-    paint.anti_alias = false;
-    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-    tile.fill_path(
-      &path,
-      &paint,
-      tiny_skia::FillRule::Winding,
-      Transform::identity(),
-      None,
-    );
     if let Some(start) = timer {
       self.record_gradient_usage((width * height) as u64, start);
     }
@@ -3231,7 +3213,7 @@ impl DisplayListRenderer {
 
     let mut paint = tiny_skia::Paint::default();
     paint.shader = Pattern::new(
-      tile.as_ref(),
+      tile.as_ref().as_ref(),
       SpreadMode::Repeat,
       tiny_skia::FilterQuality::Nearest,
       opacity,
@@ -3259,72 +3241,116 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn render_radial_gradient(&mut self, item: &RadialGradientItem) {
-    let Some(stops) = self.convert_stops(&item.stops) else {
-      return;
-    };
+  fn render_radial_gradient(&mut self, item: &RadialGradientItem) -> Result<()> {
     let rect = self.ds_rect(item.rect);
     let visible_rect = match self.gradient_visible_rect(rect) {
       Some(r) => r,
-      None => return,
+      None => return Ok(()),
     };
-    let center = SkiaPoint::from_xy(
-      rect.x() + self.ds_len(item.center.x),
-      rect.y() + self.ds_len(item.center.y),
-    );
-    let radii = SkiaPoint::from_xy(self.ds_len(item.radii.x), self.ds_len(item.radii.y));
+    let width = visible_rect.width().ceil() as u32;
+    let height = visible_rect.height().ceil() as u32;
+    if width == 0 || height == 0 {
+      return Ok(());
+    }
+
+    let Some(stops_rgba) = self.convert_stops_rgba(&item.stops) else {
+      return Ok(());
+    };
+
     let spread = match item.spread {
       crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
       crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
       crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
     };
-    let transform = Transform::from_translate(center.x, center.y).pre_scale(radii.x, radii.y);
-    let Some(shader) = RadialGradient::new(
-      SkiaPoint::from_xy(0.0, 0.0),
-      SkiaPoint::from_xy(0.0, 0.0),
-      1.0,
-      stops,
-      spread,
-      transform,
-    ) else {
-      return;
+
+    let offset_x = visible_rect.x() - rect.x();
+    let offset_y = visible_rect.y() - rect.y();
+    let center = Point::new(
+      self.ds_len(item.center.x) - offset_x,
+      self.ds_len(item.center.y) - offset_y,
+    );
+    let radii = Point::new(self.ds_len(item.radii.x), self.ds_len(item.radii.y));
+    let Some(key) =
+      GradientPixmapCacheKey::radial(width, height, center, radii, spread, &stops_rgba)
+    else {
+      return Ok(());
     };
 
-    let Some(skia_rect) = tiny_skia::Rect::from_xywh(
-      visible_rect.x(),
-      visible_rect.y(),
-      visible_rect.width(),
-      visible_rect.height(),
-    ) else {
-      return;
-    };
-
-    let path = tiny_skia::PathBuilder::from_rect(skia_rect);
-
-    let mut paint = tiny_skia::Paint::default();
-    paint.shader = shader;
-    paint.anti_alias = true;
-    paint.blend_mode = self.canvas.blend_mode();
     let background_timer = self
       .background_paint_diagnostics
       .as_ref()
       .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
-    let transform = self.canvas.transform();
+
+    let Some(pix) = self.gradient_pixmap_cache.get_or_insert(key, || {
+      let Some(stops) = self.convert_stops(&item.stops) else {
+        return Ok(None);
+      };
+      let center = SkiaPoint::from_xy(center.x, center.y);
+      let radii = SkiaPoint::from_xy(radii.x, radii.y);
+      let transform = Transform::from_translate(center.x, center.y).pre_scale(radii.x, radii.y);
+      let Some(shader) = RadialGradient::new(
+        SkiaPoint::from_xy(0.0, 0.0),
+        SkiaPoint::from_xy(0.0, 0.0),
+        1.0,
+        stops,
+        spread,
+        transform,
+      ) else {
+        return Ok(None);
+      };
+
+      let Some(mut pixmap) = new_pixmap(width, height) else {
+        return Ok(None);
+      };
+      let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)
+      else {
+        return Ok(None);
+      };
+      let path = PathBuilder::from_rect(skia_rect);
+      let mut paint = tiny_skia::Paint::default();
+      paint.shader = shader;
+      paint.anti_alias = true;
+      paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+      pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+      );
+      Ok(Some(pixmap))
+    })?
+    else {
+      return Ok(());
+    };
+
+    if let Some(start) = timer {
+      self.record_gradient_usage((width * height) as u64, start);
+    }
+
+    let paint = tiny_skia::PixmapPaint {
+      opacity: 1.0,
+      blend_mode: self.canvas.blend_mode(),
+      ..Default::default()
+    };
+    let dest_x = visible_rect.x().floor() as i32;
+    let dest_y = visible_rect.y().floor() as i32;
+    let frac_x = visible_rect.x() - dest_x as f32;
+    let frac_y = visible_rect.y() - dest_y as f32;
+    let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
     let clip = self.canvas.clip_mask().cloned();
-    self.canvas.pixmap_mut().fill_path(
-      &path,
+    self.canvas.pixmap_mut().draw_pixmap(
+      dest_x,
+      dest_y,
+      pix.as_ref().as_ref(),
       &paint,
-      tiny_skia::FillRule::Winding,
       transform,
       clip.as_ref(),
     );
-    if let Some(start) = timer {
-      let pixels = (visible_rect.width().ceil().max(0.0) as u64)
-        .saturating_mul(visible_rect.height().ceil().max(0.0) as u64);
-      self.record_gradient_usage(pixels, start);
-    }
+
     self.record_background_paint(background_timer);
+    Ok(())
   }
 
   fn render_radial_gradient_pattern(&mut self, item: &RadialGradientPatternItem) -> Result<()> {
@@ -3353,7 +3379,7 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    let Some(stops) = self.convert_stops(&item.stops) else {
+    let Some(stops_rgba) = self.convert_stops_rgba(&item.stops) else {
       return Ok(());
     };
 
@@ -3376,15 +3402,11 @@ impl DisplayListRenderer {
       crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
       crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
     };
-    let transform = Transform::from_translate(center.x, center.y).pre_scale(radii.x, radii.y);
-    let Some(shader) = RadialGradient::new(
-      SkiaPoint::from_xy(0.0, 0.0),
-      SkiaPoint::from_xy(0.0, 0.0),
-      1.0,
-      stops,
-      spread,
-      transform,
-    ) else {
+    let center_key = Point::new(center.x, center.y);
+    let radii_key = Point::new(radii.x, radii.y);
+    let Some(key) =
+      GradientPixmapCacheKey::radial(width, height, center_key, radii_key, spread, &stops_rgba)
+    else {
       return Ok(());
     };
 
@@ -3393,25 +3415,47 @@ impl DisplayListRenderer {
       .as_ref()
       .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
-    let Some(mut tile) = new_pixmap(width, height) else {
-      return Ok(());
-    };
 
-    let Some(tile_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+    let Some(tile) = self.gradient_pixmap_cache.get_or_insert(key, || {
+      let Some(stops) = self.convert_stops(&item.stops) else {
+        return Ok(None);
+      };
+      let transform = Transform::from_translate(center.x, center.y).pre_scale(radii.x, radii.y);
+      let Some(shader) = RadialGradient::new(
+        SkiaPoint::from_xy(0.0, 0.0),
+        SkiaPoint::from_xy(0.0, 0.0),
+        1.0,
+        stops,
+        spread,
+        transform,
+      ) else {
+        return Ok(None);
+      };
+      let Some(mut tile) = new_pixmap(width, height) else {
+        return Ok(None);
+      };
+
+      let Some(tile_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)
+      else {
+        return Ok(None);
+      };
+      let path = PathBuilder::from_rect(tile_rect);
+      let mut paint = tiny_skia::Paint::default();
+      paint.shader = shader;
+      paint.anti_alias = true;
+      paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+      tile.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+      );
+      Ok(Some(tile))
+    })?
+    else {
       return Ok(());
     };
-    let path = PathBuilder::from_rect(tile_rect);
-    let mut paint = tiny_skia::Paint::default();
-    paint.shader = shader;
-    paint.anti_alias = true;
-    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-    tile.fill_path(
-      &path,
-      &paint,
-      tiny_skia::FillRule::Winding,
-      Transform::identity(),
-      None,
-    );
     if let Some(start) = timer {
       self.record_gradient_usage((width * height) as u64, start);
     }
@@ -3425,7 +3469,7 @@ impl DisplayListRenderer {
 
     let mut paint = tiny_skia::Paint::default();
     paint.shader = Pattern::new(
-      tile.as_ref(),
+      tile.as_ref().as_ref(),
       SpreadMode::Repeat,
       tiny_skia::FilterQuality::Nearest,
       opacity,
@@ -3487,7 +3531,8 @@ impl DisplayListRenderer {
       .as_ref()
       .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
-    let Some(pix) = rasterize_conic_gradient(
+    let Some(pix) = rasterize_conic_gradient_cached(
+      &self.gradient_pixmap_cache,
       width,
       height,
       center,
@@ -3518,7 +3563,7 @@ impl DisplayListRenderer {
     self.canvas.pixmap_mut().draw_pixmap(
       dest_x,
       dest_y,
-      pix.as_ref(),
+      pix.as_ref().as_ref(),
       &paint,
       transform,
       clip.as_ref(),
@@ -3578,7 +3623,8 @@ impl DisplayListRenderer {
       .as_ref()
       .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
-    let Some(tile) = crate::paint::gradient::rasterize_conic_gradient_scaled(
+    let Some(tile) = rasterize_conic_gradient_scaled_cached(
+      &self.gradient_pixmap_cache,
       width,
       height,
       center,
@@ -3601,7 +3647,7 @@ impl DisplayListRenderer {
 
     let mut paint = tiny_skia::Paint::default();
     paint.shader = Pattern::new(
-      tile.as_ref(),
+      tile.as_ref().as_ref(),
       SpreadMode::Repeat,
       tiny_skia::FilterQuality::Nearest,
       opacity,
@@ -3906,6 +3952,7 @@ impl DisplayListRenderer {
           border_image.font_size,
           border_image.root_font_size,
           border_image.viewport,
+          &self.gradient_pixmap_cache,
           &self.gradient_cache,
         ) else {
           return Ok(false);
@@ -3913,7 +3960,6 @@ impl DisplayListRenderer {
         if let Some(start) = timer {
           self.record_gradient_usage((img_w * img_h) as u64, start);
         }
-        let pixmap = Arc::new(pixmap);
         let (w, h) = (pixmap.width(), pixmap.height());
         if w == 0 || h == 0 {
           return Ok(false);
@@ -4557,25 +4603,85 @@ impl DisplayListRenderer {
         continue;
       }
 
+      // Generated images (gradients) have no intrinsic size, so `auto` sizing expands them to the
+      // full positioning area. On long-scrolling pages this can yield enormous tiles even though
+      // we only ever sample the part that intersects the current viewport. When the tiling plan
+      // produces a single tile for both axes, crop the generated gradient to the visible portion
+      // so we avoid rasterizing the entire (potentially multi-megapixel) backing image.
+      let mut generated_tile_override: Option<(f32, f32, f32, f32)> = None;
       let tile = match &layer.image {
         ResolvedMaskImage::Generated(image) => {
-          let pixmap_w = tile_w.ceil().max(1.0) as u32;
-          let pixmap_h = tile_h.ceil().max(1.0) as u32;
+          let full_w = tile_w.ceil().max(1.0) as u32;
+          let full_h = tile_h.ceil().max(1.0) as u32;
           let timer = self.diagnostics_enabled.then(Instant::now);
-          let result = render_generated_border_image(
-            image,
-            mask.color,
-            pixmap_w,
-            pixmap_h,
-            mask.font_size,
-            mask.root_font_size,
-            Some(viewport),
-            &self.gradient_cache,
-          );
-          if let (Some(start), Some(_)) = (timer, result.as_ref()) {
-            self.record_gradient_usage((pixmap_w * pixmap_h) as u64, start);
+
+          let mut result = None;
+          let mut pixels = (full_w as u64).saturating_mul(full_h as u64);
+          if positions_x.count == 1 && positions_y.count == 1 {
+            let tx = positions_x.start;
+            let ty = positions_y.start;
+            let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+            if let Some(intersection) = tile_rect.intersection(clip_rect_css) {
+              let scale_x = tile_w / full_w.max(1) as f32;
+              let scale_y = tile_h / full_h.max(1) as f32;
+              if scale_x.is_finite()
+                && scale_y.is_finite()
+                && scale_x > 0.0
+                && scale_y > 0.0
+                && intersection.width() > 0.0
+                && intersection.height() > 0.0
+              {
+                let crop_x = ((intersection.x() - tx) / scale_x).max(0.0);
+                let crop_y = ((intersection.y() - ty) / scale_y).max(0.0);
+                let crop_w = (intersection.width() / scale_x).ceil().max(1.0) as u32;
+                let crop_h = (intersection.height() / scale_y).ceil().max(1.0) as u32;
+                let cropped = render_generated_border_image_subrect(
+                  image,
+                  mask.color,
+                  full_w,
+                  full_h,
+                  crop_x,
+                  crop_y,
+                  crop_w,
+                  crop_h,
+                  mask.font_size,
+                  mask.root_font_size,
+                  Some(viewport),
+                  &self.gradient_pixmap_cache,
+                  &self.gradient_cache,
+                );
+                if cropped.is_some() {
+                  generated_tile_override = Some((
+                    intersection.x(),
+                    intersection.y(),
+                    intersection.width(),
+                    intersection.height(),
+                  ));
+                  pixels = (crop_w as u64).saturating_mul(crop_h as u64);
+                  result = cropped;
+                }
+              }
+            }
           }
-          result.map(Arc::new)
+
+          let result = result.or_else(|| {
+            render_generated_border_image(
+              image,
+              mask.color,
+              full_w,
+              full_h,
+              mask.font_size,
+              mask.root_font_size,
+              Some(viewport),
+              &self.gradient_pixmap_cache,
+              &self.gradient_cache,
+            )
+          });
+
+          if let (Some(start), Some(_)) = (timer, result.as_ref()) {
+            self.record_gradient_usage(pixels, start);
+          }
+          result
         }
         ResolvedMaskImage::Raster(image) => self.image_data_to_pixmap(image)?,
       };
@@ -4650,20 +4756,35 @@ impl DisplayListRenderer {
         };
         mask_pixmap.data_mut().fill(0);
         let mut deadline_counter = 0usize;
-        for ty in positions_y.iter() {
-          for tx in positions_x.iter() {
-            check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
-            paint_mask_tile(
-              mask_pixmap,
-              mask_tile,
-              tx,
-              ty,
-              tile_w,
-              tile_h,
-              clip_rect_css,
-              self.scale,
-              (x0, y0),
-            );
+        if let Some((tx, ty, tile_w, tile_h)) = generated_tile_override {
+          check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+          paint_mask_tile(
+            mask_pixmap,
+            mask_tile,
+            tx,
+            ty,
+            tile_w,
+            tile_h,
+            clip_rect_css,
+            self.scale,
+            (x0, y0),
+          );
+        } else {
+          for ty in positions_y.iter() {
+            for tx in positions_x.iter() {
+              check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+              paint_mask_tile(
+                mask_pixmap,
+                mask_tile,
+                tx,
+                ty,
+                tile_w,
+                tile_h,
+                clip_rect_css,
+                self.scale,
+                (x0, y0),
+              );
+            }
           }
         }
 
@@ -4992,6 +5113,7 @@ impl DisplayListRenderer {
         .as_ref()
         .map(|d| d.snapshot())
         .unwrap_or_default();
+      let gradient_pixmap_stats = self.gradient_pixmap_cache.snapshot();
       return Ok(RenderReport {
         pixmap,
         parallel_used: true,
@@ -4999,6 +5121,9 @@ impl DisplayListRenderer {
         duration,
         fallback_reason,
         gradient_stats: self.gradient_stats,
+        gradient_pixmap_cache_hits: gradient_pixmap_stats.hits,
+        gradient_pixmap_cache_misses: gradient_pixmap_stats.misses,
+        gradient_pixmap_cache_bytes: gradient_pixmap_stats.bytes,
         image_pixmap_cache_hits: image_stats.hits,
         image_pixmap_cache_misses: image_stats.misses,
         image_pixmap_ms: image_stats.millis(),
@@ -5040,6 +5165,7 @@ impl DisplayListRenderer {
       .as_ref()
       .map(|d| d.snapshot())
       .unwrap_or_default();
+    let gradient_pixmap_stats = self.gradient_pixmap_cache.snapshot();
     Ok(RenderReport {
       pixmap: self.canvas.into_pixmap(),
       parallel_used: false,
@@ -5047,6 +5173,9 @@ impl DisplayListRenderer {
       duration: serial_duration,
       fallback_reason,
       gradient_stats: self.gradient_stats,
+      gradient_pixmap_cache_hits: gradient_pixmap_stats.hits,
+      gradient_pixmap_cache_misses: gradient_pixmap_stats.misses,
+      gradient_pixmap_cache_bytes: gradient_pixmap_stats.bytes,
       image_pixmap_cache_hits: image_stats.hits,
       image_pixmap_cache_misses: image_stats.misses,
       image_pixmap_ms: image_stats.millis(),
@@ -5484,6 +5613,7 @@ impl DisplayListRenderer {
     let color_cache = self.color_cache.clone();
     let glyph_cache = self.glyph_cache.clone();
     let gradient_cache = self.gradient_cache.clone();
+    let gradient_pixmap_cache = self.gradient_pixmap_cache.clone();
     let diagnostics_enabled = self.diagnostics_enabled;
     let diagnostics_session = paint_diagnostics_session_id();
     let image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
@@ -5528,6 +5658,7 @@ impl DisplayListRenderer {
               renderer.preserve_3d_disabled = preserve_3d_disabled;
               renderer.paint_parallelism = PaintParallelism::disabled();
               renderer.gradient_cache = gradient_cache.clone();
+              renderer.gradient_pixmap_cache = gradient_pixmap_cache.clone();
               renderer.diagnostics_enabled = diagnostics_enabled;
               renderer.image_pixmap_diagnostics = image_pixmap_diagnostics.clone();
               renderer.background_paint_diagnostics = background_paint_diagnostics.clone();
@@ -5722,6 +5853,7 @@ impl DisplayListRenderer {
     )?;
     renderer.preserve_3d_disabled = true;
     renderer.gradient_cache = self.gradient_cache.clone();
+    renderer.gradient_pixmap_cache = self.gradient_pixmap_cache.clone();
     renderer.diagnostics_enabled = self.diagnostics_enabled;
     renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
     renderer.background_paint_diagnostics = self.background_paint_diagnostics.clone();
@@ -6067,7 +6199,7 @@ impl DisplayListRenderer {
       DisplayItem::Outline(item) => self.render_outline(item),
       DisplayItem::LinearGradient(item) => self.render_linear_gradient(item)?,
       DisplayItem::LinearGradientPattern(item) => self.render_linear_gradient_pattern(item)?,
-      DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
+      DisplayItem::RadialGradient(item) => self.render_radial_gradient(item)?,
       DisplayItem::RadialGradientPattern(item) => self.render_radial_gradient_pattern(item)?,
       DisplayItem::ConicGradient(item) => self.render_conic_gradient(item)?,
       DisplayItem::ConicGradientPattern(item) => self.render_conic_gradient_pattern(item)?,
@@ -8348,21 +8480,28 @@ fn resolve_gradient_center(
   Point::new(cx, cy)
 }
 
-fn render_generated_border_image(
+fn render_generated_border_image_subrect(
   bg: &BackgroundImage,
   current_color: Rgba,
+  full_width: u32,
+  full_height: u32,
+  crop_x: f32,
+  crop_y: f32,
   width: u32,
   height: u32,
   font_size: f32,
   root_font_size: f32,
   viewport: Option<(f32, f32)>,
+  pixmap_cache: &GradientPixmapCache,
   cache: &GradientLutCache,
-) -> Option<Pixmap> {
-  if width == 0 || height == 0 {
+) -> Option<Arc<Pixmap>> {
+  if width == 0 || height == 0 || full_width == 0 || full_height == 0 {
     return None;
   }
 
-  let rect = Rect::from_xywh(0.0, 0.0, width as f32, height as f32);
+  let crop_x = if crop_x.is_finite() { crop_x } else { 0.0 };
+  let crop_y = if crop_y.is_finite() { crop_y } else { 0.0 };
+  let rect = Rect::from_xywh(0.0, 0.0, full_width as f32, full_height as f32);
   match bg {
     BackgroundImage::LinearGradient { angle, stops } => {
       let resolved = normalize_color_stops(stops, current_color);
@@ -8375,9 +8514,10 @@ fn render_generated_border_image(
       let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
       let cx = rect.width() * 0.5;
       let cy = rect.height() * 0.5;
-      let start = Point::new(cx - dx * len, cy - dy * len);
-      let end = Point::new(cx + dx * len, cy + dy * len);
-      rasterize_linear_gradient(
+      let start = Point::new(cx - dx * len - crop_x, cy - dy * len - crop_y);
+      let end = Point::new(cx + dx * len - crop_x, cy + dy * len - crop_y);
+      rasterize_linear_gradient_cached(
+        pixmap_cache,
         width,
         height,
         start,
@@ -8385,7 +8525,7 @@ fn render_generated_border_image(
         SpreadMode::Pad,
         &resolved,
         cache,
-        gradient_bucket(width.max(height)),
+        gradient_bucket(full_width.max(full_height)),
       )
       .ok()
       .flatten()
@@ -8401,9 +8541,10 @@ fn render_generated_border_image(
       let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
       let cx = rect.width() * 0.5;
       let cy = rect.height() * 0.5;
-      let start = Point::new(cx - dx * len, cy - dy * len);
-      let end = Point::new(cx + dx * len, cy + dy * len);
-      rasterize_linear_gradient(
+      let start = Point::new(cx - dx * len - crop_x, cy - dy * len - crop_y);
+      let end = Point::new(cx + dx * len - crop_x, cy + dy * len - crop_y);
+      rasterize_linear_gradient_cached(
+        pixmap_cache,
         width,
         height,
         start,
@@ -8411,7 +8552,7 @@ fn render_generated_border_image(
         SpreadMode::Repeat,
         &resolved,
         cache,
-        gradient_bucket(width.max(height)),
+        gradient_bucket(full_width.max(full_height)),
       )
       .ok()
       .flatten()
@@ -8436,30 +8577,48 @@ fn render_generated_border_image(
         root_font_size,
         viewport,
       );
-      let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
-      let shader = RadialGradient::new(
-        tiny_skia::Point::from_xy(0.0, 0.0),
-        tiny_skia::Point::from_xy(0.0, 0.0),
-        1.0,
-        skia_stops,
-        SpreadMode::Pad,
-        transform,
-      )?;
+      let center = Point::new(cx - crop_x, cy - crop_y);
+      let radii = Point::new(radius_x, radius_y);
+      let key =
+        GradientPixmapCacheKey::radial(width, height, center, radii, SpreadMode::Pad, &resolved)?;
+      pixmap_cache
+        .get_or_insert(key, || {
+          let transform =
+            Transform::from_translate(cx - crop_x, cy - crop_y).pre_scale(radius_x, radius_y);
+          let shader = RadialGradient::new(
+            tiny_skia::Point::from_xy(0.0, 0.0),
+            tiny_skia::Point::from_xy(0.0, 0.0),
+            1.0,
+            skia_stops,
+            SpreadMode::Pad,
+            transform,
+          )
+          .ok_or(RenderError::RasterizationFailed {
+            reason: "Unable to build radial gradient shader".into(),
+          })?;
 
-      let mut pixmap = new_pixmap(width, height)?;
-      let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
-      let path = PathBuilder::from_rect(skia_rect);
-      let mut paint = tiny_skia::Paint::default();
-      paint.shader = shader;
-      paint.anti_alias = true;
-      pixmap.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        Transform::identity(),
-        None,
-      );
-      Some(pixmap)
+          let Some(mut pixmap) = new_pixmap(width, height) else {
+            return Ok(None);
+          };
+          let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)
+          else {
+            return Ok(None);
+          };
+          let path = PathBuilder::from_rect(skia_rect);
+          let mut paint = tiny_skia::Paint::default();
+          paint.shader = shader;
+          paint.anti_alias = true;
+          pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+          );
+          Ok(Some(pixmap))
+        })
+        .ok()
+        .flatten()
     }
     BackgroundImage::RepeatingRadialGradient {
       shape,
@@ -8481,30 +8640,54 @@ fn render_generated_border_image(
         root_font_size,
         viewport,
       );
-      let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
-      let shader = RadialGradient::new(
-        tiny_skia::Point::from_xy(0.0, 0.0),
-        tiny_skia::Point::from_xy(0.0, 0.0),
-        1.0,
-        skia_stops,
+      let center = Point::new(cx - crop_x, cy - crop_y);
+      let radii = Point::new(radius_x, radius_y);
+      let key = GradientPixmapCacheKey::radial(
+        width,
+        height,
+        center,
+        radii,
         SpreadMode::Repeat,
-        transform,
+        &resolved,
       )?;
+      pixmap_cache
+        .get_or_insert(key, || {
+          let transform =
+            Transform::from_translate(cx - crop_x, cy - crop_y).pre_scale(radius_x, radius_y);
+          let shader = RadialGradient::new(
+            tiny_skia::Point::from_xy(0.0, 0.0),
+            tiny_skia::Point::from_xy(0.0, 0.0),
+            1.0,
+            skia_stops,
+            SpreadMode::Repeat,
+            transform,
+          )
+          .ok_or(RenderError::RasterizationFailed {
+            reason: "Unable to build radial gradient shader".into(),
+          })?;
 
-      let mut pixmap = new_pixmap(width, height)?;
-      let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
-      let path = PathBuilder::from_rect(skia_rect);
-      let mut paint = tiny_skia::Paint::default();
-      paint.shader = shader;
-      paint.anti_alias = true;
-      pixmap.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        Transform::identity(),
-        None,
-      );
-      Some(pixmap)
+          let Some(mut pixmap) = new_pixmap(width, height) else {
+            return Ok(None);
+          };
+          let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)
+          else {
+            return Ok(None);
+          };
+          let path = PathBuilder::from_rect(skia_rect);
+          let mut paint = tiny_skia::Paint::default();
+          paint.shader = shader;
+          paint.anti_alias = true;
+          pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+          );
+          Ok(Some(pixmap))
+        })
+        .ok()
+        .flatten()
     }
     BackgroundImage::ConicGradient {
       from_angle,
@@ -8516,7 +8699,9 @@ fn render_generated_border_image(
         return None;
       }
       let center = resolve_gradient_center(rect, position, font_size, root_font_size, viewport);
-      rasterize_conic_gradient(
+      let center = Point::new(center.x - crop_x, center.y - crop_y);
+      rasterize_conic_gradient_cached(
+        pixmap_cache,
         width,
         height,
         center,
@@ -8524,7 +8709,7 @@ fn render_generated_border_image(
         SpreadMode::Pad,
         &resolved,
         cache,
-        gradient_bucket(width.max(height).saturating_mul(2)),
+        gradient_bucket(full_width.max(full_height).saturating_mul(2)),
       )
       .ok()
       .flatten()
@@ -8539,7 +8724,9 @@ fn render_generated_border_image(
         return None;
       }
       let center = resolve_gradient_center(rect, position, font_size, root_font_size, viewport);
-      rasterize_conic_gradient(
+      let center = Point::new(center.x - crop_x, center.y - crop_y);
+      rasterize_conic_gradient_cached(
+        pixmap_cache,
         width,
         height,
         center,
@@ -8547,13 +8734,41 @@ fn render_generated_border_image(
         SpreadMode::Repeat,
         &resolved,
         cache,
-        gradient_bucket(width.max(height).saturating_mul(2)),
+        gradient_bucket(full_width.max(full_height).saturating_mul(2)),
       )
       .ok()
       .flatten()
     }
     BackgroundImage::None | BackgroundImage::Url(_) => None,
   }
+}
+
+fn render_generated_border_image(
+  bg: &BackgroundImage,
+  current_color: Rgba,
+  width: u32,
+  height: u32,
+  font_size: f32,
+  root_font_size: f32,
+  viewport: Option<(f32, f32)>,
+  pixmap_cache: &GradientPixmapCache,
+  cache: &GradientLutCache,
+) -> Option<Arc<Pixmap>> {
+  render_generated_border_image_subrect(
+    bg,
+    current_color,
+    width,
+    height,
+    0.0,
+    0.0,
+    width,
+    height,
+    font_size,
+    root_font_size,
+    viewport,
+    pixmap_cache,
+    cache,
+  )
 }
 
 fn resolve_length_for_paint(

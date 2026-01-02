@@ -1951,6 +1951,12 @@ pub struct PaintDiagnostics {
   pub gradient_ms: Option<f64>,
   pub gradient_pixels: Option<u64>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub gradient_pixmap_cache_hits: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub gradient_pixmap_cache_misses: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub gradient_pixmap_cache_bytes: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub image_pixmap_cache_hits: Option<u64>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub image_pixmap_cache_misses: Option<u64>,
@@ -4666,6 +4672,15 @@ impl FastRender {
           }
           rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
           rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
+          if diag.gradient_pixmap_cache_hits > 0 {
+            rec.stats.paint.gradient_pixmap_cache_hits = Some(diag.gradient_pixmap_cache_hits);
+          }
+          if diag.gradient_pixmap_cache_misses > 0 {
+            rec.stats.paint.gradient_pixmap_cache_misses = Some(diag.gradient_pixmap_cache_misses);
+          }
+          if diag.gradient_pixmap_cache_bytes > 0 {
+            rec.stats.paint.gradient_pixmap_cache_bytes = Some(diag.gradient_pixmap_cache_bytes);
+          }
           if diag.image_pixmap_cache_hits > 0 {
             rec.stats.paint.image_pixmap_cache_hits = Some(diag.image_pixmap_cache_hits);
           }
