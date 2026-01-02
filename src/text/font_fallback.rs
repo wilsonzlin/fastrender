@@ -62,6 +62,16 @@ use parking_lot::Mutex;
 type FallbackCacheHasher = BuildHasherDefault<FxHasher>;
 const FALLBACK_CACHE_SHARDS: usize = 16;
 const FALLBACK_CACHE_CAPACITY_ENV: &str = "FASTR_TEXT_FALLBACK_CACHE_CAPACITY";
+// Descriptor-level hint cache:
+//
+// The glyph/cluster fallback caches are keyed by descriptor + char/cluster signature. That means
+// pages that contain lots of unique codepoints (CJK, Wikipedia language lists, etc.) still pay
+// the full resolution cost once per unique key. In practice, a *single* fallback font typically
+// covers large swaths of those codepoints, so we keep a small descriptor → last-used-font hint
+// cache and try it before scanning the whole fallback chain.
+const FALLBACK_DESCRIPTOR_HINT_DIVISOR: usize = 16;
+const FALLBACK_DESCRIPTOR_HINT_MIN: usize = 64;
+const FALLBACK_DESCRIPTOR_HINT_MAX: usize = 8192;
 
 fn fallback_cache_capacity_from_env(default: usize) -> usize {
   match std::env::var(FALLBACK_CACHE_CAPACITY_ENV) {
@@ -77,6 +87,15 @@ fn fallback_cache_capacity_from_env(default: usize) -> usize {
     }
     Err(_) => default,
   }
+}
+
+fn fallback_hint_cache_capacity(total_capacity: usize) -> usize {
+  let total_capacity = total_capacity.max(1);
+  let scaled = (total_capacity / FALLBACK_DESCRIPTOR_HINT_DIVISOR).max(1);
+  scaled
+    .clamp(FALLBACK_DESCRIPTOR_HINT_MIN, FALLBACK_DESCRIPTOR_HINT_MAX)
+    .min(total_capacity)
+    .max(1)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -369,6 +388,7 @@ impl FallbackCacheStats {
 pub(crate) struct FallbackCache {
   glyphs: Arc<ShardedLruCache<GlyphFallbackCacheKey, Option<Arc<LoadedFont>>>>,
   clusters: Arc<ShardedLruCache<ClusterFallbackCacheKey, Option<Arc<LoadedFont>>>>,
+  descriptor_hints: Arc<ShardedLruCache<FallbackCacheDescriptor, Arc<LoadedFont>>>,
   last_generation: Arc<AtomicU64>,
   stats: Arc<FallbackCacheStats>,
 }
@@ -377,9 +397,12 @@ impl FallbackCache {
   pub(crate) fn new(capacity: usize) -> Self {
     let capacity = fallback_cache_capacity_from_env(capacity).max(1);
     let shard_count = FALLBACK_CACHE_SHARDS.min(capacity).max(1);
+    let hint_capacity = fallback_hint_cache_capacity(capacity);
+    let hint_shard_count = FALLBACK_CACHE_SHARDS.min(hint_capacity).max(1);
     Self {
       glyphs: Arc::new(ShardedLruCache::new(capacity, shard_count)),
       clusters: Arc::new(ShardedLruCache::new(capacity, shard_count)),
+      descriptor_hints: Arc::new(ShardedLruCache::new(hint_capacity, hint_shard_count)),
       last_generation: Arc::new(AtomicU64::new(0)),
       stats: Arc::new(FallbackCacheStats::default()),
     }
@@ -393,6 +416,7 @@ impl FallbackCache {
 
     self.glyphs.clear();
     self.clusters.clear();
+    self.descriptor_hints.clear();
     self.stats.glyph_entries.store(0, Ordering::Relaxed);
     self
       .stats
@@ -454,9 +478,27 @@ impl FallbackCache {
     }
   }
 
+  #[inline]
+  pub(crate) fn get_descriptor_hint(
+    &self,
+    descriptor: &FallbackCacheDescriptor,
+  ) -> Option<Arc<LoadedFont>> {
+    self.descriptor_hints.get(descriptor)
+  }
+
+  #[inline]
+  pub(crate) fn insert_descriptor_hint(
+    &self,
+    descriptor: FallbackCacheDescriptor,
+    font: Arc<LoadedFont>,
+  ) {
+    self.descriptor_hints.put(descriptor, font);
+  }
+
   pub(crate) fn clear(&self) {
     self.glyphs.clear();
     self.clusters.clear();
+    self.descriptor_hints.clear();
     self.stats.glyph_entries.store(0, Ordering::Relaxed);
     self
       .stats

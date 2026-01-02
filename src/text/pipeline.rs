@@ -2934,6 +2934,26 @@ fn assign_fonts_internal(
           }
         }
         if !skip_resolution && resolved.is_none() {
+          if let (Some(cache), Some(descriptor)) = (font_cache, descriptor) {
+            if let Some(hint_font) = cache.get_descriptor_hint(&descriptor) {
+              let mut face = None;
+              if coverage_chars_required.is_empty()
+                || font_supports_all_chars_fast(
+                  db,
+                  hint_font.as_ref(),
+                  &mut face,
+                  coverage_chars_required,
+                )
+              {
+                resolved = Some(hint_font);
+                if let Some(key) = char_cache_key {
+                  cache.insert_glyph(key, resolved.clone());
+                }
+              }
+            }
+          }
+        }
+        if !skip_resolution && resolved.is_none() {
           let mut picker = FontPreferencePicker::new(emoji_pref);
           let candidate = resolve_font_for_char_with_preferences(
             base_char,
@@ -2955,6 +2975,19 @@ fn assign_fonts_internal(
             cache.insert_glyph(key, candidate.clone());
           }
           resolved = candidate;
+        }
+      }
+
+      if !skip_resolution && resolved.is_none() {
+        if let (Some(cache), Some(descriptor)) = (font_cache, descriptor) {
+          if let Some(hint_font) = cache.get_descriptor_hint(&descriptor) {
+            let mut face = None;
+            if coverage_chars_required.is_empty()
+              || font_supports_all_chars_fast(db, hint_font.as_ref(), &mut face, coverage_chars_required)
+            {
+              resolved = Some(hint_font);
+            }
+          }
         }
       }
 
@@ -3070,6 +3103,11 @@ fn assign_fonts_internal(
         if resolved.is_some() {
           record_last_resort_fallback(cluster_text);
         }
+      }
+
+      if let (Some(cache), Some(descriptor), Some(font)) = (font_cache, descriptor, resolved.as_ref())
+      {
+        cache.insert_descriptor_hint(descriptor, Arc::clone(font));
       }
 
       if let (Some(cache), Some(key)) = (font_cache, cluster_cache_key) {
