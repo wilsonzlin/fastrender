@@ -2008,11 +2008,17 @@ fn apply_spread_slow_reference(pixmap: &mut Pixmap, spread: f32) {
 ///
 /// Parallel painting is enabled by default with adaptive thresholds to avoid
 /// oversubscribing small pages. Use [`PaintParallelism::disabled`] to force
-/// serial painting. When enabled, the renderer splits the target pixmap into
-/// tiles and paints them in
-/// parallel, compositing the results back in paint order. The renderer
-/// automatically falls back to serial rendering when it encounters effects that
-/// depend on full-canvas backdrops (e.g., backdrop-filter).
+/// serial painting.
+///
+/// When enabled, the renderer splits the target pixmap into tiles and paints
+/// them in parallel, blitting the results back into the final surface. Each
+/// tile renders the full paint order for its (halo-expanded) region, so effects
+/// that depend on previously painted pixels (for example `backdrop-filter`)
+/// still see a fully rendered backdrop for that tile.
+///
+/// The renderer still falls back to serial rendering for effects that cannot be
+/// evaluated correctly in isolation (for example non-isolated `mix-blend-mode`
+/// which needs the *already composited* backdrop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaintParallelismMode {
   Disabled,
@@ -2065,7 +2071,8 @@ impl PaintParallelism {
     }
   }
 
-  /// Force tiled rasterization (subject to safety fallbacks like backdrop filters).
+  /// Force tiled rasterization (still subject to safety fallbacks for parallel-incompatible
+  /// effects).
   pub fn enabled() -> Self {
     Self {
       mode: PaintParallelismMode::Enabled,
@@ -5271,7 +5278,7 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn has_backdrop_sensitive_effects(
+  fn has_parallel_incompatible_effects(
     &self,
     items: &[DisplayItem],
     fallback_reason: &mut Option<String>,
@@ -5280,10 +5287,6 @@ impl DisplayListRenderer {
     for item in items {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       if let DisplayItem::PushStackingContext(sc) = item {
-        if !sc.backdrop_filters.is_empty() {
-          *fallback_reason = Some("backdrop-filter requires serial painting".to_string());
-          return Ok(true);
-        }
         if !matches!(sc.mix_blend_mode, BlendMode::Normal) && !sc.is_isolated {
           *fallback_reason =
             Some("mix-blend-mode on non-isolated context requires serial painting".to_string());
@@ -5351,7 +5354,7 @@ impl DisplayListRenderer {
     }
 
     if self
-      .has_backdrop_sensitive_effects(list.items(), fallback_reason)
+      .has_parallel_incompatible_effects(list.items(), fallback_reason)
       .map_err(Error::Render)?
     {
       return Ok(false);
@@ -5470,39 +5473,52 @@ impl DisplayListRenderer {
           total = total.saturating_add(tmp_pixels.saturating_mul(blur_weight));
         }
         DisplayItem::PushStackingContext(sc) => {
-          if sc.filters.is_empty() {
-            continue;
-          }
-
-          let mut weight = 0u64;
-          for filter in &sc.filters {
-            weight += match filter {
-              ResolvedFilter::Blur(radius) => {
-                let r = self.ds_len(*radius).abs().round().min(32.0) as u64;
-                8 + r
-              }
-              ResolvedFilter::DropShadow { blur_radius, .. } => {
-                let r = self.ds_len(*blur_radius).abs().round().min(32.0) as u64;
-                8 + r
-              }
-              ResolvedFilter::SvgFilter(_) => 24,
-              _ => 4,
-            };
-          }
-
-          if weight == 0 {
+          if sc.filters.is_empty() && sc.backdrop_filters.is_empty() {
             continue;
           }
 
           let bounds = self.ds_rect(sc.bounds);
-          let outset = filter_outset_with_bounds(&sc.filters, self.scale, Some(sc.bounds));
-          let inflated = Rect::from_xywh(
-            bounds.x() - outset.left,
-            bounds.y() - outset.top,
-            bounds.width() + outset.left + outset.right,
-            bounds.height() + outset.top + outset.bottom,
-          );
-          add_rect(&mut total, inflated, weight);
+
+          // `filter` and `backdrop-filter` both allocate and rasterize intermediate surfaces.
+          // Treat them similarly in the heuristics that decide whether parallel tiling is worth
+          // the overhead, otherwise pages dominated by backdrop filters stay serial.
+          let mut add_filters = |filters: &[ResolvedFilter], total: &mut u64| {
+            if filters.is_empty() {
+              return;
+            }
+
+            let mut weight = 0u64;
+            for filter in filters {
+              weight += match filter {
+                ResolvedFilter::Blur(radius) => {
+                  let r = self.ds_len(*radius).abs().round().min(32.0) as u64;
+                  8 + r
+                }
+                ResolvedFilter::DropShadow { blur_radius, .. } => {
+                  let r = self.ds_len(*blur_radius).abs().round().min(32.0) as u64;
+                  8 + r
+                }
+                ResolvedFilter::SvgFilter(_) => 24,
+                _ => 4,
+              };
+            }
+
+            if weight == 0 {
+              return;
+            }
+
+            let outset = filter_outset_with_bounds(filters, self.scale, Some(sc.bounds));
+            let inflated = Rect::from_xywh(
+              bounds.x() - outset.left,
+              bounds.y() - outset.top,
+              bounds.width() + outset.left + outset.right,
+              bounds.height() + outset.top + outset.bottom,
+            );
+            add_rect(total, inflated, weight);
+          };
+
+          add_filters(&sc.filters, &mut total);
+          add_filters(&sc.backdrop_filters, &mut total);
         }
         _ => {}
       }

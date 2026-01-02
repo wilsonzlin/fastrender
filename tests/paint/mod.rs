@@ -3,6 +3,7 @@
 mod util;
 
 mod avif_test;
+mod backdrop_filter_parallel_test;
 mod backend_parity;
 mod backface_culling_test;
 mod canvas_test;
