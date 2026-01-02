@@ -369,7 +369,12 @@ const DEFAULT_LAYOUT_CACHE_MAX_ENTRIES: Option<usize> = Some(8192);
 /// default cap bounded avoids runaway memory usage on extremely large documents. Callers that
 /// want to trade memory for reuse can still override this via `FASTR_LAYOUT_CACHE_MAX_ENTRIES`.
 const MAX_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
-/// Number of entries to drop when the cache exceeds the cap.
+/// Hysteresis window for enforcing the per-thread layout cache entry cap.
+///
+/// `LAYOUT_RESULT_CACHE` is capped to avoid unbounded growth on large documents, but enforcing the
+/// cap *exactly* on every insert causes eviction work to run on essentially every store once the
+/// cache becomes full. Instead, we allow the cache to grow slightly past the configured limit and
+/// then trim it back down once it exceeds the limit by this many entries.
 const LAYOUT_CACHE_EVICTION_BATCH: usize = 64;
 
 thread_local! {
@@ -628,7 +633,9 @@ fn enforce_layout_cache_entry_limit(
   let Some(limit) = limit else {
     return;
   };
-  if map.len() <= limit {
+  // Avoid eviction churn by allowing the cache to exceed the cap by a small amount before we
+  // perform cleanup.
+  if map.len() <= limit.saturating_add(LAYOUT_CACHE_EVICTION_BATCH) {
     return;
   }
 
@@ -636,11 +643,7 @@ fn enforce_layout_cache_entry_limit(
   if over_limit == 0 {
     return;
   }
-  let to_remove = if over_limit < LAYOUT_CACHE_EVICTION_BATCH {
-    over_limit
-  } else {
-    over_limit.max(LAYOUT_CACHE_EVICTION_BATCH)
-  };
+  let to_remove = over_limit;
   let mut removed = 0usize;
   let keys: Vec<_> = map
     .keys()
@@ -1465,6 +1468,71 @@ mod tests {
     assert_eq!(hits, 1);
     assert_eq!(stores, 1);
     assert_eq!(evictions, 0);
+
+    layout_cache_use_epoch(1, false, true, None, None);
+  }
+
+  #[test]
+  fn layout_cache_entry_limit_is_enforced_in_batches() {
+    let _guard = layout_cache_test_lock();
+    layout_cache_use_epoch(1, true, true, None, None);
+
+    // Use a tiny entry cap so the hysteresis window triggers quickly.
+    let entry_limit = 2usize;
+    LAYOUT_CACHE_ENTRY_LIMIT.with(|cell| cell.set(Some(entry_limit)));
+
+    let preserve = LayoutCacheKeyNoStyle {
+      box_id: 0,
+      fc_type: FormattingContextType::Block,
+      constraints_hash: 0,
+      fragmentation_hash: 0,
+      viewport_hash: 0,
+    };
+    let entry = LayoutCacheEntry {
+      epoch: 1,
+      fragment: Arc::new(block_fragment(1.0, 1.0)),
+      style_hash: 0,
+    };
+
+    let mut map = FxHashMap::default();
+    for i in 0..entry_limit.saturating_add(LAYOUT_CACHE_EVICTION_BATCH) {
+      let key = LayoutCacheKeyNoStyle {
+        box_id: i,
+        fc_type: FormattingContextType::Block,
+        constraints_hash: 0,
+        fragmentation_hash: 0,
+        viewport_hash: 0,
+      };
+      map.insert(key, entry.clone());
+    }
+
+    assert_eq!(map.len(), entry_limit + LAYOUT_CACHE_EVICTION_BATCH);
+    enforce_layout_cache_entry_limit(&mut map, &preserve);
+    assert_eq!(
+      map.len(),
+      entry_limit + LAYOUT_CACHE_EVICTION_BATCH,
+      "cache should not trim until it exceeds the eviction hysteresis window"
+    );
+
+    // Add one more entry to push the cache over the hysteresis threshold.
+    let extra_key = LayoutCacheKeyNoStyle {
+      box_id: 99999,
+      fc_type: FormattingContextType::Block,
+      constraints_hash: 0,
+      fragmentation_hash: 0,
+      viewport_hash: 0,
+    };
+    map.insert(extra_key, entry);
+    enforce_layout_cache_entry_limit(&mut map, &preserve);
+    assert!(
+      map.len() <= entry_limit,
+      "expected cache trim back to cap (len={} limit={entry_limit})",
+      map.len()
+    );
+    assert!(
+      map.contains_key(&preserve),
+      "cache eviction should never remove the preserved key"
+    );
 
     layout_cache_use_epoch(1, false, true, None, None);
   }
