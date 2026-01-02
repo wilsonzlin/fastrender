@@ -117,6 +117,10 @@ struct PagesetArgs {
   #[arg(long)]
   no_fetch: bool,
 
+  /// Re-fetch all pages even if cached (forwards `--refresh` to `fetch_pages`)
+  #[arg(long, conflicts_with = "no_fetch")]
+  refresh: bool,
+
   /// Disable the disk-backed cache (defaults on; see NO_DISK_CACHE/DISK_CACHE)
   #[arg(long = "no-disk-cache", default_value_t = true, action = ArgAction::SetFalse)]
   disk_cache: bool,
@@ -650,6 +654,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     }
     if let Some(accept_language) = &args.accept_language {
       cmd.arg("--accept-language").arg(accept_language);
+    }
+    if args.refresh {
+      cmd.arg("--refresh");
     }
     if args.allow_http_error_status {
       cmd.arg("--allow-http-error-status");

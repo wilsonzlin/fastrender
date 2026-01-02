@@ -22,6 +22,9 @@ set -euo pipefail
 # Note: `--allow-http-error-status` is forwarded to `fetch_pages` so pageset runs can cache
 # transient 4xx/5xx pages for debugging without breaking `pageset_progress` arg parsing.
 #
+# Note: `--refresh` is forwarded to `fetch_pages` so pageset runs can re-fetch cached HTML in one
+# command.
+#
 # Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
 # `--prefetch-images` / `--prefetch-iframes` (alias `--prefetch-documents`) / `--prefetch-embeds` /
 # `--prefetch-icons` / `--prefetch-video-posters` / `--prefetch-css-url-assets` /
@@ -459,6 +462,9 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
       fi
       ;;
     --allow-http-error-status|--allow-http-error-status=*)
+      FETCH_EXTRA_ARGS+=("${arg}")
+      ;;
+    --refresh)
       FETCH_EXTRA_ARGS+=("${arg}")
       ;;
     *)
