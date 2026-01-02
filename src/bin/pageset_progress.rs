@@ -1319,7 +1319,13 @@ struct ProgressDiagnostics {
 }
 
 pub(crate) fn is_bot_mitigation_block(status: Option<u16>, url: &str) -> bool {
-  matches!(status, Some(403 | 405 | 429)) && url.to_ascii_lowercase().contains("captcha=")
+  if !matches!(status, Some(403 | 405 | 429)) {
+    return false;
+  }
+  let lower = url.to_ascii_lowercase();
+  // Keep this intentionally narrow: we only recognize explicit `captcha` query parameters (case
+  // insensitive) so we don't accidentally hide genuine subresource failures behind this label.
+  lower.contains("?captcha=") || lower.contains("&captcha=")
 }
 
 pub(crate) fn is_bot_mitigation_fetch_error(err: &ResourceFetchError) -> bool {

@@ -14,6 +14,13 @@ fn bot_mitigation_classifier_matches_expected_status_and_url_patterns() {
     "expected case-insensitive marker to match"
   );
   assert!(
+    pageset_progress::is_bot_mitigation_block(
+      Some(405),
+      "https://example.test/block?foo=1&captcha=1234"
+    ),
+    "expected query param marker to match in non-leading position"
+  );
+  assert!(
     pageset_progress::is_bot_mitigation_block(Some(403), "https://example.test/block?captcha=1234"),
     "expected 403 + captcha marker to match"
   );
@@ -32,6 +39,10 @@ fn bot_mitigation_classifier_matches_expected_status_and_url_patterns() {
   assert!(
     !pageset_progress::is_bot_mitigation_block(Some(405), "https://example.test/block"),
     "missing captcha marker should not match"
+  );
+  assert!(
+    !pageset_progress::is_bot_mitigation_block(Some(405), "https://example.test/block?recaptcha=1"),
+    "should not match unrelated query param names containing `captcha=` as a substring"
   );
 }
 
