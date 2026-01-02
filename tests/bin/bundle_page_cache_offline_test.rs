@@ -63,7 +63,7 @@ fn bundle_page_cache_captures_from_disk_cache_offline() {
 
   let html_dir = tmp.path().join("fetches/html");
   std::fs::create_dir_all(&html_dir).expect("create html dir");
-  let asset_dir = tmp.path().join("fetches/assets");
+  let asset_dir = tmp.path().join("custom_asset_cache");
   std::fs::create_dir_all(&asset_dir).expect("create asset dir");
 
   let stem = "example.invalid";
@@ -123,6 +123,8 @@ fn bundle_page_cache_captures_from_disk_cache_offline() {
     .current_dir(tmp.path())
     .args(["cache", stem, "--out"])
     .arg(bundle_dir.to_string_lossy().as_ref())
+    .args(["--cache-dir"])
+    .arg(&asset_dir)
     .status()
     .expect("run bundle_page cache");
 

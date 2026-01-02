@@ -125,7 +125,7 @@ struct CacheArgs {
   html_dir: PathBuf,
 
   /// Disk-backed subresource cache directory (defaults to fetches/assets)
-  #[arg(long, default_value = "fetches/assets")]
+  #[arg(long, default_value = "fetches/assets", value_name = "DIR", alias = "cache-dir")]
   asset_cache_dir: PathBuf,
 
   /// Override the User-Agent header used when computing the disk cache namespace.
