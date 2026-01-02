@@ -882,16 +882,15 @@ impl BlockFormattingContext {
         };
         let factory = factory_for_cb(cb);
         // Layout the child as if it were in normal flow to obtain its intrinsic size.
-        let mut layout_child = pos_child.clone();
-        let mut style = (*layout_child.style).clone();
-        style.position = Position::Relative;
-        style.top = None;
-        style.right = None;
-        style.bottom = None;
-        style.left = None;
-        layout_child.style = Arc::new(style);
+        let mut static_style = (*pos_child.style).clone();
+        static_style.position = Position::Relative;
+        static_style.top = None;
+        static_style.right = None;
+        static_style.bottom = None;
+        static_style.left = None;
+        let static_style = Arc::new(static_style);
 
-        let fc_type = layout_child
+        let fc_type = pos_child
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
         let fc = factory.get(fc_type);
@@ -903,7 +902,6 @@ impl BlockFormattingContext {
           AvailableSpace::Definite(padding_size.width),
           child_height_space,
         );
-        let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
         // Resolve positioned style against the containing block.
         let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
@@ -922,50 +920,124 @@ impl BlockFormattingContext {
           && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-        let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
-          match fc.compute_intrinsic_inline_sizes(&layout_child) {
-            Ok((min, max)) => (Some(min), Some(max)),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => {
-              let min = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MinContent,
-              ) {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+        let (
+          mut child_fragment,
+          preferred_min_inline,
+          preferred_inline,
+          preferred_min_block,
+          preferred_block,
+        ) = if pos_child.id != 0 {
+          crate::layout::style_override::with_style_override(
+            pos_child.id,
+            static_style.clone(),
+            || {
+              let child_fragment = fc.layout(&pos_child, &child_constraints)?;
+              let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+                match fc.compute_intrinsic_inline_sizes(&pos_child) {
+                  Ok((min, max)) => (Some(min), Some(max)),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => {
+                    let min = match fc
+                      .compute_intrinsic_inline_size(&pos_child, IntrinsicSizingMode::MinContent)
+                    {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    let max = match fc
+                      .compute_intrinsic_inline_size(&pos_child, IntrinsicSizingMode::MaxContent)
+                    {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    (min, max)
+                  }
+                }
+              } else {
+                (None, None)
               };
-              let max = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MaxContent,
-              ) {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let preferred_min_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&pos_child, IntrinsicSizingMode::MinContent) {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
               };
-              (min, max)
+              let preferred_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&pos_child, IntrinsicSizingMode::MaxContent) {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
+              };
+              Ok((
+                child_fragment,
+                preferred_min_inline,
+                preferred_inline,
+                preferred_min_block,
+                preferred_block,
+              ))
+            },
+          )?
+        } else {
+          let mut layout_child = pos_child.clone();
+          layout_child.style = static_style.clone();
+          let child_fragment = fc.layout(&layout_child, &child_constraints)?;
+          let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+            match fc.compute_intrinsic_inline_sizes(&layout_child) {
+              Ok((min, max)) => (Some(min), Some(max)),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => {
+                let min = match fc
+                  .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                };
+                let max = match fc
+                  .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                };
+                (min, max)
+              }
             }
-          }
-        } else {
-          (None, None)
-        };
-        let preferred_min_block = if needs_block_intrinsics {
-          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
-            Ok(value) => Some(value),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          }
-        } else {
-          None
-        };
-        let preferred_block = if needs_block_intrinsics {
-          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-            Ok(value) => Some(value),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          }
-        } else {
-          None
+          } else {
+            (None, None)
+          };
+          let preferred_min_block = if needs_block_intrinsics {
+            match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+              Ok(value) => Some(value),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => None,
+            }
+          } else {
+            None
+          };
+          let preferred_block = if needs_block_intrinsics {
+            match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+              Ok(value) => Some(value),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => None,
+            }
+          } else {
+            None
+          };
+          (
+            child_fragment,
+            preferred_min_inline,
+            preferred_inline,
+            preferred_min_block,
+            preferred_block,
+          )
         };
 
         let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
@@ -987,12 +1059,23 @@ impl BlockFormattingContext {
             AvailableSpace::Definite(result.size.width),
             AvailableSpace::Definite(result.size.height),
           );
-          let mut relayout_child = layout_child.clone();
-          let mut relayout_style = (*relayout_child.style).clone();
-          relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
-          relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
-          relayout_child.style = Arc::new(relayout_style);
-          child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+          if pos_child.id != 0 {
+            let mut relayout_style = (*static_style).clone();
+            relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+            relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+            child_fragment = crate::layout::style_override::with_style_override(
+              pos_child.id,
+              Arc::new(relayout_style),
+              || fc.layout(&pos_child, &relayout_constraints),
+            )?;
+          } else {
+            let mut relayout_child = pos_child.clone();
+            let mut relayout_style = (*static_style).clone();
+            relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+            relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+            relayout_child.style = Arc::new(relayout_style);
+            child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+          }
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
         child_fragment.style = Some(original_style);
@@ -3581,28 +3664,29 @@ impl FormattingContext for BlockFormattingContext {
         }
       };
 
+      let trace_positioned = trace_positioned_ids();
       for PositionedCandidate {
         node: child,
         source,
         static_position,
       } in positioned_children
       {
+        let original_style = child.style.clone();
         let cb = match source {
           ContainingBlockSource::ParentPadding => parent_padding_cb,
           ContainingBlockSource::Explicit(cb) => cb,
         };
         let factory = factory_for_cb(cb);
         // Layout the child as if it were in normal flow to obtain its intrinsic size.
-        let mut layout_child = child.clone();
-        let mut style = (*layout_child.style).clone();
-        style.position = Position::Relative;
-        style.top = None;
-        style.right = None;
-        style.bottom = None;
-        style.left = None;
-        layout_child.style = Arc::new(style);
+        let mut static_style = (*child.style).clone();
+        static_style.position = Position::Relative;
+        static_style.top = None;
+        static_style.right = None;
+        static_style.bottom = None;
+        static_style.left = None;
+        let static_style = Arc::new(static_style);
 
-        let fc_type = layout_child
+        let fc_type = child
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
         let fc = factory.get(fc_type);
@@ -3613,11 +3697,10 @@ impl FormattingContext for BlockFormattingContext {
           AvailableSpace::Definite(padding_size.width),
           child_height_space,
         );
-        let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
         // Resolve positioned style against the containing block.
         let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
-          &child.style,
+          &original_style,
           &cb,
           self.viewport_size,
           &self.font_context,
@@ -3632,50 +3715,124 @@ impl FormattingContext for BlockFormattingContext {
           && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-        let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
-          match fc.compute_intrinsic_inline_sizes(&layout_child) {
-            Ok((min, max)) => (Some(min), Some(max)),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => {
-              let min = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MinContent,
-              ) {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+        let (
+          mut child_fragment,
+          preferred_min_inline,
+          preferred_inline,
+          preferred_min_block,
+          preferred_block,
+        ) = if child.id != 0 {
+          crate::layout::style_override::with_style_override(
+            child.id,
+            static_style.clone(),
+            || {
+              let child_fragment = fc.layout(&child, &child_constraints)?;
+              let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+                match fc.compute_intrinsic_inline_sizes(&child) {
+                  Ok((min, max)) => (Some(min), Some(max)),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => {
+                    let min = match fc
+                      .compute_intrinsic_inline_size(&child, IntrinsicSizingMode::MinContent)
+                    {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    let max = match fc
+                      .compute_intrinsic_inline_size(&child, IntrinsicSizingMode::MaxContent)
+                    {
+                      Ok(value) => Some(value),
+                      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                      Err(_) => None,
+                    };
+                    (min, max)
+                  }
+                }
+              } else {
+                (None, None)
               };
-              let max = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MaxContent,
-              ) {
-                Ok(value) => Some(value),
-                Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-                Err(_) => None,
+              let preferred_min_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&child, IntrinsicSizingMode::MinContent) {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
               };
-              (min, max)
+              let preferred_block = if needs_block_intrinsics {
+                match fc.compute_intrinsic_block_size(&child, IntrinsicSizingMode::MaxContent) {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                }
+              } else {
+                None
+              };
+              Ok((
+                child_fragment,
+                preferred_min_inline,
+                preferred_inline,
+                preferred_min_block,
+                preferred_block,
+              ))
+            },
+          )?
+        } else {
+          let mut layout_child = child.clone();
+          layout_child.style = static_style.clone();
+          let child_fragment = fc.layout(&layout_child, &child_constraints)?;
+          let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+            match fc.compute_intrinsic_inline_sizes(&layout_child) {
+              Ok((min, max)) => (Some(min), Some(max)),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => {
+                let min = match fc
+                  .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                };
+                let max = match fc
+                  .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                {
+                  Ok(value) => Some(value),
+                  Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                  Err(_) => None,
+                };
+                (min, max)
+              }
             }
-          }
-        } else {
-          (None, None)
-        };
-        let preferred_min_block = if needs_block_intrinsics {
-          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
-            Ok(value) => Some(value),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          }
-        } else {
-          None
-        };
-        let preferred_block = if needs_block_intrinsics {
-          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
-            Ok(value) => Some(value),
-            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-            Err(_) => None,
-          }
-        } else {
-          None
+          } else {
+            (None, None)
+          };
+          let preferred_min_block = if needs_block_intrinsics {
+            match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+              Ok(value) => Some(value),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => None,
+            }
+          } else {
+            None
+          };
+          let preferred_block = if needs_block_intrinsics {
+            match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+              Ok(value) => Some(value),
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => None,
+            }
+          } else {
+            None
+          };
+          (
+            child_fragment,
+            preferred_min_inline,
+            preferred_inline,
+            preferred_min_block,
+            preferred_block,
+          )
         };
 
         let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
@@ -3697,16 +3854,27 @@ impl FormattingContext for BlockFormattingContext {
             AvailableSpace::Definite(result.size.width),
             AvailableSpace::Definite(result.size.height),
           );
-          let mut relayout_child = layout_child.clone();
-          let mut relayout_style = (*relayout_child.style).clone();
-          relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
-          relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
-          relayout_child.style = Arc::new(relayout_style);
-          child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+          if child.id != 0 {
+            let mut relayout_style = (*static_style).clone();
+            relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+            relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+            child_fragment = crate::layout::style_override::with_style_override(
+              child.id,
+              Arc::new(relayout_style),
+              || fc.layout(&child, &relayout_constraints),
+            )?;
+          } else {
+            let mut relayout_child = child.clone();
+            let mut relayout_style = (*static_style).clone();
+            relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+            relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+            relayout_child.style = Arc::new(relayout_style);
+            child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+          }
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
-        child_fragment.style = Some(child.style.clone());
-        if trace_positioned_ids().contains(&child.id) {
+        child_fragment.style = Some(original_style);
+        if trace_positioned.contains(&child.id) {
           let (text_count, total) = count_text_fragments(&child_fragment);
           eprintln!(
                         "[block-positioned-placed] child_id={} pos=({:.1},{:.1}) size=({:.1},{:.1}) texts={}/{}",
@@ -3852,29 +4020,29 @@ impl FormattingContext for BlockFormattingContext {
     let mut block_min_width = 0.0f32;
     let mut block_max_width = 0.0f32;
     let mut inline_run: Vec<&BoxNode> = Vec::new();
-    let flush_inline_run =
-      |run: &mut Vec<&BoxNode>,
-       widest_min: &mut f32,
-       widest_max: &mut f32|
-       -> Result<(), LayoutError> {
-        if run.is_empty() {
-          return Ok(());
-        }
+    let flush_inline_run = |run: &mut Vec<&BoxNode>,
+                            widest_min: &mut f32,
+                            widest_max: &mut f32|
+     -> Result<(), LayoutError> {
+      if run.is_empty() {
+        return Ok(());
+      }
 
-        let (min_width, max_width) = inline_fc.intrinsic_widths_for_children(style, run.as_slice())?;
-        if log_children {
-          let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
-          eprintln!(
-            "[intrinsic-inline-run] parent_id={} ids={:?} min={:.2} max={:.2}",
-            box_node.id, ids, min_width, max_width
-          );
-        }
+      let (min_width, max_width) =
+        inline_fc.intrinsic_widths_for_children(style, run.as_slice())?;
+      if log_children {
+        let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
+        eprintln!(
+          "[intrinsic-inline-run] parent_id={} ids={:?} min={:.2} max={:.2}",
+          box_node.id, ids, min_width, max_width
+        );
+      }
 
-        *widest_min = widest_min.max(min_width);
-        *widest_max = widest_max.max(max_width);
-        run.clear();
-        Ok(())
-      };
+      *widest_min = widest_min.max(min_width);
+      *widest_max = widest_max.max(max_width);
+      run.clear();
+      Ok(())
+    };
 
     let mut inline_child_debug: Vec<(usize, Display)> = Vec::new();
     let mut deadline_counter = 0usize;
@@ -5541,14 +5709,21 @@ mod tests {
 
     let inline_wrapper = BoxNode::new_inline(
       Arc::new(wrapper_style),
-      vec![BoxNode::new_text(Arc::new(text_style), "hi".to_string()), abs_child],
+      vec![
+        BoxNode::new_text(Arc::new(text_style), "hi".to_string()),
+        abs_child,
+      ],
     );
     let container = BoxNode::new_block(
       Arc::new(container_style),
       FormattingContextType::Block,
       vec![inline_wrapper],
     );
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![container]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![container],
+    );
 
     let fragment = fc
       .layout(&root, &LayoutConstraints::definite(300.0, 300.0))

@@ -4442,15 +4442,16 @@ impl TableFormattingContext {
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
-    self.populate_column_constraints(
-      table_box,
-      structure,
-      &mut constraints,
-      mode,
-      percent_base,
-      &style_overrides,
-    )
-    .unwrap_or_else(|err| panic!("bench_column_constraints_and_distribute: {err}"));
+    self
+      .populate_column_constraints(
+        table_box,
+        structure,
+        &mut constraints,
+        mode,
+        percent_base,
+        &style_overrides,
+      )
+      .unwrap_or_else(|err| panic!("bench_column_constraints_and_distribute: {err}"));
     self.normalize_percentage_constraints(&mut constraints, percent_base);
     let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
     let distribution = distributor.distribute(&constraints, available_content_width);
@@ -4539,20 +4540,18 @@ impl TableFormattingContext {
       style_overrides.derive(&cell_box.style, StyleOverrideFlags::STRIP_PADDING_BORDERS);
 
     let measure_with_fc = |fc: &dyn FormattingContext| -> Result<(f32, f32), LayoutError> {
-      let min = match fc
-        .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MinContent)
-      {
-        Ok(value) => value,
-        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-        Err(_) => 0.0,
-      };
-      let max = match fc
-        .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MaxContent)
-      {
-        Ok(value) => value,
-        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-        Err(_) => min,
-      };
+      let min =
+        match fc.compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MinContent) {
+          Ok(value) => value,
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => 0.0,
+        };
+      let max =
+        match fc.compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MaxContent) {
+          Ok(value) => value,
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => min,
+        };
       Ok((min, max))
     };
     let (mut min, mut max) = match fc_type {
@@ -5236,82 +5235,195 @@ impl FormattingContext for TableFormattingContext {
     let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
 
     // Helper to position out-of-flow children against containing blocks.
-    let place_out_of_flow =
-      |fragment: &mut FragmentNode,
-       cb_for_absolute: ContainingBlock,
-       cb_for_fixed: ContainingBlock|
-       -> Result<(), LayoutError> {
-        if positioned_children.is_empty() {
-          return Ok(());
+    let place_out_of_flow = |fragment: &mut FragmentNode,
+                             cb_for_absolute: ContainingBlock,
+                             cb_for_fixed: ContainingBlock|
+     -> Result<(), LayoutError> {
+      if positioned_children.is_empty() {
+        return Ok(());
+      }
+      let abs = AbsoluteLayout::with_font_context(self.factory.font_context().clone());
+      // `FormattingContextFactory::with_positioned_cb` resets the per-factory cached formatting
+      // contexts store. Build factory variants once so we can reuse cached formatting contexts
+      // when multiple positioned children share the same containing block.
+      let base_factory = self.factory.clone();
+      let abs_factory = if cb_for_absolute == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(cb_for_absolute)
+      };
+      let fixed_factory = if cb_for_fixed == cb_for_absolute {
+        abs_factory.clone()
+      } else if cb_for_fixed == base_factory.nearest_positioned_cb() {
+        base_factory.clone()
+      } else {
+        base_factory.with_positioned_cb(cb_for_fixed)
+      };
+      let factory_for_cb = |cb: ContainingBlock| -> &FormattingContextFactory {
+        if cb == cb_for_fixed {
+          &fixed_factory
+        } else {
+          &abs_factory
         }
-        let abs = AbsoluteLayout::with_font_context(self.factory.font_context().clone());
-        // `FormattingContextFactory::with_positioned_cb` resets the per-factory cached formatting
-        // contexts store. Build factory variants once so we can reuse cached formatting contexts
-        // when multiple positioned children share the same containing block.
-        let base_factory = self.factory.clone();
-        let abs_factory = if cb_for_absolute == base_factory.nearest_positioned_cb() {
-          base_factory.clone()
+      };
+      for child in positioned_children.iter().copied() {
+        let original_style = child.style.clone();
+        let mut static_style = (*child.style).clone();
+        static_style.position = crate::style::position::Position::Relative;
+        static_style.top = None;
+        static_style.right = None;
+        static_style.bottom = None;
+        static_style.left = None;
+        let static_style = Arc::new(static_style);
+
+        let cb = match child.style.position {
+          crate::style::position::Position::Fixed => cb_for_fixed,
+          _ => cb_for_absolute,
+        };
+
+        let fc_type = child
+          .formatting_context()
+          .unwrap_or(crate::style::display::FormattingContextType::Block);
+        let child_constraints = LayoutConstraints::new(
+          AvailableSpace::Definite(cb.rect.size.width),
+          AvailableSpace::Definite(cb.rect.size.height),
+        );
+        let positioned_style = resolve_positioned_style(
+          &child.style,
+          &cb,
+          self.viewport_size,
+          self.factory.font_context(),
+        );
+        let is_replaced = child.is_replaced();
+        let needs_inline_intrinsics = positioned_style.width.is_auto()
+          && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
+        let needs_block_intrinsics = positioned_style.height.is_auto()
+          && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
+
+        let (
+          mut child_fragment,
+          preferred_min_inline,
+          preferred_inline,
+          preferred_min_block,
+          preferred_block,
+        ) = if child.id != 0 {
+          crate::layout::style_override::with_style_override(
+            child.id,
+            static_style.clone(),
+            || match fc_type {
+              FormattingContextType::Table => {
+                let fc = factory_for_cb(cb).create(fc_type);
+                let fragment = fc.layout(child, &child_constraints)?;
+                let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+                  match fc.compute_intrinsic_inline_sizes(child) {
+                    Ok((min, max)) => (Some(min), Some(max)),
+                    Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                    Err(_) => {
+                      let min = match fc
+                        .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)
+                      {
+                        Ok(value) => Some(value),
+                        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                        Err(_) => None,
+                      };
+                      let max = match fc
+                        .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent)
+                      {
+                        Ok(value) => Some(value),
+                        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                        Err(_) => None,
+                      };
+                      (min, max)
+                    }
+                  }
+                } else {
+                  (None, None)
+                };
+                let preferred_min_block = if needs_block_intrinsics {
+                  match fc.compute_intrinsic_block_size(child, IntrinsicSizingMode::MinContent) {
+                    Ok(value) => Some(value),
+                    Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                    Err(_) => None,
+                  }
+                } else {
+                  None
+                };
+                let preferred_block = if needs_block_intrinsics {
+                  match fc.compute_intrinsic_block_size(child, IntrinsicSizingMode::MaxContent) {
+                    Ok(value) => Some(value),
+                    Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                    Err(_) => None,
+                  }
+                } else {
+                  None
+                };
+                Ok((
+                  fragment,
+                  preferred_min_inline,
+                  preferred_inline,
+                  preferred_min_block,
+                  preferred_block,
+                ))
+              }
+              _ => factory_for_cb(cb).with_fc(fc_type, |fc| {
+                let fragment = fc.layout(child, &child_constraints)?;
+                let (preferred_min_inline, preferred_inline) = if needs_inline_intrinsics {
+                  match fc.compute_intrinsic_inline_sizes(child) {
+                    Ok((min, max)) => (Some(min), Some(max)),
+                    Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                    Err(_) => {
+                      let min = match fc
+                        .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)
+                      {
+                        Ok(value) => Some(value),
+                        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                        Err(_) => None,
+                      };
+                      let max = match fc
+                        .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent)
+                      {
+                        Ok(value) => Some(value),
+                        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                        Err(_) => None,
+                      };
+                      (min, max)
+                    }
+                  }
+                } else {
+                  (None, None)
+                };
+                let preferred_min_block = if needs_block_intrinsics {
+                  match fc.compute_intrinsic_block_size(child, IntrinsicSizingMode::MinContent) {
+                    Ok(value) => Some(value),
+                    Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                    Err(_) => None,
+                  }
+                } else {
+                  None
+                };
+                let preferred_block = if needs_block_intrinsics {
+                  match fc.compute_intrinsic_block_size(child, IntrinsicSizingMode::MaxContent) {
+                    Ok(value) => Some(value),
+                    Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+                    Err(_) => None,
+                  }
+                } else {
+                  None
+                };
+                Ok((
+                  fragment,
+                  preferred_min_inline,
+                  preferred_inline,
+                  preferred_min_block,
+                  preferred_block,
+                ))
+              }),
+            },
+          )?
         } else {
-          base_factory.with_positioned_cb(cb_for_absolute)
-        };
-        let fixed_factory = if cb_for_fixed == cb_for_absolute {
-          abs_factory.clone()
-        } else if cb_for_fixed == base_factory.nearest_positioned_cb() {
-          base_factory.clone()
-        } else {
-          base_factory.with_positioned_cb(cb_for_fixed)
-        };
-        let factory_for_cb = |cb: ContainingBlock| -> &FormattingContextFactory {
-          if cb == cb_for_fixed {
-            &fixed_factory
-          } else {
-            &abs_factory
-          }
-        };
-        for child in positioned_children.iter().copied() {
-          let original_style = child.style.clone();
           let mut layout_child = child.clone();
-          let mut style = (*layout_child.style).clone();
-          style.position = crate::style::position::Position::Relative;
-          style.top = None;
-          style.right = None;
-          style.bottom = None;
-          style.left = None;
-          layout_child.style = Arc::new(style);
-
-          let cb = match child.style.position {
-            crate::style::position::Position::Fixed => cb_for_fixed,
-            _ => cb_for_absolute,
-          };
-
-          let fc_type = layout_child
-            .formatting_context()
-            .unwrap_or(crate::style::display::FormattingContextType::Block);
-          let child_constraints = LayoutConstraints::new(
-            AvailableSpace::Definite(cb.rect.size.width),
-            AvailableSpace::Definite(cb.rect.size.height),
-          );
-          let positioned_style = resolve_positioned_style(
-            &child.style,
-            &cb,
-            self.viewport_size,
-            self.factory.font_context(),
-          );
-          let is_replaced = child.is_replaced();
-          let needs_inline_intrinsics = positioned_style.width.is_auto()
-            && (positioned_style.left.is_auto()
-              || positioned_style.right.is_auto()
-              || is_replaced);
-          let needs_block_intrinsics = positioned_style.height.is_auto()
-            && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-
-          let (
-            mut child_fragment,
-            preferred_min_inline,
-            preferred_inline,
-            preferred_min_block,
-            preferred_block,
-          ) = match fc_type {
+          layout_child.style = static_style.clone();
+          match fc_type {
             FormattingContextType::Table => {
               let fc = factory_for_cb(cb).create(fc_type);
               let fragment = fc.layout(&layout_child, &child_constraints)?;
@@ -5320,18 +5432,16 @@ impl FormattingContext for TableFormattingContext {
                   Ok((min, max)) => (Some(min), Some(max)),
                   Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                   Err(_) => {
-                    let min = match fc.compute_intrinsic_inline_size(
-                      &layout_child,
-                      IntrinsicSizingMode::MinContent,
-                    ) {
+                    let min = match fc
+                      .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    {
                       Ok(value) => Some(value),
                       Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                       Err(_) => None,
                     };
-                    let max = match fc.compute_intrinsic_inline_size(
-                      &layout_child,
-                      IntrinsicSizingMode::MaxContent,
-                    ) {
+                    let max = match fc
+                      .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    {
                       Ok(value) => Some(value),
                       Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                       Err(_) => None,
@@ -5343,7 +5453,8 @@ impl FormattingContext for TableFormattingContext {
                 (None, None)
               };
               let preferred_min_block = if needs_block_intrinsics {
-                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                match fc
+                  .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
                 {
                   Ok(value) => Some(value),
                   Err(err @ LayoutError::Timeout { .. }) => return Err(err),
@@ -5353,7 +5464,8 @@ impl FormattingContext for TableFormattingContext {
                 None
               };
               let preferred_block = if needs_block_intrinsics {
-                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                match fc
+                  .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
                 {
                   Ok(value) => Some(value),
                   Err(err @ LayoutError::Timeout { .. }) => return Err(err),
@@ -5377,18 +5489,16 @@ impl FormattingContext for TableFormattingContext {
                   Ok((min, max)) => (Some(min), Some(max)),
                   Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                   Err(_) => {
-                    let min = match fc.compute_intrinsic_inline_size(
-                      &layout_child,
-                      IntrinsicSizingMode::MinContent,
-                    ) {
+                    let min = match fc
+                      .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    {
                       Ok(value) => Some(value),
                       Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                       Err(_) => None,
                     };
-                    let max = match fc.compute_intrinsic_inline_size(
-                      &layout_child,
-                      IntrinsicSizingMode::MaxContent,
-                    ) {
+                    let max = match fc
+                      .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    {
                       Ok(value) => Some(value),
                       Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                       Err(_) => None,
@@ -5400,7 +5510,8 @@ impl FormattingContext for TableFormattingContext {
                 (None, None)
               };
               let preferred_min_block = if needs_block_intrinsics {
-                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                match fc
+                  .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
                 {
                   Ok(value) => Some(value),
                   Err(err @ LayoutError::Timeout { .. }) => return Err(err),
@@ -5410,7 +5521,8 @@ impl FormattingContext for TableFormattingContext {
                 None
               };
               let preferred_block = if needs_block_intrinsics {
-                match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                match fc
+                  .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
                 {
                   Ok(value) => Some(value),
                   Err(err @ LayoutError::Timeout { .. }) => return Err(err),
@@ -5427,24 +5539,25 @@ impl FormattingContext for TableFormattingContext {
                 preferred_block,
               ))
             })?,
-          };
-          // Static position should start at the containing block origin; AbsoluteLayout
-          // adds padding/border offsets, so use the content origin here to avoid double
-          // counting padding.
-          let mut input =
-            AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, Point::ZERO);
-          input.is_replaced = is_replaced;
-          input.preferred_min_inline_size = preferred_min_inline;
-          input.preferred_inline_size = preferred_inline;
-          input.preferred_min_block_size = preferred_min_block;
-          input.preferred_block_size = preferred_block;
-          let result = abs.layout_absolute(&input, &cb)?;
-          child_fragment.bounds = Rect::new(result.position, result.size);
-          child_fragment.style = Some(original_style);
-          fragment.children_mut().push(child_fragment);
-        }
-        Ok(())
-      };
+          }
+        };
+        // Static position should start at the containing block origin; AbsoluteLayout
+        // adds padding/border offsets, so use the content origin here to avoid double
+        // counting padding.
+        let mut input =
+          AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, Point::ZERO);
+        input.is_replaced = is_replaced;
+        input.preferred_min_inline_size = preferred_min_inline;
+        input.preferred_inline_size = preferred_inline;
+        input.preferred_min_block_size = preferred_min_block;
+        input.preferred_block_size = preferred_block;
+        let result = abs.layout_absolute(&input, &cb)?;
+        child_fragment.bounds = Rect::new(result.position, result.size);
+        child_fragment.style = Some(original_style);
+        fragment.children_mut().push(child_fragment);
+      }
+      Ok(())
+    };
 
     if (structure.column_count == 0 || structure.row_count == 0) && captions.is_empty() {
       let width = specified_width.or(containing_width).unwrap_or(0.0);
@@ -5479,9 +5592,9 @@ impl FormattingContext for TableFormattingContext {
               let fc = self.factory.create(fc_type);
               fc.layout(&snapshot_node, &snapshot_constraints)
             }
-            _ => self
-              .factory
-              .with_fc(fc_type, |fc| fc.layout(&snapshot_node, &snapshot_constraints)),
+            _ => self.factory.with_fc(fc_type, |fc| {
+              fc.layout(&snapshot_node, &snapshot_constraints)
+            }),
           };
           match snapshot_result {
             Ok(snapshot_fragment) => {
@@ -6745,9 +6858,9 @@ impl FormattingContext for TableFormattingContext {
               let fc = self.factory.create(fc_type);
               fc.layout(&snapshot_node, &snapshot_constraints)
             }
-            _ => self
-              .factory
-              .with_fc(fc_type, |fc| fc.layout(&snapshot_node, &snapshot_constraints)),
+            _ => self.factory.with_fc(fc_type, |fc| {
+              fc.layout(&snapshot_node, &snapshot_constraints)
+            }),
           };
           match snapshot_result {
             Ok(snapshot_fragment) => {
@@ -6925,14 +7038,13 @@ impl FormattingContext for TableFormattingContext {
             let fc = self.factory.create(fc_type);
             fc.layout(&snapshot_node, &snapshot_constraints)
           }
-          _ => self
-            .factory
-            .with_fc(fc_type, |fc| fc.layout(&snapshot_node, &snapshot_constraints)),
+          _ => self.factory.with_fc(fc_type, |fc| {
+            fc.layout(&snapshot_node, &snapshot_constraints)
+          }),
         };
         match snapshot_result {
           Ok(snapshot_fragment) => {
-            let anchor_bounds =
-              Rect::from_xywh(0.0, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
+            let anchor_bounds = Rect::from_xywh(0.0, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
             let mut anchor =
               FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
             anchor.style = Some(running_child.style.clone());
@@ -7322,8 +7434,16 @@ mod tests {
     text_style.font_size = 16.0;
 
     let text = BoxNode::new_text(Arc::new(text_style), "hello world".to_string());
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![text]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![text],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
     let table = BoxNode::new_block(
       Arc::new(table_style),
       FormattingContextType::Table,
@@ -7388,8 +7508,16 @@ mod tests {
     text_style.font_size = 16.0;
 
     let text = BoxNode::new_text(Arc::new(text_style), "fixed layout hello".to_string());
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![text]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![text],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
     let table = BoxNode::new_block(
       Arc::new(table_style),
       FormattingContextType::Table,
@@ -7890,7 +8018,11 @@ mod tests {
     cell_style.display = Display::TableCell;
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
     let mut table = BoxNode::new_block(
       Arc::new(base_style.clone()),
       FormattingContextType::Table,
@@ -8487,15 +8619,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     assert!(
       (constraints[0].min_width - 40.0).abs() < 1.0,
@@ -8563,15 +8696,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let total_min: f32 = constraints.iter().map(|c| c.min_width).sum();
     assert!(
@@ -8673,15 +8807,16 @@ mod tests {
           f32::INFINITY,
         )),
       });
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      percent_base,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        percent_base,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let percent_sum: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
     assert!(
@@ -8732,15 +8867,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8788,15 +8924,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      Some(200.0),
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        Some(200.0),
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8843,15 +8980,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8961,15 +9099,16 @@ mod tests {
       DistributionMode::Auto,
     );
     let tfc = TableFormattingContext::new();
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let flex_expected = 100.0;
     let grid_expected = 120.0;
@@ -9037,15 +9176,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let constraint = constraints
       .first()
@@ -9103,15 +9243,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -9171,15 +9312,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let constraint = constraints
       .first()
@@ -9238,15 +9380,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      Some(200.0),
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        Some(200.0),
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -9297,15 +9440,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -9354,15 +9498,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      Some(200.0),
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        Some(200.0),
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let col = constraints.first().expect("column constraints");
     assert!(
@@ -9415,15 +9560,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     let col = constraints.first().expect("column constraints");
     assert!(
@@ -10246,15 +10392,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      None,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        None,
+        &style_overrides,
+      )
+      .expect("populate constraints");
 
     assert_eq!(constraints.len(), 1);
     let col = &constraints[0];
@@ -10357,8 +10504,16 @@ mod tests {
       Arc::new(row_style),
       FormattingContextType::Block,
       vec![
-        BoxNode::new_block(Arc::new(border_box_style), FormattingContextType::Block, vec![]),
-        BoxNode::new_block(Arc::new(content_box_style), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(
+          Arc::new(border_box_style),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        BoxNode::new_block(
+          Arc::new(content_box_style),
+          FormattingContextType::Block,
+          vec![],
+        ),
       ],
     );
 
@@ -10373,15 +10528,16 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Fixed,
-      None,
-      &StyleOverrideCache::default(),
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Fixed,
+        None,
+        &StyleOverrideCache::default(),
+      )
+      .expect("populate constraints");
 
     assert_eq!(constraints.len(), 2);
     assert!(
@@ -10732,15 +10888,16 @@ mod tests {
       &structure,
       DistributionMode::Fixed,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut column_constraints,
-      DistributionMode::Fixed,
-      Some(available_content),
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut column_constraints,
+        DistributionMode::Fixed,
+        Some(available_content),
+        &style_overrides,
+      )
+      .expect("populate constraints");
     let distribution = ColumnDistributor::new(DistributionMode::Fixed)
       .distribute(&column_constraints, available_content);
     let fragment = tfc.layout(&table, &constraints).expect("table layout");
@@ -14168,15 +14325,16 @@ mod tests {
       &structure,
       DistributionMode::Auto,
     );
-    tfc.populate_column_constraints(
-      &table,
-      &structure,
-      &mut constraints,
-      DistributionMode::Auto,
-      percent_base,
-      &style_overrides,
-    )
-    .expect("populate constraints");
+    tfc
+      .populate_column_constraints(
+        &table,
+        &structure,
+        &mut constraints,
+        DistributionMode::Auto,
+        percent_base,
+        &style_overrides,
+      )
+      .expect("populate constraints");
     tfc.normalize_percentage_constraints(&mut constraints, percent_base);
 
     let percents: Vec<f32> = constraints
@@ -15387,8 +15545,12 @@ mod tests {
       FormattingContextType::Block,
       vec![],
     );
-    let span_cell = BoxNode::new_block(Arc::new(cell_span_style), FormattingContextType::Block, vec![])
-      .with_debug_info(DebugInfo::new(None, None, vec![]).with_spans(1, 2));
+    let span_cell = BoxNode::new_block(
+      Arc::new(cell_span_style),
+      FormattingContextType::Block,
+      vec![],
+    )
+    .with_debug_info(DebugInfo::new(None, None, vec![]).with_spans(1, 2));
     let bottom_cell = BoxNode::new_block(
       Arc::new(cell_bottom_style),
       FormattingContextType::Block,
@@ -15460,7 +15622,10 @@ mod tests {
 
     // The table border is 2px wide; collapsed border strokes are centered on the grid lines,
     // so the first row's cell boxes should start ~1px below the table fragment origin.
-    let min_y = cells.iter().map(|c| c.bounds.y()).fold(f32::INFINITY, f32::min);
+    let min_y = cells
+      .iter()
+      .map(|c| c.bounds.y())
+      .fold(f32::INFINITY, f32::min);
     assert!((min_y - 1.0).abs() < 0.51);
 
     // The rowspan cell should occupy column 0 on both rows, causing the second row's cell to
