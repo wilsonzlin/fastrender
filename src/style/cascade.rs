@@ -1402,7 +1402,13 @@ struct DomMaps {
   // id->node and id->parent lookups, so store them in dense vectors rather than hash maps.
   id_to_node: Vec<*const DomNode>,
   parent_map: Vec<usize>,
+  // Precomputed tree-scope prefix for every node id (including shadow root boundaries).
+  tree_scope_prefixes: Vec<u32>,
+  // Cached "nearest containing shadow root id" for each node id (0 means none/document scope).
+  containing_shadow_roots: Vec<usize>,
   shadow_hosts: HashMap<usize, usize>,
+  // Reverse lookup for shadow roots: host node id -> shadow root node id (0 means no shadow root).
+  shadow_root_by_host: Vec<usize>,
   exportparts_map: HashMap<usize, Vec<(String, String)>>,
   selector_blooms: Option<SelectorBloomStore>,
   selector_keys: DomSelectorKeyCache,
@@ -1492,15 +1498,19 @@ impl DomMaps {
     // Node ids are 1..=node_count (pre-order); leave slot 0 empty.
     let mut id_to_node: Vec<*const DomNode> = vec![std::ptr::null(); node_count + 1];
     let mut parent_map: Vec<usize> = vec![0; node_count + 1];
+    let mut tree_scope_prefixes: Vec<u32> = vec![DOCUMENT_TREE_SCOPE_PREFIX; node_count + 1];
+    let mut containing_shadow_roots: Vec<usize> = vec![0; node_count + 1];
     let mut shadow_hosts: HashMap<usize, usize> = HashMap::new();
+    let mut shadow_root_by_host: Vec<usize> = vec![0; node_count + 1];
     let mut exportparts_map: HashMap<usize, Vec<(String, String)>> = HashMap::new();
     let mut selector_keys = DomSelectorKeyCache::new(node_count);
 
-    let mut stack: Vec<(&DomNode, Option<usize>)> = Vec::with_capacity(node_count.min(1024));
-    stack.push((root, None));
+    // (node, parent_id, containing_shadow_root_id)
+    let mut stack: Vec<(&DomNode, Option<usize>, usize)> = Vec::with_capacity(node_count.min(1024));
+    stack.push((root, None, 0));
     let mut next_id = 1usize;
 
-    while let Some((node, parent)) = stack.pop() {
+    while let Some((node, parent, containing_shadow_root)) = stack.pop() {
       let id = next_id;
       next_id = next_id.saturating_add(1);
       debug_assert_eq!(
@@ -1511,12 +1521,27 @@ impl DomMaps {
       if let Some(slot) = id_to_node.get_mut(id) {
         *slot = node as *const DomNode;
       }
+      if let Some(slot) = containing_shadow_roots.get_mut(id) {
+        *slot = containing_shadow_root;
+      }
+      if let Some(slot) = tree_scope_prefixes.get_mut(id) {
+        *slot = if containing_shadow_root == 0 {
+          DOCUMENT_TREE_SCOPE_PREFIX
+        } else {
+          shadow_tree_scope_prefix(containing_shadow_root)
+        };
+      }
       if let Some(p) = parent {
         if let Some(slot) = parent_map.get_mut(id) {
           *slot = p;
         }
         if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
           shadow_hosts.insert(id, p);
+          if let Some(slot) = shadow_root_by_host.get_mut(p) {
+            if *slot == 0 {
+              *slot = id;
+            }
+          }
         }
       }
       if let Some(mapping) = node.get_attribute_ref("exportparts").map(parse_exportparts) {
@@ -1577,8 +1602,13 @@ impl DomMaps {
         );
       }
 
+      let child_shadow_root = if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+        id
+      } else {
+        containing_shadow_root
+      };
       for child in node.children.iter().rev() {
-        stack.push((child, Some(id)));
+        stack.push((child, Some(id), child_shadow_root));
       }
     }
     debug_assert_eq!(
@@ -1590,7 +1620,10 @@ impl DomMaps {
       id_map,
       id_to_node,
       parent_map,
+      tree_scope_prefixes,
+      containing_shadow_roots,
       shadow_hosts,
+      shadow_root_by_host,
       exportparts_map,
       selector_blooms: None,
       selector_keys,
@@ -1636,24 +1669,20 @@ impl DomMaps {
   }
 
   fn containing_shadow_root(&self, node_id: usize) -> Option<usize> {
-    let mut current = node_id;
-    while current > 0 {
-      let parent = *self.parent_map.get(current).unwrap_or(&0);
-      if parent == 0 {
-        break;
-      }
-      if let Some(ptr) = self.id_to_node.get(parent).copied() {
-        if ptr.is_null() {
-          break;
-        }
-        let node = unsafe { &*ptr };
-        if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
-          return Some(parent);
-        }
-      }
-      current = parent;
-    }
-    None
+    let id = *self.containing_shadow_roots.get(node_id).unwrap_or(&0);
+    (id != 0).then_some(id)
+  }
+
+  fn tree_scope_prefix(&self, node_id: usize) -> u32 {
+    *self
+      .tree_scope_prefixes
+      .get(node_id)
+      .unwrap_or(&DOCUMENT_TREE_SCOPE_PREFIX)
+  }
+
+  fn shadow_root_for_host(&self, host_id: usize) -> Option<usize> {
+    let id = *self.shadow_root_by_host.get(host_id).unwrap_or(&0);
+    (id != 0).then_some(id)
   }
 
   fn exportparts_for(&self, node: &DomNode) -> Option<&Vec<(String, String)>> {
@@ -1821,10 +1850,7 @@ fn layer_order_with_tree_scope(layer_order: &[u32], tree_scope_prefix: u32) -> A
 }
 
 fn tree_scope_prefix_for_node(dom_maps: &DomMaps, node_id: usize) -> u32 {
-  dom_maps
-    .containing_shadow_root(node_id)
-    .map(shadow_tree_scope_prefix)
-    .unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX)
+  dom_maps.tree_scope_prefix(node_id)
 }
 
 #[derive(Clone, Default)]
@@ -8330,15 +8356,7 @@ fn collect_matching_rules<'a>(
   let current_shadow = dom_maps.containing_shadow_root(node_id);
   let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap<'a>> {
     dom_maps
-      .shadow_hosts
-      .iter()
-      .find_map(|(shadow_root, host)| {
-        if *host == host_id {
-          Some(shadow_root)
-        } else {
-          None
-        }
-      })
+      .shadow_root_for_host(host_id)
       .and_then(|shadow| scopes.slot_maps.get(&shadow))
   };
   let current_slot_map = current_shadow.and_then(|shadow| scopes.slot_maps.get(&shadow));
@@ -8497,15 +8515,7 @@ fn collect_pseudo_matching_rules<'a>(
   let node_keys = dom_maps.selector_keys(node_id);
   let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap> {
     dom_maps
-      .shadow_hosts
-      .iter()
-      .find_map(|(shadow_root, host)| {
-        if *host == host_id {
-          Some(shadow_root)
-        } else {
-          None
-        }
-      })
+      .shadow_root_for_host(host_id)
       .and_then(|shadow| scopes.slot_maps.get(&shadow))
   };
   let current_slot_map = current_shadow.and_then(|shadow| scopes.slot_maps.get(&shadow));
@@ -9861,6 +9871,183 @@ mod tests {
     assert!(!set.insert(3));
     set.reset();
     assert!(set.insert(3));
+  }
+
+  #[test]
+  fn dom_maps_precomputes_shadow_scopes() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::ShadowRoot {
+          mode: crate::dom::ShadowRootMode::Open,
+          delegates_focus: false,
+        },
+        children: vec![DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "span".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+          },
+          children: vec![],
+        }],
+      }],
+    };
+
+    let host = &dom;
+    let shadow_root = &dom.children[0];
+    let inside_shadow = &shadow_root.children[0];
+
+    let id_map = enumerate_dom_ids(&dom);
+    let host_id = *id_map.get(&(host as *const DomNode)).unwrap();
+    let shadow_root_id = *id_map.get(&(shadow_root as *const DomNode)).unwrap();
+    let inside_id = *id_map.get(&(inside_shadow as *const DomNode)).unwrap();
+    let dom_maps = DomMaps::new(&dom, id_map);
+
+    assert_eq!(dom_maps.shadow_root_for_host(host_id), Some(shadow_root_id));
+    assert_eq!(dom_maps.shadow_root_for_host(inside_id), None);
+    assert_eq!(dom_maps.containing_shadow_root(host_id), None);
+    assert_eq!(dom_maps.containing_shadow_root(shadow_root_id), None);
+    assert_eq!(
+      dom_maps.containing_shadow_root(inside_id),
+      Some(shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(host_id),
+      DOCUMENT_TREE_SCOPE_PREFIX
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(shadow_root_id),
+      DOCUMENT_TREE_SCOPE_PREFIX
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(inside_id),
+      shadow_tree_scope_prefix(shadow_root_id)
+    );
+  }
+
+  #[test]
+  fn dom_maps_precomputes_nested_shadow_scopes() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::ShadowRoot {
+          mode: crate::dom::ShadowRootMode::Open,
+          delegates_focus: false,
+        },
+        children: vec![
+          DomNode {
+            node_type: DomNodeType::Element {
+              tag_name: "span".to_string(),
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![],
+            },
+            children: vec![DomNode {
+              node_type: DomNodeType::ShadowRoot {
+                mode: crate::dom::ShadowRootMode::Open,
+                delegates_focus: false,
+              },
+              children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                  tag_name: "p".to_string(),
+                  namespace: HTML_NAMESPACE.to_string(),
+                  attributes: vec![],
+                },
+                children: vec![],
+              }],
+            }],
+          },
+          DomNode {
+            node_type: DomNodeType::Element {
+              tag_name: "a".to_string(),
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![],
+            },
+            children: vec![],
+          },
+        ],
+      }],
+    };
+
+    let outer_host = &dom;
+    let outer_shadow_root = &dom.children[0];
+    let inner_host = &outer_shadow_root.children[0];
+    let inner_shadow_root = &inner_host.children[0];
+    let inside_inner_shadow = &inner_shadow_root.children[0];
+    let inside_outer_shadow = &outer_shadow_root.children[1];
+
+    let id_map = enumerate_dom_ids(&dom);
+    let outer_host_id = *id_map.get(&(outer_host as *const DomNode)).unwrap();
+    let outer_shadow_root_id = *id_map.get(&(outer_shadow_root as *const DomNode)).unwrap();
+    let inner_host_id = *id_map.get(&(inner_host as *const DomNode)).unwrap();
+    let inner_shadow_root_id = *id_map.get(&(inner_shadow_root as *const DomNode)).unwrap();
+    let inside_inner_shadow_id = *id_map
+      .get(&(inside_inner_shadow as *const DomNode))
+      .unwrap();
+    let inside_outer_shadow_id = *id_map
+      .get(&(inside_outer_shadow as *const DomNode))
+      .unwrap();
+    let dom_maps = DomMaps::new(&dom, id_map);
+
+    assert_eq!(
+      dom_maps.shadow_root_for_host(outer_host_id),
+      Some(outer_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.shadow_root_for_host(inner_host_id),
+      Some(inner_shadow_root_id)
+    );
+
+    assert_eq!(dom_maps.containing_shadow_root(outer_host_id), None);
+    assert_eq!(dom_maps.containing_shadow_root(outer_shadow_root_id), None);
+    assert_eq!(
+      dom_maps.containing_shadow_root(inner_host_id),
+      Some(outer_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.containing_shadow_root(inner_shadow_root_id),
+      Some(outer_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.containing_shadow_root(inside_inner_shadow_id),
+      Some(inner_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.containing_shadow_root(inside_outer_shadow_id),
+      Some(outer_shadow_root_id)
+    );
+
+    assert_eq!(
+      dom_maps.tree_scope_prefix(outer_host_id),
+      DOCUMENT_TREE_SCOPE_PREFIX
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(outer_shadow_root_id),
+      DOCUMENT_TREE_SCOPE_PREFIX
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(inner_host_id),
+      shadow_tree_scope_prefix(outer_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(inner_shadow_root_id),
+      shadow_tree_scope_prefix(outer_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(inside_inner_shadow_id),
+      shadow_tree_scope_prefix(inner_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.tree_scope_prefix(inside_outer_shadow_id),
+      shadow_tree_scope_prefix(outer_shadow_root_id)
+    );
   }
 
   #[test]
@@ -20558,9 +20745,7 @@ fn find_matching_rules<'a>(
   }
   let assigned_slot = slot_assignment.node_to_slot.get(&node_id);
   let current_shadow = dom_maps.containing_shadow_root(node_id);
-  let node_tree_scope_prefix = current_shadow
-    .map(shadow_tree_scope_prefix)
-    .unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX);
+  let node_tree_scope_prefix = dom_maps.tree_scope_prefix(node_id);
   let profiling = cascade_profile_enabled();
   let start = profiling.then(|| Instant::now());
   let node_summary = if rules.has_has_requirements {
