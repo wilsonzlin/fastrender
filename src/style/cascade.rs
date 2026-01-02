@@ -92,6 +92,7 @@ use selectors::parser::AncestorHashes;
 use selectors::parser::Selector;
 use selectors::parser::SelectorList;
 use selectors::Element;
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -2911,11 +2912,40 @@ struct ScopeMatch<'a> {
   ancestors: Vec<&'a DomNode>,
 }
 
-fn push_key(keys: &mut Vec<SelectorKey>, key: SelectorKey) -> bool {
-  if keys.contains(&key) {
+trait SelectorKeyList {
+  fn contains_key(&self, key: &SelectorKey) -> bool;
+  fn push_key(&mut self, key: SelectorKey);
+}
+
+impl SelectorKeyList for Vec<SelectorKey> {
+  #[inline]
+  fn contains_key(&self, key: &SelectorKey) -> bool {
+    self.contains(key)
+  }
+
+  #[inline]
+  fn push_key(&mut self, key: SelectorKey) {
+    self.push(key);
+  }
+}
+
+impl<const N: usize> SelectorKeyList for SmallVec<[SelectorKey; N]> {
+  #[inline]
+  fn contains_key(&self, key: &SelectorKey) -> bool {
+    self.contains(key)
+  }
+
+  #[inline]
+  fn push_key(&mut self, key: SelectorKey) {
+    self.push(key);
+  }
+}
+
+fn push_key(keys: &mut impl SelectorKeyList, key: SelectorKey) -> bool {
+  if keys.contains_key(&key) {
     return false;
   }
-  keys.push(key);
+  keys.push_key(key);
   true
 }
 
@@ -2930,7 +2960,7 @@ fn merge_nested_keys<'a, I>(
   quirks_mode: QuirksMode,
   polarity: SelectorKeyPolarity,
   allow_universal: bool,
-  out: &mut Vec<SelectorKey>,
+  out: &mut impl SelectorKeyList,
 ) -> bool
 where
   I: IntoIterator<Item = &'a Selector<crate::css::selectors::FastRenderSelectorImpl>>,
@@ -2973,8 +3003,8 @@ where
 }
 
 struct SelectorKeyAnalysis {
-  mandatory_keys: Vec<SelectorKey>,
-  all_keys: Vec<SelectorKey>,
+  mandatory_keys: SmallVec<[SelectorKey; 2]>,
+  all_keys: SmallVec<[SelectorKey; 2]>,
   required_and: bool,
 }
 
@@ -2985,8 +3015,8 @@ fn collect_sequence_keys(
 ) -> SelectorKeyAnalysis {
   use selectors::parser::Component;
 
-  let mut mandatory_keys: Vec<SelectorKey> = Vec::new();
-  let mut all_keys: Vec<SelectorKey> = Vec::new();
+  let mut mandatory_keys: SmallVec<[SelectorKey; 2]> = SmallVec::new();
+  let mut all_keys: SmallVec<[SelectorKey; 2]> = SmallVec::new();
   let mut required_and = true;
   while let Some(component) = iter.next() {
     match component {
@@ -3444,7 +3474,7 @@ fn selector_compound_fast_reject_from_iter(
       Component::NonTSPseudoClass(_) => {}
       Component::Nth(_) => {}
       Component::NthOf(nth) => {
-        let mut shared: Option<Vec<SelectorKey>> = None;
+        let mut shared: Option<SmallVec<[SelectorKey; 2]>> = None;
         for selector in nth.selectors().iter() {
           let analysis =
             selector_keys_with_polarity(selector, quirks_mode, SelectorKeyPolarity::Matches);
@@ -3664,7 +3694,7 @@ fn selector_compound_fast_reject_from_iter(
       // - `div.foo.bar:is(.x, .y)` still requires `div.foo.bar`.
       Component::Is(list) | Component::Where(list) => {
         allow_single_key = true;
-        let mut shared: Option<Vec<SelectorKey>> = None;
+        let mut shared: Option<SmallVec<[SelectorKey; 2]>> = None;
         for selector in list.slice().iter() {
           let analysis =
             selector_keys_with_polarity(selector, quirks_mode, SelectorKeyPolarity::Matches);
@@ -4024,7 +4054,10 @@ impl<'a> RuleIndex<'a> {
 
   fn new(rules: Vec<CascadeRule<'a>>, quirks_mode: QuirksMode) -> Self {
     let mut index = RuleIndex {
-      rules: Vec::new(),
+      // Keep the caller-provided rule Vec rather than moving each rule into a second Vec.
+      // These lists can be extremely large on real pages, and the extra allocation/moves show up
+      // directly in cascade wall time.
+      rules,
       rule_sets_content: Vec::new(),
       has_has_requirements: false,
       selectors: Vec::new(),
@@ -4044,6 +4077,8 @@ impl<'a> RuleIndex<'a> {
       part_lookup: SelectorBucketMap::default(),
     };
 
+    index.rule_sets_content.reserve(index.rules.len());
+
     let mut selector_key_analyses: Vec<SelectorKeyAnalysis> = Vec::new();
     let mut selector_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
     let mut selector_mandatory_key_frequencies: FxHashMap<SelectorKey, usize> =
@@ -4059,16 +4094,13 @@ impl<'a> RuleIndex<'a> {
     let mut slotted_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
     let mut slotted_mandatory_key_frequencies: FxHashMap<SelectorKey, usize> = FxHashMap::default();
 
-    for rule in rules {
-      let sets_content = rule
+    for (rule_idx, stored_rule) in index.rules.iter().enumerate() {
+      let sets_content = stored_rule
         .rule
         .declarations
         .iter()
         .any(|decl| decl.property.as_str() == "content");
-      let rule_idx = index.rules.len();
-      index.rules.push(rule);
       index.rule_sets_content.push(sets_content);
-      let stored_rule = &index.rules[rule_idx];
       let selectors = stored_rule.rule.selectors.slice();
       // Skip duplicate selectors within the same rule to avoid redundant matching work.
       //
@@ -5768,7 +5800,12 @@ fn filter_starting_rules<'a>(
   if include_starting_style {
     rules
   } else {
-    rules.into_iter().filter(|r| !r.starting_style).collect()
+    // Filter in-place to avoid allocating a second Vec that can be as large as the flattened rule
+    // list. `@starting-style` is still uncommon on real pages, but the rule lists themselves can be
+    // extremely large.
+    let mut rules = rules;
+    rules.retain(|r| !r.starting_style);
+    rules
   }
 }
 
