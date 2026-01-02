@@ -6921,6 +6921,76 @@ mod tests {
   use std::time::Duration;
   use tempfile::tempdir;
 
+  #[test]
+  fn push_worker_args_does_not_duplicate_disk_cache_flags() {
+    let cli = Cli::try_parse_from([
+      "pageset_progress",
+      "run",
+      "--pages",
+      "discord.com",
+      "--disk-cache-allow-no-store",
+      "--disk-cache-writeback-under-deadline",
+    ])
+    .expect("parse run args");
+    let CommandKind::Run(args) = cli.command else {
+      panic!("expected Run args");
+    };
+
+    let item = WorkItem {
+      stem: "discord.com".to_string(),
+      cache_stem: "discord.com".to_string(),
+      url: "https://discord.com/".to_string(),
+      cache_path: PathBuf::from("fetches/html/discord.com.html"),
+      progress_path: PathBuf::from("progress/pages/discord.com.json"),
+      log_path: PathBuf::from("target/pageset/logs/discord.com.log"),
+      stderr_path: PathBuf::from("target/pageset/logs/discord.com.stderr.log"),
+      stage_path: PathBuf::from("target/pageset/logs/discord.com.stage"),
+      trace_out: None,
+    };
+
+    let mut cmd = Command::new("pageset_progress");
+    push_worker_args(
+      &mut cmd,
+      &args,
+      &item,
+      DiagnosticsArg::Basic,
+      None,
+      Duration::from_secs(5),
+      None,
+    );
+
+    let args_vec: Vec<String> = cmd
+      .get_args()
+      .map(|arg| arg.to_string_lossy().into_owned())
+      .collect();
+
+    // The worker args are built by `push_disk_cache_args` which already passes these toggles as
+    // `--flag true|false`. Ensure we don't pass the flag a second time (clap rejects duplicates for
+    // `num_args=0..=1` arguments).
+    assert_eq!(
+      args_vec
+        .iter()
+        .filter(|arg| arg.as_str() == "--disk-cache-allow-no-store")
+        .count(),
+      1
+    );
+    assert_eq!(
+      args_vec
+        .iter()
+        .filter(|arg| arg.as_str() == "--disk-cache-writeback-under-deadline")
+        .count(),
+      1
+    );
+
+    let mut parse_argv = Vec::with_capacity(args_vec.len() + 1);
+    parse_argv.push("pageset_progress".to_string());
+    parse_argv.extend(args_vec);
+    assert!(
+      Cli::try_parse_from(parse_argv).is_ok(),
+      "worker args should remain clap-parseable"
+    );
+  }
+
   fn make_progress(
     stem: &str,
     status: ProgressStatus,

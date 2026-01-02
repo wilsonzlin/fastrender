@@ -1923,11 +1923,19 @@ pub fn inject_css_into_html(html: &str, css: &str) -> String {
 }
 
 fn find_tag_case_insensitive(html: &str, tag: &str, closing: bool) -> Option<usize> {
+  find_tag_case_insensitive_from(html, tag, closing, 0)
+}
+
+fn find_tag_case_insensitive_from(
+  html: &str,
+  tag: &str,
+  closing: bool,
+  mut search_from: usize,
+) -> Option<usize> {
   debug_assert!(tag.as_bytes().iter().all(|b| !b.is_ascii_uppercase()));
 
   let bytes = html.as_bytes();
   let tag_bytes = tag.as_bytes();
-  let mut search_from = 0;
 
   while search_from < bytes.len() {
     let rel = bytes[search_from..].iter().position(|b| *b == b'<')?;
@@ -2016,47 +2024,42 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
     PropertyOgUrl,
   }
 
-  let lower = html.to_lowercase();
-  for (needle, attr, filter, allow_for_http_inputs) in [
-    ("<base", "href", BaseUrlHintFilter::Any, true),
-    ("<link", "href", BaseUrlHintFilter::RelCanonical, false),
-    ("<meta", "content", BaseUrlHintFilter::PropertyOgUrl, false),
+  for (tag, attr, filter, allow_for_http_inputs) in [
+    ("base", "href", BaseUrlHintFilter::Any, true),
+    ("link", "href", BaseUrlHintFilter::RelCanonical, false),
+    ("meta", "content", BaseUrlHintFilter::PropertyOgUrl, false),
   ] {
     if !allow_for_http_inputs && !is_file_input {
       continue;
     }
     let mut pos = 0;
-    while let Some(idx) = lower[pos..].find(needle) {
-      let abs = pos + idx;
-      if let Some(end) = lower[abs..].find('>') {
-        let tag_slice = &html[abs..=abs + end];
-        let attrs = parse_tag_attributes(tag_slice);
+    while let Some(start) = find_tag_case_insensitive_from(html, tag, false, pos) {
+      let Some(end) = html[start..].find('>') else {
+        break;
+      };
+      let tag_slice = &html[start..=start + end];
 
-        let matches_filter = match filter {
-          BaseUrlHintFilter::Any => true,
-          BaseUrlHintFilter::RelCanonical => attrs.get("rel").map_or(false, |rel| {
-            rel
-              .split_whitespace()
-              .any(|token| token.eq_ignore_ascii_case("canonical"))
-          }),
-          BaseUrlHintFilter::PropertyOgUrl => attrs
-            .get("property")
-            .map_or(false, |prop| prop.eq_ignore_ascii_case("og:url")),
-        };
+      let matches_filter = match filter {
+        BaseUrlHintFilter::Any => true,
+        BaseUrlHintFilter::RelCanonical => extract_attr_value(tag_slice, "rel").is_some_and(|rel| {
+          rel
+            .split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("canonical"))
+        }),
+        BaseUrlHintFilter::PropertyOgUrl => extract_attr_value(tag_slice, "property")
+          .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url")),
+      };
 
-        if matches_filter {
-          if let Some(val) = attrs.get(attr) {
-            if let Some(resolved) = resolve_href(&input, val) {
-              if resolved.starts_with("http://") || resolved.starts_with("https://") {
-                return Cow::Owned(resolved);
-              }
+      if matches_filter {
+        if let Some(val) = extract_attr_value(tag_slice, attr) {
+          if let Some(resolved) = resolve_href(&input, &val) {
+            if resolved.starts_with("http://") || resolved.starts_with("https://") {
+              return Cow::Owned(resolved);
             }
           }
         }
-        pos = abs + end + 1;
-      } else {
-        break;
       }
+      pos = start + end + 1;
     }
   }
 
