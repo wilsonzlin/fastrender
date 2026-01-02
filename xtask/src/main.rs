@@ -583,12 +583,14 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   let rayon_threads_env = std::env::var_os("RAYON_NUM_THREADS");
   let layout_parallel_env = std::env::var_os("FASTR_LAYOUT_PARALLEL");
 
-  let pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
-  let shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
-  let viewport_arg = args
+  let mut pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
+  let mut shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
+  let mut user_agent_arg = args.user_agent.clone();
+  let mut accept_language_arg = args.accept_language.clone();
+  let mut viewport_arg = args
     .viewport
     .map(|(width, height)| format!("{width}x{height}"));
-  let dpr_arg = args.dpr.map(|dpr| dpr.to_string());
+  let mut dpr_arg = args.dpr.map(|dpr| dpr.to_string());
 
   let disk_cache_enabled = disk_cache_enabled(args.disk_cache);
   let disk_cache_status = if disk_cache_enabled {
@@ -623,6 +625,59 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   fetch_allow_http_error_status |= fetch_overrides.allow_http_error_status;
   if args.no_fetch && fetch_refresh {
     bail!("--refresh cannot be used with --no-fetch");
+  }
+
+  let (filtered_pageset_extra_args, pageset_overrides) =
+    xtask::extract_pageset_extra_arg_overrides(&pageset_extra_args);
+  pageset_extra_args = filtered_pageset_extra_args;
+
+  if let Some(pages) = pageset_overrides.pages {
+    match &pages_arg {
+      Some(existing) if existing != &pages => bail!(
+        "--pages cannot be passed both before and after `--` with different values (before: {existing}, after: {pages})"
+      ),
+      _ => pages_arg = Some(pages),
+    }
+  }
+  if let Some(shard) = pageset_overrides.shard {
+    match &shard_arg {
+      Some(existing) if existing != &shard => bail!(
+        "--shard cannot be passed both before and after `--` with different values (before: {existing}, after: {shard})"
+      ),
+      _ => shard_arg = Some(shard),
+    }
+  }
+  if let Some(user_agent) = pageset_overrides.user_agent {
+    match &user_agent_arg {
+      Some(existing) if existing != &user_agent => bail!(
+        "--user-agent cannot be passed both before and after `--` with different values (before: {existing}, after: {user_agent})"
+      ),
+      _ => user_agent_arg = Some(user_agent),
+    }
+  }
+  if let Some(accept_language) = pageset_overrides.accept_language {
+    match &accept_language_arg {
+      Some(existing) if existing != &accept_language => bail!(
+        "--accept-language cannot be passed both before and after `--` with different values (before: {existing}, after: {accept_language})"
+      ),
+      _ => accept_language_arg = Some(accept_language),
+    }
+  }
+  if let Some(viewport) = pageset_overrides.viewport {
+    match &viewport_arg {
+      Some(existing) if existing != &viewport => bail!(
+        "--viewport cannot be passed both before and after `--` with different values (before: {existing}, after: {viewport})"
+      ),
+      _ => viewport_arg = Some(viewport),
+    }
+  }
+  if let Some(dpr) = pageset_overrides.dpr {
+    match &dpr_arg {
+      Some(existing) if existing != &dpr => bail!(
+        "--dpr cannot be passed both before and after `--` with different values (before: {existing}, after: {dpr})"
+      ),
+      _ => dpr_arg = Some(dpr),
+    }
   }
 
   let mut disk_cache_extra_args = extract_disk_cache_args(&pageset_extra_args);
@@ -681,10 +736,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(shard) = &shard_arg {
       cmd.arg("--shard").arg(shard);
     }
-    if let Some(user_agent) = &args.user_agent {
+    if let Some(user_agent) = &user_agent_arg {
       cmd.arg("--user-agent").arg(user_agent);
     }
-    if let Some(accept_language) = &args.accept_language {
+    if let Some(accept_language) = &accept_language_arg {
       cmd.arg("--accept-language").arg(accept_language);
     }
     if fetch_refresh {
@@ -725,10 +780,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(shard) = &shard_arg {
       cmd.arg("--shard").arg(shard);
     }
-    if let Some(user_agent) = &args.user_agent {
+    if let Some(user_agent) = &user_agent_arg {
       cmd.arg("--user-agent").arg(user_agent);
     }
-    if let Some(accept_language) = &args.accept_language {
+    if let Some(accept_language) = &accept_language_arg {
       cmd.arg("--accept-language").arg(accept_language);
     }
     if let Some(viewport) = &viewport_arg {
@@ -772,10 +827,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   if let Some(shard) = &shard_arg {
     cmd.arg("--shard").arg(shard);
   }
-  if let Some(user_agent) = &args.user_agent {
+  if let Some(user_agent) = &user_agent_arg {
     cmd.arg("--user-agent").arg(user_agent);
   }
-  if let Some(accept_language) = &args.accept_language {
+  if let Some(accept_language) = &accept_language_arg {
     cmd.arg("--accept-language").arg(accept_language);
   }
   if let Some(viewport) = &viewport_arg {
