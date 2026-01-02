@@ -61,7 +61,7 @@ struct Args {
   #[arg(long, default_value_t = 0.20)]
   count_threshold: f64,
 
-  /// Exit with a non-zero status when any stage exceeds the regression threshold
+  /// Exit with a non-zero status when any tracked metric exceeds the regression threshold
   #[arg(long)]
   fail_on_regression: bool,
 
@@ -258,7 +258,7 @@ const CORE_FIXTURES: &[CoreFixture] = &[
   ),
 ];
 
-const PERF_SMOKE_SCHEMA_VERSION: u32 = 6;
+const PERF_SMOKE_SCHEMA_VERSION: u32 = 7;
 const PAGESET_GUARDRAILS_MANIFEST_VERSION: u32 = 1;
 const PAGESET_GUARDRAILS_MANIFEST: &str = include_str!("../../tests/pages/pageset_guardrails.json");
 
@@ -467,8 +467,6 @@ struct Regression {
 
 enum RegressionMetric {
   TotalMs,
-  StageMs(&'static str),
-  TimingMs(&'static str),
   Count(&'static str),
   Paint(&'static str),
 }
@@ -1313,49 +1311,13 @@ fn find_regressions(
         continue;
       }
 
-      if base.total_ms > 0.0 && is_regression(base.total_ms, fixture.total_ms, ms_threshold) {
+      if base.total_ms > 0.0 && is_ms_regression(base.total_ms, fixture.total_ms, ms_threshold) {
         regressions.push(Regression {
           fixture: fixture.name.clone(),
           metric: RegressionMetric::TotalMs,
           baseline: base.total_ms,
           latest: fixture.total_ms,
         });
-      }
-      for (label, value) in fixture.timings_ms.entries() {
-        let base_value =
-          base
-            .timings_ms
-            .entries()
-            .iter()
-            .find_map(|(l, v)| if *l == label { Some(*v) } else { None });
-        if let Some(base_value) = base_value {
-          if base_value > 0.0 && is_regression(base_value, value, ms_threshold) {
-            regressions.push(Regression {
-              fixture: fixture.name.clone(),
-              metric: RegressionMetric::TimingMs(label),
-              baseline: base_value,
-              latest: value,
-            });
-          }
-        }
-      }
-      for (label, value) in fixture.stage_ms.entries() {
-        let base_value =
-          base
-            .stage_ms
-            .entries()
-            .iter()
-            .find_map(|(l, v)| if *l == label { Some(*v) } else { None });
-        if let Some(base_value) = base_value {
-          if base_value > 0.0 && is_regression(base_value, value, ms_threshold) {
-            regressions.push(Regression {
-              fixture: fixture.name.clone(),
-              metric: RegressionMetric::StageMs(label),
-              baseline: base_value,
-              latest: value,
-            });
-          }
-        }
       }
 
       for (label, base_value, latest_value) in [
@@ -1415,6 +1377,11 @@ fn find_regressions(
 
 fn is_regression(baseline: f64, latest: f64, threshold: f64) -> bool {
   ((latest - baseline) / baseline) > threshold
+}
+
+fn is_ms_regression(baseline_ms: f64, latest_ms: f64, threshold: f64) -> bool {
+  const MIN_DELTA_MS: f64 = 1.0;
+  (latest_ms - baseline_ms) > MIN_DELTA_MS && is_regression(baseline_ms, latest_ms, threshold)
 }
 
 fn print_top(fixtures: &[FixtureSummary], count: usize) {
@@ -1503,8 +1470,6 @@ impl RegressionMetric {
   fn label(&self) -> String {
     match self {
       Self::TotalMs => "total_ms".to_string(),
-      Self::StageMs(label) => format!("stage_ms.{label}"),
-      Self::TimingMs(label) => format!("timings_ms.{label}"),
       Self::Count(label) => format!("counts.{label}"),
       Self::Paint(label) => format!("paint.{label}"),
     }
@@ -1533,5 +1498,105 @@ impl Regression {
 
   fn format_latest(&self) -> String {
     self.metric.format_value(self.latest)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn ok_fixture(name: &str, total_ms: f64) -> FixtureSummary {
+    FixtureSummary {
+      name: name.to_string(),
+      path: String::new(),
+      viewport: ViewportSummary {
+        width: 1,
+        height: 1,
+        dpr: 1.0,
+        media: "screen".to_string(),
+      },
+      status: FixtureStatus::Ok,
+      error: None,
+      total_ms,
+      budget_ms: None,
+      fetch_error_count: 0,
+      fetch_error_samples: None,
+      failure_stage: None,
+      stage_ms: StageBreakdown::default(),
+      timings_ms: StageTimingsSummary::default(),
+      counts: CountsSummary::default(),
+      paint: PaintSummary::default(),
+    }
+  }
+
+  #[test]
+  fn ms_regression_requires_relative_threshold_and_absolute_floor() {
+    assert!(!is_ms_regression(100.0, 109.9, 0.10));
+    assert!(is_ms_regression(100.0, 110.1, 0.10));
+
+    // Even a large relative delta should be ignored when the absolute delta is tiny.
+    assert!(!is_ms_regression(0.5, 0.6, 0.10));
+
+    // But small baselines should still trigger when the absolute delta is meaningful.
+    assert!(is_ms_regression(0.5, 5.0, 0.10));
+  }
+
+  #[test]
+  fn find_regressions_ignores_stage_and_subsystem_timing_deltas() {
+    let mut baseline_fixture = ok_fixture("a", 100.0);
+    baseline_fixture.timings_ms.layout_ms = 50.0;
+    baseline_fixture.stage_ms.layout = 50.0;
+
+    let mut latest_fixture = ok_fixture("a", 100.0);
+    latest_fixture.timings_ms.layout_ms = 250.0;
+    latest_fixture.stage_ms.layout = 250.0;
+
+    let baseline = PerfSmokeSummary {
+      schema_version: PERF_SMOKE_SCHEMA_VERSION,
+      fixtures: vec![baseline_fixture],
+      total_ms: 100.0,
+      stage_ms: StageBreakdown::default(),
+    };
+    let latest = PerfSmokeSummary {
+      schema_version: PERF_SMOKE_SCHEMA_VERSION,
+      fixtures: vec![latest_fixture],
+      total_ms: 100.0,
+      stage_ms: StageBreakdown::default(),
+    };
+
+    let regressions = find_regressions(&latest, &baseline, 0.10, 0.20);
+    assert!(regressions.is_empty());
+  }
+
+  #[test]
+  fn find_regressions_reports_total_and_deterministic_count_metrics() {
+    let mut baseline_fixture = ok_fixture("a", 100.0);
+    baseline_fixture.counts.dom_nodes = 100;
+    let mut latest_fixture = ok_fixture("a", 120.0);
+    latest_fixture.counts.dom_nodes = 121;
+
+    let baseline = PerfSmokeSummary {
+      schema_version: PERF_SMOKE_SCHEMA_VERSION,
+      fixtures: vec![baseline_fixture],
+      total_ms: 100.0,
+      stage_ms: StageBreakdown::default(),
+    };
+    let latest = PerfSmokeSummary {
+      schema_version: PERF_SMOKE_SCHEMA_VERSION,
+      fixtures: vec![latest_fixture],
+      total_ms: 120.0,
+      stage_ms: StageBreakdown::default(),
+    };
+
+    let regressions = find_regressions(&latest, &baseline, 0.10, 0.20);
+    assert_eq!(regressions.len(), 2);
+    assert!(regressions.iter().any(|regression| matches!(
+      regression.metric,
+      RegressionMetric::TotalMs
+    )));
+    assert!(regressions.iter().any(|regression| matches!(
+      regression.metric,
+      RegressionMetric::Count("dom_nodes")
+    )));
   }
 }
