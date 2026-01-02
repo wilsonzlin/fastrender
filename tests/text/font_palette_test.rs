@@ -57,6 +57,7 @@ fn font_palette_property_accepts_named_identifiers() {
   let declaration = Declaration {
     property: "font-palette".into(),
     value: PropertyValue::Keyword("--Custom-Palette".into()),
+    contains_var: false,
     raw_value: "--Custom-Palette".into(),
     important: false,
   };

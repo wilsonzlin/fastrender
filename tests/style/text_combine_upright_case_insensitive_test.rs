@@ -13,6 +13,7 @@ fn text_combine_upright_keywords_are_case_insensitive() {
     &Declaration {
       property: "text-combine-upright".into(),
       value: PropertyValue::Keyword("DIGITS".into()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     },
@@ -27,6 +28,7 @@ fn text_combine_upright_keywords_are_case_insensitive() {
     &Declaration {
       property: "text-combine-upright".into(),
       value: PropertyValue::Keyword("ALL".into()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     },

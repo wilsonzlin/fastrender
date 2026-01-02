@@ -15,6 +15,7 @@ fn text_combine_upright_rejects_out_of_range_digits() {
         PropertyValue::Keyword("digits".into()),
         PropertyValue::Number(5.0),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     },

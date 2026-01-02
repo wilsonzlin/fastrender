@@ -34,9 +34,18 @@ fn make_props(pairs: &[(&str, &str)]) -> CustomPropertyStore {
 }
 
 fn decl(property: &'static str, value: PropertyValue, raw_value: &str) -> Declaration {
+  let contains_var = if !raw_value.is_empty() {
+    contains_var(raw_value)
+  } else {
+    match &value {
+      PropertyValue::Keyword(raw) | PropertyValue::Custom(raw) => contains_var(raw),
+      _ => false,
+    }
+  };
   Declaration {
     property: property.into(),
     value,
+    contains_var,
     raw_value: raw_value.to_string(),
     important: false,
   }

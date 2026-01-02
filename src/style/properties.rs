@@ -4300,7 +4300,7 @@ pub fn apply_declaration_with_base(
       }
       styles.custom_properties.insert(
         Arc::clone(custom_name),
-        CustomPropertyValue::new(raw_text.to_string(), None),
+        CustomPropertyValue::new(raw_text, None),
       );
       return;
     }
@@ -4314,13 +4314,7 @@ pub fn apply_declaration_with_base(
     // property’s inherited/initial value.
     //
     // Performance guard: only run the var() resolver when the value actually contains var().
-    let contains_var_call = if raw_trimmed.as_bytes().contains(&b'\\') {
-      crate::style::var_resolution::contains_var(raw_trimmed)
-    } else {
-      contains_ignore_ascii_case(raw_trimmed, "var(")
-    };
-
-    if contains_var_call {
+    if decl.contains_var {
       let resolved = match resolve_var_for_property(&decl.value, &styles.custom_properties, "") {
         VarResolutionResult::Resolved { css_text, .. } => css_text,
         _ => return,
@@ -4350,7 +4344,7 @@ pub fn apply_declaration_with_base(
       };
       styles.custom_properties.insert(
         Arc::clone(custom_name),
-        CustomPropertyValue::new(raw_text.to_string(), Some(typed)),
+        CustomPropertyValue::new(raw_text, Some(typed)),
       );
     }
     return;
@@ -4363,15 +4357,38 @@ pub fn apply_declaration_with_base(
     other => other,
   };
 
-  // Resolve var() references in the value
-  let (resolved_value, resolved_css_text) =
+  let needs_css_text = matches!(
+    property,
+    "scroll-timeline"
+      | "view-timeline"
+      | "animation-timeline"
+      | "animation-range"
+      | "animation-name"
+      | "transition-property"
+      | "transition-duration"
+      | "transition-delay"
+      | "transition-timing-function"
+      | "transition"
+  );
+
+  // Most declarations are var-free; avoid even calling into the token resolver when we already
+  // know the authored text contains no `var()` references (a bit computed once during parsing).
+  let mut resolved_css_text = String::new();
+  let resolved_value_owned = if decl.contains_var {
     match resolve_var_for_property(&decl.value, &styles.custom_properties, property) {
-      VarResolutionResult::Resolved { value, css_text } => (value, css_text),
+      VarResolutionResult::Resolved { value, css_text } => {
+        if needs_css_text {
+          resolved_css_text = css_text.into_owned();
+        }
+        Some(value.into_owned())
+      }
       // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
       _ => return,
-    };
-  let resolved_value = resolved_value.as_ref();
-  let resolved_css_text_str = declaration_css_text_str(decl, resolved_css_text.as_ref());
+    }
+  } else {
+    None
+  };
+  let resolved_value = resolved_value_owned.as_ref().unwrap_or(&decl.value);
   let order = styles.logical.next_order();
   if let Some(global) = global_keyword(resolved_value) {
     if apply_global_keyword(
@@ -4663,7 +4680,7 @@ pub fn apply_declaration_with_base(
     }
     "z-index" => match resolved_value {
       PropertyValue::Number(n) => styles.z_index = Some(*n as i32),
-      PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("auto") => styles.z_index = None,
+      PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => styles.z_index = None,
       _ => {}
     },
     "outline-color" => match resolved_value {
@@ -7189,8 +7206,8 @@ pub fn apply_declaration_with_base(
     }
     "text-decoration" => {
       let tokens: Vec<PropertyValue> = match resolved_value {
-        PropertyValue::Multiple(ref values) => values.clone(),
-        _ => vec![resolved_value.clone()],
+        PropertyValue::Multiple(values) => values.clone(),
+        _ => vec![resolved_value.to_owned()],
       };
 
       if tokens.is_empty() {
@@ -7239,8 +7256,8 @@ pub fn apply_declaration_with_base(
     }
     "list-style" => {
       let tokens: Vec<PropertyValue> = match resolved_value {
-        PropertyValue::Multiple(ref values) => values.clone(),
-        _ => vec![resolved_value.clone()],
+        PropertyValue::Multiple(values) => values.clone(),
+        _ => vec![resolved_value.to_owned()],
       };
 
       if tokens.is_empty() {
@@ -7738,35 +7755,44 @@ pub fn apply_declaration_with_base(
       }
     }
     "scroll-timeline" => {
-      styles.scroll_timelines = parse_scroll_timeline_list(resolved_css_text_str);
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.scroll_timelines = parse_scroll_timeline_list(css_text);
     }
     "view-timeline" => {
-      styles.view_timelines = parse_view_timeline_list(resolved_css_text_str);
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.view_timelines = parse_view_timeline_list(css_text);
     }
     "animation-timeline" => {
-      styles.animation_timelines = parse_animation_timeline_list(resolved_css_text_str);
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_timelines = parse_animation_timeline_list(css_text);
     }
     "animation-range" => {
-      styles.animation_ranges = parse_animation_range_list(resolved_css_text_str);
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_ranges = parse_animation_range_list(css_text);
     }
     "animation-name" => {
-      styles.animation_names = parse_animation_names(resolved_css_text_str);
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_names = parse_animation_names(css_text);
     }
     "transition-property" => {
-      styles.transition_properties = parse_transition_property_list(resolved_css_text_str).into();
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.transition_properties = parse_transition_property_list(css_text).into();
     }
     "transition-duration" => {
-      styles.transition_durations = parse_transition_time_list(resolved_css_text_str).into();
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.transition_durations = parse_transition_time_list(css_text).into();
     }
     "transition-delay" => {
-      styles.transition_delays = parse_transition_time_list(resolved_css_text_str).into();
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.transition_delays = parse_transition_time_list(css_text).into();
     }
     "transition-timing-function" => {
-      styles.transition_timing_functions =
-        parse_transition_timing_function_list(resolved_css_text_str).into();
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.transition_timing_functions = parse_transition_timing_function_list(css_text).into();
     }
     "transition" => {
-      let (props, durations, delays, timings) = parse_transition_shorthand(resolved_css_text_str);
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      let (props, durations, delays, timings) = parse_transition_shorthand(css_text);
       styles.transition_properties = props.into();
       styles.transition_durations = durations.into();
       styles.transition_delays = delays.into();
@@ -8243,8 +8269,8 @@ pub fn apply_declaration_with_base(
     }
     "mask" => {
       let tokens: Vec<PropertyValue> = match resolved_value {
-        PropertyValue::Multiple(ref parts) => parts.clone(),
-        _ => vec![resolved_value.clone()],
+        PropertyValue::Multiple(parts) => parts.clone(),
+        _ => vec![resolved_value.to_owned()],
       };
 
       if tokens.is_empty() {
@@ -8296,8 +8322,8 @@ pub fn apply_declaration_with_base(
     // Shorthand: background
     "background" => {
       let tokens: Vec<PropertyValue> = match resolved_value {
-        PropertyValue::Multiple(ref parts) => parts.clone(),
-        _ => vec![resolved_value.clone()],
+        PropertyValue::Multiple(parts) => parts.clone(),
+        _ => vec![resolved_value.to_owned()],
       };
 
       if tokens.is_empty() {
@@ -13135,6 +13161,7 @@ mod tests {
     let decl = Declaration {
       property: "object-fit".into(),
       value: PropertyValue::Keyword("cover".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -13235,6 +13262,7 @@ mod tests {
     let decl = Declaration {
       property: crate::css::types::PropertyName::Custom(Arc::from("--foo")),
       value: PropertyValue::Custom("0".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -13256,6 +13284,7 @@ mod tests {
     let decl = Declaration {
       property: crate::css::types::PropertyName::Custom(Arc::from("--foo")),
       value: PropertyValue::Custom("1".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -13321,6 +13350,7 @@ mod tests {
       &Declaration {
         property: "image-rendering".into(),
         value: PropertyValue::Keyword("pixelated".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13335,6 +13365,7 @@ mod tests {
       &Declaration {
         property: "image-rendering".into(),
         value: PropertyValue::Keyword("crisp-edges".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13353,6 +13384,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("nowrap".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13367,6 +13399,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("balance".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13381,6 +13414,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("pretty".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13395,6 +13429,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("wrap".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13414,6 +13449,7 @@ mod tests {
       &Declaration {
         property: "--x".into(),
         value: PropertyValue::Custom("10px".to_string()),
+        contains_var: false,
         raw_value: "10px".to_string(),
         important: false,
       },
@@ -13427,6 +13463,7 @@ mod tests {
       &Declaration {
         property: "color".into(),
         value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13441,6 +13478,7 @@ mod tests {
       &Declaration {
         property: "all".into(),
         value: PropertyValue::Keyword("initial".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13463,6 +13501,7 @@ mod tests {
       &Declaration {
         property: "color".into(),
         value: PropertyValue::Color(Color::Rgba(Rgba::GREEN)),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13477,6 +13516,7 @@ mod tests {
       &Declaration {
         property: "all".into(),
         value: PropertyValue::Keyword("unset".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13588,6 +13628,7 @@ mod tests {
       &Declaration {
         property: "word-break".into(),
         value: PropertyValue::Keyword("anywhere".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13605,6 +13646,7 @@ mod tests {
       &Declaration {
         property: "flex-flow".into(),
         value: PropertyValue::Keyword("column wrap-reverse".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13620,6 +13662,7 @@ mod tests {
       &Declaration {
         property: "flex-flow".into(),
         value: PropertyValue::Keyword("wrap row-reverse".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13642,6 +13685,7 @@ mod tests {
       &Declaration {
         property: "flex-flow".into(),
         value: PropertyValue::Keyword("wrap".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13663,6 +13707,7 @@ mod tests {
       &Declaration {
         property: "flex".into(),
         value: PropertyValue::Keyword("none".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13679,6 +13724,7 @@ mod tests {
       &Declaration {
         property: "flex".into(),
         value: PropertyValue::Keyword("auto".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13707,6 +13753,7 @@ mod tests {
           PropertyValue::Number(3.0),
           PropertyValue::Length(Length::px(10.0)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13726,6 +13773,7 @@ mod tests {
           PropertyValue::Number(4.0),
           PropertyValue::Number(5.0),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13745,6 +13793,7 @@ mod tests {
       &Declaration {
         property: "flex".into(),
         value: PropertyValue::Number(6.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13764,6 +13813,7 @@ mod tests {
       &Declaration {
         property: "flex".into(),
         value: PropertyValue::Length(Length::px(12.0)),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13792,6 +13842,7 @@ mod tests {
           PropertyValue::Number(-1.0),
           PropertyValue::Number(3.0),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13811,6 +13862,7 @@ mod tests {
     let decl = Declaration {
       property: "clip-path".into(),
       value: PropertyValue::Keyword("inset(10px 20% round 5px)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -13848,6 +13900,7 @@ mod tests {
     let decl = Declaration {
       property: "clip-path".into(),
       value: PropertyValue::Keyword("circle(30% at left 10px top 20%)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -13882,6 +13935,7 @@ mod tests {
     let decl = Declaration {
       property: "clip".into(),
       value: PropertyValue::Keyword("rect(1px, 10px, 9px, 2px)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -13897,6 +13951,7 @@ mod tests {
     let auto_decl = Declaration {
       property: "clip".into(),
       value: PropertyValue::Keyword("auto".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -13923,6 +13978,7 @@ mod tests {
       &Declaration {
         property: "transform-box".into(),
         value: PropertyValue::Keyword("view-box".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13937,6 +13993,7 @@ mod tests {
       &Declaration {
         property: "transform-box".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13951,6 +14008,7 @@ mod tests {
       &Declaration {
         property: "transform-box".into(),
         value: PropertyValue::Keyword("bogus".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13975,6 +14033,7 @@ mod tests {
       &Declaration {
         property: "transform-style".into(),
         value: PropertyValue::Keyword("preserve-3d".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -13989,6 +14048,7 @@ mod tests {
       &Declaration {
         property: "transform-style".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14003,6 +14063,7 @@ mod tests {
       &Declaration {
         property: "transform-style".into(),
         value: PropertyValue::Keyword("flat".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14017,6 +14078,7 @@ mod tests {
       &Declaration {
         property: "backface-visibility".into(),
         value: PropertyValue::Keyword("hidden".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14031,6 +14093,7 @@ mod tests {
       &Declaration {
         property: "backface-visibility".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14045,6 +14108,7 @@ mod tests {
       &Declaration {
         property: "backface-visibility".into(),
         value: PropertyValue::Keyword("visible".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14065,6 +14129,7 @@ mod tests {
       &Declaration {
         property: "transform-box".into(),
         value: PropertyValue::Keyword("invalid-value".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14087,6 +14152,7 @@ mod tests {
       &Declaration {
         property: "image-resolution".into(),
         value: PropertyValue::Keyword("2dppx".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14112,6 +14178,7 @@ mod tests {
           PropertyValue::Keyword("192dpi".to_string()),
           PropertyValue::Keyword("snap".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14135,6 +14202,7 @@ mod tests {
           PropertyValue::Keyword("2dppx".to_string()),
           PropertyValue::Keyword("3dppx".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14191,6 +14259,7 @@ mod tests {
       &Declaration {
         property: "text-overflow".into(),
         value: PropertyValue::Keyword("ellipsis".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14216,6 +14285,7 @@ mod tests {
           PropertyValue::Keyword("clip".to_string()),
           PropertyValue::Keyword("ellipsis".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14241,6 +14311,7 @@ mod tests {
       &Declaration {
         property: "text-overflow".into(),
         value: PropertyValue::String("--".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14304,6 +14375,7 @@ mod tests {
       &Declaration {
         property: "image-orientation".into(),
         value: PropertyValue::Keyword("none".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14321,6 +14393,7 @@ mod tests {
           PropertyValue::Keyword("90deg".into()),
           PropertyValue::Keyword("flip".into()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14341,6 +14414,7 @@ mod tests {
       &Declaration {
         property: "image-orientation".into(),
         value: PropertyValue::Keyword("45deg".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14361,6 +14435,7 @@ mod tests {
       &Declaration {
         property: "image-orientation".into(),
         value: PropertyValue::Keyword("flip".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14385,6 +14460,7 @@ mod tests {
       &Declaration {
         property: "contain".into(),
         value: PropertyValue::Keyword("paint".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14401,6 +14477,7 @@ mod tests {
       &Declaration {
         property: "contain".into(),
         value: PropertyValue::Keyword("strict".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14418,6 +14495,7 @@ mod tests {
           PropertyValue::Keyword("layout".into()),
           PropertyValue::Keyword("style".into()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14488,6 +14566,7 @@ mod tests {
       &Declaration {
         property: "text-orientation".into(),
         value: PropertyValue::Keyword("upright".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14502,6 +14581,7 @@ mod tests {
       &Declaration {
         property: "text-orientation".into(),
         value: PropertyValue::Keyword("sideways-right".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14516,6 +14596,7 @@ mod tests {
       &Declaration {
         property: "text-orientation".into(),
         value: PropertyValue::Keyword("sideways-left".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14534,6 +14615,7 @@ mod tests {
       &Declaration {
         property: "text-orientation".into(),
         value: PropertyValue::Keyword("upright".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14546,6 +14628,7 @@ mod tests {
       &Declaration {
         property: "text-orientation".into(),
         value: PropertyValue::Keyword("invalid".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14564,6 +14647,7 @@ mod tests {
       &Declaration {
         property: "text-combine-upright".into(),
         value: PropertyValue::Keyword("digits".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14581,6 +14665,7 @@ mod tests {
           PropertyValue::Keyword("digits".into()),
           PropertyValue::Number(3.0),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14595,6 +14680,7 @@ mod tests {
       &Declaration {
         property: "text-combine-upright".into(),
         value: PropertyValue::Keyword("all".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14618,6 +14704,7 @@ mod tests {
           PropertyValue::Keyword("digits".into()),
           PropertyValue::Number(5.0),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14639,6 +14726,7 @@ mod tests {
           PropertyValue::Keyword("digits".into()),
           PropertyValue::Number(1.0),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14660,6 +14748,7 @@ mod tests {
           PropertyValue::Keyword("digits".into()),
           PropertyValue::Number(2.5),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14680,6 +14769,7 @@ mod tests {
     let prop = Declaration {
       property: "text-transform".into(),
       value: PropertyValue::Keyword("uppercase".into()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -14698,6 +14788,7 @@ mod tests {
       &Declaration {
         property: "aspect-ratio".into(),
         value: PropertyValue::Keyword("16/9".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14712,6 +14803,7 @@ mod tests {
       &Declaration {
         property: "aspect-ratio".into(),
         value: PropertyValue::Number(2.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14726,6 +14818,7 @@ mod tests {
       &Declaration {
         property: "aspect-ratio".into(),
         value: PropertyValue::Keyword("auto".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14744,6 +14837,7 @@ mod tests {
       &Declaration {
         property: "color-scheme".into(),
         value: PropertyValue::Keyword("light dark".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14764,6 +14858,7 @@ mod tests {
       &Declaration {
         property: "color-scheme".into(),
         value: PropertyValue::Keyword("only dark".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14793,6 +14888,7 @@ mod tests {
       &Declaration {
         property: "color-scheme".into(),
         value: PropertyValue::Keyword("only".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14819,6 +14915,7 @@ mod tests {
       &Declaration {
         property: "caret-color".into(),
         value: PropertyValue::Keyword("auto".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14833,6 +14930,7 @@ mod tests {
       &Declaration {
         property: "caret-color".into(),
         value: PropertyValue::Keyword("red".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14851,6 +14949,7 @@ mod tests {
       &Declaration {
         property: "caret-color".into(),
         value: PropertyValue::Keyword("currentColor".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14876,6 +14975,7 @@ mod tests {
       &Declaration {
         property: "caret-color".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14890,6 +14990,7 @@ mod tests {
       &Declaration {
         property: "caret-color".into(),
         value: PropertyValue::Keyword("initial".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14910,6 +15011,7 @@ mod tests {
       &Declaration {
         property: "overflow-anchor".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14933,6 +15035,7 @@ mod tests {
       &Declaration {
         property: "overflow-anchor".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14947,6 +15050,7 @@ mod tests {
       &Declaration {
         property: "overflow-anchor".into(),
         value: PropertyValue::Keyword("initial".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14967,6 +15071,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -14981,6 +15086,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("preserve-parent-color".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15007,6 +15113,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15021,6 +15128,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("initial".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15040,6 +15148,7 @@ mod tests {
       &Declaration {
         property: "text-rendering".into(),
         value: PropertyValue::Keyword("optimizeLegibility".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15057,6 +15166,7 @@ mod tests {
       &Declaration {
         property: "text-rendering".into(),
         value: PropertyValue::Keyword("geometricprecision".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15083,6 +15193,7 @@ mod tests {
       &Declaration {
         property: "text-rendering".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15097,6 +15208,7 @@ mod tests {
       &Declaration {
         property: "text-rendering".into(),
         value: PropertyValue::Keyword("initial".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15115,6 +15227,7 @@ mod tests {
       &Declaration {
         property: "scroll-snap-type".into(),
         value: PropertyValue::Keyword("x mandatory".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15133,6 +15246,7 @@ mod tests {
       &Declaration {
         property: "scroll-snap-type".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15151,6 +15265,7 @@ mod tests {
       &Declaration {
         property: "scroll-snap-align".into(),
         value: PropertyValue::Keyword("start end".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15166,6 +15281,7 @@ mod tests {
       &Declaration {
         property: "scroll-snap-align".into(),
         value: PropertyValue::Keyword("center".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15185,6 +15301,7 @@ mod tests {
       &Declaration {
         property: "scroll-snap-stop".into(),
         value: PropertyValue::Keyword("always".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15199,6 +15316,7 @@ mod tests {
       &Declaration {
         property: "scroll-snap-stop".into(),
         value: PropertyValue::Keyword("normal".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15217,6 +15335,7 @@ mod tests {
       &Declaration {
         property: "accent-color".into(),
         value: PropertyValue::Keyword("auto".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15231,6 +15350,7 @@ mod tests {
       &Declaration {
         property: "accent-color".into(),
         value: PropertyValue::Keyword("blue".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15249,6 +15369,7 @@ mod tests {
       &Declaration {
         property: "accent-color".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15263,6 +15384,7 @@ mod tests {
       &Declaration {
         property: "accent-color".into(),
         value: PropertyValue::Keyword("initial".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15281,6 +15403,7 @@ mod tests {
       &Declaration {
         property: "appearance".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15295,6 +15418,7 @@ mod tests {
       &Declaration {
         property: "appearance".into(),
         value: PropertyValue::Keyword("auto".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15309,6 +15433,7 @@ mod tests {
       &Declaration {
         property: "appearance".into(),
         value: PropertyValue::Keyword("textfield".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15327,6 +15452,7 @@ mod tests {
       &Declaration {
         property: "scroll-behavior".into(),
         value: PropertyValue::Keyword("smooth".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15341,6 +15467,7 @@ mod tests {
       &Declaration {
         property: "scroll-behavior".into(),
         value: PropertyValue::Keyword("auto".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15359,6 +15486,7 @@ mod tests {
       &Declaration {
         property: "scroll-behavior".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15377,6 +15505,7 @@ mod tests {
       &Declaration {
         property: "overscroll-behavior".into(),
         value: PropertyValue::Keyword("contain".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15398,6 +15527,7 @@ mod tests {
       &Declaration {
         property: "overscroll-behavior-x".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15419,6 +15549,7 @@ mod tests {
       &Declaration {
         property: "overscroll-behavior-y".into(),
         value: PropertyValue::Keyword("auto".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15441,6 +15572,7 @@ mod tests {
       &Declaration {
         property: "resize".into(),
         value: PropertyValue::Keyword("both".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15455,6 +15587,7 @@ mod tests {
       &Declaration {
         property: "resize".into(),
         value: PropertyValue::Keyword("inline".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15469,6 +15602,7 @@ mod tests {
       &Declaration {
         property: "resize".into(),
         value: PropertyValue::Keyword("invalid".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15488,6 +15622,7 @@ mod tests {
       &Declaration {
         property: "pointer-events".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15502,6 +15637,7 @@ mod tests {
       &Declaration {
         property: "pointer-events".into(),
         value: PropertyValue::Keyword("visibleFill".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15520,6 +15656,7 @@ mod tests {
       &Declaration {
         property: "pointer-events".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15538,6 +15675,7 @@ mod tests {
       &Declaration {
         property: "user-select".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15552,6 +15690,7 @@ mod tests {
       &Declaration {
         property: "user-select".into(),
         value: PropertyValue::Keyword("all".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15570,6 +15709,7 @@ mod tests {
       &Declaration {
         property: "user-select".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15588,6 +15728,7 @@ mod tests {
       &Declaration {
         property: "touch-action".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15607,6 +15748,7 @@ mod tests {
           PropertyValue::Keyword("pan-y".into()),
           PropertyValue::Keyword("pinch-zoom".into()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15629,6 +15771,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-width".into(),
         value: PropertyValue::Keyword("thin".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15643,6 +15786,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-width".into(),
         value: PropertyValue::Keyword("none".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15661,6 +15805,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-gutter".into(),
         value: PropertyValue::Keyword("stable".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15679,6 +15824,7 @@ mod tests {
           PropertyValue::Keyword("both-edges".into()),
           PropertyValue::Keyword("stable".into()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15715,6 +15861,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-width".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15730,6 +15877,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-width".into(),
         value: PropertyValue::Keyword("revert".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15748,6 +15896,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-width".into(),
         value: PropertyValue::Keyword("revert-layer".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15766,6 +15915,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-width".into(),
         value: PropertyValue::Keyword("unset".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15801,6 +15951,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-gutter".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15819,6 +15970,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-gutter".into(),
         value: PropertyValue::Keyword("revert".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15836,6 +15988,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-gutter".into(),
         value: PropertyValue::Keyword("revert-layer".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15853,6 +16006,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-gutter".into(),
         value: PropertyValue::Keyword("unset".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15871,6 +16025,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-color".into(),
         value: PropertyValue::Keyword("dark".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15888,6 +16043,7 @@ mod tests {
           PropertyValue::Color(Color::Rgba(Rgba::from_rgba8(255, 0, 0, 255))),
           PropertyValue::Keyword("currentColor".into()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15921,6 +16077,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-color".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15940,6 +16097,7 @@ mod tests {
       &Declaration {
         property: "scrollbar-color".into(),
         value: PropertyValue::Color(Color::Rgba(Rgba::from_rgba8(10, 20, 30, 255))),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15967,6 +16125,7 @@ mod tests {
       &Declaration {
         property: "color-scheme".into(),
         value: PropertyValue::Keyword("inherit".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -15981,6 +16140,7 @@ mod tests {
       &Declaration {
         property: "color-scheme".into(),
         value: PropertyValue::Keyword("initial".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16007,6 +16167,7 @@ mod tests {
       &Declaration {
         property: "all".into(),
         value: PropertyValue::Keyword("initial".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16026,6 +16187,7 @@ mod tests {
       &Declaration {
         property: "align-items".into(),
         value: PropertyValue::Keyword("start".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16040,6 +16202,7 @@ mod tests {
       &Declaration {
         property: "align-self".into(),
         value: PropertyValue::Keyword("self-end".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16054,6 +16217,7 @@ mod tests {
       &Declaration {
         property: "justify-items".into(),
         value: PropertyValue::Keyword("right".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16068,6 +16232,7 @@ mod tests {
       &Declaration {
         property: "justify-self".into(),
         value: PropertyValue::Keyword("auto".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16082,6 +16247,7 @@ mod tests {
       &Declaration {
         property: "justify-self".into(),
         value: PropertyValue::Keyword("center".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16101,6 +16267,7 @@ mod tests {
       &Declaration {
         property: "place-items".into(),
         value: PropertyValue::Keyword("center stretch".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16116,6 +16283,7 @@ mod tests {
       &Declaration {
         property: "place-self".into(),
         value: PropertyValue::Keyword("end start".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16131,6 +16299,7 @@ mod tests {
       &Declaration {
         property: "place-content".into(),
         value: PropertyValue::Keyword("space-between center".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16150,6 +16319,7 @@ mod tests {
       &Declaration {
         property: "writing-mode".into(),
         value: PropertyValue::Keyword("vertical-rl".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16164,6 +16334,7 @@ mod tests {
       &Declaration {
         property: "writing-mode".into(),
         value: PropertyValue::Keyword("sideways-lr".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16190,6 +16361,7 @@ mod tests {
       &Declaration {
         property: "inset".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16220,6 +16392,7 @@ mod tests {
       &Declaration {
         property: "margin".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16250,6 +16423,7 @@ mod tests {
       &Declaration {
         property: "padding".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16280,6 +16454,7 @@ mod tests {
       &Declaration {
         property: "scroll-margin".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16309,6 +16484,7 @@ mod tests {
       &Declaration {
         property: "gap".into(),
         value: gap_value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16328,6 +16504,7 @@ mod tests {
       &Declaration {
         property: "row-gap".into(),
         value: row_gap_value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16344,6 +16521,7 @@ mod tests {
       &Declaration {
         property: "column-gap".into(),
         value: column_gap_value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16364,6 +16542,7 @@ mod tests {
         PropertyValue::Keyword("right".to_string()),
         PropertyValue::Keyword("bottom".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -16387,6 +16566,7 @@ mod tests {
       &Declaration {
         property: "box-sizing".into(),
         value: PropertyValue::Keyword("border-box".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16406,6 +16586,7 @@ mod tests {
       &Declaration {
         property: "box-decoration-break".into(),
         value: PropertyValue::Keyword("clone".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16428,6 +16609,7 @@ mod tests {
       &Declaration {
         property: "grid-auto-rows".into(),
         value: PropertyValue::Keyword("10px minmax(0,1fr)".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16442,6 +16624,7 @@ mod tests {
       &Declaration {
         property: "grid-auto-columns".into(),
         value: PropertyValue::Keyword("20%".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16460,6 +16643,7 @@ mod tests {
       &Declaration {
         property: "grid-auto-flow".into(),
         value: PropertyValue::Keyword("column dense".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16478,6 +16662,7 @@ mod tests {
       &Declaration {
         property: "grid-area".into(),
         value: PropertyValue::Keyword("hero".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16500,6 +16685,7 @@ mod tests {
       &Declaration {
         property: "grid".into(),
         value: PropertyValue::Keyword("auto-flow 10px / 20px".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16520,6 +16706,7 @@ mod tests {
       &Declaration {
         property: "grid".into(),
         value: PropertyValue::Keyword("\"a a\" \"b b\" / 1fr 2fr".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16540,6 +16727,7 @@ mod tests {
       &Declaration {
         property: "gap".into(),
         value: PropertyValue::Keyword("10px 20%".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16561,6 +16749,7 @@ mod tests {
       &Declaration {
         property: "row-gap".into(),
         value: PropertyValue::Keyword("normal".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16576,6 +16765,7 @@ mod tests {
       &Declaration {
         property: "column-gap".into(),
         value: PropertyValue::Percentage(15.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16595,6 +16785,7 @@ mod tests {
       &Declaration {
         property: "column-count".into(),
         value: PropertyValue::Number(2.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16607,6 +16798,7 @@ mod tests {
       &Declaration {
         property: "column-width".into(),
         value: PropertyValue::Length(Length::px(120.0)),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16619,6 +16811,7 @@ mod tests {
       &Declaration {
         property: "column-fill".into(),
         value: PropertyValue::Keyword("auto".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16631,6 +16824,7 @@ mod tests {
       &Declaration {
         property: "column-span".into(),
         value: PropertyValue::Keyword("all".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16647,6 +16841,7 @@ mod tests {
           PropertyValue::Keyword("solid".to_string()),
           PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16669,6 +16864,7 @@ mod tests {
       &Declaration {
         property: "columns".into(),
         value: PropertyValue::Keyword("4 60px".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16692,6 +16888,7 @@ mod tests {
       &Declaration {
         property: "outline".into(),
         value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16719,6 +16916,7 @@ mod tests {
           PropertyValue::Keyword("solid".to_string()),
           PropertyValue::Keyword("thin".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16742,6 +16940,7 @@ mod tests {
       &Declaration {
         property: "outline-width".into(),
         value: PropertyValue::Number(-3.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16761,6 +16960,7 @@ mod tests {
       &Declaration {
         property: "padding-left".into(),
         value: PropertyValue::Length(Length::px(-4.0)),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16773,6 +16973,7 @@ mod tests {
       &Declaration {
         property: "border-left-width".into(),
         value: PropertyValue::Number(-3.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16794,6 +16995,7 @@ mod tests {
       &Declaration {
         property: "border-radius".into(),
         value,
+        contains_var: false,
         raw_value: "10px".to_string(),
         important: false,
       },
@@ -16818,6 +17020,7 @@ mod tests {
       &Declaration {
         property: "border-radius".into(),
         value,
+        contains_var: false,
         raw_value: "10px 20px".to_string(),
         important: false,
       },
@@ -16853,6 +17056,7 @@ mod tests {
       &Declaration {
         property: "border-radius".into(),
         value,
+        contains_var: false,
         raw_value: "10px 20px 30px".to_string(),
         important: false,
       },
@@ -16888,6 +17092,7 @@ mod tests {
       &Declaration {
         property: "border-radius".into(),
         value,
+        contains_var: false,
         raw_value: "1px 2px 3px 4px".to_string(),
         important: false,
       },
@@ -16922,6 +17127,7 @@ mod tests {
       &Declaration {
         property: "border-radius".into(),
         value: PropertyValue::Length(Length::px(-10.0)),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16949,6 +17155,7 @@ mod tests {
           PropertyValue::Keyword("/".to_string()),
           PropertyValue::Length(Length::px(20.0)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -16981,6 +17188,7 @@ mod tests {
           PropertyValue::Length(Length::px(30.0)),
           PropertyValue::Length(Length::px(40.0)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17027,6 +17235,7 @@ mod tests {
       &Declaration {
         property: "overflow".into(),
         value: PropertyValue::Keyword("clip".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17048,6 +17257,7 @@ mod tests {
         PropertyValue::Keyword("left".to_string()),
         PropertyValue::Keyword("top".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17071,6 +17281,7 @@ mod tests {
           PropertyValue::Keyword("left".to_string()),
           PropertyValue::Percentage(20.0),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17096,6 +17307,7 @@ mod tests {
           PropertyValue::Keyword("top".to_string()),
           PropertyValue::Keyword("right".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17121,6 +17333,7 @@ mod tests {
           PropertyValue::Percentage(30.0),
           PropertyValue::Keyword("left".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17146,6 +17359,7 @@ mod tests {
           PropertyValue::Keyword("center".to_string()),
           PropertyValue::Keyword("left".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17169,6 +17383,7 @@ mod tests {
           PropertyValue::Keyword("center".to_string()),
           PropertyValue::Keyword("bottom".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17193,6 +17408,7 @@ mod tests {
           PropertyValue::Length(Length::px(10.0)),
           PropertyValue::Keyword("bottom".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17219,6 +17435,7 @@ mod tests {
           PropertyValue::Length(Length::px(5.0)),
           PropertyValue::Keyword("right".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17246,6 +17463,7 @@ mod tests {
           PropertyValue::Keyword("bottom".to_string()),
           PropertyValue::Length(Length::px(10.0)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17273,6 +17491,7 @@ mod tests {
           PropertyValue::Keyword("left".to_string()),
           PropertyValue::Length(Length::px(5.0)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17300,6 +17519,7 @@ mod tests {
           PropertyValue::Keyword("right".to_string()),
           PropertyValue::Length(Length::px(8.0)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17327,6 +17547,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Url("b.png".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17340,6 +17561,7 @@ mod tests {
       &Declaration {
         property: "background-position-y".into(),
         value: PropertyValue::Keyword("bottom".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17357,6 +17579,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Percentage(20.0),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17388,6 +17611,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Url("b.png".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17401,6 +17625,7 @@ mod tests {
       &Declaration {
         property: "background-position-y".into(),
         value: PropertyValue::Percentage(10.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17426,6 +17651,7 @@ mod tests {
         PropertyValue::Keyword("bottom".to_string()),
         PropertyValue::Length(Length::px(5.0)),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17448,6 +17674,7 @@ mod tests {
         PropertyValue::Keyword("top".to_string()),
         PropertyValue::Percentage(25.0),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17462,6 +17689,7 @@ mod tests {
     let decl = Declaration {
       property: "background-position".into(),
       value: PropertyValue::Keyword("top".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17482,6 +17710,7 @@ mod tests {
         PropertyValue::Keyword("underline".to_string()),
         PropertyValue::Keyword("overline".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17498,6 +17727,7 @@ mod tests {
     let decl = Declaration {
       property: "text-decoration-style".into(),
       value: PropertyValue::Keyword("dashed".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17507,6 +17737,7 @@ mod tests {
     let decl = Declaration {
       property: "text-decoration-color".into(),
       value: PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17516,6 +17747,7 @@ mod tests {
     let decl = Declaration {
       property: "text-decoration-thickness".into(),
       value: PropertyValue::Length(Length::px(3.0)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17528,6 +17760,7 @@ mod tests {
     let decl = Declaration {
       property: "text-decoration-thickness".into(),
       value: PropertyValue::Keyword("from-font".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17540,6 +17773,7 @@ mod tests {
     let decl = Declaration {
       property: "text-underline-position".into(),
       value: PropertyValue::Keyword("under".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17555,6 +17789,7 @@ mod tests {
         PropertyValue::Keyword("left".to_string()),
         PropertyValue::Keyword("under".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17575,6 +17810,7 @@ mod tests {
         PropertyValue::Keyword("open".to_string()),
         PropertyValue::Keyword("sesame".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17590,6 +17826,7 @@ mod tests {
     let decl = Declaration {
       property: "text-emphasis-color".into(),
       value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17602,6 +17839,7 @@ mod tests {
         PropertyValue::Keyword("under".to_string()),
         PropertyValue::Keyword("right".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17617,6 +17855,7 @@ mod tests {
         PropertyValue::Keyword("circle".to_string()),
         PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17640,6 +17879,7 @@ mod tests {
       &Declaration {
         property: "text-size-adjust".into(),
         value: PropertyValue::Keyword("none".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17654,6 +17894,7 @@ mod tests {
       &Declaration {
         property: "text-size-adjust".into(),
         value: PropertyValue::Percentage(125.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17670,6 +17911,7 @@ mod tests {
       &Declaration {
         property: "text-size-adjust".into(),
         value: PropertyValue::Percentage(-10.0),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17696,6 +17938,7 @@ mod tests {
       &Declaration {
         property: "text-size-adjust".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17717,6 +17960,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("none".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17731,6 +17975,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("preserve-parent-color".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17753,6 +17998,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17767,6 +18013,7 @@ mod tests {
       &Declaration {
         property: "forced-color-adjust".into(),
         value: PropertyValue::Keyword("unset".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17788,6 +18035,7 @@ mod tests {
         PropertyValue::Keyword("auto".to_string()),
         PropertyValue::Keyword("under".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17814,6 +18062,7 @@ mod tests {
         PropertyValue::Keyword("dotted".to_string()),
         PropertyValue::Color(Color::Rgba(Rgba::RED)),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17842,6 +18091,7 @@ mod tests {
         PropertyValue::Keyword("wavy".to_string()),
         PropertyValue::Keyword("currentcolor".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17866,6 +18116,7 @@ mod tests {
         PropertyValue::Color(Color::Rgba(Rgba::GREEN)),
         PropertyValue::Length(Length::px(3.2)),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17894,6 +18145,7 @@ mod tests {
           PropertyValue::Keyword("UNDERLINE".to_string()),
           PropertyValue::Keyword("OVERLINE".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17915,6 +18167,7 @@ mod tests {
       &Declaration {
         property: "text-decoration-style".into(),
         value: PropertyValue::Keyword("DASHED".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17929,6 +18182,7 @@ mod tests {
       &Declaration {
         property: "text-decoration-thickness".into(),
         value: PropertyValue::Keyword("FROM-FONT".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17946,6 +18200,7 @@ mod tests {
       &Declaration {
         property: "text-decoration-skip-ink".into(),
         value: PropertyValue::Keyword("ALL".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17960,6 +18215,7 @@ mod tests {
       &Declaration {
         property: "text-underline-position".into(),
         value: PropertyValue::Keyword("UNDER RIGHT".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -17979,6 +18235,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::Keyword("square".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17988,6 +18245,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-position".into(),
       value: PropertyValue::Keyword("inside".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -17997,6 +18255,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-image".into(),
       value: PropertyValue::Url("marker.png".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18012,6 +18271,7 @@ mod tests {
         PropertyValue::Keyword("upper-roman".to_string()),
         PropertyValue::Keyword("outside".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18023,6 +18283,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style".into(),
       value: PropertyValue::Url("img.png".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18037,6 +18298,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18047,6 +18309,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::Keyword("lower-greek".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18056,6 +18319,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::Keyword("armenian".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18065,6 +18329,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::Keyword("lower-armenian".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18074,6 +18339,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::Keyword("georgian".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18083,6 +18349,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::Keyword("disclosure-open".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18092,6 +18359,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::Keyword("disclosure-closed".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18101,6 +18369,7 @@ mod tests {
     let decl = Declaration {
       property: "list-style-type".into(),
       value: PropertyValue::String("★".to_string()),
+      contains_var: false,
       raw_value: "\"★\"".to_string(),
       important: false,
     };
@@ -18117,6 +18386,7 @@ mod tests {
       &Declaration {
         property: "list-style-image".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18136,6 +18406,7 @@ mod tests {
       &Declaration {
         property: "cursor".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18157,6 +18428,7 @@ mod tests {
       &Declaration {
         property: "cursor".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18178,6 +18450,7 @@ mod tests {
       &Declaration {
         property: "cursor".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18202,6 +18475,7 @@ mod tests {
       &Declaration {
         property: "cursor".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18231,6 +18505,7 @@ mod tests {
       &Declaration {
         property: "cursor".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18258,6 +18533,7 @@ mod tests {
         &Declaration {
           property: "cursor".into(),
           value,
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         },
@@ -18282,6 +18558,7 @@ mod tests {
         value: PropertyValue::Keyword(
           "image-set(url(\"marker-1x.png\") 1x, url(\"marker-2x.png\") 2x)".to_string(),
         ),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18307,6 +18584,7 @@ mod tests {
         PropertyValue::String("‹".to_string()),
         PropertyValue::String("›".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18323,6 +18601,7 @@ mod tests {
     let decl = Declaration {
       property: "quotes".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18336,6 +18615,7 @@ mod tests {
     let decl = Declaration {
       property: "string-set".into(),
       value: PropertyValue::Keyword("chapter content() section \"Intro\"".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18362,6 +18642,7 @@ mod tests {
     let decl = Declaration {
       property: "string-set".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18378,6 +18659,7 @@ mod tests {
     let decl = Declaration {
       property: "letter-spacing".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18387,6 +18669,7 @@ mod tests {
     let decl = Declaration {
       property: "letter-spacing".into(),
       value: PropertyValue::Length(Length::em(0.25)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18396,6 +18679,7 @@ mod tests {
     let decl = Declaration {
       property: "word-spacing".into(),
       value: PropertyValue::Percentage(50.0),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18405,6 +18689,7 @@ mod tests {
     let decl = Declaration {
       property: "word-spacing".into(),
       value: PropertyValue::Length(Length::em(-0.5)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18420,6 +18705,7 @@ mod tests {
       &Declaration {
         property: "word-break".into(),
         value: PropertyValue::Keyword("anywhere".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18438,6 +18724,7 @@ mod tests {
       &Declaration {
         property: "word-break".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18452,6 +18739,7 @@ mod tests {
       &Declaration {
         property: "word-break".into(),
         value: PropertyValue::Keyword("initial".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18470,6 +18758,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("nowrap".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18488,6 +18777,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18502,6 +18792,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("auto".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18516,6 +18807,7 @@ mod tests {
       &Declaration {
         property: "text-wrap".into(),
         value: PropertyValue::Keyword("initial".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18532,6 +18824,7 @@ mod tests {
     let decl = Declaration {
       property: "counter-reset".into(),
       value: PropertyValue::Keyword("chapter 3 section".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18549,6 +18842,7 @@ mod tests {
         PropertyValue::Keyword("item".to_string()),
         PropertyValue::Number(2.0),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18561,6 +18855,7 @@ mod tests {
     let decl = Declaration {
       property: "counter-set".into(),
       value: PropertyValue::Keyword("item 7".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18573,6 +18868,7 @@ mod tests {
     let decl = Declaration {
       property: "counter-increment".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18600,6 +18896,7 @@ mod tests {
       &Declaration {
         property: "border-image-source".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18619,6 +18916,7 @@ mod tests {
       &Declaration {
         property: "background".into(),
         value,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18670,6 +18968,7 @@ mod tests {
         PropertyValue::Keyword("padding-box".to_string()),
         PropertyValue::Color(Color::Rgba(Rgba::RED)),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -18701,6 +19000,7 @@ mod tests {
       &Declaration {
         property: "background-image".into(),
         value: PropertyValue::Url(String::new()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18724,6 +19024,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Url("b.png".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18759,6 +19060,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Url("b.png".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18776,6 +19078,7 @@ mod tests {
           PropertyValue::Length(Length::px(10.0)),
           PropertyValue::Length(Length::px(20.0)),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18807,6 +19110,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Keyword("space".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18832,6 +19136,7 @@ mod tests {
       &Declaration {
         property: "background-image".into(),
         value: PropertyValue::Url("one.png".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18851,6 +19156,7 @@ mod tests {
           PropertyValue::Keyword("right".to_string()),
           PropertyValue::Keyword("bottom".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18874,6 +19180,7 @@ mod tests {
         value: PropertyValue::Keyword(
           "image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string(),
         ),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18900,6 +19207,7 @@ mod tests {
           value: PropertyValue::Keyword(
             "image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string(),
           ),
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         },
@@ -18923,6 +19231,7 @@ mod tests {
       &Declaration {
         property: "background-image".into(),
         value: PropertyValue::Keyword("image-set(url(\"hi.png\") 192dpi)".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18942,6 +19251,7 @@ mod tests {
         value: PropertyValue::Keyword(
           "image-set(url(\"smaller.png\") 0.5x, url(\"bigger.png\") 0.75x)".to_string(),
         ),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18968,6 +19278,7 @@ mod tests {
           ),
           PropertyValue::Keyword("no-repeat".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -18992,6 +19303,7 @@ mod tests {
     let decl = Declaration {
       property: "background".into(),
       value,
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19026,6 +19338,7 @@ mod tests {
     let decl = Declaration {
       property: "background".into(),
       value,
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19069,6 +19382,7 @@ mod tests {
     let decl = Declaration {
       property: "background".into(),
       value,
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19081,6 +19395,7 @@ mod tests {
     let decl = Declaration {
       property: "background".into(),
       value,
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19106,6 +19421,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Url("b.png".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -19119,6 +19435,7 @@ mod tests {
       &Declaration {
         property: "background-blend-mode".into(),
         value: PropertyValue::Keyword("screen".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -19138,6 +19455,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Keyword("overlay".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -19156,6 +19474,7 @@ mod tests {
       &Declaration {
         property: "background-image".into(),
         value: PropertyValue::Url("single.png".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -19172,6 +19491,7 @@ mod tests {
           PropertyValue::Keyword(",".to_string()),
           PropertyValue::Keyword("lighten".to_string()),
         ]),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -19200,6 +19520,7 @@ mod tests {
     let decl = Declaration {
       property: "background".into(),
       value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19239,6 +19560,7 @@ mod tests {
     let decl = Declaration {
       property: "background".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19259,6 +19581,7 @@ mod tests {
     let decl = Declaration {
       property: "background-repeat".into(),
       value: PropertyValue::Keyword("space".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19275,6 +19598,7 @@ mod tests {
     let decl = Declaration {
       property: "background-repeat".into(),
       value: PropertyValue::Keyword("repeat-x".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19294,6 +19618,7 @@ mod tests {
         PropertyValue::Keyword("space".to_string()),
         PropertyValue::Keyword("round".to_string()),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19314,6 +19639,7 @@ mod tests {
     let decl = Declaration {
       property: "background-size".into(),
       value: PropertyValue::Length(Length::px(25.0)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19332,6 +19658,7 @@ mod tests {
         PropertyValue::Keyword("auto".to_string()),
         PropertyValue::Percentage(50.0),
       ]),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19347,6 +19674,7 @@ mod tests {
     let decl = Declaration {
       property: "background-size".into(),
       value: PropertyValue::Keyword("contain".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19363,6 +19691,7 @@ mod tests {
     let decl = Declaration {
       property: "white-space".into(),
       value: PropertyValue::Keyword("break-spaces".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19377,6 +19706,7 @@ mod tests {
     let decl = Declaration {
       property: "line-break".into(),
       value: PropertyValue::Keyword("anywhere".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19392,6 +19722,7 @@ mod tests {
     let origin_decl = Declaration {
       property: "background-origin".into(),
       value: PropertyValue::Keyword("content-box".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19407,6 +19738,7 @@ mod tests {
     let clip_decl = Declaration {
       property: "background-clip".into(),
       value: PropertyValue::Keyword("padding-box".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19569,6 +19901,7 @@ mod tests {
     let decl = Declaration {
       property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("plus-lighter".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19582,6 +19915,7 @@ mod tests {
     let darker = Declaration {
       property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("plus-darker".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19591,6 +19925,7 @@ mod tests {
     let hsv = Declaration {
       property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("hue-hsv".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19600,6 +19935,7 @@ mod tests {
     let oklch = Declaration {
       property: "mix-blend-mode".into(),
       value: PropertyValue::Keyword("color-oklch".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19613,6 +19949,7 @@ mod tests {
     let decl = Declaration {
       property: "backdrop-filter".into(),
       value: PropertyValue::Keyword("blur(5px)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19665,6 +20002,7 @@ mod tests {
     let number_decl = Declaration {
       property: "tab-size".into(),
       value: PropertyValue::Number(4.0),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19680,6 +20018,7 @@ mod tests {
     let length_decl = Declaration {
       property: "tab-size".into(),
       value: PropertyValue::Length(Length::px(20.0)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19702,6 +20041,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("italic 700 20px/30px \"Fira Sans\", serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19730,6 +20070,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("oblique calc(60deg - 10deg) 16px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19748,6 +20089,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("bold larger/125% serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19766,6 +20108,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("bold 20px/calc(50% + 25%) serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19783,6 +20126,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("bold calc(10px + 5px)/normal serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19800,6 +20144,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("bold calc(-10px + 2px)/normal serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19818,6 +20163,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("bold 20px/-1px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19838,6 +20184,7 @@ mod tests {
     let decl = Declaration {
       property: "font-family".into(),
       value,
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19864,6 +20211,7 @@ mod tests {
     let decl = Declaration {
       property: "font-family".into(),
       value: parse_property_value("font-family", "inherit").expect("font-family inherit"),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19878,6 +20226,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("italic 16px".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19899,6 +20248,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variation-settings".into(),
       value: PropertyValue::Keyword("\"wght\" 600, \"wdth\" 80".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19923,6 +20273,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variation-settings".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19936,6 +20287,7 @@ mod tests {
     let decl = Declaration {
       property: "font-optical-sizing".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19945,6 +20297,7 @@ mod tests {
     let decl2 = Declaration {
       property: "font-optical-sizing".into(),
       value: PropertyValue::Keyword("auto".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19958,6 +20311,7 @@ mod tests {
     let decl = Declaration {
       property: "font-language-override".into(),
       value: PropertyValue::Keyword("\"SRB\"".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19970,6 +20324,7 @@ mod tests {
     let decl2 = Declaration {
       property: "font-language-override".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -19987,24 +20342,28 @@ mod tests {
       Declaration {
         property: "font-feature-settings".into(),
         value: PropertyValue::Keyword("\"kern\" off".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
       Declaration {
         property: "font-variation-settings".into(),
         value: PropertyValue::Keyword("\"wght\" 700".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
       Declaration {
         property: "font-language-override".into(),
         value: PropertyValue::Keyword("\"SRB\"".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
       Declaration {
         property: "font".into(),
         value: PropertyValue::Keyword("italic 16px/20px serif".to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -20028,6 +20387,7 @@ mod tests {
     let decl = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Percentage(150.0),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20043,6 +20403,7 @@ mod tests {
     let decl = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Length(len),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20058,6 +20419,7 @@ mod tests {
     let decl = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Length(len),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20074,6 +20436,7 @@ mod tests {
     let decl = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Length(len),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20088,6 +20451,7 @@ mod tests {
     let decl = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Length(Length::percent(125.0)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20104,6 +20468,7 @@ mod tests {
     let negative_number = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Number(-1.0),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20119,6 +20484,7 @@ mod tests {
     let negative_percent = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Percentage(-50.0),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20134,6 +20500,7 @@ mod tests {
     let negative_length = Declaration {
       property: "line-height".into(),
       value: PropertyValue::Length(Length::px(-10.0)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20154,6 +20521,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Keyword("large".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20163,6 +20531,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Percentage(150.0),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20172,6 +20541,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Length(Length::em(2.0)),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20181,6 +20551,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Length(parse_length("calc(10px + 5px)").unwrap()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20190,6 +20561,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Length(parse_length("calc(50% + 0%)").unwrap()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20199,6 +20571,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Length(parse_length("calc(-10px + 2px)").unwrap()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20215,6 +20588,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Length(parse_length("10vw").unwrap()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20231,6 +20605,7 @@ mod tests {
     let vh_decl = Declaration {
       property: "font-size".into(),
       value: PropertyValue::Length(parse_length("5vh").unwrap()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20251,6 +20626,7 @@ mod tests {
     let decl = Declaration {
       property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 20deg".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20260,6 +20636,7 @@ mod tests {
     let invalid = Declaration {
       property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 120deg".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20274,6 +20651,7 @@ mod tests {
     let decl = Declaration {
       property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 10deg".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20283,6 +20661,7 @@ mod tests {
     let invalid = Declaration {
       property: "font-style".into(),
       value: PropertyValue::Keyword("oblique calc(120deg - 10deg)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20303,6 +20682,7 @@ mod tests {
       &Declaration {
         property: "inset".into(),
         value: PropertyValue::Keyword("calc(0)".into()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -20322,6 +20702,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("oblique 15deg 16px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20332,6 +20713,7 @@ mod tests {
     let invalid = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("oblique 100deg 20px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20347,6 +20729,7 @@ mod tests {
     let decl = Declaration {
       property: "font-style".into(),
       value: PropertyValue::Keyword("oblique 120deg".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20362,6 +20745,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("oblique 12deg 16px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20371,6 +20755,7 @@ mod tests {
     let invalid = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("oblique calc(95deg + 10deg) 18px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20386,6 +20771,7 @@ mod tests {
     let decl = Declaration {
       property: "font-stretch".into(),
       value: PropertyValue::Keyword("expanded".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20395,6 +20781,7 @@ mod tests {
     let decl = Declaration {
       property: "font-stretch".into(),
       value: PropertyValue::Percentage(125.0),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20408,6 +20795,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("italic bold condensed 16px/20px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20441,6 +20829,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("italic bold small-caps 16px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20479,6 +20868,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20488,6 +20878,7 @@ mod tests {
     let decl = Declaration {
       property: "font".into(),
       value: PropertyValue::Keyword("small-caps 16px serif".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20502,6 +20893,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps bogus".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20519,6 +20911,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps all-petite-caps".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20544,6 +20937,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20581,6 +20975,7 @@ mod tests {
                  historical-forms styleset(1,2) swash(3) annotation(note) sub"
           .to_string(),
       ),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20636,6 +21031,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps styleset(1 2 3) swash(4)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20662,6 +21058,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps oldstyle-nums".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20713,6 +21110,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("small-caps tabular-nums proportional-nums".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20739,6 +21137,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-caps".into(),
       value: PropertyValue::Keyword("all-small-caps".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20751,6 +21150,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant".into(),
       value: PropertyValue::Keyword("all-petite-caps titling-caps".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20767,6 +21167,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-position".into(),
       value: PropertyValue::Keyword("super".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20779,6 +21180,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-position".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20795,6 +21197,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size-adjust".into(),
       value: PropertyValue::Number(0.7),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20804,6 +21207,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size-adjust".into(),
       value: PropertyValue::Keyword("from-font".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20813,6 +21217,7 @@ mod tests {
     let decl = Declaration {
       property: "font-size-adjust".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20826,6 +21231,7 @@ mod tests {
     let decl = Declaration {
       property: "font-synthesis".into(),
       value: PropertyValue::Keyword("weight style position".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20838,6 +21244,7 @@ mod tests {
     let decl = Declaration {
       property: "font-synthesis".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20854,6 +21261,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("emoji".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20866,6 +21274,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("text".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20878,6 +21287,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("unicode".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20890,6 +21300,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-emoji".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20912,6 +21323,7 @@ mod tests {
       let decl = Declaration {
         property: "font-palette".into(),
         value: PropertyValue::Keyword(value.to_string()),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       };
@@ -20936,6 +21348,7 @@ mod tests {
     let decl = Declaration {
       property: "font-synthesis-weight".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20945,6 +21358,7 @@ mod tests {
     let decl = Declaration {
       property: "font-synthesis-style".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20954,6 +21368,7 @@ mod tests {
     let decl = Declaration {
       property: "font-synthesis-small-caps".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20963,6 +21378,7 @@ mod tests {
     let decl = Declaration {
       property: "font-synthesis-position".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20972,6 +21388,7 @@ mod tests {
     let reset = Declaration {
       property: "font-synthesis".into(),
       value: PropertyValue::Keyword("weight style small-caps position".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -20988,6 +21405,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("jis90 proportional-width ruby".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21005,6 +21423,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21021,6 +21440,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("bogus".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21038,6 +21458,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-east-asian".into(),
       value: PropertyValue::Keyword("full-width proportional-width".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21056,6 +21477,7 @@ mod tests {
       value: PropertyValue::Keyword(
         "oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero".to_string(),
       ),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21078,6 +21500,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-numeric".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21105,6 +21528,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-alternates".into(),
       value: PropertyValue::Keyword("bogus".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21119,6 +21543,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-alternates".into(),
       value: PropertyValue::Keyword("stylistic(1) stylistic(2)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21132,6 +21557,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-alternates".into(),
       value: PropertyValue::Keyword("styleset(1 2 3) character-variant(4 5) swash(6)".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21148,6 +21574,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-numeric".into(),
       value: PropertyValue::Keyword("bogus".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21165,6 +21592,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-numeric".into(),
       value: PropertyValue::Keyword("tabular-nums proportional-nums".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21182,6 +21610,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-ligatures".into(),
       value: PropertyValue::Keyword("foo".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21196,6 +21625,7 @@ mod tests {
     let decl = Declaration {
       property: "font-variant-ligatures".into(),
       value: PropertyValue::Keyword("contextual no-contextual".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21209,6 +21639,7 @@ mod tests {
     let decl = Declaration {
       property: "font-kerning".into(),
       value: PropertyValue::Keyword("none".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21218,6 +21649,7 @@ mod tests {
     let decl = Declaration {
       property: "font-kerning".into(),
       value: PropertyValue::Keyword("normal".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21231,6 +21663,7 @@ mod tests {
     let decl = Declaration {
       property: "float".into(),
       value: PropertyValue::Keyword("left".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21240,6 +21673,7 @@ mod tests {
     let decl = Declaration {
       property: "clear".into(),
       value: PropertyValue::Keyword("both".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21249,6 +21683,7 @@ mod tests {
     let decl = Declaration {
       property: "float".into(),
       value: PropertyValue::Keyword("invalid".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21266,6 +21701,7 @@ mod tests {
       &Declaration {
         property: "shape-margin".into(),
         value: margin,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -21281,6 +21717,7 @@ mod tests {
       &Declaration {
         property: "shape-image-threshold".into(),
         value: threshold,
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -21300,6 +21737,7 @@ mod tests {
       &Declaration {
         property: "shape-outside".into(),
         value: parse_property_value("shape-outside", "circle(50% at 50% 50%) margin-box").unwrap(),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -21332,6 +21770,7 @@ mod tests {
       &Declaration {
         property: "shape-outside".into(),
         value: parse_property_value("shape-outside", "url(a.png)").unwrap(),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },
@@ -21352,6 +21791,7 @@ mod tests {
     let decl = Declaration {
       property: "break-before".into(),
       value: PropertyValue::Keyword("avoid-page".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21361,6 +21801,7 @@ mod tests {
     let decl = Declaration {
       property: "break-after".into(),
       value: PropertyValue::Keyword("avoid-column".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21370,6 +21811,7 @@ mod tests {
     let decl = Declaration {
       property: "column-break-before".into(),
       value: PropertyValue::Keyword("always".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };
@@ -21379,6 +21821,7 @@ mod tests {
     let decl = Declaration {
       property: "column-break-inside".into(),
       value: PropertyValue::Keyword("avoid".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     };

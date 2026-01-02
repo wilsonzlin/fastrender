@@ -12,9 +12,16 @@ use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 
 fn decl(property: &'static str, value: PropertyValue) -> Declaration {
+  let contains_var = match &value {
+    PropertyValue::Keyword(raw) | PropertyValue::Custom(raw) => {
+      fastrender::style::var_resolution::contains_var(raw)
+    }
+    _ => false,
+  };
   Declaration {
     property: property.into(),
     value,
+    contains_var,
     raw_value: String::new(),
     important: false,
   }

@@ -9,9 +9,11 @@ use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 
 fn decl(name: &'static str, value: &str) -> Declaration {
+  let contains_var = fastrender::style::var_resolution::contains_var(value);
   Declaration {
     property: name.into(),
     value: parse_property_value(name, value).expect("parse property value"),
+    contains_var,
     raw_value: value.to_string(),
     important: false,
   }

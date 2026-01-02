@@ -19727,6 +19727,7 @@ fn list_type_presentational_hint(
   let declarations = vec![Declaration {
     property: "list-style-type".into(),
     value: PropertyValue::Keyword(mapped.to_string()),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   }];
@@ -19801,6 +19802,7 @@ fn alignment_presentational_hint(
         declarations.push(Declaration {
           property: "text-align".into(),
           value: PropertyValue::Keyword(mapped.to_string()),
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         });
@@ -19811,12 +19813,14 @@ fn alignment_presentational_hint(
             declarations.push(Declaration {
               property: "margin-left".into(),
               value: PropertyValue::Keyword("auto".to_string()),
+              contains_var: false,
               raw_value: String::new(),
               important: false,
             });
             declarations.push(Declaration {
               property: "margin-right".into(),
               value: PropertyValue::Keyword("auto".to_string()),
+              contains_var: false,
               raw_value: String::new(),
               important: false,
             });
@@ -19825,12 +19829,14 @@ fn alignment_presentational_hint(
             declarations.push(Declaration {
               property: "margin-left".into(),
               value: PropertyValue::Keyword("auto".to_string()),
+              contains_var: false,
               raw_value: String::new(),
               important: false,
             });
             declarations.push(Declaration {
               property: "margin-right".into(),
               value: PropertyValue::Length(Length::px(0.0)),
+              contains_var: false,
               raw_value: String::new(),
               important: false,
             });
@@ -19839,12 +19845,14 @@ fn alignment_presentational_hint(
             declarations.push(Declaration {
               property: "margin-left".into(),
               value: PropertyValue::Length(Length::px(0.0)),
+              contains_var: false,
               raw_value: String::new(),
               important: false,
             });
             declarations.push(Declaration {
               property: "margin-right".into(),
               value: PropertyValue::Keyword("auto".to_string()),
+              contains_var: false,
               raw_value: String::new(),
               important: false,
             });
@@ -19861,6 +19869,7 @@ fn alignment_presentational_hint(
         declarations.push(Declaration {
           property: "vertical-align".into(),
           value: PropertyValue::Keyword(mapped.to_string()),
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         });
@@ -19903,6 +19912,7 @@ fn dimension_presentational_hint(
     declarations.push(Declaration {
       property: "width".into(),
       value: PropertyValue::Length(w),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     });
@@ -19911,6 +19921,7 @@ fn dimension_presentational_hint(
     declarations.push(Declaration {
       property: "height".into(),
       value: PropertyValue::Length(h),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     });
@@ -19937,6 +19948,7 @@ fn bgcolor_presentational_hint(
   let declarations = vec![Declaration {
     property: "background-color".into(),
     value: PropertyValue::Color(Color::Rgba(color)),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   }];
@@ -19961,6 +19973,7 @@ fn bordercolor_presentational_hint(
   let declarations = vec![Declaration {
     property: "border-color".into(),
     value: PropertyValue::Color(Color::Rgba(color)),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   }];
@@ -20054,12 +20067,14 @@ fn border_presentational_hint(
   declarations.push(Declaration {
     property: "border-width".into(),
     value: PropertyValue::Length(border_len),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   });
   declarations.push(Declaration {
     property: "border-style".into(),
     value: PropertyValue::Keyword("solid".to_string()),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   });
@@ -20068,6 +20083,7 @@ fn border_presentational_hint(
   declarations.push(Declaration {
     property: "border-color".into(),
     value: PropertyValue::Keyword("currentcolor".to_string()),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   });
@@ -20075,6 +20091,7 @@ fn border_presentational_hint(
     declarations.push(Declaration {
       property: "border-collapse".into(),
       value: PropertyValue::Keyword("collapse".to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     });
@@ -20104,6 +20121,7 @@ fn cellspacing_presentational_hint(
   let declarations = vec![Declaration {
     property: "border-spacing".into(),
     value: PropertyValue::Length(length),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   }];
@@ -20153,6 +20171,7 @@ fn cellpadding_presentational_hint(
   let declarations = vec![Declaration {
     property: "padding".into(),
     value: PropertyValue::Length(padding),
+    contains_var: false,
     raw_value: String::new(),
     important: false,
   }];
@@ -20242,6 +20261,7 @@ fn replaced_alignment_presentational_hint(
     declarations.push(Declaration {
       property: "float".into(),
       value: PropertyValue::Keyword(float.to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     });
@@ -20250,6 +20270,7 @@ fn replaced_alignment_presentational_hint(
     declarations.push(Declaration {
       property: "vertical-align".into(),
       value: PropertyValue::Keyword(valign.to_string()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     });

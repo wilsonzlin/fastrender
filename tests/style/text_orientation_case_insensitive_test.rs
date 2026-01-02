@@ -13,6 +13,7 @@ fn text_orientation_keywords_are_case_insensitive() {
     &Declaration {
       property: "text-orientation".into(),
       value: PropertyValue::Keyword("UPRIGHT".into()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     },
@@ -27,6 +28,7 @@ fn text_orientation_keywords_are_case_insensitive() {
     &Declaration {
       property: "text-orientation".into(),
       value: PropertyValue::Keyword("SIDEWAYS-LEFT".into()),
+      contains_var: false,
       raw_value: String::new(),
       important: false,
     },

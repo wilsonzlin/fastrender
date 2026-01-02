@@ -222,6 +222,7 @@ fn background_image_set_chooses_best_density_for_display_list() {
           "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
           low, high
         )),
+        contains_var: false,
         raw_value: String::new(),
         important: false,
       },

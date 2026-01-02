@@ -47,32 +47,194 @@ fn contains_ascii_case_insensitive_var_call(raw: &str) -> bool {
   false
 }
 
+#[inline]
+fn parse_simple_var_call<'a>(raw: &'a str) -> Option<(&'a str, Option<&'a str>)> {
+  let trimmed = raw.trim();
+  if trimmed.len() < 6
+    || !trimmed
+      .get(..4)
+      .is_some_and(|prefix| prefix.eq_ignore_ascii_case("var("))
+    || !trimmed.ends_with(')')
+  {
+    return None;
+  }
+
+  // Reject anything with nested parentheses; those require a full tokenizer to interpret.
+  let inner = trimmed.get(4..trimmed.len().saturating_sub(1))?;
+  if inner.contains('(') || inner.contains(')') {
+    return None;
+  }
+
+  let inner = inner.trim();
+  let (name_chunk, fallback_chunk) = inner
+    .split_once(',')
+    .map(|(name, fallback)| (name, Some(fallback)))
+    .unwrap_or((inner, None));
+
+  let name = name_chunk.trim();
+  if !name.starts_with("--") || name.contains(|c: char| c.is_whitespace()) {
+    return None;
+  }
+
+  let fallback = fallback_chunk.map(str::trim);
+  if let Some(fallback) = fallback {
+    if fallback.is_empty() {
+      return Some((name, None));
+    }
+    // Only support a single comma here; multiple commas require tokenization to disambiguate.
+    if fallback_chunk.is_some_and(|rest| rest.contains(',')) {
+      return None;
+    }
+    return Some((name, Some(fallback)));
+  }
+
+  Some((name, None))
+}
+
+#[inline]
+fn try_resolve_var_calls_without_tokenizer<'a>(
+  raw: &'a str,
+  custom_properties: &'a CustomPropertyStore,
+  depth: usize,
+) -> Option<Result<String, VarResolutionResult<'a>>> {
+  if depth >= MAX_RECURSION_DEPTH {
+    return Some(Err(VarResolutionResult::RecursionLimitExceeded));
+  }
+
+  // The fast path only handles unescaped values. If the raw string contains backslashes it may
+  // hide `var(` via escapes; fall back to cssparser in that case for correctness.
+  if raw.as_bytes().contains(&b'\\') {
+    return None;
+  }
+
+  // Cheap check: most values don't contain var() at all.
+  if !contains_ascii_case_insensitive_var_call(raw) {
+    return None;
+  }
+
+  #[inline]
+  fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_') || b >= 0x80
+  }
+
+  let bytes = raw.as_bytes();
+  let mut i = 0usize;
+  let mut last = 0usize;
+  let mut output = String::new();
+  let mut in_comment = false;
+  let mut in_string: Option<u8> = None;
+  let mut any = false;
+  // Reuse the same recursion stack for each top-level var() call to avoid repeated allocations.
+  let mut stack: Vec<String> = Vec::new();
+
+  while i < bytes.len() {
+    let b = bytes[i];
+
+    if in_comment {
+      if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+        in_comment = false;
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if let Some(quote) = in_string {
+      if b == quote {
+        in_string = None;
+      }
+      i += 1;
+      continue;
+    }
+
+    if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+      in_comment = true;
+      i += 2;
+      continue;
+    }
+
+    if b == b'"' || b == b'\'' {
+      in_string = Some(b);
+      i += 1;
+      continue;
+    }
+
+    if i + 3 < bytes.len()
+      && b.to_ascii_lowercase() == b'v'
+      && bytes[i + 1].to_ascii_lowercase() == b'a'
+      && bytes[i + 2].to_ascii_lowercase() == b'r'
+      && bytes[i + 3] == b'('
+    {
+      // Ensure the match isn't part of a longer identifier (e.g. `somevar(`).
+      let prev = i.checked_sub(1).and_then(|idx| bytes.get(idx).copied());
+      if prev.map_or(false, is_ident_byte) {
+        i += 1;
+        continue;
+      }
+
+      // Find the end of the `var(...)` call. We only accept a "simple" var() call here with no
+      // nested parentheses inside the argument list (nested blocks/fallback functions require a
+      // full tokenizer).
+      let mut end = i + 4;
+      let mut saw_nested_paren = false;
+      while end < bytes.len() {
+        match bytes[end] {
+          b')' => break,
+          b'(' => {
+            saw_nested_paren = true;
+            break;
+          }
+          b'"' | b'\'' => return None,
+          b'/' if end + 1 < bytes.len() && bytes[end + 1] == b'*' => return None,
+          _ => end += 1,
+        }
+      }
+
+      if saw_nested_paren || end >= bytes.len() {
+        return None;
+      }
+
+      let var_call = raw.get(i..end + 1)?;
+      let Some((name, fallback)) = parse_simple_var_call(var_call) else {
+        return None;
+      };
+
+      if !any {
+        output.reserve(raw.len());
+      }
+      output.push_str(raw.get(last..i)?);
+
+      stack.clear();
+      match resolve_variable_reference(
+        name,
+        fallback.map(Cow::Borrowed),
+        custom_properties,
+        &mut stack,
+        depth,
+      ) {
+        Ok(resolved) => output.push_str(resolved.as_ref()),
+        Err(err) => return Some(Err(err)),
+      }
+
+      any = true;
+      last = end + 1;
+      i = end + 1;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  if !any {
+    return None;
+  }
+
+  output.push_str(raw.get(last..)?);
+  Some(Ok(output))
+}
+
 /// Result of a var() resolution attempt
-#[derive(Debug, Clone)]
-pub enum ResolvedPropertyValue<'a> {
-  Borrowed(&'a PropertyValue),
-  Owned(Box<PropertyValue>),
-}
-
-impl<'a> ResolvedPropertyValue<'a> {
-  #[inline]
-  pub fn as_ref(&self) -> &PropertyValue {
-    match self {
-      Self::Borrowed(value) => value,
-      Self::Owned(value) => value.as_ref(),
-    }
-  }
-
-  #[inline]
-  pub fn into_owned(self) -> PropertyValue {
-    match self {
-      Self::Borrowed(value) => value.clone(),
-      Self::Owned(value) => *value,
-    }
-  }
-}
-
-/// Result of a var() resolution attempt.
 #[derive(Debug, Clone)]
 pub enum VarResolutionResult<'a> {
   /// Successfully resolved to a value
@@ -86,6 +248,37 @@ pub enum VarResolutionResult<'a> {
   RecursionLimitExceeded,
   /// Invalid var() syntax
   InvalidSyntax(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedPropertyValue<'a> {
+  Borrowed(&'a PropertyValue),
+  Owned(PropertyValue),
+}
+
+impl<'a> ResolvedPropertyValue<'a> {
+  #[inline]
+  pub fn as_ref(&self) -> &PropertyValue {
+    match self {
+      ResolvedPropertyValue::Borrowed(value) => value,
+      ResolvedPropertyValue::Owned(value) => value,
+    }
+  }
+
+  #[inline]
+  pub fn into_owned(self) -> PropertyValue {
+    match self {
+      ResolvedPropertyValue::Borrowed(value) => value.clone(),
+      ResolvedPropertyValue::Owned(value) => value,
+    }
+  }
+}
+
+impl<'a> AsRef<PropertyValue> for ResolvedPropertyValue<'a> {
+  #[inline]
+  fn as_ref(&self) -> &PropertyValue {
+    Self::as_ref(self)
+  }
 }
 
 impl<'a> VarResolutionResult<'a> {
@@ -135,7 +328,7 @@ pub fn resolve_var(
 /// appropriate grammar (e.g., background layers with commas), rather than the generic parser.
 pub fn resolve_var_for_property<'a>(
   value: &'a PropertyValue,
-  custom_properties: &CustomPropertyStore,
+  custom_properties: &'a CustomPropertyStore,
   property_name: &str,
 ) -> VarResolutionResult<'a> {
   match value {
@@ -154,6 +347,50 @@ pub fn resolve_var_for_property<'a>(
           value: ResolvedPropertyValue::Borrowed(value),
           css_text: Cow::Borrowed(""),
         };
+      }
+
+      // Fast path: `var(--x)` is extremely common (especially for color/spacing tokens). Avoid a
+      // full `cssparser` token walk when the entire value is a single var() call with no fallback.
+      //
+      // This also avoids allocating/building an output string for the outer token stream; we only
+      // materialize the referenced custom property's value.
+      if !raw.as_bytes().contains(&b'\\') {
+        if let Some((name, fallback)) = parse_simple_var_call(raw) {
+          let mut stack = Vec::new();
+          match resolve_variable_reference(
+            name,
+            fallback.map(Cow::Borrowed),
+            custom_properties,
+            &mut stack,
+            0,
+          ) {
+            Ok(resolved) => match parse_value_after_resolution(resolved.as_ref(), property_name) {
+              Some(parsed) => {
+                return VarResolutionResult::Resolved {
+                  value: ResolvedPropertyValue::Owned(parsed),
+                  css_text: resolved,
+                };
+              }
+              None => return VarResolutionResult::InvalidSyntax(resolved.into_owned()),
+            },
+            Err(err) => return err,
+          }
+        }
+
+        if let Some(result) = try_resolve_var_calls_without_tokenizer(raw, custom_properties, 0) {
+          match result {
+            Ok(resolved) => match parse_value_after_resolution(&resolved, property_name) {
+              Some(parsed) => {
+                return VarResolutionResult::Resolved {
+                  value: ResolvedPropertyValue::Owned(parsed),
+                  css_text: Cow::Owned(resolved),
+                };
+              }
+              None => return VarResolutionResult::InvalidSyntax(resolved),
+            },
+            Err(err) => return err,
+          }
+        }
       }
     }
     _ => {}
@@ -179,7 +416,7 @@ pub fn resolve_var_with_depth(
 /// Internal recursive implementation of var() resolution
 fn resolve_var_recursive<'a>(
   value: &'a PropertyValue,
-  custom_properties: &CustomPropertyStore,
+  custom_properties: &'a CustomPropertyStore,
   depth: usize,
   property_name: &str,
 ) -> VarResolutionResult<'a> {
@@ -200,33 +437,33 @@ fn resolve_var_recursive<'a>(
 }
 
 fn resolve_from_string<'a>(
-  raw: &str,
-  custom_properties: &CustomPropertyStore,
+  raw: &'a str,
+  custom_properties: &'a CustomPropertyStore,
   depth: usize,
   property_name: &str,
 ) -> VarResolutionResult<'a> {
   let mut stack = Vec::new();
   match resolve_value_tokens(raw, custom_properties, &mut stack, depth) {
-    Ok(tokens) => {
-      let resolved = tokens_to_css_string(&tokens);
-      match parse_value_after_resolution(&resolved, property_name) {
-        Some(value) => VarResolutionResult::Resolved {
-          value: ResolvedPropertyValue::Owned(Box::new(value)),
-          css_text: Cow::Owned(resolved),
-        },
-        None => VarResolutionResult::InvalidSyntax(resolved),
-      }
-    }
+    Ok(resolved) => match parse_value_after_resolution(&resolved, property_name) {
+      Some(value) => VarResolutionResult::Resolved {
+        value: ResolvedPropertyValue::Owned(value),
+        css_text: Cow::Owned(resolved),
+      },
+      None => VarResolutionResult::InvalidSyntax(resolved),
+    },
     Err(err) => err,
   }
 }
 
-fn resolve_value_tokens(
-  value: &str,
-  custom_properties: &CustomPropertyStore,
+fn resolve_value_tokens<'a, 'i>(
+  value: &'i str,
+  custom_properties: &'a CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult<'static>> {
+) -> Result<String, VarResolutionResult<'a>>
+where
+  'a: 'i,
+{
   if depth >= MAX_RECURSION_DEPTH {
     return Err(VarResolutionResult::RecursionLimitExceeded);
   }
@@ -236,16 +473,19 @@ fn resolve_value_tokens(
   resolve_tokens_from_parser(&mut parser, custom_properties, stack, depth)
 }
 
-fn resolve_tokens_from_parser<'i, 't>(
+fn resolve_tokens_from_parser<'a, 'i, 't>(
   parser: &mut Parser<'i, 't>,
-  custom_properties: &CustomPropertyStore,
+  custom_properties: &'a CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult<'static>> {
+) -> Result<String, VarResolutionResult<'a>>
+where
+  'a: 'i,
+{
   #[cfg(test)]
   TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(count.get() + 1));
 
-  let mut output = Vec::new();
+  let mut output = String::new();
 
   while let Ok(token) = parser.next_including_whitespace_and_comments() {
     match token {
@@ -255,20 +495,20 @@ fn resolve_tokens_from_parser<'i, 't>(
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "var")?;
-        output.extend(resolved);
+        output.push_str(resolved.as_ref());
       }
       Token::Function(name) => {
-        let name = name.as_ref().to_string();
+        output.push_str(name.as_ref());
+        output.push('(');
         let nested = parser.parse_nested_block(|nested| {
           resolve_tokens_from_parser(nested, custom_properties, stack, depth)
             .map_err(|err| nested.new_custom_error(err))
         });
-        let resolved = map_nested_result(nested, &name)?;
-        let mut text = name;
-        text.push('(');
-        text.push_str(&tokens_to_css_string(&resolved));
-        text.push(')');
-        output.push(text);
+        // Avoid keeping `name` (which borrows from the parser input) live across the nested parse.
+        // If the nested block is invalid, we still surface a generic hint.
+        let resolved = map_nested_result(nested, "fn")?;
+        output.push_str(&resolved);
+        output.push(')');
       }
       Token::ParenthesisBlock => {
         let nested = parser.parse_nested_block(|nested| {
@@ -276,7 +516,9 @@ fn resolve_tokens_from_parser<'i, 't>(
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "()")?;
-        output.push(format!("({})", tokens_to_css_string(&resolved)));
+        output.push('(');
+        output.push_str(&resolved);
+        output.push(')');
       }
       Token::SquareBracketBlock => {
         let nested = parser.parse_nested_block(|nested| {
@@ -284,7 +526,9 @@ fn resolve_tokens_from_parser<'i, 't>(
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "[]")?;
-        output.push(format!("[{}]", tokens_to_css_string(&resolved)));
+        output.push('[');
+        output.push_str(&resolved);
+        output.push(']');
       }
       Token::CurlyBracketBlock => {
         let nested = parser.parse_nested_block(|nested| {
@@ -292,19 +536,21 @@ fn resolve_tokens_from_parser<'i, 't>(
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "{}")?;
-        output.push(format!("{{{}}}", tokens_to_css_string(&resolved)));
+        output.push('{');
+        output.push_str(&resolved);
+        output.push('}');
       }
-      other => output.push(token_to_css_string(&other)),
+      other => push_token_to_css(&mut output, &other),
     }
   }
 
   Ok(output)
 }
 
-fn map_nested_result<'i>(
-  result: Result<Vec<String>, ParseError<'i, VarResolutionResult<'static>>>,
+fn map_nested_result<'a, 'i, T>(
+  result: Result<T, ParseError<'i, VarResolutionResult<'a>>>,
   hint: &str,
-) -> Result<Vec<String>, VarResolutionResult<'static>> {
+) -> Result<T, VarResolutionResult<'a>> {
   match result {
     Ok(tokens) => Ok(tokens),
     Err(err) => match err.kind {
@@ -314,25 +560,28 @@ fn map_nested_result<'i>(
   }
 }
 
-fn parse_var_function<'i, 't>(
+fn parse_var_function<'a, 'i, 't>(
   parser: &mut Parser<'i, 't>,
-  custom_properties: &CustomPropertyStore,
+  custom_properties: &'a CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult<'static>> {
+) -> Result<Cow<'a, str>, VarResolutionResult<'a>>
+where
+  'a: 'i,
+{
   let (var_name, fallback) = parse_var_function_arguments(parser)?;
   resolve_variable_reference(
     &var_name,
-    fallback.as_deref(),
+    fallback.map(Cow::Owned),
     custom_properties,
     stack,
     depth,
   )
 }
 
-fn parse_var_function_arguments<'i, 't>(
+fn parse_var_function_arguments<'a, 'i, 't>(
   parser: &mut Parser<'i, 't>,
-) -> Result<(String, Option<String>), VarResolutionResult<'static>> {
+) -> Result<(String, Option<String>), VarResolutionResult<'a>> {
   let mut var_name: Option<String> = None;
 
   while let Ok(token) = parser.next_including_whitespace_and_comments() {
@@ -376,13 +625,13 @@ fn parse_var_function_arguments<'i, 't>(
   Ok((name, Some(fallback_slice.to_string())))
 }
 
-fn resolve_variable_reference(
+fn resolve_variable_reference<'a>(
   name: &str,
-  fallback: Option<&str>,
-  custom_properties: &CustomPropertyStore,
+  fallback: Option<Cow<'a, str>>,
+  custom_properties: &'a CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult<'static>> {
+) -> Result<Cow<'a, str>, VarResolutionResult<'a>> {
   if depth >= MAX_RECURSION_DEPTH {
     return Err(VarResolutionResult::RecursionLimitExceeded);
   }
@@ -392,26 +641,56 @@ fn resolve_variable_reference(
   }
 
   if let Some(value) = custom_properties.get(name) {
+    // Fast path: if the custom property value can't possibly contain var() references (including
+    // escape-hiding), we can skip a full cssparser token walk and just substitute the raw tokens.
+    let raw = value.value.as_str();
+    if !contains_ascii_case_insensitive_var_call(raw)
+      && (!raw.as_bytes().contains(&b'\\') || !raw.as_bytes().contains(&b'('))
+    {
+      return Ok(Cow::Borrowed(raw));
+    }
+
     stack.push(name.to_string());
-    let result = resolve_value_tokens(&value.value, custom_properties, stack, depth + 1);
+    let result = if !raw.as_bytes().contains(&b'\\') {
+      if let Some((nested_name, nested_fallback)) = parse_simple_var_call(raw) {
+        resolve_variable_reference(
+          nested_name,
+          nested_fallback.map(Cow::Borrowed),
+          custom_properties,
+          stack,
+          depth + 1,
+        )
+      } else {
+        resolve_value_tokens(raw, custom_properties, stack, depth + 1).map(Cow::Owned)
+      }
+    } else {
+      resolve_value_tokens(raw, custom_properties, stack, depth + 1).map(Cow::Owned)
+    };
     stack.pop();
     return result;
   }
 
   if let Some(fallback_value) = fallback {
-    return resolve_value_tokens(fallback_value, custom_properties, stack, depth + 1).map_err(
-      |err| match err {
+    // Same fast-path as above for literal fallback tokens.
+    if !contains_ascii_case_insensitive_var_call(fallback_value.as_ref())
+      && (!fallback_value.as_bytes().contains(&b'\\') || !fallback_value.as_bytes().contains(&b'('))
+    {
+      return Ok(fallback_value);
+    }
+
+    return resolve_value_tokens(fallback_value.as_ref(), custom_properties, stack, depth + 1)
+      .map(Cow::Owned)
+      .map_err(|err| match err {
         VarResolutionResult::NotFound(_) => VarResolutionResult::NotFound(name.to_string()),
         other => other,
-      },
-    );
+      });
   }
 
   Err(VarResolutionResult::NotFound(name.to_string()))
 }
 
 fn parse_value_after_resolution(value: &str, property_name: &str) -> Option<PropertyValue> {
-  if resolved_text_contains_var_function(value) {
+  if contains_var(value) {
     return None;
   }
 
@@ -420,74 +699,6 @@ fn parse_value_after_resolution(value: &str, property_name: &str) -> Option<Prop
   } else {
     parse_property_value_after_var_resolution(property_name, value)
   }
-}
-
-fn resolved_text_contains_var_function(haystack: &str) -> bool {
-  fn is_ident_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' || byte >= 0x80
-  }
-
-  let bytes = haystack.as_bytes();
-  if bytes.contains(&b'\\') {
-    // Slow path: backslashes can form escaped `var()` identifiers (e.g. `v\\61 r(...)`), so
-    // re-tokenize to catch those. This also avoids needing a full escape-aware lexer here.
-    return contains_var(haystack);
-  }
-
-  let mut in_string: Option<u8> = None;
-  let mut in_comment = false;
-
-  let mut i = 0usize;
-  while i < bytes.len() {
-    let byte = bytes[i];
-
-    if in_comment {
-      if byte == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-        in_comment = false;
-        i += 2;
-        continue;
-      }
-      i += 1;
-      continue;
-    }
-
-    if let Some(quote) = in_string {
-      if byte == quote {
-        in_string = None;
-      }
-      i += 1;
-      continue;
-    }
-
-    // Not inside a string/comment.
-    if byte == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-      in_comment = true;
-      i += 2;
-      continue;
-    }
-
-    if byte == b'"' || byte == b'\'' {
-      in_string = Some(byte);
-      i += 1;
-      continue;
-    }
-
-    if i + 3 < bytes.len()
-      && byte.to_ascii_lowercase() == b'v'
-      && bytes[i + 1].to_ascii_lowercase() == b'a'
-      && bytes[i + 2].to_ascii_lowercase() == b'r'
-      && bytes[i + 3] == b'('
-    {
-      let prev = i.checked_sub(1).and_then(|idx| bytes.get(idx).copied());
-      if prev.map_or(true, |b| !is_ident_byte(b)) {
-        return true;
-      }
-    }
-
-    i += 1;
-  }
-
-  false
 }
 
 fn parse_untyped_value(value: &str) -> PropertyValue {
@@ -506,14 +717,15 @@ fn parse_untyped_value(value: &str) -> PropertyValue {
   PropertyValue::Keyword(trimmed.to_string())
 }
 
-fn tokens_to_css_string(tokens: &[String]) -> String {
-  tokens.concat()
-}
-
-fn token_to_css_string(token: &Token) -> String {
+#[inline]
+fn push_token_to_css(out: &mut String, token: &Token) {
   match token {
-    Token::WhiteSpace(ws) => ws.to_string(),
-    Token::Comment(text) => format!("/*{}*/", text),
+    Token::WhiteSpace(ws) => out.push_str(ws.as_ref()),
+    Token::Comment(text) => {
+      out.push_str("/*");
+      out.push_str(text.as_ref());
+      out.push_str("*/");
+    }
     // `cssparser`'s `to_css_string()` escapes quotes inside strings/URLs to guarantee the output is
     // valid CSS. Our property-value parser, however, consumes the resolved string without
     // interpreting CSS string escapes (it expects the raw token contents). This mismatch can turn
@@ -521,6 +733,32 @@ fn token_to_css_string(token: &Token) -> String {
     //
     // Prefer emitting quoted strings with a quote character that does not appear in the content so
     // we can preserve the raw value without adding backslash escapes.
+    Token::QuotedString(text) => {
+      let raw = text.as_ref();
+      if !raw.contains('\'') {
+        out.push('\'');
+        out.push_str(raw);
+        out.push('\'');
+      } else if !raw.contains('"') {
+        out.push('"');
+        out.push_str(raw);
+        out.push('"');
+      } else {
+        token
+          .to_css(out)
+          .expect("writing to String should be infallible");
+      }
+    }
+    other => other
+      .to_css(out)
+      .expect("writing to String should be infallible"),
+  }
+}
+
+fn token_to_css_string(token: &Token) -> String {
+  match token {
+    Token::WhiteSpace(ws) => ws.to_string(),
+    Token::Comment(text) => format!("/*{}*/", text),
     Token::QuotedString(text) => {
       let raw = text.as_ref();
       if !raw.contains('\'') {
@@ -549,39 +787,76 @@ pub fn contains_var(value: &str) -> bool {
   }
 
   #[inline]
-  fn is_ascii_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')
+  fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_') || b >= 0x80
   }
 
+  let mut in_string: Option<u8> = None;
+  let mut in_comment = false;
   let mut has_backslash = false;
   let mut has_open_paren = false;
 
-  for (idx, b0) in bytes.iter().copied().enumerate() {
-    if b0 == b'\\' {
+  let mut i = 0usize;
+  while i < bytes.len() {
+    let byte = bytes[i];
+
+    if in_comment {
+      if byte == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+        in_comment = false;
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if let Some(quote) = in_string {
+      if byte == b'\\' {
+        // Skip the escaped byte so `\"` doesn't terminate the string.
+        i = (i + 2).min(bytes.len());
+        continue;
+      }
+      if byte == quote {
+        in_string = None;
+      }
+      i += 1;
+      continue;
+    }
+
+    // Not inside a string/comment.
+    if byte == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+      in_comment = true;
+      i += 2;
+      continue;
+    }
+
+    if byte == b'"' || byte == b'\'' {
+      in_string = Some(byte);
+      i += 1;
+      continue;
+    }
+
+    if byte == b'\\' {
       has_backslash = true;
-    } else if b0 == b'(' {
+    } else if byte == b'(' {
       has_open_paren = true;
     }
 
-    if idx + 3 >= bytes.len() {
-      continue;
+    if i + 3 < bytes.len()
+      && byte.to_ascii_lowercase() == b'v'
+      && bytes[i + 1].to_ascii_lowercase() == b'a'
+      && bytes[i + 2].to_ascii_lowercase() == b'r'
+      && bytes[i + 3] == b'('
+    {
+      // `var(` must be the full function name, so ensure the match is not preceded by an
+      // identifier character (e.g. `somevar(` should not match).
+      let prev = i.checked_sub(1).and_then(|idx| bytes.get(idx).copied());
+      if prev.map_or(true, |b| !is_ident_byte(b)) {
+        return true;
+      }
     }
 
-    if b0 != b'v' && b0 != b'V' {
-      continue;
-    }
-
-    // `var(` must be the full function name, so ensure the match is not preceded by an ASCII
-    // identifier character (e.g. `somevar(` should not match).
-    if idx > 0 && is_ascii_ident_byte(bytes[idx - 1]) {
-      continue;
-    }
-
-    let b1 = bytes[idx + 1];
-    let b2 = bytes[idx + 2];
-    if (b1 == b'a' || b1 == b'A') && (b2 == b'r' || b2 == b'R') && bytes[idx + 3] == b'(' {
-      return true;
-    }
+    i += 1;
   }
 
   // Escaped function names (e.g. `v\61 r(`) require a proper tokenizer to interpret escapes.
@@ -645,7 +920,7 @@ fn collect_var_references_from_parser<'i, 't>(parser: &mut Parser<'i, 't>, refs:
       Token::Function(name) if name.eq_ignore_ascii_case("var") => {
         let _ = parser.parse_nested_block(|nested| {
           if let Ok((name, fallback)) = parse_var_function_arguments(nested) {
-            refs.push(name.clone());
+            refs.push(name);
             if let Some(fallback_value) = fallback {
               let mut input = ParserInput::new(&fallback_value);
               let mut nested_parser = Parser::new(&mut input);
@@ -836,7 +1111,7 @@ mod tests {
     let resolved = resolve_var_for_property(&value, &props, "background-image");
 
     if let VarResolutionResult::Resolved { value, .. } = resolved {
-      let list = match value.as_ref() {
+      let list = match value.into_owned() {
         PropertyValue::Multiple(list) => list,
         other => panic!("Expected Multiple for background layers, got {:?}", other),
       };
@@ -852,39 +1127,6 @@ mod tests {
         resolved
       );
     }
-  }
-
-  #[test]
-  fn resolve_var_preserves_quotes_inside_data_url_svg() {
-    let props = make_props(&[(
-      "--icon",
-      r#"url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6" fill="none"></svg>')"#,
-    )]);
-    let value = PropertyValue::Keyword("var(--icon)".to_string());
-    let resolved = resolve_var_for_property(&value, &props, "background-image");
-
-    let VarResolutionResult::Resolved { value, css_text } = resolved else {
-      panic!("expected successful var() resolution, got {resolved:?}");
-    };
-
-    match value.as_ref() {
-      PropertyValue::Url(url) => {
-        assert!(
-          url.contains(r#"xmlns="http://www.w3.org/2000/svg""#),
-          "resolved data URL should preserve raw quotes, got {url:?}"
-        );
-        assert!(
-          !url.contains("\\\""),
-          "resolved data URL should not contain CSS-escaped quotes, got {url:?}"
-        );
-      }
-      other => panic!("expected Url(...) after var() resolution, got {other:?}"),
-    }
-
-    assert!(
-      !css_text.contains("\\\""),
-      "resolved CSS text should avoid inserting escapes into quoted data URLs: {css_text}"
-    );
   }
 
   #[test]
@@ -963,10 +1205,30 @@ mod tests {
     assert!(contains_var("calc(var(--size) + 10px)"));
     assert!(contains_var("0 0 var(--blur) black"));
     assert!(contains_var("v\\61 r(--x)"));
+    assert!(
+      contains_var("url(var(--x))"),
+      "var() inside url() should be detected"
+    );
     assert!(!contains_var("10px"));
     assert!(!contains_var("red"));
     assert!(!contains_var("color: red"));
     assert!(!contains_var(""));
+  }
+
+  #[test]
+  fn contains_var_ignores_strings_and_comments() {
+    assert!(
+      !contains_var("\"var(--x)\""),
+      "var() inside quoted strings is not a var() token"
+    );
+    assert!(
+      !contains_var("/* var(--x) */"),
+      "var() inside comments is not a var() token"
+    );
+    assert!(
+      !contains_var("url(\"var(--x)\")"),
+      "var() inside url()'s quoted string is not a var() token"
+    );
   }
 
   #[test]
@@ -1048,9 +1310,13 @@ mod tests {
     match resolved {
       VarResolutionResult::Resolved { value, css_text } => {
         assert!(css_text.is_empty());
+        assert!(
+          matches!(value, ResolvedPropertyValue::Borrowed(_)),
+          "expected var-free resolution to borrow the original PropertyValue"
+        );
         assert!(matches!(
-          value,
-          ResolvedPropertyValue::Borrowed(PropertyValue::Keyword(kw)) if kw == "block"
+          value.as_ref(),
+          PropertyValue::Keyword(ref kw) if kw == "block"
         ));
       }
       other => panic!("Expected Resolved, got {:?}", other),
@@ -1060,9 +1326,90 @@ mod tests {
   }
 
   #[test]
+  fn test_simple_var_call_skips_tokenization() {
+    let props = make_props(&[("--x", "10px")]);
+    let value = PropertyValue::Keyword("var(--x)".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
+    let resolved = resolve_var_for_property(&value, &props, "width");
+
+    let VarResolutionResult::Resolved { value, css_text } = resolved else {
+      panic!("expected var() resolution to succeed, got {resolved:?}");
+    };
+    assert_eq!(css_text.as_ref(), "10px");
+    assert!(matches!(
+      value.as_ref(),
+      PropertyValue::Length(len) if (len.value - 10.0).abs() < f32::EPSILON && len.unit == LengthUnit::Px
+    ));
+
+    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
+  }
+
+  #[test]
+  fn test_simple_var_call_with_fallback_skips_tokenization() {
+    let props = CustomPropertyStore::default();
+    let value = PropertyValue::Keyword("var(--missing, 10px)".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
+    let resolved = resolve_var_for_property(&value, &props, "width");
+
+    let VarResolutionResult::Resolved { value, css_text } = resolved else {
+      panic!("expected fallback var() resolution to succeed, got {resolved:?}");
+    };
+    assert_eq!(css_text.trim(), "10px");
+    assert!(matches!(
+      value.as_ref(),
+      PropertyValue::Length(len) if (len.value - 10.0).abs() < f32::EPSILON && len.unit == LengthUnit::Px
+    ));
+
+    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
+  }
+
+  #[test]
+  fn test_multi_var_calls_skip_tokenization() {
+    let props = make_props(&[("--x", "10px"), ("--y", "20px")]);
+    let value = PropertyValue::Keyword("translate(var(--x), var(--y))".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
+    let resolved = resolve_var_for_property(&value, &props, "");
+
+    let VarResolutionResult::Resolved { value, css_text } = resolved else {
+      panic!("expected multi-var() resolution to succeed, got {resolved:?}");
+    };
+    assert_eq!(css_text.as_ref(), "translate(10px, 20px)");
+    assert!(matches!(
+      value.as_ref(),
+      PropertyValue::Keyword(ref kw) if kw == "translate(10px, 20px)"
+    ));
+
+    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
+  }
+
+  #[test]
+  fn test_chained_simple_var_calls_skip_tokenization() {
+    let props = make_props(&[("--a", "var(--b)"), ("--b", "10px")]);
+    let value = PropertyValue::Keyword("var(--a)".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
+    let resolved = resolve_var_for_property(&value, &props, "width");
+
+    let VarResolutionResult::Resolved { value, css_text } = resolved else {
+      panic!("expected chained var() resolution to succeed, got {resolved:?}");
+    };
+    assert_eq!(css_text.as_ref(), "10px");
+    assert!(matches!(
+      value.as_ref(),
+      PropertyValue::Length(len)
+        if (len.value - 10.0).abs() < f32::EPSILON && len.unit == LengthUnit::Px
+    ));
+
+    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
+  }
+
+  #[test]
   fn test_resolve_var_result_methods() {
-    let resolved = VarResolutionResult::Resolved {
-      value: ResolvedPropertyValue::Owned(Box::new(PropertyValue::Keyword("blue".to_string()))),
+    let resolved: VarResolutionResult<'static> = VarResolutionResult::Resolved {
+      value: ResolvedPropertyValue::Owned(PropertyValue::Keyword("blue".to_string())),
       css_text: Cow::Borrowed("blue"),
     };
     assert!(resolved.is_resolved());

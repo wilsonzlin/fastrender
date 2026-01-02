@@ -18,6 +18,7 @@ fn fade_keyframes(name: &str) -> KeyframesRule {
         declarations: vec![Declaration {
           property: "opacity".into(),
           value: PropertyValue::Number(0.0),
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         }],
@@ -27,6 +28,7 @@ fn fade_keyframes(name: &str) -> KeyframesRule {
         declarations: vec![Declaration {
           property: "opacity".into(),
           value: PropertyValue::Number(1.0),
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         }],

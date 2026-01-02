@@ -8480,6 +8480,7 @@ mod tests {
             "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
             low, high
           )),
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         },
@@ -8570,6 +8571,7 @@ mod tests {
             "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
             low, high
           )),
+          contains_var: false,
           raw_value: String::new(),
           important: false,
         },

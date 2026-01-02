@@ -3911,11 +3911,13 @@ fn parse_declaration<'i, 't>(
   };
   let value = value.trim_end_matches(';').trim_end();
 
+  let contains_var = crate::style::var_resolution::contains_var(value);
   let parsed_value =
     parse_property_value_in_context_known_property(context, property.as_str(), value)?;
   Some(Declaration {
     property,
     value: parsed_value,
+    contains_var,
     raw_value: String::new(),
     important,
   })
@@ -4069,6 +4071,7 @@ fn parse_declaration_in_style_block<'i, 't>(
     return Ok(None);
   };
 
+  let contains_var = crate::style::var_resolution::contains_var(value);
   let Some(parsed_value) =
     parse_property_value_in_context_known_property(context, property.as_str(), value)
   else {
@@ -4087,6 +4090,7 @@ fn parse_declaration_in_style_block<'i, 't>(
   Ok(Some(Declaration {
     property,
     value: parsed_value,
+    contains_var,
     raw_value: String::new(),
     important,
   }))
