@@ -153,6 +153,35 @@ struct MeasureKey {
 const GRID_MEASURE_SIZE_CACHE_MAX_ENTRIES: usize = 262_144;
 
 #[cfg(not(test))]
+const GRID_MEASURE_SIZE_CACHE_EVICTION_BATCH: usize = 16_384;
+
+fn grid_measure_size_cache_store_with_policy(
+  cache: &mut FxHashMap<MeasureKey, taffy::geometry::Size<f32>>,
+  key: MeasureKey,
+  size: taffy::geometry::Size<f32>,
+  max_entries: usize,
+  eviction_batch: usize,
+) {
+  if max_entries == 0 {
+    cache.clear();
+    return;
+  }
+  if cache.len() >= max_entries && !cache.contains_key(&key) {
+    // The grid measure cache can grow extremely large on pages with many grid items + probes.
+    // Clearing the cache in this case causes avoidable thrash (re-measuring recently-seen nodes).
+    // Instead, evict a bounded batch of entries to make room while keeping reuse stable.
+    let eviction_batch = eviction_batch.max(1).min(max_entries).min(cache.len());
+    if eviction_batch > 0 {
+      let keys: Vec<_> = cache.keys().take(eviction_batch).cloned().collect();
+      for key in keys {
+        cache.remove(&key);
+      }
+    }
+  }
+  cache.insert(key, size);
+}
+
+#[cfg(not(test))]
 thread_local! {
   /// Cross-invocation cache for grid item measurements keyed by quantized constraints.
   ///
@@ -192,10 +221,13 @@ fn grid_measure_size_cache_store(key: MeasureKey, size: taffy::geometry::Size<f3
   grid_measure_size_cache_use_epoch();
   GRID_MEASURE_SIZE_CACHE.with(|cache| {
     let mut cache = cache.borrow_mut();
-    if cache.len() >= GRID_MEASURE_SIZE_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
-      cache.clear();
-    }
-    cache.insert(key, size);
+    grid_measure_size_cache_store_with_policy(
+      &mut cache,
+      key,
+      size,
+      GRID_MEASURE_SIZE_CACHE_MAX_ENTRIES,
+      GRID_MEASURE_SIZE_CACHE_EVICTION_BATCH,
+    );
   });
 }
 
@@ -4560,6 +4592,52 @@ mod tests {
       !node_keys.contains(&first_key),
       "oldest measured keys should be evicted when exceeding the cap"
     );
+  }
+
+  #[test]
+  fn grid_measure_size_cache_policy_evicts_instead_of_clearing() {
+    let mut cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+    let max_entries = 4;
+    let eviction_batch = 2;
+    let size = taffy::geometry::Size {
+      width: 1.0,
+      height: 2.0,
+    };
+    for i in 0..max_entries {
+      let key = MeasureKey {
+        node_ptr: i,
+        known_width: None,
+        known_height: None,
+        available_width: MeasureAvailKey::Indefinite,
+        available_height: MeasureAvailKey::Indefinite,
+      };
+      grid_measure_size_cache_store_with_policy(
+        &mut cache,
+        key,
+        size,
+        max_entries,
+        eviction_batch,
+      );
+    }
+    assert_eq!(cache.len(), max_entries);
+
+    let key = MeasureKey {
+      node_ptr: 999,
+      known_width: None,
+      known_height: None,
+      available_width: MeasureAvailKey::Indefinite,
+      available_height: MeasureAvailKey::Indefinite,
+    };
+    grid_measure_size_cache_store_with_policy(&mut cache, key, size, max_entries, eviction_batch);
+    assert_eq!(cache.len(), max_entries - eviction_batch + 1);
+    assert!(
+      cache.len() > 1,
+      "eviction should preserve cache reuse instead of clearing everything"
+    );
+
+    let before = cache.len();
+    grid_measure_size_cache_store_with_policy(&mut cache, key, size, max_entries, eviction_batch);
+    assert_eq!(cache.len(), before, "updating an existing key should not evict");
   }
 
   #[test]
