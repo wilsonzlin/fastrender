@@ -58,7 +58,12 @@ pub struct RecapturePageFixturesArgs {
   /// Disk-backed subresource cache directory passed to `bundle_page cache`.
   ///
   /// This should match the `--cache-dir` value used when warming the pageset disk cache.
-  #[arg(long, default_value = "fetches/assets", value_name = "DIR", alias = "cache-dir")]
+  #[arg(
+    long,
+    default_value = "fetches/assets",
+    value_name = "DIR",
+    visible_alias = "cache-dir"
+  )]
   pub asset_cache_dir: PathBuf,
 
   /// Per-request fetch timeout (seconds) passed to `bundle_page fetch`.

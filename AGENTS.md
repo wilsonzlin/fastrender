@@ -18,7 +18,11 @@ Or (same thing, via the preferred wrapper):
 cargo xtask pageset
 ```
 
-Pageset wrappers enable the disk-backed subresource cache (writes to `fetches/assets/` by default; override with `--cache-dir <dir>`) for faster, repeatable runs. They also prefetch external stylesheets and font subresources into that cache before rendering so the 5s render budget isn't spent on first-run network fetches. Set `NO_DISK_CACHE=1` or `DISK_CACHE=0` (or pass `--no-disk-cache`) to fall back to in-memory fetch caching. Both wrappers default to bundled fonts to avoid slow or non-deterministic system font discovery.
+Pageset wrappers:
+- Enable the disk-backed subresource cache (writes to `fetches/assets/` by default; override with `--cache-dir <dir>`) for faster, repeatable runs.
+- Prefetch external stylesheets and font subresources into that cache before rendering so the 5s render budget isn't spent on first-run network fetches.
+- Set `NO_DISK_CACHE=1` or `DISK_CACHE=0` (or pass `--no-disk-cache`) to fall back to in-memory fetch caching.
+- Default to bundled fonts to avoid slow or non-deterministic system font discovery.
 
 Disk cache tuning knobs (useful for reproducibility when long-lived caches would otherwise age out):
 - `FASTR_DISK_CACHE_MAX_AGE_SECS=0` pins cached subresources (never expire purely due to age).
