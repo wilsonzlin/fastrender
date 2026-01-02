@@ -1852,18 +1852,22 @@ fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) 
     .unwrap_or_default();
 
   if sequences.is_empty() {
-    let mut iter = UnicodeSegmentation::grapheme_indices(text, true).peekable();
-    while let Some((start, _)) = iter.next() {
-      let end = iter.peek().map(|(idx, _)| *idx).unwrap_or(text.len());
-      if start < end {
-        clusters.push((start, end));
+    let mut prev = 0usize;
+    for boundary in UnicodeSegmentation::grapheme_indices(text, true)
+      .map(|(idx, _)| idx)
+      .skip(1)
+      .chain(std::iter::once(text.len()))
+    {
+      if prev < boundary {
+        clusters.push((prev, boundary));
       }
+      prev = boundary;
     }
     return;
   }
 
   let mut seq_iter = sequences.iter().peekable();
-  let mut last_boundary = Some(0usize);
+  let mut prev_boundary = 0usize;
   for boundary in UnicodeSegmentation::grapheme_indices(text, true)
     .map(|(idx, _)| idx)
     .chain(std::iter::once(text.len()))
@@ -1881,12 +1885,10 @@ fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) 
       }
     }
 
-    if let Some(prev) = last_boundary {
-      if prev < boundary {
-        clusters.push((prev, boundary));
-      }
+    if prev_boundary < boundary {
+      clusters.push((prev_boundary, boundary));
     }
-    last_boundary = Some(boundary);
+    prev_boundary = boundary;
   }
 }
 
