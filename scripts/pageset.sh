@@ -64,24 +64,23 @@ if [[ -n "${NO_DISK_CACHE:-}" ]]; then
 fi
 
 ARGS=()
-PARSE_FLAGS=1
 for arg in "$@"; do
-  if [[ "${PARSE_FLAGS}" -eq 1 ]]; then
-    case "${arg}" in
-      --no-disk-cache)
-        USE_DISK_CACHE=0
-        continue
-        ;;
-      --disk-cache)
-        USE_DISK_CACHE=1
-        continue
-        ;;
-      --)
-        PARSE_FLAGS=0
-        continue
-        ;;
-    esac
-  fi
+  # Be forgiving if callers accidentally place disk-cache toggles after `--` (intended for
+  # pageset_progress args). The underlying binaries do not recognize these flags, so it's always
+  # safe to treat them as wrapper flags.
+  case "${arg}" in
+    --no-disk-cache)
+      USE_DISK_CACHE=0
+      continue
+      ;;
+    --disk-cache)
+      USE_DISK_CACHE=1
+      continue
+      ;;
+    --)
+      continue
+      ;;
+  esac
   ARGS+=("${arg}")
 done
 
