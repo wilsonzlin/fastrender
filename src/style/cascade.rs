@@ -11080,7 +11080,7 @@ mod tests {
       children: vec![],
     };
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
