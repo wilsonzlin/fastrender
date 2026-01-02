@@ -77,7 +77,7 @@
         "fallback_cache_glyph_capacity": 131072,
         "fallback_cache_cluster_capacity": 131072,
         "fallback_cache_shards": 16,
-        "last_resort_font_fallbacks": 2,
+        "last_resort_font_fallbacks": 0,
         "last_resort_font_fallback_samples": [
           "U+276E",
           "U+276F"

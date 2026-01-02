@@ -9,7 +9,7 @@ fn bundled_emoji_does_not_hit_last_resort_fallbacks() {
     <style>
       body { font-size: 48px; }
     </style>
-    <p>⭐ 🐐 🤠</p>
+    <p>⭐ 🐐 🤠 ☶ ❮ ❯</p>
   "#;
 
   let policy = ResourcePolicy::default()

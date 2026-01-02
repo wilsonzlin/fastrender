@@ -49,6 +49,7 @@ fn bundled_font_coverage_includes_pageset_must_cover_codepoints() {
     ),
     // Pageset emoji/symbol regressions (e.g. ebay.com, espn.com) that should never hit the
     // last-resort tofu path when using bundled fonts.
+    ("Trigram for water U+2636", char::from_u32(0x2636).expect("emoji scalar")),
     (
       "Black right-pointing triangle U+25B6",
       char::from_u32(0x25B6).expect("emoji scalar"),
@@ -57,6 +58,14 @@ fn bundled_font_coverage_includes_pageset_must_cover_codepoints() {
     ("Writing hand U+270D", char::from_u32(0x270D).expect("emoji scalar")),
     ("Black four pointed star U+2726", char::from_u32(0x2726).expect("emoji scalar")),
     ("Sparkles U+2728", char::from_u32(0x2728).expect("emoji scalar")),
+    (
+      "Heavy left-pointing angle quotation mark ornament U+276E",
+      char::from_u32(0x276E).expect("emoji scalar"),
+    ),
+    (
+      "Heavy right-pointing angle quotation mark ornament U+276F",
+      char::from_u32(0x276F).expect("emoji scalar"),
+    ),
     ("Black diamond minus white x U+2756", char::from_u32(0x2756).expect("emoji scalar")),
     ("Up arrow U+2B06", char::from_u32(0x2B06).expect("emoji scalar")),
     ("Down arrow U+2B07", char::from_u32(0x2B07).expect("emoji scalar")),

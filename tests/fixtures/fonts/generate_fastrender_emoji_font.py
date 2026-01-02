@@ -145,11 +145,14 @@ def main() -> None:
   # Pageset-derived emoji (from `bundled_font_coverage`) mapped onto the existing fixture glyphs
   # so bundled-font runs avoid missing-emoji tofu.
   for codepoint in [
+    0x2636,  # ☶
     0x25B6,  # ▶ (emoji variant ▶️)
     0x2705,  # ✅
     0x270D,  # ✍
     0x2726,  # ✦
     0x2728,  # ✨
+    0x276E,  # ❮
+    0x276F,  # ❯
     0x2756,  # ❖
     0x2B06,  # ⬆
     0x2B07,  # ⬇
