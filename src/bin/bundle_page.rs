@@ -1345,7 +1345,7 @@ fn crawl_document(
     if fetch_errors.len() > 50 {
       msg.push_str(&format!("\n... and {} more", fetch_errors.len() - 50));
     }
-    msg.push_str("\n\nTip: warm `fetches/assets/` by running `prefetch_assets` / `pageset_progress` online, or pass --allow-missing to capture placeholders.");
+    msg.push_str("\n\nTip: warm the disk cache by running `prefetch_assets` / `pageset_progress` online (use the same `--cache-dir`), or pass `--allow-missing` to capture placeholders.");
     return Err(fastrender::Error::Other(msg));
   }
 
