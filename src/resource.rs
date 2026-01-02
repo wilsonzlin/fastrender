@@ -1583,6 +1583,9 @@ impl ResourcePolicy {
   }
 
   fn ensure_url_allowed(&self, url: &str) -> Result<ResourceScheme> {
+    if url.trim().is_empty() {
+      return Err(policy_error("empty URL"));
+    }
     let scheme = classify_scheme(url);
     if !self.allowed_schemes.allows(scheme) {
       return Err(policy_error(format!("scheme {:?} is not allowed", scheme)));
@@ -11152,6 +11155,30 @@ mod tests {
     let err = fetcher.fetch("http://example.test/").unwrap_err();
     assert!(
       err.to_string().contains("not allowed"),
+      "unexpected error: {err:?}"
+    );
+  }
+
+  #[test]
+  fn resource_policy_rejects_empty_urls() {
+    let fetcher = HttpFetcher::new();
+    let err = fetcher.fetch("").unwrap_err();
+    assert!(
+      matches!(err, Error::Other(_)),
+      "expected Error::Other for empty URL, got {err:?}"
+    );
+    assert!(
+      err.to_string().contains("empty URL"),
+      "unexpected error: {err:?}"
+    );
+
+    let err = fetcher.fetch(" \t ").unwrap_err();
+    assert!(
+      matches!(err, Error::Other(_)),
+      "expected Error::Other for whitespace URL, got {err:?}"
+    );
+    assert!(
+      err.to_string().contains("empty URL"),
       "unexpected error: {err:?}"
     );
   }
