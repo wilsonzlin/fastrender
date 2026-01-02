@@ -303,7 +303,7 @@ fn collect_box_generation_prepass<'a>(
     check_active_periodic(
       deadline_counter,
       BOX_GEN_DEADLINE_STRIDE,
-      RenderStage::Cascade,
+      RenderStage::BoxTree,
     )?;
 
     out.styled_lookup.insert(node.node_id, node);
@@ -1540,7 +1540,7 @@ fn generate_boxes_for_styled_into(
         check_active_periodic(
           deadline_counter,
           BOX_GEN_DEADLINE_STRIDE,
-          RenderStage::Cascade,
+          RenderStage::BoxTree,
         )?;
 
         if let Some(text) = styled.node.text_content() {

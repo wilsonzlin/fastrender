@@ -432,7 +432,7 @@ impl TableStructureFixer {
       check_active_periodic(
         deadline_counter,
         TABLE_FIXUP_DEADLINE_STRIDE,
-        RenderStage::Cascade,
+        RenderStage::BoxTree,
       )?;
       if Self::is_table_cell(&child) {
         // Accumulate loose cells
@@ -509,7 +509,7 @@ impl TableStructureFixer {
       check_active_periodic(
         deadline_counter,
         TABLE_FIXUP_DEADLINE_STRIDE,
-        RenderStage::Cascade,
+        RenderStage::BoxTree,
       )?;
       if Self::is_table_cell(&child) {
         loose_cells.push(child);
@@ -564,7 +564,7 @@ impl TableStructureFixer {
       check_active_periodic(
         deadline_counter,
         TABLE_FIXUP_DEADLINE_STRIDE,
-        RenderStage::Cascade,
+        RenderStage::BoxTree,
       )?;
       if Self::is_table_cell(&child) {
         if !pending_non_cells.is_empty() {
@@ -621,7 +621,7 @@ impl TableStructureFixer {
       check_active_periodic(
         deadline_counter,
         TABLE_FIXUP_DEADLINE_STRIDE,
-        RenderStage::Cascade,
+        RenderStage::BoxTree,
       )?;
       if Self::is_table_row(&child) {
         // Accumulate loose rows
@@ -688,7 +688,7 @@ impl TableStructureFixer {
     check_active_periodic(
       deadline_counter,
       TABLE_FIXUP_DEADLINE_STRIDE,
-      RenderStage::Cascade,
+      RenderStage::BoxTree,
     )?;
     // Verify this is actually a table
     if !Self::is_table_box(&table_box) {
@@ -729,7 +729,7 @@ impl TableStructureFixer {
       check_active_periodic(
         deadline_counter,
         TABLE_FIXUP_DEADLINE_STRIDE,
-        RenderStage::Cascade,
+        RenderStage::BoxTree,
       )?;
       if Self::is_table_caption(&child) {
         match child.style.caption_side {
@@ -823,7 +823,7 @@ impl TableStructureFixer {
         deadline.check_periodic(
           deadline_counter,
           TABLE_FIXUP_DEADLINE_STRIDE,
-          RenderStage::Cascade,
+          RenderStage::BoxTree,
         )?;
       }
 

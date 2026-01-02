@@ -41,7 +41,7 @@ fn box_generation_times_out_with_active_deadline() {
 
   let err = generate_box_tree_with_anonymous_fixup(&styled).unwrap_err();
   match err {
-    Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Cascade),
-    other => panic!("expected cascade timeout, got {other:?}"),
+    Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::BoxTree),
+    other => panic!("expected box_tree timeout, got {other:?}"),
   }
 }

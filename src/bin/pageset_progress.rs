@@ -680,6 +680,7 @@ impl From<RenderStage> for ProgressStage {
       RenderStage::DomParse => ProgressStage::DomParse,
       RenderStage::Css => ProgressStage::Css,
       RenderStage::Cascade => ProgressStage::Cascade,
+      RenderStage::BoxTree => ProgressStage::BoxTree,
       RenderStage::Layout => ProgressStage::Layout,
       RenderStage::Paint => ProgressStage::Paint,
     }
@@ -2010,6 +2011,7 @@ pub(crate) fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
     RenderStage::DomParse => "fetch",
     RenderStage::Css => "css",
     RenderStage::Cascade => "cascade",
+    RenderStage::BoxTree => "box_tree",
     RenderStage::Layout => "layout",
     RenderStage::Paint => "paint",
   }
@@ -8529,6 +8531,11 @@ mod tests {
   #[test]
   fn timeout_cascade_maps_to_cascade_hotspot() {
     assert_eq!(hotspot_from_timeout_stage(RenderStage::Cascade), "cascade");
+  }
+
+  #[test]
+  fn timeout_box_tree_maps_to_box_tree_hotspot() {
+    assert_eq!(hotspot_from_timeout_stage(RenderStage::BoxTree), "box_tree");
   }
 
   #[test]

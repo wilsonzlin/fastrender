@@ -129,7 +129,7 @@ impl AnonymousBoxCreator {
       deadline.check_periodic(
         deadline_counter,
         ANON_FIXUP_DEADLINE_STRIDE,
-        RenderStage::Cascade,
+        RenderStage::BoxTree,
       )?;
     }
 
@@ -163,7 +163,7 @@ impl AnonymousBoxCreator {
           deadline.check_periodic(
             deadline_counter,
             ANON_FIXUP_DEADLINE_STRIDE,
-            RenderStage::Cascade,
+            RenderStage::BoxTree,
           )?;
         }
 

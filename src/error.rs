@@ -70,6 +70,8 @@ pub enum RenderStage {
   Css,
   /// Cascade and computed style resolution
   Cascade,
+  /// DOM + computed styles → box tree construction.
+  BoxTree,
   /// Layout computation
   Layout,
   /// Display list build and paint
@@ -82,6 +84,7 @@ impl RenderStage {
       RenderStage::DomParse => "dom_parse",
       RenderStage::Css => "css",
       RenderStage::Cascade => "cascade",
+      RenderStage::BoxTree => "box_tree",
       RenderStage::Layout => "layout",
       RenderStage::Paint => "paint",
     }
