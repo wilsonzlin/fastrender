@@ -28,7 +28,7 @@ use common::render_pipeline::{
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
   RenderArtifacts, RenderCounts, RenderDiagnostics, RenderStageTimings, RenderStats,
-  ResourceDiagnostics, ResourceKind,
+  ResourceDiagnostics, ResourceFetchError, ResourceKind,
 };
 use fastrender::debug::snapshot;
 use fastrender::error::{RenderError, RenderStage};
@@ -1307,13 +1307,28 @@ struct ProgressDiagnostics {
   stats: Option<RenderStats>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   fetch_error_summary: Option<ProgressFetchErrorSummary>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  bot_mitigation_summary: Option<ProgressFetchErrorSummary>,
 }
 
-fn build_fetch_error_summary(diagnostics: &RenderDiagnostics) -> Option<ProgressFetchErrorSummary> {
-  if diagnostics.fetch_errors.is_empty() {
-    return None;
-  }
+pub(crate) fn is_bot_mitigation_block(status: Option<u16>, url: &str) -> bool {
+  matches!(status, Some(403 | 405 | 429)) && url.to_ascii_lowercase().contains("captcha=")
+}
 
+pub(crate) fn is_bot_mitigation_fetch_error(err: &ResourceFetchError) -> bool {
+  // Only classify subresource loads. Document errors should remain visible as failures.
+  if err.kind == ResourceKind::Document {
+    return false;
+  }
+  let effective_url = err.final_url.as_deref().unwrap_or(&err.url);
+  is_bot_mitigation_block(err.status, effective_url)
+    || is_bot_mitigation_block(err.status, &err.url)
+}
+
+fn build_fetch_error_summary<'a, I>(errors: I) -> Option<ProgressFetchErrorSummary>
+where
+  I: IntoIterator<Item = &'a ResourceFetchError>,
+{
   #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
   struct FetchErrorKey {
     kind: ResourceKind,
@@ -1324,7 +1339,7 @@ fn build_fetch_error_summary(diagnostics: &RenderDiagnostics) -> Option<Progress
 
   let mut unique: BTreeMap<FetchErrorKey, ProgressFetchErrorSample> = BTreeMap::new();
 
-  for err in &diagnostics.fetch_errors {
+  for err in errors {
     let message = normalize_progress_note(&err.message);
     let key = FetchErrorKey {
       kind: err.kind,
@@ -1574,26 +1589,32 @@ fn serialize_progress(progress: &PageProgress) -> io::Result<String> {
   normalized.notes = normalize_progress_note(&normalized.notes);
   normalized.auto_notes = normalize_progress_note(&normalized.auto_notes);
   if let Some(diag) = normalized.diagnostics.as_mut() {
-    if let Some(summary) = diag.fetch_error_summary.as_mut() {
-      if summary.total == 0 {
-        diag.fetch_error_summary = None;
-      } else {
-        for sample in &mut summary.samples {
-          sample.url = normalize_progress_url(&sample.url);
-          if let Some(final_url) = sample.final_url.as_mut() {
-            *final_url = normalize_progress_url(final_url);
-            if *final_url == sample.url {
-              sample.final_url = None;
-            }
-          }
-          sample.message = normalize_progress_note(&sample.message);
-        }
-      }
-    }
+    normalize_progress_fetch_error_summary(&mut diag.fetch_error_summary);
+    normalize_progress_fetch_error_summary(&mut diag.bot_mitigation_summary);
   }
   let json = serde_json::to_string_pretty(&normalized)
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
   Ok(format!("{json}\n"))
+}
+
+fn normalize_progress_fetch_error_summary(summary: &mut Option<ProgressFetchErrorSummary>) {
+  if summary.as_ref().is_some_and(|summary| summary.total == 0) {
+    *summary = None;
+    return;
+  }
+  let Some(summary) = summary.as_mut() else {
+    return;
+  };
+  for sample in &mut summary.samples {
+    sample.url = normalize_progress_url(&sample.url);
+    if let Some(final_url) = sample.final_url.as_mut() {
+      *final_url = normalize_progress_url(final_url);
+      if *final_url == sample.url {
+        sample.final_url = None;
+      }
+    }
+    sample.message = normalize_progress_note(&sample.message);
+  }
 }
 
 fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
@@ -2067,8 +2088,22 @@ pub(crate) fn apply_diagnostics_to_progress(
   progress: &mut PageProgress,
   diagnostics: &RenderDiagnostics,
 ) {
-  progress.failure_stage = diagnostics.failure_stage.map(ProgressStage::from);
+  progress.failure_stage = failure_stage_from_fetch_errors(&diagnostics.fetch_errors);
   progress.timeout_stage = diagnostics.timeout_stage.map(ProgressStage::from);
+}
+
+fn failure_stage_from_fetch_errors(fetch_errors: &[ResourceFetchError]) -> Option<ProgressStage> {
+  for err in fetch_errors {
+    if is_bot_mitigation_fetch_error(err) {
+      continue;
+    }
+    match err.kind {
+      ResourceKind::Document => return Some(ProgressStage::DomParse),
+      ResourceKind::Image => return Some(ProgressStage::Paint),
+      ResourceKind::Stylesheet | ResourceKind::Font | ResourceKind::Other => {}
+    }
+  }
+  None
 }
 
 pub(crate) fn populate_timeout_progress(
@@ -2432,7 +2467,20 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         timeline_buckets.unwrap_or_else(|| buckets_from_diagnostics(&result.diagnostics));
       progress.stages_ms.rescale_to_total(total_ms);
       apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
-      let fetch_error_summary = build_fetch_error_summary(&result.diagnostics);
+      let fetch_error_summary = build_fetch_error_summary(
+        result
+          .diagnostics
+          .fetch_errors
+          .iter()
+          .filter(|err| !is_bot_mitigation_fetch_error(err)),
+      );
+      let bot_mitigation_summary = build_fetch_error_summary(
+        result
+          .diagnostics
+          .fetch_errors
+          .iter()
+          .filter(|err| is_bot_mitigation_fetch_error(err)),
+      );
       if !used_timeline && result.diagnostics.stats.is_none() {
         log.push_str(
           "Stage timings unavailable (no timeline or render stats); stages_ms left at 0ms.\n",
@@ -2461,11 +2509,14 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         note.push_str(&parts.join(" "));
         progress.auto_notes = note;
       }
-      progress.diagnostics = if result.diagnostics.stats.is_some() || fetch_error_summary.is_some()
+      progress.diagnostics = if result.diagnostics.stats.is_some()
+        || fetch_error_summary.is_some()
+        || bot_mitigation_summary.is_some()
       {
         Some(ProgressDiagnostics {
           stats: result.diagnostics.stats.clone(),
           fetch_error_summary,
+          bot_mitigation_summary,
         })
       } else {
         None
@@ -4570,9 +4621,8 @@ fn report(args: ReportArgs) -> io::Result<()> {
         .map(|code| (code, entry))
     })
     .collect();
-  cached_html_http_errors.sort_by(|(a_code, a), (b_code, b)| {
-    a_code.cmp(b_code).then_with(|| a.stem.cmp(&b.stem))
-  });
+  cached_html_http_errors
+    .sort_by(|(a_code, a), (b_code, b)| a_code.cmp(b_code).then_with(|| a.stem.cmp(&b.stem)));
   println!(
     "Pages with cached HTML HTTP error status (>=400): {}",
     cached_html_http_errors.len()
@@ -4588,8 +4638,13 @@ fn report(args: ReportArgs) -> io::Result<()> {
     for (code, count) in code_counts {
       println!("  {code}: {count}");
     }
-    let shown = cached_html_http_errors.len().min(REPORT_OFFENDING_STEMS_LIMIT);
-    println!("  stems (showing {shown} of {}):", cached_html_http_errors.len());
+    let shown = cached_html_http_errors
+      .len()
+      .min(REPORT_OFFENDING_STEMS_LIMIT);
+    println!(
+      "  stems (showing {shown} of {}):",
+      cached_html_http_errors.len()
+    );
     for (code, entry) in cached_html_http_errors.iter().take(shown) {
       println!(
         "    {} status={} cached_html_status={code}",
@@ -4602,6 +4657,85 @@ fn report(args: ReportArgs) -> io::Result<()> {
         "    {} and {} more",
         PROGRESS_NOTE_ELLIPSIS,
         cached_html_http_errors.len() - shown
+      );
+    }
+    println!();
+  }
+
+  let mut bot_mitigation_pages: Vec<(usize, &LoadedProgress)> = progresses
+    .iter()
+    .filter_map(|entry| {
+      let total = entry
+        .progress
+        .diagnostics
+        .as_ref()?
+        .bot_mitigation_summary
+        .as_ref()?
+        .total;
+      (total > 0).then_some((total, entry))
+    })
+    .collect();
+  bot_mitigation_pages.sort_by(|(a_total, a_entry), (b_total, b_entry)| {
+    b_total
+      .cmp(a_total)
+      .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+  });
+  println!(
+    "Pages with bot mitigation subresource blocks: {}",
+    bot_mitigation_pages.len()
+  );
+  if bot_mitigation_pages.is_empty() {
+    println!("  (none)");
+    println!();
+  } else {
+    let mut kind_counts: BTreeMap<ResourceKind, usize> = BTreeMap::new();
+    let mut total = 0usize;
+    for (page_total, entry) in bot_mitigation_pages.iter().copied() {
+      total += page_total;
+      let Some(summary) = entry
+        .progress
+        .diagnostics
+        .as_ref()
+        .and_then(|d| d.bot_mitigation_summary.as_ref())
+      else {
+        continue;
+      };
+      for (kind, count) in &summary.by_kind {
+        *kind_counts.entry(*kind).or_default() += *count;
+      }
+    }
+    println!("  total unique blocks: {total}");
+    for kind in [
+      ResourceKind::Document,
+      ResourceKind::Stylesheet,
+      ResourceKind::Image,
+      ResourceKind::Font,
+      ResourceKind::Other,
+    ] {
+      println!(
+        "  {}: {}",
+        resource_kind_label(kind),
+        kind_counts.get(&kind).copied().unwrap_or(0)
+      );
+    }
+    let shown = bot_mitigation_pages.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+    println!(
+      "  stems (showing {shown} of {}):",
+      bot_mitigation_pages.len()
+    );
+    for (page_total, entry) in bot_mitigation_pages.iter().take(shown).copied() {
+      println!(
+        "    {} status={} blocks={page_total} url={}",
+        entry.stem,
+        entry.progress.status.as_str(),
+        entry.progress.url
+      );
+    }
+    if bot_mitigation_pages.len() > shown {
+      println!(
+        "    {} and {} more",
+        PROGRESS_NOTE_ELLIPSIS,
+        bot_mitigation_pages.len() - shown
       );
     }
     println!();

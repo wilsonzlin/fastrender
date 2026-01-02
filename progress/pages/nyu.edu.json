@@ -14,9 +14,8 @@
     "paint": 155.30779825826087
   },
   "notes": "",
-  "auto_notes": "ok with failures: failure_stage=paint fetch_errors=9 (img=9)",
   "hotspot": "cascade",
-  "failure_stage": "paint",
+  "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "199250cd4a9354e60b8c1617e83d46328f1633e9",
   "last_regression_commit": "",
@@ -207,7 +206,7 @@
         "image_decode_ms": 0.0
       }
     },
-    "fetch_error_summary": {
+    "bot_mitigation_summary": {
       "total": 9,
       "by_kind": {
         "Image": 9

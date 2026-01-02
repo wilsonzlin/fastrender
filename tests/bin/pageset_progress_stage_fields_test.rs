@@ -2,6 +2,7 @@
 mod pageset_progress;
 
 use fastrender::api::RenderDiagnostics;
+use fastrender::api::{ResourceFetchError, ResourceKind};
 use fastrender::error::RenderStage;
 use fastrender::render_control::StageHeartbeat;
 use serde_json::json;
@@ -32,12 +33,20 @@ fn timeout_records_stage_and_hotspot() {
 fn diagnostics_failure_stage_is_propagated() {
   let mut progress = pageset_progress::PageProgress::new("https://css.test/".to_string());
   let mut diagnostics = RenderDiagnostics::default();
-  diagnostics.failure_stage = Some(RenderStage::Css);
+  diagnostics.fetch_errors.push(ResourceFetchError {
+    kind: ResourceKind::Image,
+    url: "https://img.test/missing.png".to_string(),
+    message: "missing".to_string(),
+    status: None,
+    final_url: None,
+    etag: None,
+    last_modified: None,
+  });
 
   pageset_progress::apply_diagnostics_to_progress(&mut progress, &diagnostics);
 
   let value = serde_json::to_value(&progress).expect("serialize progress");
-  assert_eq!(value["failure_stage"], json!("css"));
+  assert_eq!(value["failure_stage"], json!("paint"));
 }
 
 #[test]

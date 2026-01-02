@@ -66,6 +66,7 @@ fn pageset_progress_report_outputs_summary() {
   assert!(stdout.contains("timeout: 1"));
   assert!(stdout.contains("panic: 1"));
   assert!(stdout.contains("Pages with cached HTML HTTP error status (>=400): 0"));
+  assert!(stdout.contains("Pages with bot mitigation subresource blocks: 0"));
   assert!(stdout.contains("Slowest pages (top 4 of 4 with timings):"));
   assert!(stdout.contains("1. timeout_page (timeout"));
   assert!(stdout.contains("2. slow_ok (ok"));
@@ -107,7 +108,13 @@ fn pageset_progress_report_counts_cached_html_http_errors() {
     .unwrap_or_else(|_| panic!("write {}", path.display()));
 
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
-    .args(["report", "--progress-dir", temp.path().to_str().unwrap(), "--top", "0"])
+    .args([
+      "report",
+      "--progress-dir",
+      temp.path().to_str().unwrap(),
+      "--top",
+      "0",
+    ])
     .output()
     .expect("run pageset_progress report");
   assert!(output.status.success(), "expected success for report");
@@ -116,6 +123,57 @@ fn pageset_progress_report_counts_cached_html_http_errors() {
   assert!(stdout.contains("Pages with cached HTML HTTP error status (>=400): 1"));
   assert!(stdout.contains("403: 1"));
   assert!(stdout.contains("cached_status status=ok cached_html_status=403"));
+}
+
+#[test]
+fn pageset_progress_report_counts_bot_mitigation_blocks() {
+  let temp = tempdir().expect("tempdir");
+  let progress = json!({
+    "url": "https://bot.test/",
+    "status": "ok",
+    "total_ms": 10.0,
+    "stages_ms": {
+      "fetch": 1.0,
+      "css": 0.0,
+      "cascade": 0.0,
+      "layout": 0.0,
+      "paint": 0.0
+    },
+    "notes": "",
+    "hotspot": "paint",
+    "last_good_commit": "",
+    "last_regression_commit": "",
+    "diagnostics": {
+      "bot_mitigation_summary": {
+        "total": 2,
+        "by_kind": {
+          "Image": 2
+        },
+        "samples": []
+      }
+    }
+  });
+  let path = temp.path().join("bot_page.json");
+  fs::write(&path, serde_json::to_string_pretty(&progress).unwrap())
+    .unwrap_or_else(|_| panic!("write {}", path.display()));
+
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      temp.path().to_str().unwrap(),
+      "--top",
+      "0",
+    ])
+    .output()
+    .expect("run pageset_progress report");
+  assert!(output.status.success(), "expected success for report");
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(stdout.contains("Pages with bot mitigation subresource blocks: 1"));
+  assert!(stdout.contains("total unique blocks: 2"));
+  assert!(stdout.contains("img: 2"));
+  assert!(stdout.contains("bot_page status=ok blocks=2"));
 }
 
 #[test]
