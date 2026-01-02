@@ -51,6 +51,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::contexts::inline::line_builder::ReshapeCache;
+use crate::layout::contexts::node_ref::BoxNodeRef;
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::float_context::FloatContext;
@@ -195,7 +196,7 @@ fn truncate_text(text: &str, limit: usize) -> String {
 #[derive(Debug, Clone)]
 enum InlineFlowSegment {
   InlineItems(Vec<InlineItem>),
-  Block(Box<BoxNode>),
+  Block(BoxNodeRef),
 }
 
 #[derive(Debug, Clone)]
@@ -205,9 +206,10 @@ enum FlowChunk {
   Block { index: usize },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct PositionedChild {
-  node: BoxNode,
+  node: BoxNodeRef,
+  box_id: usize,
   /// Box id of the nearest positioned ancestor that establishes this child's containing block.
   /// `None` means to use the formatting context's `nearest_positioned_cb`.
   containing_block_id: Option<usize>,
@@ -395,7 +397,7 @@ impl InlineFormattingContext {
 
   fn create_static_position_anchor(&self, child: &BoxNode) -> InlineItem {
     InlineItem::StaticPositionAnchor(StaticPositionAnchor::new(
-      child.id,
+      ensure_box_id(child),
       child.style.direction,
       child.style.unicode_bidi,
     ))
@@ -555,17 +557,17 @@ impl InlineFormattingContext {
         child.style.position,
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
-        let mut positioned = child.clone();
-        positioned.id = ensure_box_id(child);
+        let box_id = ensure_box_id(child);
         let containing_block_id = if matches!(child.style.position, crate::style::position::Position::Fixed)
         {
           fixed_cb_stack.last().copied()
         } else {
           abs_cb_stack.last().copied()
         };
-        let anchor = self.create_static_position_anchor(&positioned);
+        let anchor = self.create_static_position_anchor(child);
         positioned_children.push(PositionedChild {
-          node: positioned,
+          node: BoxNodeRef::new(child),
+          box_id,
           containing_block_id,
         });
         current_items.push(anchor);
@@ -1149,7 +1151,7 @@ impl InlineFormattingContext {
           }
           flush_current(&mut segments, &mut current_items);
           pending_space = None;
-          segments.push(InlineFlowSegment::Block(Box::new(child.clone())));
+          segments.push(InlineFlowSegment::Block(BoxNodeRef::new(child)));
         }
       }
     }
@@ -1274,17 +1276,17 @@ impl InlineFormattingContext {
         child.style.position,
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
-        let mut positioned = child.clone();
-        positioned.id = ensure_box_id(child);
+        let box_id = ensure_box_id(child);
         let containing_block_id = if matches!(child.style.position, crate::style::position::Position::Fixed)
         {
           fixed_cb_stack.last().copied()
         } else {
           abs_cb_stack.last().copied()
         };
-        let anchor = self.create_static_position_anchor(&positioned);
+        let anchor = self.create_static_position_anchor(child);
         positioned_children.push(PositionedChild {
-          node: positioned,
+          node: BoxNodeRef::new(child),
+          box_id,
           containing_block_id,
         });
         items.push(anchor);
@@ -8132,7 +8134,10 @@ impl InlineFormattingContext {
             }
           }
         }
-        InlineFlowSegment::Block(block_node) => {
+        InlineFlowSegment::Block(block_node_ref) => {
+          // SAFETY: `InlineFlowSegment::Block` stores pointers into the (immutable) box tree owned
+          // by the current layout run. The tree is not moved while `layout_with_floats` executes.
+          let block_node = unsafe { block_node_ref.get() };
           if float_ctx.is_none() && local_float_ctx.is_none() {
             local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
           }
@@ -8212,7 +8217,7 @@ impl InlineFormattingContext {
             AvailableSpace::Definite(available_inline),
             constraints.available_height,
           );
-          let fragment = fc.layout(&block_node, &child_constraints)?;
+          let fragment = fc.layout(block_node, &child_constraints)?;
           let translate_y = line_offset + margin_top - fragment.bounds.y();
           let translated = fragment.translate_subtree_absolute(Point::new(0.0, translate_y));
           block_run_max_width = block_run_max_width
@@ -8603,9 +8608,13 @@ impl InlineFormattingContext {
       }
       let layout_positioned_child = |positioned_child: &PositionedChild| {
         let PositionedChild {
-          node: child,
+          node: child_ref,
+          box_id,
           containing_block_id,
-        } = positioned_child;
+        } = *positioned_child;
+        // SAFETY: `PositionedChild` stores pointers into the (immutable) box tree owned by the
+        // current layout run. The tree is not moved while `layout_with_floats` executes.
+        let child = unsafe { child_ref.get() };
         let custom_cb = containing_block_id
           .and_then(|id| positioned_containing_blocks.get(&id))
           .copied();
@@ -8625,7 +8634,7 @@ impl InlineFormattingContext {
         };
 
         let mut child_static_position = anchor_positions
-          .get(&child.id)
+          .get(&box_id)
           .copied()
           .unwrap_or(default_static_position);
         if adjust_static_position {
@@ -8638,6 +8647,7 @@ impl InlineFormattingContext {
 
         let original_style = child.style.clone();
         let mut layout_child = child.clone();
+        layout_child.id = box_id;
         let mut child_style = (*layout_child.style).clone();
         child_style.position = crate::style::position::Position::Relative;
         child_style.top = None;
@@ -8668,7 +8678,7 @@ impl InlineFormattingContext {
         );
         let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
         let positioned_style =
-          resolve_positioned_style(&child.style, &child_cb, viewport_size, &font_context);
+          resolve_positioned_style(&original_style, &child_cb, viewport_size, &font_context);
         let is_replaced = child.is_replaced();
         let needs_inline_intrinsics = positioned_style.width.is_auto()
           && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
@@ -8752,12 +8762,11 @@ impl InlineFormattingContext {
               .with_used_border_box_size(Some(result.size.width), Some(result.size.height));
             child_fragment = fc.layout(&layout_child, &relayout_constraints)?;
           } else {
-            let mut relayout_child = layout_child.clone();
-            let mut relayout_style = (*relayout_child.style).clone();
+            let mut relayout_style = (*layout_child.style).clone();
             relayout_style.width = Some(Length::px(result.size.width));
             relayout_style.height = Some(Length::px(result.size.height));
-            relayout_child.style = Arc::new(relayout_style);
-            child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+            layout_child.style = Arc::new(relayout_style);
+            child_fragment = fc.layout(&layout_child, &relayout_constraints)?;
           }
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
