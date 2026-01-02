@@ -1508,6 +1508,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       url: canonical.clone(),
       status: resource.status,
       content_type: resource.content_type.clone(),
+      content_encoding: resource.content_encoding.clone(),
       etag: resource.etag.clone(),
       last_modified: resource.last_modified.clone(),
       // The artifact entry is keyed by the canonical URL (after redirects). Store the canonical

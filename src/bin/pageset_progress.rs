@@ -5649,13 +5649,6 @@ fn push_worker_args(
     .arg("--timeout")
     .arg(worker_timeout_secs.to_string());
 
-  if args.disk_cache.allow_no_store {
-    cmd.arg("--disk-cache-allow-no-store");
-  }
-  if args.disk_cache.writeback_under_deadline {
-    cmd.arg("--disk-cache-writeback-under-deadline");
-  }
-
   if args.no_http_freshness {
     cmd.arg("--no-http-freshness");
   }
@@ -7281,6 +7274,7 @@ mod tests {
       .get_args()
       .map(|arg| arg.to_string_lossy().into_owned())
       .collect::<Vec<_>>();
+    let count_flag = |flag: &str| cmd_args.iter().filter(|arg| arg.as_str() == flag).count();
 
     let max_bytes_pos = cmd_args
       .iter()
@@ -7305,6 +7299,11 @@ mod tests {
       .position(|arg| arg == "--disk-cache-allow-no-store")
       .expect("expected --disk-cache-allow-no-store in worker command");
     assert_eq!(
+      count_flag("--disk-cache-allow-no-store"),
+      1,
+      "expected --disk-cache-allow-no-store to be passed exactly once"
+    );
+    assert_eq!(
       cmd_args.get(allow_no_store_pos + 1),
       Some(&"true".to_string())
     );
@@ -7313,6 +7312,11 @@ mod tests {
       .iter()
       .position(|arg| arg == "--disk-cache-writeback-under-deadline")
       .expect("expected --disk-cache-writeback-under-deadline in worker command");
+    assert_eq!(
+      count_flag("--disk-cache-writeback-under-deadline"),
+      1,
+      "expected --disk-cache-writeback-under-deadline to be passed exactly once"
+    );
     assert_eq!(cmd_args.get(writeback_pos + 1), Some(&"true".to_string()));
   }
 
