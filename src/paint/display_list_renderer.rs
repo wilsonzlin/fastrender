@@ -10557,6 +10557,23 @@ mod tests {
     renderer.canvas.set_transform(transform);
   }
 
+  fn setup_translate_clip_path(renderer: &mut DisplayListRenderer) {
+    renderer.canvas.set_transform(Transform::from_translate(20.0, 0.0));
+    let square = ResolvedClipPath::Polygon {
+      points: vec![
+        Point::new(0.0, 0.0),
+        Point::new(40.0, 0.0),
+        Point::new(40.0, 40.0),
+        Point::new(0.0, 40.0),
+      ],
+      fill_rule: tiny_skia::FillRule::Winding,
+    };
+    renderer
+      .canvas
+      .set_clip_path(&square, renderer.scale)
+      .unwrap();
+  }
+
   fn setup_clip_mask(renderer: &mut DisplayListRenderer) {
     renderer
       .canvas
@@ -10601,6 +10618,7 @@ mod tests {
       ("outset_rotate", setup_rotate, &outset),
       ("outset_clipped", setup_clip_mask, &outset),
       ("outset_rotated_clipped", setup_rotated_clip_mask, &outset),
+      ("outset_translate_clip_path", setup_translate_clip_path, &outset),
     ];
 
     for (name, setup, item) in cases {

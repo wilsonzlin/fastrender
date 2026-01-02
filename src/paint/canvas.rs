@@ -695,9 +695,15 @@ impl Canvas {
       bounds.width() * scale,
       bounds.height() * scale,
     );
+    let transform = self.current_state.transform;
+    let clip_bounds = if transform == Transform::identity() {
+      scaled_bounds
+    } else {
+      Self::transform_rect_aabb(scaled_bounds, transform)
+    };
     let base_clip = match self.current_state.clip_rect {
-      Some(existing) => existing.intersection(scaled_bounds).unwrap_or(Rect::ZERO),
-      None => scaled_bounds,
+      Some(existing) => existing.intersection(clip_bounds).unwrap_or(Rect::ZERO),
+      None => clip_bounds,
     };
     self.current_state.clip_rect = Some(base_clip);
 
