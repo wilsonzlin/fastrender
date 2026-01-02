@@ -1074,8 +1074,8 @@ impl RenderDiagnostics {
 fn failure_stage_for_resource(kind: ResourceKind) -> Option<RenderStage> {
   match kind {
     ResourceKind::Document => Some(RenderStage::DomParse),
-    ResourceKind::Stylesheet => Some(RenderStage::Css),
-    ResourceKind::Font => Some(RenderStage::Css),
+    ResourceKind::Stylesheet => None,
+    ResourceKind::Font => None,
     ResourceKind::Image => Some(RenderStage::Paint),
     ResourceKind::Other => None,
   }

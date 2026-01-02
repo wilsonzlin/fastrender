@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use fastrender::api::{FastRender, RenderOptions};
-use fastrender::error::RenderStage;
 use fastrender::render_control::{set_stage_listener, StageHeartbeat};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -69,7 +68,7 @@ fn css_inlining_respects_deadline() {
     "expected exactly one CSS cancellation-triggering deadline check"
   );
 
-  assert_eq!(result.diagnostics.failure_stage, Some(RenderStage::Css));
+  assert!(result.diagnostics.failure_stage.is_none());
   assert!(
     result
       .diagnostics

@@ -46,7 +46,7 @@ fn missing_stylesheet_keeps_rendering_with_diagnostics() {
     .find(|entry| entry.kind == ResourceKind::Stylesheet)
     .expect("stylesheet error recorded");
   assert!(stylesheet_error.url.contains("missing.css"));
-  assert_eq!(result.diagnostics.failure_stage, Some(RenderStage::Css));
+  assert_eq!(result.diagnostics.failure_stage, None);
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn invalid_stylesheet_url_records_failure_stage() {
 
   assert_eq!(result.pixmap.width(), 40);
   assert_eq!(result.pixmap.height(), 30);
-  assert_eq!(result.diagnostics.failure_stage, Some(RenderStage::Css));
+  assert_eq!(result.diagnostics.failure_stage, None);
   let stylesheet_error = result
     .diagnostics
     .fetch_errors

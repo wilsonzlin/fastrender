@@ -2649,27 +2649,67 @@ fn format_support_rank(hints: &[FontSourceFormat], url: &str) -> Option<usize> {
 }
 
 fn inferred_format_support_rank_from_url(url: &str) -> Option<usize> {
+  // `src:` descriptors may omit `format()`. To avoid fetching formats we cannot decode (notably
+  // legacy EOT), infer a best-effort rank from the URL suffix / data: MIME.
+  //
+  // If we can't infer anything, return a low priority "unknown" rank so we still attempt to load
+  // it (some endpoints omit extensions).
   if has_prefix_ignore_ascii_case(url, "data:") {
-    return Some(3);
+    let after_prefix = url.get("data:".len()..).unwrap_or("");
+    let meta = after_prefix.split_once(',').map(|(m, _)| m).unwrap_or(after_prefix);
+    let mime = meta.split(';').next().unwrap_or("").trim();
+    if !mime.is_empty() {
+      let mime = mime.to_ascii_lowercase();
+      if mime.contains("woff2") {
+        return Some(0);
+      }
+      if mime.contains("woff") {
+        return Some(1);
+      }
+      if mime.contains("opentype") || mime.contains("otf") || mime.contains("truetype")
+        || mime.contains("ttf")
+        || mime.contains("collection")
+        || mime.contains("ttc")
+      {
+        return Some(2);
+      }
+      if mime.contains("embedded-opentype") || mime.contains("eot") || mime.contains("svg") {
+        return None;
+      }
+    }
   }
 
-  let without_query_fragment = url
-    .split(|c| c == '?' || c == '#')
-    .next()
-    .unwrap_or(url);
-  let ext = std::path::Path::new(without_query_fragment)
-    .extension()
-    .and_then(|e| e.to_str())
-    .map(|e| e.to_ascii_lowercase());
+  let lower = url.to_ascii_lowercase();
+  let lower = lower
+    .split_once('#')
+    .map(|(before, _)| before)
+    .unwrap_or(&lower);
+  let lower = lower
+    .split_once('?')
+    .map(|(before, _)| before)
+    .unwrap_or(lower);
 
-  match ext.as_deref() {
-    Some("woff2") => Some(0),
-    Some("woff") => Some(1),
-    Some("opentype") | Some("otf") | Some("truetype") | Some("ttf") | Some("collection")
-    | Some("ttc") => Some(2),
-    Some("eot") | Some("svg") | Some("svgz") => None,
-    _ => Some(3),
+  if lower.ends_with(".woff2") {
+    return Some(0);
   }
+  if lower.ends_with(".woff") {
+    return Some(1);
+  }
+  if lower.ends_with(".ttf")
+    || lower.ends_with(".otf")
+    || lower.ends_with(".ttc")
+    || lower.ends_with(".opentype")
+    || lower.ends_with(".truetype")
+    || lower.ends_with(".collection")
+    || lower.ends_with(".otc")
+  {
+    return Some(2);
+  }
+  if lower.ends_with(".eot") || lower.ends_with(".svg") || lower.ends_with(".svgz") {
+    return None;
+  }
+
+  Some(3)
 }
 
 fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u8>> {
@@ -3408,6 +3448,52 @@ mod tests {
     );
     assert_eq!(calls[0], "https://example.com/font.woff2");
     assert!(ctx.has_web_faces("FormatPref"));
+  }
+
+  #[test]
+  fn infers_format_from_url_when_hints_are_missing() {
+    let woff2_path = std::path::Path::new("tests/fixtures/fonts/DejaVuSans-subset.woff2");
+    let ttf_path = std::path::Path::new("tests/fixtures/fonts/DejaVuSans-subset.ttf");
+    if !(woff2_path.exists() && ttf_path.exists()) {
+      return;
+    }
+
+    let woff2_bytes = fs::read(woff2_path).expect("read woff2 fixture");
+    let ttf_bytes = fs::read(ttf_path).expect("read ttf fixture");
+
+    // `@font-face` rules on some pages omit `format()` hints. Ensure we infer format from the URL
+    // suffix so unsupported legacy sources (EOT) are skipped when modern sources exist.
+    let fetcher = Arc::new(RecordingFetcher::new(vec![
+      (
+        "https://example.com/font.woff2".to_string(),
+        woff2_bytes,
+        Some("font/woff2".to_string()),
+      ),
+      (
+        "https://example.com/font.ttf".to_string(),
+        ttf_bytes,
+        Some("font/ttf".to_string()),
+      ),
+    ]));
+
+    let css = r#"@font-face { font-family: "InferredFormat"; src: url("https://example.com/font.eot?#iefix"), url("https://example.com/font.woff2"), url("https://example.com/font.ttf"); }"#;
+    let sheet = crate::css::parser::parse_stylesheet(css).unwrap();
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let faces = sheet.collect_font_face_rules(&media_ctx);
+
+    let ctx = FontContext::with_fetcher(fetcher.clone());
+    ctx
+      .load_web_fonts(&faces, None, None)
+      .expect("schedule format loads");
+    assert!(ctx.wait_for_pending_web_fonts(Duration::from_secs(1)));
+
+    let calls = fetcher.calls();
+    assert_eq!(
+      calls,
+      vec!["https://example.com/font.woff2".to_string()],
+      "expected only the inferred woff2 source to be fetched"
+    );
+    assert!(ctx.has_web_faces("InferredFormat"));
   }
 
   #[test]

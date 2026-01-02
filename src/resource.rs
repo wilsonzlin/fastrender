@@ -918,6 +918,13 @@ fn http_response_allows_empty_body(
     return true;
   }
 
+  // For error statuses (4xx/5xx), many servers legitimately return an empty body. Treating that as
+  // a fetch error obscures the real root cause (`HTTP status <code>`) and prevents higher-level
+  // code from surfacing the status+final_url via `ensure_http_success`.
+  if status >= 400 {
+    return true;
+  }
+
   // Empty stylesheets are valid and used in practice (e.g. `https://www.debian.org/empty.css`),
   // but we still want to treat unexpected empty bodies as suspicious to catch truncation/corrupt
   // fetches. Only accept empty bodies for stylesheet requests when the server explicitly signals
@@ -3169,6 +3176,7 @@ impl HttpFetcher {
           .map(|s| s.to_string());
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.get_uri().to_string();
+        let allows_empty_body = http_response_allows_empty_body(kind, status_code, response.headers());
 
         let mut body_reader = response.body_mut().as_reader();
         let body_result = read_response_prefix(&mut body_reader, read_limit);
@@ -3177,9 +3185,7 @@ impl HttpFetcher {
             record_network_fetch_bytes(bytes.len());
             let is_retryable_status = retryable_http_status(status_code);
 
-            if bytes.is_empty()
-              && !http_response_allows_empty_body(kind, status_code, response.headers())
-            {
+            if bytes.is_empty() && !allows_empty_body {
               finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {
@@ -3602,6 +3608,7 @@ impl HttpFetcher {
           .map(|s| s.to_string());
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.url().to_string();
+        let allows_empty_body = http_response_allows_empty_body(kind, status_code, response.headers());
 
         let body_result = read_response_prefix(&mut response, read_limit);
         match body_result {
@@ -3609,9 +3616,7 @@ impl HttpFetcher {
             record_network_fetch_bytes(bytes.len());
             let is_retryable_status = retryable_http_status(status_code);
 
-            if bytes.is_empty()
-              && !http_response_allows_empty_body(kind, status_code, response.headers())
-            {
+            if bytes.is_empty() && !allows_empty_body {
               finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {
@@ -7805,6 +7810,87 @@ mod tests {
       "expected 404 font with empty body to be accepted"
     );
     assert_eq!(res.status, Some(404));
+  }
+
+  #[test]
+  fn http_empty_body_for_error_status_is_allowed() {
+    let Some(listener) = try_bind_localhost("http_empty_body_for_error_status_is_allowed") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      for _ in 0..2 {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        // Some servers legitimately return an empty body for 404/403 responses. We want the
+        // fetcher to propagate the HTTP status so callers can report `HTTP status <code>` rather
+        // than surfacing a misleading "empty HTTP response body" error.
+        let response =
+          "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n\r\n";
+        stream.write_all(response.as_bytes()).unwrap();
+      }
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+    let url = format!("http://{addr}/missing.woff2");
+
+    let res_ureq = fetcher
+      .fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Font,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        Instant::now(),
+        false,
+      )
+      .expect("ureq should return response for empty 404");
+    assert_eq!(res_ureq.status, Some(404));
+    assert!(
+      res_ureq.bytes.is_empty(),
+      "expected empty 404 body to be returned"
+    );
+    let err = ensure_http_success(&res_ureq, &url).expect_err("404 should be an HTTP failure");
+    assert!(
+      err.to_string().contains("HTTP status 404"),
+      "unexpected error message: {err}"
+    );
+
+    let res_reqwest = fetcher
+      .fetch_http_with_accept_inner_reqwest(
+        FetchContextKind::Font,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        Instant::now(),
+        false,
+      )
+      .expect("reqwest should return response for empty 404");
+    assert_eq!(res_reqwest.status, Some(404));
+    assert!(
+      res_reqwest.bytes.is_empty(),
+      "expected empty 404 body to be returned"
+    );
+    let err =
+      ensure_http_success(&res_reqwest, &url).expect_err("404 should be an HTTP failure");
+    assert!(
+      err.to_string().contains("HTTP status 404"),
+      "unexpected error message: {err}"
+    );
+
+    handle.join().unwrap();
   }
 
   #[test]
