@@ -558,6 +558,20 @@ struct LayoutCache {
   runs: AtomicUsize,
 }
 
+/// Global epoch generator shared across all `LayoutEngine` instances.
+///
+/// Layout caches (intrinsic sizing + fragment subtree reuse) are backed by thread-local hash maps
+/// keyed by `(box_id, style_fingerprint, constraints, epoch)`. If each `LayoutEngine` instance
+/// started from epoch 1, then re-creating the engine for each render (as the API does) could reuse
+/// the same epoch values across renders, which is unsafe once layout runs fan out to rayon worker
+/// threads (their TLS caches can outlive a single render).
+///
+/// Using a process-wide monotonically increasing epoch ensures:
+/// - cache entries from previous renders are never considered valid for a new render, and
+/// - worker-thread TLS caches can be lazily invalidated by epoch mismatch without needing a
+///   cross-thread clear.
+static GLOBAL_LAYOUT_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(0);
+
 impl LayoutCache {
   fn new() -> Self {
     Self {
@@ -567,10 +581,16 @@ impl LayoutCache {
   }
 
   fn start_run(&self, reset: bool) -> usize {
-    let epoch = if reset {
-      self.epoch.fetch_add(1, Ordering::Relaxed) + 1
+    // When `reset` is true (the common case for full layout runs), bump the global epoch so each
+    // render gets a fresh cache namespace. When `reset` is false we reuse the last epoch assigned
+    // to this engine instance (enabling container query relayout passes to share memoized work).
+    let current = self.epoch.load(Ordering::Relaxed);
+    let epoch = if reset || current == 0 {
+      let next = GLOBAL_LAYOUT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+      self.epoch.store(next, Ordering::Relaxed);
+      next
     } else {
-      self.epoch.load(Ordering::Relaxed).max(1)
+      current
     };
     self.runs.fetch_add(1, Ordering::Relaxed);
     epoch

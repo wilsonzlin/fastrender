@@ -53,10 +53,10 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::mem;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 /// Intrinsic sizing mode for content-based size queries
 ///
@@ -193,6 +193,15 @@ static LAYOUT_CACHE_HITS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounte
 static LAYOUT_CACHE_STORES: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
 static LAYOUT_CACHE_EVICTIONS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
 static LAYOUT_CACHE_CLONE_RETURNS: LazyLock<ShardedCounter> = LazyLock::new(ShardedCounter::new);
+
+// Layout cache configuration is stored globally so all rayon worker threads observe the same
+// enablement + epoch for a layout run. The cached fragments themselves remain thread-local to avoid
+// locking during parallel layout fan-out.
+static LAYOUT_CACHE_GLOBAL_ENABLED: AtomicBool = AtomicBool::new(false);
+static LAYOUT_CACHE_GLOBAL_EPOCH: AtomicUsize = AtomicUsize::new(1);
+static LAYOUT_CACHE_GLOBAL_FRAGMENTATION: AtomicU64 = AtomicU64::new(0);
+/// Stores the per-thread entry cap for `LAYOUT_RESULT_CACHE` (0 means "no cap / caching disabled").
+static LAYOUT_CACHE_GLOBAL_ENTRY_LIMIT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
 static INTRINSIC_CACHE_TEST_LOCK: LazyLock<parking_lot::ReentrantMutex<()>> =
@@ -745,6 +754,46 @@ fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
     .unwrap_or(0)
 }
 
+fn layout_cache_sync_thread_state() {
+  // Pull the run-scoped layout cache configuration from globals into this thread's TLS state.
+  let epoch = LAYOUT_CACHE_GLOBAL_EPOCH.load(Ordering::Relaxed).max(1);
+  let enabled = LAYOUT_CACHE_GLOBAL_ENABLED.load(Ordering::Relaxed);
+  let fragmentation = LAYOUT_CACHE_GLOBAL_FRAGMENTATION.load(Ordering::Relaxed);
+  let entry_limit = match LAYOUT_CACHE_GLOBAL_ENTRY_LIMIT.load(Ordering::Relaxed) {
+    0 => None,
+    v => Some(v),
+  };
+
+  let local_epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+  let local_enabled = LAYOUT_CACHE_ENABLED.with(|cell| cell.get());
+  let local_fragmentation = LAYOUT_CACHE_FRAGMENTATION.with(|cell| cell.get());
+  let local_entry_limit = LAYOUT_CACHE_ENTRY_LIMIT.with(|cell| cell.get());
+
+  let epoch_changed = local_epoch != epoch;
+  let enabled_changed = local_enabled != enabled;
+  let fragmentation_changed = local_fragmentation != fragmentation;
+  let entry_limit_changed = local_entry_limit != entry_limit;
+
+  if !(epoch_changed || enabled_changed || fragmentation_changed || entry_limit_changed) {
+    return;
+  }
+
+  // When a new epoch starts (or caching is disabled), drop any cached fragments/fingerprints on
+  // this thread. The global epoch is monotonically increasing (see `LayoutCache::start_run`), so
+  // this ensures worker-thread TLS caches don't leak across renders even when the engine is
+  // recreated per render.
+  if epoch_changed || !enabled || fragmentation_changed {
+    LAYOUT_RESULT_CACHE.with(|cache| cache.borrow_mut().clear());
+    clear_layout_style_fingerprint_cache();
+    subgrid_cache_use_epoch(epoch, true);
+  }
+
+  LAYOUT_CACHE_EPOCH.with(|cell| cell.set(epoch));
+  LAYOUT_CACHE_ENABLED.with(|cell| cell.set(enabled));
+  LAYOUT_CACHE_FRAGMENTATION.with(|cell| cell.set(fragmentation));
+  LAYOUT_CACHE_ENTRY_LIMIT.with(|cell| cell.set(entry_limit));
+}
+
 fn is_layout_cacheable(box_node: &BoxNode, fc_type: FormattingContextType) -> bool {
   if !LAYOUT_CACHE_ENABLED.with(|enabled| enabled.get()) {
     return false;
@@ -876,6 +925,7 @@ pub(crate) fn layout_cache_reset_counters() {
   #[cfg(test)]
   let _guard = layout_cache_test_lock();
 
+  layout_cache_sync_thread_state();
   LAYOUT_RESULT_CACHE.with(|cache| {
     cache.borrow_mut().clear();
   });
@@ -900,29 +950,32 @@ pub(crate) fn layout_cache_use_epoch(
   let _guard = layout_cache_test_lock();
 
   let epoch = epoch.max(1);
-  let previous = LAYOUT_CACHE_EPOCH.with(|cell| {
-    let previous = cell.get();
-    cell.set(epoch);
-    previous
-  });
-  LAYOUT_CACHE_ENABLED.with(|cell| cell.set(enabled));
-  LAYOUT_CACHE_FRAGMENTATION.with(|cell| cell.set(fragmentation_fingerprint(fragmentation)));
-
-  let should_clear = reset_counters || previous != epoch || !enabled;
-  if should_clear {
-    layout_cache_reset_counters();
-  }
-  if should_clear {
-    layout_cache_clear();
-  } else {
-    subgrid_cache_use_epoch(epoch, false);
-  }
+  let fragmentation_hash = fragmentation_fingerprint(fragmentation);
   let entry_limit = if enabled {
     resolve_layout_cache_entry_limit()
   } else {
     None
   };
-  LAYOUT_CACHE_ENTRY_LIMIT.with(|cell| cell.set(entry_limit));
+
+  let previous = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+
+  // Publish run configuration so rayon worker threads can observe it.
+  LAYOUT_CACHE_GLOBAL_EPOCH.store(epoch, Ordering::Relaxed);
+  LAYOUT_CACHE_GLOBAL_ENABLED.store(enabled, Ordering::Relaxed);
+  LAYOUT_CACHE_GLOBAL_FRAGMENTATION.store(fragmentation_hash, Ordering::Relaxed);
+  LAYOUT_CACHE_GLOBAL_ENTRY_LIMIT.store(entry_limit.unwrap_or(0), Ordering::Relaxed);
+
+  // Sync the calling thread immediately so subsequent cache lookups don't need to pay the sync
+  // cost repeatedly.
+  layout_cache_sync_thread_state();
+
+  let should_clear = reset_counters || previous != epoch || !enabled;
+  if should_clear {
+    layout_cache_reset_counters();
+    layout_cache_clear();
+  } else {
+    subgrid_cache_use_epoch(epoch, false);
+  }
 }
 
 /// Attempts to retrieve a cached layout result for the given formatting context.
@@ -932,6 +985,7 @@ pub(crate) fn layout_cache_lookup(
   constraints: &LayoutConstraints,
   viewport: Size,
 ) -> Option<FragmentNode> {
+  layout_cache_sync_thread_state();
   let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   let key = layout_cache_key(box_node, fc_type, constraints, viewport, epoch)?;
   if key.subgrid_dependent {
@@ -975,6 +1029,7 @@ pub(crate) fn layout_cache_store(
   fragment: &FragmentNode,
   viewport: Size,
 ) {
+  layout_cache_sync_thread_state();
   let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   let key = match layout_cache_key(box_node, fc_type, constraints, viewport, epoch) {
     Some(k) => k,
@@ -1294,8 +1349,10 @@ mod tests {
   use crate::style::display::{Display, FormattingContextType};
   use crate::style::values::Length;
   use crate::style::ComputedStyle;
+  use rayon::ThreadPoolBuilder;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
+  use std::time::Duration;
 
   /// Stub formatting context for testing trait requirements
   ///
@@ -1630,6 +1687,110 @@ mod tests {
   }
 
   #[test]
+  fn layout_cache_misses_on_constraint_change() {
+    let _guard = layout_cache_test_lock();
+    layout_cache_use_epoch(1, true, true, None);
+
+    let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    node.id = 1;
+    let viewport = Size::new(800.0, 600.0);
+    let fc_type = FormattingContextType::Block;
+
+    let constraints_a = LayoutConstraints::definite(800.0, 600.0);
+    let constraints_b = LayoutConstraints::definite(640.0, 480.0);
+
+    layout_cache_store(
+      &node,
+      fc_type,
+      &constraints_a,
+      &block_fragment(100.0, 50.0),
+      viewport,
+    );
+    assert!(
+      layout_cache_lookup(&node, fc_type, &constraints_b, viewport).is_none(),
+      "changing constraints must invalidate the cached entry"
+    );
+
+    layout_cache_use_epoch(1, false, true, None);
+  }
+
+  #[test]
+  fn layout_cache_does_not_cross_contaminate_nodes() {
+    let _guard = layout_cache_test_lock();
+    layout_cache_use_epoch(1, true, true, None);
+
+    let mut node_a = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    node_a.id = 1;
+    let mut node_b = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    node_b.id = 2;
+
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let viewport = Size::new(800.0, 600.0);
+    let fc_type = FormattingContextType::Block;
+
+    layout_cache_store(
+      &node_a,
+      fc_type,
+      &constraints,
+      &block_fragment(100.0, 50.0),
+      viewport,
+    );
+
+    assert!(
+      layout_cache_lookup(&node_b, fc_type, &constraints, viewport).is_none(),
+      "layout cache entries must not be reused across different box ids"
+    );
+
+    layout_cache_use_epoch(1, false, true, None);
+  }
+
+  #[test]
+  fn layout_cache_is_available_from_rayon_worker_threads() {
+    // Regression test: layout cache enablement/epoch configuration is stored in TLS, but layout
+    // itself can fan out to rayon worker threads. The cache must be usable from those workers
+    // without requiring each thread to call `layout_cache_use_epoch` manually.
+    let _guard = layout_cache_test_lock();
+    layout_cache_use_epoch(1, true, true, None);
+
+    let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Flex, vec![]);
+    node.id = 1;
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let viewport = Size::new(800.0, 600.0);
+
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(1)
+      .build()
+      .expect("build rayon pool");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    pool.spawn(move || {
+      assert!(
+        layout_cache_lookup(&node, FormattingContextType::Flex, &constraints, viewport).is_none(),
+        "cache should be empty before store"
+      );
+      let fragment = block_fragment(123.0, 45.0);
+      layout_cache_store(
+        &node,
+        FormattingContextType::Flex,
+        &constraints,
+        &fragment,
+        viewport,
+      );
+      tx.send(
+        layout_cache_lookup(&node, FormattingContextType::Flex, &constraints, viewport).is_some(),
+      )
+      .expect("send result");
+    });
+    assert!(
+      rx.recv_timeout(Duration::from_secs(1))
+        .expect("receive worker result"),
+      "expected worker thread to observe layout cache hit after store"
+    );
+
+    layout_cache_use_epoch(1, false, true, None);
+  }
+
+  #[test]
   fn layout_style_fingerprint_memoized_per_epoch() {
     let _guard = layout_cache_test_lock();
     layout_cache_use_epoch(1, true, true, None);
@@ -1736,7 +1897,9 @@ mod tests {
       &block_fragment(40.0, 10.0),
       viewport,
     );
-    LAYOUT_CACHE_EPOCH.with(|cell| cell.set(2));
+    // Simulate a new layout run starting on another thread by bumping the global epoch.
+    // Worker threads should observe the change and drop any stale TLS cache entries.
+    LAYOUT_CACHE_GLOBAL_EPOCH.store(2, Ordering::Relaxed);
 
     assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_none());
     LAYOUT_RESULT_CACHE.with(|cache| assert!(cache.borrow().is_empty()));
@@ -1745,9 +1908,10 @@ mod tests {
     assert_eq!(lookups, 1);
     assert_eq!(hits, 0);
     assert_eq!(stores, 1);
-    assert_eq!(evictions, 1);
+    // Epoch transitions happen at layout-run boundaries where counters are reset, so we do not
+    // count stale entries from previous epochs as evictions in the current run.
+    assert_eq!(evictions, 0);
 
     layout_cache_use_epoch(1, false, true, None);
   }
 }
-use std::time::Duration;
