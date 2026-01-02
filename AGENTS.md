@@ -183,6 +183,10 @@ Each file should be tiny (no huge logs, no raw HTML):
 ```json
 {
   "url": "https://example.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok|timeout|panic|error",
   "total_ms": 123.4,
   "stages_ms": { "fetch": 0.0, "css": 0.0, "cascade": 0.0, "layout": 0.0, "paint": 0.0 },

@@ -1,5 +1,9 @@
 {
   "url": "https://www.w3.org/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 278.324401,
   "stages_ms": {
@@ -20,7 +24,7 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 1.386241,
-        "dom_html5ever_ms": 0.9841920000000001,
+        "dom_html5ever_ms": 0.984192,
         "dom_convert_ms": 0.310137,
         "dom_shadow_attach_ms": 0.028911000000000003,
         "dom_compat_ms": 0.0,
@@ -37,17 +41,17 @@
         "css_inline_inject_ms": null,
         "css_parse_ms": 1.496963,
         "css_parse_used_codepoints_ms": 0.090252,
-        "css_parse_collect_font_faces_ms": 0.025599999999999998,
+        "css_parse_collect_font_faces_ms": 0.0256,
         "css_parse_load_webfonts_ms": 1.301539,
         "css_parse_collect_keyframes_ms": 0.056041,
-        "cascade_ms": 39.087061999999996,
+        "cascade_ms": 39.087062,
         "box_tree_ms": 15.534513,
         "layout_ms": 45.78576,
         "text_fallback_cpu_ms": 9.454085999999997,
         "text_shape_cpu_ms": 3.740165000000001,
         "paint_build_ms": 10.370049,
         "paint_optimize_ms": 0.00931,
-        "paint_rasterize_ms": 0.9109510000000001,
+        "paint_rasterize_ms": 0.910951,
         "text_rasterize_cpu_ms": 0.0,
         "encode_ms": null
       },

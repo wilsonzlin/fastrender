@@ -17,9 +17,7 @@ fn pageset_progress_soft_timeout_in_box_tree_includes_stage_note() {
   }
   fs::write(
     html_dir.join("box_tree_soft_timeout.html"),
-    format!(
-      "<!doctype html><title>Box tree timeout</title><body>{body}</body>"
-    ),
+    format!("<!doctype html><title>Box tree timeout</title><body>{body}</body>"),
   )
   .expect("write html");
 
@@ -27,6 +25,8 @@ fn pageset_progress_soft_timeout_in_box_tree_includes_stage_note() {
   let log_dir = temp.path().join("logs");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     // Delay once StageHeartbeat reaches `box_tree` so the next cooperative deadline check in box
     // generation trips the renderer timeout.

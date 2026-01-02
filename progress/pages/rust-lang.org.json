@@ -1,5 +1,9 @@
 {
   "url": "https://rust-lang.org/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 999.537951,
   "stages_ms": {
@@ -19,9 +23,9 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.9216610000000001,
+        "dom_parse_ms": 0.921661,
         "dom_html5ever_ms": 0.659384,
-        "dom_convert_ms": 0.20629399999999998,
+        "dom_convert_ms": 0.206294,
         "dom_shadow_attach_ms": 0.022051,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.0042899999999999995,
@@ -48,7 +52,7 @@
         "paint_build_ms": 11.252706,
         "paint_optimize_ms": 0.013431,
         "paint_rasterize_ms": 3.358893,
-        "text_rasterize_cpu_ms": 1.6870669999999999,
+        "text_rasterize_cpu_ms": 1.687067,
         "encode_ms": null
       },
       "counts": {

@@ -1,5 +1,9 @@
 {
   "url": "https://www.newyorker.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 844.740509,
   "stages_ms": {
@@ -46,7 +50,7 @@
         "text_fallback_cpu_ms": 5.696610999999996,
         "text_shape_cpu_ms": 7.531620999999999,
         "paint_build_ms": 103.980948,
-        "paint_optimize_ms": 0.20746499999999998,
+        "paint_optimize_ms": 0.207465,
         "paint_rasterize_ms": 23.211343999999997,
         "text_rasterize_cpu_ms": 11.697375,
         "encode_ms": null

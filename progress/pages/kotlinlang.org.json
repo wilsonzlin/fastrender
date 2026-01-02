@@ -1,5 +1,9 @@
 {
   "url": "https://kotlinlang.org/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 363.260685,
   "stages_ms": {
@@ -46,7 +50,7 @@
         "text_fallback_cpu_ms": 0.6959190000000001,
         "text_shape_cpu_ms": 3.2943629999999993,
         "paint_build_ms": 18.78382,
-        "paint_optimize_ms": 0.014589999999999999,
+        "paint_optimize_ms": 0.01459,
         "paint_rasterize_ms": 28.732743000000003,
         "text_rasterize_cpu_ms": 0.366209,
         "encode_ms": null

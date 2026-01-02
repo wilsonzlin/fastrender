@@ -18,6 +18,8 @@ fn pageset_progress_killed_after_done_populates_timeout_stage() {
   let log_dir = temp.path().join("logs");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .env("FASTR_TEST_SKIP_PROGRESS_SENTINEL", "1")
     // The worker sleeps after committing progress so the parent hits the hard timeout while the

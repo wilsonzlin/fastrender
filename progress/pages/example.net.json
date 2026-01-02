@@ -1,5 +1,9 @@
 {
   "url": "https://example.net/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 310.43310299999996,
   "stages_ms": {
@@ -7,7 +11,7 @@
     "css": 59.02093736231019,
     "cascade": 147.51100911890802,
     "layout": 6.385600137697819,
-    "paint": 97.23069332748625
+    "paint": 97.23069332748624
   },
   "notes": "",
   "hotspot": "paint",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 20.170416,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 27.763581,
         "box_tree_ms": 22.648333,
         "layout_ms": 2.18228,

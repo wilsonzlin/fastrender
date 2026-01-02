@@ -18,6 +18,7 @@ fn pageset_progress_worker_times_out_cooperatively_under_parallel_layout_and_pai
   let log_path = temp.path().join("worker.log");
 
   let mut cmd = Command::new(env!("CARGO_BIN_EXE_pageset_progress"));
+  cmd.env("DISK_CACHE", "0").env("NO_DISK_CACHE", "1");
   cmd
     // Run in an isolated working directory so per-run scratch dirs like `fetches/assets` don't
     // collide with other CLI tests (the worker uses relative cache paths by default).
@@ -105,13 +106,8 @@ fn pageset_progress_worker_times_out_cooperatively_under_parallel_layout_and_pai
     "expected paint heartbeat at timeout, got: {stage}"
   );
 
-  let buckets = progress["stages_ms"]
-    .as_object()
-    .expect("stages_ms object");
-  let paint_ms = buckets
-    .get("paint")
-    .and_then(|v| v.as_f64())
-    .unwrap_or(0.0);
+  let buckets = progress["stages_ms"].as_object().expect("stages_ms object");
+  let paint_ms = buckets.get("paint").and_then(|v| v.as_f64()).unwrap_or(0.0);
   assert!(
     paint_ms > 0.0,
     "expected non-zero paint bucket on timeout, got: {paint_ms} (raw {progress_raw})"

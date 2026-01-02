@@ -12,8 +12,8 @@ use walkdir::WalkDir;
 
 mod import_page_fixture;
 mod recapture_page_fixtures;
-mod update_pageset_guardrails_budgets;
 mod update_pageset_guardrails;
+mod update_pageset_guardrails_budgets;
 
 fn main() -> Result<()> {
   let cli = Cli::parse();
@@ -76,7 +76,9 @@ enum Commands {
   ///
   /// Note: the legacy `update-pageset-timeout-budgets` command name is kept as an alias.
   #[command(alias = "update-pageset-timeout-budgets")]
-  UpdatePagesetGuardrailsBudgets(update_pageset_guardrails_budgets::UpdatePagesetGuardrailsBudgetsArgs),
+  UpdatePagesetGuardrailsBudgets(
+    update_pageset_guardrails_budgets::UpdatePagesetGuardrailsBudgetsArgs,
+  ),
   /// Run the offline perf smoke harness (`perf_smoke` binary) over curated fixtures
   PerfSmoke(PerfSmokeArgs),
 }
@@ -561,6 +563,15 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   } else {
     "disabled"
   };
+  let apply_disk_cache_env = |cmd: &mut Command| {
+    if disk_cache_enabled {
+      cmd.env("DISK_CACHE", "1");
+      cmd.env_remove("NO_DISK_CACHE");
+    } else {
+      cmd.env("DISK_CACHE", "0");
+      cmd.env("NO_DISK_CACHE", "1");
+    }
+  };
 
   let prefetch_support = PrefetchAssetsSupport::detect();
   let (mut prefetch_asset_args, mut pageset_extra_args) =
@@ -638,6 +649,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if layout_parallel_env.is_none() {
       cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
     }
+    apply_disk_cache_env(&mut cmd);
     println!(
       "Updating cached pages (jobs={}, timeout={}s, disk_cache={})...",
       args.jobs, args.fetch_timeout, disk_cache_status
@@ -683,6 +695,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if layout_parallel_env.is_none() {
       cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
     }
+    apply_disk_cache_env(&mut cmd);
     println!(
       "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
       args.jobs, args.fetch_timeout
@@ -734,6 +747,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   if layout_parallel_env.is_none() {
     cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
   }
+  apply_disk_cache_env(&mut cmd);
   println!(
     "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={})...",
     args.jobs, args.render_timeout, disk_cache_status
@@ -817,7 +831,8 @@ fn extract_prefetch_assets_args(
           || arg.starts_with("--prefetch-documents=")))
       || (support.prefetch_embeds
         && (arg == "--prefetch-embeds" || arg.starts_with("--prefetch-embeds=")))
-      || (support.prefetch_icons && (arg == "--prefetch-icons" || arg.starts_with("--prefetch-icons=")))
+      || (support.prefetch_icons
+        && (arg == "--prefetch-icons" || arg.starts_with("--prefetch-icons=")))
       || (support.prefetch_video_posters
         && (arg == "--prefetch-video-posters" || arg.starts_with("--prefetch-video-posters=")))
       || (support.prefetch_css_url_assets

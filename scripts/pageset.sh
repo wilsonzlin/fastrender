@@ -79,6 +79,14 @@ for arg in "$@"; do
   ARGS+=("${arg}")
 done
 
+if [[ "${USE_DISK_CACHE}" != 0 ]]; then
+  export DISK_CACHE=1
+  unset NO_DISK_CACHE || true
+else
+  export DISK_CACHE=0
+  export NO_DISK_CACHE=1
+fi
+
 USER_AGENT_ARG="${USER_AGENT:-}"
 ACCEPT_LANGUAGE_ARG="${ACCEPT_LANGUAGE:-}"
 VIEWPORT_ARG="${VIEWPORT:-}"

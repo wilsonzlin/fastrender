@@ -1,10 +1,14 @@
 {
   "url": "https://www.wsj.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 362.66148,
   "stages_ms": {
     "fetch": 0.5153845065816847,
-    "css": 102.05083637036533,
+    "css": 102.05083637036532,
     "cascade": 181.9001198613245,
     "layout": 7.110253663894772,
     "paint": 71.08488559783369
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 23.646646,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 33.940493000000004,
         "box_tree_ms": 8.20838,
         "layout_ms": 1.647548,

@@ -16,7 +16,8 @@ mod stage_buckets;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use common::args::{
   parse_shard, CompatArgs, CompatProfileArg, DiskCacheArgs, DomCompatArg, LayoutParallelArgs,
-  LayoutParallelModeArg, ResourceAccessArgs,
+  LayoutParallelModeArg, ResourceAccessArgs, DEFAULT_DISK_CACHE_MAX_AGE_SECS,
+  DEFAULT_DISK_CACHE_MAX_BYTES,
 };
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, follow_client_redirects_with_deadline,
@@ -1012,9 +1013,106 @@ fn normalize_progress_url(url: &str) -> String {
   format!("{head}{PROGRESS_NOTE_ELLIPSIS}{tail}")
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProgressConfig {
+  disk_cache_enabled: bool,
+  http_browser_headers_enabled: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  disk_cache_max_bytes: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  disk_cache_max_age_secs: Option<u64>,
+}
+
+fn http_browser_headers_enabled_from_raw(raw: Option<&str>) -> bool {
+  raw
+    .map(|raw| {
+      !matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
+      )
+    })
+    .unwrap_or(true)
+}
+
+fn progress_config_from_parts(
+  disk_cache: &DiskCacheArgs,
+  disk_cache_enabled: bool,
+  http_browser_headers_enabled: bool,
+) -> ProgressConfig {
+  let mut config = ProgressConfig {
+    disk_cache_enabled,
+    http_browser_headers_enabled,
+    disk_cache_max_bytes: None,
+    disk_cache_max_age_secs: None,
+  };
+
+  if disk_cache_enabled {
+    if disk_cache.max_bytes != DEFAULT_DISK_CACHE_MAX_BYTES {
+      config.disk_cache_max_bytes = Some(disk_cache.max_bytes);
+    }
+    if disk_cache.max_age_secs != DEFAULT_DISK_CACHE_MAX_AGE_SECS {
+      config.disk_cache_max_age_secs = Some(disk_cache.max_age_secs);
+    }
+  }
+
+  config
+}
+
+fn current_progress_config(disk_cache: &DiskCacheArgs) -> ProgressConfig {
+  let raw = std::env::var("FASTR_HTTP_BROWSER_HEADERS").ok();
+  progress_config_from_parts(
+    disk_cache,
+    cfg!(feature = "disk_cache"),
+    http_browser_headers_enabled_from_raw(raw.as_deref()),
+  )
+}
+
+fn migrate_progress_config(progress: &mut PageProgress) {
+  if progress.config.is_some() {
+    return;
+  }
+
+  progress.config = Some(ProgressConfig {
+    disk_cache_enabled: true,
+    http_browser_headers_enabled: true,
+    disk_cache_max_bytes: None,
+    disk_cache_max_age_secs: None,
+  });
+}
+
+fn disk_cache_expected_from_env() -> bool {
+  if std::env::var("NO_DISK_CACHE")
+    .map(|value| !value.is_empty())
+    .unwrap_or(false)
+  {
+    return false;
+  }
+
+  std::env::var("DISK_CACHE")
+    .map(|value| value != "0")
+    .unwrap_or(true)
+}
+
+fn ensure_disk_cache_feature_available() {
+  if disk_cache_expected_from_env() && !cfg!(feature = "disk_cache") {
+    eprintln!(
+      "pageset_progress was built without the `disk_cache` feature, but disk cache is enabled by \
+       default for pageset runs so progress artifacts are comparable.\n\
+       \n\
+       Re-run via `cargo xtask pageset` / `scripts/pageset.sh`, or rebuild with \
+       `--features disk_cache`.\n\
+       \n\
+       To intentionally disable disk cache, set `NO_DISK_CACHE=1` or `DISK_CACHE=0`."
+    );
+    std::process::exit(2);
+  }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct PageProgress {
   url: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  config: Option<ProgressConfig>,
   status: ProgressStatus,
   total_ms: Option<f64>,
   stages_ms: StageBuckets,
@@ -1034,6 +1132,7 @@ impl PageProgress {
   pub(crate) fn new(url: String) -> Self {
     Self {
       url,
+      config: None,
       status: ProgressStatus::Error,
       total_ms: None,
       stages_ms: StageBuckets::default(),
@@ -1584,6 +1683,7 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
       )
     })?;
     migrate_legacy_notes(&mut progress);
+    migrate_progress_config(&mut progress);
     normalize_missing_cache_placeholder(&mut progress, cache_exists);
     if let Some(total_ms) = progress.total_ms {
       if progress.status == ProgressStatus::Ok {
@@ -1667,6 +1767,7 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       new_progress
     };
 
+    migrate_progress_config(&mut progress);
     progress.url = cache_path
       .as_ref()
       .and_then(|path| cached_url_from_cache_meta(path))
@@ -1959,6 +2060,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let started = Instant::now();
   let mut log = String::new();
   let current_sha = current_git_sha();
+  let progress_config = current_progress_config(&args.disk_cache);
 
   let progress_before = read_progress(&args.progress_path);
 
@@ -1969,6 +2071,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       let note_msg = format_error_with_chain(&e, args.verbose);
       log.push_str(&format!("Read error: {log_msg}\n"));
       let mut progress = PageProgress::new(url_hint_from_cache_path(&args.cache_path));
+      progress.config = Some(progress_config.clone());
       progress.status = ProgressStatus::Error;
       progress.auto_notes = format!("read: {note_msg}");
       progress.failure_stage = heartbeat
@@ -2001,6 +2104,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   if cached_html_status.is_some() && args.fail_on_cached_http_error_status {
     let status = cached.status;
     let mut progress = PageProgress::new(url.clone());
+    progress.config = Some(progress_config.clone());
     progress.status = ProgressStatus::Error;
     progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
     if let Some(note) = cached_html_status_note.as_deref() {
@@ -2195,6 +2299,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         let note_msg = format_error_with_chain(&e, args.verbose);
         log.push_str(&format!("Renderer init error: {log_msg}\n"));
         let mut progress = PageProgress::new(url);
+        progress.config = Some(progress_config.clone());
         progress.status = ProgressStatus::Error;
         progress.auto_notes = format!("renderer init: {note_msg}");
         progress.failure_stage = heartbeat
@@ -2240,6 +2345,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
   let mut progress = PageProgress::new(url);
+  progress.config = Some(progress_config.clone());
   progress.total_ms = Some(elapsed_ms);
 
   match render_result {
@@ -5904,6 +6010,7 @@ fn run_queue(
 ) -> io::Result<()> {
   let mut running: Vec<RunningChild> = Vec::new();
   let current_sha = current_git_sha();
+  let progress_config = current_progress_config(&args.disk_cache);
   let poll_interval = std::env::var("FASTR_TEST_PAGESET_POLL_INTERVAL_MS")
     .ok()
     .and_then(|raw| raw.parse::<u64>().ok())
@@ -5984,6 +6091,7 @@ fn run_queue(
         }
         .to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
+        progress.config = Some(progress_config.clone());
         progress.status = if crash_at_timeout {
           ProgressStatus::Panic
         } else {
@@ -6071,6 +6179,7 @@ fn run_queue(
               // Sentinel says the worker wrote progress, but the file isn't readable.
               let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
               let mut progress = PageProgress::new(entry.item.url.clone());
+              progress.config = Some(progress_config.clone());
               progress.status = ProgressStatus::Panic;
               progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
               progress.auto_notes =
@@ -6106,6 +6215,7 @@ fn run_queue(
             let previous = read_progress(&entry.item.progress_path);
             let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
             let mut progress = PageProgress::new(entry.item.url.clone());
+            progress.config = Some(progress_config.clone());
             progress.status = ProgressStatus::Panic;
             progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
             let note = synthesize_missing_progress_note(exit_summary);
@@ -6161,6 +6271,7 @@ fn run_queue(
           let previous = read_progress(&entry.item.progress_path);
           let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
           let mut progress = PageProgress::new(entry.item.url.clone());
+          progress.config = Some(progress_config.clone());
           progress.status = ProgressStatus::Panic;
           progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
           progress.auto_notes = "worker try_wait failed".to_string();
@@ -6327,6 +6438,7 @@ fn merge_cascade_stats_into_progress(progress: &mut PageProgress, rerun_stats: &
 }
 
 fn run(args: RunArgs) -> io::Result<()> {
+  ensure_disk_cache_feature_available();
   if args.jobs == 0 {
     eprintln!("jobs must be > 0");
     std::process::exit(2);
@@ -6916,6 +7028,7 @@ fn run(args: RunArgs) -> io::Result<()> {
 }
 
 fn worker(args: WorkerArgs) -> io::Result<()> {
+  ensure_disk_cache_feature_available();
   if args.cache_path.as_os_str().is_empty() {
     return Ok(());
   }
@@ -6955,6 +7068,7 @@ fn worker_on_large_stack(args: WorkerArgs) -> io::Result<()> {
   let verbose = args.verbose;
   let started = Instant::now();
   let current_sha = current_git_sha();
+  let progress_config = current_progress_config(&args.disk_cache);
 
   let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_worker(args)));
   match result {
@@ -6983,6 +7097,7 @@ fn worker_on_large_stack(args: WorkerArgs) -> io::Result<()> {
         .as_ref()
         .and_then(|path| read_stage_heartbeat(path));
       let mut progress = PageProgress::new(url);
+      progress.config = Some(progress_config.clone());
       progress.status = ProgressStatus::Panic;
       progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
       progress.auto_notes = panic_msg;
@@ -7514,6 +7629,64 @@ mod tests {
       "expected --disk-cache-writeback-under-deadline to be passed exactly once"
     );
     assert_eq!(cmd_args.get(writeback_pos + 1), Some(&"true".to_string()));
+  }
+
+  #[test]
+  fn progress_config_serializes_disk_cache_enabled_feature_flag() {
+    let disk_cache = DiskCacheArgs {
+      max_bytes: DEFAULT_DISK_CACHE_MAX_BYTES,
+      max_age_secs: DEFAULT_DISK_CACHE_MAX_AGE_SECS,
+      lock_stale_secs: common::args::DEFAULT_DISK_CACHE_LOCK_STALE_SECS,
+      allow_no_store: false,
+      writeback_under_deadline: false,
+    };
+
+    let config = current_progress_config(&disk_cache);
+    assert_eq!(
+      config.disk_cache_enabled,
+      cfg!(feature = "disk_cache"),
+      "disk_cache_enabled should reflect whether the binary was built with the disk_cache feature"
+    );
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("page.json");
+    let mut progress = PageProgress::new("https://example.com/".to_string());
+    progress.status = ProgressStatus::Ok;
+    progress.total_ms = Some(12.5);
+    progress.config = Some(config);
+    write_progress(&path, &progress).unwrap();
+
+    let written = fs::read_to_string(&path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(
+      parsed
+        .get("config")
+        .and_then(|cfg| cfg.get("disk_cache_enabled"))
+        .and_then(|v| v.as_bool()),
+      Some(cfg!(feature = "disk_cache"))
+    );
+  }
+
+  #[test]
+  fn progress_config_includes_disk_cache_knobs_only_when_enabled() {
+    let disk_cache = DiskCacheArgs {
+      max_bytes: DEFAULT_DISK_CACHE_MAX_BYTES + 1,
+      max_age_secs: 0,
+      lock_stale_secs: common::args::DEFAULT_DISK_CACHE_LOCK_STALE_SECS,
+      allow_no_store: false,
+      writeback_under_deadline: false,
+    };
+
+    let enabled = progress_config_from_parts(&disk_cache, true, true);
+    assert_eq!(
+      enabled.disk_cache_max_bytes,
+      Some(DEFAULT_DISK_CACHE_MAX_BYTES + 1)
+    );
+    assert_eq!(enabled.disk_cache_max_age_secs, Some(0));
+
+    let disabled = progress_config_from_parts(&disk_cache, false, true);
+    assert_eq!(disabled.disk_cache_max_bytes, None);
+    assert_eq!(disabled.disk_cache_max_age_secs, None);
   }
 
   #[test]
@@ -8530,6 +8703,8 @@ mod tests {
     // Keep this comfortably above process spawn + stage heartbeat fsync time so the worker has time
     // to write its initial heartbeat stage before the parent kills it.
     let hard_timeout = Duration::from_millis(800);
+    let _disk_cache_guard = EnvVarGuard::set("DISK_CACHE", "0");
+    let _no_disk_cache_guard = EnvVarGuard::set("NO_DISK_CACHE", "1");
     // Delay longer than the hard timeout so the worker is guaranteed to still be running when the
     // parent triggers the hard kill.
     let _guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_MS", "5000");
@@ -8612,6 +8787,8 @@ mod tests {
     // the worker during the (intentionally stalled) dump capture phase.
     let render_kill_timeout = Duration::from_secs(3);
     let overall_kill_timeout = Duration::from_secs(4);
+    let _disk_cache_guard = EnvVarGuard::set("DISK_CACHE", "0");
+    let _no_disk_cache_guard = EnvVarGuard::set("NO_DISK_CACHE", "1");
     let _guard = EnvVarGuard::set("FASTR_TEST_DUMP_DELAY_MS", "10000");
     let _stem_guard = EnvVarGuard::set("FASTR_TEST_DUMP_DELAY_STEM", "dumpkill");
     let queue = VecDeque::from(vec![item]);
@@ -8687,6 +8864,8 @@ mod tests {
 
     let render_kill_timeout = Duration::from_secs(5);
     let overall_kill_timeout = Duration::from_secs(6);
+    let _disk_cache_guard = EnvVarGuard::set("DISK_CACHE", "0");
+    let _no_disk_cache_guard = EnvVarGuard::set("NO_DISK_CACHE", "1");
     let _guard = EnvVarGuard::set("FASTR_TEST_DUMP_PANIC", "1");
     let _stem_guard = EnvVarGuard::set("FASTR_TEST_DUMP_PANIC_STEM", "dumppanic");
     let queue = VecDeque::from(vec![item]);

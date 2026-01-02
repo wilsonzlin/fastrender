@@ -1,9 +1,13 @@
 {
   "url": "https://developer.apple.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1042.243344,
   "stages_ms": {
-    "fetch": 228.45032845907807,
+    "fetch": 228.4503284590781,
     "css": 196.09470253998117,
     "cascade": 189.23138795108184,
     "layout": 126.48108313828786,
@@ -39,15 +43,15 @@
         "css_parse_ms": 2.164479,
         "css_parse_used_codepoints_ms": 0.240416,
         "css_parse_collect_font_faces_ms": 0.27849599999999997,
-        "css_parse_load_webfonts_ms": 1.3849909999999999,
+        "css_parse_load_webfonts_ms": 1.384991,
         "css_parse_collect_keyframes_ms": 0.154053,
         "cascade_ms": 108.466064,
         "box_tree_ms": 69.894875,
-        "layout_ms": 50.722246999999996,
+        "layout_ms": 50.722247,
         "text_fallback_cpu_ms": 21.597231000000004,
         "text_shape_cpu_ms": 2.736076,
         "paint_build_ms": 75.624965,
-        "paint_optimize_ms": 0.050180999999999996,
+        "paint_optimize_ms": 0.050181,
         "paint_rasterize_ms": 183.561427,
         "text_rasterize_cpu_ms": 2.5729850000000005,
         "encode_ms": null
@@ -178,7 +182,7 @@
         "blur_cache_misses": 1,
         "blur_tiles": 0,
         "blur_calls": 1,
-        "blur_ms": 10.650682999999999,
+        "blur_ms": 10.650683,
         "blur_pixels": 242400,
         "blur_bytes": 969600,
         "blur_cancellations": 0

@@ -1,5 +1,9 @@
 {
   "url": "https://arstechnica.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 963.576271,
   "stages_ms": {
@@ -36,11 +40,11 @@
         "css_inline_imports_cpu_ms": null,
         "css_inline_inject_ms": null,
         "css_parse_ms": 6.717605,
-        "css_parse_used_codepoints_ms": 0.19753500000000002,
+        "css_parse_used_codepoints_ms": 0.197535,
         "css_parse_collect_font_faces_ms": 0.074652,
         "css_parse_load_webfonts_ms": 6.368148,
         "css_parse_collect_keyframes_ms": 0.048871,
-        "cascade_ms": 476.90062500000005,
+        "cascade_ms": 476.9006250000001,
         "box_tree_ms": 27.561088,
         "layout_ms": 204.50789,
         "text_fallback_cpu_ms": 3.327071000000002,
@@ -200,7 +204,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 1.8911210000000003
+        "image_decode_ms": 1.8911210000000005
       }
     }
   }

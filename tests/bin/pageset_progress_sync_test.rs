@@ -11,6 +11,7 @@ fn run_sync_with_env(
   envs: &[(&str, &str)],
 ) -> std::process::ExitStatus {
   let mut cmd = Command::new(env!("CARGO_BIN_EXE_pageset_progress"));
+  cmd.env("DISK_CACHE", "0").env("NO_DISK_CACHE", "1");
   cmd.args([
     "sync",
     "--progress-dir",

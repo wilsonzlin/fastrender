@@ -18,6 +18,8 @@ fn pageset_progress_worker_fast_exits_after_writing_progress() {
   let log_dir = temp.path().join("logs");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     // The worker uses `std::process::exit` after writing progress artifacts to
     // bypass Drop-based cleanup. Keep the hard timeout below the injected drop

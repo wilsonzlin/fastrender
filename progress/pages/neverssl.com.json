@@ -1,12 +1,16 @@
 {
   "url": "http://neverssl.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 334.031069,
   "stages_ms": {
     "fetch": 0.5998975899473752,
     "css": 37.281991747652505,
     "cascade": 89.14883243273306,
-    "layout": 119.88395764992377,
+    "layout": 119.88395764992376,
     "paint": 87.11638957974334
   },
   "notes": "",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 8.758662000000001,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 8.128658,
         "box_tree_ms": 12.815086,
         "layout_ms": 28.16435,

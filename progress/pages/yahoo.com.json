@@ -1,5 +1,9 @@
 {
   "url": "https://www.yahoo.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1362.973913,
   "stages_ms": {
@@ -10,7 +14,7 @@
     "paint": 162.54795124194655
   },
   "notes": "",
-  "hotspot": "fetch",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
@@ -28,16 +32,27 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 23.892112,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 1.926002,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 344.48476999999997,
         "box_tree_ms": 69.156052,
         "layout_ms": 41.139500000000005,
-        "text_fallback_cpu_ms": 0.9035030000000003,
+        "text_fallback_cpu_ms": 0.9035030000000004,
         "text_shape_cpu_ms": 3.402734,
         "paint_build_ms": 11.321468,
         "paint_optimize_ms": 0.02121,
         "paint_rasterize_ms": 26.170302,
-        "text_rasterize_cpu_ms": 0.19010500000000002,
+        "text_rasterize_cpu_ms": 0.190105,
         "encode_ms": null
       },
       "counts": {

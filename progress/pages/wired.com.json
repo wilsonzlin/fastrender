@@ -1,7 +1,11 @@
 {
   "url": "https://www.wired.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
-  "total_ms": 1430.4712299999999,
+  "total_ms": 1430.47123,
   "stages_ms": {
     "fetch": 133.6426408650519,
     "css": 38.60787402768166,
@@ -45,7 +49,7 @@
         "layout_ms": 1103.851678,
         "text_fallback_cpu_ms": 2.7517299999999993,
         "text_shape_cpu_ms": 6.386484000000002,
-        "paint_build_ms": 11.974680999999999,
+        "paint_build_ms": 11.974681,
         "paint_optimize_ms": 0.01757,
         "paint_rasterize_ms": 1.174787,
         "text_rasterize_cpu_ms": 0.0,

@@ -1,5 +1,9 @@
 {
   "url": "https://www.zillow.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 587.055909,
   "stages_ms": {
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 26.45679,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 127.13201399999998,
         "box_tree_ms": 31.113878,
         "layout_ms": 39.85912,

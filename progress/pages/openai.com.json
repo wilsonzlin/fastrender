@@ -1,5 +1,9 @@
 {
   "url": "https://openai.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 137.767379,
   "stages_ms": {
@@ -7,7 +11,7 @@
     "css": 8.466151782122905,
     "cascade": 7.696501620111732,
     "layout": 3.848250810055866,
-    "paint": 13.853702916201117
+    "paint": 13.853702916201115
   },
   "notes": "",
   "hotspot": "paint",
@@ -22,13 +26,24 @@
         "dom_parse_ms": 0.218825,
         "dom_html5ever_ms": 0.171663,
         "dom_convert_ms": 0.030001,
-        "dom_shadow_attach_ms": 0.011640000000000001,
+        "dom_shadow_attach_ms": 0.01164,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.016861,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 0.380539,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 0.036891,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 5.863781,
         "box_tree_ms": 3.59712,
         "layout_ms": 2.134337,
@@ -37,7 +52,7 @@
         "paint_build_ms": 10.519265,
         "paint_optimize_ms": 0.008060000000000001,
         "paint_rasterize_ms": 0.423559,
-        "text_rasterize_cpu_ms": 0.36820800000000004,
+        "text_rasterize_cpu_ms": 0.368208,
         "encode_ms": null
       },
       "counts": {
@@ -143,7 +158,7 @@
         "parallel_threads": 1,
         "parallel_fallback_reason": "estimated paint work below parallel threshold",
         "parallel_ms": 0.0,
-        "serial_ms": 11.310944000000003,
+        "serial_ms": 11.310944000000005,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,

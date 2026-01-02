@@ -1,9 +1,13 @@
 {
   "url": "https://discord.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 762.0541589999999,
   "stages_ms": {
-    "fetch": 127.00902649999999,
+    "fetch": 127.0090265,
     "css": 223.96248184351143,
     "cascade": 148.3387866755725,
     "layout": 50.415796778625946,
@@ -207,7 +211,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 118.21359299999999
+        "image_decode_ms": 118.213593
       }
     }
   }

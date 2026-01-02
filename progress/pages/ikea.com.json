@@ -1,10 +1,14 @@
 {
   "url": "https://www.ikea.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1438.5407429999998,
   "stages_ms": {
     "fetch": 399.79983422272136,
-    "css": 238.21791507958918,
+    "css": 238.2179150795892,
     "cascade": 228.061337304878,
     "layout": 198.51492923299097,
     "paint": 373.9467271598202
@@ -28,16 +32,27 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 5.146687,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 0.97005,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 165.94878599999998,
         "box_tree_ms": 88.63241500000001,
         "layout_ms": 131.559239,
         "text_fallback_cpu_ms": 1.0695200000000005,
         "text_shape_cpu_ms": 5.3333499999999985,
         "paint_build_ms": 267.065531,
-        "paint_optimize_ms": 0.09579199999999999,
-        "paint_rasterize_ms": 19.729981000000002,
-        "text_rasterize_cpu_ms": 1.6425859999999999,
+        "paint_optimize_ms": 0.095792,
+        "paint_rasterize_ms": 19.729981,
+        "text_rasterize_cpu_ms": 1.642586,
         "encode_ms": null
       },
       "counts": {

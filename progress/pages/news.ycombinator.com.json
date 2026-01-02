@@ -1,10 +1,14 @@
 {
   "url": "https://news.ycombinator.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 360.775626,
   "stages_ms": {
     "fetch": 243.87193603004292,
-    "css": 24.000095291845494,
+    "css": 24.000095291845497,
     "cascade": 41.806617605150215,
     "layout": 20.903308802575108,
     "paint": 30.193668270386265
@@ -19,10 +23,10 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 2.0137140000000002,
-        "dom_html5ever_ms": 1.4002999999999999,
+        "dom_parse_ms": 2.013714,
+        "dom_html5ever_ms": 1.4003,
         "dom_convert_ms": 0.5047609999999999,
-        "dom_shadow_attach_ms": 0.037651000000000004,
+        "dom_shadow_attach_ms": 0.037651,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.023731,
         "dom_clone_ms": null,
@@ -144,7 +148,7 @@
         "transparent_removed": 0,
         "noop_removed": 0,
         "merged_items": 0,
-        "gradient_ms": 0.046329999999999996,
+        "gradient_ms": 0.04633,
         "gradient_pixels": 700,
         "gradient_pixmap_cache_hits": 6,
         "gradient_pixmap_cache_misses": 1,

@@ -1,5 +1,9 @@
 {
   "url": "https://apache.org/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 372.513143,
   "stages_ms": {
@@ -28,9 +32,20 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 13.130583,
-        "css_parse_ms": 2.3072019999999998,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
+        "css_parse_ms": 2.307202,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 53.659987,
-        "box_tree_ms": 15.812643000000001,
+        "box_tree_ms": 15.812643,
         "layout_ms": 78.444751,
         "text_fallback_cpu_ms": 22.669349000000008,
         "text_shape_cpu_ms": 2.2369840000000005,
@@ -159,7 +174,7 @@
         "blur_cache_misses": 4,
         "blur_tiles": 0,
         "blur_calls": 4,
-        "blur_ms": 24.562248999999998,
+        "blur_ms": 24.562249,
         "blur_pixels": 560764,
         "blur_bytes": 2243056,
         "blur_cancellations": 0

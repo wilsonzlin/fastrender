@@ -1,5 +1,9 @@
 {
   "url": "https://techmeme.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1378.62238,
   "stages_ms": {
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 2.459724,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 1.1623359999999998,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 270.68753000000004,
         "box_tree_ms": 97.384469,
         "layout_ms": 56.512709,
@@ -140,7 +155,7 @@
         "parallel_tasks": 20,
         "parallel_threads": 20,
         "parallel_ms": 8.5092,
-        "serial_ms": 21.157403000000002,
+        "serial_ms": 21.157403,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,

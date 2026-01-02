@@ -32,6 +32,8 @@ fn pageset_progress_worker_runs_on_large_stack_thread() {
   let stage_path = temp.path().join("worker.stage");
 
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .args([
       "worker",

@@ -1,5 +1,9 @@
 {
   "url": "https://developer.mozilla.org/en-US/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1578.592428,
   "stages_ms": {
@@ -28,16 +32,27 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": 0.026601000000000003,
         "css_inlining_ms": 3.430316,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 2.544077,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 274.788691,
         "box_tree_ms": 99.267584,
         "layout_ms": 255.38108999999997,
         "text_fallback_cpu_ms": 18.57897900000001,
         "text_shape_cpu_ms": 4.259994000000001,
-        "paint_build_ms": 13.112241000000001,
+        "paint_build_ms": 13.112241,
         "paint_optimize_ms": 0.035281,
         "paint_rasterize_ms": 51.283969,
-        "text_rasterize_cpu_ms": 0.21952500000000003,
+        "text_rasterize_cpu_ms": 0.21952500000000005,
         "encode_ms": null
       },
       "counts": {
@@ -192,7 +207,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 0.9067810000000001
+        "image_decode_ms": 0.906781
       }
     }
   }

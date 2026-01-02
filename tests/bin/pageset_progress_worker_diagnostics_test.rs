@@ -16,6 +16,8 @@ fn pageset_progress_worker_writes_diagnostics_stats() {
   let progress_path = temp.path().join("progress.json");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .args([
       "worker",
@@ -72,6 +74,8 @@ fn pageset_progress_worker_writes_fetch_error_summary_for_ok_pages() {
   let progress_path = temp.path().join("progress.json");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .args([
       "worker",
@@ -147,6 +151,8 @@ fn pageset_progress_worker_truncates_fetch_error_sample_urls() {
   let progress_path = temp.path().join("progress.json");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .args([
       "worker",

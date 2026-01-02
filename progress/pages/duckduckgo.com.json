@@ -1,10 +1,14 @@
 {
   "url": "https://html.duckduckgo.com/html",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 260.281756,
   "stages_ms": {
     "fetch": 0.6716040845461199,
-    "css": 46.456507432744324,
+    "css": 46.45650743274432,
     "cascade": 145.88088179591105,
     "layout": 3.3061382447635697,
     "paint": 63.966624442034906
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 16.527722,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 27.461663,
         "box_tree_ms": 24.438034,
         "layout_ms": 1.176217,

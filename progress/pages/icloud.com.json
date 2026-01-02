@@ -1,5 +1,9 @@
 {
   "url": "https://www.icloud.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 478.540653,
   "stages_ms": {
@@ -7,7 +11,7 @@
     "css": 226.4290470773911,
     "cascade": 189.37616911304983,
     "layout": 47.87512371556326,
-    "paint": 13.785149832775659
+    "paint": 13.78514983277566
   },
   "notes": "",
   "hotspot": "css",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 54.854193,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 5.574439,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 33.362897000000004,
         "box_tree_ms": 17.177186,
         "layout_ms": 12.776754,

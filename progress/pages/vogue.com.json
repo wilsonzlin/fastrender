@@ -1,5 +1,9 @@
 {
   "url": "https://www.vogue.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1242.040647,
   "stages_ms": {
@@ -41,7 +45,7 @@
         "css_parse_load_webfonts_ms": 0.680736,
         "css_parse_collect_keyframes_ms": 0.125103,
         "cascade_ms": 135.34180500000002,
-        "box_tree_ms": 21.152758000000002,
+        "box_tree_ms": 21.152758,
         "layout_ms": 853.368033,
         "text_fallback_cpu_ms": 2.4085449999999984,
         "text_shape_cpu_ms": 6.372745000000001,

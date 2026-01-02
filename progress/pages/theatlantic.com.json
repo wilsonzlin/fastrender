@@ -1,5 +1,9 @@
 {
   "url": "https://www.theatlantic.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1414.594147,
   "stages_ms": {
@@ -28,9 +32,20 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 12.579928,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 1.604206,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 159.54970500000002,
-        "box_tree_ms": 95.46357900000001,
+        "box_tree_ms": 95.463579,
         "layout_ms": 150.652337,
         "text_fallback_cpu_ms": 5.818634,
         "text_shape_cpu_ms": 13.44531000000001,

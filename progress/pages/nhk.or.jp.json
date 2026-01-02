@@ -1,13 +1,17 @@
 {
   "url": "https://www.nhk.or.jp/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1120.256494,
   "stages_ms": {
-    "fetch": 2.4718024003742682,
-    "css": 107.09378474541927,
+    "fetch": 2.471802400374268,
+    "css": 107.09378474541928,
     "cascade": 904.2657878487476,
     "layout": 61.919131267635805,
-    "paint": 44.505987737823084
+    "paint": 44.50598773782309
   },
   "notes": "",
   "hotspot": "box_tree",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 11.403153,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 0.093322,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 47.552238,
         "box_tree_ms": 49.520333,
         "layout_ms": 6.646993999999999,

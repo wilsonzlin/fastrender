@@ -39,6 +39,8 @@ fn pageset_progress_worker_abort_overwrites_stale_progress() {
   .expect("write stale progress");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .env("FASTR_TEST_WORKER_ABORT_AFTER_MS", "0")
     .env("FASTR_TEST_WORKER_ABORT_STEM", "abort")
@@ -77,4 +79,3 @@ fn pageset_progress_worker_abort_overwrites_stale_progress() {
     "expected stale note to be overwritten, got:\n{notes}"
   );
 }
-

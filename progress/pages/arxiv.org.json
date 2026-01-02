@@ -1,13 +1,17 @@
 {
   "url": "https://arxiv.org/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
-  "total_ms": 246.46367899999998,
+  "total_ms": 246.463679,
   "stages_ms": {
     "fetch": 114.89943754092526,
     "css": 13.156424145907472,
     "cascade": 47.363126925266904,
     "layout": 45.60893703914591,
-    "paint": 25.435753348754446
+    "paint": 25.43575334875445
   },
   "notes": "",
   "hotspot": "layout",
@@ -21,7 +25,7 @@
         "html_decode_ms": null,
         "dom_parse_ms": 1.868601,
         "dom_html5ever_ms": 1.286218,
-        "dom_convert_ms": 0.48158100000000004,
+        "dom_convert_ms": 0.481581,
         "dom_shadow_attach_ms": 0.032341,
         "dom_compat_ms": 0.0,
         "dom_meta_viewport_ms": 0.00348,
@@ -35,14 +39,14 @@
         "css_inline_stylesheet_absolutize_cpu_ms": null,
         "css_inline_imports_cpu_ms": null,
         "css_inline_inject_ms": null,
-        "css_parse_ms": 0.036900999999999996,
+        "css_parse_ms": 0.036901,
         "css_parse_used_codepoints_ms": 0.000029999999999999997,
-        "css_parse_collect_font_faces_ms": 0.009089999999999999,
-        "css_parse_load_webfonts_ms": 0.00011999999999999999,
+        "css_parse_collect_font_faces_ms": 0.00909,
+        "css_parse_load_webfonts_ms": 0.00012,
         "css_parse_collect_keyframes_ms": 0.01225,
         "cascade_ms": 38.130209,
-        "box_tree_ms": 14.167442000000001,
-        "layout_ms": 48.048097999999996,
+        "box_tree_ms": 14.167442,
+        "layout_ms": 48.048098,
         "text_fallback_cpu_ms": 2.869809,
         "text_shape_cpu_ms": 4.8753090000000014,
         "paint_build_ms": 13.214401,
@@ -197,7 +201,7 @@
         "raster_pixmap_cache_hits": 0,
         "raster_pixmap_cache_misses": 0,
         "raster_pixmap_cache_bytes": 0,
-        "image_decode_ms": 1.1650559999999999
+        "image_decode_ms": 1.165056
       }
     }
   }

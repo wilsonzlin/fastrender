@@ -50,6 +50,8 @@ fn write_progress(
 #[test]
 fn pageset_progress_report_outputs_summary() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args(["report", "--progress-dir", fixtures_dir().to_str().unwrap()])
     .output()
     .expect("run pageset_progress report");
@@ -119,6 +121,8 @@ fn pageset_progress_report_counts_cached_html_http_errors() {
 #[test]
 fn pageset_progress_report_outputs_stats_when_verbose() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -153,9 +157,7 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains("fallback_desc_families=2"));
   assert!(stdout.contains("fallback_desc_lang=1"));
   assert!(stdout.contains("fallback_desc_weights=4"));
-  assert!(stdout.contains(
-    "| timings text_shape_cpu_ms=123.45ms text_fallback_cpu_ms=67.89ms"
-  ));
+  assert!(stdout.contains("| timings text_shape_cpu_ms=123.45ms text_fallback_cpu_ms=67.89ms"));
   assert!(
     !stdout.contains("fallback_desc_samples="),
     "descriptor samples should not print without --verbose"
@@ -207,6 +209,8 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
 #[test]
 fn pageset_progress_report_outputs_descriptor_samples_when_verbose() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -284,6 +288,8 @@ fn pageset_progress_report_includes_text_cache_stats_tokens() {
     .unwrap_or_else(|_| panic!("write {}", path.display()));
 
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -327,6 +333,8 @@ fn pageset_progress_report_includes_text_cache_stats_tokens() {
 #[test]
 fn pageset_progress_report_fail_on_bad_exits_non_zero() {
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -413,6 +421,8 @@ fn pageset_progress_report_compares_and_detects_regressions() {
   );
 
   let comparison = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -467,6 +477,8 @@ fn pageset_progress_report_compares_and_detects_regressions() {
   );
 
   let failure = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -520,6 +532,8 @@ fn pageset_progress_report_fail_on_slow_ok_ms_exits_non_zero() {
   .expect("write progress json");
 
   let baseline = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args(["report", "--progress-dir", dir.path().to_str().unwrap()])
     .output()
     .expect("run pageset_progress report");
@@ -529,6 +543,8 @@ fn pageset_progress_report_fail_on_slow_ok_ms_exits_non_zero() {
   );
 
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -548,7 +564,10 @@ fn pageset_progress_report_fail_on_slow_ok_ms_exits_non_zero() {
     stderr.contains("total=6000.00ms"),
     "missing offending total_ms"
   );
-  assert!(stderr.contains("hotspot=layout"), "missing offending hotspot");
+  assert!(
+    stderr.contains("hotspot=layout"),
+    "missing offending hotspot"
+  );
 }
 
 #[test]
@@ -564,6 +583,8 @@ fn pageset_progress_report_surfaces_ok_pages_with_failure_stage_and_can_gate() {
   );
 
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",
@@ -579,7 +600,10 @@ fn pageset_progress_report_surfaces_ok_pages_with_failure_stage_and_can_gate() {
     stdout.contains("Ok pages with failures (failure_stage set): 1"),
     "missing ok-with-failures summary section"
   );
-  assert!(stdout.contains("paint: 1"), "missing failure stage breakdown");
+  assert!(
+    stdout.contains("paint: 1"),
+    "missing failure stage breakdown"
+  );
   assert!(
     stdout.contains("ok_with_failure_stage total=123.00ms"),
     "missing ok-with-failures listing"
@@ -590,6 +614,8 @@ fn pageset_progress_report_surfaces_ok_pages_with_failure_stage_and_can_gate() {
   );
 
   let failure = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "report",
       "--progress-dir",

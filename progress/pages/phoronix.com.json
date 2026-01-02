@@ -1,5 +1,9 @@
 {
   "url": "https://www.phoronix.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 318.661513,
   "stages_ms": {
@@ -24,7 +28,7 @@
         "dom_convert_ms": 0.570523,
         "dom_shadow_attach_ms": 0.037391,
         "dom_compat_ms": 0.0,
-        "dom_meta_viewport_ms": 0.021030999999999998,
+        "dom_meta_viewport_ms": 0.021031,
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 1.320279,
@@ -37,12 +41,12 @@
         "css_inline_inject_ms": null,
         "css_parse_ms": 0.609484,
         "css_parse_used_codepoints_ms": 0.161374,
-        "css_parse_collect_font_faces_ms": 0.0037199999999999998,
+        "css_parse_collect_font_faces_ms": 0.00372,
         "css_parse_load_webfonts_ms": 0.426599,
         "css_parse_collect_keyframes_ms": 0.00833,
         "cascade_ms": 54.585913,
-        "box_tree_ms": 26.185162000000002,
-        "layout_ms": 37.379051000000004,
+        "box_tree_ms": 26.185162,
+        "layout_ms": 37.379051,
         "text_fallback_cpu_ms": 1.7098189999999998,
         "text_shape_cpu_ms": 12.798902999999992,
         "paint_build_ms": 14.689206,

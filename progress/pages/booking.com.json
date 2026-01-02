@@ -1,12 +1,16 @@
 {
   "url": "https://booking.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 764.1363319999999,
   "stages_ms": {
     "fetch": 0.9612974792822446,
     "css": 1.7746436668384165,
     "cascade": 720.7843621186894,
-    "layout": 13.823439722039371,
+    "layout": 13.823439722039373,
     "paint": 26.792589013150604
   },
   "notes": "",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 0.217776,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 0.069631,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 36.259859,
         "box_tree_ms": 80.47257300000001,
         "layout_ms": 2.2387330000000003,

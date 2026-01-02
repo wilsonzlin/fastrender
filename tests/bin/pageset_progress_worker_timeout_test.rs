@@ -59,6 +59,8 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
   let log_path = temp.path().join("worker.log");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     // Run in an isolated working directory so per-run scratch dirs like `fetches/assets` don't
     // collide with other CLI tests (the worker uses relative cache paths by default).
     .current_dir(temp.path())

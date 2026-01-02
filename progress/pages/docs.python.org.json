@@ -1,5 +1,9 @@
 {
   "url": "https://docs.python.org/3/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 502.1989,
   "stages_ms": {
@@ -7,7 +11,7 @@
     "css": 66.58547715654952,
     "cascade": 37.70502923322684,
     "layout": 64.1787731629393,
-    "paint": 103.48827172523961
+    "paint": 103.4882717252396
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,7 +23,7 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.1234140000000001,
+        "dom_parse_ms": 1.123414,
         "dom_html5ever_ms": 0.792087,
         "dom_convert_ms": 0.270916,
         "dom_shadow_attach_ms": 0.016981,
@@ -28,8 +32,19 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 3.717382,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 0.142203,
-        "cascade_ms": 31.757222000000002,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
+        "cascade_ms": 31.757222,
         "box_tree_ms": 12.168239000000002,
         "layout_ms": 31.359833,
         "text_fallback_cpu_ms": 6.726462000000002,
@@ -146,7 +161,7 @@
         "parallel_threads": 1,
         "parallel_fallback_reason": "parallel paint thread budget is single-threaded; dedicated paint pool disabled (set FASTR_PAINT_THREADS>1 to enable)",
         "parallel_ms": 0.0,
-        "serial_ms": 22.600569999999998,
+        "serial_ms": 22.60057,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,

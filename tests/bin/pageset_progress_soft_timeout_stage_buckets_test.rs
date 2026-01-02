@@ -25,6 +25,8 @@ fn pageset_progress_soft_timeout_populates_stage_buckets() {
   let log_dir = temp.path().join("logs");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .args([
       "run",

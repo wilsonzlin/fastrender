@@ -1,5 +1,9 @@
 {
   "url": "https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Forms/Your_first_form",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 782.7799650000001,
   "stages_ms": {
@@ -44,7 +48,7 @@
         "box_tree_ms": 14.392673,
         "layout_ms": 273.787822,
         "text_fallback_cpu_ms": 1.566858,
-        "text_shape_cpu_ms": 9.924021000000005,
+        "text_shape_cpu_ms": 9.924021000000003,
         "paint_build_ms": 13.981173,
         "paint_optimize_ms": 0.014,
         "paint_rasterize_ms": 0.35487799999999997,

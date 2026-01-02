@@ -1,5 +1,9 @@
 {
   "url": "https://www.fandom.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 407.352351,
   "stages_ms": {
@@ -48,7 +52,7 @@
         "paint_build_ms": 20.172038,
         "paint_optimize_ms": 0.02392,
         "paint_rasterize_ms": 57.005197,
-        "text_rasterize_cpu_ms": 3.0219650000000002,
+        "text_rasterize_cpu_ms": 3.021965,
         "encode_ms": null
       },
       "counts": {

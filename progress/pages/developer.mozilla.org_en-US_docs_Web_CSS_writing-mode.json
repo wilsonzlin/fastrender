@@ -1,10 +1,14 @@
 {
   "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/writing-mode",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1949.338398,
   "stages_ms": {
     "fetch": 14.845815070281596,
-    "css": 12.295808419498277,
+    "css": 12.295808419498275,
     "cascade": 1498.97046188969,
     "layout": 353.8285935863256,
     "paint": 69.39771903420464
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": 0.099822,
         "css_inlining_ms": 5.548918,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 2.5833589999999997,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 929.945497,
         "box_tree_ms": 61.452758,
         "layout_ms": 234.01732,

@@ -18,6 +18,8 @@ fn pageset_progress_ok_populates_stage_buckets_from_timeline() {
   let log_dir = temp.path().join("logs");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .args([
       "run",
@@ -89,6 +91,8 @@ fn pageset_progress_ok_populates_stage_buckets_from_diagnostics_when_timeline_mi
   // Run the worker directly without `--stage-path` so the heartbeat timeline is unavailable and we
   // exercise the diagnostics-based fallback mapping.
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .args([
       "worker",

@@ -1,11 +1,15 @@
 {
   "url": "https://tripadvisor.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 382.469147,
   "stages_ms": {
     "fetch": 0.7922282050665698,
     "css": 27.65616776990743,
-    "cascade": 240.99387509769642,
+    "cascade": 240.9938750976964,
     "layout": 10.385697271479405,
     "paint": 102.6411786558502
   },
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 4.345619999999999,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 12.109439,
         "box_tree_ms": 25.757984,
         "layout_ms": 1.631907,

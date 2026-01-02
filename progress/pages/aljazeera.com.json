@@ -1,5 +1,9 @@
 {
   "url": "https://www.aljazeera.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 470.512383,
   "stages_ms": {
@@ -20,7 +24,7 @@
       "timings": {
         "html_decode_ms": null,
         "dom_parse_ms": 3.704813,
-        "dom_html5ever_ms": 2.5450369999999998,
+        "dom_html5ever_ms": 2.545037,
         "dom_convert_ms": 0.964872,
         "dom_shadow_attach_ms": 0.06425199999999999,
         "dom_compat_ms": 0.0,
@@ -28,16 +32,27 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 22.332763,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 2.475585,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 132.282671,
         "box_tree_ms": 13.572656,
         "layout_ms": 67.373088,
         "text_fallback_cpu_ms": 2.013031,
-        "text_shape_cpu_ms": 3.7312830000000012,
+        "text_shape_cpu_ms": 3.7312830000000017,
         "paint_build_ms": 18.695911,
         "paint_optimize_ms": 0.033161,
         "paint_rasterize_ms": 20.39704,
-        "text_rasterize_cpu_ms": 2.5800399999999994,
+        "text_rasterize_cpu_ms": 2.580039999999999,
         "encode_ms": null
       },
       "counts": {

@@ -1,12 +1,16 @@
 {
   "url": "https://elpais.com/us/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1064.246924,
   "stages_ms": {
-    "fetch": 108.39552003703703,
+    "fetch": 108.39552003703704,
     "css": 67.99355347777778,
-    "cascade": 202.99524661481482,
-    "layout": 476.94028816296293,
+    "cascade": 202.9952466148148,
+    "layout": 476.940288162963,
     "paint": 207.9223157074074
   },
   "notes": "",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 53.45213699999999,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 1.330599,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 189.221118,
         "box_tree_ms": 15.770578,
         "layout_ms": 466.475586,

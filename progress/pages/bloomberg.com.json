@@ -1,12 +1,16 @@
 {
   "url": "https://www.bloomberg.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 294.665359,
   "stages_ms": {
     "fetch": 0.7184138681259604,
     "css": 81.32360954301772,
     "cascade": 129.86101416420337,
-    "layout": 15.311025654895495,
+    "layout": 15.311025654895497,
     "paint": 67.45129576975751
   },
   "notes": "",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 30.213447,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 34.483786,
         "box_tree_ms": 13.762337,
         "layout_ms": 5.688371,

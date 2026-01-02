@@ -1,12 +1,16 @@
 {
   "url": "https://weather.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
-  "total_ms": 499.98895799999997,
+  "total_ms": 499.988958,
   "stages_ms": {
     "fetch": 162.91775035955055,
     "css": 37.45235640449438,
     "cascade": 166.662986,
-    "layout": 102.99398011235955,
+    "layout": 102.99398011235957,
     "paint": 29.961885123595504
   },
   "notes": "",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 6.72937,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 0.966122,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 155.990701,
         "box_tree_ms": 22.060613,
         "layout_ms": 95.281896,

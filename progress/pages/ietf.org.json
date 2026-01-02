@@ -1,5 +1,9 @@
 {
   "url": "https://www.ietf.org/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 927.50544,
   "stages_ms": {
@@ -28,16 +32,27 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 24.604359,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 8.076836,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 194.32881,
-        "box_tree_ms": 133.72879700000001,
+        "box_tree_ms": 133.728797,
         "layout_ms": 44.872228,
-        "text_fallback_cpu_ms": 1.3335319999999997,
+        "text_fallback_cpu_ms": 1.3335319999999995,
         "text_shape_cpu_ms": 2.605943999999999,
         "paint_build_ms": 40.137271000000005,
         "paint_optimize_ms": 0.02177,
         "paint_rasterize_ms": 62.82251,
-        "text_rasterize_cpu_ms": 3.6681040000000005,
+        "text_rasterize_cpu_ms": 3.668104000000001,
         "encode_ms": null
       },
       "counts": {

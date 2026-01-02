@@ -20,6 +20,8 @@ fn pageset_progress_hard_timeout_populates_timeout_stage_from_heartbeat() {
   let log_dir = temp.path().join("logs");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .env("FASTR_TEST_RENDER_DELAY_MS", "2000")
     .env("FASTR_TEST_RENDER_DELAY_STEM", "slow")
@@ -93,6 +95,8 @@ fn pageset_progress_hard_timeout_falls_back_when_stage_timeline_missing() {
   fs::create_dir_all(&log_dir).expect("create log dir");
 
   let mut child = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     .env("FASTR_TEST_RENDER_DELAY_MS", "2000")
     .env("FASTR_TEST_RENDER_DELAY_STEM", "missing_timeline")
@@ -173,13 +177,18 @@ fn pageset_progress_hard_timeout_crash_exit_is_classified_as_panic() {
   let temp = TempDir::new().expect("tempdir");
   let html_dir = temp.path().join("fetches/html");
   fs::create_dir_all(&html_dir).expect("create html dir");
-  fs::write(html_dir.join("abort.html"), "<!doctype html><title>Abort</title>")
-    .expect("write html");
+  fs::write(
+    html_dir.join("abort.html"),
+    "<!doctype html><title>Abort</title>",
+  )
+  .expect("write html");
 
   let progress_dir = temp.path().join("progress");
   let log_dir = temp.path().join("logs");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .current_dir(temp.path())
     // Slow down polling so the worker can abort between polls and still be handled by the hard
     // timeout path (instead of being collected via `try_wait`).

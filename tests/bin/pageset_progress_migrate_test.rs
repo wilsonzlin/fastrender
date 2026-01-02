@@ -28,6 +28,8 @@ fn pageset_progress_migrate_moves_legacy_auto_notes_out_of_notes() {
   .expect("write legacy json");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "migrate",
       "--progress-dir",
@@ -116,6 +118,8 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
   .expect("write progress json");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "migrate",
       "--progress-dir",
@@ -198,6 +202,8 @@ fn pageset_progress_migrate_preserves_existing_stage_buckets_when_present() {
   .expect("write progress json");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "migrate",
       "--progress-dir",
@@ -286,6 +292,8 @@ fn pageset_progress_migrate_rewrites_legacy_cpu_sum_keys() {
   .expect("write progress json");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "migrate",
       "--progress-dir",

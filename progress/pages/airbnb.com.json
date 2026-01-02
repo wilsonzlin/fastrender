@@ -1,5 +1,9 @@
 {
   "url": "https://www.airbnb.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 296.375409,
   "stages_ms": {
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": 3.542539,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 0.532452,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 43.369697,
         "box_tree_ms": 11.035139,
         "layout_ms": 20.189135,
@@ -137,7 +152,7 @@
         "transparent_removed": 0,
         "noop_removed": 60,
         "merged_items": 0,
-        "gradient_ms": 0.9924020000000001,
+        "gradient_ms": 0.992402,
         "gradient_pixels": 90880,
         "image_pixmap_cache_misses": 4,
         "image_pixmap_ms": 0.0018,

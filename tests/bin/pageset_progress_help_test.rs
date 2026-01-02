@@ -7,6 +7,8 @@ use tempfile::tempdir;
 #[test]
 fn pageset_progress_help_exits_success() {
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .arg("--help")
     .status()
     .expect("run pageset_progress --help");
@@ -16,6 +18,8 @@ fn pageset_progress_help_exits_success() {
 #[test]
 fn pageset_progress_run_help_exits_success() {
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args(["run", "--help"])
     .status()
     .expect("run pageset_progress run --help");
@@ -25,6 +29,8 @@ fn pageset_progress_run_help_exits_success() {
 #[test]
 fn pageset_progress_migrate_help_mentions_progress_dir_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args(["migrate", "--help"])
     .output()
     .expect("run pageset_progress migrate --help");
@@ -47,6 +53,8 @@ fn pageset_progress_migrate_help_mentions_progress_dir_flag() {
 #[test]
 fn pageset_progress_run_help_mentions_font_flags() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args(["run", "--help"])
     .output()
     .expect("run pageset_progress run --help");
@@ -76,6 +84,8 @@ fn pageset_progress_worker_bundled_fonts_smoke_test() {
   let log_path = temp.path().join("worker.log");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .env("FASTR_USE_BUNDLED_FONTS", "0")
     .args([
       "worker",

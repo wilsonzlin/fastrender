@@ -1,5 +1,9 @@
 {
   "url": "https://www.reddit.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 409.05787,
   "stages_ms": {
@@ -7,7 +11,7 @@
     "css": 36.325097127750325,
     "cascade": 212.6450385767515,
     "layout": 65.96259283431468,
-    "paint": 92.72625612559483
+    "paint": 92.72625612559484
   },
   "notes": "",
   "hotspot": "box_tree",
@@ -28,7 +32,18 @@
         "dom_clone_ms": null,
         "dom_top_layer_ms": null,
         "css_inlining_ms": null,
+        "css_inline_extract_links_ms": null,
+        "css_inline_extract_embedded_urls_ms": null,
+        "css_inline_stylesheet_fetch_cpu_ms": null,
+        "css_inline_stylesheet_decode_cpu_ms": null,
+        "css_inline_stylesheet_absolutize_cpu_ms": null,
+        "css_inline_imports_cpu_ms": null,
+        "css_inline_inject_ms": null,
         "css_parse_ms": 14.680619,
+        "css_parse_used_codepoints_ms": null,
+        "css_parse_collect_font_faces_ms": null,
+        "css_parse_load_webfonts_ms": null,
+        "css_parse_collect_keyframes_ms": null,
         "cascade_ms": 20.047582,
         "box_tree_ms": 65.89192100000001,
         "layout_ms": 26.658475,

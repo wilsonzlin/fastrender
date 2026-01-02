@@ -1,5 +1,9 @@
 {
   "url": "https://www.cloudflare.com/",
+  "config": {
+    "disk_cache_enabled": true,
+    "http_browser_headers_enabled": true
+  },
   "status": "ok",
   "total_ms": 1587.407603,
   "stages_ms": {

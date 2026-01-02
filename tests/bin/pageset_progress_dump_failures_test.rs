@@ -18,6 +18,8 @@ fn worker_writes_dumps_for_failures() {
   let dump_dir = temp.path().join("dumps");
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .env("FASTR_TEST_RENDER_DELAY_MS", "20")
     .env("FASTR_TEST_RENDER_DELAY_STEM", "dump")
     .args([
