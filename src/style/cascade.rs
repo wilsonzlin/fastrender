@@ -1427,6 +1427,8 @@ struct DomSelectorKeyCache {
   attr_value_keys: Vec<SelectorBucketKey>,
 }
 
+// `class_keys`, `attr_keys`, and `attr_value_keys` are stored sorted so fast-reject paths can use
+// `binary_search` instead of linear scans.
 #[derive(Clone, Copy)]
 struct NodeSelectorKeys<'a> {
   tag_key: SelectorBucketKey,
@@ -1534,7 +1536,9 @@ impl DomMaps {
               .push(selector_bucket_class_for_mode(cls, quirks_mode));
           }
         }
-        let class_len = selector_keys.class_keys.len() - class_start;
+        let class_end = selector_keys.class_keys.len();
+        selector_keys.class_keys[class_start..class_end].sort_unstable();
+        let class_len = class_end - class_start;
 
         let attr_start = selector_keys.attr_keys.len();
         let attr_value_start = selector_keys.attr_value_keys.len();
@@ -1546,8 +1550,12 @@ impl DomMaps {
               .push(selector_bucket_attr_value(name, value));
           }
         }
-        let attr_len = selector_keys.attr_keys.len() - attr_start;
-        let attr_value_len = selector_keys.attr_value_keys.len() - attr_value_start;
+        let attr_end = selector_keys.attr_keys.len();
+        let attr_value_end = selector_keys.attr_value_keys.len();
+        selector_keys.attr_keys[attr_start..attr_end].sort_unstable();
+        selector_keys.attr_value_keys[attr_value_start..attr_value_end].sort_unstable();
+        let attr_len = attr_end - attr_start;
+        let attr_value_len = attr_value_end - attr_value_start;
 
         selector_keys.set_node_keys(
           id,
@@ -1895,6 +1903,7 @@ struct RightmostFastReject {
 impl RightmostFastReject {
   const FLAG_HAS_TAG: u8 = 1 << 0;
   const FLAG_HAS_ID: u8 = 1 << 1;
+  const KEY_LINEAR_SEARCH_MAX_LEN: usize = 8;
 
   #[inline]
   fn has_tag(self) -> bool {
@@ -1904,6 +1913,15 @@ impl RightmostFastReject {
   #[inline]
   fn has_id(self) -> bool {
     (self.flags & Self::FLAG_HAS_ID) != 0
+  }
+
+  #[inline]
+  fn node_keys_contain(haystack: &[SelectorBucketKey], needle: SelectorBucketKey) -> bool {
+    if haystack.len() <= Self::KEY_LINEAR_SEARCH_MAX_LEN {
+      haystack.contains(&needle)
+    } else {
+      haystack.binary_search(&needle).is_ok()
+    }
   }
 
   #[inline]
@@ -1917,14 +1935,15 @@ impl RightmostFastReject {
 
     let class_len = self.class_len as usize;
     for required in &self.keys[..class_len] {
-      if !node_keys.class_keys.iter().any(|key| key == required) {
+      if !Self::node_keys_contain(node_keys.class_keys, *required) {
         return false;
       }
     }
     let attr_end = class_len + self.attr_len as usize;
     for required in &self.keys[class_len..attr_end] {
-      if !node_keys.attr_keys.iter().any(|key| key == required)
-        && !node_keys.attr_value_keys.iter().any(|key| key == required)
+      let required = *required;
+      if !Self::node_keys_contain(node_keys.attr_keys, required)
+        && !Self::node_keys_contain(node_keys.attr_value_keys, required)
       {
         return false;
       }
@@ -5747,6 +5766,9 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
               .push(selector_bucket_attr_value(name, value));
           }
         }
+        self.tmp_class_keys.sort_unstable();
+        self.tmp_attr_keys.sort_unstable();
+        self.tmp_attr_value_keys.sort_unstable();
         let node_keys = NodeSelectorKeys {
           tag_key,
           id_key,
@@ -9930,6 +9952,9 @@ mod tests {
         attr_value_keys.push(selector_bucket_attr_value(name, value));
       }
     }
+    class_keys.sort_unstable();
+    attr_keys.sort_unstable();
+    attr_value_keys.sort_unstable();
     NodeSelectorKeys {
       tag_key,
       id_key,
