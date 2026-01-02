@@ -77,7 +77,6 @@ use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_fallback::families_signature;
-use crate::text::font_fallback::family_name_signature;
 use crate::text::font_fallback::ClusterFallbackCacheKey;
 use crate::text::font_fallback::EmojiPreference;
 use crate::text::font_fallback::FallbackCache;
@@ -2477,7 +2476,22 @@ fn assign_fonts_internal(
       .then(|| HbLanguage::from_str(tag).ok())
       .flatten()
   };
-  let language_signature = family_name_signature(language);
+  let language_signature = {
+    let primary = language
+      .trim()
+      .split(|ch| ch == '-' || ch == '_')
+      .next()
+      .unwrap_or_default();
+    // Script fallback selection only distinguishes Japanese vs Korean vs everything else.
+    // Map everything else (including empty language) to the same bucket to maximize cache reuse.
+    if primary.eq_ignore_ascii_case("ja") {
+      1
+    } else if primary.eq_ignore_ascii_case("ko") {
+      2
+    } else {
+      0
+    }
+  };
   let families_display =
     descriptor_stats_enabled.then(|| format_family_entries_for_sample(&families));
   let mut local_descriptors: Option<FxHashSet<FallbackCacheDescriptor>> =
@@ -7870,6 +7884,50 @@ mod tests {
     assert_eq!(
       second_miss_delta, 0,
       "expected the second run to reuse cached glyph resolutions"
+    );
+  }
+
+  #[test]
+  fn fallback_cache_reuses_cjk_fonts_across_language_region_variants() {
+    let ctx = FontContext::with_config(FontConfig::bundled_only());
+    ctx.clear_web_fonts();
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()].into();
+    style.font_size = 16.0;
+
+    let pipeline = ShapingPipeline::new();
+    let text = "漢字";
+
+    style.language = "ja-JP".into();
+    let before = pipeline.fallback_cache_stats();
+    let runs = pipeline.shape(text, &style, &ctx).expect("shape ja-JP");
+    assert!(!runs.is_empty());
+    let mid = pipeline.fallback_cache_stats();
+
+    style.language = "ja".into();
+    let runs = pipeline.shape(text, &style, &ctx).expect("shape ja");
+    assert!(!runs.is_empty());
+    let after = pipeline.fallback_cache_stats();
+
+    let miss_delta_first = (mid.glyph_misses + mid.cluster_misses)
+      .saturating_sub(before.glyph_misses + before.cluster_misses);
+    assert!(
+      miss_delta_first > 0,
+      "expected initial shaping to populate fallback cache"
+    );
+
+    let miss_delta_second = (after.glyph_misses + after.cluster_misses)
+      .saturating_sub(mid.glyph_misses + mid.cluster_misses);
+    let hit_delta_second =
+      (after.glyph_hits + after.cluster_hits).saturating_sub(mid.glyph_hits + mid.cluster_hits);
+    assert_eq!(
+      miss_delta_second, 0,
+      "expected region variants to reuse the same CJK fallback cache entries"
+    );
+    assert!(
+      hit_delta_second > 0,
+      "expected fallback cache hits when reusing region-variant language buckets"
     );
   }
 
