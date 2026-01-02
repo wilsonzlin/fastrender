@@ -1956,16 +1956,23 @@ fn mime_is_html(mime: &str) -> bool {
 }
 
 fn url_looks_like_suffix(url: &str, suffix: &str) -> bool {
-  let lower = url.trim().to_ascii_lowercase();
-  let lower = lower
+  let url = url.trim();
+  let url = url
     .split_once('#')
     .map(|(before, _)| before)
-    .unwrap_or(&lower);
-  let lower = lower
+    .unwrap_or(url);
+  let url = url
     .split_once('?')
     .map(|(before, _)| before)
-    .unwrap_or(lower);
-  lower.ends_with(suffix)
+    .unwrap_or(url);
+  let Some(tail) = url
+    .len()
+    .checked_sub(suffix.len())
+    .and_then(|idx| url.get(idx..))
+  else {
+    return false;
+  };
+  tail.eq_ignore_ascii_case(suffix)
 }
 
 fn url_looks_like_html(url: &str) -> bool {
@@ -7586,6 +7593,31 @@ mod tests {
       }
       Err(err) => panic!("bind {context}: {err}"),
     }
+  }
+
+  #[test]
+  fn url_looks_like_suffix_ignores_query_fragment_and_case() {
+    assert!(url_looks_like_suffix(
+      "http://example.com/PHOTO.JPG",
+      ".jpg"
+    ));
+    assert!(url_looks_like_suffix(
+      "http://example.com/photo.jpg?x=1",
+      ".jpg"
+    ));
+    assert!(url_looks_like_suffix(
+      "http://example.com/photo.jpg#frag",
+      ".jpg"
+    ));
+    assert!(url_looks_like_suffix(
+      "  http://example.com/photo.JpG?x=1#frag  ",
+      ".jpg"
+    ));
+    assert!(!url_looks_like_suffix(
+      "http://example.com/photo.jpgx",
+      ".jpg"
+    ));
+    assert!(!url_looks_like_suffix("jpg", ".jpeg"));
   }
 
   #[test]
