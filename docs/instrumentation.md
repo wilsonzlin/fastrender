@@ -26,10 +26,11 @@ Most CLI tooling can capture `RenderDiagnostics.stats` by enabling a diagnostics
 - `verbose`: more expensive details (profiling stats, extra counts)
 
 `pageset_progress` writes a coarse **wall-time** stage attribution into
-`progress/pages/<stem>.json` as `stages_ms` (fetch/css/cascade/layout/paint). For ok renders this
-is derived from the worker stage heartbeat timeline (`*.stage.timeline`) when available and then
-rescaled so the buckets sum (within rounding error) to `total_ms`. If the timeline is missing or
-unreadable, it falls back to a best-effort mapping from `RenderDiagnostics.stats.timings`.
+`progress/pages/<stem>.json` as `stages_ms` (fetch/css/cascade/box_tree/layout/paint). For ok
+renders this is derived from the worker stage heartbeat timeline (`*.stage.timeline`) when
+available and then rescaled so the buckets sum (within rounding error) to `total_ms`. If the
+timeline is missing or unreadable, it falls back to a best-effort mapping from
+`RenderDiagnostics.stats.timings`.
 
 `stages_ms` is intentionally **not** a sum of every detailed sub-timer: values like
 `diagnostics.stats.timings.text_shape_cpu_ms`, `text_fallback_cpu_ms`, and `text_rasterize_cpu_ms`
@@ -50,7 +51,8 @@ Stage buckets:
 
 - `fetch`: html decode + DOM parse/setup (viewport meta, DOM clone, top-layer plumbing)
 - `css`: css parse (includes stylesheet inlining; `timings.css_inlining_ms` is a sub-stage timer)
-- `cascade`: selector matching + box tree generation
+- `cascade`: selector matching + computed style resolution
+- `box_tree`: DOM + computed styles → box tree (plus intrinsic sizing of replaced elements)
 - `layout`: layout engine
 - `paint`: display-list build/optimize + rasterize + encode (diagnostics captures `paint.gradient_ms`
   + `paint.gradient_pixels` for gradient-heavy pages)
@@ -73,9 +75,9 @@ should not be interpreted as “share of total render time”.
 `pageset_progress` stage buckets (`stages_ms`) intentionally use **only wall-clock stage timers** and
 exclude `_cpu_ms` fields so that `hotspot` classification stays meaningful.
 
-Stage buckets should be roughly additive for successful renders (`fetch + css + cascade + layout +
-paint ≈ total_ms`). When changing stage timing accounting, you can enable an opt-in sanity check in
-`pageset_progress report`:
+Stage buckets should be roughly additive for successful renders (`fetch + css + cascade + box_tree +
+layout + paint ≈ total_ms`). When changing stage timing accounting, you can enable an opt-in sanity
+check in `pageset_progress report`:
 
 - `--fail-on-stage-sum-exceeds-total` checks `status=ok` entries that have both `total_ms` and
   non-zero stage buckets, failing if the bucket sum materially exceeds `total_ms`.
@@ -103,7 +105,7 @@ selector/declaration/pseudo time splits, plus `:has()` counters) via:
 - `pageset_progress run --cascade-diagnostics` (re-runs slow-cascade ok pages + cascade timeouts
   with profiling enabled and merges `stats.cascade` back into the committed progress JSON)
 `pageset_progress report --verbose-stats` also prints:
-- top-N rankings per stage bucket (fetch/css/cascade/layout/paint)
+- top-N rankings per stage bucket (fetch/css/cascade/box_tree/layout/paint)
 - an aggregated resource totals line plus rankings for the heaviest network/inflight/disk-cache
   pages (including disk lock wait time)
 to speed up triage.
