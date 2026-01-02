@@ -32,7 +32,7 @@ under render deadlines when configured to serve stale responses).
 
 ## Commonly useful
 
-- `FASTR_RENDER_TIMINGS=1` – print per-stage timings during rendering (parse/cascade/box/layout/paint).
+- `FASTR_RENDER_TIMINGS=1` – print per-stage timings during rendering (parse/cascade/box_tree/layout/paint).
 - `FASTR_FULL_PAGE=1` – expand output to the full document content size (instead of the viewport).
 - `FASTR_USE_BUNDLED_FONTS=1` – disable system font discovery and use the bundled fixtures (default in CI).
 - `FASTR_BUNDLE_EMOJI_FONT=0|1` – explicitly enable/disable the bundled emoji font fixture (on by default in bundled mode/CI).
