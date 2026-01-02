@@ -4186,6 +4186,14 @@ fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
     "sel_bloom_rejects",
     cascade.selector_bloom_fast_rejects,
   );
+  push_opt_u64(&mut parts, "bloom_built", cascade.selector_bloom_built);
+  push_opt_ms(&mut parts, "bloom_build", cascade.selector_bloom_time_ms);
+  push_opt_u64(
+    &mut parts,
+    "sel_rightmost_rejects",
+    cascade.selector_rightmost_fast_rejects,
+  );
+  push_opt_u64(&mut parts, "sel_match_calls", cascade.selector_match_calls);
   let mut bucket_parts = Vec::new();
   push_opt_u64(&mut bucket_parts, "id", cascade.rule_candidates_by_id);
   push_opt_u64(&mut bucket_parts, "class", cascade.rule_candidates_by_class);
@@ -7080,6 +7088,12 @@ fn merge_cascade_diagnostics(dst: &mut CascadeDiagnostics, src: &CascadeDiagnost
   dst.rule_candidates_universal = dst
     .rule_candidates_universal
     .or(src.rule_candidates_universal);
+  dst.selector_bloom_built = dst.selector_bloom_built.or(src.selector_bloom_built);
+  dst.selector_bloom_time_ms = dst.selector_bloom_time_ms.or(src.selector_bloom_time_ms);
+  dst.selector_rightmost_fast_rejects = dst
+    .selector_rightmost_fast_rejects
+    .or(src.selector_rightmost_fast_rejects);
+  dst.selector_match_calls = dst.selector_match_calls.or(src.selector_match_calls);
   dst.selector_attempts_total = dst.selector_attempts_total.or(src.selector_attempts_total);
   dst.selector_attempts_after_bloom = dst
     .selector_attempts_after_bloom
@@ -8459,12 +8473,14 @@ mod tests {
     let mut dst = CascadeDiagnostics {
       nodes: Some(1),
       selector_time_ms: Some(2.0),
+      selector_rightmost_fast_rejects: Some(5),
       ..CascadeDiagnostics::default()
     };
     let src = CascadeDiagnostics {
       nodes: Some(99),
       rule_candidates: Some(10),
       selector_time_ms: Some(42.0),
+      selector_match_calls: Some(11),
       has_evals: Some(7),
       ..CascadeDiagnostics::default()
     };
@@ -8482,8 +8498,18 @@ mod tests {
       "existing fields should not be overwritten"
     );
     assert_eq!(
+      dst.selector_rightmost_fast_rejects,
+      Some(5),
+      "existing fields should not be overwritten"
+    );
+    assert_eq!(
       dst.rule_candidates,
       Some(10),
+      "missing fields should be filled"
+    );
+    assert_eq!(
+      dst.selector_match_calls,
+      Some(11),
       "missing fields should be filled"
     );
     assert_eq!(dst.has_evals, Some(7), "missing fields should be filled");

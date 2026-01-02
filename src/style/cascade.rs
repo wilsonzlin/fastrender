@@ -603,6 +603,8 @@ pub struct CascadeProfileStats {
   pub rule_candidates_by_tag: u64,
   pub rule_candidates_by_attr: u64,
   pub rule_candidates_universal: u64,
+  pub selector_bloom_built: u64,
+  pub selector_bloom_time_ns: u64,
   pub selector_rightmost_fast_rejects: u64,
   pub selector_match_calls: u64,
   pub selector_bloom_fast_rejects: u64,
@@ -624,6 +626,8 @@ pub fn capture_cascade_profile() -> CascadeProfileStats {
     rule_candidates_by_tag: CASCADE_PROFILE_CANDIDATES_BY_TAG.load(Ordering::Relaxed),
     rule_candidates_by_attr: CASCADE_PROFILE_CANDIDATES_BY_ATTR.load(Ordering::Relaxed),
     rule_candidates_universal: CASCADE_PROFILE_CANDIDATES_UNIVERSAL.load(Ordering::Relaxed),
+    selector_bloom_built: CASCADE_PROFILE_SELECTOR_BLOOM_BUILT.load(Ordering::Relaxed),
+    selector_bloom_time_ns: CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS.load(Ordering::Relaxed),
     selector_rightmost_fast_rejects: CASCADE_PROFILE_SELECTOR_RIGHTMOST_FAST_REJECTS
       .load(Ordering::Relaxed),
     selector_match_calls: CASCADE_PROFILE_SELECTOR_MATCH_CALLS.load(Ordering::Relaxed),

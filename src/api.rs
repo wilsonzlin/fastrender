@@ -2111,6 +2111,18 @@ pub struct CascadeDiagnostics {
   pub rule_candidates_by_tag: Option<u64>,
   pub rule_candidates_by_attr: Option<u64>,
   pub rule_candidates_universal: Option<u64>,
+  /// Number of nodes that built an ancestor bloom filter during cascade.
+  #[serde(default)]
+  pub selector_bloom_built: Option<u64>,
+  /// Total time spent building ancestor bloom filters during cascade.
+  #[serde(default)]
+  pub selector_bloom_time_ms: Option<f64>,
+  /// Selector attempts pruned by the rightmost-compound fast-reject descriptor.
+  #[serde(default)]
+  pub selector_rightmost_fast_rejects: Option<u64>,
+  /// Full selector matcher invocations (i.e. attempts that reached `matches_selector`).
+  #[serde(default)]
+  pub selector_match_calls: Option<u64>,
   /// Total selector match attempts across all candidate rules.
   pub selector_attempts_total: Option<u64>,
   /// Selector attempts that were not rejected by the ancestor bloom filter.
@@ -4673,23 +4685,29 @@ impl FastRender {
           rec.stats.layout.table_cell_layouts = Some(table_stats.cell_layouts);
         }
 
-        let cascade_profile_active = crate::style::cascade::cascade_profile_enabled();
-        if rec.verbose() || cascade_profile_active {
-          let profile = crate::style::cascade::capture_cascade_profile();
-          rec.stats.cascade.nodes = Some(profile.nodes);
-          rec.stats.cascade.rule_candidates = Some(profile.rule_candidates);
-          rec.stats.cascade.rule_matches = Some(profile.rule_matches);
-          rec.stats.cascade.rule_candidates_pruned = Some(profile.rule_candidates_pruned);
-          rec.stats.cascade.rule_candidates_by_id = Some(profile.rule_candidates_by_id);
-          rec.stats.cascade.rule_candidates_by_class = Some(profile.rule_candidates_by_class);
-          rec.stats.cascade.rule_candidates_by_tag = Some(profile.rule_candidates_by_tag);
-          rec.stats.cascade.rule_candidates_by_attr = Some(profile.rule_candidates_by_attr);
-          rec.stats.cascade.rule_candidates_universal = Some(profile.rule_candidates_universal);
-          rec.stats.cascade.selector_bloom_fast_rejects = Some(profile.selector_bloom_fast_rejects);
-          rec.stats.cascade.selector_attempts_total = Some(profile.selector_attempts_total);
-          rec.stats.cascade.selector_attempts_after_bloom =
-            Some(profile.selector_attempts_after_bloom);
-          rec.stats.cascade.selector_time_ms = Some(profile.selector_time_ns as f64 / 1_000_000.0);
+          let cascade_profile_active = crate::style::cascade::cascade_profile_enabled();
+          if rec.verbose() || cascade_profile_active {
+            let profile = crate::style::cascade::capture_cascade_profile();
+            rec.stats.cascade.nodes = Some(profile.nodes);
+            rec.stats.cascade.rule_candidates = Some(profile.rule_candidates);
+            rec.stats.cascade.rule_matches = Some(profile.rule_matches);
+            rec.stats.cascade.rule_candidates_pruned = Some(profile.rule_candidates_pruned);
+            rec.stats.cascade.rule_candidates_by_id = Some(profile.rule_candidates_by_id);
+            rec.stats.cascade.rule_candidates_by_class = Some(profile.rule_candidates_by_class);
+            rec.stats.cascade.rule_candidates_by_tag = Some(profile.rule_candidates_by_tag);
+            rec.stats.cascade.rule_candidates_by_attr = Some(profile.rule_candidates_by_attr);
+            rec.stats.cascade.rule_candidates_universal = Some(profile.rule_candidates_universal);
+            rec.stats.cascade.selector_bloom_built = Some(profile.selector_bloom_built);
+            rec.stats.cascade.selector_bloom_time_ms =
+              Some(profile.selector_bloom_time_ns as f64 / 1_000_000.0);
+            rec.stats.cascade.selector_rightmost_fast_rejects =
+              Some(profile.selector_rightmost_fast_rejects);
+            rec.stats.cascade.selector_match_calls = Some(profile.selector_match_calls);
+            rec.stats.cascade.selector_bloom_fast_rejects = Some(profile.selector_bloom_fast_rejects);
+            rec.stats.cascade.selector_attempts_total = Some(profile.selector_attempts_total);
+            rec.stats.cascade.selector_attempts_after_bloom =
+              Some(profile.selector_attempts_after_bloom);
+            rec.stats.cascade.selector_time_ms = Some(profile.selector_time_ns as f64 / 1_000_000.0);
           rec.stats.cascade.declaration_time_ms =
             Some(profile.declaration_time_ns as f64 / 1_000_000.0);
           rec.stats.cascade.pseudo_time_ms = Some(profile.pseudo_time_ns as f64 / 1_000_000.0);
