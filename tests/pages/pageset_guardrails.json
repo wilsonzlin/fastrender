@@ -4,7 +4,7 @@
   "fixtures": [
     {
       "name": "stripe.com",
-      "url": "https://stripe.com",
+      "url": "https://stripe.com/",
       "viewport": [
         1200,
         800
@@ -15,7 +15,7 @@
     },
     {
       "name": "bbc.com",
-      "url": "https://bbc.com",
+      "url": "https://www.bbc.com/",
       "viewport": [
         1200,
         800
@@ -26,7 +26,7 @@
     },
     {
       "name": "foxnews.com",
-      "url": "https://foxnews.com",
+      "url": "https://www.foxnews.com/",
       "viewport": [
         1200,
         800
@@ -48,7 +48,7 @@
     },
     {
       "name": "microsoft.com",
-      "url": "https://www.microsoft.com/",
+      "url": "https://www.microsoft.com/en-us/",
       "viewport": [
         1200,
         800
@@ -59,7 +59,7 @@
     },
     {
       "name": "techcrunch.com",
-      "url": "https://techcrunch.com",
+      "url": "https://techcrunch.com/",
       "viewport": [
         1200,
         800
@@ -70,7 +70,7 @@
     },
     {
       "name": "dropbox.com",
-      "url": "https://dropbox.com",
+      "url": "https://www.dropbox.com/",
       "viewport": [
         1200,
         800
@@ -125,7 +125,7 @@
     },
     {
       "name": "dailymail.co.uk",
-      "url": "https://dailymail.co.uk",
+      "url": "https://www.dailymail.co.uk/ushome/index.html",
       "viewport": [
         1200,
         800
@@ -158,7 +158,7 @@
     },
     {
       "name": "forbes.com",
-      "url": "https://forbes.com",
+      "url": "https://www.forbes.com/",
       "viewport": [
         1200,
         800
@@ -169,7 +169,7 @@
     },
     {
       "name": "apnews.com",
-      "url": "https://apnews.com",
+      "url": "https://apnews.com/",
       "viewport": [
         1200,
         800
@@ -180,7 +180,7 @@
     },
     {
       "name": "ft.com",
-      "url": "https://ft.com",
+      "url": "https://www.ft.com/",
       "viewport": [
         1200,
         800
@@ -202,7 +202,7 @@
     },
     {
       "name": "msnbc.com",
-      "url": "https://msnbc.com",
+      "url": "https://www.ms.now/",
       "viewport": [
         1200,
         800
@@ -213,7 +213,7 @@
     },
     {
       "name": "nbcnews.com",
-      "url": "https://nbcnews.com",
+      "url": "https://www.nbcnews.com/",
       "viewport": [
         1200,
         800
@@ -224,7 +224,7 @@
     },
     {
       "name": "github.com",
-      "url": "https://github.com",
+      "url": "https://github.com/",
       "viewport": [
         1200,
         800
@@ -235,7 +235,7 @@
     },
     {
       "name": "theguardian.com",
-      "url": "https://theguardian.com",
+      "url": "https://www.theguardian.com/us",
       "viewport": [
         1200,
         800
@@ -444,7 +444,7 @@
     },
     {
       "name": "wired.com",
-      "url": "https://wired.com",
+      "url": "https://www.wired.com/",
       "viewport": [
         1200,
         800

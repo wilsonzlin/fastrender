@@ -678,14 +678,7 @@ fn update_manifest(
     .map(|entry| {
       if let Some(existing) = existing_map.get(&entry.name) {
         let mut fixture = existing.clone();
-        let needs_url = fixture
-          .url
-          .as_deref()
-          .map(|url| url.trim().is_empty())
-          .unwrap_or(true);
-        if needs_url {
-          fixture.url = Some(entry.url.clone());
-        }
+        fixture.url = Some(entry.url.clone());
         fixture
       } else {
         PagesetGuardrailsFixture {
@@ -790,7 +783,7 @@ mod tests {
         { "name": "panic.test", "url": "https://panic.test/", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
         { "name": "error.test", "url": "https://error.test/", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
         { "name": "timeout-a.test", "url": "https://timeout-a.test/", "viewport": [1200, 800], "dpr": 1.0, "media": "screen", "budget_ms": 7777.0 },
-        { "name": "timeout-b.test", "url": "https://override.test/", "viewport": [800, 600], "dpr": 2.0, "media": "print", "budget_ms": 1234.0 },
+        { "name": "timeout-b.test", "url": "https://timeout-b.test/", "viewport": [800, 600], "dpr": 2.0, "media": "print", "budget_ms": 1234.0 },
         { "name": "slow-ok.test", "url": "https://slow-ok.test/", "viewport": [640, 480], "dpr": 1.5, "media": "screen", "budget_ms": 4321.0 }
       ]
     });
@@ -1022,6 +1015,52 @@ mod tests {
       "legacy manifest {} should mirror {}",
       legacy_path.display(),
       guardrails_path.display()
+    );
+  }
+
+  #[test]
+  fn repo_guardrails_manifest_urls_match_progress() {
+    let progress_dir = repo_root().join("progress/pages");
+    let manifest_path = repo_root().join(DEFAULT_MANIFEST_PATH);
+    let progress = read_progress_entries(&progress_dir).expect("read progress/pages");
+    let manifest = load_manifest(&manifest_path).expect("load pageset guardrails manifest");
+
+    let progress_urls: BTreeMap<String, String> = progress
+      .into_iter()
+      .map(|entry| (entry.name, entry.url))
+      .collect();
+
+    let mut mismatches = Vec::new();
+    for fixture in &manifest.fixtures {
+      let expected = match progress_urls.get(&fixture.name) {
+        Some(url) => url,
+        None => {
+          mismatches.push(format!(
+            "{} missing progress/pages/{}.json",
+            fixture.name, fixture.name
+          ));
+          continue;
+        }
+      };
+
+      match fixture.url.as_deref() {
+        Some(actual) if actual == expected => {}
+        Some(actual) => mismatches.push(format!(
+          "{} url mismatch: manifest={} progress={}",
+          fixture.name, actual, expected
+        )),
+        None => mismatches.push(format!(
+          "{} missing url field (expected {})",
+          fixture.name, expected
+        )),
+      }
+    }
+
+    assert!(
+      mismatches.is_empty(),
+      "{} fixture URLs drifted from progress/pages:\n{}",
+      manifest_path.display(),
+      mismatches.join("\n")
     );
   }
 } 
