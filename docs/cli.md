@@ -8,7 +8,7 @@ Compatibility toggles are **opt-in** across the render CLIs. Pass `--compat-prof
 
 These are optional wrappers for the most common loops:
 
-- Pageset loop (`fetch_pages` → `prefetch_assets` (disk cache only) → `pageset_progress`, defaults to bundled fonts): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out; pass `--disk-cache` to force-enable; supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, and `--no-fetch`; pass extra `pageset_progress run` flags after `--`)
+- Pageset loop (`fetch_pages` → `prefetch_assets` (disk cache only) → `pageset_progress`, defaults to bundled fonts): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out; pass `--disk-cache` to force-enable; supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--no-fetch`, `--allow-collisions`, and `--timings`; pass extra `pageset_progress run` flags after `--`)
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
@@ -54,7 +54,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
-- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--refresh] [--disk-cache] [--no-disk-cache] [--allow-http-error-status] [--cascade-diagnostics] [--cascade-diagnostics-slow-ms 500] [-- <pageset_progress args...>]`
+- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--refresh] [--allow-http-error-status] [--allow-collisions] [--timings] [--disk-cache] [--no-disk-cache] [--cascade-diagnostics] [--cascade-diagnostics-slow-ms 500] [-- <pageset_progress args...>]`
   - Sharded example: `cargo xtask pageset --shard 0/4` (applies to fetch + prefetch (disk cache only) + render; add `--no-fetch` to reuse cached pages)
   - Forward compatibility gates when needed: `--compat-profile site` and/or `--dom-compat compat` are passed through to `pageset_progress run` but remain off by default.
   - Disk cache tuning flags passed after `--` (e.g. `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--disk-cache-lock-stale-secs`) are also forwarded to `prefetch_assets` when it runs.

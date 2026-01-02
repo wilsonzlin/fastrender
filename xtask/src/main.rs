@@ -101,6 +101,17 @@ struct PagesetArgs {
   #[arg(long)]
   allow_http_error_status: bool,
 
+  /// Allow duplicate stems by appending a deterministic hash suffix.
+  ///
+  /// This forwards `--allow-collisions` to `fetch_pages`. Most runs should leave this disabled so
+  /// unexpected pageset stem collisions fail fast.
+  #[arg(long)]
+  allow_collisions: bool,
+
+  /// Print per-page fetch durations for the `fetch_pages` step.
+  #[arg(long = "timings")]
+  fetch_timings: bool,
+
   /// Hard per-page render timeout (seconds)
   #[arg(long, default_value_t = 5)]
   render_timeout: u64,
@@ -592,11 +603,15 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 
   let mut fetch_refresh = args.refresh;
   let mut fetch_allow_http_error_status = args.allow_http_error_status;
+  let mut fetch_allow_collisions = args.allow_collisions;
+  let mut fetch_timings = args.fetch_timings;
   let (filtered_pageset_extra_args, fetch_overrides) =
     xtask::extract_fetch_pages_flag_overrides(&pageset_extra_args);
   pageset_extra_args = filtered_pageset_extra_args;
   fetch_refresh |= fetch_overrides.refresh;
   fetch_allow_http_error_status |= fetch_overrides.allow_http_error_status;
+  fetch_allow_collisions |= fetch_overrides.allow_collisions;
+  fetch_timings |= fetch_overrides.timings;
 
   let (filtered_pageset_extra_args, pageset_overrides) =
     xtask::extract_pageset_extra_arg_overrides(&pageset_extra_args);
@@ -786,11 +801,17 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(accept_language) = &accept_language_arg {
       cmd.arg("--accept-language").arg(accept_language);
     }
+    if fetch_allow_collisions {
+      cmd.arg("--allow-collisions");
+    }
     if fetch_refresh {
       cmd.arg("--refresh");
     }
     if fetch_allow_http_error_status {
       cmd.arg("--allow-http-error-status");
+    }
+    if fetch_timings {
+      cmd.arg("--timings");
     }
     if rayon_threads_env.is_none() {
       cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());

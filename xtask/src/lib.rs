@@ -39,7 +39,9 @@ pub fn extract_disk_cache_args(extra: &[String]) -> Vec<String> {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct FetchPagesFlagOverrides {
   pub allow_http_error_status: bool,
+  pub allow_collisions: bool,
   pub refresh: bool,
+  pub timings: bool,
 }
 
 /// Extract `fetch_pages`-specific flags from an argument vector.
@@ -57,7 +59,9 @@ pub fn extract_fetch_pages_flag_overrides(
   for arg in extra {
     match arg.as_str() {
       "--allow-http-error-status" => overrides.allow_http_error_status = true,
+      "--allow-collisions" => overrides.allow_collisions = true,
       "--refresh" => overrides.refresh = true,
+      "--timings" => overrides.timings = true,
       _ => out.push(arg.clone()),
     }
   }

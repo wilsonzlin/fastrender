@@ -29,6 +29,11 @@ set -euo pipefail
 # Note: `--refresh` is forwarded to `fetch_pages` so pageset runs can re-fetch cached HTML in one
 # command.
 #
+# Note: `--allow-collisions` is forwarded to `fetch_pages` so temporary pageset stem collisions can
+# be investigated without editing the pageset list.
+#
+# Note: `--timings` is forwarded to `fetch_pages` so callers can inspect document fetch durations.
+#
 # Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
 # `--prefetch-images` / `--prefetch-iframes` (alias `--prefetch-documents`) / `--prefetch-embeds` /
 # `--prefetch-icons` / `--prefetch-video-posters` / `--prefetch-css-url-assets` /
@@ -537,7 +542,13 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
     --allow-http-error-status|--allow-http-error-status=*)
       FETCH_EXTRA_ARGS+=("${arg}")
       ;;
+    --allow-collisions)
+      FETCH_EXTRA_ARGS+=("${arg}")
+      ;;
     --refresh)
+      FETCH_EXTRA_ARGS+=("${arg}")
+      ;;
+    --timings)
       FETCH_EXTRA_ARGS+=("${arg}")
       ;;
     *)

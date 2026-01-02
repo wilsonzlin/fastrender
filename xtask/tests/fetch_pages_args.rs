@@ -4,8 +4,10 @@ use xtask::{extract_fetch_pages_flag_overrides, FetchPagesFlagOverrides};
 fn extracts_fetch_pages_flags() {
   let extra = vec![
     "--foo".to_string(),
+    "--allow-collisions".to_string(),
     "--refresh".to_string(),
     "--allow-http-error-status".to_string(),
+    "--timings".to_string(),
     "--bar=baz".to_string(),
   ];
 
@@ -19,8 +21,9 @@ fn extracts_fetch_pages_flags() {
     overrides,
     FetchPagesFlagOverrides {
       allow_http_error_status: true,
+      allow_collisions: true,
       refresh: true,
+      timings: true,
     }
   );
 }
-
