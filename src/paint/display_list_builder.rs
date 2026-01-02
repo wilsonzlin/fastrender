@@ -162,6 +162,8 @@ use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use lru::LruCache;
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -194,6 +196,7 @@ pub struct DisplayListBuilder {
   parallel_root_min: usize,
   parallel_min_explicit: bool,
   parallel_stats: Option<Arc<ParallelStats>>,
+  build_breakdown: Option<Arc<BuildBreakdown>>,
   background_tiles: Option<Arc<AtomicU64>>,
   background_layers: Option<Arc<AtomicU64>>,
   background_pattern_fast_paths: Option<Arc<AtomicU64>>,
@@ -287,6 +290,46 @@ struct ParallelStatsSnapshot {
   threads: usize,
   parallel_ns: u64,
   serial_ns: u64,
+}
+
+#[derive(Default)]
+struct BuildBreakdown {
+  stacking_tree_ns: AtomicU64,
+  stacking_tree_calls: AtomicU64,
+  fragment_paint_bounds_ns: AtomicU64,
+  fragment_paint_bounds_calls: AtomicU64,
+  text_shape_ns: AtomicU64,
+  text_shape_calls: AtomicU64,
+  text_decoration_ns: AtomicU64,
+  text_decoration_calls: AtomicU64,
+  image_decode_ns: AtomicU64,
+  image_decode_calls: AtomicU64,
+  clip_path_ns: AtomicU64,
+  clip_path_calls: AtomicU64,
+  border_radii_ns: AtomicU64,
+  border_radii_calls: AtomicU64,
+  svg_filter_ns: AtomicU64,
+  svg_filter_calls: AtomicU64,
+}
+
+#[derive(Default, Clone, Copy)]
+struct BuildBreakdownSnapshot {
+  stacking_tree_ns: u64,
+  stacking_tree_calls: u64,
+  fragment_paint_bounds_ns: u64,
+  fragment_paint_bounds_calls: u64,
+  text_shape_ns: u64,
+  text_shape_calls: u64,
+  text_decoration_ns: u64,
+  text_decoration_calls: u64,
+  image_decode_ns: u64,
+  image_decode_calls: u64,
+  clip_path_ns: u64,
+  clip_path_calls: u64,
+  border_radii_ns: u64,
+  border_radii_calls: u64,
+  svg_filter_ns: u64,
+  svg_filter_calls: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -443,6 +486,78 @@ impl ParallelStats {
   }
 }
 
+impl BuildBreakdown {
+  #[inline]
+  fn record_pair(ns: &AtomicU64, calls: &AtomicU64, elapsed: Duration) {
+    ns.fetch_add(
+      elapsed.as_nanos().min(u64::MAX as u128) as u64,
+      Ordering::Relaxed,
+    );
+    calls.fetch_add(1, Ordering::Relaxed);
+  }
+
+  fn record_stacking_tree(&self, elapsed: Duration) {
+    Self::record_pair(&self.stacking_tree_ns, &self.stacking_tree_calls, elapsed);
+  }
+
+  fn record_fragment_paint_bounds(&self, elapsed: Duration) {
+    Self::record_pair(
+      &self.fragment_paint_bounds_ns,
+      &self.fragment_paint_bounds_calls,
+      elapsed,
+    );
+  }
+
+  fn record_text_shape(&self, elapsed: Duration) {
+    Self::record_pair(&self.text_shape_ns, &self.text_shape_calls, elapsed);
+  }
+
+  fn record_text_decoration(&self, elapsed: Duration) {
+    Self::record_pair(
+      &self.text_decoration_ns,
+      &self.text_decoration_calls,
+      elapsed,
+    );
+  }
+
+  fn record_image_decode(&self, elapsed: Duration) {
+    Self::record_pair(&self.image_decode_ns, &self.image_decode_calls, elapsed);
+  }
+
+  fn record_clip_path(&self, elapsed: Duration) {
+    Self::record_pair(&self.clip_path_ns, &self.clip_path_calls, elapsed);
+  }
+
+  fn record_border_radii(&self, elapsed: Duration) {
+    Self::record_pair(&self.border_radii_ns, &self.border_radii_calls, elapsed);
+  }
+
+  fn record_svg_filter(&self, elapsed: Duration) {
+    Self::record_pair(&self.svg_filter_ns, &self.svg_filter_calls, elapsed);
+  }
+
+  fn snapshot(&self) -> BuildBreakdownSnapshot {
+    BuildBreakdownSnapshot {
+      stacking_tree_ns: self.stacking_tree_ns.load(Ordering::Relaxed),
+      stacking_tree_calls: self.stacking_tree_calls.load(Ordering::Relaxed),
+      fragment_paint_bounds_ns: self.fragment_paint_bounds_ns.load(Ordering::Relaxed),
+      fragment_paint_bounds_calls: self.fragment_paint_bounds_calls.load(Ordering::Relaxed),
+      text_shape_ns: self.text_shape_ns.load(Ordering::Relaxed),
+      text_shape_calls: self.text_shape_calls.load(Ordering::Relaxed),
+      text_decoration_ns: self.text_decoration_ns.load(Ordering::Relaxed),
+      text_decoration_calls: self.text_decoration_calls.load(Ordering::Relaxed),
+      image_decode_ns: self.image_decode_ns.load(Ordering::Relaxed),
+      image_decode_calls: self.image_decode_calls.load(Ordering::Relaxed),
+      clip_path_ns: self.clip_path_ns.load(Ordering::Relaxed),
+      clip_path_calls: self.clip_path_calls.load(Ordering::Relaxed),
+      border_radii_ns: self.border_radii_ns.load(Ordering::Relaxed),
+      border_radii_calls: self.border_radii_calls.load(Ordering::Relaxed),
+      svg_filter_ns: self.svg_filter_ns.load(Ordering::Relaxed),
+      svg_filter_calls: self.svg_filter_calls.load(Ordering::Relaxed),
+    }
+  }
+}
+
 fn parallel_config_from_env() -> (bool, usize, bool) {
   let toggles = runtime::runtime_toggles();
   let enabled = toggles.truthy_with_default("FASTR_DISPLAY_LIST_PARALLEL", true);
@@ -456,6 +571,10 @@ fn parallel_config_from_env() -> (bool, usize, bool) {
     ),
   };
   (enabled, min, explicit_min)
+}
+
+fn paint_build_breakdown_enabled() -> bool {
+  paint_diagnostics_enabled() && runtime::runtime_toggles().truthy("FASTR_PAINT_BUILD_BREAKDOWN")
 }
 
 impl DisplayListBuilder {
@@ -629,6 +748,7 @@ impl DisplayListBuilder {
     absolute_rect: Rect,
     style: Option<&ComputedStyle>,
   ) -> Rect {
+    let paint_bounds_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
     let mut bounds = absolute_rect;
     if let Some(style) = style {
       if let Some(outline) = Self::outline_bounds(style, absolute_rect) {
@@ -679,6 +799,9 @@ impl DisplayListBuilder {
       if fragment.table_borders.is_some() {
         bounds = bounds.union(fragment.bounds.translate(absolute_rect.origin));
       }
+    }
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), paint_bounds_timer) {
+      breakdown.record_fragment_paint_bounds(start.elapsed());
     }
     bounds
   }
@@ -738,6 +861,39 @@ impl DisplayListBuilder {
               .saturating_add(background_pattern_fast_paths);
           }
         });
+      }
+
+      if let Some(breakdown) = self.build_breakdown.as_ref() {
+        let snapshot = breakdown.snapshot();
+        if snapshot.stacking_tree_calls > 0
+          || snapshot.fragment_paint_bounds_calls > 0
+          || snapshot.text_shape_calls > 0
+          || snapshot.text_decoration_calls > 0
+          || snapshot.image_decode_calls > 0
+          || snapshot.clip_path_calls > 0
+          || snapshot.border_radii_calls > 0
+          || snapshot.svg_filter_calls > 0
+        {
+          with_paint_diagnostics(|diag| {
+            diag.build_stacking_tree_ms += snapshot.stacking_tree_ns as f64 / 1_000_000.0;
+            diag.build_stacking_tree_calls += snapshot.stacking_tree_calls;
+            diag.build_fragment_paint_bounds_ms +=
+              snapshot.fragment_paint_bounds_ns as f64 / 1_000_000.0;
+            diag.build_fragment_paint_bounds_calls += snapshot.fragment_paint_bounds_calls;
+            diag.build_text_shape_ms += snapshot.text_shape_ns as f64 / 1_000_000.0;
+            diag.build_text_shape_calls += snapshot.text_shape_calls;
+            diag.build_text_decoration_ms += snapshot.text_decoration_ns as f64 / 1_000_000.0;
+            diag.build_text_decoration_calls += snapshot.text_decoration_calls;
+            diag.build_image_decode_ms += snapshot.image_decode_ns as f64 / 1_000_000.0;
+            diag.build_image_decode_calls += snapshot.image_decode_calls;
+            diag.build_clip_path_ms += snapshot.clip_path_ns as f64 / 1_000_000.0;
+            diag.build_clip_path_calls += snapshot.clip_path_calls;
+            diag.build_border_radii_ms += snapshot.border_radii_ns as f64 / 1_000_000.0;
+            diag.build_border_radii_calls += snapshot.border_radii_calls;
+            diag.build_svg_filter_ms += snapshot.svg_filter_ns as f64 / 1_000_000.0;
+            diag.build_svg_filter_calls += snapshot.svg_filter_calls;
+          });
+        }
       }
     }
     if let Some(err) = self.error.take() {
@@ -805,6 +961,7 @@ impl DisplayListBuilder {
       parallel_root_min,
       parallel_min_explicit,
       parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
+      build_breakdown: paint_build_breakdown_enabled().then(|| Arc::new(BuildBreakdown::default())),
       background_tiles: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
       background_layers: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
       background_pattern_fast_paths: paint_diagnostics_enabled()
@@ -842,6 +999,7 @@ impl DisplayListBuilder {
       parallel_root_min,
       parallel_min_explicit,
       parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
+      build_breakdown: paint_build_breakdown_enabled().then(|| Arc::new(BuildBreakdown::default())),
       background_tiles: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
       background_layers: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
       background_pattern_fast_paths: paint_diagnostics_enabled()
@@ -1014,7 +1172,11 @@ impl DisplayListBuilder {
       .or_else(|| self.svg_filter_defs.clone());
     let mut svg_filters = SvgFilterResolver::new(defs, svg_roots, image_cache.as_ref());
 
+    let stacking_tree_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
     let contexts = crate::paint::stacking::build_stacking_tree_from_tree_checked(tree)?;
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), stacking_tree_timer) {
+      breakdown.record_stacking_tree(start.elapsed());
+    }
     let visibility = self.root_visibility();
     for context in &contexts {
       self.build_stacking_context(context, Point::ZERO, true, &mut svg_filters, visibility);
@@ -1067,7 +1229,11 @@ impl DisplayListBuilder {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
     self.estimate_from_roots(std::iter::once(root));
+    let stacking_tree_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
     let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree_checked(root)?;
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), stacking_tree_timer) {
+      breakdown.record_stacking_tree(start.elapsed());
+    }
     let image_cache = self.image_cache.clone();
     let mut svg_filters = SvgFilterResolver::new(
       self.svg_filter_defs.clone(),
@@ -1108,7 +1274,11 @@ impl DisplayListBuilder {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
     self.estimate_from_roots(std::iter::once(root));
+    let stacking_tree_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
     let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree_checked(root)?;
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), stacking_tree_timer) {
+      breakdown.record_stacking_tree(start.elapsed());
+    }
     let mut svg_roots = Vec::new();
     Self::collect_stacking_fragments(&stacking, &mut svg_roots);
     let image_cache = self.image_cache.clone();
@@ -1337,7 +1507,7 @@ impl DisplayListBuilder {
 
     let (overflow_clip, clip_rect) = if let Some(style) = style_opt {
       (
-        Self::overflow_clip_from_style(style, absolute_rect, self.viewport),
+        Self::overflow_clip_from_style(style, absolute_rect, self.viewport, self.build_breakdown.as_deref()),
         Self::clip_rect_from_style(style, absolute_rect, self.viewport),
       )
     } else {
@@ -1672,6 +1842,7 @@ impl DisplayListBuilder {
       .unwrap_or(false);
     let (filters, backdrop_filters, radii) = root_style
       .map(|style| {
+        let breakdown = self.build_breakdown.as_deref();
         (
           Self::resolve_filters(
             &style.filter,
@@ -1679,6 +1850,7 @@ impl DisplayListBuilder {
             self.viewport,
             &self.font_ctx,
             svg_filters,
+            breakdown,
           ),
           Self::resolve_filters(
             &style.backdrop_filter,
@@ -1686,8 +1858,16 @@ impl DisplayListBuilder {
             self.viewport,
             &self.font_ctx,
             svg_filters,
+            breakdown,
           ),
-          Self::resolve_border_radii(Some(style), context.bounds, self.viewport),
+          {
+            let border_timer = breakdown.map(|_| Instant::now());
+            let radii = Self::resolve_border_radii(Some(style), context.bounds, self.viewport);
+            if let (Some(breakdown), Some(start)) = (breakdown, border_timer) {
+              breakdown.record_border_radii(start.elapsed());
+            }
+            radii
+          },
         )
       })
       .unwrap_or((
@@ -1752,12 +1932,20 @@ impl DisplayListBuilder {
     let viewport = self
       .viewport
       .unwrap_or_else(|| (context_bounds.width(), context_bounds.height()));
-    let clip_path = root_style
-      .and_then(|style| resolve_clip_path(style, context_bounds, viewport, &self.font_ctx));
-    let clip_rect = root_style
-      .and_then(|style| Self::clip_rect_from_style(style, context_bounds, Some(viewport)));
+    let clip_path_timer = if self.build_breakdown.is_some() && root_style.is_some() {
+      Some(Instant::now())
+    } else {
+      None
+    };
+    let clip_path =
+      root_style.and_then(|style| resolve_clip_path(style, context_bounds, viewport, &self.font_ctx));
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), clip_path_timer) {
+      breakdown.record_clip_path(start.elapsed());
+    }
+    let clip_rect =
+      root_style.and_then(|style| Self::clip_rect_from_style(style, context_bounds, Some(viewport)));
     let overflow_clip = root_style
-      .and_then(|style| Self::overflow_clip_from_style(style, context_bounds, self.viewport));
+      .and_then(|style| Self::overflow_clip_from_style(style, context_bounds, self.viewport, self.build_breakdown.as_deref()));
     let paint_containment_clip = if paint_contained {
       root_fragment
         .and_then(|fragment| {
@@ -1771,7 +1959,13 @@ impl DisplayListBuilder {
           );
           let rects = Self::background_rects(rect, style, self.viewport);
           let radii =
-            Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
+            Self::resolve_clip_radii(
+              style,
+              &rects,
+              BackgroundBox::PaddingBox,
+              self.viewport,
+              self.build_breakdown.as_deref(),
+            );
           Some(ClipItem {
             shape: ClipShape::Rect {
               rect: rects.padding,
@@ -2027,6 +2221,7 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
     bounds: Rect,
     viewport: Option<(f32, f32)>,
+    breakdown: Option<&BuildBreakdown>,
   ) -> Option<ClipItem> {
     let clip_x = matches!(
       style.overflow_x,
@@ -2051,7 +2246,8 @@ impl DisplayListBuilder {
     if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
       return None;
     }
-    let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, viewport);
+    let radii =
+      Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, viewport, breakdown);
     Some(ClipItem {
       shape: ClipShape::Rect {
         rect: clip_rect,
@@ -2439,11 +2635,10 @@ impl DisplayListBuilder {
     rects: &BackgroundRects,
     clip: BackgroundBox,
     viewport: Option<(f32, f32)>,
+    breakdown: Option<&BuildBreakdown>,
   ) -> crate::paint::display_list::BorderRadii {
+    let timer = breakdown.map(|_| Instant::now());
     let base = Self::resolve_border_radii(Some(style), rects.border, viewport);
-    if base.is_zero() {
-      return base;
-    }
 
     let percentage_base = rects.border.width().max(0.0);
     let font_size = style.font_size;
@@ -2505,55 +2700,64 @@ impl DisplayListBuilder {
       viewport,
     );
 
-    match clip {
-      BackgroundBox::BorderBox => base,
-      BackgroundBox::PaddingBox => {
-        let shrunk = crate::paint::display_list::BorderRadii {
-          top_left: crate::paint::display_list::BorderRadius {
-            x: (base.top_left.x - border_left).max(0.0),
-            y: (base.top_left.y - border_top).max(0.0),
-          },
-          top_right: crate::paint::display_list::BorderRadius {
-            x: (base.top_right.x - border_right).max(0.0),
-            y: (base.top_right.y - border_top).max(0.0),
-          },
-          bottom_right: crate::paint::display_list::BorderRadius {
-            x: (base.bottom_right.x - border_right).max(0.0),
-            y: (base.bottom_right.y - border_bottom).max(0.0),
-          },
-          bottom_left: crate::paint::display_list::BorderRadius {
-            x: (base.bottom_left.x - border_left).max(0.0),
-            y: (base.bottom_left.y - border_bottom).max(0.0),
-          },
-        };
-        shrunk.clamped(rects.padding.width(), rects.padding.height())
+    let out = if base.is_zero() {
+      base
+    } else {
+      match clip {
+        BackgroundBox::BorderBox => base,
+        BackgroundBox::PaddingBox => {
+          let shrunk = crate::paint::display_list::BorderRadii {
+            top_left: crate::paint::display_list::BorderRadius {
+              x: (base.top_left.x - border_left).max(0.0),
+              y: (base.top_left.y - border_top).max(0.0),
+            },
+            top_right: crate::paint::display_list::BorderRadius {
+              x: (base.top_right.x - border_right).max(0.0),
+              y: (base.top_right.y - border_top).max(0.0),
+            },
+            bottom_right: crate::paint::display_list::BorderRadius {
+              x: (base.bottom_right.x - border_right).max(0.0),
+              y: (base.bottom_right.y - border_bottom).max(0.0),
+            },
+            bottom_left: crate::paint::display_list::BorderRadius {
+              x: (base.bottom_left.x - border_left).max(0.0),
+              y: (base.bottom_left.y - border_bottom).max(0.0),
+            },
+          };
+          shrunk.clamped(rects.padding.width(), rects.padding.height())
+        }
+        BackgroundBox::ContentBox => {
+          let shrink_left = border_left + padding_left;
+          let shrink_right = border_right + padding_right;
+          let shrink_top = border_top + padding_top;
+          let shrink_bottom = border_bottom + padding_bottom;
+          let shrunk = crate::paint::display_list::BorderRadii {
+            top_left: crate::paint::display_list::BorderRadius {
+              x: (base.top_left.x - shrink_left).max(0.0),
+              y: (base.top_left.y - shrink_top).max(0.0),
+            },
+            top_right: crate::paint::display_list::BorderRadius {
+              x: (base.top_right.x - shrink_right).max(0.0),
+              y: (base.top_right.y - shrink_top).max(0.0),
+            },
+            bottom_right: crate::paint::display_list::BorderRadius {
+              x: (base.bottom_right.x - shrink_right).max(0.0),
+              y: (base.bottom_right.y - shrink_bottom).max(0.0),
+            },
+            bottom_left: crate::paint::display_list::BorderRadius {
+              x: (base.bottom_left.x - shrink_left).max(0.0),
+              y: (base.bottom_left.y - shrink_bottom).max(0.0),
+            },
+          };
+          shrunk.clamped(rects.content.width(), rects.content.height())
+        }
       }
-      BackgroundBox::ContentBox => {
-        let shrink_left = border_left + padding_left;
-        let shrink_right = border_right + padding_right;
-        let shrink_top = border_top + padding_top;
-        let shrink_bottom = border_bottom + padding_bottom;
-        let shrunk = crate::paint::display_list::BorderRadii {
-          top_left: crate::paint::display_list::BorderRadius {
-            x: (base.top_left.x - shrink_left).max(0.0),
-            y: (base.top_left.y - shrink_top).max(0.0),
-          },
-          top_right: crate::paint::display_list::BorderRadius {
-            x: (base.top_right.x - shrink_right).max(0.0),
-            y: (base.top_right.y - shrink_top).max(0.0),
-          },
-          bottom_right: crate::paint::display_list::BorderRadius {
-            x: (base.bottom_right.x - shrink_right).max(0.0),
-            y: (base.bottom_right.y - shrink_bottom).max(0.0),
-          },
-          bottom_left: crate::paint::display_list::BorderRadius {
-            x: (base.bottom_left.x - shrink_left).max(0.0),
-            y: (base.bottom_left.y - shrink_bottom).max(0.0),
-          },
-        };
-        shrunk.clamped(rects.content.width(), rects.content.height())
-      }
+    };
+
+    if let (Some(breakdown), Some(start)) = (breakdown, timer) {
+      breakdown.record_border_radii(start.elapsed());
     }
+    out
   }
 
   fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
@@ -2847,6 +3051,7 @@ impl DisplayListBuilder {
     viewport: Option<(f32, f32)>,
     font_ctx: &FontContext,
     svg_filters: &mut SvgFilterResolver,
+    breakdown: Option<&BuildBreakdown>,
   ) -> Vec<ResolvedFilter> {
     let viewport = viewport.unwrap_or((0.0, 0.0));
     filters
@@ -2902,7 +3107,12 @@ impl DisplayListBuilder {
           })
         }
         crate::style::types::FilterFunction::Url(url) => {
-          svg_filters.resolve(url).map(ResolvedFilter::SvgFilter)
+          let timer = breakdown.map(|_| Instant::now());
+          let resolved = svg_filters.resolve(url);
+          if let (Some(breakdown), Some(start)) = (breakdown, timer) {
+            breakdown.record_svg_filter(start.elapsed());
+          }
+          resolved.map(ResolvedFilter::SvgFilter)
         }
       })
       .collect()
@@ -3454,6 +3664,7 @@ impl DisplayListBuilder {
       parallel_root_min: self.parallel_root_min,
       parallel_min_explicit: self.parallel_min_explicit,
       parallel_stats: self.parallel_stats.clone(),
+      build_breakdown: self.build_breakdown.clone(),
       background_tiles: self.background_tiles.clone(),
       background_layers: self.background_layers.clone(),
       background_pattern_fast_paths: self.background_pattern_fast_paths.clone(),
@@ -3501,7 +3712,12 @@ impl DisplayListBuilder {
         let runs_ref: Option<&[ShapedRun]> = if let Some(runs) = shaped {
           Some(runs.as_ref())
         } else if let Some(style) = style_opt {
-          if let Ok(mut runs) = self.shaper.shape(text, style, &self.font_ctx) {
+          let shape_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
+          let shaped_result = self.shaper.shape(text, style, &self.font_ctx);
+          if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), shape_timer) {
+            breakdown.record_text_shape(start.elapsed());
+          }
+          if let Ok(mut runs) = shaped_result {
             InlineTextItem::apply_spacing_to_runs(
               &mut runs,
               text,
@@ -3924,7 +4140,13 @@ impl DisplayListBuilder {
       && color_clip_rect.width() > 0.0
       && color_clip_rect.height() > 0.0
     {
-      let radii = Self::resolve_clip_radii(style, &rects, color_layer.clip, self.viewport);
+      let radii = Self::resolve_clip_radii(
+        style,
+        &rects,
+        color_layer.clip,
+        self.viewport,
+        self.build_breakdown.as_deref(),
+      );
       if radii.is_zero() {
         self.emit_background(color_clip_rect, style.background_color);
       } else {
@@ -4020,7 +4242,13 @@ impl DisplayListBuilder {
       }
     }
 
-    let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
+    let clip_radii = Self::resolve_clip_radii(
+      style,
+      rects,
+      clip_box,
+      self.viewport,
+      self.build_breakdown.as_deref(),
+    );
     let blend_mode = Self::convert_blend_mode(layer.blend_mode);
     let use_blend = blend_mode != BlendMode::Normal;
     let pushed_clip = !clip_radii.is_zero() && {
@@ -4847,7 +5075,13 @@ impl DisplayListBuilder {
     let rects = Self::background_rects(rect, style, self.viewport);
     let outer_radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
     let inner_radii =
-      Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
+      Self::resolve_clip_radii(
+        style,
+        &rects,
+        BackgroundBox::PaddingBox,
+        self.viewport,
+        self.build_breakdown.as_deref(),
+      );
     let base_rect = if inset { rects.padding } else { rects.border };
 
     for shadow in &style.box_shadow {
@@ -5579,6 +5813,7 @@ impl DisplayListBuilder {
       return Vec::new();
     }
 
+    let decoration_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
     let band_half = (thickness * 0.5).abs();
     let mut exclusions = if inline_vertical {
       let band_left = center - band_half;
@@ -5610,6 +5845,9 @@ impl DisplayListBuilder {
       segments.push((line_start, line_start + line_width));
     }
 
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decoration_timer) {
+      breakdown.record_text_decoration(start.elapsed());
+    }
     segments
   }
 
@@ -5778,7 +6016,12 @@ impl DisplayListBuilder {
       } else {
         let mut mark_style = style.clone();
         mark_style.font_size = style.font_size * 0.5;
-        match self.shaper.shape(s, &mark_style, &self.font_ctx) {
+        let shape_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
+        let shaped = self.shaper.shape(s, &mark_style, &self.font_ctx);
+        if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), shape_timer) {
+          breakdown.record_text_shape(start.elapsed());
+        }
+        match shaped {
           Ok(mark_runs) if !mark_runs.is_empty() => {
             let mark_font_id = self.font_id_from_run(&mark_runs[0]);
             let mut glyphs = Vec::new();
@@ -6271,7 +6514,12 @@ impl DisplayListBuilder {
       return self.emit_naive_text(text, rect, None);
     };
 
-    let mut runs = match self.shaper.shape(text, style, &self.font_ctx) {
+    let shape_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
+    let shaped = self.shaper.shape(text, style, &self.font_ctx);
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), shape_timer) {
+      breakdown.record_text_shape(start.elapsed());
+    }
+    let mut runs = match shaped {
       Ok(r) => r,
       Err(_) => return self.emit_naive_text(text, rect, Some(style)),
     };
@@ -6491,6 +6739,7 @@ impl DisplayListBuilder {
       }
     }
 
+    let decode_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
     let pixmap = match injection {
       Some(injection) => image_cache.render_svg_pixmap_at_size_with_injected_style(
         svg,
@@ -6511,7 +6760,12 @@ impl DisplayListBuilder {
     };
     let pixmap = match pixmap {
       Ok(pixmap) => pixmap,
-      Err(_) => return false,
+      Err(_) => {
+        if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decode_timer) {
+          breakdown.record_image_decode(start.elapsed());
+        }
+        return false;
+      }
     };
 
     let image_data = Arc::new(ImageData::from_pixmap(pixmap.as_ref(), dest_w, dest_h));
@@ -6527,6 +6781,9 @@ impl DisplayListBuilder {
         filter_quality: Self::image_filter_quality(style),
         src_rect: None,
       }));
+      if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decode_timer) {
+        breakdown.record_image_decode(start.elapsed());
+      }
       return true;
     }
     decoded_cache.insert(cache_key, image_data.clone());
@@ -6537,6 +6794,9 @@ impl DisplayListBuilder {
       filter_quality: Self::image_filter_quality(style),
       src_rect: None,
     }));
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decode_timer) {
+      breakdown.record_image_decode(start.elapsed());
+    }
     true
   }
 
@@ -6588,15 +6848,27 @@ impl DisplayListBuilder {
       }
     }
 
-    let (css_w, css_h) = image.css_dimensions(
+    let decode_timer = self.build_breakdown.as_ref().map(|_| Instant::now());
+    let (css_w, css_h) = match image.css_dimensions(
       orientation,
       &image_resolution,
       self.device_pixel_ratio,
       None,
-    )?;
+    ) {
+      Some(dimensions) => dimensions,
+      None => {
+        if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decode_timer) {
+          breakdown.record_image_decode(start.elapsed());
+        }
+        return None;
+      }
+    };
     let rgba = image.to_oriented_rgba(orientation);
     let (w, h) = rgba.dimensions();
     if w == 0 || h == 0 {
+      if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decode_timer) {
+        breakdown.record_image_decode(start.elapsed());
+      }
       return None;
     }
     let image_data = Arc::new(ImageData::new(w, h, css_w, css_h, rgba.into_raw()));
@@ -6606,9 +6878,15 @@ impl DisplayListBuilder {
       .lock()
       .unwrap_or_else(|e| e.into_inner());
     if let Some(image) = decoded_cache.get(&key) {
+      if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decode_timer) {
+        breakdown.record_image_decode(start.elapsed());
+      }
       return Some(image);
     }
     decoded_cache.insert(key, image_data.clone());
+    if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decode_timer) {
+      breakdown.record_image_decode(start.elapsed());
+    }
     Some(image_data)
   }
 
@@ -6639,6 +6917,62 @@ impl DecorationMetrics {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct UnderlineGlyphBboxKey {
+  font_ptr: usize,
+  font_index: u32,
+  variations_hash: u64,
+  glyph_id: u16,
+}
+
+const UNDERLINE_GLYPH_BBOX_CACHE_MAX_ENTRIES: usize = 8192;
+
+thread_local! {
+  static UNDERLINE_GLYPH_BBOX_CACHE: RefCell<FxHashMap<UnderlineGlyphBboxKey, Option<ttf_parser::Rect>>> =
+    RefCell::new(FxHashMap::default());
+}
+
+#[inline]
+fn cached_glyph_bounding_box(
+  face: &ttf_parser::Face<'static>,
+  font: &crate::text::font_db::LoadedFont,
+  variations_hash: u64,
+  glyph_id: u16,
+) -> Option<ttf_parser::Rect> {
+  let key = UnderlineGlyphBboxKey {
+    font_ptr: Arc::as_ptr(&font.data) as usize,
+    font_index: font.index,
+    variations_hash,
+    glyph_id,
+  };
+
+  UNDERLINE_GLYPH_BBOX_CACHE.with(|cache| {
+    let mut cache = cache.borrow_mut();
+    if let Some(cached) = cache.get(&key) {
+      return *cached;
+    }
+    let bbox = face.glyph_bounding_box(ttf_parser::GlyphId(glyph_id));
+    if cache.len() >= UNDERLINE_GLYPH_BBOX_CACHE_MAX_ENTRIES {
+      cache.clear();
+    }
+    cache.insert(key, bbox);
+    bbox
+  })
+}
+
+#[inline]
+fn underline_variations_hash(variations: &[rustybuzz::Variation]) -> u64 {
+  if variations.is_empty() {
+    return 0;
+  }
+  let mut hasher = DefaultHasher::new();
+  for v in variations {
+    v.tag.hash(&mut hasher);
+    v.value.to_bits().hash(&mut hasher);
+  }
+  hasher.finish()
+}
+
 fn collect_underline_exclusions(
   runs: &[ShapedRun],
   line_start: f32,
@@ -6656,6 +6990,7 @@ fn collect_underline_exclusions(
       continue;
     };
     let face = face.face();
+    let variations_hash = underline_variations_hash(&run.variations);
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
@@ -6673,7 +7008,9 @@ fn collect_underline_exclusions(
         crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
       };
       let glyph_y = baseline_y - glyph.y_offset;
-      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+      if let Some(bbox) =
+        cached_glyph_bounding_box(face, &run.font, variations_hash, glyph.glyph_id as u16)
+      {
         let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
         let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
         let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
@@ -6707,6 +7044,7 @@ fn collect_underline_exclusions_vertical(
       continue;
     };
     let face = face.face();
+    let variations_hash = underline_variations_hash(&run.variations);
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
@@ -6725,7 +7063,9 @@ fn collect_underline_exclusions_vertical(
         crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
       };
       let block_pos = block_baseline - glyph.y_offset;
-      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+      if let Some(bbox) =
+        cached_glyph_bounding_box(face, &run.font, variations_hash, glyph.glyph_id as u16)
+      {
         let inline_left = inline_pos + bbox.x_min as f32 * scale;
         let inline_right = inline_pos + bbox.x_max as f32 * scale;
         let block_top = block_pos - bbox.y_max as f32 * scale;
@@ -8503,6 +8843,7 @@ mod tests {
       Some((200.0, 100.0)),
       &FontContext::new(),
       &mut resolver,
+      None,
     );
 
     match filters.first() {
@@ -8539,6 +8880,7 @@ mod tests {
       Some((200.0, 100.0)),
       &FontContext::new(),
       &mut resolver,
+      None,
     );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
@@ -8565,6 +8907,7 @@ mod tests {
       Some((200.0, 100.0)),
       &FontContext::new(),
       &mut resolver,
+      None,
     );
     assert_eq!(filters.len(), 3);
     assert!(filters
@@ -8927,6 +9270,48 @@ mod tests {
     assert!(
       face_cache::face_parse_count() <= 1,
       "underline exclusions should reuse cached faces"
+    );
+  }
+
+  #[test]
+  fn underline_glyph_bbox_cache_separates_variations() {
+    let font_path =
+      PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts/RobotoFlex-VF.ttf");
+    let data = Arc::new(std::fs::read(font_path).expect("read test font"));
+    let font = crate::text::font_db::LoadedFont {
+      id: None,
+      data,
+      index: 0,
+      family: "RobotoFlex".to_string(),
+      weight: crate::text::font_db::FontWeight::NORMAL,
+      style: FontStyle::Normal,
+      stretch: FontStretch::Normal,
+    };
+
+    let cached_face = face_cache::get_ttf_face(&font).expect("parse test font");
+    let face = cached_face.face();
+    let glyph_id = face
+      .glyph_index('A')
+      .expect("expected glyph for A")
+      .0;
+
+    let hash_a = underline_variations_hash(&[rustybuzz::Variation {
+      tag: ttf_parser::Tag::from_bytes(b"wght"),
+      value: 400.0,
+    }]);
+    let hash_b = underline_variations_hash(&[rustybuzz::Variation {
+      tag: ttf_parser::Tag::from_bytes(b"wght"),
+      value: 700.0,
+    }]);
+    assert_ne!(hash_a, hash_b, "variation hash should depend on value");
+
+    UNDERLINE_GLYPH_BBOX_CACHE.with(|cache| cache.borrow_mut().clear());
+    let _ = cached_glyph_bounding_box(face, &font, hash_a, glyph_id);
+    let _ = cached_glyph_bounding_box(face, &font, hash_b, glyph_id);
+    let cache_len = UNDERLINE_GLYPH_BBOX_CACHE.with(|cache| cache.borrow().len());
+    assert_eq!(
+      cache_len, 2,
+      "glyph bbox cache should key entries by variation hash"
     );
   }
 

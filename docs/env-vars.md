@@ -159,6 +159,7 @@ These are emitted by the paint pipeline:
 - `FASTR_TEXT_SHAPING_CACHE_CAPACITY=<N>` – shaping cache entry cap (default 2048; 0/empty/unset uses the default).
 - `FASTR_TAFFY_CACHE_LIMIT=<N>` – Taffy flex/grid template cache capacity (default 512; auto-scaled for large box trees). Use `FASTR_TAFFY_FLEX_CACHE_LIMIT` / `FASTR_TAFFY_GRID_CACHE_LIMIT` to override adapters independently.
 - `FASTR_TRACE_OUT=/path/to/trace.json` – emit Chrome trace events for parse/style/layout/paint.
+- `FASTR_PAINT_BUILD_BREAKDOWN=0|1` – collect low-overhead display-list build sub-timers (stacking tree, clip-path resolution, underline decoration, image decode, etc). Requires render diagnostics and populates `RenderStats.paint.build_*_{ms,calls}` fields.
 - `FASTR_DISABLE_LAYOUT_CACHE=1` / `FASTR_DISABLE_FLEX_CACHE=1` – disable layout/flex caches.
 - `FASTR_IMAGE_PROFILE_MS=<ms>` / `FASTR_STACK_PROFILE_MS=<ms>` / `FASTR_TEXT_PROFILE_MS=<ms>` / `FASTR_CMD_PROFILE_MS=<ms>` – emit timing when operations exceed the threshold.
 - `FASTR_IMAGE_PROBE_MAX_BYTES=<bytes>` – cap bytes fetched when probing image dimensions/metadata (default 65536; the probe retries with a larger prefix before falling back to a full fetch).

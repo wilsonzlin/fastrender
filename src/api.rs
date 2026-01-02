@@ -1970,6 +1970,38 @@ pub struct PaintDiagnostics {
   pub blur_pixels: Option<u64>,
   pub blur_bytes: Option<u64>,
   pub blur_cancellations: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_stacking_tree_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_stacking_tree_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_fragment_paint_bounds_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_fragment_paint_bounds_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_text_shape_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_text_shape_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_text_decoration_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_text_decoration_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_image_decode_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_image_decode_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_clip_path_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_clip_path_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_border_radii_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_border_radii_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_svg_filter_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_svg_filter_calls: Option<u64>,
 }
 
 /// Resource loading counters.
@@ -4652,6 +4684,40 @@ impl FastRender {
           rec.stats.paint.blur_pixels = Some(diag.blur_pixels);
           rec.stats.paint.blur_bytes = Some(diag.blur_bytes);
           rec.stats.paint.blur_cancellations = Some(diag.blur_cancellations);
+          if diag.build_stacking_tree_calls > 0 {
+            rec.stats.paint.build_stacking_tree_ms = Some(diag.build_stacking_tree_ms);
+            rec.stats.paint.build_stacking_tree_calls = Some(diag.build_stacking_tree_calls);
+          }
+          if diag.build_fragment_paint_bounds_calls > 0 {
+            rec.stats.paint.build_fragment_paint_bounds_ms =
+              Some(diag.build_fragment_paint_bounds_ms);
+            rec.stats.paint.build_fragment_paint_bounds_calls =
+              Some(diag.build_fragment_paint_bounds_calls);
+          }
+          if diag.build_text_shape_calls > 0 {
+            rec.stats.paint.build_text_shape_ms = Some(diag.build_text_shape_ms);
+            rec.stats.paint.build_text_shape_calls = Some(diag.build_text_shape_calls);
+          }
+          if diag.build_text_decoration_calls > 0 {
+            rec.stats.paint.build_text_decoration_ms = Some(diag.build_text_decoration_ms);
+            rec.stats.paint.build_text_decoration_calls = Some(diag.build_text_decoration_calls);
+          }
+          if diag.build_image_decode_calls > 0 {
+            rec.stats.paint.build_image_decode_ms = Some(diag.build_image_decode_ms);
+            rec.stats.paint.build_image_decode_calls = Some(diag.build_image_decode_calls);
+          }
+          if diag.build_clip_path_calls > 0 {
+            rec.stats.paint.build_clip_path_ms = Some(diag.build_clip_path_ms);
+            rec.stats.paint.build_clip_path_calls = Some(diag.build_clip_path_calls);
+          }
+          if diag.build_border_radii_calls > 0 {
+            rec.stats.paint.build_border_radii_ms = Some(diag.build_border_radii_ms);
+            rec.stats.paint.build_border_radii_calls = Some(diag.build_border_radii_calls);
+          }
+          if diag.build_svg_filter_calls > 0 {
+            rec.stats.paint.build_svg_filter_ms = Some(diag.build_svg_filter_ms);
+            rec.stats.paint.build_svg_filter_calls = Some(diag.build_svg_filter_calls);
+          }
         }
       }
 

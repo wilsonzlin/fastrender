@@ -370,6 +370,10 @@ impl DebugConfig {
       "FASTR_PAINT_STATS",
       truthy(raw.get("FASTR_PAINT_STATS"), false),
     );
+    config.insert_bool(
+      "FASTR_PAINT_BUILD_BREAKDOWN",
+      truthy(raw.get("FASTR_PAINT_BUILD_BREAKDOWN"), false),
+    );
     config.insert_bool("FASTR_FAST_BLUR", truthy(raw.get("FASTR_FAST_BLUR"), false));
     config.insert_bool(
       "FASTR_LOG_ABS_CLAMP",
