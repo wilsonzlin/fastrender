@@ -3427,6 +3427,64 @@ impl ImageCache {
       .or_else(|| sniffed_format.and_then(|format| Self::dimensions_for_format(bytes, format)))
   }
 
+  /// Returns a prefix of `bytes` that excludes any trailing data that does not form a valid top
+  /// level ISO-BMFF box.
+  ///
+  /// Some AVIF payloads (including pageset content) include non-box trailer bytes that trip
+  /// debug-only assertions inside `avif_parse`. Trimming to the last complete box keeps intrinsic
+  /// probing robust without impacting real decoders (which generally ignore such trailers).
+  fn trim_isobmff_trailing_bytes(bytes: &[u8]) -> &[u8] {
+    let len = bytes.len();
+    let mut offset = 0usize;
+
+    while offset + 8 <= len {
+      let size = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap());
+
+      let box_size = match size {
+        // Box extends to end of file.
+        0 => len - offset,
+        // Extended size stored in the next 8 bytes.
+        1 => {
+          if offset + 16 > len {
+            break;
+          }
+          let ext = u64::from_be_bytes(bytes[offset + 8..offset + 16].try_into().unwrap());
+          if ext < 16 {
+            break;
+          }
+          let Ok(ext) = usize::try_from(ext) else {
+            break;
+          };
+          ext
+        }
+        // Regular 32-bit size.
+        n => n as usize,
+      };
+
+      // Invalid box size.
+      if box_size < 8 {
+        break;
+      }
+      let Some(next) = offset.checked_add(box_size) else {
+        break;
+      };
+      if next > len {
+        break;
+      }
+
+      offset = next;
+      if offset == len {
+        return bytes;
+      }
+    }
+
+    if offset > 0 {
+      &bytes[..offset]
+    } else {
+      bytes
+    }
+  }
+
   fn dimensions_for_format(bytes: &[u8], format: ImageFormat) -> Option<(u32, u32)> {
     match format {
       ImageFormat::Png => image::codecs::png::PngDecoder::new(Cursor::new(bytes))
@@ -3442,10 +3500,18 @@ impl ImageCache {
         .ok()
         .map(|d| d.dimensions()),
       ImageFormat::Avif => {
-        let mut cursor = Cursor::new(bytes);
-        let data = AvifData::from_reader(&mut cursor).ok()?;
-        let meta = data.primary_item_metadata().ok()?;
-        Some((meta.max_frame_width.get(), meta.max_frame_height.get()))
+        // `avif_parse` includes debug assertions that can panic when the payload includes trailing
+        // bytes (which is tolerated by other decoders and observed on pageset content). Guard
+        // against that so image probing doesn't crash the renderer in debug builds.
+        let trimmed = Self::trim_isobmff_trailing_bytes(bytes);
+        std::panic::catch_unwind(|| {
+          let mut cursor = Cursor::new(trimmed);
+          let data = AvifData::from_reader(&mut cursor).ok()?;
+          let meta = data.primary_item_metadata().ok()?;
+          Some((meta.max_frame_width.get(), meta.max_frame_height.get()))
+        })
+        .ok()
+        .flatten()
       }
       _ => None,
     }
