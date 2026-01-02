@@ -31,7 +31,8 @@ pip install -r tests/fixtures/fonts/requirements.txt
   - `NotoSans-subset.ttf` / `NotoSerif-subset.ttf`: Basic + Extended Latin plus IPA/modifier-letter support
     (U+0250–02FF, U+1D00–1D7F), Latin Extended Additional (U+1E00–1EFF), Cyrillic Supplement (U+0500–052F),
     combining marks, Greek, Cyrillic, and punctuation (U+2000–206F) for bundled serif/sans fallbacks.
-  - `NotoSansMono-subset.ttf`: ASCII, punctuation, arrows, and box-drawing glyphs for monospace fallback.
+  - `NotoSansMono-subset.ttf`: ASCII, punctuation, number forms (U+2100–214F), arrows, and box-drawing glyphs for
+    monospace fallback.
   - `NotoSansArabic-subset.ttf`: Arabic + Supplement/Extended ranges, presentation forms, ZWNJ/ZWJ, and combining marks
     (U+0300–036F) for mixed clusters.
   - `NotoSansHebrew-subset.ttf`: Hebrew (U+0590–05FF) plus presentation forms (U+FB1D–FB4F) and common punctuation for
@@ -85,8 +86,8 @@ pip install -r tests/fixtures/fonts/requirements.txt
   - `NotoSansMeeteiMayek-subset.ttf`: Meetei Mayek (U+ABC0–ABFF) for Wikipedia language list samples (ꯃꯤꯇꯩ ꯂꯣꯟ).
   - `NotoSansGothic-subset.ttf`: Gothic (U+10330–1034F) for Wikipedia language list samples (𐌲𐌿𐍄𐌹𐍃𐌺).
   - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: CJK Unified Ideographs (U+3400–4DBF,
-    U+4E00–9FFF), CJK punctuation/fullwidth forms, and common combining marks (U+0300–036F); JP adds kana (U+3040–31FF)
-    and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
+    U+4E00–9FFF), CJK punctuation/fullwidth forms, Small Form Variants punctuation (U+FE50–FE6F), and common combining
+    marks (U+0300–036F); JP adds kana (U+3040–31FF) and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
   - `NotoSansSymbols-subset.ttf` / `NotoSansSymbols2-subset.ttf`: UI arrows, checkmarks, stars, alerts, and related
     symbol glyphs used by fallback chains.
   - `FastRenderEmoji.ttf`: COLR/CPAL emoji fixture that covers 😀 (U+1F600), ❤ (U+2764), 👍 (U+1F44D), and 🇺🇸

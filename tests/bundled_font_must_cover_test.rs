@@ -8,6 +8,18 @@ fn bundled_font_coverage_includes_pageset_must_cover_codepoints() {
     ("Myanmar sample U+1019", char::from_u32(0x1019).expect("Myanmar scalar")),
     ("Telugu sample U+0C24", char::from_u32(0x0C24).expect("Telugu scalar")),
     (
+      "Celsius sign U+2103",
+      char::from_u32(0x2103).expect("Celsius scalar"),
+    ),
+    (
+      "Box drawing sample U+250A",
+      char::from_u32(0x250A).expect("box drawing scalar"),
+    ),
+    (
+      "Small form variant sample U+FE5D",
+      char::from_u32(0xFE5D).expect("small form variant scalar"),
+    ),
+    (
       "Gujarati sample U+0A97",
       char::from_u32(0x0A97).expect("Gujarati scalar"),
     ),

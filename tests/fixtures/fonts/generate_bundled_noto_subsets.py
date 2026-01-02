@@ -95,6 +95,8 @@ CJK_SHARED_UNICODES = [
     "U+3400-4DBF",
     "U+4E00-9FFF",
     "U+F900-FAFF",
+    # Small Form Variants punctuation (seen on sina.com.cn pageset runs).
+    "U+FE50-FE6F",
     "U+FF00-FFEF",
 ]
 
@@ -172,7 +174,11 @@ FONT_DEFS = [
         "unicodes": [
             "U+0000-00FF",
             "U+2000-206F",
+            # Number Forms (℃, etc.) observed on sina.com.cn.
+            "U+2100-214F",
             "U+2190-21FF",
+            # Box Drawing (e.g. U+250A) observed on sina.com.cn.
+            "U+2500-257F",
             "U+25A0-25FF",
         ],
     },
