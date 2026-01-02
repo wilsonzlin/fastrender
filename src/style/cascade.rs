@@ -2541,16 +2541,18 @@ struct CascadeScratch {
 }
 
 impl CascadeScratch {
-  fn new(rule_count: usize) -> Self {
+  fn new(rule_count: usize, candidate_count: usize, part_count: usize) -> Self {
     Self {
       candidates: Vec::new(),
       slotted_candidates: Vec::new(),
       match_index: MatchIndex::new(rule_count),
-      candidate_seen: CandidateSet::new(rule_count),
+      // The candidate `CandidateSet` is indexed by selector indices (not rule indices), so size it
+      // based on the largest selector list we might dedupe against across all scopes.
+      candidate_seen: CandidateSet::new(candidate_count),
       candidate_stats: CandidateStats::default(),
       candidate_merge: CandidateMergeScratch::default(),
       part_candidates: Vec::new(),
-      part_seen: CandidateSet::new(rule_count),
+      part_seen: CandidateSet::new(part_count),
       scope_cache: ScopeResolutionCache::default(),
       presentational_hint_layer_orders: FxHashMap::default(),
       unlayered_layer_orders: FxHashMap::default(),
@@ -2586,6 +2588,20 @@ impl CascadeScratch {
       .insert(tree_scope_prefix, layer_order.clone());
     layer_order
   }
+}
+
+#[inline]
+fn rule_index_candidate_count(index: &RuleIndex<'_>) -> usize {
+  index
+    .selectors
+    .len()
+    .max(index.pseudo_selectors.len())
+    .max(index.slotted_selectors.len())
+}
+
+#[inline]
+fn rule_index_part_count(index: &RuleIndex<'_>) -> usize {
+  index.part_pseudos.len()
 }
 
 struct CandidateSet {
@@ -6637,13 +6653,21 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         .rules
         .len()
         .max(rule_scopes.document.rules.len());
+      let mut max_candidates = rule_index_candidate_count(&rule_scopes.ua)
+        .max(rule_index_candidate_count(&rule_scopes.document));
+      let mut max_parts =
+        rule_index_part_count(&rule_scopes.ua).max(rule_index_part_count(&rule_scopes.document));
       for index in rule_scopes.shadows.values() {
         max_rules = max_rules.max(index.rules.len());
+        max_candidates = max_candidates.max(rule_index_candidate_count(index));
+        max_parts = max_parts.max(rule_index_part_count(index));
       }
       for index in rule_scopes.host_rules.values() {
         max_rules = max_rules.max(index.rules.len());
+        max_candidates = max_candidates.max(rule_index_candidate_count(index));
+        max_parts = max_parts.max(rule_index_part_count(index));
       }
-      let mut scratch = CascadeScratch::new(max_rules.max(1));
+      let mut scratch = CascadeScratch::new(max_rules.max(1), max_candidates.max(1), max_parts);
       let mut inline_style_decls = vec![None; dom_node_count + 1];
       let mut node_counter: usize = 1;
       let mut ancestor_ids: Vec<usize> = Vec::new();
@@ -7089,13 +7113,21 @@ impl<'a> PreparedCascade<'a> {
       .rules
       .len()
       .max(rule_scopes.document.rules.len());
+    let mut max_candidates =
+      rule_index_candidate_count(&rule_scopes.ua).max(rule_index_candidate_count(&rule_scopes.document));
+    let mut max_parts =
+      rule_index_part_count(&rule_scopes.ua).max(rule_index_part_count(&rule_scopes.document));
     for index in rule_scopes.shadows.values() {
       max_rules = max_rules.max(index.rules.len());
+      max_candidates = max_candidates.max(rule_index_candidate_count(index));
+      max_parts = max_parts.max(rule_index_part_count(index));
     }
     for index in rule_scopes.host_rules.values() {
       max_rules = max_rules.max(index.rules.len());
+      max_candidates = max_candidates.max(rule_index_candidate_count(index));
+      max_parts = max_parts.max(rule_index_part_count(index));
     }
-    let scratch = CascadeScratch::new(max_rules.max(1));
+    let scratch = CascadeScratch::new(max_rules.max(1), max_candidates.max(1), max_parts);
     let inline_style_decls = vec![None; dom_node_count + 1];
 
     Ok(Self {
@@ -18722,7 +18754,11 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let cache_epoch = next_selector_cache_epoch();
     caches.set_epoch(cache_epoch);
     let sibling_cache = SiblingListCache::new(cache_epoch);
-    let mut scratch = CascadeScratch::new(rule_index.rules.len());
+    let mut scratch = CascadeScratch::new(
+      rule_index.rules.len(),
+      rule_index_candidate_count(&rule_index).max(1),
+      rule_index_part_count(&rule_index),
+    );
     let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
     let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
