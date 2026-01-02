@@ -63,6 +63,24 @@ use std::time::Instant;
 
 const DEFAULT_ASSET_CACHE_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
+const WORKER_RAYON_THREADS_ENV: &str = "RAYON_NUM_THREADS";
+
+fn env_var_is_nonempty(key: &str) -> bool {
+  std::env::var_os(key).is_some_and(|value| !value.is_empty())
+}
+
+fn default_rayon_threads_per_worker(total_cpus: usize, jobs: usize) -> usize {
+  let total_cpus = total_cpus.max(1);
+  let jobs = jobs.max(1);
+  (total_cpus / jobs).max(1)
+}
+
+fn maybe_set_worker_rayon_threads(cmd: &mut Command, threads: usize) {
+  if env_var_is_nonempty(WORKER_RAYON_THREADS_ENV) {
+    return;
+  }
+  cmd.env(WORKER_RAYON_THREADS_ENV, threads.to_string());
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum DumpMode {
@@ -1058,6 +1076,7 @@ fn spawn_worker(
   args: &Args,
   entry: &CachedEntry,
   soft_timeout_ms: Option<u64>,
+  rayon_threads_per_worker: usize,
 ) -> io::Result<Child> {
   let mut cmd = Command::new(exe);
   cmd
@@ -1116,6 +1135,7 @@ fn spawn_worker(
     cmd.arg("--timings");
   }
 
+  maybe_set_worker_rayon_threads(&mut cmd, rayon_threads_per_worker);
   configure_worker_stdio(&mut cmd, &stderr_path_for(&entry.stem))?;
 
   cmd.spawn()
@@ -1197,6 +1217,8 @@ fn run_workers(
   soft_timeout_ms: Option<u64>,
 ) -> io::Result<Vec<PageResult>> {
   let exe = std::env::current_exe()?;
+  let total_cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+  let rayon_threads_per_worker = default_rayon_threads_per_worker(total_cpus, args.jobs);
   let mut queue: VecDeque<CachedEntry> = VecDeque::from(entries);
   let mut running: Vec<RunningChild> = Vec::new();
   let mut results: Vec<PageResult> = Vec::new();
@@ -1208,7 +1230,13 @@ fn run_workers(
       };
       let _ = fs::remove_file(result_path_for(&entry.stem));
       let _ = fs::remove_file(stderr_path_for(&entry.stem));
-      let child = spawn_worker(&exe, args, &entry, soft_timeout_ms)?;
+      let child = spawn_worker(
+        &exe,
+        args,
+        &entry,
+        soft_timeout_ms,
+        rayon_threads_per_worker,
+      )?;
       running.push(RunningChild {
         entry,
         started: Instant::now(),
