@@ -4718,17 +4718,21 @@ impl<'a> RuleIndex<'a> {
           summary,
           quirks_mode,
         ) {
-          stats.pruned += 1;
+          if TRACK_STATS {
+            stats.pruned += 1;
+          }
           continue;
         }
         out.push(selector_idx);
-        match if cursor_idx == 0 { a.bucket } else { b.bucket } {
-          CandidateBucket::Id => stats.by_id += 1,
-          CandidateBucket::Class => stats.by_class += 1,
-          CandidateBucket::AttrValue => stats.by_attr += 1,
-          CandidateBucket::Tag => stats.by_tag += 1,
-          CandidateBucket::Attr => stats.by_attr += 1,
-          CandidateBucket::Universal => stats.universal += 1,
+        if TRACK_STATS {
+          match if cursor_idx == 0 { a.bucket } else { b.bucket } {
+            CandidateBucket::Id => stats.by_id += 1,
+            CandidateBucket::Class => stats.by_class += 1,
+            CandidateBucket::AttrValue => stats.by_attr += 1,
+            CandidateBucket::Tag => stats.by_tag += 1,
+            CandidateBucket::Attr => stats.by_attr += 1,
+            CandidateBucket::Universal => stats.universal += 1,
+          }
         }
       }
       return;
@@ -4822,17 +4826,21 @@ impl<'a> RuleIndex<'a> {
           summary,
           quirks_mode,
         ) {
-          stats.pruned += 1;
+          if TRACK_STATS {
+            stats.pruned += 1;
+          }
           continue;
         }
         out.push(selector_idx);
-        match bucket {
-          CandidateBucket::Id => stats.by_id += 1,
-          CandidateBucket::Class => stats.by_class += 1,
-          CandidateBucket::AttrValue => stats.by_attr += 1,
-          CandidateBucket::Tag => stats.by_tag += 1,
-          CandidateBucket::Attr => stats.by_attr += 1,
-          CandidateBucket::Universal => stats.universal += 1,
+        if TRACK_STATS {
+          match bucket {
+            CandidateBucket::Id => stats.by_id += 1,
+            CandidateBucket::Class => stats.by_class += 1,
+            CandidateBucket::AttrValue => stats.by_attr += 1,
+            CandidateBucket::Tag => stats.by_tag += 1,
+            CandidateBucket::Attr => stats.by_attr += 1,
+            CandidateBucket::Universal => stats.universal += 1,
+          }
         }
       }
       return;
@@ -5093,17 +5101,21 @@ impl<'a> RuleIndex<'a> {
           summary,
           quirks_mode,
         ) {
-          stats.pruned += 1;
+          if TRACK_STATS {
+            stats.pruned += 1;
+          }
           continue;
         }
         out.push(selector_idx);
-        match if cursor_idx == 0 { a.bucket } else { b.bucket } {
-          CandidateBucket::Id => stats.by_id += 1,
-          CandidateBucket::Class => stats.by_class += 1,
-          CandidateBucket::AttrValue => stats.by_attr += 1,
-          CandidateBucket::Tag => stats.by_tag += 1,
-          CandidateBucket::Attr => stats.by_attr += 1,
-          CandidateBucket::Universal => stats.universal += 1,
+        if TRACK_STATS {
+          match if cursor_idx == 0 { a.bucket } else { b.bucket } {
+            CandidateBucket::Id => stats.by_id += 1,
+            CandidateBucket::Class => stats.by_class += 1,
+            CandidateBucket::AttrValue => stats.by_attr += 1,
+            CandidateBucket::Tag => stats.by_tag += 1,
+            CandidateBucket::Attr => stats.by_attr += 1,
+            CandidateBucket::Universal => stats.universal += 1,
+          }
         }
       }
       return;
@@ -5191,17 +5203,21 @@ impl<'a> RuleIndex<'a> {
           summary,
           quirks_mode,
         ) {
-          stats.pruned += 1;
+          if TRACK_STATS {
+            stats.pruned += 1;
+          }
           continue;
         }
         out.push(selector_idx);
-        match bucket {
-          CandidateBucket::Id => stats.by_id += 1,
-          CandidateBucket::Class => stats.by_class += 1,
-          CandidateBucket::AttrValue => stats.by_attr += 1,
-          CandidateBucket::Tag => stats.by_tag += 1,
-          CandidateBucket::Attr => stats.by_attr += 1,
-          CandidateBucket::Universal => stats.universal += 1,
+        if TRACK_STATS {
+          match bucket {
+            CandidateBucket::Id => stats.by_id += 1,
+            CandidateBucket::Class => stats.by_class += 1,
+            CandidateBucket::AttrValue => stats.by_attr += 1,
+            CandidateBucket::Tag => stats.by_tag += 1,
+            CandidateBucket::Attr => stats.by_attr += 1,
+            CandidateBucket::Universal => stats.universal += 1,
+          }
         }
       }
       return;
@@ -9358,6 +9374,172 @@ mod tests {
     assert!(!set.insert(3));
     set.reset();
     assert!(set.insert(3));
+  }
+
+  #[test]
+  fn candidate_stats_unprofiled_stay_zero_in_two_list_fast_path() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        .a { color: red; }
+        div { color: blue; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a".to_string())],
+      },
+      children: vec![],
+    };
+    let mut candidates = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates.as_slice(), &[0usize, 1usize]);
+    assert_eq!(stats.total(), 0);
+    assert_eq!(stats.pruned, 0);
+  }
+
+  #[test]
+  fn candidate_stats_unprofiled_stay_zero_in_small_k_fast_paths() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        .a { color: red; }
+        div { color: blue; }
+        [data-x] { color: green; }
+        ::slotted(.a) { color: red; }
+        ::slotted(div) { color: blue; }
+        ::slotted([data-x]) { color: green; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("class".to_string(), "a".to_string()),
+          ("data-x".to_string(), "1".to_string()),
+        ],
+      },
+      children: vec![],
+    };
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    {
+      let mut candidates = Vec::new();
+      let mut seen = CandidateSet::new(index.selectors.len());
+      let mut stats = CandidateStats::default();
+      let mut merge = CandidateMergeScratch::default();
+      index.selector_candidates(
+        &node,
+        node_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut candidates,
+        &mut seen,
+        &mut stats,
+        &mut merge,
+      );
+      assert_eq!(candidates.as_slice(), &[0usize, 1usize, 2usize]);
+      assert_eq!(stats.total(), 0);
+      assert_eq!(stats.pruned, 0);
+    }
+
+    {
+      let mut candidates = Vec::new();
+      let mut seen = CandidateSet::new(index.slotted_selectors.len());
+      let mut stats = CandidateStats::default();
+      let mut merge = CandidateMergeScratch::default();
+      index.slotted_candidates(
+        &node,
+        node_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut candidates,
+        &mut seen,
+        &mut stats,
+        &mut merge,
+      );
+      assert_eq!(candidates.as_slice(), &[0usize, 1usize, 2usize]);
+      assert_eq!(stats.total(), 0);
+      assert_eq!(stats.pruned, 0);
+    }
   }
 
   struct AncestorBloomEnabledGuard {
