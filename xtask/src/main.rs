@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use image::{Rgba, RgbaImage};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -121,9 +121,13 @@ struct PagesetArgs {
   #[arg(long, conflicts_with = "no_fetch")]
   refresh: bool,
 
-  /// Disable the disk-backed cache (defaults on; see NO_DISK_CACHE/DISK_CACHE)
-  #[arg(long = "no-disk-cache", default_value_t = true, action = ArgAction::SetFalse)]
+  /// Force-enable the disk-backed cache (overrides NO_DISK_CACHE/DISK_CACHE)
+  #[arg(long, conflicts_with = "no_disk_cache")]
   disk_cache: bool,
+
+  /// Disable the disk-backed cache (defaults on; see NO_DISK_CACHE/DISK_CACHE)
+  #[arg(long = "no-disk-cache", conflicts_with = "disk_cache")]
+  no_disk_cache: bool,
 
   /// Override the User-Agent header (propagated to fetch/prefetch/render steps)
   #[arg(long)]
@@ -155,10 +159,9 @@ struct PagesetArgs {
 
   /// Extra arguments forwarded to `pageset_progress run` (use `--` before these).
   ///
-  /// Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
-  /// prefetch toggles like `--prefetch-images`, those flags are intercepted here and forwarded to
-  /// `prefetch_assets` instead so users can override the wrapper defaults without breaking
-  /// `pageset_progress` arg parsing.
+  /// Note: when `prefetch_assets` supports prefetch toggles like `--prefetch-images`, those flags
+  /// are intercepted here and forwarded to `prefetch_assets` (when it runs) instead so users can
+  /// override the wrapper defaults without breaking `pageset_progress` arg parsing.
   #[arg(last = true)]
   extra: Vec<String>,
 }
@@ -592,25 +595,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .map(|(width, height)| format!("{width}x{height}"));
   let mut dpr_arg = args.dpr.map(|dpr| dpr.to_string());
 
-  let disk_cache_enabled = disk_cache_enabled(args.disk_cache);
-  let disk_cache_status = if disk_cache_enabled {
-    "enabled"
-  } else {
-    "disabled"
-  };
-  let apply_disk_cache_env = |cmd: &mut Command| {
-    if disk_cache_enabled {
-      cmd.env("DISK_CACHE", "1");
-      cmd.env_remove("NO_DISK_CACHE");
-    } else {
-      cmd.env("DISK_CACHE", "0");
-      cmd.env("NO_DISK_CACHE", "1");
-    }
-  };
-
   let prefetch_support = PrefetchAssetsSupport::detect();
   let (mut prefetch_asset_args, mut pageset_extra_args) =
-    if disk_cache_enabled && prefetch_support.any() {
+    if prefetch_support.any() {
       extract_prefetch_assets_args(&args.extra, prefetch_support)
     } else {
       (Vec::new(), args.extra.clone())
@@ -680,6 +667,38 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     }
   }
 
+  let mut disk_cache_override = if args.disk_cache {
+    Some(true)
+  } else if args.no_disk_cache {
+    Some(false)
+  } else {
+    None
+  };
+  if let Some(disk_cache) = pageset_overrides.disk_cache {
+    match disk_cache_override {
+      Some(existing) if existing != disk_cache => bail!(
+        "--disk-cache/--no-disk-cache cannot be passed both before and after `--` with different values"
+      ),
+      _ => disk_cache_override = Some(disk_cache),
+    }
+  }
+
+  let disk_cache_enabled = disk_cache_enabled(disk_cache_override);
+  let disk_cache_status = if disk_cache_enabled {
+    "enabled"
+  } else {
+    "disabled"
+  };
+  let apply_disk_cache_env = |cmd: &mut Command| {
+    if disk_cache_enabled {
+      cmd.env("DISK_CACHE", "1");
+      cmd.env_remove("NO_DISK_CACHE");
+    } else {
+      cmd.env("DISK_CACHE", "0");
+      cmd.env("NO_DISK_CACHE", "1");
+    }
+  };
+
   let mut disk_cache_extra_args = extract_disk_cache_args(&pageset_extra_args);
   if disk_cache_enabled
     && std::env::var_os("FASTR_DISK_CACHE_ALLOW_NO_STORE").is_none()
@@ -714,7 +733,8 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     );
   } else {
     println!(
-      "Disk cache disabled (NO_DISK_CACHE/DISK_CACHE/--no-disk-cache); subresources will be refetched each run."
+      "Disk cache disabled (NO_DISK_CACHE/DISK_CACHE/--no-disk-cache); subresources will be refetched each run. \
+       Pass --disk-cache to force-enable."
     );
   }
 
@@ -1128,9 +1148,9 @@ fn extract_progress_from_ref(reference: &str) -> Result<(TempDir, PathBuf)> {
   Ok((tempdir, baseline_root))
 }
 
-fn disk_cache_enabled(cli_disk_cache_enabled: bool) -> bool {
-  if !cli_disk_cache_enabled {
-    return false;
+fn disk_cache_enabled(cli_override: Option<bool>) -> bool {
+  if let Some(enabled) = cli_override {
+    return enabled;
   }
 
   if std::env::var("NO_DISK_CACHE")

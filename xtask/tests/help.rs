@@ -40,8 +40,8 @@ fn pageset_help_mentions_disk_cache_flag() {
 
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert!(
-    stdout.contains("--no-disk-cache"),
-    "pageset help should mention the disk cache opt-out; got:\n{stdout}"
+    stdout.contains("--no-disk-cache") && stdout.contains("--disk-cache"),
+    "pageset help should mention disk cache enable/disable flags; got:\n{stdout}"
   );
 }
 

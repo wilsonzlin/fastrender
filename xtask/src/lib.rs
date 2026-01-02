@@ -73,6 +73,7 @@ pub struct PagesetExtraArgsOverrides {
   pub accept_language: Option<String>,
   pub viewport: Option<String>,
   pub dpr: Option<String>,
+  pub disk_cache: Option<bool>,
 }
 
 /// Extract pageset wrapper knobs that should apply to fetch/prefetch/render steps.
@@ -92,6 +93,14 @@ pub fn extract_pageset_extra_arg_overrides(
 
   while let Some(arg) = iter.next() {
     match arg.as_str() {
+      "--disk-cache" => {
+        overrides.disk_cache = Some(true);
+        continue;
+      }
+      "--no-disk-cache" => {
+        overrides.disk_cache = Some(false);
+        continue;
+      }
       "--pages" => {
         if let Some(next) = iter.peek() {
           if !next.starts_with('-') {
