@@ -1847,50 +1847,46 @@ fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) 
     return;
   }
 
-  let mut boundaries: Vec<usize> = UnicodeSegmentation::grapheme_indices(text, true)
-    .map(|(idx, _)| idx)
-    .collect();
-  if boundaries.first().copied() != Some(0) {
-    boundaries.insert(0, 0);
-  }
-  if boundaries.last().copied() != Some(text.len()) {
-    boundaries.push(text.len());
-  }
+  let sequences = needs_emoji_sequence_spans
+    .then(|| emoji::find_emoji_sequence_spans(text))
+    .unwrap_or_default();
 
-  if needs_emoji_sequence_spans {
-    let sequences = emoji::find_emoji_sequence_spans(text);
-    if !sequences.is_empty() {
-      let mut filtered = Vec::with_capacity(boundaries.len());
-      let mut seq_iter = sequences.iter().peekable();
-      for boundary in boundaries {
-        while let Some(seq) = seq_iter.peek() {
-          if seq.end <= boundary {
-            seq_iter.next();
-          } else {
-            break;
-          }
-        }
-        if let Some(seq) = seq_iter.peek() {
-          if seq.start < boundary && boundary < seq.end {
-            continue;
-          }
-        }
-        if filtered.last().copied() != Some(boundary) {
-          filtered.push(boundary);
-        }
+  if sequences.is_empty() {
+    let mut iter = UnicodeSegmentation::grapheme_indices(text, true).peekable();
+    while let Some((start, _)) = iter.next() {
+      let end = iter.peek().map(|(idx, _)| *idx).unwrap_or(text.len());
+      if start < end {
+        clusters.push((start, end));
       }
-      boundaries = filtered;
     }
+    return;
   }
 
-  let estimated = boundaries.len().saturating_sub(1);
-  clusters.reserve(estimated.saturating_sub(clusters.len()));
-  for window in boundaries.windows(2) {
-    let start = window[0];
-    let end = window[1];
-    if start < end {
-      clusters.push((start, end));
+  let mut seq_iter = sequences.iter().peekable();
+  let mut last_boundary = Some(0usize);
+  for boundary in UnicodeSegmentation::grapheme_indices(text, true)
+    .map(|(idx, _)| idx)
+    .chain(std::iter::once(text.len()))
+  {
+    while let Some(seq) = seq_iter.peek() {
+      if seq.end <= boundary {
+        seq_iter.next();
+      } else {
+        break;
+      }
     }
+    if let Some(seq) = seq_iter.peek() {
+      if seq.start < boundary && boundary < seq.end {
+        continue;
+      }
+    }
+
+    if let Some(prev) = last_boundary {
+      if prev < boundary {
+        clusters.push((prev, boundary));
+      }
+    }
+    last_boundary = Some(boundary);
   }
 }
 
