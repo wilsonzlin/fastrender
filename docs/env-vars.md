@@ -159,7 +159,7 @@ These are emitted by the paint pipeline:
 - `FASTR_INTRINSIC_STATS=1` – intrinsic sizing cache stats.
 - `FASTR_LAYOUT_CACHE_STATS=1` – layout cache stats (intrinsic cache hits/misses and pass counts).
 - `FASTR_TABLE_STATS=1` – table auto-layout counters (cell intrinsic measurements + per-cell layout calls).
-- `FASTR_LAYOUT_CACHE_MAX_ENTRIES=<N>` – per-thread layout cache entry cap (default 8192; set to 0 to disable).
+- `FASTR_LAYOUT_CACHE_MAX_ENTRIES=<N>` – per-thread layout cache entry cap (default auto-scaled from box tree size, min 8192 / max 32768; set to 0 to disable).
 - `FASTR_TEXT_SHAPING_CACHE_CAPACITY=<N>` – shaping cache entry cap (default 2048; 0/empty/unset uses the default).
 - `FASTR_TAFFY_CACHE_LIMIT=<N>` – Taffy flex/grid template cache capacity (default 512; auto-scaled for large box trees). Use `FASTR_TAFFY_FLEX_CACHE_LIMIT` / `FASTR_TAFFY_GRID_CACHE_LIMIT` to override adapters independently.
 - `FASTR_TRACE_OUT=/path/to/trace.json` – emit Chrome trace events for parse/style/layout/paint.

@@ -138,6 +138,13 @@ enum MeasureAvailKey {
   Indefinite,
   MinContent,
   MaxContent,
+  /// Marker used when the corresponding `known_dimensions` axis is definite.
+  ///
+  /// When Taffy provides a known size, `constraints_from_taffy` ignores the
+  /// `AvailableSpace` value for that axis. Including the raw `AvailableSpace`
+  /// in the cache key would therefore create redundant entries (and redundant
+  /// `fc.layout` calls) for identical measurements.
+  Ignored,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -297,14 +304,25 @@ impl MeasureKey {
       }
     }
 
+    let known_width = known_dimensions
+      .width
+      .map(|w| Self::quantize_to_bits(Self::clamp_width_for_constraints(w, viewport)));
+    let known_height = known_dimensions.height.map(Self::quantize_to_bits);
+
     Self {
       node_ptr: node_ptr as usize,
-      known_width: known_dimensions
-        .width
-        .map(|w| Self::quantize_to_bits(Self::clamp_width_for_constraints(w, viewport))),
-      known_height: known_dimensions.height.map(Self::quantize_to_bits),
-      available_width: avail_width_key(available_space.width, viewport),
-      available_height: avail_key(available_space.height),
+      known_width,
+      known_height,
+      available_width: if known_width.is_some() {
+        MeasureAvailKey::Ignored
+      } else {
+        avail_width_key(available_space.width, viewport)
+      },
+      available_height: if known_height.is_some() {
+        MeasureAvailKey::Ignored
+      } else {
+        avail_key(available_space.height)
+      },
     }
   }
 }
@@ -4433,9 +4451,13 @@ mod tests {
       "near-identical definite sizes should quantize to the same key"
     );
 
+    let intrinsic_known = taffy::geometry::Size {
+      width: None,
+      height: known_a.height,
+    };
     let min_key = MeasureKey::new(
       ptr,
-      known_a,
+      intrinsic_known,
       taffy::geometry::Size {
         width: AvailableSpace::MinContent,
         height: avail_a.height,
@@ -4444,14 +4466,17 @@ mod tests {
     );
     let max_key = MeasureKey::new(
       ptr,
-      known_a,
+      intrinsic_known,
       taffy::geometry::Size {
         width: AvailableSpace::MaxContent,
         height: avail_a.height,
       },
       viewport,
     );
-    assert_ne!(min_key.available_width, max_key.available_width);
+    assert_ne!(
+      min_key.available_width, max_key.available_width,
+      "min/max-content probes should remain distinct when width is unknown"
+    );
   }
 
   #[test]

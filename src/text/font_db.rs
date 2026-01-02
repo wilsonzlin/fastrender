@@ -1866,12 +1866,31 @@ impl FontMetrics {
   ///
   /// Returns an error if the font data cannot be parsed.
   pub fn from_font(font: &LoadedFont) -> Result<Self> {
-    Self::from_data(&font.data, font.index)
+    face_cache::with_face(font, |face| extract_metrics(face))
+      .transpose()?
+      .ok_or_else(|| {
+        FontError::LoadFailed {
+          family: font.family.clone(),
+          reason: "Failed to parse font".to_string(),
+        }
+        .into()
+      })
   }
 
   /// Extract metrics from a loaded font with specific variation coordinates.
   pub fn from_font_with_variations(font: &LoadedFont, variations: &[(Tag, f32)]) -> Result<Self> {
-    Self::from_data_with_variations(&font.data, font.index, variations)
+    if variations.is_empty() {
+      return Self::from_font(font);
+    }
+    face_cache::with_face(font, |face| Self::from_face_with_variations(face, variations))
+      .transpose()?
+      .ok_or_else(|| {
+        FontError::LoadFailed {
+          family: font.family.clone(),
+          reason: "Failed to parse font".to_string(),
+        }
+        .into()
+      })
   }
 
   /// Extract metrics from font data

@@ -5,6 +5,7 @@ use crate::style::media::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -157,16 +158,31 @@ fn matches_ignore_case(value: &str, candidates: &[&str]) -> bool {
 
 static DEFAULT_TOGGLES: OnceLock<Arc<RuntimeToggles>> = OnceLock::new();
 static ACTIVE_TOGGLES: OnceLock<RwLock<Arc<RuntimeToggles>>> = OnceLock::new();
+static ACTIVE_TOGGLES_EPOCH: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone)]
+enum ThreadToggleState {
+  Override(Arc<RuntimeToggles>),
+  Cached { epoch: usize, toggles: Arc<RuntimeToggles> },
+}
 thread_local! {
-  static THREAD_TOGGLES: RefCell<Option<Arc<RuntimeToggles>>> = RefCell::new(None);
+  static THREAD_TOGGLES: RefCell<Option<ThreadToggleState>> = RefCell::new(None);
 }
 
 /// Returns the currently active runtime toggles.
 ///
 /// Defaults to `RuntimeToggles::from_env()` if no overrides are installed.
 pub fn runtime_toggles() -> Arc<RuntimeToggles> {
-  if let Some(toggles) = THREAD_TOGGLES.with(|cell| cell.borrow().clone()) {
-    return toggles;
+  if let Some(state) = THREAD_TOGGLES.with(|cell| cell.borrow().clone()) {
+    match state {
+      ThreadToggleState::Override(toggles) => return toggles,
+      ThreadToggleState::Cached { epoch, toggles } => {
+        let global_epoch = ACTIVE_TOGGLES_EPOCH.load(Ordering::Relaxed);
+        if epoch == global_epoch {
+          return toggles;
+        }
+      }
+    }
   }
   let lock = ACTIVE_TOGGLES.get_or_init(|| {
     let default = default_toggles();
@@ -175,10 +191,24 @@ pub fn runtime_toggles() -> Arc<RuntimeToggles> {
   // Runtime toggles guard global configuration (and a lot of debug-only behavior). A panic that
   // happens to occur while toggles are being read/written should not permanently poison the
   // process, especially for long-running tools that catch panics and continue (pageset runners).
-  lock
-    .read()
-    .unwrap_or_else(|poisoned| poisoned.into_inner())
-    .clone()
+  //
+  // This accessor is on the hot path for layout profiling gates, so cache the current `Arc` in
+  // thread-local storage and refresh it when the global epoch changes.
+  loop {
+    let epoch = ACTIVE_TOGGLES_EPOCH.load(Ordering::Relaxed);
+    let toggles = lock
+      .read()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .clone();
+    let epoch_after = ACTIVE_TOGGLES_EPOCH.load(Ordering::Relaxed);
+    if epoch != epoch_after {
+      continue;
+    }
+    THREAD_TOGGLES.with(|cell| {
+      *cell.borrow_mut() = Some(ThreadToggleState::Cached { epoch, toggles: toggles.clone() });
+    });
+    return toggles;
+  }
 }
 
 fn default_toggles() -> Arc<RuntimeToggles> {
@@ -199,6 +229,7 @@ impl Drop for RuntimeTogglesGuard {
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
       *guard = self.previous.clone();
+      ACTIVE_TOGGLES_EPOCH.fetch_add(1, Ordering::Relaxed);
     }
   }
 }
@@ -211,6 +242,7 @@ pub fn set_runtime_toggles(toggles: Arc<RuntimeToggles>) -> RuntimeTogglesGuard 
     .unwrap_or_else(|poisoned| poisoned.into_inner());
   let previous = guard.clone();
   *guard = toggles;
+  ACTIVE_TOGGLES_EPOCH.fetch_add(1, Ordering::Relaxed);
   RuntimeTogglesGuard { previous }
 }
 
@@ -223,6 +255,7 @@ pub(crate) fn update_runtime_toggles(toggles: Arc<RuntimeToggles>) {
     .write()
     .unwrap_or_else(|poisoned| poisoned.into_inner());
   *guard = toggles;
+  ACTIVE_TOGGLES_EPOCH.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Convenience helper to run a closure with a temporary toggles override.
@@ -235,7 +268,7 @@ pub fn with_runtime_toggles<T>(toggles: Arc<RuntimeToggles>, f: impl FnOnce() ->
 
 /// Guard that restores the previous thread-local runtime toggles when dropped.
 pub struct ThreadRuntimeTogglesGuard {
-  previous: Option<Arc<RuntimeToggles>>,
+  previous: Option<ThreadToggleState>,
 }
 
 impl Drop for ThreadRuntimeTogglesGuard {
@@ -248,7 +281,12 @@ impl Drop for ThreadRuntimeTogglesGuard {
 
 /// Install the provided toggles as the thread-local set for the duration of the returned guard.
 pub fn set_thread_runtime_toggles(toggles: Arc<RuntimeToggles>) -> ThreadRuntimeTogglesGuard {
-  let previous = THREAD_TOGGLES.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), Some(toggles)));
+  let previous = THREAD_TOGGLES.with(|cell| {
+    std::mem::replace(
+      &mut *cell.borrow_mut(),
+      Some(ThreadToggleState::Override(toggles)),
+    )
+  });
   ThreadRuntimeTogglesGuard { previous }
 }
 
