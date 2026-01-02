@@ -2180,6 +2180,11 @@ impl<'a> SelectorDedupKey<'a> {
   }
 }
 
+// Most style rules only contain a single selector, and even multi-selector rules typically have
+// only a few comma-separated selectors. Avoid allocating a hash set per rule when a small linear
+// scan is cheaper.
+const SELECTOR_DEDUP_LINEAR_LIMIT: usize = 8;
+
 impl Hash for SelectorDedupKey<'_> {
   fn hash<H: Hasher>(&self, state: &mut H) {
     self.fingerprint.hash(state);
@@ -4066,12 +4071,36 @@ impl<'a> RuleIndex<'a> {
       index.rules.push(rule);
       index.rule_sets_content.push(sets_content);
       let stored_rule = &index.rules[rule_idx];
-      let mut seen_selectors: FxHashSet<SelectorDedupKey<'a>> = FxHashSet::default();
+      let selectors = stored_rule.rule.selectors.slice();
+      // Skip duplicate selectors within the same rule to avoid redundant matching work.
+      //
+      // Most rules only contain a single selector; avoid allocating a hash set + computing
+      // fingerprints in that common case.
+      let needs_dedup = selectors.len() > 1;
+      let use_linear_dedup = selectors.len() <= SELECTOR_DEDUP_LINEAR_LIMIT;
+      let mut seen_linear: Vec<SelectorDedupKey<'a>> =
+        Vec::with_capacity(selectors.len().min(SELECTOR_DEDUP_LINEAR_LIMIT));
+      let mut seen_set: Option<FxHashSet<SelectorDedupKey<'a>>> = needs_dedup
+        .then(|| (!use_linear_dedup).then(FxHashSet::default))
+        .flatten();
+      if let Some(set) = seen_set.as_mut() {
+        set.reserve(selectors.len());
+      }
 
-      for selector in stored_rule.rule.selectors.slice().iter() {
-        // Skip duplicate selectors within the same rule to avoid redundant matching work.
-        if !seen_selectors.insert(SelectorDedupKey::new(selector)) {
-          continue;
+      for selector in selectors.iter() {
+        if needs_dedup {
+          let key = SelectorDedupKey::new(selector);
+          let is_duplicate = if let Some(set) = seen_set.as_mut() {
+            !set.insert(key)
+          } else if seen_linear.iter().any(|existing| existing == &key) {
+            true
+          } else {
+            seen_linear.push(key);
+            false
+          };
+          if is_duplicate {
+            continue;
+          }
         }
 
         if let Some(pe) = selector.pseudo_element() {
