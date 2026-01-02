@@ -18600,6 +18600,28 @@ mod tests {
   }
 
   #[test]
+  fn background_shorthand_empty_url_is_none() {
+    let mut style = ComputedStyle::default();
+    let value = parse_property_value("background", "red url() no-repeat").expect("background");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "background".into(),
+        value,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(style.background_color, Rgba::RED);
+    assert!(style.background_layers[0].image.is_none());
+    assert_eq!(style.background_layers[0].repeat, BackgroundRepeat::no_repeat());
+  }
+
+  #[test]
   fn background_shorthand_resets_unspecified_fields() {
     let mut style = ComputedStyle::default();
     style.set_background_layers(vec![BackgroundLayer {
@@ -21553,7 +21575,9 @@ fn parse_background_shorthand(
     if shorthand.image.is_none() {
       match token {
         PropertyValue::Url(url) => {
-          shorthand.image = Some(BackgroundImage::Url(url.clone()));
+          if !url.trim().is_empty() {
+            shorthand.image = Some(BackgroundImage::Url(url.clone()));
+          }
           idx += 1;
           continue;
         }
