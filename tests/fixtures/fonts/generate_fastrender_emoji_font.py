@@ -146,6 +146,7 @@ def main() -> None:
   # so bundled-font runs avoid missing-emoji tofu.
   for codepoint in [
     0x2636,  # ☶
+    0x26A0,  # ⚠ (emoji variant ⚠️)
     0x25B6,  # ▶ (emoji variant ▶️)
     0x2705,  # ✅
     0x270D,  # ✍
@@ -157,6 +158,7 @@ def main() -> None:
     0x2B06,  # ⬆
     0x2B07,  # ⬇
     0x2B50,  # ⭐
+    0x1F31F,  # 🌟
     0x1F30E,  # 🌎
     0x1F381,  # 🎁
     0x1F382,  # 🎂
@@ -189,11 +191,13 @@ def main() -> None:
     0x1F680,  # 🚀
     0x1F6A8,  # 🚨
     0x1F914,  # 🤔
+    0x1F919,  # 🤙
     0x1F920,  # 🤠
     0x1F929,  # 🤩
     0x1F92F,  # 🤯
     0x1F52E,  # 🔮
     0x1F9C3,  # 🧃
+    0x1F9E3,  # 🧣
   ]:
     cmap[codepoint] = "grin"
   # Pageset-derived icon/codepoint regressions (typically inserted via CSS `content:`) mapped onto

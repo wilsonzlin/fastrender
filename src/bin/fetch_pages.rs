@@ -10,17 +10,21 @@ use common::render_pipeline::build_http_fetcher;
 use fastrender::pageset::{
   cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
-use fastrender::resource::{parse_cached_html_meta, FetchRequest, FetchedResource, ResourceFetcher};
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::resource::{
+  parse_cached_html_meta, FetchRequest, FetchedResource, ResourceFetcher,
+};
 use rayon::ThreadPoolBuilder;
 use std::fmt::Write;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+const DEFAULT_ASSET_CACHE_DIR: &str = "fetches/assets";
 
 /// Fetch and cache HTML pages for testing
 #[derive(Parser, Debug)]
@@ -36,6 +40,12 @@ struct Args {
 
   #[command(flatten)]
   timeout: TimeoutArgs,
+
+  /// Override disk cache directory (defaults to fetches/assets)
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
+  #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
+  cache_dir: PathBuf,
 
   /// Fetch only listed pages (comma-separated URLs or stems)
   #[arg(long, value_delimiter = ',')]

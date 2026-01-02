@@ -70,6 +70,8 @@ fn bundled_font_coverage_includes_pageset_must_cover_codepoints() {
     ("Up arrow U+2B06", char::from_u32(0x2B06).expect("emoji scalar")),
     ("Down arrow U+2B07", char::from_u32(0x2B07).expect("emoji scalar")),
     ("White medium star U+2B50", char::from_u32(0x2B50).expect("emoji scalar")),
+    ("Warning sign U+26A0", char::from_u32(0x26A0).expect("emoji scalar")),
+    ("Glowing star U+1F31F", char::from_u32(0x1F31F).expect("emoji scalar")),
     ("Crystal ball U+1F52E", char::from_u32(0x1F52E).expect("emoji scalar")),
     ("Police car light U+1F6A8", char::from_u32(0x1F6A8).expect("emoji scalar")),
     ("Party popper U+1F389", char::from_u32(0x1F389).expect("emoji scalar")),
@@ -81,10 +83,12 @@ fn bundled_font_coverage_includes_pageset_must_cover_codepoints() {
     ("Growing heart U+1F497", char::from_u32(0x1F497).expect("emoji scalar")),
     ("Fire U+1F525", char::from_u32(0x1F525).expect("emoji scalar")),
     ("Thinking face U+1F914", char::from_u32(0x1F914).expect("emoji scalar")),
+    ("Call me hand U+1F919", char::from_u32(0x1F919).expect("emoji scalar")),
     (
       "Cowboy hat face U+1F920",
       char::from_u32(0x1F920).expect("emoji scalar"),
     ),
+    ("Scarf U+1F9E3", char::from_u32(0x1F9E3).expect("emoji scalar")),
     ("Handbag U+1F45C", char::from_u32(0x1F45C).expect("emoji scalar")),
     // Pageset icon font / private-use regressions that should not hit last-resort tofu when using
     // bundled fonts.
