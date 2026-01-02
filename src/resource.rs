@@ -884,6 +884,32 @@ fn http_status_allows_empty_body(status: u16) -> bool {
   matches!(status, 202 | 204 | 205 | 304) || (100..200).contains(&status)
 }
 
+fn header_content_length_is_zero(headers: &HeaderMap) -> bool {
+  headers
+    .get("content-length")
+    .and_then(|h| h.to_str().ok())
+    .and_then(|raw| raw.trim().parse::<u64>().ok())
+    .is_some_and(|len| len == 0)
+}
+
+fn http_response_allows_empty_body(
+  kind: FetchContextKind,
+  status: u16,
+  headers: &HeaderMap,
+) -> bool {
+  if http_status_allows_empty_body(status) {
+    return true;
+  }
+
+  // Empty stylesheets are valid and used in practice (e.g. `https://www.debian.org/empty.css`),
+  // but we still want to treat unexpected empty bodies as suspicious to catch truncation/corrupt
+  // fetches. Only accept empty bodies for stylesheet requests when the server explicitly signals
+  // an empty entity with `Content-Length: 0`.
+  kind == FetchContextKind::Stylesheet
+    && (200..300).contains(&status)
+    && header_content_length_is_zero(headers)
+}
+
 fn http_retry_logging_enabled() -> bool {
   static ENABLED: OnceLock<bool> = OnceLock::new();
   *ENABLED.get_or_init(|| {
@@ -3994,6 +4020,8 @@ impl HttpFetcher {
           .map(|s| s.to_string());
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.get_uri().to_string();
+        let allows_empty_body =
+          http_response_allows_empty_body(kind, status_code, response.headers());
 
         let body_result = response
           .body_mut()
@@ -4037,7 +4065,7 @@ impl HttpFetcher {
             record_network_fetch_bytes(bytes.len());
             let is_retryable_status = retryable_http_status(status_code);
 
-            if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
+            if bytes.is_empty() && !allows_empty_body {
               finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {
@@ -4486,6 +4514,8 @@ impl HttpFetcher {
           .map(|s| s.to_string());
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.url().to_string();
+        let allows_empty_body =
+          http_response_allows_empty_body(kind, status_code, response.headers());
 
         let mut body = Vec::new();
         let body_result = response
@@ -4558,7 +4588,7 @@ impl HttpFetcher {
             record_network_fetch_bytes(bytes.len());
             let is_retryable_status = retryable_http_status(status_code);
 
-            if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
+            if bytes.is_empty() && !allows_empty_body {
               finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {
@@ -7511,6 +7541,188 @@ mod tests {
       msg.contains("attempt 3/3"),
       "expected retries to be attempted (message: {msg})"
     );
+  }
+
+  #[test]
+  fn http_empty_stylesheet_with_content_length_zero_is_ok_ureq() {
+    let Some(listener) =
+      try_bind_localhost("http_empty_stylesheet_with_content_length_zero_is_ok_ureq")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers =
+        "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/empty.css");
+    let res = fetcher
+      .fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Stylesheet,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect("stylesheet fetch should succeed");
+    handle.join().unwrap();
+
+    assert!(
+      res.bytes.is_empty(),
+      "expected empty stylesheet body to be accepted"
+    );
+    assert_eq!(res.status, Some(200));
+    assert_eq!(res.content_type.as_deref(), Some("text/css"));
+  }
+
+  #[test]
+  fn http_empty_stylesheet_without_content_length_is_error() {
+    let Some(listener) =
+      try_bind_localhost("http_empty_stylesheet_without_content_length_is_error")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/empty.css");
+    let err = fetcher
+      .fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Stylesheet,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect_err("stylesheet fetch should reject unexpected empty body");
+    handle.join().unwrap();
+    assert!(
+      err.to_string().contains("empty HTTP response body"),
+      "unexpected error message: {err}"
+    );
+  }
+
+  #[test]
+  fn http_empty_image_with_content_length_zero_is_error() {
+    let Some(listener) = try_bind_localhost("http_empty_image_with_content_length_zero_is_error")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers =
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/empty.png");
+    let err = fetcher
+      .fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Image,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect_err("image fetch should reject empty body");
+    handle.join().unwrap();
+    assert!(
+      err.to_string().contains("empty HTTP response body"),
+      "unexpected error message: {err}"
+    );
+  }
+
+  #[test]
+  fn http_empty_stylesheet_with_content_length_zero_is_ok_reqwest() {
+    let Some(listener) =
+      try_bind_localhost("http_empty_stylesheet_with_content_length_zero_is_ok_reqwest")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers =
+        "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/empty.css");
+    let res = fetcher
+      .fetch_http_with_accept_inner_reqwest(
+        FetchContextKind::Stylesheet,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect("reqwest stylesheet fetch should succeed");
+    handle.join().unwrap();
+
+    assert!(
+      res.bytes.is_empty(),
+      "expected empty stylesheet body to be accepted"
+    );
+    assert_eq!(res.status, Some(200));
+    assert_eq!(res.content_type.as_deref(), Some("text/css"));
   }
 
   #[test]

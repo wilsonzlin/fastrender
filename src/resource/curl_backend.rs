@@ -653,8 +653,10 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
 
       super::record_network_fetch_bytes(bytes.len());
       let is_retryable_status = super::retryable_http_status(status_code);
+      let allows_empty_body =
+        super::http_response_allows_empty_body(kind, status_code, &response.headers);
 
-      if bytes.is_empty() && !super::http_status_allows_empty_body(status_code) {
+      if bytes.is_empty() && !allows_empty_body {
         let mut can_retry = attempt < max_attempts;
         if can_retry {
           let mut backoff = super::compute_backoff(&fetcher.retry_policy, attempt, &current);
