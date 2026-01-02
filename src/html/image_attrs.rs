@@ -171,6 +171,87 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
     true
   }
 
+  fn is_likely_comma_in_path_crop_rect(bytes: &[u8], url_start: usize, comma_idx: usize) -> bool {
+    // Another common `srcset` compatibility issue:
+    //
+    // Amazon-hosted images (including IMDb) embed crop rectangles directly in the filename using
+    // unescaped commas, e.g.:
+    //   https://m.media-amazon.com/images/..._UX414_CR0,0,414,612_AL_.jpg
+    //
+    // Here the `CR` token is followed by a comma-separated numeric list. Treating those commas as
+    // candidate separators produces bogus relative URLs like `/414_.jpg` on imdb.com.
+    //
+    // We treat a comma as part of the URL when it appears inside the numeric list following a
+    // `_CR` marker in the current path segment.
+
+    // Find the current path segment start (after the last `/`, `?`, or `#`).
+    let mut segment_start = url_start;
+    for i in (url_start..comma_idx).rev() {
+      match bytes[i] {
+        b'/' | b'?' | b'#' => {
+          segment_start = i + 1;
+          break;
+        }
+        _ => {}
+      }
+    }
+
+    // Find the last `_CR` marker before this comma.
+    let mut cr_start = None;
+    if segment_start + 3 <= comma_idx {
+      for i in (segment_start..=comma_idx - 3).rev() {
+        if bytes[i] == b'_'
+          && bytes[i + 1].to_ascii_uppercase() == b'C'
+          && bytes[i + 2].to_ascii_uppercase() == b'R'
+        {
+          cr_start = Some(i);
+          break;
+        }
+      }
+    }
+    let Some(cr_start) = cr_start else {
+      return false;
+    };
+
+    let list_start = cr_start + 3;
+    if list_start >= comma_idx {
+      return false;
+    }
+
+    fn is_numeric_list_char(b: u8) -> bool {
+      b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'+' | b',')
+    }
+
+    let before = &bytes[list_start..comma_idx];
+    if before.is_empty() || !before.iter().all(|&b| is_numeric_list_char(b)) {
+      return false;
+    }
+    if !before.iter().any(|b| b.is_ascii_digit()) {
+      return false;
+    }
+
+    let mut after_end = comma_idx + 1;
+    while after_end < bytes.len() {
+      let b = bytes[after_end];
+      if b.is_ascii_whitespace() || matches!(b, b'_' | b'.' | b'/' | b'?' | b'#' | b',') {
+        break;
+      }
+      after_end += 1;
+    }
+    if comma_idx + 1 >= after_end {
+      return false;
+    }
+    let after = &bytes[comma_idx + 1..after_end];
+    if after.is_empty() || !after.iter().all(|&b| is_numeric_list_char(b)) {
+      return false;
+    }
+    if !after.iter().any(|b| b.is_ascii_digit()) {
+      return false;
+    }
+
+    true
+  }
+
   let bytes = attr.as_bytes();
   let mut out = Vec::new();
   let mut idx = 0;
@@ -206,6 +287,7 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
         if idx + 1 < bytes.len() && !bytes[idx + 1].is_ascii_whitespace() {
           if is_likely_comma_in_cdn_transform_url(bytes, url_start, idx)
             || is_likely_comma_in_query_numeric_list(bytes, url_start, idx)
+            || is_likely_comma_in_path_crop_rect(bytes, url_start, idx)
           {
             idx += 1;
             continue;
@@ -485,6 +567,21 @@ mod tests {
     );
     assert_eq!(parsed.len(), 2);
     assert_eq!(parsed[0].url, "https://img.example/foo.jpg?rect=0,0,100,100");
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+    assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
+  }
+
+  #[test]
+  fn parse_srcset_allows_commas_in_amazon_crop_rect_paths() {
+    let parsed = parse_srcset(
+      "https://img.example/foo_UX414_CR0,0,414,612_AL_.jpg 1x,https://img.example/bar.jpg 2x",
+    );
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(
+      parsed[0].url,
+      "https://img.example/foo_UX414_CR0,0,414,612_AL_.jpg"
+    );
     assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
     assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
     assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
