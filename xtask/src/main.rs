@@ -376,6 +376,13 @@ struct PerfSmokeArgs {
   #[arg(long)]
   threshold: Option<f64>,
 
+  /// Relative regression threshold for deterministic count metrics (e.g. 0.20 = 20%)
+  ///
+  /// Applies to stable complexity counters such as DOM nodes, fragments, glyphs, and display
+  /// items. Defaults to the `perf_smoke` binary default.
+  #[arg(long)]
+  count_threshold: Option<f64>,
+
   /// Where to write the perf smoke JSON report
   ///
   /// Defaults to the `perf_smoke` binary default (`target/perf_smoke.json`).
@@ -385,6 +392,20 @@ struct PerfSmokeArgs {
   /// Fail when regressions are detected
   #[arg(long)]
   fail_on_regression: bool,
+
+  /// Stop after the first fixture failure instead of continuing to the end of the suite.
+  #[arg(long)]
+  fail_fast: bool,
+
+  /// Fail the command when any fixture fails (status=error|panic|timeout).
+  ///
+  /// Defaults to the `perf_smoke` binary default (enabled in CI).
+  #[arg(long, conflicts_with = "no_fail_on_failure")]
+  fail_on_failure: bool,
+
+  /// Disable the default CI behavior that enables `--fail-on-failure`.
+  #[arg(long = "no-fail-on-failure", conflicts_with = "fail_on_failure")]
+  no_fail_on_failure: bool,
 
   /// Fail when a pageset-guardrails manifest fixture is missing locally.
   ///
@@ -1076,6 +1097,11 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
       bail!("threshold must be >= 0");
     }
   }
+  if let Some(count_threshold) = args.count_threshold {
+    if count_threshold < 0.0 {
+      bail!("count-threshold must be >= 0");
+    }
+  }
 
   let fail_on_missing_fixtures = if args.allow_missing_fixtures {
     false
@@ -1098,6 +1124,11 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   if let Some(threshold) = args.threshold {
     cmd.arg("--threshold").arg(threshold.to_string());
   }
+  if let Some(count_threshold) = args.count_threshold {
+    cmd
+      .arg("--count-threshold")
+      .arg(count_threshold.to_string());
+  }
   if let Some(only) = &args.only {
     cmd.arg("--only").arg(only.join(","));
   }
@@ -1109,6 +1140,14 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   }
   if args.fail_on_regression {
     cmd.arg("--fail-on-regression");
+  }
+  if args.fail_fast {
+    cmd.arg("--fail-fast");
+  }
+  if args.fail_on_failure {
+    cmd.arg("--fail-on-failure");
+  } else if args.no_fail_on_failure {
+    cmd.arg("--no-fail-on-failure");
   }
   if fail_on_missing_fixtures {
     cmd.arg("--fail-on-missing-fixtures");
