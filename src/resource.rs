@@ -3246,6 +3246,8 @@ impl HttpFetcher {
               status_code,
               response.headers(),
             );
+        let substitute_captcha_image =
+          should_substitute_captcha_image_response(kind, status_code, &final_url);
         let mut body_reader = response.body_mut().as_reader();
         let body_result = read_response_prefix(&mut body_reader, read_limit);
         match body_result {
@@ -3259,6 +3261,12 @@ impl HttpFetcher {
             }
             if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
+              let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
+            if substitute_captcha_image {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -3394,7 +3402,9 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            resource.status = Some(status_code);
+            if !substitute_captcha_image {
+              resource.status = Some(status_code);
+            }
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
@@ -3696,6 +3706,8 @@ impl HttpFetcher {
               status_code,
               response.headers(),
             );
+        let substitute_captcha_image =
+          should_substitute_captcha_image_response(kind, status_code, &final_url);
         let body_result = read_response_prefix(&mut response, read_limit);
         match body_result {
           Ok(mut bytes) => {
@@ -3708,6 +3720,12 @@ impl HttpFetcher {
             }
             if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
+              let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
+            if substitute_captcha_image {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -3843,7 +3861,9 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            resource.status = Some(status_code);
+            if !substitute_captcha_image {
+              resource.status = Some(status_code);
+            }
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
@@ -4143,6 +4163,8 @@ impl HttpFetcher {
         let final_url = response.get_uri().to_string();
         let allows_empty_body =
           http_response_allows_empty_body(kind, status_code, response.headers());
+        let substitute_captcha_image =
+          should_substitute_captcha_image_response(kind, status_code, &final_url);
 
         let body_result = response
           .body_mut()
@@ -4199,6 +4221,11 @@ impl HttpFetcher {
             }
             if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
+            if substitute_captcha_image {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
@@ -4368,7 +4395,9 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            resource.status = Some(status.as_u16());
+            if !substitute_captcha_image {
+              resource.status = Some(status.as_u16());
+            }
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
@@ -4663,6 +4692,8 @@ impl HttpFetcher {
               status_code,
               response.headers(),
             );
+        let substitute_captcha_image =
+          should_substitute_captcha_image_response(kind, status_code, &final_url);
 
         let mut body = Vec::new();
         let body_result = response
@@ -4740,6 +4771,11 @@ impl HttpFetcher {
             }
             if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
+            if substitute_captcha_image {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
@@ -4905,7 +4941,9 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            resource.status = Some(status.as_u16());
+            if !substitute_captcha_image {
+              resource.status = Some(status.as_u16());
+            }
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
@@ -7294,6 +7332,17 @@ fn should_substitute_empty_image_body(kind: FetchContextKind, status: u16, heade
   kind == FetchContextKind::Image
     && (200..300).contains(&status)
     && header_content_length_is_zero(headers)
+}
+
+fn url_has_captcha_param(url: &str) -> bool {
+  url.contains("?captcha=") || url.contains("&captcha=")
+}
+
+fn should_substitute_captcha_image_response(kind: FetchContextKind, status: u16, final_url: &str) -> bool {
+  // NYU (and similar bot-mitigation setups) can redirect blocked subresource requests to a URL with
+  // `?captcha=...` and return an HTTP error status. Treat these as missing images rather than hard
+  // failures so the renderer can proceed deterministically.
+  kind == FetchContextKind::Image && status == 405 && url_has_captcha_param(final_url)
 }
 
 fn should_substitute_markup_image_body(

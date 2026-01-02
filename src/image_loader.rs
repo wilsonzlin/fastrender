@@ -2647,6 +2647,13 @@ impl ImageCache {
             break;
           }
         };
+      // Some servers reject `Range` requests for images (or bot-mitigation paths) with status codes
+      // like 405/416 even though a full GET without a `Range` header would succeed. In that case,
+      // skip reporting a fetch error from the probe and fall back to a full fetch.
+      if matches!(resource.status, Some(405 | 416)) {
+        record_probe_partial_fetch(resource.bytes.len());
+        break;
+      }
       record_probe_partial_fetch(resource.bytes.len());
       let resource = Arc::new(resource);
 
@@ -5022,6 +5029,79 @@ mod tests {
     ));
     let meta = cache.probe(&url).expect("probe succeeds");
     assert_eq!(meta.dimensions(), (1, 1));
+
+    server.join().unwrap();
+  }
+
+  #[test]
+  fn image_probe_partial_fetch_falls_back_on_http_405() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => listener,
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!(
+          "skipping image_probe_partial_fetch_falls_back_on_http_405: cannot bind localhost: {err}"
+        );
+        return;
+      }
+      Err(err) => panic!("bind localhost: {err}"),
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/probe.png");
+    let body = padded_png();
+
+    let server = std::thread::spawn(move || {
+      // First request should be the partial probe with a Range header.
+      {
+        let (mut stream, _) = listener.accept().expect("accept range request");
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+        let req = read_http_headers(&mut stream);
+        assert!(
+          extract_range_header(&req).is_some(),
+          "expected Range header on probe request"
+        );
+
+        let header = "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        stream.write_all(header.as_bytes()).expect("write header");
+        let _ = stream.flush();
+      }
+
+      // Second request should be the fallback full fetch (no Range header).
+      {
+        let (mut stream, _) = listener.accept().expect("accept full request");
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+        let req = read_http_headers(&mut stream);
+        assert!(
+          extract_range_header(&req).is_none(),
+          "unexpected Range header on fallback full fetch"
+        );
+
+        let header = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        stream.write_all(header.as_bytes()).expect("write header");
+        stream.write_all(&body).expect("write body");
+        let _ = stream.flush();
+      }
+    });
+
+    enable_image_cache_diagnostics();
+    let cache = ImageCache::with_fetcher(Arc::new(HttpFetcher::new()));
+    let meta = cache.probe(&url).expect("probe succeeds");
+    assert_eq!(meta.dimensions(), (1, 1));
+
+    let stats = take_image_cache_diagnostics().expect("diagnostics enabled");
+    assert_eq!(stats.probe_partial_requests, 1);
+    assert_eq!(stats.probe_partial_fallback_full, 1);
 
     server.join().unwrap();
   }

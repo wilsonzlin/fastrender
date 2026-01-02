@@ -631,6 +631,8 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
             status_code,
             &response.headers,
           );
+      let substitute_captcha_image =
+        super::should_substitute_captcha_image_response(kind, status_code, &current);
       let mut bytes = match super::decode_content_encodings(
         response.body,
         &encodings,
@@ -667,6 +669,11 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       }
       if super::should_substitute_markup_image_body(kind, url, &current, content_type.as_deref(), &bytes)
       {
+        bytes = super::OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+        content_type = Some(super::OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+        decode_stage = super::decode_stage_for_content_type(content_type.as_deref());
+      }
+      if substitute_captcha_image {
         bytes = super::OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
         content_type = Some(super::OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
         decode_stage = super::decode_stage_for_content_type(content_type.as_deref());
@@ -829,7 +836,9 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       if !encodings.is_empty() {
         resource.content_encoding = Some(encodings.join(", "));
       }
-      resource.status = Some(status_code);
+      if !substitute_captcha_image {
+        resource.status = Some(status_code);
+      }
       resource.etag = etag;
       resource.last_modified = last_modified;
       resource.cache_policy = cache_policy;

@@ -613,6 +613,14 @@ impl FontContext {
   }
 
   fn record_font_error(&self, url: &str, error: &Error) {
+    if let Error::Resource(err) = error {
+      let is_captcha = err.final_url.as_deref().is_some_and(|final_url| {
+        final_url.contains("?captcha=") || final_url.contains("&captcha=")
+      });
+      if err.status == Some(405) && is_captcha {
+        return;
+      }
+    }
     if let Some(ctx) = &self.resource_context {
       if let Some(diag) = &ctx.diagnostics {
         diag.record_error(ResourceKind::Font, url, error);
