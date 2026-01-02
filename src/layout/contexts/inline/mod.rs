@@ -1889,7 +1889,10 @@ impl InlineFormattingContext {
       LayoutError::UnsupportedBoxType("Inline-level box missing formatting context".to_string())
     })?;
 
-    let style = &box_node.style;
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| box_node.style.as_ref());
     let metrics = self.resolve_scaled_metrics(style);
     let line_height =
       compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(self.viewport_size));
@@ -5247,7 +5250,10 @@ impl InlineFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    let style = &box_node.style;
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| box_node.style.as_ref());
     if style.containment.size || style.containment.inline_size {
       let edges = resolve_length_for_width(
         style.padding_left,
@@ -5308,7 +5314,10 @@ impl InlineFormattingContext {
   }
 
   fn calculate_intrinsic_widths(&self, box_node: &BoxNode) -> Result<(f32, f32), LayoutError> {
-    let style = &box_node.style;
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| box_node.style.as_ref());
     if style.containment.size || style.containment.inline_size {
       let edges = resolve_length_for_width(
         style.padding_left,
@@ -7719,6 +7728,8 @@ impl InlineFormattingContext {
     float_base_y: f32,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Inline);
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let style = style_override.as_ref().unwrap_or(&box_node.style);
     let mut transformed: Option<BoxNode> = None;
     let box_node = if let Some(letter_style) = box_node.first_letter_style.as_ref() {
       if Self::first_letter_eligible(box_node) {
@@ -7726,7 +7737,7 @@ impl InlineFormattingContext {
           box_node,
           letter_style.clone(),
           box_node.first_line_style.clone(),
-          box_node.style.direction,
+          style.direction,
         );
         let owned = transformed.insert(node);
         &*owned
@@ -7789,7 +7800,6 @@ impl InlineFormattingContext {
                 constraints.height().unwrap_or(f32::MAX)
             );
     }
-    let style = &box_node.style;
     let inline_vertical = is_vertical_writing_mode(style.writing_mode);
     let inline_space = if inline_vertical {
       constraints.available_height
@@ -8380,7 +8390,7 @@ impl InlineFormattingContext {
     );
     if let Some(first_line_style) = box_node.first_line_style.as_ref() {
       if let Some(first_line) = line_fragments.first_mut() {
-        self.apply_first_line_fragment_style(first_line, first_line_style, &box_node.style);
+        self.apply_first_line_fragment_style(first_line, first_line_style, style);
       }
     }
 
@@ -9440,27 +9450,31 @@ fn resolve_base_direction_for_style_and_children(
 }
 
 fn resolve_base_direction_for_box(box_node: &BoxNode) -> crate::style::types::Direction {
+  let style_override = crate::layout::style_override::style_override_for(box_node.id);
+  let style: &ComputedStyle = style_override
+    .as_deref()
+    .unwrap_or_else(|| box_node.style.as_ref());
   if matches!(
-    box_node.style.writing_mode,
+    style.writing_mode,
     crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
   ) && matches!(
-    box_node.style.text_orientation,
+    style.text_orientation,
     crate::style::types::TextOrientation::Upright
   ) {
     return crate::style::types::Direction::Ltr;
   }
 
   if !matches!(
-    box_node.style.unicode_bidi,
+    style.unicode_bidi,
     crate::style::types::UnicodeBidi::Plaintext
   ) {
-    return box_node.style.direction;
+    return style.direction;
   }
 
   let mut logical = String::new();
   collect_logical_text_for_direction(box_node, &mut logical);
   if logical.is_empty() {
-    return box_node.style.direction;
+    return style.direction;
   }
   let info = unicode_bidi::BidiInfo::new(&logical, None);
   if let Some(p) = info.paragraphs.first() {
@@ -9470,7 +9484,7 @@ fn resolve_base_direction_for_box(box_node: &BoxNode) -> crate::style::types::Di
       crate::style::types::Direction::Ltr
     }
   } else {
-    box_node.style.direction
+    style.direction
   }
 }
 
@@ -10015,6 +10029,49 @@ mod tests {
 
   fn make_inline_container(children: Vec<BoxNode>) -> BoxNode {
     BoxNode::new_block(default_style(), FormattingContextType::Block, children)
+  }
+
+  #[test]
+  fn inline_respects_style_override_for_root() {
+    let ifc = InlineFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+
+    let mut base_style = ComputedStyle::default();
+    base_style.display = Display::Block;
+    base_style.writing_mode = WritingMode::HorizontalTb;
+
+    let text_style = Arc::new(ComputedStyle {
+      display: Display::Inline,
+      ..ComputedStyle::default()
+    });
+    let text = BoxNode::new_text(text_style, "hello".to_string());
+
+    let mut root = BoxNode::new_block(
+      Arc::new(base_style.clone()),
+      FormattingContextType::Inline,
+      vec![text],
+    );
+    root.id = 1;
+
+    let constraints = LayoutConstraints::definite(200.0, 123.0);
+    let fragment = ifc
+      .layout(&root, &constraints)
+      .expect("inline layout should succeed");
+    assert!(
+      fragment.bounds.height() < 123.0,
+      "expected horizontal writing mode to produce content-driven height (got {})",
+      fragment.bounds.height()
+    );
+
+    let mut override_style = base_style;
+    override_style.writing_mode = WritingMode::VerticalRl;
+    let fragment = crate::layout::style_override::with_style_override(
+      root.id,
+      Arc::new(override_style),
+      || ifc.layout(&root, &constraints),
+    )
+    .expect("inline layout with style override should succeed");
+
+    assert!((fragment.bounds.height() - 123.0).abs() < 0.01);
   }
 
   fn find_fragment_by_position<'a>(

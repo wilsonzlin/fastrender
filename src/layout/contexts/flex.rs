@@ -1203,20 +1203,10 @@ impl FormattingContext for FlexFormattingContext {
                         style.width = None;
                     }
                     let override_style = cloned_style.map(Arc::new);
-                    let fc_type =
-                        box_node.formatting_context().unwrap_or(FormattingContextType::Block);
-                    let mut alt_box: Option<BoxNode> = None;
-                    let measure_box: &BoxNode = match (&override_style, fc_type) {
-                      (Some(_), FormattingContextType::Block)
-                      | (Some(_), FormattingContextType::Flex)
-                      | (Some(_), FormattingContextType::Grid) => box_node,
-                      (Some(style), _) => {
-                        let mut cloned = box_node.clone();
-                        cloned.style = Arc::clone(style);
-                        &*alt_box.insert(cloned)
-                      }
-                      (None, _) => box_node,
-                    };
+                    // When probing intrinsic sizes we may temporarily override the root style.
+                    // Use the thread-local override mechanism rather than cloning the entire box
+                    // subtree just to swap the style pointer.
+                    let measure_box: &BoxNode = box_node;
                     let measure_style: &ComputedStyle = override_style
                       .as_deref()
                       .unwrap_or_else(|| measure_box.style.as_ref());
@@ -1398,19 +1388,12 @@ impl FormattingContext for FlexFormattingContext {
                     let selector_for_profile = node_timer
                         .as_ref()
                         .and_then(|_| measure_box.debug_info.as_ref().map(|d| d.to_selector()));
-                    let layout_result = if override_style.is_some()
-                      && matches!(
-                        fc_type,
-                        FormattingContextType::Block
-                          | FormattingContextType::Flex
-                          | FormattingContextType::Grid
-                      ) {
-                        let style = override_style.clone().expect("override style missing");
-                        crate::layout::style_override::with_style_override(measure_box.id, style, || {
-                          fc.layout(measure_box, &constraints)
-                        })
-                    } else {
+                    let layout_result = if let Some(style) = override_style.clone() {
+                      crate::layout::style_override::with_style_override(measure_box.id, style, || {
                         fc.layout(measure_box, &constraints)
+                      })
+                    } else {
+                      fc.layout(measure_box, &constraints)
                     };
                     let fragment = match layout_result {
                          Ok(f) => {
@@ -5994,12 +5977,17 @@ mod tests {
     base_style.display = Display::InlineFlex;
     base_style.width = Some(Length::px(50.0));
 
-    let mut container =
-      BoxNode::new_inline_block(Arc::new(base_style.clone()), FormattingContextType::Flex, vec![]);
+    let mut container = BoxNode::new_inline_block(
+      Arc::new(base_style.clone()),
+      FormattingContextType::Flex,
+      vec![],
+    );
     container.id = 1;
 
-    let constraints =
-      LayoutConstraints::new(CrateAvailableSpace::MaxContent, CrateAvailableSpace::Indefinite);
+    let constraints = LayoutConstraints::new(
+      CrateAvailableSpace::MaxContent,
+      CrateAvailableSpace::Indefinite,
+    );
     let fragment = fc
       .layout(&container, &constraints)
       .expect("inline-flex layout should succeed");

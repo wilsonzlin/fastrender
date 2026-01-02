@@ -4972,11 +4972,13 @@ impl FormattingContext for TableFormattingContext {
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Table);
     let mut deadline_counter = 0usize;
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let override_active = style_override.is_some();
     let has_running_children_for_cache = box_node
       .children
       .iter()
       .any(|child| child.style.running_position.is_some());
-    if !has_running_children_for_cache {
+    if !has_running_children_for_cache && !override_active {
       if let Some(cached) = layout_cache_lookup(
         box_node,
         FormattingContextType::Table,
@@ -4988,6 +4990,9 @@ impl FormattingContext for TableFormattingContext {
     }
     let normalized_table = self.normalize_table_root(box_node);
     let table_box = normalized_table.as_ref();
+    let table_root_style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| table_box.style.as_ref());
     let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
     let mut positioned_children: Vec<&BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, &BoxNode)> = Vec::new();
@@ -5140,29 +5145,28 @@ impl FormattingContext for TableFormattingContext {
     }
 
     // Honor explicit table width if present.
-    let font_size = table_box.style.font_size;
-    let specified_width = table_box
-      .style
+    let font_size = table_root_style.font_size;
+    let specified_width = table_root_style
       .width
       .as_ref()
       .and_then(|len| resolve_length_against(len, font_size, containing_width));
     let resolved_min_width = resolve_opt_length_against(
-      table_box.style.min_width.as_ref(),
+      table_root_style.min_width.as_ref(),
       font_size,
       containing_width,
     );
     let resolved_max_width = resolve_opt_length_against(
-      table_box.style.max_width.as_ref(),
+      table_root_style.max_width.as_ref(),
       font_size,
       containing_width,
     );
     let mut min_width = resolve_opt_length_against(
-      table_box.style.min_width.as_ref(),
+      table_root_style.min_width.as_ref(),
       font_size,
       containing_width,
     );
     let max_width = resolve_opt_length_against(
-      table_box.style.max_width.as_ref(),
+      table_root_style.max_width.as_ref(),
       font_size,
       containing_width,
     );
@@ -5182,14 +5186,14 @@ impl FormattingContext for TableFormattingContext {
       _ if l.unit.is_absolute() => l.to_px(),
       _ => l.value,
     };
-    let _outer_border_left = resolve_abs(&table_box.style.border_left_width);
-    let _outer_border_right = resolve_abs(&table_box.style.border_right_width);
-    let outer_border_top = resolve_abs(&table_box.style.border_top_width);
-    let outer_border_bottom = resolve_abs(&table_box.style.border_bottom_width);
+    let _outer_border_left = resolve_abs(&table_root_style.border_left_width);
+    let _outer_border_right = resolve_abs(&table_root_style.border_right_width);
+    let outer_border_top = resolve_abs(&table_root_style.border_top_width);
+    let outer_border_bottom = resolve_abs(&table_root_style.border_bottom_width);
     let outer_border_v = outer_border_top + outer_border_bottom;
-    let mut pad_left = resolve_abs(&table_box.style.padding_left);
-    let mut pad_right = resolve_abs(&table_box.style.padding_right);
-    let mut pad_top = resolve_abs(&table_box.style.padding_top);
+    let mut pad_left = resolve_abs(&table_root_style.padding_left);
+    let mut pad_right = resolve_abs(&table_root_style.padding_right);
+    let mut pad_top = resolve_abs(&table_root_style.padding_top);
     // In the collapsing border model, the table box has no padding (CSS 2.2 §17.6.2).
     let pad_bottom = if structure.border_collapse == BorderCollapse::Collapse {
       pad_left = 0.0;
@@ -5197,17 +5201,17 @@ impl FormattingContext for TableFormattingContext {
       pad_top = 0.0;
       0.0
     } else {
-      resolve_abs(&table_box.style.padding_bottom)
+      resolve_abs(&table_root_style.padding_bottom)
     };
     let (border_left, border_right, border_top, border_bottom) =
       if structure.border_collapse == BorderCollapse::Collapse {
         (0.0, 0.0, 0.0, 0.0)
       } else {
         (
-          resolve_abs(&table_box.style.border_left_width),
-          resolve_abs(&table_box.style.border_right_width),
-          resolve_abs(&table_box.style.border_top_width),
-          resolve_abs(&table_box.style.border_bottom_width),
+          resolve_abs(&table_root_style.border_left_width),
+          resolve_abs(&table_root_style.border_right_width),
+          resolve_abs(&table_root_style.border_top_width),
+          resolve_abs(&table_root_style.border_bottom_width),
         )
       };
     let padding_h = pad_left + pad_right;
@@ -5215,18 +5219,17 @@ impl FormattingContext for TableFormattingContext {
     let border_h = border_left + border_right;
     let border_v = border_top + border_bottom;
 
-    let specified_height = table_box
-      .style
+    let specified_height = table_root_style
       .height
       .as_ref()
       .and_then(|len| resolve_length_against(len, font_size, containing_height));
     let min_height = resolve_opt_length_against(
-      table_box.style.min_height.as_ref(),
+      table_root_style.min_height.as_ref(),
       font_size,
       containing_height,
     );
     let max_height = resolve_opt_length_against(
-      table_box.style.max_height.as_ref(),
+      table_root_style.max_height.as_ref(),
       font_size,
       containing_height,
     );
@@ -5502,7 +5505,7 @@ impl FormattingContext for TableFormattingContext {
             height - border_top - border_bottom,
           ),
         );
-        let block_base = if table_box.style.height.is_some() {
+        let block_base = if table_root_style.height.is_some() {
           Some(padding_rect.size.height)
         } else {
           None
@@ -5514,15 +5517,15 @@ impl FormattingContext for TableFormattingContext {
           block_base,
         );
         let viewport_cb = ContainingBlock::viewport(self.viewport_size);
-        let establishes_abs_cb = table_box.style.position.is_positioned()
-          || !table_box.style.transform.is_empty()
-          || table_box.style.perspective.is_some()
-          || table_box.style.containment.layout
-          || table_box.style.containment.paint;
-        let establishes_fixed_cb = !table_box.style.transform.is_empty()
-          || table_box.style.perspective.is_some()
-          || table_box.style.containment.layout
-          || table_box.style.containment.paint;
+        let establishes_abs_cb = table_root_style.position.is_positioned()
+          || !table_root_style.transform.is_empty()
+          || table_root_style.perspective.is_some()
+          || table_root_style.containment.layout
+          || table_root_style.containment.paint;
+        let establishes_fixed_cb = !table_root_style.transform.is_empty()
+          || table_root_style.perspective.is_some()
+          || table_root_style.containment.layout
+          || table_root_style.containment.paint;
         let cb_for_absolute = if establishes_abs_cb {
           padding_cb
         } else {
@@ -5535,7 +5538,7 @@ impl FormattingContext for TableFormattingContext {
         };
         place_out_of_flow(&mut fragment, cb_for_absolute, cb_for_fixed)?;
       }
-      if !has_running_children {
+      if !has_running_children && !override_active {
         layout_cache_store(
           box_node,
           FormattingContextType::Table,
@@ -6700,7 +6703,7 @@ impl FormattingContext for TableFormattingContext {
     }
     let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
-    let mut table_style = (*table_box.style).clone();
+    let mut table_style = table_root_style.clone();
     if structure.border_collapse == BorderCollapse::Collapse {
       table_style.border_top_width = crate::style::values::Length::px(0.0);
       table_style.border_right_width = crate::style::values::Length::px(0.0);
@@ -6759,7 +6762,7 @@ impl FormattingContext for TableFormattingContext {
           }
         }
       }
-      if !has_running_children {
+      if !has_running_children && !override_active {
         layout_cache_store(
           box_node,
           FormattingContextType::Table,
@@ -6854,7 +6857,7 @@ impl FormattingContext for TableFormattingContext {
       wrapper_children.push(frag);
     }
 
-    let mut wrapper_style = (*table_box.style).clone();
+    let mut wrapper_style = table_root_style.clone();
     // Keep transforms/opacity/filters on the wrapper so they apply to both caption and table,
     // but avoid painting an extra background/border around the combined area.
     wrapper_style.reset_background_to_initial();
@@ -6956,7 +6959,7 @@ impl FormattingContext for TableFormattingContext {
           table_bounds.height() - border_top - border_bottom,
         ),
       );
-      let block_base = if table_box.style.height.is_some() {
+      let block_base = if table_root_style.height.is_some() {
         Some(padding_rect.size.height)
       } else {
         None
@@ -6968,15 +6971,15 @@ impl FormattingContext for TableFormattingContext {
         block_base,
       );
       let viewport_cb = ContainingBlock::viewport(self.viewport_size);
-      let establishes_abs_cb = table_box.style.position.is_positioned()
-        || !table_box.style.transform.is_empty()
-        || table_box.style.perspective.is_some()
-        || table_box.style.containment.layout
-        || table_box.style.containment.paint;
-      let establishes_fixed_cb = !table_box.style.transform.is_empty()
-        || table_box.style.perspective.is_some()
-        || table_box.style.containment.layout
-        || table_box.style.containment.paint;
+      let establishes_abs_cb = table_root_style.position.is_positioned()
+        || !table_root_style.transform.is_empty()
+        || table_root_style.perspective.is_some()
+        || table_root_style.containment.layout
+        || table_root_style.containment.paint;
+      let establishes_fixed_cb = !table_root_style.transform.is_empty()
+        || table_root_style.perspective.is_some()
+        || table_root_style.containment.layout
+        || table_root_style.containment.paint;
       let cb_for_absolute = if establishes_abs_cb {
         padding_cb
       } else {
@@ -6991,7 +6994,7 @@ impl FormattingContext for TableFormattingContext {
       place_out_of_flow(&mut wrapper_fragment, cb_for_absolute, cb_for_fixed)?;
     }
 
-    if !has_running_children {
+    if !has_running_children && !override_active {
       layout_cache_store(
         box_node,
         FormattingContextType::Table,
@@ -7010,13 +7013,16 @@ impl FormattingContext for TableFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
     let normalized_table = self.normalize_table_root(box_node);
     let table_box = normalized_table.as_ref();
+    let table_root_style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| table_box.style.as_ref());
     let structure = table_structure_cached(table_box);
     let spacing = structure.total_horizontal_spacing();
-    let font_size = table_box.style.font_size;
-    let authored_width = table_box
-      .style
+    let font_size = table_root_style.font_size;
+    let authored_width = table_root_style
       .width
       .as_ref()
       .and_then(|len| resolve_length_against(len, font_size, None));
@@ -7025,10 +7031,10 @@ impl FormattingContext for TableFormattingContext {
       _ if l.unit.is_absolute() => l.to_px(),
       _ => l.value,
     };
-    let padding_h_base = resolve_abs_no_pct(&table_box.style.padding_left)
-      + resolve_abs_no_pct(&table_box.style.padding_right);
-    let border_h_base = resolve_abs_no_pct(&table_box.style.border_left_width)
-      + resolve_abs_no_pct(&table_box.style.border_right_width);
+    let padding_h_base = resolve_abs_no_pct(&table_root_style.padding_left)
+      + resolve_abs_no_pct(&table_root_style.padding_right);
+    let border_h_base = resolve_abs_no_pct(&table_root_style.border_left_width)
+      + resolve_abs_no_pct(&table_root_style.border_right_width);
     let edge_consumption = if structure.border_collapse == BorderCollapse::Collapse {
       0.0
     } else {
@@ -7068,10 +7074,10 @@ impl FormattingContext for TableFormattingContext {
         _ if l.unit.is_absolute() => l.to_px(),
         _ => l.value,
       };
-      resolve_abs(&table_box.style.padding_left)
-        + resolve_abs(&table_box.style.padding_right)
-        + resolve_abs(&table_box.style.border_left_width)
-        + resolve_abs(&table_box.style.border_right_width)
+      resolve_abs(&table_root_style.padding_left)
+        + resolve_abs(&table_root_style.padding_right)
+        + resolve_abs(&table_root_style.border_left_width)
+        + resolve_abs(&table_root_style.border_right_width)
     };
     let min_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
     let raw_max_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
@@ -7155,14 +7161,14 @@ impl FormattingContext for TableFormattingContext {
     let width = base.max(caption_min);
 
     // Apply authored min/max width to intrinsic size per CSS preferred width clamping.
-    let font_size = table_box.style.font_size;
+    let font_size = table_root_style.font_size;
     let min_w = resolve_opt_length_against(
-      table_box.style.min_width.as_ref(),
+      table_root_style.min_width.as_ref(),
       font_size,
       None, /* no containing width */
     );
     let max_w = resolve_opt_length_against(
-      table_box.style.max_width.as_ref(),
+      table_root_style.max_width.as_ref(),
       font_size,
       None, /* no containing width */
     );
@@ -7865,6 +7871,47 @@ mod tests {
     let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
     assert!((fragment.bounds.width() - 200.0).abs() < 0.1);
+  }
+
+  #[test]
+  fn table_respects_style_override_for_root() {
+    let tfc = TableFormattingContext::new();
+
+    let mut base_style = ComputedStyle::default();
+    base_style.display = Display::Table;
+    base_style.width = Some(Length::px(50.0));
+    base_style.border_spacing_horizontal = Length::px(0.0);
+    base_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+    let mut table = BoxNode::new_block(
+      Arc::new(base_style.clone()),
+      FormattingContextType::Table,
+      vec![row],
+    );
+    table.id = 1;
+
+    let constraints = LayoutConstraints::definite_width(800.0);
+    let fragment = tfc.layout(&table, &constraints).expect("table layout");
+    assert!((fragment.bounds.width() - 50.0).abs() < 0.1);
+
+    let mut override_style = base_style;
+    override_style.width = Some(Length::px(100.0));
+    let fragment = crate::layout::style_override::with_style_override(
+      table.id,
+      Arc::new(override_style),
+      || tfc.layout(&table, &constraints),
+    )
+    .expect("table layout with style override");
+
+    assert!((fragment.bounds.width() - 100.0).abs() < 0.1);
   }
 
   #[test]
