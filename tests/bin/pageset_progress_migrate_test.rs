@@ -158,6 +158,73 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
 }
 
 #[test]
+fn pageset_progress_migrate_preserves_existing_stage_buckets_when_present() {
+  let tmp = tempfile::tempdir().expect("temp dir");
+  let progress_dir = tmp.path().join("progress");
+  let html_dir = tmp.path().join("html");
+  fs::create_dir_all(&progress_dir).expect("create progress dir");
+  fs::create_dir_all(&html_dir).expect("create html dir");
+
+  fs::write(html_dir.join("example.com.html"), "<!doctype html>").expect("write cache placeholder");
+
+  let progress_path = progress_dir.join("example.com.json");
+  let progress = serde_json::json!({
+    "url": "https://example.com",
+    "status": "ok",
+    "total_ms": 100.0,
+    // Non-zero buckets should remain intact so a migrate run doesn't destroy stage-timeline
+    // attribution (e.g. cache/redirect overhead) captured in committed progress artifacts.
+    "stages_ms": { "fetch": 60.0, "css": 10.0, "cascade": 30.0, "layout": 0.0, "paint": 0.0 },
+    "notes": "",
+    "hotspot": "fetch",
+    "failure_stage": null,
+    "timeout_stage": null,
+    "last_good_commit": "",
+    "last_regression_commit": "",
+    "diagnostics": {
+      "stats": {
+        "timings": {
+          "dom_parse_ms": 1.0,
+          "css_parse_ms": 1.0,
+          "cascade_ms": 80.0
+        }
+      }
+    }
+  });
+  fs::write(
+    &progress_path,
+    serde_json::to_string_pretty(&progress).expect("serialize progress json"),
+  )
+  .expect("write progress json");
+
+  let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "migrate",
+      "--progress-dir",
+      progress_dir.to_str().expect("progress dir utf-8"),
+      "--html-dir",
+      html_dir.to_str().expect("html dir utf-8"),
+    ])
+    .status()
+    .expect("run pageset_progress migrate");
+  assert!(status.success(), "migrate should succeed");
+
+  let migrated_raw = fs::read_to_string(&progress_path).expect("read migrated json");
+  let migrated: Value = serde_json::from_str(&migrated_raw).expect("parse migrated json value");
+  let stages = migrated.get("stages_ms").expect("stages_ms object");
+  assert!((stages["fetch"].as_f64().unwrap() - 60.0).abs() < 1e-6);
+  assert!((stages["css"].as_f64().unwrap() - 10.0).abs() < 1e-6);
+  assert!((stages["cascade"].as_f64().unwrap() - 30.0).abs() < 1e-6);
+  assert!((stages["layout"].as_f64().unwrap() - 0.0).abs() < 1e-6);
+  assert!((stages["paint"].as_f64().unwrap() - 0.0).abs() < 1e-6);
+  assert_eq!(
+    migrated.get("hotspot"),
+    Some(&Value::String("cascade".into())),
+    "hotspot should be recomputed from stats even when stages_ms already exists",
+  );
+}
+
+#[test]
 fn pageset_progress_migrate_rewrites_legacy_cpu_sum_keys() {
   let tmp = tempfile::tempdir().expect("temp dir");
   let progress_dir = tmp.path().join("progress");

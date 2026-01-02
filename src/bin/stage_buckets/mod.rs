@@ -43,6 +43,12 @@ impl StageBuckets {
     if !sum.is_finite() || sum <= 0.0 {
       return;
     }
+    // Avoid tiny float drift: stage buckets are often already rescaled (committed progress files,
+    // repeated `migrate` runs, etc). Rescaling again when the sum already matches `total_ms`
+    // introduces spurious diffs in serialized JSON due to floating point rounding.
+    if (sum - total_ms).abs() <= 0.001 {
+      return;
+    }
     let scale = total_ms / sum;
     if !scale.is_finite() || scale <= 0.0 {
       return;

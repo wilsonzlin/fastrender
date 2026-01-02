@@ -1552,17 +1552,20 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
     })?;
     migrate_legacy_notes(&mut progress);
     normalize_missing_cache_placeholder(&mut progress, cache_exists);
-    // Historical progress files may have stage buckets that included `text_*` subsystem timings.
-    // When stats are present, recompute buckets using the current wall-clock-only definition so
-    // `migrate` can update committed progress artifacts without requiring a rerender.
     if let Some(total_ms) = progress.total_ms {
       if progress.status == ProgressStatus::Ok {
         let stats = progress
           .diagnostics
           .as_ref()
           .and_then(|diag| diag.stats.as_ref());
-        if let Some(stats) = stats {
-          progress.stages_ms = buckets_from_stats(stats);
+        // Only recompute missing stage buckets from stats. Many committed progress artifacts were
+        // produced with stage-timeline attribution enabled; clobbering those buckets during a
+        // schema-only `migrate` pass would misattribute work that occurs outside the renderer's
+        // internal `RenderStats` timings (e.g. cache reads, redirect following, renderer init).
+        if progress.stages_ms.sum() == 0.0 {
+          if let Some(stats) = stats {
+            progress.stages_ms = buckets_from_stats(stats);
+          }
         }
         if progress.stages_ms.sum() > 0.0 {
           progress.stages_ms.rescale_to_total(total_ms);
