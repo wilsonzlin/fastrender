@@ -4574,24 +4574,14 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
-    let selectors = &self.selectors;
     let mut push_list = |list: &[usize], bucket: CandidateBucket| {
       if list.is_empty() {
         return;
       }
-      let cursor_idx = merge.cursors.len();
       merge.cursors.push(CandidateCursor::new(list, bucket));
-      let selector_idx = list[0];
-      let indexed = &selectors[selector_idx];
-      merge.heap.push(CandidateHeapItem {
-        rule_idx: indexed.rule_idx,
-        specificity: indexed.specificity,
-        selector_idx,
-        bucket_rank: bucket.rank(),
-        cursor_idx,
-      });
     };
 
+    let selectors = &self.selectors;
     if !self.by_id.is_empty() {
       if let Some(key) = node_keys.id_key {
         if let Some(list) = self.by_id.get(&key) {
@@ -4680,7 +4670,6 @@ impl<'a> RuleIndex<'a> {
       //
       // Ordering must match `CandidateHeapItem::cmp`:
       //   (rule_idx asc, specificity desc, selector_idx asc, bucket_rank asc, cursor_idx asc)
-      let selectors = &self.selectors;
       let (left, right) = merge.cursors.split_at_mut(1);
       let a = &mut left[0];
       let b = &mut right[0];
@@ -4849,6 +4838,21 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
+    // General k-way merge path using a heap.
+    for (cursor_idx, cursor) in merge.cursors.iter().enumerate() {
+      let Some(selector_idx) = cursor.current() else {
+        continue;
+      };
+      let indexed = &selectors[selector_idx];
+      merge.heap.push(CandidateHeapItem {
+        rule_idx: indexed.rule_idx,
+        specificity: indexed.specificity,
+        selector_idx,
+        bucket_rank: cursor.bucket.rank(),
+        cursor_idx,
+      });
+    }
+
     while let Some(item) = merge.heap.pop() {
       let cursor = &mut merge.cursors[item.cursor_idx];
       let Some(selector_idx) = cursor.current() else {
@@ -4946,24 +4950,14 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
-    let selectors = &self.slotted_selectors;
     let mut push_list = |list: &[usize], bucket: CandidateBucket| {
       if list.is_empty() {
         return;
       }
-      let cursor_idx = merge.cursors.len();
       merge.cursors.push(CandidateCursor::new(list, bucket));
-      let selector_idx = list[0];
-      let indexed = &selectors[selector_idx];
-      merge.heap.push(CandidateHeapItem {
-        rule_idx: indexed.rule_idx,
-        specificity: 0,
-        selector_idx,
-        bucket_rank: bucket.rank(),
-        cursor_idx,
-      });
     };
 
+    let selectors = &self.slotted_selectors;
     if !self.slotted_buckets.by_id.is_empty() {
       if let Some(key) = node_keys.id_key {
         if let Some(list) = self.slotted_buckets.by_id.get(&key) {
@@ -5052,7 +5046,6 @@ impl<'a> RuleIndex<'a> {
       // Ordering matches `CandidateHeapItem::cmp` as used by the general path, with specificity
       // fixed at 0 for slotted selectors:
       //   (rule_idx asc, selector_idx asc, bucket_rank asc, cursor_idx asc)
-      let selectors = &self.slotted_selectors;
       let (left, right) = merge.cursors.split_at_mut(1);
       let a = &mut left[0];
       let b = &mut right[0];
@@ -5212,6 +5205,21 @@ impl<'a> RuleIndex<'a> {
         }
       }
       return;
+    }
+
+    // General k-way merge path using a heap.
+    for (cursor_idx, cursor) in merge.cursors.iter().enumerate() {
+      let Some(selector_idx) = cursor.current() else {
+        continue;
+      };
+      let indexed = &selectors[selector_idx];
+      merge.heap.push(CandidateHeapItem {
+        rule_idx: indexed.rule_idx,
+        specificity: 0,
+        selector_idx,
+        bucket_rank: cursor.bucket.rank(),
+        cursor_idx,
+      });
     }
 
     while let Some(item) = merge.heap.pop() {
