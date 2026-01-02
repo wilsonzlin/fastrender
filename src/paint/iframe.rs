@@ -380,8 +380,10 @@ pub(crate) fn render_iframe_srcdoc(
   }
 
   let iframe_url = src
+    .map(str::trim)
     .filter(|s| !s.is_empty())
     .map(|s| image_cache.resolve_url(s))
+    .filter(|s| !s.trim().is_empty())
     .unwrap_or_else(|| "about:srcdoc".to_string());
   let context = image_cache.resource_context();
   let remaining_depth = context
@@ -486,6 +488,7 @@ pub(crate) fn render_iframe_src(
   device_pixel_ratio: f32,
   max_iframe_depth: usize,
 ) -> Option<Arc<ImageData>> {
+  let src = src.trim();
   if src.is_empty() {
     return None;
   }
@@ -497,6 +500,9 @@ pub(crate) fn render_iframe_src(
 
   let context = image_cache.resource_context();
   let resolved = image_cache.resolve_url(src);
+  if resolved.is_empty() {
+    return None;
+  }
   let remaining_depth = context
     .as_ref()
     .and_then(|ctx| ctx.iframe_depth_remaining)
@@ -1058,6 +1064,20 @@ mod diagnostics_tests {
     cache
   }
 
+  fn test_image_cache_with_iframe_depth(
+    fetcher: Arc<dyn ResourceFetcher>,
+    diagnostics: SharedRenderDiagnostics,
+    iframe_depth_remaining: usize,
+  ) -> ImageCache {
+    let mut cache = ImageCache::with_fetcher(fetcher);
+    cache.set_resource_context(Some(ResourceContext {
+      diagnostics: Some(diagnostics),
+      iframe_depth_remaining: Some(iframe_depth_remaining),
+      ..ResourceContext::default()
+    }));
+    cache
+  }
+
   #[test]
   fn iframe_fetch_network_error_records_diagnostics() {
     let diagnostics = SharedRenderDiagnostics::new();
@@ -1144,6 +1164,90 @@ mod diagnostics_tests {
     assert!(
       diag.fetch_errors.is_empty(),
       "expected no diagnostics for about:blank, got {diag:?}"
+    );
+  }
+
+  #[test]
+  fn iframe_whitespace_src_does_not_fetch() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|url| panic!("unexpected fetch: {url}")));
+    let cache = test_image_cache(fetcher, diagnostics.clone());
+    let rect = Rect::new(Point::ZERO, Size::new(10.0, 10.0));
+
+    let result = render_iframe_src(
+      "   ",
+      rect,
+      None,
+      &cache,
+      &test_font_context(),
+      1.0,
+      1,
+    );
+    assert!(result.is_none());
+
+    let diag = diagnostics.into_inner();
+    assert!(
+      diag.fetch_errors.is_empty(),
+      "expected no diagnostics for whitespace src, got {diag:?}"
+    );
+  }
+
+  #[test]
+  fn iframe_src_trims_whitespace_before_fetching() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|url| {
+      assert_eq!(url, "https://example.com/");
+      Ok(FetchedResource::new(
+        b"<html></html>".to_vec(),
+        Some("text/html".to_string()),
+      ))
+    }));
+    let cache = test_image_cache(fetcher, diagnostics.clone());
+    let rect = Rect::new(Point::ZERO, Size::new(10.0, 10.0));
+
+    let result = render_iframe_src(
+      " \t  https://example.com",
+      rect,
+      None,
+      &cache,
+      &test_font_context(),
+      1.0,
+      1,
+    );
+    assert!(result.is_some());
+
+    let diag = diagnostics.into_inner();
+    assert!(
+      diag.fetch_errors.is_empty(),
+      "expected no diagnostics for trimmed src, got {diag:?}"
+    );
+  }
+
+  #[test]
+  fn iframe_srcdoc_whitespace_src_records_nesting_violation_for_about_srcdoc() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|url| panic!("unexpected fetch: {url}")));
+    let cache = test_image_cache_with_iframe_depth(fetcher, diagnostics.clone(), 0);
+    let rect = Rect::new(Point::ZERO, Size::new(10.0, 10.0));
+
+    let result = render_iframe_srcdoc(
+      "<html></html>",
+      Some("   "),
+      rect,
+      None,
+      &cache,
+      &test_font_context(),
+      1.0,
+      1,
+    );
+    assert!(result.is_some());
+
+    let diag = diagnostics.into_inner();
+    assert!(
+      diag.fetch_errors.iter().any(|e| {
+        e.kind == ResourceKind::Document && e.url == "about:srcdoc" && e.message == IFRAME_NESTING_LIMIT_MESSAGE
+      }),
+      "expected about:srcdoc nesting violation, got {diag:?}"
     );
   }
 }
