@@ -1406,7 +1406,9 @@ struct DomMaps {
   tree_scope_prefixes: Vec<u32>,
   // Cached "nearest containing shadow root id" for each node id (0 means none/document scope).
   containing_shadow_roots: Vec<usize>,
-  shadow_hosts: HashMap<usize, usize>,
+  shadow_root_ids: Vec<usize>,
+  // Reverse lookup for shadow roots: shadow root node id -> host node id (0 means no host).
+  shadow_host_by_root: Vec<usize>,
   // Reverse lookup for shadow roots: host node id -> shadow root node id (0 means no shadow root).
   shadow_root_by_host: Vec<usize>,
   exportparts_map: HashMap<usize, Vec<(String, String)>>,
@@ -1500,7 +1502,8 @@ impl DomMaps {
     let mut parent_map: Vec<usize> = vec![0; node_count + 1];
     let mut tree_scope_prefixes: Vec<u32> = vec![DOCUMENT_TREE_SCOPE_PREFIX; node_count + 1];
     let mut containing_shadow_roots: Vec<usize> = vec![0; node_count + 1];
-    let mut shadow_hosts: HashMap<usize, usize> = HashMap::new();
+    let mut shadow_root_ids: Vec<usize> = Vec::new();
+    let mut shadow_host_by_root: Vec<usize> = vec![0; node_count + 1];
     let mut shadow_root_by_host: Vec<usize> = vec![0; node_count + 1];
     let mut exportparts_map: HashMap<usize, Vec<(String, String)>> = HashMap::new();
     let mut selector_keys = DomSelectorKeyCache::new(node_count);
@@ -1536,7 +1539,10 @@ impl DomMaps {
           *slot = p;
         }
         if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
-          shadow_hosts.insert(id, p);
+          shadow_root_ids.push(id);
+          if let Some(slot) = shadow_host_by_root.get_mut(id) {
+            *slot = p;
+          }
           if let Some(slot) = shadow_root_by_host.get_mut(p) {
             if *slot == 0 {
               *slot = id;
@@ -1622,7 +1628,8 @@ impl DomMaps {
       parent_map,
       tree_scope_prefixes,
       containing_shadow_roots,
-      shadow_hosts,
+      shadow_root_ids,
+      shadow_host_by_root,
       shadow_root_by_host,
       exportparts_map,
       selector_blooms: None,
@@ -1671,6 +1678,15 @@ impl DomMaps {
   fn containing_shadow_root(&self, node_id: usize) -> Option<usize> {
     let id = *self.containing_shadow_roots.get(node_id).unwrap_or(&0);
     (id != 0).then_some(id)
+  }
+
+  fn has_shadow_roots(&self) -> bool {
+    !self.shadow_root_ids.is_empty()
+  }
+
+  fn shadow_host_for_root(&self, shadow_root_id: usize) -> Option<usize> {
+    let host_id = *self.shadow_host_by_root.get(shadow_root_id).unwrap_or(&0);
+    (host_id != 0).then_some(host_id)
   }
 
   fn tree_scope_prefix(&self, node_id: usize) -> u32 {
@@ -6534,7 +6550,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   let dom_node_count = id_map.len();
   let shadow_stylesheets = collect_shadow_stylesheets(dom, &id_map)?;
   let mut dom_maps = DomMaps::new(dom, id_map);
-  let slot_assignment = if dom_maps.shadow_hosts.is_empty() {
+  let slot_assignment = if !dom_maps.has_shadow_roots() {
     SlotAssignment::default()
   } else {
     compute_slot_assignment_with_ids(dom, &dom_maps.id_map)
@@ -6565,7 +6581,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     let mut shadow_entries: Vec<_> = shadow_stylesheets.into_iter().collect();
     shadow_entries.sort_by_key(|(shadow_root_id, _)| *shadow_root_id);
     for (shadow_root_id, sheet) in shadow_entries {
-      let Some(host_id) = dom_maps.shadow_hosts.get(&shadow_root_id).copied() else {
+      let Some(host_id) = dom_maps.shadow_host_for_root(shadow_root_id) else {
         continue;
       };
       let resolved = if let Some(loader) = import_loader {
@@ -6696,7 +6712,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   // Legacy cascade entrypoints apply document styles inside shadow roots. When a document
   // stylesheet contains :host / :host-context selectors and a shadow tree has no shadow
   // stylesheet, treat those selectors as shadow-host rules so they can style the host element.
-  if !dom_maps.shadow_hosts.is_empty() {
+  if dom_maps.has_shadow_roots() {
     let mut fallback_host_rule_templates: Vec<CascadeRule<'_>> = Vec::new();
     for (idx, rule) in author_rules.iter().enumerate() {
       if !rule_targets_shadow_host(rule.rule) {
@@ -6717,7 +6733,10 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
 
     if !fallback_host_rule_templates.is_empty() {
       let mut seen_hosts: HashSet<usize> = HashSet::new();
-      for host_id in dom_maps.shadow_hosts.values().copied() {
+      for shadow_root_id in dom_maps.shadow_root_ids.iter().copied() {
+        let Some(host_id) = dom_maps.shadow_host_for_root(shadow_root_id) else {
+          continue;
+        };
         if !seen_hosts.insert(host_id) {
           continue;
         }
@@ -7064,16 +7083,12 @@ impl<'a> PreparedCascade<'a> {
     let id_map = enumerate_dom_ids(dom);
     let dom_node_count = id_map.len();
     let dom_maps = DomMaps::new(dom, id_map);
-    let slot_assignment = if dom_maps.shadow_hosts.is_empty() {
+    let slot_assignment = if !dom_maps.has_shadow_roots() {
       SlotAssignment::default()
     } else {
       compute_slot_assignment_with_ids(dom, &dom_maps.id_map)
     };
     let slot_maps = build_slot_maps(dom, &slot_assignment, &dom_maps);
-    let mut host_to_shadow_root: HashMap<usize, usize> = HashMap::new();
-    for (shadow_root_id, host_id) in dom_maps.shadow_hosts.iter() {
-      host_to_shadow_root.insert(*host_id, *shadow_root_id);
-    }
 
     let mut max_author_rules = document_rules.len();
     for (_host, sheet) in &shadow_sheets {
@@ -7143,7 +7158,7 @@ impl<'a> PreparedCascade<'a> {
     let mut shadow_host_indices: HashMap<usize, RuleIndex<'a>> = HashMap::new();
 
     for (host, sheet) in &shadow_sheets {
-      let Some(shadow_root_id) = host_to_shadow_root.get(host).copied() else {
+      let Some(shadow_root_id) = dom_maps.shadow_root_for_host(*host) else {
         continue;
       };
       // Safety: shadow sheets are boxed and kept alive by this struct.
@@ -8094,6 +8109,7 @@ fn scope_has_pseudo_rules(
   scopes: &RuleScopes<'_>,
   scope_host: Option<usize>,
   node_id: usize,
+  dom_maps: &DomMaps,
   pseudo: &PseudoElement,
 ) -> bool {
   if scopes.ua.has_pseudo_rules(pseudo) {
@@ -8111,9 +8127,11 @@ fn scope_has_pseudo_rules(
       }
     }
   }
-  if let Some(host) = scopes.host_rules.get(&node_id) {
-    if host.has_pseudo_rules(pseudo) {
-      return true;
+  if !scopes.host_rules.is_empty() && dom_maps.shadow_root_for_host(node_id).is_some() {
+    if let Some(host) = scopes.host_rules.get(&node_id) {
+      if host.has_pseudo_rules(pseudo) {
+        return true;
+      }
     }
   }
   false
@@ -8123,6 +8141,7 @@ fn scope_has_pseudo_content(
   scopes: &RuleScopes<'_>,
   scope_host: Option<usize>,
   node_id: usize,
+  dom_maps: &DomMaps,
   pseudo: &PseudoElement,
 ) -> bool {
   if scopes.ua.has_pseudo_content(pseudo) {
@@ -8140,9 +8159,11 @@ fn scope_has_pseudo_content(
       }
     }
   }
-  if let Some(host) = scopes.host_rules.get(&node_id) {
-    if host.has_pseudo_content(pseudo) {
-      return true;
+  if !scopes.host_rules.is_empty() && dom_maps.shadow_root_for_host(node_id).is_some() {
+    if let Some(host) = scopes.host_rules.get(&node_id) {
+      if host.has_pseudo_content(pseudo) {
+        return true;
+      }
     }
   }
   false
@@ -8432,31 +8453,33 @@ fn collect_matching_rules<'a>(
     }
   }
 
-  if let Some(host) = scopes.host_rules.get(&node_id) {
-    let host_slot_map = slot_map_for_host(node_id);
-    matches.extend(find_matching_rules(
-      node,
-      host,
-      selector_caches,
-      scratch,
-      ancestors,
-      ancestor_bloom,
-      ancestor_ids,
-      node_id,
-      container_ctx,
-      dom_maps,
-      slot_assignment,
-      host_slot_map,
-      Some(element_attr_cache),
-      sibling_cache,
-      true,
-      scopes.quirks_mode,
-    )?);
+  if dom_maps.shadow_root_for_host(node_id).is_some() {
+    if let Some(host) = scopes.host_rules.get(&node_id) {
+      let host_slot_map = slot_map_for_host(node_id);
+      matches.extend(find_matching_rules(
+        node,
+        host,
+        selector_caches,
+        scratch,
+        ancestors,
+        ancestor_bloom,
+        ancestor_ids,
+        node_id,
+        container_ctx,
+        dom_maps,
+        slot_assignment,
+        host_slot_map,
+        Some(element_attr_cache),
+        sibling_cache,
+        true,
+        scopes.quirks_mode,
+      )?);
+    }
   }
 
   // Shadow `::slotted(...)` rules apply to light-DOM nodes assigned to slots.
   if let Some(slot) = slot_assignment.node_to_slot.get(&node_id) {
-    if let Some(host_id) = dom_maps.shadow_hosts.get(&slot.shadow_root_id).copied() {
+    if let Some(host_id) = dom_maps.shadow_host_for_root(slot.shadow_root_id) {
       if let Some(shadow_index) = scopes.shadows.get(&host_id) {
         matches.extend(find_matching_rules(
           node,
@@ -8974,7 +8997,13 @@ fn compute_pseudo_styles(
   let mut backdrop_styles = None;
   if styles.top_layer.is_some()
     && (styles.top_layer.map(|k| k.is_modal()).unwrap_or(false)
-      || scope_has_pseudo_rules(rule_scopes, scope_host, node_id, &PseudoElement::Backdrop))
+      || scope_has_pseudo_rules(
+        rule_scopes,
+        scope_host,
+        node_id,
+        dom_maps,
+        &PseudoElement::Backdrop,
+      ))
   {
     backdrop_styles = compute_pseudo_element_styles(
       node,
@@ -9048,7 +9077,13 @@ fn compute_pseudo_styles(
   )
   .map(Arc::new);
   let before_styles =
-    if scope_has_pseudo_content(rule_scopes, scope_host, node_id, &PseudoElement::Before) {
+    if scope_has_pseudo_content(
+      rule_scopes,
+      scope_host,
+      node_id,
+      dom_maps,
+      &PseudoElement::Before,
+    ) {
       compute_pseudo_element_styles(
         node,
         rule_scopes,
@@ -9074,7 +9109,13 @@ fn compute_pseudo_styles(
       None
     };
   let after_styles =
-    if scope_has_pseudo_content(rule_scopes, scope_host, node_id, &PseudoElement::After) {
+    if scope_has_pseudo_content(
+      rule_scopes,
+      scope_host,
+      node_id,
+      dom_maps,
+      &PseudoElement::After,
+    ) {
       compute_pseudo_element_styles(
         node,
         rule_scopes,
@@ -9907,7 +9948,9 @@ mod tests {
     let inside_id = *id_map.get(&(inside_shadow as *const DomNode)).unwrap();
     let dom_maps = DomMaps::new(&dom, id_map);
 
+    assert!(dom_maps.has_shadow_roots());
     assert_eq!(dom_maps.shadow_root_for_host(host_id), Some(shadow_root_id));
+    assert_eq!(dom_maps.shadow_host_for_root(shadow_root_id), Some(host_id));
     assert_eq!(dom_maps.shadow_root_for_host(inside_id), None);
     assert_eq!(dom_maps.containing_shadow_root(host_id), None);
     assert_eq!(dom_maps.containing_shadow_root(shadow_root_id), None);
@@ -9996,13 +10039,22 @@ mod tests {
       .unwrap();
     let dom_maps = DomMaps::new(&dom, id_map);
 
+    assert!(dom_maps.has_shadow_roots());
     assert_eq!(
       dom_maps.shadow_root_for_host(outer_host_id),
       Some(outer_shadow_root_id)
     );
     assert_eq!(
+      dom_maps.shadow_host_for_root(outer_shadow_root_id),
+      Some(outer_host_id)
+    );
+    assert_eq!(
       dom_maps.shadow_root_for_host(inner_host_id),
       Some(inner_shadow_root_id)
+    );
+    assert_eq!(
+      dom_maps.shadow_host_for_root(inner_shadow_root_id),
+      Some(inner_host_id)
     );
 
     assert_eq!(dom_maps.containing_shadow_root(outer_host_id), None);
@@ -21105,21 +21157,18 @@ fn find_matching_rules<'a>(
 
   if !slotted_candidates.is_empty() {
     let slot_shadow_host = assigned_slot.and_then(|slot| {
-      dom_maps
-        .shadow_hosts
-        .get(&slot.shadow_root_id)
-        .and_then(|host_id| {
-          dom_maps
-            .id_to_node
-            .get(*host_id)
-            .copied()
-            .filter(|ptr| !ptr.is_null())
-            .map(|ptr| {
-              let host_node = unsafe { &*ptr };
-              let host_ancestors = dom_maps.ancestors_for(*host_id);
-              (host_node, host_ancestors)
-            })
-        })
+      dom_maps.shadow_host_for_root(slot.shadow_root_id).and_then(|host_id| {
+        dom_maps
+          .id_to_node
+          .get(host_id)
+          .copied()
+          .filter(|ptr| !ptr.is_null())
+          .map(|ptr| {
+            let host_node = unsafe { &*ptr };
+            let host_ancestors = dom_maps.ancestors_for(host_id);
+            (host_node, host_ancestors)
+          })
+      })
     });
     let shadow_host_for_slotted = slot_shadow_host
       .as_ref()
@@ -22984,7 +23033,7 @@ fn compute_pseudo_element_styles(
   pseudo: &PseudoElement,
   include_starting_style: bool,
 ) -> Option<ComputedStyle> {
-  if !scope_has_pseudo_rules(rule_scopes, scope_host, node_id, pseudo) {
+  if !scope_has_pseudo_rules(rule_scopes, scope_host, node_id, dom_maps, pseudo) {
     return None;
   }
   // Find rules matching this pseudo-element
@@ -23151,7 +23200,13 @@ fn compute_first_line_styles(
   viewport: Size,
   include_starting_style: bool,
 ) -> Option<(ComputedStyle, ComputedStyle)> {
-  if !scope_has_pseudo_rules(rule_scopes, scope_host, node_id, &PseudoElement::FirstLine) {
+  if !scope_has_pseudo_rules(
+    rule_scopes,
+    scope_host,
+    node_id,
+    dom_maps,
+    &PseudoElement::FirstLine,
+  ) {
     return None;
   }
 
@@ -23253,6 +23308,7 @@ fn compute_first_letter_styles(
     rule_scopes,
     scope_host,
     node_id,
+    dom_maps,
     &PseudoElement::FirstLetter,
   ) {
     return None;
@@ -23359,7 +23415,13 @@ fn compute_marker_styles(
   }
 
   let matching_rules =
-    if scope_has_pseudo_rules(rule_scopes, scope_host, node_id, &PseudoElement::Marker) {
+    if scope_has_pseudo_rules(
+      rule_scopes,
+      scope_host,
+      node_id,
+      dom_maps,
+      &PseudoElement::Marker,
+    ) {
       collect_pseudo_matching_rules(
         node,
         rule_scopes,
