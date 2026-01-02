@@ -6975,11 +6975,29 @@ impl FastRender {
     let cascade_timer = stats.as_deref().and_then(|rec| rec.timer());
     let style_apply_start = timings_enabled.then(Instant::now);
     record_stage(StageHeartbeat::Cascade);
-    let (mut prepared_cascade, mut styled_tree) = {
-      let _span = trace.span("cascade", "style");
-      let mut prepared = PreparedCascade::new_for_style_set(
+    let starting_tree = if options.animation_time.is_some() && has_starting_style_rules {
+      apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
         &dom_with_state,
         &style_set,
+        &media_ctx,
+        target_fragment.as_deref(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&mut media_query_cache),
+        deadline,
+      )
+      .ok()
+    } else {
+      None
+    };
+    let (mut prepared_cascade, mut styled_tree) = {
+      let _span = trace.span("cascade", "style");
+      let mut prepared = PreparedCascade::new_for_style_set_owned(
+        &dom_with_state,
+        style_set,
         &media_ctx,
         None,
         None,
@@ -6989,24 +7007,8 @@ impl FastRender {
       let styled_tree = prepared.apply(target_fragment.as_deref(), None, None, None, deadline)?;
       (prepared, styled_tree)
     };
-    if options.animation_time.is_some() && has_starting_style_rules {
-      if let Ok(starting_tree) =
-        apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
-          &dom_with_state,
-          &style_set,
-          &media_ctx,
-          target_fragment.as_deref(),
-          None,
-          None,
-          None,
-          None,
-          None,
-          Some(&mut media_query_cache),
-          deadline,
-        )
-      {
-        attach_starting_styles(&mut styled_tree, &starting_tree);
-      }
+    if let Some(starting_tree) = starting_tree {
+      attach_starting_styles(&mut styled_tree, &starting_tree);
     }
     check_deadline(deadline, RenderStage::Cascade)?;
     if let Some(start) = style_apply_start {
@@ -7016,31 +7018,23 @@ impl FastRender {
       has_container_queries.then(|| styled_fingerprint_map(&styled_tree));
     let mut svg_filter_defs = crate::tree::box_generation::collect_svg_filter_defs(&styled_tree);
 
-    // Keep the stylesheet for the `PreparedDocument`/`LayoutArtifacts` API surface, but build it
-    // by moving rules out of the scoped `StyleSet` instead of cloning a combined AST up front.
-    let stylesheet = {
-      let StyleSet {
-        mut document,
-        shadows,
-      } = style_set;
-      if !shadows.is_empty() {
-        let mut shadow_entries: Vec<_> = shadows.into_iter().collect();
-        shadow_entries.sort_by_key(|(host, _)| *host);
-        let additional: usize = shadow_entries
-          .iter()
-          .map(|(_, sheet)| sheet.rules.len())
-          .sum();
-        document.rules.reserve(additional);
-        for (_host, mut sheet) in shadow_entries {
-          document.rules.append(&mut sheet.rules);
-        }
-      }
-      document
-    };
-
     let fallback_page_size = viewport_size;
-    let page_rules =
-      stylesheet.collect_page_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let owned_page_rules = {
+      let collected =
+        prepared_cascade.collect_page_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
+      collected
+        .into_iter()
+        .map(|rule| (rule.rule.clone(), rule.layer_order.clone(), rule.order))
+        .collect::<Vec<_>>()
+    };
+    let page_rules: Vec<crate::css::types::CollectedPageRule<'_>> = owned_page_rules
+      .iter()
+      .map(|(rule, layer_order, order)| crate::css::types::CollectedPageRule {
+        rule,
+        layer_order: layer_order.clone(),
+        order: *order,
+      })
+      .collect();
     let mut page_name_hint = None;
     let mut layout_viewport = fallback_page_size;
     let mut first_page_style = None;
@@ -7626,9 +7620,10 @@ impl FastRender {
       }
     }
 
-    // `PreparedCascade` borrows from `dom_with_state`; drop it before moving the DOM into the
-    // returned artifacts.
-    drop(prepared_cascade);
+    // `PreparedCascade` borrows from `dom_with_state`; consume it before moving the DOM into the
+    // returned artifacts. This also yields the combined author stylesheet required by the
+    // `PreparedDocument`/`LayoutArtifacts` API surface.
+    let stylesheet = prepared_cascade.into_stylesheet();
 
     let svg_filter_defs = (!svg_filter_defs.is_empty()).then(|| Arc::new(svg_filter_defs));
     if let Some(start) = layout_start {

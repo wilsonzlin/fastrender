@@ -16,6 +16,7 @@ use crate::css::selectors::ShadowMatchData;
 use crate::css::selectors::SlotAssignmentMap;
 use crate::css::selectors::TextDirection;
 use crate::css::types::CollectedRule;
+use crate::css::types::CollectedPageRule;
 use crate::css::types::ContainerCondition;
 use crate::css::types::ContainerQuery;
 use crate::css::types::ContainerStyleQuery;
@@ -6653,49 +6654,19 @@ pub(crate) struct PreparedCascade<'a> {
 }
 
 impl<'a> PreparedCascade<'a> {
-  /// Build a reusable cascade context for a `StyleSet` + immutable DOM.
   #[allow(clippy::needless_option_as_deref)]
-  pub(crate) fn new_for_style_set(
+  fn new_for_style_set_with_sheets(
     dom: &'a DomNode,
-    style_set: &StyleSet,
+    document_sheet: Box<StyleSheet>,
+    shadow_sheets: Vec<(usize, Box<StyleSheet>)>,
     media_ctx: &MediaContext,
-    import_loader: Option<&dyn CssImportLoader>,
-    base_url: Option<&str>,
     mut media_cache: Option<&mut MediaQueryCache>,
     include_starting_style: bool,
   ) -> Result<Self, RenderError> {
     let ua_stylesheet = user_agent_stylesheet();
-
-    let resolve_imports = |sheet: &StyleSheet,
-                           loader: Option<&dyn CssImportLoader>,
-                           cache: Option<&mut MediaQueryCache>|
-     -> Result<StyleSheet, RenderError> {
-      if let Some(loader) = loader {
-        sheet.resolve_imports_with_cache(loader, base_url, media_ctx, cache)
-      } else {
-        Ok(sheet.clone())
-      }
-    };
-
-    let document_sheet = Box::new(resolve_imports(
-      &style_set.document,
-      import_loader,
-      media_cache.as_deref_mut(),
-    )?);
     // Safety: `document_sheet` is kept alive inside `PreparedCascade`. References derived from the
     // raw pointer remain valid for the lifetime `'a` of this context.
     let document_ref: &'a StyleSheet = unsafe { &*(&*document_sheet as *const StyleSheet) };
-
-    let mut shadow_sheets: Vec<(usize, Box<StyleSheet>)> =
-      Vec::with_capacity(style_set.shadows.len());
-    if !style_set.shadows.is_empty() {
-      let mut shadow_entries: Vec<_> = style_set.shadows.iter().collect();
-      shadow_entries.sort_by_key(|(host, _)| *host);
-      for (host, sheet) in shadow_entries {
-        let resolved = resolve_imports(sheet, import_loader, media_cache.as_deref_mut())?;
-        shadow_sheets.push((*host, Box::new(resolved)));
-      }
-    }
 
     // Collect style rules (possibly filtering out @starting-style rules depending on the mode).
     let ua_rules = filter_starting_rules(
@@ -7067,6 +7038,162 @@ impl<'a> PreparedCascade<'a> {
       scratch,
     })
   }
+
+  /// Build a reusable cascade context for a `StyleSet` + immutable DOM.
+  #[allow(clippy::needless_option_as_deref)]
+  pub(crate) fn new_for_style_set(
+    dom: &'a DomNode,
+    style_set: &StyleSet,
+    media_ctx: &MediaContext,
+    import_loader: Option<&dyn CssImportLoader>,
+    base_url: Option<&str>,
+    mut media_cache: Option<&mut MediaQueryCache>,
+    include_starting_style: bool,
+  ) -> Result<Self, RenderError> {
+    let resolve_imports = |sheet: &StyleSheet,
+                           loader: Option<&dyn CssImportLoader>,
+                           cache: Option<&mut MediaQueryCache>|
+     -> Result<StyleSheet, RenderError> {
+      if let Some(loader) = loader {
+        if sheet.contains_imports() {
+          sheet.resolve_imports_with_cache(loader, base_url, media_ctx, cache)
+        } else {
+          Ok(sheet.clone())
+        }
+      } else {
+        Ok(sheet.clone())
+      }
+    };
+
+    let document_sheet = Box::new(resolve_imports(
+      &style_set.document,
+      import_loader,
+      media_cache.as_deref_mut(),
+    )?);
+
+    let mut shadow_sheets: Vec<(usize, Box<StyleSheet>)> =
+      Vec::with_capacity(style_set.shadows.len());
+    if !style_set.shadows.is_empty() {
+      let mut shadow_entries: Vec<_> = style_set.shadows.iter().collect();
+      shadow_entries.sort_by_key(|(host, _)| *host);
+      for (host, sheet) in shadow_entries {
+        let resolved = resolve_imports(sheet, import_loader, media_cache.as_deref_mut())?;
+        shadow_sheets.push((*host, Box::new(resolved)));
+      }
+    }
+
+    Self::new_for_style_set_with_sheets(
+      dom,
+      document_sheet,
+      shadow_sheets,
+      media_ctx,
+      media_cache.as_deref_mut(),
+      include_starting_style,
+    )
+  }
+
+  /// Build a reusable cascade context by consuming an owned `StyleSet`.
+  ///
+  /// This avoids cloning large stylesheets when the caller already owns the parsed rule trees
+  /// (the common case in the main render pipeline).
+  #[allow(clippy::needless_option_as_deref)]
+  pub(crate) fn new_for_style_set_owned(
+    dom: &'a DomNode,
+    style_set: StyleSet,
+    media_ctx: &MediaContext,
+    import_loader: Option<&dyn CssImportLoader>,
+    base_url: Option<&str>,
+    mut media_cache: Option<&mut MediaQueryCache>,
+    include_starting_style: bool,
+  ) -> Result<Self, RenderError> {
+    let resolve_imports = |sheet: StyleSheet,
+                           loader: Option<&dyn CssImportLoader>,
+                           cache: Option<&mut MediaQueryCache>|
+     -> Result<StyleSheet, RenderError> {
+      if let Some(loader) = loader {
+        if sheet.contains_imports() {
+          sheet.resolve_imports_owned_with_cache(loader, base_url, media_ctx, cache)
+        } else {
+          Ok(sheet)
+        }
+      } else {
+        Ok(sheet)
+      }
+    };
+
+    let StyleSet { document, shadows } = style_set;
+    let document_sheet = Box::new(resolve_imports(
+      document,
+      import_loader,
+      media_cache.as_deref_mut(),
+    )?);
+
+    let mut shadow_sheets: Vec<(usize, Box<StyleSheet>)> = Vec::with_capacity(shadows.len());
+    if !shadows.is_empty() {
+      let mut shadow_entries: Vec<_> = shadows.into_iter().collect();
+      shadow_entries.sort_by_key(|(host, _)| *host);
+      for (host, sheet) in shadow_entries {
+        let resolved = resolve_imports(sheet, import_loader, media_cache.as_deref_mut())?;
+        shadow_sheets.push((host, Box::new(resolved)));
+      }
+    }
+
+    Self::new_for_style_set_with_sheets(
+      dom,
+      document_sheet,
+      shadow_sheets,
+      media_ctx,
+      media_cache.as_deref_mut(),
+      include_starting_style,
+    )
+  }
+
+  /// Collect @page rules across all author scopes represented by this cascade.
+  ///
+  /// This mirrors the behavior of concatenating shadow stylesheets onto the document stylesheet
+  /// (as done when emitting the combined `LayoutArtifacts.stylesheet`) without reallocating or
+  /// mutating the underlying rule lists.
+  pub(crate) fn collect_page_rules_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    mut cache: Option<&mut MediaQueryCache>,
+  ) -> Vec<CollectedPageRule<'_>> {
+    let mut out = self
+      ._document_sheet
+      .collect_page_rules_with_cache(media_ctx, cache.as_deref_mut());
+    for (_host, sheet) in &self._shadow_sheets {
+      let offset = out.len();
+      let mut rules = sheet.collect_page_rules_with_cache(media_ctx, cache.as_deref_mut());
+      for rule in rules.iter_mut() {
+        rule.order = rule.order.saturating_add(offset);
+      }
+      out.extend(rules);
+    }
+    out
+  }
+
+  /// Consume the prepared cascade and return the combined author stylesheet.
+  ///
+  /// This matches the historical behavior of `LayoutArtifacts.stylesheet`: start with the
+  /// document stylesheet and append each shadow-root stylesheet in deterministic host-id order.
+  pub(crate) fn into_stylesheet(self) -> StyleSheet {
+    let PreparedCascade {
+      mut _document_sheet,
+      _shadow_sheets,
+      ..
+    } = self;
+    let mut document = *_document_sheet;
+    if !_shadow_sheets.is_empty() {
+      let additional: usize = _shadow_sheets.iter().map(|(_, sheet)| sheet.rules.len()).sum();
+      document.rules.reserve(additional);
+      for (_host, sheet) in _shadow_sheets {
+        let mut sheet = *sheet;
+        document.rules.append(&mut sheet.rules);
+      }
+    }
+    document
+  }
+
 
   /// Apply styles using the stored rule indices, DOM maps, and reused selector caches.
   #[allow(clippy::implicit_hasher)]
