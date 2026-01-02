@@ -470,20 +470,33 @@ fn rewrite_known_pageset_hosts(url: &str) -> Option<String> {
       return None;
     }
     let host = parsed.host_str()?;
-    // Some pageset domains (notably `tesco.com` and `nhk.or.jp`) do not resolve/reply reliably
-    // without the `www.` subdomain in certain environments. Rewrite to the canonical host so the
-    // pageset can still fetch and render deterministically.
+
+    // Some pageset domains do not resolve/reply reliably without the `www.` subdomain in certain
+    // environments. Rewrite to the canonical host so the pageset can still fetch and render
+    // deterministically.
     //
     // Note: this is intentionally scoped to a small allowlist to avoid surprising callers with
-    // implicit host changes.
+    // implicit URL changes.
     if host.eq_ignore_ascii_case("tesco.com") {
       parsed.set_host(Some("www.tesco.com")).ok()?;
-    } else if host.eq_ignore_ascii_case("nhk.or.jp") {
-      parsed.set_host(Some("www.nhk.or.jp")).ok()?;
-    } else {
-      return None;
+      return Some(parsed.to_string());
     }
-    Some(parsed.to_string())
+    if host.eq_ignore_ascii_case("nhk.or.jp") {
+      parsed.set_host(Some("www.nhk.or.jp")).ok()?;
+      return Some(parsed.to_string());
+    }
+
+    // MDN moved the multicol layout docs from the legacy `CSS_multicol_layout` section to the
+    // `Guides/Multicol_layout` path. Keep the pageset entry stable by rewriting the legacy URL to
+    // the new location so we can still fetch real content.
+    if host.eq_ignore_ascii_case("developer.mozilla.org")
+      && parsed.path() == "/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts"
+    {
+      parsed.set_path("/en-US/docs/Web/CSS/Guides/Multicol_layout");
+      return Some(parsed.to_string());
+    }
+
+    None
   })
 }
 
@@ -7800,6 +7813,13 @@ mod tests {
     assert_eq!(
       rewrite_known_pageset_hosts("https://nhk.or.jp").as_deref(),
       Some("https://www.nhk.or.jp/")
+    );
+    assert_eq!(
+      rewrite_known_pageset_hosts(
+        "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts"
+      )
+      .as_deref(),
+      Some("https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Multicol_layout")
     );
     assert_eq!(rewrite_known_pageset_hosts("https://example.com"), None);
     assert_eq!(rewrite_known_pageset_hosts("http://tesco.com"), None);
