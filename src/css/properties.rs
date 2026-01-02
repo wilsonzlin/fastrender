@@ -1708,16 +1708,26 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
     return Some(PropertyValue::Length(length));
   }
 
-  if value_str.len() >= 5
-    && value_str.as_bytes()[0].to_ascii_lowercase() == b'u'
-    && value_str.as_bytes()[1].to_ascii_lowercase() == b'r'
-    && value_str.as_bytes()[2].to_ascii_lowercase() == b'l'
-    && value_str.as_bytes()[3] == b'('
-    && value_str.ends_with(')')
+  if trimmed.len() >= 5
+    && trimmed.as_bytes()[0].to_ascii_lowercase() == b'u'
+    && trimmed.as_bytes()[1].to_ascii_lowercase() == b'r'
+    && trimmed.as_bytes()[2].to_ascii_lowercase() == b'l'
+    && trimmed.as_bytes()[3] == b'('
+    && trimmed.ends_with(')')
   {
-    let inner = value_str[4..value_str.len() - 1].trim();
-    let inner = inner.trim_matches(|c| c == '"' || c == '\'');
-    return Some(PropertyValue::Url(inner.to_string()));
+    let inner = trimmed[4..trimmed.len() - 1].trim();
+    let inner = if inner.len() >= 2 {
+      let first = inner.as_bytes()[0];
+      let last = inner.as_bytes()[inner.len() - 1];
+      if (first == b'"' || first == b'\'') && last == first {
+        &inner[1..inner.len() - 1]
+      } else {
+        inner
+      }
+    } else {
+      inner
+    };
+    return Some(PropertyValue::Url(unescape_css_string_fragment(inner)));
   }
 
   if value_str.ends_with('%') {
@@ -1738,6 +1748,77 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
   }
 
   Some(PropertyValue::Keyword(value_str.to_string()))
+}
+
+fn is_css_whitespace(ch: char) -> bool {
+  matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{000C}')
+}
+
+fn unescape_css_string_fragment(value: &str) -> String {
+  if !value.as_bytes().contains(&b'\\') {
+    return value.to_string();
+  }
+
+  let mut out = String::with_capacity(value.len());
+  let mut iter = value.chars().peekable();
+  while let Some(ch) = iter.next() {
+    if ch != '\\' {
+      out.push(ch);
+      continue;
+    }
+
+    let Some(&next) = iter.peek() else {
+      out.push(char::REPLACEMENT_CHARACTER);
+      break;
+    };
+
+    match next {
+      '\n' | '\u{000C}' => {
+        iter.next();
+        continue;
+      }
+      '\r' => {
+        iter.next();
+        if matches!(iter.peek().copied(), Some('\n')) {
+          iter.next();
+        }
+        continue;
+      }
+      _ => {}
+    }
+
+    if next.is_ascii_hexdigit() {
+      let mut digits = 0usize;
+      let mut value: u32 = 0;
+      while digits < 6 {
+        let Some(&ch) = iter.peek() else {
+          break;
+        };
+        if !ch.is_ascii_hexdigit() {
+          break;
+        }
+        let digit = ch.to_digit(16).unwrap();
+        value = (value << 4) | digit;
+        digits += 1;
+        iter.next();
+      }
+
+      if matches!(iter.peek().copied(), Some(ch) if is_css_whitespace(ch)) {
+        iter.next();
+      }
+
+      let decoded = match value {
+        0 | 0xD800..=0xDFFF | 0x110000.. => char::REPLACEMENT_CHARACTER,
+        _ => char::from_u32(value).unwrap_or(char::REPLACEMENT_CHARACTER),
+      };
+      out.push(decoded);
+      continue;
+    }
+
+    out.push(iter.next().unwrap());
+  }
+
+  out
 }
 
 fn parse_gradient(value: &str) -> Option<PropertyValue> {
@@ -2816,6 +2897,30 @@ mod tests {
     assert!(matches!(&list[2], PropertyValue::Number(n) if (*n - 2.0).abs() < 1e-6));
     assert!(matches!(&list[3], PropertyValue::Keyword(k) if k == ","));
     assert!(matches!(&list[4], PropertyValue::Keyword(k) if k.eq_ignore_ascii_case("pointer")));
+  }
+
+  #[test]
+  fn parses_url_unescapes_quoted_string_escapes() {
+    let parsed = parse_simple_value(
+      r#"url("data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"></svg>")"#,
+    )
+    .expect("parsed");
+    let PropertyValue::Url(url) = parsed else {
+      panic!("expected Url");
+    };
+    assert_eq!(
+      url,
+      r#"data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#
+    );
+  }
+
+  #[test]
+  fn parses_url_unescapes_hex_escapes() {
+    let parsed = parse_simple_value(r#"url("data:image/svg+xml,\3C svg\3E")"#).expect("parsed");
+    let PropertyValue::Url(url) = parsed else {
+      panic!("expected Url");
+    };
+    assert_eq!(url, "data:image/svg+xml,<svg>");
   }
 
   #[test]
