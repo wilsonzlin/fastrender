@@ -727,6 +727,10 @@ fn parse_import_rule<'i, 't>(
     None => return Ok(None),
   };
 
+  if href.trim().is_empty() {
+    return Ok(None);
+  }
+
   Ok(Some(CssRule::Import(ImportRule {
     href,
     media: media_queries,
@@ -3148,7 +3152,11 @@ fn parse_font_face_src(value: &str) -> Vec<FontFaceSource> {
 
 fn parse_font_face_src_item<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<FontFaceSource> {
   if let Ok(url) = parser.try_parse(|p| p.expect_url()) {
-    let mut src = FontFaceUrlSource::new(url.as_ref().to_string());
+    let url = url.as_ref();
+    if url.trim().is_empty() {
+      return None;
+    }
+    let mut src = FontFaceUrlSource::new(url.to_string());
     src.format_hints = parse_format_hints(parser);
     return Some(FontFaceSource::Url(src));
   }
@@ -3156,6 +3164,9 @@ fn parse_font_face_src_item<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<FontF
   match parser.next_including_whitespace() {
     Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("url") => {
       if let Ok(url) = parser.parse_nested_block(|p| parse_string_or_ident(p)) {
+        if url.trim().is_empty() {
+          return None;
+        }
         let mut src = FontFaceUrlSource::new(url);
         src.format_hints = parse_format_hints(parser);
         return Some(FontFaceSource::Url(src));
@@ -4677,6 +4688,17 @@ mod tests {
   }
 
   #[test]
+  fn ignores_import_rule_with_empty_href() {
+    let css = r#"
+        @import url("");
+        body { color: red; }
+      "#;
+    let stylesheet = parse_stylesheet(css).unwrap();
+    assert_eq!(stylesheet.rules.len(), 1);
+    assert!(matches!(stylesheet.rules[0], CssRule::Style(_)));
+  }
+
+  #[test]
   fn parses_font_face_rule() {
     let css = r#"@font-face {
             font-family: "TestFamily";
@@ -4710,6 +4732,23 @@ mod tests {
         assert_eq!(face.unicode_ranges[0], (0x0041, 0x005a));
         assert_eq!(face.unicode_ranges[1], (0x0061, 0x007a));
         assert_eq!(face.unicode_ranges[2], (0x1f600, 0x1f600));
+      }
+      other => panic!("Unexpected rule: {:?}", other),
+    }
+  }
+
+  #[test]
+  fn font_face_src_skips_empty_url() {
+    let css = r#"@font-face {
+            font-family: "TestFamily";
+            src: url("") format("woff2"), local(TestLocal);
+        }"#;
+    let stylesheet = parse_stylesheet(css).unwrap();
+    assert_eq!(stylesheet.rules.len(), 1);
+    match &stylesheet.rules[0] {
+      CssRule::FontFace(face) => {
+        assert_eq!(face.sources.len(), 1);
+        assert!(matches!(&face.sources[0], FontFaceSource::Local(name) if name == "TestLocal"));
       }
       other => panic!("Unexpected rule: {:?}", other),
     }
