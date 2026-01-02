@@ -196,6 +196,20 @@ def main() -> None:
     0x1F9C3,  # 🧃
   ]:
     cmap[codepoint] = "grin"
+  # Pageset-derived icon/codepoint regressions (typically inserted via CSS `content:`) mapped onto
+  # existing glyphs so bundled-font runs avoid last-resort tofu.
+  for codepoint in [
+    0x28FE,  # ⣾ (stripe.com)
+    0xE021,  # private use (hbr.org)
+    0xE022,  # private use (hbr.org)
+    0xE031,  # private use (hbr.org)
+    0xE083,  # private use (hbr.org)
+    0xE085,  # private use (hbr.org)
+    0xE909,  # private use (microsoft.com)
+    0xF301,  # private use (developer.apple.com)
+    0xF8FF,  # private use (developer.apple.com)
+  ]:
+    cmap[codepoint] = "grin"
   for codepoint in [
     0x1F4AA,  # 💪
     0x1F937,  # 🤷

@@ -86,6 +86,17 @@ fn bundled_font_coverage_includes_pageset_must_cover_codepoints() {
       char::from_u32(0x1F920).expect("emoji scalar"),
     ),
     ("Handbag U+1F45C", char::from_u32(0x1F45C).expect("emoji scalar")),
+    // Pageset icon font / private-use regressions that should not hit last-resort tofu when using
+    // bundled fonts.
+    ("Braille pattern U+28FE", char::from_u32(0x28FE).expect("braille scalar")),
+    ("Microsoft PUA U+E909", char::from_u32(0xE909).expect("PUA scalar")),
+    ("HBR PUA U+E021", char::from_u32(0xE021).expect("PUA scalar")),
+    ("HBR PUA U+E022", char::from_u32(0xE022).expect("PUA scalar")),
+    ("HBR PUA U+E031", char::from_u32(0xE031).expect("PUA scalar")),
+    ("HBR PUA U+E083", char::from_u32(0xE083).expect("PUA scalar")),
+    ("HBR PUA U+E085", char::from_u32(0xE085).expect("PUA scalar")),
+    ("Apple PUA U+F301", char::from_u32(0xF301).expect("PUA scalar")),
+    ("Apple PUA U+F8FF", char::from_u32(0xF8FF).expect("PUA scalar")),
   ];
 
   for (label, ch) in must_cover {

@@ -75,4 +75,45 @@ fn bundled_font_set_integrity() {
   assert_family_has_glyph(&ctx, "FastRender Emoji", '⭐');
   assert_family_has_glyph(&ctx, "FastRender Emoji", '🐐');
   assert_family_has_glyph(&ctx, "FastRender Emoji", '🤠');
+  assert_family_has_glyph(&ctx, "FastRender Emoji", '⣾');
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xE909).expect("microsoft private use scalar"),
+  );
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xE021).expect("hbr private use scalar"),
+  );
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xE022).expect("hbr private use scalar"),
+  );
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xE031).expect("hbr private use scalar"),
+  );
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xE083).expect("hbr private use scalar"),
+  );
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xE085).expect("hbr private use scalar"),
+  );
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xF301).expect("apple private use scalar"),
+  );
+  assert_family_has_glyph(
+    &ctx,
+    "FastRender Emoji",
+    char::from_u32(0xF8FF).expect("apple private use scalar"),
+  );
 }
