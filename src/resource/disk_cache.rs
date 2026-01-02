@@ -103,6 +103,13 @@ const DISK_READ_CHUNK_SIZE: usize = 64 * 1024;
 const DISK_WRITE_CHUNK_SIZE: usize = 64 * 1024;
 /// Small time buffer to avoid spending the entire render budget persisting cache entries.
 const DISK_WRITE_DEADLINE_BUFFER: Duration = Duration::from_millis(10);
+/// Maximum number of bytes allowed for opportunistic disk cache writeback while a render timeout is
+/// active.
+///
+/// Pageset runs enable `allow_no_store` by default for determinism/offline behavior. When a render
+/// deadline is active we normally avoid disk writes entirely (to preserve the render budget), but
+/// persisting small entries is usually cheaper than repeating the network fetch on every run.
+const DISK_WRITEBACK_SMALL_ENTRY_MAX_BYTES: usize = 128 * 1024;
 /// Minimum chunk size used for deadline-aware disk reads.
 ///
 /// Most disk-cache hits are tiny (CSS, meta JSON) so reading with a 64KiB scratch buffer on every
@@ -511,6 +518,21 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         deadline.timeout_limit().is_some() && !self.disk_config.writeback_under_deadline
       })
       .unwrap_or(false)
+  }
+
+  fn disk_writeback_disabled_for_len(&self, len: usize) -> bool {
+    if !self.disk_writeback_disabled() {
+      return false;
+    }
+
+    // When `allow_no_store` is enabled we assume the caller cares about determinism/offline
+    // behavior. In that mode, allow persisting *small* entries even when writeback is disabled so
+    // warm-cache pageset runs don't repeatedly fetch the same tiny subresources.
+    if self.disk_config.allow_no_store && len <= DISK_WRITEBACK_SMALL_ENTRY_MAX_BYTES {
+      return false;
+    }
+
+    true
   }
 
   fn deadline_allows_disk_writeback(&self) -> bool {
@@ -1117,10 +1139,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn persist_alias(&self, kind: FetchContextKind, alias: &str, canonical: &str) {
-    if self.disk_writeback_disabled() {
+    if alias == canonical || self.should_skip_disk(alias) || self.should_skip_disk(canonical) {
       return;
     }
-    if alias == canonical || self.should_skip_disk(alias) || self.should_skip_disk(canonical) {
+    if !self.deadline_allows_disk_writeback() {
       return;
     }
 
@@ -1134,7 +1156,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       target: canonical.to_string(),
     };
     match serde_json::to_vec(&alias) {
-      Ok(serialized) if fs::write(&tmp, &serialized).is_ok() => {
+      Ok(serialized) if !self.disk_writeback_disabled_for_len(serialized.len())
+        && fs::write(&tmp, &serialized).is_ok() =>
+      {
         let _ = fs::rename(&tmp, &alias_path);
       }
       _ => {
@@ -1144,9 +1168,6 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn persist_snapshot(&self, kind: FetchContextKind, url: &str, snapshot: &CachedSnapshot) {
-    if self.disk_writeback_disabled() {
-      return;
-    }
     if let Some(resource) = snapshot.as_resource() {
       self.persist_resource(
         kind,
@@ -1168,7 +1189,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     last_modified: Option<&str>,
     http_cache: Option<&CachedHttpMetadata>,
   ) {
-    if self.disk_writeback_disabled() {
+    if self.disk_writeback_disabled_for_len(resource.bytes.len()) {
       return;
     }
     if self.should_skip_disk(url) {
@@ -1447,7 +1468,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     bytes: &[u8],
     source: Option<&FetchedResource>,
   ) {
-    if self.disk_writeback_disabled() {
+    if self.disk_writeback_disabled_for_len(bytes.len()) {
       return;
     }
     if self.should_skip_disk(url) {
@@ -2394,6 +2415,98 @@ mod tests {
   }
 
   #[test]
+  fn disk_cache_persists_small_entries_under_deadline_when_allow_no_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        allow_no_store: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let url = "https://example.com/persist-small-under-deadline";
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(500)), None);
+    let res = render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect("fetch");
+    assert_eq!(res.bytes, b"hello");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let data_path = disk.data_path(TEST_KIND, url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    assert!(
+      data_path.exists(),
+      "expected small entry to be persisted even when writeback is disabled under deadline"
+    );
+    assert!(
+      meta_path.exists(),
+      "expected small entry metadata to be persisted even when writeback is disabled under deadline"
+    );
+
+    let disk_again = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let second = disk_again.fetch(url).expect("disk hit");
+    assert_eq!(second.bytes, b"hello");
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
+  }
+
+  #[test]
+  fn disk_cache_does_not_persist_large_entries_under_deadline_when_allow_no_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = SizedFetcher {
+      count: Arc::clone(&counter),
+      size: DISK_WRITEBACK_SMALL_ENTRY_MAX_BYTES + 1,
+    };
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        allow_no_store: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let url = "https://example.com/no-persist-large-under-deadline";
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(500)), None);
+    let res = render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect("fetch");
+    assert_eq!(res.bytes.len(), DISK_WRITEBACK_SMALL_ENTRY_MAX_BYTES + 1);
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let data_path = disk.data_path(TEST_KIND, url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    assert!(
+      !data_path.exists(),
+      "expected large entries to avoid opportunistic persistence under deadline"
+    );
+    assert!(!meta_path.exists());
+
+    // A new instance should refetch because nothing was written to disk.
+    let second_fetcher = SizedFetcher {
+      count: Arc::clone(&counter),
+      size: DISK_WRITEBACK_SMALL_ENTRY_MAX_BYTES + 1,
+    };
+    let disk_again = DiskCachingFetcher::new(second_fetcher, tmp.path());
+    let _ = render_control::with_deadline(Some(&deadline), || disk_again.fetch(url)).expect("fetch");
+    assert_eq!(
+      counter.load(Ordering::SeqCst),
+      2,
+      "expected refetch because large entry was not persisted"
+    );
+  }
+
+  #[test]
   fn disk_cache_persists_under_deadline_when_enabled() {
     let tmp = tempfile::tempdir().unwrap();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -2439,6 +2552,58 @@ mod tests {
       render_control::with_deadline(Some(&deadline), || disk_again.fetch(url)).expect("disk hit");
     assert_eq!(second.bytes, b"hello");
     assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
+  }
+
+  #[test]
+  fn disk_cache_persists_cache_artifacts_under_deadline_when_allow_no_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let disk = DiskCachingFetcher::with_configs(
+      PanicFetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        allow_no_store: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let url = "https://example.com/artifact-under-deadline";
+    let artifact_bytes = br#"{"intrinsic":"ok"}"#;
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(500)), None);
+    render_control::with_deadline(Some(&deadline), || {
+      disk.write_cache_artifact(
+        TEST_KIND,
+        url,
+        CacheArtifactKind::ImageProbeMetadata,
+        artifact_bytes,
+        None,
+      );
+    });
+
+    let key = disk.artifact_key(TEST_KIND, url, CacheArtifactKind::ImageProbeMetadata);
+    let data_path = disk.data_path_for_key(&key);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    assert!(
+      data_path.exists(),
+      "expected cache artifact to be persisted under deadline in determinism mode"
+    );
+    assert!(
+      meta_path.exists(),
+      "expected cache artifact metadata to be persisted under deadline in determinism mode"
+    );
+
+    let disk_again = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let cached = disk_again
+      .read_cache_artifact(TEST_KIND, url, CacheArtifactKind::ImageProbeMetadata)
+      .expect("artifact hit");
+    assert_eq!(cached.bytes, artifact_bytes);
+    assert_eq!(
+      cached.content_type.as_deref(),
+      Some(IMAGE_PROBE_METADATA_CONTENT_TYPE)
+    );
   }
 
   #[test]
