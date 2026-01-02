@@ -1180,4 +1180,58 @@ mod tests {
       .expect("definite entry should remain cached");
     assert_eq!(got_def.size, def_layout.size);
   }
+
+  #[test]
+  fn taffy_measure_cache_retains_many_definite_entries_alongside_max_content() {
+    use taffy::prelude::Size as TaffySize;
+    use taffy::style::AvailableSpace;
+    use taffy::tree::{Cache, LayoutOutput, RunMode};
+
+    let mut cache = Cache::new();
+    let known = TaffySize {
+      width: None,
+      height: None,
+    };
+    let max_space = TaffySize {
+      width: AvailableSpace::MaxContent,
+      height: AvailableSpace::MaxContent,
+    };
+
+    let mut definite_spaces = Vec::new();
+    for idx in 0..16u32 {
+      let space = TaffySize {
+        width: AvailableSpace::Definite(400.0 + idx as f32 * 10.0),
+        height: AvailableSpace::Definite(300.0),
+      };
+      definite_spaces.push(space);
+      cache.store(
+        known,
+        space,
+        RunMode::ComputeSize,
+        LayoutOutput::from_outer_size(TaffySize {
+          width: idx as f32,
+          height: idx as f32,
+        }),
+      );
+    }
+
+    let max_layout = LayoutOutput::from_outer_size(TaffySize {
+      width: 123.0,
+      height: 45.0,
+    });
+    cache.store(known, max_space, RunMode::ComputeSize, max_layout);
+
+    let got_max = cache
+      .get(known, max_space, RunMode::ComputeSize)
+      .expect("max-content entry should remain cached");
+    assert_eq!(got_max.size, max_layout.size);
+
+    let target_idx = 8usize;
+    let target_space = definite_spaces[target_idx];
+    let got_def = cache
+      .get(known, target_space, RunMode::ComputeSize)
+      .expect("definite entries should not be evicted by max-content insert");
+    assert_eq!(got_def.size.width, target_idx as f32);
+    assert_eq!(got_def.size.height, target_idx as f32);
+  }
 }
