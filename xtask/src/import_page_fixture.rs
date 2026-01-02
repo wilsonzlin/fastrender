@@ -620,10 +620,12 @@ fn rewrite_css(
   ctx: ReferenceContext,
 ) -> Result<String> {
   let url_regex =
-    Regex::new("(?i)(?P<prefix>url\\(\\s*[\"']?)(?P<url>[^\"')]+)(?P<suffix>[\"']?\\s*\\))")
+    // Some real pages ship malformed url() values (e.g. missing the closing ')'). We still want to
+    // rewrite the URL so the imported fixture is fully offline/deterministic.
+    Regex::new("(?i)(?P<prefix>url\\(\\s*[\"']?)(?P<url>[^\"')]+)(?P<suffix>[\"']?\\s*\\)?)")
       .expect("url regex must compile");
   let import_regex =
-    Regex::new("(?i)(?P<prefix>@import\\s+['\"])(?P<url>[^\"']+)(?P<suffix>['\"])")
+    Regex::new("(?i)(?P<prefix>@import\\s*['\"])(?P<url>[^\"']+)(?P<suffix>['\"])")
       .expect("import regex must compile");
 
   let mut rewritten = apply_rewrite(&url_regex, input, base_url, ctx, catalog, None)?;
@@ -1459,4 +1461,38 @@ mod tests {
     );
     Ok(())
   }
-}
+
+  #[test]
+  fn rewrite_css_rewrites_unclosed_url_functions() -> Result<()> {
+    let base = Url::parse("https://example.test/")?;
+    let mut catalog = AssetCatalog::new(true);
+    let css = "background-image:url(https://example.test/img";
+    let rewritten = rewrite_css(css, &base, &mut catalog, ReferenceContext::Html)?;
+    assert!(
+      !rewritten.contains("https://example.test/img"),
+      "expected url() to be rewritten, got: {rewritten}"
+    );
+    assert!(
+      rewritten.contains("assets/missing_"),
+      "expected placeholder asset to be inserted, got: {rewritten}"
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn rewrite_css_rewrites_import_without_whitespace() -> Result<()> {
+    let base = Url::parse("https://example.test/")?;
+    let mut catalog = AssetCatalog::new(true);
+    let css = "@import\"https://example.test/style.css\";";
+    let rewritten = rewrite_css(css, &base, &mut catalog, ReferenceContext::Html)?;
+    assert!(
+      !rewritten.contains("https://example.test/style.css"),
+      "expected @import to be rewritten, got: {rewritten}"
+    );
+    assert!(
+      rewritten.contains("assets/missing_"),
+      "expected placeholder asset to be inserted, got: {rewritten}"
+    );
+    Ok(())
+  }
+} 

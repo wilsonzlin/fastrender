@@ -2603,7 +2603,7 @@ fn ordered_sources<'a>(sources: &'a [FontFaceSource]) -> Vec<&'a FontFaceSource>
         let mut remotes: Vec<(usize, usize, &FontFaceSource)> = (start..idx)
           .filter_map(|i| {
             let rank = match &sources[i] {
-              FontFaceSource::Url(url) => format_support_rank(&url.format_hints),
+              FontFaceSource::Url(url) => format_support_rank(&url.format_hints, &url.url),
               _ => None,
             }?;
             Some((rank, i, &sources[i]))
@@ -2619,9 +2619,9 @@ fn ordered_sources<'a>(sources: &'a [FontFaceSource]) -> Vec<&'a FontFaceSource>
   ordered
 }
 
-fn format_support_rank(hints: &[FontSourceFormat]) -> Option<usize> {
+fn format_support_rank(hints: &[FontSourceFormat], url: &str) -> Option<usize> {
   if hints.is_empty() {
-    return Some(3);
+    return inferred_format_support_rank_from_url(url);
   }
 
   let mut best: Option<usize> = None;
@@ -2642,6 +2642,30 @@ fn format_support_rank(hints: &[FontSourceFormat]) -> Option<usize> {
   }
 
   best
+}
+
+fn inferred_format_support_rank_from_url(url: &str) -> Option<usize> {
+  if has_prefix_ignore_ascii_case(url, "data:") {
+    return Some(3);
+  }
+
+  let without_query_fragment = url
+    .split(|c| c == '?' || c == '#')
+    .next()
+    .unwrap_or(url);
+  let ext = std::path::Path::new(without_query_fragment)
+    .extension()
+    .and_then(|e| e.to_str())
+    .map(|e| e.to_ascii_lowercase());
+
+  match ext.as_deref() {
+    Some("woff2") => Some(0),
+    Some("woff") => Some(1),
+    Some("opentype") | Some("otf") | Some("truetype") | Some("ttf") | Some("collection")
+    | Some("ttc") => Some(2),
+    Some("eot") | Some("svg") | Some("svgz") => None,
+    _ => Some(3),
+  }
 }
 
 fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u8>> {
@@ -2818,6 +2842,32 @@ mod tests {
     let (_guard, _timeout) = cvar
       .wait_timeout(guard, Duration::from_millis(0))
       .unwrap_or_else(|poisoned| poisoned.into_inner());
+  }
+
+  #[test]
+  fn ordered_sources_skips_eot_when_format_hints_are_missing() {
+    let sources = vec![
+      FontFaceSource::url("https://example.com/font.eot"),
+      FontFaceSource::url("https://example.com/font.woff2"),
+      FontFaceSource::url("https://example.com/font.woff"),
+    ];
+
+    let ordered = ordered_sources(&sources);
+    let urls: Vec<&str> = ordered
+      .iter()
+      .filter_map(|src| match src {
+        FontFaceSource::Url(url) => Some(url.url.as_str()),
+        _ => None,
+      })
+      .collect();
+
+    assert_eq!(
+      urls,
+      vec![
+        "https://example.com/font.woff2",
+        "https://example.com/font.woff"
+      ]
+    );
   }
 
   fn system_font_for_char(ch: char) -> Option<(Vec<u8>, String)> {

@@ -4977,7 +4977,8 @@ impl HttpFetcher {
   /// Decode a data: URL
   fn fetch_data(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
     let limit = self.policy.allowed_response_limit()?;
-    let resource = data_url::decode_data_url(url)?;
+    let mut resource = data_url::decode_data_url(url)?;
+    substitute_offline_fixture_placeholder_full(kind, &mut resource.bytes, &mut resource.content_type);
     let len = resource.bytes.len();
     if len > limit {
       if let Some(remaining) = self.policy.remaining_budget() {
@@ -4999,10 +5000,21 @@ impl HttpFetcher {
     Ok(resource)
   }
 
-  fn fetch_data_prefix(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
+  fn fetch_data_prefix(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<FetchedResource> {
     let limit = self.policy.allowed_response_limit()?;
     let read_limit = max_bytes.min(limit);
-    let resource = data_url::decode_data_url_prefix(url, read_limit)?;
+    let mut resource = data_url::decode_data_url_prefix(url, read_limit)?;
+    substitute_offline_fixture_placeholder_prefix(
+      kind,
+      &mut resource.bytes,
+      &mut resource.content_type,
+      read_limit,
+    );
     self.policy.reserve_budget(resource.bytes.len())?;
     render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
     Ok(resource)
@@ -5104,7 +5116,7 @@ impl ResourceFetcher for HttpFetcher {
     render_control::check_active(render_stage_hint_for_context(kind, url))
       .map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
-      ResourceScheme::Data => self.fetch_data_prefix(url, max_bytes),
+      ResourceScheme::Data => self.fetch_data_prefix(kind, url, max_bytes),
       ResourceScheme::File => self.fetch_file_prefix(kind, url, max_bytes),
       ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_partial(kind, url, max_bytes),
       ResourceScheme::Relative => {
@@ -9628,6 +9640,30 @@ mod tests {
 
     let partial = fetcher
       .fetch_partial_with_context(FetchContextKind::Image, &url, 8)
+      .expect("fetch image prefix");
+    assert_eq!(partial.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG[..8]);
+    assert_eq!(
+      partial.content_type.as_deref(),
+      Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+    );
+  }
+
+  #[test]
+  fn data_url_fetch_substitutes_placeholder_bytes_for_empty_image_payloads() {
+    let fetcher = HttpFetcher::new();
+    let url = "data:image/gif;base64,";
+
+    let res = fetcher
+      .fetch_with_context(FetchContextKind::Image, url)
+      .expect("fetch image data url");
+    assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG);
+    assert_eq!(
+      res.content_type.as_deref(),
+      Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+    );
+
+    let partial = fetcher
+      .fetch_partial_with_context(FetchContextKind::Image, url, 8)
       .expect("fetch image prefix");
     assert_eq!(partial.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG[..8]);
     assert_eq!(
