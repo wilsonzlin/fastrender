@@ -193,6 +193,50 @@ impl FontSourceArgs {
 
     None
   }
+
+  fn resolved_font_config(&self) -> FontConfig {
+    self.to_font_config().unwrap_or_else(FontConfig::new)
+  }
+
+  fn describe(&self) -> String {
+    let config = self.resolved_font_config();
+    let mut dirs_desc = String::new();
+    if !config.font_dirs.is_empty() {
+      let dirs = config
+        .font_dirs
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+      dirs_desc = format!(" font-dirs=[{dirs}]");
+    }
+
+    match (
+      config.use_bundled_fonts,
+      config.use_system_fonts,
+      config.font_dirs.is_empty(),
+    ) {
+      (true, false, true) => "Fonts: bundled fixtures (system fonts skipped)".to_string(),
+      (false, true, true) => {
+        "Fonts: system fonts (tip: pass --bundled-fonts for deterministic pageset timings)"
+          .to_string()
+      }
+      (false, false, false) => format!("Fonts: custom{dirs_desc}"),
+      _ => {
+        let mut parts: Vec<&'static str> = Vec::new();
+        if config.use_bundled_fonts {
+          parts.push("bundled");
+        }
+        if config.use_system_fonts {
+          parts.push("system");
+        }
+        if parts.is_empty() {
+          parts.push("none");
+        }
+        format!("Fonts: {}{dirs_desc}", parts.join(" + "))
+      }
+    }
+  }
 }
 
 #[derive(Args, Debug)]
@@ -2418,19 +2462,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     .as_str();
   log.push_str(&format!("Compat profile: {compat_profile}\n"));
   log.push_str(&format!("DOM compat: {dom_compat}\n"));
-  if args.fonts.bundled_fonts {
-    log.push_str("Fonts: bundled fixtures\n");
-  }
-  if !args.fonts.font_dir.is_empty() {
-    let dirs = args
-      .fonts
-      .font_dir
-      .iter()
-      .map(|p| p.display().to_string())
-      .collect::<Vec<_>>()
-      .join(", ");
-    log.push_str(&format!("Font dirs: {dirs}\n"));
-  }
+  log.push_str(&format!("{}\n", args.fonts.describe()));
   if let Some(ct) = &cached.content_type {
     log.push_str(&format!("Content-Type: {ct}\n"));
   }
@@ -3302,7 +3334,9 @@ impl StageHeartbeatWriter {
       );
       let mut buf = [b' '; STAGE_HEARTBEAT_FILE_BYTES];
       let stage_bytes = stage_str.as_bytes();
-      let end = stage_bytes.len().min(STAGE_HEARTBEAT_FILE_BYTES.saturating_sub(1));
+      let end = stage_bytes
+        .len()
+        .min(STAGE_HEARTBEAT_FILE_BYTES.saturating_sub(1));
       buf[..end].copy_from_slice(&stage_bytes[..end]);
       buf[end] = b'\n';
 
@@ -7432,18 +7466,7 @@ fn run(args: RunArgs) -> io::Result<()> {
       Err(err) => println!("Disk cache stats: unavailable ({err})"),
     }
   }
-  if args.fonts.bundled_fonts {
-    println!("Fonts: bundled fixtures (system fonts skipped)");
-  } else if !args.fonts.font_dir.is_empty() {
-    let dirs = args
-      .fonts
-      .font_dir
-      .iter()
-      .map(|p| p.display().to_string())
-      .collect::<Vec<_>>()
-      .join(", ");
-    println!("Fonts: {}", dirs);
-  }
+  println!("{}", args.fonts.describe());
   println!("Progress dir: {}", args.progress_dir.display());
   println!();
 
