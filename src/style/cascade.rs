@@ -4700,7 +4700,10 @@ impl<'a> RuleIndex<'a> {
     merge: &mut CandidateMergeScratch,
   ) {
     out.clear();
-    seen.reset();
+    // `CandidateSet` writes are avoided on the hot path; the set is only used for debug assertions.
+    if cfg!(debug_assertions) {
+      seen.reset();
+    }
     merge.cursors.clear();
     merge.heap.clear();
     if !node.is_element() {
@@ -5109,7 +5112,10 @@ impl<'a> RuleIndex<'a> {
     merge: &mut CandidateMergeScratch,
   ) {
     out.clear();
-    seen.reset();
+    // `CandidateSet` writes are avoided on the hot path; the set is only used for debug assertions.
+    if cfg!(debug_assertions) {
+      seen.reset();
+    }
     merge.cursors.clear();
     merge.heap.clear();
     if !node.is_element() {
