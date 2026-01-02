@@ -263,6 +263,17 @@ fn stable_hash_bytes(bytes: &[u8]) -> u64 {
   hasher.finish()
 }
 
+fn is_about_blank(url: &str) -> bool {
+  const PREFIX: &str = "about:blank";
+  let Some(head) = url.get(..PREFIX.len()) else {
+    return false;
+  };
+  if !head.eq_ignore_ascii_case(PREFIX) {
+    return false;
+  }
+  matches!(url.as_bytes().get(PREFIX.len()), None | Some(b'#') | Some(b'?'))
+}
+
 fn policy_fingerprint(policy: &ResourceAccessPolicy) -> u64 {
   // The nested document origin is derived from the iframe's URL/base URL. That value is already
   // part of the cache key, so we avoid hashing it here. This allows identical iframe URLs to share
@@ -509,6 +520,26 @@ pub(crate) fn render_iframe_src(
   }
   let nested_depth = remaining_depth.saturating_sub(1);
   let fetcher = Arc::clone(image_cache.fetcher());
+  let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
+
+  if is_about_blank(&resolved) {
+    // about:blank is a browser-provided empty document. Treat it as an empty iframe instead of a
+    // resource fetch so offline fixtures do not record spurious fetch errors.
+    let device_width = ((width as f32) * device_pixel_ratio).round().max(1.0) as u32;
+    let device_height = ((height as f32) * device_pixel_ratio).round().max(1.0) as u32;
+    let mut pixmap = new_pixmap(device_width, device_height)?;
+    let color = tiny_skia::Color::from_rgba8(
+      background.r,
+      background.g,
+      background.b,
+      background.alpha_u8(),
+    );
+    pixmap.fill(color);
+    let image = image_data_from_pixmap(&pixmap, width, height);
+    #[cfg(test)]
+    record_iframe_cache_hit(false);
+    return Some(image);
+  }
   if let Some(ctx) = context.as_ref() {
     if ctx
       .check_allowed(ResourceKind::Document, &resolved)
@@ -518,7 +549,6 @@ pub(crate) fn render_iframe_src(
     }
   }
 
-  let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
   let policy = context
     .as_ref()
     .map(|ctx| ctx.policy.clone())
@@ -1090,5 +1120,30 @@ mod diagnostics_tests {
       .find(|e| e.kind == ResourceKind::Document && e.url == "/bad")
       .expect("expected iframe fetch error diagnostic");
     assert_eq!(entry.status, Some(403));
+  }
+
+  #[test]
+  fn iframe_about_blank_does_not_record_fetch_errors() {
+    let diagnostics = SharedRenderDiagnostics::new();
+    let fetcher = Arc::new(MockFetcher::new(|url| panic!("unexpected fetch: {url}")));
+    let cache = test_image_cache(fetcher, diagnostics.clone());
+    let rect = Rect::new(Point::ZERO, Size::new(10.0, 10.0));
+
+    let result = render_iframe_src(
+      "about:blank",
+      rect,
+      None,
+      &cache,
+      &test_font_context(),
+      1.0,
+      1,
+    );
+    assert!(result.is_some());
+
+    let diag = diagnostics.into_inner();
+    assert!(
+      diag.fetch_errors.is_empty(),
+      "expected no diagnostics for about:blank, got {diag:?}"
+    );
   }
 }

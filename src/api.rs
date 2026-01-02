@@ -9167,32 +9167,47 @@ impl FastRender {
         let needs_ratio = replaced_box.aspect_ratio.is_none();
         if (needs_intrinsic || needs_ratio) && !src.is_empty() {
           let src_trimmed = src.trim_start();
-          let inline_svg = src_trimmed.starts_with("<svg") || src_trimmed.starts_with("<?xml");
-          let meta = if inline_svg {
-            self.image_cache.probe_svg_content(src, "embed")
-          } else {
-            self.image_cache.probe(src).map(|meta| (*meta).clone())
+          let is_about_blank = {
+            const PREFIX: &str = "about:blank";
+            match src_trimmed.get(..PREFIX.len()) {
+              Some(head) if head.eq_ignore_ascii_case(PREFIX) => matches!(
+                src_trimmed.as_bytes().get(PREFIX.len()),
+                None | Some(b'#') | Some(b'?')
+              ),
+              _ => false,
+            }
           };
-          if let Ok(meta) = meta {
-            let orientation = style.image_orientation.resolve(meta.orientation, false);
-            explicit_no_ratio = meta.aspect_ratio_none;
-            if let Some((w, h)) = meta.css_dimensions(
-              orientation,
-              &style.image_resolution,
-              self.device_pixel_ratio,
-              None,
-            ) {
-              if needs_intrinsic {
-                replaced_box.intrinsic_size = Some(Size::new(w, h));
-              }
-              if needs_ratio && !explicit_no_ratio {
-                replaced_box.aspect_ratio = meta.intrinsic_ratio(orientation).or_else(|| {
-                  if h > 0.0 {
-                    Some(w / h)
-                  } else {
-                    None
-                  }
-                });
+
+          // about:blank is a browser-provided empty document; avoid probing it as an image source
+          // (which would fail offline and record spurious fetch errors).
+          if !is_about_blank {
+            let inline_svg = src_trimmed.starts_with("<svg") || src_trimmed.starts_with("<?xml");
+            let meta = if inline_svg {
+              self.image_cache.probe_svg_content(src, "embed")
+            } else {
+              self.image_cache.probe(src).map(|meta| (*meta).clone())
+            };
+            if let Ok(meta) = meta {
+              let orientation = style.image_orientation.resolve(meta.orientation, false);
+              explicit_no_ratio = meta.aspect_ratio_none;
+              if let Some((w, h)) = meta.css_dimensions(
+                orientation,
+                &style.image_resolution,
+                self.device_pixel_ratio,
+                None,
+              ) {
+                if needs_intrinsic {
+                  replaced_box.intrinsic_size = Some(Size::new(w, h));
+                }
+                if needs_ratio && !explicit_no_ratio {
+                  replaced_box.aspect_ratio = meta.intrinsic_ratio(orientation).or_else(|| {
+                    if h > 0.0 {
+                      Some(w / h)
+                    } else {
+                      None
+                    }
+                  });
+                }
               }
             }
           }
