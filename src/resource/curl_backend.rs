@@ -647,7 +647,7 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
           return fetch_http_with_accept_inner(
             fetcher,
             kind,
-            &current,
+            url,
             Some("identity"),
             validators,
             referrer,

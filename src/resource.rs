@@ -4188,7 +4188,7 @@ impl HttpFetcher {
                   finish_network_fetch_diagnostics(network_timer.take());
                   return self.fetch_http_with_accept_inner_ureq(
                     kind,
-                    &current,
+                    url,
                     Some("identity"),
                     validators,
                     referrer,
@@ -4746,7 +4746,7 @@ impl HttpFetcher {
                   finish_network_fetch_diagnostics(network_timer.take());
                   return self.fetch_http_with_accept_inner_reqwest(
                     kind,
-                    &current,
+                    url,
                     Some("identity"),
                     validators,
                     referrer,
@@ -8703,6 +8703,199 @@ mod tests {
         )
         .expect("reqwest fetch should succeed");
       handle.join().unwrap();
+      assert_eq!(res.bytes, body.as_bytes());
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    }
+  }
+
+  #[test]
+  fn http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder() {
+    let body = "<!DOCTYPE html><html><title>blocked</title></html>";
+    let redirect_headers =
+      "HTTP/1.1 302 Found\r\nLocation: /blocked.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        .to_string();
+    let good_headers = format!(
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+      body.len(),
+      body
+    );
+
+    let bad_gzip_body = b"not a gzip stream";
+    let bad_gzip_headers = format!(
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+      bad_gzip_body.len()
+    );
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+
+    {
+      let Some(listener) = try_bind_localhost(
+        "http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_ureq",
+      ) else {
+        return;
+      };
+      listener.set_nonblocking(true).unwrap();
+      let addr = listener.local_addr().unwrap();
+      let redirect_response = redirect_headers.clone();
+      let good_response = good_headers.clone();
+      let bad_response_headers = bad_gzip_headers.clone();
+      let bad_response_body = bad_gzip_body.to_vec();
+      let handle = thread::spawn(move || {
+        let start = Instant::now();
+        let mut served_bad = false;
+        let mut served_good = false;
+        while start.elapsed() < Duration::from_secs(2) && !(served_bad && served_good) {
+          match listener.accept() {
+            Ok((mut stream, _)) => {
+              stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+              loop {
+                let req = match read_http_request(&mut stream) {
+                  Ok(Some(req)) => req,
+                  Ok(None) => break,
+                  Err(err) => panic!(
+                    "read http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_ureq: {err}"
+                  ),
+                };
+                let req = String::from_utf8_lossy(&req);
+                if req.contains("GET /photo.jpg") {
+                  stream.write_all(redirect_response.as_bytes()).unwrap();
+                } else if req.contains("GET /blocked.html") {
+                  let lower = req.to_ascii_lowercase();
+                  if lower.contains("accept-encoding: identity") {
+                    served_good = true;
+                    stream.write_all(good_response.as_bytes()).unwrap();
+                  } else {
+                    served_bad = true;
+                    stream
+                      .write_all(bad_response_headers.as_bytes())
+                      .unwrap();
+                    stream.write_all(&bad_response_body).unwrap();
+                  }
+                } else {
+                  panic!(
+                    "unexpected request for http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_ureq: {req}"
+                  );
+                }
+              }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+              thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) => panic!(
+              "accept http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_ureq: {err}"
+            ),
+          }
+        }
+        assert!(
+          served_bad && served_good,
+          "expected invalid-gzip then identity retry (bad={served_bad}, good={served_good})"
+        );
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher.fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Image,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        Instant::now(),
+        false,
+      );
+      handle.join().unwrap();
+      let res = res.expect("ureq fetch should succeed");
+      assert_eq!(res.bytes, body.as_bytes());
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    }
+
+    {
+      let Some(listener) = try_bind_localhost(
+        "http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_reqwest",
+      ) else {
+        return;
+      };
+      listener.set_nonblocking(true).unwrap();
+      let addr = listener.local_addr().unwrap();
+      let redirect_response = redirect_headers.clone();
+      let good_response = good_headers.clone();
+      let bad_response_headers = bad_gzip_headers.clone();
+      let bad_response_body = bad_gzip_body.to_vec();
+      let handle = thread::spawn(move || {
+        let start = Instant::now();
+        let mut served_bad = false;
+        let mut served_good = false;
+        while start.elapsed() < Duration::from_secs(2) && !(served_bad && served_good) {
+          match listener.accept() {
+            Ok((mut stream, _)) => {
+              stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+              loop {
+                let req = match read_http_request(&mut stream) {
+                  Ok(Some(req)) => req,
+                  Ok(None) => break,
+                  Err(err) => panic!(
+                    "read http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_reqwest: {err}"
+                  ),
+                };
+                let req = String::from_utf8_lossy(&req);
+                if req.contains("GET /photo.jpg") {
+                  stream.write_all(redirect_response.as_bytes()).unwrap();
+                } else if req.contains("GET /blocked.html") {
+                  let lower = req.to_ascii_lowercase();
+                  if lower.contains("accept-encoding: identity") {
+                    served_good = true;
+                    stream.write_all(good_response.as_bytes()).unwrap();
+                  } else {
+                    served_bad = true;
+                    stream
+                      .write_all(bad_response_headers.as_bytes())
+                      .unwrap();
+                    stream.write_all(&bad_response_body).unwrap();
+                  }
+                } else {
+                  panic!(
+                    "unexpected request for http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_reqwest: {req}"
+                  );
+                }
+              }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+              thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) => panic!(
+              "accept http_redirect_to_html_for_jpg_with_bad_gzip_does_not_substitute_placeholder_reqwest: {err}"
+            ),
+          }
+        }
+        assert!(
+          served_bad && served_good,
+          "expected invalid-gzip then identity retry (bad={served_bad}, good={served_good})"
+        );
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher.fetch_http_with_accept_inner_reqwest(
+        FetchContextKind::Image,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        Instant::now(),
+        false,
+      );
+      handle.join().unwrap();
+      let res = res.expect("reqwest fetch should succeed");
       assert_eq!(res.bytes, body.as_bytes());
       assert_eq!(res.content_type.as_deref(), Some("text/html"));
     }
