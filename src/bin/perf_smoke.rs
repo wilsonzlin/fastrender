@@ -1329,11 +1329,6 @@ fn find_regressions(
         ),
         ("box_nodes", base.counts.box_nodes, fixture.counts.box_nodes),
         ("fragments", base.counts.fragments, fixture.counts.fragments),
-        (
-          "shaped_runs",
-          base.counts.shaped_runs,
-          fixture.counts.shaped_runs,
-        ),
         ("glyphs", base.counts.glyphs, fixture.counts.glyphs),
       ] {
         if base_value > 0 && is_regression(base_value as f64, latest_value as f64, count_threshold)
@@ -1598,5 +1593,29 @@ mod tests {
       regression.metric,
       RegressionMetric::Count("dom_nodes")
     )));
+  }
+
+  #[test]
+  fn find_regressions_ignores_shaped_runs_count() {
+    let mut baseline_fixture = ok_fixture("a", 100.0);
+    baseline_fixture.counts.shaped_runs = 1000;
+    let mut latest_fixture = ok_fixture("a", 100.0);
+    latest_fixture.counts.shaped_runs = 2500;
+
+    let baseline = PerfSmokeSummary {
+      schema_version: PERF_SMOKE_SCHEMA_VERSION,
+      fixtures: vec![baseline_fixture],
+      total_ms: 100.0,
+      stage_ms: StageBreakdown::default(),
+    };
+    let latest = PerfSmokeSummary {
+      schema_version: PERF_SMOKE_SCHEMA_VERSION,
+      fixtures: vec![latest_fixture],
+      total_ms: 100.0,
+      stage_ms: StageBreakdown::default(),
+    };
+
+    let regressions = find_regressions(&latest, &baseline, 0.10, 0.20);
+    assert!(regressions.is_empty());
   }
 }
