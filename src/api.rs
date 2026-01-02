@@ -1115,7 +1115,7 @@ impl RenderDiagnostics {
   }
 }
 
-fn is_bot_mitigation_blocked_subresource(
+pub(crate) fn is_bot_mitigation_blocked_subresource(
   kind: ResourceKind,
   requested_url: &str,
   status: Option<u16>,

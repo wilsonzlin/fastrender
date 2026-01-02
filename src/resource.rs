@@ -3424,9 +3424,7 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            if !substitute_captcha_image {
-              resource.status = Some(status_code);
-            }
+            resource.status = Some(status_code);
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
@@ -3885,9 +3883,7 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            if !substitute_captcha_image {
-              resource.status = Some(status_code);
-            }
+            resource.status = Some(status_code);
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
@@ -4421,9 +4417,7 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            if !substitute_captcha_image {
-              resource.status = Some(status.as_u16());
-            }
+            resource.status = Some(status.as_u16());
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
@@ -4969,9 +4963,7 @@ impl HttpFetcher {
             if !encodings.is_empty() {
               resource.content_encoding = Some(encodings.join(", "));
             }
-            if !substitute_captcha_image {
-              resource.status = Some(status.as_u16());
-            }
+            resource.status = Some(status.as_u16());
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;

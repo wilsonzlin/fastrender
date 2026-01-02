@@ -3,7 +3,9 @@
 //! This module provides image loading from various sources (HTTP, file, data URLs)
 //! with in-memory caching and support for various image formats including SVG.
 
-use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
+use crate::api::{
+  is_bot_mitigation_blocked_subresource, RenderDiagnostics, ResourceContext, ResourceKind,
+};
 use crate::debug::runtime;
 use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
 use crate::paint::painter::with_paint_diagnostics;
@@ -1282,6 +1284,19 @@ fn is_empty_body_error_for_image(error: &Error) -> bool {
   )
 }
 
+fn is_bot_mitigation_image_error(requested_url: &str, error: &Error) -> bool {
+  let Error::Resource(res) = error else {
+    return false;
+  };
+  is_bot_mitigation_blocked_subresource(
+    ResourceKind::Image,
+    requested_url,
+    res.status,
+    res.final_url.as_deref(),
+    res.content_type.as_deref(),
+  )
+}
+
 fn payload_looks_like_markup_but_not_svg(bytes: &[u8]) -> bool {
   let sample = &bytes[..bytes.len().min(256)];
   let mut i = 0;
@@ -2515,7 +2530,11 @@ impl ImageCache {
     if let Err(err) =
       ensure_http_success(&resource, resolved_url).and_then(|()| ensure_image_mime_sane(&resource, resolved_url))
     {
+      let treat_as_placeholder = is_bot_mitigation_image_error(resolved_url, &err);
       self.record_image_error(resolved_url, &err);
+      if treat_as_placeholder {
+        return Ok(self.cache_placeholder_image(resolved_url));
+      }
       return Err(err);
     }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
@@ -2685,7 +2704,13 @@ impl ImageCache {
       let resource = Arc::new(resource);
 
       if let Err(err) = check_resource_allowed(resource.as_ref()) {
+        let treat_as_placeholder = is_bot_mitigation_image_error(resolved_url, &err);
         self.record_image_error(resolved_url, &err);
+        if treat_as_placeholder {
+          let meta = about_url_placeholder_metadata();
+          let _ = self.cache_placeholder_image(resolved_url);
+          return Ok(meta);
+        }
         return Err(err);
       }
       if status_is_http_success(resource.status)
@@ -2790,7 +2815,13 @@ impl ImageCache {
     };
     let resource = Arc::new(resource);
     if let Err(err) = check_resource_allowed(resource.as_ref()) {
+      let treat_as_placeholder = is_bot_mitigation_image_error(resolved_url, &err);
       self.record_image_error(resolved_url, &err);
+      if treat_as_placeholder {
+        let meta = about_url_placeholder_metadata();
+        let _ = self.cache_placeholder_image(resolved_url);
+        return Ok(meta);
+      }
       return Err(err);
     }
     if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
