@@ -6150,6 +6150,25 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     }
 
     if self.config.honor_http_cache_headers && has_validators {
+      // When a cooperative render timeout is active, avoid spending the remaining budget on
+      // conditional revalidation requests for cached entries whose freshness is unknown (e.g. the
+      // server supplied `ETag`/`Last-Modified` but no `Cache-Control`/`Expires` metadata). In this
+      // situation we treat the entry as stale and serve the cached bytes immediately.
+      //
+      // This keeps `CacheStalePolicy::UseStaleWhenDeadline` consistent with its docs: serve cached
+      // bytes even when the entry "requires revalidation".
+      if self.config.stale_policy == CacheStalePolicy::UseStaleWhenDeadline
+        && render_control::active_deadline()
+          .as_ref()
+          .and_then(|deadline| deadline.timeout_limit())
+          .is_some()
+      {
+        return CachePlan {
+          cached,
+          action: CacheAction::UseCached,
+          is_stale: true,
+        };
+      }
       CachePlan {
         cached,
         action: CacheAction::Validate {
@@ -8458,6 +8477,64 @@ mod tests {
       calls.load(Ordering::SeqCst),
       1,
       "stale_policy should serve cached bytes under deadline"
+    );
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert!(
+      stats.stale_hits >= 1,
+      "expected stale hit counter to increment (got {})",
+      stats.stale_hits
+    );
+  }
+
+  #[test]
+  fn resource_cache_diagnostics_avoid_validator_revalidation_under_deadline() {
+    let _lock = resource_cache_diagnostics_test_lock();
+
+    #[derive(Clone)]
+    struct CountingFetcher {
+      calls: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for CountingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        resource.etag = Some("\"v1\"".to_string());
+        // No Cache-Control/Expires metadata: this normally forces revalidation when validators are
+        // present. Under a render deadline we should instead serve the cached bytes.
+        resource.cache_policy = None;
+        Ok(resource)
+      }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let fetcher = CachingFetcher::with_config(
+      CountingFetcher {
+        calls: Arc::clone(&calls),
+      },
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        stale_policy: CacheStalePolicy::UseStaleWhenDeadline,
+        ..CachingFetcherConfig::default()
+      },
+    );
+
+    let url = "https://example.com/validators";
+    let first = fetcher.fetch(url).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    enable_resource_cache_diagnostics();
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
+    let second = render_control::with_deadline(Some(&deadline), || fetcher.fetch(url))
+      .expect("deadline fetch should succeed");
+    assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "stale_policy should serve cached bytes under deadline when freshness is unknown"
     );
 
     let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
