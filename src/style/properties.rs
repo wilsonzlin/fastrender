@@ -288,7 +288,13 @@ fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage
     PropertyValue::Keyword(kw) if starts_with_ignore_ascii_case(kw, "image-set(") => {
       parse_image_set(kw)
     }
-    PropertyValue::Url(url) => Some(BackgroundImage::Url(url.clone())),
+    PropertyValue::Url(url) => {
+      if url.trim().is_empty() {
+        Some(BackgroundImage::None)
+      } else {
+        Some(BackgroundImage::Url(url.clone()))
+      }
+    }
     PropertyValue::LinearGradient { angle, stops } => Some(BackgroundImage::LinearGradient {
       angle: *angle,
       stops: stops.clone(),
@@ -522,7 +528,11 @@ pub(crate) fn parse_image_set(text: &str) -> Option<BackgroundImage> {
         .trim()
         .trim_matches(|c| c == '"' || c == '\'')
         .to_string();
-      Some(BackgroundImage::Url(inner))
+      if inner.trim().is_empty() {
+        None
+      } else {
+        Some(BackgroundImage::Url(inner))
+      }
     } else {
       crate::css::properties::parse_property_value("background-image", image_token)
         .and_then(|prop| parse_background_image_value(&prop))
@@ -765,14 +775,18 @@ fn parse_cursor(value: &PropertyValue) -> Option<(Vec<CursorImage>, CursorKeywor
             idx += 2;
           }
         }
-        images.push(CursorImage {
-          url: url.clone(),
-          hotspot,
-        });
+        if !url.trim().is_empty() {
+          images.push(CursorImage {
+            url: url.clone(),
+            hotspot,
+          });
+        }
       }
       PropertyValue::Keyword(kw) if starts_with_ignore_ascii_case(kw, "image-set(") => {
         if let Some(BackgroundImage::Url(url)) = parse_image_set(kw) {
-          images.push(CursorImage { url, hotspot: None });
+          if !url.trim().is_empty() {
+            images.push(CursorImage { url, hotspot: None });
+          }
         }
       }
       PropertyValue::Keyword(kw) => {
@@ -9130,7 +9144,10 @@ fn parse_border_image_source(value: &PropertyValue) -> Option<BorderImageSource>
       return Some(BorderImageSource::None);
     }
   }
-  parse_background_image_value(value).map(|img| BorderImageSource::Image(Box::new(img)))
+  parse_background_image_value(value).map(|img| match img {
+    BackgroundImage::None => BorderImageSource::None,
+    other => BorderImageSource::Image(Box::new(other)),
+  })
 }
 
 fn parse_border_image_slice(value: &PropertyValue) -> Option<BorderImageSlice> {
@@ -12691,11 +12708,23 @@ fn parse_list_style_image(value: &PropertyValue) -> Option<ListStyleImage> {
     PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => Some(ListStyleImage::None),
     PropertyValue::Keyword(kw) if starts_with_ignore_ascii_case(kw, "image-set(") => {
       parse_image_set(kw).and_then(|img| match img {
-        BackgroundImage::Url(url) => Some(ListStyleImage::Url(url)),
+        BackgroundImage::Url(url) => {
+          if url.trim().is_empty() {
+            Some(ListStyleImage::None)
+          } else {
+            Some(ListStyleImage::Url(url))
+          }
+        }
         _ => None,
       })
     }
-    PropertyValue::Url(url) => Some(ListStyleImage::Url(url.clone())),
+    PropertyValue::Url(url) => {
+      if url.trim().is_empty() {
+        Some(ListStyleImage::None)
+      } else {
+        Some(ListStyleImage::Url(url.clone()))
+      }
+    }
     _ => None,
   }
 }
@@ -13009,6 +13038,7 @@ mod tests {
   use crate::style::types::BackgroundPosition;
   use crate::style::types::BackgroundRepeatKeyword;
   use crate::style::types::BasicShape;
+  use crate::style::types::BorderImageSource;
   use crate::style::types::BorderCornerRadius;
   use crate::style::types::BoxSizing;
   use crate::style::types::CaseTransform;
@@ -13023,6 +13053,7 @@ mod tests {
   use crate::style::types::ImageRendering;
   use crate::style::types::ImageResolution;
   use crate::style::types::JustifyContent;
+  use crate::style::types::ListStyleImage;
   use crate::style::types::ListStylePosition;
   use crate::style::types::ListStyleType;
   use crate::style::types::MixBlendMode;
@@ -18067,9 +18098,49 @@ mod tests {
   }
 
   #[test]
+  fn list_style_image_empty_url_is_none() {
+    let value = parse_property_value("list-style-image", r#"url("")"#).expect("list-style-image");
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "list-style-image".into(),
+        value,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.list_style_image, ListStyleImage::None);
+  }
+
+  #[test]
   fn cursor_keyword_parses() {
     let mut style = ComputedStyle::default();
     let value = parse_property_value("cursor", "pointer").expect("cursor keyword");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "cursor".into(),
+        value,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.cursor, CursorKeyword::Pointer);
+    assert!(style.cursor_images.is_empty());
+  }
+
+  #[test]
+  fn cursor_ignores_empty_url_images() {
+    let mut style = ComputedStyle::default();
+    let value =
+      parse_property_value("cursor", r#"url("") 1 2, pointer"#).expect("cursor empty url");
     apply_declaration(
       &mut style,
       &Declaration {
@@ -18501,6 +18572,31 @@ mod tests {
       .as_ref()
       .map(|c| c.is_empty())
       .unwrap_or(false));
+  }
+
+  #[test]
+  fn empty_css_url_is_treated_as_none_for_image_properties() {
+    for css in ["url()", r#"url("")"#, r#"url("   ")"#] {
+      let value = parse_property_value("background-image", css).expect("background-image parsed");
+      let image = parse_background_image_value(&value).expect("background-image value parsed");
+      assert_eq!(image, BackgroundImage::None, "{css}");
+    }
+
+    let value = parse_property_value("border-image-source", "url()").expect("border-image parsed");
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "border-image-source".into(),
+        value,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.border_image.source, BorderImageSource::None);
   }
 
   #[test]

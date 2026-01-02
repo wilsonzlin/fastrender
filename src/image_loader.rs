@@ -1790,7 +1790,7 @@ impl ImageCache {
 
   /// Resolve a potentially relative URL to an absolute URL
   pub fn resolve_url(&self, url: &str) -> String {
-    if url.is_empty() {
+    if url.trim().is_empty() {
       return String::new();
     }
 
@@ -1826,6 +1826,9 @@ impl ImageCache {
   /// return the cached image.
   pub fn load(&self, url: &str) -> Result<Arc<CachedImage>> {
     let trimmed = url.trim();
+    if trimmed.is_empty() {
+      return Ok(about_url_placeholder_image());
+    }
     if let Some(svg) = decode_inline_svg_url(trimmed) {
       return self.render_svg(svg.as_str());
     }
