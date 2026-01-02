@@ -6484,6 +6484,25 @@ fn apply_worker_env_overrides(cmd: &mut Command) {
   });
 }
 
+const WORKER_RAYON_THREADS_ENV: &str = "RAYON_NUM_THREADS";
+
+fn env_var_is_nonempty(key: &str) -> bool {
+  std::env::var_os(key).is_some_and(|value| !value.is_empty())
+}
+
+fn default_rayon_threads_per_worker(total_cpus: usize, jobs: usize) -> usize {
+  let total_cpus = total_cpus.max(1);
+  let jobs = jobs.max(1);
+  (total_cpus / jobs).max(1)
+}
+
+fn maybe_set_worker_rayon_threads(cmd: &mut Command, threads: usize) {
+  if env_var_is_nonempty(WORKER_RAYON_THREADS_ENV) {
+    return;
+  }
+  cmd.env(WORKER_RAYON_THREADS_ENV, threads.to_string());
+}
+
 fn push_disk_cache_args(cmd: &mut Command, args: &DiskCacheArgs) {
   cmd
     .arg("--disk-cache-max-bytes")
@@ -6636,6 +6655,7 @@ fn spawn_worker(
   soft_timeout_ms: Option<u64>,
   worker_timeout: Duration,
   dump: Option<&DumpSettings>,
+  rayon_threads_per_worker: usize,
 ) -> io::Result<Child> {
   let mut cmd = Command::new(exe);
   push_worker_args(
@@ -6647,6 +6667,7 @@ fn spawn_worker(
     worker_timeout,
     dump,
   );
+  maybe_set_worker_rayon_threads(&mut cmd, rayon_threads_per_worker);
 
   if cascade_profile {
     cmd.env("FASTR_CASCADE_PROFILE", "1");
@@ -6686,6 +6707,8 @@ fn run_queue(
   dump: Option<&DumpSettings>,
 ) -> io::Result<()> {
   let mut running: Vec<RunningChild> = Vec::new();
+  let total_cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+  let rayon_threads_per_worker = default_rayon_threads_per_worker(total_cpus, jobs);
   let current_sha = current_git_sha();
   let progress_config = current_progress_config(&args.disk_cache);
   let poll_interval = std::env::var("FASTR_TEST_PAGESET_POLL_INTERVAL_MS")
@@ -6712,6 +6735,7 @@ fn run_queue(
         soft_timeout_ms,
         worker_timeout,
         dump,
+        rayon_threads_per_worker,
       )?;
       running.push(RunningChild {
         item,
@@ -7813,6 +7837,7 @@ fn worker_on_large_stack(args: WorkerArgs) -> io::Result<()> {
 mod tests {
   use super::*;
   use std::collections::{HashSet, VecDeque};
+  use std::ffi::OsStr;
   use std::fs;
   use std::io;
   use std::net::{SocketAddr, TcpListener};
@@ -7822,6 +7847,8 @@ mod tests {
   use std::thread::JoinHandle;
   use std::time::Duration;
   use tempfile::tempdir;
+
+  static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
   #[test]
   fn push_worker_args_does_not_duplicate_disk_cache_flags() {
@@ -7908,6 +7935,77 @@ mod tests {
       Cli::try_parse_from(parse_argv).is_ok(),
       "worker args should remain clap-parseable"
     );
+  }
+
+  #[test]
+  fn default_rayon_threads_per_worker_never_returns_zero() {
+    assert_eq!(default_rayon_threads_per_worker(0, 0), 1);
+    assert_eq!(default_rayon_threads_per_worker(1, 0), 1);
+    assert_eq!(default_rayon_threads_per_worker(0, 1), 1);
+    assert_eq!(default_rayon_threads_per_worker(1, 8), 1);
+  }
+
+  #[test]
+  fn default_rayon_threads_per_worker_matches_pageset_wrapper_math() {
+    // `scripts/pageset.sh` uses integer division (`TOTAL_CPUS / JOBS`) with a minimum of 1.
+    assert_eq!(default_rayon_threads_per_worker(16, 1), 16);
+    assert_eq!(default_rayon_threads_per_worker(16, 2), 8);
+    assert_eq!(default_rayon_threads_per_worker(16, 3), 5);
+    assert_eq!(default_rayon_threads_per_worker(16, 16), 1);
+    assert_eq!(default_rayon_threads_per_worker(16, 32), 1);
+  }
+
+  #[test]
+  fn maybe_set_worker_rayon_threads_respects_parent_env_override() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let prev = std::env::var_os(WORKER_RAYON_THREADS_ENV);
+    std::env::set_var(WORKER_RAYON_THREADS_ENV, "99");
+
+    let mut cmd = Command::new("pageset_progress");
+    maybe_set_worker_rayon_threads(&mut cmd, 1);
+
+    let has_override = cmd
+      .get_envs()
+      .any(|(key, _)| key == OsStr::new(WORKER_RAYON_THREADS_ENV));
+    assert!(!has_override, "should not override explicit RAYON_NUM_THREADS");
+
+    match prev {
+      Some(value) => std::env::set_var(WORKER_RAYON_THREADS_ENV, value),
+      None => std::env::remove_var(WORKER_RAYON_THREADS_ENV),
+    }
+  }
+
+  #[test]
+  fn maybe_set_worker_rayon_threads_sets_threads_when_env_missing_or_empty() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let prev = std::env::var_os(WORKER_RAYON_THREADS_ENV);
+    std::env::remove_var(WORKER_RAYON_THREADS_ENV);
+
+    let mut cmd = Command::new("pageset_progress");
+    maybe_set_worker_rayon_threads(&mut cmd, 3);
+
+    let value = cmd
+      .get_envs()
+      .find(|(key, _)| *key == OsStr::new(WORKER_RAYON_THREADS_ENV))
+      .and_then(|(_, value)| value)
+      .map(|value| value.to_string_lossy().into_owned());
+    assert_eq!(value.as_deref(), Some("3"));
+
+    // Empty should be treated as unset (Rayon will reject it if left unmodified).
+    std::env::set_var(WORKER_RAYON_THREADS_ENV, "");
+    let mut cmd = Command::new("pageset_progress");
+    maybe_set_worker_rayon_threads(&mut cmd, 2);
+    let value = cmd
+      .get_envs()
+      .find(|(key, _)| *key == OsStr::new(WORKER_RAYON_THREADS_ENV))
+      .and_then(|(_, value)| value)
+      .map(|value| value.to_string_lossy().into_owned());
+    assert_eq!(value.as_deref(), Some("2"));
+
+    match prev {
+      Some(value) => std::env::set_var(WORKER_RAYON_THREADS_ENV, value),
+      None => std::env::remove_var(WORKER_RAYON_THREADS_ENV),
+    }
   }
 
   fn make_progress(
