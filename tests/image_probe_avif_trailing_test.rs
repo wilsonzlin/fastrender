@@ -1,19 +1,34 @@
 use fastrender::image_loader::ImageCache;
+use fastrender::resource::{FetchedResource, ResourceFetcher};
 use std::path::PathBuf;
-use url::Url;
+use std::sync::Arc;
 
-fn avif_fixture_url(name: &str) -> String {
+fn avif_fixture_bytes(name: &str) -> Vec<u8> {
   let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("tests/fixtures/avif")
     .join(name);
-  Url::from_file_path(path).unwrap().to_string()
+  std::fs::read(&path).expect("read AVIF fixture")
 }
 
 #[test]
 fn probe_does_not_panic_on_avif_with_trailing_bytes() {
-  let cache = ImageCache::new();
-  let url = avif_fixture_url("solid_trailing.avif");
-  let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cache.probe(&url)));
+  #[derive(Clone)]
+  struct StaticFetcher {
+    bytes: Vec<u8>,
+  }
+
+  impl ResourceFetcher for StaticFetcher {
+    fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
+      Ok(FetchedResource::new(self.bytes.clone(), None))
+    }
+  }
+
+  let fetcher = Arc::new(StaticFetcher {
+    bytes: avif_fixture_bytes("solid_trailing.avif"),
+  });
+  let cache = ImageCache::with_fetcher(fetcher);
+  let url = "https://example.com/image";
+  let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cache.probe(url)));
   let probe = result.expect("image probe should not panic on avif-parse debug assertions");
   let meta = probe.expect("probe should succeed after trimming trailing bytes");
   assert_eq!((meta.width, meta.height), (4, 4));
