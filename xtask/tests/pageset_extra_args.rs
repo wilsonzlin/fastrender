@@ -5,6 +5,7 @@ fn extracts_pageset_extra_arg_overrides() {
   let extra = vec![
     "--foo".to_string(),
     "--no-disk-cache".to_string(),
+    "--no-fetch".to_string(),
     "--pages".to_string(),
     "discord.com".to_string(),
     "--user-agent=TestAgent".to_string(),
@@ -13,6 +14,9 @@ fn extracts_pageset_extra_arg_overrides() {
     "--viewport".to_string(),
     "1200x800".to_string(),
     "--dpr=2".to_string(),
+    "--fetch-timeout".to_string(),
+    "60".to_string(),
+    "--render-timeout=7".to_string(),
     "--shard".to_string(),
     "0/4".to_string(),
     "--bar".to_string(),
@@ -34,6 +38,9 @@ fn extracts_pageset_extra_arg_overrides() {
       viewport: Some("1200x800".to_string()),
       dpr: Some("2".to_string()),
       disk_cache: Some(false),
+      no_fetch: true,
+      fetch_timeout: Some("60".to_string()),
+      render_timeout: Some("7".to_string()),
     }
   );
 }
@@ -54,6 +61,9 @@ fn extracts_pageset_extra_arg_overrides_disk_cache_enabled() {
       viewport: None,
       dpr: None,
       disk_cache: Some(true),
+      no_fetch: false,
+      fetch_timeout: None,
+      render_timeout: None,
     }
   );
 }

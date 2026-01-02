@@ -569,6 +569,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     bail!("jobs must be > 0");
   }
 
+  let mut fetch_timeout = args.fetch_timeout;
+  let mut render_timeout = args.render_timeout;
+  let mut no_fetch = args.no_fetch;
+
   // `pageset_progress` runs up to `jobs` worker processes in parallel (one per page). The renderer
   // itself can also use Rayon threads (e.g., layout fan-out, CSS selector work, etc). Without a
   // cap, running N worker processes on a machine with M logical CPUs can oversubscribe
@@ -610,9 +614,6 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   pageset_extra_args = filtered_pageset_extra_args;
   fetch_refresh |= fetch_overrides.refresh;
   fetch_allow_http_error_status |= fetch_overrides.allow_http_error_status;
-  if args.no_fetch && fetch_refresh {
-    bail!("--refresh cannot be used with --no-fetch");
-  }
 
   let (filtered_pageset_extra_args, pageset_overrides) =
     xtask::extract_pageset_extra_arg_overrides(&pageset_extra_args);
@@ -665,6 +666,22 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       ),
       _ => dpr_arg = Some(dpr),
     }
+  }
+  if pageset_overrides.no_fetch {
+    no_fetch = true;
+  }
+  if let Some(timeout) = pageset_overrides.fetch_timeout {
+    fetch_timeout = timeout
+      .parse::<u64>()
+      .with_context(|| format!("failed to parse --fetch-timeout value \"{timeout}\""))?;
+  }
+  if let Some(timeout) = pageset_overrides.render_timeout {
+    render_timeout = timeout
+      .parse::<u64>()
+      .with_context(|| format!("failed to parse --render-timeout value \"{timeout}\""))?;
+  }
+  if no_fetch && fetch_refresh {
+    bail!("--refresh cannot be used with --no-fetch");
   }
 
   let mut disk_cache_override = if args.disk_cache {
@@ -738,7 +755,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     );
   }
 
-  if !args.no_fetch {
+  if !no_fetch {
     let mut cmd = Command::new("cargo");
     cmd
       .arg("run")
@@ -749,7 +766,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       .arg("--jobs")
       .arg(args.jobs.to_string())
       .arg("--timeout")
-      .arg(args.fetch_timeout.to_string());
+      .arg(fetch_timeout.to_string());
     if let Some(pages) = &pages_arg {
       cmd.arg("--pages").arg(pages);
     }
@@ -777,7 +794,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     apply_disk_cache_env(&mut cmd);
     println!(
       "Updating cached pages (jobs={}, timeout={}s, disk_cache={})...",
-      args.jobs, args.fetch_timeout, disk_cache_status
+      args.jobs, fetch_timeout, disk_cache_status
     );
     run_command(cmd)?;
   }
@@ -793,7 +810,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       .arg("--jobs")
       .arg(args.jobs.to_string())
       .arg("--timeout")
-      .arg(args.fetch_timeout.to_string());
+      .arg(fetch_timeout.to_string());
     if let Some(pages) = &pages_arg {
       cmd.arg("--pages").arg(pages);
     }
@@ -823,7 +840,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     apply_disk_cache_env(&mut cmd);
     println!(
       "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
-      args.jobs, args.fetch_timeout
+      args.jobs, fetch_timeout
     );
     run_command(cmd)?;
   }
@@ -839,7 +856,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .arg("--jobs")
     .arg(args.jobs.to_string())
     .arg("--timeout")
-    .arg(args.render_timeout.to_string())
+    .arg(render_timeout.to_string())
     .arg("--bundled-fonts");
   if let Some(pages) = &pages_arg {
     cmd.arg("--pages").arg(pages);
@@ -875,7 +892,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   apply_disk_cache_env(&mut cmd);
   println!(
     "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={})...",
-    args.jobs, args.render_timeout, disk_cache_status
+    args.jobs, render_timeout, disk_cache_status
   );
   run_command(cmd)?;
 

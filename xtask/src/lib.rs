@@ -74,6 +74,9 @@ pub struct PagesetExtraArgsOverrides {
   pub viewport: Option<String>,
   pub dpr: Option<String>,
   pub disk_cache: Option<bool>,
+  pub no_fetch: bool,
+  pub fetch_timeout: Option<String>,
+  pub render_timeout: Option<String>,
 }
 
 /// Extract pageset wrapper knobs that should apply to fetch/prefetch/render steps.
@@ -100,6 +103,30 @@ pub fn extract_pageset_extra_arg_overrides(
       "--no-disk-cache" => {
         overrides.disk_cache = Some(false);
         continue;
+      }
+      "--no-fetch" => {
+        overrides.no_fetch = true;
+        continue;
+      }
+      "--fetch-timeout" => {
+        if let Some(next) = iter.peek() {
+          if !next.starts_with('-') {
+            overrides.fetch_timeout = Some((*next).clone());
+            iter.next();
+            continue;
+          }
+        }
+        out.push(arg.clone());
+      }
+      "--render-timeout" => {
+        if let Some(next) = iter.peek() {
+          if !next.starts_with('-') {
+            overrides.render_timeout = Some((*next).clone());
+            iter.next();
+            continue;
+          }
+        }
+        out.push(arg.clone());
       }
       "--pages" => {
         if let Some(next) = iter.peek() {
@@ -184,6 +211,14 @@ pub fn extract_pageset_extra_arg_overrides(
         }
         if let Some(value) = arg.strip_prefix("--dpr=") {
           overrides.dpr = Some(value.to_string());
+          continue;
+        }
+        if let Some(value) = arg.strip_prefix("--fetch-timeout=") {
+          overrides.fetch_timeout = Some(value.to_string());
+          continue;
+        }
+        if let Some(value) = arg.strip_prefix("--render-timeout=") {
+          overrides.render_timeout = Some(value.to_string());
           continue;
         }
         out.push(arg.clone());
