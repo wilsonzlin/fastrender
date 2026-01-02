@@ -60,7 +60,7 @@
 use crate::accessibility::AccessibilityNode;
 use crate::animation;
 use crate::compat::CompatProfile;
-use crate::css::encoding::decode_css_bytes;
+use crate::css::encoding::{decode_css_bytes, decode_css_bytes_cow};
 use crate::css::loader::{
   absolutize_css_urls_cow, extract_css_links, extract_embedded_css_urls_with_meta, infer_base_url,
   inject_css_into_html, inline_imports_with_diagnostics, link_rel_is_stylesheet_candidate,
@@ -5831,15 +5831,17 @@ impl FastRender {
             }
 
             let sheet_base = resource.final_url.clone().unwrap_or_else(|| url.clone());
-            let mut css_text = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-            if let std::borrow::Cow::Owned(rewritten) =
-              absolutize_css_urls_cow(&css_text, &sheet_base)?
-            {
-              css_text = rewritten;
-            }
+            let decoded = decode_css_bytes_cow(&resource.bytes, resource.content_type.as_deref());
+            let css_text = match absolutize_css_urls_cow(decoded.as_ref(), &sheet_base)? {
+              std::borrow::Cow::Borrowed(_) => decoded,
+              std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+            };
 
-            let sheet =
-              parse_stylesheet_with_media(&css_text, media_ctx, Some(&mut local_media_cache))?;
+            let sheet = parse_stylesheet_with_media(
+              css_text.as_ref(),
+              media_ctx,
+              Some(&mut local_media_cache),
+            )?;
             let resolved = if sheet.contains_imports() {
               let loader = CssImportFetcher::new(
                 Some(sheet_base.clone()),
@@ -6136,16 +6138,17 @@ impl FastRender {
                 .final_url
                 .clone()
                 .unwrap_or_else(|| stylesheet_url.clone());
-              let mut css_text =
-                decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-              if let std::borrow::Cow::Owned(rewritten) =
-                absolutize_css_urls_cow(&css_text, &sheet_base)?
-              {
-                css_text = rewritten;
-              }
+              let decoded = decode_css_bytes_cow(&resource.bytes, resource.content_type.as_deref());
+              let css_text = match absolutize_css_urls_cow(decoded.as_ref(), &sheet_base)? {
+                std::borrow::Cow::Borrowed(_) => decoded,
+                std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+              };
 
-              let sheet =
-                parse_stylesheet_with_media(&css_text, media_ctx, Some(media_query_cache))?;
+              let sheet = parse_stylesheet_with_media(
+                css_text.as_ref(),
+                media_ctx,
+                Some(media_query_cache),
+              )?;
               if sheet.contains_imports() {
                 let loader = CssImportFetcher::new(
                   Some(sheet_base.clone()),
@@ -8198,7 +8201,7 @@ impl FastRender {
             continue;
           }
           let decode_timer = stats.as_deref().and_then(|rec| rec.timer());
-          let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+          let decoded = decode_css_bytes_cow(&res.bytes, res.content_type.as_deref());
           if let Some(rec) = stats.as_deref_mut() {
             RenderStatsRecorder::add_ms(
               &mut rec.stats.timings.css_inline_stylesheet_decode_cpu_ms,
@@ -8206,7 +8209,10 @@ impl FastRender {
             );
           }
           let absolutize_timer = stats.as_deref().and_then(|rec| rec.timer());
-          let rewritten = absolutize_css_urls_cow(&css_text, &css_url)?;
+          let css_text = match absolutize_css_urls_cow(decoded.as_ref(), &css_url)? {
+            std::borrow::Cow::Borrowed(_) => decoded,
+            std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+          };
           if let Some(rec) = stats.as_deref_mut() {
             RenderStatsRecorder::add_ms(
               &mut rec.stats.timings.css_inline_stylesheet_absolutize_cpu_ms,
@@ -8267,7 +8273,7 @@ impl FastRender {
             };
 
             inline_imports_with_diagnostics(
-              rewritten.as_ref(),
+              css_text.as_ref(),
               &css_url,
               &mut import_fetch,
               &mut import_state,

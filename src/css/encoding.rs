@@ -8,6 +8,7 @@
 
 use encoding_rs::Encoding;
 use encoding_rs::UTF_8;
+use std::borrow::Cow;
 
 /// Decode raw stylesheet bytes into a UTF-8 `String`, following CSS encoding rules.
 ///
@@ -16,20 +17,29 @@ use encoding_rs::UTF_8;
 /// - Otherwise, a charset from the HTTP `Content-Type` header is honored.
 /// - Otherwise, UTF-8 is used.
 pub fn decode_css_bytes(bytes: &[u8], content_type: Option<&str>) -> String {
+  decode_css_bytes_cow(bytes, content_type).into_owned()
+}
+
+/// Decode raw stylesheet bytes into UTF-8 with an allocation-free fast path.
+///
+/// This is identical to [`decode_css_bytes`] but returns a [`Cow`] so callers can
+/// avoid copying large UTF-8 stylesheets when no transcoding / BOM stripping is
+/// required.
+pub fn decode_css_bytes_cow<'a>(bytes: &'a [u8], content_type: Option<&str>) -> Cow<'a, str> {
   if bytes.is_empty() {
-    return String::new();
+    return Cow::Borrowed("");
   }
 
   // BOM check first.
   if let Some((enc, bom_len)) = Encoding::for_bom(bytes) {
     let (text, _) = enc.decode_without_bom_handling(&bytes[bom_len..]);
-    return text.into_owned();
+    return text;
   }
 
   // @charset detection.
   if let Some(enc) = sniff_charset_at_rule(bytes) {
     let (text, _) = enc.decode_with_bom_removal(bytes);
-    return text.into_owned();
+    return text;
   }
 
   // Content-Type: charset=...
@@ -37,14 +47,14 @@ pub fn decode_css_bytes(bytes: &[u8], content_type: Option<&str>) -> String {
     if let Some(label) = charset_from_content_type(ct) {
       if let Some(enc) = Encoding::for_label(label.as_bytes()) {
         let (text, _) = enc.decode_with_bom_removal(bytes);
-        return text.into_owned();
+        return text;
       }
     }
   }
 
   // Default to UTF-8.
   let (text, _) = UTF_8.decode_with_bom_removal(bytes);
-  text.into_owned()
+  text
 }
 
 fn charset_from_content_type(content_type: &str) -> Option<String> {
@@ -167,5 +177,16 @@ mod tests {
   fn defaults_to_utf8() {
     let text = decode_css_bytes(b"body { color: blue; }", None);
     assert!(text.contains("blue"));
+  }
+
+  #[test]
+  fn cow_decoder_borrows_utf8_bytes_without_copy() {
+    let data = b"body { color: green; }";
+    let cow = decode_css_bytes_cow(data, None);
+    assert!(
+      matches!(cow, std::borrow::Cow::Borrowed(_)),
+      "expected borrowed output, got owned: {cow:?}"
+    );
+    assert!(cow.contains("green"));
   }
 }
