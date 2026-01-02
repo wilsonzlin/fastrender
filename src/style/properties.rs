@@ -765,6 +765,10 @@ fn parse_cursor(value: &PropertyValue) -> Option<(Vec<CursorImage>, CursorKeywor
         continue;
       }
       PropertyValue::Url(url) => {
+        if url.trim().is_empty() {
+          idx += 1;
+          continue;
+        }
         let mut hotspot = None;
         if idx + 2 < tokens.len() {
           if let (Some(x), Some(y)) = (
@@ -10402,10 +10406,16 @@ fn parse_will_change_from_str(text: &str) -> Option<WillChange> {
 fn parse_filter_list(value: &PropertyValue) -> Option<Vec<FilterFunction>> {
   match value {
     PropertyValue::Url(url) => {
+      if url.trim().is_empty() {
+        return None;
+      }
       return Some(vec![FilterFunction::Url(url.clone())]);
     }
     PropertyValue::Multiple(values) if values.len() == 1 => {
       if let PropertyValue::Url(url) = &values[0] {
+        if url.trim().is_empty() {
+          return None;
+        }
         return Some(vec![FilterFunction::Url(url.clone())]);
       }
     }
@@ -12715,6 +12725,7 @@ fn parse_list_style_image(value: &PropertyValue) -> Option<ListStyleImage> {
             Some(ListStyleImage::Url(url))
           }
         }
+        BackgroundImage::None => Some(ListStyleImage::None),
         _ => None,
       })
     }
@@ -18683,6 +18694,59 @@ mod tests {
   }
 
   #[test]
+  fn empty_background_image_url_treated_as_none() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "background-image".into(),
+        value: PropertyValue::Url(String::new()),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.background_layers.len(), 1);
+    assert!(style.background_layers[0].image.is_none());
+  }
+
+  #[test]
+  fn background_image_list_allows_empty_url_layer() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "background-image".into(),
+        value: PropertyValue::Multiple(vec![
+          PropertyValue::Url(String::new()),
+          PropertyValue::Keyword(",".to_string()),
+          PropertyValue::Url("b.png".to_string()),
+        ]),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.background_layers.len(), 2);
+    assert!(style.background_layers[0].image.is_none());
+    assert!(matches!(
+      style.background_layers[1].image,
+      Some(BackgroundImage::Url(ref url)) if url == "b.png"
+    ));
+  }
+
+  #[test]
+  fn background_shorthand_empty_url_treated_as_none() {
+    let parsed = parse_background_shorthand(&[PropertyValue::Url(String::new())], Rgba::BLACK, true)
+      .expect("background shorthand parsed");
+    assert!(matches!(parsed.image, Some(BackgroundImage::None)));
+  }
+
+  #[test]
   fn background_longhand_lists_expand_layers() {
     let mut style = ComputedStyle::default();
     // Two images
@@ -19403,6 +19467,11 @@ mod tests {
       parse_filter_list(&PropertyValue::Url("#recolor".to_string())).expect("filters parsed");
     assert_eq!(filters.len(), 1);
     assert!(matches!(filters.first(), Some(FilterFunction::Url(url)) if url == "#recolor"));
+  }
+
+  #[test]
+  fn filter_url_empty_is_invalid() {
+    assert!(parse_filter_list(&PropertyValue::Url(String::new())).is_none());
   }
 
   #[test]
@@ -21575,9 +21644,11 @@ fn parse_background_shorthand(
     if shorthand.image.is_none() {
       match token {
         PropertyValue::Url(url) => {
-          if !url.trim().is_empty() {
-            shorthand.image = Some(BackgroundImage::Url(url.clone()));
-          }
+          shorthand.image = Some(if url.trim().is_empty() {
+            BackgroundImage::None
+          } else {
+            BackgroundImage::Url(url.clone())
+          });
           idx += 1;
           continue;
         }

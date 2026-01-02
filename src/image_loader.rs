@@ -1270,6 +1270,77 @@ fn about_url_placeholder_pixmap() -> Arc<tiny_skia::Pixmap> {
   }))
 }
 
+fn status_is_http_success(status: Option<u16>) -> bool {
+  matches!(status, Some(200..=299))
+}
+
+fn is_empty_body_error_for_image(error: &Error) -> bool {
+  matches!(
+    error,
+    Error::Resource(res)
+      if status_is_http_success(res.status) && res.message.contains("empty HTTP response body")
+  )
+}
+
+fn payload_looks_like_markup_but_not_svg(bytes: &[u8]) -> bool {
+  let sample = &bytes[..bytes.len().min(256)];
+  let mut i = 0;
+  if sample.starts_with(b"\xef\xbb\xbf") {
+    i = 3;
+  }
+  while i < sample.len() && sample[i].is_ascii_whitespace() {
+    i += 1;
+  }
+  let rest = &sample[i..];
+  if rest.is_empty() || rest[0] != b'<' {
+    return false;
+  }
+
+  // Accept common SVG/XML prologs so that SVG documents aren't mistaken for HTML.
+  if rest.len() >= 4
+    && rest[0] == b'<'
+    && rest[1].to_ascii_lowercase() == b's'
+    && rest[2].to_ascii_lowercase() == b'v'
+    && rest[3].to_ascii_lowercase() == b'g'
+  {
+    return false;
+  }
+  if rest.len() >= 5
+    && rest[0] == b'<'
+    && rest[1] == b'?'
+    && rest[2].to_ascii_lowercase() == b'x'
+    && rest[3].to_ascii_lowercase() == b'm'
+    && rest[4].to_ascii_lowercase() == b'l'
+  {
+    return false;
+  }
+  if rest.len() >= 10
+    && rest[0] == b'<'
+    && rest[1] == b'!'
+    && rest[2].to_ascii_lowercase() == b'd'
+    && rest[3].to_ascii_lowercase() == b'o'
+    && rest[4].to_ascii_lowercase() == b'c'
+    && rest[5].to_ascii_lowercase() == b't'
+    && rest[6].to_ascii_lowercase() == b'y'
+    && rest[7].to_ascii_lowercase() == b'p'
+    && rest[8].to_ascii_lowercase() == b'e'
+  {
+    let mut j = 9;
+    while j < rest.len() && rest[j].is_ascii_whitespace() {
+      j += 1;
+    }
+    if rest.len().saturating_sub(j) >= 3
+      && rest[j].to_ascii_lowercase() == b's'
+      && rest[j + 1].to_ascii_lowercase() == b'v'
+      && rest[j + 2].to_ascii_lowercase() == b'g'
+    {
+      return false;
+    }
+  }
+
+  true
+}
+
 // ============================================================================
 // ImageCache
 // ============================================================================
@@ -2270,6 +2341,24 @@ impl ImageCache {
       .and_then(|mut cache| cache.remove(resolved_url))
   }
 
+  fn cache_placeholder_image(&self, resolved_url: &str) -> Arc<CachedImage> {
+    let image = about_url_placeholder_image();
+    self.insert_cached_image(resolved_url, Arc::clone(&image));
+    let meta = about_url_placeholder_metadata();
+    if let Ok(mut cache) = self.meta_cache.lock() {
+      cache.insert(resolved_url.to_string(), Arc::clone(&meta));
+    }
+    image
+  }
+
+  fn cache_placeholder_metadata(&self, resolved_url: &str) -> Arc<CachedImageMetadata> {
+    let meta = about_url_placeholder_metadata();
+    if let Ok(mut cache) = self.meta_cache.lock() {
+      cache.insert(resolved_url.to_string(), Arc::clone(&meta));
+    }
+    meta
+  }
+
   fn insert_cached_image(&self, resolved_url: &str, image: Arc<CachedImage>) {
     let mut bytes = Self::estimate_image_bytes(&image.image);
     if let Some(svg) = &image.svg_content {
@@ -2377,6 +2466,9 @@ impl ImageCache {
     let resource = match self.fetcher.fetch_with_request(request) {
       Ok(res) => res,
       Err(err) => {
+        if is_empty_body_error_for_image(&err) {
+          return Ok(self.cache_placeholder_image(resolved_url));
+        }
         self.record_image_error(resolved_url, &err);
         return Err(err);
       }
@@ -2391,6 +2483,9 @@ impl ImageCache {
         self.record_image_error(resolved_url, &blocked);
         return Err(blocked);
       }
+    }
+    if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+      return Ok(self.cache_placeholder_image(resolved_url));
     }
     if let Err(err) = ensure_http_success(&resource, resolved_url)
       .and_then(|()| ensure_image_mime_sane(&resource, resolved_url))
@@ -2457,6 +2552,9 @@ impl ImageCache {
     resolved_url: &str,
     resource: &FetchedResource,
   ) -> Result<Arc<CachedImage>> {
+    if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+      return Ok(self.cache_placeholder_image(resolved_url));
+    }
     let threshold_ms = image_profile_threshold_ms();
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
@@ -2542,6 +2640,9 @@ impl ImageCache {
         {
           Ok(res) => res,
           Err(err) => {
+            if is_empty_body_error_for_image(&err) {
+              return Ok(self.cache_placeholder_metadata(resolved_url));
+            }
             let _ = err;
             break;
           }
@@ -2552,6 +2653,9 @@ impl ImageCache {
       if let Err(err) = check_resource_allowed(resource.as_ref()) {
         self.record_image_error(resolved_url, &err);
         return Err(err);
+      }
+      if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+        return Ok(self.cache_placeholder_metadata(resolved_url));
       }
 
       let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
@@ -2639,6 +2743,9 @@ impl ImageCache {
     let resource = match self.fetcher.fetch_with_request(request) {
       Ok(res) => res,
       Err(err) => {
+        if is_empty_body_error_for_image(&err) {
+          return Ok(self.cache_placeholder_metadata(resolved_url));
+        }
         self.record_image_error(resolved_url, &err);
         return Err(err);
       }
@@ -2647,6 +2754,9 @@ impl ImageCache {
     if let Err(err) = check_resource_allowed(resource.as_ref()) {
       self.record_image_error(resolved_url, &err);
       return Err(err);
+    }
+    if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+      return Ok(self.cache_placeholder_metadata(resolved_url));
     }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let probe_start = profile_enabled.then(Instant::now);
@@ -4140,6 +4250,133 @@ mod tests {
       meta.intrinsic_ratio(OrientationTransform::IDENTITY),
       Some(1.0)
     );
+  }
+
+  #[test]
+  fn image_cache_load_empty_http_body_returns_placeholder_without_diagnostics() {
+    #[derive(Clone)]
+    struct EmptyBodyFetcher;
+
+    impl ResourceFetcher for EmptyBodyFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        Err(Error::Resource(
+          crate::error::ResourceError::new(url, "empty HTTP response body").with_status(200),
+        ))
+      }
+    }
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let mut cache = ImageCache::with_fetcher(Arc::new(EmptyBodyFetcher));
+    cache.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+
+    let image = cache
+      .load("https://example.com/pixel.png")
+      .expect("empty-body image loads as placeholder");
+    assert_eq!(image.dimensions(), (1, 1));
+
+    let diag = diagnostics.lock().unwrap().clone();
+    assert!(
+      diag.fetch_errors.is_empty(),
+      "placeholder images should not be recorded as fetch errors"
+    );
+  }
+
+  #[test]
+  fn image_cache_probe_empty_http_body_returns_placeholder_metadata_without_diagnostics() {
+    #[derive(Clone)]
+    struct EmptyBodyFetcher;
+
+    impl ResourceFetcher for EmptyBodyFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        Err(Error::Resource(
+          crate::error::ResourceError::new(url, "empty HTTP response body").with_status(200),
+        ))
+      }
+    }
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let mut cache = ImageCache::with_fetcher(Arc::new(EmptyBodyFetcher));
+    cache.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+
+    let meta = cache
+      .probe("https://example.com/pixel.png")
+      .expect("empty-body image probe returns placeholder");
+    assert_eq!(meta.dimensions(), (1, 1));
+
+    let diag = diagnostics.lock().unwrap().clone();
+    assert!(diag.fetch_errors.is_empty());
+  }
+
+  #[test]
+  fn image_cache_html_payload_returns_placeholder_without_diagnostics() {
+    #[derive(Clone)]
+    struct HtmlFetcher;
+
+    impl ResourceFetcher for HtmlFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        let mut res = FetchedResource::new(
+          b"<!doctype html><html><head></head><body>not an image</body></html>".to_vec(),
+          Some("image/png".to_string()),
+        );
+        res.status = Some(200);
+        Ok(res)
+      }
+    }
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let mut cache = ImageCache::with_fetcher(Arc::new(HtmlFetcher));
+    cache.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+
+    let image = cache
+      .load("https://example.com/not-really.png")
+      .expect("HTML body treated as placeholder image");
+    assert_eq!(image.dimensions(), (1, 1));
+
+    let meta = cache
+      .probe("https://example.com/not-really.png")
+      .expect("HTML body treated as placeholder metadata");
+    assert_eq!(meta.dimensions(), (1, 1));
+
+    let diag = diagnostics.lock().unwrap().clone();
+    assert!(diag.fetch_errors.is_empty());
+  }
+
+  #[test]
+  fn image_cache_html_payload_with_206_status_returns_placeholder_without_diagnostics() {
+    #[derive(Clone)]
+    struct PartialHtmlFetcher;
+
+    impl ResourceFetcher for PartialHtmlFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("full fetch should not be required for HTML payload probe");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        _url: &str,
+        _max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        let mut res = FetchedResource::new(
+          b"<!doctype html><html><body>partial content</body></html>".to_vec(),
+          Some("image/png".to_string()),
+        );
+        res.status = Some(206);
+        Ok(res)
+      }
+    }
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let mut cache = ImageCache::with_fetcher(Arc::new(PartialHtmlFetcher));
+    cache.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+
+    let meta = cache
+      .probe("https://example.com/not-an-image.png")
+      .expect("HTML probe returns placeholder metadata");
+    assert_eq!(meta.dimensions(), (1, 1));
+
+    let diag = diagnostics.lock().unwrap().clone();
+    assert!(diag.fetch_errors.is_empty());
   }
 
   fn padded_png() -> Vec<u8> {
