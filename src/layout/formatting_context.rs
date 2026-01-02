@@ -41,7 +41,6 @@ use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
 use crate::style::position::Position;
 use crate::style::ComputedStyle;
-use crate::style::values::{CalcLength, Length};
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 use parking_lot::RwLock;
@@ -305,83 +304,15 @@ fn subgrid_cache_use_epoch(epoch: usize, force_clear: bool) {
   });
 }
 
-#[inline]
-fn f32_to_canonical_bits(value: f32) -> u32 {
-  if value == 0.0 {
-    0.0f32.to_bits()
-  } else {
-    value.to_bits()
-  }
-}
-
-fn hash_enum_discriminant<T>(value: &T, hasher: &mut DefaultHasher) {
-  std::mem::discriminant(value).hash(hasher);
-}
-
-fn hash_calc_length(calc: &CalcLength, hasher: &mut DefaultHasher) {
-  let terms = calc.terms();
-  (terms.len() as u8).hash(hasher);
-  for term in terms {
-    term.unit.hash(hasher);
-    f32_to_canonical_bits(term.value).hash(hasher);
-  }
-}
-
-fn hash_length(len: &Length, hasher: &mut DefaultHasher) {
-  len.unit.hash(hasher);
-  f32_to_canonical_bits(len.value).hash(hasher);
-  match &len.calc {
-    Some(calc) => {
-      1u8.hash(hasher);
-      hash_calc_length(calc, hasher);
-    }
-    None => 0u8.hash(hasher),
-  }
-}
-
-fn hash_option_length(len: &Option<Length>, hasher: &mut DefaultHasher) {
-  match len {
-    Some(len) => {
-      1u8.hash(hasher);
-      hash_length(len, hasher);
-    }
-    None => 0u8.hash(hasher),
-  }
-}
-
-fn style_override_signature(box_node: &BoxNode, style: &ComputedStyle) -> u64 {
+fn style_override_signature(box_node: &BoxNode, fingerprint: u64) -> u64 {
   // Style overrides are used in hot flex/grid measurement paths to temporarily adjust sizing
   // hints (e.g., clearing percentage widths for intrinsic probes). We incorporate the base style
-  // pointer so overrides remain distinct across cascades, then hash the subset of style fields
-  // that influence sizing. This stays significantly cheaper than hashing the entire
-  // `ComputedStyle`, while remaining correct for the intended override use cases.
+  // pointer so overrides remain distinct across cascades, then incorporate the precomputed
+  // override fingerprint. Fingerprints are memoized by `layout::style_override` so we avoid
+  // re-hashing style fields on every intrinsic-cache lookup.
   let mut h = DefaultHasher::default();
   (Arc::as_ptr(&box_node.style) as usize).hash(&mut h);
-  hash_enum_discriminant(&style.display, &mut h);
-  hash_enum_discriminant(&style.position, &mut h);
-  hash_enum_discriminant(&style.box_sizing, &mut h);
-  hash_enum_discriminant(&style.writing_mode, &mut h);
-  hash_enum_discriminant(&style.direction, &mut h);
-  hash_option_length(&style.width, &mut h);
-  hash_option_length(&style.height, &mut h);
-  hash_option_length(&style.min_width, &mut h);
-  hash_option_length(&style.max_width, &mut h);
-  hash_option_length(&style.min_height, &mut h);
-  hash_option_length(&style.max_height, &mut h);
-  hash_length(&style.padding_top, &mut h);
-  hash_length(&style.padding_right, &mut h);
-  hash_length(&style.padding_bottom, &mut h);
-  hash_length(&style.padding_left, &mut h);
-  hash_length(&style.border_top_width, &mut h);
-  hash_length(&style.border_right_width, &mut h);
-  hash_length(&style.border_bottom_width, &mut h);
-  hash_length(&style.border_left_width, &mut h);
-  hash_enum_discriminant(&style.overflow_x, &mut h);
-  hash_enum_discriminant(&style.overflow_y, &mut h);
-  hash_enum_discriminant(&style.scrollbar_width, &mut h);
-  hash_enum_discriminant(&style.line_height, &mut h);
-  style.font_size.to_bits().hash(&mut h);
-  style.root_font_size.to_bits().hash(&mut h);
+  fingerprint.hash(&mut h);
   h.finish()
 }
 
@@ -398,13 +329,13 @@ fn override_cache_key(
   node: &BoxNode,
   mode: IntrinsicSizingMode,
   epoch: usize,
-  override_style: &ComputedStyle,
+  override_fingerprint: u64,
 ) -> Option<(usize, u64, IntrinsicSizingMode)> {
   let id = node.id();
   if id == 0 || subtree_contains_subgrid(node, epoch) {
     return None;
   }
-  let signature = style_override_signature(node, override_style);
+  let signature = style_override_signature(node, override_fingerprint);
   Some((id, signature, mode))
 }
 
@@ -427,8 +358,8 @@ pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) 
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   ensure_intrinsic_thread_epoch(epoch);
   let id = node.id();
-  if let Some(style_override) = crate::layout::style_override::style_override_for(id) {
-    let key = override_cache_key(node, mode, epoch, style_override.as_ref())?;
+  if let Some(fingerprint) = crate::layout::style_override::style_override_fingerprint_for(id) {
+    let key = override_cache_key(node, mode, epoch, fingerprint)?;
     let hit = INTRINSIC_INLINE_OVERRIDE_CACHE.with(|cache| {
       cache
         .borrow()
@@ -461,8 +392,8 @@ pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, v
   ensure_intrinsic_thread_epoch(epoch);
 
   let id = node.id();
-  if let Some(style_override) = crate::layout::style_override::style_override_for(id) {
-    if let Some(key) = override_cache_key(node, mode, epoch, style_override.as_ref()) {
+  if let Some(fingerprint) = crate::layout::style_override::style_override_fingerprint_for(id) {
+    if let Some(key) = override_cache_key(node, mode, epoch, fingerprint) {
       INTRINSIC_INLINE_OVERRIDE_CACHE.with(|cache| {
         cache.borrow_mut().insert(key, (epoch, value));
       });
@@ -1389,8 +1320,8 @@ pub(crate) fn intrinsic_block_cache_lookup(
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   ensure_intrinsic_thread_epoch(epoch);
   let id = node.id();
-  if let Some(style_override) = crate::layout::style_override::style_override_for(id) {
-    let key = override_cache_key(node, mode, epoch, style_override.as_ref())?;
+  if let Some(fingerprint) = crate::layout::style_override::style_override_fingerprint_for(id) {
+    let key = override_cache_key(node, mode, epoch, fingerprint)?;
     return INTRINSIC_BLOCK_OVERRIDE_CACHE.with(|cache| {
       cache
         .borrow()
@@ -1415,8 +1346,8 @@ pub(crate) fn intrinsic_block_cache_store(node: &BoxNode, mode: IntrinsicSizingM
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   ensure_intrinsic_thread_epoch(epoch);
   let id = node.id();
-  if let Some(style_override) = crate::layout::style_override::style_override_for(id) {
-    if let Some(key) = override_cache_key(node, mode, epoch, style_override.as_ref()) {
+  if let Some(fingerprint) = crate::layout::style_override::style_override_fingerprint_for(id) {
+    if let Some(key) = override_cache_key(node, mode, epoch, fingerprint) {
       INTRINSIC_BLOCK_OVERRIDE_CACHE.with(|cache| {
         cache.borrow_mut().insert(key, (epoch, value));
       });
@@ -1636,6 +1567,59 @@ mod tests {
       intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent),
       None
     );
+
+    intrinsic_cache_use_epoch(1, true);
+  }
+
+  #[test]
+  fn intrinsic_cache_style_overrides_use_distinct_keys() {
+    let _guard = intrinsic_cache_test_lock();
+    intrinsic_cache_use_epoch(1, true);
+
+    let mut node = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![],
+    );
+    node.id = 1;
+
+    intrinsic_cache_store(&node, IntrinsicSizingMode::MinContent, 10.0);
+    assert_eq!(
+      intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent),
+      Some(10.0)
+    );
+
+    let mut override_style = ComputedStyle::default();
+    override_style.width = Some(Length::px(100.0));
+    crate::layout::style_override::with_style_override(node.id, Arc::new(override_style), || {
+      intrinsic_cache_store(&node, IntrinsicSizingMode::MinContent, 20.0);
+      assert_eq!(
+        intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent),
+        Some(20.0)
+      );
+    });
+
+    assert_eq!(
+      intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent),
+      Some(10.0)
+    );
+
+    // A fresh override instance with identical sizing inputs should reuse the cached value.
+    let mut override_style = ComputedStyle::default();
+    override_style.width = Some(Length::px(100.0));
+    crate::layout::style_override::with_style_override(node.id, Arc::new(override_style), || {
+      assert_eq!(
+        intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent),
+        Some(20.0)
+      );
+    });
+
+    // Different override styles should not collide.
+    let mut override_style = ComputedStyle::default();
+    override_style.width = Some(Length::px(200.0));
+    crate::layout::style_override::with_style_override(node.id, Arc::new(override_style), || {
+      assert_eq!(intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent), None);
+    });
 
     intrinsic_cache_use_epoch(1, true);
   }
