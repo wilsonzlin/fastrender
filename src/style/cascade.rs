@@ -4851,12 +4851,13 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
-    if matches!(merge.cursors.len(), 3 | 4) {
+    if matches!(merge.cursors.len(), 3..=8) {
       // Fast path: merge a small number of candidate lists without a heap.
       //
-      // Many elements hit exactly three buckets (e.g. class + tag + universal). The general path
-      // uses a `BinaryHeap` to do a k-way merge, but for tiny k the heap's per-candidate pop+push
-      // overhead is significant. A linear scan among 3-4 cursors is cheaper while preserving the
+      // Many elements hit only a handful of buckets (e.g. class + tag + universal). The general
+      // path uses a `BinaryHeap` to do a k-way merge, but for small k the heap's per-candidate
+      // pop+push overhead is significant. A linear scan among a few cursors is cheaper while
+      // preserving the
       // exact same ordering semantics as `CandidateHeapItem::cmp`.
       //
       // Ordering:
@@ -4887,7 +4888,7 @@ impl<'a> RuleIndex<'a> {
       }
 
       let cursor_count = merge.cursors.len();
-      debug_assert!(cursor_count == 3 || cursor_count == 4);
+      debug_assert!(cursor_count >= 3 && cursor_count <= 8);
       loop {
         let mut best_cursor_idx: Option<usize> = None;
         let mut best_selector_idx: usize = 0;
@@ -5229,7 +5230,7 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
-    if matches!(merge.cursors.len(), 3 | 4) {
+    if matches!(merge.cursors.len(), 3..=8) {
       // Fast path: merge a small number of slotted candidate lists without a heap.
       //
       // Slotted selectors use the same k-way merge as normal selectors, but we can apply the same
@@ -5259,7 +5260,7 @@ impl<'a> RuleIndex<'a> {
       }
 
       let cursor_count = merge.cursors.len();
-      debug_assert!(cursor_count == 3 || cursor_count == 4);
+      debug_assert!(cursor_count >= 3 && cursor_count <= 8);
       loop {
         let mut best_cursor_idx: Option<usize> = None;
         let mut best_selector_idx: usize = 0;
@@ -10561,7 +10562,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.selector_candidates_profiled(
+    index.selector_candidates(
       &node,
       node_keys,
       None,
@@ -10641,7 +10642,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.selector_candidates_profiled(
+    index.selector_candidates(
       &node,
       node_keys,
       None,
@@ -10721,7 +10722,7 @@ mod tests {
       &mut attr_value_keys,
     );
 
-    index.selector_candidates(
+    index.selector_candidates_profiled(
       &node,
       node_keys,
       None,
@@ -10939,7 +10940,7 @@ mod tests {
       &mut attr_value_keys,
     );
 
-    index.selector_candidates(
+    index.selector_candidates_profiled(
       &node,
       node_keys,
       None,
@@ -11026,6 +11027,82 @@ mod tests {
   }
 
   #[test]
+  fn selector_candidates_five_cursor_merge_orders_by_rule_index() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        .a { color: red; }
+        .b { color: green; }
+        .c { color: blue; }
+        div { color: black; }
+        :root { color: pink; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 5);
+
+    // This element hits 3 class buckets + tag + universal, so the candidate collection path must
+    // handle k > 4.
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b c".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates, vec![0, 1, 2, 3, 4]);
+  }
+
+  #[test]
   fn rule_index_anchors_tag_plus_is_under_tag() {
     let stylesheet = parse_stylesheet("div:is(.a, .b) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
@@ -11092,7 +11169,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.selector_candidates_profiled(
+    index.selector_candidates(
       &node,
       node_keys,
       None,
