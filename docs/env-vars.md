@@ -30,6 +30,10 @@ When enabled, FastRender will still treat these entries as always-stale (it will
 network refresh), but cached bytes remain available as a fallback (and can be served immediately
 under render deadlines when configured to serve stale responses).
 
+When `no-store` persistence is enabled, FastRender also persists transient HTTP error responses
+(notably 429/5xx) as always-stale entries so warm-cache pageset runs avoid repeatedly hammering
+blocked endpoints. Non-deadline fetches still attempt a refresh.
+
 ## Commonly useful
 
 - `FASTR_RENDER_TIMINGS=1` – print per-stage timings during rendering (parse/cascade/box_tree/layout/paint).

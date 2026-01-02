@@ -6788,6 +6788,30 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             let is_ok = fallback.is_ok();
             (fallback, is_ok)
           } else {
+            // When callers opt into caching `no-store` responses for pageset determinism, also
+            // persist transient HTTP error responses (429/5xx) as always-stale entries. This avoids
+            // repeatedly hammering blocked endpoints during warm-cache runs while still allowing
+            // non-deadline fetches to attempt a refresh.
+            if self.config.allow_no_store && res.status.is_some_and(|code| code >= 400) {
+              let stored_at = SystemTime::now();
+              let _ = self.cache_entry(
+                &key,
+                CacheEntry {
+                  value: CacheValue::Resource(res.clone()),
+                  etag: res.etag.clone(),
+                  last_modified: res.last_modified.clone(),
+                  http_cache: Some(CachedHttpMetadata {
+                    stored_at,
+                    max_age: None,
+                    expires: None,
+                    no_cache: false,
+                    no_store: true,
+                    must_revalidate: false,
+                  }),
+                },
+                res.final_url.as_deref(),
+              );
+            }
             record_cache_miss();
             (Ok(res), false)
           }

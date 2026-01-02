@@ -1778,6 +1778,36 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
             let is_ok = fallback.is_ok();
             (fallback, is_ok)
           } else {
+            // When callers opt into persisting `Cache-Control: no-store` responses (pageset
+            // determinism mode), also persist transient HTTP error responses (429/5xx) as
+            // always-stale entries. This prevents warm-cache renders from repeatedly hammering
+            // blocked endpoints while still allowing non-deadline fetches to attempt a refresh.
+            if self.memory.config.allow_no_store && res.status.is_some_and(|code| code >= 400) {
+              let stored_at = SystemTime::now();
+              let canonical = self.memory.cache_entry(
+                &key,
+                super::CacheEntry {
+                  value: super::CacheValue::Resource(res.clone()),
+                  etag: res.etag.clone(),
+                  last_modified: res.last_modified.clone(),
+                  http_cache: Some(CachedHttpMetadata {
+                    stored_at,
+                    max_age: None,
+                    expires: None,
+                    no_cache: false,
+                    no_store: true,
+                    must_revalidate: false,
+                  }),
+                },
+                res.final_url.as_deref(),
+              );
+              if let Some(snapshot) = self.memory.cached_snapshot(kind, &canonical.url) {
+                self.persist_snapshot(kind, &canonical.url, &snapshot);
+                if canonical.url != url {
+                  self.persist_alias(kind, url, &canonical.url);
+                }
+              }
+            }
             super::record_cache_miss();
             (Ok(res), false)
           }
@@ -2902,6 +2932,64 @@ mod tests {
       2,
       "transient responses should not be persisted to disk"
     );
+  }
+
+  #[test]
+  fn disk_cache_serves_persisted_transient_status_under_deadline_when_allow_no_store() {
+    #[derive(Clone)]
+    struct TransientFetcher {
+      count: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for TransientFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let mut resource =
+          FetchedResource::new(b"transient".to_vec(), Some("text/plain".to_string()));
+        resource.status = Some(503);
+        resource.final_url = Some(url.to_string());
+        Ok(resource)
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let url = "https://example.com/transient-no-store";
+
+    let memory_config = CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      stale_policy: CacheStalePolicy::UseStaleWhenDeadline,
+      ..CachingFetcherConfig::default()
+    };
+    let disk_config = DiskCacheConfig {
+      allow_no_store: true,
+      ..DiskCacheConfig::default()
+    };
+
+    let disk = DiskCachingFetcher::with_configs(
+      TransientFetcher {
+        count: Arc::clone(&counter),
+      },
+      tmp.path(),
+      memory_config,
+      disk_config.clone(),
+    );
+    let first = disk.fetch(url).expect("first fetch");
+    assert_eq!(first.bytes, b"transient");
+    assert_eq!(first.status, Some(503));
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let offline = DiskCachingFetcher::with_configs(
+      PanicFetcher,
+      tmp.path(),
+      memory_config,
+      disk_config,
+    );
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
+    let cached = render_control::with_deadline(Some(&deadline), || offline.fetch(url))
+      .expect("disk hit under deadline");
+    assert_eq!(cached.bytes, b"transient");
+    assert_eq!(cached.status, Some(503));
   }
 
   #[derive(Clone)]
