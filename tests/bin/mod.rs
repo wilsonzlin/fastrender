@@ -21,6 +21,7 @@ mod pageset_progress_commit_tracking_test;
 mod pageset_progress_done_timeout_stage_test;
 mod pageset_progress_dump_failures_test;
 mod pageset_progress_dump_full_test;
+mod pageset_progress_fetch_error_classification_test;
 mod pageset_progress_hard_timeout_stage_test;
 mod pageset_progress_help_test;
 mod pageset_progress_migrate_test;

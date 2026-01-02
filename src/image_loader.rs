@@ -9,8 +9,7 @@ use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
 use crate::paint::painter::with_paint_diagnostics;
 use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
 use crate::render_control::{self, check_active, check_active_periodic};
-use crate::resource::ensure_http_success;
-use crate::resource::ensure_image_mime_sane;
+use crate::resource::{ensure_http_success, ensure_image_mime_sane};
 use crate::resource::CacheArtifactKind;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
@@ -72,7 +71,8 @@ fn unescape_js_escapes(input: &str) -> Cow<'_, str> {
   let mut i = 0;
   while i < bytes.len() {
     if bytes[i] == b'\\' {
-      if i + 1 < bytes.len() && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'' || bytes[i + 1] == b'/')
+      if i + 1 < bytes.len()
+        && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'' || bytes[i + 1] == b'/')
       {
         out.push(bytes[i + 1] as char);
         i += 2;
@@ -2212,7 +2212,9 @@ impl ImageCache {
 
       let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, &cache_key, flight);
       record_image_cache_miss();
-      let result = self.probe_svg_content(svg.as_str(), "inline-svg").map(Arc::new);
+      let result = self
+        .probe_svg_content(svg.as_str(), "inline-svg")
+        .map(Arc::new);
       let shared = match &result {
         Ok(meta) => {
           if let Ok(mut cache) = self.meta_cache.lock() {
@@ -2396,6 +2398,23 @@ impl ImageCache {
     }
   }
 
+  fn record_invalid_image(&self, url: &str) {
+    const INVALID_IMAGE_LIMIT: usize = 64;
+    let Some(diag) = &self.diagnostics else {
+      return;
+    };
+    let Ok(mut guard) = diag.lock() else {
+      return;
+    };
+    if guard.invalid_images.len() >= INVALID_IMAGE_LIMIT {
+      return;
+    }
+    if guard.invalid_images.iter().any(|u| u == url) {
+      return;
+    }
+    guard.invalid_images.push(url.to_string());
+  }
+
   fn enforce_image_policy(&self, url: &str) -> Result<()> {
     if let Some(ctx) = &self.resource_context {
       if let Err(err) = ctx.check_allowed(ResourceKind::Image, url) {
@@ -2487,11 +2506,14 @@ impl ImageCache {
         return Err(blocked);
       }
     }
-    if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+    if status_is_http_success(resource.status)
+      && payload_looks_like_markup_but_not_svg(&resource.bytes)
+    {
+      self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_image(resolved_url));
     }
-    if let Err(err) = ensure_http_success(&resource, resolved_url)
-      .and_then(|()| ensure_image_mime_sane(&resource, resolved_url))
+    if let Err(err) =
+      ensure_http_success(&resource, resolved_url).and_then(|()| ensure_image_mime_sane(&resource, resolved_url))
     {
       self.record_image_error(resolved_url, &err);
       return Err(err);
@@ -2555,7 +2577,10 @@ impl ImageCache {
     resolved_url: &str,
     resource: &FetchedResource,
   ) -> Result<Arc<CachedImage>> {
-    if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+    if status_is_http_success(resource.status)
+      && payload_looks_like_markup_but_not_svg(&resource.bytes)
+    {
+      self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_image(resolved_url));
     }
     let threshold_ms = image_profile_threshold_ms();
@@ -2624,7 +2649,6 @@ impl ImageCache {
         }
       }
       ensure_http_success(resource, resolved_url)
-        .and_then(|()| ensure_image_mime_sane(resource, resolved_url))
     };
 
     let probe_limit = image_probe_max_bytes();
@@ -2664,7 +2688,10 @@ impl ImageCache {
         self.record_image_error(resolved_url, &err);
         return Err(err);
       }
-      if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+      if status_is_http_success(resource.status)
+        && payload_looks_like_markup_but_not_svg(&resource.bytes)
+      {
+        self.record_invalid_image(resolved_url);
         return Ok(self.cache_placeholder_metadata(resolved_url));
       }
 
@@ -2690,7 +2717,8 @@ impl ImageCache {
 
           // When the image is small enough to fit in the probe prefix, keep the bytes so a later
           // decode can reuse them without issuing another HTTP request.
-          if resource.bytes.len() < limit && resource.bytes.len() <= RAW_RESOURCE_CACHE_LIMIT_BYTES {
+          if resource.bytes.len() < limit && resource.bytes.len() <= RAW_RESOURCE_CACHE_LIMIT_BYTES
+          {
             if let Ok(mut cache) = self.raw_cache.lock() {
               cache.insert(resolved_url.to_string(), Arc::clone(&resource));
             }
@@ -2766,6 +2794,7 @@ impl ImageCache {
       return Err(err);
     }
     if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+      self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_metadata(resolved_url));
     }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
@@ -4418,6 +4447,10 @@ mod tests {
 
     let diag = diagnostics.lock().unwrap().clone();
     assert!(diag.fetch_errors.is_empty());
+    assert!(
+      diag.invalid_images.is_empty(),
+      "empty-body placeholder images should not be treated as invalid images"
+    );
   }
 
   #[test]
@@ -4452,6 +4485,12 @@ mod tests {
 
     let diag = diagnostics.lock().unwrap().clone();
     assert!(diag.fetch_errors.is_empty());
+    assert!(
+      diag.invalid_images
+        .iter()
+        .any(|u| u == "https://example.com/not-really.png"),
+      "invalid image URLs should be tracked in diagnostics.invalid_images"
+    );
   }
 
   #[test]
@@ -4490,6 +4529,12 @@ mod tests {
 
     let diag = diagnostics.lock().unwrap().clone();
     assert!(diag.fetch_errors.is_empty());
+    assert!(
+      diag.invalid_images
+        .iter()
+        .any(|u| u == "https://example.com/not-an-image.png"),
+      "invalid image URLs should be tracked in diagnostics.invalid_images"
+    );
   }
 
   fn padded_png() -> Vec<u8> {

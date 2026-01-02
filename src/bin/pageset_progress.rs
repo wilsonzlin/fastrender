@@ -1309,13 +1309,23 @@ struct ProgressFetchErrorSample {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
+struct ProgressUrlSummary {
+  total: usize,
+  samples: Vec<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct ProgressDiagnostics {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   stats: Option<RenderStats>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   fetch_error_summary: Option<ProgressFetchErrorSummary>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  invalid_image_summary: Option<ProgressUrlSummary>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   bot_mitigation_summary: Option<ProgressFetchErrorSummary>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  external_network_failure_summary: Option<ProgressFetchErrorSummary>,
 }
 
 pub(crate) fn is_bot_mitigation_block(status: Option<u16>, url: &str) -> bool {
@@ -1323,9 +1333,13 @@ pub(crate) fn is_bot_mitigation_block(status: Option<u16>, url: &str) -> bool {
     return false;
   }
   let lower = url.to_ascii_lowercase();
-  // Keep this intentionally narrow: we only recognize explicit `captcha` query parameters (case
-  // insensitive) so we don't accidentally hide genuine subresource failures behind this label.
-  lower.contains("?captcha=") || lower.contains("&captcha=")
+  // Keep this intentionally narrow: we only recognize explicit `captcha`/`challenge` query
+  // parameters (case-insensitive) so we don't accidentally hide genuine subresource failures behind
+  // this label.
+  lower.contains("?captcha=")
+    || lower.contains("&captcha=")
+    || lower.contains("?challenge=")
+    || lower.contains("&challenge=")
 }
 
 pub(crate) fn is_bot_mitigation_fetch_error(err: &ResourceFetchError) -> bool {
@@ -1334,8 +1348,7 @@ pub(crate) fn is_bot_mitigation_fetch_error(err: &ResourceFetchError) -> bool {
     return false;
   }
   let effective_url = err.final_url.as_deref().unwrap_or(&err.url);
-  is_bot_mitigation_block(err.status, effective_url)
-    || is_bot_mitigation_block(err.status, &err.url)
+  is_bot_mitigation_block(err.status, effective_url) || is_bot_mitigation_block(err.status, &err.url)
 }
 
 fn build_fetch_error_summary<'a, I>(errors: I) -> Option<ProgressFetchErrorSummary>
@@ -1400,6 +1413,61 @@ where
     by_kind,
     samples,
   })
+}
+
+fn build_url_summary(urls: &[String]) -> Option<ProgressUrlSummary> {
+  if urls.is_empty() {
+    return None;
+  }
+  let mut unique: BTreeSet<String> = BTreeSet::new();
+  for url in urls {
+    unique.insert(normalize_progress_url(url));
+  }
+  if unique.is_empty() {
+    return None;
+  }
+  let samples = unique
+    .iter()
+    .take(FETCH_ERROR_SAMPLE_LIMIT)
+    .cloned()
+    .collect::<Vec<_>>();
+  Some(ProgressUrlSummary {
+    total: unique.len(),
+    samples,
+  })
+}
+
+pub(crate) fn is_external_network_failure_fetch_error(err: &ResourceFetchError) -> bool {
+  if err.kind != ResourceKind::Stylesheet {
+    return false;
+  }
+  if err.status.is_some() {
+    return false;
+  }
+  if let Ok(parsed) = url::Url::parse(&err.url) {
+    if !matches!(parsed.scheme(), "http" | "https") {
+      return false;
+    }
+  } else {
+    // If we couldn't parse the URL, treat it as actionable (URL handling/regression).
+    return false;
+  }
+  let msg = err.message.to_ascii_lowercase();
+  [
+    "error sending request",
+    "dns",
+    "failed to lookup",
+    "name or service not known",
+    "connection refused",
+    "connection reset",
+    "unexpected eof",
+    "timed out",
+    "timeout",
+    "tls",
+    "certificate",
+  ]
+  .into_iter()
+  .any(|needle| msg.contains(needle))
 }
 
 fn resource_kind_label(kind: ResourceKind) -> &'static str {
@@ -1597,21 +1665,8 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
   atomic_write_with_hook(path, contents, |_| Ok(()))
 }
 
-fn serialize_progress(progress: &PageProgress) -> io::Result<String> {
-  let mut normalized = progress.clone();
-  normalized.notes = normalize_progress_note(&normalized.notes);
-  normalized.auto_notes = normalize_progress_note(&normalized.auto_notes);
-  if let Some(diag) = normalized.diagnostics.as_mut() {
-    normalize_progress_fetch_error_summary(&mut diag.fetch_error_summary);
-    normalize_progress_fetch_error_summary(&mut diag.bot_mitigation_summary);
-  }
-  let json = serde_json::to_string_pretty(&normalized)
-    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-  Ok(format!("{json}\n"))
-}
-
 fn normalize_progress_fetch_error_summary(summary: &mut Option<ProgressFetchErrorSummary>) {
-  if summary.as_ref().is_some_and(|summary| summary.total == 0) {
+  if summary.as_ref().is_some_and(|s| s.total == 0) {
     *summary = None;
     return;
   }
@@ -1628,6 +1683,34 @@ fn normalize_progress_fetch_error_summary(summary: &mut Option<ProgressFetchErro
     }
     sample.message = normalize_progress_note(&sample.message);
   }
+}
+
+fn normalize_progress_url_summary(summary: &mut Option<ProgressUrlSummary>) {
+  if summary.as_ref().is_some_and(|s| s.total == 0) {
+    *summary = None;
+    return;
+  }
+  let Some(summary) = summary.as_mut() else {
+    return;
+  };
+  for url in &mut summary.samples {
+    *url = normalize_progress_url(url);
+  }
+}
+
+fn serialize_progress(progress: &PageProgress) -> io::Result<String> {
+  let mut normalized = progress.clone();
+  normalized.notes = normalize_progress_note(&normalized.notes);
+  normalized.auto_notes = normalize_progress_note(&normalized.auto_notes);
+  if let Some(diag) = normalized.diagnostics.as_mut() {
+    normalize_progress_fetch_error_summary(&mut diag.fetch_error_summary);
+    normalize_progress_url_summary(&mut diag.invalid_image_summary);
+    normalize_progress_fetch_error_summary(&mut diag.bot_mitigation_summary);
+    normalize_progress_fetch_error_summary(&mut diag.external_network_failure_summary);
+  }
+  let json = serde_json::to_string_pretty(&normalized)
+    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+  Ok(format!("{json}\n"))
 }
 
 fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
@@ -2486,7 +2569,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
           .diagnostics
           .fetch_errors
           .iter()
-          .filter(|err| !is_bot_mitigation_fetch_error(err)),
+          .filter(|err| {
+            !is_bot_mitigation_fetch_error(err) && !is_external_network_failure_fetch_error(err)
+          }),
       );
       let bot_mitigation_summary = build_fetch_error_summary(
         result
@@ -2501,6 +2586,14 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
               .filter(|err| is_bot_mitigation_fetch_error(err)),
           ),
       );
+      let external_network_failure_summary = build_fetch_error_summary(
+        result
+          .diagnostics
+          .fetch_errors
+          .iter()
+          .filter(|err| is_external_network_failure_fetch_error(err)),
+      );
+      let invalid_image_summary = build_url_summary(&result.diagnostics.invalid_images);
       if !used_timeline && result.diagnostics.stats.is_none() {
         log.push_str(
           "Stage timings unavailable (no timeline or render stats); stages_ms left at 0ms.\n",
@@ -2543,12 +2636,16 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       }
       progress.diagnostics = if result.diagnostics.stats.is_some()
         || fetch_error_summary.is_some()
+        || invalid_image_summary.is_some()
         || bot_mitigation_summary.is_some()
+        || external_network_failure_summary.is_some()
       {
         Some(ProgressDiagnostics {
           stats: result.diagnostics.stats.clone(),
           fetch_error_summary,
+          invalid_image_summary,
           bot_mitigation_summary,
+          external_network_failure_summary,
         })
       } else {
         None
@@ -4906,6 +5003,144 @@ fn report(args: ReportArgs) -> io::Result<()> {
         "  {}: {}",
         resource_kind_label(kind),
         kind_counts.get(&kind).copied().unwrap_or(0)
+      );
+    }
+    println!();
+  }
+
+  let ok_with_invalid_images: Vec<(&LoadedProgress, usize)> = progresses
+    .iter()
+    .filter_map(|entry| {
+      (entry.progress.status == ProgressStatus::Ok)
+        .then_some(entry)
+        .and_then(|entry| {
+          entry
+            .progress
+            .diagnostics
+            .as_ref()
+            .and_then(|d| d.invalid_image_summary.as_ref())
+            .map(|s| s.total)
+            .filter(|total| *total > 0)
+            .map(|total| (entry, total))
+        })
+    })
+    .collect();
+  println!(
+    "Ok pages with invalid image payloads (invalid_image_summary present): {}",
+    ok_with_invalid_images.len()
+  );
+  if ok_with_invalid_images.is_empty() {
+    println!("  (none)");
+    println!();
+  } else {
+    let total: usize = ok_with_invalid_images.iter().map(|(_, total)| *total).sum();
+    println!("  total unique invalid images: {total}");
+    let mut offenders = ok_with_invalid_images;
+    offenders
+      .sort_by(|(a, a_total), (b, b_total)| b_total.cmp(a_total).then_with(|| a.stem.cmp(&b.stem)));
+    let shown = offenders.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+    println!("  stems (showing {shown} of {}):", offenders.len());
+    for (entry, count) in offenders.iter().take(shown) {
+      println!("    {} invalid_images={count}", entry.stem);
+    }
+    if offenders.len() > shown {
+      println!(
+        "    {} and {} more",
+        PROGRESS_NOTE_ELLIPSIS,
+        offenders.len() - shown
+      );
+    }
+    println!();
+  }
+
+  let ok_with_bot_mitigation: Vec<(&LoadedProgress, usize)> = progresses
+    .iter()
+    .filter_map(|entry| {
+      (entry.progress.status == ProgressStatus::Ok)
+        .then_some(entry)
+        .and_then(|entry| {
+          entry
+            .progress
+            .diagnostics
+            .as_ref()
+            .and_then(|d| d.bot_mitigation_summary.as_ref())
+            .map(|s| s.total)
+            .filter(|total| *total > 0)
+            .map(|total| (entry, total))
+        })
+    })
+    .collect();
+  println!(
+    "Ok pages with bot-mitigation fetch blocks (bot_mitigation_summary present): {}",
+    ok_with_bot_mitigation.len()
+  );
+  if ok_with_bot_mitigation.is_empty() {
+    println!("  (none)");
+    println!();
+  } else {
+    let total: usize = ok_with_bot_mitigation.iter().map(|(_, total)| *total).sum();
+    println!("  total unique blocked fetches: {total}");
+    let mut offenders = ok_with_bot_mitigation;
+    offenders
+      .sort_by(|(a, a_total), (b, b_total)| b_total.cmp(a_total).then_with(|| a.stem.cmp(&b.stem)));
+    let shown = offenders.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+    println!("  stems (showing {shown} of {}):", offenders.len());
+    for (entry, count) in offenders.iter().take(shown) {
+      println!("    {} blocked_fetches={count}", entry.stem);
+    }
+    if offenders.len() > shown {
+      println!(
+        "    {} and {} more",
+        PROGRESS_NOTE_ELLIPSIS,
+        offenders.len() - shown
+      );
+    }
+    println!();
+  }
+
+  let ok_with_external_network_failures: Vec<(&LoadedProgress, usize)> = progresses
+    .iter()
+    .filter_map(|entry| {
+      (entry.progress.status == ProgressStatus::Ok)
+        .then_some(entry)
+        .and_then(|entry| {
+          entry
+            .progress
+            .diagnostics
+            .as_ref()
+            .and_then(|d| d.external_network_failure_summary.as_ref())
+            .map(|s| s.total)
+            .filter(|total| *total > 0)
+            .map(|total| (entry, total))
+        })
+    })
+    .collect();
+  println!(
+    "Ok pages with external network failures (external_network_failure_summary present): {}",
+    ok_with_external_network_failures.len()
+  );
+  if ok_with_external_network_failures.is_empty() {
+    println!("  (none)");
+    println!();
+  } else {
+    let total: usize = ok_with_external_network_failures
+      .iter()
+      .map(|(_, total)| *total)
+      .sum();
+    println!("  total unique network failures: {total}");
+    let mut offenders = ok_with_external_network_failures;
+    offenders
+      .sort_by(|(a, a_total), (b, b_total)| b_total.cmp(a_total).then_with(|| a.stem.cmp(&b.stem)));
+    let shown = offenders.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+    println!("  stems (showing {shown} of {}):", offenders.len());
+    for (entry, count) in offenders.iter().take(shown) {
+      println!("    {} network_failures={count}", entry.stem);
+    }
+    if offenders.len() > shown {
+      println!(
+        "    {} and {} more",
+        PROGRESS_NOTE_ELLIPSIS,
+        offenders.len() - shown
       );
     }
     println!();

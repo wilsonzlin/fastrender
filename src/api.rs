@@ -1003,6 +1003,10 @@ pub struct RenderDiagnostics {
   /// as renderer failures) while keeping the underlying blocked resources visible for debugging.
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub blocked_fetch_errors: Vec<ResourceFetchError>,
+  /// Image URLs that returned non-image payloads (e.g. HTML error pages) and were treated as
+  /// missing/broken images instead of renderer failures.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub invalid_images: Vec<String>,
   /// Document-level fetch failure message when a placeholder render is produced.
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
@@ -1153,7 +1157,10 @@ fn is_bot_mitigation_blocked_subresource(
 
 fn url_has_captcha_query_param(url: &str) -> bool {
   let lower = url.to_ascii_lowercase();
-  lower.contains("?captcha=") || lower.contains("&captcha=")
+  lower.contains("?captcha=")
+    || lower.contains("&captcha=")
+    || lower.contains("?challenge=")
+    || lower.contains("&challenge=")
 }
 
 fn content_type_is_html(content_type: &str) -> bool {
@@ -1251,6 +1258,17 @@ mod bot_mitigation_tests {
       "https://example.com/a.jpg",
       Some(405),
       Some("https://example.com/a.jpg?captcha=deadbeef"),
+      None,
+    ));
+  }
+
+  #[test]
+  fn bot_mitigation_classifier_recognizes_challenge_query_param() {
+    assert!(is_bot_mitigation_blocked_subresource(
+      ResourceKind::Image,
+      "https://example.com/a.jpg",
+      Some(403),
+      Some("https://example.com/a.jpg?challenge=deadbeef"),
       None,
     ));
   }
@@ -6027,20 +6045,18 @@ impl FastRender {
             if let Some(referrer) = referrer {
               request = request.with_referrer(referrer);
             }
-            let resource = match fetcher.fetch_with_request(request) {
-              Ok(resource) => resource,
-              Err(err) => {
-                // Per spec, stylesheet loads are best-effort. On failure, continue.
-                if !should_suppress_stylesheet_network_error(&url, &err) {
+              let resource = match fetcher.fetch_with_request(request) {
+                Ok(resource) => resource,
+                Err(err) => {
+                  // Per spec, stylesheet loads are best-effort. On failure, continue.
                   if let Some(diag) = diagnostics.as_ref() {
                     if let Ok(mut guard) = diag.lock() {
                       guard.record_error(ResourceKind::Stylesheet, &url, &err);
                     }
                   }
+                  return Ok((None, local_media_cache));
                 }
-                return Ok((None, local_media_cache));
-              }
-            };
+              };
 
             if let Some(ctx) = resource_context.as_ref() {
               if ctx
@@ -6404,11 +6420,9 @@ impl FastRender {
             }
             Err(err) => {
               // Per spec, stylesheet loads are best-effort. On failure, continue.
-              if !should_suppress_stylesheet_network_error(&stylesheet_url, &err) {
-                if let Some(diag) = &self.diagnostics {
-                  if let Ok(mut guard) = diag.lock() {
-                    guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
-                  }
+              if let Some(diag) = &self.diagnostics {
+                if let Ok(mut guard) = diag.lock() {
+                  guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
                 }
               }
               continue;
@@ -8501,6 +8515,7 @@ impl FastRender {
                 }
                 Err(err) => {
                   if should_suppress_stylesheet_network_error(u, &err) {
+                    diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
                     Ok(String::new())
                   } else {
                     diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
@@ -8557,9 +8572,7 @@ impl FastRender {
               fetch_timer,
             );
           }
-          if !should_suppress_stylesheet_network_error(&css_url, &err) {
-            diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err);
-          }
+          diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err);
         }
       }
     }
@@ -9928,6 +9941,11 @@ impl CssImportLoader for CssImportFetcher {
       Ok(res) => res,
       Err(err) => {
         if should_suppress_stylesheet_network_error(&resolved, &err) {
+          if let Some(ctx) = &self.resource_context {
+            if let Some(diag) = &ctx.diagnostics {
+              diag.record_error(ResourceKind::Stylesheet, resolved.as_str(), &err);
+            }
+          }
           return Ok(String::new());
         }
         if let Some(ctx) = &self.resource_context {
