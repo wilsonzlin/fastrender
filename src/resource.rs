@@ -2039,8 +2039,8 @@ pub fn ensure_http_success(resource: &FetchedResource, requested_url: &str) -> R
 
 /// Best-effort MIME sanity check for fetched images.
 ///
-/// When enabled, prevents common bot-mitigation HTML responses (`text/html`, `text/plain`) from
-/// being fed into image decoders, surfacing a `ResourceError` instead.
+/// When enabled, prevents common bot-mitigation HTML responses from being fed into image decoders,
+/// surfacing a `ResourceError` instead.
 pub fn ensure_image_mime_sane(resource: &FetchedResource, requested_url: &str) -> Result<()> {
   if !strict_mime_checks_enabled() || resource.status.is_none() {
     return Ok(());
@@ -2048,22 +2048,32 @@ pub fn ensure_image_mime_sane(resource: &FetchedResource, requested_url: &str) -
   if url_looks_like_svg_or_html(requested_url) {
     return Ok(());
   }
-  let Some(content_type) = resource.content_type.as_deref() else {
-    return Ok(());
-  };
-  let mime = content_type_mime(content_type);
-  if mime_is_html(mime) {
-    return Err(response_resource_error(
-      resource,
-      requested_url,
-      format!("unexpected content-type {mime}"),
-    ));
+  if let Some(content_type) = resource.content_type.as_deref() {
+    let mime = content_type_mime(content_type);
+    if mime_is_html(mime) {
+      return Err(response_resource_error(
+        resource,
+        requested_url,
+        format!("unexpected content-type {mime}"),
+      ));
+    }
+    if starts_with_ignore_ascii_case(mime, "text/plain") {
+      return Err(response_resource_error(
+        resource,
+        requested_url,
+        format!("unexpected content-type {mime}"),
+      ));
+    }
   }
-  if starts_with_ignore_ascii_case(mime, "text/plain") {
+
+  // Some bot mitigation pages respond to image requests with HTML markup but lie about the
+  // response content-type (e.g. `image/png`). Detect obvious markup payloads for URLs that should
+  // be images and surface them as resource errors.
+  if file_payload_looks_like_markup_but_not_svg(&resource.bytes) {
     return Err(response_resource_error(
       resource,
       requested_url,
-      format!("unexpected content-type {mime}"),
+      "unexpected markup response body",
     ));
   }
   Ok(())
