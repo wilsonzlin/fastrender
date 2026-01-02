@@ -40,8 +40,6 @@ use crate::layout::fragmentation::FragmentationOptions;
 use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
 use crate::style::position::Position;
-use crate::style::types::GridTrack;
-use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
@@ -49,10 +47,8 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHasher as DefaultHasher;
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -374,157 +370,16 @@ thread_local! {
   /// Layout result cache kept per-thread to stay contention-free during rayon-powered fan-out.
   static LAYOUT_RESULT_CACHE: RefCell<FxHashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>> =
     RefCell::new(FxHashMap::default());
-  /// Memoized `layout_style_fingerprint` results keyed by `Arc<ComputedStyle>` pointer.
-  ///
-  /// We intentionally key by the `Arc` pointer (not deep style equality) because the
-  /// underlying `ComputedStyle` is immutable once created and the existing fingerprint
-  /// already incorporates the pointer address. This keeps lookups extremely cheap in
-  /// layout-cache-heavy documents.
-  static LAYOUT_STYLE_FINGERPRINT_CACHE: RefCell<FxHashMap<usize, (usize, u64)>> =
-    RefCell::new(FxHashMap::default());
   static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
   static LAYOUT_CACHE_EPOCH: Cell<usize> = const { Cell::new(1) };
   static LAYOUT_CACHE_FRAGMENTATION: Cell<u64> = const { Cell::new(0) };
   static LAYOUT_CACHE_ENTRY_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-/// Maximum number of memoized style fingerprints kept per thread.
-///
-/// When exceeded the cache is cleared to avoid unbounded growth on extremely large
-/// documents.
-const LAYOUT_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES: usize = 32_768;
-
 fn pack_viewport_size(size: Size) -> u64 {
   let w = size.width.to_bits() as u64;
   let h = size.height.to_bits() as u64;
   (w << 32) | h
-}
-
-fn hash_enum_discriminant<T>(value: &T, hasher: &mut DefaultHasher) {
-  mem::discriminant(value).hash(hasher);
-}
-
-fn hash_length(len: &Length, hasher: &mut DefaultHasher) {
-  hash_enum_discriminant(&len.unit, hasher);
-  len.value.to_bits().hash(hasher);
-  if let Some(calc) = &len.calc {
-    1u8.hash(hasher);
-    for term in calc.terms() {
-      hash_enum_discriminant(&term.unit, hasher);
-      term.value.to_bits().hash(hasher);
-    }
-  } else {
-    0u8.hash(hasher);
-  }
-}
-
-fn hash_option_length(len: &Option<Length>, hasher: &mut DefaultHasher) {
-  match len {
-    Some(l) => {
-      1u8.hash(hasher);
-      hash_length(l, hasher);
-    }
-    None => 0u8.hash(hasher),
-  }
-}
-
-fn hash_string_vecs(vecs: &[Vec<String>], hasher: &mut DefaultHasher) {
-  vecs.len().hash(hasher);
-  for names in vecs {
-    names.len().hash(hasher);
-    for name in names {
-      name.hash(hasher);
-    }
-  }
-}
-
-fn hash_grid_track(track: &GridTrack, hasher: &mut DefaultHasher) {
-  use GridTrack::*;
-  match track {
-    Length(len) => {
-      0u8.hash(hasher);
-      hash_length(len, hasher);
-    }
-    Fr(fr) => {
-      1u8.hash(hasher);
-      fr.to_bits().hash(hasher);
-    }
-    Auto => 2u8.hash(hasher),
-    MinContent => 3u8.hash(hasher),
-    MaxContent => 4u8.hash(hasher),
-    FitContent(len) => {
-      5u8.hash(hasher);
-      hash_length(len, hasher);
-    }
-    MinMax(min, max) => {
-      6u8.hash(hasher);
-      hash_grid_track(min, hasher);
-      hash_grid_track(max, hasher);
-    }
-    RepeatAutoFill { tracks, line_names } => {
-      7u8.hash(hasher);
-      hash_grid_tracks(tracks, hasher);
-      hash_string_vecs(line_names, hasher);
-    }
-    RepeatAutoFit { tracks, line_names } => {
-      8u8.hash(hasher);
-      hash_grid_tracks(tracks, hasher);
-      hash_string_vecs(line_names, hasher);
-    }
-  }
-}
-
-fn hash_grid_tracks(tracks: &[GridTrack], hasher: &mut DefaultHasher) {
-  tracks.len().hash(hasher);
-  for track in tracks {
-    hash_grid_track(track, hasher);
-  }
-}
-
-fn hash_named_lines_map(map: &HashMap<String, Vec<usize>>, hasher: &mut DefaultHasher) {
-  let mut entries: Vec<_> = map.iter().collect();
-  entries.sort_by(|a, b| a.0.cmp(b.0));
-  entries.len().hash(hasher);
-  for (name, positions) in entries {
-    name.hash(hasher);
-    positions.hash(hasher);
-  }
-}
-
-fn hash_template_areas(areas: &[Vec<Option<String>>], hasher: &mut DefaultHasher) {
-  areas.len().hash(hasher);
-  for row in areas {
-    row.len().hash(hasher);
-    for cell in row {
-      match cell {
-        Some(name) => {
-          1u8.hash(hasher);
-          name.hash(hasher);
-        }
-        None => 0u8.hash(hasher),
-      }
-    }
-  }
-}
-
-#[cfg(test)]
-thread_local! {
-  static STYLE_FINGERPRINT_COMPUTE_COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-fn increment_style_fingerprint_compute_count() {
-  STYLE_FINGERPRINT_COMPUTE_COUNT.with(|counter| counter.set(counter.get() + 1));
-}
-
-#[cfg(test)]
-fn reset_style_fingerprint_compute_count() {
-  STYLE_FINGERPRINT_COMPUTE_COUNT.with(|counter| counter.set(0));
-}
-
-#[cfg(test)]
-fn style_fingerprint_compute_count() -> usize {
-  STYLE_FINGERPRINT_COMPUTE_COUNT.with(|counter| counter.get())
 }
 
 #[cfg(test)]
@@ -624,121 +479,15 @@ fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
   h.finish()
 }
 
-/// Computes a conservative fingerprint of layout-affecting style properties.
+/// Returns a conservative fingerprint for layout cache invalidation.
+///
+/// FastRender treats each `Arc<ComputedStyle>` allocation as immutable once shared. When layout
+/// needs to tweak styles (e.g., for layout-only normalization) it does so via `Arc::make_mut`,
+/// which results in a distinct allocation and therefore a distinct pointer for cache keys.
+///
+/// That lets us use the style pointer itself as a cheap, conservative fingerprint.
 pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
-  #[cfg(test)]
-  increment_style_fingerprint_compute_count();
-
-  let mut h = DefaultHasher::default();
-  (Arc::as_ptr(style) as usize).hash(&mut h);
-  hash_enum_discriminant(&style.display, &mut h);
-  hash_enum_discriminant(&style.position, &mut h);
-  hash_enum_discriminant(&style.float, &mut h);
-  hash_enum_discriminant(&style.clear, &mut h);
-  hash_enum_discriminant(&style.box_sizing, &mut h);
-  hash_option_length(&style.width, &mut h);
-  hash_option_length(&style.height, &mut h);
-  hash_option_length(&style.min_width, &mut h);
-  hash_option_length(&style.max_width, &mut h);
-  hash_option_length(&style.min_height, &mut h);
-  hash_option_length(&style.max_height, &mut h);
-  hash_option_length(&style.margin_top, &mut h);
-  hash_option_length(&style.margin_right, &mut h);
-  hash_option_length(&style.margin_bottom, &mut h);
-  hash_option_length(&style.margin_left, &mut h);
-  hash_length(&style.padding_top, &mut h);
-  hash_length(&style.padding_right, &mut h);
-  hash_length(&style.padding_bottom, &mut h);
-  hash_length(&style.padding_left, &mut h);
-  hash_length(&style.border_top_width, &mut h);
-  hash_length(&style.border_right_width, &mut h);
-  hash_length(&style.border_bottom_width, &mut h);
-  hash_length(&style.border_left_width, &mut h);
-  hash_enum_discriminant(&style.overflow_x, &mut h);
-  hash_enum_discriminant(&style.overflow_y, &mut h);
-  hash_enum_discriminant(&style.scrollbar_width, &mut h);
-  hash_enum_discriminant(&style.aspect_ratio, &mut h);
-  hash_enum_discriminant(&style.writing_mode, &mut h);
-  hash_enum_discriminant(&style.direction, &mut h);
-  hash_enum_discriminant(&style.line_height, &mut h);
-  style.font_size.to_bits().hash(&mut h);
-  style.root_font_size.to_bits().hash(&mut h);
-  style.letter_spacing.to_bits().hash(&mut h);
-  style.word_spacing.to_bits().hash(&mut h);
-  hash_option_length(&style.column_width, &mut h);
-  hash_enum_discriminant(&style.column_count, &mut h);
-  hash_length(&style.column_gap, &mut h);
-  hash_enum_discriminant(&style.grid_auto_flow, &mut h);
-  hash_grid_tracks(&style.grid_template_columns, &mut h);
-  hash_grid_tracks(&style.grid_template_rows, &mut h);
-  hash_grid_tracks(&style.grid_auto_columns, &mut h);
-  hash_grid_tracks(&style.grid_auto_rows, &mut h);
-  hash_length(&style.grid_gap, &mut h);
-  hash_length(&style.grid_row_gap, &mut h);
-  hash_length(&style.grid_column_gap, &mut h);
-  style.grid_row_subgrid.hash(&mut h);
-  style.grid_column_subgrid.hash(&mut h);
-  hash_string_vecs(&style.subgrid_row_line_names, &mut h);
-  hash_string_vecs(&style.subgrid_column_line_names, &mut h);
-  hash_string_vecs(&style.grid_row_line_names, &mut h);
-  hash_string_vecs(&style.grid_column_line_names, &mut h);
-  hash_named_lines_map(&style.grid_row_names, &mut h);
-  hash_named_lines_map(&style.grid_column_names, &mut h);
-  hash_template_areas(&style.grid_template_areas, &mut h);
-  style.grid_column_start.hash(&mut h);
-  style.grid_column_end.hash(&mut h);
-  style.grid_row_start.hash(&mut h);
-  style.grid_row_end.hash(&mut h);
-  match &style.grid_column_raw {
-    Some(raw) => {
-      1u8.hash(&mut h);
-      raw.hash(&mut h);
-    }
-    None => 0u8.hash(&mut h),
-  }
-  match &style.grid_row_raw {
-    Some(raw) => {
-      1u8.hash(&mut h);
-      raw.hash(&mut h);
-    }
-    None => 0u8.hash(&mut h),
-  }
-  style.containment.size.hash(&mut h);
-  style.containment.inline_size.hash(&mut h);
-  style.containment.layout.hash(&mut h);
-  style.containment.style.hash(&mut h);
-  style.containment.paint.hash(&mut h);
-  for family in style.font_family.iter() {
-    family.hash(&mut h);
-  }
-  h.finish()
-}
-
-fn clear_layout_style_fingerprint_cache() {
-  LAYOUT_STYLE_FINGERPRINT_CACHE.with(|cache| cache.borrow_mut().clear());
-}
-
-fn layout_style_fingerprint_cached(style: &Arc<ComputedStyle>) -> u64 {
-  let style_ptr = Arc::as_ptr(style) as usize;
-  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
-  if let Some(hit) = LAYOUT_STYLE_FINGERPRINT_CACHE.with(|cache| {
-    cache
-      .borrow()
-      .get(&style_ptr)
-      .and_then(|(cached_epoch, fingerprint)| (*cached_epoch == epoch).then_some(*fingerprint))
-  }) {
-    return hit;
-  }
-
-  let fingerprint = layout_style_fingerprint(style);
-  LAYOUT_STYLE_FINGERPRINT_CACHE.with(|cache| {
-    let mut map = cache.borrow_mut();
-    if map.len() >= LAYOUT_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES && !map.contains_key(&style_ptr) {
-      map.clear();
-    }
-    map.insert(style_ptr, (epoch, fingerprint));
-  });
-  fingerprint
+  Arc::as_ptr(style) as usize as u64
 }
 
 fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
@@ -784,7 +533,6 @@ fn layout_cache_sync_thread_state() {
   // recreated per render.
   if epoch_changed || !enabled || fragmentation_changed {
     LAYOUT_RESULT_CACHE.with(|cache| cache.borrow_mut().clear());
-    clear_layout_style_fingerprint_cache();
     subgrid_cache_use_epoch(epoch, true);
   }
 
@@ -833,7 +581,7 @@ fn layout_cache_key(
     return None;
   }
 
-  let style_hash = layout_style_fingerprint_cached(&box_node.style);
+  let style_hash = layout_style_fingerprint(&box_node.style);
   let constraints_hash = layout_constraints_hash(constraints);
   let fragmentation_hash = LAYOUT_CACHE_FRAGMENTATION.with(|hash| hash.get());
   Some(LayoutCacheKeyParts {
@@ -929,7 +677,6 @@ pub(crate) fn layout_cache_reset_counters() {
   LAYOUT_RESULT_CACHE.with(|cache| {
     cache.borrow_mut().clear();
   });
-  clear_layout_style_fingerprint_cache();
   LAYOUT_CACHE_LOOKUPS.store(0);
   LAYOUT_CACHE_HITS.store(0);
   LAYOUT_CACHE_STORES.store(0);
@@ -1786,47 +1533,6 @@ mod tests {
         .expect("receive worker result"),
       "expected worker thread to observe layout cache hit after store"
     );
-
-    layout_cache_use_epoch(1, false, true, None);
-  }
-
-  #[test]
-  fn layout_style_fingerprint_memoized_per_epoch() {
-    let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(1, true, true, None);
-    reset_style_fingerprint_compute_count();
-
-    let style = flow_root_style();
-    let mut node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
-    node.id = 1;
-    let constraints = LayoutConstraints::definite(800.0, 600.0);
-    let viewport = Size::new(800.0, 600.0);
-    let fc_type = FormattingContextType::Block;
-
-    for _ in 0..16 {
-      layout_cache_store(
-        &node,
-        fc_type,
-        &constraints,
-        &block_fragment(100.0, 50.0),
-        viewport,
-      );
-      assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_some());
-    }
-    assert_eq!(style_fingerprint_compute_count(), 1);
-
-    layout_cache_use_epoch(2, true, true, None);
-    for _ in 0..16 {
-      layout_cache_store(
-        &node,
-        fc_type,
-        &constraints,
-        &block_fragment(100.0, 50.0),
-        viewport,
-      );
-      assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_some());
-    }
-    assert_eq!(style_fingerprint_compute_count(), 2);
 
     layout_cache_use_epoch(1, false, true, None);
   }
