@@ -3257,7 +3257,7 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
@@ -3706,7 +3706,7 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
@@ -4197,7 +4197,7 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -4738,7 +4738,7 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
             {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -8483,6 +8483,178 @@ mod tests {
         .expect("reqwest prefix should succeed");
       handle.join().unwrap();
       assert_eq!(res.bytes, body.as_bytes()[..8]);
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    }
+  }
+
+  #[test]
+  fn http_redirect_to_html_for_jpg_does_not_substitute_placeholder() {
+    let body = "<!DOCTYPE html><html><title>blocked</title></html>";
+    let redirect_headers = "HTTP/1.1 302 Found\r\nLocation: /blocked.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string();
+    let final_headers = format!(
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+      body.len(),
+      body
+    );
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+
+    {
+      let Some(listener) = try_bind_localhost("http_redirect_to_html_for_jpg_does_not_substitute_placeholder_ureq")
+      else {
+        return;
+      };
+      listener.set_nonblocking(true).unwrap();
+      let addr = listener.local_addr().unwrap();
+      let redirect_response = redirect_headers.clone();
+      let final_response = final_headers.clone();
+      let handle = thread::spawn(move || {
+        let start = Instant::now();
+        let mut served_redirect = false;
+        let mut served_final = false;
+        while start.elapsed() < Duration::from_secs(2) && !served_final {
+          match listener.accept() {
+            Ok((mut stream, _)) => {
+              stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+              for _ in 0..2 {
+                let req = match read_http_request(&mut stream) {
+                  Ok(Some(req)) => req,
+                  Ok(None) => break,
+                  Err(err) => panic!("read http_redirect_to_html_for_jpg_does_not_substitute_placeholder_ureq: {err}"),
+                };
+                let req = String::from_utf8_lossy(&req);
+                if !served_redirect {
+                  assert!(
+                    req.contains("GET /photo.jpg"),
+                    "expected /photo.jpg request, got: {req}"
+                  );
+                  stream.write_all(redirect_response.as_bytes()).unwrap();
+                  served_redirect = true;
+                } else {
+                  assert!(
+                    req.contains("GET /blocked.html"),
+                    "expected /blocked.html request, got: {req}"
+                  );
+                  stream.write_all(final_response.as_bytes()).unwrap();
+                  served_final = true;
+                  break;
+                }
+              }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+              thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) => panic!(
+              "accept http_redirect_to_html_for_jpg_does_not_substitute_placeholder_ureq: {err}"
+            ),
+          }
+        }
+        assert!(
+          served_redirect && served_final,
+          "expected redirect+final requests (redirect={served_redirect}, final={served_final})"
+        );
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher
+        .fetch_http_with_accept_inner_ureq(
+          FetchContextKind::Image,
+          &url,
+          None,
+          None,
+          None,
+          &deadline,
+          Instant::now(),
+          false,
+        )
+        .expect("ureq fetch should succeed");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, body.as_bytes());
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    }
+
+    {
+      let Some(listener) =
+        try_bind_localhost("http_redirect_to_html_for_jpg_does_not_substitute_placeholder_reqwest")
+      else {
+        return;
+      };
+      listener.set_nonblocking(true).unwrap();
+      let addr = listener.local_addr().unwrap();
+      let redirect_response = redirect_headers.clone();
+      let final_response = final_headers.clone();
+      let handle = thread::spawn(move || {
+        let start = Instant::now();
+        let mut served_redirect = false;
+        let mut served_final = false;
+        while start.elapsed() < Duration::from_secs(2) && !served_final {
+          match listener.accept() {
+            Ok((mut stream, _)) => {
+              stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+              for _ in 0..2 {
+                let req = match read_http_request(&mut stream) {
+                  Ok(Some(req)) => req,
+                  Ok(None) => break,
+                  Err(err) => panic!("read http_redirect_to_html_for_jpg_does_not_substitute_placeholder_reqwest: {err}"),
+                };
+                let req = String::from_utf8_lossy(&req);
+                if !served_redirect {
+                  assert!(
+                    req.contains("GET /photo.jpg"),
+                    "expected /photo.jpg request, got: {req}"
+                  );
+                  stream.write_all(redirect_response.as_bytes()).unwrap();
+                  served_redirect = true;
+                } else {
+                  assert!(
+                    req.contains("GET /blocked.html"),
+                    "expected /blocked.html request, got: {req}"
+                  );
+                  stream.write_all(final_response.as_bytes()).unwrap();
+                  served_final = true;
+                  break;
+                }
+              }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+              thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) => panic!(
+              "accept http_redirect_to_html_for_jpg_does_not_substitute_placeholder_reqwest: {err}"
+            ),
+          }
+        }
+        assert!(
+          served_redirect && served_final,
+          "expected redirect+final requests (redirect={served_redirect}, final={served_final})"
+        );
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher
+        .fetch_http_with_accept_inner_reqwest(
+          FetchContextKind::Image,
+          &url,
+          None,
+          None,
+          None,
+          &deadline,
+          Instant::now(),
+          false,
+        )
+        .expect("reqwest fetch should succeed");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, body.as_bytes());
       assert_eq!(res.content_type.as_deref(), Some("text/html"));
     }
   }
