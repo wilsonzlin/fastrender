@@ -8603,10 +8603,10 @@ impl FastRender {
     media_ctx: &MediaContext,
     deadline: Option<&RenderDeadline>,
   ) -> Option<ImageProbePrefetchJoinHandle> {
-    let Some(deadline) = deadline else {
+    let Some(deadline_ref) = deadline else {
       return None;
     };
-    if deadline.timeout_limit().is_none() {
+    if deadline_ref.timeout_limit().is_none() {
       return None;
     }
     if !self
@@ -8617,7 +8617,7 @@ impl FastRender {
     }
 
     // If we're already very close to the deadline, skip spawning extra work.
-    if let Some(remaining) = deadline.remaining_timeout() {
+    if let Some(remaining) = deadline_ref.remaining_timeout() {
       if remaining < Duration::from_millis(100) {
         return None;
       }
@@ -8668,7 +8668,7 @@ impl FastRender {
       ctx.diagnostics = None;
       image_cache.set_resource_context(Some(ctx));
     }
-    let deadline = crate::render_control::active_deadline();
+    let deadline = Some(deadline_ref.clone());
     let parallelism = self
       .runtime_toggles
       .usize("FASTR_PREFETCH_IMAGE_PROBES_PARALLELISM")
@@ -8685,6 +8685,8 @@ impl FastRender {
         let _stage_guard = StageGuard::install(Some(RenderStage::BoxTree));
         pool.install(|| {
           urls.into_par_iter().for_each(|url| {
+            let _deadline_guard = DeadlineGuard::install(deadline.as_ref());
+            let _stage_guard = StageGuard::install(Some(RenderStage::BoxTree));
             let _ = image_cache.probe(url.as_str());
           });
         });
