@@ -166,9 +166,13 @@ fn cached_html_status(cache_path: &Path) -> Option<u16> {
 fn should_preserve_existing_cache_on_error_status(
   allow_http_error_status: bool,
   fetched_status: Option<u16>,
+  has_existing_cache: bool,
   existing_status: Option<u16>,
 ) -> bool {
   if !allow_http_error_status {
+    return false;
+  }
+  if !has_existing_cache {
     return false;
   }
   let Some(fetched_status) = fetched_status else {
@@ -331,10 +335,14 @@ fn main() {
         match fetch_page(fetcher.as_ref(), &entry.url, allow_http_error_status) {
           Ok(res) => {
             let canonical_url = res.final_url.as_deref().unwrap_or(&entry.url);
+            let has_existing_cache = cache_path.exists();
             if should_preserve_existing_cache_on_error_status(
               allow_http_error_status,
               res.status,
-              cache_path.exists().then(|| cached_html_status(&cache_path)).flatten(),
+              has_existing_cache,
+              has_existing_cache
+                .then(|| cached_html_status(&cache_path))
+                .flatten(),
             ) {
               if let Some(start) = start {
                 println!(
@@ -1063,28 +1071,32 @@ mod tests {
   #[test]
   fn preserve_existing_cache_on_error_status_avoids_overwriting_good_cache() {
     assert!(
-      should_preserve_existing_cache_on_error_status(true, Some(403), Some(200)),
+      should_preserve_existing_cache_on_error_status(true, Some(403), true, Some(200)),
       "should preserve ok cache when refreshed fetch hits HTTP error"
     );
     assert!(
-      should_preserve_existing_cache_on_error_status(true, Some(500), None),
+      should_preserve_existing_cache_on_error_status(true, Some(500), true, None),
       "missing meta (unknown status) should be treated as ok for preservation purposes"
     );
     assert!(
-      !should_preserve_existing_cache_on_error_status(true, Some(403), Some(403)),
+      !should_preserve_existing_cache_on_error_status(true, Some(403), true, Some(403)),
       "should allow overwriting caches that are already known to be error pages"
     );
     assert!(
-      !should_preserve_existing_cache_on_error_status(true, Some(200), Some(200)),
+      !should_preserve_existing_cache_on_error_status(true, Some(200), true, Some(200)),
       "successful fetches should always overwrite"
     );
     assert!(
-      !should_preserve_existing_cache_on_error_status(false, Some(403), Some(200)),
+      !should_preserve_existing_cache_on_error_status(false, Some(403), true, Some(200)),
       "preservation is only relevant when --allow-http-error-status is enabled"
     );
     assert!(
-      !should_preserve_existing_cache_on_error_status(true, None, Some(200)),
+      !should_preserve_existing_cache_on_error_status(true, None, true, Some(200)),
       "non-HTTP fetches (no status code) should not trigger preservation"
+    );
+    assert!(
+      !should_preserve_existing_cache_on_error_status(true, Some(500), false, None),
+      "if there is no existing cache, allow caching the HTTP error response"
     );
   }
 
