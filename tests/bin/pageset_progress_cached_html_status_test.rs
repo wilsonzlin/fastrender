@@ -25,6 +25,8 @@ fn pageset_progress_worker_renders_cached_http_error_status_by_default() {
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .current_dir(temp.path())
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "worker",
       "--cache-path",
@@ -84,6 +86,8 @@ fn pageset_progress_worker_can_fail_on_cached_http_error_status() {
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .current_dir(temp.path())
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
     .args([
       "worker",
       "--cache-path",
@@ -117,4 +121,3 @@ fn pageset_progress_worker_can_fail_on_cached_http_error_status() {
     "expected cached status to be fatal when strict flag is enabled"
   );
 }
-
