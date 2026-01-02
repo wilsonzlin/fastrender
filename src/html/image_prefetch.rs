@@ -9,10 +9,11 @@ use crate::css::loader::resolve_href_with_base;
 use crate::css::parser::tokenize_rel_list;
 use crate::dom::{DomNode, HTML_NAMESPACE};
 use crate::html::image_attrs::{parse_sizes, parse_srcset};
-use crate::html::images::{image_sources_with_fallback, ImageSelectionContext};
+use crate::html::images::{image_sources_with_fallback, select_image_source, ImageSelectionContext};
 use crate::resource::is_data_url;
 use crate::style::media::MediaQuery;
-use crate::tree::box_tree::PictureSource;
+use crate::style::media::MediaContext;
+use crate::tree::box_tree::{PictureSource, SizesList, SrcsetDescriptor};
 use std::collections::HashSet;
 
 /// Hard limits for image prefetch discovery.
@@ -43,6 +44,8 @@ pub struct ImagePrefetchDiscovery {
   /// True when discovery stopped early due to `max_image_elements`.
   pub limited: bool,
 }
+
+const WIDTH_DESCRIPTOR_SECONDARY_SLOT_SCALE: f32 = 0.75;
 
 fn normalize_mime_type(value: &str) -> Option<String> {
   let base = value.split(';').next().unwrap_or("").trim();
@@ -101,6 +104,78 @@ fn push_unique_url(
   }
 }
 
+fn normalized_image_mime(mime: &str) -> String {
+  mime
+    .split(';')
+    .next()
+    .unwrap_or("")
+    .trim()
+    .to_ascii_lowercase()
+}
+
+fn is_supported_image_mime(mime: &str) -> bool {
+  let normalized = normalized_image_mime(mime);
+  if normalized == "image/svg+xml" {
+    return true;
+  }
+
+  image::ImageFormat::from_mime_type(&normalized).is_some()
+}
+
+fn picture_source_matches(source: &PictureSource, ctx: ImageSelectionContext<'_>) -> bool {
+  if source.srcset.is_empty() {
+    return false;
+  }
+
+  if let Some(mime) = &source.mime_type {
+    if !is_supported_image_mime(mime) {
+      return false;
+    }
+  }
+
+  match &source.media {
+    Some(queries) => ctx
+      .media_context
+      .map(|m| m.evaluate_list(queries))
+      .unwrap_or(true),
+    None => true,
+  }
+}
+
+fn select_picture_source<'a>(
+  sources: &'a [PictureSource],
+  ctx: ImageSelectionContext<'_>,
+) -> Option<&'a PictureSource> {
+  sources.iter().find(|source| picture_source_matches(source, ctx))
+}
+
+fn estimate_source_size(sizes: Option<&SizesList>, ctx: ImageSelectionContext<'_>) -> Option<f32> {
+  let viewport = ctx.viewport?;
+  let font_size = ctx.font_size.unwrap_or(16.0);
+  let media_ctx = ctx.media_context.cloned().unwrap_or_else(|| {
+    MediaContext::screen(viewport.width, viewport.height)
+      .with_device_pixel_ratio(ctx.device_pixel_ratio)
+      .with_env_overrides()
+  });
+
+  let resolved = if let Some(list) = sizes {
+    list.evaluate(&media_ctx, viewport, font_size)
+  } else {
+    viewport.width
+  };
+
+  resolved
+    .is_finite()
+    .then_some(resolved)
+    .filter(|v| *v > 0.0)
+}
+
+fn srcset_has_width_descriptors(srcset: &[crate::tree::box_tree::SrcsetCandidate]) -> bool {
+  srcset
+    .iter()
+    .any(|c| matches!(c.descriptor, SrcsetDescriptor::Width(_)))
+}
+
 fn link_rel_is_preload_image(rel_tokens: &[String], as_attr: Option<&str>) -> bool {
   rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("preload"))
     && as_attr
@@ -150,6 +225,84 @@ fn picture_sources_and_fallback_img<'a>(
   }
 
   None
+}
+
+fn push_prefetch_selection(
+  ctx: ImageSelectionContext<'_>,
+  picture_sources: &[PictureSource],
+  img_src: &str,
+  img_srcset: &[crate::tree::box_tree::SrcsetCandidate],
+  img_sizes: Option<&SizesList>,
+  limits: ImagePrefetchLimits,
+  seen_urls: &mut HashSet<String>,
+  urls: &mut Vec<String>,
+) {
+  if limits.max_urls_per_element == 0 {
+    return;
+  }
+
+  let srcset_to_consider = select_picture_source(picture_sources, ctx)
+    .map(|source| source.srcset.as_slice())
+    .unwrap_or(img_srcset);
+  let uses_width_descriptors = srcset_has_width_descriptors(srcset_to_consider);
+
+  if uses_width_descriptors {
+    let sizes_for_estimate = select_picture_source(picture_sources, ctx)
+      .and_then(|source| source.sizes.as_ref())
+      .or(img_sizes);
+
+    let Some(source_size) = estimate_source_size(sizes_for_estimate, ctx) else {
+      // Fallback to the renderer-aligned selection which will pick a candidate based on `sizes`
+      // evaluation when slot widths are unknown.
+      for selected in image_sources_with_fallback(img_src, img_srcset, img_sizes, picture_sources, ctx)
+        .into_iter()
+        .take(limits.max_urls_per_element)
+      {
+        push_unique_url(ctx, seen_urls, urls, selected.url);
+      }
+      return;
+    };
+
+    let mut emitted = 0usize;
+    for slot_width in [
+      source_size,
+      source_size * WIDTH_DESCRIPTOR_SECONDARY_SLOT_SCALE,
+    ] {
+      if emitted >= limits.max_urls_per_element {
+        break;
+      }
+      if !slot_width.is_finite() || slot_width <= 0.0 {
+        continue;
+      }
+
+      let selection_ctx = ImageSelectionContext {
+        slot_width: Some(slot_width),
+        ..ctx
+      };
+      let selected = select_image_source(img_src, img_srcset, img_sizes, picture_sources, selection_ctx);
+      if selected.url.trim().is_empty() {
+        continue;
+      }
+      let before_len = urls.len();
+      push_unique_url(ctx, seen_urls, urls, selected.url);
+      if urls.len() != before_len {
+        emitted += 1;
+      }
+    }
+
+    // Ensure a plain `src` is still captured when we didn't fill the cap (e.g. malformed srcset).
+    if emitted < limits.max_urls_per_element && !img_src.trim().is_empty() {
+      push_unique_url(ctx, seen_urls, urls, img_src);
+    }
+    return;
+  }
+
+  for selected in image_sources_with_fallback(img_src, img_srcset, img_sizes, picture_sources, ctx)
+    .into_iter()
+    .take(limits.max_urls_per_element)
+  {
+    push_unique_url(ctx, seen_urls, urls, selected.url);
+  }
 }
 
 /// Discover image URLs in a DOM tree using the renderer's responsive image selection.
@@ -217,18 +370,16 @@ pub fn discover_image_prefetch_urls(
             .unwrap_or_default();
           let img_sizes = img.get_attribute_ref("sizes").and_then(parse_sizes);
 
-          for selected in image_sources_with_fallback(
+          push_prefetch_selection(
+            ctx,
+            &picture_sources,
             img_src,
             &img_srcset,
             img_sizes.as_ref(),
-            &picture_sources,
-            ctx,
-          )
-          .into_iter()
-          .take(limits.max_urls_per_element)
-          {
-            push_unique_url(ctx, seen_urls, urls, selected.url);
-          }
+            limits,
+            seen_urls,
+            urls,
+          );
           if *image_elements >= limits.max_image_elements {
             *limited = true;
             return false;
@@ -265,13 +416,16 @@ pub fn discover_image_prefetch_urls(
           let img_srcset = img_srcset_attr.map(parse_srcset).unwrap_or_default();
           let img_sizes = node.get_attribute_ref("sizes").and_then(parse_sizes);
 
-          for selected in
-            image_sources_with_fallback(img_src, &img_srcset, img_sizes.as_ref(), &[], ctx)
-              .into_iter()
-              .take(limits.max_urls_per_element)
-          {
-            push_unique_url(ctx, seen_urls, urls, selected.url);
-          }
+          push_prefetch_selection(
+            ctx,
+            &[],
+            img_src,
+            &img_srcset,
+            img_sizes.as_ref(),
+            limits,
+            seen_urls,
+            urls,
+          );
           if *image_elements >= limits.max_image_elements {
             *limited = true;
             return false;
@@ -336,13 +490,16 @@ pub fn discover_image_prefetch_urls(
                 return false;
               }
               *image_elements += 1;
-              for selected in
-                image_sources_with_fallback(href, &parsed_srcset, parsed_sizes.as_ref(), &[], ctx)
-                  .into_iter()
-                  .take(limits.max_urls_per_element)
-              {
-                push_unique_url(ctx, seen_urls, urls, selected.url);
-              }
+              push_prefetch_selection(
+                ctx,
+                &[],
+                href,
+                &parsed_srcset,
+                parsed_sizes.as_ref(),
+                limits,
+                seen_urls,
+                urls,
+              );
               if *image_elements >= limits.max_image_elements {
                 *limited = true;
                 return false;
@@ -557,5 +714,37 @@ mod tests {
     assert_eq!(out.image_elements, 1);
     assert!(!out.limited);
     assert_eq!(out.urls, vec!["https://example.com/poster.jpg".to_string()]);
+  }
+
+  #[test]
+  fn hedges_width_descriptor_srcset_by_slot_width_guess() {
+    let html = r#"
+      <img
+        src="fallback.jpg"
+        srcset="small.jpg 600w, large.jpg 800w"
+      >
+    "#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(
+      out.urls,
+      vec![
+        "https://example.com/large.jpg".to_string(),
+        "https://example.com/small.jpg".to_string(),
+      ]
+    );
   }
 }
