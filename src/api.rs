@@ -68,7 +68,7 @@ use crate::css::loader::{
 };
 use crate::css::parser::{
   extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_media, CssTreeScope,
-  StylesheetSource,
+  ScopedStylesheetSources, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug;
@@ -1723,7 +1723,29 @@ pub struct RenderStageTimings {
   #[serde(default)]
   pub dom_top_layer_ms: Option<f64>,
   pub css_inlining_ms: Option<f64>,
+  #[serde(default)]
+  pub css_inline_extract_links_ms: Option<f64>,
+  #[serde(default)]
+  pub css_inline_extract_embedded_urls_ms: Option<f64>,
+  #[serde(default)]
+  pub css_inline_stylesheet_fetch_cpu_ms: Option<f64>,
+  #[serde(default)]
+  pub css_inline_stylesheet_decode_cpu_ms: Option<f64>,
+  #[serde(default)]
+  pub css_inline_stylesheet_absolutize_cpu_ms: Option<f64>,
+  #[serde(default)]
+  pub css_inline_imports_cpu_ms: Option<f64>,
+  #[serde(default)]
+  pub css_inline_inject_ms: Option<f64>,
   pub css_parse_ms: Option<f64>,
+  #[serde(default)]
+  pub css_parse_used_codepoints_ms: Option<f64>,
+  #[serde(default)]
+  pub css_parse_collect_font_faces_ms: Option<f64>,
+  #[serde(default)]
+  pub css_parse_load_webfonts_ms: Option<f64>,
+  #[serde(default)]
+  pub css_parse_collect_keyframes_ms: Option<f64>,
   pub cascade_ms: Option<f64>,
   pub box_tree_ms: Option<f64>,
   pub layout_ms: Option<f64>,
@@ -2123,7 +2145,9 @@ impl DiagnosticsSessionGuard {
     // break diagnostics for the remainder of the process (e.g. pageset runners that catch panics
     // and continue).
     let mutex = diagnostics_session_mutex();
-    let guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = mutex
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     DIAGNOSTICS_SESSION_DEPTH.with(|depth| depth.set(depth.get() + 1));
 
     Self { _guard: guard }
@@ -2881,7 +2905,10 @@ mod pool_panic_tests {
       .lock()
       .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_eq!(guard.total, 0, "renderer should be discarded on panic");
-    assert!(guard.idle.is_empty(), "renderer should not be returned to the pool");
+    assert!(
+      guard.idle.is_empty(),
+      "renderer should not be returned to the pool"
+    );
     drop(guard);
 
     let pixmap = pool
@@ -2895,8 +2922,15 @@ mod pool_panic_tests {
       .state
       .lock()
       .unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert_eq!(guard.total, 1, "expected renderer to be rebuilt after panic");
-    assert_eq!(guard.idle.len(), 1, "expected renderer to be returned to the pool");
+    assert_eq!(
+      guard.total, 1,
+      "expected renderer to be rebuilt after panic"
+    );
+    assert_eq!(
+      guard.idle.len(),
+      1,
+      "expected renderer to be returned to the pool"
+    );
   }
 
   #[test]
@@ -3008,7 +3042,8 @@ impl FastRenderPool {
         let shared = Arc::clone(&self.inner.shared);
         drop(guard);
 
-        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shared.build_renderer()));
+        let built =
+          std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shared.build_renderer()));
         match built {
           Ok(Ok(renderer)) => return Ok(renderer),
           Ok(Err(err)) => {
@@ -5132,10 +5167,7 @@ impl FastRender {
     let result = (|| -> Result<RenderReport> {
       let resource = {
         let _span = trace_handle.span("html_fetch", "network");
-        match self
-          .fetcher
-          .fetch_with_request(FetchRequest::document(url))
-        {
+        match self.fetcher.fetch_with_request(FetchRequest::document(url)) {
           Ok(res) => res,
           Err(e) => {
             if let Ok(mut guard) = diagnostics.lock() {
@@ -5715,9 +5747,9 @@ impl FastRender {
             Ok((Some(resolved), local_media_cache))
           }
           StylesheetTask::External { url } => {
-          if let Some(counter) = stylesheet_fetch_counter.as_ref() {
-            counter.fetch_add(1, Ordering::Relaxed);
-          }
+            if let Some(counter) = stylesheet_fetch_counter.as_ref() {
+              counter.fetch_add(1, Ordering::Relaxed);
+            }
             let referrer = resource_context
               .as_ref()
               .and_then(|ctx| ctx.document_url.as_deref());
@@ -5794,8 +5826,8 @@ impl FastRender {
     }
 
     let collect_from_sources =
-      |sources: &[StylesheetSource], cache: &mut MediaQueryCache| -> Result<StyleSheet> {
-        let mut tasks = Vec::new();
+      |sources: Vec<StylesheetSource>, cache: &mut MediaQueryCache| -> Result<StyleSheet> {
+        let mut tasks = Vec::with_capacity(sources.len());
 
         for source in sources {
           match source {
@@ -5806,12 +5838,11 @@ impl FastRender {
               if !Self::media_attr_allows(inline.media.as_deref(), media_ctx, cache) {
                 continue;
               }
-              if inline.css.trim().is_empty() {
+              let css = inline.css;
+              if css.trim().is_empty() {
                 continue;
               }
-              tasks.push(StylesheetTask::Inline {
-                css: inline.css.clone(),
-              });
+              tasks.push(StylesheetTask::Inline { css });
             }
             StylesheetSource::External(link) => {
               if !fetch_link_css {
@@ -5889,13 +5920,20 @@ impl FastRender {
             .collect()
         };
 
-        let mut combined_rules = Vec::new();
+        let mut sheets = Vec::new();
+        let mut total_rules = 0usize;
         for result in results {
           let (sheet, local_cache) = result?;
           cache.merge_from(local_cache);
           if let Some(sheet) = sheet {
-            combined_rules.extend(sheet.rules);
+            total_rules = total_rules.saturating_add(sheet.rules.len());
+            sheets.push(sheet);
           }
+        }
+
+        let mut combined_rules = Vec::with_capacity(total_rules);
+        for mut sheet in sheets {
+          combined_rules.append(&mut sheet.rules);
         }
 
         Ok(StyleSheet {
@@ -5903,10 +5941,14 @@ impl FastRender {
         })
       };
 
-    let document = collect_from_sources(&scoped_sources.document, media_query_cache)?;
+    let ScopedStylesheetSources {
+      document: document_sources,
+      shadows: shadow_sources,
+    } = scoped_sources;
+    let document = collect_from_sources(document_sources, media_query_cache)?;
     let mut shadows = HashMap::new();
-    for (host, sources) in scoped_sources.shadows {
-      shadows.insert(host, collect_from_sources(&sources, media_query_cache)?);
+    for (host, sources) in shadow_sources {
+      shadows.insert(host, collect_from_sources(sources, media_query_cache)?);
     }
 
     if let (Some(recorder), Some(counter)) = (stats, stylesheet_fetch_counter.as_ref()) {
@@ -5972,8 +6014,7 @@ impl FastRender {
             continue;
           }
 
-          let sheet =
-            parse_stylesheet_with_media(&inline.css, media_ctx, Some(media_query_cache))?;
+          let sheet = parse_stylesheet_with_media(&inline.css, media_ctx, Some(media_query_cache))?;
           if sheet.contains_imports() {
             let resolved = sheet.resolve_imports_owned_with_cache(
               &inline_loader,
@@ -6026,8 +6067,7 @@ impl FastRender {
           if let Some(counter) = stylesheet_fetch_counter.as_ref() {
             counter.fetch_add(1, Ordering::Relaxed);
           }
-          let mut request =
-            FetchRequest::new(stylesheet_url.as_str(), FetchDestination::Style);
+          let mut request = FetchRequest::new(stylesheet_url.as_str(), FetchDestination::Style);
           if let Some(referrer) = self.document_url() {
             request = request.with_referrer(referrer);
           }
@@ -6573,25 +6613,62 @@ impl FastRender {
     record_stage(StageHeartbeat::CssParse);
     let css_parse_timer = stats.as_deref().and_then(|rec| rec.timer());
 
-    // Collect codepoints used in text nodes to avoid fetching unused web font subsets.
-    let used_codepoints = dom::collect_text_codepoints(&dom_with_state);
-
     let mut stage_start = overall_start;
 
     // Apply styles to create styled tree
     let target_fragment = self.current_target_fragment();
     let style_load_start = timings_enabled.then(Instant::now);
     self.font_context.clear_web_fonts();
+    let font_faces_timer = stats.as_deref().and_then(|rec| rec.timer());
     let font_faces = style_set
       .collect_font_face_rules_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(
+        &mut rec.stats.timings.css_parse_collect_font_faces_ms,
+        font_faces_timer,
+      );
+    }
+
+    // Collect codepoints used in text nodes to avoid fetching unused web font subsets. Skip the
+    // DOM walk entirely when there are no @font-face rules (common for many pages).
+    let used_codepoints_timer = stats.as_deref().and_then(|rec| rec.timer());
+    let used_codepoints = if font_faces.is_empty() {
+      Vec::new()
+    } else {
+      dom::collect_text_codepoints(&dom_with_state)?
+    };
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(
+        &mut rec.stats.timings.css_parse_used_codepoints_ms,
+        used_codepoints_timer,
+      );
+    }
+
     // Best-effort loading; rendering should continue even if a web font fails.
-    let _ = self.font_context.load_web_fonts(
-      &font_faces,
-      self.base_url.as_deref(),
-      Some(&used_codepoints),
-    );
+    let load_webfonts_timer = stats.as_deref().and_then(|rec| rec.timer());
+    if !font_faces.is_empty() {
+      let _ = self.font_context.load_web_fonts(
+        &font_faces,
+        self.base_url.as_deref(),
+        Some(&used_codepoints),
+      );
+    }
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(
+        &mut rec.stats.timings.css_parse_load_webfonts_ms,
+        load_webfonts_timer,
+      );
+    }
+
+    let keyframes_timer = stats.as_deref().and_then(|rec| rec.timer());
     let keyframes =
       style_set.collect_keyframes_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(
+        &mut rec.stats.timings.css_parse_collect_keyframes_ms,
+        keyframes_timer,
+      );
+    }
     let has_container_queries = style_set.has_container_rules_any_scope();
     let has_starting_style_rules = style_set.has_starting_style_rules_any_scope();
     if let Some(rec) = stats.as_deref_mut() {
@@ -7976,7 +8053,14 @@ impl FastRender {
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
     let fetch_link_css = runtime_toggles.truthy_with_default("FASTR_FETCH_LINK_CSS", true);
+    let extract_links_timer = stats.as_deref().and_then(|rec| rec.timer());
     let mut css_links = extract_css_links(html, base_url, media_type)?;
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(
+        &mut rec.stats.timings.css_inline_extract_links_ms,
+        extract_links_timer,
+      );
+    }
     let has_link_stylesheets = !css_links.is_empty();
     if !fetch_link_css {
       css_links.clear();
@@ -7993,7 +8077,14 @@ impl FastRender {
     let should_scan_embedded =
       should_scan_embedded_css_urls(html, has_link_stylesheets, remaining_limit);
     if should_scan_embedded {
+      let embedded_timer = stats.as_deref().and_then(|rec| rec.timer());
       let embedded = extract_embedded_css_urls_with_meta(html, base_url, Some(remaining_limit))?;
+      if let Some(rec) = stats.as_deref_mut() {
+        RenderStatsRecorder::add_ms(
+          &mut rec.stats.timings.css_inline_extract_embedded_urls_ms,
+          embedded_timer,
+        );
+      }
       if embedded.truncated {
         diagnostics.record_message(
           ResourceKind::Stylesheet,
@@ -8040,8 +8131,15 @@ impl FastRender {
       if let Some(referrer) = document_referrer {
         request = request.with_referrer(referrer);
       }
+      let fetch_timer = stats.as_deref().and_then(|rec| rec.timer());
       match fetcher.fetch_with_request(request) {
         Ok(res) => {
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(
+              &mut rec.stats.timings.css_inline_stylesheet_fetch_cpu_ms,
+              fetch_timer,
+            );
+          }
           if let Some(ctx) = resource_context {
             if ctx
               .check_allowed_with_final(
@@ -8060,9 +8158,24 @@ impl FastRender {
             diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err);
             continue;
           }
+          let decode_timer = stats.as_deref().and_then(|rec| rec.timer());
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(
+              &mut rec.stats.timings.css_inline_stylesheet_decode_cpu_ms,
+              decode_timer,
+            );
+          }
+          let absolutize_timer = stats.as_deref().and_then(|rec| rec.timer());
           let rewritten = absolutize_css_urls_cow(&css_text, &css_url)?;
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(
+              &mut rec.stats.timings.css_inline_stylesheet_absolutize_cpu_ms,
+              absolutize_timer,
+            );
+          }
           let mut import_diags: Vec<(String, String)> = Vec::new();
+          let import_timer = stats.as_deref().and_then(|rec| rec.timer());
           let inlined = {
             let mut import_fetch = |u: &str| -> Result<String> {
               if let Some(rec) = stats.as_deref_mut() {
@@ -8123,6 +8236,12 @@ impl FastRender {
               deadline,
             )?
           };
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(
+              &mut rec.stats.timings.css_inline_imports_cpu_ms,
+              import_timer,
+            );
+          }
           for (url, reason) in import_diags.drain(..) {
             diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
           }
@@ -8144,14 +8263,27 @@ impl FastRender {
             break;
           }
         }
-        Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
+        Err(err) => {
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(
+              &mut rec.stats.timings.css_inline_stylesheet_fetch_cpu_ms,
+              fetch_timer,
+            );
+          }
+          diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err)
+        }
       }
     }
 
     let output = if combined_css.is_empty() {
       html.to_string()
     } else {
-      inject_css_into_html(html, &combined_css)
+      let inject_timer = stats.as_deref().and_then(|rec| rec.timer());
+      let injected = inject_css_into_html(html, &combined_css);
+      if let Some(rec) = stats.as_deref_mut() {
+        RenderStatsRecorder::add_ms(&mut rec.stats.timings.css_inline_inject_ms, inject_timer);
+      }
+      injected
     };
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_inlining_ms, inlining_start);
@@ -8487,7 +8619,10 @@ impl FastRender {
       return;
     }
 
-    let ReplacedType::Image { alt: stored_alt, .. } = &replaced_box.replaced_type else {
+    let ReplacedType::Image {
+      alt: stored_alt, ..
+    } = &replaced_box.replaced_type
+    else {
       return;
     };
 
@@ -10970,7 +11105,10 @@ mod tests {
         })
     }
 
-    fn fetch_with_request(&self, request: FetchRequest<'_>) -> crate::error::Result<FetchedResource> {
+    fn fetch_with_request(
+      &self,
+      request: FetchRequest<'_>,
+    ) -> crate::error::Result<FetchedResource> {
       if let Ok(mut guard) = self.requests.lock() {
         guard.push(RecordedFetchRequest {
           url: request.url.to_string(),
@@ -11993,7 +12131,9 @@ mod tests {
       .with_viewport(64, 64)
       .with_diagnostics_level(DiagnosticsLevel::Basic)
       .with_paint_parallelism(PaintParallelism::disabled());
-    let result = renderer.render_html_with_diagnostics(html, options).unwrap();
+    let result = renderer
+      .render_html_with_diagnostics(html, options)
+      .unwrap();
 
     assert!(result.diagnostics.stats.is_some());
     let stats = result.diagnostics.stats.as_ref().unwrap();
@@ -13156,11 +13296,9 @@ mod tests {
             Err(next) => observed = next,
           }
         }
- 
+
         let (lock, cvar) = &*self.gate;
-        let mut state = lock
-          .lock()
-          .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         state.arrivals += 1;
         if state.arrivals >= 2 {
           state.opened = true;
@@ -13951,10 +14089,11 @@ mod tests {
     let document_url = "https://a.example/page.html";
     let stylesheet_url = "https://b.example/style.css";
 
-    let fetcher = Arc::new(
-      RecordingRequestFetcher::default()
-        .with_entry(stylesheet_url, "#target { color: rgb(1, 2, 3); }", "text/css"),
-    );
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "#target { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let toggles = RuntimeToggles::from_map(HashMap::from([(
       "FASTR_FETCH_LINK_CSS".to_string(),
       "1".to_string(),
@@ -13981,10 +14120,11 @@ mod tests {
     assert_eq!(stylesheet_request.url, stylesheet_url);
     assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
 
-    let blocked_fetcher = Arc::new(
-      RecordingRequestFetcher::default()
-        .with_entry(stylesheet_url, "#target { color: rgb(1, 2, 3); }", "text/css"),
-    );
+    let blocked_fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "#target { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let blocked_config = FastRenderConfig::default()
       .with_runtime_toggles(toggles)
       .with_same_origin_subresources(true);
@@ -14343,6 +14483,107 @@ mod tests {
     assert!(output.contains("@media screen"));
     assert!(output.contains("@media print"));
     assert_eq!(output.matches("p { color: rgb(1, 2, 3); }").count(), 2);
+  }
+
+  #[test]
+  fn inline_stylesheets_preserve_stylesheet_order_and_import_order() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = MapFetcher::default()
+      .with_entry(
+        "https://example.com/a.css",
+        "@import \"import.css\";\n/*a*/ .a { color: rgb(1, 2, 3); }",
+      )
+      .with_entry(
+        "https://example.com/import.css",
+        "/*import*/ .imp { color: rgb(4, 5, 6); }",
+      )
+      .with_entry(
+        "https://example.com/b.css",
+        "/*b*/ .b { color: rgb(7, 8, 9); }",
+      );
+    let html = r#"
+      <link rel="stylesheet" href="a.css">
+      <link rel="stylesheet" href="b.css">
+      <div>Order</div>
+    "#;
+
+    let mut diagnostics = RenderDiagnostics::default();
+    let output = FastRender::inline_stylesheets_for_html_with_context(
+      &fetcher,
+      html,
+      base_url,
+      MediaType::Screen,
+      None,
+      None,
+      &mut diagnostics,
+      None,
+      None,
+    )
+    .expect("inlined styles");
+
+    let import_pos = output
+      .find("/*import*/")
+      .expect("import css should be inlined");
+    let a_pos = output
+      .find("/*a*/")
+      .expect("a.css content should be present");
+    let b_pos = output
+      .find("/*b*/")
+      .expect("b.css content should be present");
+    assert!(
+      import_pos < a_pos && a_pos < b_pos,
+      "expected @import content < a.css < b.css (import={import_pos}, a={a_pos}, b={b_pos})\noutput={output:?}"
+    );
+  }
+
+  #[test]
+  fn embedded_css_discovery_truncation_and_budget_exhaustion_preserve_diagnostics() {
+    let base_url = "https://example.com/page.html";
+    let mut html = String::from("<!doctype html><html><head><script>");
+    for i in 0..10 {
+      html.push_str(&format!("var s{i}=\"a{i}.css\";"));
+    }
+    html.push_str("</script></head><body>ok</body></html>");
+
+    let fetcher = MapFetcher::default()
+      .with_entry("https://example.com/a0.css", "/*a0*/@import \"big.css\";")
+      .with_entry("https://example.com/big.css", &"X".repeat(256))
+      .with_entry(
+        "https://example.com/a1.css",
+        "body { color: rgb(1, 2, 3); }",
+      );
+
+    let mut diagnostics = RenderDiagnostics::default();
+    let _output = FastRender::inline_stylesheets_for_html_with_context_with_budget(
+      &fetcher,
+      &html,
+      base_url,
+      MediaType::Screen,
+      Some(2),
+      None,
+      &mut diagnostics,
+      None,
+      None,
+      StylesheetInlineBudget::new(128, 32, 8),
+    )
+    .expect("inline stylesheets");
+
+    assert!(
+      diagnostics
+        .fetch_errors
+        .iter()
+        .any(|err| err.message.contains("embedded css discovery truncated")),
+      "expected embedded css discovery truncation message, got {:?}",
+      diagnostics.fetch_errors
+    );
+    assert!(
+      diagnostics
+        .fetch_errors
+        .iter()
+        .any(|err| err.message.contains("stylesheet byte budget exhausted")),
+      "expected stylesheet byte budget exhaustion message, got {:?}",
+      diagnostics.fetch_errors
+    );
   }
 
   #[test]

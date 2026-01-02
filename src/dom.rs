@@ -18,6 +18,7 @@ use html5ever::ParseOpts;
 use markup5ever_rcdom::Handle;
 use markup5ever_rcdom::NodeData;
 use markup5ever_rcdom::RcDom;
+use rustc_hash::FxHashSet;
 use selectors::attr::AttrSelectorOperation;
 use selectors::attr::CaseSensitivity;
 use selectors::bloom::BloomFilter;
@@ -1581,18 +1582,33 @@ fn node_is_inert_like(attributes: &[(String, String)]) -> bool {
 /// Script and style contents are skipped to avoid counting non-visible text. Nodes marked as
 /// hidden or inert are ignored along with their descendants to avoid fetching unnecessary font
 /// subsets for invisible content.
-pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
+pub fn collect_text_codepoints(node: &DomNode) -> Result<Vec<u32>> {
+  const CODEPOINT_DEADLINE_STRIDE: usize = 1024;
   let mut stack = vec![(node, false)];
-  let mut seen: HashSet<u32> = HashSet::new();
+  let mut seen: FxHashSet<u32> = FxHashSet::default();
+  seen.reserve(256);
+  let mut deadline_counter = 0usize;
 
   while let Some((current, suppressed)) = stack.pop() {
+    check_active_periodic(
+      &mut deadline_counter,
+      CODEPOINT_DEADLINE_STRIDE,
+      RenderStage::Css,
+    )
+    .map_err(Error::Render)?;
     if suppressed {
       continue;
     }
     match &current.node_type {
       DomNodeType::Text { content } => {
-        for ch in content.chars() {
-          seen.insert(ch as u32);
+        if content.is_ascii() {
+          for &b in content.as_bytes() {
+            seen.insert(b as u32);
+          }
+        } else {
+          for ch in content.chars() {
+            seen.insert(ch as u32);
+          }
         }
       }
       DomNodeType::Element {
@@ -1627,7 +1643,7 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
 
   let mut codepoints: Vec<u32> = seen.into_iter().collect();
   codepoints.sort_unstable();
-  codepoints
+  Ok(codepoints)
 }
 
 fn boolish(value: &str) -> bool {
@@ -6891,7 +6907,7 @@ mod tests {
       ],
     };
 
-    let codepoints = collect_text_codepoints(&dom);
+    let codepoints = collect_text_codepoints(&dom).unwrap();
     let expected: Vec<u32> = vec!['a', 'b', 'c'].into_iter().map(|c| c as u32).collect();
     assert_eq!(codepoints, expected);
   }

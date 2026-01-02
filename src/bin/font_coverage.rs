@@ -147,7 +147,7 @@ fn collect_codepoints_from_text(text: &str) -> Vec<char> {
 fn collect_codepoints_from_html(html: &str) -> Result<Vec<char>, fastrender::Error> {
   let root = dom::parse_html(html)?;
   let mut set = BTreeSet::new();
-  for cp in dom::collect_text_codepoints(&root) {
+  for cp in dom::collect_text_codepoints(&root)? {
     let Some(ch) = char::from_u32(cp) else {
       continue;
     };

@@ -10,8 +10,9 @@ use crate::debug::runtime;
 use crate::error::{RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic, RenderDeadline};
 use cssparser::{Parser, ParserInput, Token};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use url::Url;
 
@@ -517,55 +518,50 @@ pub fn absolutize_css_urls_cow<'a>(
           last_emitted = parser.position();
         }
         Token::Function(_)
-          | Token::ParenthesisBlock
-          | Token::SquareBracketBlock
-          | Token::CurlyBracketBlock => {
-            let open_len = parser.slice_from(token_start).len();
-            let mut nested_error: Option<RenderError> = None;
-            let parse_result = parser.parse_nested_block(|nested| {
-              let rewritten = match rewrite_urls_in_parser(
-                nested,
-                base_url,
-                0,
-                deadline_counter,
-              ) {
-                Ok(r) => r,
-                Err(err) => {
-                  nested_error = Some(err);
-                  return Err(nested.new_custom_error(()));
-                }
-              };
-              let changed = matches!(rewritten, Cow::Owned(_));
-              Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, changed))
-            });
-
-            if let Some(err) = nested_error {
-              return Err(err);
-            }
-            let Ok((inner_rewritten, changed)) = parse_result else {
-              continue;
+        | Token::ParenthesisBlock
+        | Token::SquareBracketBlock
+        | Token::CurlyBracketBlock => {
+          let open_len = parser.slice_from(token_start).len();
+          let mut nested_error: Option<RenderError> = None;
+          let parse_result = parser.parse_nested_block(|nested| {
+            let rewritten = match rewrite_urls_in_parser(nested, base_url, 0, deadline_counter) {
+              Ok(r) => r,
+              Err(err) => {
+                nested_error = Some(err);
+                return Err(nested.new_custom_error(()));
+              }
             };
-            if !changed {
-              continue;
-            }
+            let changed = matches!(rewritten, Cow::Owned(_));
+            Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, changed))
+          });
 
-            let block_text = parser.slice_from(token_start);
-            const CLOSING_LEN: usize = 1;
-            if block_text.len() < open_len + CLOSING_LEN {
-              continue;
-            }
+          if let Some(err) = nested_error {
+            return Err(err);
+          }
+          let Ok((inner_rewritten, changed)) = parse_result else {
+            continue;
+          };
+          if !changed {
+            continue;
+          }
 
-            let chunk = parser.slice_from(last_emitted);
-            let prefix_len = chunk.len().saturating_sub(block_text.len());
-            let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
-            out.push_str(&chunk[..prefix_len]);
+          let block_text = parser.slice_from(token_start);
+          const CLOSING_LEN: usize = 1;
+          if block_text.len() < open_len + CLOSING_LEN {
+            continue;
+          }
 
-            let close_part = &block_text[block_text.len() - CLOSING_LEN..];
-            out.push_str(&block_text[..open_len]);
-            out.push_str(inner_rewritten.as_ref());
-            out.push_str(close_part);
+          let chunk = parser.slice_from(last_emitted);
+          let prefix_len = chunk.len().saturating_sub(block_text.len());
+          let out = out.get_or_insert_with(|| String::with_capacity(capacity_hint));
+          out.push_str(&chunk[..prefix_len]);
 
-            last_emitted = parser.position();
+          let close_part = &block_text[block_text.len() - CLOSING_LEN..];
+          out.push_str(&block_text[..open_len]);
+          out.push_str(inner_rewritten.as_ref());
+          out.push_str(close_part);
+
+          last_emitted = parser.position();
         }
         _ => {}
       }
@@ -766,8 +762,8 @@ impl Default for StylesheetInlineBudget {
 #[derive(Debug)]
 pub struct InlineImportState {
   stack: Vec<String>,
-  seen: HashSet<String>,
-  cache: HashMap<String, String>,
+  seen: FxHashSet<String>,
+  cache: FxHashMap<String, String>,
   budget: StylesheetInlineBudget,
 }
 
@@ -779,8 +775,8 @@ impl InlineImportState {
   pub fn with_budget(budget: StylesheetInlineBudget) -> Self {
     Self {
       stack: Vec::new(),
-      seen: HashSet::new(),
-      cache: HashMap::new(),
+      seen: FxHashSet::default(),
+      cache: FxHashMap::default(),
       budget,
     }
   }
@@ -1439,14 +1435,23 @@ pub fn extract_css_links(
   let alternate_stylesheets_enabled =
     toggles.truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
 
-  let lower = html.to_lowercase();
-  let mut pos = 0;
+  let bytes = html.as_bytes();
+  let mut pos = 0usize;
   let mut deadline_counter = 0usize;
 
-  while let Some(link_start) = lower[pos..].find("<link") {
-    check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
-    let abs_start = pos + link_start;
-    if let Some(link_end) = lower[abs_start..].find('>') {
+  while pos < bytes.len() {
+    check_active_periodic(&mut deadline_counter, 1024, RenderStage::Css)?;
+    let Some(rel_start) = memchr::memchr(b'<', &bytes[pos..]) else {
+      break;
+    };
+    let abs_start = pos + rel_start;
+    pos = abs_start.saturating_add(1);
+    if abs_start + 5 > bytes.len()
+      || !bytes[abs_start..abs_start + 5].eq_ignore_ascii_case(b"<link")
+    {
+      continue;
+    }
+    if let Some(link_end) = bytes[abs_start..].iter().position(|&b| b == b'>') {
       let link_tag = &html[abs_start..=abs_start + link_end];
       let attrs = parse_tag_attributes(link_tag);
       let rel_tokens = attrs
@@ -1462,7 +1467,7 @@ pub fn extract_css_links(
         alternate_stylesheets_enabled,
       );
 
-      let link_tag_lower = link_tag.to_lowercase();
+      let link_tag_lower = link_tag.to_ascii_lowercase();
 
       if !is_stylesheet_link && rel_tokens.is_empty() && link_tag_lower.contains("stylesheet") {
         is_stylesheet_link = true;
@@ -1646,7 +1651,7 @@ pub(crate) fn extract_embedded_css_urls_with_meta(
   }
 
   let mut urls = Vec::new();
-  let mut seen = HashSet::new();
+  let mut seen: FxHashSet<String> = FxHashSet::default();
   let bytes = html.as_bytes();
   let mut idx = 0;
   let mut deadline_counter = 0usize;
@@ -1654,7 +1659,7 @@ pub(crate) fn extract_embedded_css_urls_with_meta(
 
   fn record_url(
     resolved: String,
-    seen: &mut HashSet<String>,
+    seen: &mut FxHashSet<String>,
     urls: &mut Vec<String>,
     truncated: &mut bool,
     max_candidates: usize,
@@ -1670,7 +1675,7 @@ pub(crate) fn extract_embedded_css_urls_with_meta(
   }
 
   'css_scan: while let Some(pos) = memchr::memmem::find(&bytes[idx..], b".css") {
-    check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
+    check_active_periodic(&mut deadline_counter, 256, RenderStage::Css)?;
     let abs_pos = idx + pos;
 
     let mut start = abs_pos;
@@ -1812,11 +1817,17 @@ pub(crate) fn extract_embedded_css_urls_with_meta(
   }
 
   if !truncated {
-    let lower = html.to_lowercase();
-    let mut pos = 0;
-    while let Some(hit) = lower[pos..].find("cssurl") {
-      check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
-      let abs = pos + hit;
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+      let Some(rel) = memchr::memchr2(b'c', b'C', &bytes[pos..]) else {
+        break;
+      };
+      let abs = pos + rel;
+      pos = abs.saturating_add(1);
+      if abs + 6 > bytes.len() || !bytes[abs..abs + 6].eq_ignore_ascii_case(b"cssurl") {
+        continue;
+      }
+      check_active_periodic(&mut deadline_counter, 256, RenderStage::Css)?;
       let slice = &html[abs..];
       if let Some(colon) = slice.find(':') {
         let after_colon = &slice[colon + 1..];
@@ -1852,7 +1863,6 @@ pub(crate) fn extract_embedded_css_urls_with_meta(
           }
         }
       }
-      pos = abs + 6;
     }
   }
 
@@ -1885,7 +1895,8 @@ pub(crate) fn should_scan_embedded_css_urls(
 
 /// Deduplicate a list while preserving the order of first occurrence.
 pub fn dedupe_links_preserving_order(mut links: Vec<String>) -> Vec<String> {
-  let mut seen: HashSet<String> = HashSet::with_capacity(links.len());
+  let mut seen: FxHashSet<String> = FxHashSet::default();
+  seen.reserve(links.len());
   links.retain(|link| seen.insert(link.clone()));
   links
 }

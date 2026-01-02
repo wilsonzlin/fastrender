@@ -42,7 +42,7 @@ fn collect_text_codepoints_skips_hidden_and_inert() {
     children: vec![visible, hidden, inert],
   };
 
-  let codepoints = dom::collect_text_codepoints(&root);
+  let codepoints = dom::collect_text_codepoints(&root).unwrap();
   assert!(codepoints.contains(&(b'A' as u32)));
   assert!(!codepoints.contains(&(b'B' as u32)));
   assert!(!codepoints.contains(&(b'C' as u32)));

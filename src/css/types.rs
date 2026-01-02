@@ -7,7 +7,7 @@ use super::selectors::PseudoClassParser;
 use super::supports;
 use crate::css::loader::resolve_href_with_base;
 use crate::error::{Error, RenderError, RenderStage};
-use crate::render_control::check_active_periodic;
+use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::counter_styles::CounterStyleRule;
@@ -21,6 +21,7 @@ use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
+use rustc_hash::FxHashSet;
 use selectors::parser::SelectorList;
 use std::cell::RefCell;
 use std::fmt;
@@ -684,8 +685,10 @@ impl StyleSheet {
     media_ctx: &MediaContext,
     cache: Option<&mut MediaQueryCache>,
   ) -> std::result::Result<Self, RenderError> {
+    check_active(RenderStage::Css)?;
     let mut resolved = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    seen.reserve(32);
     let mut deadline_counter = 0usize;
     resolve_rules_owned(
       self.rules,
@@ -2335,17 +2338,18 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
   base_url: Option<&str>,
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
-  seen: &mut std::collections::HashSet<String>,
+  seen: &mut FxHashSet<String>,
   out: &mut Vec<CssRule>,
   deadline_counter: &mut usize,
 ) -> std::result::Result<(), RenderError> {
   const MAX_RESOLVED_IMPORTS: usize = 128;
+  const DEADLINE_STRIDE: usize = 64;
 
   // Keep a mutable binding so nested calls can borrow the cache mutably via as_deref_mut().
   let mut cache = cache;
 
   for rule in rules {
-    check_active_periodic(deadline_counter, 1, RenderStage::Css)?;
+    check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Css)?;
     match rule {
       CssRule::Style(_)
       | CssRule::Media(_)
@@ -2501,17 +2505,22 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
               Err(Error::Render(err)) => return Err(err),
               Err(_) => continue,
             };
-            let mut resolved_children = Vec::new();
-            resolve_rules_owned(
-              sheet.rules.clone(),
-              loader,
-              Some(&resolved_href),
-              media_ctx,
-              cache.as_deref_mut(),
-              seen,
-              &mut resolved_children,
-              deadline_counter,
-            )?;
+            let resolved_children = if sheet.contains_imports() {
+              let mut resolved_children = Vec::new();
+              resolve_rules_owned(
+                sheet.rules.clone(),
+                loader,
+                Some(&resolved_href),
+                media_ctx,
+                cache.as_deref_mut(),
+                seen,
+                &mut resolved_children,
+                deadline_counter,
+              )?;
+              resolved_children
+            } else {
+              sheet.rules.clone()
+            };
 
             if let Some(layer) = layer {
               let layer_rule = match layer {
