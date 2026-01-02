@@ -326,6 +326,18 @@ pub struct StyleSheet {
   pub rules: Vec<CssRule>,
 }
 
+/// Aggregated information derived from walking a stylesheet rule tree.
+///
+/// This is used to avoid multiple full traversals when callers need to collect
+/// both `@font-face` and `@keyframes` rules alongside simple feature flags.
+#[derive(Debug, Default, Clone)]
+pub struct CollectedCssMetadata {
+  pub font_faces: Vec<FontFaceRule>,
+  pub keyframes: Vec<KeyframesRule>,
+  pub has_container_rules: bool,
+  pub has_starting_style_rules: bool,
+}
+
 /// A page selector used by @page rules.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PageSelector {
@@ -564,6 +576,27 @@ impl StyleSheet {
     let mut result = Vec::new();
     collect_keyframes_recursive(&self.rules, media_ctx, cache, &mut result);
     result
+  }
+
+  /// Collect both `@font-face` and `@keyframes` rules and detect container/starting-style usage
+  /// in a single walk of the rule tree.
+  pub fn collect_css_metadata_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> CollectedCssMetadata {
+    let mut result = CollectedCssMetadata::default();
+    collect_css_metadata_recursive(&self.rules, media_ctx, cache, true, true, &mut result);
+    result
+  }
+
+  pub fn collect_css_metadata_with_cache_into(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+    out: &mut CollectedCssMetadata,
+  ) {
+    collect_css_metadata_recursive(&self.rules, media_ctx, cache, true, true, out);
   }
 
   /// Collects all @counter-style rules that apply to the current media context.
@@ -1152,6 +1185,129 @@ fn collect_font_faces_recursive(
       CssRule::StartingStyle(starting_rule) => {
         collect_font_faces_recursive(&starting_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
+    }
+  }
+}
+
+fn collect_css_metadata_recursive(
+  rules: &[CssRule],
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+  collect_font_faces: bool,
+  collect_keyframes: bool,
+  out: &mut CollectedCssMetadata,
+) {
+  let mut cache = cache;
+  for rule in rules {
+    match rule {
+      CssRule::FontFace(face) => {
+        if collect_font_faces {
+          out.font_faces.push(face.clone());
+        }
+      }
+      CssRule::Keyframes(kf) => {
+        if collect_keyframes {
+          out.keyframes.push(kf.clone());
+        }
+      }
+      CssRule::Container(container_rule) => {
+        out.has_container_rules = true;
+        collect_css_metadata_recursive(
+          &container_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          collect_font_faces,
+          collect_keyframes,
+          out,
+        );
+      }
+      CssRule::StartingStyle(starting_rule) => {
+        out.has_starting_style_rules = true;
+        collect_css_metadata_recursive(
+          &starting_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          collect_font_faces,
+          collect_keyframes,
+          out,
+        );
+      }
+      CssRule::Scope(scope_rule) => {
+        collect_css_metadata_recursive(
+          &scope_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          collect_font_faces,
+          collect_keyframes,
+          out,
+        );
+      }
+      CssRule::Media(media_rule) => {
+        let matches = if collect_font_faces || collect_keyframes {
+          media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut())
+        } else {
+          false
+        };
+        collect_css_metadata_recursive(
+          &media_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          collect_font_faces && matches,
+          collect_keyframes && matches,
+          out,
+        );
+      }
+      CssRule::Supports(supports_rule) => {
+        let matches = if collect_font_faces || collect_keyframes {
+          supports_rule.condition.matches()
+        } else {
+          false
+        };
+        collect_css_metadata_recursive(
+          &supports_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          collect_font_faces && matches,
+          collect_keyframes && matches,
+          out,
+        );
+      }
+      CssRule::Layer(layer_rule) => {
+        if layer_rule.rules.is_empty() {
+          continue;
+        }
+        let next_collect_font_faces = if collect_font_faces {
+          layer_rule.anonymous || layer_rule.names.len() == 1
+        } else {
+          false
+        };
+        collect_css_metadata_recursive(
+          &layer_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          next_collect_font_faces,
+          collect_keyframes,
+          out,
+        );
+      }
+      CssRule::Style(style_rule) => {
+        if style_rule.nested_rules.is_empty() {
+          continue;
+        }
+        collect_css_metadata_recursive(
+          &style_rule.nested_rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          false,
+          false,
+          out,
+        );
+      }
+      CssRule::Page(_)
+      | CssRule::CounterStyle(_)
+      | CssRule::Import(_)
+      | CssRule::FontPaletteValues(_)
+      | CssRule::Property(_) => {}
     }
   }
 }

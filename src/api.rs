@@ -6634,13 +6634,17 @@ impl FastRender {
     let target_fragment = self.current_target_fragment();
     let style_load_start = timings_enabled.then(Instant::now);
     self.font_context.clear_web_fonts();
-    let font_faces_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let font_faces = style_set
-      .collect_font_face_rules_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let css_metadata_timer = stats.as_deref().and_then(|rec| rec.timer());
+    let css_metadata =
+      style_set.collect_css_metadata_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let font_faces = css_metadata.font_faces;
+    let keyframes = css_metadata.keyframes;
+    let has_container_queries = css_metadata.has_container_rules;
+    let has_starting_style_rules = css_metadata.has_starting_style_rules;
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(
         &mut rec.stats.timings.css_parse_collect_font_faces_ms,
-        font_faces_timer,
+        css_metadata_timer,
       );
     }
 
@@ -6676,16 +6680,12 @@ impl FastRender {
     }
 
     let keyframes_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let keyframes =
-      style_set.collect_keyframes_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(
         &mut rec.stats.timings.css_parse_collect_keyframes_ms,
         keyframes_timer,
       );
     }
-    let has_container_queries = style_set.has_container_rules_any_scope();
-    let has_starting_style_rules = style_set.has_starting_style_rules_any_scope();
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_parse_ms, css_parse_timer);
     }

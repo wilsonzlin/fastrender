@@ -1,4 +1,4 @@
-use crate::css::types::{FontFaceRule, KeyframesRule, StyleSheet};
+use crate::css::types::{CollectedCssMetadata, FontFaceRule, KeyframesRule, StyleSheet};
 use crate::style::media::{MediaContext, MediaQueryCache};
 use std::collections::HashMap;
 
@@ -113,6 +113,19 @@ impl StyleSet {
       .sheets_in_cascade_order()
       .any(|sheet| sheet.has_starting_style_rules())
   }
+
+  pub fn collect_css_metadata_all_scopes_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> CollectedCssMetadata {
+    let mut result = CollectedCssMetadata::default();
+    let mut cache = cache;
+    for sheet in self.sheets_in_cascade_order() {
+      sheet.collect_css_metadata_with_cache_into(media_ctx, cache.as_deref_mut(), &mut result);
+    }
+    result
+  }
 }
 
 #[cfg(test)]
@@ -214,6 +227,37 @@ mod tests {
       stylesheet.has_starting_style_rules(),
       style_set.has_starting_style_rules_any_scope(),
       "starting-style detection should match document stylesheet behavior"
+    );
+
+    let mut cache_old = MediaQueryCache::default();
+    let mut cache_new = MediaQueryCache::default();
+    let expected_fonts =
+      style_set.collect_font_face_rules_all_scopes_with_cache(&media_ctx, Some(&mut cache_old));
+    let expected_keyframes =
+      style_set.collect_keyframes_all_scopes_with_cache(&media_ctx, Some(&mut cache_old));
+    let expected_has_container = style_set.has_container_rules_any_scope();
+    let expected_has_starting = style_set.has_starting_style_rules_any_scope();
+
+    let actual =
+      style_set.collect_css_metadata_all_scopes_with_cache(&media_ctx, Some(&mut cache_new));
+
+    assert_eq!(
+      format!("{expected_fonts:?}"),
+      format!("{:?}", actual.font_faces),
+      "css metadata font-face collection should match existing collectors"
+    );
+    assert_eq!(
+      format!("{expected_keyframes:?}"),
+      format!("{:?}", actual.keyframes),
+      "css metadata keyframes collection should match existing collectors"
+    );
+    assert_eq!(
+      actual.has_container_rules, expected_has_container,
+      "css metadata container flag should match existing detection"
+    );
+    assert_eq!(
+      actual.has_starting_style_rules, expected_has_starting,
+      "css metadata starting-style flag should match existing detection"
     );
   }
 }
