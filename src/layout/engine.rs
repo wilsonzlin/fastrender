@@ -303,7 +303,7 @@ impl LayoutParallelism {
     }
     self
       .max_threads
-      .unwrap_or_else(rayon::current_num_threads)
+      .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
       .max(1)
   }
 }
@@ -1256,6 +1256,28 @@ mod tests {
       config.parallelism = config.parallelism.with_max_threads(Some(32));
       let engine = LayoutEngine::new(config);
       assert_eq!(engine.config().parallelism.max_threads, Some(32));
+    });
+  }
+
+  #[test]
+  fn expected_workers_respects_auto_thread_cap() {
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2)
+      .build()
+      .expect("build rayon pool");
+    pool.install(|| {
+      let workload = LayoutParallelismWorkload {
+        nodes: DEFAULT_LAYOUT_AUTO_MIN_NODES * 2,
+        max_fanout: DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2,
+        parallel_children: DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2,
+      };
+      let parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT)
+        .resolve_for_workload(workload);
+      assert!(parallelism.is_active());
+      assert_eq!(
+        parallelism.estimated_workers_for_workload(&workload),
+        DEFAULT_LAYOUT_AUTO_MAX_THREADS
+      );
     });
   }
 
