@@ -1717,6 +1717,12 @@ pub struct FetchedResource {
   pub bytes: Vec<u8>,
   /// Content-Type header value, if available (e.g., "image/png", "text/css")
   pub content_type: Option<String>,
+  /// Content-Encoding header value, if available (e.g., "br", "gzip").
+  ///
+  /// Note: the bytes in [`FetchedResource::bytes`] are returned *after* any content encoding has
+  /// been decoded by the fetcher. This field exists purely for diagnostics so callers can surface
+  /// actionable errors when decoders reject the response body.
+  pub content_encoding: Option<String>,
   /// HTTP status code when fetched over HTTP(S)
   pub status: Option<u16>,
   /// HTTP ETag header (weak or strong) when present
@@ -1743,6 +1749,7 @@ impl FetchedResource {
     Self {
       bytes,
       content_type,
+      content_encoding: None,
       status: None,
       etag: None,
       last_modified: None,
@@ -1760,6 +1767,7 @@ impl FetchedResource {
     Self {
       bytes,
       content_type,
+      content_encoding: None,
       status: None,
       etag: None,
       last_modified: None,
@@ -3251,6 +3259,9 @@ impl HttpFetcher {
             self.policy.reserve_budget(bytes.len())?;
             let mut resource =
               FetchedResource::with_final_url(bytes, content_type, Some(final_url));
+            if !encodings.is_empty() {
+              resource.content_encoding = Some(encodings.join(", "));
+            }
             resource.status = Some(status_code);
             resource.etag = etag;
             resource.last_modified = last_modified;
@@ -3678,6 +3689,9 @@ impl HttpFetcher {
             self.policy.reserve_budget(bytes.len())?;
             let mut resource =
               FetchedResource::with_final_url(bytes, content_type, Some(final_url));
+            if !encodings.is_empty() {
+              resource.content_encoding = Some(encodings.join(", "));
+            }
             resource.status = Some(status_code);
             resource.etag = etag;
             resource.last_modified = last_modified;
@@ -4183,6 +4197,9 @@ impl HttpFetcher {
             self.policy.reserve_budget(bytes.len())?;
             let mut resource =
               FetchedResource::with_final_url(bytes, content_type, Some(final_url));
+            if !encodings.is_empty() {
+              resource.content_encoding = Some(encodings.join(", "));
+            }
             resource.status = Some(status.as_u16());
             resource.etag = etag;
             resource.last_modified = last_modified;
@@ -4697,6 +4714,9 @@ impl HttpFetcher {
             self.policy.reserve_budget(bytes.len())?;
             let mut resource =
               FetchedResource::with_final_url(bytes, content_type, Some(final_url));
+            if !encodings.is_empty() {
+              resource.content_encoding = Some(encodings.join(", "));
+            }
             resource.status = Some(status.as_u16());
             resource.etag = etag;
             resource.last_modified = last_modified;

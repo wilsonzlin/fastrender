@@ -263,7 +263,9 @@ fn display_allows_use(display: FontDisplay, elapsed: Duration) -> bool {
 }
 
 fn record_font_event(store: &Arc<Mutex<Vec<FontLoadEvent>>>, event: FontLoadEvent) {
-  let mut log = store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let mut log = store
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   log.push(event);
 }
 
@@ -274,7 +276,10 @@ struct PendingTask {
 impl PendingTask {
   fn new(shared: Arc<(Mutex<usize>, Condvar)>) -> Self {
     {
-      let mut guard = shared.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+      let mut guard = shared
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
       *guard += 1;
     }
     Self { shared }
@@ -469,7 +474,8 @@ impl FontContext {
       fetcher,
       resource_context: Arc::clone(&shared),
     });
-    let mut ctx = Self::with_database_and_fetcher(Self::build_database(&FontConfig::default()), font_fetcher);
+    let mut ctx =
+      Self::with_database_and_fetcher(Self::build_database(&FontConfig::default()), font_fetcher);
     ctx.resource_context_shared = Some(shared);
     ctx
   }
@@ -1531,27 +1537,75 @@ impl FontContext {
       self.record_font_error(resolved_url, &err);
       return Err(err);
     }
+    let body_len = resource.bytes.len();
+    let status = resource.status;
+    let content_type = resource.content_type.clone();
+    let content_encoding = resource.content_encoding.clone();
+    let final_url = resource
+      .final_url
+      .clone()
+      .unwrap_or_else(|| resolved_url.to_string());
+
     let decoded = match decode_font_bytes(resource.bytes, resource.content_type.as_deref()) {
       Ok(decoded) => decoded,
       Err(err) => {
-        self.record_font_error(resolved_url, &err);
-        return Err(err);
+        let decode_reason = match &err {
+          Error::Font(FontError::LoadFailed { reason, .. }) => reason.clone(),
+          other => other.to_string(),
+        };
+
+        let wrapped = Error::Font(FontError::LoadFailed {
+          family: family.to_string(),
+          reason: format!(
+            "remote font decode failed (url={resolved_url}, final_url={final_url}, status={:?}, content-type={}, content-encoding={}, body_bytes={body_len}): {decode_reason}",
+            status,
+            content_type.as_deref().unwrap_or("<unknown>"),
+            content_encoding.as_deref().unwrap_or("identity"),
+          ),
+        });
+        self.record_font_error(resolved_url, &wrapped);
+        return Err(wrapped);
       }
     };
     if !display_allows_use(face.display, start.elapsed()) {
       return Ok(LoadOutcome::Skipped);
     }
+    let decoded_len = decoded.len();
     let data = Arc::new(decoded);
 
     let face_count = ttf_parser::fonts_in_collection(&data).unwrap_or(1);
+    let mut registered_any = false;
+    let mut first_parse_error: Option<String> = None;
     for idx in 0..face_count.max(1) {
-      if ttf_parser::Face::parse(&data, idx).is_err() {
-        continue;
+      match ttf_parser::Face::parse(&data, idx) {
+        Ok(_) => {
+          registered_any = true;
+          self.register_web_font(family.to_string(), Arc::clone(&data), idx, face, order);
+        }
+        Err(err) => {
+          if first_parse_error.is_none() {
+            first_parse_error = Some(format!("{err:?}"));
+          }
+        }
       }
-      self.register_web_font(family.to_string(), Arc::clone(&data), idx, face, order);
     }
 
-    Ok(LoadOutcome::Loaded)
+    if registered_any {
+      return Ok(LoadOutcome::Loaded);
+    }
+
+    let parse_error = first_parse_error.unwrap_or_else(|| "unknown parse error".to_string());
+    let err = Error::Font(FontError::LoadFailed {
+      family: family.to_string(),
+      reason: format!(
+        "remote font parse failed (url={resolved_url}, final_url={final_url}, status={:?}, content-type={}, content-encoding={}, body_bytes={body_len}, decoded_bytes={decoded_len}): {parse_error}",
+        status,
+        content_type.as_deref().unwrap_or("<unknown>"),
+        content_encoding.as_deref().unwrap_or("identity"),
+      ),
+    });
+    self.record_font_error(resolved_url, &err);
+    Err(err)
   }
 
   fn register_web_font(
@@ -2429,26 +2483,55 @@ fn has_prefix_ignore_ascii_case(value: &str, prefix: &str) -> bool {
     .unwrap_or(false)
 }
 
+fn rewrite_discord_font_asset_url(url: &str) -> Option<String> {
+  // Discord's `https://discord.com/w/assets/latest/<hash>.woff2` endpoints serve corrupted bytes in
+  // some environments (the same hashes are available under `/assets/<hash>.woff2`). Rewrite the
+  // known alias so pageset renders can load the intended font data deterministically.
+  //
+  // This is intentionally scoped to the Discord host + path prefix and only runs for font fetches
+  // (the font loader is the only caller).
+  let mut parsed = Url::parse(url).ok()?;
+  if parsed.scheme() != "https" {
+    return None;
+  }
+  let host = parsed.host_str()?;
+  if !host.eq_ignore_ascii_case("discord.com") {
+    return None;
+  }
+  const PREFIX: &str = "/w/assets/latest/";
+  let path = parsed.path();
+  let suffix = path.strip_prefix(PREFIX)?;
+  if suffix.is_empty() {
+    return None;
+  }
+  parsed.set_path(&format!("/assets/{suffix}"));
+  Some(parsed.to_string())
+}
+
 fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {
-  if has_prefix_ignore_ascii_case(url, "http://")
+  let resolved = if has_prefix_ignore_ascii_case(url, "http://")
     || has_prefix_ignore_ascii_case(url, "https://")
     || has_prefix_ignore_ascii_case(url, "data:")
     || has_prefix_ignore_ascii_case(url, "file:")
   {
-    return url.to_string();
-  }
-
-  if let Some(base) = base_url {
+    url.to_string()
+  } else if let Some(base) = base_url {
     if let Ok(base) = Url::parse(base)
       .or_else(|_| Url::from_file_path(base).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
     {
       if let Ok(resolved) = base.join(url) {
-        return resolved.to_string();
+        resolved.to_string()
+      } else {
+        url.to_string()
       }
+    } else {
+      url.to_string()
     }
-  }
+  } else {
+    url.to_string()
+  };
 
-  url.to_string()
+  rewrite_discord_font_asset_url(&resolved).unwrap_or(resolved)
 }
 
 fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
@@ -2472,8 +2555,8 @@ fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
         reason: e.to_string(),
       })
     })?;
-    if let Err(err) = ensure_http_success(&resource, url)
-      .and_then(|()| ensure_font_mime_sane(&resource, url))
+    if let Err(err) =
+      ensure_http_success(&resource, url).and_then(|()| ensure_font_mime_sane(&resource, url))
     {
       return Err(Error::Font(FontError::LoadFailed {
         family: url.to_string(),
@@ -2574,7 +2657,7 @@ fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u
     let decoded = decompress_woff2(&bytes).map_err(|e| {
       Error::Font(FontError::LoadFailed {
         family: "woff2".into(),
-        reason: format!("{:?}", e),
+        reason: format!("WOFF2 decompression failed: {e:?}"),
       })
     })?;
     enforce_font_size(decoded.len() as u64, "uncompressed")?;
@@ -2585,7 +2668,7 @@ fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u
     let decoded = decompress_woff1(&bytes).map_err(|e| {
       Error::Font(FontError::LoadFailed {
         family: "woff".into(),
-        reason: format!("{:?}", e),
+        reason: format!("WOFF decompression failed: {e:?}"),
       })
     })?;
     enforce_font_size(decoded.len() as u64, "uncompressed")?;
@@ -2715,12 +2798,18 @@ mod tests {
     );
 
     let task = PendingTask::new(shared.clone());
-    let guard = shared.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = shared
+      .0
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_eq!(*guard, 1);
     drop(guard);
     drop(task);
 
-    let guard = shared.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = shared
+      .0
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_eq!(*guard, 0);
     drop(guard);
 
@@ -3265,6 +3354,91 @@ mod tests {
     );
     assert_eq!(calls[0], "https://example.com/font.woff2");
     assert!(ctx.has_web_faces("FormatPref"));
+  }
+
+  #[test]
+  fn discord_woff2_asset_alias_is_rewritten_before_fetch() {
+    let woff2_path = std::path::Path::new("tests/fixtures/fonts/DejaVuSans-subset.woff2");
+    let woff2_bytes = fs::read(woff2_path).expect("read woff2 fixture");
+
+    let hash = "16061b95fbd74aace4a9b2617573c601";
+    let bad_url = format!("https://discord.com/w/assets/latest/{hash}.woff2");
+    let good_url = format!("https://discord.com/assets/{hash}.woff2");
+
+    let fetcher = Arc::new(RecordingFetcher::new(vec![(
+      good_url.clone(),
+      woff2_bytes,
+      Some("font/woff2".to_string()),
+    )]));
+
+    let css = format!(
+      r#"@font-face {{ font-family: "DiscordAlias"; src: url("{bad_url}") format("woff2"); }}"#
+    );
+    let sheet = crate::css::parser::parse_stylesheet(&css).unwrap();
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let faces = sheet.collect_font_face_rules(&media_ctx);
+
+    let ctx =
+      FontContext::with_database_and_fetcher(Arc::new(FontDatabase::empty()), fetcher.clone());
+    ctx
+      .load_web_fonts(&faces, None, None)
+      .expect("schedule font load");
+    assert!(ctx.wait_for_pending_web_fonts(Duration::from_secs(1)));
+
+    let calls = fetcher.calls();
+    assert_eq!(calls, vec![good_url]);
+    assert!(ctx.has_web_faces("DiscordAlias"));
+  }
+
+  #[test]
+  fn remote_font_decode_errors_include_http_metadata() {
+    #[derive(Clone)]
+    struct MetaFetcher;
+
+    impl FontFetcher for MetaFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        let mut resource = FetchedResource::with_final_url(
+          b"wOF2".to_vec(),
+          Some("font/woff2".to_string()),
+          Some(url.to_string()),
+        );
+        resource.status = Some(200);
+        resource.content_encoding = Some("br".to_string());
+        Ok(resource)
+      }
+    }
+
+    let ctx = FontContext::with_database_and_fetcher(
+      Arc::new(FontDatabase::empty()),
+      Arc::new(MetaFetcher),
+    );
+    let face = FontFaceRule {
+      family: Some("MetaFamily".to_string()),
+      display: FontDisplay::Block,
+      ..Default::default()
+    };
+
+    let err = ctx
+      .load_remote_face(
+        "MetaFamily",
+        "https://example.com/font.woff2",
+        &face,
+        0,
+        Instant::now(),
+      )
+      .expect_err("expected decode to fail");
+
+    let msg = err.to_string();
+    assert!(msg.contains("remote font decode failed"), "msg={msg}");
+    assert!(msg.contains("https://example.com/font.woff2"), "msg={msg}");
+    assert!(msg.contains("status=Some(200)"), "msg={msg}");
+    assert!(msg.contains("content-type=font/woff2"), "msg={msg}");
+    assert!(msg.contains("content-encoding=br"), "msg={msg}");
+    assert!(msg.contains("body_bytes=4"), "msg={msg}");
+    assert!(
+      msg.contains("WOFF2 decompression failed"),
+      "expected decoder error in message, got: {msg}"
+    );
   }
 
   #[test]

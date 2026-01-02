@@ -984,6 +984,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       meta.content_type.clone(),
       meta.final_url.clone().or_else(|| Some(url.to_string())),
     );
+    resource.content_encoding = meta.content_encoding.clone();
     resource.status = meta.status;
     resource.etag = meta.etag.clone();
     resource.last_modified = meta.last_modified.clone();
@@ -1075,6 +1076,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       meta.content_type.clone(),
       meta.final_url.clone().or_else(|| Some(url.to_string())),
     );
+    resource.content_encoding = meta.content_encoding.clone();
     resource.status = meta.status;
     resource.etag = meta.etag.clone();
     resource.last_modified = meta.last_modified.clone();
@@ -1218,6 +1220,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       url: url.to_string(),
       status: resource.status,
       content_type: resource.content_type.clone(),
+      content_encoding: resource.content_encoding.clone(),
       etag: etag
         .map(|s| s.to_string())
         .or_else(|| resource.etag.clone()),
@@ -1944,6 +1947,8 @@ pub(super) struct StoredMetadata {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   status: Option<u16>,
   content_type: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  content_encoding: Option<String>,
   etag: Option<String>,
   last_modified: Option<String>,
   final_url: Option<String>,
@@ -2697,6 +2702,7 @@ mod tests {
       url: url.to_string(),
       status: None,
       content_type: Some("text/plain".to_string()),
+      content_encoding: None,
       etag: None,
       last_modified: None,
       final_url: Some(url.to_string()),
@@ -2748,6 +2754,7 @@ mod tests {
       url: url.to_string(),
       status: None,
       content_type: Some("text/plain".to_string()),
+      content_encoding: None,
       etag: None,
       last_modified: None,
       final_url: Some(url.to_string()),
@@ -3603,6 +3610,7 @@ mod tests {
       url: url.to_string(),
       status: None,
       content_type: Some("text/plain".to_string()),
+      content_encoding: None,
       etag: None,
       last_modified: None,
       final_url: Some(url.to_string()),

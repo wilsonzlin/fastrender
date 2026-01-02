@@ -167,9 +167,7 @@ fn disk_cache_namespace_for_browser_headers(
   let ua = fastrender::resource::normalize_user_agent_for_log(user_agent).trim();
   let lang = accept_language.trim();
   if browser_headers_enabled {
-    format!(
-      "{DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER}\nuser-agent:{ua}\naccept-language:{lang}"
-    )
+    format!("{DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER}\nuser-agent:{ua}\naccept-language:{lang}")
   } else {
     format!(
       "{DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER}\nuser-agent:{ua}\naccept-language:{lang}\nhttp-browser-headers:0"
@@ -203,21 +201,15 @@ mod disk_cache_namespace_tests {
 
   #[test]
   fn disk_cache_namespace_includes_fetch_profile_marker_and_partitions_opt_out() {
-    let enabled = disk_cache_namespace_for_browser_headers(
-      DEFAULT_USER_AGENT,
-      DEFAULT_ACCEPT_LANGUAGE,
-      true,
-    );
+    let enabled =
+      disk_cache_namespace_for_browser_headers(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, true);
     assert!(
       enabled.contains(DISK_CACHE_FETCH_PROFILE_NAMESPACE_MARKER),
       "namespace should include fetch profile marker when browser headers are enabled: {enabled}"
     );
 
-    let disabled = disk_cache_namespace_for_browser_headers(
-      DEFAULT_USER_AGENT,
-      DEFAULT_ACCEPT_LANGUAGE,
-      false,
-    );
+    let disabled =
+      disk_cache_namespace_for_browser_headers(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, false);
     assert_ne!(
       enabled, disabled,
       "disabling browser headers should produce a distinct disk cache namespace"
@@ -548,7 +540,10 @@ mod tests {
   impl ResourceFetcher for DeadlineAssertingFetcher {
     fn fetch(&self, url: &str) -> Result<FetchedResource> {
       let deadline = render_control::active_deadline();
-      assert!(deadline.is_some(), "expected active deadline for redirect fetch");
+      assert!(
+        deadline.is_some(),
+        "expected active deadline for redirect fetch"
+      );
       let deadline = deadline.expect("deadline installed");
       assert!(
         deadline.timeout_limit().is_some(),
@@ -558,6 +553,7 @@ mod tests {
       Ok(FetchedResource {
         bytes: b"<html><head><title>ok</title></head><body>ok</body></html>".to_vec(),
         content_type: Some("text/html".to_string()),
+        content_encoding: None,
         status: Some(200),
         etag: None,
         last_modified: None,

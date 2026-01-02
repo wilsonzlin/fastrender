@@ -49,7 +49,13 @@ impl CookieJarState {
       let file = Builder::new().prefix("fastr-curl-cookies").tempfile()?;
       self.jar = Some(file.into_temp_path());
     }
-    Ok(self.jar.as_ref().expect("jar should be initialized").as_ref())
+    Ok(
+      self
+        .jar
+        .as_ref()
+        .expect("jar should be initialized")
+        .as_ref(),
+    )
   }
 }
 
@@ -63,7 +69,11 @@ struct CurlResponse {
 #[derive(Debug)]
 enum CurlError {
   Failure(CurlFailure),
-  BodyTooLarge { status: u16, observed: usize, limit: usize },
+  BodyTooLarge {
+    status: u16,
+    observed: usize,
+    limit: usize,
+  },
 }
 
 #[derive(Debug)]
@@ -99,7 +109,10 @@ impl CurlFailure {
     // Common transient curl exit codes. We err on the side of retrying since higher-level budgets
     // and deadlines cap total time.
     matches!(status, 5 | 6 | 7 | 18 | 28 | 35 | 52 | 56 | 92)
-      || self.stderr.to_ascii_lowercase().contains("connection reset")
+      || self
+        .stderr
+        .to_ascii_lowercase()
+        .contains("connection reset")
       || self.stderr.to_ascii_lowercase().contains("timed out")
       || self.stderr.to_ascii_lowercase().contains("timeout")
       || self.stderr.to_ascii_lowercase().contains("http2")
@@ -219,7 +232,8 @@ fn read_curl_headers<R: BufRead>(reader: &mut R) -> io::Result<(String, u16, Hea
     }
 
     let status_lower = status_line.to_ascii_lowercase();
-    let provisional = (100..200).contains(&status) || status_lower.contains("connection established");
+    let provisional =
+      (100..200).contains(&status) || status_lower.contains("connection established");
     if provisional {
       continue;
     }
@@ -346,9 +360,7 @@ fn run_curl(
   })
 }
 
-fn lock_cookie_jar(
-  fetcher: &HttpFetcher,
-) -> MutexGuard<'_, CookieJarState> {
+fn lock_cookie_jar(fetcher: &HttpFetcher) -> MutexGuard<'_, CookieJarState> {
   fetcher
     .curl_cookie_jar
     .lock()
@@ -419,7 +431,8 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       }
 
       let allowed_limit = fetcher.policy.allowed_response_limit()?;
-      let per_request_timeout = fetcher.deadline_aware_timeout(kind, deadline.as_ref(), &current)?;
+      let per_request_timeout =
+        fetcher.deadline_aware_timeout(kind, deadline.as_ref(), &current)?;
       let mut effective_timeout = per_request_timeout.unwrap_or(fetcher.policy.request_timeout);
 
       if let Some(budget) = timeout_budget {
@@ -556,7 +569,8 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
             message.push_str(&super::format_attempt_suffix(attempt, max_attempts));
           }
 
-          let mut err = ResourceError::new(current.clone(), message).with_final_url(current.clone());
+          let mut err =
+            ResourceError::new(current.clone(), message).with_final_url(current.clone());
           if let Some(source) = failure.spawn_error {
             err = err.with_source(source);
           }
@@ -583,13 +597,12 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         }
       }
 
-      let retry_after = if fetcher.retry_policy.respect_retry_after
-        && super::retryable_http_status(status_code)
-      {
-        super::parse_retry_after(&response.headers)
-      } else {
-        None
-      };
+      let retry_after =
+        if fetcher.retry_policy.respect_retry_after && super::retryable_http_status(status_code) {
+          super::parse_retry_after(&response.headers)
+        } else {
+          None
+        };
 
       let encodings = super::parse_content_encodings(&response.headers);
       let content_type = response
@@ -610,8 +623,12 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         .map(|s| s.to_string());
       let cache_policy = super::parse_http_cache_policy(&response.headers);
 
-      let bytes = match super::decode_content_encodings(response.body, &encodings, allowed_limit, decode_stage)
-      {
+      let bytes = match super::decode_content_encodings(
+        response.body,
+        &encodings,
+        allowed_limit,
+        decode_stage,
+      ) {
         Ok(decoded) => decoded,
         Err(super::ContentDecodeError::DeadlineExceeded { stage, elapsed, .. }) => {
           return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
@@ -774,7 +791,11 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         }
         let err = ResourceError::new(
           current.clone(),
-          format!("response too large ({} > {} bytes)", bytes.len(), allowed_limit),
+          format!(
+            "response too large ({} > {} bytes)",
+            bytes.len(),
+            allowed_limit
+          ),
         )
         .with_status(status_code)
         .with_final_url(current.clone());
@@ -782,11 +803,11 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       }
 
       fetcher.policy.reserve_budget(bytes.len())?;
-      let mut resource = super::FetchedResource::with_final_url(
-        bytes,
-        content_type,
-        Some(current.clone()),
-      );
+      let mut resource =
+        super::FetchedResource::with_final_url(bytes, content_type, Some(current.clone()));
+      if !encodings.is_empty() {
+        resource.content_encoding = Some(encodings.join(", "));
+      }
       resource.status = Some(status_code);
       resource.etag = etag;
       resource.last_modified = last_modified;
@@ -797,8 +818,14 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
   }
 
   Err(Error::Resource(
-    ResourceError::new(url, format!("too many redirects (limit {})", fetcher.policy.max_redirects))
-      .with_final_url(current),
+    ResourceError::new(
+      url,
+      format!(
+        "too many redirects (limit {})",
+        fetcher.policy.max_redirects
+      ),
+    )
+    .with_final_url(current),
   ))
 }
 
