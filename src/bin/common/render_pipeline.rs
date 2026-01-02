@@ -278,6 +278,7 @@ impl PreparedDocument {
 pub struct CachedDocument {
   pub document: PreparedDocument,
   pub content_type: Option<String>,
+  pub status: Option<u16>,
   pub byte_len: usize,
 }
 
@@ -312,6 +313,7 @@ pub fn read_cached_document(path: &Path) -> Result<CachedDocument> {
   Ok(CachedDocument {
     document: PreparedDocument::new(html, base_hint),
     content_type: parsed_meta.content_type,
+    status: parsed_meta.status,
     byte_len: bytes.len(),
   })
 }

@@ -1962,6 +1962,27 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     url = parsed.to_string();
   }
 
+  if cached.status.is_some_and(|status| status >= 400) {
+    let status = cached.status;
+    let mut progress = PageProgress::new(url.clone());
+    progress.status = ProgressStatus::Error;
+    progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+    if let Some(code) = status {
+      progress.auto_notes = format!("cached HTML status: {code}");
+    } else {
+      progress.auto_notes = "cached HTML status: <unknown>".to_string();
+    }
+    progress.failure_stage = Some(ProgressStage::DomParse);
+    progress.hotspot = hotspot_from_progress_stage(ProgressStage::DomParse).to_string();
+    let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
+    let _ = write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
+    if let Some(path) = &args.log_path {
+      log.push_str(&format!("Cached HTML status: {status:?}\n"));
+      let _ = write_text_file(path, &log);
+    }
+    return Ok(());
+  }
+
   let hard_timeout = Duration::from_secs(args.timeout);
   let fetch_timeout = compute_fetch_timeout(hard_timeout, args.soft_timeout_ms);
   let serve_stale_when_deadline = cfg!(feature = "disk_cache")
