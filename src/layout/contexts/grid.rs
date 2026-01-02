@@ -36,6 +36,8 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::flex_cache::ShardedFlexCache;
 use crate::layout::engine::LayoutParallelism;
+use crate::layout::formatting_context::intrinsic_cache_lookup;
+use crate::layout::formatting_context::intrinsic_cache_store;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
 #[cfg(not(test))]
@@ -242,11 +244,14 @@ impl MeasureKey {
   }
 }
 
-fn push_measured_key(keys: &mut Vec<MeasureKey>, key: MeasureKey) {
-  if keys.len() >= MAX_MEASURED_KEYS_PER_NODE {
-    keys.remove(0);
-  }
+fn push_measured_key(keys: &mut Vec<MeasureKey>, key: MeasureKey) -> Option<MeasureKey> {
+  let evicted = if keys.len() >= MAX_MEASURED_KEYS_PER_NODE {
+    Some(keys.remove(0))
+  } else {
+    None
+  };
   keys.push(key);
+  evicted
 }
 
 #[cfg(test)]
@@ -2619,6 +2624,7 @@ impl GridFormattingContext {
       root_id,
       available_space,
       {
+        let this = self.clone();
         let factory = self.factory.clone();
         let viewport_size = self.viewport_size;
         let mut cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
@@ -2633,6 +2639,12 @@ impl GridFormattingContext {
           if node_id == root_id {
             return taffy::geometry::Size::ZERO;
           }
+          let fallback_size = |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
+            known.unwrap_or(match avail_dim {
+              taffy::style::AvailableSpace::Definite(v) => v,
+              _ => 0.0,
+            })
+          };
           let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
             return taffy::geometry::Size::ZERO;
           };
@@ -2660,6 +2672,49 @@ impl GridFormattingContext {
             .formatting_context()
             .unwrap_or(FormattingContextType::Block);
           let fc = factory.get(fc_type);
+          let mut intrinsic_width: Option<f32> = None;
+          if known_dimensions.width.is_none() {
+            intrinsic_width = match available_space.width {
+              taffy::style::AvailableSpace::MinContent => Some(
+                match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent) {
+                  Ok(size) => size,
+                  Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                  Err(_) => 0.0,
+                },
+              ),
+              taffy::style::AvailableSpace::MaxContent => Some(
+                match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
+                  Ok(size) => size,
+                  Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                  Err(_) => 0.0,
+                },
+              ),
+              _ => None,
+            };
+          }
+
+          if let Some(border_width) = intrinsic_width {
+            let percentage_base = match available_space.width {
+              taffy::style::AvailableSpace::Definite(w) => w,
+              _ => 0.0,
+            };
+            let (
+              padding_left,
+              padding_right,
+              _padding_top,
+              _padding_bottom,
+              border_left,
+              border_right,
+              _border_top,
+              _border_bottom,
+            ) = this.resolved_padding_border_for_measure(&box_node.style, percentage_base);
+            let width =
+              (border_width - padding_left - padding_right - border_left - border_right).max(0.0);
+            let height = fallback_size(known_dimensions.height, available_space.height).max(0.0);
+            let size = taffy::geometry::Size { width, height };
+            cache.insert(key, size);
+            return size;
+          }
           let constraints =
             constraints_from_taffy(viewport_size, known_dimensions, available_space, None);
           let fragment = match fc.layout(box_node, &constraints) {
@@ -2667,9 +2722,16 @@ impl GridFormattingContext {
             Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
             Err(_) => return taffy::geometry::Size::ZERO,
           };
+          let percentage_base = match available_space.width {
+            taffy::style::AvailableSpace::Definite(w) => w,
+            _ => constraints
+              .width()
+              .unwrap_or_else(|| fragment.bounds.width()),
+          };
+          let content_size = this.content_box_size(&fragment, &box_node.style, percentage_base);
           let size = taffy::geometry::Size {
-            width: fragment.bounds.width().max(0.0),
-            height: fragment.bounds.height().max(0.0),
+            width: content_size.width.max(0.0),
+            height: content_size.height.max(0.0),
           };
           grid_measure_size_cache_store(key, size);
           cache.insert(key, size);
@@ -2764,7 +2826,9 @@ impl GridFormattingContext {
         height: content_size.height.max(0.0),
       };
       grid_measure_size_cache_store(key, size);
-      push_measured_key(measured_node_keys.entry(node_id).or_default(), key);
+      if let Some(evicted) = push_measured_key(measured_node_keys.entry(node_id).or_default(), key) {
+        measured_fragments.remove(&evicted);
+      }
       measured_fragments.insert(key, fragment);
       measure_cache.insert(key, size);
       return size;
@@ -2880,7 +2944,9 @@ impl GridFormattingContext {
       height: content_size.height.max(0.0),
     };
     grid_measure_size_cache_store(key, size);
-    push_measured_key(measured_node_keys.entry(node_id).or_default(), key);
+    if let Some(evicted) = push_measured_key(measured_node_keys.entry(node_id).or_default(), key) {
+      measured_fragments.remove(&evicted);
+    }
     measured_fragments.insert(key, fragment);
     measure_cache.insert(key, size);
     size
@@ -3872,13 +3938,11 @@ impl FormattingContext for GridFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    if let Some(cached) = crate::layout::formatting_context::intrinsic_cache_lookup(box_node, mode)
-    {
+    if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
       return Ok(cached);
     }
-
     let size = self.compute_intrinsic_size(box_node, mode)?;
-    crate::layout::formatting_context::intrinsic_cache_store(box_node, mode, size);
+    intrinsic_cache_store(box_node, mode, size);
     Ok(size)
   }
 }
@@ -5036,6 +5100,46 @@ mod tests {
       crate::layout::taffy_integration::taffy_counters().grid,
       1,
       "expected repeated intrinsic calls to reuse intrinsic_cache without re-running Taffy"
+    );
+  }
+
+  #[test]
+  fn grid_intrinsic_size_does_not_double_count_padding_and_border() {
+    let fc = GridFormattingContext::new();
+
+    let mut item_style = ComputedStyle::default();
+    item_style.width = Some(Length::px(100.0));
+    item_style.padding_left = Length::px(10.0);
+    item_style.padding_right = Length::px(10.0);
+    item_style.border_left_width = Length::px(5.0);
+    item_style.border_right_width = Length::px(5.0);
+    let child = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+    let grid = BoxNode::new_block(
+      make_grid_style_with_tracks(vec![GridTrack::Auto], vec![GridTrack::Auto]),
+      FormattingContextType::Grid,
+      vec![child],
+    );
+
+    let expected = 100.0 + 10.0 + 10.0 + 5.0 + 5.0;
+    let min = fc
+      .compute_intrinsic_inline_size(&grid, IntrinsicSizingMode::MinContent)
+      .unwrap();
+    let max = fc
+      .compute_intrinsic_inline_size(&grid, IntrinsicSizingMode::MaxContent)
+      .unwrap();
+
+    assert!(
+      (min - expected).abs() < 0.01,
+      "min-content intrinsic width should match the grid item's border-box width (got {:.2}, expected {:.2})",
+      min,
+      expected
+    );
+    assert!(
+      (max - expected).abs() < 0.01,
+      "max-content intrinsic width should match the grid item's border-box width (got {:.2}, expected {:.2})",
+      max,
+      expected
     );
   }
 
