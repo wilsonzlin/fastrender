@@ -4669,6 +4669,7 @@ mod tests {
         height: AvailableSpace::Definite(10.0),
       },
       viewport,
+      false,
     );
     let key_b = MeasureKey::new(
       ptr,
@@ -4678,6 +4679,7 @@ mod tests {
         height: AvailableSpace::Definite(10.0),
       },
       viewport,
+      false,
     );
 
     assert_eq!(key_a.available_width, MeasureAvailKey::Ignored);
@@ -4695,6 +4697,7 @@ mod tests {
         height: AvailableSpace::Definite(50.0),
       },
       viewport,
+      false,
     );
     assert_ne!(
       key_a, key_c,
@@ -4722,6 +4725,7 @@ mod tests {
         height: AvailableSpace::Definite(100.0),
       },
       viewport,
+      false,
     );
     let key_b = MeasureKey::new(
       ptr,
@@ -4731,6 +4735,7 @@ mod tests {
         height: AvailableSpace::Definite(400.0),
       },
       viewport,
+      false,
     );
 
     assert_eq!(key_a.available_height, MeasureAvailKey::Ignored);
@@ -4748,6 +4753,7 @@ mod tests {
         height: AvailableSpace::Definite(100.0),
       },
       viewport,
+      false,
     );
     assert_ne!(
       key_a, key_c,

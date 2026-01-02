@@ -2398,7 +2398,11 @@ fn font_has_glyph_fast(
       .and_then(|id| db.cached_face(id.inner()))
       .or_else(|| crate::text::face_cache::get_ttf_face(font));
   }
-  cached_face.as_ref().is_some_and(|face| face.has_glyph(ch))
+
+  match cached_face.as_ref() {
+    Some(face) => face.has_glyph(ch),
+    None => false,
+  }
 }
 
 fn font_supports_all_chars_fast(
@@ -2407,10 +2411,18 @@ fn font_supports_all_chars_fast(
   cached_face: &mut Option<Arc<crate::text::face_cache::CachedFace>>,
   chars: &[char],
 ) -> bool {
-  chars
-    .iter()
-    .copied()
-    .all(|ch| font_has_glyph_fast(db, font, cached_face, ch))
+  match chars {
+    [] => true,
+    [ch] => font_has_glyph_fast(db, font, cached_face, *ch),
+    _ => {
+      for &ch in chars {
+        if !font_has_glyph_fast(db, font, cached_face, ch) {
+          return false;
+        }
+      }
+      true
+    }
+  }
 }
 
 fn last_resort_font(font_context: &FontContext) -> Option<Arc<LoadedFont>> {
