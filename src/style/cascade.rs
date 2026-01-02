@@ -2621,6 +2621,16 @@ impl CandidateSet {
     self.mark_seen(idx)
   }
 
+  #[inline]
+  fn mark_seen_bounded(&mut self, idx: usize) -> bool {
+    debug_assert!(idx < self.marks.len());
+    if self.marks[idx] == self.generation {
+      return false;
+    }
+    self.marks[idx] = self.generation;
+    true
+  }
+
   fn mark_seen(&mut self, idx: usize) -> bool {
     if idx >= self.marks.len() {
       self.marks.resize(idx + 1, 0);
@@ -4735,7 +4745,7 @@ impl<'a> RuleIndex<'a> {
       for offset in 0..cursor.len {
         // Safety: `offset < len` ensures the pointer remains within the slice.
         let selector_idx = unsafe { *cursor.ptr.add(offset) } as usize;
-        if !seen.mark_seen(selector_idx) {
+        if !seen.mark_seen_bounded(selector_idx) {
           continue;
         }
         if !self.metadata_matches_node(
@@ -4812,7 +4822,7 @@ impl<'a> RuleIndex<'a> {
           b.pos += 1;
         }
 
-        if !seen.mark_seen(selector_idx) {
+        if !seen.mark_seen_bounded(selector_idx) {
           continue;
         }
         if !self.metadata_matches_node(
@@ -4920,7 +4930,7 @@ impl<'a> RuleIndex<'a> {
         let bucket = merge.cursors[cursor_idx].bucket;
         merge.cursors[cursor_idx].pos += 1;
 
-        if !seen.mark_seen(selector_idx) {
+        if !seen.mark_seen_bounded(selector_idx) {
           continue;
         }
         if !self.metadata_matches_node(
@@ -4982,7 +4992,7 @@ impl<'a> RuleIndex<'a> {
         });
       }
 
-      if !seen.mark_seen(selector_idx) {
+      if !seen.mark_seen_bounded(selector_idx) {
         continue;
       }
       if !self.metadata_matches_node(selectors[selector_idx].metadata_id, node, summary, quirks_mode)
@@ -5118,7 +5128,7 @@ impl<'a> RuleIndex<'a> {
       for offset in 0..cursor.len {
         // Safety: `offset < len` ensures the pointer remains within the slice.
         let selector_idx = unsafe { *cursor.ptr.add(offset) } as usize;
-        if !seen.mark_seen(selector_idx) {
+        if !seen.mark_seen_bounded(selector_idx) {
           continue;
         }
         if !self.metadata_matches_node(
@@ -5190,7 +5200,7 @@ impl<'a> RuleIndex<'a> {
           b.pos += 1;
         }
 
-        if !seen.mark_seen(selector_idx) {
+        if !seen.mark_seen_bounded(selector_idx) {
           continue;
         }
         if !self.metadata_matches_node(
@@ -5292,7 +5302,7 @@ impl<'a> RuleIndex<'a> {
         let bucket = merge.cursors[cursor_idx].bucket;
         merge.cursors[cursor_idx].pos += 1;
 
-        if !seen.mark_seen(selector_idx) {
+        if !seen.mark_seen_bounded(selector_idx) {
           continue;
         }
         if !self.metadata_matches_node(
@@ -5354,7 +5364,7 @@ impl<'a> RuleIndex<'a> {
         });
       }
 
-      if !seen.mark_seen(selector_idx) {
+      if !seen.mark_seen_bounded(selector_idx) {
         continue;
       }
       if !self.metadata_matches_node(selectors[selector_idx].metadata_id, node, summary, quirks_mode)
@@ -5438,14 +5448,14 @@ impl<'a> RuleIndex<'a> {
         summary,
         quirks_mode,
       ) {
-        if seen.mark_seen(idx) {
+        if seen.mark_seen_bounded(idx) {
           if TRACK_STATS {
             stats.pruned += 1;
           }
         }
         return;
       }
-      if seen.mark_seen(idx) {
+      if seen.mark_seen_bounded(idx) {
         out.push(idx as SelectorIndex);
         if TRACK_STATS {
           *bucket += 1;
