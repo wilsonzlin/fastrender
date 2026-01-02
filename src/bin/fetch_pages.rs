@@ -10,7 +10,7 @@ use common::render_pipeline::build_http_fetcher;
 use fastrender::pageset::{
   cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
-use fastrender::resource::{FetchRequest, FetchedResource, ResourceFetcher};
+use fastrender::resource::{parse_cached_html_meta, FetchRequest, FetchedResource, ResourceFetcher};
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use rayon::ThreadPoolBuilder;
@@ -64,7 +64,9 @@ struct Args {
   /// Allow caching pages that return HTTP error statuses (>= 400)
   ///
   /// By default, `fetch_pages` treats error statuses as failures to avoid caching bot
-  /// mitigation pages (403/5xx) as if they were real page content.
+  /// mitigation pages (403/5xx) as if they were real page content. When enabled, HTTP error
+  /// responses still won't overwrite an existing cached snapshot unless that snapshot is also
+  /// known to be an HTTP error page.
   #[arg(long)]
   allow_http_error_status: bool,
 }
@@ -148,6 +150,37 @@ fn write_cached_html(
   }
 
   Ok(())
+}
+
+fn cached_html_status(cache_path: &Path) -> Option<u16> {
+  let mut meta_path = cache_path.to_path_buf();
+  if let Some(ext) = meta_path.extension().and_then(|e| e.to_str()) {
+    meta_path.set_extension(format!("{ext}.meta"));
+  } else {
+    meta_path.set_extension("meta");
+  }
+  let meta = fs::read_to_string(meta_path).ok()?;
+  parse_cached_html_meta(&meta).status
+}
+
+fn should_preserve_existing_cache_on_error_status(
+  allow_http_error_status: bool,
+  fetched_status: Option<u16>,
+  existing_status: Option<u16>,
+) -> bool {
+  if !allow_http_error_status {
+    return false;
+  }
+  let Some(fetched_status) = fetched_status else {
+    return false;
+  };
+  if fetched_status < 400 {
+    return false;
+  }
+  // Preserve an existing cache unless it is also known to be an HTTP error page. This avoids a
+  // transient bot-mitigation response (403/5xx) overwriting a previously-captured snapshot while
+  // still allowing users to refresh a cache that was already bad.
+  !existing_status.is_some_and(|status| status >= 400)
 }
 
 fn fetch_page(
@@ -298,6 +331,30 @@ fn main() {
         match fetch_page(fetcher.as_ref(), &entry.url, allow_http_error_status) {
           Ok(res) => {
             let canonical_url = res.final_url.as_deref().unwrap_or(&entry.url);
+            if should_preserve_existing_cache_on_error_status(
+              allow_http_error_status,
+              res.status,
+              cache_path.exists().then(|| cached_html_status(&cache_path)).flatten(),
+            ) {
+              if let Some(start) = start {
+                println!(
+                  "⚠ {} (HTTP status {:?}; preserving existing cache, {}ms)",
+                  entry.url,
+                  res.status,
+                  start.elapsed().as_millis()
+                );
+              } else {
+                println!(
+                  "⚠ {} (HTTP status {:?}; preserving existing cache)",
+                  entry.url, res.status
+                );
+              }
+              failed.fetch_add(1, Ordering::Relaxed);
+              let _ = failed_urls
+                .lock()
+                .map(|mut v| v.push(entry.url.to_string()));
+              return;
+            }
             if write_cached_html(
               &cache_path,
               &res.bytes,
@@ -1001,6 +1058,43 @@ mod tests {
     assert_eq!(res.status, Some(403));
     assert_eq!(res.bytes, b"forbidden");
     assert_eq!(res.final_url.as_deref(), Some(url.as_str()));
+  }
+
+  #[test]
+  fn preserve_existing_cache_on_error_status_avoids_overwriting_good_cache() {
+    assert!(
+      should_preserve_existing_cache_on_error_status(true, Some(403), Some(200)),
+      "should preserve ok cache when refreshed fetch hits HTTP error"
+    );
+    assert!(
+      should_preserve_existing_cache_on_error_status(true, Some(500), None),
+      "missing meta (unknown status) should be treated as ok for preservation purposes"
+    );
+    assert!(
+      !should_preserve_existing_cache_on_error_status(true, Some(403), Some(403)),
+      "should allow overwriting caches that are already known to be error pages"
+    );
+    assert!(
+      !should_preserve_existing_cache_on_error_status(true, Some(200), Some(200)),
+      "successful fetches should always overwrite"
+    );
+    assert!(
+      !should_preserve_existing_cache_on_error_status(false, Some(403), Some(200)),
+      "preservation is only relevant when --allow-http-error-status is enabled"
+    );
+    assert!(
+      !should_preserve_existing_cache_on_error_status(true, None, Some(200)),
+      "non-HTTP fetches (no status code) should not trigger preservation"
+    );
+  }
+
+  #[test]
+  fn cached_html_status_reads_sidecar_meta() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("page.html");
+    std::fs::write(&cache_path, "stub").unwrap();
+    std::fs::write(cache_path.with_extension("html.meta"), "status: 403\n").unwrap();
+    assert_eq!(cached_html_status(&cache_path), Some(403));
   }
 
   #[test]
