@@ -2030,6 +2030,9 @@ fn create_pseudo_element_box(
         // Running elements are not yet resolved into generated content.
       }
       ContentItem::Url(url) => {
+        if url.trim().is_empty() {
+          continue;
+        }
         flush_text(&mut text_buf, &pseudo_style, &mut children);
         let replaced = ReplacedBox {
           replaced_type: ReplacedType::Image {
@@ -2200,6 +2203,9 @@ pub(crate) fn marker_content_from_style(
             // Running elements are not supported for list markers yet.
           }
           ContentItem::Url(url) => {
+            if url.trim().is_empty() {
+              continue;
+            }
             // If the author supplies multiple URLs we take the last; mixed text+image returns text.
             image = Some(url.clone());
           }
@@ -5432,6 +5438,35 @@ mod tests {
     };
     assert_eq!(label, "chosen");
     assert!(!multiple);
+  }
+
+  #[test]
+  fn pseudo_element_content_ignores_empty_url() {
+    let styled = styled_element("div");
+    let counters = CounterManager::new();
+
+    let mut pseudo_style = ComputedStyle::default();
+    pseudo_style.content_value = ContentValue::Items(vec![ContentItem::Url(String::new())]);
+    let pseudo_style = Arc::new(pseudo_style);
+
+    assert!(
+      create_pseudo_element_box(&styled, &pseudo_style, None, "before", &counters).is_none(),
+      "empty url() content items should not generate replaced boxes"
+    );
+  }
+
+  #[test]
+  fn marker_content_ignores_empty_url() {
+    let styled = styled_element("li");
+    let counters = CounterManager::new();
+
+    let mut marker_style = ComputedStyle::default();
+    marker_style.content_value = ContentValue::Items(vec![ContentItem::Url(String::new())]);
+
+    assert!(
+      marker_content_from_style(&styled, &marker_style, &counters).is_none(),
+      "empty url() content items should not generate marker images"
+    );
   }
 }
 

@@ -1039,6 +1039,9 @@ fn build_margin_box_children(
           ContentItem::NoOpenQuote => context.push_quote(),
           ContentItem::NoCloseQuote => context.pop_quote(),
           ContentItem::Url(url) => {
+            if url.trim().is_empty() {
+              continue;
+            }
             flush_text(&mut text_buf, &mut children, style);
             children.push(BoxNode::new_replaced(
               style.clone(),
