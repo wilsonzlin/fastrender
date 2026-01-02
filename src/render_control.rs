@@ -84,7 +84,8 @@ impl StageHeartbeat {
         "fetch"
       }
       StageHeartbeat::CssInline | StageHeartbeat::CssParse => "css",
-      StageHeartbeat::Cascade | StageHeartbeat::BoxTree => "cascade",
+      StageHeartbeat::Cascade => "cascade",
+      StageHeartbeat::BoxTree => "box_tree",
       StageHeartbeat::Layout => "layout",
       StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize => "paint",
       StageHeartbeat::Done => "unknown",

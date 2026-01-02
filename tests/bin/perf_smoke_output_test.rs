@@ -30,7 +30,7 @@ fn perf_smoke_emits_stage_breakdowns() {
   let summary: Value = serde_json::from_str(&data).expect("parse perf_smoke json");
   assert_eq!(
     summary["schema_version"].as_u64(),
-    Some(5),
+    Some(6),
     "perf_smoke schema_version should be current"
   );
   let fixtures = summary["fixtures"]
@@ -51,7 +51,7 @@ fn perf_smoke_emits_stage_breakdowns() {
     fixture.get("error").is_some(),
     "fixture should include an error field (null for ok fixtures)"
   );
-  for key in ["fetch", "css", "cascade", "layout", "paint"] {
+  for key in ["fetch", "css", "cascade", "box_tree", "layout", "paint"] {
     assert!(
       fixture["stage_ms"][key].as_f64().is_some(),
       "fixture stage_ms should contain numeric {key}"

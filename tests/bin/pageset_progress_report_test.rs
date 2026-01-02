@@ -78,7 +78,7 @@ fn pageset_progress_report_outputs_summary() {
   assert!(stdout.contains("layout: 3"));
   assert!(stdout.contains("Stage timings (ok pages with timings: 2):"));
   assert!(
-    stdout.contains("totals_ms: fetch=55.00 css=110.00 cascade=220.00 layout=3040.00 paint=545.00")
+    stdout.contains("totals_ms: fetch=55.00 css=110.00 cascade=220.00 box_tree=0.00 layout=3040.00 paint=545.00")
   );
 }
 
@@ -472,7 +472,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "missing improvement header"
   );
   assert!(
-    stdout.contains("improves_fast (ok -> ok) Δtotal=-150.00ms (-50.00%) stages_ms=fetch:-30.00 css:-20.00 cascade:-40.00 layout:-40.00 paint:-20.00"),
+    stdout.contains("improves_fast (ok -> ok) Δtotal=-150.00ms (-50.00%) stages_ms=fetch:-30.00 css:-20.00 cascade:-40.00 box_tree:+0.00 layout:-40.00 paint:-20.00"),
     "missing improvement entry"
   );
 

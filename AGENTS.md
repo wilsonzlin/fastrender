@@ -189,12 +189,12 @@ Each file should be tiny (no huge logs, no raw HTML):
   },
   "status": "ok|timeout|panic|error",
   "total_ms": 123.4,
-  "stages_ms": { "fetch": 0.0, "css": 0.0, "cascade": 0.0, "layout": 0.0, "paint": 0.0 },
+  "stages_ms": { "fetch": 0.0, "css": 0.0, "cascade": 0.0, "box_tree": 0.0, "layout": 0.0, "paint": 0.0 },
   "notes": "short, durable explanation of current blocker",
   "auto_notes": "machine-generated last-run diagnostics (overwritten each run)",
   "hotspot": "fetch|css|cascade|box_tree|layout|paint|unknown",
-  "failure_stage": "dom_parse|css|cascade|layout|paint|null",
-  "timeout_stage": "dom_parse|css|cascade|layout|paint|null",
+  "failure_stage": "dom_parse|css|cascade|box_tree|layout|paint|null",
+  "timeout_stage": "dom_parse|css|cascade|box_tree|layout|paint|null",
   "last_good_commit": "abcdef0",
   "last_regression_commit": "1234567"
 }

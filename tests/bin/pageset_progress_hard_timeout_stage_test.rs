@@ -64,6 +64,7 @@ fn pageset_progress_hard_timeout_populates_timeout_stage_from_heartbeat() {
   );
   assert_eq!(stages["css"].as_f64().expect("css stage ms"), 0.0);
   assert_eq!(stages["cascade"].as_f64().expect("cascade stage ms"), 0.0);
+  assert_eq!(stages["box_tree"].as_f64().expect("box_tree stage ms"), 0.0);
   assert_eq!(stages["layout"].as_f64().expect("layout stage ms"), 0.0);
   assert_eq!(stages["paint"].as_f64().expect("paint stage ms"), 0.0);
 
@@ -71,6 +72,7 @@ fn pageset_progress_hard_timeout_populates_timeout_stage_from_heartbeat() {
   let sum = fetch
     + stages["css"].as_f64().unwrap()
     + stages["cascade"].as_f64().unwrap()
+    + stages["box_tree"].as_f64().unwrap()
     + stages["layout"].as_f64().unwrap()
     + stages["paint"].as_f64().unwrap();
   assert!(
@@ -150,6 +152,7 @@ fn pageset_progress_hard_timeout_falls_back_when_stage_timeline_missing() {
   );
   assert_eq!(stages["css"].as_f64().unwrap_or(-1.0), 0.0);
   assert_eq!(stages["cascade"].as_f64().unwrap_or(-1.0), 0.0);
+  assert_eq!(stages["box_tree"].as_f64().unwrap_or(-1.0), 0.0);
   assert_eq!(stages["layout"].as_f64().unwrap_or(-1.0), 0.0);
   assert_eq!(stages["paint"].as_f64().unwrap_or(-1.0), 0.0);
 
@@ -157,6 +160,7 @@ fn pageset_progress_hard_timeout_falls_back_when_stage_timeline_missing() {
   let sum = fetch
     + stages["css"].as_f64().unwrap_or(0.0)
     + stages["cascade"].as_f64().unwrap_or(0.0)
+    + stages["box_tree"].as_f64().unwrap_or(0.0)
     + stages["layout"].as_f64().unwrap_or(0.0)
     + stages["paint"].as_f64().unwrap_or(0.0);
   assert!(

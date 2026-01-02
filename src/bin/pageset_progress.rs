@@ -656,6 +656,7 @@ pub(crate) enum ProgressStage {
   DomParse,
   Css,
   Cascade,
+  BoxTree,
   Layout,
   Paint,
 }
@@ -666,6 +667,7 @@ impl ProgressStage {
       ProgressStage::DomParse => "dom_parse",
       ProgressStage::Css => "css",
       ProgressStage::Cascade => "cascade",
+      ProgressStage::BoxTree => "box_tree",
       ProgressStage::Layout => "layout",
       ProgressStage::Paint => "paint",
     }
@@ -718,6 +720,7 @@ fn stage_buckets_for_progress_stage(stage: ProgressStage, total_ms: f64) -> Stag
     ProgressStage::DomParse => buckets.fetch = total_ms,
     ProgressStage::Css => buckets.css = total_ms,
     ProgressStage::Cascade => buckets.cascade = total_ms,
+    ProgressStage::BoxTree => buckets.box_tree = total_ms,
     ProgressStage::Layout => buckets.layout = total_ms,
     ProgressStage::Paint => buckets.paint = total_ms,
   }
@@ -906,6 +909,50 @@ fn normalize_missing_cache_placeholder(progress: &mut PageProgress, cache_exists
     && progress.auto_notes.trim() == "missing cache"
   {
     progress.auto_notes = "not run".to_string();
+  }
+}
+
+fn migrate_split_legacy_box_tree_bucket(buckets: &mut StageBuckets, stats: &RenderStats) {
+  if buckets.box_tree != 0.0 {
+    return;
+  }
+  let legacy_cascade = buckets.cascade;
+  if !legacy_cascade.is_finite() || legacy_cascade <= 0.0 {
+    return;
+  }
+  let cascade_ms = stats.timings.cascade_ms.unwrap_or(0.0);
+  let box_tree_ms = stats.timings.box_tree_ms.unwrap_or(0.0);
+  if !cascade_ms.is_finite() || cascade_ms < 0.0 || !box_tree_ms.is_finite() || box_tree_ms < 0.0 {
+    return;
+  }
+  let denom = cascade_ms + box_tree_ms;
+  if !denom.is_finite() || denom <= 0.0 {
+    return;
+  }
+  buckets.cascade = legacy_cascade * (cascade_ms / denom);
+  buckets.box_tree = legacy_cascade * (box_tree_ms / denom);
+}
+
+fn migrate_stage_from_auto_notes(progress: &mut PageProgress) {
+  let auto_notes = progress.auto_notes.as_str();
+  let stage = auto_notes
+    .lines()
+    .find_map(|line| line.trim().strip_prefix("stage:"))
+    .map(|raw| raw.trim())
+    .and_then(StageHeartbeat::from_str)
+    .and_then(progress_stage_from_heartbeat);
+  let Some(stage) = stage else {
+    return;
+  };
+
+  match progress.status {
+    ProgressStatus::Timeout => {
+      progress.timeout_stage = Some(stage);
+    }
+    ProgressStatus::Panic | ProgressStatus::Error => {
+      progress.failure_stage = Some(stage);
+    }
+    ProgressStatus::Ok => {}
   }
 }
 
@@ -1676,7 +1723,17 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
     let cache_exists = args.html_dir.join(format!("{stem}.html")).exists();
 
     let raw = fs::read_to_string(&path)?;
-    let mut progress: PageProgress = serde_json::from_str(&raw).map_err(|e| {
+    let json_value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+      io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{}: {}", path.display(), e),
+      )
+    })?;
+    let stages_have_box_tree = json_value
+      .get("stages_ms")
+      .and_then(|v| v.get("box_tree"))
+      .is_some();
+    let mut progress: PageProgress = serde_json::from_value(json_value).map_err(|e| {
       io::Error::new(
         io::ErrorKind::InvalidData,
         format!("{}: {}", path.display(), e),
@@ -1685,6 +1742,24 @@ fn migrate(args: MigrateArgs) -> io::Result<()> {
     migrate_legacy_notes(&mut progress);
     migrate_progress_config(&mut progress);
     normalize_missing_cache_placeholder(&mut progress, cache_exists);
+
+    // Some legacy progress artifacts collapse the box-tree build time into `stages_ms.cascade`.
+    // When we have structured stage timings, split that bucket proportionally so `report` can
+    // distinguish "real" cascade from box generation.
+    if progress.status == ProgressStatus::Ok && !stages_have_box_tree {
+      if let Some(stats) = progress
+        .diagnostics
+        .as_ref()
+        .and_then(|diag| diag.stats.as_ref())
+      {
+        migrate_split_legacy_box_tree_bucket(&mut progress.stages_ms, stats);
+      }
+    }
+
+    // Normalize timeout/failure stage attribution using any `stage: <heartbeat>` marker embedded
+    // in machine `auto_notes` (used for hard-killed workers).
+    migrate_stage_from_auto_notes(&mut progress);
+
     if let Some(total_ms) = progress.total_ms {
       if progress.status == ProgressStatus::Ok {
         let stats = progress
@@ -1844,6 +1919,7 @@ fn guess_hotspot(buckets: &StageBuckets) -> &'static str {
     ("fetch", buckets.fetch),
     ("css", buckets.css),
     ("cascade", buckets.cascade),
+    ("box_tree", buckets.box_tree),
     ("layout", buckets.layout),
     ("paint", buckets.paint),
   ] {
@@ -1856,8 +1932,7 @@ fn guess_hotspot(buckets: &StageBuckets) -> &'static str {
 
 fn guess_hotspot_from_timings(timings: &RenderStageTimings) -> Option<&'static str> {
   // Use the renderer-reported stage wall timers when available so the hotspot classification
-  // reflects the true dominant subsystem (not the coarse `stages_ms` buckets which intentionally
-  // fold the box tree build into the cascade bucket).
+  // reflects the dominant subsystem even when the coarse `stages_ms` buckets are missing.
   let fetch = timings.html_decode_ms.unwrap_or(0.0)
     + timings.dom_parse_ms.unwrap_or(0.0)
     + timings.dom_meta_viewport_ms.unwrap_or(0.0)
@@ -1919,7 +1994,8 @@ pub(crate) fn progress_stage_from_heartbeat(stage: StageHeartbeat) -> Option<Pro
       Some(ProgressStage::DomParse)
     }
     StageHeartbeat::CssInline | StageHeartbeat::CssParse => Some(ProgressStage::Css),
-    StageHeartbeat::Cascade | StageHeartbeat::BoxTree => Some(ProgressStage::Cascade),
+    StageHeartbeat::Cascade => Some(ProgressStage::Cascade),
+    StageHeartbeat::BoxTree => Some(ProgressStage::BoxTree),
     StageHeartbeat::Layout => Some(ProgressStage::Layout),
     StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize => Some(ProgressStage::Paint),
     StageHeartbeat::Done => None,
@@ -1927,13 +2003,7 @@ pub(crate) fn progress_stage_from_heartbeat(stage: StageHeartbeat) -> Option<Pro
 }
 
 fn hotspot_from_heartbeat(stage: StageHeartbeat) -> &'static str {
-  match stage {
-    // Box-tree work is still bucketed into `stages_ms.cascade`, but for hotspot attribution we want
-    // to surface it explicitly so triage can distinguish "real" cascade time from box generation /
-    // intrinsic sizing work.
-    StageHeartbeat::BoxTree => "box_tree",
-    other => other.hotspot(),
-  }
+  stage.hotspot()
 }
 
 pub(crate) fn hotspot_from_progress_stage(stage: ProgressStage) -> &'static str {
@@ -1941,6 +2011,7 @@ pub(crate) fn hotspot_from_progress_stage(stage: ProgressStage) -> &'static str 
     ProgressStage::DomParse => "fetch",
     ProgressStage::Css => "css",
     ProgressStage::Cascade => "cascade",
+    ProgressStage::BoxTree => "box_tree",
     ProgressStage::Layout => "layout",
     ProgressStage::Paint => "paint",
   }
@@ -2915,12 +2986,11 @@ impl StageHeartbeatWriter {
             fs::create_dir_all(parent)?;
           }
         }
-        let file = OpenOptions::new()
+        let _file = OpenOptions::new()
           .write(true)
           .create(true)
           .truncate(true)
           .open(timeline_path)?;
-        file.sync_all()?;
         Ok(())
       })();
     }
@@ -2979,7 +3049,6 @@ impl StageHeartbeatWriter {
         .truncate(true)
         .open(&tmp_path)?;
       file.write_all(contents.as_bytes())?;
-      file.sync_all()?;
       fs::rename(&tmp_path, path)?;
       Ok(())
     })();
@@ -2999,7 +3068,6 @@ impl StageHeartbeatWriter {
             .append(true)
             .open(timeline_path)?;
           timeline.write_all(line.as_bytes())?;
-          timeline.sync_data()?;
           Ok(())
         })();
       }
@@ -3124,6 +3192,7 @@ fn stage_buckets_from_timeline(stage_path: &Path, total_ms: u64) -> Option<Stage
       "fetch" => buckets.fetch += dur_ms as f64,
       "css" => buckets.css += dur_ms as f64,
       "cascade" => buckets.cascade += dur_ms as f64,
+      "box_tree" => buckets.box_tree += dur_ms as f64,
       "layout" => buckets.layout += dur_ms as f64,
       "paint" => buckets.paint += dur_ms as f64,
       _ => {}
@@ -3141,6 +3210,7 @@ fn stage_buckets_from_timeline(stage_path: &Path, total_ms: u64) -> Option<Stage
       "fetch" => buckets.fetch += dur_ms as f64,
       "css" => buckets.css += dur_ms as f64,
       "cascade" => buckets.cascade += dur_ms as f64,
+      "box_tree" => buckets.box_tree += dur_ms as f64,
       "layout" => buckets.layout += dur_ms as f64,
       "paint" => buckets.paint += dur_ms as f64,
       _ => {}
@@ -3278,6 +3348,7 @@ fn add_stage_buckets(into: &mut StageBuckets, from: &StageBuckets) {
   into.fetch += from.fetch;
   into.css += from.css;
   into.cascade += from.cascade;
+  into.box_tree += from.box_tree;
   into.layout += from.layout;
   into.paint += from.paint;
 }
@@ -3290,6 +3361,7 @@ fn divide_stage_buckets(total: &StageBuckets, divisor: f64) -> StageBuckets {
     fetch: total.fetch / divisor,
     css: total.css / divisor,
     cascade: total.cascade / divisor,
+    box_tree: total.box_tree / divisor,
     layout: total.layout / divisor,
     paint: total.paint / divisor,
   }
@@ -3300,6 +3372,7 @@ fn subtract_stage_buckets(current: &StageBuckets, baseline: &StageBuckets) -> St
     fetch: current.fetch - baseline.fetch,
     css: current.css - baseline.css,
     cascade: current.cascade - baseline.cascade,
+    box_tree: current.box_tree - baseline.box_tree,
     layout: current.layout - baseline.layout,
     paint: current.paint - baseline.paint,
   }
@@ -3318,8 +3391,8 @@ fn status_label(status: Option<ProgressStatus>) -> &'static str {
 
 fn format_stage_delta(delta: &StageBuckets) -> String {
   format!(
-    "stages_ms=fetch:{:+.2} css:{:+.2} cascade:{:+.2} layout:{:+.2} paint:{:+.2}",
-    delta.fetch, delta.css, delta.cascade, delta.layout, delta.paint
+    "stages_ms=fetch:{:+.2} css:{:+.2} cascade:{:+.2} box_tree:{:+.2} layout:{:+.2} paint:{:+.2}",
+    delta.fetch, delta.css, delta.cascade, delta.box_tree, delta.layout, delta.paint
   )
 }
 
@@ -3353,12 +3426,22 @@ fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
         format!("failed to read {}: {}", path.display(), e),
       )
     })?;
-    let progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
+    let mut progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
       io::Error::new(
         io::ErrorKind::InvalidData,
         format!("failed to parse {}: {}", path.display(), e),
       )
     })?;
+    migrate_stage_from_auto_notes(&mut progress);
+    if progress.status == ProgressStatus::Ok {
+      if let Some(stats) = progress
+        .diagnostics
+        .as_ref()
+        .and_then(|diag| diag.stats.as_ref())
+      {
+        migrate_split_legacy_box_tree_bucket(&mut progress.stages_ms, stats);
+      }
+    }
     let stem = path
       .file_stem()
       .map(|s| s.to_string_lossy().to_string())
@@ -3396,12 +3479,22 @@ fn read_progress_dir_allow_empty(dir: &Path) -> io::Result<Vec<LoadedProgress>> 
         format!("failed to read {}: {}", path.display(), e),
       )
     })?;
-    let progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
+    let mut progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
       io::Error::new(
         io::ErrorKind::InvalidData,
         format!("failed to parse {}: {}", path.display(), e),
       )
     })?;
+    migrate_stage_from_auto_notes(&mut progress);
+    if progress.status == ProgressStatus::Ok {
+      if let Some(stats) = progress
+        .diagnostics
+        .as_ref()
+        .and_then(|diag| diag.stats.as_ref())
+      {
+        migrate_split_legacy_box_tree_bucket(&mut progress.stages_ms, stats);
+      }
+    }
     let stem = path
       .file_stem()
       .map(|s| s.to_string_lossy().to_string())
@@ -3454,7 +3547,17 @@ fn read_progress_dir_tolerant(dir: &Path) -> ProgressLoadOutcome {
     };
 
     match serde_json::from_str::<PageProgress>(&contents) {
-      Ok(progress) => {
+      Ok(mut progress) => {
+        migrate_stage_from_auto_notes(&mut progress);
+        if progress.status == ProgressStatus::Ok {
+          if let Some(stats) = progress
+            .diagnostics
+            .as_ref()
+            .and_then(|diag| diag.stats.as_ref())
+          {
+            migrate_split_legacy_box_tree_bucket(&mut progress.stages_ms, stats);
+          }
+        }
         let stem = path
           .file_stem()
           .map(|s| s.to_string_lossy().to_string())
@@ -4765,16 +4868,22 @@ fn report(args: ReportArgs) -> io::Result<()> {
     let stage_mean = divide_stage_buckets(&stage_total, stage_count as f64);
     println!("Stage timings (ok pages with timings: {stage_count}):");
     println!(
-      "  totals_ms: fetch={:.2} css={:.2} cascade={:.2} layout={:.2} paint={:.2}",
+      "  totals_ms: fetch={:.2} css={:.2} cascade={:.2} box_tree={:.2} layout={:.2} paint={:.2}",
       stage_total.fetch,
       stage_total.css,
       stage_total.cascade,
+      stage_total.box_tree,
       stage_total.layout,
       stage_total.paint
     );
     println!(
-      "  means_ms:  fetch={:.2} css={:.2} cascade={:.2} layout={:.2} paint={:.2}",
-      stage_mean.fetch, stage_mean.css, stage_mean.cascade, stage_mean.layout, stage_mean.paint
+      "  means_ms:  fetch={:.2} css={:.2} cascade={:.2} box_tree={:.2} layout={:.2} paint={:.2}",
+      stage_mean.fetch,
+      stage_mean.css,
+      stage_mean.cascade,
+      stage_mean.box_tree,
+      stage_mean.layout,
+      stage_mean.paint
     );
     println!();
   }
@@ -4830,6 +4939,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
     stage_ranking!("fetch", fetch);
     stage_ranking!("css", css);
     stage_ranking!("cascade", cascade);
+    stage_ranking!("box_tree", box_tree);
     stage_ranking!("layout", layout);
     stage_ranking!("paint", paint);
 
@@ -6384,8 +6494,8 @@ fn progress_is_cascade_timeout(progress: &PageProgress) -> bool {
     return false;
   }
 
-  // Prefer the inferred hotspot when it is set, so `box_tree` timeouts (which still collapse into
-  // the `cascade` stage bucket) are not treated as cascade timeouts for cascade-profiling reruns.
+  // Prefer the inferred hotspot when it is set, so `box_tree` timeouts are not treated as cascade
+  // timeouts for cascade-profiling reruns.
   if progress.hotspot.eq_ignore_ascii_case("cascade") {
     return true;
   }
@@ -7830,6 +7940,7 @@ mod tests {
       fetch: 5.0,
       css: 1.0,
       cascade: 2.0,
+      box_tree: 0.5,
       layout: 3.0,
       paint: 4.0,
     };
@@ -7855,6 +7966,49 @@ mod tests {
       ..StageBuckets::default()
     };
     assert_eq!(infer_hotspot(Some(&stats), &buckets), "box_tree");
+  }
+
+  #[test]
+  fn timeline_buckets_attribute_box_tree_separately() {
+    let dir = tempdir().unwrap();
+    let stage_path = dir.path().join("page.stage");
+    let timeline_path = stage_timeline_path(&stage_path);
+    fs::write(
+      &timeline_path,
+      "0 dom_parse\n10 cascade\n30 box_tree\n80 layout\n100 paint_build\n",
+    )
+    .unwrap();
+
+    let buckets = stage_buckets_from_timeline(&stage_path, 120).expect("timeline buckets");
+    assert_eq!(buckets.fetch, 10.0);
+    assert_eq!(buckets.css, 0.0);
+    assert_eq!(buckets.cascade, 20.0);
+    assert_eq!(buckets.box_tree, 50.0);
+    assert_eq!(buckets.layout, 20.0);
+    assert_eq!(buckets.paint, 20.0);
+  }
+
+  #[test]
+  fn migrate_splits_legacy_cascade_bucket_into_box_tree() {
+    let stats = RenderStats {
+      timings: RenderStageTimings {
+        cascade_ms: Some(25.0),
+        box_tree_ms: Some(75.0),
+        ..RenderStageTimings::default()
+      },
+      ..RenderStats::default()
+    };
+    let mut buckets = StageBuckets {
+      fetch: 1.0,
+      css: 2.0,
+      cascade: 100.0,
+      ..StageBuckets::default()
+    };
+    migrate_split_legacy_box_tree_bucket(&mut buckets, &stats);
+    assert!((buckets.cascade - 25.0).abs() < 1e-9);
+    assert!((buckets.box_tree - 75.0).abs() < 1e-9);
+    assert_eq!(buckets.fetch, 1.0);
+    assert_eq!(buckets.css, 2.0);
   }
 
   #[test]
@@ -8605,7 +8759,7 @@ mod tests {
     assert_eq!(StageHeartbeat::CssInline.hotspot(), "css");
     assert_eq!(StageHeartbeat::CssParse.hotspot(), "css");
     assert_eq!(StageHeartbeat::Cascade.hotspot(), "cascade");
-    assert_eq!(StageHeartbeat::BoxTree.hotspot(), "cascade");
+    assert_eq!(StageHeartbeat::BoxTree.hotspot(), "box_tree");
     assert_eq!(StageHeartbeat::Layout.hotspot(), "layout");
     assert_eq!(StageHeartbeat::PaintBuild.hotspot(), "paint");
     assert_eq!(StageHeartbeat::PaintRasterize.hotspot(), "paint");
@@ -8631,7 +8785,7 @@ mod tests {
     );
     assert_eq!(
       progress_stage_from_heartbeat(StageHeartbeat::BoxTree),
-      Some(ProgressStage::Cascade)
+      Some(ProgressStage::BoxTree)
     );
   }
 
@@ -8647,7 +8801,7 @@ mod tests {
     );
 
     assert_eq!(progress.status, ProgressStatus::Timeout);
-    assert_eq!(progress.timeout_stage, Some(ProgressStage::Cascade));
+    assert_eq!(progress.timeout_stage, Some(ProgressStage::BoxTree));
     assert_eq!(progress.hotspot, "box_tree");
     assert!(
       progress.auto_notes.contains("stage: box_tree"),

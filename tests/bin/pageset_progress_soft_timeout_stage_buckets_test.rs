@@ -66,9 +66,10 @@ fn pageset_progress_soft_timeout_populates_stage_buckets() {
   let fetch = stages["fetch"].as_f64().unwrap_or(0.0);
   let css = stages["css"].as_f64().unwrap_or(0.0);
   let cascade = stages["cascade"].as_f64().unwrap_or(0.0);
+  let box_tree = stages["box_tree"].as_f64().unwrap_or(0.0);
   let layout = stages["layout"].as_f64().unwrap_or(0.0);
   let paint = stages["paint"].as_f64().unwrap_or(0.0);
-  let sum = fetch + css + cascade + layout + paint;
+  let sum = fetch + css + cascade + box_tree + layout + paint;
 
   assert!(sum > 0.0, "expected non-zero stages_ms, got: {stages:?}");
   assert!(
@@ -77,7 +78,7 @@ fn pageset_progress_soft_timeout_populates_stage_buckets() {
     progress["total_ms"]
   );
   assert!(
-    fetch >= css && fetch >= cascade && fetch >= layout && fetch >= paint,
+    fetch >= css && fetch >= cascade && fetch >= box_tree && fetch >= layout && fetch >= paint,
     "expected fetch bucket to dominate, got: {stages:?}"
   );
 }

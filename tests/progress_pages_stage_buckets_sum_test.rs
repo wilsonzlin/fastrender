@@ -85,6 +85,32 @@ fn progress_pages_stage_buckets_sum_to_total_ms() {
       }
       sum += ms;
     }
+    // `box_tree` was introduced later; allow it to be missing for legacy progress artifacts so we
+    // don't require a repo-wide migrate in every PR.
+    if let Some(ms) = stages.get("box_tree") {
+      let Some(ms) = ms.as_f64() else {
+        offenders.push(format!(
+          "{}: invalid stages_ms.box_tree {:?}",
+          display_path(&repo_root, &path),
+          ms
+        ));
+        continue;
+      };
+      if !ms.is_finite() || ms < 0.0 {
+        offenders.push(format!(
+          "{}: invalid stages_ms.box_tree {ms:?}",
+          display_path(&repo_root, &path)
+        ));
+        continue;
+      }
+      if ms > total_ms + 1e-6 {
+        offenders.push(format!(
+          "{}: stages_ms.box_tree={ms:.3} exceeds total_ms={total_ms:.3}",
+          display_path(&repo_root, &path)
+        ));
+      }
+      sum += ms;
+    }
 
     if sum <= 0.0 {
       offenders.push(format!(
@@ -116,4 +142,3 @@ fn display_path(repo_root: &Path, path: &Path) -> String {
     .display()
     .to_string()
 }
-

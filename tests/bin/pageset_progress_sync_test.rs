@@ -136,6 +136,7 @@ fn pageset_progress_sync_marks_missing_cache_as_error() {
       "fetch": 0.0,
       "css": 0.0,
       "cascade": 0.0,
+      "box_tree": 0.0,
       "layout": 0.0,
       "paint": 0.0
     })),
@@ -253,6 +254,7 @@ fn pageset_progress_sync_preserves_manual_fields() {
       "fetch": 0.0,
       "css": 0.0,
       "cascade": 0.0,
+      "box_tree": 0.0,
       "layout": 0.0,
       "paint": 0.0
     })),

@@ -137,23 +137,25 @@ fn pageset_progress_migrate_recomputes_stage_buckets_from_stats() {
   let fetch = stages["fetch"].as_f64().expect("fetch stage");
   let css = stages["css"].as_f64().expect("css stage");
   let cascade = stages["cascade"].as_f64().expect("cascade stage");
+  let box_tree = stages["box_tree"].as_f64().expect("box_tree stage");
   let layout = stages["layout"].as_f64().expect("layout stage");
   let paint = stages["paint"].as_f64().expect("paint stage");
-  let sum = fetch + css + cascade + layout + paint;
+  let sum = fetch + css + cascade + box_tree + layout + paint;
   assert!(
     (sum - 123.0).abs() < 1.0,
     "expected migrated stages_ms sum ({sum}) to match total_ms (123.0)"
   );
   // `text_*` subsystem timings should not affect wall-clock stage buckets (only the stage wall
   // timers are used, then rescaled to total_ms for share calculations).
-  let raw = (4.5, 7.0, 11.0, 7.0, 43.0);
-  let raw_sum = raw.0 + raw.1 + raw.2 + raw.3 + raw.4;
+  let raw = [4.5, 7.0, 5.0, 6.0, 7.0, 43.0];
+  let raw_sum: f64 = raw.iter().sum();
   let scale = 123.0 / raw_sum;
-  assert!((fetch - raw.0 * scale).abs() < 1e-6);
-  assert!((css - raw.1 * scale).abs() < 1e-6);
-  assert!((cascade - raw.2 * scale).abs() < 1e-6);
-  assert!((layout - raw.3 * scale).abs() < 1e-6);
-  assert!((paint - raw.4 * scale).abs() < 1e-6);
+  assert!((fetch - raw[0] * scale).abs() < 1e-6);
+  assert!((css - raw[1] * scale).abs() < 1e-6);
+  assert!((cascade - raw[2] * scale).abs() < 1e-6);
+  assert!((box_tree - raw[3] * scale).abs() < 1e-6);
+  assert!((layout - raw[4] * scale).abs() < 1e-6);
+  assert!((paint - raw[5] * scale).abs() < 1e-6);
   assert_eq!(
     migrated.get("hotspot"),
     Some(&Value::String("paint".into())),
@@ -221,6 +223,7 @@ fn pageset_progress_migrate_preserves_existing_stage_buckets_when_present() {
   assert!((stages["fetch"].as_f64().unwrap() - 60.0).abs() < 1e-6);
   assert!((stages["css"].as_f64().unwrap() - 10.0).abs() < 1e-6);
   assert!((stages["cascade"].as_f64().unwrap() - 30.0).abs() < 1e-6);
+  assert!((stages["box_tree"].as_f64().unwrap() - 0.0).abs() < 1e-6);
   assert!((stages["layout"].as_f64().unwrap() - 0.0).abs() < 1e-6);
   assert!((stages["paint"].as_f64().unwrap() - 0.0).abs() < 1e-6);
   assert_eq!(

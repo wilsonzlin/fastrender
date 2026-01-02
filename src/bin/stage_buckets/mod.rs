@@ -25,6 +25,8 @@ pub(crate) struct StageBuckets {
   #[serde(default)]
   pub(crate) cascade: f64,
   #[serde(default)]
+  pub(crate) box_tree: f64,
+  #[serde(default)]
   pub(crate) layout: f64,
   #[serde(default)]
   pub(crate) paint: f64,
@@ -32,7 +34,7 @@ pub(crate) struct StageBuckets {
 
 impl StageBuckets {
   pub(crate) fn sum(&self) -> f64 {
-    self.fetch + self.css + self.cascade + self.layout + self.paint
+    self.fetch + self.css + self.cascade + self.box_tree + self.layout + self.paint
   }
 
   pub(crate) fn rescale_to_total(&mut self, total_ms: f64) {
@@ -56,15 +58,17 @@ impl StageBuckets {
     self.fetch *= scale;
     self.css *= scale;
     self.cascade *= scale;
+    self.box_tree *= scale;
     self.layout *= scale;
     self.paint *= scale;
   }
 
-  pub(crate) fn entries(&self) -> [(&'static str, f64); 5] {
+  pub(crate) fn entries(&self) -> [(&'static str, f64); 6] {
     [
       ("fetch", self.fetch),
       ("css", self.css),
       ("cascade", self.cascade),
+      ("box_tree", self.box_tree),
       ("layout", self.layout),
       ("paint", self.paint),
     ]
@@ -74,6 +78,7 @@ impl StageBuckets {
     self.fetch += other.fetch;
     self.css += other.css;
     self.cascade += other.cascade;
+    self.box_tree += other.box_tree;
     self.layout += other.layout;
     self.paint += other.paint;
   }
@@ -83,15 +88,14 @@ impl StageBuckets {
       fetch: round_ms(self.fetch),
       css: round_ms(self.css),
       cascade: round_ms(self.cascade),
+      box_tree: round_ms(self.box_tree),
       layout: round_ms(self.layout),
       paint: round_ms(self.paint),
     }
   }
 }
 
-pub(crate) fn wall_clock_stage_buckets_from_timings(
-  timings: &RenderStageTimings,
-) -> StageBuckets {
+pub(crate) fn wall_clock_stage_buckets_from_timings(timings: &RenderStageTimings) -> StageBuckets {
   // Bucket composition MUST remain consistent between:
   // - `pageset_progress` (`progress/pages/*.json` -> `stages_ms`)
   // - `perf_smoke` (`target/perf_smoke.json` -> `stage_ms`)
@@ -108,7 +112,8 @@ pub(crate) fn wall_clock_stage_buckets_from_timings(
   //
   // `pageset_progress` expects these to be summed.
   let css = timings.css_inlining_ms.unwrap_or(0.0) + timings.css_parse_ms.unwrap_or(0.0);
-  let cascade = timings.cascade_ms.unwrap_or(0.0) + timings.box_tree_ms.unwrap_or(0.0);
+  let cascade = timings.cascade_ms.unwrap_or(0.0);
+  let box_tree = timings.box_tree_ms.unwrap_or(0.0);
   let layout = timings.layout_ms.unwrap_or(0.0);
   let paint = timings.paint_build_ms.unwrap_or(0.0)
     + timings.paint_optimize_ms.unwrap_or(0.0)
@@ -118,6 +123,7 @@ pub(crate) fn wall_clock_stage_buckets_from_timings(
     fetch,
     css,
     cascade,
+    box_tree,
     layout,
     paint,
   }
@@ -129,7 +135,11 @@ pub(crate) fn wall_clock_stage_buckets_from_stats(stats: &RenderStats) -> StageB
 
 fn round_ms(value: f64) -> f64 {
   let rounded = (value * 1000.0).round() / 1000.0;
-  if rounded == 0.0 { 0.0 } else { rounded }
+  if rounded == 0.0 {
+    0.0
+  } else {
+    rounded
+  }
 }
 
 #[cfg(test)]
@@ -162,7 +172,8 @@ mod tests {
     let buckets = wall_clock_stage_buckets_from_timings(&timings);
     assert_eq!(buckets.fetch, 4.5);
     assert_eq!(buckets.css, 7.0);
-    assert_eq!(buckets.cascade, 11.0);
+    assert_eq!(buckets.cascade, 5.0);
+    assert_eq!(buckets.box_tree, 6.0);
     assert_eq!(buckets.layout, 7.0);
     assert_eq!(buckets.paint, 43.0);
   }
