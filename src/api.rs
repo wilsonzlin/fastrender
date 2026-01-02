@@ -9533,9 +9533,14 @@ impl FastRender {
           }
         }
       }
-      ReplacedType::Embed { src }
-      | ReplacedType::Object { data: src }
-      | ReplacedType::Iframe { src, .. } => {
+      ReplacedType::Iframe { .. } => {
+        if profile_enabled {
+          REPLACED_INTRINSIC_PROFILE.with(|state| {
+            state.borrow_mut().embeds += 1;
+          });
+        }
+      }
+      ReplacedType::Embed { src } | ReplacedType::Object { data: src } => {
         if profile_enabled {
           REPLACED_INTRINSIC_PROFILE.with(|state| {
             state.borrow_mut().embeds += 1;
@@ -13798,6 +13803,43 @@ mod tests {
       Some(expected.width / expected.height),
       "alt text should set aspect ratio"
     );
+  }
+
+  #[test]
+  fn resolve_intrinsic_sizes_does_not_probe_iframe_src_as_image() {
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("iframe intrinsic sizing should not fetch resources");
+      }
+    }
+
+    let renderer = FastRender::builder()
+      .fetcher(Arc::new(PanicFetcher) as Arc<dyn ResourceFetcher>)
+      .build()
+      .expect("init renderer");
+    let style = Arc::new(ComputedStyle::default());
+
+    let mut node = BoxNode::new_replaced(
+      style,
+      ReplacedType::Iframe {
+        src: "https://example.com/embed.html".to_string(),
+        srcdoc: None,
+      },
+      Some(Size::new(120.0, 0.0)),
+      None,
+    );
+
+    renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
+
+    let replaced = match &node.box_type {
+      BoxType::Replaced(replaced) => replaced,
+      other => panic!("expected replaced box, got {other:?}"),
+    };
+    assert_eq!(replaced.intrinsic_size, Some(Size::new(120.0, 0.0)));
+    assert_eq!(replaced.aspect_ratio, None);
   }
 
   #[test]

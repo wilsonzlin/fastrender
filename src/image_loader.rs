@@ -2187,6 +2187,9 @@ impl ImageCache {
   /// without fully decoding the image.
   pub fn probe(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
     let trimmed = url.trim();
+    if trimmed.is_empty() {
+      return Ok(about_url_placeholder_metadata());
+    }
     if let Some(svg) = decode_inline_svg_url(trimmed) {
       let cache_key = inline_svg_cache_key(svg.trim_start());
       record_image_cache_request();
@@ -3171,6 +3174,10 @@ impl ImageCache {
     let bytes = &resource.bytes;
     let content_type = resource.content_type.as_deref();
     check_active(RenderStage::Paint).map_err(Error::Render)?;
+    if bytes.is_empty() {
+      let img = RgbaImage::new(1, 1);
+      return Ok((DynamicImage::ImageRgba8(img), None, None, false, None, false, None));
+    }
 
     // Check if this is SVG
     let mime_is_svg = content_type
@@ -3204,6 +3211,9 @@ impl ImageCache {
   fn probe_resource(&self, resource: &FetchedResource, url: &str) -> Result<CachedImageMetadata> {
     let bytes = &resource.bytes;
     let content_type = resource.content_type.as_deref();
+    if bytes.is_empty() {
+      return Ok((*about_url_placeholder_metadata()).clone());
+    }
 
     // SVG: parse intrinsic metadata without rasterizing.
     let mime_is_svg = content_type
@@ -4219,6 +4229,36 @@ mod tests {
     let image = cache
       .load("about:blank")
       .expect("about:blank placeholder loads");
+    assert!(!image.is_vector);
+    assert_eq!(image.dimensions(), (1, 1));
+
+    let rgba = image.image.to_rgba8();
+    assert_eq!(rgba.dimensions(), (1, 1));
+    assert_eq!(rgba.get_pixel(0, 0).0, [0, 0, 0, 0]);
+  }
+
+  #[test]
+  fn image_cache_load_empty_url_returns_transparent_placeholder() {
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("fetch should not be called for empty URLs");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        _url: &str,
+        _max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        panic!("partial fetch should not be called for empty URLs");
+      }
+    }
+
+    let cache = ImageCache::with_fetcher(Arc::new(PanicFetcher));
+    let image = cache.load(" \t\r\n").expect("empty url placeholder loads");
     assert!(!image.is_vector);
     assert_eq!(image.dimensions(), (1, 1));
 
