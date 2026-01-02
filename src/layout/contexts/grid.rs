@@ -130,6 +130,12 @@ enum Axis {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum MeasureAvailKey {
   Definite(u32),
+  /// Represents "effectively indefinite" available space.
+  ///
+  /// `constraints_from_taffy` treats very small definite sizes (`<= 1px`) as
+  /// `AvailableSpace::Indefinite` to avoid pathological 0px probes. Encode that
+  /// normalization in the cache key so near-zero definites coalesce.
+  Indefinite,
   MinContent,
   MaxContent,
 }
@@ -219,26 +225,53 @@ impl MeasureKey {
     Self::quantize(val).to_bits()
   }
 
+  fn clamp_width_for_constraints(val: f32, viewport: Size) -> f32 {
+    // Match `constraints_from_taffy`, which clamps all definite inline sizes to the viewport.
+    // Any wider definite probe will produce the same downstream layout result.
+    val.min(viewport.width)
+  }
+
   fn new(
     node_ptr: *const BoxNode,
     known_dimensions: taffy::geometry::Size<Option<f32>>,
     available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
+    viewport: Size,
   ) -> Self {
     fn avail_key(space: taffy::style::AvailableSpace) -> MeasureAvailKey {
       match space {
         taffy::style::AvailableSpace::Definite(v) => {
-          MeasureAvailKey::Definite(MeasureKey::quantize_to_bits(v))
+          if v <= 1.0 {
+            MeasureAvailKey::Indefinite
+          } else {
+            MeasureAvailKey::Definite(MeasureKey::quantize_to_bits(v))
+          }
         }
         taffy::style::AvailableSpace::MinContent => MeasureAvailKey::MinContent,
         taffy::style::AvailableSpace::MaxContent => MeasureAvailKey::MaxContent,
       }
     }
 
+    fn avail_width_key(space: taffy::style::AvailableSpace, viewport: Size) -> MeasureAvailKey {
+      match space {
+        taffy::style::AvailableSpace::Definite(v) => {
+          if v <= 1.0 {
+            MeasureAvailKey::Indefinite
+          } else {
+            let clamped = MeasureKey::clamp_width_for_constraints(v, viewport);
+            MeasureAvailKey::Definite(MeasureKey::quantize_to_bits(clamped))
+          }
+        }
+        other => avail_key(other),
+      }
+    }
+
     Self {
       node_ptr: node_ptr as usize,
-      known_width: known_dimensions.width.map(Self::quantize_to_bits),
+      known_width: known_dimensions
+        .width
+        .map(|w| Self::quantize_to_bits(Self::clamp_width_for_constraints(w, viewport))),
       known_height: known_dimensions.height.map(Self::quantize_to_bits),
-      available_width: avail_key(available_space.width),
+      available_width: avail_width_key(available_space.width, viewport),
       available_height: avail_key(available_space.height),
     }
   }
@@ -2672,7 +2705,7 @@ impl GridFormattingContext {
             available_space.width = taffy::style::AvailableSpace::MaxContent;
           }
 
-          let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+          let key = MeasureKey::new(node_ptr, known_dimensions, available_space, viewport_size);
           if let Some(size) = cache.get(&key) {
             return *size;
           }
@@ -2795,7 +2828,7 @@ impl GridFormattingContext {
       })
     };
 
-    let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+    let key = MeasureKey::new(node_ptr, known_dimensions, available_space, self.viewport_size);
     if let Some(size) = measure_cache.get(&key) {
       return *size;
     }
@@ -4343,6 +4376,7 @@ mod tests {
 
     let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
     let ptr = &node as *const _;
+    let viewport = Size::new(800.0, 600.0);
     let known_a = taffy::geometry::Size {
       width: Some(300.3),
       height: Some(150.7),
@@ -4360,8 +4394,8 @@ mod tests {
       height: AvailableSpace::Definite(600.2),
     };
 
-    let key_a = MeasureKey::new(ptr, known_a, avail_a);
-    let key_b = MeasureKey::new(ptr, known_b, avail_b);
+    let key_a = MeasureKey::new(ptr, known_a, avail_a, viewport);
+    let key_b = MeasureKey::new(ptr, known_b, avail_b, viewport);
     assert_eq!(
       key_a, key_b,
       "near-identical definite sizes should quantize to the same key"
@@ -4374,6 +4408,7 @@ mod tests {
         width: AvailableSpace::MinContent,
         height: avail_a.height,
       },
+      viewport,
     );
     let max_key = MeasureKey::new(
       ptr,
@@ -4382,8 +4417,92 @@ mod tests {
         width: AvailableSpace::MaxContent,
         height: avail_a.height,
       },
+      viewport,
     );
     assert_ne!(min_key.available_width, max_key.available_width);
+  }
+
+  #[test]
+  fn measure_key_clamps_definite_widths_to_viewport() {
+    use taffy::style::AvailableSpace;
+
+    let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let ptr = &node as *const _;
+    let viewport = Size::new(800.0, 600.0);
+
+    let known_a = taffy::geometry::Size {
+      width: Some(2000.0),
+      height: Some(100.0),
+    };
+    let known_b = taffy::geometry::Size {
+      width: Some(3000.0),
+      height: Some(100.0),
+    };
+    let avail_a = taffy::geometry::Size {
+      width: AvailableSpace::Definite(2000.0),
+      height: AvailableSpace::Definite(400.0),
+    };
+    let avail_b = taffy::geometry::Size {
+      width: AvailableSpace::Definite(3000.0),
+      height: AvailableSpace::Definite(400.0),
+    };
+
+    let key_a = MeasureKey::new(ptr, known_a, avail_a, viewport);
+    let key_b = MeasureKey::new(ptr, known_b, avail_b, viewport);
+    assert_eq!(
+      key_a, key_b,
+      "definite widths larger than the viewport should clamp to the same cache key"
+    );
+  }
+
+  #[test]
+  fn measure_key_treats_tiny_definite_available_space_as_indefinite() {
+    use taffy::style::AvailableSpace;
+
+    let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let ptr = &node as *const _;
+    let viewport = Size::new(800.0, 600.0);
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+
+    let zero_key = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(0.0),
+        height: AvailableSpace::Definite(0.0),
+      },
+      viewport,
+    );
+    let one_key = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(1.0),
+        height: AvailableSpace::Definite(1.0),
+      },
+      viewport,
+    );
+    assert_eq!(zero_key.available_width, MeasureAvailKey::Indefinite);
+    assert_eq!(zero_key.available_height, MeasureAvailKey::Indefinite);
+    assert_eq!(
+      zero_key, one_key,
+      "tiny definite available sizes should coalesce to the same key"
+    );
+
+    let two_key = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(2.0),
+        height: AvailableSpace::Definite(2.0),
+      },
+      viewport,
+    );
+    assert_ne!(zero_key.available_width, two_key.available_width);
+    assert_ne!(zero_key.available_height, two_key.available_height);
   }
 
   #[test]
@@ -4435,6 +4554,7 @@ mod tests {
         width: AvailableSpace::Definite(20.0),
         height: AvailableSpace::Definite(40.0),
       },
+      gc.viewport_size,
     );
     assert!(
       !node_keys.contains(&first_key),
@@ -4830,7 +4950,7 @@ mod tests {
               };
               let box_node = unsafe { &*node_ptr };
 
-              let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+              let key = MeasureKey::new(node_ptr, known_dimensions, available_space, viewport_size);
               if let Some(size) = cache.get(&key) {
                 return *size;
               }
