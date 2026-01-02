@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generator: Adobe Illustrator 18.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1"
+	 id="svg2" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:cc="http://creativecommons.org/ns#" xmlns:svg="http://www.w3.org/2000/svg" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:dc="http://purl.org/dc/elements/1.1/" sodipodi:docname="black-gentoo-thing.svg" inkscape:version="0.48.1 r9760"
+	 xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 399.285 49.431"
+	 enable-background="new 0 0 399.285 49.431" xml:space="preserve">
+<title  id="title3047">Black Gentoo Thing v1.0.1</title>
+<sodipodi:namedview  showgrid="false" fit-margin-left="0" bordercolor="#666666" borderopacity="1.0" pagecolor="#ffffff" inkscape:cy="41.79217" inkscape:zoom="1.979899" fit-margin-top="0" inkscape:cx="124.38271" id="base" inkscape:window-maximized="1" inkscape:window-y="0" inkscape:current-layer="layer1" inkscape:window-height="968" fit-margin-right="0" inkscape:window-x="0" inkscape:pageshadow="2" inkscape:document-units="px" inkscape:window-width="1280" fit-margin-bottom="0" inkscape:pageopacity="0">
+	</sodipodi:namedview>
+<g id="layer1" transform="translate(-102.5,-656.36602)" inkscape:label="Layer 1" inkscape:groupmode="layer" opacity="0.62">
+	<g id="g3020" transform="translate(5.3571623,3.4349199)" inkscape:label="black gentoo thing">
+		
+			<path id="path5447" inkscape:label="outer ring" sodipodi:type="arc" sodipodi:rx="199.64287" sodipodi:ry="30.418419" sodipodi:cx="306.78571" sodipodi:cy="666.64789" d="
+			M496.73,697.259c0.729,16.784-87.979,34.27-198.134,39.055c-110.156,4.785-200.046-4.942-200.775-21.727
+			c-0.729-16.783,87.979-34.268,198.134-39.054C406.112,670.748,496.001,680.476,496.73,697.259z"/>
+		
+			<path id="path5449" inkscape:label="inner ring bottom black" sodipodi:type="arc" sodipodi:rx="168.92859" sodipodi:ry="22.142857" sodipodi:cx="306.78571" sodipodi:cy="666.64789" d="
+			M474.811,694.637c0.53,12.217-74.601,25.403-167.81,29.452c-93.208,4.049-169.199-2.573-169.73-14.79
+			c-0.531-12.218,74.6-25.405,167.808-29.454C398.289,675.796,474.28,682.419,474.811,694.637z"/>
+		
+			<linearGradient id="path5471_1_" gradientUnits="userSpaceOnUse" x1="357.6529" y1="-101.9474" x2="350.8676" y2="-179.7999" gradientTransform="matrix(0.9991 -0.0434 -0.0434 -0.9991 -54.1783 580.3665)">
+			<stop  offset="0" style="stop-color:#FFFFFF;stop-opacity:0.6906"/>
+			<stop  offset="0.2478" style="stop-color:#FFFFFF;stop-opacity:0.4029"/>
+			<stop  offset="0.4527" style="stop-color:#FFFFFF;stop-opacity:0.223"/>
+			<stop  offset="0.6466" style="stop-color:#FFFFFF;stop-opacity:0.0791"/>
+			<stop  offset="1" style="stop-color:#FFFFFF;stop-opacity:0"/>
+		</linearGradient>
+		
+			<path id="path5471" inkscape:label="inner ring top gradient" sodipodi:type="arc" sodipodi:rx="168.92859" sodipodi:ry="22.142857" sodipodi:cx="306.78571" sodipodi:cy="666.64789" fill="url(#path5471_1_)" d="
+			M474.811,694.637c0.53,12.217-74.601,25.403-167.81,29.452c-93.208,4.049-169.199-2.573-169.73-14.79
+			c-0.531-12.218,74.6-25.405,167.808-29.454C398.289,675.796,474.28,682.419,474.811,694.637z"/>
+		
+			<path id="path5467" inkscape:label="shock right" sodipodi:nodetypes="cccc" inkscape:connector-curvature="0" fill-opacity="0.1542" d="
+			M310.876,677.505c1.773-4.685,1.346-8.152,2.022-13.712c1.964-5.492,5.139-9.769,9.13-8.984c3.563,4.253-3.166,9.862-3.647,10.528
+			"/>
+		<path id="path5453" inkscape:label="body" sodipodi:nodetypes="ccccc" inkscape:connector-curvature="0" d="M360.244,731.786
+			c-11.572-18.478-12.166-45.743-30.682-59.798c-11.649-8.953-19.682,15.995-29.032-0.711
+			c-12.912-13.563-25.584,7.432-29.515,18.666c-5.161,13.809-7.883,31.299-8.366,45.905"/>
+		
+			<path id="path5457" inkscape:label="eye left white" sodipodi:type="arc" sodipodi:rx="15.209209" sodipodi:ry="15.209209" sodipodi:cx="277.14285" sodipodi:cy="803.07648" fill="#FFFFFF" d="
+			M311.103,699.898c0.365,8.393-6.142,15.491-14.534,15.855c-8.392,0.364-15.49-6.144-15.854-14.535
+			c-0.365-8.392,6.143-15.49,14.534-15.854C303.641,684.999,310.739,691.507,311.103,699.898z"/>
+		
+			<path id="path5469" inkscape:label="shock left" sodipodi:nodetypes="ccccc" inkscape:connector-curvature="0" fill-opacity="0.1542" d="
+			M301.022,673.53c-3.412-5.068-4.82-7.811-7.798-11.483c-1.578-3.775-5.436-9.269,0.189-8.972c5.144,1.872,5.56,6.299,6.673,10.432
+			C300.253,665.799,300.997,670.209,301.022,673.53L301.022,673.53z"/>
+		
+			<path id="path5463" inkscape:label="eye left black" sodipodi:type="arc" sodipodi:rx="4.5255618" sodipodi:ry="4.5255618" sodipodi:cx="303.75" sodipodi:cy="763.61218" d="
+			M302.581,690.142c0.108,2.498-1.827,4.61-4.325,4.718c-2.497,0.108-4.609-1.828-4.717-4.325c-0.108-2.497,1.828-4.609,4.325-4.718
+			C300.36,685.709,302.472,687.645,302.581,690.142z"/>
+		
+			<path id="path5457-6" inkscape:label="eye left white" sodipodi:type="arc" sodipodi:rx="15.209209" sodipodi:ry="15.209209" sodipodi:cx="277.14285" sodipodi:cy="803.07648" fill="#FFFFFF" d="
+			M335.493,700.33c0.364,8.393-6.142,15.49-14.534,15.855c-8.393,0.364-15.491-6.143-15.857-14.535
+			c-0.364-8.391,6.144-15.49,14.536-15.854C328.03,685.431,335.128,691.939,335.493,700.33z"/>
+		
+			<path id="path5463-4" inkscape:label="eye left black" sodipodi:type="arc" sodipodi:rx="4.5255618" sodipodi:ry="4.5255618" sodipodi:cx="303.75" sodipodi:cy="763.61218" d="
+			M322.617,691.238c0.108,2.497-1.828,4.609-4.325,4.718c-2.496,0.108-4.609-1.828-4.718-4.325
+			c-0.108-2.497,1.828-4.609,4.325-4.717C320.395,686.805,322.508,688.741,322.617,691.238z"/>
+	</g>
+</g>
+</svg>
