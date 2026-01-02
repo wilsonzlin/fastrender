@@ -67,7 +67,31 @@ fn sniff_html_meta_charset(bytes: &[u8]) -> Option<&'static Encoding> {
           break;
         }
       }
-      if lower[i..].starts_with(b"<meta") && is_meta_tag_boundary(lower.get(i + 5).copied()) {
+      if lower[i..].starts_with(b"<script") && is_tag_name_boundary(lower.get(i + 7).copied()) {
+        if let Some(tag_end) = find_tag_end(&lower, i + 7) {
+          let after_tag = tag_end + 1;
+          if let Some(next) = skip_rawtext_element(&lower, after_tag, b"</script") {
+            i = next;
+            continue;
+          }
+          break;
+        } else {
+          break;
+        }
+      }
+      if lower[i..].starts_with(b"<style") && is_tag_name_boundary(lower.get(i + 6).copied()) {
+        if let Some(tag_end) = find_tag_end(&lower, i + 6) {
+          let after_tag = tag_end + 1;
+          if let Some(next) = skip_rawtext_element(&lower, after_tag, b"</style") {
+            i = next;
+            continue;
+          }
+          break;
+        } else {
+          break;
+        }
+      }
+      if lower[i..].starts_with(b"<meta") && is_tag_name_boundary(lower.get(i + 5).copied()) {
         if let Some(tag_end) = find_tag_end(&lower, i + 5) {
           let attrs = &lower[i + 5..tag_end];
           if let Some(enc) = parse_meta_charset(attrs) {
@@ -85,12 +109,25 @@ fn sniff_html_meta_charset(bytes: &[u8]) -> Option<&'static Encoding> {
   None
 }
 
-fn is_meta_tag_boundary(b: Option<u8>) -> bool {
+fn is_tag_name_boundary(b: Option<u8>) -> bool {
   matches!(b, None | Some(b'>') | Some(b'/')) || b.is_some_and(|b| b.is_ascii_whitespace())
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
   haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn skip_rawtext_element(lower: &[u8], mut idx: usize, end_tag: &[u8]) -> Option<usize> {
+  while idx < lower.len() {
+    let pos = find_bytes(&lower[idx..], end_tag)?;
+    let candidate = idx + pos;
+    if is_tag_name_boundary(lower.get(candidate + end_tag.len()).copied()) {
+      let end = find_tag_end(lower, candidate + end_tag.len())?;
+      return Some(end + 1);
+    }
+    idx = candidate + 1;
+  }
+  None
 }
 
 fn find_tag_end(bytes: &[u8], mut idx: usize) -> Option<usize> {
@@ -418,6 +455,34 @@ mod tests {
     assert!(
       !decoded.contains('\u{FFFD}'),
       "decoded text should not contain replacement characters when decoding utf-8 content: {}",
+      decoded
+    );
+  }
+
+  #[test]
+  fn decode_html_ignores_meta_inside_script_data() {
+    let encoded = encoding_rs::WINDOWS_1252.encode(
+      "<html><head><script>var x = '<meta charset=\"shift_jis\">';</script></head><body>£</body></html>",
+    ).0;
+    let decoded = decode_html_bytes(&encoded, None);
+    assert!(
+      decoded.contains('£'),
+      "decoded text should use default Windows-1252 and ignore meta strings inside <script>: {}",
+      decoded
+    );
+  }
+
+  #[test]
+  fn decode_html_ignores_meta_inside_style_data() {
+    let encoded = encoding_rs::WINDOWS_1252
+      .encode(
+        "<html><head><style>/* <meta charset=\"shift_jis\"> */</style></head><body>£</body></html>",
+      )
+      .0;
+    let decoded = decode_html_bytes(&encoded, None);
+    assert!(
+      decoded.contains('£'),
+      "decoded text should use default Windows-1252 and ignore meta strings inside <style>: {}",
       decoded
     );
   }
