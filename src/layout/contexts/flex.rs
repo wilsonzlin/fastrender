@@ -3775,7 +3775,10 @@ impl FlexFormattingContext {
 
       let supports_used_border_box = matches!(
         fc_type,
-        FormattingContextType::Block | FormattingContextType::Flex | FormattingContextType::Grid
+        FormattingContextType::Block
+          | FormattingContextType::Flex
+          | FormattingContextType::Grid
+          | FormattingContextType::Inline
       );
 
       // Preserve the flex-resolved size. When the child formatting context can honor

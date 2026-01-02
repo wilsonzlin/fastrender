@@ -1925,6 +1925,7 @@ impl GridFormattingContext {
             FormattingContextType::Block
               | FormattingContextType::Flex
               | FormattingContextType::Grid
+              | FormattingContextType::Inline
           );
 
           let mut laid_out = if supports_used_border_box {
@@ -2160,7 +2161,10 @@ impl GridFormattingContext {
 
       let supports_used_border_box = matches!(
         fc_type,
-        FormattingContextType::Block | FormattingContextType::Flex | FormattingContextType::Grid
+        FormattingContextType::Block
+          | FormattingContextType::Flex
+          | FormattingContextType::Grid
+          | FormattingContextType::Inline
       );
 
       let mut laid_out = if supports_used_border_box {

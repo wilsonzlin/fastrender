@@ -8456,7 +8456,7 @@ impl InlineFormattingContext {
         cb.rect.origin.x += block_shift;
       }
     }
-    let bounds = if inline_vertical {
+    let mut bounds = if inline_vertical {
       Rect::from_xywh(
         0.0,
         0.0,
@@ -8466,6 +8466,16 @@ impl InlineFormattingContext {
     } else {
       Rect::from_xywh(0.0, 0.0, inline_extent.min(available_inline), total_height)
     };
+    if let Some(used_width) = constraints.used_border_box_width {
+      if used_width.is_finite() {
+        bounds.size.width = used_width.max(0.0);
+      }
+    }
+    if let Some(used_height) = constraints.used_border_box_height {
+      if used_height.is_finite() {
+        bounds.size.height = used_height.max(0.0);
+      }
+    }
 
     // Position out-of-flow abs/fixed children against the containing block.
     if !positioned_children.is_empty() {
@@ -8534,7 +8544,8 @@ impl InlineFormattingContext {
           bounds.height() - border_top - border_bottom,
         ),
       );
-      let cb_block_base = if style.height.is_some() {
+      let cb_block_base = if style.height.is_some() || constraints.used_border_box_height.is_some()
+      {
         Some(padding_rect.size.height)
       } else {
         None
@@ -8722,16 +8733,32 @@ impl InlineFormattingContext {
         let needs_relayout = (result.size.width - child_fragment.bounds.width()).abs() > 0.01
           || (result.size.height - child_fragment.bounds.height()).abs() > 0.01;
         if needs_relayout {
-          let relayout_constraints = LayoutConstraints::new(
+          let supports_used_border_box = matches!(
+            fc_type,
+            FormattingContextType::Block
+              | FormattingContextType::Flex
+              | FormattingContextType::Grid
+              | FormattingContextType::Inline
+          );
+          let mut relayout_constraints = LayoutConstraints::new(
             AvailableSpace::Definite(result.size.width),
             AvailableSpace::Definite(result.size.height),
           );
-          let mut relayout_child = layout_child.clone();
-          let mut relayout_style = (*relayout_child.style).clone();
-          relayout_style.width = Some(Length::px(result.size.width));
-          relayout_style.height = Some(Length::px(result.size.height));
-          relayout_child.style = Arc::new(relayout_style);
-          child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+          if supports_used_border_box
+            && layout_child.style.width.is_none()
+            && layout_child.style.height.is_none()
+          {
+            relayout_constraints = relayout_constraints
+              .with_used_border_box_size(Some(result.size.width), Some(result.size.height));
+            child_fragment = fc.layout(&layout_child, &relayout_constraints)?;
+          } else {
+            let mut relayout_child = layout_child.clone();
+            let mut relayout_style = (*relayout_child.style).clone();
+            relayout_style.width = Some(Length::px(result.size.width));
+            relayout_style.height = Some(Length::px(result.size.height));
+            relayout_child.style = Arc::new(relayout_style);
+            child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+          }
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
         child_fragment.style = Some(original_style);
@@ -15070,6 +15097,25 @@ mod tests {
     assert!(
       left >= 39.9 && (120.0 - width - left).abs() < 0.1,
       "float context should report shortened line space; left={left}, width={width}"
+    );
+  }
+
+  #[test]
+  fn inline_fc_honors_used_border_box_height() {
+    let text_style = Arc::new(ComputedStyle::default());
+    let node = BoxNode::new_text(text_style.clone(), "hi".to_string());
+    let root = BoxNode::new_inline(text_style, vec![node]);
+
+    let ifc = InlineFormattingContext::new();
+    let constraints = LayoutConstraints::definite_width(120.0)
+      .with_used_border_box_size(Some(120.0), Some(200.0));
+    let fragment = ifc
+      .layout_with_floats(&root, &constraints, None, 0.0)
+      .expect("layout with used border box override");
+
+    assert!(
+      (fragment.bounds.height() - 200.0).abs() < 0.1,
+      "expected IFC to honor constraints.used_border_box_height"
     );
   }
 
