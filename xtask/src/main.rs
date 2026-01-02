@@ -170,9 +170,10 @@ struct PagesetArgs {
 
   /// Extra arguments forwarded to `pageset_progress run` (use `--` before these).
   ///
-  /// Note: when `prefetch_assets` supports prefetch toggles like `--prefetch-images`, those flags
-  /// are intercepted here and forwarded to `prefetch_assets` (when it runs) instead so users can
-  /// override the wrapper defaults without breaking `pageset_progress` arg parsing.
+  /// Note: when `prefetch_assets` supports prefetch toggles like `--prefetch-fonts` or
+  /// `--prefetch-images`, those flags are intercepted here and forwarded to `prefetch_assets` (when
+  /// it runs) instead so users can override the wrapper defaults without breaking
+  /// `pageset_progress` arg parsing.
   #[arg(last = true)]
   extra: Vec<String>,
 }

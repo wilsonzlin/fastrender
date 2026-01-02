@@ -103,6 +103,44 @@ fn pageset_help_mentions_allow_http_error_status() {
 }
 
 #[test]
+fn pageset_help_mentions_allow_collisions() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["pageset", "--help"])
+    .output()
+    .expect("run cargo xtask pageset --help");
+
+  assert!(
+    output.status.success(),
+    "xtask pageset help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--allow-collisions"),
+    "pageset help should mention --allow-collisions; got:\n{stdout}"
+  );
+}
+
+#[test]
+fn pageset_help_mentions_timings() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["pageset", "--help"])
+    .output()
+    .expect("run cargo xtask pageset --help");
+
+  assert!(
+    output.status.success(),
+    "xtask pageset help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--timings"),
+    "pageset help should mention --timings; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn pageset_help_mentions_refresh_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["pageset", "--help"])
