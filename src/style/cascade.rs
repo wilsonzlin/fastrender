@@ -4701,6 +4701,10 @@ impl<'a> RuleIndex<'a> {
     };
 
     let selectors = &self.selectors;
+    // Candidate lists are merged in an ordering that guarantees duplicate selector indices appear
+    // consecutively, so we can de-dupe via adjacency without a `CandidateSet` write on the hot
+    // path. (Debug builds still assert this invariant using `seen`.)
+    let mut last_selector_idx: usize = usize::MAX;
     if !self.by_id.is_empty() {
       if let Some(key) = node_keys.id_key {
         if let Some(list) = self.by_id.get(&key) {
@@ -4751,9 +4755,15 @@ impl<'a> RuleIndex<'a> {
       for offset in 0..cursor.len {
         // Safety: `offset < len` ensures the pointer remains within the slice.
         let selector_idx = unsafe { *cursor.ptr.add(offset) } as usize;
-        if !seen.mark_seen_bounded(selector_idx) {
+        if selector_idx == last_selector_idx {
           continue;
         }
+        #[cfg(debug_assertions)]
+        debug_assert!(
+          seen.mark_seen_bounded(selector_idx),
+          "selector_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+        );
+        last_selector_idx = selector_idx;
         if !self.metadata_matches_node(
           selectors[selector_idx].metadata_id,
           node,
@@ -4828,9 +4838,15 @@ impl<'a> RuleIndex<'a> {
           b.pos += 1;
         }
 
-        if !seen.mark_seen_bounded(selector_idx) {
+        if selector_idx == last_selector_idx {
           continue;
         }
+        #[cfg(debug_assertions)]
+        debug_assert!(
+          seen.mark_seen_bounded(selector_idx),
+          "selector_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+        );
+        last_selector_idx = selector_idx;
         if !self.metadata_matches_node(
           selectors[selector_idx].metadata_id,
           node,
@@ -4937,9 +4953,15 @@ impl<'a> RuleIndex<'a> {
         let bucket = merge.cursors[cursor_idx].bucket;
         merge.cursors[cursor_idx].pos += 1;
 
-        if !seen.mark_seen_bounded(selector_idx) {
+        if selector_idx == last_selector_idx {
           continue;
         }
+        #[cfg(debug_assertions)]
+        debug_assert!(
+          seen.mark_seen_bounded(selector_idx),
+          "selector_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+        );
+        last_selector_idx = selector_idx;
         if !self.metadata_matches_node(
           selectors[selector_idx].metadata_id,
           node,
@@ -4999,9 +5021,15 @@ impl<'a> RuleIndex<'a> {
         });
       }
 
-      if !seen.mark_seen_bounded(selector_idx) {
+      if selector_idx == last_selector_idx {
         continue;
       }
+      #[cfg(debug_assertions)]
+      debug_assert!(
+        seen.mark_seen_bounded(selector_idx),
+        "selector_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+      );
+      last_selector_idx = selector_idx;
       if !self.metadata_matches_node(selectors[selector_idx].metadata_id, node, summary, quirks_mode)
       {
         if TRACK_STATS {
@@ -5082,6 +5110,10 @@ impl<'a> RuleIndex<'a> {
     };
 
     let selectors = &self.slotted_selectors;
+    // Same as `selector_candidates_impl`: merged candidate ordering guarantees duplicates are
+    // consecutive, so we can de-dupe via adjacency without `CandidateSet` writes on the hot path.
+    // (Debug builds still assert this invariant using `seen`.)
+    let mut last_selector_idx: usize = usize::MAX;
     if !self.slotted_buckets.by_id.is_empty() {
       if let Some(key) = node_keys.id_key {
         if let Some(list) = self.slotted_buckets.by_id.get(&key) {
@@ -5135,9 +5167,15 @@ impl<'a> RuleIndex<'a> {
       for offset in 0..cursor.len {
         // Safety: `offset < len` ensures the pointer remains within the slice.
         let selector_idx = unsafe { *cursor.ptr.add(offset) } as usize;
-        if !seen.mark_seen_bounded(selector_idx) {
+        if selector_idx == last_selector_idx {
           continue;
         }
+        #[cfg(debug_assertions)]
+        debug_assert!(
+          seen.mark_seen_bounded(selector_idx),
+          "slotted_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+        );
+        last_selector_idx = selector_idx;
         if !self.metadata_matches_node(
           selectors[selector_idx].metadata_id,
           node,
@@ -5207,9 +5245,15 @@ impl<'a> RuleIndex<'a> {
           b.pos += 1;
         }
 
-        if !seen.mark_seen_bounded(selector_idx) {
+        if selector_idx == last_selector_idx {
           continue;
         }
+        #[cfg(debug_assertions)]
+        debug_assert!(
+          seen.mark_seen_bounded(selector_idx),
+          "slotted_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+        );
+        last_selector_idx = selector_idx;
         if !self.metadata_matches_node(
           selectors[selector_idx].metadata_id,
           node,
@@ -5309,9 +5353,15 @@ impl<'a> RuleIndex<'a> {
         let bucket = merge.cursors[cursor_idx].bucket;
         merge.cursors[cursor_idx].pos += 1;
 
-        if !seen.mark_seen_bounded(selector_idx) {
+        if selector_idx == last_selector_idx {
           continue;
         }
+        #[cfg(debug_assertions)]
+        debug_assert!(
+          seen.mark_seen_bounded(selector_idx),
+          "slotted_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+        );
+        last_selector_idx = selector_idx;
         if !self.metadata_matches_node(
           selectors[selector_idx].metadata_id,
           node,
@@ -5371,9 +5421,15 @@ impl<'a> RuleIndex<'a> {
         });
       }
 
-      if !seen.mark_seen_bounded(selector_idx) {
+      if selector_idx == last_selector_idx {
         continue;
       }
+      #[cfg(debug_assertions)]
+      debug_assert!(
+        seen.mark_seen_bounded(selector_idx),
+        "slotted_candidates_impl merge should yield adjacent duplicates; saw non-adjacent duplicate selector index {selector_idx}"
+      );
+      last_selector_idx = selector_idx;
       if !self.metadata_matches_node(selectors[selector_idx].metadata_id, node, summary, quirks_mode)
       {
         if TRACK_STATS {
@@ -11106,6 +11162,160 @@ mod tests {
       &mut merge,
     );
     assert_eq!(candidates, vec![0, 1, 2, 3, 4]);
+  }
+
+  #[test]
+  fn selector_candidates_heap_merge_dedupes_adjacent_duplicates() {
+    let stylesheet = parse_stylesheet(
+      ":is(.a, .b, .c, .d, .e, .f, .g, .h, .i) { color: red; }",
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 1);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b c d e f g h i".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.selector_candidates_profiled(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert!(
+      merge.cursors.len() > 8,
+      "test should exercise heap merge path"
+    );
+    assert_eq!(candidates, vec![0]);
+    assert_eq!(stats.by_class, 1);
+    assert_eq!(stats.by_id, 0);
+    assert_eq!(stats.by_tag, 0);
+    assert_eq!(stats.by_attr, 0);
+    assert_eq!(stats.universal, 0);
+    assert_eq!(stats.pruned, 0);
+  }
+
+  #[test]
+  fn slotted_candidates_heap_merge_dedupes_adjacent_duplicates() {
+    let stylesheet = parse_stylesheet(
+      "::slotted(:is(.a, .b, .c, .d, .e, .f, .g, .h, .i)) { color: red; }",
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.slotted_selectors.len(), 1);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b c d e f g h i".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
+    let mut seen = CandidateSet::new(index.slotted_selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.slotted_candidates_profiled(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert!(
+      merge.cursors.len() > 8,
+      "test should exercise heap merge path"
+    );
+    assert_eq!(candidates, vec![0]);
+    assert_eq!(stats.by_class, 1);
+    assert_eq!(stats.by_id, 0);
+    assert_eq!(stats.by_tag, 0);
+    assert_eq!(stats.by_attr, 0);
+    assert_eq!(stats.universal, 0);
+    assert_eq!(stats.pruned, 0);
   }
 
   #[test]
