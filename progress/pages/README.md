@@ -18,6 +18,7 @@ This directory contains the **committed pageset scoreboard**: one tiny JSON file
     - `network_fetches` / `network_fetch_bytes` / `network_fetch_ms` (HTTP fetches performed by the underlying fetcher)
 - These are auto-generated; don't hand-edit them except for durable human fields like `notes`/`last_*` when needed.
 - `notes` is intended for durable human explanations; `auto_notes` is machine-generated last-run diagnostics and is rewritten on each run.
+- Successful pages can still report non-fatal problems under `auto_notes` (for example: `ok with failures: ...` when a render completes but records `failure_stage=<...>` and/or subresource `fetch_errors`).
 - Renderer-provided `failure_stage`/`timeout_stage` fields stay `null` on placeholders and are populated directly from diagnostics during runs for programmatic triage.
 - `stages_ms` buckets are a coarse **wall-time** attribution (mutually exclusive buckets) derived
   from the worker stage heartbeat timeline (`*.stage.timeline`) when available and rescaled so the
