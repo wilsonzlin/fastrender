@@ -5,6 +5,7 @@
 //! where "good enough" coverage is preferable to strict spec parsing.
 
 use crate::css::loader::resolve_href;
+use crate::html::image_attrs;
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -35,23 +36,11 @@ fn capture_first<'t>(caps: &regex::Captures<'t>, groups: &[usize]) -> Option<&'t
     .find_map(|idx| caps.get(*idx).map(|m| m.as_str()))
 }
 
-fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<&str> {
-  let mut out = Vec::new();
-  for candidate in srcset.split(',') {
-    if out.len() >= max_candidates {
-      break;
-    }
-    let trimmed = candidate.trim();
-    if trimmed.is_empty() {
-      continue;
-    }
-    let url_part = trimmed.split_whitespace().next().unwrap_or("").trim();
-    if url_part.is_empty() {
-      continue;
-    }
-    out.push(url_part);
-  }
-  out
+fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<String> {
+  image_attrs::parse_srcset_with_limit(srcset, max_candidates)
+    .into_iter()
+    .map(|candidate| candidate.url)
+    .collect()
 }
 
 fn link_rel_is_image_asset(rel_value: &str, as_value: Option<&str>) -> bool {
@@ -225,7 +214,7 @@ pub fn discover_html_asset_urls_with_srcset_limit(
       continue;
     };
     for candidate in parse_srcset_urls(raw_srcset, max_srcset_candidates) {
-      push_image(candidate);
+      push_image(&candidate);
     }
   }
 
@@ -234,7 +223,7 @@ pub fn discover_html_asset_urls_with_srcset_limit(
       continue;
     };
     for candidate in parse_srcset_urls(raw_srcset, max_srcset_candidates) {
-      push_image(candidate);
+      push_image(&candidate);
     }
   }
 
@@ -292,7 +281,7 @@ pub fn discover_html_asset_urls_with_srcset_limit(
         .unwrap_or("");
       if !imagesrcset.is_empty() {
         for candidate in parse_srcset_urls(imagesrcset, MAX_SRCSET_CANDIDATES) {
-          push_image(candidate);
+          push_image(&candidate);
         }
       }
     }
@@ -349,6 +338,22 @@ mod tests {
     let html = r#"<img srcset="img0.png 1x, img1.png 2x">"#;
     let out = discover_html_asset_urls_with_srcset_limit(html, "https://example.com/", 1);
     assert_eq!(out.images, vec!["https://example.com/img0.png".to_string()]);
+  }
+
+  #[test]
+  fn discovers_srcset_candidates_with_commas_inside_urls() {
+    let html = r#"<img srcset="https://img.example/master/w_2560,c_limit/foo.jpg 2560w, https://img.example/master/w_1280,c_limit/foo.jpg 1280w">"#;
+    let out = discover_html_asset_urls(html, "https://example.com/");
+    assert_eq!(
+      out.images,
+      vec![
+        "https://img.example/master/w_2560,c_limit/foo.jpg",
+        "https://img.example/master/w_1280,c_limit/foo.jpg",
+      ]
+      .into_iter()
+      .map(str::to_string)
+      .collect::<Vec<_>>()
+    );
   }
 
   #[test]

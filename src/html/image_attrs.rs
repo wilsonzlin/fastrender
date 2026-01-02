@@ -12,6 +12,15 @@ use cssparser::{Parser, ParserInput, Token};
 /// This is a small, allocation-minimal parser intended to match the renderer's
 /// internal behavior. Invalid candidate strings are ignored.
 pub fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
+  parse_srcset_with_limit(attr, usize::MAX)
+}
+
+/// Parse an HTML `srcset` attribute into candidate URLs with descriptors,
+/// returning at most `max_candidates` valid entries.
+///
+/// This is primarily used by developer tooling (e.g. regex-based HTML asset
+/// discovery) to keep memory bounded when encountering pathological attributes.
+pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetCandidate> {
   fn is_data_url(bytes: &[u8], start: usize) -> bool {
     if start + 5 > bytes.len() {
       return false;
@@ -30,6 +39,9 @@ pub fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
   let mut idx = 0;
 
   while idx < bytes.len() {
+    if out.len() >= max_candidates {
+      break;
+    }
     while idx < bytes.len() && (bytes[idx].is_ascii_whitespace() || bytes[idx] == b',') {
       idx += 1;
     }
@@ -54,8 +66,20 @@ pub fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
           idx += 1;
           continue;
         }
-        // Candidate separator (no descriptors).
-        break;
+        // Compatibility: many production pages include unescaped commas within
+        // the URL (e.g. transformation paths like `w_2560,c_limit/foo.jpg`).
+        //
+        // Treat commas as candidate separators only when they are followed by
+        // ASCII whitespace (or the end of the attribute). This matches common
+        // authoring patterns and avoids producing bogus relative URLs like
+        // `/c_limit/foo.jpg` when splitting a transformation URL.
+        let next_is_whitespace = idx + 1 >= bytes.len() || bytes[idx + 1].is_ascii_whitespace();
+        if next_is_whitespace {
+          // Candidate separator (no descriptors).
+          break;
+        }
+        idx += 1;
+        continue;
       }
       idx += 1;
     }
@@ -261,6 +285,41 @@ mod tests {
     assert_eq!(parsed[0].url, "a.png");
     assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
     assert_eq!(parsed[1].url, "c.png");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
+  }
+
+  #[test]
+  fn parse_srcset_allows_commas_inside_urls() {
+    let parsed = parse_srcset(
+      "https://img.example/master/w_2560,c_limit/foo.jpg 1x, https://img.example/bar.jpg 2x",
+    );
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(
+      parsed[0].url,
+      "https://img.example/master/w_2560,c_limit/foo.jpg"
+    );
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+    assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
+  }
+
+  #[test]
+  fn parse_srcset_parses_urls_without_descriptors() {
+    let parsed = parse_srcset("a.png, b.png");
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].url, "a.png");
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+    assert_eq!(parsed[1].url, "b.png");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+  }
+
+  #[test]
+  fn parse_srcset_parses_data_urls() {
+    let parsed = parse_srcset("data:image/png;base64,abcd 1x, b.png 2x");
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].url, "data:image/png;base64,abcd");
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+    assert_eq!(parsed[1].url, "b.png");
     assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
   }
 

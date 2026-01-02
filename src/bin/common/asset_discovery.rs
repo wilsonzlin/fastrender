@@ -96,25 +96,13 @@ pub fn discover_html_image_urls(html: &str, base_url: &str) -> Vec<String> {
 
 /// Parse a `srcset` attribute into a list of URL strings (without descriptors).
 ///
-/// This is intentionally permissive: we split on commas and then take the first
-/// whitespace-delimited token of each candidate.
+/// This shares parsing logic with the renderer so tools treat malformed-but-common
+/// `srcset` values (e.g. URLs containing unescaped commas) consistently.
 pub fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<String> {
-  let mut out = Vec::new();
-  for candidate in srcset.split(',') {
-    if out.len() >= max_candidates {
-      break;
-    }
-    let trimmed = candidate.trim();
-    if trimmed.is_empty() {
-      continue;
-    }
-    let url_part = trimmed.split_whitespace().next().unwrap_or("").trim();
-    if url_part.is_empty() {
-      continue;
-    }
-    out.push(url_part.to_string());
-  }
-  out
+  fastrender::html::image_attrs::parse_srcset_with_limit(srcset, max_candidates)
+    .into_iter()
+    .map(|candidate| candidate.url)
+    .collect()
 }
 
 /// Discover URLs referenced inside a CSS string.
