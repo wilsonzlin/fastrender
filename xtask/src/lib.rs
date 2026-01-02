@@ -79,6 +79,7 @@ pub struct PagesetExtraArgsOverrides {
   pub viewport: Option<String>,
   pub dpr: Option<String>,
   pub disk_cache: Option<bool>,
+  pub cache_dir: Option<String>,
   pub no_fetch: bool,
   pub fetch_timeout: Option<String>,
   pub render_timeout: Option<String>,
@@ -203,6 +204,16 @@ pub fn extract_pageset_extra_arg_overrides(
         }
         out.push(arg.clone());
       }
+      "--cache-dir" => {
+        if let Some(next) = iter.peek() {
+          if !next.starts_with('-') {
+            overrides.cache_dir = Some((*next).clone());
+            iter.next();
+            continue;
+          }
+        }
+        out.push(arg.clone());
+      }
       _ => {
         if let Some(value) = arg.strip_prefix("--jobs=") {
           overrides.jobs = Some(value.to_string());
@@ -236,6 +247,10 @@ pub fn extract_pageset_extra_arg_overrides(
         }
         if let Some(value) = arg.strip_prefix("--dpr=") {
           overrides.dpr = Some(value.to_string());
+          continue;
+        }
+        if let Some(value) = arg.strip_prefix("--cache-dir=") {
+          overrides.cache_dir = Some(value.to_string());
           continue;
         }
         if let Some(value) = arg.strip_prefix("--fetch-timeout=") {

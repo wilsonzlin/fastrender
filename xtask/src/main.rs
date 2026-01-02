@@ -140,6 +140,13 @@ struct PagesetArgs {
   #[arg(long = "no-disk-cache", conflicts_with = "disk_cache")]
   no_disk_cache: bool,
 
+  /// Override disk-backed subresource cache directory (defaults to fetches/assets)
+  ///
+  /// This is forwarded to both `prefetch_assets` and `pageset_progress` so the pageset workflow can
+  /// use a non-default cache location (for example when keeping multiple caches side-by-side).
+  #[arg(long, value_name = "DIR")]
+  cache_dir: Option<PathBuf>,
+
   /// Override the User-Agent header (propagated to fetch/prefetch/render steps)
   #[arg(long)]
   user_agent: Option<String>,
@@ -173,7 +180,8 @@ struct PagesetArgs {
   /// Note: when `prefetch_assets` supports prefetch toggles like `--prefetch-fonts` or
   /// `--prefetch-images`, those flags are intercepted here and forwarded to `prefetch_assets` (when
   /// it runs) instead so users can override the wrapper defaults without breaking
-  /// `pageset_progress` arg parsing.
+  /// `pageset_progress` arg parsing. Likewise, `--cache-dir` and `--disk-cache-*` flags are
+  /// forwarded to `prefetch_assets` when possible so the warmed cache matches the render step.
   #[arg(last = true)]
   extra: Vec<String>,
 }
@@ -593,14 +601,14 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .viewport
     .map(|(width, height)| format!("{width}x{height}"));
   let mut dpr_arg = args.dpr.map(|dpr| dpr.to_string());
+  let mut cache_dir_arg = args.cache_dir.clone();
 
   let prefetch_support = PrefetchAssetsSupport::detect();
-  let (mut prefetch_asset_args, mut pageset_extra_args) =
-    if prefetch_support.any() {
-      extract_prefetch_assets_args(&args.extra, prefetch_support)
-    } else {
-      (Vec::new(), args.extra.clone())
-    };
+  let (mut prefetch_asset_args, mut pageset_extra_args) = if prefetch_support.any() {
+    extract_prefetch_assets_args(&args.extra, prefetch_support)
+  } else {
+    (Vec::new(), args.extra.clone())
+  };
 
   let mut fetch_refresh = args.refresh;
   let mut fetch_allow_http_error_status = args.allow_http_error_status;
@@ -690,6 +698,17 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       _ => dpr_arg = Some(dpr),
     }
   }
+  if let Some(cache_dir) = pageset_overrides.cache_dir {
+    let cache_dir = PathBuf::from(cache_dir);
+    match &cache_dir_arg {
+      Some(existing) if existing != &cache_dir => bail!(
+        "--cache-dir cannot be passed both before and after `--` with different values (before: {}, after: {})",
+        existing.display(),
+        cache_dir.display()
+      ),
+      _ => cache_dir_arg = Some(cache_dir),
+    }
+  }
   if pageset_overrides.no_fetch {
     no_fetch = true;
   }
@@ -724,6 +743,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   }
 
   let disk_cache_enabled = disk_cache_enabled(disk_cache_override);
+  let cache_dir = cache_dir_arg.unwrap_or_else(|| PathBuf::from("fetches/assets"));
   let disk_cache_status = if disk_cache_enabled {
     "enabled"
   } else {
@@ -768,8 +788,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   }
   if disk_cache_enabled {
     println!(
-      "Disk cache enabled (persisting subresources under fetches/assets/). \
-       Set NO_DISK_CACHE=1, DISK_CACHE=0, or --no-disk-cache to disable."
+      "Disk cache enabled (persisting subresources under {}). \
+       Set NO_DISK_CACHE=1, DISK_CACHE=0, or --no-disk-cache to disable.",
+      cache_dir.display()
     );
   } else {
     println!(
@@ -790,6 +811,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       .arg(jobs.to_string())
       .arg("--timeout")
       .arg(fetch_timeout.to_string());
+    cmd.arg("--cache-dir").arg(&cache_dir);
     if let Some(pages) = &pages_arg {
       cmd.arg("--pages").arg(pages);
     }
@@ -868,8 +890,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     }
     apply_disk_cache_env(&mut cmd);
     println!(
-      "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
-      jobs, fetch_timeout
+      "Prefetching subresources into {} (jobs={}, timeout={}s)...",
+      cache_dir.display(),
+      jobs,
+      fetch_timeout
     );
     run_command(cmd)?;
   }
@@ -887,6 +911,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .arg("--timeout")
     .arg(render_timeout.to_string())
     .arg("--bundled-fonts");
+  cmd.arg("--cache-dir").arg(&cache_dir);
   if let Some(pages) = &pages_arg {
     cmd.arg("--pages").arg(pages);
   }
@@ -920,8 +945,11 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   }
   apply_disk_cache_env(&mut cmd);
   println!(
-    "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={})...",
-    jobs, render_timeout, disk_cache_status
+    "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={}, cache_dir={})...",
+    jobs,
+    render_timeout,
+    disk_cache_status,
+    cache_dir.display()
   );
   run_command(cmd)?;
 
@@ -1000,7 +1028,7 @@ fn extract_prefetch_assets_args(
     let is_prefetch_arg = (support.prefetch_fonts
       && (arg == "--prefetch-fonts" || arg.starts_with("--prefetch-fonts=")))
       || (support.prefetch_images
-      && (arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")))
+        && (arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")))
       || (support.prefetch_iframes
         && (arg == "--prefetch-iframes"
           || arg.starts_with("--prefetch-iframes=")

@@ -13,7 +13,7 @@ set -euo pipefail
 #   FASTR_DISK_CACHE_ALLOW_NO_STORE=0|1 (do not override via wrapper defaults when set)
 #
 # Wrapper flags (accepted even if placed after `--`):
-#   --jobs/-j N --fetch-timeout SECS --render-timeout SECS --no-fetch
+#   --jobs/-j N --fetch-timeout SECS --render-timeout SECS --cache-dir DIR --no-fetch
 #   --disk-cache --no-disk-cache
 #
 # Extra arguments are forwarded to `pageset_progress run`. Use `--` to separate them from the
@@ -47,6 +47,7 @@ JOBS="${JOBS:-${TOTAL_CPUS}}"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-30}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-5}"
 USE_DISK_CACHE="${DISK_CACHE:-1}"
+CACHE_DIR="fetches/assets"
 NO_FETCH=0
 
 if [[ -n "${NO_DISK_CACHE:-}" ]]; then
@@ -126,6 +127,20 @@ while [[ $# -gt 0 ]]; do
       shift
       continue
       ;;
+    --cache-dir)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      CACHE_DIR="$2"
+      shift 2
+      continue
+      ;;
+    --cache-dir=*)
+      CACHE_DIR="${arg#--cache-dir=}"
+      shift
+      continue
+      ;;
     --)
       shift
       continue
@@ -145,6 +160,10 @@ if ! [[ "${FETCH_TIMEOUT}" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "${RENDER_TIMEOUT}" =~ ^[0-9]+$ ]]; then
   echo "RENDER_TIMEOUT must be an integer >= 0" >&2
+  exit 2
+fi
+if [[ -z "${CACHE_DIR}" ]]; then
+  echo "CACHE_DIR must be non-empty" >&2
   exit 2
 fi
 
@@ -599,15 +618,15 @@ else
 fi
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
-  echo "Prefetching assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
+  echo "Prefetching assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, cache_dir=${CACHE_DIR})..."
   if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES}" -eq 1 && "${PREFETCH_IMAGES_IN_ARGS}" -eq 0 ]]; then
     PREFETCH_ASSET_ARGS+=(--prefetch-images)
   fi
   if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS}" -eq 1 && "${PREFETCH_CSS_URL_ASSETS_IN_ARGS}" -eq 0 ]]; then
     PREFETCH_ASSET_ARGS+=(--prefetch-css-url-assets)
   fi
-  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${SELECTION_ARGS[@]}" "${PREFETCH_KNOB_ARGS[@]}" "${PREFETCH_ASSET_ARGS[@]}" "${DISK_CACHE_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
+  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" --cache-dir "${CACHE_DIR}" "${SELECTION_ARGS[@]}" "${PREFETCH_KNOB_ARGS[@]}" "${PREFETCH_ASSET_ARGS[@]}" "${DISK_CACHE_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
 fi
 
-echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts "${PAGESET_KNOB_ARGS[@]}" "${PAGESET_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
+echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, cache_dir=${CACHE_DIR}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
+cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts --cache-dir "${CACHE_DIR}" "${PAGESET_KNOB_ARGS[@]}" "${PAGESET_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"

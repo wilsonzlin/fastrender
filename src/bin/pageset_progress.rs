@@ -64,7 +64,7 @@ use tempfile::NamedTempFile;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
-const ASSET_DIR: &str = "fetches/assets";
+const DEFAULT_ASSET_CACHE_DIR: &str = "fetches/assets";
 const DEFAULT_PROGRESS_DIR: &str = "progress/pages";
 const DEFAULT_LOG_DIR: &str = "target/pageset/logs";
 const DEFAULT_TRACE_DIR: &str = "target/pageset/traces";
@@ -311,6 +311,12 @@ struct RunArgs {
 
   #[command(flatten)]
   disk_cache: DiskCacheArgs,
+
+  /// Override disk cache directory (defaults to fetches/assets)
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
+  #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
+  cache_dir: PathBuf,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -566,6 +572,12 @@ struct WorkerArgs {
 
   #[command(flatten)]
   disk_cache: DiskCacheArgs,
+
+  /// Override disk cache directory (defaults to fetches/assets)
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
+  #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
+  cache_dir: PathBuf,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -1348,7 +1360,8 @@ pub(crate) fn is_bot_mitigation_fetch_error(err: &ResourceFetchError) -> bool {
     return false;
   }
   let effective_url = err.final_url.as_deref().unwrap_or(&err.url);
-  is_bot_mitigation_block(err.status, effective_url) || is_bot_mitigation_block(err.status, &err.url)
+  is_bot_mitigation_block(err.status, effective_url)
+    || is_bot_mitigation_block(err.status, &err.url)
 }
 
 fn build_fetch_error_summary<'a, I>(errors: I) -> Option<ProgressFetchErrorSummary>
@@ -2402,6 +2415,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       "Disk cache: max_bytes={} max_age={} writeback_under_deadline={}\n",
       args.disk_cache.max_bytes, max_age, args.disk_cache.writeback_under_deadline
     ));
+    log.push_str(&format!("Disk cache dir: {}\n", args.cache_dir.display()));
     let stale_policy = if serve_stale_when_deadline {
       "use_stale_when_deadline"
     } else {
@@ -2451,7 +2465,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   }
   #[cfg(feature = "disk_cache")]
   let fetcher: std::sync::Arc<dyn ResourceFetcher> = std::sync::Arc::new(
-    DiskCachingFetcher::with_configs(http, ASSET_DIR, memory_config, disk_config),
+    DiskCachingFetcher::with_configs(http, &args.cache_dir, memory_config, disk_config),
   );
   #[cfg(not(feature = "disk_cache"))]
   let fetcher: std::sync::Arc<dyn ResourceFetcher> =
@@ -2564,27 +2578,18 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         timeline_buckets.unwrap_or_else(|| buckets_from_diagnostics(&result.diagnostics));
       progress.stages_ms.rescale_to_total(total_ms);
       apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
-      let fetch_error_summary = build_fetch_error_summary(
-        result
-          .diagnostics
-          .fetch_errors
-          .iter()
-          .filter(|err| {
-            !is_bot_mitigation_fetch_error(err) && !is_external_network_failure_fetch_error(err)
-          }),
-      );
+      let fetch_error_summary =
+        build_fetch_error_summary(result.diagnostics.fetch_errors.iter().filter(|err| {
+          !is_bot_mitigation_fetch_error(err) && !is_external_network_failure_fetch_error(err)
+        }));
       let bot_mitigation_summary = build_fetch_error_summary(
-        result
-          .diagnostics
-          .blocked_fetch_errors
-          .iter()
-          .chain(
-            result
-              .diagnostics
-              .fetch_errors
-              .iter()
-              .filter(|err| is_bot_mitigation_fetch_error(err)),
-          ),
+        result.diagnostics.blocked_fetch_errors.iter().chain(
+          result
+            .diagnostics
+            .fetch_errors
+            .iter()
+            .filter(|err| is_bot_mitigation_fetch_error(err)),
+        ),
       );
       let external_network_failure_summary = build_fetch_error_summary(
         result
@@ -2825,7 +2830,10 @@ fn append_fetch_error_summary(log: &mut String, diagnostics: &RenderDiagnostics)
   };
 
   append("Fetch errors", &diagnostics.fetch_errors);
-  append("Blocked fetch errors (bot mitigation)", &diagnostics.blocked_fetch_errors);
+  append(
+    "Blocked fetch errors (bot mitigation)",
+    &diagnostics.blocked_fetch_errors,
+  );
 }
 
 fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
@@ -6372,6 +6380,7 @@ fn push_worker_args(
     .arg(&args.user_agent)
     .arg("--accept-language")
     .arg(&args.accept_language);
+  cmd.arg("--cache-dir").arg(&args.cache_dir);
   push_disk_cache_args(cmd, &args.disk_cache);
   cmd
     .arg("--diagnostics")
@@ -7003,7 +7012,7 @@ fn run(args: RunArgs) -> io::Result<()> {
   #[cfg(feature = "disk_cache")]
   {
     // Ensure disk-backed cache is available before spawning workers.
-    fs::create_dir_all(ASSET_DIR)?;
+    fs::create_dir_all(&args.cache_dir)?;
   }
   if dumps_enabled {
     fs::create_dir_all(&args.dump_dir)?;
@@ -7282,7 +7291,9 @@ fn run(args: RunArgs) -> io::Result<()> {
       args.disk_cache.max_bytes, max_age
     );
     let lock_stale_after = Duration::from_secs(args.disk_cache.lock_stale_secs);
-    match common::disk_cache_stats::scan_disk_cache_dir(Path::new(ASSET_DIR), lock_stale_after) {
+    println!("Disk cache dir: {}", args.cache_dir.display());
+    match common::disk_cache_stats::scan_disk_cache_dir(args.cache_dir.as_path(), lock_stale_after)
+    {
       Ok(stats) => {
         println!(
           "Disk cache stats: bin_count={} meta_count={} alias_count={} bin_bytes={} locks={} stale_locks={} tmp={} journal={}",
@@ -7673,6 +7684,8 @@ mod tests {
       "run",
       "--pages",
       "discord.com",
+      "--cache-dir",
+      "target/test_assets",
       "--disk-cache-allow-no-store",
       "--disk-cache-writeback-under-deadline",
     ])
@@ -7725,6 +7738,21 @@ mod tests {
         .filter(|arg| arg.as_str() == "--disk-cache-writeback-under-deadline")
         .count(),
       1
+    );
+    assert_eq!(
+      args_vec
+        .iter()
+        .filter(|arg| arg.as_str() == "--cache-dir")
+        .count(),
+      1
+    );
+    let cache_dir_pos = args_vec
+      .iter()
+      .position(|arg| arg.as_str() == "--cache-dir")
+      .expect("expected --cache-dir in worker args");
+    assert_eq!(
+      args_vec.get(cache_dir_pos + 1).map(String::as_str),
+      Some("target/test_assets")
     );
 
     let mut parse_argv = Vec::with_capacity(args_vec.len() + 1);
@@ -7985,16 +8013,39 @@ mod tests {
   }
 
   fn pageset_progress_exe() -> Option<PathBuf> {
-    std::env::var("CARGO_BIN_EXE_pageset_progress")
-      .ok()
-      .map(PathBuf::from)
-      .or_else(|| {
-        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-          .join("target")
-          .join("debug")
-          .join("pageset_progress");
-        candidate.exists().then_some(candidate)
-      })
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_pageset_progress") {
+      candidates.push(PathBuf::from(path));
+    }
+    candidates.push(
+      PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("debug")
+        .join("pageset_progress"),
+    );
+
+    // The worker tests rely on spawning a real `pageset_progress` binary (not the rustc `--test`
+    // harness). When developers run `cargo test --bin pageset_progress`, Cargo does not always
+    // rebuild `target/debug/pageset_progress`, so the binary can be stale relative to the sources.
+    // If the binary doesn't recognize recently-added worker flags, skip the integration-style
+    // tests instead of failing with a confusing clap error.
+    for candidate in candidates {
+      if !candidate.exists() {
+        continue;
+      }
+      let Ok(output) = Command::new(&candidate).args(["worker", "--help"]).output() else {
+        continue;
+      };
+      if !output.status.success() {
+        continue;
+      }
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      if stdout.contains("--cache-dir") {
+        return Some(candidate);
+      }
+    }
+
+    None
   }
 
   fn basic_run_args(base: &Path) -> RunArgs {
@@ -8015,6 +8066,7 @@ mod tests {
         allow_no_store: false,
         writeback_under_deadline: false,
       },
+      cache_dir: base.join("assets"),
       css_limit: None,
       fonts: FontSourceArgs {
         bundled_fonts: false,
@@ -8103,6 +8155,20 @@ mod tests {
       .map(|arg| arg.to_string_lossy().into_owned())
       .collect::<Vec<_>>();
     let count_flag = |flag: &str| cmd_args.iter().filter(|arg| arg.as_str() == flag).count();
+
+    let cache_dir_pos = cmd_args
+      .iter()
+      .position(|arg| arg == "--cache-dir")
+      .expect("expected --cache-dir in worker command");
+    assert_eq!(
+      count_flag("--cache-dir"),
+      1,
+      "expected --cache-dir to be passed exactly once"
+    );
+    assert_eq!(
+      cmd_args.get(cache_dir_pos + 1),
+      Some(&args.cache_dir.to_string_lossy().into_owned())
+    );
 
     let max_bytes_pos = cmd_args
       .iter()

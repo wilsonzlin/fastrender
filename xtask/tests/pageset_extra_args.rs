@@ -16,6 +16,8 @@ fn extracts_pageset_extra_arg_overrides() {
     "--viewport".to_string(),
     "1200x800".to_string(),
     "--dpr=2".to_string(),
+    "--cache-dir".to_string(),
+    "target/assets".to_string(),
     "--fetch-timeout".to_string(),
     "60".to_string(),
     "--render-timeout=7".to_string(),
@@ -41,6 +43,7 @@ fn extracts_pageset_extra_arg_overrides() {
       viewport: Some("1200x800".to_string()),
       dpr: Some("2".to_string()),
       disk_cache: Some(false),
+      cache_dir: Some("target/assets".to_string()),
       no_fetch: true,
       fetch_timeout: Some("60".to_string()),
       render_timeout: Some("7".to_string()),
@@ -50,7 +53,10 @@ fn extracts_pageset_extra_arg_overrides() {
 
 #[test]
 fn extracts_pageset_extra_arg_overrides_disk_cache_enabled() {
-  let extra = vec!["--disk-cache".to_string(), "--pages=example.com".to_string()];
+  let extra = vec![
+    "--disk-cache".to_string(),
+    "--pages=example.com".to_string(),
+  ];
 
   let (filtered, overrides) = extract_pageset_extra_arg_overrides(&extra);
   assert_eq!(filtered, Vec::<String>::new());
@@ -65,6 +71,7 @@ fn extracts_pageset_extra_arg_overrides_disk_cache_enabled() {
       viewport: None,
       dpr: None,
       disk_cache: Some(true),
+      cache_dir: None,
       no_fetch: false,
       fetch_timeout: None,
       render_timeout: None,
