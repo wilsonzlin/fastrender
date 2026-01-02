@@ -3165,12 +3165,12 @@ impl HttpFetcher {
           return Err(Error::Resource(err));
         }
 
-        let content_type = response
+        let mut content_type = response
           .headers()
           .get("content-type")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
-        let decode_stage = decode_stage_for_content_type(content_type.as_deref());
+        let mut decode_stage = decode_stage_for_content_type(content_type.as_deref());
         let etag = response
           .headers()
           .get("etag")
@@ -3186,11 +3186,19 @@ impl HttpFetcher {
         let allows_empty_body =
           http_response_allows_empty_body(kind, status_code, response.headers());
 
+        let substitute_empty_image_body =
+          should_substitute_empty_image_body(kind, status_code, response.headers());
         let mut body_reader = response.body_mut().as_reader();
         let body_result = read_response_prefix(&mut body_reader, read_limit);
         match body_result {
-          Ok(bytes) => {
+          Ok(mut bytes) => {
             record_network_fetch_bytes(bytes.len());
+            if bytes.is_empty() && substitute_empty_image_body {
+              let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
             let is_retryable_status = retryable_http_status(status_code);
 
             if bytes.is_empty() && http_empty_body_is_error(status_code, allows_empty_body) {
@@ -3598,12 +3606,12 @@ impl HttpFetcher {
           return Err(Error::Resource(err));
         }
 
-        let content_type = response
+        let mut content_type = response
           .headers()
           .get("content-type")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
-        let decode_stage = decode_stage_for_content_type(content_type.as_deref());
+        let mut decode_stage = decode_stage_for_content_type(content_type.as_deref());
         let etag = response
           .headers()
           .get("etag")
@@ -3619,10 +3627,18 @@ impl HttpFetcher {
         let allows_empty_body =
           http_response_allows_empty_body(kind, status_code, response.headers());
 
+        let substitute_empty_image_body =
+          should_substitute_empty_image_body(kind, status_code, response.headers());
         let body_result = read_response_prefix(&mut response, read_limit);
         match body_result {
-          Ok(bytes) => {
+          Ok(mut bytes) => {
             record_network_fetch_bytes(bytes.len());
+            if bytes.is_empty() && substitute_empty_image_body {
+              let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
             let is_retryable_status = retryable_http_status(status_code);
 
             if bytes.is_empty() && http_empty_body_is_error(status_code, allows_empty_body) {
@@ -4037,12 +4053,12 @@ impl HttpFetcher {
           };
 
         let encodings = parse_content_encodings(response.headers());
-        let content_type = response
+        let mut content_type = response
           .headers()
           .get("content-type")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
-        let decode_stage = decode_stage_for_content_type(content_type.as_deref());
+        let mut decode_stage = decode_stage_for_content_type(content_type.as_deref());
         let etag = response
           .headers()
           .get("etag")
@@ -4067,7 +4083,7 @@ impl HttpFetcher {
 
         match body_result {
           Ok(bytes) => {
-            let bytes =
+            let mut bytes =
               match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage) {
                 Ok(decoded) => decoded,
                 Err(ContentDecodeError::DeadlineExceeded { stage, elapsed, .. }) => {
@@ -4098,6 +4114,11 @@ impl HttpFetcher {
               };
 
             record_network_fetch_bytes(bytes.len());
+            if bytes.is_empty() && should_substitute_empty_image_body(kind, status_code, response.headers()) {
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
             let is_retryable_status = retryable_http_status(status_code);
 
             if bytes.is_empty() && http_empty_body_is_error(status_code, allows_empty_body) {
@@ -4531,12 +4552,12 @@ impl HttpFetcher {
           };
 
         let encodings = parse_content_encodings(response.headers());
-        let content_type = response
+        let mut content_type = response
           .headers()
           .get("content-type")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
-        let decode_stage = decode_stage_for_content_type(content_type.as_deref());
+        let mut decode_stage = decode_stage_for_content_type(content_type.as_deref());
         let etag = response
           .headers()
           .get("etag")
@@ -4551,6 +4572,8 @@ impl HttpFetcher {
         let final_url = response.url().to_string();
         let allows_empty_body =
           http_response_allows_empty_body(kind, status_code, response.headers());
+        let substitute_empty_image_body =
+          should_substitute_empty_image_body(kind, status_code, response.headers());
 
         let mut body = Vec::new();
         let body_result = response
@@ -4590,7 +4613,7 @@ impl HttpFetcher {
               return Err(Error::Resource(err));
             }
 
-            let bytes =
+            let mut bytes =
               match decode_content_encodings(body, &encodings, allowed_limit, decode_stage) {
                 Ok(decoded) => decoded,
                 Err(ContentDecodeError::DeadlineExceeded { stage, elapsed, .. }) => {
@@ -4621,6 +4644,11 @@ impl HttpFetcher {
               };
 
             record_network_fetch_bytes(bytes.len());
+            if bytes.is_empty() && substitute_empty_image_body {
+              bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+              content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+              decode_stage = decode_stage_for_content_type(content_type.as_deref());
+            }
             let is_retryable_status = retryable_http_status(status_code);
 
             if bytes.is_empty() && http_empty_body_is_error(status_code, allows_empty_body) {
@@ -7158,6 +7186,17 @@ const OFFLINE_FIXTURE_PLACEHOLDER_WOFF2: &[u8] =
   include_bytes!("../tests/pages/fixtures/assets/fonts/DejaVuSans-subset.woff2");
 const OFFLINE_FIXTURE_PLACEHOLDER_WOFF2_MIME: &str = "font/woff2";
 
+fn should_substitute_empty_image_body(kind: FetchContextKind, status: u16, headers: &HeaderMap) -> bool {
+  // Some sites (notably Akamai `akam/13/pixel_*` tracking endpoints used on multiple pageset pages)
+  // respond to `<img>` requests with an explicit empty entity body (`Content-Length: 0`) while still
+  // returning a successful 2xx status and a non-image content-type. Treat those as a 1x1
+  // transparent PNG so they don't surface as fetch failures (and so replaced element sizing has a
+  // stable intrinsic size).
+  kind == FetchContextKind::Image
+    && (200..300).contains(&status)
+    && header_content_length_is_zero(headers)
+}
+
 fn file_payload_looks_like_markup_but_not_svg(bytes: &[u8]) -> bool {
   let sample = &bytes[..bytes.len().min(256)];
   let mut i = 0;
@@ -7861,22 +7900,9 @@ mod tests {
   }
 
   #[test]
-  fn http_empty_image_with_content_length_zero_is_error() {
-    let Some(listener) = try_bind_localhost("http_empty_image_with_content_length_zero_is_error")
-    else {
-      return;
-    };
-    let addr = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-      let (mut stream, _) = listener.accept().unwrap();
-      stream
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .unwrap();
-      let _ = read_http_request(&mut stream);
-      let headers =
-        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-      stream.write_all(headers.as_bytes()).unwrap();
-    });
+  fn http_empty_image_with_content_length_zero_substitutes_placeholder() {
+    let headers =
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
     let fetcher = HttpFetcher::new()
       .with_timeout(Duration::from_secs(2))
@@ -7885,25 +7911,135 @@ mod tests {
         ..HttpRetryPolicy::default()
       });
     let deadline = None;
-    let started = Instant::now();
-    let url = format!("http://{addr}/empty.png");
-    let err = fetcher
-      .fetch_http_with_accept_inner_ureq(
-        FetchContextKind::Image,
-        &url,
-        None,
-        None,
-        None,
-        &deadline,
-        started,
-        false,
-      )
-      .expect_err("image fetch should reject empty body");
-    handle.join().unwrap();
-    assert!(
-      err.to_string().contains("empty HTTP response body"),
-      "unexpected error message: {err}"
-    );
+
+    {
+      let Some(listener) = try_bind_localhost("http_empty_image_body_substitutes_placeholder_ureq")
+      else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(headers.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/pixel");
+      let res = fetcher
+        .fetch_http_with_accept_inner_ureq(
+          FetchContextKind::Image,
+          &url,
+          None,
+          None,
+          None,
+          &deadline,
+          Instant::now(),
+          false,
+        )
+        .expect("ureq image fetch should substitute placeholder");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG);
+      assert_eq!(
+        res.content_type.as_deref(),
+        Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+      );
+    }
+
+    {
+      let Some(listener) =
+        try_bind_localhost("http_empty_image_body_substitutes_placeholder_ureq_partial")
+      else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(headers.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/pixel");
+      let res = fetcher
+        .fetch_http_partial_inner_ureq(FetchContextKind::Image, &url, 8, &deadline, Instant::now())
+        .expect("ureq image prefix should substitute placeholder");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG[..8]);
+      assert_eq!(
+        res.content_type.as_deref(),
+        Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+      );
+    }
+
+    {
+      let Some(listener) =
+        try_bind_localhost("http_empty_image_body_substitutes_placeholder_reqwest")
+      else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(headers.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/pixel");
+      let res = fetcher
+        .fetch_http_with_accept_inner_reqwest(
+          FetchContextKind::Image,
+          &url,
+          None,
+          None,
+          None,
+          &deadline,
+          Instant::now(),
+          false,
+        )
+        .expect("reqwest image fetch should substitute placeholder");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG);
+      assert_eq!(
+        res.content_type.as_deref(),
+        Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+      );
+    }
+
+    {
+      let Some(listener) =
+        try_bind_localhost("http_empty_image_body_substitutes_placeholder_reqwest_partial")
+      else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(headers.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/pixel");
+      let res = fetcher
+        .fetch_http_partial_inner_reqwest(FetchContextKind::Image, &url, 8, &deadline, Instant::now())
+        .expect("reqwest image prefix should substitute placeholder");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG[..8]);
+      assert_eq!(
+        res.content_type.as_deref(),
+        Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+      );
+    }
   }
 
   #[test]

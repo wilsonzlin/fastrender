@@ -605,12 +605,12 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         };
 
       let encodings = super::parse_content_encodings(&response.headers);
-      let content_type = response
+      let mut content_type = response
         .headers
         .get("content-type")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
-      let decode_stage = super::decode_stage_for_content_type(content_type.as_deref());
+      let mut decode_stage = super::decode_stage_for_content_type(content_type.as_deref());
       let etag = response
         .headers
         .get("etag")
@@ -623,7 +623,9 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         .map(|s| s.to_string());
       let cache_policy = super::parse_http_cache_policy(&response.headers);
 
-      let bytes = match super::decode_content_encodings(
+      let substitute_empty_image_body =
+        super::should_substitute_empty_image_body(kind, status_code, &response.headers);
+      let mut bytes = match super::decode_content_encodings(
         response.body,
         &encodings,
         allowed_limit,
@@ -652,6 +654,11 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       };
 
       super::record_network_fetch_bytes(bytes.len());
+      if bytes.is_empty() && substitute_empty_image_body {
+        bytes = super::OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+        content_type = Some(super::OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+        decode_stage = super::decode_stage_for_content_type(content_type.as_deref());
+      }
       let is_retryable_status = super::retryable_http_status(status_code);
       let allows_empty_body =
         super::http_response_allows_empty_body(kind, status_code, &response.headers);
