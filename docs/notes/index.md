@@ -12,3 +12,4 @@ Small, durable writeups that explain “why/how” decisions that are worth keep
 - [http-agent-pooling.md](http-agent-pooling.md) — shared `ureq::Agent` / `reqwest::blocking::Client` connection pooling for cheaper resource fetches.
 - [bundled-fonts.md](bundled-fonts.md) — policy for keeping bundled font coverage deterministic and small.
 - [layout-timeouts-profiling.md](layout-timeouts-profiling.md) — baseline CPU profiles for layout timeouts + layout hotspots.
+- [empty-urls-and-image-placeholders.md](empty-urls-and-image-placeholders.md) — handling `url("")` and non-image HTTP payloads to keep pageset progress signal-heavy.
