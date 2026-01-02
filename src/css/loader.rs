@@ -336,7 +336,7 @@ pub fn absolutize_css_urls_cow<'a>(
 
   fn should_resolve_css_url(url: &str) -> bool {
     let trimmed = url.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('<') {
       return false;
     }
     !looks_like_absolute_url(trimmed)
@@ -2133,6 +2133,24 @@ mod tests {
     let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
     assert!(matches!(out, Cow::Borrowed(_)));
     assert_eq!(out.as_ref(), css);
+  }
+
+  #[test]
+  fn absolutizes_css_urls_cow_leaves_inline_svg_markup_unchanged() {
+    let css = r#"body { mask-image: url("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'></svg>"); }"#;
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert_eq!(out.as_ref(), css);
+  }
+
+  #[test]
+  fn absolutizes_css_urls_cow_rewrites_unquoted_relative_urls() {
+    let css = "body { background: url(images/bg.png); }";
+    let out = absolutize_css_urls_cow(css, "https://example.com/styles/main.css").unwrap();
+    assert!(matches!(out, Cow::Owned(_)));
+    assert_eq!(
+      out.as_ref(),
+      "body { background: url(\"https://example.com/styles/images/bg.png\"); }"
+    );
   }
 
   #[test]
