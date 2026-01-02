@@ -136,11 +136,16 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
       return false;
     }
 
-    // Verify digits on both sides of the comma.
-    if !bytes[eq_pos + 1..comma_idx]
-      .iter()
-      .all(|b| b.is_ascii_digit())
-    {
+    fn is_numeric_list_char(b: u8) -> bool {
+      b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'+' | b',')
+    }
+
+    // Verify numeric-list characters on both sides of the comma.
+    let before = &bytes[eq_pos + 1..comma_idx];
+    if before.is_empty() || !before.iter().all(|&b| is_numeric_list_char(b)) {
+      return false;
+    }
+    if !before.iter().any(|b| b.is_ascii_digit()) {
       return false;
     }
 
@@ -155,10 +160,11 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
     if comma_idx + 1 >= after_end {
       return false;
     }
-    if !bytes[comma_idx + 1..after_end]
-      .iter()
-      .all(|b| b.is_ascii_digit())
-    {
+    let after = &bytes[comma_idx + 1..after_end];
+    if after.is_empty() || !after.iter().all(|&b| is_numeric_list_char(b)) {
+      return false;
+    }
+    if !after.iter().any(|b| b.is_ascii_digit()) {
       return false;
     }
 
@@ -470,6 +476,18 @@ mod tests {
     assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Width(300)));
     assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
     assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Width(600)));
+  }
+
+  #[test]
+  fn parse_srcset_allows_multiple_commas_in_query_numeric_lists() {
+    let parsed = parse_srcset(
+      "https://img.example/foo.jpg?rect=0,0,100,100 1x, https://img.example/bar.jpg 2x",
+    );
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].url, "https://img.example/foo.jpg?rect=0,0,100,100");
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+    assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
   }
 
   #[test]
