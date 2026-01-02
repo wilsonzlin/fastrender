@@ -82,7 +82,6 @@ skrifa = "0.20"
 [dev-dependencies]
 criterion = "0.5"
 filetime = "0.2"
-num_cpus = "1.17.0"
 
 [[bench]]
 name = "perf_regressions"

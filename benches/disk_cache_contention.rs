@@ -45,7 +45,7 @@ impl ResourceFetcher for PanicFetcher {
 
 #[cfg(feature = "disk_cache")]
 fn bench_disk_cache_parallel_hits(c: &mut Criterion) {
-  let workers = std::cmp::max(1, num_cpus::get());
+  let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
   let url_count = 16usize;
   let urls: Vec<String> = (0..url_count)
     .map(|i| format!("https://example.com/resource/{i}"))
@@ -146,7 +146,7 @@ fn bench_disk_cache_parallel_hits(c: &mut Criterion) {
 
 #[cfg(feature = "disk_cache")]
 fn bench_disk_cache_parallel_inserts_with_eviction(c: &mut Criterion) {
-  let workers = std::cmp::max(1, num_cpus::get());
+  let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
   let inserts_per_worker = 64usize;
   let body: Arc<Vec<u8>> = Arc::new(vec![42u8; 64]);
 

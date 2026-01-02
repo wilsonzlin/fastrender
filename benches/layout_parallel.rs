@@ -13,6 +13,10 @@ use fastrender::{
 use rayon::ThreadPoolBuilder;
 use std::{env, sync::Arc};
 
+fn available_threads() -> usize {
+  std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
 fn build_table(rows: usize, cols: usize) -> BoxTree {
   let mut root_style = ComputedStyle::default();
   root_style.display = Display::Block;
@@ -421,7 +425,7 @@ fn bench_layout_parallel(c: &mut Criterion) {
 
   let serial_engine =
     LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), font_ctx.clone());
-  let parallelism = LayoutParallelism::enabled(4).with_max_threads(Some(num_cpus::get().max(2)));
+  let parallelism = LayoutParallelism::enabled(4).with_max_threads(Some(available_threads().max(2)));
   let parallel_engine = LayoutEngine::with_font_context(
     LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
     font_ctx,
@@ -446,7 +450,7 @@ fn bench_layout_parallel_dense(c: &mut Criterion) {
     LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), font_ctx.clone());
   let parallelism = LayoutParallelism::enabled(8)
     .with_min_fanout(4)
-    .with_max_threads(Some(num_cpus::get().max(2)));
+    .with_max_threads(Some(available_threads().max(2)));
   let parallel_engine = LayoutEngine::with_font_context(
     LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
     font_ctx,
@@ -479,7 +483,7 @@ fn bench_grid_parallel(c: &mut Criterion) {
     .with_parallelism(LayoutParallelism::enabled(8));
 
   let pool = ThreadPoolBuilder::new()
-    .num_threads(num_cpus::get().max(2))
+    .num_threads(available_threads().max(2))
     .build()
     .expect("build rayon pool");
 
@@ -503,7 +507,7 @@ fn bench_block_parallel(c: &mut Criterion) {
 
   let serial_engine =
     LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), font_ctx.clone());
-  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(num_cpus::get().max(2)));
+  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(available_threads().max(2)));
   let parallel_engine = LayoutEngine::with_font_context(
     LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
     font_ctx,
@@ -526,7 +530,7 @@ fn bench_flex_parallel(c: &mut Criterion) {
 
   let serial_engine =
     LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), font_ctx.clone());
-  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(num_cpus::get().max(2)));
+  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(available_threads().max(2)));
   let parallel_engine = LayoutEngine::with_font_context(
     LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
     font_ctx,
@@ -549,7 +553,7 @@ fn bench_flex_item_children_parallel(c: &mut Criterion) {
 
   let serial_engine =
     LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), font_ctx.clone());
-  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(num_cpus::get().max(2)));
+  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(available_threads().max(2)));
   let parallel_engine = LayoutEngine::with_font_context(
     LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
     font_ctx,
@@ -584,7 +588,7 @@ fn bench_flex_cache_contention_case(
 
   let parallelism = LayoutParallelism::enabled(8)
     .with_min_fanout(4)
-    .with_max_threads(Some(num_cpus::get().max(2)));
+    .with_max_threads(Some(available_threads().max(2)));
   let mut parallel_config = LayoutConfig::for_viewport(viewport).with_parallelism(parallelism);
   parallel_config.enable_cache = true;
   let parallel_engine = LayoutEngine::with_font_context(parallel_config, font_ctx);
@@ -647,7 +651,7 @@ fn bench_taffy_node_cache_contention(c: &mut Criterion) {
 
   let parallelism = LayoutParallelism::enabled(8)
     .with_min_fanout(4)
-    .with_max_threads(Some(num_cpus::get().max(2)));
+    .with_max_threads(Some(available_threads().max(2)));
   let mut parallel_config = LayoutConfig::for_viewport(viewport).with_parallelism(parallelism);
   parallel_config.enable_cache = true;
   let parallel_engine = LayoutEngine::with_font_context(parallel_config, font_ctx);
