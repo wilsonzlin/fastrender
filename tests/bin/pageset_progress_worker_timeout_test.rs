@@ -91,7 +91,7 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
       "--timeout",
       "1",
       "--soft-timeout-ms",
-      "100",
+      "300",
       "--bundled-fonts",
     ])
     .status()

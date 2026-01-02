@@ -1181,12 +1181,25 @@ fn crawl_document(
   }
 
   // Avoid exploding crawl time/bundle size on pages with large responsive image srcsets.
-  // Missing candidates will be rewritten to local placeholders when importing fixtures.
-  const MAX_HTML_SRCSET_CANDIDATES: usize = 1;
+  //
+  // For network documents we keep the crawl bounded aggressively because a single `<img srcset>`
+  // can reference dozens of large images. For local `file://` fixtures, however, we want more
+  // complete bundles (and the resources are on-disk anyway), so allow the HTML discovery helper's
+  // full cap (currently 16).
+  const MAX_HTML_SRCSET_CANDIDATES_NETWORK: usize = 1;
+  const MAX_HTML_SRCSET_CANDIDATES_LOCAL: usize = 16;
+  let srcset_candidate_limit = |base_url: &str| {
+    if base_url.trim_start().to_ascii_lowercase().starts_with("file://") {
+      MAX_HTML_SRCSET_CANDIDATES_LOCAL
+    } else {
+      MAX_HTML_SRCSET_CANDIDATES_NETWORK
+    }
+  };
+  let max_srcset_candidates = srcset_candidate_limit(&document.base_url);
   let html_assets = fastrender::html::asset_discovery::discover_html_asset_urls_with_srcset_limit(
     &document.html,
     &document.base_url,
-    MAX_HTML_SRCSET_CANDIDATES,
+    max_srcset_candidates,
   );
   for url in html_assets.images {
     enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
@@ -1302,7 +1315,7 @@ fn crawl_document(
       let html_assets = fastrender::html::asset_discovery::discover_html_asset_urls_with_srcset_limit(
         &doc.html,
         &doc.base_url,
-        MAX_HTML_SRCSET_CANDIDATES,
+        srcset_candidate_limit(&doc.base_url),
       );
       for url in html_assets.images {
         enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);

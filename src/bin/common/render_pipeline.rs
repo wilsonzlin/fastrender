@@ -18,6 +18,7 @@ use fastrender::resource::{
 use fastrender::style::media::MediaType;
 use fastrender::text::font_db::FontConfig;
 use fastrender::{Error, LayoutParallelism, Result};
+use memchr::memchr;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -316,6 +317,54 @@ pub fn read_cached_document(path: &Path) -> Result<CachedDocument> {
 }
 
 const MAX_CLIENT_REDIRECT_HOPS: usize = 5;
+// Avoid quadratic-ish scans over huge HTML bodies when looking for meta refresh / JS redirects.
+// Redirect tags/scripts are almost always near the top of the document (head / early body).
+const MAX_CLIENT_REDIRECT_SCAN_BYTES: usize = 256 * 1024;
+const CLIENT_REDIRECT_SCAN_BODY_PREFIX_BYTES: usize = 32 * 1024;
+
+fn find_tag_case_insensitive(bytes: &[u8], limit: usize, needle: &[u8]) -> Option<usize> {
+  let mut idx = 0usize;
+  while idx < limit {
+    let Some(pos) = memchr(b'<', &bytes[idx..limit]) else {
+      return None;
+    };
+    let start = idx + pos;
+    if start + needle.len() <= limit
+      && bytes[start..start + needle.len()].eq_ignore_ascii_case(needle)
+    {
+      let after = start + needle.len();
+      if after >= limit {
+        return Some(start);
+      }
+      let next = bytes[after];
+      if next == b'>' || next == b'/' || next.is_ascii_whitespace() {
+        return Some(start);
+      }
+    }
+    idx = start + 1;
+  }
+  None
+}
+
+fn client_redirect_scan_html(html: &str) -> &str {
+  if html.len() <= MAX_CLIENT_REDIRECT_SCAN_BYTES {
+    return html;
+  }
+  let bytes = html.as_bytes();
+  let limit = MAX_CLIENT_REDIRECT_SCAN_BYTES.min(bytes.len());
+  let mut end = limit;
+
+  if let Some(pos) = find_tag_case_insensitive(bytes, limit, b"<body") {
+    end = (pos + CLIENT_REDIRECT_SCAN_BODY_PREFIX_BYTES).min(limit);
+  } else if let Some(pos) = find_tag_case_insensitive(bytes, limit, b"</head") {
+    end = pos.min(limit);
+  }
+
+  while end > 0 && !html.is_char_boundary(end) {
+    end -= 1;
+  }
+  &html[..end]
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClientRedirectKind {
@@ -335,13 +384,14 @@ fn client_redirect_target(
   doc: &PreparedDocument,
   mut log: impl FnMut(&str),
 ) -> Option<String> {
+  let html = client_redirect_scan_html(&doc.html);
   match kind {
     ClientRedirectKind::MetaRefresh => {
-      let refresh = extract_meta_refresh_url(&doc.html)?;
+      let refresh = extract_meta_refresh_url(html)?;
       resolve_href(&doc.base_url, &refresh)
     }
     ClientRedirectKind::JsLocation => {
-      let js_redirect = extract_js_location_redirect(&doc.html)?;
+      let js_redirect = extract_js_location_redirect(html)?;
       if js_redirect.len() > 2048 {
         log(&format!(
           "Warning: skipping JS redirect of length {}",
