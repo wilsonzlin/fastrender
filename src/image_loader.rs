@@ -2059,6 +2059,14 @@ impl ImageCache {
       return Ok(meta);
     }
 
+    let (flight, is_owner) = self.join_meta_inflight(resolved_url);
+    if !is_owner {
+      record_image_cache_hit();
+      return flight.wait(resolved_url);
+    }
+
+    let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, resolved_url, flight);
+
     if let Some(cached) = self.fetcher.read_cache_artifact(
       FetchContextKind::Image,
       resolved_url,
@@ -2072,6 +2080,7 @@ impl ImageCache {
             reason: err.reason,
           });
           self.record_image_error(resolved_url, &blocked);
+          inflight_guard.finish(SharedMetaResult::Error(blocked.clone()));
           return Err(blocked);
         }
       }
@@ -2082,6 +2091,7 @@ impl ImageCache {
           cache.insert(resolved_url.to_string(), Arc::clone(&meta));
         }
         record_image_cache_hit();
+        inflight_guard.finish(SharedMetaResult::Success(Arc::clone(&meta)));
         return Ok(meta);
       }
 
@@ -2092,14 +2102,6 @@ impl ImageCache {
         CacheArtifactKind::ImageProbeMetadata,
       );
     }
-
-    let (flight, is_owner) = self.join_meta_inflight(resolved_url);
-    if !is_owner {
-      record_image_cache_hit();
-      return flight.wait(resolved_url);
-    }
-
-    let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, resolved_url, flight);
 
     record_image_cache_miss();
     let result = self.fetch_and_probe(resolved_url);
@@ -5328,6 +5330,103 @@ mod tests {
     release.wait();
     let _ = owner_handle.join();
     let _ = waiter_handle.join();
+  }
+
+  #[test]
+  fn probe_inflight_deduplicates_cache_artifact_reads() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Barrier;
+    use std::thread;
+
+    struct ArtifactFetcher {
+      url: String,
+      bytes: Arc<Vec<u8>>,
+      calls: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for ArtifactFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("network fetch should not be called");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        _url: &str,
+        _max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        panic!("network partial fetch should not be called");
+      }
+
+      fn read_cache_artifact(
+        &self,
+        kind: FetchContextKind,
+        url: &str,
+        artifact: CacheArtifactKind,
+      ) -> Option<FetchedResource> {
+        assert_eq!(kind, FetchContextKind::Image);
+        assert_eq!(artifact, CacheArtifactKind::ImageProbeMetadata);
+        if url != self.url {
+          return None;
+        }
+
+        let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+        if idx == 0 {
+          // Simulate a slow disk read so concurrent probes overlap.
+          thread::sleep(Duration::from_millis(50));
+        }
+
+        let mut res = FetchedResource::new(
+          self.bytes.as_ref().clone(),
+          Some("application/x-fastrender-image-probe+json".to_string()),
+        );
+        res.status = Some(200);
+        res.final_url = Some(url.to_string());
+        Some(res)
+      }
+    }
+
+    let meta = CachedImageMetadata {
+      width: 42,
+      height: 24,
+      orientation: None,
+      resolution: None,
+      is_vector: false,
+      intrinsic_ratio: None,
+      aspect_ratio_none: false,
+    };
+    let bytes = Arc::new(encode_probe_metadata_for_disk(&meta).expect("encode metadata"));
+    let url = "https://example.com/probe-inflight-artifact.png".to_string();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let cache = ImageCache::with_fetcher(Arc::new(ArtifactFetcher {
+      url: url.clone(),
+      bytes: Arc::clone(&bytes),
+      calls: Arc::clone(&calls),
+    }));
+
+    let threads = 8usize;
+    let barrier = Arc::new(Barrier::new(threads));
+    let mut handles = Vec::new();
+    for _ in 0..threads {
+      let cache = cache.clone();
+      let url = url.clone();
+      let barrier = Arc::clone(&barrier);
+      handles.push(thread::spawn(move || {
+        barrier.wait();
+        cache.probe_resolved(&url)
+      }));
+    }
+
+    for handle in handles {
+      let probed = handle.join().expect("probe thread panicked").expect("probe ok");
+      assert_eq!(probed.dimensions(), (42, 24));
+    }
+
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "cache artifact reads should be single-flight under probe in-flight"
+    );
   }
 
   #[test]
