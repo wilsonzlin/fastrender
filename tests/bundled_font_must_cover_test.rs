@@ -60,16 +60,22 @@ fn bundled_font_coverage_includes_pageset_must_cover_codepoints() {
     ("Black diamond minus white x U+2756", char::from_u32(0x2756).expect("emoji scalar")),
     ("Up arrow U+2B06", char::from_u32(0x2B06).expect("emoji scalar")),
     ("Down arrow U+2B07", char::from_u32(0x2B07).expect("emoji scalar")),
+    ("White medium star U+2B50", char::from_u32(0x2B50).expect("emoji scalar")),
     ("Crystal ball U+1F52E", char::from_u32(0x1F52E).expect("emoji scalar")),
     ("Police car light U+1F6A8", char::from_u32(0x1F6A8).expect("emoji scalar")),
     ("Party popper U+1F389", char::from_u32(0x1F389).expect("emoji scalar")),
     ("Confetti ball U+1F38A", char::from_u32(0x1F38A).expect("emoji scalar")),
     ("Trophy U+1F3C6", char::from_u32(0x1F3C6).expect("emoji scalar")),
+    ("Goat U+1F410", char::from_u32(0x1F410).expect("emoji scalar")),
     ("Calendar U+1F4C5", char::from_u32(0x1F4C5).expect("emoji scalar")),
     ("Round pushpin U+1F4CD", char::from_u32(0x1F4CD).expect("emoji scalar")),
     ("Growing heart U+1F497", char::from_u32(0x1F497).expect("emoji scalar")),
     ("Fire U+1F525", char::from_u32(0x1F525).expect("emoji scalar")),
     ("Thinking face U+1F914", char::from_u32(0x1F914).expect("emoji scalar")),
+    (
+      "Cowboy hat face U+1F920",
+      char::from_u32(0x1F920).expect("emoji scalar"),
+    ),
     ("Handbag U+1F45C", char::from_u32(0x1F45C).expect("emoji scalar")),
   ];
 

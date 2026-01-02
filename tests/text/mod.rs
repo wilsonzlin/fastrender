@@ -3,6 +3,7 @@
 mod bidi;
 mod bidi_visual_order;
 mod bundled_emoji_render;
+mod bundled_emoji_last_resort;
 mod bundled_multiscript_render;
 mod bundled_script_coverage;
 mod cluster_test;
