@@ -54,7 +54,7 @@ impl CustomPropertyRegistry {
     let mut store = CustomPropertyStore::default();
     for (name, rule) in self.definitions.iter() {
       if let Some(value) = rule.initial_value.as_ref() {
-        store.insert(name.clone(), value.clone());
+        store.insert(name.as_str().into(), value.clone());
       }
     }
     store

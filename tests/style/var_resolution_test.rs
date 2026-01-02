@@ -28,7 +28,7 @@ use fastrender::PropertyValue;
 fn make_props(pairs: &[(&str, &str)]) -> CustomPropertyStore {
   let mut store = CustomPropertyStore::default();
   for (name, value) in pairs.iter().copied() {
-    store.insert(name.to_string(), CustomPropertyValue::new(value, None));
+    store.insert(name.into(), CustomPropertyValue::new(value, None));
   }
   store
 }
@@ -161,7 +161,7 @@ fn test_resolve_var_fallback_with_commas_and_functions() {
   let resolved = resolve_var_for_property(&value, &props, "color");
 
   match resolved {
-    VarResolutionResult::Resolved { value, .. } => match *value {
+    VarResolutionResult::Resolved { value, .. } => match value.as_ref() {
       PropertyValue::Color(_) => {}
       other => panic!("Expected color value, got {:?}", other),
     },
@@ -176,7 +176,7 @@ fn test_resolve_var_fallback_with_commas_inside_url() {
   let resolved = resolve_var_for_property(&value, &props, "background-image");
 
   match resolved {
-    VarResolutionResult::Resolved { value, .. } => match *value {
+    VarResolutionResult::Resolved { value, .. } => match value.as_ref() {
       PropertyValue::Multiple(values) => {
         assert_eq!(values.len(), 1);
         assert!(matches!(values[0], PropertyValue::Url(ref url) if url == "a,b"));

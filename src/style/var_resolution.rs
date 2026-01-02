@@ -13,6 +13,7 @@ use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
+use std::borrow::Cow;
 #[cfg(test)]
 use std::cell::Cell;
 
@@ -48,11 +49,36 @@ fn contains_ascii_case_insensitive_var_call(raw: &str) -> bool {
 
 /// Result of a var() resolution attempt
 #[derive(Debug, Clone)]
-pub enum VarResolutionResult {
+pub enum ResolvedPropertyValue<'a> {
+  Borrowed(&'a PropertyValue),
+  Owned(Box<PropertyValue>),
+}
+
+impl<'a> ResolvedPropertyValue<'a> {
+  #[inline]
+  pub fn as_ref(&self) -> &PropertyValue {
+    match self {
+      Self::Borrowed(value) => value,
+      Self::Owned(value) => value.as_ref(),
+    }
+  }
+
+  #[inline]
+  pub fn into_owned(self) -> PropertyValue {
+    match self {
+      Self::Borrowed(value) => value.clone(),
+      Self::Owned(value) => *value,
+    }
+  }
+}
+
+/// Result of a var() resolution attempt.
+#[derive(Debug, Clone)]
+pub enum VarResolutionResult<'a> {
   /// Successfully resolved to a value
   Resolved {
-    value: Box<PropertyValue>,
-    css_text: String,
+    value: ResolvedPropertyValue<'a>,
+    css_text: Cow<'a, str>,
   },
   /// The variable was not found and no fallback was provided (or the fallback failed to resolve)
   NotFound(String),
@@ -62,11 +88,11 @@ pub enum VarResolutionResult {
   InvalidSyntax(String),
 }
 
-impl VarResolutionResult {
+impl<'a> VarResolutionResult<'a> {
   /// Returns the resolved value if successful, otherwise returns the original value
   pub fn unwrap_or(self, default: PropertyValue) -> PropertyValue {
     match self {
-      VarResolutionResult::Resolved { value, .. } => *value,
+      VarResolutionResult::Resolved { value, .. } => value.into_owned(),
       _ => default,
     }
   }
@@ -82,7 +108,7 @@ impl VarResolutionResult {
   /// which is still useful for consumers that need the token-stream result.
   pub fn css_text(&self) -> Option<&str> {
     match self {
-      VarResolutionResult::Resolved { css_text, .. } => Some(css_text.as_str()),
+      VarResolutionResult::Resolved { css_text, .. } => Some(css_text.as_ref()),
       VarResolutionResult::InvalidSyntax(text) => Some(text.as_str()),
       _ => None,
     }
@@ -98,7 +124,7 @@ pub fn resolve_var(
   custom_properties: &CustomPropertyStore,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, 0, "") {
-    VarResolutionResult::Resolved { value, .. } => *value,
+    VarResolutionResult::Resolved { value, .. } => value.into_owned(),
     other => other.unwrap_or(value.clone()),
   }
 }
@@ -107,11 +133,11 @@ pub fn resolve_var(
 ///
 /// Passing the property name allows the resolver to parse the substituted value using the
 /// appropriate grammar (e.g., background layers with commas), rather than the generic parser.
-pub fn resolve_var_for_property(
-  value: &PropertyValue,
+pub fn resolve_var_for_property<'a>(
+  value: &'a PropertyValue,
   custom_properties: &CustomPropertyStore,
   property_name: &str,
-) -> VarResolutionResult {
+) -> VarResolutionResult<'a> {
   match value {
     PropertyValue::Keyword(raw) | PropertyValue::Custom(raw) => {
       // Most declarations are simple keywords (display, position, etc.) and do not contain any
@@ -125,8 +151,8 @@ pub fn resolve_var_for_property(
         && (!raw.as_bytes().contains(&b'\\') || !raw.as_bytes().contains(&b'('))
       {
         return VarResolutionResult::Resolved {
-          value: Box::new(value.clone()),
-          css_text: String::new(),
+          value: ResolvedPropertyValue::Borrowed(value),
+          css_text: Cow::Borrowed(""),
         };
       }
     }
@@ -145,18 +171,18 @@ pub fn resolve_var_with_depth(
   depth: usize,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, depth, "") {
-    VarResolutionResult::Resolved { value, .. } => *value,
+    VarResolutionResult::Resolved { value, .. } => value.into_owned(),
     other => other.unwrap_or(value.clone()),
   }
 }
 
 /// Internal recursive implementation of var() resolution
-fn resolve_var_recursive(
-  value: &PropertyValue,
+fn resolve_var_recursive<'a>(
+  value: &'a PropertyValue,
   custom_properties: &CustomPropertyStore,
   depth: usize,
   property_name: &str,
-) -> VarResolutionResult {
+) -> VarResolutionResult<'a> {
   if depth >= MAX_RECURSION_DEPTH {
     return VarResolutionResult::RecursionLimitExceeded;
   }
@@ -167,26 +193,26 @@ fn resolve_var_recursive(
     }
     PropertyValue::Custom(raw) => resolve_from_string(raw, custom_properties, depth, property_name),
     _ => VarResolutionResult::Resolved {
-      value: Box::new(value.clone()),
-      css_text: String::new(),
+      value: ResolvedPropertyValue::Borrowed(value),
+      css_text: Cow::Borrowed(""),
     },
   }
 }
 
-fn resolve_from_string(
+fn resolve_from_string<'a>(
   raw: &str,
   custom_properties: &CustomPropertyStore,
   depth: usize,
   property_name: &str,
-) -> VarResolutionResult {
+) -> VarResolutionResult<'a> {
   let mut stack = Vec::new();
   match resolve_value_tokens(raw, custom_properties, &mut stack, depth) {
     Ok(tokens) => {
       let resolved = tokens_to_css_string(&tokens);
       match parse_value_after_resolution(&resolved, property_name) {
         Some(value) => VarResolutionResult::Resolved {
-          value: Box::new(value),
-          css_text: resolved,
+          value: ResolvedPropertyValue::Owned(Box::new(value)),
+          css_text: Cow::Owned(resolved),
         },
         None => VarResolutionResult::InvalidSyntax(resolved),
       }
@@ -200,7 +226,7 @@ fn resolve_value_tokens(
   custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult> {
+) -> Result<Vec<String>, VarResolutionResult<'static>> {
   if depth >= MAX_RECURSION_DEPTH {
     return Err(VarResolutionResult::RecursionLimitExceeded);
   }
@@ -215,7 +241,7 @@ fn resolve_tokens_from_parser<'i, 't>(
   custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult> {
+) -> Result<Vec<String>, VarResolutionResult<'static>> {
   #[cfg(test)]
   TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(count.get() + 1));
 
@@ -276,9 +302,9 @@ fn resolve_tokens_from_parser<'i, 't>(
 }
 
 fn map_nested_result<'i>(
-  result: Result<Vec<String>, ParseError<'i, VarResolutionResult>>,
+  result: Result<Vec<String>, ParseError<'i, VarResolutionResult<'static>>>,
   hint: &str,
-) -> Result<Vec<String>, VarResolutionResult> {
+) -> Result<Vec<String>, VarResolutionResult<'static>> {
   match result {
     Ok(tokens) => Ok(tokens),
     Err(err) => match err.kind {
@@ -293,7 +319,7 @@ fn parse_var_function<'i, 't>(
   custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult> {
+) -> Result<Vec<String>, VarResolutionResult<'static>> {
   let (var_name, fallback) = parse_var_function_arguments(parser)?;
   resolve_variable_reference(
     &var_name,
@@ -306,7 +332,7 @@ fn parse_var_function<'i, 't>(
 
 fn parse_var_function_arguments<'i, 't>(
   parser: &mut Parser<'i, 't>,
-) -> Result<(String, Option<String>), VarResolutionResult> {
+) -> Result<(String, Option<String>), VarResolutionResult<'static>> {
   let mut var_name: Option<String> = None;
 
   while let Ok(token) = parser.next_including_whitespace_and_comments() {
@@ -356,7 +382,7 @@ fn resolve_variable_reference(
   custom_properties: &CustomPropertyStore,
   stack: &mut Vec<String>,
   depth: usize,
-) -> Result<Vec<String>, VarResolutionResult> {
+) -> Result<Vec<String>, VarResolutionResult<'static>> {
   if depth >= MAX_RECURSION_DEPTH {
     return Err(VarResolutionResult::RecursionLimitExceeded);
   }
@@ -668,7 +694,7 @@ mod tests {
   fn make_props(pairs: &[(&str, &str)]) -> CustomPropertyStore {
     let mut store = CustomPropertyStore::default();
     for (name, value) in pairs.iter().copied() {
-      store.insert(name.to_string(), CustomPropertyValue::new(value, None));
+      store.insert(name.into(), CustomPropertyValue::new(value, None));
     }
     store
   }
@@ -809,10 +835,10 @@ mod tests {
     let value = PropertyValue::Keyword("var(--bg)".to_string());
     let resolved = resolve_var_for_property(&value, &props, "background-image");
 
-    if let VarResolutionResult::Resolved { value: boxed, .. } = resolved {
-      let list = match *boxed {
+    if let VarResolutionResult::Resolved { value, .. } = resolved {
+      let list = match value.as_ref() {
         PropertyValue::Multiple(list) => list,
-        _ => panic!("Expected Multiple for background layers, got {:?}", boxed),
+        other => panic!("Expected Multiple for background layers, got {:?}", other),
       };
       assert_eq!(list.len(), 3); // url, comma token, gradient
       assert!(matches!(list[0], PropertyValue::Url(ref u) if u == "image.png"));
@@ -1020,12 +1046,12 @@ mod tests {
     let resolved = resolve_var_for_property(&value, &props, "display");
 
     match resolved {
-      VarResolutionResult::Resolved {
-        value: boxed,
-        css_text,
-      } => {
+      VarResolutionResult::Resolved { value, css_text } => {
         assert!(css_text.is_empty());
-        assert!(matches!(*boxed, PropertyValue::Keyword(ref kw) if kw == "block"));
+        assert!(matches!(
+          value,
+          ResolvedPropertyValue::Borrowed(PropertyValue::Keyword(kw)) if kw == "block"
+        ));
       }
       other => panic!("Expected Resolved, got {:?}", other),
     }
@@ -1036,8 +1062,8 @@ mod tests {
   #[test]
   fn test_resolve_var_result_methods() {
     let resolved = VarResolutionResult::Resolved {
-      value: Box::new(PropertyValue::Keyword("blue".to_string())),
-      css_text: "blue".to_string(),
+      value: ResolvedPropertyValue::Owned(Box::new(PropertyValue::Keyword("blue".to_string()))),
+      css_text: Cow::Borrowed("blue"),
     };
     assert!(resolved.is_resolved());
 

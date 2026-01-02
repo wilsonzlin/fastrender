@@ -3894,9 +3894,7 @@ fn parse_declaration<'i, 't>(
   let value = if let Some(pos) = important_pos {
     let important_slice = parser.slice_from(pos);
     let prefix_len = full_slice_raw.len().saturating_sub(important_slice.len());
-    full_slice_raw
-      .get(..prefix_len)
-      .unwrap_or(full_slice_raw)
+    full_slice_raw.get(..prefix_len).unwrap_or(full_slice_raw)
   } else {
     full_slice_raw
   };
@@ -3914,7 +3912,7 @@ fn parse_declaration<'i, 't>(
 
 fn intern_property_name(property: &str, context: DeclarationContext) -> Option<PropertyName> {
   if property.starts_with("--") {
-    return Some(PropertyName::Custom(property.to_string()));
+    return Some(PropertyName::Custom(Arc::from(property)));
   }
 
   let needs_lowercase = property.as_bytes().iter().any(|b| b.is_ascii_uppercase());
@@ -3964,9 +3962,9 @@ fn parse_declaration_in_style_block<'i, 't>(
           saw_curly_block = true;
           break;
         }
-        Ok(Token::Function(_))
-        | Ok(Token::ParenthesisBlock)
-        | Ok(Token::SquareBracketBlock) => skip_nested_block_contents(parser),
+        Ok(Token::Function(_)) | Ok(Token::ParenthesisBlock) | Ok(Token::SquareBracketBlock) => {
+          skip_nested_block_contents(parser)
+        }
         Ok(_) => {}
       }
     }
@@ -3997,9 +3995,9 @@ fn parse_declaration_in_style_block<'i, 't>(
           // Nested rules like `a:hover {}` contain a colon, but must not be treated as declarations.
           return Err(parser.new_custom_error(SelectorParseErrorKind::EmptySelector));
         }
-        Ok(Token::Function(_))
-        | Ok(Token::ParenthesisBlock)
-        | Ok(Token::SquareBracketBlock) => skip_nested_block_contents(parser),
+        Ok(Token::Function(_)) | Ok(Token::ParenthesisBlock) | Ok(Token::SquareBracketBlock) => {
+          skip_nested_block_contents(parser)
+        }
         Ok(_) => {}
       }
     }
@@ -4050,9 +4048,7 @@ fn parse_declaration_in_style_block<'i, 't>(
   let value = if let Some(pos) = important_pos {
     let important_slice = parser.slice_from(pos);
     let prefix_len = full_slice_raw.len().saturating_sub(important_slice.len());
-    full_slice_raw
-      .get(..prefix_len)
-      .unwrap_or(full_slice_raw)
+    full_slice_raw.get(..prefix_len).unwrap_or(full_slice_raw)
   } else {
     full_slice_raw
   };
@@ -4635,9 +4631,16 @@ mod tests {
         }
       ";
     let sheet = parse_stylesheet(css).expect("parse stylesheet");
-    assert_eq!(sheet.rules.len(), 2, "expected 2 top-level rules, got {sheet:?}");
+    assert_eq!(
+      sheet.rules.len(),
+      2,
+      "expected 2 top-level rules, got {sheet:?}"
+    );
     let CssRule::Scope(scope) = &sheet.rules[1] else {
-      panic!("expected second rule to be @scope, got {:?}", sheet.rules[1]);
+      panic!(
+        "expected second rule to be @scope, got {:?}",
+        sheet.rules[1]
+      );
     };
     assert!(scope.start.is_some(), "expected scope start selector list");
     assert!(scope.end.is_some(), "expected scope end selector list");

@@ -1,6 +1,28 @@
 use crate::style::values::CustomPropertyValue;
 use cssparser::{Parser, ParserInput, Token};
 use im::HashMap;
+use rustc_hash::FxHasher;
+#[cfg(test)]
+use std::cell::Cell;
+use std::hash::BuildHasherDefault;
+use std::sync::Arc;
+
+type CustomPropertyMap = HashMap<Arc<str>, CustomPropertyValue, BuildHasherDefault<FxHasher>>;
+
+#[cfg(test)]
+thread_local! {
+  static TEST_HAMT_INSERTS: Cell<u64> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_test_hamt_inserts() {
+  TEST_HAMT_INSERTS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn test_hamt_inserts() -> u64 {
+  TEST_HAMT_INSERTS.with(|count| count.get())
+}
 
 /// Structurally-shared custom property store.
 ///
@@ -8,7 +30,7 @@ use im::HashMap;
 /// properties to descendants) is O(1) with structural sharing instead of O(vars).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CustomPropertyStore {
-  map: HashMap<String, CustomPropertyValue>,
+  map: CustomPropertyMap,
   /// Count of custom property values containing the keyword `revert-layer`.
   ///
   /// This is an optimization for `apply_cascaded_declarations`, which otherwise would scan every
@@ -21,7 +43,7 @@ pub struct CustomPropertyStore {
 impl Default for CustomPropertyStore {
   fn default() -> Self {
     Self {
-      map: HashMap::new(),
+      map: HashMap::default(),
       revert_layer_values: 0,
     }
   }
@@ -48,12 +70,20 @@ impl CustomPropertyStore {
     self.map.contains_key(name)
   }
 
-  pub fn insert(&mut self, name: String, value: CustomPropertyValue) {
+  pub fn insert(&mut self, name: Arc<str>, value: CustomPropertyValue) {
+    // Avoid the relatively expensive HAMT insert when the value is unchanged.
+    //
+    // Tailwind-style resets often assign the same custom property value on every element even
+    // though the property is inherited. Without this guard we end up allocating new HAMT nodes for
+    // no-op overwrites across the entire DOM.
+    let prev = self.map.get(name.as_ref());
+    if prev.is_some_and(|prev| prev == &value) {
+      return;
+    }
+
     let new_has_revert_layer = contains_revert_layer_token(value.value.as_str());
-    let prev_has_revert_layer = self
-      .map
-      .get(name.as_str())
-      .is_some_and(|prev| contains_revert_layer_token(prev.value.as_str()));
+    let prev_has_revert_layer =
+      prev.is_some_and(|prev| contains_revert_layer_token(prev.value.as_str()));
 
     if prev_has_revert_layer {
       self.revert_layer_values = self.revert_layer_values.saturating_sub(1);
@@ -61,6 +91,9 @@ impl CustomPropertyStore {
     if new_has_revert_layer {
       self.revert_layer_values = self.revert_layer_values.saturating_add(1);
     }
+
+    #[cfg(test)]
+    TEST_HAMT_INSERTS.with(|count| count.set(count.get() + 1));
 
     self.map.insert(name, value);
   }
@@ -80,7 +113,7 @@ impl CustomPropertyStore {
     self.map.values()
   }
 
-  pub fn iter(&self) -> impl Iterator<Item = (&String, &CustomPropertyValue)> + '_ {
+  pub fn iter(&self) -> impl Iterator<Item = (&Arc<str>, &CustomPropertyValue)> + '_ {
     self.map.iter()
   }
 

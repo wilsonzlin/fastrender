@@ -4258,6 +4258,9 @@ pub fn apply_declaration_with_base(
 ) {
   // Handle CSS Custom Properties (--*)
   if decl.property.is_custom() {
+    let crate::css::types::PropertyName::Custom(custom_name) = &decl.property else {
+      return;
+    };
     let raw_text = decl_raw_text(decl);
     let raw_trimmed = raw_text.trim();
     let registration = styles.custom_property_registry.get(decl.property.as_str());
@@ -4270,8 +4273,15 @@ pub fn apply_declaration_with_base(
         CustomPropertySyntax::Universal
       )
     {
+      if styles
+        .custom_properties
+        .get(custom_name.as_ref())
+        .is_some_and(|existing| existing.typed.is_none() && existing.value == raw_text)
+      {
+        return;
+      }
       styles.custom_properties.insert(
-        decl.property.as_str().to_string(),
+        Arc::clone(custom_name),
         CustomPropertyValue::new(raw_text.to_string(), None),
       );
       return;
@@ -4297,19 +4307,31 @@ pub fn apply_declaration_with_base(
         VarResolutionResult::Resolved { css_text, .. } => css_text,
         _ => return,
       };
+      let resolved = if resolved.is_empty() {
+        raw_trimmed.to_string()
+      } else {
+        resolved.into_owned()
+      };
       let Some(typed) = rule.syntax.parse_value(&resolved) else {
         return;
       };
       styles.custom_properties.insert(
-        decl.property.as_str().to_string(),
+        Arc::clone(custom_name),
         CustomPropertyValue::new(resolved, Some(typed)),
       );
     } else {
+      if styles
+        .custom_properties
+        .get(custom_name.as_ref())
+        .is_some_and(|existing| existing.value == raw_text && existing.typed.is_some())
+      {
+        return;
+      }
       let Some(typed) = rule.syntax.parse_value(raw_trimmed) else {
         return;
       };
       styles.custom_properties.insert(
-        decl.property.as_str().to_string(),
+        Arc::clone(custom_name),
         CustomPropertyValue::new(raw_text.to_string(), Some(typed)),
       );
     }
@@ -4326,13 +4348,14 @@ pub fn apply_declaration_with_base(
   // Resolve var() references in the value
   let (resolved_value, resolved_css_text) =
     match resolve_var_for_property(&decl.value, &styles.custom_properties, property) {
-      VarResolutionResult::Resolved { value, css_text } => (*value, css_text),
+      VarResolutionResult::Resolved { value, css_text } => (value, css_text),
       // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
       _ => return,
     };
-  let resolved_css_text_str = declaration_css_text_str(decl, resolved_css_text.as_str());
+  let resolved_value = resolved_value.as_ref();
+  let resolved_css_text_str = declaration_css_text_str(decl, resolved_css_text.as_ref());
   let order = styles.logical.next_order();
-  if let Some(global) = global_keyword(&resolved_value) {
+  if let Some(global) = global_keyword(resolved_value) {
     if apply_global_keyword(
       styles,
       parent_styles,
@@ -4357,7 +4380,7 @@ pub fn apply_declaration_with_base(
 
   match property {
     "all" => {
-      let Some(global) = global_keyword(&resolved_value) else {
+      let Some(global) = global_keyword(resolved_value) else {
         return;
       };
       let Some(source) = global_keyword_source(
@@ -4388,14 +4411,14 @@ pub fn apply_declaration_with_base(
     }
     // Display
     "display" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Ok(display) = Display::parse(kw) {
           styles.display = display;
         }
       }
     }
     "visibility" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.visibility = match kw.as_str() {
           "visible" => crate::style::computed::Visibility::Visible,
           "hidden" => crate::style::computed::Visibility::Hidden,
@@ -4405,38 +4428,38 @@ pub fn apply_declaration_with_base(
       }
     }
     "float" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Ok(value) = Float::parse(kw) {
           styles.float = value;
         }
       }
     }
     "clear" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Ok(value) = Clear::parse(kw) {
           styles.clear = value;
         }
       }
     }
     "shape-margin" => {
-      if let Some(margin) = extract_length(&resolved_value) {
+      if let Some(margin) = extract_length(resolved_value) {
         styles.shape_margin = sanitize_non_negative_length(margin);
       }
     }
     "shape-image-threshold" => {
-      if let PropertyValue::Number(threshold) = &resolved_value {
+      if let PropertyValue::Number(threshold) = resolved_value {
         if threshold.is_finite() {
           styles.shape_image_threshold = threshold.clamp(0.0, 1.0);
         }
       }
     }
     "shape-outside" => {
-      if let Some(shape) = parse_shape_outside_value(&resolved_value) {
+      if let Some(shape) = parse_shape_outside_value(resolved_value) {
         styles.shape_outside = shape;
       }
     }
     "overflow" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let overflow = match kw.as_str() {
           "visible" => Overflow::Visible,
           "hidden" => Overflow::Hidden,
@@ -4450,7 +4473,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "overflow-x" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.overflow_x = match kw.as_str() {
           "visible" => Overflow::Visible,
           "hidden" => Overflow::Hidden,
@@ -4462,7 +4485,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "overflow-y" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.overflow_y = match kw.as_str() {
           "visible" => Overflow::Visible,
           "hidden" => Overflow::Hidden,
@@ -4476,7 +4499,7 @@ pub fn apply_declaration_with_base(
 
     // Position
     "position" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(running) = parse_running_position(kw) {
           styles.running_position = Some(running);
           styles.position = Position::Static;
@@ -4487,7 +4510,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "box-sizing" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         match kw.as_str() {
           _ if kw.eq_ignore_ascii_case("content-box") => styles.box_sizing = BoxSizing::ContentBox,
           _ if kw.eq_ignore_ascii_case("border-box") => styles.box_sizing = BoxSizing::BorderBox,
@@ -4496,7 +4519,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "box-decoration-break" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         match kw.as_str() {
           _ if kw.eq_ignore_ascii_case("slice") => {
             styles.box_decoration_break = BoxDecorationBreak::Slice
@@ -4512,29 +4535,29 @@ pub fn apply_declaration_with_base(
     "top" => set_inset_side(
       styles,
       crate::style::PhysicalSide::Top,
-      extract_length(&resolved_value),
+      extract_length(resolved_value),
       order,
     ),
     "right" => set_inset_side(
       styles,
       crate::style::PhysicalSide::Right,
-      extract_length(&resolved_value),
+      extract_length(resolved_value),
       order,
     ),
     "bottom" => set_inset_side(
       styles,
       crate::style::PhysicalSide::Bottom,
-      extract_length(&resolved_value),
+      extract_length(resolved_value),
       order,
     ),
     "left" => set_inset_side(
       styles,
       crate::style::PhysicalSide::Left,
-      extract_length(&resolved_value),
+      extract_length(resolved_value),
       order,
     ),
     "inset" => {
-      if let Some(lengths) = extract_margin_values(&resolved_value) {
+      if let Some(lengths) = extract_margin_values(resolved_value) {
         let mut top = styles.top;
         let mut right = styles.right;
         let mut bottom = styles.bottom;
@@ -4551,7 +4574,7 @@ pub fn apply_declaration_with_base(
         styles,
         crate::style::LogicalProperty::Inset {
           axis: crate::style::LogicalAxis::Inline,
-          start: Some(extract_length(&resolved_value)),
+          start: Some(extract_length(resolved_value)),
           end: None,
         },
         order,
@@ -4563,7 +4586,7 @@ pub fn apply_declaration_with_base(
         crate::style::LogicalProperty::Inset {
           axis: crate::style::LogicalAxis::Inline,
           start: None,
-          end: Some(extract_length(&resolved_value)),
+          end: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4573,7 +4596,7 @@ pub fn apply_declaration_with_base(
         styles,
         crate::style::LogicalProperty::Inset {
           axis: crate::style::LogicalAxis::Block,
-          start: Some(extract_length(&resolved_value)),
+          start: Some(extract_length(resolved_value)),
           end: None,
         },
         order,
@@ -4585,13 +4608,13 @@ pub fn apply_declaration_with_base(
         crate::style::LogicalProperty::Inset {
           axis: crate::style::LogicalAxis::Block,
           start: None,
-          end: Some(extract_length(&resolved_value)),
+          end: Some(extract_length(resolved_value)),
         },
         order,
       );
     }
     "inset-inline" => {
-      if let Some(values) = extract_margin_values(&resolved_value) {
+      if let Some(values) = extract_margin_values(resolved_value) {
         let start = values.first().copied().flatten();
         let end = values.get(1).copied().flatten().or(start);
         push_logical(
@@ -4606,7 +4629,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "inset-block" => {
-      if let Some(values) = extract_margin_values(&resolved_value) {
+      if let Some(values) = extract_margin_values(resolved_value) {
         let start = values.first().copied().flatten();
         let end = values.get(1).copied().flatten().or(start);
         push_logical(
@@ -4621,11 +4644,11 @@ pub fn apply_declaration_with_base(
       }
     }
     "z-index" => match resolved_value {
-      PropertyValue::Number(n) => styles.z_index = Some(n as i32),
+      PropertyValue::Number(n) => styles.z_index = Some(*n as i32),
       PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("auto") => styles.z_index = None,
       _ => {}
     },
-    "outline-color" => match &resolved_value {
+    "outline-color" => match resolved_value {
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => {
         styles.outline_color = OutlineColor::CurrentColor;
       }
@@ -4638,31 +4661,31 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "outline-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(style) = parse_outline_style(kw) {
           styles.outline_style = style;
         }
       }
     }
     "outline-width" => {
-      if let Some(width) = parse_outline_width(&resolved_value) {
+      if let Some(width) = parse_outline_width(resolved_value) {
         styles.outline_width = width;
       }
     }
     "outline-offset" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         styles.outline_offset = len;
       }
     }
     "outline" => {
-      apply_outline_shorthand(styles, &resolved_value);
+      apply_outline_shorthand(styles, resolved_value);
     }
 
     // Width and height
     "width" => set_length_with_order(
       &mut styles.width,
       &mut styles.logical.width_order,
-      extract_length(&resolved_value),
+      extract_length(resolved_value),
       order,
     ),
     "height" => {
@@ -4670,26 +4693,26 @@ pub fn apply_declaration_with_base(
       set_length_with_order(
         &mut styles.height,
         &mut styles.logical.height_order,
-        extract_length(&resolved_value),
+        extract_length(resolved_value),
         order,
       );
     }
     "min-width" => set_length_with_order(
       &mut styles.min_width,
       &mut styles.logical.min_width_order,
-      sanitize_min_length(extract_length(&resolved_value)),
+      sanitize_min_length(extract_length(resolved_value)),
       order,
     ),
     "min-height" => set_length_with_order(
       &mut styles.min_height,
       &mut styles.logical.min_height_order,
-      sanitize_min_length(extract_length(&resolved_value)),
+      sanitize_min_length(extract_length(resolved_value)),
       order,
     ),
     "max-width" => set_length_with_order(
       &mut styles.max_width,
       &mut styles.logical.max_width_order,
-      sanitize_max_length(extract_length(&resolved_value)),
+      sanitize_max_length(extract_length(resolved_value)),
       order,
     ),
     "max-height" => {
@@ -4710,7 +4733,7 @@ pub fn apply_declaration_with_base(
       set_length_with_order(
         &mut styles.max_height,
         &mut styles.logical.max_height_order,
-        sanitize_max_length(extract_length(&resolved_value)),
+        sanitize_max_length(extract_length(resolved_value)),
         order,
       );
     }
@@ -4718,7 +4741,7 @@ pub fn apply_declaration_with_base(
       push_logical(
         styles,
         crate::style::LogicalProperty::InlineSize {
-          value: Some(extract_length(&resolved_value)),
+          value: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4727,7 +4750,7 @@ pub fn apply_declaration_with_base(
       push_logical(
         styles,
         crate::style::LogicalProperty::BlockSize {
-          value: Some(extract_length(&resolved_value)),
+          value: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4736,7 +4759,7 @@ pub fn apply_declaration_with_base(
       push_logical(
         styles,
         crate::style::LogicalProperty::MinInlineSize {
-          value: Some(extract_length(&resolved_value)),
+          value: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4745,7 +4768,7 @@ pub fn apply_declaration_with_base(
       push_logical(
         styles,
         crate::style::LogicalProperty::MinBlockSize {
-          value: Some(extract_length(&resolved_value)),
+          value: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4754,7 +4777,7 @@ pub fn apply_declaration_with_base(
       push_logical(
         styles,
         crate::style::LogicalProperty::MaxInlineSize {
-          value: Some(extract_length(&resolved_value)),
+          value: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4763,7 +4786,7 @@ pub fn apply_declaration_with_base(
       push_logical(
         styles,
         crate::style::LogicalProperty::MaxBlockSize {
-          value: Some(extract_length(&resolved_value)),
+          value: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4771,7 +4794,7 @@ pub fn apply_declaration_with_base(
 
     // Margin
     "margin" => {
-      if let Some(lengths) = extract_margin_values(&resolved_value) {
+      if let Some(lengths) = extract_margin_values(resolved_value) {
         let mut top = styles.margin_top;
         let mut right = styles.margin_right;
         let mut bottom = styles.margin_bottom;
@@ -4787,7 +4810,7 @@ pub fn apply_declaration_with_base(
       set_margin_side(
         styles,
         crate::style::PhysicalSide::Top,
-        extract_length(&resolved_value),
+        extract_length(resolved_value),
         order,
       );
     }
@@ -4795,7 +4818,7 @@ pub fn apply_declaration_with_base(
       set_margin_side(
         styles,
         crate::style::PhysicalSide::Right,
-        extract_length(&resolved_value),
+        extract_length(resolved_value),
         order,
       );
     }
@@ -4803,7 +4826,7 @@ pub fn apply_declaration_with_base(
       set_margin_side(
         styles,
         crate::style::PhysicalSide::Bottom,
-        extract_length(&resolved_value),
+        extract_length(resolved_value),
         order,
       );
     }
@@ -4811,7 +4834,7 @@ pub fn apply_declaration_with_base(
       set_margin_side(
         styles,
         crate::style::PhysicalSide::Left,
-        extract_length(&resolved_value),
+        extract_length(resolved_value),
         order,
       );
     }
@@ -4820,7 +4843,7 @@ pub fn apply_declaration_with_base(
         styles,
         crate::style::LogicalProperty::Margin {
           axis: crate::style::LogicalAxis::Inline,
-          start: Some(extract_length(&resolved_value)),
+          start: Some(extract_length(resolved_value)),
           end: None,
         },
         order,
@@ -4832,7 +4855,7 @@ pub fn apply_declaration_with_base(
         crate::style::LogicalProperty::Margin {
           axis: crate::style::LogicalAxis::Inline,
           start: None,
-          end: Some(extract_length(&resolved_value)),
+          end: Some(extract_length(resolved_value)),
         },
         order,
       );
@@ -4842,7 +4865,7 @@ pub fn apply_declaration_with_base(
         styles,
         crate::style::LogicalProperty::Margin {
           axis: crate::style::LogicalAxis::Block,
-          start: Some(extract_length(&resolved_value)),
+          start: Some(extract_length(resolved_value)),
           end: None,
         },
         order,
@@ -4854,13 +4877,13 @@ pub fn apply_declaration_with_base(
         crate::style::LogicalProperty::Margin {
           axis: crate::style::LogicalAxis::Block,
           start: None,
-          end: Some(extract_length(&resolved_value)),
+          end: Some(extract_length(resolved_value)),
         },
         order,
       );
     }
     "margin-inline" => {
-      if let Some(values) = extract_margin_values(&resolved_value) {
+      if let Some(values) = extract_margin_values(resolved_value) {
         let start = values.first().copied().flatten();
         let end = values.get(1).copied().flatten().or(start);
         push_logical(
@@ -4875,7 +4898,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "margin-block" => {
-      if let Some(values) = extract_margin_values(&resolved_value) {
+      if let Some(values) = extract_margin_values(resolved_value) {
         let start = values.first().copied().flatten();
         let end = values.get(1).copied().flatten().or(start);
         push_logical(
@@ -4892,7 +4915,7 @@ pub fn apply_declaration_with_base(
 
     // Padding
     "padding" => {
-      if let Some(lengths) = extract_box_values(&resolved_value) {
+      if let Some(lengths) = extract_box_values(resolved_value) {
         let mut top = styles.padding_top;
         let mut right = styles.padding_right;
         let mut bottom = styles.padding_bottom;
@@ -4905,27 +4928,27 @@ pub fn apply_declaration_with_base(
       }
     }
     "padding-top" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_padding_side(styles, crate::style::PhysicalSide::Top, len, order);
       }
     }
     "padding-right" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_padding_side(styles, crate::style::PhysicalSide::Right, len, order);
       }
     }
     "padding-bottom" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_padding_side(styles, crate::style::PhysicalSide::Bottom, len, order);
       }
     }
     "padding-left" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_padding_side(styles, crate::style::PhysicalSide::Left, len, order);
       }
     }
     "padding-inline-start" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::Padding {
@@ -4938,7 +4961,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "padding-inline-end" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::Padding {
@@ -4951,7 +4974,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "padding-block-start" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::Padding {
@@ -4964,7 +4987,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "padding-block-end" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::Padding {
@@ -4977,7 +5000,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "padding-inline" => {
-      if let Some((start, end)) = extract_length_pair(&resolved_value) {
+      if let Some((start, end)) = extract_length_pair(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::Padding {
@@ -4990,7 +5013,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "padding-block" => {
-      if let Some((start, end)) = extract_length_pair(&resolved_value) {
+      if let Some((start, end)) = extract_length_pair(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::Padding {
@@ -5005,7 +5028,7 @@ pub fn apply_declaration_with_base(
 
     // Border width
     "border-width" => {
-      if let Some(lengths) = extract_box_values(&resolved_value) {
+      if let Some(lengths) = extract_box_values(resolved_value) {
         let mut top = styles.border_top_width;
         let mut right = styles.border_right_width;
         let mut bottom = styles.border_bottom_width;
@@ -5018,27 +5041,27 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-top-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_border_width_side(styles, crate::style::PhysicalSide::Top, len, order);
       }
     }
     "border-right-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_border_width_side(styles, crate::style::PhysicalSide::Right, len, order);
       }
     }
     "border-bottom-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_border_width_side(styles, crate::style::PhysicalSide::Bottom, len, order);
       }
     }
     "border-left-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         set_border_width_side(styles, crate::style::PhysicalSide::Left, len, order);
       }
     }
     "border-inline-start-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderWidth {
@@ -5051,7 +5074,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-inline-end-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderWidth {
@@ -5064,7 +5087,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-start-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderWidth {
@@ -5077,7 +5100,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-end-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderWidth {
@@ -5090,7 +5113,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-inline-width" => {
-      if let Some((start, end)) = extract_length_pair(&resolved_value) {
+      if let Some((start, end)) = extract_length_pair(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderWidth {
@@ -5103,7 +5126,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-width" => {
-      if let Some((start, end)) = extract_length_pair(&resolved_value) {
+      if let Some((start, end)) = extract_length_pair(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderWidth {
@@ -5118,7 +5141,7 @@ pub fn apply_declaration_with_base(
 
     // Border color
     "border-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         set_border_color_side(styles, crate::style::PhysicalSide::Top, c, order);
         set_border_color_side(styles, crate::style::PhysicalSide::Right, c, order);
         set_border_color_side(styles, crate::style::PhysicalSide::Bottom, c, order);
@@ -5126,27 +5149,27 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-top-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         set_border_color_side(styles, crate::style::PhysicalSide::Top, c, order);
       }
     }
     "border-right-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         set_border_color_side(styles, crate::style::PhysicalSide::Right, c, order);
       }
     }
     "border-bottom-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         set_border_color_side(styles, crate::style::PhysicalSide::Bottom, c, order);
       }
     }
     "border-left-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         set_border_color_side(styles, crate::style::PhysicalSide::Left, c, order);
       }
     }
     "border-inline-start-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderColor {
@@ -5159,7 +5182,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-inline-end-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderColor {
@@ -5172,7 +5195,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-start-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderColor {
@@ -5185,7 +5208,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-end-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderColor {
@@ -5198,7 +5221,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-inline-color" => {
-      if let Some((start, end)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
+      if let Some((start, end)) = extract_color_pair_with(resolved_value, &resolve_color_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderColor {
@@ -5211,7 +5234,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-color" => {
-      if let Some((start, end)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
+      if let Some((start, end)) = extract_color_pair_with(resolved_value, &resolve_color_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderColor {
@@ -5226,7 +5249,7 @@ pub fn apply_declaration_with_base(
 
     // Border style
     "border-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let style = parse_border_style(kw);
         set_border_style_side(styles, crate::style::PhysicalSide::Top, style, order);
         set_border_style_side(styles, crate::style::PhysicalSide::Right, style, order);
@@ -5235,7 +5258,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-top-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         set_border_style_side(
           styles,
           crate::style::PhysicalSide::Top,
@@ -5245,7 +5268,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-right-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         set_border_style_side(
           styles,
           crate::style::PhysicalSide::Right,
@@ -5255,7 +5278,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-bottom-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         set_border_style_side(
           styles,
           crate::style::PhysicalSide::Bottom,
@@ -5265,7 +5288,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-left-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         set_border_style_side(
           styles,
           crate::style::PhysicalSide::Left,
@@ -5275,7 +5298,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-inline-start-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderStyle {
@@ -5288,7 +5311,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-inline-end-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderStyle {
@@ -5301,7 +5324,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-start-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderStyle {
@@ -5314,7 +5337,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-end-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderStyle {
@@ -5327,7 +5350,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-inline-style" => {
-      let styles_list: Vec<BorderStyle> = match &resolved_value {
+      let styles_list: Vec<BorderStyle> = match resolved_value {
         PropertyValue::Keyword(kw) => vec![parse_border_style(kw)],
         PropertyValue::Multiple(values) => values
           .iter()
@@ -5356,7 +5379,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block-style" => {
-      let styles_list: Vec<BorderStyle> = match &resolved_value {
+      let styles_list: Vec<BorderStyle> = match resolved_value {
         PropertyValue::Keyword(kw) => vec![parse_border_style(kw)],
         PropertyValue::Multiple(values) => values
           .iter()
@@ -5441,13 +5464,13 @@ pub fn apply_declaration_with_base(
         }
       };
 
-      match &resolved_value {
+      match resolved_value {
         PropertyValue::Multiple(values) => apply_shorthand(values),
         other => apply_shorthand(std::slice::from_ref(other)),
       }
     }
     "border-inline" => {
-      if let PropertyValue::Multiple(values) = &resolved_value {
+      if let PropertyValue::Multiple(values) = resolved_value {
         let mut width: Option<Length> = None;
         let mut style_val: Option<BorderStyle> = None;
         let mut color: Option<Rgba> = None;
@@ -5498,7 +5521,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-block" => {
-      if let PropertyValue::Multiple(values) = &resolved_value {
+      if let PropertyValue::Multiple(values) = resolved_value {
         let mut width: Option<Length> = None;
         let mut style_val: Option<BorderStyle> = None;
         let mut color: Option<Rgba> = None;
@@ -5552,7 +5575,7 @@ pub fn apply_declaration_with_base(
     // Border radius
     "border-radius" => {
       if let Some([top_left, top_right, bottom_right, bottom_left]) =
-        parse_border_radius_shorthand(&resolved_value)
+        parse_border_radius_shorthand(resolved_value)
       {
         set_corner_radius(styles, PhysicalCorner::TopLeft, Some(top_left), order);
         set_corner_radius(styles, PhysicalCorner::TopRight, Some(top_right), order);
@@ -5566,27 +5589,27 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-top-left-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         set_corner_radius(styles, PhysicalCorner::TopLeft, Some(radius), order);
       }
     }
     "border-top-right-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         set_corner_radius(styles, PhysicalCorner::TopRight, Some(radius), order);
       }
     }
     "border-bottom-left-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(radius), order);
       }
     }
     "border-bottom-right-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         set_corner_radius(styles, PhysicalCorner::BottomRight, Some(radius), order);
       }
     }
     "border-start-start-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
@@ -5599,7 +5622,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-start-end-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
@@ -5612,7 +5635,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-end-start-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
@@ -5625,7 +5648,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-end-end-radius" => {
-      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
@@ -5640,7 +5663,7 @@ pub fn apply_declaration_with_base(
 
     // Flexbox
     "flex-direction" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.flex_direction = match kw.as_str() {
           "row" => FlexDirection::Row,
           "row-reverse" => FlexDirection::RowReverse,
@@ -5651,7 +5674,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "flex-wrap" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.flex_wrap = match kw.as_str() {
           "nowrap" => FlexWrap::NoWrap,
           "wrap" => FlexWrap::Wrap,
@@ -5661,7 +5684,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "flex-flow" => {
-      let tokens: Vec<String> = match &resolved_value {
+      let tokens: Vec<String> = match resolved_value {
         PropertyValue::Keyword(kw) => kw
           .split_whitespace()
           .map(|s| s.to_ascii_lowercase())
@@ -5742,7 +5765,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "justify-content" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.justify_content = match kw.as_str() {
           "flex-start" | "start" => JustifyContent::FlexStart,
           "flex-end" | "end" => JustifyContent::FlexEnd,
@@ -5755,14 +5778,14 @@ pub fn apply_declaration_with_base(
       }
     }
     "align-items" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(value) = parse_align_keyword(kw) {
           styles.align_items = value;
         }
       }
     }
     "align-self" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.align_self = match kw.as_str() {
           "auto" => None,
           _ => parse_align_keyword(kw),
@@ -5771,7 +5794,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "align-content" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.align_content = match kw.as_str() {
           "flex-start" | "start" => AlignContent::FlexStart,
           "flex-end" | "end" => AlignContent::FlexEnd,
@@ -5785,7 +5808,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "justify-items" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         match kw.as_str() {
           "auto" => styles.justify_items = AlignItems::Stretch,
           _ => {
@@ -5797,7 +5820,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "justify-self" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.justify_self = match kw.as_str() {
           "auto" => None,
           _ => parse_align_keyword(kw),
@@ -5806,19 +5829,19 @@ pub fn apply_declaration_with_base(
       }
     }
     "place-items" => {
-      if let Some((align, justify)) = parse_place_pair(&resolved_value) {
+      if let Some((align, justify)) = parse_place_pair(resolved_value) {
         styles.align_items = align;
         styles.justify_items = justify;
       }
     }
     "place-self" => {
-      if let Some((align, justify)) = parse_place_pair(&resolved_value) {
+      if let Some((align, justify)) = parse_place_pair(resolved_value) {
         styles.align_self = Some(align);
         styles.justify_self = Some(justify);
       }
     }
     "place-content" => {
-      if let Some((align, justify)) = parse_place_content_pair(&resolved_value) {
+      if let Some((align, justify)) = parse_place_content_pair(resolved_value) {
         styles.align_content = align;
         styles.justify_content = justify;
       }
@@ -5827,7 +5850,7 @@ pub fn apply_declaration_with_base(
       if let PropertyValue::Number(n) = resolved_value {
         if n.is_finite() && (n.fract() == 0.0) {
           // CSS order is an integer; ignore non-integers.
-          let int = n as i64;
+          let int = *n as i64;
           if let Ok(val) = i32::try_from(int) {
             styles.order = val;
           }
@@ -5836,38 +5859,38 @@ pub fn apply_declaration_with_base(
     }
     "flex-grow" => {
       if let PropertyValue::Number(n) = resolved_value {
-        if n.is_finite() && n >= 0.0 {
-          styles.flex_grow = n;
+        if n.is_finite() && *n >= 0.0 {
+          styles.flex_grow = *n;
         }
       }
     }
     "flex-shrink" => {
       if let PropertyValue::Number(n) = resolved_value {
-        if n.is_finite() && n >= 0.0 {
-          styles.flex_shrink = n;
+        if n.is_finite() && *n >= 0.0 {
+          styles.flex_shrink = *n;
         }
       }
     }
     "flex" => {
-      if let Some((grow, shrink, basis)) = parse_flex_shorthand(&resolved_value) {
+      if let Some((grow, shrink, basis)) = parse_flex_shorthand(resolved_value) {
         styles.flex_grow = grow;
         styles.flex_shrink = shrink;
         styles.flex_basis = basis;
       }
     }
     "flex-basis" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if kw == "auto" {
           styles.flex_basis = FlexBasis::Auto;
         }
-      } else if let Some(len) = extract_length(&resolved_value) {
+      } else if let Some(len) = extract_length(resolved_value) {
         styles.flex_basis = FlexBasis::Length(len);
       }
     }
 
     // Grid
     "grid-template-columns" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(line_names) = parse_subgrid_line_names(kw) {
           styles.grid_column_subgrid = true;
           styles.subgrid_column_line_names = line_names.clone();
@@ -5885,7 +5908,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-template-rows" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(line_names) = parse_subgrid_line_names(kw) {
           styles.grid_row_subgrid = true;
           styles.subgrid_row_line_names = line_names.clone();
@@ -5902,7 +5925,7 @@ pub fn apply_declaration_with_base(
         styles.subgrid_row_line_names.clear();
       }
     }
-    "grid-template-areas" => match &resolved_value {
+    "grid-template-areas" => match resolved_value {
       PropertyValue::Keyword(kw) | PropertyValue::String(kw) => {
         if let Some(areas) = parse_grid_template_areas(kw) {
           let row_count = areas.len();
@@ -5940,7 +5963,7 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "grid-template" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if contains_ignore_ascii_case(kw, "subgrid") {
           let mut parts = kw.split('/');
           if let Some(row_part) = parts.next() {
@@ -6012,7 +6035,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(parsed) = parse_grid_shorthand(kw) {
           if let Some(template) = parsed.template {
             styles.grid_template_areas = template.areas.unwrap_or_default();
@@ -6044,7 +6067,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-auto-rows" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let ParsedTracks { tracks, .. } = parse_track_list(kw);
         if !tracks.is_empty() {
           styles.grid_auto_rows = tracks.into();
@@ -6052,7 +6075,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-auto-columns" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let ParsedTracks { tracks, .. } = parse_track_list(kw);
         if !tracks.is_empty() {
           styles.grid_auto_columns = tracks.into();
@@ -6060,7 +6083,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-auto-flow" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let lower = kw.to_ascii_lowercase();
         let dense = lower.contains("dense");
         let primary = if lower.contains("column") {
@@ -6080,7 +6103,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-gap" | "gap" => {
-      if let Some((row, column)) = parse_gap_lengths(&resolved_value) {
+      if let Some((row, column)) = parse_gap_lengths(resolved_value) {
         styles.grid_gap = row;
         styles.grid_row_gap = row;
         styles.grid_column_gap = column;
@@ -6088,17 +6111,17 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-row-gap" | "row-gap" => {
-      if let Some(len) = parse_single_gap_length(&resolved_value) {
+      if let Some(len) = parse_single_gap_length(resolved_value) {
         styles.grid_row_gap = len;
       }
     }
     "grid-column-gap" | "column-gap" => {
-      if let Some(len) = parse_single_gap_length(&resolved_value) {
+      if let Some(len) = parse_single_gap_length(resolved_value) {
         styles.grid_column_gap = len;
         styles.column_gap = len;
       }
     }
-    "column-count" => match &resolved_value {
+    "column-count" => match resolved_value {
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
         styles.column_count = None;
       }
@@ -6107,28 +6130,28 @@ pub fn apply_declaration_with_base(
       }
       _ => {}
     },
-    "column-width" => match &resolved_value {
+    "column-width" => match resolved_value {
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
         styles.column_width = None;
       }
       _ => {
-        if let Some(len) = extract_length(&resolved_value) {
+        if let Some(len) = extract_length(resolved_value) {
           styles.column_width = Some(len);
         }
       }
     },
     "column-rule-width" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         styles.column_rule_width = len;
       }
     }
     "column-rule-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.column_rule_style = parse_border_style(kw);
       }
     }
     "column-rule-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         styles.column_rule_color = Some(c);
       }
     }
@@ -6136,7 +6159,7 @@ pub fn apply_declaration_with_base(
       let mut width = None;
       let mut style_val = None;
       let mut color = None;
-      match &resolved_value {
+      match resolved_value {
         PropertyValue::Multiple(values) => {
           for val in values {
             match val {
@@ -6175,7 +6198,7 @@ pub fn apply_declaration_with_base(
             style_val = Some(style_parsed);
           }
           if color.is_none() {
-            if let Some(c) = resolve_color_value(&resolved_value) {
+            if let Some(c) = resolve_color_value(resolved_value) {
               color = Some(c);
             }
           }
@@ -6213,7 +6236,7 @@ pub fn apply_declaration_with_base(
         }
       };
 
-      match &resolved_value {
+      match resolved_value {
         PropertyValue::Multiple(values) => {
           for v in values {
             match v {
@@ -6238,7 +6261,7 @@ pub fn apply_declaration_with_base(
       styles.column_width = width;
     }
     "column-fill" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.column_fill = if kw.eq_ignore_ascii_case("auto") {
           ColumnFill::Auto
         } else if kw.eq_ignore_ascii_case("balance") {
@@ -6249,7 +6272,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "column-span" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.column_span = if kw.eq_ignore_ascii_case("all") {
           ColumnSpan::All
         } else {
@@ -6258,13 +6281,13 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-column" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         // Store raw value for later resolution (after grid-template-columns is set)
         styles.grid_column_raw = Some(kw.clone());
       }
     }
     "grid-row" => {
-      match &resolved_value {
+      match resolved_value {
         PropertyValue::Keyword(kw) => {
           // Store raw value for later resolution (after grid-template-rows is set)
           styles.grid_row_raw = Some(kw.clone());
@@ -6277,7 +6300,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-column-start" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         // For explicit start/end, we can parse immediately if numeric
         if let Ok(n) = kw.parse::<i32>() {
           styles.grid_column_start = n;
@@ -6293,7 +6316,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-column-end" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Ok(n) = kw.parse::<i32>() {
           styles.grid_column_end = n;
         } else {
@@ -6307,7 +6330,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-row-start" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Ok(n) = kw.parse::<i32>() {
           styles.grid_row_start = n;
         } else {
@@ -6321,7 +6344,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-row-end" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Ok(n) = kw.parse::<i32>() {
           styles.grid_row_end = n;
         } else {
@@ -6335,7 +6358,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "grid-area" => {
-      if let PropertyValue::Keyword(kw) | PropertyValue::String(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) | PropertyValue::String(kw) = resolved_value {
         let parts: Vec<&str> = kw
           .split('/')
           .map(|s| s.trim())
@@ -6363,7 +6386,7 @@ pub fn apply_declaration_with_base(
 
     // Typography
     "font" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         if let Some((
           font_style,
           font_weight,
@@ -6400,11 +6423,11 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-family" => {
-      if let PropertyValue::FontFamily(families) = &resolved_value {
+      if let PropertyValue::FontFamily(families) = resolved_value {
         styles.font_family = families.clone().into();
       }
     }
-    "font-size" => match &resolved_value {
+    "font-size" => match resolved_value {
       PropertyValue::Keyword(kw) => {
         if let Some(size) = parse_font_size_keyword(kw, parent_font_size) {
           styles.font_size = size;
@@ -6426,7 +6449,7 @@ pub fn apply_declaration_with_base(
       }
       _ => {}
     },
-    "font-size-adjust" => match &resolved_value {
+    "font-size-adjust" => match resolved_value {
       PropertyValue::Keyword(kw) => match kw.as_str() {
         "none" => styles.font_size_adjust = FontSizeAdjust::None,
         "from-font" => styles.font_size_adjust = FontSizeAdjust::FromFont,
@@ -6437,7 +6460,7 @@ pub fn apply_declaration_with_base(
       }
       _ => {}
     },
-    "font-weight" => match &resolved_value {
+    "font-weight" => match resolved_value {
       PropertyValue::Keyword(kw) => {
         styles.font_weight = match kw.as_str() {
           "normal" => FontWeight::Normal,
@@ -6455,14 +6478,14 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "font-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(fs) = parse_font_style_keyword(kw) {
           styles.font_style = fs;
         }
       }
     }
     "font-variant" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let trimmed = kw.trim();
         // CSS Fonts shorthand for font-variant subproperties.
         if trimmed == "normal" {
@@ -6601,7 +6624,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-variant-caps" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let raw_tokens = split_font_variant_tokens(kw);
         let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
         if let Some((caps, variant)) = parse_font_variant_caps_tokens(&tokens, styles.font_variant)
@@ -6612,7 +6635,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-variant-alternates" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let raw_tokens = split_font_variant_tokens(kw);
         let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
         if tokens.len() == 1 && tokens[0] == "normal" {
@@ -6623,7 +6646,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-variant-position" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let raw_tokens = split_font_variant_tokens(kw);
         let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
         if let Some(position) =
@@ -6634,7 +6657,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-variant-east-asian" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let tokens: Vec<&str> = kw.split_whitespace().collect();
         if let Some(east) = parse_font_variant_east_asian_tokens(&tokens) {
           styles.font_variant_east_asian = east;
@@ -6642,7 +6665,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-variant-numeric" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let tokens: Vec<&str> = kw.split_whitespace().collect();
         if let Some(numeric) = parse_font_variant_numeric_tokens(&tokens) {
           styles.font_variant_numeric = numeric;
@@ -6650,7 +6673,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-variant-ligatures" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let tokens: Vec<&str> = kw.split_whitespace().collect();
         if let Some(ligatures) = parse_font_variant_ligatures_tokens(&tokens) {
           styles.font_variant_ligatures = ligatures;
@@ -6658,7 +6681,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-feature-settings" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         let trimmed = raw.trim();
         if trimmed.eq_ignore_ascii_case("normal") {
           styles.font_feature_settings = default_computed_style().font_feature_settings.clone();
@@ -6672,7 +6695,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-optical-sizing" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         styles.font_optical_sizing = if raw.eq_ignore_ascii_case("auto") {
           FontOpticalSizing::Auto
         } else if raw.eq_ignore_ascii_case("none") {
@@ -6682,7 +6705,7 @@ pub fn apply_declaration_with_base(
         };
       }
     }
-    "font-language-override" => match &resolved_value {
+    "font-language-override" => match resolved_value {
       PropertyValue::Keyword(raw) if raw.eq_ignore_ascii_case("normal") => {
         styles.font_language_override = FontLanguageOverride::Normal;
       }
@@ -6695,7 +6718,7 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "font-variant-emoji" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         styles.font_variant_emoji = if raw.eq_ignore_ascii_case("emoji") {
           crate::style::types::FontVariantEmoji::Emoji
         } else if raw.eq_ignore_ascii_case("text") {
@@ -6710,7 +6733,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-variation-settings" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         let trimmed = raw.trim();
         if trimmed.eq_ignore_ascii_case("normal") {
           styles.font_variation_settings = default_computed_style().font_variation_settings.clone();
@@ -6723,7 +6746,7 @@ pub fn apply_declaration_with_base(
         }
       }
     }
-    "font-stretch" => match &resolved_value {
+    "font-stretch" => match resolved_value {
       PropertyValue::Keyword(kw) => {
         if let Some(stretch) = parse_font_stretch_keyword(kw) {
           styles.font_stretch = stretch;
@@ -6735,7 +6758,7 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "font-kerning" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.font_kerning = match kw.as_str() {
           "auto" => FontKerning::Auto,
           "normal" => FontKerning::Normal,
@@ -6745,7 +6768,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-palette" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
           styles.font_palette = if trimmed.eq_ignore_ascii_case("normal") {
@@ -6761,7 +6784,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-synthesis" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         let tokens: Vec<&str> = raw.split_whitespace().collect();
         if tokens.len() == 1 && tokens[0] == "none" {
           styles.font_synthesis = FontSynthesis {
@@ -6791,26 +6814,26 @@ pub fn apply_declaration_with_base(
       }
     }
     "font-synthesis-weight" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         styles.font_synthesis.weight = !raw.eq_ignore_ascii_case("none");
       }
     }
     "font-synthesis-style" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         styles.font_synthesis.style = !raw.eq_ignore_ascii_case("none");
       }
     }
     "font-synthesis-small-caps" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         styles.font_synthesis.small_caps = !raw.eq_ignore_ascii_case("none");
       }
     }
     "font-synthesis-position" => {
-      if let PropertyValue::Keyword(raw) = &resolved_value {
+      if let PropertyValue::Keyword(raw) = resolved_value {
         styles.font_synthesis.position = !raw.eq_ignore_ascii_case("none");
       }
     }
-    "line-height" => match &resolved_value {
+    "line-height" => match resolved_value {
       PropertyValue::Keyword(kw) if kw == "normal" => {
         styles.line_height = LineHeight::Normal;
       }
@@ -6836,7 +6859,7 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "table-layout" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.table_layout = match kw.as_str() {
           "auto" => TableLayout::Auto,
           "fixed" => TableLayout::Fixed,
@@ -6845,7 +6868,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "empty-cells" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.empty_cells = match kw.as_str() {
           "show" => EmptyCells::Show,
           "hide" => EmptyCells::Hide,
@@ -6854,7 +6877,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "caption-side" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.caption_side = match kw.as_str() {
           "top" => CaptionSide::Top,
           "bottom" => CaptionSide::Bottom,
@@ -6862,7 +6885,7 @@ pub fn apply_declaration_with_base(
         };
       }
     }
-    "vertical-align" => match &resolved_value {
+    "vertical-align" => match resolved_value {
       PropertyValue::Keyword(kw) => {
         styles.vertical_align = match kw.as_str() {
           "baseline" => VerticalAlign::Baseline,
@@ -6888,7 +6911,7 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "text-align" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let parsed = match kw.as_str() {
           "start" => Some(TextAlign::Start),
           "end" => Some(TextAlign::End),
@@ -6906,7 +6929,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-align-all" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let parsed = match kw.as_str() {
           "start" => Some(TextAlign::Start),
           "end" => Some(TextAlign::End),
@@ -6924,7 +6947,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-align-last" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.text_align_last = match kw.as_str() {
           "auto" => TextAlignLast::Auto,
           "start" => TextAlignLast::Start,
@@ -6939,7 +6962,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-rendering" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.text_rendering = if kw.eq_ignore_ascii_case("auto") {
           TextRendering::Auto
         } else if kw.eq_ignore_ascii_case("optimizespeed") {
@@ -6954,7 +6977,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-justify" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.text_justify = match kw.as_str() {
           "auto" => TextJustify::Auto,
           "none" => TextJustify::None,
@@ -6966,7 +6989,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-size-adjust" => {
-      styles.text_size_adjust = match &resolved_value {
+      styles.text_size_adjust = match resolved_value {
         PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => TextSizeAdjust::Auto,
         PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => TextSizeAdjust::None,
         PropertyValue::Keyword(_) => styles.text_size_adjust,
@@ -6975,7 +6998,7 @@ pub fn apply_declaration_with_base(
       };
     }
     "text-wrap" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.text_wrap = match kw.as_str() {
           "wrap" | "auto" | "normal" => TextWrap::Auto,
           "nowrap" => TextWrap::NoWrap,
@@ -6987,7 +7010,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-orientation" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let kw = kw.to_ascii_lowercase();
         styles.text_orientation = match kw.as_str() {
           "mixed" => TextOrientation::Mixed,
@@ -7000,7 +7023,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-combine-upright" => {
-      if let Some(value) = parse_text_combine_upright(&resolved_value) {
+      if let Some(value) = parse_text_combine_upright(resolved_value) {
         styles.text_combine_upright = value;
       }
     }
@@ -7020,7 +7043,7 @@ pub fn apply_declaration_with_base(
         _ => {}
       };
 
-      match &resolved_value {
+      match resolved_value {
         PropertyValue::Multiple(values) => {
           for v in values {
             apply_component(v);
@@ -7036,7 +7059,7 @@ pub fn apply_declaration_with_base(
       };
     }
     "direction" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.direction = match kw.as_str() {
           "ltr" => Direction::Ltr,
           "rtl" => Direction::Rtl,
@@ -7045,61 +7068,61 @@ pub fn apply_declaration_with_base(
       }
     }
     "text-decoration-line" => {
-      if let Some(lines) = parse_text_decoration_line(&resolved_value) {
+      if let Some(lines) = parse_text_decoration_line(resolved_value) {
         styles.text_decoration_line_specified = true;
         styles.text_decoration.lines = lines;
       }
     }
     "text-decoration-style" => {
-      if let Some(style) = parse_text_decoration_style(&resolved_value) {
+      if let Some(style) = parse_text_decoration_style(resolved_value) {
         styles.text_decoration.style = style;
       }
     }
     "text-decoration-color" => {
-      if let Some(color) = parse_text_decoration_color(&resolved_value, styles.color) {
+      if let Some(color) = parse_text_decoration_color(resolved_value, styles.color) {
         styles.text_decoration.color = color;
       }
     }
     "text-decoration-thickness" => {
       if let Some(thick) =
-        parse_text_decoration_thickness(&resolved_value, parent_font_size, root_font_size)
+        parse_text_decoration_thickness(resolved_value, parent_font_size, root_font_size)
       {
         styles.text_decoration.thickness = thick;
       }
     }
     "text-decoration-skip-ink" => {
-      if let Some(skip) = parse_text_decoration_skip_ink(&resolved_value) {
+      if let Some(skip) = parse_text_decoration_skip_ink(resolved_value) {
         styles.text_decoration_skip_ink = skip;
       }
     }
     "text-underline-offset" => {
-      if let Some(offset) = parse_text_underline_offset(&resolved_value) {
+      if let Some(offset) = parse_text_underline_offset(resolved_value) {
         styles.text_underline_offset = offset;
       }
     }
     "text-underline-position" => {
-      if let Some(pos) = parse_text_underline_position(&resolved_value) {
+      if let Some(pos) = parse_text_underline_position(resolved_value) {
         styles.text_underline_position = pos;
       }
     }
     "text-emphasis-style" => {
-      if let Some(emph) = parse_text_emphasis_style(&resolved_value) {
+      if let Some(emph) = parse_text_emphasis_style(resolved_value) {
         styles.text_emphasis_style = emph;
       }
     }
     "text-emphasis-color" => {
-      if let Some(color) = parse_text_emphasis_color(&resolved_value, styles.color) {
+      if let Some(color) = parse_text_emphasis_color(resolved_value, styles.color) {
         styles.text_emphasis_color = color;
       }
     }
     "text-emphasis-position" => {
-      if let Some(pos) = parse_text_emphasis_position(&resolved_value) {
+      if let Some(pos) = parse_text_emphasis_position(resolved_value) {
         styles.text_emphasis_position = pos;
       }
     }
     "text-emphasis" => {
       if let Some((style_val, color_val)) =
-        parse_text_emphasis_shorthand(&resolved_value, styles.color)
+        parse_text_emphasis_shorthand(resolved_value, styles.color)
       {
         if let Some(emph_style) = style_val {
           styles.text_emphasis_style = emph_style;
@@ -7114,7 +7137,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "ruby-position" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.ruby_position = match kw.as_str() {
           "over" => RubyPosition::Over,
           "under" => RubyPosition::Under,
@@ -7125,7 +7148,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "ruby-align" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.ruby_align = match kw.as_str() {
           "auto" => RubyAlign::Auto,
           "start" => RubyAlign::Start,
@@ -7137,7 +7160,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "ruby-merge" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.ruby_merge = match kw.as_str() {
           "separate" => RubyMerge::Separate,
           "collapse" => RubyMerge::Collapse,
@@ -7182,17 +7205,17 @@ pub fn apply_declaration_with_base(
       styles.text_decoration = decoration;
     }
     "list-style-type" => {
-      if let Some(t) = parse_list_style_type(&resolved_value) {
+      if let Some(t) = parse_list_style_type(resolved_value) {
         styles.list_style_type = t;
       }
     }
     "list-style-position" => {
-      if let Some(p) = parse_list_style_position(&resolved_value) {
+      if let Some(p) = parse_list_style_position(resolved_value) {
         styles.list_style_position = p;
       }
     }
     "list-style-image" => {
-      if let Some(img) = parse_list_style_image(&resolved_value) {
+      if let Some(img) = parse_list_style_image(resolved_value) {
         styles.list_style_image = img;
       }
     }
@@ -7236,23 +7259,22 @@ pub fn apply_declaration_with_base(
       styles.list_style_image = list_image;
     }
     "counter-reset" => {
-      if let Some(parsed) = parse_counter_property(&resolved_value, CounterPropertyKind::Reset) {
+      if let Some(parsed) = parse_counter_property(resolved_value, CounterPropertyKind::Reset) {
         styles.counters.counter_reset = Some(parsed);
       }
     }
     "counter-increment" => {
-      if let Some(parsed) = parse_counter_property(&resolved_value, CounterPropertyKind::Increment)
-      {
+      if let Some(parsed) = parse_counter_property(resolved_value, CounterPropertyKind::Increment) {
         styles.counters.counter_increment = Some(parsed);
       }
     }
     "counter-set" => {
-      if let Some(parsed) = parse_counter_property(&resolved_value, CounterPropertyKind::Set) {
+      if let Some(parsed) = parse_counter_property(resolved_value, CounterPropertyKind::Set) {
         styles.counters.counter_set = Some(parsed);
       }
     }
     "text-transform" => {
-      if let Some(parsed) = parse_text_transform(&resolved_value) {
+      if let Some(parsed) = parse_text_transform(resolved_value) {
         styles.text_transform = parsed;
       }
     }
@@ -7262,7 +7284,7 @@ pub fn apply_declaration_with_base(
       } else {
         parent_font_size
       };
-      if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, false) {
+      if let Some(len) = parse_spacing_value(resolved_value, font_size, root_font_size, false) {
         styles.letter_spacing = len;
       }
     }
@@ -7272,12 +7294,12 @@ pub fn apply_declaration_with_base(
       } else {
         parent_font_size
       };
-      if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, true) {
+      if let Some(len) = parse_spacing_value(resolved_value, font_size, root_font_size, true) {
         styles.word_spacing = len;
       }
     }
     "white-space" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.white_space = match kw.as_str() {
           "normal" => WhiteSpace::Normal,
           "nowrap" => WhiteSpace::Nowrap,
@@ -7290,7 +7312,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "line-break" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.line_break = match kw.as_str() {
           "auto" => LineBreak::Auto,
           "loose" => LineBreak::Loose,
@@ -7307,7 +7329,7 @@ pub fn apply_declaration_with_base(
         "page-break-before" | "page-break-after"
       );
       let column_alias = matches!(property, "column-break-before" | "column-break-after");
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let value = match kw.as_str() {
           "auto" => BreakBetween::Auto,
           "avoid" => {
@@ -7346,7 +7368,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "break-inside" | "column-break-inside" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let column_alias = decl.property.as_str() == "column-break-inside";
         styles.break_inside = match kw.as_str() {
           "auto" => BreakInside::Auto,
@@ -7364,7 +7386,7 @@ pub fn apply_declaration_with_base(
         };
       }
     }
-    "page" => match &resolved_value {
+    "page" => match resolved_value {
       PropertyValue::Keyword(kw) => {
         if kw.eq_ignore_ascii_case("auto") {
           styles.page = None;
@@ -7378,16 +7400,16 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "widows" => {
-      if let PropertyValue::Number(n) = &resolved_value {
+      if let PropertyValue::Number(n) = resolved_value {
         styles.widows = n.max(1.0).floor() as usize;
       }
     }
     "orphans" => {
-      if let PropertyValue::Number(n) = &resolved_value {
+      if let PropertyValue::Number(n) = resolved_value {
         styles.orphans = n.max(1.0).floor() as usize;
       }
     }
-    "tab-size" => match &resolved_value {
+    "tab-size" => match resolved_value {
       PropertyValue::Number(n) => {
         styles.tab_size = TabSize::Number(n.max(0.0));
       }
@@ -7397,7 +7419,7 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "hyphens" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.hyphens = match kw.as_str() {
           "none" => HyphensMode::None,
           "manual" => HyphensMode::Manual,
@@ -7407,7 +7429,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "word-break" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.word_break = match kw.as_str() {
           "normal" => WordBreak::Normal,
           "break-all" => WordBreak::BreakAll,
@@ -7419,7 +7441,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "overflow-wrap" | "word-wrap" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.overflow_wrap = match kw.as_str() {
           "normal" => OverflowWrap::Normal,
           "break-word" => OverflowWrap::BreakWord,
@@ -7429,7 +7451,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "overflow-anchor" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.overflow_anchor = match kw.as_str() {
           "auto" => OverflowAnchor::Auto,
           "none" => OverflowAnchor::None,
@@ -7438,7 +7460,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "forced-color-adjust" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.forced_color_adjust = if kw.eq_ignore_ascii_case("auto") {
           ForcedColorAdjust::Auto
         } else if kw.eq_ignore_ascii_case("none") {
@@ -7451,7 +7473,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "appearance" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if kw.eq_ignore_ascii_case("auto") {
           styles.appearance = Appearance::Auto;
         } else if kw.eq_ignore_ascii_case("none") {
@@ -7475,7 +7497,7 @@ pub fn apply_declaration_with_base(
         }
       };
 
-      let mut sides: Vec<TextOverflowSide> = match &resolved_value {
+      let mut sides: Vec<TextOverflowSide> = match resolved_value {
         PropertyValue::Multiple(values) => values.iter().filter_map(parse_side).collect(),
         other => parse_side(other).into_iter().collect(),
       };
@@ -7492,7 +7514,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "unicode-bidi" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.unicode_bidi = match kw.as_str() {
           "normal" => UnicodeBidi::Normal,
           "embed" => UnicodeBidi::Embed,
@@ -7505,7 +7527,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "writing-mode" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         let kw = kw.to_ascii_lowercase();
         styles.writing_mode = match kw.as_str() {
           "horizontal-tb" => WritingMode::HorizontalTb,
@@ -7518,13 +7540,13 @@ pub fn apply_declaration_with_base(
       }
     }
     "cursor" => {
-      if let Some((images, keyword)) = parse_cursor(&resolved_value) {
+      if let Some((images, keyword)) = parse_cursor(resolved_value) {
         styles.cursor_images = images.into();
         styles.cursor = keyword;
       }
     }
     "caret-color" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if kw.eq_ignore_ascii_case("auto") {
           styles.caret_color = CaretColor::Auto;
         } else if let Some(c) = resolve_color_value(&PropertyValue::Keyword(kw.clone())) {
@@ -7532,12 +7554,12 @@ pub fn apply_declaration_with_base(
         } else if let Ok(parsed) = Color::parse(kw) {
           styles.caret_color = CaretColor::Color(parsed.to_rgba(styles.color));
         }
-      } else if let Some(c) = resolve_color_value(&resolved_value) {
+      } else if let Some(c) = resolve_color_value(resolved_value) {
         styles.caret_color = CaretColor::Color(c);
       }
     }
     "accent-color" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if kw.eq_ignore_ascii_case("auto") {
           styles.accent_color = AccentColor::Auto;
         } else if let Some(c) = resolve_color_value(&PropertyValue::Keyword(kw.clone())) {
@@ -7545,12 +7567,12 @@ pub fn apply_declaration_with_base(
         } else if let Ok(parsed) = Color::parse(kw) {
           styles.accent_color = AccentColor::Color(parsed.to_rgba(styles.color));
         }
-      } else if let Some(c) = resolve_color_value(&resolved_value) {
+      } else if let Some(c) = resolve_color_value(resolved_value) {
         styles.accent_color = AccentColor::Color(c);
       }
     }
     "scroll-behavior" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.scroll_behavior = match kw.as_str() {
           "auto" => ScrollBehavior::Auto,
           "smooth" => ScrollBehavior::Smooth,
@@ -7559,7 +7581,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "overscroll-behavior" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(val) = parse_overscroll_keyword(kw) {
           styles.overscroll_behavior_x = val;
           styles.overscroll_behavior_y = val;
@@ -7567,21 +7589,21 @@ pub fn apply_declaration_with_base(
       }
     }
     "overscroll-behavior-x" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(val) = parse_overscroll_keyword(kw) {
           styles.overscroll_behavior_x = val;
         }
       }
     }
     "overscroll-behavior-y" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(val) = parse_overscroll_keyword(kw) {
           styles.overscroll_behavior_y = val;
         }
       }
     }
     "scroll-padding" => {
-      if let Some(values) = extract_scroll_padding_values(&resolved_value) {
+      if let Some(values) = extract_scroll_padding_values(resolved_value) {
         let mut top = styles.scroll_padding_top;
         let mut right = styles.scroll_padding_right;
         let mut bottom = styles.scroll_padding_bottom;
@@ -7594,27 +7616,27 @@ pub fn apply_declaration_with_base(
       }
     }
     "scroll-padding-top" => {
-      if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+      if let Some(len) = extract_scroll_padding_length(resolved_value) {
         styles.scroll_padding_top = len;
       }
     }
     "scroll-padding-right" => {
-      if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+      if let Some(len) = extract_scroll_padding_length(resolved_value) {
         styles.scroll_padding_right = len;
       }
     }
     "scroll-padding-bottom" => {
-      if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+      if let Some(len) = extract_scroll_padding_length(resolved_value) {
         styles.scroll_padding_bottom = len;
       }
     }
     "scroll-padding-left" => {
-      if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+      if let Some(len) = extract_scroll_padding_length(resolved_value) {
         styles.scroll_padding_left = len;
       }
     }
     "scroll-margin" => {
-      if let Some(values) = extract_box_values(&resolved_value) {
+      if let Some(values) = extract_box_values(resolved_value) {
         let mut top = styles.scroll_margin_top;
         let mut right = styles.scroll_margin_right;
         let mut bottom = styles.scroll_margin_bottom;
@@ -7627,28 +7649,28 @@ pub fn apply_declaration_with_base(
       }
     }
     "scroll-margin-top" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         styles.scroll_margin_top = len;
       }
     }
     "scroll-margin-right" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         styles.scroll_margin_right = len;
       }
     }
     "scroll-margin-bottom" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         styles.scroll_margin_bottom = len;
       }
     }
     "scroll-margin-left" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(len) = extract_length(resolved_value) {
         styles.scroll_margin_left = len;
       }
     }
     "scroll-snap-type" => {
       let mut parts: Vec<&str> = Vec::new();
-      match &resolved_value {
+      match resolved_value {
         PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace()),
         PropertyValue::Multiple(tokens) => {
           for token in tokens {
@@ -7668,7 +7690,7 @@ pub fn apply_declaration_with_base(
     }
     "scroll-snap-align" => {
       let mut parts: Vec<&str> = Vec::new();
-      match &resolved_value {
+      match resolved_value {
         PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace()),
         PropertyValue::Multiple(tokens) => {
           for token in tokens {
@@ -7687,7 +7709,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "scroll-snap-stop" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.scroll_snap_stop = if kw.eq_ignore_ascii_case("normal") {
           ScrollSnapStop::Normal
         } else if kw.eq_ignore_ascii_case("always") {
@@ -7736,7 +7758,7 @@ pub fn apply_declaration_with_base(
       let mut stable = false;
       let mut both_edges = false;
       let mut seen = false;
-      let tokens: Vec<String> = match &resolved_value {
+      let tokens: Vec<String> = match resolved_value {
         PropertyValue::Keyword(kw) => kw
           .split_whitespace()
           .map(|s| s.to_ascii_lowercase())
@@ -7767,7 +7789,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "pointer-events" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.pointer_events = if kw.eq_ignore_ascii_case("auto") {
           PointerEvents::Auto
         } else if kw.eq_ignore_ascii_case("none") {
@@ -7794,7 +7816,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "user-select" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.user_select = if kw.eq_ignore_ascii_case("auto") {
           UserSelect::Auto
         } else if kw.eq_ignore_ascii_case("text") {
@@ -7810,7 +7832,7 @@ pub fn apply_declaration_with_base(
         };
       }
     }
-    "touch-action" => match &resolved_value {
+    "touch-action" => match resolved_value {
       PropertyValue::Keyword(kw) => {
         if let Some(val) = parse_touch_action_keywords(&[kw.to_ascii_lowercase()]) {
           styles.touch_action = val;
@@ -7833,7 +7855,7 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "scrollbar-width" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.scrollbar_width = if kw.eq_ignore_ascii_case("auto") {
           ScrollbarWidth::Auto
         } else if kw.eq_ignore_ascii_case("thin") {
@@ -7846,9 +7868,9 @@ pub fn apply_declaration_with_base(
       }
     }
     "scrollbar-color" => {
-      if let Some((thumb, track)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
+      if let Some((thumb, track)) = extract_color_pair_with(resolved_value, &resolve_color_value) {
         styles.scrollbar_color = ScrollbarColor::Colors { thumb, track };
-      } else if let PropertyValue::Keyword(kw) = &resolved_value {
+      } else if let PropertyValue::Keyword(kw) = resolved_value {
         styles.scrollbar_color = if kw.eq_ignore_ascii_case("auto") {
           ScrollbarColor::Auto
         } else if kw.eq_ignore_ascii_case("dark") {
@@ -7861,7 +7883,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "resize" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.resize = if kw.eq_ignore_ascii_case("none") {
           Resize::None
         } else if kw.eq_ignore_ascii_case("both") {
@@ -7882,36 +7904,36 @@ pub fn apply_declaration_with_base(
 
     // Color
     "color-scheme" => {
-      if let Some(pref) = parse_color_scheme(&resolved_value) {
+      if let Some(pref) = parse_color_scheme(resolved_value) {
         styles.color_scheme = pref;
       }
     }
     "color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         styles.color = c;
       }
     }
     "background-color" => {
-      if let Some(c) = resolve_color_value(&resolved_value) {
+      if let Some(c) = resolve_color_value(resolved_value) {
         styles.background_color = c;
       }
     }
 
     // Background
     "background-image" => {
-      if let Some(images) = parse_background_image_list(&resolved_value) {
+      if let Some(images) = parse_background_image_list(resolved_value) {
         styles.background_images = images.into();
         styles.rebuild_background_layers();
       }
     }
     "background-size" => {
-      if let Some(sizes) = parse_layer_list(&resolved_value, parse_background_size) {
+      if let Some(sizes) = parse_layer_list(resolved_value, parse_background_size) {
         styles.background_sizes = sizes.into();
         styles.rebuild_background_layers();
       }
     }
     "background-size-inline" => {
-      if let Some(values) = parse_layer_list(&resolved_value, parse_background_size_component) {
+      if let Some(values) = parse_layer_list(resolved_value, parse_background_size_component) {
         styles.ensure_background_lists();
         let horizontal_inline = inline_axis_is_horizontal(styles.writing_mode);
         let default = BackgroundLayer::default().size;
@@ -7952,7 +7974,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "background-size-block" => {
-      if let Some(values) = parse_layer_list(&resolved_value, parse_background_size_component) {
+      if let Some(values) = parse_layer_list(resolved_value, parse_background_size_component) {
         styles.ensure_background_lists();
         let horizontal_block = block_axis_is_horizontal(styles.writing_mode);
         let default = BackgroundLayer::default().size;
@@ -7993,19 +8015,19 @@ pub fn apply_declaration_with_base(
       }
     }
     "background-repeat" => {
-      if let Some(repeats) = parse_layer_list(&resolved_value, parse_background_repeat) {
+      if let Some(repeats) = parse_layer_list(resolved_value, parse_background_repeat) {
         styles.background_repeats = repeats.into();
         styles.rebuild_background_layers();
       }
     }
     "background-position" => {
-      if let Some(positions) = parse_layer_list(&resolved_value, parse_background_position) {
+      if let Some(positions) = parse_layer_list(resolved_value, parse_background_position) {
         styles.background_positions = positions.into();
         styles.rebuild_background_layers();
       }
     }
     "background-position-x" => {
-      if let Some(xs) = parse_layer_list(&resolved_value, parse_background_position_component_x) {
+      if let Some(xs) = parse_layer_list(resolved_value, parse_background_position_component_x) {
         styles.ensure_background_lists();
         let BackgroundPosition::Position { x: default, .. } = BackgroundLayer::default().position;
         let layer_count = xs.len().max(styles.background_positions.len()).max(1);
@@ -8029,7 +8051,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "background-position-y" => {
-      if let Some(ys) = parse_layer_list(&resolved_value, parse_background_position_component_y) {
+      if let Some(ys) = parse_layer_list(resolved_value, parse_background_position_component_y) {
         styles.ensure_background_lists();
         let BackgroundPosition::Position { y: default, .. } = BackgroundLayer::default().position;
         let layer_count = ys.len().max(styles.background_positions.len()).max(1);
@@ -8053,7 +8075,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "background-position-inline" => {
-      if let Some(values) = parse_layer_list(&resolved_value, parse_background_position_component_x)
+      if let Some(values) = parse_layer_list(resolved_value, parse_background_position_component_x)
       {
         styles.ensure_background_lists();
         let horizontal_inline = inline_axis_is_horizontal(styles.writing_mode);
@@ -8084,7 +8106,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "background-position-block" => {
-      if let Some(values) = parse_layer_list(&resolved_value, parse_background_position_component_y)
+      if let Some(values) = parse_layer_list(resolved_value, parse_background_position_component_y)
       {
         styles.ensure_background_lists();
         let horizontal_block = block_axis_is_horizontal(styles.writing_mode);
@@ -8124,19 +8146,19 @@ pub fn apply_declaration_with_base(
         },
         _ => None,
       };
-      if let Some(attachments) = parse_layer_list(&resolved_value, parse) {
+      if let Some(attachments) = parse_layer_list(resolved_value, parse) {
         styles.background_attachments = attachments.into();
         styles.rebuild_background_layers();
       }
     }
     "background-origin" => {
-      if let Some(origins) = parse_layer_list(&resolved_value, parse_background_box) {
+      if let Some(origins) = parse_layer_list(resolved_value, parse_background_box) {
         styles.background_origins = origins.into();
         styles.rebuild_background_layers();
       }
     }
     "background-clip" => {
-      if let Some(clips) = parse_layer_list(&resolved_value, parse_background_box) {
+      if let Some(clips) = parse_layer_list(resolved_value, parse_background_box) {
         styles.background_clips = clips.into();
         styles.rebuild_background_layers();
       }
@@ -8146,7 +8168,7 @@ pub fn apply_declaration_with_base(
         PropertyValue::Keyword(kw) => parse_mix_blend_mode(kw),
         _ => None,
       };
-      if let Some(modes) = parse_layer_list(&resolved_value, parse) {
+      if let Some(modes) = parse_layer_list(resolved_value, parse) {
         styles.background_blend_modes = modes.into();
         styles.rebuild_background_layers();
       }
@@ -8154,49 +8176,49 @@ pub fn apply_declaration_with_base(
 
     // Mask
     "mask-image" => {
-      if let Some(images) = parse_background_image_list(&resolved_value) {
+      if let Some(images) = parse_background_image_list(resolved_value) {
         styles.mask_images = images.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-position" => {
-      if let Some(positions) = parse_layer_list(&resolved_value, parse_background_position) {
+      if let Some(positions) = parse_layer_list(resolved_value, parse_background_position) {
         styles.mask_positions = positions.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-size" => {
-      if let Some(sizes) = parse_layer_list(&resolved_value, parse_background_size) {
+      if let Some(sizes) = parse_layer_list(resolved_value, parse_background_size) {
         styles.mask_sizes = sizes.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-repeat" => {
-      if let Some(repeats) = parse_layer_list(&resolved_value, parse_background_repeat) {
+      if let Some(repeats) = parse_layer_list(resolved_value, parse_background_repeat) {
         styles.mask_repeats = repeats.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-mode" => {
-      if let Some(modes) = parse_layer_list(&resolved_value, parse_mask_mode) {
+      if let Some(modes) = parse_layer_list(resolved_value, parse_mask_mode) {
         styles.mask_modes = modes.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-origin" => {
-      if let Some(origins) = parse_layer_list(&resolved_value, parse_mask_origin) {
+      if let Some(origins) = parse_layer_list(resolved_value, parse_mask_origin) {
         styles.mask_origins = origins.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-clip" => {
-      if let Some(clips) = parse_layer_list(&resolved_value, parse_mask_clip) {
+      if let Some(clips) = parse_layer_list(resolved_value, parse_mask_clip) {
         styles.mask_clips = clips.into();
         styles.rebuild_mask_layers();
       }
     }
     "mask-composite" => {
-      if let Some(ops) = parse_layer_list(&resolved_value, parse_mask_composite) {
+      if let Some(ops) = parse_layer_list(resolved_value, parse_mask_composite) {
         styles.mask_composites = ops.into();
         styles.rebuild_mask_layers();
       }
@@ -8316,7 +8338,7 @@ pub fn apply_declaration_with_base(
         styles.opacity = n.clamp(0.0, 1.0);
       }
     }
-    "box-shadow" => match &resolved_value {
+    "box-shadow" => match resolved_value {
       PropertyValue::BoxShadow(shadows) => {
         styles.box_shadow = shadows.clone();
       }
@@ -8325,7 +8347,7 @@ pub fn apply_declaration_with_base(
       }
       _ => {}
     },
-    "text-shadow" => match &resolved_value {
+    "text-shadow" => match resolved_value {
       PropertyValue::TextShadow(shadows) => {
         styles.text_shadow = shadows.clone().into();
       }
@@ -8335,9 +8357,9 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "transform" => {
-      if let PropertyValue::Transform(transforms) = &resolved_value {
+      if let PropertyValue::Transform(transforms) = resolved_value {
         styles.transform = transforms.clone();
-      } else if let PropertyValue::Keyword(kw) = &resolved_value {
+      } else if let PropertyValue::Keyword(kw) = resolved_value {
         if kw.eq_ignore_ascii_case("none") {
           styles.transform.clear();
         } else if let Some(ts) = crate::css::properties::parse_transform_list(kw) {
@@ -8346,11 +8368,11 @@ pub fn apply_declaration_with_base(
       }
     }
     "offset-path" => {
-      if let Some(path) = parse_offset_path_value(&resolved_value) {
+      if let Some(path) = parse_offset_path_value(resolved_value) {
         styles.offset_path = path;
       }
     }
-    "offset-distance" => match &resolved_value {
+    "offset-distance" => match resolved_value {
       PropertyValue::Length(len) => {
         styles.offset_distance = *len;
       }
@@ -8363,30 +8385,30 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "offset-rotate" => {
-      if let Some(value) = parse_offset_rotate(&resolved_value) {
+      if let Some(value) = parse_offset_rotate(resolved_value) {
         styles.offset_rotate = value;
       }
     }
     "offset-anchor" => {
-      if let Some(anchor) = parse_offset_anchor(&resolved_value) {
+      if let Some(anchor) = parse_offset_anchor(resolved_value) {
         styles.offset_anchor = anchor;
       }
     }
     "transform-box" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(value) = parse_transform_box(kw) {
           styles.transform_box = value;
         }
       }
     }
     "transform-style" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(value) = parse_transform_style(kw) {
           styles.transform_style = value;
         }
       }
     }
-    "perspective" => match &resolved_value {
+    "perspective" => match resolved_value {
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
         styles.perspective = None;
       }
@@ -8396,51 +8418,51 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "perspective-origin" => {
-      if let Some(origin) = parse_transform_origin(&resolved_value) {
+      if let Some(origin) = parse_transform_origin(resolved_value) {
         styles.perspective_origin = origin;
       }
     }
     "backface-visibility" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(value) = parse_backface_visibility(kw) {
           styles.backface_visibility = value;
         }
       }
     }
     "filter" => {
-      if let Some(filters) = parse_filter_list(&resolved_value) {
+      if let Some(filters) = parse_filter_list(resolved_value) {
         styles.filter = filters;
       }
     }
     "backdrop-filter" => {
-      if let Some(filters) = parse_filter_list(&resolved_value) {
+      if let Some(filters) = parse_filter_list(resolved_value) {
         styles.backdrop_filter = filters;
       }
     }
     "clip-path" => {
-      if let Some(path) = parse_clip_path_value(&resolved_value) {
+      if let Some(path) = parse_clip_path_value(resolved_value) {
         styles.clip_path = path;
       }
     }
     "clip" => {
-      if let Some(value) = parse_clip_value(&resolved_value) {
+      if let Some(value) = parse_clip_value(resolved_value) {
         styles.clip = value;
       }
     }
     "transform-origin" => {
-      if let Some(origin) = parse_transform_origin(&resolved_value) {
+      if let Some(origin) = parse_transform_origin(resolved_value) {
         styles.transform_origin = origin;
       }
     }
     "mix-blend-mode" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(mode) = parse_mix_blend_mode(kw) {
           styles.mix_blend_mode = mode;
         }
       }
     }
     "isolation" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.isolation = match kw.as_str() {
           "isolate" => Isolation::Isolate,
           _ => Isolation::Auto,
@@ -8448,22 +8470,22 @@ pub fn apply_declaration_with_base(
       }
     }
     "will-change" => {
-      if let Some(value) = parse_will_change(&resolved_value) {
+      if let Some(value) = parse_will_change(resolved_value) {
         styles.will_change = value;
       }
     }
     "container-type" => {
-      if let Some(ct) = parse_container_type_value(&resolved_value) {
+      if let Some(ct) = parse_container_type_value(resolved_value) {
         styles.container_type = ct;
       }
     }
     "container-name" => {
-      if let Some(names) = parse_container_names(&resolved_value) {
+      if let Some(names) = parse_container_names(resolved_value) {
         styles.container_name = names;
       }
     }
     "container" => {
-      if let Some((names, ty)) = parse_container_shorthand(&resolved_value) {
+      if let Some((names, ty)) = parse_container_shorthand(resolved_value) {
         styles.container_name = names;
         if let Some(ct) = ty {
           styles.container_type = ct;
@@ -8471,13 +8493,13 @@ pub fn apply_declaration_with_base(
       }
     }
     "contain" => {
-      if let Some(value) = parse_containment(&resolved_value) {
+      if let Some(value) = parse_containment(resolved_value) {
         styles.containment = value;
       }
     }
 
     "border-collapse" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         styles.border_collapse = match kw.as_str() {
           "collapse" => crate::style::types::BorderCollapse::Collapse,
           "separate" => crate::style::types::BorderCollapse::Separate,
@@ -8486,7 +8508,7 @@ pub fn apply_declaration_with_base(
       }
     }
     "border-spacing" => {
-      if let Some((mut h, mut v)) = extract_length_pair(&resolved_value) {
+      if let Some((mut h, mut v)) = extract_length_pair(resolved_value) {
         // border-spacing only accepts non-negative lengths; percentages are invalid.
         if h.has_percentage() || v.has_percentage() {
           return;
@@ -8501,17 +8523,17 @@ pub fn apply_declaration_with_base(
     }
 
     "string-set" => {
-      if let Some(assignments) = parse_string_set_value(&resolved_value) {
+      if let Some(assignments) = parse_string_set_value(resolved_value) {
         styles.string_set = assignments;
       }
     }
 
     // Content property (for ::before and ::after pseudo-elements)
     "content" => {
-      if let Some(parsed) = content_value_from_property(&resolved_value) {
+      if let Some(parsed) = content_value_from_property(resolved_value) {
         styles.content_value = parsed.clone();
         // Keep legacy string storage for marker tests and existing code paths.
-        styles.content = match &resolved_value {
+        styles.content = match resolved_value {
           PropertyValue::String(s) => s.clone(),
           PropertyValue::Keyword(k) => k.clone(),
           PropertyValue::Multiple(tokens) => tokens
@@ -8531,7 +8553,7 @@ pub fn apply_declaration_with_base(
         };
       }
     }
-    "quotes" => match &resolved_value {
+    "quotes" => match resolved_value {
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
         styles.quotes = Arc::from(Vec::new());
       }
@@ -8562,66 +8584,66 @@ pub fn apply_declaration_with_base(
       _ => {}
     },
     "image-orientation" => {
-      if let Some(orientation) = parse_image_orientation(&resolved_value) {
+      if let Some(orientation) = parse_image_orientation(resolved_value) {
         styles.image_orientation = orientation;
       }
     }
     "image-resolution" => {
-      if let Some(res) = parse_image_resolution(&resolved_value) {
+      if let Some(res) = parse_image_resolution(resolved_value) {
         styles.image_resolution = res;
       }
     }
     "border-image-source" => {
-      if let Some(src) = parse_border_image_source(&resolved_value) {
+      if let Some(src) = parse_border_image_source(resolved_value) {
         styles.border_image.source = src;
       }
     }
     "border-image-slice" => {
-      if let Some(slice) = parse_border_image_slice(&resolved_value) {
+      if let Some(slice) = parse_border_image_slice(resolved_value) {
         styles.border_image.slice = slice;
       }
     }
     "border-image-width" => {
-      if let Some(width) = parse_border_image_width(&resolved_value) {
+      if let Some(width) = parse_border_image_width(resolved_value) {
         styles.border_image.width = width;
       }
     }
     "border-image-outset" => {
-      if let Some(outset) = parse_border_image_outset(&resolved_value) {
+      if let Some(outset) = parse_border_image_outset(resolved_value) {
         styles.border_image.outset = outset;
       }
     }
     "border-image-repeat" => {
-      if let Some(rep) = parse_border_image_repeat(&resolved_value) {
+      if let Some(rep) = parse_border_image_repeat(resolved_value) {
         styles.border_image.repeat = rep;
       }
     }
     "border-image" => {
-      if let Some(img) = parse_border_image_shorthand(&resolved_value) {
+      if let Some(img) = parse_border_image_shorthand(resolved_value) {
         styles.border_image = img;
       }
     }
     "image-rendering" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(rendering) = parse_image_rendering(kw) {
           styles.image_rendering = rendering;
         }
       }
     }
     "aspect-ratio" => {
-      if let Some(ratio) = parse_aspect_ratio(&resolved_value) {
+      if let Some(ratio) = parse_aspect_ratio(resolved_value) {
         styles.aspect_ratio = ratio;
       }
     }
     "object-fit" => {
-      if let PropertyValue::Keyword(kw) = &resolved_value {
+      if let PropertyValue::Keyword(kw) = resolved_value {
         if let Some(fit) = parse_object_fit(kw) {
           styles.object_fit = fit;
         }
       }
     }
     "object-position" => {
-      if let Some(pos) = parse_object_position(&resolved_value) {
+      if let Some(pos) = parse_object_position(resolved_value) {
         styles.object_position = pos;
       }
     }
@@ -13131,7 +13153,7 @@ mod tests {
     let parent_styles = ComputedStyle::default();
     let mut styles = ComputedStyle::default();
     styles.custom_properties.insert(
-      "--t".to_string(),
+      "--t".into(),
       CustomPropertyValue::new("opacity 1s linear 2s", None),
     );
     apply_declaration_with_base(
@@ -13154,6 +13176,67 @@ mod tests {
     assert_eq!(
       styles.transition_timing_functions,
       vec![TransitionTimingFunction::Linear].into()
+    );
+  }
+
+  #[test]
+  fn custom_property_noop_assignment_skips_store_insert() {
+    use crate::style::custom_property_store::{reset_test_hamt_inserts, test_hamt_inserts};
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    styles
+      .custom_properties
+      .insert("--foo".into(), CustomPropertyValue::new("0", None));
+
+    reset_test_hamt_inserts();
+    let decl = Declaration {
+      property: crate::css::types::PropertyName::Custom(Arc::from("--foo")),
+      value: PropertyValue::Custom("0".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+
+    apply_declaration_with_base(
+      &mut styles,
+      &decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(test_hamt_inserts(), 0);
+
+    reset_test_hamt_inserts();
+    let decl = Declaration {
+      property: crate::css::types::PropertyName::Custom(Arc::from("--foo")),
+      value: PropertyValue::Custom("1".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+
+    apply_declaration_with_base(
+      &mut styles,
+      &decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(test_hamt_inserts(), 1);
+    assert_eq!(
+      styles
+        .custom_properties
+        .get("--foo")
+        .expect("custom property present")
+        .value,
+      "1"
     );
   }
 

@@ -689,7 +689,7 @@ fn var_resolution_width_benchmark(c: &mut Criterion) {
   use fastrender::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
 
   let mut custom_properties = CustomPropertyStore::new();
-  custom_properties.insert("--x".to_string(), CustomPropertyValue::new("10px", None));
+  custom_properties.insert("--x".into(), CustomPropertyValue::new("10px", None));
   let value = PropertyValue::Keyword("var(--x)".to_string());
 
   // Ensure the benchmark keeps exercising the typed post-resolution parser.

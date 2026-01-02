@@ -8627,7 +8627,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
         if let Some(initial) = &rule.initial_value {
           styles
             .custom_properties
-            .insert(name.clone(), initial.clone());
+            .insert(name.as_str().into(), initial.clone());
         }
       }
       continue;
@@ -8642,7 +8642,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
       if !already_initial {
         styles
           .custom_properties
-          .insert(name.clone(), initial.clone());
+          .insert(name.as_str().into(), initial.clone());
       }
     } else {
       styles.custom_properties.remove(name.as_str());

@@ -87,7 +87,7 @@ mod tests {
 
     let mut custom_properties = CustomPropertyStore::default();
     custom_properties.insert(
-      "--title".to_string(),
+      "--title".into(),
       CustomPropertyValue::new(" \"Var Title\"", None),
     );
 
@@ -98,7 +98,8 @@ mod tests {
       panic!("expected var() resolution to succeed for string-set value");
     };
 
-    let assignments = parse_string_set_value(&value).expect("parse string-set after resolution");
+    let assignments =
+      parse_string_set_value(value.as_ref()).expect("parse string-set after resolution");
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].name, "header");
     match &assignments[0].value {

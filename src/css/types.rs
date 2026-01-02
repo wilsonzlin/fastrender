@@ -2418,7 +2418,7 @@ pub enum PropertyName {
   Known(&'static str),
   /// A custom property name (`--*`), which is case-sensitive and must preserve the authored
   /// spelling.
-  Custom(String),
+  Custom(Arc<str>),
 }
 
 impl PropertyName {
@@ -2426,7 +2426,7 @@ impl PropertyName {
   pub fn as_str(&self) -> &str {
     match self {
       Self::Known(name) => name,
-      Self::Custom(name) => name,
+      Self::Custom(name) => name.as_ref(),
     }
   }
 
@@ -2463,7 +2463,7 @@ impl From<&'static str> for PropertyName {
   #[inline]
   fn from(name: &'static str) -> Self {
     if name.starts_with("--") {
-      PropertyName::Custom(name.to_string())
+      PropertyName::Custom(Arc::from(name))
     } else {
       PropertyName::Known(name)
     }
