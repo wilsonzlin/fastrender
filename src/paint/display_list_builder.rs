@@ -1958,14 +1958,17 @@ impl DisplayListBuilder {
             fragment.bounds.size,
           );
           let rects = Self::background_rects(rect, style, self.viewport);
-          let radii =
+          let radii = if Self::border_radius_is_zero(style) {
+            crate::paint::display_list::BorderRadii::ZERO
+          } else {
             Self::resolve_clip_radii(
               style,
               &rects,
               BackgroundBox::PaddingBox,
               self.viewport,
               self.build_breakdown.as_deref(),
-            );
+            )
+          };
           Some(ClipItem {
             shape: ClipShape::Rect {
               rect: rects.padding,
@@ -2246,8 +2249,11 @@ impl DisplayListBuilder {
     if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
       return None;
     }
-    let radii =
-      Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, viewport, breakdown);
+    let radii = if Self::border_radius_is_zero(style) {
+      crate::paint::display_list::BorderRadii::ZERO
+    } else {
+      Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, viewport, breakdown)
+    };
     Some(ClipItem {
       shape: ClipShape::Rect {
         rect: clip_rect,
@@ -2588,6 +2594,9 @@ impl DisplayListBuilder {
     let Some(style) = style else {
       return crate::paint::display_list::BorderRadii::ZERO;
     };
+    if Self::border_radius_is_zero(style) {
+      return crate::paint::display_list::BorderRadii::ZERO;
+    }
     let w = bounds.width().max(0.0);
     let h = bounds.height().max(0.0);
     if w <= 0.0 || h <= 0.0 {
@@ -2639,6 +2648,12 @@ impl DisplayListBuilder {
   ) -> crate::paint::display_list::BorderRadii {
     let timer = breakdown.map(|_| Instant::now());
     let base = Self::resolve_border_radii(Some(style), rects.border, viewport);
+    if base.is_zero() {
+      if let (Some(breakdown), Some(start)) = (breakdown, timer) {
+        breakdown.record_border_radii(start.elapsed());
+      }
+      return base;
+    }
 
     let percentage_base = rects.border.width().max(0.0);
     let font_size = style.font_size;
@@ -2700,57 +2715,53 @@ impl DisplayListBuilder {
       viewport,
     );
 
-    let out = if base.is_zero() {
-      base
-    } else {
-      match clip {
-        BackgroundBox::BorderBox => base,
-        BackgroundBox::PaddingBox => {
-          let shrunk = crate::paint::display_list::BorderRadii {
-            top_left: crate::paint::display_list::BorderRadius {
-              x: (base.top_left.x - border_left).max(0.0),
-              y: (base.top_left.y - border_top).max(0.0),
-            },
-            top_right: crate::paint::display_list::BorderRadius {
-              x: (base.top_right.x - border_right).max(0.0),
-              y: (base.top_right.y - border_top).max(0.0),
-            },
-            bottom_right: crate::paint::display_list::BorderRadius {
-              x: (base.bottom_right.x - border_right).max(0.0),
-              y: (base.bottom_right.y - border_bottom).max(0.0),
-            },
-            bottom_left: crate::paint::display_list::BorderRadius {
-              x: (base.bottom_left.x - border_left).max(0.0),
-              y: (base.bottom_left.y - border_bottom).max(0.0),
-            },
-          };
-          shrunk.clamped(rects.padding.width(), rects.padding.height())
-        }
-        BackgroundBox::ContentBox => {
-          let shrink_left = border_left + padding_left;
-          let shrink_right = border_right + padding_right;
-          let shrink_top = border_top + padding_top;
-          let shrink_bottom = border_bottom + padding_bottom;
-          let shrunk = crate::paint::display_list::BorderRadii {
-            top_left: crate::paint::display_list::BorderRadius {
-              x: (base.top_left.x - shrink_left).max(0.0),
-              y: (base.top_left.y - shrink_top).max(0.0),
-            },
-            top_right: crate::paint::display_list::BorderRadius {
-              x: (base.top_right.x - shrink_right).max(0.0),
-              y: (base.top_right.y - shrink_top).max(0.0),
-            },
-            bottom_right: crate::paint::display_list::BorderRadius {
-              x: (base.bottom_right.x - shrink_right).max(0.0),
-              y: (base.bottom_right.y - shrink_bottom).max(0.0),
-            },
-            bottom_left: crate::paint::display_list::BorderRadius {
-              x: (base.bottom_left.x - shrink_left).max(0.0),
-              y: (base.bottom_left.y - shrink_bottom).max(0.0),
-            },
-          };
-          shrunk.clamped(rects.content.width(), rects.content.height())
-        }
+    let out = match clip {
+      BackgroundBox::BorderBox => base,
+      BackgroundBox::PaddingBox => {
+        let shrunk = crate::paint::display_list::BorderRadii {
+          top_left: crate::paint::display_list::BorderRadius {
+            x: (base.top_left.x - border_left).max(0.0),
+            y: (base.top_left.y - border_top).max(0.0),
+          },
+          top_right: crate::paint::display_list::BorderRadius {
+            x: (base.top_right.x - border_right).max(0.0),
+            y: (base.top_right.y - border_top).max(0.0),
+          },
+          bottom_right: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_right.x - border_right).max(0.0),
+            y: (base.bottom_right.y - border_bottom).max(0.0),
+          },
+          bottom_left: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_left.x - border_left).max(0.0),
+            y: (base.bottom_left.y - border_bottom).max(0.0),
+          },
+        };
+        shrunk.clamped(rects.padding.width(), rects.padding.height())
+      }
+      BackgroundBox::ContentBox => {
+        let shrink_left = border_left + padding_left;
+        let shrink_right = border_right + padding_right;
+        let shrink_top = border_top + padding_top;
+        let shrink_bottom = border_bottom + padding_bottom;
+        let shrunk = crate::paint::display_list::BorderRadii {
+          top_left: crate::paint::display_list::BorderRadius {
+            x: (base.top_left.x - shrink_left).max(0.0),
+            y: (base.top_left.y - shrink_top).max(0.0),
+          },
+          top_right: crate::paint::display_list::BorderRadius {
+            x: (base.top_right.x - shrink_right).max(0.0),
+            y: (base.top_right.y - shrink_top).max(0.0),
+          },
+          bottom_right: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_right.x - shrink_right).max(0.0),
+            y: (base.bottom_right.y - shrink_bottom).max(0.0),
+          },
+          bottom_left: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_left.x - shrink_left).max(0.0),
+            y: (base.bottom_left.y - shrink_bottom).max(0.0),
+          },
+        };
+        shrunk.clamped(rects.content.width(), rects.content.height())
       }
     };
 
@@ -3382,31 +3393,76 @@ impl DisplayListBuilder {
     percentage_base: f32,
     viewport: Option<(f32, f32)>,
   ) -> f32 {
-    let needs_viewport = len.unit.is_viewport_relative()
-      || len
-        .calc
-        .as_ref()
-        .map(|c| c.has_viewport_relative())
-        .unwrap_or(false);
-    let (vw, vh) = match viewport {
-      Some(vp) => vp,
-      None if needs_viewport => (f32::NAN, f32::NAN),
-      None => (percentage_base, percentage_base),
+    if len.is_zero() {
+      return 0.0;
+    }
+
+    if len.calc.is_some() {
+      let needs_viewport = len.unit.is_viewport_relative()
+        || len
+          .calc
+          .as_ref()
+          .map(|c| c.has_viewport_relative())
+          .unwrap_or(false);
+      let (vw, vh) = match viewport {
+        Some(vp) => vp,
+        None if needs_viewport => (f32::NAN, f32::NAN),
+        None => (percentage_base, percentage_base),
+      };
+      let resolved = len
+        .resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
+        .unwrap_or_else(|| {
+          if len.unit.is_absolute() {
+            len.to_px()
+          } else {
+            len.value * font_size
+          }
+        });
+      return if resolved.is_finite() { resolved } else { 0.0 };
+    }
+
+    let resolved = if len.unit.is_absolute() {
+      len.to_px()
+    } else if len.unit.is_percentage() {
+      if percentage_base.is_finite() {
+        (len.value / 100.0) * percentage_base
+      } else {
+        len.value * font_size
+      }
+    } else if len.unit.is_viewport_relative() {
+      if let Some((vw, vh)) = viewport {
+        len.resolve_with_viewport(vw, vh).unwrap_or(len.value * font_size)
+      } else {
+        len.value * font_size
+      }
+    } else if len.unit.is_font_relative() {
+      let px = if matches!(len.unit, LengthUnit::Rem) {
+        root_font_size
+      } else {
+        font_size
+      };
+      len.resolve_with_font_size(px).unwrap_or(len.value * font_size)
+    } else {
+      len.value
     };
-    let resolved = len
-      .resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
-      .unwrap_or_else(|| {
-        if len.unit.is_absolute() {
-          len.to_px()
-        } else {
-          len.value * font_size
-        }
-      });
+
     if resolved.is_finite() {
       resolved
     } else {
       0.0
     }
+  }
+
+  #[inline]
+  fn border_radius_is_zero(style: &ComputedStyle) -> bool {
+    style.border_top_left_radius.x.is_zero()
+      && style.border_top_left_radius.y.is_zero()
+      && style.border_top_right_radius.x.is_zero()
+      && style.border_top_right_radius.y.is_zero()
+      && style.border_bottom_right_radius.x.is_zero()
+      && style.border_bottom_right_radius.y.is_zero()
+      && style.border_bottom_left_radius.x.is_zero()
+      && style.border_bottom_left_radius.y.is_zero()
   }
 
   fn inset_rect(rect: Rect, left: f32, top: f32, right: f32, bottom: f32) -> Rect {
@@ -4140,13 +4196,17 @@ impl DisplayListBuilder {
       && color_clip_rect.width() > 0.0
       && color_clip_rect.height() > 0.0
     {
-      let radii = Self::resolve_clip_radii(
-        style,
-        &rects,
-        color_layer.clip,
-        self.viewport,
-        self.build_breakdown.as_deref(),
-      );
+      let radii = if Self::border_radius_is_zero(style) {
+        crate::paint::display_list::BorderRadii::ZERO
+      } else {
+        Self::resolve_clip_radii(
+          style,
+          &rects,
+          color_layer.clip,
+          self.viewport,
+          self.build_breakdown.as_deref(),
+        )
+      };
       if radii.is_zero() {
         self.emit_background(color_clip_rect, style.background_color);
       } else {
@@ -4242,13 +4302,17 @@ impl DisplayListBuilder {
       }
     }
 
-    let clip_radii = Self::resolve_clip_radii(
-      style,
-      rects,
-      clip_box,
-      self.viewport,
-      self.build_breakdown.as_deref(),
-    );
+    let clip_radii = if Self::border_radius_is_zero(style) {
+      crate::paint::display_list::BorderRadii::ZERO
+    } else {
+      Self::resolve_clip_radii(
+        style,
+        rects,
+        clip_box,
+        self.viewport,
+        self.build_breakdown.as_deref(),
+      )
+    };
     let blend_mode = Self::convert_blend_mode(layer.blend_mode);
     let use_blend = blend_mode != BlendMode::Normal;
     let pushed_clip = !clip_radii.is_zero() && {
@@ -5074,14 +5138,17 @@ impl DisplayListBuilder {
     }
     let rects = Self::background_rects(rect, style, self.viewport);
     let outer_radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
-    let inner_radii =
+    let inner_radii = if Self::border_radius_is_zero(style) {
+      crate::paint::display_list::BorderRadii::ZERO
+    } else {
       Self::resolve_clip_radii(
         style,
         &rects,
         BackgroundBox::PaddingBox,
         self.viewport,
         self.build_breakdown.as_deref(),
-      );
+      )
+    };
     let base_rect = if inset { rects.padding } else { rects.border };
 
     for shadow in &style.box_shadow {
@@ -5132,6 +5199,15 @@ impl DisplayListBuilder {
   }
 
   fn emit_border_from_style(&mut self, rect: Rect, style: &ComputedStyle) {
+    if matches!(style.border_image.source, BorderImageSource::None)
+      && !Self::border_style_visible(style.border_top_style)
+      && !Self::border_style_visible(style.border_right_style)
+      && !Self::border_style_visible(style.border_bottom_style)
+      && !Self::border_style_visible(style.border_left_style)
+    {
+      return;
+    }
+
     let widths = (
       Self::resolve_length_for_paint(
         &style.border_top_width,
@@ -5881,19 +5957,29 @@ impl DisplayListBuilder {
     let origin = Point::new(origin_x, baseline_y);
     let mut bounds = ConservativeGlyphRunBoundsBuilder::new(origin, run.advance);
 
-    for glyph in &run.glyphs {
-      let x = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset,
-        crate::text::pipeline::Direction::LeftToRight => origin_x + glyph.x_offset,
-      };
-      let y = baseline_y - glyph.y_offset;
-      let offset = Point::new(x - origin_x, y - baseline_y);
-      bounds.include_glyph(offset.x, glyph.x_advance);
-      glyphs.push(GlyphInstance {
-        glyph_id: glyph.glyph_id,
-        offset,
-        advance: glyph.x_advance,
-      });
+    match run.direction {
+      crate::text::pipeline::Direction::LeftToRight => {
+        for glyph in &run.glyphs {
+          let offset = Point::new(glyph.x_offset, -glyph.y_offset);
+          bounds.include_glyph(offset.x, glyph.x_advance);
+          glyphs.push(GlyphInstance {
+            glyph_id: glyph.glyph_id,
+            offset,
+            advance: glyph.x_advance,
+          });
+        }
+      }
+      crate::text::pipeline::Direction::RightToLeft => {
+        for glyph in &run.glyphs {
+          let offset = Point::new(-glyph.x_offset, -glyph.y_offset);
+          bounds.include_glyph(offset.x, glyph.x_advance);
+          glyphs.push(GlyphInstance {
+            glyph_id: glyph.glyph_id,
+            offset,
+            advance: glyph.x_advance,
+          });
+        }
+      }
     }
 
     (glyphs, bounds.finish(run.font_size))
@@ -5910,19 +5996,31 @@ impl DisplayListBuilder {
     let origin = Point::new(block_baseline, inline_start);
     let mut bounds = ConservativeGlyphRunBoundsBuilder::new(origin, run.advance);
 
-    for glyph in &run.glyphs {
-      let inline_pos = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => inline_origin - glyph.x_offset,
-        crate::text::pipeline::Direction::LeftToRight => inline_origin + glyph.x_offset,
-      };
-      let block_pos = block_baseline - glyph.y_offset;
-      let offset = Point::new(block_pos - block_baseline, inline_pos - inline_start);
-      bounds.include_glyph(offset.x, 0.0);
-      glyphs.push(GlyphInstance {
-        glyph_id: glyph.glyph_id,
-        offset,
-        advance: 0.0,
-      });
+    match run.direction {
+      crate::text::pipeline::Direction::LeftToRight => {
+        let inline_base = inline_origin - inline_start;
+        for glyph in &run.glyphs {
+          let offset = Point::new(-glyph.y_offset, inline_base + glyph.x_offset);
+          bounds.include_glyph(offset.x, 0.0);
+          glyphs.push(GlyphInstance {
+            glyph_id: glyph.glyph_id,
+            offset,
+            advance: 0.0,
+          });
+        }
+      }
+      crate::text::pipeline::Direction::RightToLeft => {
+        let inline_base = inline_origin - inline_start;
+        for glyph in &run.glyphs {
+          let offset = Point::new(-glyph.y_offset, inline_base - glyph.x_offset);
+          bounds.include_glyph(offset.x, 0.0);
+          glyphs.push(GlyphInstance {
+            glyph_id: glyph.glyph_id,
+            offset,
+            advance: 0.0,
+          });
+        }
+      }
     }
 
     (glyphs, bounds.finish(run.font_size))
@@ -7174,6 +7272,7 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
+  use crate::{debug::runtime::RuntimeToggles, paint::painter::enable_paint_diagnostics};
   use crate::text::face_cache;
   use crate::text::font_db::FontDatabase;
   use crate::text::font_loader::FontContext;
@@ -7184,6 +7283,7 @@ mod tests {
   use image::codecs::png::PngEncoder;
   use image::ColorType;
   use image::ImageEncoder;
+  use std::collections::HashMap;
   use std::path::PathBuf;
   use std::sync::Arc;
 
@@ -7266,6 +7366,66 @@ mod tests {
             | DisplayItem::PopStackingContext
         )
     })
+  }
+
+  #[test]
+  fn paint_build_skips_clip_radii_when_border_radius_is_zero() {
+    let toggles = Arc::new(RuntimeToggles::from_map(HashMap::from([
+      ("FASTR_PAINT_BUILD_BREAKDOWN".to_string(), "1".to_string()),
+      ("FASTR_DISPLAY_LIST_PARALLEL".to_string(), "0".to_string()),
+    ])));
+
+    runtime::with_thread_runtime_toggles(toggles, || {
+      enable_paint_diagnostics();
+
+      let mut style = ComputedStyle::default();
+      style.background_color = Rgba::new(16, 32, 64, 1.0);
+      style.overflow_x = Overflow::Hidden;
+      style.overflow_y = Overflow::Hidden;
+      let style = Arc::new(style);
+
+      let depth = 64;
+      let rect = Rect::from_xywh(0.0, 0.0, 200.0, 200.0);
+      let mut tree = FragmentNode::new_block_styled(rect, vec![], style.clone());
+      for _ in 0..depth {
+        tree = FragmentNode::new_block_styled(rect, vec![tree], style.clone());
+      }
+
+      let list = DisplayListBuilder::new()
+        .with_viewport_size(rect.width(), rect.height())
+        .build_with_stacking_tree_checked(&tree)
+        .expect("display list should build");
+
+      let diagnostics =
+        crate::paint::painter::take_paint_diagnostics().expect("paint diagnostics enabled");
+
+      let stacking_contexts = list
+        .items()
+        .iter()
+        .filter(|item| matches!(item, DisplayItem::PushStackingContext(_)))
+        .count() as u64;
+      assert_eq!(
+        diagnostics.build_border_radii_calls, stacking_contexts,
+        "border radii work should only run for stacking contexts when border-radius is zero"
+      );
+
+      for item in list.items() {
+        match item {
+          DisplayItem::FillRoundedRect(_) | DisplayItem::StrokeRoundedRect(_) => {
+            panic!("unexpected rounded-rect paint when border-radius is zero");
+          }
+          DisplayItem::PushClip(clip) => {
+            if let ClipShape::Rect { radii, .. } = &clip.shape {
+              assert!(
+                radii.is_none(),
+                "border-radius is zero so rect clips should not carry radii"
+              );
+            }
+          }
+          _ => {}
+        }
+      }
+    });
   }
 
   #[test]
