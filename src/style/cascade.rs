@@ -2624,22 +2624,28 @@ impl CandidateSet {
   #[inline]
   fn mark_seen_bounded(&mut self, idx: usize) -> bool {
     debug_assert!(idx < self.marks.len());
-    if self.marks[idx] == self.generation {
-      return false;
+    let generation = self.generation;
+    let slot = &mut self.marks[idx];
+    if *slot == generation {
+      false
+    } else {
+      *slot = generation;
+      true
     }
-    self.marks[idx] = self.generation;
-    true
   }
 
   fn mark_seen(&mut self, idx: usize) -> bool {
     if idx >= self.marks.len() {
       self.marks.resize(idx + 1, 0);
     }
-    if self.marks[idx] == self.generation {
-      return false;
+    let generation = self.generation;
+    let slot = &mut self.marks[idx];
+    if *slot == generation {
+      false
+    } else {
+      *slot = generation;
+      true
     }
-    self.marks[idx] = self.generation;
-    true
   }
 
   fn reset(&mut self) {
@@ -8007,7 +8013,7 @@ fn match_part_rules<'a>(
         let key = selector_bucket_part(name.as_str());
         if let Some(list) = rules.part_lookup.get(&key) {
           for &idx in list {
-            if scratch.part_seen.insert(idx) {
+            if scratch.part_seen.mark_seen_bounded(idx) {
               scratch.part_candidates.push(idx);
             }
           }
