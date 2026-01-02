@@ -276,7 +276,7 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
       .bundle_fetch_timeout_secs
       .map(|secs| format!(" --fetch-timeout-secs {secs}"))
       .unwrap_or_default();
-    let asset_cache_flag = format!(" --cache-dir '{}'", args.asset_cache_dir.display());
+    let cache_dir_flag = format!(" --cache-dir '{}'", args.asset_cache_dir.display());
     let overwrite_flag = if args.overwrite_fixtures {
       " --overwrite"
     } else {
@@ -317,7 +317,7 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
           "      cargo run --release --features disk_cache --bin bundle_page -- cache '{}' --out '{}'{}{}{}{} --viewport {}x{} --dpr {}",
           entry.name,
           bundle_path.display(),
-          asset_cache_flag,
+          cache_dir_flag,
           args
             .user_agent
             .as_deref()
