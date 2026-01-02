@@ -2027,70 +2027,7 @@ impl ImageCache {
     }
 
     let resolved_url = self.resolve_url(url);
-    self.enforce_image_policy(&resolved_url)?;
-
-    record_image_cache_request();
-    if let Some(img) = self.get_cached(&resolved_url) {
-      record_image_cache_hit();
-      return Ok(Arc::new(CachedImageMetadata::from(&*img)));
-    }
-
-    if let Some(meta) = self.get_cached_meta(&resolved_url) {
-      record_image_cache_hit();
-      return Ok(meta);
-    }
-
-    if let Some(cached) = self.fetcher.read_cache_artifact(
-      FetchContextKind::Image,
-      &resolved_url,
-      CacheArtifactKind::ImageProbeMetadata,
-    ) {
-      if let Some(ctx) = &self.resource_context {
-        let policy_url = cached.final_url.as_deref().unwrap_or(&resolved_url);
-        if let Err(err) = ctx.check_allowed(ResourceKind::Image, policy_url) {
-          let blocked = Error::Image(ImageError::LoadFailed {
-            url: resolved_url.to_string(),
-            reason: err.reason,
-          });
-          self.record_image_error(&resolved_url, &blocked);
-          return Err(blocked);
-        }
-      }
-
-      if let Some(decoded) = decode_probe_metadata_from_disk(&cached.bytes) {
-        let meta = Arc::new(decoded);
-        if let Ok(mut cache) = self.meta_cache.lock() {
-          cache.insert(resolved_url.clone(), Arc::clone(&meta));
-        }
-        record_image_cache_hit();
-        return Ok(meta);
-      }
-
-      // Corrupt or incompatible cache entry; evict so we don't repeatedly reparse it.
-      self.fetcher.remove_cache_artifact(
-        FetchContextKind::Image,
-        cached.final_url.as_deref().unwrap_or(&resolved_url),
-        CacheArtifactKind::ImageProbeMetadata,
-      );
-    }
-
-    let (flight, is_owner) = self.join_meta_inflight(&resolved_url);
-    if !is_owner {
-      record_image_cache_hit();
-      return flight.wait(&resolved_url);
-    }
-
-    let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, &resolved_url, flight);
-
-    record_image_cache_miss();
-    let result = self.fetch_and_probe(&resolved_url);
-    let shared = match &result {
-      Ok(meta) => SharedMetaResult::Success(Arc::clone(meta)),
-      Err(err) => SharedMetaResult::Error(err.clone()),
-    };
-    inflight_guard.finish(shared);
-
-    result
+    self.probe_resolved_url(&resolved_url)
   }
 
   pub fn probe_resolved(&self, resolved_url: &str) -> Result<Arc<CachedImageMetadata>> {
@@ -2099,6 +2036,10 @@ impl ImageCache {
     if trimmed.starts_with('<') {
       return self.probe(trimmed);
     }
+    self.probe_resolved_url(resolved_url)
+  }
+
+  fn probe_resolved_url(&self, resolved_url: &str) -> Result<Arc<CachedImageMetadata>> {
     if resolved_url.is_empty() {
       return Err(Error::Image(ImageError::LoadFailed {
         url: resolved_url.to_string(),
@@ -2117,6 +2058,41 @@ impl ImageCache {
       record_image_cache_hit();
       return Ok(meta);
     }
+
+    if let Some(cached) = self.fetcher.read_cache_artifact(
+      FetchContextKind::Image,
+      resolved_url,
+      CacheArtifactKind::ImageProbeMetadata,
+    ) {
+      if let Some(ctx) = &self.resource_context {
+        let policy_url = cached.final_url.as_deref().unwrap_or(resolved_url);
+        if let Err(err) = ctx.check_allowed(ResourceKind::Image, policy_url) {
+          let blocked = Error::Image(ImageError::LoadFailed {
+            url: resolved_url.to_string(),
+            reason: err.reason,
+          });
+          self.record_image_error(resolved_url, &blocked);
+          return Err(blocked);
+        }
+      }
+
+      if let Some(decoded) = decode_probe_metadata_from_disk(&cached.bytes) {
+        let meta = Arc::new(decoded);
+        if let Ok(mut cache) = self.meta_cache.lock() {
+          cache.insert(resolved_url.to_string(), Arc::clone(&meta));
+        }
+        record_image_cache_hit();
+        return Ok(meta);
+      }
+
+      // Corrupt or incompatible cache entry; evict so we don't repeatedly reparse it.
+      self.fetcher.remove_cache_artifact(
+        FetchContextKind::Image,
+        cached.final_url.as_deref().unwrap_or(resolved_url),
+        CacheArtifactKind::ImageProbeMetadata,
+      );
+    }
+
     let (flight, is_owner) = self.join_meta_inflight(resolved_url);
     if !is_owner {
       record_image_cache_hit();
@@ -4059,6 +4035,98 @@ mod tests {
       calls2.load(Ordering::SeqCst),
       0,
       "second probe should reuse persisted probe metadata without network calls"
+    );
+  }
+
+  #[cfg(feature = "disk_cache")]
+  #[test]
+  fn image_probe_resolved_reuses_persisted_metadata_to_disk_cache() {
+    use crate::resource::{CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct CountingPartialFetcher {
+      calls: Arc<AtomicUsize>,
+      body: Arc<Vec<u8>>,
+    }
+
+    impl ResourceFetcher for CountingPartialFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("expected partial fetch only");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        url: &str,
+        max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut res =
+          FetchedResource::new(self.body.as_ref().clone(), Some("image/png".to_string()));
+        res.status = Some(200);
+        res.final_url = Some(url.to_string());
+        if res.bytes.len() > max_bytes {
+          res.bytes.truncate(max_bytes);
+        }
+        Ok(res)
+      }
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cache_dir = tmp.path().join("assets");
+    let url = "https://example.com/probe_resolved.png";
+    let body = Arc::new(padded_png());
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::with_configs(
+      CountingPartialFetcher {
+        calls: Arc::clone(&calls),
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache = ImageCache::with_fetcher(Arc::new(disk));
+    let meta = cache.probe_resolved(url).expect("probe succeeds");
+    assert_eq!(meta.dimensions(), (1, 1));
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "first resolved probe should hit the network via fetch_partial"
+    );
+
+    let calls2 = Arc::new(AtomicUsize::new(0));
+    let disk2 = DiskCachingFetcher::with_configs(
+      CountingPartialFetcher {
+        calls: Arc::clone(&calls2),
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache2 = ImageCache::with_fetcher(Arc::new(disk2));
+    let meta2 = cache2.probe_resolved(url).expect("probe succeeds from disk");
+    assert_eq!(meta2.dimensions(), (1, 1));
+    assert_eq!(
+      calls2.load(Ordering::SeqCst),
+      0,
+      "second resolved probe should reuse persisted probe metadata without network calls"
     );
   }
 
