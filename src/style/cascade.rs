@@ -2668,6 +2668,7 @@ struct CandidateCursor {
   len: usize,
   pos: usize,
   bucket: CandidateBucket,
+  bucket_rank: u8,
 }
 
 impl CandidateCursor {
@@ -2677,6 +2678,7 @@ impl CandidateCursor {
       len: list.len(),
       pos: 0,
       bucket,
+      bucket_rank: bucket.rank(),
     }
   }
 
@@ -4683,17 +4685,17 @@ impl<'a> RuleIndex<'a> {
           (Some(a_sel_idx), Some(b_sel_idx)) => {
             let a_sel = &selectors[a_sel_idx];
             let b_sel = &selectors[b_sel_idx];
-            let a_bucket_rank = a.bucket.rank();
-            let b_bucket_rank = b.bucket.rank();
-
-            let take_a = a_sel
-              .rule_idx
-              .cmp(&b_sel.rule_idx)
-              .then_with(|| b_sel.specificity.cmp(&a_sel.specificity))
-              .then_with(|| a_sel_idx.cmp(&b_sel_idx))
-              .then_with(|| a_bucket_rank.cmp(&b_bucket_rank))
-              .then_with(|| 0usize.cmp(&1usize))
-              == CmpOrdering::Less;
+            let take_a = if a_sel.rule_idx != b_sel.rule_idx {
+              a_sel.rule_idx < b_sel.rule_idx
+            } else if a_sel.specificity != b_sel.specificity {
+              a_sel.specificity > b_sel.specificity
+            } else if a_sel_idx != b_sel_idx {
+              a_sel_idx < b_sel_idx
+            } else if a.bucket_rank != b.bucket_rank {
+              a.bucket_rank < b.bucket_rank
+            } else {
+              true
+            };
 
             if take_a {
               (0usize, a_sel_idx)
@@ -4785,7 +4787,7 @@ impl<'a> RuleIndex<'a> {
           let Some(selector_idx) = cursor.current() else {
             continue;
           };
-          let bucket_rank = cursor.bucket.rank();
+          let bucket_rank = cursor.bucket_rank;
           match best_cursor_idx {
             None => {
               best_cursor_idx = Some(cursor_idx);
@@ -4856,7 +4858,7 @@ impl<'a> RuleIndex<'a> {
         rule_idx: indexed.rule_idx,
         specificity: indexed.specificity,
         selector_idx,
-        bucket_rank: cursor.bucket.rank(),
+        bucket_rank: cursor.bucket_rank,
         cursor_idx,
       });
     }
@@ -4874,7 +4876,7 @@ impl<'a> RuleIndex<'a> {
           rule_idx: indexed.rule_idx,
           specificity: indexed.specificity,
           selector_idx: next_idx,
-          bucket_rank: cursor.bucket.rank(),
+          bucket_rank: cursor.bucket_rank,
           cursor_idx: item.cursor_idx,
         });
       }
@@ -5067,16 +5069,15 @@ impl<'a> RuleIndex<'a> {
           (Some(a_sel_idx), Some(b_sel_idx)) => {
             let a_sel = &selectors[a_sel_idx];
             let b_sel = &selectors[b_sel_idx];
-            let a_bucket_rank = a.bucket.rank();
-            let b_bucket_rank = b.bucket.rank();
-
-            let take_a = a_sel
-              .rule_idx
-              .cmp(&b_sel.rule_idx)
-              .then_with(|| a_sel_idx.cmp(&b_sel_idx))
-              .then_with(|| a_bucket_rank.cmp(&b_bucket_rank))
-              .then_with(|| 0usize.cmp(&1usize))
-              == CmpOrdering::Less;
+            let take_a = if a_sel.rule_idx != b_sel.rule_idx {
+              a_sel.rule_idx < b_sel.rule_idx
+            } else if a_sel_idx != b_sel_idx {
+              a_sel_idx < b_sel_idx
+            } else if a.bucket_rank != b.bucket_rank {
+              a.bucket_rank < b.bucket_rank
+            } else {
+              true
+            };
 
             if take_a {
               (0usize, a_sel_idx)
@@ -5162,7 +5163,7 @@ impl<'a> RuleIndex<'a> {
           let Some(selector_idx) = cursor.current() else {
             continue;
           };
-          let bucket_rank = cursor.bucket.rank();
+          let bucket_rank = cursor.bucket_rank;
           match best_cursor_idx {
             None => {
               best_cursor_idx = Some(cursor_idx);
@@ -5233,7 +5234,7 @@ impl<'a> RuleIndex<'a> {
         rule_idx: indexed.rule_idx,
         specificity: 0,
         selector_idx,
-        bucket_rank: cursor.bucket.rank(),
+        bucket_rank: cursor.bucket_rank,
         cursor_idx,
       });
     }
@@ -5251,7 +5252,7 @@ impl<'a> RuleIndex<'a> {
           rule_idx: indexed.rule_idx,
           specificity: 0,
           selector_idx: next_idx,
-          bucket_rank: cursor.bucket.rank(),
+          bucket_rank: cursor.bucket_rank,
           cursor_idx: item.cursor_idx,
         });
       }
@@ -10550,6 +10551,73 @@ mod tests {
       &mut merge,
     );
     assert_eq!(candidates, vec![0, 1]);
+  }
+
+  #[test]
+  fn selector_candidates_two_cursor_merge_orders_by_specificity_within_rule() {
+    let stylesheet = parse_stylesheet("div, .foo { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 2);
+
+    // The selector list is parsed as `div` then `.foo`. They share a rule_idx; ordering should
+    // prefer higher specificity first, so `.foo` should be returned ahead of `div`.
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "foo".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert_eq!(candidates, vec![1, 0]);
   }
 
   #[test]
