@@ -299,6 +299,15 @@ struct RunArgs {
   #[arg(long, action = ArgAction::SetTrue)]
   no_http_freshness: bool,
 
+  /// Treat cached HTML documents with HTTP error statuses (>= 400) as failures.
+  ///
+  /// By default, pageset progress renders whatever HTML is cached on disk (even if the original
+  /// fetch returned a 4xx/5xx status) and records the status as a warning in `auto_notes`.
+  /// Enable this flag to restore the legacy behaviour that short-circuits and marks the page as
+  /// `status=error` when the cached HTTP status is >= 400.
+  #[arg(long, action = ArgAction::SetTrue)]
+  fail_on_cached_http_error_status: bool,
+
   #[command(flatten)]
   disk_cache: DiskCacheArgs,
 
@@ -544,6 +553,15 @@ struct WorkerArgs {
   /// Disable serving fresh cached HTTP responses without revalidation
   #[arg(long, action = ArgAction::SetTrue)]
   no_http_freshness: bool,
+
+  /// Treat cached HTML documents with HTTP error statuses (>= 400) as failures.
+  ///
+  /// By default, pageset progress renders whatever HTML is cached on disk (even if the original
+  /// fetch returned a 4xx/5xx status) and records the status as a warning in `auto_notes`.
+  /// Enable this flag to restore the legacy behaviour that short-circuits and marks the page as
+  /// `status=error` when the cached HTTP status is >= 400.
+  #[arg(long, action = ArgAction::SetTrue)]
+  fail_on_cached_http_error_status: bool,
 
   #[command(flatten)]
   disk_cache: DiskCacheArgs,
@@ -857,6 +875,19 @@ fn legacy_auto_notes_from_previous(previous: &PageProgress) -> Option<String> {
   }
 }
 
+fn cached_html_status_from_auto_notes(note: &str) -> Option<u16> {
+  // Prefer the structured `cached_html_status=403` format, but also accept the legacy
+  // `cached HTML status: 403` output.
+  static RE: OnceLock<Regex> = OnceLock::new();
+  let re = RE.get_or_init(|| {
+    Regex::new(r"(?:cached_html_status=|cached HTML status:\s*)(\d{3})")
+      .expect("cached html status regex compiles")
+  });
+  re.captures(note)
+    .and_then(|caps| caps.get(1))
+    .and_then(|m| m.as_str().parse::<u16>().ok())
+}
+
 fn migrate_legacy_notes(progress: &mut PageProgress) {
   if !progress.auto_notes.trim().is_empty() || progress.notes.trim().is_empty() {
     return;
@@ -1033,6 +1064,8 @@ impl PageProgress {
           .as_ref()
           .and_then(|d| d.fetch_error_summary.as_ref())
           .is_some_and(|s| s.total > 0);
+      let has_failures = has_failures
+        || cached_html_status_from_auto_notes(&self.auto_notes).is_some_and(|code| code >= 400);
       if !has_failures {
         self.auto_notes = String::new();
       }
@@ -1962,20 +1995,22 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     url = parsed.to_string();
   }
 
-  if cached.status.is_some_and(|status| status >= 400) {
+  let cached_html_status = cached.status.filter(|status| *status >= 400);
+  let cached_html_status_note = cached_html_status.map(|code| format!("cached_html_status={code}"));
+
+  if cached_html_status.is_some() && args.fail_on_cached_http_error_status {
     let status = cached.status;
     let mut progress = PageProgress::new(url.clone());
     progress.status = ProgressStatus::Error;
     progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-    if let Some(code) = status {
-      progress.auto_notes = format!("cached HTML status: {code}");
-    } else {
-      progress.auto_notes = "cached HTML status: <unknown>".to_string();
+    if let Some(note) = cached_html_status_note.as_deref() {
+      progress.auto_notes = note.to_string();
     }
     progress.failure_stage = Some(ProgressStage::DomParse);
     progress.hotspot = hotspot_from_progress_stage(ProgressStage::DomParse).to_string();
     let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
-    let _ = write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
+    let _ =
+      write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
     if let Some(path) = &args.log_path {
       log.push_str(&format!("Cached HTML status: {status:?}\n"));
       let _ = write_text_file(path, &log);
@@ -2300,6 +2335,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       log.push_str("Status: PANIC\n");
       log.push_str(&format!("Panic: {}\n", progress.auto_notes));
     }
+  }
+
+  if let Some(note) = cached_html_status_note.as_deref() {
+    ensure_auto_note_includes(&mut progress, note);
   }
 
   if is_bad_status(progress.status)
@@ -4309,6 +4348,56 @@ fn report(args: ReportArgs) -> io::Result<()> {
   println!("  error: {}", status_counts.error);
   println!();
 
+  let mut cached_html_http_errors: Vec<(u16, &LoadedProgress)> = progresses
+    .iter()
+    .filter_map(|entry| {
+      let auto_notes = if entry.progress.auto_notes.trim().is_empty() {
+        legacy_auto_notes_from_previous(&entry.progress).unwrap_or_default()
+      } else {
+        entry.progress.auto_notes.clone()
+      };
+      cached_html_status_from_auto_notes(&auto_notes)
+        .filter(|code| *code >= 400)
+        .map(|code| (code, entry))
+    })
+    .collect();
+  cached_html_http_errors.sort_by(|(a_code, a), (b_code, b)| {
+    a_code.cmp(b_code).then_with(|| a.stem.cmp(&b.stem))
+  });
+  println!(
+    "Pages with cached HTML HTTP error status (>=400): {}",
+    cached_html_http_errors.len()
+  );
+  if cached_html_http_errors.is_empty() {
+    println!("  (none)");
+    println!();
+  } else {
+    let mut code_counts: BTreeMap<u16, usize> = BTreeMap::new();
+    for (code, _) in &cached_html_http_errors {
+      *code_counts.entry(*code).or_default() += 1;
+    }
+    for (code, count) in code_counts {
+      println!("  {code}: {count}");
+    }
+    let shown = cached_html_http_errors.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+    println!("  stems (showing {shown} of {}):", cached_html_http_errors.len());
+    for (code, entry) in cached_html_http_errors.iter().take(shown) {
+      println!(
+        "    {} status={} cached_html_status={code}",
+        entry.stem,
+        entry.progress.status.as_str()
+      );
+    }
+    if cached_html_http_errors.len() > shown {
+      println!(
+        "    {} and {} more",
+        PROGRESS_NOTE_ELLIPSIS,
+        cached_html_http_errors.len() - shown
+      );
+    }
+    println!();
+  }
+
   let ok_with_failures: Vec<&LoadedProgress> = progresses
     .iter()
     .filter(|p| p.progress.status == ProgressStatus::Ok && p.progress.failure_stage.is_some())
@@ -5669,6 +5758,9 @@ fn push_worker_args(
 
   if args.no_http_freshness {
     cmd.arg("--no-http-freshness");
+  }
+  if args.fail_on_cached_http_error_status {
+    cmd.arg("--fail-on-cached-http-error-status");
   }
   if args.fonts.bundled_fonts {
     cmd.arg("--bundled-fonts");
@@ -7283,6 +7375,7 @@ mod tests {
       user_agent: DEFAULT_USER_AGENT.to_string(),
       accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
       no_http_freshness: false,
+      fail_on_cached_http_error_status: false,
       disk_cache: DiskCacheArgs {
         max_bytes: common::args::DEFAULT_DISK_CACHE_MAX_BYTES,
         max_age_secs: common::args::DEFAULT_DISK_CACHE_MAX_AGE_SECS,

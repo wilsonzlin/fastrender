@@ -15,6 +15,7 @@ mod file_stylesheet_parity;
 mod inspect_frag_external_css_test;
 mod inspect_frag_help_test;
 mod pageset_progress_commit_tracking_test;
+mod pageset_progress_cached_html_status_test;
 mod pageset_progress_done_timeout_stage_test;
 mod pageset_progress_dump_failures_test;
 mod pageset_progress_dump_full_test;

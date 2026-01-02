@@ -464,39 +464,39 @@ fn auto_backend_ureq_timeout_slice(total: Duration) -> Duration {
   half.min(AUTO_BACKEND_UREQ_TIMEOUT_CAP)
 }
 
-fn rewrite_known_pageset_hosts(url: &str) -> Option<String> {
+fn rewrite_known_pageset_url(url: &str) -> Option<String> {
   Url::parse(url).ok().and_then(|mut parsed| {
     if parsed.scheme() != "https" {
       return None;
     }
     let host = parsed.host_str()?;
 
-    // Some pageset domains do not resolve/reply reliably without the `www.` subdomain in certain
-    // environments. Rewrite to the canonical host so the pageset can still fetch and render
-    // deterministically.
+    // Some pageset domains (notably `tesco.com` and `nhk.or.jp`) do not resolve/reply reliably
+    // without the `www.` subdomain in certain environments. Rewrite to the canonical host so the
+    // pageset can still fetch and render deterministically.
     //
     // Note: this is intentionally scoped to a small allowlist to avoid surprising callers with
-    // implicit URL changes.
+    // implicit host changes.
     if host.eq_ignore_ascii_case("tesco.com") {
       parsed.set_host(Some("www.tesco.com")).ok()?;
-      return Some(parsed.to_string());
-    }
-    if host.eq_ignore_ascii_case("nhk.or.jp") {
+    } else if host.eq_ignore_ascii_case("nhk.or.jp") {
       parsed.set_host(Some("www.nhk.or.jp")).ok()?;
-      return Some(parsed.to_string());
+    } else if host.eq_ignore_ascii_case("developer.mozilla.org") {
+      // MDN occasionally moves pages without leaving an HTTP redirect. Rewrite known moved pages
+      // so the pageset can continue to fetch deterministically while keeping the original cache
+      // stem/progress artifact name stable.
+      if parsed.path()
+        == "/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts"
+      {
+        parsed.set_path("/en-US/docs/Web/CSS/Guides/Multicol_layout/Using");
+      } else {
+        return None;
+      }
+    } else {
+      return None;
     }
 
-    // MDN moved the multicol layout docs from the legacy `CSS_multicol_layout` section to the
-    // `Guides/Multicol_layout` path. Keep the pageset entry stable by rewriting the legacy URL to
-    // the new location so we can still fetch real content.
-    if host.eq_ignore_ascii_case("developer.mozilla.org")
-      && parsed.path() == "/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts"
-    {
-      parsed.set_path("/en-US/docs/Web/CSS/Guides/Multicol_layout");
-      return Some(parsed.to_string());
-    }
-
-    None
+    Some(parsed.to_string())
   })
 }
 
@@ -2776,7 +2776,7 @@ impl HttpFetcher {
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
   ) -> Result<FetchedResource> {
-    let rewritten_url = rewrite_known_pageset_hosts(url);
+    let rewritten_url = rewrite_known_pageset_url(url);
     let mut effective_url = rewritten_url
       .map(Cow::Owned)
       .unwrap_or_else(|| Cow::Borrowed(url));
@@ -2925,7 +2925,7 @@ impl HttpFetcher {
     deadline: &Option<render_control::RenderDeadline>,
     started: Instant,
   ) -> Result<FetchedResource> {
-    let rewritten_url = rewrite_known_pageset_hosts(url);
+    let rewritten_url = rewrite_known_pageset_url(url);
     let effective_url = rewritten_url.as_deref().unwrap_or(url);
     let prefer_reqwest = effective_url
       .get(..8)
@@ -7903,24 +7903,28 @@ mod tests {
   }
 
   #[test]
-  fn rewrite_known_pageset_hosts_examples() {
+  fn rewrite_known_pageset_url_examples() {
     assert_eq!(
-      rewrite_known_pageset_hosts("https://tesco.com").as_deref(),
+      rewrite_known_pageset_url("https://tesco.com").as_deref(),
       Some("https://www.tesco.com/")
     );
     assert_eq!(
-      rewrite_known_pageset_hosts("https://nhk.or.jp").as_deref(),
+      rewrite_known_pageset_url("https://nhk.or.jp").as_deref(),
       Some("https://www.nhk.or.jp/")
     );
     assert_eq!(
-      rewrite_known_pageset_hosts(
+      rewrite_known_pageset_url(
         "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts"
       )
       .as_deref(),
-      Some("https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Multicol_layout")
+      Some("https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Multicol_layout/Using")
     );
-    assert_eq!(rewrite_known_pageset_hosts("https://example.com"), None);
-    assert_eq!(rewrite_known_pageset_hosts("http://tesco.com"), None);
+    assert_eq!(
+      rewrite_known_pageset_url("https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation"),
+      None
+    );
+    assert_eq!(rewrite_known_pageset_url("https://example.com"), None);
+    assert_eq!(rewrite_known_pageset_url("http://tesco.com"), None);
   }
 
   static RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

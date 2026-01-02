@@ -63,6 +63,7 @@ fn pageset_progress_report_outputs_summary() {
   assert!(stdout.contains("ok: 2"));
   assert!(stdout.contains("timeout: 1"));
   assert!(stdout.contains("panic: 1"));
+  assert!(stdout.contains("Pages with cached HTML HTTP error status (>=400): 0"));
   assert!(stdout.contains("Slowest pages (top 4 of 4 with timings):"));
   assert!(stdout.contains("1. timeout_page (timeout"));
   assert!(stdout.contains("2. slow_ok (ok"));
@@ -77,6 +78,42 @@ fn pageset_progress_report_outputs_summary() {
   assert!(
     stdout.contains("totals_ms: fetch=55.00 css=110.00 cascade=220.00 layout=3040.00 paint=545.00")
   );
+}
+
+#[test]
+fn pageset_progress_report_counts_cached_html_http_errors() {
+  let temp = tempdir().expect("tempdir");
+  let progress = json!({
+    "url": "https://cached-status.test/",
+    "status": "ok",
+    "total_ms": 10.0,
+    "stages_ms": {
+      "fetch": 1.0,
+      "css": 0.0,
+      "cascade": 0.0,
+      "layout": 0.0,
+      "paint": 0.0
+    },
+    "notes": "",
+    "auto_notes": "cached_html_status=403",
+    "hotspot": "fetch",
+    "last_good_commit": "",
+    "last_regression_commit": ""
+  });
+  let path = temp.path().join("cached_status.json");
+  fs::write(&path, serde_json::to_string_pretty(&progress).unwrap())
+    .unwrap_or_else(|_| panic!("write {}", path.display()));
+
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args(["report", "--progress-dir", temp.path().to_str().unwrap(), "--top", "0"])
+    .output()
+    .expect("run pageset_progress report");
+  assert!(output.status.success(), "expected success for report");
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(stdout.contains("Pages with cached HTML HTTP error status (>=400): 1"));
+  assert!(stdout.contains("403: 1"));
+  assert!(stdout.contains("cached_status status=ok cached_html_status=403"));
 }
 
 #[test]
