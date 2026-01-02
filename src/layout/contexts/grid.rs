@@ -36,12 +36,12 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::flex_cache::ShardedFlexCache;
 use crate::layout::engine::LayoutParallelism;
+#[cfg(not(test))]
+use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::intrinsic_cache_lookup;
 use crate::layout::formatting_context::intrinsic_cache_store;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
-#[cfg(not(test))]
-use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
@@ -1795,7 +1795,14 @@ impl GridFormattingContext {
               .or_else(|| Some(bounds.width())),
           );
 
-          let mut laid_out = if fc_type == FormattingContextType::Block {
+          let supports_used_border_box = matches!(
+            fc_type,
+            FormattingContextType::Block
+              | FormattingContextType::Flex
+              | FormattingContextType::Grid
+          );
+
+          let mut laid_out = if supports_used_border_box {
             let child_constraints = child_constraints
               .with_used_border_box_size(Some(bounds.width()), Some(bounds.height()));
             fc.layout(child, &child_constraints)?
@@ -2026,7 +2033,12 @@ impl GridFormattingContext {
           .or_else(|| Some(bounds.width())),
       );
 
-      let mut laid_out = if fc_type == FormattingContextType::Block {
+      let supports_used_border_box = matches!(
+        fc_type,
+        FormattingContextType::Block | FormattingContextType::Flex | FormattingContextType::Grid
+      );
+
+      let mut laid_out = if supports_used_border_box {
         let child_constraints =
           child_constraints.with_used_border_box_size(Some(bounds.width()), Some(bounds.height()));
         fc.layout(box_node, &child_constraints)?
@@ -2826,7 +2838,8 @@ impl GridFormattingContext {
         height: content_size.height.max(0.0),
       };
       grid_measure_size_cache_store(key, size);
-      if let Some(evicted) = push_measured_key(measured_node_keys.entry(node_id).or_default(), key) {
+      if let Some(evicted) = push_measured_key(measured_node_keys.entry(node_id).or_default(), key)
+      {
         measured_fragments.remove(&evicted);
       }
       measured_fragments.insert(key, fragment);
@@ -3434,6 +3447,34 @@ impl FormattingContext for GridFormattingContext {
       }
     }
 
+    // If a parent layout mode (flex/grid) already resolved a definite used border-box size for
+    // this grid item, force that size on the root node without cloning/mutating styles.
+    if constraints.used_border_box_width.is_some() || constraints.used_border_box_height.is_some() {
+      if let Ok(existing) = taffy.style(root_id) {
+        let mut updated = existing.clone();
+        let mut changed = false;
+        if let Some(w) = constraints
+          .used_border_box_width
+          .filter(|w| w.is_finite() && *w >= 0.0)
+        {
+          updated.size.width = Dimension::length(w);
+          changed = true;
+        }
+        if let Some(h) = constraints
+          .used_border_box_height
+          .filter(|h| h.is_finite() && *h >= 0.0)
+        {
+          updated.size.height = Dimension::length(h);
+          changed = true;
+        }
+        if changed {
+          taffy
+            .set_style(root_id, updated)
+            .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+        }
+      }
+    }
+
     // Convert constraints to Taffy available space
     let available_space = taffy::geometry::Size {
       width: match constraints.available_width {
@@ -3990,6 +4031,36 @@ mod tests {
     let style = Arc::new(style);
     let text_child = BoxNode::new_text(style.clone(), text.to_string());
     BoxNode::new_block(style, FormattingContextType::Inline, vec![text_child])
+  }
+
+  #[test]
+  fn grid_respects_used_border_box_size_overrides() {
+    let fc = GridFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+
+    let mut grid_style = ComputedStyle::default();
+    grid_style.display = CssDisplay::InlineGrid;
+    let mut item_style = ComputedStyle::default();
+    item_style.width = Some(Length::px(10.0));
+    item_style.height = Some(Length::px(10.0));
+
+    let container = BoxNode::new_inline_block(
+      Arc::new(grid_style),
+      FormattingContextType::Grid,
+      vec![BoxNode::new_block(
+        Arc::new(item_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
+
+    let constraints =
+      LayoutConstraints::definite(500.0, 100.0).with_used_border_box_size(Some(500.0), Some(100.0));
+    let fragment = fc
+      .layout(&container, &constraints)
+      .expect("inline-grid layout should succeed");
+
+    assert_eq!(fragment.bounds.width(), 500.0);
+    assert_eq!(fragment.bounds.height(), 100.0);
   }
 
   #[test]
