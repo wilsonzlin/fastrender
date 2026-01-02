@@ -55,6 +55,12 @@ pub struct RecapturePageFixturesArgs {
   #[arg(long)]
   pub accept_language: Option<String>,
 
+  /// Disk-backed subresource cache directory passed to `bundle_page cache`.
+  ///
+  /// This should match the `--cache-dir` value used when warming the pageset disk cache.
+  #[arg(long, default_value = "fetches/assets", value_name = "DIR", alias = "cache-dir")]
+  pub asset_cache_dir: PathBuf,
+
   /// Per-request fetch timeout (seconds) passed to `bundle_page fetch`.
   #[arg(long)]
   pub bundle_fetch_timeout_secs: Option<u64>,
@@ -464,6 +470,10 @@ fn capture_bundle(
     }
     CaptureMode::Cache => {
       cmd.args(["cache", &fixture.name]);
+      cmd.args([
+        "--asset-cache-dir",
+        args.asset_cache_dir.to_string_lossy().as_ref(),
+      ]);
       if args.allow_missing_resources {
         cmd.arg("--allow-missing");
       }
@@ -568,6 +578,7 @@ mod tests {
     assert_eq!(args.bundle_out_dir, PathBuf::from(DEFAULT_BUNDLE_OUT_DIR));
     assert_eq!(args.user_agent, None);
     assert_eq!(args.accept_language, None);
+    assert_eq!(args.asset_cache_dir, PathBuf::from("fetches/assets"));
     assert_eq!(
       args.only,
       Some(vec!["b.test".to_string(), "a.test".to_string()])
@@ -609,6 +620,7 @@ mod tests {
       capture_mode: CaptureMode::Crawl,
       user_agent: None,
       accept_language: None,
+      asset_cache_dir: PathBuf::from("fetches/assets"),
       bundle_fetch_timeout_secs: None,
       same_origin_subresources: false,
       allow_subresource_origin: Vec::new(),
@@ -647,6 +659,7 @@ mod tests {
       capture_mode: CaptureMode::Crawl,
       user_agent: None,
       accept_language: None,
+      asset_cache_dir: PathBuf::from("fetches/assets"),
       bundle_fetch_timeout_secs: None,
       same_origin_subresources: false,
       allow_subresource_origin: Vec::new(),

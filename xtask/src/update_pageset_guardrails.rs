@@ -60,6 +60,12 @@ pub struct UpdatePagesetGuardrailsArgs {
   #[arg(long)]
   pub accept_language: Option<String>,
 
+  /// Disk-backed subresource cache directory passed to `bundle_page cache`.
+  ///
+  /// This should match the `--cache-dir` value used when warming the pageset disk cache.
+  #[arg(long, default_value = "fetches/assets", value_name = "DIR", alias = "cache-dir")]
+  pub asset_cache_dir: PathBuf,
+
   /// Overwrite existing fixture directories when capturing missing fixtures
   #[arg(long)]
   pub overwrite_fixtures: bool,
@@ -265,6 +271,7 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
       .bundle_fetch_timeout_secs
       .map(|secs| format!(" --fetch-timeout-secs {secs}"))
       .unwrap_or_default();
+    let asset_cache_flag = format!(" --asset-cache-dir '{}'", args.asset_cache_dir.display());
     let overwrite_flag = if args.overwrite_fixtures {
       " --overwrite"
     } else {
@@ -302,9 +309,10 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
       }
       FixtureCaptureMode::Cache => {
         eprintln!(
-          "      cargo run --release --features disk_cache --bin bundle_page -- cache '{}' --out '{}'{}{}{} --viewport {}x{} --dpr {}",
+          "      cargo run --release --features disk_cache --bin bundle_page -- cache '{}' --out '{}'{}{}{}{} --viewport {}x{} --dpr {}",
           entry.name,
           bundle_path.display(),
+          asset_cache_flag,
           args
             .user_agent
             .as_deref()
@@ -383,6 +391,10 @@ fn capture_missing(missing: &[MissingFixture], args: &UpdatePagesetGuardrailsArg
       }
       FixtureCaptureMode::Cache => {
         bundle_cmd.args(["cache", &entry.name]);
+        bundle_cmd.args([
+          "--asset-cache-dir",
+          args.asset_cache_dir.to_string_lossy().as_ref(),
+        ]);
         if args.allow_missing_resources {
           bundle_cmd.arg("--allow-missing");
         }
