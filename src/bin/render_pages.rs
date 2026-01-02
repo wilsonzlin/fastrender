@@ -60,7 +60,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-const ASSET_DIR: &str = "fetches/assets";
+const DEFAULT_ASSET_CACHE_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -173,6 +173,12 @@ struct Args {
 
   #[command(flatten)]
   disk_cache: DiskCacheArgs,
+
+  /// Override disk cache directory (defaults to fetches/assets)
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
+  #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
+  cache_dir: PathBuf,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -389,7 +395,7 @@ fn run(args: Args) -> io::Result<()> {
 
   // Create directories
   fs::create_dir_all(RENDER_DIR)?;
-  fs::create_dir_all(ASSET_DIR)?;
+  fs::create_dir_all(&args.cache_dir)?;
 
   let entries = collect_entries(&args, page_filter);
   if entries.is_empty() {
@@ -418,8 +424,10 @@ fn run(args: Args) -> io::Result<()> {
       format!("{}s", args.disk_cache.max_age_secs)
     };
     println!(
-      "Disk cache: max_bytes={} max_age={}",
-      args.disk_cache.max_bytes, max_age
+      "Disk cache: dir={} max_bytes={} max_age={}",
+      args.cache_dir.display(),
+      args.disk_cache.max_bytes,
+      max_age
     );
   }
   if let Some((index, total)) = args.shard {
@@ -664,7 +672,7 @@ fn build_render_shared(
   #[cfg(feature = "disk_cache")]
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
     http,
-    ASSET_DIR,
+    &args.cache_dir,
     memory_config,
     disk_config,
   ));
@@ -1077,11 +1085,18 @@ fn spawn_worker(
       compat: &args.compat,
     },
   );
+  cmd.arg("--cache-dir").arg(&args.cache_dir);
   cmd
     .arg("--disk-cache-max-bytes")
     .arg(args.disk_cache.max_bytes.to_string())
     .arg("--disk-cache-max-age-secs")
-    .arg(args.disk_cache.max_age_secs.to_string());
+    .arg(args.disk_cache.max_age_secs.to_string())
+    .arg("--disk-cache-lock-stale-secs")
+    .arg(args.disk_cache.lock_stale_secs.to_string())
+    .arg("--disk-cache-allow-no-store")
+    .arg(args.disk_cache.allow_no_store.to_string())
+    .arg("--disk-cache-writeback-under-deadline")
+    .arg(args.disk_cache.writeback_under_deadline.to_string());
   if args.diagnostics_json {
     cmd.arg("--diagnostics-json");
   }
@@ -1312,7 +1327,7 @@ fn worker_main(worker_args: WorkerArgs) -> io::Result<()> {
   let shared = build_render_shared(&args, 1, None, Some(args.timeout), soft_timeout_ms);
 
   fs::create_dir_all(RENDER_DIR)?;
-  let _ = fs::create_dir_all(ASSET_DIR);
+  let _ = fs::create_dir_all(&args.cache_dir);
 
   let page_result = render_entry(&shared, &entry);
 

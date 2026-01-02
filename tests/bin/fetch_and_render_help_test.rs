@@ -25,4 +25,9 @@ fn help_mentions_default_output_and_dirs() {
     "help should mention parent directory creation; got:\n{}",
     help
   );
+  assert!(
+    help.contains("--cache-dir"),
+    "help should mention --cache-dir; got:\n{}",
+    help
+  );
 }

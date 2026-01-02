@@ -40,6 +40,36 @@ fn render_pages_exits_non_zero_when_filter_matches_nothing() {
 }
 
 #[test]
+fn render_pages_accepts_cache_dir_flag() {
+  let temp = TempDir::new().expect("tempdir");
+  let html_dir = temp.path().join("fetches/html");
+  fs::create_dir_all(&html_dir).expect("create html dir");
+
+  fs::write(
+    html_dir.join("example.com.html"),
+    "<!doctype html><title>Foo</title>",
+  )
+  .expect("write html");
+
+  let cache_dir = temp.path().join("custom_assets");
+
+  let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
+    .current_dir(temp.path())
+    .args(["--pages", "example.com"])
+    .arg("--cache-dir")
+    .arg(&cache_dir)
+    .status()
+    .expect("run render_pages");
+
+  assert!(status.success(), "expected render_pages to succeed");
+  assert!(cache_dir.is_dir(), "expected cache dir to be created");
+  assert!(
+    !temp.path().join("fetches/assets").exists(),
+    "expected default fetches/assets to remain absent when --cache-dir is set"
+  );
+}
+
+#[test]
 fn render_pages_errors_on_unknown_option() {
   let temp = TempDir::new().expect("tempdir");
 

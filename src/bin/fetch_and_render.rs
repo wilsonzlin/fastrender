@@ -23,7 +23,6 @@ use common::render_pipeline::{
 };
 use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::image_output::encode_image;
-use fastrender::resource::FetchRequest;
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::url_to_filename;
 #[cfg(not(feature = "disk_cache"))]
@@ -31,6 +30,7 @@ use fastrender::resource::CachingFetcher;
 use fastrender::resource::CachingFetcherConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
+use fastrender::resource::FetchRequest;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
@@ -43,8 +43,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-#[cfg(feature = "disk_cache")]
-const ASSET_CACHE_DIR: &str = "fetches/assets";
+const DEFAULT_ASSET_CACHE_DIR: &str = "fetches/assets";
 
 /// Fetch a single page and render it to an image
 #[derive(Parser, Debug)]
@@ -110,6 +109,12 @@ struct Args {
 
   #[command(flatten)]
   disk_cache: DiskCacheArgs,
+
+  /// Override disk cache directory (defaults to fetches/assets)
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
+  #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
+  cache_dir: PathBuf,
   #[command(flatten)]
   layout_parallel: LayoutParallelArgs,
 
@@ -229,8 +234,10 @@ fn try_main(args: Args) -> Result<()> {
       format!("{}s", args.disk_cache.max_age_secs)
     };
     banner.push_str(&format!(
-      "\nDisk cache: max_bytes={} max_age={}",
-      args.disk_cache.max_bytes, max_age
+      "\nDisk cache: dir={} max_bytes={} max_age={}",
+      args.cache_dir.display(),
+      args.disk_cache.max_bytes,
+      max_age
     ));
   }
   eprintln!("{banner}");
@@ -240,7 +247,7 @@ fn try_main(args: Args) -> Result<()> {
   #[cfg(feature = "disk_cache")]
   {
     // Keep parity with render_pages/pageset_progress: ensure disk cache is ready up front.
-    std::fs::create_dir_all(ASSET_CACHE_DIR)?;
+    std::fs::create_dir_all(&args.cache_dir)?;
   }
 
   let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
@@ -286,7 +293,7 @@ fn try_main(args: Args) -> Result<()> {
   #[cfg(feature = "disk_cache")]
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
     http,
-    ASSET_CACHE_DIR,
+    &args.cache_dir,
     memory_config,
     disk_config,
   ));
