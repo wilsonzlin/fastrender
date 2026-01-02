@@ -16,8 +16,8 @@ env:
   # Deterministic complexity counters (DOM nodes, fragments, display items, etc) should not drift
   # far without an explicit change; keep this conservative while still catching blowups.
   PERF_SMOKE_COUNT_REGRESSION_THRESHOLD: "0.20"
-  # Enable once pageset-guardrails budgets are calibrated (Task 74).
-  PERF_SMOKE_FAIL_ON_BUDGET: "0"
+  # Enforce pageset-guardrails budget_ms entries (offline perf smoke hard cap).
+  PERF_SMOKE_FAIL_ON_BUDGET: "1"
 
 jobs:
   # ===========================================================================
@@ -102,9 +102,9 @@ jobs:
             extra_args+=(--fail-on-budget)
           fi
           # Keep CI invocation explicit (instead of delegating to `cargo xtask perf-smoke`) so we
-          # can't silently drift from the perf_smoke guardrails we intend to enforce here. Once
-          # xtask exposes all of these flags directly (Task 62), consider switching to reduce
-          # duplication between local workflows and CI.
+          # can't silently drift from the perf_smoke guardrails we intend to enforce here.
+          # Note: `cargo xtask perf-smoke` now exposes these flags; consider switching if we want
+          # to reduce duplication between local workflows and CI.
           cargo run --release --bin perf_smoke -- \
             --suite pageset-guardrails \
             --fail-on-missing-fixtures \
