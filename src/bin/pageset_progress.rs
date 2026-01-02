@@ -1678,6 +1678,39 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
   atomic_write_with_hook(path, contents, |_| Ok(()))
 }
 
+/// Best-effort atomic write helper for non-critical artifacts (logs, run sentinels, etc).
+///
+/// Unlike `atomic_write`, this intentionally avoids `sync_all` so it stays cheap enough to
+/// run inside the measured render window without skewing per-stage timing attribution.
+fn atomic_write_fast_with_hook<F>(
+  path: &Path,
+  contents: &[u8],
+  pre_rename_hook: F,
+) -> io::Result<()>
+where
+  F: FnOnce(&Path) -> io::Result<()>,
+{
+  if let Some(parent) = path.parent() {
+    if !parent.as_os_str().is_empty() {
+      fs::create_dir_all(parent)?;
+    }
+  }
+  let dir = path
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .unwrap_or_else(|| Path::new("."));
+  let mut temp = NamedTempFile::new_in(dir)?;
+  temp.write_all(contents)?;
+  temp.flush()?;
+  let temp_path = temp.into_temp_path();
+  pre_rename_hook(temp_path.as_ref())?;
+  temp_path.persist(path).map_err(|e| e.error)
+}
+
+fn atomic_write_fast(path: &Path, contents: &[u8]) -> io::Result<()> {
+  atomic_write_fast_with_hook(path, contents, |_| Ok(()))
+}
+
 fn normalize_progress_fetch_error_summary(summary: &mut Option<ProgressFetchErrorSummary>) {
   if summary.as_ref().is_some_and(|s| s.total == 0) {
     *summary = None;
@@ -2944,7 +2977,7 @@ fn trace_issue_message(trace_path: &Path, reason: Option<&str>) -> Option<String
 }
 
 fn write_text_file(path: &Path, contents: &str) -> io::Result<()> {
-  atomic_write(path, contents.as_bytes())
+  atomic_write_fast(path, contents.as_bytes())
 }
 
 fn write_json_file(path: &Path, value: &impl Serialize) -> io::Result<()> {
@@ -3353,7 +3386,7 @@ fn write_progress_with_sentinel(
     let sentinel_path = progress_sentinel_path(stage_path);
     // Best-effort marker so the parent can distinguish "worker wrote progress for this run"
     // from a stale progress artifact left over from a previous invocation.
-    atomic_write(&sentinel_path, b"written\n")?;
+    atomic_write_fast(&sentinel_path, b"written\n")?;
   }
   Ok(())
 }
