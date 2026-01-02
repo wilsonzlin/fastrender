@@ -1977,6 +1977,7 @@ struct IndexedSlottedSelector<'a> {
 
 type SelectorBucketKey = u64;
 type SelectorIndex = u32;
+type SelectorIndexList = SmallVec<[SelectorIndex; 4]>;
 
 // The rule index stores pre-hashed selector keys (ids, classes, tags, attribute names) so we can:
 //   1. Avoid allocating/cloning `String`s when building the index.
@@ -2125,11 +2126,11 @@ type SelectorBucketBuildHasher = BuildHasherDefault<SelectorBucketHasher>;
 type SelectorBucketMap<V> = HashMap<SelectorBucketKey, V, SelectorBucketBuildHasher>;
 
 struct PseudoBuckets {
-  by_id: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_class: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_attr_value: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_tag: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_attr: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_id: SelectorBucketMap<SelectorIndexList>,
+  by_class: SelectorBucketMap<SelectorIndexList>,
+  by_attr_value: SelectorBucketMap<SelectorIndexList>,
+  by_tag: SelectorBucketMap<SelectorIndexList>,
+  by_attr: SelectorBucketMap<SelectorIndexList>,
   universal: Vec<SelectorIndex>,
 }
 
@@ -2147,11 +2148,11 @@ impl PseudoBuckets {
 }
 
 struct SlottedBuckets {
-  by_id: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_class: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_attr_value: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_tag: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_attr: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_id: SelectorBucketMap<SelectorIndexList>,
+  by_class: SelectorBucketMap<SelectorIndexList>,
+  by_attr_value: SelectorBucketMap<SelectorIndexList>,
+  by_tag: SelectorBucketMap<SelectorIndexList>,
+  by_attr: SelectorBucketMap<SelectorIndexList>,
   universal: Vec<SelectorIndex>,
 }
 
@@ -2179,11 +2180,11 @@ struct RuleIndex<'a> {
   selectors: Vec<IndexedSelector<'a>>,
   metadatas: Vec<SelectorMetadata>,
   fast_rejects: Vec<RightmostFastReject>,
-  by_id: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_class: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_attr_value: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_tag: SelectorBucketMap<Vec<SelectorIndex>>,
-  by_attr: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_id: SelectorBucketMap<SelectorIndexList>,
+  by_class: SelectorBucketMap<SelectorIndexList>,
+  by_attr_value: SelectorBucketMap<SelectorIndexList>,
+  by_tag: SelectorBucketMap<SelectorIndexList>,
+  by_attr: SelectorBucketMap<SelectorIndexList>,
   universal: Vec<SelectorIndex>,
   pseudo_selectors: Vec<IndexedSelector<'a>>,
   pseudo_buckets: HashMap<PseudoElement, PseudoBuckets>,
@@ -4596,7 +4597,7 @@ impl<'a> RuleIndex<'a> {
   }
 
   fn sort_selector_buckets(&mut self) {
-    fn sort_bucket(list: &mut Vec<SelectorIndex>, selectors: &[IndexedSelector<'_>]) {
+    fn sort_bucket(list: &mut [SelectorIndex], selectors: &[IndexedSelector<'_>]) {
       list.sort_unstable_by(|a, b| {
         let a_sel = &selectors[*a as usize];
         let b_sel = &selectors[*b as usize];
@@ -4610,23 +4611,26 @@ impl<'a> RuleIndex<'a> {
 
     let selectors = &self.selectors;
     for list in self.by_id.values_mut() {
-      sort_bucket(list, selectors);
+      sort_bucket(list.as_mut_slice(), selectors);
     }
     for list in self.by_class.values_mut() {
-      sort_bucket(list, selectors);
+      sort_bucket(list.as_mut_slice(), selectors);
     }
     for list in self.by_attr_value.values_mut() {
-      sort_bucket(list, selectors);
+      sort_bucket(list.as_mut_slice(), selectors);
     }
     for list in self.by_tag.values_mut() {
-      sort_bucket(list, selectors);
+      sort_bucket(list.as_mut_slice(), selectors);
     }
     for list in self.by_attr.values_mut() {
-      sort_bucket(list, selectors);
+      sort_bucket(list.as_mut_slice(), selectors);
     }
-    sort_bucket(&mut self.universal, selectors);
+    sort_bucket(self.universal.as_mut_slice(), selectors);
 
-    fn sort_slotted_bucket(list: &mut Vec<SelectorIndex>, selectors: &[IndexedSlottedSelector<'_>]) {
+    fn sort_slotted_bucket(
+      list: &mut [SelectorIndex],
+      selectors: &[IndexedSlottedSelector<'_>],
+    ) {
       list.sort_unstable_by(|a, b| {
         let a_sel = &selectors[*a as usize];
         let b_sel = &selectors[*b as usize];
@@ -4636,21 +4640,21 @@ impl<'a> RuleIndex<'a> {
 
     let slotted_selectors = &self.slotted_selectors;
     for list in self.slotted_buckets.by_id.values_mut() {
-      sort_slotted_bucket(list, slotted_selectors);
+      sort_slotted_bucket(list.as_mut_slice(), slotted_selectors);
     }
     for list in self.slotted_buckets.by_class.values_mut() {
-      sort_slotted_bucket(list, slotted_selectors);
+      sort_slotted_bucket(list.as_mut_slice(), slotted_selectors);
     }
     for list in self.slotted_buckets.by_attr_value.values_mut() {
-      sort_slotted_bucket(list, slotted_selectors);
+      sort_slotted_bucket(list.as_mut_slice(), slotted_selectors);
     }
     for list in self.slotted_buckets.by_tag.values_mut() {
-      sort_slotted_bucket(list, slotted_selectors);
+      sort_slotted_bucket(list.as_mut_slice(), slotted_selectors);
     }
     for list in self.slotted_buckets.by_attr.values_mut() {
-      sort_slotted_bucket(list, slotted_selectors);
+      sort_slotted_bucket(list.as_mut_slice(), slotted_selectors);
     }
-    sort_slotted_bucket(&mut self.slotted_buckets.universal, slotted_selectors);
+    sort_slotted_bucket(self.slotted_buckets.universal.as_mut_slice(), slotted_selectors);
   }
 
   fn has_pseudo_content(&self, pseudo: &PseudoElement) -> bool {
@@ -10633,7 +10637,7 @@ mod tests {
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.selectors.len(), 1);
 
-    let count_bucket_occurrences = |map: &SelectorBucketMap<Vec<SelectorIndex>>| -> usize {
+    let count_bucket_occurrences = |map: &SelectorBucketMap<SelectorIndexList>| -> usize {
       map.values().flatten().filter(|&&i| i == 0).count()
     };
     let total_occurrences = count_bucket_occurrences(&index.by_id)
