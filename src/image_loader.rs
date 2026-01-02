@@ -3685,16 +3685,56 @@ impl ImageCache {
   }
 
   fn decode_avif(bytes: &[u8]) -> std::result::Result<DynamicImage, AvifDecodeError> {
-    check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
-    let decoder =
-      AvifDecoder::from_avif(bytes).map_err(|err| AvifDecodeError::Image(Self::avif_error(err)))?;
-    check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
-    let image = decoder
-      .to_image()
-      .map_err(|err| AvifDecodeError::Image(Self::avif_error(err)))?;
-    let mut deadline_counter = 0usize;
-    check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
-    Self::avif_image_to_dynamic(image, &mut deadline_counter)
+    let decode_inner = |payload: &[u8]| -> std::result::Result<DynamicImage, AvifDecodeError> {
+      check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
+      let decoder = AvifDecoder::from_avif(payload)
+        .map_err(|err| AvifDecodeError::Image(Self::avif_error(err)))?;
+      check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
+      let image = decoder
+        .to_image()
+        .map_err(|err| AvifDecodeError::Image(Self::avif_error(err)))?;
+      let mut deadline_counter = 0usize;
+      check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
+      Self::avif_image_to_dynamic(image, &mut deadline_counter)
+    };
+
+    let try_decode = |payload: &[u8]| -> std::result::Result<DynamicImage, AvifDecodeError> {
+      match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_inner(payload))) {
+        Ok(result) => result,
+        Err(panic) => {
+          let message = panic
+            .downcast_ref::<&str>()
+            .map(|msg| (*msg).to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<unknown panic>".to_string());
+          Err(AvifDecodeError::Image(Self::avif_error(format!(
+            "avif decode panicked: {message}"
+          ))))
+        }
+      }
+    };
+
+    let original = match try_decode(bytes) {
+      Ok(img) => return Ok(img),
+      Err(err) => err,
+    };
+
+    if matches!(original, AvifDecodeError::Timeout(_)) {
+      return Err(original);
+    }
+
+    let trimmed = Self::trim_isobmff_trailing_bytes(bytes);
+    if trimmed.len() < bytes.len() {
+      match try_decode(trimmed) {
+        Ok(img) => Ok(img),
+        Err(err) => match err {
+          AvifDecodeError::Timeout(_) => Err(err),
+          AvifDecodeError::Image(_) => Err(original),
+        },
+      }
+    } else {
+      Err(original)
+    }
   }
 
   fn reserve_for_bytes(bytes: u64, context: &str) -> std::result::Result<usize, image::ImageError> {
