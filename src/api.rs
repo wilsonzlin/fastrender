@@ -132,7 +132,7 @@ use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::paint::painter::PaintBackend;
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{
-  record_stage, CancelCallback, DeadlineGuard, RenderDeadline, StageHeartbeat,
+  record_stage, CancelCallback, DeadlineGuard, RenderDeadline, StageGuard, StageHeartbeat,
 };
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{
@@ -8674,6 +8674,7 @@ impl FastRender {
       .name("fastr-image-prefetch".to_string())
       .spawn(move || {
         let _deadline_guard = DeadlineGuard::install(deadline.as_ref());
+        let _stage_guard = StageGuard::install(Some(RenderStage::BoxTree));
         pool.install(|| {
           urls.into_par_iter().for_each(|url| {
             let _ = image_cache.probe(url.as_str());
@@ -8890,6 +8891,7 @@ impl FastRender {
 
     let run_job = |(url, jobs): (String, Vec<ImageIntrinsicProbeJob>)| {
       let _deadline_guard = DeadlineGuard::install(deadline.as_ref());
+      let _stage_guard = StageGuard::install(Some(RenderStage::BoxTree));
       let probe_start = profile_enabled.then(Instant::now);
       let probe_result = if url.trim_start().starts_with('<') {
         image_cache.probe(url.as_str())

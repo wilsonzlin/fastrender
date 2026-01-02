@@ -6065,6 +6065,9 @@ impl InFlight {
 }
 
 fn render_stage_hint_from_url(url: &str) -> RenderStage {
+  if let Some(stage) = crate::render_control::active_stage() {
+    return stage;
+  }
   let path_hint = Url::parse(url)
     .ok()
     .map(|parsed| parsed.path().to_string())
@@ -6080,6 +6083,9 @@ fn render_stage_hint_from_url(url: &str) -> RenderStage {
 }
 
 fn render_stage_hint_for_context(kind: FetchContextKind, url: &str) -> RenderStage {
+  if let Some(stage) = crate::render_control::active_stage() {
+    return stage;
+  }
   match kind {
     FetchContextKind::Document => RenderStage::DomParse,
     FetchContextKind::Stylesheet | FetchContextKind::Font => RenderStage::Css,
@@ -7085,6 +7091,9 @@ fn read_response_prefix<R: Read>(
 }
 
 fn decode_stage_for_content_type(content_type: Option<&str>) -> RenderStage {
+  if let Some(stage) = crate::render_control::active_stage() {
+    return stage;
+  }
   let mime = content_type
     .and_then(|ct| ct.split(';').next())
     .map(|ct| ct.trim().to_ascii_lowercase())

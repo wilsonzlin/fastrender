@@ -1,10 +1,14 @@
 use crate::error::{RenderError, RenderStage};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 thread_local! {
   static ACTIVE_DEADLINE: RefCell<Option<RenderDeadline>> = RefCell::new(None);
+}
+
+thread_local! {
+  static ACTIVE_STAGE: Cell<Option<RenderStage>> = const { Cell::new(None) };
 }
 
 /// Callback type used to cooperatively cancel rendering work.
@@ -22,6 +26,11 @@ pub struct RenderDeadline {
 /// Guard that installs an active deadline for the duration of a render stage.
 pub struct DeadlineGuard {
   previous: Option<RenderDeadline>,
+}
+
+/// Guard that installs an active stage hint for deadline attribution.
+pub struct StageGuard {
+  previous: Option<RenderStage>,
 }
 
 /// Stages surfaced via heartbeat callbacks.
@@ -45,6 +54,20 @@ pub enum StageHeartbeat {
 }
 
 impl StageHeartbeat {
+  fn render_stage(self) -> Option<RenderStage> {
+    match self {
+      StageHeartbeat::ReadCache
+      | StageHeartbeat::FollowRedirects
+      | StageHeartbeat::DomParse => Some(RenderStage::DomParse),
+      StageHeartbeat::CssInline | StageHeartbeat::CssParse => Some(RenderStage::Css),
+      StageHeartbeat::Cascade => Some(RenderStage::Cascade),
+      StageHeartbeat::BoxTree => Some(RenderStage::BoxTree),
+      StageHeartbeat::Layout => Some(RenderStage::Layout),
+      StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize => Some(RenderStage::Paint),
+      StageHeartbeat::Done => None,
+    }
+  }
+
   pub fn as_str(self) -> &'static str {
     match self {
       StageHeartbeat::ReadCache => "read_cache",
@@ -107,6 +130,7 @@ pub fn set_stage_listener(listener: Option<StageListener>) {
 }
 
 pub fn record_stage(stage: StageHeartbeat) {
+  ACTIVE_STAGE.with(|active| active.set(stage.render_stage()));
   let maybe_listener = stage_listener()
     .lock()
     .ok()
@@ -230,6 +254,18 @@ impl DeadlineGuard {
   }
 }
 
+impl StageGuard {
+  /// Installs the provided stage hint as the active stage for the current thread.
+  pub fn install(stage: Option<RenderStage>) -> Self {
+    let previous = ACTIVE_STAGE.with(|active| {
+      let previous = active.get();
+      active.set(stage);
+      previous
+    });
+    Self { previous }
+  }
+}
+
 impl Drop for DeadlineGuard {
   fn drop(&mut self) {
     let previous = self.previous.take();
@@ -237,6 +273,17 @@ impl Drop for DeadlineGuard {
       *active.borrow_mut() = previous;
     });
   }
+}
+
+impl Drop for StageGuard {
+  fn drop(&mut self) {
+    ACTIVE_STAGE.with(|active| active.set(self.previous));
+  }
+}
+
+/// Returns the currently installed stage hint for this thread, if any.
+pub fn active_stage() -> Option<RenderStage> {
+  ACTIVE_STAGE.with(|active| active.get())
 }
 
 /// Check against any active deadline stored for the current thread.
