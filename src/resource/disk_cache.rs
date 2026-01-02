@@ -16,7 +16,7 @@ use super::HttpCachePolicy;
 use super::ResourceFetcher;
 use super::ResourcePolicy;
 use super::MAX_ALIAS_HOPS;
-use crate::error::{Error, RenderError, RenderStage};
+use crate::error::{Error, RenderError, RenderStage, ResourceError};
 use crate::render_control;
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -392,6 +392,7 @@ enum SnapshotRead {
 
 enum SnapshotPrefixRead {
   Hit(FetchedResource),
+  Error(Error),
   Miss,
   Locked,
   Timeout(RenderError),
@@ -916,6 +917,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           super::finish_disk_cache_diagnostics(disk_timer.take());
           return Ok(Some((current, resource)));
         }
+        SnapshotPrefixRead::Error(err) => {
+          super::record_disk_cache_hit();
+          super::record_disk_cache_bytes(0);
+          super::finish_disk_cache_diagnostics(disk_timer.take());
+          return Err(err);
+        }
         SnapshotPrefixRead::Timeout(err) => {
           super::finish_disk_cache_diagnostics(disk_timer.take());
           return Err(Error::Render(err));
@@ -934,6 +941,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
                   super::record_disk_cache_bytes(resource.bytes.len());
                   super::finish_disk_cache_diagnostics(disk_timer.take());
                   return Ok(Some((current, resource)));
+                }
+                SnapshotPrefixRead::Error(err) => {
+                  super::record_disk_cache_hit();
+                  super::record_disk_cache_bytes(0);
+                  super::finish_disk_cache_diagnostics(disk_timer.take());
+                  return Err(err);
                 }
                 SnapshotPrefixRead::Timeout(err) => {
                   super::finish_disk_cache_diagnostics(disk_timer.take());
@@ -992,6 +1005,54 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         return SnapshotRead::Miss;
       }
     };
+
+    if let Some(message) = meta.error.clone() {
+      let data_len_ok = fs::metadata(data_path)
+        .ok()
+        .and_then(|m| usize::try_from(m.len()).ok())
+        .map(|len| len == meta.len)
+        .unwrap_or(false);
+      if !data_len_ok {
+        self.remove_entry_if_unlocked(key, data_path, meta_path);
+        return SnapshotRead::Miss;
+      }
+      self
+        .index
+        .backfill_if_missing(key, meta.stored_at, meta.len as u64, data_path, meta_path);
+
+      let mut err = ResourceError::new(meta.url.clone(), message)
+        .with_content_type(meta.content_type.clone())
+        .with_validators(meta.etag.clone(), meta.last_modified.clone());
+      if let Some(status) = meta.status {
+        err = err.with_status(status);
+      }
+      if let Some(final_url) = meta.final_url.clone() {
+        err = err.with_final_url(final_url);
+      }
+
+      let stored_time = secs_to_system_time(meta.stored_at).unwrap_or(SystemTime::now());
+      let http_cache = meta
+        .cache
+        .as_ref()
+        .and_then(|c| c.to_http())
+        .or_else(|| {
+          Some(CachedHttpMetadata {
+            stored_at: stored_time,
+            max_age: None,
+            expires: None,
+            no_cache: false,
+            no_store: true,
+            must_revalidate: false,
+          })
+        });
+
+      return SnapshotRead::Hit(CachedSnapshot {
+        value: super::CacheValue::Error(Error::Resource(err)),
+        etag: meta.etag,
+        last_modified: meta.last_modified,
+        http_cache,
+      });
+    }
 
     let read_stage = stage_for_cached_content_type(meta.content_type.as_deref());
     let bytes = match read_path_with_deadline(data_path, read_stage, DISK_READ_CHUNK_SIZE) {
@@ -1083,6 +1144,24 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     if !data_len_ok {
       self.remove_entry_if_unlocked(key, data_path, meta_path);
       return SnapshotPrefixRead::Miss;
+    }
+
+    if let Some(message) = meta.error.clone() {
+      self
+        .index
+        .backfill_if_missing(key, meta.stored_at, meta.len as u64, data_path, meta_path);
+
+      let mut err = ResourceError::new(meta.url.clone(), message)
+        .with_content_type(meta.content_type.clone())
+        .with_validators(meta.etag.clone(), meta.last_modified.clone());
+      if let Some(status) = meta.status {
+        err = err.with_status(status);
+      }
+      if let Some(final_url) = meta.final_url.clone() {
+        err = err.with_final_url(final_url);
+      }
+
+      return SnapshotPrefixRead::Error(Error::Resource(err));
     }
 
     let read_stage = stage_for_cached_content_type(meta.content_type.as_deref());
@@ -1263,6 +1342,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       cache: cache_metadata
         .as_ref()
         .and_then(StoredCacheMetadata::from_http),
+      error: None,
     };
 
     let data_written = if deadline_aware_write {
@@ -1324,6 +1404,120 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     // Now that the entry is journaled, release the per-entry lock before running eviction to keep
     // lock hold times small and allow oversized entries to self-evict.
+    drop(entry_lock);
+
+    self
+      .index
+      .evict_if_needed(self.disk_config.max_bytes, |path| {
+        !self.lock_is_active(path)
+      });
+  }
+
+  fn persist_error(&self, kind: FetchContextKind, url: &str, error: &ResourceError) {
+    if self.disk_writeback_disabled_for_len(0) {
+      return;
+    }
+    if self.should_skip_disk(url) {
+      return;
+    }
+    if !self.deadline_allows_disk_writeback() {
+      return;
+    }
+
+    self.remove_alias_for(kind, url);
+
+    let key = self.cache_key(kind, url);
+    let data_path = self.data_path_for_key(&key);
+    if let Some(parent) = data_path.parent() {
+      let _ = fs::create_dir_all(parent);
+    }
+
+    let Some(entry_lock) = self.acquire_lock(&data_path) else {
+      return;
+    };
+    if !self.deadline_allows_disk_writeback() {
+      return;
+    }
+
+    let stored_at = now_seconds();
+    let stored_time = UNIX_EPOCH
+      .checked_add(Duration::from_secs(stored_at))
+      .unwrap_or(SystemTime::now());
+    let cache_metadata = CachedHttpMetadata {
+      stored_at: stored_time,
+      max_age: None,
+      expires: None,
+      no_cache: false,
+      no_store: true,
+      must_revalidate: false,
+    };
+
+    let meta_path = self.meta_path_for_data(&data_path);
+    let data_tmp = tmp_path(&data_path);
+    let meta_tmp = tmp_path(&meta_path);
+    let stage = stage_for_cached_content_type(error.content_type.as_deref());
+    let deadline_aware_write = render_control::active_deadline()
+      .map(|deadline| deadline.is_enabled())
+      .unwrap_or(false);
+
+    let meta = StoredMetadata {
+      url: url.to_string(),
+      status: error.status,
+      content_type: error.content_type.clone(),
+      content_encoding: None,
+      etag: error.etag.clone(),
+      last_modified: error.last_modified.clone(),
+      final_url: error.final_url.clone(),
+      stored_at,
+      len: 0,
+      cache: StoredCacheMetadata::from_http(&cache_metadata),
+      error: Some(error.message.clone()),
+    };
+
+    let data_written = if deadline_aware_write {
+      write_path_with_deadline(&data_tmp, &[], stage).is_ok()
+    } else {
+      fs::write(&data_tmp, &[]).is_ok()
+    };
+    if !data_written {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    let Ok(serialized) = serde_json::to_vec(&meta) else {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    };
+
+    let meta_written = if deadline_aware_write {
+      write_path_with_deadline(&meta_tmp, &serialized, stage).is_ok()
+    } else {
+      fs::write(&meta_tmp, &serialized).is_ok()
+    };
+    if !meta_written {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    if fs::rename(&data_tmp, &data_path).is_err() {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    if fs::rename(&meta_tmp, &meta_path).is_err() {
+      let _ = fs::remove_file(&meta_tmp);
+      let _ = self.remove_entry(&key, &data_path, &meta_path);
+      return;
+    }
+
+    self
+      .index
+      .record_insert(&key, stored_at, 0, &data_path, &meta_path);
+
     drop(entry_lock);
 
     self
@@ -1561,6 +1755,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       cache: cache_metadata
         .as_ref()
         .and_then(StoredCacheMetadata::from_http),
+      error: None,
     };
 
     let data_written = if deadline_aware_write {
@@ -1896,6 +2091,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
               },
               None,
             );
+            if self.disk_config.allow_no_store {
+              if let Error::Resource(resource_err) = &err {
+                self.persist_error(kind, url, resource_err);
+              }
+            }
           }
           (Err(err), false)
         }
@@ -2027,6 +2227,8 @@ pub(super) struct StoredMetadata {
   stored_at: u64,
   len: usize,
   cache: Option<StoredCacheMetadata>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2166,9 +2368,12 @@ mod tests {
   }
 
   impl ResourceFetcher for FailingFetcher {
-    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
       self.count.fetch_add(1, Ordering::SeqCst);
-      Err(Error::Other("network error".to_string()))
+      Err(Error::Resource(crate::error::ResourceError::new(
+        url.to_string(),
+        "network error".to_string(),
+      )))
     }
   }
 
@@ -2833,6 +3038,65 @@ mod tests {
   }
 
   #[test]
+  fn disk_cache_persists_network_errors_when_allow_no_store_enabled() {
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("network fetch should not be reached when disk cache contains persisted error");
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let url = "https://example.com/persist-error";
+
+    let seed = DiskCachingFetcher::with_configs(
+      FailingFetcher {
+        count: Arc::clone(&counter),
+      },
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        allow_no_store: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let err = seed.fetch(url).expect_err("expected initial fetch to fail");
+    match err {
+      Error::Resource(err) => assert_eq!(err.message, "network error"),
+      other => panic!("expected resource error, got {other:?}"),
+    }
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let disk_again = DiskCachingFetcher::with_configs(
+      PanicFetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        stale_policy: CacheStalePolicy::UseStaleWhenDeadline,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        allow_no_store: true,
+        ..DiskCacheConfig::default()
+      },
+    );
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
+    let err = render_control::with_deadline(Some(&deadline), || disk_again.fetch(url))
+      .expect_err("expected cached error");
+    match err {
+      Error::Resource(err) => assert_eq!(err.message, "network error"),
+      other => panic!("expected resource error, got {other:?}"),
+    }
+  }
+
+  #[test]
   fn disk_cache_persists_empty_resources() {
     let tmp = tempfile::tempdir().unwrap();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -2925,6 +3189,7 @@ mod tests {
       stored_at: now_seconds().saturating_sub(60),
       len: cached_bytes.len(),
       cache: None,
+      error: None,
     };
     fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
 
@@ -2977,6 +3242,7 @@ mod tests {
       stored_at: now_seconds().saturating_sub(60),
       len: cached_bytes.len(),
       cache: None,
+      error: None,
     };
     fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
 
@@ -3891,6 +4157,7 @@ mod tests {
       stored_at: now_seconds(),
       len: bytes.len(),
       cache: None,
+      error: None,
     };
     fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
 

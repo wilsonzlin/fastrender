@@ -842,6 +842,7 @@ mod tests {
       stored_at,
       len: body.len(),
       cache: None,
+      error: None,
     };
     let meta_bytes = serde_json::to_vec(&meta).expect("serialize meta");
     fs::write(&meta_path, meta_bytes).expect("write meta");
@@ -975,6 +976,7 @@ mod tests {
             stored_at,
             len: body.len(),
             cache: None,
+            error: None,
           };
           let meta_bytes = serde_json::to_vec(&meta).expect("serialize meta");
           fs::write(&meta_path, meta_bytes).expect("write meta");
