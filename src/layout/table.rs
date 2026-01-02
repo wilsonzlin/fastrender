@@ -4972,12 +4972,11 @@ impl FormattingContext for TableFormattingContext {
     let _profile = layout_timer(LayoutKind::Table);
     let mut deadline_counter = 0usize;
     let style_override = crate::layout::style_override::style_override_for(box_node.id);
-    let override_active = style_override.is_some();
     let has_running_children_for_cache = box_node
       .children
       .iter()
       .any(|child| child.style.running_position.is_some());
-    if !has_running_children_for_cache && !override_active {
+    if !has_running_children_for_cache {
       if let Some(cached) = layout_cache_lookup(
         box_node,
         FormattingContextType::Table,
@@ -5651,7 +5650,7 @@ impl FormattingContext for TableFormattingContext {
         };
         place_out_of_flow(&mut fragment, cb_for_absolute, cb_for_fixed)?;
       }
-      if !has_running_children && !override_active {
+      if !has_running_children {
         layout_cache_store(
           box_node,
           FormattingContextType::Table,
@@ -6875,7 +6874,7 @@ impl FormattingContext for TableFormattingContext {
           }
         }
       }
-      if !has_running_children && !override_active {
+      if !has_running_children {
         layout_cache_store(
           box_node,
           FormattingContextType::Table,
@@ -7106,7 +7105,7 @@ impl FormattingContext for TableFormattingContext {
       place_out_of_flow(&mut wrapper_fragment, cb_for_absolute, cb_for_fixed)?;
     }
 
-    if !has_running_children && !override_active {
+    if !has_running_children {
       layout_cache_store(
         box_node,
         FormattingContextType::Table,

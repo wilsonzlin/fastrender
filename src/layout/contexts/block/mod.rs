@@ -2930,16 +2930,13 @@ impl FormattingContext for BlockFormattingContext {
       return Err(LayoutError::Timeout { elapsed });
     }
     let style_override = crate::layout::style_override::style_override_for(box_node.id);
-    let override_active = style_override.is_some();
-    if !override_active {
-      if let Some(cached) = layout_cache_lookup(
-        box_node,
-        FormattingContextType::Block,
-        constraints,
-        self.viewport_size,
-      ) {
-        return Ok(cached);
-      }
+    if let Some(cached) = layout_cache_lookup(
+      box_node,
+      FormattingContextType::Block,
+      constraints,
+      self.viewport_size,
+    ) {
+      return Ok(cached);
     }
     let style = style_override.as_ref().unwrap_or(&box_node.style);
     let toggles = crate::debug::runtime::runtime_toggles();
@@ -3937,15 +3934,13 @@ impl FormattingContext for BlockFormattingContext {
       style.direction,
     );
 
-    if !override_active {
-      layout_cache_store(
-        box_node,
-        FormattingContextType::Block,
-        constraints,
-        &converted,
-        self.viewport_size,
-      );
-    }
+    layout_cache_store(
+      box_node,
+      FormattingContextType::Block,
+      constraints,
+      &converted,
+      self.viewport_size,
+    );
 
     Ok(converted)
   }

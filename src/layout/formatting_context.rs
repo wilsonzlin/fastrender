@@ -484,17 +484,29 @@ pub(crate) fn count_inline_intrinsic_call() {
 // === Layout result cache ====================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct LayoutCacheKeyNoStyle {
+pub(crate) struct LayoutCacheKey {
   box_id: usize,
   fc_type: FormattingContextType,
   constraints_hash: u64,
   fragmentation_hash: u64,
   viewport_hash: u64,
+  /// Distinguishes base-style layout results from those computed under an active style override.
+  ///
+  /// Layout caching traditionally keys off the box id + constraints and stores a separate
+  /// `style_hash` in the entry for validation. That works because a given box is typically laid out
+  /// with a single effective style per run, so overwriting on style changes keeps memory bounded.
+  ///
+  /// Style overrides, however, intentionally lay out the *same* box under multiple effective style
+  /// variants (e.g., clearing percentage widths during intrinsic probes). When overrides are active
+  /// we need the cache key to differentiate those variants so override results do not overwrite the
+  /// base layout results (and vice versa). We encode override identity here using a tagged hash so
+  /// base entries (0) never collide with override entries.
+  style_variant: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LayoutCacheKeyParts {
-  key: LayoutCacheKeyNoStyle,
+  key: LayoutCacheKey,
   style_hash: u64,
   subgrid_dependent: bool,
 }
@@ -515,7 +527,7 @@ struct LayoutCacheEntry {
 const GLOBAL_LAYOUT_CACHE_SHARDS: usize = 64;
 
 struct ShardedLayoutResultCache {
-  shards: [RwLock<FxHashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>>; GLOBAL_LAYOUT_CACHE_SHARDS],
+  shards: [RwLock<FxHashMap<LayoutCacheKey, LayoutCacheEntry>>; GLOBAL_LAYOUT_CACHE_SHARDS],
 }
 
 impl ShardedLayoutResultCache {
@@ -533,7 +545,7 @@ impl ShardedLayoutResultCache {
   #[inline]
   fn get(
     &self,
-    key: &LayoutCacheKeyNoStyle,
+    key: &LayoutCacheKey,
     epoch: usize,
     style_hash: u64,
   ) -> Option<Arc<FragmentNode>> {
@@ -569,7 +581,7 @@ impl ShardedLayoutResultCache {
   }
 
   #[inline]
-  fn insert(&self, key: LayoutCacheKeyNoStyle, entry: LayoutCacheEntry) {
+  fn insert(&self, key: LayoutCacheKey, entry: LayoutCacheEntry) {
     let shard = &self.shards[Self::shard_index_for_box_id(key.box_id)];
     shard.write().insert(key, entry);
   }
@@ -611,7 +623,7 @@ const LAYOUT_CACHE_EVICTION_BATCH: usize = 64;
 
 thread_local! {
   /// Layout result cache kept per-thread to stay contention-free during rayon-powered fan-out.
-  static LAYOUT_RESULT_CACHE: RefCell<FxHashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>> =
+  static LAYOUT_RESULT_CACHE: RefCell<FxHashMap<LayoutCacheKey, LayoutCacheEntry>> =
     RefCell::new(FxHashMap::default());
   static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
   static LAYOUT_CACHE_EPOCH: Cell<usize> = const { Cell::new(1) };
@@ -829,16 +841,24 @@ fn layout_cache_key(
     return None;
   }
 
-  let style_hash = layout_style_fingerprint(&box_node.style);
+  let id = box_node.id();
+  let (style_variant, style_hash) =
+    if let Some(fingerprint) = crate::layout::style_override::style_override_fingerprint_for(id) {
+      let signature = style_override_signature(box_node, fingerprint);
+      (signature | (1u64 << 63), signature)
+    } else {
+      (0, layout_style_fingerprint(&box_node.style))
+    };
   let constraints_hash = layout_constraints_hash(constraints);
   let fragmentation_hash = LAYOUT_CACHE_FRAGMENTATION.with(|hash| hash.get());
   Some(LayoutCacheKeyParts {
-    key: LayoutCacheKeyNoStyle {
-      box_id: box_node.id(),
+    key: LayoutCacheKey {
+      box_id: id,
       fc_type,
       constraints_hash,
       fragmentation_hash,
       viewport_hash: pack_viewport_size(viewport),
+      style_variant,
     },
     style_hash,
     subgrid_dependent: subtree_contains_subgrid(box_node, epoch),
@@ -863,8 +883,8 @@ pub(crate) fn layout_cache_entry_limit_for_box_tree(box_tree_nodes: usize) -> Op
 }
 
 fn enforce_layout_cache_entry_limit(
-  map: &mut FxHashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>,
-  preserve: &LayoutCacheKeyNoStyle,
+  map: &mut FxHashMap<LayoutCacheKey, LayoutCacheEntry>,
+  preserve: &LayoutCacheKey,
 ) {
   let limit = LAYOUT_CACHE_ENTRY_LIMIT.with(|limit| limit.get());
   let Some(limit) = limit else {
@@ -1034,6 +1054,13 @@ pub(crate) fn layout_cache_lookup(
     return Some((*fragment).clone());
   }
 
+  // Style overrides are primarily used within a single formatting-context measurement pass, so the
+  // cross-thread cache is unlikely to be beneficial and can add lock contention on misses. Keep
+  // override-aware entries thread-local-only unless proven otherwise.
+  if key.key.style_variant != 0 {
+    return None;
+  }
+
   // Second-level cache: cross-thread shared layout results.
   if let Some(fragment) = GLOBAL_LAYOUT_RESULT_CACHE.get(&key.key, epoch, key.style_hash) {
     // Populate the thread-local cache so repeated lookups on this worker don't pay the global lock.
@@ -1085,16 +1112,31 @@ pub(crate) fn layout_cache_store(
     style_hash: key.style_hash,
   };
 
-  LAYOUT_RESULT_CACHE.with(|cache| {
-    let mut map = cache.borrow_mut();
-    if let Some(previous) = map.insert(key.key, entry.clone()) {
-      if previous.epoch != epoch || previous.style_hash != key.style_hash {
-        LAYOUT_CACHE_EVICTIONS.inc();
+  if key.key.style_variant == 0 {
+    // Base-style entries: store in both the thread-local cache and the shared cache so rayon worker
+    // threads can reuse expensive subtree layouts.
+    LAYOUT_RESULT_CACHE.with(|cache| {
+      let mut map = cache.borrow_mut();
+      if let Some(previous) = map.insert(key.key, entry.clone()) {
+        if previous.epoch != epoch || previous.style_hash != key.style_hash {
+          LAYOUT_CACHE_EVICTIONS.inc();
+        }
       }
-    }
-    enforce_layout_cache_entry_limit(&mut map, &key.key);
-  });
-  GLOBAL_LAYOUT_RESULT_CACHE.insert(key.key, entry);
+      enforce_layout_cache_entry_limit(&mut map, &key.key);
+    });
+    GLOBAL_LAYOUT_RESULT_CACHE.insert(key.key, entry);
+  } else {
+    // Style overrides are thread-local-only (see `layout_cache_lookup`).
+    LAYOUT_RESULT_CACHE.with(|cache| {
+      let mut map = cache.borrow_mut();
+      if let Some(previous) = map.insert(key.key, entry) {
+        if previous.epoch != epoch || previous.style_hash != key.style_hash {
+          LAYOUT_CACHE_EVICTIONS.inc();
+        }
+      }
+      enforce_layout_cache_entry_limit(&mut map, &key.key);
+    });
+  }
 
   LAYOUT_CACHE_STORES.inc();
 }
@@ -1818,6 +1860,76 @@ mod tests {
   }
 
   #[test]
+  fn layout_cache_style_overrides_use_distinct_keys() {
+    let _guard = layout_cache_test_lock();
+    layout_cache_use_epoch(1, true, true, None, None);
+
+    let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    node.id = 1;
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let viewport = Size::new(800.0, 600.0);
+    let fc_type = FormattingContextType::Block;
+
+    layout_cache_store(
+      &node,
+      fc_type,
+      &constraints,
+      &block_fragment(100.0, 50.0),
+      viewport,
+    );
+
+    let mut override_style = (*node.style).clone();
+    override_style.width = Some(Length::px(123.0));
+    let override_style = Arc::new(override_style);
+    crate::layout::style_override::with_style_override(node.id, override_style.clone(), || {
+      layout_cache_store(
+        &node,
+        fc_type,
+        &constraints,
+        &block_fragment(200.0, 60.0),
+        viewport,
+      );
+    });
+
+    LAYOUT_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 2));
+
+    let base_hit = layout_cache_lookup(&node, fc_type, &constraints, viewport).unwrap();
+    assert_eq!(base_hit.bounds.width(), 100.0);
+
+    let override_hit = crate::layout::style_override::with_style_override(
+      node.id,
+      override_style.clone(),
+      || layout_cache_lookup(&node, fc_type, &constraints, viewport),
+    )
+    .expect("override cache hit");
+    assert_eq!(override_hit.bounds.width(), 200.0);
+
+    // Fresh `Arc<ComputedStyle>` allocations with identical override values should reuse the cached
+    // entry by fingerprint.
+    let mut override_style_again = (*node.style).clone();
+    override_style_again.width = Some(Length::px(123.0));
+    let override_hit_again = crate::layout::style_override::with_style_override(
+      node.id,
+      Arc::new(override_style_again),
+      || layout_cache_lookup(&node, fc_type, &constraints, viewport),
+    )
+    .expect("override cache hit (fresh arc)");
+    assert_eq!(override_hit_again.bounds.width(), 200.0);
+
+    // Different overrides must not collide with the previously stored entry.
+    let mut different_override = (*node.style).clone();
+    different_override.width = Some(Length::px(456.0));
+    let miss = crate::layout::style_override::with_style_override(
+      node.id,
+      Arc::new(different_override),
+      || layout_cache_lookup(&node, fc_type, &constraints, viewport),
+    );
+    assert!(miss.is_none());
+
+    layout_cache_use_epoch(1, false, true, None, None);
+  }
+
+  #[test]
   fn layout_cache_entry_limit_is_enforced_in_batches() {
     let _guard = layout_cache_test_lock();
     layout_cache_use_epoch(1, true, true, None, None);
@@ -1826,12 +1938,13 @@ mod tests {
     let entry_limit = 2usize;
     LAYOUT_CACHE_ENTRY_LIMIT.with(|cell| cell.set(Some(entry_limit)));
 
-    let preserve = LayoutCacheKeyNoStyle {
+    let preserve = LayoutCacheKey {
       box_id: 0,
       fc_type: FormattingContextType::Block,
       constraints_hash: 0,
       fragmentation_hash: 0,
       viewport_hash: 0,
+      style_variant: 0,
     };
     let entry = LayoutCacheEntry {
       epoch: 1,
@@ -1841,12 +1954,13 @@ mod tests {
 
     let mut map = FxHashMap::default();
     for i in 0..entry_limit.saturating_add(LAYOUT_CACHE_EVICTION_BATCH) {
-      let key = LayoutCacheKeyNoStyle {
+      let key = LayoutCacheKey {
         box_id: i,
         fc_type: FormattingContextType::Block,
         constraints_hash: 0,
         fragmentation_hash: 0,
         viewport_hash: 0,
+        style_variant: 0,
       };
       map.insert(key, entry.clone());
     }
@@ -1860,12 +1974,13 @@ mod tests {
     );
 
     // Add one more entry to push the cache over the hysteresis threshold.
-    let extra_key = LayoutCacheKeyNoStyle {
+    let extra_key = LayoutCacheKey {
       box_id: 99999,
       fc_type: FormattingContextType::Block,
       constraints_hash: 0,
       fragmentation_hash: 0,
       viewport_hash: 0,
+      style_variant: 0,
     };
     map.insert(extra_key, entry);
     enforce_layout_cache_entry_limit(&mut map, &preserve);

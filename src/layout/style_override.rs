@@ -125,6 +125,12 @@ fn style_override_fingerprint(style: &ComputedStyle) -> u64 {
   let mut h = FxHasher::default();
   hash_enum_discriminant(&style.display, &mut h);
   hash_enum_discriminant(&style.position, &mut h);
+  hash_option_length(&style.top, &mut h);
+  hash_option_length(&style.right, &mut h);
+  hash_option_length(&style.bottom, &mut h);
+  hash_option_length(&style.left, &mut h);
+  hash_enum_discriminant(&style.float, &mut h);
+  hash_enum_discriminant(&style.clear, &mut h);
   hash_enum_discriminant(&style.box_sizing, &mut h);
   hash_enum_discriminant(&style.writing_mode, &mut h);
   hash_enum_discriminant(&style.direction, &mut h);
@@ -134,6 +140,11 @@ fn style_override_fingerprint(style: &ComputedStyle) -> u64 {
   hash_option_length(&style.max_width, &mut h);
   hash_option_length(&style.min_height, &mut h);
   hash_option_length(&style.max_height, &mut h);
+  style.max_height_is_max_content.hash(&mut h);
+  hash_option_length(&style.margin_top, &mut h);
+  hash_option_length(&style.margin_right, &mut h);
+  hash_option_length(&style.margin_bottom, &mut h);
+  hash_option_length(&style.margin_left, &mut h);
   hash_length(&style.padding_top, &mut h);
   hash_length(&style.padding_right, &mut h);
   hash_length(&style.padding_bottom, &mut h);

@@ -3635,16 +3635,13 @@ impl FormattingContext for GridFormattingContext {
       return Err(LayoutError::Timeout { elapsed });
     }
     let style_override = crate::layout::style_override::style_override_for(box_node.id);
-    let override_active = style_override.is_some();
-    if !override_active {
-      if let Some(cached) = layout_cache_lookup(
-        box_node,
-        FormattingContextType::Grid,
-        constraints,
-        self.viewport_size,
-      ) {
-        return Ok(cached);
-      }
+    if let Some(cached) = layout_cache_lookup(
+      box_node,
+      FormattingContextType::Grid,
+      constraints,
+      self.viewport_size,
+    ) {
+      return Ok(cached);
     }
     let style: &ComputedStyle = style_override
       .as_deref()
@@ -4350,15 +4347,13 @@ impl FormattingContext for GridFormattingContext {
         fragment.children_mut().push(child_fragment);
       }
     }
-    if !override_active {
-      layout_cache_store(
-        box_node,
-        FormattingContextType::Grid,
-        constraints,
-        &fragment,
-        self.viewport_size,
-      );
-    }
+    layout_cache_store(
+      box_node,
+      FormattingContextType::Grid,
+      constraints,
+      &fragment,
+      self.viewport_size,
+    );
 
     Ok(fragment)
   }

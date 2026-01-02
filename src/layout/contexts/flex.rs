@@ -575,7 +575,12 @@ impl FormattingContext for FlexFormattingContext {
         break;
       }
     }
-    if !override_active && !has_running_children {
+    // Do not cache flex containers that contain running elements: running anchors are synthesized
+    // based on in-flow position, so reusing cached fragments can capture the wrong snapshot.
+    let toggles = crate::debug::runtime::runtime_toggles();
+    let disable_global_layout_cache =
+      toggles.truthy("FASTR_DISABLE_FLEX_CACHE") || has_running_children;
+    if !disable_global_layout_cache {
       if let Some(cached) = layout_cache_lookup(
         box_node,
         FormattingContextType::Flex,
@@ -589,9 +594,7 @@ impl FormattingContext for FlexFormattingContext {
     // Reuse full layout fragments when the same flex container is laid out repeatedly with
     // identical available sizes (common on carousel-heavy pages). This is scoped per layout
     // run via the factory cache reset.
-    let toggles = crate::debug::runtime::runtime_toggles();
-    let disable_cache =
-      toggles.truthy("FASTR_DISABLE_FLEX_CACHE") || has_running_children || override_active;
+    let disable_cache = disable_global_layout_cache || override_active;
     let layout_cache_entry = if disable_cache {
       None
     } else {
@@ -2792,7 +2795,7 @@ impl FormattingContext for FlexFormattingContext {
       }
     }
 
-    if !disable_cache && !override_active {
+    if !disable_global_layout_cache {
       layout_cache_store(
         box_node,
         FormattingContextType::Flex,
