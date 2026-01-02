@@ -1392,8 +1392,10 @@ struct CascadeRule<'a> {
 #[derive(Debug)]
 struct DomMaps {
   id_map: HashMap<*const DomNode, usize>,
-  id_to_node: HashMap<usize, *const DomNode>,
-  parent_map: HashMap<usize, usize>,
+  // Node ids are stable pre-order traversal indices (1-indexed). Most cascade hot paths need fast
+  // id->node and id->parent lookups, so store them in dense vectors rather than hash maps.
+  id_to_node: Vec<*const DomNode>,
+  parent_map: Vec<usize>,
   shadow_hosts: HashMap<usize, usize>,
   exportparts_map: HashMap<usize, Vec<(String, String)>>,
   selector_blooms: Option<SelectorBloomStore>,
@@ -1478,23 +1480,33 @@ impl DomSelectorKeyCache {
 impl DomMaps {
   fn new(root: &DomNode, id_map: HashMap<*const DomNode, usize>) -> Self {
     let quirks_mode = quirks_mode_for_dom(root);
-    let mut id_to_node: HashMap<usize, *const DomNode> = HashMap::new();
-    for (ptr, id) in &id_map {
-      id_to_node.insert(*id, *ptr);
-    }
-
-    let mut parent_map: HashMap<usize, usize> = HashMap::new();
+    let node_count = id_map.len();
+    // Node ids are 1..=node_count (pre-order); leave slot 0 empty.
+    let mut id_to_node: Vec<*const DomNode> = vec![std::ptr::null(); node_count + 1];
+    let mut parent_map: Vec<usize> = vec![0; node_count + 1];
     let mut shadow_hosts: HashMap<usize, usize> = HashMap::new();
     let mut exportparts_map: HashMap<usize, Vec<(String, String)>> = HashMap::new();
-    let mut selector_keys = DomSelectorKeyCache::new(id_map.len());
+    let mut selector_keys = DomSelectorKeyCache::new(node_count);
 
-    let mut stack: Vec<(&DomNode, Option<usize>)> = Vec::with_capacity(id_map.len().min(1024));
+    let mut stack: Vec<(&DomNode, Option<usize>)> = Vec::with_capacity(node_count.min(1024));
     stack.push((root, None));
+    let mut next_id = 1usize;
 
     while let Some((node, parent)) = stack.pop() {
-      let id = id_map.get(&(node as *const DomNode)).copied().unwrap_or(0);
+      let id = next_id;
+      next_id = next_id.saturating_add(1);
+      debug_assert_eq!(
+        id_map.get(&(node as *const DomNode)).copied(),
+        Some(id),
+        "DomMaps pre-order traversal must match enumerate_dom_ids"
+      );
+      if let Some(slot) = id_to_node.get_mut(id) {
+        *slot = node as *const DomNode;
+      }
       if let Some(p) = parent {
-        parent_map.insert(id, p);
+        if let Some(slot) = parent_map.get_mut(id) {
+          *slot = p;
+        }
         if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
           shadow_hosts.insert(id, p);
         }
@@ -1555,6 +1567,11 @@ impl DomMaps {
         stack.push((child, Some(id)));
       }
     }
+    debug_assert_eq!(
+      next_id,
+      node_count.saturating_add(1),
+      "DomMaps traversal should visit every node exactly once"
+    );
     Self {
       id_map,
       id_to_node,
@@ -1587,22 +1604,35 @@ impl DomMaps {
   fn ancestors_for(&self, node_id: usize) -> Vec<&DomNode> {
     let mut ids: Vec<usize> = Vec::new();
     let mut current = node_id;
-    while let Some(parent) = self.parent_map.get(&current).copied() {
+    while current > 0 {
+      let parent = *self.parent_map.get(current).unwrap_or(&0);
+      if parent == 0 {
+        break;
+      }
       ids.push(parent);
       current = parent;
     }
     ids
       .into_iter()
       .rev()
-      .filter_map(|id| self.id_to_node.get(&id).map(|ptr| unsafe { &**ptr }))
+      .filter_map(|id| self.id_to_node.get(id).copied())
+      .filter(|ptr| !ptr.is_null())
+      .map(|ptr| unsafe { &*ptr })
       .collect()
   }
 
   fn containing_shadow_root(&self, node_id: usize) -> Option<usize> {
     let mut current = node_id;
-    while let Some(parent) = self.parent_map.get(&current).copied() {
-      if let Some(ptr) = self.id_to_node.get(&parent) {
-        let node = unsafe { &**ptr };
+    while current > 0 {
+      let parent = *self.parent_map.get(current).unwrap_or(&0);
+      if parent == 0 {
+        break;
+      }
+      if let Some(ptr) = self.id_to_node.get(parent).copied() {
+        if ptr.is_null() {
+          break;
+        }
+        let node = unsafe { &*ptr };
         if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
           return Some(parent);
         }
@@ -1637,7 +1667,8 @@ fn build_slot_maps<'a>(
     if nodes.is_empty() {
       continue;
     }
-    let Some(slot_ptr) = dom_maps.id_to_node.get(&slot_id) else {
+    let Some(slot_ptr) = dom_maps.id_to_node.get(slot_id).copied().filter(|ptr| !ptr.is_null())
+    else {
       continue;
     };
     let Some(first_node) = nodes.first() else {
@@ -1650,24 +1681,30 @@ fn build_slot_maps<'a>(
     // Safety: DOM nodes are immutable during cascade; pointers come from the parsed tree.
     // Use raw pointers to decouple these references from the borrow of `dom_maps` so the slot
     // maps can be stored inside a long-lived `PreparedCascade`.
-    let slot_node: &'a DomNode = unsafe { &*(*slot_ptr) };
+    let slot_node: &'a DomNode = unsafe { &*slot_ptr };
     let ancestors: Vec<&'a DomNode> = {
       let mut ids: Vec<usize> = Vec::new();
       let mut current = slot_id;
-      while let Some(parent) = dom_maps.parent_map.get(&current).copied() {
+      while current > 0 {
+        let parent = *dom_maps.parent_map.get(current).unwrap_or(&0);
+        if parent == 0 {
+          break;
+        }
         ids.push(parent);
         current = parent;
       }
       ids
         .into_iter()
         .rev()
-        .filter_map(|id| dom_maps.id_to_node.get(&id).copied())
+        .filter_map(|id| dom_maps.id_to_node.get(id).copied())
+        .filter(|ptr| !ptr.is_null())
         .map(|ptr| unsafe { &*ptr })
         .collect()
     };
     let assigned_nodes: Vec<&'a DomNode> = nodes
       .iter()
-      .filter_map(|id| dom_maps.id_to_node.get(id).copied())
+      .filter_map(|id| dom_maps.id_to_node.get(*id).copied())
+      .filter(|ptr| !ptr.is_null())
       .map(|ptr| unsafe { &*ptr })
       .collect();
     if assigned_nodes.is_empty() {
@@ -18708,11 +18745,16 @@ fn find_matching_rules<'a>(
         .shadow_hosts
         .get(&slot.shadow_root_id)
         .and_then(|host_id| {
-          dom_maps.id_to_node.get(host_id).map(|ptr| {
-            let host_node = unsafe { &**ptr };
-            let host_ancestors = dom_maps.ancestors_for(*host_id);
-            (host_node, host_ancestors)
-          })
+          dom_maps
+            .id_to_node
+            .get(*host_id)
+            .copied()
+            .filter(|ptr| !ptr.is_null())
+            .map(|ptr| {
+              let host_node = unsafe { &*ptr };
+              let host_ancestors = dom_maps.ancestors_for(*host_id);
+              (host_node, host_ancestors)
+            })
         })
     });
     let shadow_host_for_slotted = slot_shadow_host
@@ -18721,9 +18763,13 @@ fn find_matching_rules<'a>(
       .or(shadow_host);
 
     let slot_node_and_ancestors = assigned_slot.and_then(|slot_info| {
-      let slot_ptr = dom_maps.id_to_node.get(&slot_info.slot_node_id)?;
+      let slot_ptr = dom_maps
+        .id_to_node
+        .get(slot_info.slot_node_id)
+        .copied()
+        .filter(|ptr| !ptr.is_null())?;
       // Safety: DOM nodes outlive selector matching; pointers are derived from the immutable DOM tree.
-      let slot_node = unsafe { &**slot_ptr };
+      let slot_node = unsafe { &*slot_ptr };
       let slot_ancestors = dom_maps.ancestors_for(slot_info.slot_node_id);
       Some((slot_node, slot_ancestors))
     });

@@ -112,7 +112,8 @@ pub struct SlotAssignmentMap<'a> {
   pub slot_to_nodes: HashMap<usize, Vec<usize>>,
   pub node_to_slot: HashMap<usize, AssignedSlot>,
   pub slot_ancestors: HashMap<usize, Vec<&'a DomNode>>,
-  pub id_to_node: HashMap<usize, *const DomNode>,
+  // Node ids are stable pre-order traversal indices, so store id->node mappings densely.
+  pub id_to_node: Vec<*const DomNode>,
   pub node_to_id: HashMap<*const DomNode, usize>,
 }
 
@@ -126,7 +127,7 @@ pub struct AssignedSlotRef<'a> {
 impl<'a> SlotAssignmentMap<'a> {
   pub fn new(
     node_to_id: &HashMap<*const DomNode, usize>,
-    id_to_node: &HashMap<usize, *const DomNode>,
+    id_to_node: &Vec<*const DomNode>,
   ) -> Self {
     Self {
       slot_to_nodes: HashMap::new(),
@@ -188,7 +189,12 @@ impl<'a> SlotAssignmentMap<'a> {
   }
 
   pub fn node_for_id(&self, node_id: usize) -> Option<&'a DomNode> {
-    self.id_to_node.get(&node_id).map(|ptr| unsafe { &**ptr })
+    self
+      .id_to_node
+      .get(node_id)
+      .copied()
+      .filter(|ptr| !ptr.is_null())
+      .map(|ptr| unsafe { &*ptr })
   }
 
   pub fn assigned_slot(&'a self, node: &DomNode) -> Option<AssignedSlotRef<'a>> {
