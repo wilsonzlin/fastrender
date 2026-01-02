@@ -1924,11 +1924,23 @@ fn url_looks_like_suffix(url: &str, suffix: &str) -> bool {
   lower.ends_with(suffix)
 }
 
+fn url_looks_like_html(url: &str) -> bool {
+  url_looks_like_suffix(url, ".html") || url_looks_like_suffix(url, ".htm")
+}
+
+fn url_looks_like_image_asset(url: &str) -> bool {
+  [
+    ".png", ".apng", ".gif", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".ico", ".tif", ".tiff",
+    ".svg", ".svgz", ".jxl", ".heic", ".heif",
+  ]
+  .into_iter()
+  .any(|suffix| url_looks_like_suffix(url, suffix))
+}
+
 fn url_looks_like_svg_or_html(url: &str) -> bool {
   url_looks_like_suffix(url, ".svg")
     || url_looks_like_suffix(url, ".svgz")
-    || url_looks_like_suffix(url, ".html")
-    || url_looks_like_suffix(url, ".htm")
+    || url_looks_like_html(url)
 }
 
 /// Ensures an HTTP response represents a successful fetch for a subresource.
@@ -3199,7 +3211,8 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, content_type.as_deref(), &bytes) {
+            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -3645,7 +3658,8 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, content_type.as_deref(), &bytes) {
+            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -4131,7 +4145,8 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, content_type.as_deref(), &bytes) {
+            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
@@ -4666,7 +4681,8 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, content_type.as_deref(), &bytes) {
+            if should_substitute_markup_image_body(kind, &current, &final_url, content_type.as_deref(), &bytes)
+            {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
@@ -7221,12 +7237,29 @@ fn should_substitute_empty_image_body(kind: FetchContextKind, status: u16, heade
 
 fn should_substitute_markup_image_body(
   kind: FetchContextKind,
+  requested_url: &str,
+  final_url: &str,
   content_type: Option<&str>,
   bytes: &[u8],
 ) -> bool {
   if kind != FetchContextKind::Image || bytes.is_empty() {
     return false;
   }
+  // Avoid hiding "bot mitigation returned HTML for an image URL" cases (e.g. `.jpg` / `.png` / etc.)
+  // which should remain visible via `ensure_image_mime_sane`.
+  if url_looks_like_image_asset(requested_url) || url_looks_like_image_asset(final_url) {
+    return false;
+  }
+
+  // Only substitute when the URL/content-type strongly suggests the response is an HTML document
+  // being used in an image context (e.g. DailyMail `.html` modules).
+  let is_obvious_html = url_looks_like_html(requested_url)
+    || url_looks_like_html(final_url)
+    || content_type.is_some_and(|ct| mime_is_html(content_type_mime(ct)));
+  if !is_obvious_html {
+    return false;
+  }
+
   if content_type
     .map(|ct| ct.to_ascii_lowercase().contains("image/svg"))
     .unwrap_or(false)
@@ -8250,6 +8283,146 @@ mod tests {
         res.content_type.as_deref(),
         Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
       );
+    }
+  }
+
+  #[test]
+  fn http_html_image_payload_for_jpg_does_not_substitute_placeholder() {
+    let body = "<!DOCTYPE html><html><title>blocked</title></html>";
+    let headers = format!(
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+      body.len(),
+      body
+    );
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+
+    {
+      let Some(listener) = try_bind_localhost(
+        "http_html_image_payload_for_jpg_does_not_substitute_placeholder_ureq",
+      ) else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let response = headers.clone();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(response.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher
+        .fetch_http_with_accept_inner_ureq(
+          FetchContextKind::Image,
+          &url,
+          None,
+          None,
+          None,
+          &deadline,
+          Instant::now(),
+          false,
+        )
+        .expect("ureq fetch should succeed");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, body.as_bytes());
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    }
+
+    {
+      let Some(listener) = try_bind_localhost(
+        "http_html_image_payload_for_jpg_does_not_substitute_placeholder_ureq_partial",
+      ) else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let response = headers.clone();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(response.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher
+        .fetch_http_partial_inner_ureq(FetchContextKind::Image, &url, 8, &deadline, Instant::now())
+        .expect("ureq prefix should succeed");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, body.as_bytes()[..8]);
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    }
+
+    {
+      let Some(listener) = try_bind_localhost(
+        "http_html_image_payload_for_jpg_does_not_substitute_placeholder_reqwest",
+      ) else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let response = headers.clone();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(response.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher
+        .fetch_http_with_accept_inner_reqwest(
+          FetchContextKind::Image,
+          &url,
+          None,
+          None,
+          None,
+          &deadline,
+          Instant::now(),
+          false,
+        )
+        .expect("reqwest fetch should succeed");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, body.as_bytes());
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    }
+
+    {
+      let Some(listener) = try_bind_localhost(
+        "http_html_image_payload_for_jpg_does_not_substitute_placeholder_reqwest_partial",
+      ) else {
+        return;
+      };
+      let addr = listener.local_addr().unwrap();
+      let response = headers.clone();
+      let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream.write_all(response.as_bytes()).unwrap();
+      });
+
+      let url = format!("http://{addr}/photo.jpg");
+      let res = fetcher
+        .fetch_http_partial_inner_reqwest(FetchContextKind::Image, &url, 8, &deadline, Instant::now())
+        .expect("reqwest prefix should succeed");
+      handle.join().unwrap();
+      assert_eq!(res.bytes, body.as_bytes()[..8]);
+      assert_eq!(res.content_type.as_deref(), Some("text/html"));
     }
   }
 
