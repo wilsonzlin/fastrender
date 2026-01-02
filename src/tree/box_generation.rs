@@ -1682,6 +1682,7 @@ fn generate_boxes_for_styled_into(
                 document_css,
                 svg_document_css_style_element,
                 picture_sources_for_img,
+                site_compat,
               );
               let mut box_node = box_node;
               box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
@@ -2935,6 +2936,7 @@ fn create_replaced_box_from_styled(
   document_css: &str,
   svg_document_css_style_element: Option<&Arc<str>>,
   picture_sources: Vec<PictureSource>,
+  site_compat: bool,
 ) -> BoxNode {
   let tag = styled.node.tag_name().unwrap_or("img");
 
@@ -2961,11 +2963,18 @@ fn create_replaced_box_from_styled(
     }
   } else if tag.eq_ignore_ascii_case("video") {
     let src = styled.node.get_attribute("src").unwrap_or_default();
-    let poster = styled
+    let mut poster = styled
       .node
       .get_attribute_ref("poster")
       .filter(|s| !s.is_empty())
       .map(|s| s.to_string());
+    if poster.is_none() && site_compat {
+      poster = styled
+        .node
+        .get_attribute_ref("gnt-gl-ps")
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    }
     ReplacedType::Video { src, poster }
   } else if tag.eq_ignore_ascii_case("audio") {
     let src = styled.node.get_attribute("src").unwrap_or_default();
@@ -3662,7 +3671,14 @@ mod tests {
 
     for tag in ["canvas", "video", "iframe", "embed", "object"] {
       let styled = styled_element(tag);
-      let box_node = create_replaced_box_from_styled(&styled, style.clone(), "", None, Vec::new());
+      let box_node = create_replaced_box_from_styled(
+        &styled,
+        style.clone(),
+        "",
+        None,
+        Vec::new(),
+        false,
+      );
       match &box_node.box_type {
         BoxType::Replaced(replaced) => {
           assert_eq!(
@@ -3678,6 +3694,64 @@ mod tests {
         }
         other => panic!("expected replaced box for {tag}, got {:?}", other),
       }
+    }
+  }
+
+  #[test]
+  fn video_poster_falls_back_to_gnt_gl_ps_when_site_compat_enabled() {
+    let mut styled = styled_element("video");
+    match &mut styled.node.node_type {
+      DomNodeType::Element { attributes, .. } => {
+        attributes.push(("gnt-gl-ps".to_string(), "poster.png".to_string()));
+      }
+      _ => panic!("expected element"),
+    }
+
+    let box_node = create_replaced_box_from_styled(
+      &styled,
+      default_style(),
+      "",
+      None,
+      Vec::new(),
+      true,
+    );
+    match &box_node.box_type {
+      BoxType::Replaced(replaced) => match &replaced.replaced_type {
+        ReplacedType::Video { poster, .. } => {
+          assert_eq!(poster.as_deref(), Some("poster.png"));
+        }
+        other => panic!("expected video replaced type, got {other:?}"),
+      },
+      other => panic!("expected replaced box, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn video_poster_does_not_fall_back_to_gnt_gl_ps_when_site_compat_disabled() {
+    let mut styled = styled_element("video");
+    match &mut styled.node.node_type {
+      DomNodeType::Element { attributes, .. } => {
+        attributes.push(("gnt-gl-ps".to_string(), "poster.png".to_string()));
+      }
+      _ => panic!("expected element"),
+    }
+
+    let box_node = create_replaced_box_from_styled(
+      &styled,
+      default_style(),
+      "",
+      None,
+      Vec::new(),
+      false,
+    );
+    match &box_node.box_type {
+      BoxType::Replaced(replaced) => match &replaced.replaced_type {
+        ReplacedType::Video { poster, .. } => {
+          assert_eq!(poster.as_deref(), None);
+        }
+        other => panic!("expected video replaced type, got {other:?}"),
+      },
+      other => panic!("expected replaced box, got {other:?}"),
     }
   }
 

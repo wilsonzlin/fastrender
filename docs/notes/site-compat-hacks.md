@@ -23,6 +23,8 @@ internal page captures:
 - If a hidden `[data-testid="one-nav-overlay"]` is present, skip it and the
   subsequent `.FocusTrapContainer-*` drawer contents to mirror the closed state
   of that navigation widget.
+- When a `<video>` element omits `poster`, fall back to `gnt-gl-ps` (a nonstandard
+  attribute used by Gannett properties like USA TODAY to point at a poster image).
 
 These behaviors are intentionally off by default to keep the renderer free of
 page-specific hacks.

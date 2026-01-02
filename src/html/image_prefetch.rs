@@ -254,18 +254,24 @@ pub fn discover_image_prefetch_urls(
           }
         }
       } else if tag.eq_ignore_ascii_case("video") {
-        if let Some(poster) = node.get_attribute_ref("poster") {
-          if !poster.trim().is_empty() {
-            if *image_elements >= limits.max_image_elements {
-              *limited = true;
-              return false;
-            }
-            *image_elements += 1;
-            push_unique_url(ctx, seen_urls, urls, poster);
-            if *image_elements >= limits.max_image_elements {
-              *limited = true;
-              return false;
-            }
+        let poster = node
+          .get_attribute_ref("poster")
+          .filter(|value| !value.trim().is_empty())
+          .or_else(|| {
+            node
+              .get_attribute_ref("gnt-gl-ps")
+              .filter(|value| !value.trim().is_empty())
+          });
+        if let Some(poster) = poster {
+          if *image_elements >= limits.max_image_elements {
+            *limited = true;
+            return false;
+          }
+          *image_elements += 1;
+          push_unique_url(ctx, seen_urls, urls, poster);
+          if *image_elements >= limits.max_image_elements {
+            *limited = true;
+            return false;
           }
         }
       } else if tag.eq_ignore_ascii_case("link") {
@@ -461,5 +467,26 @@ mod tests {
         "https://example.com/fallback.jpg".to_string(),
       ]
     );
+  }
+
+  #[test]
+  fn discovers_video_poster_from_gnt_gl_ps() {
+    let html = r#"<video gnt-gl-ps="poster.jpg"></video>"#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/poster.jpg".to_string()]);
   }
 }
