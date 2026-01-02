@@ -482,6 +482,11 @@ impl FormattingContext for FlexFormattingContext {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let override_active = style_override.is_some();
+    let style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| box_node.style.as_ref());
     let build_timer = flex_profile::timer();
     let mut constraints = *constraints;
     let container_inline_base = constraints
@@ -506,13 +511,15 @@ impl FormattingContext for FlexFormattingContext {
       }
     }
     if !has_running_children {
-      if let Some(cached) = layout_cache_lookup(
-        box_node,
-        FormattingContextType::Flex,
-        &constraints,
-        self.viewport_size,
-      ) {
-        return Ok(cached);
+      if !override_active {
+        if let Some(cached) = layout_cache_lookup(
+          box_node,
+          FormattingContextType::Flex,
+          &constraints,
+          self.viewport_size,
+        ) {
+          return Ok(cached);
+        }
       }
     }
 
@@ -524,7 +531,8 @@ impl FormattingContext for FlexFormattingContext {
     let layout_cache_entry = if disable_cache {
       None
     } else {
-      layout_cache_key(&constraints, self.viewport_size).map(|k| (flex_cache_key(box_node), k))
+      layout_cache_key(&constraints, self.viewport_size)
+        .map(|k| (flex_cache_key_with_style(box_node, style), k))
     };
 
     let _trace_text_ids = trace_flex_text_ids();
@@ -617,6 +625,7 @@ impl FormattingContext for FlexFormattingContext {
     let root_node = self.build_taffy_tree_children(
       &mut taffy_tree,
       box_node,
+      style,
       &in_flow_children,
       &constraints,
       &mut node_map,
@@ -626,7 +635,7 @@ impl FormattingContext for FlexFormattingContext {
     // Block-level flex containers with `width:auto` fill the available inline space. Root flex
     // nodes have no parent for percentage resolution, so translate the definite available width
     // into an explicit Taffy size to ensure flex-shrink/grow runs against the correct line size.
-    if box_node.style.width.is_none() && matches!(box_node.style.display, Display::Flex) {
+    if style.width.is_none() && matches!(style.display, Display::Flex) {
       if let CrateAvailableSpace::Definite(w) = constraints.available_width {
         if let Ok(existing) = taffy_tree.style(root_node) {
           let mut updated = existing.clone();
@@ -1198,7 +1207,9 @@ impl FormattingContext for FlexFormattingContext {
                         box_node.formatting_context().unwrap_or(FormattingContextType::Block);
                     let mut alt_box: Option<BoxNode> = None;
                     let measure_box: &BoxNode = match (&override_style, fc_type) {
-                      (Some(_), FormattingContextType::Block) => box_node,
+                      (Some(_), FormattingContextType::Block)
+                      | (Some(_), FormattingContextType::Flex)
+                      | (Some(_), FormattingContextType::Grid) => box_node,
                       (Some(style), _) => {
                         let mut cloned = box_node.clone();
                         cloned.style = Arc::clone(style);
@@ -1387,22 +1398,25 @@ impl FormattingContext for FlexFormattingContext {
                     let selector_for_profile = node_timer
                         .as_ref()
                         .and_then(|_| measure_box.debug_info.as_ref().map(|d| d.to_selector()));
-                    let layout_result = if matches!(fc_type, FormattingContextType::Block) {
-                      if let Some(style) = override_style.clone() {
+                    let layout_result = if override_style.is_some()
+                      && matches!(
+                        fc_type,
+                        FormattingContextType::Block
+                          | FormattingContextType::Flex
+                          | FormattingContextType::Grid
+                      ) {
+                        let style = override_style.clone().expect("override style missing");
                         crate::layout::style_override::with_style_override(measure_box.id, style, || {
                           fc.layout(measure_box, &constraints)
                         })
-                      } else {
-                        fc.layout(measure_box, &constraints)
-                      }
                     } else {
-                      fc.layout(measure_box, &constraints)
+                        fc.layout(measure_box, &constraints)
                     };
                     let fragment = match layout_result {
                          Ok(f) => {
                                flex_profile::record_node_layout(
-                                    measure_box.id,
-                                   selector_for_profile.as_deref(),
+                                     measure_box.id,
+                                    selector_for_profile.as_deref(),
                                    node_timer,
                               );
                              f
@@ -2538,7 +2552,7 @@ impl FormattingContext for FlexFormattingContext {
       }
     }
 
-    if !disable_cache {
+    if !disable_cache && !override_active {
       layout_cache_store(
         box_node,
         FormattingContextType::Flex,
@@ -2558,14 +2572,26 @@ impl FormattingContext for FlexFormattingContext {
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
     count_flex_intrinsic_call();
-    if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
-      return Ok(cached);
+    let override_active = crate::layout::style_override::has_style_override(box_node.id);
+    if !override_active {
+      if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
+        return Ok(cached);
+      }
     }
 
-    let style = &box_node.style;
+    let style_override = if override_active {
+      crate::layout::style_override::style_override_for(box_node.id)
+    } else {
+      None
+    };
+    let style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| box_node.style.as_ref());
     if style.containment.isolates_inline_size() {
       let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
-      intrinsic_cache_store(box_node, mode, edges.max(0.0));
+      if !override_active {
+        intrinsic_cache_store(box_node, mode, edges.max(0.0));
+      }
       return Ok(edges.max(0.0));
     }
 
@@ -2645,7 +2671,9 @@ impl FormattingContext for FlexFormattingContext {
 
     let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
     let width = (contribution + edges).max(0.0);
-    intrinsic_cache_store(box_node, mode, width);
+    if !override_active {
+      intrinsic_cache_store(box_node, mode, width);
+    }
     Ok(width)
   }
 }
@@ -2991,7 +3019,14 @@ impl FlexFormattingContext {
     node_map: &mut FxHashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
     let children: Vec<&BoxNode> = box_node.children.iter().collect();
-    self.build_taffy_tree_children(taffy_tree, box_node, &children, constraints, node_map)
+    self.build_taffy_tree_children(
+      taffy_tree,
+      box_node,
+      box_node.style.as_ref(),
+      &children,
+      constraints,
+      node_map,
+    )
   }
 
   /// Builds a Taffy tree from a BoxNode tree using an explicit set of root children
@@ -3000,13 +3035,14 @@ impl FlexFormattingContext {
     &self,
     taffy_tree: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
+    root_style: &ComputedStyle,
     root_children: &[&BoxNode],
     _constraints: &LayoutConstraints,
     node_map: &mut FxHashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
     let mut deadline_counter = 0usize;
     let child_fingerprint = flex_child_fingerprint(root_children, &mut deadline_counter)?;
-    let root_style_fingerprint = taffy_flex_style_fingerprint(box_node.style.as_ref());
+    let root_style_fingerprint = taffy_flex_style_fingerprint(root_style);
     let cache_key = TaffyNodeCacheKey::new(
       TaffyAdapterKind::Flex,
       root_style_fingerprint,
@@ -3023,11 +3059,11 @@ impl FlexFormattingContext {
       for child in root_children {
         check_layout_deadline(&mut deadline_counter)?;
         child_styles.push(std::sync::Arc::new(SendSyncStyle(
-          self.computed_style_to_taffy_base(child, false, Some(&box_node.style))?,
+          self.computed_style_to_taffy_base(child.style.as_ref(), false, Some(root_style))?,
         )));
       }
       let root_style = std::sync::Arc::new(SendSyncStyle(
-        self.computed_style_to_taffy_base(box_node, true, None)?,
+        self.computed_style_to_taffy_base(root_style, true, None)?,
       ));
       let template = std::sync::Arc::new(CachedTaffyTemplate {
         root_style,
@@ -3044,7 +3080,7 @@ impl FlexFormattingContext {
       check_layout_deadline(&mut deadline_counter)?;
       let child = *child;
       let mut resolved_style = child_style.0.clone();
-      self.apply_flex_auto_min_size(child, false, Some(&box_node.style), &mut resolved_style)?;
+      self.apply_flex_auto_min_size(child, false, Some(root_style), &mut resolved_style)?;
       let node = taffy_tree
         .new_leaf_with_context(resolved_style, child as *const BoxNode)
         .map_err(|e| {
@@ -3145,7 +3181,8 @@ impl FlexFormattingContext {
     is_root: bool,
     containing_flex: Option<&ComputedStyle>,
   ) -> Result<taffy::style::Style, LayoutError> {
-    let mut style = self.computed_style_to_taffy_base(box_node, is_root, containing_flex)?;
+    let mut style =
+      self.computed_style_to_taffy_base(box_node.style.as_ref(), is_root, containing_flex)?;
     self.apply_flex_auto_min_size(box_node, is_root, containing_flex, &mut style)?;
     Ok(style)
   }
@@ -3157,11 +3194,10 @@ impl FlexFormattingContext {
   /// (e.g. when instantiating cached Taffy templates) so template caching remains correct.
   fn computed_style_to_taffy_base(
     &self,
-    box_node: &BoxNode,
+    style: &ComputedStyle,
     is_root: bool,
     containing_flex: Option<&ComputedStyle>,
   ) -> Result<taffy::style::Style, LayoutError> {
-    let style = &box_node.style;
     let inline_positive_container = self.inline_axis_positive(style);
     let block_positive_container = self.block_axis_positive(style);
     let inline_is_horizontal_container = matches!(style.writing_mode, WritingMode::HorizontalTb);
@@ -5822,6 +5858,7 @@ mod tests {
     let result = fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container,
+      container.style.as_ref(),
       &root_children,
       &constraints,
       &mut node_map,
@@ -5861,6 +5898,7 @@ mod tests {
     let result = fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container,
+      container.style.as_ref(),
       &root_children,
       &constraints,
       &mut node_map,
@@ -5946,6 +5984,37 @@ mod tests {
 
     assert_eq!(fragment.bounds.width(), 500.0);
     assert_eq!(fragment.bounds.height(), 100.0);
+  }
+
+  #[test]
+  fn flex_respects_style_override_for_root() {
+    let fc = FlexFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+
+    let mut base_style = ComputedStyle::default();
+    base_style.display = Display::InlineFlex;
+    base_style.width = Some(Length::px(50.0));
+
+    let mut container =
+      BoxNode::new_inline_block(Arc::new(base_style.clone()), FormattingContextType::Flex, vec![]);
+    container.id = 1;
+
+    let constraints =
+      LayoutConstraints::new(CrateAvailableSpace::MaxContent, CrateAvailableSpace::Indefinite);
+    let fragment = fc
+      .layout(&container, &constraints)
+      .expect("inline-flex layout should succeed");
+    assert_eq!(fragment.bounds.width(), 50.0);
+
+    let mut override_style = base_style;
+    override_style.width = Some(Length::px(100.0));
+    let fragment = crate::layout::style_override::with_style_override(
+      container.id,
+      Arc::new(override_style),
+      || fc.layout(&container, &constraints),
+    )
+    .expect("layout with style override should succeed");
+
+    assert_eq!(fragment.bounds.width(), 100.0);
   }
 
   #[test]
@@ -6248,6 +6317,7 @@ mod tests {
     fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container,
+      container.style.as_ref(),
       &root_children,
       &constraints,
       &mut node_map,
@@ -6272,6 +6342,7 @@ mod tests {
     let result = fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container,
+      container.style.as_ref(),
       &root_children,
       &constraints,
       &mut node_map,
@@ -6375,6 +6446,7 @@ mod tests {
     fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container_a,
+      container_a.style.as_ref(),
       &children_a,
       &constraints,
       &mut node_map,
@@ -6409,6 +6481,7 @@ mod tests {
     fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container_b,
+      container_b.style.as_ref(),
       &children_b,
       &constraints,
       &mut node_map,
@@ -6509,6 +6582,7 @@ mod tests {
     fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container_a,
+      container_a.style.as_ref(),
       &root_children,
       &constraints,
       &mut node_map,
@@ -6535,6 +6609,7 @@ mod tests {
     fc.build_taffy_tree_children(
       &mut taffy_tree,
       &container_b,
+      container_b.style.as_ref(),
       &root_children,
       &constraints,
       &mut node_map,
