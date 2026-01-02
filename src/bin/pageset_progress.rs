@@ -9784,6 +9784,13 @@ mod tests {
 fn main() -> io::Result<()> {
   exit_silently_on_broken_pipe_panic();
 
+  // Default to bundled fonts (deterministic + fast) unless the caller explicitly overrides via
+  // env/CLI. This matches the pageset wrappers (`scripts/pageset.sh`, `cargo xtask pageset`) and
+  // avoids accidental "system font discovery" runs that can be dramatically slower.
+  if std::env::var_os("FASTR_USE_BUNDLED_FONTS").is_none() {
+    std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
+  }
+
   let cli = Cli::parse();
   match cli.command {
     CommandKind::Sync(args) => sync(args),
