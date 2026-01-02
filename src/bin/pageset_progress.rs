@@ -9230,6 +9230,8 @@ mod tests {
 }
 
 fn main() -> io::Result<()> {
+  exit_silently_on_broken_pipe_panic();
+
   let cli = Cli::parse();
   match cli.command {
     CommandKind::Sync(args) => sync(args),
@@ -9238,4 +9240,20 @@ fn main() -> io::Result<()> {
     CommandKind::Report(args) => report(args),
     CommandKind::Worker(args) => worker(args),
   }
+}
+
+fn exit_silently_on_broken_pipe_panic() {
+  let default_hook = std::panic::take_hook();
+  std::panic::set_hook(Box::new(move |info| {
+    let mut msg = info.to_string();
+    if let Some(s) = info.payload().downcast_ref::<&str>() {
+      msg = (*s).to_string();
+    } else if let Some(s) = info.payload().downcast_ref::<String>() {
+      msg = s.clone();
+    }
+    if msg.contains("Broken pipe") {
+      std::process::exit(0);
+    }
+    default_hook(info);
+  }));
 }

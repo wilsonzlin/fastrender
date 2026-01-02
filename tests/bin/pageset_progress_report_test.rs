@@ -1,7 +1,7 @@
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::tempdir;
 
 fn fixtures_dir() -> PathBuf {
@@ -80,6 +80,36 @@ fn pageset_progress_report_outputs_summary() {
   assert!(stdout.contains("Stage timings (ok pages with timings: 2):"));
   assert!(
     stdout.contains("totals_ms: fetch=55.00 css=110.00 cascade=220.00 box_tree=0.00 layout=3040.00 paint=545.00")
+  );
+}
+
+#[cfg(unix)]
+#[test]
+fn pageset_progress_report_exits_success_on_broken_pipe() {
+  let mut child = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
+    .args([
+      "report",
+      "--progress-dir",
+      fixtures_dir().to_str().unwrap(),
+      "--top",
+      "0",
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("spawn pageset_progress report");
+
+  drop(child.stdout.take());
+  let output = child
+    .wait_with_output()
+    .expect("wait for pageset_progress report");
+  assert!(
+    output.status.success(),
+    "expected report to exit successfully on broken pipe; status={:?} stderr:\n{}",
+    output.status,
+    String::from_utf8_lossy(&output.stderr)
   );
 }
 
