@@ -3381,12 +3381,14 @@ impl HttpFetcher {
                 }
               }
 
-              if status_code != 202 {
-                let mut message = if attempt < max_attempts {
-                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
-                } else {
-                  "retryable HTTP status (retries exhausted)".to_string()
-                };
+              // Treat retryable statuses as success once retries are exhausted so caching layers can
+              // persist the HTTP response deterministically (especially important for pageset
+              // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
+              // responses). Still surface a hard error when retries are aborted early due to a
+              // render deadline; callers can decide whether to fall back to cached bytes.
+              if status_code != 202 && attempt < max_attempts {
+                let mut message =
+                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
                 let err = ResourceError::new(current.clone(), message)
                   .with_status(status_code)
@@ -3840,12 +3842,14 @@ impl HttpFetcher {
                 }
               }
 
-              if status_code != 202 {
-                let mut message = if attempt < max_attempts {
-                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
-                } else {
-                  "retryable HTTP status (retries exhausted)".to_string()
-                };
+              // Treat retryable statuses as success once retries are exhausted so caching layers can
+              // persist the HTTP response deterministically (especially important for pageset
+              // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
+              // responses). Still surface a hard error when retries are aborted early due to a
+              // render deadline; callers can decide whether to fall back to cached bytes.
+              if status_code != 202 && attempt < max_attempts {
+                let mut message =
+                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
                 let err = ResourceError::new(current.clone(), message)
                   .with_status(status_code)
@@ -4343,12 +4347,14 @@ impl HttpFetcher {
               // later". We still treat it as transient and retryable, but once retries are
               // exhausted (or a render deadline prevents further retries) we return `Ok` and let
               // higher-level code decide how to handle the empty/placeholder body.
-              if status_code != 202 {
-                let mut message = if attempt < max_attempts {
-                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
-                } else {
-                  "retryable HTTP status (retries exhausted)".to_string()
-                };
+              // Treat retryable statuses as success once retries are exhausted so caching layers can
+              // persist the HTTP response deterministically (especially important for pageset
+              // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
+              // responses). Still surface a hard error when retries are aborted early due to a
+              // render deadline; callers can decide whether to fall back to cached bytes.
+              if status_code != 202 && attempt < max_attempts {
+                let mut message =
+                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
                 let err = ResourceError::new(current.clone(), message)
                   .with_status(status_code)
@@ -4889,12 +4895,14 @@ impl HttpFetcher {
                 }
               }
 
-              if status_code != 202 {
-                let mut message = if attempt < max_attempts {
-                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
-                } else {
-                  "retryable HTTP status (retries exhausted)".to_string()
-                };
+              // Treat retryable statuses as success once retries are exhausted so caching layers can
+              // persist the HTTP response deterministically (especially important for pageset
+              // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
+              // responses). Still surface a hard error when retries are aborted early due to a
+              // render deadline; callers can decide whether to fall back to cached bytes.
+              if status_code != 202 && attempt < max_attempts {
+                let mut message =
+                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
                 let err = ResourceError::new(current.clone(), message)
                   .with_status(status_code)
@@ -11928,6 +11936,49 @@ mod tests {
 
     assert!(res.bytes.is_empty());
     assert_eq!(res.status, Some(202));
+  }
+
+  #[test]
+  fn http_fetcher_returns_ok_on_persistent_429_after_retries() {
+    let Some(listener) =
+      try_bind_localhost("http_fetcher_returns_ok_on_persistent_429_after_retries")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let body = b"too many";
+
+    let handle = thread::spawn(move || {
+      for stream in listener.incoming().take(2) {
+        let mut stream = stream.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let headers = format!(
+          "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(body);
+      }
+    });
+
+    let retry_policy = HttpRetryPolicy {
+      max_attempts: 2,
+      backoff_base: Duration::ZERO,
+      backoff_cap: Duration::ZERO,
+      respect_retry_after: true,
+    };
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(retry_policy);
+    let url = format!("http://{}/", addr);
+    let res = fetcher
+      .fetch(&url)
+      .expect("persistent 429 should return Ok after retries are exhausted");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, body);
+    assert_eq!(res.status, Some(429));
   }
 
   #[test]
