@@ -10,7 +10,7 @@ use crate::css::types::RadialGradientSize;
 use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::geometry::Point;
 use crate::geometry::Rect;
-use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
+use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache, BlurCacheOps, SharedBlurCache};
 use crate::paint::canvas::Canvas;
 use crate::paint::canvas::{apply_mask_with_offset, crop_mask};
 use crate::paint::display_list::BlendMode;
@@ -73,7 +73,8 @@ use crate::paint::painter::{
 use crate::paint::pixmap::{new_pixmap, reserve_buffer};
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::{
-  estimate_box_shadow_work_pixels, render_box_shadow_cached, BoxShadow,
+  estimate_box_shadow_work_pixels, render_box_shadow_cached_with_clamp, BoxShadow,
+  BoxShadowSurfaceClamp,
 };
 use crate::paint::text_rasterize::{
   shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache, GlyphCache,
@@ -747,14 +748,18 @@ fn apply_filters(
   filters: &[ResolvedFilter],
   scale: f32,
   bbox: Rect,
-  cache: Option<&mut BlurCache>,
+  mut cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
-  let mut cache = cache;
   for filter in filters {
-    let cache_ref = cache.as_deref_mut();
     match filter {
       ResolvedFilter::Blur(radius) => {
-        apply_gaussian_blur_cached(pixmap, *radius * scale, *radius * scale, cache_ref, scale)?
+        apply_gaussian_blur_cached(
+          pixmap,
+          *radius * scale,
+          *radius * scale,
+          cache.as_deref_mut(),
+          scale,
+        )?
       }
       ResolvedFilter::Brightness(amount) => {
         crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
@@ -807,7 +812,7 @@ fn apply_filters(
         blur_radius * scale,
         spread * scale,
         *color,
-        cache_ref,
+        cache.as_deref_mut(),
       )?,
       ResolvedFilter::SvgFilter(ref filter) => {
         crate::paint::svg_filter::apply_svg_filter_with_cache(
@@ -815,7 +820,7 @@ fn apply_filters(
           pixmap,
           scale,
           bbox,
-          cache_ref,
+          cache.as_deref_mut(),
         )?;
       }
     }
@@ -829,7 +834,7 @@ fn apply_filters_scoped(
   scale: f32,
   bbox: Rect,
   bounds: Option<&Rect>,
-  cache: Option<&mut BlurCache>,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   if filters.is_empty() {
     return Ok(());
@@ -959,7 +964,7 @@ fn apply_backdrop_filters(
   clip_mask: Option<&Mask>,
   clip_bounds: Option<Rect>,
   filter_bounds: Rect,
-  cache: Option<&mut BlurCache>,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   if filters.is_empty() {
     return Ok(());
@@ -1682,7 +1687,7 @@ fn apply_drop_shadow(
   blur_radius: f32,
   spread: f32,
   color: Rgba,
-  cache: Option<&mut BlurCache>,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   let width = pixmap.width();
   let height = pixmap.height();
@@ -2431,6 +2436,7 @@ pub struct DisplayListRenderer {
   layer_alloc_diagnostics: Option<Arc<LayerAllocationDiagnostics>>,
   warp_cache: WarpCache,
   blur_cache: BlurCache,
+  shared_blur_cache: Option<SharedBlurCache>,
   gradient_cache: GradientLutCache,
   gradient_pixmap_cache: GradientPixmapCache,
   gradient_stats: GradientStats,
@@ -3043,6 +3049,7 @@ impl DisplayListRenderer {
         .then(|| Arc::new(LayerAllocationDiagnostics::default())),
       warp_cache: WarpCache::new(WARP_CACHE_CAPACITY),
       blur_cache: BlurCache::default(),
+      shared_blur_cache: None,
       gradient_cache: GradientLutCache::default(),
       gradient_pixmap_cache: GradientPixmapCache::default(),
       gradient_stats: GradientStats::default(),
@@ -3061,6 +3068,14 @@ impl DisplayListRenderer {
   fn record_layer_allocation(&self, width: u32, height: u32) {
     if let Some(diag) = self.layer_alloc_diagnostics.as_ref() {
       diag.record(width, height);
+    }
+  }
+
+  #[inline]
+  fn blur_cache_mut(&mut self) -> &mut (dyn BlurCacheOps + 'static) {
+    match self.shared_blur_cache.as_mut() {
+      Some(shared) => shared,
+      None => &mut self.blur_cache,
     }
   }
 
@@ -5069,7 +5084,7 @@ impl DisplayListRenderer {
       None => return Ok(()),
     };
 
-    let _ = render_box_shadow_cached(
+    let _ = render_box_shadow_cached_with_clamp(
       &mut temp,
       rect.x() - clipped_bounds.x(),
       rect.y() - clipped_bounds.y(),
@@ -5077,7 +5092,8 @@ impl DisplayListRenderer {
       rect.height(),
       &radii,
       &shadow,
-      Some(&mut self.blur_cache),
+      Some(self.blur_cache_mut()),
+      BoxShadowSurfaceClamp::ClampToDestination,
     )?;
 
     let paint = tiny_skia::PixmapPaint {
@@ -5264,8 +5280,13 @@ impl DisplayListRenderer {
     let pending = record.pending_backdrop.take().unwrap();
     let clip_mask = self.canvas.clip_mask().cloned();
     let clip_bounds = self.canvas.clip_bounds();
+    let cache: &mut (dyn BlurCacheOps + 'static) = match self.shared_blur_cache.as_mut() {
+      Some(shared) => shared,
+      None => &mut self.blur_cache,
+    };
+    let backdrop = self.canvas.backdrop_pixmap_mut();
     apply_backdrop_filters(
-      self.canvas.backdrop_pixmap_mut(),
+      backdrop,
       &pending.bounds,
       &pending.filters,
       pending.radii,
@@ -5273,7 +5294,7 @@ impl DisplayListRenderer {
       clip_mask.as_ref(),
       clip_bounds,
       pending.filter_bounds,
-      Some(&mut self.blur_cache),
+      Some(cache),
     )?;
     Ok(())
   }
@@ -5755,6 +5776,7 @@ impl DisplayListRenderer {
     let glyph_cache = self.glyph_cache.clone();
     let gradient_cache = self.gradient_cache.clone();
     let gradient_pixmap_cache = self.gradient_pixmap_cache.clone();
+    let shared_blur_cache = SharedBlurCache::default();
     let diagnostics_enabled = self.diagnostics_enabled;
     let diagnostics_session = paint_diagnostics_session_id();
     let image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
@@ -5801,6 +5823,7 @@ impl DisplayListRenderer {
               renderer.paint_parallelism = PaintParallelism::disabled();
               renderer.gradient_cache = gradient_cache.clone();
               renderer.gradient_pixmap_cache = gradient_pixmap_cache.clone();
+              renderer.shared_blur_cache = Some(shared_blur_cache.clone());
               renderer.diagnostics_enabled = diagnostics_enabled;
               renderer.image_pixmap_diagnostics = image_pixmap_diagnostics.clone();
               renderer.background_paint_diagnostics = background_paint_diagnostics.clone();
@@ -6611,7 +6634,7 @@ impl DisplayListRenderer {
               self.scale,
               bbox,
               layer_region.as_ref(),
-              Some(&mut self.blur_cache),
+              Some(self.blur_cache_mut()),
             )?;
           }
 
@@ -7344,7 +7367,7 @@ impl DisplayListRenderer {
           &mut shadow_pixmap,
           shadow.blur_radius,
           shadow.blur_radius,
-          Some(&mut self.blur_cache),
+          Some(self.blur_cache_mut()),
           1.0,
         )?;
       }

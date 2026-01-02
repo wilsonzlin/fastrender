@@ -33,7 +33,7 @@
 
 use crate::error::{RenderError, RenderStage};
 use crate::geometry::Rect;
-use crate::paint::blur::{apply_gaussian_blur_cached, BlurCache};
+use crate::paint::blur::{apply_gaussian_blur_cached, BlurCache, BlurCacheOps};
 use crate::paint::display_list::BorderRadii;
 use crate::paint::display_list::BorderRadius;
 use crate::paint::pixmap::new_pixmap;
@@ -149,6 +149,23 @@ pub struct BoxShadow {
   pub color: Rgba,
   /// Whether this is an inset shadow
   pub inset: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BoxShadowSurfaceClamp {
+  /// Allow the internal offscreen surface to extend beyond the destination pixmap bounds by the
+  /// blur kernel radius.
+  ///
+  /// This matches the historical behavior when `pixmap` is the final render target: pixels just
+  /// outside the destination can still contribute to visible pixels near the edge.
+  ExpandByBlurRadius,
+  /// Clamp the internal offscreen surface to the destination pixmap bounds.
+  ///
+  /// This is intended for callers that already allocated a guard band around the region that will
+  /// be composited (e.g. tile-based rendering). In that case, allocating another `3σ` padding layer
+  /// inside `render_box_shadow` wastes work: pixels beyond the destination cannot affect any pixel
+  /// the caller will ever composite.
+  ClampToDestination,
 }
 
 impl BoxShadow {
@@ -1022,6 +1039,30 @@ pub fn render_box_shadow_cached(
   shadow: &BoxShadow,
   cache: Option<&mut BlurCache>,
 ) -> Result<bool, RenderError> {
+  render_box_shadow_cached_with_clamp(
+    pixmap,
+    x,
+    y,
+    width,
+    height,
+    radii,
+    shadow,
+    cache.map(|cache| cache as &mut (dyn BlurCacheOps + 'static)),
+    BoxShadowSurfaceClamp::ExpandByBlurRadius,
+  )
+}
+
+pub(crate) fn render_box_shadow_cached_with_clamp(
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  shadow: &BoxShadow,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
+  clamp: BoxShadowSurfaceClamp,
+) -> Result<bool, RenderError> {
   crate::render_control::check_active(RenderStage::Paint)?;
   if shadow.color.a == 0.0 {
     return Ok(false);
@@ -1029,9 +1070,9 @@ pub fn render_box_shadow_cached(
   check_active(RenderStage::Paint)?;
 
   if shadow.inset {
-    render_inset_shadow(pixmap, x, y, width, height, radii, shadow, cache)
+    render_inset_shadow(pixmap, x, y, width, height, radii, shadow, cache, clamp)
   } else {
-    render_outset_shadow(pixmap, x, y, width, height, radii, shadow, cache)
+    render_outset_shadow(pixmap, x, y, width, height, radii, shadow, cache, clamp)
   }
 }
 
@@ -1044,7 +1085,8 @@ fn render_outset_shadow(
   height: f32,
   radii: &BorderRadii,
   shadow: &BoxShadow,
-  cache: Option<&mut BlurCache>,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
+  clamp: BoxShadowSurfaceClamp,
 ) -> Result<bool, RenderError> {
   crate::render_control::check_active(RenderStage::Paint)?;
   let sigma = shadow.blur_radius.max(0.0);
@@ -1089,10 +1131,20 @@ fn render_outset_shadow(
   // catastrophically expensive. Instead, clamp the offscreen shadow surface to the destination
   // pixmap bounds plus the blur kernel radius: pixels further away cannot influence any visible
   // destination pixels.
-  let clip_min_x = (-blur_pad).floor();
-  let clip_min_y = (-blur_pad).floor();
-  let clip_max_x = (pixmap.width() as f32 + blur_pad).ceil();
-  let clip_max_y = (pixmap.height() as f32 + blur_pad).ceil();
+  let (clip_min_x, clip_min_y, clip_max_x, clip_max_y) = match clamp {
+    BoxShadowSurfaceClamp::ExpandByBlurRadius => (
+      (-blur_pad).floor(),
+      (-blur_pad).floor(),
+      (pixmap.width() as f32 + blur_pad).ceil(),
+      (pixmap.height() as f32 + blur_pad).ceil(),
+    ),
+    BoxShadowSurfaceClamp::ClampToDestination => (
+      0.0,
+      0.0,
+      pixmap.width() as f32,
+      pixmap.height() as f32,
+    ),
+  };
 
   let min_x = full_min_x.max(clip_min_x);
   let min_y = full_min_y.max(clip_min_y);
@@ -1151,7 +1203,8 @@ fn render_inset_shadow(
   height: f32,
   radii: &BorderRadii,
   shadow: &BoxShadow,
-  cache: Option<&mut BlurCache>,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
+  clamp: BoxShadowSurfaceClamp,
 ) -> Result<bool, RenderError> {
   crate::render_control::check_active(RenderStage::Paint)?;
   let sigma = shadow.blur_radius.max(0.0);
@@ -1169,10 +1222,20 @@ fn render_inset_shadow(
   let full_max_x = (x + width + pad_x).ceil();
   let full_max_y = (y + height + pad_y).ceil();
 
-  let clip_min_x = (-blur_pad).floor();
-  let clip_min_y = (-blur_pad).floor();
-  let clip_max_x = (pixmap.width() as f32 + blur_pad).ceil();
-  let clip_max_y = (pixmap.height() as f32 + blur_pad).ceil();
+  let (clip_min_x, clip_min_y, clip_max_x, clip_max_y) = match clamp {
+    BoxShadowSurfaceClamp::ExpandByBlurRadius => (
+      (-blur_pad).floor(),
+      (-blur_pad).floor(),
+      (pixmap.width() as f32 + blur_pad).ceil(),
+      (pixmap.height() as f32 + blur_pad).ceil(),
+    ),
+    BoxShadowSurfaceClamp::ClampToDestination => (
+      0.0,
+      0.0,
+      pixmap.width() as f32,
+      pixmap.height() as f32,
+    ),
+  };
 
   let min_x = full_min_x.max(clip_min_x);
   let min_y = full_min_y.max(clip_min_y);
@@ -1733,6 +1796,79 @@ mod tests {
       "expected hits from second shadow, got {}",
       stats.blur_cache_hits
     );
+  }
+
+  #[test]
+  fn test_render_box_shadow_clamp_to_destination_reduces_blur_work_and_preserves_interior() {
+    // Simulate the display-list renderer's clipped/guarded box-shadow path: callers can allocate a
+    // destination pixmap that already includes enough padding for the blur kernel. In that case
+    // `render_box_shadow` should not allocate an additional `3σ` border internally.
+    let radii = BorderRadii::zero();
+    let shadow = BoxShadow::new(0.0, 0.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 200));
+    let blur_pad = (shadow.blur_radius.max(0.0) * 3.0).ceil() as usize;
+
+    let dest_w = blur_pad * 2 + 40;
+    let dest_h = blur_pad * 2 + 40;
+
+    let x = -1000.0;
+    let y = -1000.0;
+    let width = 2000.0;
+    let height = 2000.0;
+
+    enable_paint_diagnostics();
+    let mut expanded = new_pixmap(dest_w as u32, dest_h as u32).unwrap();
+    render_box_shadow_cached_with_clamp(
+      &mut expanded,
+      x,
+      y,
+      width,
+      height,
+      &radii,
+      &shadow,
+      None,
+      BoxShadowSurfaceClamp::ExpandByBlurRadius,
+    )
+    .unwrap();
+    let expanded_stats = take_paint_diagnostics().expect("diagnostics enabled");
+
+    enable_paint_diagnostics();
+    let mut clamped = new_pixmap(dest_w as u32, dest_h as u32).unwrap();
+    render_box_shadow_cached_with_clamp(
+      &mut clamped,
+      x,
+      y,
+      width,
+      height,
+      &radii,
+      &shadow,
+      None,
+      BoxShadowSurfaceClamp::ClampToDestination,
+    )
+    .unwrap();
+    let clamped_stats = take_paint_diagnostics().expect("diagnostics enabled");
+
+    assert!(
+      expanded_stats.blur_pixels > clamped_stats.blur_pixels,
+      "expected clamped render to blur fewer pixels: expanded={} clamped={}",
+      expanded_stats.blur_pixels,
+      clamped_stats.blur_pixels
+    );
+
+    // Only the interior region that is at least `blur_pad` away from the destination edges is
+    // guaranteed to be independent of content outside the clipped bounds.
+    let interior_min = blur_pad;
+    let interior_max_x = dest_w.saturating_sub(blur_pad);
+    let interior_max_y = dest_h.saturating_sub(blur_pad);
+    for yy in interior_min..interior_max_y {
+      for xx in interior_min..interior_max_x {
+        let idx = (yy * dest_w + xx) * 4;
+        assert_eq!(
+          &expanded.data()[idx..idx + 4],
+          &clamped.data()[idx..idx + 4],
+          "pixel mismatch at ({xx},{yy})"
+        );
+      }
+    }
   }
 
   #[test]

@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::BuildHasherDefault;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -113,6 +114,12 @@ pub struct BlurCache {
   config: FilterCacheConfig,
 }
 
+pub(crate) trait BlurCacheOps {
+  fn config(&self) -> FilterCacheConfig;
+  fn get(&mut self, key: &BlurCacheKey) -> Option<Pixmap>;
+  fn put(&mut self, key: BlurCacheKey, pixmap: &Pixmap);
+}
+
 impl BlurCache {
   pub(crate) fn new(config: FilterCacheConfig) -> Self {
     Self {
@@ -168,6 +175,67 @@ impl BlurCache {
 impl Default for BlurCache {
   fn default() -> Self {
     Self::new(FilterCacheConfig::from_env())
+  }
+}
+
+impl BlurCacheOps for BlurCache {
+  #[inline]
+  fn config(&self) -> FilterCacheConfig {
+    self.config
+  }
+
+  #[inline]
+  fn get(&mut self, key: &BlurCacheKey) -> Option<Pixmap> {
+    BlurCache::get(self, key)
+  }
+
+  #[inline]
+  fn put(&mut self, key: BlurCacheKey, pixmap: &Pixmap) {
+    BlurCache::put(self, key, pixmap)
+  }
+}
+
+#[derive(Clone)]
+pub(crate) struct SharedBlurCache {
+  inner: Arc<Mutex<BlurCache>>,
+  config: FilterCacheConfig,
+}
+
+impl SharedBlurCache {
+  pub(crate) fn new(config: FilterCacheConfig) -> Self {
+    Self {
+      inner: Arc::new(Mutex::new(BlurCache::new(config))),
+      config,
+    }
+  }
+}
+
+impl Default for SharedBlurCache {
+  fn default() -> Self {
+    Self::new(FilterCacheConfig::from_env())
+  }
+}
+
+impl BlurCacheOps for SharedBlurCache {
+  #[inline]
+  fn config(&self) -> FilterCacheConfig {
+    self.config
+  }
+
+  fn get(&mut self, key: &BlurCacheKey) -> Option<Pixmap> {
+    let mut cache = self
+      .inner
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.get(key)
+  }
+
+  fn put(&mut self, key: BlurCacheKey, pixmap: &Pixmap) {
+    let mut cache = self
+      .inner
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.put(key, pixmap);
   }
 }
 
@@ -2445,7 +2513,7 @@ fn apply_blur_internal(
   pixmap: &mut Pixmap,
   sigma_x: f32,
   sigma_y: f32,
-  mut cache: Option<&mut BlurCache>,
+  mut cache: Option<&mut (dyn BlurCacheOps + 'static)>,
   scale: f32,
 ) -> Result<(), RenderError> {
   let sigma_x = sigma_x.abs();
@@ -2454,7 +2522,7 @@ fn apply_blur_internal(
     return Ok(());
   }
 
-  let cache_config = cache.as_ref().map(|cache| cache.config);
+  let cache_config = cache.as_ref().map(|cache| cache.config());
   let cache_key = match cache_config {
     Some(config) if config.max_items != 0 => {
       let weight = pixmap.data().len();
@@ -2549,7 +2617,7 @@ pub(crate) fn apply_gaussian_blur_cached(
   pixmap: &mut Pixmap,
   sigma_x: f32,
   sigma_y: f32,
-  cache: Option<&mut BlurCache>,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
   scale: f32,
 ) -> Result<(), RenderError> {
   apply_blur_internal(pixmap, sigma_x, sigma_y, cache, scale)

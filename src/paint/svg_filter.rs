@@ -3,7 +3,7 @@ use crate::error::{Error, RenderError, RenderStage};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::blur::pixel_fingerprint;
-use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
+use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache, BlurCacheOps};
 use crate::paint::painter::with_paint_diagnostics;
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, check_active, with_deadline};
@@ -468,9 +468,9 @@ fn svg_filter_depth_guard() -> DepthGuard {
   })
 }
 
-fn with_blur_cache<R, F>(cache: Option<&mut BlurCache>, f: F) -> R
+fn with_blur_cache<R, F>(cache: Option<&mut (dyn BlurCacheOps + 'static)>, f: F) -> R
 where
-  F: FnOnce(Option<&mut BlurCache>) -> R,
+  F: FnOnce(Option<&mut (dyn BlurCacheOps + 'static)>) -> R,
 {
   if let Some(cache) = cache {
     return f(Some(cache));
@@ -478,7 +478,7 @@ where
   let mut guard = svg_blur_cache()
     .lock()
     .unwrap_or_else(|poisoned| poisoned.into_inner());
-  f(Some(&mut *guard))
+  f(Some(&mut *guard as &mut (dyn BlurCacheOps + 'static)))
 }
 
 fn record_filter_cache_hit() {
@@ -2609,7 +2609,7 @@ pub(crate) fn apply_svg_filter_with_cache(
   pixmap: &mut Pixmap,
   scale: f32,
   bbox: Rect,
-  blur_cache: Option<&mut BlurCache>,
+  mut blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   let _depth = svg_filter_depth_guard();
   let scale = if scale.is_finite() && scale > 0.0 {
@@ -2617,7 +2617,6 @@ pub(crate) fn apply_svg_filter_with_cache(
   } else {
     1.0
   };
-  let mut blur_cache = blur_cache;
 
   let Some((_, filter_region)) = resolve_filter_regions(def, scale, scale, bbox) else {
     for px in pixmap.pixels_mut() {
@@ -2627,7 +2626,14 @@ pub(crate) fn apply_svg_filter_with_cache(
   };
 
   let Some((res_w, res_h)) = def.filter_res else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   };
 
@@ -2636,16 +2642,37 @@ pub(crate) fn apply_svg_filter_with_cache(
   let res_w = res_w.min(MAX_FILTER_RES);
   let res_h = res_h.min(MAX_FILTER_RES);
   if target_w == 0 || target_h == 0 || res_w == 0 || res_h == 0 {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   }
   if res_w == target_w && res_h == target_h {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   }
 
   let Some(mut working_pixmap) = resize_pixmap(pixmap, res_w, res_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   };
 
@@ -2668,7 +2695,14 @@ pub(crate) fn apply_svg_filter_with_cache(
   )?;
 
   let Some(resized_back) = resize_pixmap(&working_pixmap, target_w, target_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   };
   *pixmap = resized_back;
@@ -2747,7 +2781,7 @@ fn apply_svg_filter_scaled(
   scale_x: f32,
   scale_y: f32,
   bbox: Rect,
-  mut blur_cache: Option<&mut BlurCache>,
+  mut blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   let Some((css_bbox, filter_region)) = resolve_filter_regions(def, scale_x, scale_y, bbox) else {
     for px in pixmap.pixels_mut() {
@@ -2912,7 +2946,7 @@ fn apply_primitive(
   scale_y: f32,
   filter_region: Rect,
   color_interpolation_filters: ColorInterpolationFilters,
-  blur_cache: Option<&mut BlurCache>,
+  blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<Option<FilterResult>> {
   check_active(RenderStage::Paint)?;
   let scale_avg = if scale_x.is_finite() && scale_y.is_finite() {
@@ -3950,7 +3984,7 @@ fn drop_shadow_pixmap(
   opacity: f32,
   color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
-  blur_cache: Option<&mut BlurCache>,
+  blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
   scale: f32,
 ) -> RenderResult<FilterResult> {
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&input.pixmap) else {
