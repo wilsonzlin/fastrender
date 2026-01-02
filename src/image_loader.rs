@@ -40,9 +40,11 @@ use image::ImageFormat;
 use image::ImageReader;
 use image::RgbaImage;
 use lru::LruCache;
+use percent_encoding::percent_decode_str;
 use roxmltree::Document;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
+use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -59,6 +61,69 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tiny_skia::{FilterQuality, IntSize, Pixmap};
 use url::Url;
+
+fn unescape_js_escapes(input: &str) -> Cow<'_, str> {
+  if !input.contains('\\') {
+    return Cow::Borrowed(input);
+  }
+
+  let mut out = String::with_capacity(input.len());
+  let bytes = input.as_bytes();
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] == b'\\' {
+      if i + 1 < bytes.len() && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'' || bytes[i + 1] == b'/')
+      {
+        out.push(bytes[i + 1] as char);
+        i += 2;
+        continue;
+      }
+
+      if i + 5 < bytes.len() && (bytes[i + 1] == b'u' || bytes[i + 1] == b'U') {
+        if let Ok(code) = u16::from_str_radix(&input[i + 2..i + 6], 16) {
+          if let Some(ch) = char::from_u32(code as u32) {
+            out.push(ch);
+            i += 6;
+            continue;
+          }
+        }
+      }
+    }
+
+    out.push(bytes[i] as char);
+    i += 1;
+  }
+
+  Cow::Owned(out)
+}
+
+fn decode_inline_svg_url(url: &str) -> Option<String> {
+  let trimmed = url.trim_start();
+  if trimmed.is_empty() {
+    return None;
+  }
+
+  if trimmed.starts_with('<') {
+    return Some(unescape_js_escapes(trimmed).into_owned());
+  }
+
+  // Inline SVG markup sometimes appears percent-encoded (e.g. `%3Csvg ...`). Treat it the same as
+  // raw `<svg...>` strings so the renderer doesn't accidentally resolve it as a network URL.
+  if trimmed
+    .get(.."%3csvg".len())
+    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("%3csvg"))
+  {
+    if let Ok(decoded) = percent_decode_str(trimmed).decode_utf8() {
+      let decoded = decoded.into_owned();
+      let decoded_trimmed = decoded.trim_start();
+      if decoded_trimmed.starts_with('<') {
+        return Some(unescape_js_escapes(decoded_trimmed).into_owned());
+      }
+    }
+  }
+
+  None
+}
 
 fn image_profile_threshold_ms() -> Option<f64> {
   runtime::runtime_toggles().f64("FASTR_IMAGE_PROFILE_MS")
@@ -1731,6 +1796,12 @@ impl ImageCache {
 
     // Absolute or data URLs can be returned directly.
     if crate::resource::is_data_url(url) {
+      // Data URLs often appear inside CSS/JS strings with backslash-escaped quotes
+      // (e.g. `data:image/svg+xml,<svg xmlns=\\\"...\\\">`). Unescape those so the SVG/XML parser
+      // sees valid markup.
+      if url.contains('\\') {
+        return unescape_js_escapes(url).into_owned();
+      }
       return url.to_string();
     }
     if let Ok(parsed) = url::Url::parse(url) {
@@ -1754,16 +1825,16 @@ impl ImageCache {
   /// Results are cached in memory, so subsequent loads of the same URL
   /// return the cached image.
   pub fn load(&self, url: &str) -> Result<Arc<CachedImage>> {
-    let trimmed = url.trim_start();
-    if trimmed.starts_with('<') {
-      return self.render_svg(trimmed);
+    let trimmed = url.trim();
+    if let Some(svg) = decode_inline_svg_url(trimmed) {
+      return self.render_svg(svg.as_str());
     }
     if is_about_url(trimmed) {
       return Ok(about_url_placeholder_image());
     }
 
     // Resolve the URL first
-    let resolved_url = self.resolve_url(url);
+    let resolved_url = self.resolve_url(trimmed);
     self.enforce_image_policy(&resolved_url)?;
 
     // Check cache first (using resolved URL as key)
@@ -2041,9 +2112,9 @@ impl ImageCache {
   /// Probe image metadata (dimensions, EXIF orientation/resolution, SVG intrinsic ratio)
   /// without fully decoding the image.
   pub fn probe(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
-    let trimmed = url.trim_start();
-    if trimmed.starts_with('<') {
-      let cache_key = inline_svg_cache_key(trimmed);
+    let trimmed = url.trim();
+    if let Some(svg) = decode_inline_svg_url(trimmed) {
+      let cache_key = inline_svg_cache_key(svg.trim_start());
       record_image_cache_request();
 
       if let Some(img) = self.get_cached(&cache_key) {
@@ -2064,7 +2135,7 @@ impl ImageCache {
 
       let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, &cache_key, flight);
       record_image_cache_miss();
-      let result = self.probe_svg_content(trimmed, "inline-svg").map(Arc::new);
+      let result = self.probe_svg_content(svg.as_str(), "inline-svg").map(Arc::new);
       let shared = match &result {
         Ok(meta) => {
           if let Ok(mut cache) = self.meta_cache.lock() {
@@ -2081,7 +2152,7 @@ impl ImageCache {
       return Ok(about_url_placeholder_metadata());
     }
 
-    let resolved_url = self.resolve_url(url);
+    let resolved_url = self.resolve_url(trimmed);
     self.probe_resolved_url(&resolved_url)
   }
 
@@ -2458,6 +2529,8 @@ impl ImageCache {
       .max(512 * 1024)
       .clamp(1, 64 * 1024 * 1024);
 
+    const RAW_RESOURCE_CACHE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
+
     for (idx, limit) in [probe_limit, retry_limit].into_iter().enumerate() {
       let resource =
         match self
@@ -2496,6 +2569,14 @@ impl ImageCache {
               &serialized,
               Some(resource.as_ref()),
             );
+          }
+
+          // When the image is small enough to fit in the probe prefix, keep the bytes so a later
+          // decode can reuse them without issuing another HTTP request.
+          if resource.bytes.len() < limit && resource.bytes.len() <= RAW_RESOURCE_CACHE_LIMIT_BYTES {
+            if let Ok(mut cache) = self.raw_cache.lock() {
+              cache.insert(resolved_url.to_string(), Arc::clone(&resource));
+            }
           }
 
           if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
@@ -2589,7 +2670,6 @@ impl ImageCache {
       );
     }
 
-    const RAW_RESOURCE_CACHE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
     if resource.bytes.len() <= RAW_RESOURCE_CACHE_LIMIT_BYTES {
       if let Ok(mut cache) = self.raw_cache.lock() {
         cache.insert(resolved_url.to_string(), Arc::clone(&resource));

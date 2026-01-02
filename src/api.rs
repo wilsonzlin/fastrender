@@ -87,6 +87,7 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::html::encoding::decode_html_bytes;
+use crate::html::image_prefetch::{discover_image_prefetch_urls, ImagePrefetchLimits};
 use crate::html::viewport::ViewportLength;
 use crate::image_loader::ImageCache;
 use crate::image_output::encode_image;
@@ -243,6 +244,16 @@ struct ImageIntrinsicProbeOutcome {
   intrinsic_size: Option<Size>,
   aspect_ratio: Option<f32>,
   explicit_no_ratio: bool,
+}
+
+struct ImageProbePrefetchJoinHandle(Option<std::thread::JoinHandle<()>>);
+
+impl Drop for ImageProbePrefetchJoinHandle {
+  fn drop(&mut self) {
+    if let Some(handle) = self.0.take() {
+      let _ = handle.join();
+    }
+  }
 }
 
 /// Main entry point for the FastRender library
@@ -6600,6 +6611,8 @@ impl FastRender {
     .with_device_pixel_ratio(self.device_pixel_ratio)
     .with_env_overrides();
 
+    let _image_probe_prefetch = self.spawn_image_probe_prefetch(&dom_with_state, &media_ctx, deadline);
+
     // CSS fetching/parsing happens before cascade; keep the stage heartbeat in sync so
     // render runners can attribute stalls/timeouts correctly.
     record_stage(StageHeartbeat::CssInline);
@@ -8313,6 +8326,99 @@ impl FastRender {
 
   fn replaced_intrinsic_profile_enabled() -> bool {
     runtime::runtime_toggles().truthy("FASTR_REPLACED_INTRINSIC_PROFILE")
+  }
+
+  fn spawn_image_probe_prefetch(
+    &self,
+    dom: &DomNode,
+    media_ctx: &MediaContext,
+    deadline: Option<&RenderDeadline>,
+  ) -> Option<ImageProbePrefetchJoinHandle> {
+    let Some(deadline) = deadline else {
+      return None;
+    };
+    if deadline.timeout_limit().is_none() {
+      return None;
+    }
+    if !self
+      .runtime_toggles
+      .truthy_with_default("FASTR_PREFETCH_IMAGE_PROBES", true)
+    {
+      return None;
+    }
+
+    // If we're already very close to the deadline, skip spawning extra work.
+    if let Some(remaining) = deadline.remaining_timeout() {
+      if remaining < Duration::from_millis(100) {
+        return None;
+      }
+    }
+
+    let max_image_elements = self
+      .runtime_toggles
+      .usize("FASTR_PREFETCH_IMAGE_PROBES_MAX_ELEMENTS")
+      .unwrap_or(60)
+      .min(500);
+    if max_image_elements == 0 {
+      return None;
+    }
+    let max_urls_per_element = self
+      .runtime_toggles
+      .usize("FASTR_PREFETCH_IMAGE_PROBES_MAX_URLS_PER_ELEMENT")
+      .unwrap_or(1)
+      .clamp(1, 4);
+
+    let discovery = discover_image_prefetch_urls(
+      dom,
+      crate::tree::box_tree::ImageSelectionContext {
+        device_pixel_ratio: media_ctx.device_pixel_ratio,
+        slot_width: None,
+        viewport: Some(Size::new(media_ctx.viewport_width, media_ctx.viewport_height)),
+        media_context: Some(media_ctx),
+        font_size: Some(media_ctx.base_font_size),
+        base_url: self.base_url.as_deref(),
+      },
+      ImagePrefetchLimits {
+        max_image_elements,
+        max_urls_per_element,
+      },
+    );
+    if discovery.urls.is_empty() {
+      return None;
+    }
+
+    // Image probe prefetch is best-effort cache warming. Failures here should not be treated as
+    // page failures because the renderer will still fetch any images it truly needs during layout
+    // and paint.
+    let mut image_cache = self.image_cache.clone();
+    image_cache.set_diagnostics_sink(None);
+    if let Some(mut ctx) = image_cache.resource_context() {
+      ctx.diagnostics = None;
+      image_cache.set_resource_context(Some(ctx));
+    }
+    let deadline = crate::render_control::active_deadline();
+    let parallelism = self
+      .runtime_toggles
+      .usize("FASTR_PREFETCH_IMAGE_PROBES_PARALLELISM")
+      .unwrap_or_else(|| self.intrinsic_probe_parallelism())
+      .max(1)
+      .min(16);
+    let pool = Self::intrinsic_probe_pool(parallelism);
+    let urls = discovery.urls;
+
+    let handle = std::thread::Builder::new()
+      .name("fastr-image-prefetch".to_string())
+      .spawn(move || {
+        let _deadline_guard = DeadlineGuard::install(deadline.as_ref());
+        pool.install(|| {
+          urls.into_par_iter().for_each(|url| {
+            let _ = image_cache.probe(url.as_str());
+          });
+        });
+      })
+      .ok()?;
+
+    Some(ImageProbePrefetchJoinHandle(Some(handle)))
   }
 
   fn intrinsic_probe_parallelism(&self) -> usize {

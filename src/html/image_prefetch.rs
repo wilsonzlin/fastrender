@@ -108,27 +108,6 @@ fn link_rel_is_preload_image(rel_tokens: &[String], as_attr: Option<&str>) -> bo
       .unwrap_or(false)
 }
 
-fn link_rel_is_icon_candidate(rel_tokens: &[String]) -> bool {
-  if rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("icon")) {
-    return true;
-  }
-
-  if rel_tokens
-    .iter()
-    .any(|t| t.eq_ignore_ascii_case("apple-touch-icon") || t.eq_ignore_ascii_case("mask-icon"))
-  {
-    return true;
-  }
-
-  if rel_tokens.iter().any(|t| {
-    t.eq_ignore_ascii_case("apple-touch-icon-precomposed") || t.eq_ignore_ascii_case("manifest")
-  }) {
-    return true;
-  }
-
-  false
-}
-
 fn picture_sources_and_fallback_img<'a>(
   picture: &'a DomNode,
 ) -> Option<(Vec<PictureSource>, &'a DomNode)> {
@@ -331,20 +310,6 @@ pub fn discover_image_prefetch_urls(
               {
                 push_unique_url(ctx, seen_urls, urls, selected.url);
               }
-              if *image_elements >= limits.max_image_elements {
-                *limited = true;
-                return false;
-              }
-            } else if link_rel_is_icon_candidate(&rel_tokens) {
-              if href.is_empty() {
-                return true;
-              }
-              if *image_elements >= limits.max_image_elements {
-                *limited = true;
-                return false;
-              }
-              *image_elements += 1;
-              push_unique_url(ctx, seen_urls, urls, href);
               if *image_elements >= limits.max_image_elements {
                 *limited = true;
                 return false;

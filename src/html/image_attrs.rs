@@ -269,7 +269,6 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
 
     let url_start = idx;
     let data_url = is_data_url(bytes, url_start);
-    let mut data_commas_seen = 0usize;
 
     while idx < bytes.len() {
       let b = bytes[idx];
@@ -277,10 +276,8 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
         break;
       }
       if b == b',' {
-        if data_url && data_commas_seen == 0 {
-          // Data URLs contain a required comma separating metadata and payload.
-          // Treat the first comma as part of the URL.
-          data_commas_seen = 1;
+        if data_url {
+          // `data:` URLs may contain commas in the payload; do not treat them as srcset separators.
           idx += 1;
           continue;
         }
@@ -516,6 +513,18 @@ mod tests {
     assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
     assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
     assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
+  }
+
+  #[test]
+  fn parse_srcset_allows_commas_inside_urls_with_width_descriptors() {
+    let parsed = parse_srcset(
+      "https://example.com/w_2560,c_limit/image.jpg 2560w, https://example.com/w_1280,c_limit/image.jpg 1280w",
+    );
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].url, "https://example.com/w_2560,c_limit/image.jpg");
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Width(2560)));
+    assert_eq!(parsed[1].url, "https://example.com/w_1280,c_limit/image.jpg");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Width(1280)));
   }
 
   #[test]

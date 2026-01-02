@@ -340,6 +340,16 @@ pub fn absolutize_css_urls_cow<'a>(
     if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('<') {
       return false;
     }
+    // Inline SVG markup is supported by the image loader (it treats strings beginning with
+    // `<svg` as a renderable document). Resolving these values against `base_url` turns them into
+    // bogus network URLs like `https://example.com/%3Csvg...`, causing noisy pageset failures.
+    if trimmed.starts_with('<')
+      || trimmed
+        .get(.."%3csvg".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("%3csvg"))
+    {
+      return false;
+    }
     !looks_like_absolute_url(trimmed)
   }
 

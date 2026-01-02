@@ -95,7 +95,7 @@ mod disk_cache_main {
     /// Prefetch image-like URLs referenced directly from HTML (true/false)
     #[arg(
       long,
-      default_value_t = false,
+      default_value_t = true,
       action = ArgAction::Set,
       num_args = 0..=1,
       default_missing_value = "true"
@@ -159,7 +159,7 @@ mod disk_cache_main {
     /// Prefetch non-CSS assets referenced via `url(...)` in CSS (true/false)
     #[arg(
       long,
-      default_value_t = false,
+      default_value_t = true,
       action = ArgAction::Set,
       num_args = 0..=1,
       default_missing_value = "true"

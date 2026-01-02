@@ -2620,8 +2620,12 @@ fn ordered_sources<'a>(sources: &'a [FontFaceSource]) -> Vec<&'a FontFaceSource>
 }
 
 fn format_support_rank(hints: &[FontSourceFormat], url: &str) -> Option<usize> {
+  let inferred = inferred_format_support_rank_from_url(url);
+  if inferred.is_none() {
+    return None;
+  }
   if hints.is_empty() {
-    return inferred_format_support_rank_from_url(url);
+    return inferred;
   }
 
   let mut best: Option<usize> = None;
@@ -3489,6 +3493,24 @@ mod tests {
       msg.contains("WOFF2 decompression failed"),
       "expected decoder error in message, got: {msg}"
     );
+  }
+
+  #[test]
+  fn ordered_sources_skips_eot_without_format_hints() {
+    let sources = vec![FontFaceSource::url("https://example.com/font.eot?#iefix".to_string())];
+    assert!(ordered_sources(&sources).is_empty());
+  }
+
+  #[test]
+  fn ordered_sources_skips_eot_when_format_hints_are_unknown() {
+    let mut sources = vec![FontFaceSource::url("https://example.com/font.eot")];
+    match &mut sources[0] {
+      FontFaceSource::Url(url) => {
+        url.format_hints = vec![FontSourceFormat::Unknown("bogus".to_string())];
+      }
+      FontFaceSource::Local(_) => unreachable!("expected URL source"),
+    }
+    assert!(ordered_sources(&sources).is_empty());
   }
 
   #[test]

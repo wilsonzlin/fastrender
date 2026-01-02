@@ -3177,7 +3177,9 @@ impl HttpFetcher {
             record_network_fetch_bytes(bytes.len());
             let is_retryable_status = retryable_http_status(status_code);
 
-            if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
+            if bytes.is_empty()
+              && !http_response_allows_empty_body(kind, status_code, response.headers())
+            {
               finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {
@@ -3607,7 +3609,9 @@ impl HttpFetcher {
             record_network_fetch_bytes(bytes.len());
             let is_retryable_status = retryable_http_status(status_code);
 
-            if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
+            if bytes.is_empty()
+              && !http_response_allows_empty_body(kind, status_code, response.headers())
+            {
               finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {

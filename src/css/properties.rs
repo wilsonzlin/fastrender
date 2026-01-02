@@ -2924,6 +2924,20 @@ mod tests {
   }
 
   #[test]
+  fn parses_url_unescapes_hex_escape_slashes() {
+    // Real-world stylesheets sometimes escape leading slashes as `\\2f `.
+    let parsed = parse_property_value(
+      "background-image",
+      r"url(\2f content\2f dam\2fnyu\2fstream\2fhome3\2fparkeast.jpg)",
+    )
+    .expect("parsed");
+    assert!(matches!(
+      parsed,
+      PropertyValue::Url(url) if url == "/content/dam/nyu/stream/home3/parkeast.jpg"
+    ));
+  }
+
+  #[test]
   fn border_image_slice_keeps_multiple_tokens() {
     let parsed = parse_property_value("border-image-slice", "30 30 fill");
     let PropertyValue::Multiple(list) = parsed.expect("parsed") else {

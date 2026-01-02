@@ -193,6 +193,33 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
   esac
 done
 
+SELECTION_ARGS=()
+for ((i=0; i < ${#ARGS[@]}; i++)); do
+  arg="${ARGS[$i]}"
+  case "${arg}" in
+    --pages|--pages=*)
+      SELECTION_ARGS+=("${arg}")
+      if [[ "${arg}" == "--pages" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+        next="${ARGS[$((i + 1))]}"
+        if [[ "${next}" != -* ]]; then
+          SELECTION_ARGS+=("${next}")
+          i=$((i + 1))
+        fi
+      fi
+      ;;
+    --shard|--shard=*)
+      SELECTION_ARGS+=("${arg}")
+      if [[ "${arg}" == "--shard" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+        next="${ARGS[$((i + 1))]}"
+        if [[ "${next}" != -* ]]; then
+          SELECTION_ARGS+=("${next}")
+          i=$((i + 1))
+        fi
+      fi
+      ;;
+  esac
+done
+
 EXTRA_DISK_CACHE_ARGS=()
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   DISK_CACHE_ALLOW_NO_STORE_IN_ARGS=0
@@ -212,7 +239,6 @@ fi
 
 PREFETCH_ASSET_ARGS=()
 PAGESET_ARGS=()
-PAGE_FILTER_ARGS=()
 PREFETCH_IMAGES_IN_ARGS=0
 PREFETCH_IFRAMES_IN_ARGS=0
 PREFETCH_EMBEDS_IN_ARGS=0
@@ -266,24 +292,20 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "${arg}" in
     --pages|--pages=*)
-      PAGE_FILTER_ARGS+=("${arg}")
       PAGESET_ARGS+=("${arg}")
       if [[ "${arg}" == "--pages" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
         next="${ARGS[$((i + 1))]}"
         if [[ "${next}" != -* ]]; then
-          PAGE_FILTER_ARGS+=("${next}")
           PAGESET_ARGS+=("${next}")
           i=$((i + 1))
         fi
       fi
       ;;
     --shard|--shard=*)
-      PAGE_FILTER_ARGS+=("${arg}")
       PAGESET_ARGS+=("${arg}")
       if [[ "${arg}" == "--shard" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
         next="${ARGS[$((i + 1))]}"
         if [[ "${next}" != -* ]]; then
-          PAGE_FILTER_ARGS+=("${next}")
           PAGESET_ARGS+=("${next}")
           i=$((i + 1))
         fi
@@ -436,7 +458,7 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
 fi
 
 echo "Fetching pages (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, disk_cache=${USE_DISK_CACHE})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${FETCH_KNOB_ARGS[@]}" "${PAGE_FILTER_ARGS[@]}"
+cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${SELECTION_ARGS[@]}" "${FETCH_KNOB_ARGS[@]}"
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   echo "Prefetching assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."
@@ -446,7 +468,7 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS}" -eq 1 && "${PREFETCH_CSS_URL_ASSETS_IN_ARGS}" -eq 0 ]]; then
     PREFETCH_ASSET_ARGS+=(--prefetch-css-url-assets)
   fi
-  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${PREFETCH_KNOB_ARGS[@]}" "${PAGE_FILTER_ARGS[@]}" "${PREFETCH_ASSET_ARGS[@]}" "${DISK_CACHE_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
+  cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${SELECTION_ARGS[@]}" "${PREFETCH_KNOB_ARGS[@]}" "${PREFETCH_ASSET_ARGS[@]}" "${DISK_CACHE_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
 fi
 
 echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
