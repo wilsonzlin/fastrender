@@ -656,7 +656,7 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       let allows_empty_body =
         super::http_response_allows_empty_body(kind, status_code, &response.headers);
 
-      if bytes.is_empty() && !allows_empty_body {
+      if bytes.is_empty() && super::http_empty_body_is_error(status_code, allows_empty_body) {
         let mut can_retry = attempt < max_attempts;
         if can_retry {
           let mut backoff = super::compute_backoff(&fetcher.retry_policy, attempt, &current);
