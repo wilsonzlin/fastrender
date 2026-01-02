@@ -2106,12 +2106,12 @@ type SelectorBucketBuildHasher = BuildHasherDefault<SelectorBucketHasher>;
 type SelectorBucketMap<V> = HashMap<SelectorBucketKey, V, SelectorBucketBuildHasher>;
 
 struct PseudoBuckets {
-  by_id: SelectorBucketMap<Vec<usize>>,
-  by_class: SelectorBucketMap<Vec<usize>>,
-  by_attr_value: SelectorBucketMap<Vec<usize>>,
-  by_tag: SelectorBucketMap<Vec<usize>>,
-  by_attr: SelectorBucketMap<Vec<usize>>,
-  universal: Vec<usize>,
+  by_id: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_class: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_attr_value: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_tag: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_attr: SelectorBucketMap<Vec<SelectorIndex>>,
+  universal: Vec<SelectorIndex>,
 }
 
 impl PseudoBuckets {
@@ -2128,12 +2128,12 @@ impl PseudoBuckets {
 }
 
 struct SlottedBuckets {
-  by_id: SelectorBucketMap<Vec<usize>>,
-  by_class: SelectorBucketMap<Vec<usize>>,
-  by_attr_value: SelectorBucketMap<Vec<usize>>,
-  by_tag: SelectorBucketMap<Vec<usize>>,
-  by_attr: SelectorBucketMap<Vec<usize>>,
-  universal: Vec<usize>,
+  by_id: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_class: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_attr_value: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_tag: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_attr: SelectorBucketMap<Vec<SelectorIndex>>,
+  universal: Vec<SelectorIndex>,
 }
 
 impl SlottedBuckets {
@@ -2160,12 +2160,12 @@ struct RuleIndex<'a> {
   selectors: Vec<IndexedSelector<'a>>,
   metadatas: Vec<SelectorMetadata>,
   fast_rejects: Vec<RightmostFastReject>,
-  by_id: SelectorBucketMap<Vec<usize>>,
-  by_class: SelectorBucketMap<Vec<usize>>,
-  by_attr_value: SelectorBucketMap<Vec<usize>>,
-  by_tag: SelectorBucketMap<Vec<usize>>,
-  by_attr: SelectorBucketMap<Vec<usize>>,
-  universal: Vec<usize>,
+  by_id: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_class: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_attr_value: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_tag: SelectorBucketMap<Vec<SelectorIndex>>,
+  by_attr: SelectorBucketMap<Vec<SelectorIndex>>,
+  universal: Vec<SelectorIndex>,
   pseudo_selectors: Vec<IndexedSelector<'a>>,
   pseudo_buckets: HashMap<PseudoElement, PseudoBuckets>,
   pseudo_content: HashSet<PseudoElement>,
@@ -2674,7 +2674,7 @@ impl CandidateBucket {
 }
 
 struct CandidateCursor {
-  ptr: *const usize,
+  ptr: *const SelectorIndex,
   len: usize,
   pos: usize,
   bucket: CandidateBucket,
@@ -2682,7 +2682,7 @@ struct CandidateCursor {
 }
 
 impl CandidateCursor {
-  fn new(list: &[usize], bucket: CandidateBucket) -> Self {
+  fn new(list: &[SelectorIndex], bucket: CandidateBucket) -> Self {
     Self {
       ptr: list.as_ptr(),
       len: list.len(),
@@ -2695,7 +2695,7 @@ impl CandidateCursor {
   fn current(&self) -> Option<usize> {
     if self.pos < self.len {
       // Safety: `pos < len` ensures the pointer remains within the slice.
-      Some(unsafe { *self.ptr.add(self.pos) })
+      Some(unsafe { *self.ptr.add(self.pos) } as usize)
     } else {
       None
     }
@@ -4347,6 +4347,7 @@ impl<'a> RuleIndex<'a> {
     }
 
     for (selector_idx, analysis) in selector_key_analyses.iter().enumerate() {
+      let selector_idx = u32::try_from(selector_idx).expect("selector bucket index overflow");
       if !analysis.mandatory_keys.is_empty() {
         let anchor = choose_anchor_key(
           &analysis.mandatory_keys,
@@ -4399,6 +4400,7 @@ impl<'a> RuleIndex<'a> {
     }
 
     for (selector_idx, (pseudo, analysis)) in pseudo_key_analyses.iter().enumerate() {
+      let selector_idx = u32::try_from(selector_idx).expect("selector bucket index overflow");
       let Some(freq) = pseudo_key_frequencies.get(pseudo) else {
         continue;
       };
@@ -4463,6 +4465,7 @@ impl<'a> RuleIndex<'a> {
     }
 
     for (selector_idx, arg_analyses) in slotted_arg_key_analyses.iter().enumerate() {
+      let selector_idx = u32::try_from(selector_idx).expect("selector bucket index overflow");
       let mut keys: Vec<SelectorKey> = Vec::new();
       for analysis in arg_analyses.iter() {
         if !analysis.mandatory_keys.is_empty() {
@@ -4528,10 +4531,10 @@ impl<'a> RuleIndex<'a> {
   }
 
   fn sort_selector_buckets(&mut self) {
-    fn sort_bucket(list: &mut Vec<usize>, selectors: &[IndexedSelector<'_>]) {
+    fn sort_bucket(list: &mut Vec<SelectorIndex>, selectors: &[IndexedSelector<'_>]) {
       list.sort_unstable_by(|a, b| {
-        let a_sel = &selectors[*a];
-        let b_sel = &selectors[*b];
+        let a_sel = &selectors[*a as usize];
+        let b_sel = &selectors[*b as usize];
         a_sel
           .rule_idx
           .cmp(&b_sel.rule_idx)
@@ -4558,10 +4561,10 @@ impl<'a> RuleIndex<'a> {
     }
     sort_bucket(&mut self.universal, selectors);
 
-    fn sort_slotted_bucket(list: &mut Vec<usize>, selectors: &[IndexedSlottedSelector<'_>]) {
+    fn sort_slotted_bucket(list: &mut Vec<SelectorIndex>, selectors: &[IndexedSlottedSelector<'_>]) {
       list.sort_unstable_by(|a, b| {
-        let a_sel = &selectors[*a];
-        let b_sel = &selectors[*b];
+        let a_sel = &selectors[*a as usize];
+        let b_sel = &selectors[*b as usize];
         a_sel.rule_idx.cmp(&b_sel.rule_idx).then(a.cmp(b))
       });
     }
@@ -4658,7 +4661,7 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
-    let mut push_list = |list: &[usize], bucket: CandidateBucket| {
+    let mut push_list = |list: &[SelectorIndex], bucket: CandidateBucket| {
       if list.is_empty() {
         return;
       }
@@ -4715,7 +4718,7 @@ impl<'a> RuleIndex<'a> {
       let cursor = &merge.cursors[0];
       for offset in 0..cursor.len {
         // Safety: `offset < len` ensures the pointer remains within the slice.
-        let selector_idx = unsafe { *cursor.ptr.add(offset) };
+        let selector_idx = unsafe { *cursor.ptr.add(offset) } as usize;
         if !seen.mark_seen(selector_idx) {
           continue;
         }
@@ -5038,7 +5041,7 @@ impl<'a> RuleIndex<'a> {
       return;
     }
 
-    let mut push_list = |list: &[usize], bucket: CandidateBucket| {
+    let mut push_list = |list: &[SelectorIndex], bucket: CandidateBucket| {
       if list.is_empty() {
         return;
       }
@@ -5098,7 +5101,7 @@ impl<'a> RuleIndex<'a> {
       let cursor = &merge.cursors[0];
       for offset in 0..cursor.len {
         // Safety: `offset < len` ensures the pointer remains within the slice.
-        let selector_idx = unsafe { *cursor.ptr.add(offset) };
+        let selector_idx = unsafe { *cursor.ptr.add(offset) } as usize;
         if !seen.mark_seen(selector_idx) {
           continue;
         }
@@ -5438,7 +5441,7 @@ impl<'a> RuleIndex<'a> {
       if let Some(key) = node_keys.id_key {
         if let Some(list) = bucket.by_id.get(&key) {
           for idx in list {
-            consider_candidate(*idx, &mut stats.by_id);
+            consider_candidate(*idx as usize, &mut stats.by_id);
           }
         }
       }
@@ -5448,7 +5451,7 @@ impl<'a> RuleIndex<'a> {
       for key in node_keys.class_keys {
         if let Some(list) = bucket.by_class.get(key) {
           for idx in list {
-            consider_candidate(*idx, &mut stats.by_class);
+            consider_candidate(*idx as usize, &mut stats.by_class);
           }
         }
       }
@@ -5458,7 +5461,7 @@ impl<'a> RuleIndex<'a> {
       for key in node_keys.attr_value_keys {
         if let Some(list) = bucket.by_attr_value.get(key) {
           for idx in list {
-            consider_candidate(*idx, &mut stats.by_attr);
+            consider_candidate(*idx as usize, &mut stats.by_attr);
           }
         }
       }
@@ -5468,13 +5471,13 @@ impl<'a> RuleIndex<'a> {
       let key = node_keys.tag_key;
       if let Some(list) = bucket.by_tag.get(&key) {
         for idx in list {
-          consider_candidate(*idx, &mut stats.by_tag);
+          consider_candidate(*idx as usize, &mut stats.by_tag);
         }
       }
       let star = selector_bucket_tag("*");
       if let Some(list) = bucket.by_tag.get(&star) {
         for idx in list {
-          consider_candidate(*idx, &mut stats.by_tag);
+          consider_candidate(*idx as usize, &mut stats.by_tag);
         }
       }
     }
@@ -5483,14 +5486,14 @@ impl<'a> RuleIndex<'a> {
       for key in node_keys.attr_keys {
         if let Some(list) = bucket.by_attr.get(key) {
           for idx in list {
-            consider_candidate(*idx, &mut stats.by_attr);
+            consider_candidate(*idx as usize, &mut stats.by_attr);
           }
         }
       }
     }
 
     for idx in &bucket.universal {
-      consider_candidate(*idx, &mut stats.universal);
+      consider_candidate(*idx as usize, &mut stats.universal);
     }
   }
 }
@@ -10480,7 +10483,7 @@ mod tests {
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.selectors.len(), 1);
 
-    let count_bucket_occurrences = |map: &SelectorBucketMap<Vec<usize>>| -> usize {
+    let count_bucket_occurrences = |map: &SelectorBucketMap<Vec<SelectorIndex>>| -> usize {
       map.values().flatten().filter(|&&i| i == 0).count()
     };
     let total_occurrences = count_bucket_occurrences(&index.by_id)
@@ -10563,7 +10566,7 @@ mod tests {
         .get(&selector_bucket_class("foo"))
         .expect("foo bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
     assert!(
       index.by_class.get(&selector_bucket_class("a")).is_none(),
@@ -10641,7 +10644,7 @@ mod tests {
     let class_key = selector_bucket_class_for_mode("foo", QuirksMode::NoQuirks);
     assert_eq!(
       index.by_class.get(&class_key).expect("class bucket").as_slice(),
-      &[0usize]
+      &[0]
     );
     assert_eq!(
       index
@@ -10649,7 +10652,7 @@ mod tests {
         .get(&selector_bucket_tag("div"))
         .expect("tag bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
 
     let node = DomNode {
@@ -10858,7 +10861,7 @@ mod tests {
     let class_key = selector_bucket_class_for_mode("foo", QuirksMode::NoQuirks);
     assert_eq!(
       index.by_class.get(&class_key).expect("class bucket").as_slice(),
-      &[0usize]
+      &[0]
     );
     assert_eq!(
       index
@@ -10866,9 +10869,9 @@ mod tests {
         .get(&selector_bucket_tag("div"))
         .expect("tag bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
-    assert_eq!(index.universal.as_slice(), &[0usize]);
+    assert_eq!(index.universal.as_slice(), &[0]);
 
     let node = DomNode {
       node_type: DomNodeType::Element {
@@ -11014,7 +11017,7 @@ mod tests {
         .get(&selector_bucket_tag("div"))
         .expect("div bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
     assert!(
       index.by_class.get(&selector_bucket_class("a")).is_none(),
@@ -11100,7 +11103,7 @@ mod tests {
         .get(&class_a)
         .expect("class a bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
     assert_eq!(
       index
@@ -11108,7 +11111,7 @@ mod tests {
         .get(&class_b)
         .expect("class b bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
 
     for cls in ["a", "b"] {
@@ -11192,7 +11195,7 @@ mod tests {
         .get(&key_a)
         .expect("value a bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
     assert_eq!(
       index
@@ -11200,7 +11203,7 @@ mod tests {
         .get(&key_b)
         .expect("value b bucket")
         .as_slice(),
-      &[1usize]
+      &[1]
     );
 
     let mut candidates = Vec::new();
@@ -11333,7 +11336,7 @@ mod tests {
         .get(&class_b)
         .expect("class b bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
     assert_eq!(
       index
@@ -11341,7 +11344,7 @@ mod tests {
         .get(&class_d)
         .expect("class d bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
 
     // We intentionally index multi-key conjunction branches under a single representative key to
@@ -11351,7 +11354,7 @@ mod tests {
       let contains = index
         .by_class
         .get(&key)
-        .map(|list| list.contains(&0usize))
+        .map(|list| list.contains(&0))
         .unwrap_or(false);
       assert!(
         !contains,
@@ -11434,11 +11437,14 @@ mod tests {
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
 
     use selectors::parser::Component;
-    let host_selector_idx = index
-      .selectors
-      .iter()
-      .position(|sel| sel.selector.iter().any(|c| matches!(c, Component::Host(_))))
-      .expect("host selector");
+    let host_selector_idx = u32::try_from(
+      index
+        .selectors
+        .iter()
+        .position(|sel| sel.selector.iter().any(|c| matches!(c, Component::Host(_))))
+        .expect("host selector"),
+    )
+    .expect("selector bucket index overflow");
 
     let class_a = selector_bucket_class("a");
     let class_b = selector_bucket_class("b");
@@ -12174,7 +12180,7 @@ mod tests {
         .get(&class_a)
         .expect("class a bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
     assert_eq!(
       index
@@ -12182,7 +12188,7 @@ mod tests {
         .get(&class_b)
         .expect("class b bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
 
     let node = DomNode {
@@ -12272,7 +12278,7 @@ mod tests {
         .get(&class_a)
         .expect("class a bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
     assert_eq!(
       before_bucket
@@ -12280,7 +12286,7 @@ mod tests {
         .get(&class_b)
         .expect("class b bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
 
     let node = DomNode {
@@ -12364,7 +12370,7 @@ mod tests {
         .get(&selector_bucket_class("a"))
         .expect("class a bucket")
         .as_slice(),
-      &[0usize]
+      &[0]
     );
 
     let after_bucket = index
@@ -12378,7 +12384,7 @@ mod tests {
         .get(&selector_bucket_class("foo"))
         .expect("class foo bucket")
         .as_slice(),
-      &[1usize]
+      &[1]
     );
     assert!(
       after_bucket
