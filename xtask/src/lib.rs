@@ -36,3 +36,31 @@ pub fn extract_disk_cache_args(extra: &[String]) -> Vec<String> {
   out
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FetchPagesFlagOverrides {
+  pub allow_http_error_status: bool,
+  pub refresh: bool,
+}
+
+/// Extract `fetch_pages`-specific flags from an argument vector.
+///
+/// `cargo xtask pageset` forwards `args.extra` (intended for `pageset_progress run`) through to the
+/// underlying binaries. Some flags apply only to the `fetch_pages` step (e.g. `--refresh`). To keep
+/// the wrapper forgiving (and consistent with how we forward `prefetch_assets` flags), strip these
+/// from the extra args and return them so the caller can forward them to `fetch_pages`.
+pub fn extract_fetch_pages_flag_overrides(
+  extra: &[String],
+) -> (Vec<String>, FetchPagesFlagOverrides) {
+  let mut out = Vec::new();
+  let mut overrides = FetchPagesFlagOverrides::default();
+
+  for arg in extra {
+    match arg.as_str() {
+      "--allow-http-error-status" => overrides.allow_http_error_status = true,
+      "--refresh" => overrides.refresh = true,
+      _ => out.push(arg.clone()),
+    }
+  }
+
+  (out, overrides)
+}

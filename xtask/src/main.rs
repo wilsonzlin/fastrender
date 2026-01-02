@@ -614,6 +614,17 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       (Vec::new(), args.extra.clone())
     };
 
+  let mut fetch_refresh = args.refresh;
+  let mut fetch_allow_http_error_status = args.allow_http_error_status;
+  let (filtered_pageset_extra_args, fetch_overrides) =
+    xtask::extract_fetch_pages_flag_overrides(&pageset_extra_args);
+  pageset_extra_args = filtered_pageset_extra_args;
+  fetch_refresh |= fetch_overrides.refresh;
+  fetch_allow_http_error_status |= fetch_overrides.allow_http_error_status;
+  if args.no_fetch && fetch_refresh {
+    bail!("--refresh cannot be used with --no-fetch");
+  }
+
   let mut disk_cache_extra_args = extract_disk_cache_args(&pageset_extra_args);
   if disk_cache_enabled
     && std::env::var_os("FASTR_DISK_CACHE_ALLOW_NO_STORE").is_none()
@@ -676,10 +687,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(accept_language) = &args.accept_language {
       cmd.arg("--accept-language").arg(accept_language);
     }
-    if args.refresh {
+    if fetch_refresh {
       cmd.arg("--refresh");
     }
-    if args.allow_http_error_status {
+    if fetch_allow_http_error_status {
       cmd.arg("--allow-http-error-status");
     }
     if rayon_threads_env.is_none() {
