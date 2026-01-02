@@ -1950,9 +1950,20 @@ fn content_type_mime(content_type: &str) -> &str {
     .trim()
 }
 
+fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+  value
+    .get(..prefix.len())
+    .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
 fn mime_is_html(mime: &str) -> bool {
-  let lower = mime.trim().to_ascii_lowercase();
-  lower.starts_with("text/html") || lower.starts_with("application/xhtml+xml")
+  let mime = mime.trim();
+  starts_with_ignore_ascii_case(mime, "text/html")
+    || starts_with_ignore_ascii_case(mime, "application/xhtml+xml")
+}
+
+fn mime_is_svg(mime: &str) -> bool {
+  starts_with_ignore_ascii_case(mime.trim(), "image/svg")
 }
 
 fn url_looks_like_suffix(url: &str, suffix: &str) -> bool {
@@ -2029,15 +2040,14 @@ pub fn ensure_image_mime_sane(resource: &FetchedResource, requested_url: &str) -
     return Ok(());
   };
   let mime = content_type_mime(content_type);
-  let lower = mime.to_ascii_lowercase();
-  if lower.starts_with("text/html") || lower.starts_with("application/xhtml+xml") {
+  if mime_is_html(mime) {
     return Err(response_resource_error(
       resource,
       requested_url,
       format!("unexpected content-type {mime}"),
     ));
   }
-  if lower.starts_with("text/plain") {
+  if starts_with_ignore_ascii_case(mime, "text/plain") {
     return Err(response_resource_error(
       resource,
       requested_url,
@@ -7394,10 +7404,7 @@ fn should_substitute_markup_image_body(
     return false;
   }
 
-  if content_type
-    .map(|ct| ct.to_ascii_lowercase().contains("image/svg"))
-    .unwrap_or(false)
-  {
+  if content_type.is_some_and(|ct| mime_is_svg(content_type_mime(ct))) {
     return false;
   }
   file_payload_looks_like_markup_but_not_svg(bytes)
@@ -7618,6 +7625,15 @@ mod tests {
       ".jpg"
     ));
     assert!(!url_looks_like_suffix("jpg", ".jpeg"));
+  }
+
+  #[test]
+  fn mime_predicates_are_case_insensitive() {
+    assert!(mime_is_html("Text/Html"));
+    assert!(mime_is_html("application/xhtml+xml"));
+    assert!(mime_is_svg("IMAGE/SVG+XML"));
+    assert!(mime_is_svg("image/svg+xml"));
+    assert!(!mime_is_svg("image/png"));
   }
 
   #[test]
