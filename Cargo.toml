@@ -36,7 +36,6 @@ kamadak-exif = "0.6"
 markup5ever_rcdom = "0.35"
 memchr = "2.7"
 smallvec = "1.15"
-num_cpus = "1.17.0"
 parking_lot = "0.12"
 percent-encoding = "2.3"
 precomputed-hash = "0.1"
@@ -83,6 +82,7 @@ skrifa = "0.20"
 [dev-dependencies]
 criterion = "0.5"
 filetime = "0.2"
+num_cpus = "1.17.0"
 
 [[bench]]
 name = "perf_regressions"

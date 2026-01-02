@@ -5,7 +5,7 @@
 mod common;
 
 use clap::Parser;
-use common::args::{parse_shard, TimeoutArgs};
+use common::args::{default_jobs, parse_shard, TimeoutArgs};
 use common::render_pipeline::build_http_fetcher;
 use fastrender::pageset::{
   cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
@@ -35,7 +35,7 @@ struct Args {
   refresh: bool,
 
   /// Number of parallel fetches
-  #[arg(long, short, default_value_t = num_cpus::get())]
+  #[arg(long, short, default_value_t = default_jobs())]
   jobs: usize,
 
   #[command(flatten)]

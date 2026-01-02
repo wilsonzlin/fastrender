@@ -193,7 +193,7 @@ High eviction counts typically imply cache pressure (raise `FASTR_TEXT_FALLBACK_
 - `FASTR_LAYOUT_PARALLEL_MAX_THREADS=<N>` – cap Rayon worker threads used during layout fan-out.
 - `FASTR_LAYOUT_PARALLEL_MIN_NODES=<N>` – minimum box nodes before auto layout fan-out will engage (default 1024).
 - `FASTR_LAYOUT_PARALLEL_DEBUG=1` – capture layout parallel debug counters (worker threads/work items) for diagnostics/logging.
-- `FASTR_INTRINSIC_PROBE_PARALLELISM=<N>` – cap the thread count for intrinsic image probing during box-tree construction (default `min(num_cpus, 8)`). Uses a dedicated Rayon pool (ignores `RAYON_NUM_THREADS`); set to `1` to force serial probing.
+- `FASTR_INTRINSIC_PROBE_PARALLELISM=<N>` – cap the thread count for intrinsic image probing during box-tree construction. Uses a dedicated Rayon pool; defaults to a multiple of the per-worker thread budget (`RAYON_NUM_THREADS` when set, otherwise the platform-reported available parallelism) and is further capped by the probe prefetch logic.
 
 ## Media query overrides
 

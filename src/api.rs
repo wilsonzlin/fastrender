@@ -3010,9 +3010,10 @@ pub struct FastRenderPoolConfig {
 
 impl Default for FastRenderPoolConfig {
   fn default() -> Self {
+    let pool_size = std::thread::available_parallelism().map_or(1, |n| n.get());
     Self {
       renderer: FastRenderConfig::default(),
-      pool_size: num_cpus::get().max(1),
+      pool_size,
       font_cache: FontCacheConfig::default(),
       image_cache: ImageCacheConfig::default(),
       fetcher: None,
@@ -8727,7 +8728,7 @@ impl FastRender {
       .ok()
       .and_then(|value| value.parse::<usize>().ok())
       .filter(|threads| *threads > 0)
-      .unwrap_or_else(num_cpus::get)
+      .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
       .max(1);
     let default_parallelism = base_parallelism.saturating_mul(8).min(64).max(1);
     self

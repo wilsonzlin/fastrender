@@ -49,7 +49,7 @@ mod disk_cache_main {
   use std::sync::{Arc, OnceLock};
   use std::time::Duration;
 
-  use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs, ViewportArgs};
+  use crate::common::args::{default_jobs, parse_shard, DiskCacheArgs, TimeoutArgs, ViewportArgs};
   use crate::common::asset_discovery::{discover_css_urls, extract_inline_css_chunks};
   use crate::common::disk_cache_stats::scan_disk_cache_dir;
   use crate::common::render_pipeline::{
@@ -62,7 +62,7 @@ mod disk_cache_main {
   #[command(name = "prefetch_assets", version, about)]
   struct Args {
     /// Number of parallel pages to prefetch
-    #[arg(long, short, default_value_t = num_cpus::get())]
+    #[arg(long, short, default_value_t = default_jobs())]
     jobs: usize,
 
     #[command(flatten)]

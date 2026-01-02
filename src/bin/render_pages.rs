@@ -8,7 +8,8 @@ mod common;
 
 use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use common::args::{
-  parse_bool_preference, parse_color_scheme, parse_contrast, parse_shard, parse_viewport,
+  default_jobs, parse_bool_preference, parse_color_scheme, parse_contrast, parse_shard,
+  parse_viewport,
   CompatArgs, DiskCacheArgs, LayoutParallelArgs, ResourceAccessArgs,
 };
 use common::render_pipeline::{
@@ -100,7 +101,7 @@ enum CliCommand {
 #[derive(ClapArgs, Debug, Clone)]
 struct Args {
   /// Number of parallel renders/workers
-  #[arg(long, short, default_value_t = num_cpus::get())]
+  #[arg(long, short, default_value_t = default_jobs())]
   jobs: usize,
 
   /// Hard per-page timeout in seconds

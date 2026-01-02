@@ -7,6 +7,11 @@ use fastrender::layout::engine::DEFAULT_LAYOUT_MIN_FANOUT;
 use fastrender::style::media::MediaType;
 use std::time::Duration;
 
+#[allow(dead_code)]
+pub fn default_jobs() -> usize {
+  std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
 /// Default on-disk cache budget (512MB).
 ///
 /// This matches `fastrender::resource::DiskCacheConfig::default()` when built with `disk_cache`.
