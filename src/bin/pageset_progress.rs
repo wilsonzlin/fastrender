@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 use stage_buckets::StageBuckets;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -3162,37 +3162,56 @@ fn capture_dump_for_page(
 
 #[derive(Clone)]
 struct StageHeartbeatWriter {
-  path: Option<PathBuf>,
-  timeline_path: Option<PathBuf>,
   started: Instant,
-  last: Arc<Mutex<Option<StageHeartbeat>>>,
+  inner: Arc<Mutex<StageHeartbeatWriterInner>>,
 }
+
+struct StageHeartbeatWriterInner {
+  stage_file: Option<File>,
+  timeline_file: Option<File>,
+  last: Option<StageHeartbeat>,
+}
+
+// Keep the stage file fixed-size so we can overwrite in place without truncation/rename.
+// (Truncation/rename/fsync-heavy patterns show up in profiles as measurable per-stage overhead.)
+const STAGE_HEARTBEAT_FILE_BYTES: usize = 64;
 
 impl StageHeartbeatWriter {
   fn new(path: Option<PathBuf>) -> Self {
-    let timeline_path = path.as_ref().map(|path| stage_timeline_path(path));
-    let started = Instant::now();
-    // Best-effort cleanup so a reused stage path doesn't leave stale timelines behind.
-    if let Some(timeline_path) = timeline_path.as_ref() {
-      let _ = (|| -> io::Result<()> {
-        if let Some(parent) = timeline_path.parent() {
-          if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-          }
+    let mut stage_file = None;
+    let mut timeline_file = None;
+    if let Some(path) = path.as_ref() {
+      if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+          let _ = fs::create_dir_all(parent);
         }
-        let _file = OpenOptions::new()
-          .write(true)
-          .create(true)
-          .truncate(true)
-          .open(timeline_path)?;
-        Ok(())
-      })();
+      }
+      stage_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .ok();
+      let timeline_path = stage_timeline_path(path);
+      timeline_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(timeline_path)
+        .ok();
     }
+
+    // Start timing after any one-time filesystem setup so those costs don't get attributed to the
+    // first stage in the timeline buckets.
+    let started = Instant::now();
+
     Self {
-      path,
-      timeline_path,
       started,
-      last: Arc::new(Mutex::new(None)),
+      inner: Arc::new(Mutex::new(StageHeartbeatWriterInner {
+        stage_file,
+        timeline_file,
+        last: None,
+      })),
     }
   }
 
@@ -3202,7 +3221,7 @@ impl StageHeartbeatWriter {
   }
 
   fn last_stage(&self) -> Option<StageHeartbeat> {
-    self.last.lock().ok().and_then(|guard| *guard)
+    self.inner.lock().ok().and_then(|guard| guard.last)
   }
 
   fn elapsed_ms(&self) -> u64 {
@@ -3213,79 +3232,78 @@ impl StageHeartbeatWriter {
     if stage == StageHeartbeat::Done {
       return;
     }
-    let Some(path) = &self.path else {
-      if let Ok(mut guard) = self.last.lock() {
-        if guard.as_ref() == Some(&stage) {
-          return;
-        }
-        *guard = Some(stage);
+
+    // Capture the stage timestamp before any blocking I/O so stage attribution doesn't get skewed
+    // by filesystem latency (rename/fsync/etc).
+    let elapsed_ms = self.elapsed_ms();
+
+    let mut stage_written = false;
+    let mut should_sleep_box_tree = false;
+    let mut should_sleep_paint = false;
+
+    if let Ok(mut guard) = self.inner.lock() {
+      if guard.last.as_ref() == Some(&stage) {
+        return;
       }
-      return;
-    };
-    {
-      if let Ok(guard) = self.last.lock() {
-        if guard.as_ref() == Some(&stage) {
-          return;
+
+      // If persistence is disabled (or failed to initialize), still track the stage in memory so
+      // cooperative timeouts can attribute failures.
+      let Some(stage_file) = guard.stage_file.as_mut() else {
+        guard.last = Some(stage);
+        return;
+      };
+
+      let stage_str = stage.as_str();
+      debug_assert!(
+        stage_str.len() + 1 <= STAGE_HEARTBEAT_FILE_BYTES,
+        "stage heartbeat marker too long for stage file buffer"
+      );
+      let mut buf = [b' '; STAGE_HEARTBEAT_FILE_BYTES];
+      let stage_bytes = stage_str.as_bytes();
+      let end = stage_bytes.len().min(STAGE_HEARTBEAT_FILE_BYTES.saturating_sub(1));
+      buf[..end].copy_from_slice(&stage_bytes[..end]);
+      buf[end] = b'\n';
+
+      let write_result = (|| -> io::Result<()> {
+        stage_file.seek(SeekFrom::Start(0))?;
+        stage_file.write_all(&buf)?;
+        Ok(())
+      })();
+
+      if write_result.is_ok() {
+        stage_written = true;
+        if let Some(timeline) = guard.timeline_file.as_mut() {
+          let line = format!("{elapsed_ms} {stage_str}\n");
+          let _ = timeline.write_all(line.as_bytes());
         }
+        guard.last = Some(stage);
+        should_sleep_box_tree = stage == StageHeartbeat::BoxTree;
+        should_sleep_paint = matches!(
+          stage,
+          StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize
+        );
       }
     }
-    let tmp_path = stage_tmp_path(path);
-    let contents = format!("{}\n", stage.as_str());
-    let write_result = (|| -> io::Result<()> {
-      if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-          fs::create_dir_all(parent)?;
-        }
+
+    if !stage_written {
+      return;
+    }
+
+    if should_sleep_box_tree {
+      if let Some(delay) = std::env::var("FASTR_TEST_BOX_TREE_DELAY_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+      {
+        std::thread::sleep(Duration::from_millis(delay));
       }
-      let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&tmp_path)?;
-      file.write_all(contents.as_bytes())?;
-      fs::rename(&tmp_path, path)?;
-      Ok(())
-    })();
-    if write_result.is_ok() {
-      if let Some(timeline_path) = &self.timeline_path {
-        let _ = (|| -> io::Result<()> {
-          let elapsed_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-          let line = format!("{elapsed_ms} {}\n", stage.as_str());
-          if let Some(parent) = timeline_path.parent() {
-            if !parent.as_os_str().is_empty() {
-              fs::create_dir_all(parent)?;
-            }
-          }
-          let mut timeline = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .append(true)
-            .open(timeline_path)?;
-          timeline.write_all(line.as_bytes())?;
-          Ok(())
-        })();
-      }
-      if let Ok(mut guard) = self.last.lock() {
-        *guard = Some(stage);
-      }
-      if stage == StageHeartbeat::BoxTree {
-        if let Some(delay) = std::env::var("FASTR_TEST_BOX_TREE_DELAY_MS")
-          .ok()
-          .and_then(|raw| raw.parse::<u64>().ok())
-        {
-          std::thread::sleep(Duration::from_millis(delay));
-        }
-      }
-      if matches!(
-        stage,
-        StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize
-      ) {
-        if let Some(delay) = std::env::var("FASTR_TEST_PAINT_DELAY_MS")
-          .ok()
-          .and_then(|raw| raw.parse::<u64>().ok())
-        {
-          std::thread::sleep(Duration::from_millis(delay));
-        }
+    }
+
+    if should_sleep_paint {
+      if let Some(delay) = std::env::var("FASTR_TEST_PAINT_DELAY_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+      {
+        std::thread::sleep(Duration::from_millis(delay));
       }
     }
   }
@@ -9285,6 +9303,81 @@ mod tests {
       progress.auto_notes.contains("stage: box_tree"),
       "expected box_tree stage note in auto_notes, got: {}",
       progress.auto_notes
+    );
+  }
+
+  #[test]
+  fn stage_heartbeat_writer_updates_stage_file_and_timeline() {
+    let dir = tempdir().unwrap();
+    let stage_path = dir.path().join("page.stage");
+    let writer = StageHeartbeatWriter::new(Some(stage_path.clone()));
+
+    writer.record(StageHeartbeat::ReadCache);
+    std::thread::sleep(Duration::from_millis(10));
+    writer.record(StageHeartbeat::CssInline);
+    std::thread::sleep(Duration::from_millis(10));
+    writer.record(StageHeartbeat::Cascade);
+
+    assert_eq!(
+      read_stage_heartbeat(&stage_path),
+      Some(StageHeartbeat::Cascade)
+    );
+
+    let timeline_path = stage_timeline_path(&stage_path);
+    let timeline = fs::read_to_string(&timeline_path).expect("timeline file");
+    let parsed: Vec<(u64, StageHeartbeat)> = timeline
+      .lines()
+      .filter_map(|line| {
+        let mut parts = line.split_whitespace();
+        let ms = parts.next()?.parse::<u64>().ok()?;
+        let stage = StageHeartbeat::from_str(parts.next()?)?;
+        Some((ms, stage))
+      })
+      .collect();
+    assert!(
+      parsed.len() >= 3,
+      "expected at least 3 timeline entries, got {} from:\n{}",
+      parsed.len(),
+      timeline
+    );
+
+    let total_ms = writer.elapsed_ms().max(1);
+    assert!(
+      stage_buckets_from_timeline(&stage_path, total_ms).is_some(),
+      "timeline should remain parseable"
+    );
+  }
+
+  #[test]
+  #[ignore]
+  fn stage_heartbeat_writer_record_overhead_is_small() {
+    let dir = tempdir().unwrap();
+    let stage_path = dir.path().join("bench.stage");
+    let writer = StageHeartbeatWriter::new(Some(stage_path));
+
+    let mut per_call: Vec<Duration> = Vec::new();
+    for i in 0..200 {
+      let stage = if i % 2 == 0 {
+        StageHeartbeat::ReadCache
+      } else {
+        StageHeartbeat::CssInline
+      };
+      let started = Instant::now();
+      writer.record(stage);
+      per_call.push(started.elapsed());
+    }
+
+    per_call.sort();
+    let median = per_call[per_call.len() / 2];
+    let worst = *per_call.last().expect("durations");
+
+    assert!(
+      median < Duration::from_millis(5),
+      "median record() overhead too high: {median:?} worst={worst:?}"
+    );
+    assert!(
+      worst < Duration::from_millis(50),
+      "worst-case record() overhead too high: {worst:?}"
     );
   }
 
