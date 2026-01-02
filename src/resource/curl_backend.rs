@@ -659,6 +659,11 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
         content_type = Some(super::OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
         decode_stage = super::decode_stage_for_content_type(content_type.as_deref());
       }
+      if super::should_substitute_markup_image_body(kind, content_type.as_deref(), &bytes) {
+        bytes = super::OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+        content_type = Some(super::OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+        decode_stage = super::decode_stage_for_content_type(content_type.as_deref());
+      }
       let is_retryable_status = super::retryable_http_status(status_code);
       let allows_empty_body =
         super::http_response_allows_empty_body(kind, status_code, &response.headers);
