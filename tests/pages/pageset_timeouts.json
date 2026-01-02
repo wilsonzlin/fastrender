@@ -11,7 +11,7 @@
       ],
       "dpr": 1.0,
       "media": "screen",
-      "budget_ms": 10000.0
+      "budget_ms": 5000.0
     },
     {
       "name": "bbc.com",
@@ -82,6 +82,28 @@
     {
       "name": "economist.com",
       "url": "https://www.economist.com/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "npmjs.com",
+      "url": "https://www.npmjs.com/",
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1.0,
+      "media": "screen",
+      "budget_ms": 5000.0
+    },
+    {
+      "name": "developer.mozilla.org_en-US_docs_Web_CSS_CSS_multicol_layout_Using_multi-column_layouts",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts",
       "viewport": [
         1200,
         800
