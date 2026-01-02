@@ -2579,15 +2579,15 @@ impl CascadeScratch {
 }
 
 struct CandidateSet {
-  seen: Vec<bool>,
-  touched: Vec<usize>,
+  marks: Vec<u32>,
+  generation: u32,
 }
 
 impl CandidateSet {
   fn new(rule_count: usize) -> Self {
     Self {
-      seen: vec![false; rule_count],
-      touched: Vec::new(),
+      marks: vec![0; rule_count],
+      generation: 1,
     }
   }
 
@@ -2595,27 +2595,22 @@ impl CandidateSet {
     self.mark_seen(idx)
   }
 
-  fn contains(&self, idx: usize) -> bool {
-    self.seen.get(idx).copied().unwrap_or(false)
-  }
-
   fn mark_seen(&mut self, idx: usize) -> bool {
-    if self.contains(idx) {
+    if idx >= self.marks.len() {
+      self.marks.resize(idx + 1, 0);
+    }
+    if self.marks[idx] == self.generation {
       return false;
     }
-    if idx >= self.seen.len() {
-      self.seen.resize(idx + 1, false);
-    }
-    self.seen[idx] = true;
-    self.touched.push(idx);
+    self.marks[idx] = self.generation;
     true
   }
 
   fn reset(&mut self) {
-    for idx in self.touched.drain(..) {
-      if let Some(slot) = self.seen.get_mut(idx) {
-        *slot = false;
-      }
+    self.generation = self.generation.wrapping_add(1);
+    if self.generation == 0 {
+      self.marks.fill(0);
+      self.generation = 1;
     }
   }
 }
@@ -9024,6 +9019,19 @@ mod tests {
   fn cascade_global_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+  }
+
+  #[test]
+  fn candidate_set_reset_allows_reuse_of_indices() {
+    let mut set = CandidateSet::new(2);
+    assert!(set.insert(1));
+    assert!(!set.insert(1));
+    set.reset();
+    assert!(set.insert(1));
+    assert!(set.insert(3));
+    assert!(!set.insert(3));
+    set.reset();
+    assert!(set.insert(3));
   }
 
   struct AncestorBloomEnabledGuard {
