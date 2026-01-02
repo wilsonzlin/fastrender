@@ -105,11 +105,15 @@ impl AvailableSpace {
   }
 
   /// Compare equality with another AvailableSpace, treating definite values
-  /// that are within f32::EPSILON of each other as equal
+  /// that are within a small (relative) epsilon of each other as equal
   pub fn is_roughly_equal(self, other: AvailableSpace) -> bool {
     use AvailableSpace::*;
     match (self, other) {
-      (Definite(a), Definite(b)) => abs(a - b) < f32::EPSILON,
+      (Definite(a), Definite(b)) => {
+        // Use a relative epsilon so that values derived from float math (track sizing, percentages,
+        // etc.) still compare equal after tiny rounding differences.
+        abs(a - b) <= f32::EPSILON * (abs(a) + abs(b) + 1.0)
+      }
       (MinContent, MinContent) => true,
       (MaxContent, MaxContent) => true,
       _ => false,

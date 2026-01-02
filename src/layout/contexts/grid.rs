@@ -38,6 +38,8 @@ use crate::layout::contexts::flex_cache::ShardedFlexCache;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
+#[cfg(not(test))]
+use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
@@ -74,9 +76,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHasher};
-#[cfg(test)]
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use taffy::geometry::Line;
@@ -141,6 +141,59 @@ struct MeasureKey {
   available_width: MeasureAvailKey,
   available_height: MeasureAvailKey,
 }
+
+#[cfg(not(test))]
+const GRID_MEASURE_SIZE_CACHE_MAX_ENTRIES: usize = 262_144;
+
+#[cfg(not(test))]
+thread_local! {
+  /// Cross-invocation cache for grid item measurements keyed by quantized constraints.
+  ///
+  /// Grid containers can be laid out repeatedly during track sizing and intrinsic measurement (and
+  /// each layout call triggers a fresh Taffy tree + measurement pass). Persisting measurements per
+  /// render avoids re-running nested formatting-context layout for the same items across those
+  /// invocations.
+  static GRID_MEASURE_SIZE_CACHE: RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>> =
+    RefCell::new(FxHashMap::default());
+  static GRID_MEASURE_SIZE_CACHE_EPOCH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(not(test))]
+fn grid_measure_size_cache_use_epoch() {
+  let epoch = intrinsic_cache_epoch().max(1);
+  GRID_MEASURE_SIZE_CACHE_EPOCH.with(|cell| {
+    if cell.get() != epoch {
+      cell.set(epoch);
+      GRID_MEASURE_SIZE_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+  });
+}
+
+#[cfg(not(test))]
+fn grid_measure_size_cache_lookup(key: &MeasureKey) -> Option<taffy::geometry::Size<f32>> {
+  grid_measure_size_cache_use_epoch();
+  GRID_MEASURE_SIZE_CACHE.with(|cache| cache.borrow().get(key).copied())
+}
+
+#[cfg(test)]
+fn grid_measure_size_cache_lookup(_key: &MeasureKey) -> Option<taffy::geometry::Size<f32>> {
+  None
+}
+
+#[cfg(not(test))]
+fn grid_measure_size_cache_store(key: MeasureKey, size: taffy::geometry::Size<f32>) {
+  grid_measure_size_cache_use_epoch();
+  GRID_MEASURE_SIZE_CACHE.with(|cache| {
+    let mut cache = cache.borrow_mut();
+    if cache.len() >= GRID_MEASURE_SIZE_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+      cache.clear();
+    }
+    cache.insert(key, size);
+  });
+}
+
+#[cfg(test)]
+fn grid_measure_size_cache_store(_key: MeasureKey, _size: taffy::geometry::Size<f32>) {}
 
 impl MeasureKey {
   fn quantize(val: f32) -> f32 {
@@ -2581,6 +2634,10 @@ impl GridFormattingContext {
           if let Some(size) = cache.get(&key) {
             return *size;
           }
+          if let Some(size) = grid_measure_size_cache_lookup(&key) {
+            cache.insert(key, size);
+            return size;
+          }
           let fc_type = box_node
             .formatting_context()
             .unwrap_or(FormattingContextType::Block);
@@ -2596,6 +2653,7 @@ impl GridFormattingContext {
             width: fragment.bounds.width().max(0.0),
             height: fragment.bounds.height().max(0.0),
           };
+          grid_measure_size_cache_store(key, size);
           cache.insert(key, size);
           size
         }
@@ -2649,6 +2707,10 @@ impl GridFormattingContext {
     if let Some(size) = measure_cache.borrow().get(&key) {
       return *size;
     }
+    if let Some(size) = grid_measure_size_cache_lookup(&key) {
+      measure_cache.borrow_mut().insert(key, size);
+      return size;
+    }
     let mut constraints = constraints_from_taffy(
       self.viewport_size,
       known_dimensions,
@@ -2686,6 +2748,7 @@ impl GridFormattingContext {
         width: content_size.width.max(0.0),
         height: content_size.height.max(0.0),
       };
+      grid_measure_size_cache_store(key, size);
       push_measured_key(
         measured_node_keys.borrow_mut().entry(node_id).or_default(),
         key,
@@ -2746,6 +2809,7 @@ impl GridFormattingContext {
       let height = fallback_size(known_dimensions.height, available_space.height).max(0.0);
 
       let size = taffy::geometry::Size { width, height };
+      grid_measure_size_cache_store(key, size);
       measure_cache.borrow_mut().insert(key, size);
       return size;
     }
@@ -2803,6 +2867,7 @@ impl GridFormattingContext {
       width: content_size.width.max(0.0),
       height: content_size.height.max(0.0),
     };
+    grid_measure_size_cache_store(key, size);
     push_measured_key(
       measured_node_keys.borrow_mut().entry(node_id).or_default(),
       key,
