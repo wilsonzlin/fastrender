@@ -2972,8 +2972,9 @@ fn assign_fonts_internal(
         }
         if !skip_resolution && resolved.is_none() {
           if let (Some(cache), Some(descriptor)) = (font_cache, descriptor) {
-            if let Some(hint_font) = cache.get_descriptor_hint(&descriptor) {
-              let mut face = None;
+            if let Some(hint) = cache.get_descriptor_hint(&descriptor) {
+              let mut face = hint.cached_face(db);
+              let hint_font = hint.font;
               if coverage_chars_required.is_empty()
                 || font_supports_all_chars_fast(
                   db,
@@ -3017,8 +3018,9 @@ fn assign_fonts_internal(
 
       if !skip_resolution && resolved.is_none() {
         if let (Some(cache), Some(descriptor)) = (font_cache, descriptor) {
-          if let Some(hint_font) = cache.get_descriptor_hint(&descriptor) {
-            let mut face = None;
+          if let Some(hint) = cache.get_descriptor_hint(&descriptor) {
+            let mut face = hint.cached_face(db);
+            let hint_font = hint.font;
             if coverage_chars_required.is_empty()
               || font_supports_all_chars_fast(db, hint_font.as_ref(), &mut face, coverage_chars_required)
             {
@@ -3142,8 +3144,7 @@ fn assign_fonts_internal(
         }
       }
 
-      if let (Some(cache), Some(descriptor), Some(font)) = (font_cache, descriptor, resolved.as_ref())
-      {
+      if let (Some(cache), Some(descriptor), Some(font)) = (font_cache, descriptor, resolved.as_ref()) {
         cache.insert_descriptor_hint(descriptor, Arc::clone(font));
       }
 

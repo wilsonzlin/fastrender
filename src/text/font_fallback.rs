@@ -40,6 +40,7 @@
 //! - CSS Fonts Module Level 4, Section 5: <https://www.w3.org/TR/css-fonts-4/#font-matching-algorithm>
 
 use super::emoji;
+use super::face_cache::CachedFace;
 use super::font_db::FontDatabase;
 use super::font_db::FontStretch;
 use super::font_db::FontStyle;
@@ -56,7 +57,7 @@ use std::hash::Hasher;
 use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 
 type FallbackCacheHasher = BuildHasherDefault<FxHasher>;
@@ -320,6 +321,46 @@ pub(crate) struct ClusterFallbackCacheKey {
   pub signature: u64,
 }
 
+#[derive(Clone)]
+pub(crate) struct FallbackCacheDescriptorHint {
+  pub font: Arc<LoadedFont>,
+  cached_face: Arc<OnceLock<Option<Arc<CachedFace>>>>,
+}
+
+impl std::fmt::Debug for FallbackCacheDescriptorHint {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("FallbackCacheDescriptorHint")
+      .field("family", &self.font.family)
+      .field("index", &self.font.index)
+      .field("cached_face_ready", &self.cached_face.get().is_some())
+      .finish()
+  }
+}
+
+impl FallbackCacheDescriptorHint {
+  #[inline]
+  pub(crate) fn cached_face(&self, db: &FontDatabase) -> Option<Arc<CachedFace>> {
+    self
+      .cached_face
+      .get_or_init(|| {
+        self
+          .font
+          .id
+          .and_then(|id| db.cached_face(id.inner()))
+          .or_else(|| super::face_cache::get_ttf_face(self.font.as_ref()))
+      })
+      .clone()
+  }
+}
+
+fn same_font_face(a: &LoadedFont, b: &LoadedFont) -> bool {
+  Arc::ptr_eq(&a.data, &b.data)
+    && a.index == b.index
+    && a.weight == b.weight
+    && a.style == b.style
+    && a.stretch == b.stretch
+}
+
 #[derive(Default, Debug)]
 struct FallbackCacheStats {
   glyph_hits: AtomicU64,
@@ -388,7 +429,7 @@ impl FallbackCacheStats {
 pub(crate) struct FallbackCache {
   glyphs: Arc<ShardedLruCache<GlyphFallbackCacheKey, Option<Arc<LoadedFont>>>>,
   clusters: Arc<ShardedLruCache<ClusterFallbackCacheKey, Option<Arc<LoadedFont>>>>,
-  descriptor_hints: Arc<ShardedLruCache<FallbackCacheDescriptor, Arc<LoadedFont>>>,
+  descriptor_hints: Arc<ShardedLruCache<FallbackCacheDescriptor, FallbackCacheDescriptorHint>>,
   last_generation: Arc<AtomicU64>,
   stats: Arc<FallbackCacheStats>,
 }
@@ -482,7 +523,7 @@ impl FallbackCache {
   pub(crate) fn get_descriptor_hint(
     &self,
     descriptor: &FallbackCacheDescriptor,
-  ) -> Option<Arc<LoadedFont>> {
+  ) -> Option<FallbackCacheDescriptorHint> {
     self.descriptor_hints.get(descriptor)
   }
 
@@ -492,7 +533,19 @@ impl FallbackCache {
     descriptor: FallbackCacheDescriptor,
     font: Arc<LoadedFont>,
   ) {
-    self.descriptor_hints.put(descriptor, font);
+    if let Some(existing) = self.descriptor_hints.get(&descriptor) {
+      if same_font_face(existing.font.as_ref(), font.as_ref()) {
+        return;
+      }
+    }
+
+    self.descriptor_hints.put(
+      descriptor,
+      FallbackCacheDescriptorHint {
+        font,
+        cached_face: Arc::new(OnceLock::new()),
+      },
+    );
   }
 
   pub(crate) fn clear(&self) {
