@@ -894,7 +894,11 @@ fn http_status_allows_empty_body(status: u16) -> bool {
   // Note: 202 (Accepted) frequently returns an empty body and is used by some CDNs/API gateways
   // to indicate "try again later". We still treat it as transient/retryable, but the caller may
   // want to proceed even if retries are exhausted.
-  matches!(status, 202 | 204 | 205 | 304) || (100..200).contains(&status)
+  //
+  // For HTTP error statuses (>= 400), empty bodies are common and should be treated as a valid
+  // response so higher-level code can key off the status code (and caching layers can persist the
+  // failure deterministically) instead of surfacing a fetch-layer "empty body" error.
+  matches!(status, 202 | 204 | 205 | 304) || (100..200).contains(&status) || status >= 400
 }
 
 fn header_content_length_is_zero(headers: &HeaderMap) -> bool {
@@ -7703,6 +7707,100 @@ mod tests {
       err.to_string().contains("empty HTTP response body"),
       "unexpected error message: {err}"
     );
+  }
+
+  #[test]
+  fn http_empty_font_404_is_ok_ureq() {
+    let Some(listener) = try_bind_localhost("http_empty_font_404_is_ok_ureq") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers =
+        "HTTP/1.1 404 Not Found\r\nContent-Type: font/woff2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/missing.woff2");
+    let res = fetcher
+      .fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Font,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect("font fetch should succeed");
+    handle.join().unwrap();
+
+    assert!(
+      res.bytes.is_empty(),
+      "expected 404 font with empty body to be accepted"
+    );
+    assert_eq!(res.status, Some(404));
+  }
+
+  #[test]
+  fn http_empty_font_404_is_ok_reqwest() {
+    let Some(listener) = try_bind_localhost("http_empty_font_404_is_ok_reqwest") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers =
+        "HTTP/1.1 404 Not Found\r\nContent-Type: font/woff2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/missing.woff2");
+    let res = fetcher
+      .fetch_http_with_accept_inner_reqwest(
+        FetchContextKind::Font,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect("reqwest font fetch should succeed");
+    handle.join().unwrap();
+
+    assert!(
+      res.bytes.is_empty(),
+      "expected 404 font with empty body to be accepted"
+    );
+    assert_eq!(res.status, Some(404));
   }
 
   #[test]
