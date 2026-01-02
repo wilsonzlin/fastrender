@@ -4650,6 +4650,112 @@ mod tests {
   }
 
   #[test]
+  fn measure_key_ignores_available_width_when_known_width_is_some() {
+    use taffy::style::AvailableSpace;
+
+    let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let ptr = &node as *const _;
+    let viewport = Size::new(800.0, 600.0);
+    let known = taffy::geometry::Size {
+      width: Some(200.0),
+      height: None,
+    };
+
+    let key_a = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(100.0),
+        height: AvailableSpace::Definite(10.0),
+      },
+      viewport,
+    );
+    let key_b = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(400.0),
+        height: AvailableSpace::Definite(10.0),
+      },
+      viewport,
+    );
+
+    assert_eq!(key_a.available_width, MeasureAvailKey::Ignored);
+    assert_eq!(key_b.available_width, MeasureAvailKey::Ignored);
+    assert_eq!(
+      key_a, key_b,
+      "when Taffy supplies a known width, varying AvailableSpace::width should not change the key"
+    );
+
+    let key_c = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(100.0),
+        height: AvailableSpace::Definite(50.0),
+      },
+      viewport,
+    );
+    assert_ne!(
+      key_a, key_c,
+      "unknown height should remain sensitive to AvailableSpace::height"
+    );
+  }
+
+  #[test]
+  fn measure_key_ignores_available_height_when_known_height_is_some() {
+    use taffy::style::AvailableSpace;
+
+    let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let ptr = &node as *const _;
+    let viewport = Size::new(800.0, 600.0);
+    let known = taffy::geometry::Size {
+      width: None,
+      height: Some(200.0),
+    };
+
+    let key_a = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(10.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      viewport,
+    );
+    let key_b = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(10.0),
+        height: AvailableSpace::Definite(400.0),
+      },
+      viewport,
+    );
+
+    assert_eq!(key_a.available_height, MeasureAvailKey::Ignored);
+    assert_eq!(key_b.available_height, MeasureAvailKey::Ignored);
+    assert_eq!(
+      key_a, key_b,
+      "when Taffy supplies a known height, varying AvailableSpace::height should not change the key"
+    );
+
+    let key_c = MeasureKey::new(
+      ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(50.0),
+        height: AvailableSpace::Definite(100.0),
+      },
+      viewport,
+    );
+    assert_ne!(
+      key_a, key_c,
+      "unknown width should remain sensitive to AvailableSpace::width"
+    );
+  }
+
+  #[test]
   fn measure_key_clamps_definite_widths_to_viewport() {
     use taffy::style::AvailableSpace;
 
