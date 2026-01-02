@@ -967,6 +967,12 @@ mod tests {
     let manifest_path = root.join(DEFAULT_MANIFEST_PATH);
     let manifest = load_manifest(&manifest_path).expect("load pageset guardrails manifest");
 
+    assert!(
+      !manifest.fixtures.is_empty(),
+      "{} should contain at least one fixture (empty manifest disables perf guardrails)",
+      manifest_path.display()
+    );
+
     let mut missing = Vec::new();
     for fixture in &manifest.fixtures {
       let html_path = fixtures_root.join(&fixture.name).join("index.html");

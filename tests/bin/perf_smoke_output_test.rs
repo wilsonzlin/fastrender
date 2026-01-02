@@ -212,6 +212,41 @@ fn perf_smoke_fail_on_missing_fixtures_exits_non_zero() {
 }
 
 #[test]
+fn perf_smoke_empty_pageset_guardrails_manifest_is_error_when_fail_on_missing_fixtures_is_set() {
+  let temp = tempdir().expect("create temp dir");
+  let output = temp.path().join("perf-smoke.json");
+  let manifest_path = temp.path().join("manifest.json");
+  let manifest = serde_json::json!({
+    "schema_version": 1,
+    "fixtures": []
+  });
+  fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+  let result = Command::new(env!("CARGO_BIN_EXE_perf_smoke"))
+    .env(PAGESET_GUARDRAILS_MANIFEST_ENV, manifest_path)
+    .args([
+      "--suite",
+      "pageset-guardrails",
+      "--fail-on-missing-fixtures",
+      "--no-isolate",
+      "--output",
+      output.to_str().unwrap(),
+    ])
+    .output()
+    .expect("run perf_smoke");
+
+  assert!(
+    !result.status.success(),
+    "perf_smoke should fail when pageset-guardrails manifest is empty and --fail-on-missing-fixtures is set"
+  );
+  let stderr = String::from_utf8_lossy(&result.stderr);
+  assert!(
+    stderr.contains("no fixtures"),
+    "stderr should mention missing fixtures/empty manifest; got: {stderr}"
+  );
+}
+
+#[test]
 fn perf_smoke_fail_on_budget_exits_non_zero() {
   let temp = tempdir().expect("create temp dir");
   let output = temp.path().join("perf-smoke.json");

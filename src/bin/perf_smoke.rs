@@ -795,6 +795,14 @@ fn pageset_guardrails_fixture_specs(
     );
   }
 
+  if manifest.fixtures.is_empty() {
+    if fail_on_missing_fixtures {
+      return Err("pageset guardrails manifest contains no fixtures".into());
+    }
+    eprintln!("Pageset guardrails manifest contains no fixtures.");
+    return Ok(Vec::new());
+  }
+
   let default_budget = manifest.default_budget_ms;
   let mut specs = Vec::new();
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
