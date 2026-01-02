@@ -273,6 +273,10 @@ enum ProgressStatusArg {
   Error,
 }
 
+fn default_jobs() -> usize {
+  std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
 #[derive(Args, Debug, Default, Clone)]
 struct ProgressSelectionArgs {
   /// Select pages from an existing `progress/pages` directory instead of the cache listing (filters combine with AND unless `--union` is set)
@@ -311,7 +315,7 @@ struct ProgressSelectionArgs {
 #[derive(Args, Debug)]
 struct RunArgs {
   /// Number of parallel workers
-  #[arg(long, short, default_value_t = num_cpus::get())]
+  #[arg(long, short, default_value_t = default_jobs())]
   jobs: usize,
 
   /// Hard per-page timeout in seconds (worker process is killed after this)
