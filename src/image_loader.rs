@@ -11,7 +11,6 @@ use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
 use crate::paint::painter::with_paint_diagnostics;
 use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
 use crate::render_control::{self, check_active, check_active_periodic};
-use crate::resource::{ensure_http_success, ensure_image_mime_sane};
 use crate::resource::CacheArtifactKind;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
@@ -21,6 +20,7 @@ use crate::resource::FetchRequest;
 use crate::resource::FetchedResource;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
+use crate::resource::{ensure_http_success, ensure_image_mime_sane};
 use crate::style::color::Rgba;
 use crate::style::types::ImageResolution;
 use crate::style::types::OrientationTransform;
@@ -2560,8 +2560,8 @@ impl ImageCache {
       self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_image(resolved_url));
     }
-    if let Err(err) =
-      ensure_http_success(&resource, resolved_url).and_then(|()| ensure_image_mime_sane(&resource, resolved_url))
+    if let Err(err) = ensure_http_success(&resource, resolved_url)
+      .and_then(|()| ensure_image_mime_sane(&resource, resolved_url))
     {
       let treat_as_placeholder = is_bot_mitigation_image_error(resolved_url, &err);
       self.record_image_error(resolved_url, &err);
@@ -2760,6 +2760,16 @@ impl ImageCache {
         self.record_invalid_image(resolved_url);
         return Ok(self.cache_placeholder_metadata(resolved_url));
       }
+      if let Err(err) = ensure_image_mime_sane(resource.as_ref(), resolved_url) {
+        let treat_as_placeholder = is_bot_mitigation_image_error(resolved_url, &err);
+        self.record_image_error(resolved_url, &err);
+        if treat_as_placeholder {
+          let meta = about_url_placeholder_metadata();
+          let _ = self.cache_placeholder_image(resolved_url);
+          return Ok(meta);
+        }
+        return Err(err);
+      }
 
       let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
       let attempt_probe_start = profile_enabled.then(Instant::now);
@@ -2874,6 +2884,16 @@ impl ImageCache {
     ) {
       self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_metadata(resolved_url));
+    }
+    if let Err(err) = ensure_image_mime_sane(resource.as_ref(), resolved_url) {
+      let treat_as_placeholder = is_bot_mitigation_image_error(resolved_url, &err);
+      self.record_image_error(resolved_url, &err);
+      if treat_as_placeholder {
+        let meta = about_url_placeholder_metadata();
+        let _ = self.cache_placeholder_image(resolved_url);
+        return Ok(meta);
+      }
+      return Err(err);
     }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let probe_start = profile_enabled.then(Instant::now);
@@ -3283,7 +3303,15 @@ impl ImageCache {
     check_active(RenderStage::Paint).map_err(Error::Render)?;
     if bytes.is_empty() {
       let img = RgbaImage::new(1, 1);
-      return Ok((DynamicImage::ImageRgba8(img), None, None, false, None, false, None));
+      return Ok((
+        DynamicImage::ImageRgba8(img),
+        None,
+        None,
+        false,
+        None,
+        false,
+        None,
+      ));
     }
 
     // Check if this is SVG
@@ -4572,6 +4600,83 @@ mod tests {
   }
 
   #[test]
+  fn http_200_html_for_jpg_probe_is_reported_as_resource_error() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => listener,
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!(
+          "skipping http_200_html_for_jpg_probe_is_reported_as_resource_error: cannot bind localhost: {err}"
+        );
+        return;
+      }
+      Err(err) => panic!("bind localhost: {err}"),
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/photo.jpg");
+
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept");
+      let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+      let mut buf = [0u8; 1024];
+      let _ = stream.read(&mut buf);
+
+      let body = "<!doctype html><html><body>blocked</body></html>";
+      let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .expect("write response");
+      let _ = stream.flush();
+    });
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let mut cache = ImageCache::with_fetcher(Arc::new(HttpFetcher::new()));
+    cache.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+
+    let err = match cache.probe(&url) {
+      Ok(_) => panic!("image probe should fail"),
+      Err(err) => err,
+    };
+    match err {
+      Error::Resource(ref res) => {
+        assert_eq!(res.status, Some(200));
+        assert!(
+          res.message.contains("unexpected content-type"),
+          "unexpected error message: {}",
+          res.message
+        );
+      }
+      other => panic!("expected resource error, got {other:?}"),
+    }
+
+    let diag = diagnostics.lock().unwrap().clone();
+    let entry = diag
+      .fetch_errors
+      .iter()
+      .find(|e| e.kind == ResourceKind::Image && e.url == url)
+      .expect("diagnostics entry");
+    assert_eq!(entry.status, Some(200));
+    assert!(
+      diag.invalid_images.iter().all(|u| u != &url),
+      "expected invalid_images to not contain url"
+    );
+
+    server.join().unwrap();
+  }
+
+  #[test]
   fn image_cache_load_about_blank_returns_transparent_placeholder() {
     #[derive(Clone)]
     struct PanicFetcher;
@@ -4757,7 +4862,8 @@ mod tests {
     let diag = diagnostics.lock().unwrap().clone();
     assert!(diag.fetch_errors.is_empty());
     assert!(
-      diag.invalid_images
+      diag
+        .invalid_images
         .iter()
         .any(|u| u == "https://example.com/not-really.png"),
       "invalid image URLs should be tracked in diagnostics.invalid_images"
@@ -4801,7 +4907,8 @@ mod tests {
     let diag = diagnostics.lock().unwrap().clone();
     assert!(diag.fetch_errors.is_empty());
     assert!(
-      diag.invalid_images
+      diag
+        .invalid_images
         .iter()
         .any(|u| u == "https://example.com/not-an-image.png"),
       "invalid image URLs should be tracked in diagnostics.invalid_images"
