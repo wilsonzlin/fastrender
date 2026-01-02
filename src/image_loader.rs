@@ -4064,6 +4064,150 @@ mod tests {
 
   #[cfg(feature = "disk_cache")]
   #[test]
+  fn image_probe_artifact_inherits_stored_at_from_cached_resource() {
+    use crate::resource::{
+      CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher, FetchDestination, FetchRequest,
+    };
+    use std::fs;
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct FullFetcher {
+      body: Arc<Vec<u8>>,
+    }
+
+    impl ResourceFetcher for FullFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        let mut res =
+          FetchedResource::new(self.body.as_ref().clone(), Some("image/png".to_string()));
+        res.status = Some(200);
+        res.final_url = Some(url.to_string());
+        Ok(res)
+      }
+    }
+
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("network fetch should not be called");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        _url: &str,
+        _max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        panic!("network partial fetch should not be called");
+      }
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cache_dir = tmp.path().join("assets");
+    let url = "https://example.com/aged.png";
+    let body = Arc::new(padded_png());
+
+    // Persist the full image bytes into the disk cache so the probe can later derive metadata from
+    // disk without touching the network.
+    let disk = DiskCachingFetcher::with_configs(
+      FullFetcher {
+        body: Arc::clone(&body),
+      },
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      },
+    );
+    disk
+      .fetch_with_request(FetchRequest::new(url, FetchDestination::Image))
+      .expect("seed fetch");
+
+    // Locate the primary cached image entry and force its `stored_at` to be very old so we can
+    // assert the derived probe artifact inherits that age rather than refreshing it.
+    let mut resource_meta_path = None;
+    for entry in fs::read_dir(&cache_dir).expect("read cache dir") {
+      let path = entry.expect("dir entry").path();
+      if !path.to_string_lossy().ends_with(".bin.meta") {
+        continue;
+      }
+      let bytes = fs::read(&path).expect("read meta");
+      let value: serde_json::Value = serde_json::from_slice(&bytes).expect("parse meta json");
+      let ct = value
+        .get("content_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+      if ct == "image/png" {
+        resource_meta_path = Some(path);
+        break;
+      }
+    }
+    let resource_meta_path = resource_meta_path.expect("cached image meta file");
+    let meta_bytes = fs::read(&resource_meta_path).expect("read meta bytes");
+    let mut value: serde_json::Value =
+      serde_json::from_slice(&meta_bytes).expect("parse meta json");
+    value["stored_at"] = serde_json::Value::from(0u64);
+    fs::write(
+      &resource_meta_path,
+      serde_json::to_vec(&value).expect("serialize meta"),
+    )
+    .expect("write meta");
+
+    // New fetcher instance (empty memory cache). The probe should be satisfied entirely from disk.
+    let disk2 = DiskCachingFetcher::with_configs(
+      PanicFetcher,
+      &cache_dir,
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      },
+    );
+    let cache = ImageCache::with_fetcher(Arc::new(disk2));
+    let meta = cache.probe(url).expect("probe succeeds");
+    assert_eq!(meta.dimensions(), (1, 1));
+
+    // The persisted probe metadata should inherit the primary resource `stored_at` timestamp so it
+    // becomes stale alongside the cached image bytes.
+    let mut probe_meta_path = None;
+    for entry in fs::read_dir(&cache_dir).expect("read cache dir") {
+      let path = entry.expect("dir entry").path();
+      if !path.to_string_lossy().ends_with(".bin.meta") {
+        continue;
+      }
+      let bytes = fs::read(&path).expect("read meta");
+      let value: serde_json::Value = serde_json::from_slice(&bytes).expect("parse meta json");
+      let ct = value
+        .get("content_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+      if ct == "application/x-fastrender-image-probe+json" {
+        probe_meta_path = Some(path);
+        break;
+      }
+    }
+    let probe_meta_path = probe_meta_path.expect("probe meta file");
+    let probe_bytes = fs::read(&probe_meta_path).expect("read probe meta");
+    let probe_value: serde_json::Value =
+      serde_json::from_slice(&probe_bytes).expect("parse probe meta json");
+    assert_eq!(
+      probe_value.get("stored_at").and_then(|v| v.as_u64()),
+      Some(0),
+      "probe metadata should inherit stored_at from the cached resource"
+    );
+  }
+
+  #[cfg(feature = "disk_cache")]
+  #[test]
   fn image_probe_disk_cache_respects_staleness_and_recovers_from_corruption() {
     use crate::resource::{CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher};
     use std::fs;

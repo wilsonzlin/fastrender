@@ -575,6 +575,15 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
+  fn stored_at_for_cached_entry(&self, kind: FetchContextKind, url: &str) -> Option<u64> {
+    let key = self.cache_key(kind, url);
+    let data_path = self.data_path_for_key(&key);
+    let meta_path = self.meta_path_for_data(&data_path);
+    let meta_bytes = fs::read(meta_path).ok()?;
+    let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).ok()?;
+    Some(meta.stored_at)
+  }
+
   fn data_path(&self, kind: FetchContextKind, url: &str) -> PathBuf {
     self.data_path_for_key(&self.cache_key(kind, url))
   }
@@ -1461,6 +1470,18 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
 
     let canonical = self.canonical_url(url, resource.final_url.as_deref());
+    // Persist derived metadata with the same freshness window as the underlying cached resource.
+    //
+    // If we build an artifact from bytes served out of the disk cache, we should not "refresh" its
+    // age simply because we recomputed the metadata: doing so would keep the artifact fresh even
+    // after the underlying resource would have gone stale, potentially serving stale intrinsic
+    // sizes when the network is available again.
+    //
+    // Best-effort: if the primary resource is not cached (e.g. probe performed via a network range
+    // request that bypasses disk persistence), fall back to using `now` as the stored-at timestamp.
+    let stored_at = self
+      .stored_at_for_cached_entry(kind, &canonical)
+      .unwrap_or_else(now_seconds);
     let canonical_key = self.artifact_key(kind, &canonical, artifact);
     let data_path = self.data_path_for_key(&canonical_key);
     if let Some(parent) = data_path.parent() {
@@ -1474,7 +1495,6 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
-    let stored_at = now_seconds();
     let stored_time = UNIX_EPOCH
       .checked_add(Duration::from_secs(stored_at))
       .unwrap_or(SystemTime::now());
