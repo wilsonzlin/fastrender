@@ -3405,8 +3405,24 @@ fn read_stage_file(path: &Path) -> Option<StageHeartbeat> {
   StageHeartbeat::from_str(raw.trim())
 }
 
+fn read_stage_from_timeline(stage_path: &Path) -> Option<StageHeartbeat> {
+  let raw = fs::read_to_string(stage_timeline_path(stage_path)).ok()?;
+  for line in raw.lines().rev() {
+    let mut parts = line.split_whitespace();
+    let _ms_raw = parts.next()?;
+    let stage_raw = parts.next()?;
+    let stage = StageHeartbeat::from_str(stage_raw)?;
+    if stage != StageHeartbeat::Done {
+      return Some(stage);
+    }
+  }
+  None
+}
+
 fn read_stage_heartbeat(path: &Path) -> Option<StageHeartbeat> {
-  read_stage_file(path).or_else(|| read_stage_file(&stage_tmp_path(path)))
+  read_stage_file(path)
+    .or_else(|| read_stage_file(&stage_tmp_path(path)))
+    .or_else(|| read_stage_from_timeline(path))
 }
 
 fn stage_buckets_from_timeline(stage_path: &Path, total_ms: u64) -> Option<StageBuckets> {
@@ -9387,6 +9403,25 @@ mod tests {
     assert!(
       stage_buckets_from_timeline(&stage_path, total_ms).is_some(),
       "timeline should remain parseable"
+    );
+  }
+
+  #[test]
+  fn stage_heartbeat_reader_falls_back_to_timeline() {
+    let dir = tempdir().unwrap();
+    let stage_path = dir.path().join("page.stage");
+    let writer = StageHeartbeatWriter::new(Some(stage_path.clone()));
+
+    writer.record(StageHeartbeat::ReadCache);
+    std::thread::sleep(Duration::from_millis(10));
+    writer.record(StageHeartbeat::Cascade);
+
+    drop(writer);
+    fs::write(&stage_path, "garbage\n").expect("corrupt stage file");
+
+    assert_eq!(
+      read_stage_heartbeat(&stage_path),
+      Some(StageHeartbeat::Cascade)
     );
   }
 
