@@ -1766,41 +1766,17 @@ fn needs_nontrivial_grapheme_segmentation(text: &str) -> bool {
   false
 }
 
-fn atomic_shaping_clusters_by_char_boundaries(text: &str) -> Vec<(usize, usize)> {
-  let mut clusters = Vec::with_capacity(text.len());
-  let mut iter = text.char_indices().peekable();
-
-  while let Some((start, ch)) = iter.next() {
-    if ch == '\r' {
-      if let Some(&(next_start, next_ch)) = iter.peek() {
-        if next_ch == '\n' {
-          iter.next();
-          clusters.push((start, next_start + next_ch.len_utf8()));
-          continue;
-        }
-      }
-    }
-
-    clusters.push((start, start + ch.len_utf8()));
-  }
-
-  clusters
-}
-
-/// Returns byte spans for atomic shaping clusters within the text.
-///
-/// Clusters combine extended grapheme clusters with emoji sequences so that
-/// shaping and font fallback never split them.
-pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
+fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) {
+  clusters.clear();
   if text.is_empty() {
-    return Vec::new();
+    return;
   }
 
   if text.is_ascii() {
     // ASCII text cannot contain combining marks, ZWJ sequences, or variation selectors, so the
     // grapheme boundaries are trivial apart from the CRLF special-case in UAX#29.
     let bytes = text.as_bytes();
-    let mut clusters = Vec::with_capacity(bytes.len());
+    clusters.reserve(bytes.len().saturating_sub(clusters.len()));
     let mut idx = 0usize;
     while idx < bytes.len() {
       if bytes[idx] == b'\r' && bytes.get(idx + 1) == Some(&b'\n') {
@@ -1811,14 +1787,28 @@ pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
         idx += 1;
       }
     }
-    return clusters;
+    return;
   }
 
   if !needs_nontrivial_grapheme_segmentation(text) {
     // "Cluster-trivial" Unicode: iterate scalar boundaries (with CRLF folded) instead of running
     // full grapheme segmentation. This is a large win for long Latin runs that include a small
     // amount of non-ASCII punctuation but do not contain marks/emoji sequences.
-    return atomic_shaping_clusters_by_char_boundaries(text);
+    clusters.reserve(text.len().saturating_sub(clusters.len()));
+    let mut iter = text.char_indices().peekable();
+    while let Some((start, ch)) = iter.next() {
+      if ch == '\r' {
+        if let Some(&(next_start, next_ch)) = iter.peek() {
+          if next_ch == '\n' {
+            iter.next();
+            clusters.push((start, next_start + next_ch.len_utf8()));
+            continue;
+          }
+        }
+      }
+      clusters.push((start, start + ch.len_utf8()));
+    }
+    return;
   }
 
   let mut boundaries: Vec<usize> = UnicodeSegmentation::grapheme_indices(text, true)
@@ -1855,7 +1845,8 @@ pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
     boundaries = filtered;
   }
 
-  let mut clusters = Vec::with_capacity(boundaries.len().saturating_sub(1));
+  let estimated = boundaries.len().saturating_sub(1);
+  clusters.reserve(estimated.saturating_sub(clusters.len()));
   for window in boundaries.windows(2) {
     let start = window[0];
     let end = window[1];
@@ -1863,7 +1854,15 @@ pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
       clusters.push((start, end));
     }
   }
+}
 
+/// Returns byte spans for atomic shaping clusters within the text.
+///
+/// Clusters combine extended grapheme clusters with emoji sequences so that
+/// shaping and font fallback never split them.
+pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
+  let mut clusters = Vec::new();
+  atomic_shaping_clusters_into(text, &mut clusters);
   clusters
 }
 
@@ -2472,6 +2471,7 @@ fn assign_fonts_internal(
   }
 
   let mut font_runs = Vec::new();
+  let mut cluster_spans: Vec<(usize, usize)> = Vec::new();
   for run in runs {
     // Fast path: ASCII runs (e.g. page text + code blocks) spend a lot of time in
     // per-codepoint cluster handling, even when a single font covers the run.
@@ -2725,7 +2725,8 @@ fn assign_fonts_internal(
     let mut relevant_chars = ClusterCharBuf::new();
     let mut required_chars = ClusterCharBuf::new();
 
-    for (cluster_start, cluster_end) in atomic_shaping_clusters(&run.text) {
+    atomic_shaping_clusters_into(&run.text, &mut cluster_spans);
+    for (cluster_start, cluster_end) in cluster_spans.iter().copied() {
       let cluster_text = &run.text[cluster_start..cluster_end];
       let mut cluster_iter = cluster_text.chars();
       let first_char = cluster_iter.next().unwrap_or(' ');
