@@ -101,6 +101,70 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
     false
   }
 
+  fn is_likely_comma_in_query_numeric_list(bytes: &[u8], url_start: usize, comma_idx: usize) -> bool {
+    // Some sites (notably WordPress, including nasa.gov fixtures) embed comma-separated numeric
+    // values in query parameters, e.g. `?resize=300,163`.
+    //
+    // Like the CDN transform case above, these commas are invalid per spec but common in
+    // production `srcset` values, so we treat them as part of the URL.
+    let query_start = bytes[url_start..comma_idx]
+      .iter()
+      .rposition(|&b| b == b'?')
+      .map(|pos| url_start + pos);
+    let Some(query_start) = query_start else {
+      return false;
+    };
+
+    // Find the start of the current query parameter (after the last '&' following '?').
+    let mut param_start = query_start + 1;
+    for i in (query_start + 1..comma_idx).rev() {
+      if bytes[i] == b'&' {
+        param_start = i + 1;
+        break;
+      }
+    }
+
+    // Find the '=' within the parameter.
+    let eq_pos = bytes[param_start..comma_idx]
+      .iter()
+      .rposition(|&b| b == b'=')
+      .map(|pos| param_start + pos);
+    let Some(eq_pos) = eq_pos else {
+      return false;
+    };
+    if eq_pos + 1 >= comma_idx {
+      return false;
+    }
+
+    // Verify digits on both sides of the comma.
+    if !bytes[eq_pos + 1..comma_idx]
+      .iter()
+      .all(|b| b.is_ascii_digit())
+    {
+      return false;
+    }
+
+    let mut after_end = comma_idx + 1;
+    while after_end < bytes.len() {
+      let b = bytes[after_end];
+      if b.is_ascii_whitespace() || matches!(b, b'&' | b'#' | b',') {
+        break;
+      }
+      after_end += 1;
+    }
+    if comma_idx + 1 >= after_end {
+      return false;
+    }
+    if !bytes[comma_idx + 1..after_end]
+      .iter()
+      .all(|b| b.is_ascii_digit())
+    {
+      return false;
+    }
+
+    true
+  }
+
   let bytes = attr.as_bytes();
   let mut out = Vec::new();
   let mut idx = 0;
@@ -134,7 +198,9 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
           continue;
         }
         if idx + 1 < bytes.len() && !bytes[idx + 1].is_ascii_whitespace() {
-          if is_likely_comma_in_cdn_transform_url(bytes, url_start, idx) {
+          if is_likely_comma_in_cdn_transform_url(bytes, url_start, idx)
+            || is_likely_comma_in_query_numeric_list(bytes, url_start, idx)
+          {
             idx += 1;
             continue;
           }
@@ -392,6 +458,18 @@ mod tests {
     assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
     assert_eq!(parsed[1].url, "b.png");
     assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
+  }
+
+  #[test]
+  fn parse_srcset_allows_commas_in_query_params() {
+    let parsed = parse_srcset(
+      "https://img.example/foo.jpg?resize=300,163 300w, https://img.example/bar.jpg 600w",
+    );
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].url, "https://img.example/foo.jpg?resize=300,163");
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Width(300)));
+    assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Width(600)));
   }
 
   #[test]
