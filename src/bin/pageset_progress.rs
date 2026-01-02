@@ -437,6 +437,10 @@ struct ReportArgs {
   #[arg(long, default_value = DEFAULT_PROGRESS_DIR)]
   progress_dir: PathBuf,
 
+  /// Summarize only listed pages (comma-separated URLs or stems)
+  #[arg(long, value_delimiter = ',')]
+  pages: Option<Vec<String>>,
+
   /// Number of slowest pages to list
   #[arg(long, default_value_t = 10)]
   top: usize,
@@ -4825,7 +4829,17 @@ fn report(args: ReportArgs) -> io::Result<()> {
     }
   }
 
-  let progresses = read_progress_dir(&args.progress_dir)?;
+  let page_filter = args
+    .pages
+    .as_ref()
+    .and_then(|pages| PagesetFilter::from_inputs(pages));
+
+  let mut progresses = read_progress_dir(&args.progress_dir)?;
+  if let Some(filter) = page_filter.as_ref() {
+    progresses.retain(|entry| {
+      filter.matches_cache_stem(&entry.stem, pageset_stem(&entry.stem).as_deref())
+    });
+  }
   let total_pages = progresses.len();
   let status_counts = summarize_status(&progresses);
 
@@ -6009,7 +6023,12 @@ fn report(args: ReportArgs) -> io::Result<()> {
   }
 
   if let Some(compare_dir) = args.compare.as_ref() {
-    let baseline = read_progress_dir(compare_dir)?;
+    let mut baseline = read_progress_dir(compare_dir)?;
+    if let Some(filter) = page_filter.as_ref() {
+      baseline.retain(|entry| {
+        filter.matches_cache_stem(&entry.stem, pageset_stem(&entry.stem).as_deref())
+      });
+    }
     let comparison = build_comparison(&progresses, &baseline);
 
     println!("Status transitions vs {}:", compare_dir.display());
@@ -6187,7 +6206,12 @@ fn report(args: ReportArgs) -> io::Result<()> {
       args.trace_progress_dir.display(),
       args.trace_dir.display()
     );
-    let trace_progresses = read_progress_dir_allow_empty(&args.trace_progress_dir)?;
+    let mut trace_progresses = read_progress_dir_allow_empty(&args.trace_progress_dir)?;
+    if let Some(filter) = page_filter.as_ref() {
+      trace_progresses.retain(|entry| {
+        filter.matches_cache_stem(&entry.stem, pageset_stem(&entry.stem).as_deref())
+      });
+    }
     if trace_progresses.is_empty() {
       println!("  (no trace progress files found)");
     } else {
@@ -7869,6 +7893,7 @@ mod tests {
   fn basic_report_args() -> ReportArgs {
     ReportArgs {
       progress_dir: PathBuf::new(),
+      pages: None,
       top: 10,
       compare: None,
       fail_on_regression: false,

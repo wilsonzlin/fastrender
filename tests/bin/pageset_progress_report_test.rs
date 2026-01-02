@@ -83,6 +83,42 @@ fn pageset_progress_report_outputs_summary() {
   );
 }
 
+#[test]
+fn pageset_progress_report_filters_pages() {
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
+    .args([
+      "report",
+      "--progress-dir",
+      fixtures_dir().to_str().unwrap(),
+      "--pages",
+      "slow_ok",
+    ])
+    .output()
+    .expect("run pageset_progress report --pages");
+  assert!(
+    output.status.success(),
+    "expected success for report --pages"
+  );
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(
+    stdout.contains("Status counts (1 pages):"),
+    "expected filtered status header"
+  );
+  assert!(stdout.contains("ok: 1"));
+  assert!(stdout.contains("timeout: 0"));
+  assert!(stdout.contains("panic: 0"));
+  assert!(stdout.contains("error: 0"));
+  assert!(stdout.contains("Slowest pages (top 1 of 1 with timings):"));
+  assert!(stdout.contains("1. slow_ok (ok"));
+  assert!(
+    !stdout.contains("timeout_page"),
+    "unexpected unfiltered stems in output"
+  );
+}
+
 #[cfg(unix)]
 #[test]
 fn pageset_progress_report_exits_success_on_broken_pipe() {
