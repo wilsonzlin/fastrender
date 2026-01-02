@@ -1712,58 +1712,52 @@ fn is_grapheme_prepend(cp: u32) -> bool {
 }
 
 #[inline]
-fn needs_nontrivial_grapheme_segmentation(text: &str) -> bool {
-  // Fast pre-scan: most real-world "Latin" text is cluster-trivial even when it contains a small
-  // amount of non-ASCII punctuation (curly quotes, dashes, etc). Only fall back to full
-  // grapheme clustering when we see codepoints that can participate in multi-scalar grapheme
-  // clusters (marks, joiners, variation selectors, flags, emoji modifiers, etc).
-  for ch in text.chars() {
-    if ch.is_ascii() {
-      continue;
-    }
-    let cp = ch as u32;
-
-    if is_unicode_mark(ch) {
-      return true;
-    }
-
-    // Join controls and variation selectors participate in the UAX#29 rules as "Extend"/"ZWJ"
-    // and must not be split into separate fallback/shaping clusters.
-    if matches!(cp, 0x200c | 0x200d)
-      || (0xfe00..=0xfe0f).contains(&cp)
-      || (0xe0100..=0xe01ef).contains(&cp)
-      || (0x180b..=0x180d).contains(&cp)
-    {
-      return true;
-    }
-
-    // Regional indicator symbols join into flag sequences.
-    if (0x1f1e0..=0x1f1ff).contains(&cp) {
-      return true;
-    }
-
-    // Emoji modifiers participate in emoji modifier sequences.
-    if (0x1f3fb..=0x1f3ff).contains(&cp) {
-      return true;
-    }
-
-    // Tag characters are used for emoji subdivision flags.
-    if (0xe0020..=0xe007f).contains(&cp) {
-      return true;
-    }
-
-    // Halfwidth Katakana voiced/semi-voiced sound marks are Grapheme_Extend characters
-    // even though they are not in the Unicode Mark (M*) general categories.
-    if matches!(cp, 0xff9e | 0xff9f) {
-      return true;
-    }
-
-    if is_hangul_jamo(cp) || is_grapheme_prepend(cp) {
-      return true;
-    }
+fn requires_full_grapheme_segmentation(ch: char) -> bool {
+  // Most real-world "Latin" text is cluster-trivial even when it contains a small amount of
+  // non-ASCII punctuation (curly quotes, dashes, etc). We only fall back to full grapheme
+  // segmentation when we see codepoints that can participate in multi-scalar grapheme clusters
+  // (marks, joiners, variation selectors, flags, emoji modifiers, etc).
+  if ch.is_ascii() {
+    return false;
   }
 
-  false
+  let cp = ch as u32;
+  if is_unicode_mark(ch) {
+    return true;
+  }
+
+  // Join controls and variation selectors participate in the UAX#29 rules as "Extend"/"ZWJ" and
+  // must not be split into separate fallback/shaping clusters.
+  if matches!(cp, 0x200c | 0x200d)
+    || (0xfe00..=0xfe0f).contains(&cp)
+    || (0xe0100..=0xe01ef).contains(&cp)
+    || (0x180b..=0x180d).contains(&cp)
+  {
+    return true;
+  }
+
+  // Regional indicator symbols join into flag sequences.
+  if (0x1f1e0..=0x1f1ff).contains(&cp) {
+    return true;
+  }
+
+  // Emoji modifiers participate in emoji modifier sequences.
+  if (0x1f3fb..=0x1f3ff).contains(&cp) {
+    return true;
+  }
+
+  // Tag characters are used for emoji subdivision flags.
+  if (0xe0020..=0xe007f).contains(&cp) {
+    return true;
+  }
+
+  // Halfwidth Katakana voiced/semi-voiced sound marks are Grapheme_Extend characters even though
+  // they are not in the Unicode Mark (M*) general categories.
+  if matches!(cp, 0xff9e | 0xff9f) {
+    return true;
+  }
+
+  is_hangul_jamo(cp) || is_grapheme_prepend(cp)
 }
 
 fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) {
@@ -1790,24 +1784,29 @@ fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) 
     return;
   }
 
-  if !needs_nontrivial_grapheme_segmentation(text) {
-    // "Cluster-trivial" Unicode: iterate scalar boundaries (with CRLF folded) instead of running
-    // full grapheme segmentation. This is a large win for long Latin runs that include a small
-    // amount of non-ASCII punctuation but do not contain marks/emoji sequences.
-    clusters.reserve(text.len().saturating_sub(clusters.len()));
-    let mut iter = text.char_indices().peekable();
-    while let Some((start, ch)) = iter.next() {
-      if ch == '\r' {
-        if let Some(&(next_start, next_ch)) = iter.peek() {
-          if next_ch == '\n' {
-            iter.next();
-            clusters.push((start, next_start + next_ch.len_utf8()));
-            continue;
-          }
+  // Try the "cluster-trivial" Unicode path while scanning for codepoints that require full
+  // grapheme segmentation. This avoids a separate pre-scan pass for long runs that are safe to
+  // cluster by scalar boundaries (e.g. CJK text or Latin text with curly quotes/dashes).
+  clusters.reserve(text.len().saturating_sub(clusters.len()));
+  let mut iter = text.char_indices().peekable();
+  while let Some((start, ch)) = iter.next() {
+    if requires_full_grapheme_segmentation(ch) {
+      clusters.clear();
+      break;
+    }
+
+    if ch == '\r' {
+      if let Some(&(next_start, next_ch)) = iter.peek() {
+        if next_ch == '\n' {
+          iter.next();
+          clusters.push((start, next_start + next_ch.len_utf8()));
+          continue;
         }
       }
-      clusters.push((start, start + ch.len_utf8()));
     }
+    clusters.push((start, start + ch.len_utf8()));
+  }
+  if !clusters.is_empty() {
     return;
   }
 
