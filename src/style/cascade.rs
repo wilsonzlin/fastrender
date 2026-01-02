@@ -2736,11 +2736,27 @@ impl CandidateCursor {
 
 #[derive(Clone, Copy)]
 struct CandidateHeapItem {
-  rule_idx: usize,
+  rule_idx: u32,
   specificity: u32,
-  selector_idx: usize,
-  bucket_rank: u8,
-  cursor_idx: usize,
+  selector_idx: SelectorIndex,
+  cursor_key: u32,
+}
+
+impl CandidateHeapItem {
+  const CURSOR_KEY_BUCKET_SHIFT: u32 = 29;
+  const CURSOR_KEY_CURSOR_MASK: u32 = (1 << Self::CURSOR_KEY_BUCKET_SHIFT) - 1;
+
+  #[inline(always)]
+  fn pack_cursor_key(bucket_rank: u8, cursor_idx: usize) -> u32 {
+    debug_assert!(bucket_rank <= 7);
+    debug_assert!(cursor_idx <= Self::CURSOR_KEY_CURSOR_MASK as usize);
+    (u32::from(bucket_rank) << Self::CURSOR_KEY_BUCKET_SHIFT) | (cursor_idx as u32)
+  }
+
+  #[inline(always)]
+  fn cursor_idx(self) -> usize {
+    (self.cursor_key & Self::CURSOR_KEY_CURSOR_MASK) as usize
+  }
 }
 
 impl PartialEq for CandidateHeapItem {
@@ -2748,8 +2764,7 @@ impl PartialEq for CandidateHeapItem {
     self.rule_idx == other.rule_idx
       && self.specificity == other.specificity
       && self.selector_idx == other.selector_idx
-      && self.bucket_rank == other.bucket_rank
-      && self.cursor_idx == other.cursor_idx
+      && self.cursor_key == other.cursor_key
   }
 }
 
@@ -2770,8 +2785,7 @@ impl Ord for CandidateHeapItem {
       .cmp(&self.rule_idx)
       .then_with(|| self.specificity.cmp(&other.specificity))
       .then_with(|| other.selector_idx.cmp(&self.selector_idx))
-      .then_with(|| other.bucket_rank.cmp(&self.bucket_rank))
-      .then_with(|| other.cursor_idx.cmp(&self.cursor_idx))
+      .then_with(|| other.cursor_key.cmp(&self.cursor_key))
   }
 }
 
@@ -4994,30 +5008,30 @@ impl<'a> RuleIndex<'a> {
         continue;
       };
       let indexed = &selectors[selector_idx];
+      debug_assert!(indexed.rule_idx <= u32::MAX as usize);
       merge.heap.push(CandidateHeapItem {
-        rule_idx: indexed.rule_idx,
+        rule_idx: indexed.rule_idx as u32,
         specificity: indexed.specificity,
-        selector_idx,
-        bucket_rank: cursor.bucket_rank,
-        cursor_idx,
+        selector_idx: selector_idx as SelectorIndex,
+        cursor_key: CandidateHeapItem::pack_cursor_key(cursor.bucket_rank, cursor_idx),
       });
     }
 
     while let Some(item) = merge.heap.pop() {
-      let cursor = &mut merge.cursors[item.cursor_idx];
+      let cursor = &mut merge.cursors[item.cursor_idx()];
       let Some(selector_idx) = cursor.current() else {
         continue;
       };
-      debug_assert_eq!(selector_idx, item.selector_idx);
+      debug_assert_eq!(selector_idx as SelectorIndex, item.selector_idx);
       cursor.pos += 1;
       if let Some(next_idx) = cursor.current() {
         let indexed = &selectors[next_idx];
+        debug_assert!(indexed.rule_idx <= u32::MAX as usize);
         merge.heap.push(CandidateHeapItem {
-          rule_idx: indexed.rule_idx,
+          rule_idx: indexed.rule_idx as u32,
           specificity: indexed.specificity,
-          selector_idx: next_idx,
-          bucket_rank: cursor.bucket_rank,
-          cursor_idx: item.cursor_idx,
+          selector_idx: next_idx as SelectorIndex,
+          cursor_key: item.cursor_key,
         });
       }
 
@@ -5394,30 +5408,30 @@ impl<'a> RuleIndex<'a> {
         continue;
       };
       let indexed = &selectors[selector_idx];
+      debug_assert!(indexed.rule_idx <= u32::MAX as usize);
       merge.heap.push(CandidateHeapItem {
-        rule_idx: indexed.rule_idx,
+        rule_idx: indexed.rule_idx as u32,
         specificity: 0,
-        selector_idx,
-        bucket_rank: cursor.bucket_rank,
-        cursor_idx,
+        selector_idx: selector_idx as SelectorIndex,
+        cursor_key: CandidateHeapItem::pack_cursor_key(cursor.bucket_rank, cursor_idx),
       });
     }
 
     while let Some(item) = merge.heap.pop() {
-      let cursor = &mut merge.cursors[item.cursor_idx];
+      let cursor = &mut merge.cursors[item.cursor_idx()];
       let Some(selector_idx) = cursor.current() else {
         continue;
       };
-      debug_assert_eq!(selector_idx, item.selector_idx);
+      debug_assert_eq!(selector_idx as SelectorIndex, item.selector_idx);
       cursor.pos += 1;
       if let Some(next_idx) = cursor.current() {
         let indexed = &selectors[next_idx];
+        debug_assert!(indexed.rule_idx <= u32::MAX as usize);
         merge.heap.push(CandidateHeapItem {
-          rule_idx: indexed.rule_idx,
+          rule_idx: indexed.rule_idx as u32,
           specificity: 0,
-          selector_idx: next_idx,
-          bucket_rank: cursor.bucket_rank,
-          cursor_idx: item.cursor_idx,
+          selector_idx: next_idx as SelectorIndex,
+          cursor_key: item.cursor_key,
         });
       }
 
@@ -11167,7 +11181,7 @@ mod tests {
   #[test]
   fn selector_candidates_heap_merge_dedupes_adjacent_duplicates() {
     let stylesheet = parse_stylesheet(
-      ":is(.a, .b, .c, .d, .e, .f, .g, .h, .i) { color: red; }",
+      ":is(div, .a, .b, .c, .d, .e, .f, .g, .h, .i) { color: red; }",
     )
     .unwrap();
     let media_ctx = MediaContext::default();
@@ -11244,7 +11258,7 @@ mod tests {
   #[test]
   fn slotted_candidates_heap_merge_dedupes_adjacent_duplicates() {
     let stylesheet = parse_stylesheet(
-      "::slotted(:is(.a, .b, .c, .d, .e, .f, .g, .h, .i)) { color: red; }",
+      "::slotted(:is(div, .a, .b, .c, .d, .e, .f, .g, .h, .i)) { color: red; }",
     )
     .unwrap();
     let media_ctx = MediaContext::default();
@@ -11316,6 +11330,168 @@ mod tests {
     assert_eq!(stats.by_attr, 0);
     assert_eq!(stats.universal, 0);
     assert_eq!(stats.pruned, 0);
+  }
+
+  #[test]
+  fn selector_candidates_heap_merge_orders_by_rule_index() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        .a { color: red; }
+        .b { color: green; }
+        .c { color: blue; }
+        .d { color: pink; }
+        .e { color: black; }
+        .f { color: orange; }
+        .g { color: purple; }
+        .h { color: teal; }
+        .i { color: brown; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.selectors.len(), 9);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b c d e f g h i".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.selector_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert!(
+      merge.cursors.len() > 8,
+      "test should exercise heap merge path"
+    );
+    assert_eq!(candidates, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  }
+
+  #[test]
+  fn slotted_candidates_heap_merge_orders_by_rule_index() {
+    let stylesheet = parse_stylesheet(
+      r#"
+        ::slotted(.a) { color: red; }
+        ::slotted(.b) { color: green; }
+        ::slotted(.c) { color: blue; }
+        ::slotted(.d) { color: pink; }
+        ::slotted(.e) { color: black; }
+        ::slotted(.f) { color: orange; }
+        ::slotted(.g) { color: purple; }
+        ::slotted(.h) { color: teal; }
+        ::slotted(.i) { color: brown; }
+      "#,
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(
+          rule.layer_order.as_ref(),
+          DOCUMENT_TREE_SCOPE_PREFIX,
+        ),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+    assert_eq!(index.slotted_selectors.len(), 9);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a b c d e f g h i".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
+    let mut seen = CandidateSet::new(index.slotted_selectors.len());
+    let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_value_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(
+      &node,
+      QuirksMode::NoQuirks,
+      &mut class_keys,
+      &mut attr_keys,
+      &mut attr_value_keys,
+    );
+
+    index.slotted_candidates(
+      &node,
+      node_keys,
+      None,
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+      &mut merge,
+    );
+    assert!(
+      merge.cursors.len() > 8,
+      "test should exercise heap merge path"
+    );
+    assert_eq!(candidates, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
   }
 
   #[test]
