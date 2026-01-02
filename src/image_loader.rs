@@ -3417,7 +3417,11 @@ impl ImageCache {
   }
 
   fn sniff_image_format(bytes: &[u8]) -> Option<ImageFormat> {
-    image::guess_format(bytes).ok()
+    // `image::guess_format` may invoke codec sniffers that use debug assertions (notably for AVIF).
+    // Guard against panics so metadata probing can't crash the renderer in debug builds.
+    std::panic::catch_unwind(|| image::guess_format(bytes).ok())
+      .ok()
+      .flatten()
   }
 
   fn decode_with_format(bytes: &[u8], format: ImageFormat) -> image::ImageResult<DynamicImage> {
