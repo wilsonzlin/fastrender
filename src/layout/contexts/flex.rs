@@ -2697,7 +2697,12 @@ fn measure_cache_key(
     } else {
       2.0
     };
-    (val / step).round() * step
+    let quantized = (val / step).round() * step;
+    if quantized == 0.0 {
+      0.0
+    } else {
+      quantized
+    }
   }
 
   fn clamp_width_for_constraints(w: f32, viewport: Size) -> f32 {
@@ -2776,16 +2781,27 @@ fn measure_cache_key(
     }
   };
 
-  (width.map(f32::to_bits), height.map(f32::to_bits))
+  (
+    width.map(f32_to_canonical_bits),
+    height.map(f32_to_canonical_bits),
+  )
 }
 
 fn hash_enum_discriminant<T>(value: &T, hasher: &mut FingerprintHasher) {
   mem::discriminant(value).hash(hasher);
 }
 
+fn f32_to_canonical_bits(value: f32) -> u32 {
+  if value == 0.0 {
+    0.0f32.to_bits()
+  } else {
+    value.to_bits()
+  }
+}
+
 fn hash_length(len: &Length, hasher: &mut FingerprintHasher) {
   hash_enum_discriminant(&len.unit, hasher);
-  len.value.to_bits().hash(hasher);
+  f32_to_canonical_bits(len.value).hash(hasher);
   // Treat calc lengths as distinct from raw by hashing a marker.
   if len.calc.is_some() {
     1u8.hash(hasher);
@@ -2860,13 +2876,13 @@ fn flex_style_fingerprint(style: &ComputedStyle) -> u64 {
     }
     None => 0u8.hash(&mut h),
   }
-  style.flex_grow.to_bits().hash(&mut h);
-  style.flex_shrink.to_bits().hash(&mut h);
+  f32_to_canonical_bits(style.flex_grow).hash(&mut h);
+  f32_to_canonical_bits(style.flex_shrink).hash(&mut h);
   hash_flex_basis(&style.flex_basis, &mut h);
   hash_enum_discriminant(&style.aspect_ratio, &mut h);
   // Intrinsic/text sizing influences: include font size/line height basics.
-  style.font_size.to_bits().hash(&mut h);
-  style.root_font_size.to_bits().hash(&mut h);
+  f32_to_canonical_bits(style.font_size).hash(&mut h);
+  f32_to_canonical_bits(style.root_font_size).hash(&mut h);
   hash_enum_discriminant(&style.line_height, &mut h);
   h.finish()
 }
@@ -2913,14 +2929,19 @@ fn layout_cache_key(
     } else {
       2.0
     };
-    (val / step).round() * step
+    let quantized = (val / step).round() * step;
+    if quantized == 0.0 {
+      0.0
+    } else {
+      quantized
+    }
   }
 
   let map_space = |space: CrateAvailableSpace, vp: f32, neg_offset: f32| -> Option<u32> {
     match space {
-      CrateAvailableSpace::Definite(v) => Some(quantize(v).to_bits()),
-      CrateAvailableSpace::MinContent => Some((-vp - neg_offset).to_bits()),
-      CrateAvailableSpace::MaxContent => Some((-vp - (neg_offset + 1.0)).to_bits()),
+      CrateAvailableSpace::Definite(v) => Some(f32_to_canonical_bits(quantize(v))),
+      CrateAvailableSpace::MinContent => Some(f32_to_canonical_bits(-vp - neg_offset)),
+      CrateAvailableSpace::MaxContent => Some(f32_to_canonical_bits(-vp - (neg_offset + 1.0))),
       CrateAvailableSpace::Indefinite => None,
     }
   };
@@ -3901,9 +3922,10 @@ impl FlexFormattingContext {
           let mc_constraints = if work.layout_child_storage.is_none()
             && matches!(
               work.fc_type,
-              FormattingContextType::Block | FormattingContextType::Flex | FormattingContextType::Grid
-            )
-          {
+              FormattingContextType::Block
+                | FormattingContextType::Flex
+                | FormattingContextType::Grid
+            ) {
             mc_constraints
               .with_used_border_box_size(work.used_border_box_width, work.used_border_box_height)
           } else {
@@ -5741,6 +5763,36 @@ mod tests {
       .expect("baseline computation")
       .expect("fragment has no baseline");
     fragment.bounds.y() + offset
+  }
+
+  #[test]
+  fn flex_style_fingerprint_canonicalizes_negative_zero() {
+    let mut style_zero = ComputedStyle::default();
+    style_zero.display = Display::Flex;
+    style_zero.margin_left = Some(Length::px(0.0));
+    let mut style_neg_zero = style_zero.clone();
+    style_neg_zero.margin_left = Some(Length::px(-0.0));
+
+    assert_eq!(
+      flex_style_fingerprint(&style_zero),
+      flex_style_fingerprint(&style_neg_zero)
+    );
+  }
+
+  #[test]
+  fn flex_layout_cache_key_canonicalizes_negative_zero() {
+    let viewport = Size::new(800.0, 600.0);
+    let constraints_zero = LayoutConstraints::new(
+      CrateAvailableSpace::Definite(0.0),
+      CrateAvailableSpace::Definite(100.0),
+    );
+    let mut constraints_neg_zero = constraints_zero;
+    constraints_neg_zero.available_width = CrateAvailableSpace::Definite(-0.0);
+
+    assert_eq!(
+      layout_cache_key(&constraints_zero, viewport),
+      layout_cache_key(&constraints_neg_zero, viewport)
+    );
   }
 
   #[test]

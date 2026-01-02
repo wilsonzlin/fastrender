@@ -413,7 +413,7 @@ pub fn total_taffy_invocations() -> u64 {
 
 fn quantize(value: f32) -> f32 {
   let abs = value.abs();
-  if abs > 4096.0 {
+  let quantized = if abs > 4096.0 {
     (value / 64.0).round() * 64.0
   } else if abs > 2048.0 {
     (value / 32.0).round() * 32.0
@@ -425,13 +425,28 @@ fn quantize(value: f32) -> f32 {
     (value / 4.0).round() * 4.0
   } else {
     (value / 2.0).round() * 2.0
+  };
+
+  if quantized == 0.0 {
+    0.0
+  } else {
+    quantized
+  }
+}
+
+#[inline]
+fn f32_to_canonical_bits(value: f32) -> u32 {
+  if value == 0.0 {
+    0.0f32.to_bits()
+  } else {
+    value.to_bits()
   }
 }
 
 fn viewport_hash(viewport: Size) -> u64 {
   let mut h = FxHasher::default();
-  quantize(viewport.width).to_bits().hash(&mut h);
-  quantize(viewport.height).to_bits().hash(&mut h);
+  f32_to_canonical_bits(quantize(viewport.width)).hash(&mut h);
+  f32_to_canonical_bits(quantize(viewport.height)).hash(&mut h);
   h.finish()
 }
 
@@ -444,13 +459,13 @@ fn hash_calc_length(calc: &CalcLength, hasher: &mut FxHasher) {
   (terms.len() as u8).hash(hasher);
   for term in terms {
     term.unit.hash(hasher);
-    term.value.to_bits().hash(hasher);
+    f32_to_canonical_bits(term.value).hash(hasher);
   }
 }
 
 fn hash_length(len: &Length, hasher: &mut FxHasher) {
   len.unit.hash(hasher);
-  len.value.to_bits().hash(hasher);
+  f32_to_canonical_bits(len.value).hash(hasher);
   match &len.calc {
     Some(calc) => {
       1u8.hash(hasher);
@@ -485,7 +500,7 @@ fn hash_aspect_ratio(value: &AspectRatio, hasher: &mut FxHasher) {
     AspectRatio::Auto => 0u8.hash(hasher),
     AspectRatio::Ratio(ratio) => {
       1u8.hash(hasher);
-      ratio.to_bits().hash(hasher);
+      f32_to_canonical_bits(*ratio).hash(hasher);
     }
   }
 }
@@ -500,7 +515,7 @@ fn hash_grid_track(track: &GridTrack, hasher: &mut FxHasher) {
     }
     Fr(fr) => {
       1u8.hash(hasher);
-      fr.to_bits().hash(hasher);
+      f32_to_canonical_bits(*fr).hash(hasher);
     }
     Auto => 2u8.hash(hasher),
     MinContent => 3u8.hash(hasher),
@@ -593,16 +608,16 @@ pub(crate) fn taffy_flex_style_fingerprint(style: &ComputedStyle) -> u64 {
     }
     None => 0u8.hash(&mut h),
   }
-  style.flex_grow.to_bits().hash(&mut h);
-  style.flex_shrink.to_bits().hash(&mut h);
+  f32_to_canonical_bits(style.flex_grow).hash(&mut h);
+  f32_to_canonical_bits(style.flex_shrink).hash(&mut h);
   hash_flex_basis(&style.flex_basis, &mut h);
 
   hash_length(&style.grid_row_gap, &mut h);
   hash_length(&style.grid_column_gap, &mut h);
 
   hash_aspect_ratio(&style.aspect_ratio, &mut h);
-  style.font_size.to_bits().hash(&mut h);
-  style.root_font_size.to_bits().hash(&mut h);
+  f32_to_canonical_bits(style.font_size).hash(&mut h);
+  f32_to_canonical_bits(style.root_font_size).hash(&mut h);
 
   h.finish()
 }
@@ -614,8 +629,8 @@ pub(crate) fn taffy_grid_container_style_fingerprint(style: &ComputedStyle) -> u
   hash_enum_discriminant(&style.writing_mode, &mut h);
   hash_enum_discriminant(&style.direction, &mut h);
   hash_enum_discriminant(&style.box_sizing, &mut h);
-  style.font_size.to_bits().hash(&mut h);
-  style.root_font_size.to_bits().hash(&mut h);
+  f32_to_canonical_bits(style.font_size).hash(&mut h);
+  f32_to_canonical_bits(style.root_font_size).hash(&mut h);
 
   hash_option_length(&style.width, &mut h);
   hash_option_length(&style.height, &mut h);
@@ -701,8 +716,8 @@ pub(crate) fn taffy_grid_item_style_fingerprint(style: &ComputedStyle) -> u64 {
   hash_enum_discriminant(&style.writing_mode, &mut h);
   hash_enum_discriminant(&style.direction, &mut h);
   hash_enum_discriminant(&style.box_sizing, &mut h);
-  style.font_size.to_bits().hash(&mut h);
-  style.root_font_size.to_bits().hash(&mut h);
+  f32_to_canonical_bits(style.font_size).hash(&mut h);
+  f32_to_canonical_bits(style.root_font_size).hash(&mut h);
 
   hash_option_length(&style.width, &mut h);
   hash_option_length(&style.height, &mut h);
@@ -1065,6 +1080,27 @@ mod tests {
       root_style: Arc::new(SendSyncStyle(TaffyStyle::default())),
       child_styles: Vec::new(),
     })
+  }
+
+  #[test]
+  fn taffy_style_fingerprints_canonicalize_negative_zero() {
+    let mut style_zero = ComputedStyle::default();
+    style_zero.margin_left = Some(Length::px(0.0));
+    let mut style_neg_zero = style_zero.clone();
+    style_neg_zero.margin_left = Some(Length::px(-0.0));
+
+    assert_eq!(
+      taffy_flex_style_fingerprint(&style_zero),
+      taffy_flex_style_fingerprint(&style_neg_zero)
+    );
+    assert_eq!(
+      taffy_grid_container_style_fingerprint(&style_zero),
+      taffy_grid_container_style_fingerprint(&style_neg_zero)
+    );
+    assert_eq!(
+      taffy_grid_item_style_fingerprint(&style_zero),
+      taffy_grid_item_style_fingerprint(&style_neg_zero)
+    );
   }
 
   #[test]

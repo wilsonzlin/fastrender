@@ -257,7 +257,12 @@ impl MeasureKey {
     } else {
       2.0
     };
-    (val / step).round() * step
+    let quantized = (val / step).round() * step;
+    if quantized == 0.0 {
+      0.0
+    } else {
+      quantized
+    }
   }
 
   fn quantize_to_bits(val: f32) -> u32 {
@@ -4179,6 +4184,40 @@ mod tests {
   }
 
   #[test]
+  fn grid_measure_key_canonicalizes_negative_zero() {
+    let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let node_ptr: *const BoxNode = &node;
+    let viewport = Size::new(800.0, 600.0);
+    let available = taffy::geometry::Size {
+      width: taffy::style::AvailableSpace::MaxContent,
+      height: taffy::style::AvailableSpace::MaxContent,
+    };
+
+    let key_zero = MeasureKey::new(
+      node_ptr,
+      taffy::geometry::Size {
+        width: Some(0.0),
+        height: None,
+      },
+      available,
+      viewport,
+      false,
+    );
+    let key_neg_zero = MeasureKey::new(
+      node_ptr,
+      taffy::geometry::Size {
+        width: Some(-0.0),
+        height: None,
+      },
+      available,
+      viewport,
+      false,
+    );
+
+    assert_eq!(key_zero, key_neg_zero);
+  }
+
+  #[test]
   fn grid_respects_used_border_box_size_overrides() {
     let fc = GridFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
 
@@ -4704,13 +4743,7 @@ mod tests {
         available_width: MeasureAvailKey::Indefinite,
         available_height: MeasureAvailKey::Indefinite,
       };
-      grid_measure_size_cache_store_with_policy(
-        &mut cache,
-        key,
-        size,
-        max_entries,
-        eviction_batch,
-      );
+      grid_measure_size_cache_store_with_policy(&mut cache, key, size, max_entries, eviction_batch);
     }
     assert_eq!(cache.len(), max_entries);
 
@@ -4730,7 +4763,11 @@ mod tests {
 
     let before = cache.len();
     grid_measure_size_cache_store_with_policy(&mut cache, key, size, max_entries, eviction_batch);
-    assert_eq!(cache.len(), before, "updating an existing key should not evict");
+    assert_eq!(
+      cache.len(),
+      before,
+      "updating an existing key should not evict"
+    );
   }
 
   #[test]
