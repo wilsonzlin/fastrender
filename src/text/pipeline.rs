@@ -2446,6 +2446,7 @@ fn assign_fonts_internal(
 ) -> Result<Vec<FontRun>> {
   let descriptor_stats_enabled =
     font_cache.is_some() && text_diagnostics_enabled() && text_fallback_descriptor_stats_enabled();
+  let validate_last_resort_coverage = text_diagnostics_verbose_logging();
 
   let features: Arc<[Feature]> = collect_opentype_features(style).into_boxed_slice().into();
   let authored_variations = authored_variations_from_style(style);
@@ -3150,15 +3151,11 @@ fn assign_fonts_internal(
         }
       }
 
-      if require_base_glyph {
+      if validate_last_resort_coverage && require_base_glyph {
         if let Some(font) = resolved.as_ref() {
           let base_supported = font
             .id
-            .map(|id| {
-              font_context
-                .database()
-                .has_glyph_cached(id.inner(), base_char)
-            })
+            .map(|id| font_context.database().has_glyph_cached(id.inner(), base_char))
             .unwrap_or_else(|| font_supports_all_chars(font.as_ref(), &[base_char]));
           if !base_supported {
             record_last_resort_fallback(cluster_text);
