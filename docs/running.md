@@ -45,7 +45,7 @@ For large runs, both `fetch_pages` and `render_pages` accept `--shard <index>/<t
 
 Cache layout:
 - `fetches/html/` – cached HTML
-- `fetches/assets/` – cached subresources (images/CSS/etc.)
+- `fetches/assets/` – cached subresources (images/CSS/etc.; override with `--cache-dir <dir>` for the pageset/render CLIs)
 - `fetches/renders/` – output PNGs and logs
 
 ## Render a single page
