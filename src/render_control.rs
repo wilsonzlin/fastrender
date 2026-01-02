@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 thread_local! {
-  static ACTIVE_DEADLINE: RefCell<Option<RenderDeadline>> = RefCell::new(None);
+  static DEADLINE_STACK: RefCell<Vec<Option<RenderDeadline>>> = RefCell::new(Vec::new());
 }
 
 thread_local! {
@@ -25,7 +25,7 @@ pub struct RenderDeadline {
 
 /// Guard that installs an active deadline for the duration of a render stage.
 pub struct DeadlineGuard {
-  previous: Option<RenderDeadline>,
+  previous_len: usize,
 }
 
 /// Guard that installs an active stage hint for deadline attribution.
@@ -249,8 +249,13 @@ impl DeadlineGuard {
   /// Installs the provided deadline as the active deadline for the current thread.
   pub fn install(deadline: Option<&RenderDeadline>) -> Self {
     let cloned = deadline.cloned();
-    let previous = ACTIVE_DEADLINE.with(|active| active.replace(cloned));
-    Self { previous }
+    let previous_len = DEADLINE_STACK.with(|stack| {
+      let mut stack = stack.borrow_mut();
+      let previous_len = stack.len();
+      stack.push(cloned);
+      previous_len
+    });
+    Self { previous_len }
   }
 }
 
@@ -268,9 +273,9 @@ impl StageGuard {
 
 impl Drop for DeadlineGuard {
   fn drop(&mut self) {
-    let previous = self.previous.take();
-    ACTIVE_DEADLINE.with(|active| {
-      *active.borrow_mut() = previous;
+    let previous_len = self.previous_len;
+    DEADLINE_STACK.with(|stack| {
+      stack.borrow_mut().truncate(previous_len);
     });
   }
 }
@@ -288,8 +293,8 @@ pub fn active_stage() -> Option<RenderStage> {
 
 /// Check against any active deadline stored for the current thread.
 pub fn check_active(stage: RenderStage) -> Result<(), RenderError> {
-  ACTIVE_DEADLINE.with(|active| {
-    if let Some(deadline) = active.borrow().as_ref() {
+  DEADLINE_STACK.with(|stack| {
+    if let Some(Some(deadline)) = stack.borrow().last() {
       deadline.check(stage)
     } else {
       Ok(())
@@ -317,8 +322,8 @@ pub fn check_active_periodic(
   if stride == 0 {
     return Ok(());
   }
-  ACTIVE_DEADLINE.with(|active| -> Result<(), RenderError> {
-    if let Some(deadline) = active.borrow().as_ref() {
+  DEADLINE_STACK.with(|stack| -> Result<(), RenderError> {
+    if let Some(Some(deadline)) = stack.borrow().last() {
       deadline.check_periodic(counter, stride, stage)
     } else {
       Ok(())
@@ -328,7 +333,24 @@ pub fn check_active_periodic(
 
 /// Returns the currently installed deadline for this thread, if any.
 pub fn active_deadline() -> Option<RenderDeadline> {
-  ACTIVE_DEADLINE.with(|active| active.borrow().clone())
+  DEADLINE_STACK.with(|stack| stack.borrow().last().cloned().flatten())
+}
+
+/// Returns the root (outermost) deadline installed for this thread, if any.
+///
+/// Nested deadline guards are used throughout the renderer to allocate time budgets to expensive
+/// phases. Those scoped deadlines intentionally *do not* represent the overall render timeout and
+/// should not be used to bound network fetches (which can be triggered deep inside a budgeted
+/// phase, e.g. during display list construction).
+pub fn root_deadline() -> Option<RenderDeadline> {
+  DEADLINE_STACK.with(|stack| {
+    for entry in stack.borrow().iter() {
+      if let Some(deadline) = entry {
+        return Some(deadline.clone());
+      }
+    }
+    None
+  })
 }
 
 /// Installs `deadline` for the duration of the provided closure.

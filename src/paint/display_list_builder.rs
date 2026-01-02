@@ -3632,6 +3632,7 @@ impl DisplayListBuilder {
     if let Some(plan) = self.plan_parallel(fragments.len(), threads) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
+      let root_deadline = crate::render_control::root_deadline();
       let diagnostics_session = paint_diagnostics_session_id();
       let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
         fragments
@@ -3641,16 +3642,20 @@ impl DisplayListBuilder {
             let chunk_offset = chunk_idx * plan.chunk_size;
             let _diagnostics_guard =
               diagnostics_session.map(PaintDiagnosticsThreadGuard::enter);
-            with_deadline(deadline.as_ref(), || {
-              let mut builder = self.fork();
-              let mut counter = 0usize;
-              for fragment in chunk {
-                if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
-                  break;
+            let deadline = deadline.clone();
+            let root_deadline = root_deadline.clone();
+            with_deadline(root_deadline.as_ref(), || {
+              with_deadline(deadline.as_ref(), || {
+                let mut builder = self.fork();
+                let mut counter = 0usize;
+                for fragment in chunk {
+                  if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+                    break;
+                  }
+                  builder.build_fragment(fragment, offset, visibility);
                 }
-                builder.build_fragment(fragment, offset, visibility);
-              }
-              (chunk_offset, builder.list, std::thread::current().id())
+                (chunk_offset, builder.list, std::thread::current().id())
+              })
             })
           })
           .collect()
@@ -3700,6 +3705,7 @@ impl DisplayListBuilder {
     if let Some(plan) = self.plan_parallel(fragments.len(), threads) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
+      let root_deadline = crate::render_control::root_deadline();
       let diagnostics_session = paint_diagnostics_session_id();
       let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
         fragments
@@ -3709,20 +3715,24 @@ impl DisplayListBuilder {
             let chunk_offset = chunk_idx * plan.chunk_size;
             let _diagnostics_guard =
               diagnostics_session.map(PaintDiagnosticsThreadGuard::enter);
-            with_deadline(deadline.as_ref(), || {
-              let mut builder = self.fork();
-              let mut counter = 0usize;
-              for fragment in chunk {
-                if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
-                  break;
+            let deadline = deadline.clone();
+            let root_deadline = root_deadline.clone();
+            with_deadline(root_deadline.as_ref(), || {
+              with_deadline(deadline.as_ref(), || {
+                let mut builder = self.fork();
+                let mut counter = 0usize;
+                for fragment in chunk {
+                  if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+                    break;
+                  }
+                  if suppress_opacity {
+                    builder.build_fragment_internal(fragment, offset, false, true, visibility);
+                  } else {
+                    builder.build_fragment_shallow(fragment, offset, visibility);
+                  }
                 }
-                if suppress_opacity {
-                  builder.build_fragment_internal(fragment, offset, false, true, visibility);
-                } else {
-                  builder.build_fragment_shallow(fragment, offset, visibility);
-                }
-              }
-              (chunk_offset, builder.list, std::thread::current().id())
+                (chunk_offset, builder.list, std::thread::current().id())
+              })
             })
           })
           .collect()

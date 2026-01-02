@@ -811,7 +811,6 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       .arg(jobs.to_string())
       .arg("--timeout")
       .arg(fetch_timeout.to_string());
-    cmd.arg("--cache-dir").arg(&cache_dir);
     if let Some(pages) = &pages_arg {
       cmd.arg("--pages").arg(pages);
     }

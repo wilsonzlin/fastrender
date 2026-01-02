@@ -2849,9 +2849,11 @@ impl HttpFetcher {
     url: &str,
     max_bytes: usize,
   ) -> Result<FetchedResource> {
-    let deadline = render_control::active_deadline();
+    let deadline = render_control::root_deadline();
     let started = Instant::now();
-    self.fetch_http_partial_inner(kind, url, max_bytes, &deadline, started)
+    render_control::with_deadline(deadline.as_ref(), || {
+      self.fetch_http_partial_inner(kind, url, max_bytes, &deadline, started)
+    })
   }
 
   fn fetch_http_with_context(
@@ -2862,17 +2864,19 @@ impl HttpFetcher {
     validators: Option<HttpCacheValidators<'_>>,
     referrer: Option<&str>,
   ) -> Result<FetchedResource> {
-    let deadline = render_control::active_deadline();
+    let deadline = render_control::root_deadline();
     let started = Instant::now();
-    self.fetch_http_with_context_inner(
-      kind,
-      url,
-      accept_encoding,
-      validators,
-      referrer,
-      &deadline,
-      started,
-    )
+    render_control::with_deadline(deadline.as_ref(), || {
+      self.fetch_http_with_context_inner(
+        kind,
+        url,
+        accept_encoding,
+        validators,
+        referrer,
+        &deadline,
+        started,
+      )
+    })
   }
 
   fn fetch_http_with_context_inner<'a>(
