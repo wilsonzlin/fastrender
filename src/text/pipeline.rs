@@ -2509,6 +2509,21 @@ fn assign_fonts_internal(
   let mut font_runs = Vec::new();
   let mut cluster_spans: Vec<(usize, usize)> = Vec::new();
   for run in runs {
+    // Language only influences script fallback selection for CJK scripts. Treating every distinct
+    // `lang=` tag as a unique fallback-cache descriptor causes pathological churn on pages like
+    // Wikipedia that annotate each language name with its own BCP47 tag.
+    //
+    // Collapse language signatures for scripts where it has no effect so the glyph/cluster caches
+    // and descriptor hint cache can be reused across such runs.
+    let language_signature_for_run = if matches!(
+      run.script,
+      Script::Han | Script::Hiragana | Script::Katakana
+    ) {
+      language_signature
+    } else {
+      0
+    };
+
     // Fast path: ASCII runs (e.g. page text + code blocks) spend a lot of time in
     // per-codepoint cluster handling, even when a single font covers the run.
     if enable_ascii_fast_path
@@ -2524,7 +2539,7 @@ fn assign_fonts_internal(
         let descriptor = font_cache.map(|_| {
           FallbackCacheDescriptor::new(
             families_signature,
-            language_signature,
+            language_signature_for_run,
             run.script as u8,
             weight_value,
             font_style,
@@ -2922,7 +2937,7 @@ fn assign_fonts_internal(
       let descriptor = font_cache.map(|_| {
         FallbackCacheDescriptor::new(
           families_signature,
-          language_signature,
+          language_signature_for_run,
           run.script as u8,
           weight_value,
           font_style,
