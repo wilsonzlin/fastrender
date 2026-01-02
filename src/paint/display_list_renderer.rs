@@ -5379,12 +5379,23 @@ impl DisplayListRenderer {
       return Ok(true);
     }
 
-    let expensive_pixels = self.estimate_expensive_raster_pixels(list.items())?;
+    let (expensive_pixels, image_source_pixels, image_tile_count) =
+      self.estimate_expensive_raster_pixels(list.items(), task_capacity)?;
     let tile = u64::from(self.paint_parallelism.tile_size.max(1));
     let tile_pixels = tile.saturating_mul(tile);
     let min_expensive_per_thread =
       tile_pixels.saturating_mul(self.paint_parallelism.min_tiles.max(1) as u64);
-    let expensive_per_thread = expensive_pixels / task_capacity.max(1) as u64;
+    let mut expensive_per_thread = expensive_pixels / task_capacity.max(1) as u64;
+    // Some costs (notably converting raw `ImageData` into a premultiplied `Pixmap`) scale with the
+    // *source* pixel count and can dominate pages with many large-but-thumbnail-sized images.
+    //
+    // This work is only meaningfully parallelized when those images are spread across multiple
+    // tiles (so different tile tasks request and convert different images concurrently).
+    if image_tile_count > 1 && image_source_pixels > 0 {
+      let image_threads = image_tile_count.max(1) as u64;
+      expensive_per_thread =
+        expensive_per_thread.saturating_add(image_source_pixels / image_threads);
+    }
     if expensive_per_thread < min_expensive_per_thread {
       *fallback_reason = Some("estimated paint work below parallel threshold".to_string());
       return Ok(false);
@@ -5393,7 +5404,11 @@ impl DisplayListRenderer {
     Ok(true)
   }
 
-  fn estimate_expensive_raster_pixels(&self, items: &[DisplayItem]) -> Result<u64> {
+  fn estimate_expensive_raster_pixels(
+    &self,
+    items: &[DisplayItem],
+    task_capacity: usize,
+  ) -> Result<(u64, u64, usize)> {
     const GRADIENT_WEIGHT: u64 = 4;
     const IMAGE_LINEAR_WEIGHT: u64 = 2;
 
@@ -5404,22 +5419,31 @@ impl DisplayListRenderer {
       self.canvas.height() as f32,
     );
     let mut total = 0u64;
+    let mut image_source_pixels = 0u64;
+    let tile_size = self.paint_parallelism.tile_size.max(1);
+    let tiles_x = (self.canvas.width() + tile_size - 1) / tile_size;
+    let tiles_y = (self.canvas.height() + tile_size - 1) / tile_size;
+    let tile_cap = task_capacity
+      .max(1)
+      .min((tiles_x.saturating_mul(tiles_y)).max(1) as usize);
+    let mut image_tiles: Vec<u64> = Vec::with_capacity(tile_cap.min(8));
     let mut deadline_counter = 0usize;
 
-    let mut add_rect = |total: &mut u64, rect: Rect, weight: u64| {
+    let add_rect = |total: &mut u64, rect: Rect, weight: u64| -> Option<Rect> {
       if weight == 0 {
-        return;
+        return None;
       }
       let Some(intersection) = rect.intersection(viewport) else {
-        return;
+        return None;
       };
       let w = intersection.width().ceil().max(0.0) as u64;
       let h = intersection.height().ceil().max(0.0) as u64;
       if w == 0 || h == 0 {
-        return;
+        return None;
       }
       let area = w.saturating_mul(h);
       *total = total.saturating_add(area.saturating_mul(weight));
+      Some(intersection)
     };
 
     for item in items {
@@ -5427,36 +5451,86 @@ impl DisplayListRenderer {
         .map_err(Error::Render)?;
       match item {
         DisplayItem::LinearGradient(item) => {
-          add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
+          let _ = add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
         }
         DisplayItem::LinearGradientPattern(item) => {
-          add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
+          let _ = add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
         }
         DisplayItem::RadialGradient(item) => {
-          add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
+          let _ = add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
         }
         DisplayItem::RadialGradientPattern(item) => {
-          add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
+          let _ = add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
         }
         DisplayItem::ConicGradient(item) => {
-          add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
+          let _ = add_rect(&mut total, self.ds_rect(item.rect), GRADIENT_WEIGHT);
         }
         DisplayItem::ConicGradientPattern(item) => {
-          add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
+          let _ = add_rect(&mut total, self.ds_rect(item.dest_rect), GRADIENT_WEIGHT);
         }
         DisplayItem::Image(item) => {
           let weight = match item.filter_quality {
             ImageFilterQuality::Nearest => 1,
             ImageFilterQuality::Linear => IMAGE_LINEAR_WEIGHT,
           };
-          add_rect(&mut total, self.ds_rect(item.dest_rect), weight);
+          let dest_rect = self.ds_rect(item.dest_rect);
+          let Some(intersection) = add_rect(&mut total, dest_rect, weight) else {
+            continue;
+          };
+          if tile_cap <= 1 {
+            continue;
+          }
+          let target_w = dest_rect.width().abs().ceil().max(1.0) as u32;
+          let target_h = dest_rect.height().abs().ceil().max(1.0) as u32;
+          let needs_full_pixmap = item.src_rect.is_some()
+            || !Self::should_use_scaled_image_pixmap(
+              item.filter_quality,
+              item.image.width,
+              item.image.height,
+              target_w,
+              target_h,
+            );
+          if !needs_full_pixmap {
+            continue;
+          }
+          let src_px = u64::from(item.image.width).saturating_mul(u64::from(item.image.height));
+          image_source_pixels = image_source_pixels.saturating_add(src_px);
+          if image_tiles.len() >= tile_cap {
+            continue;
+          }
+          let min_x = intersection.x().floor().max(0.0) as u32;
+          let min_y = intersection.y().floor().max(0.0) as u32;
+          let max_x = (intersection.x() + intersection.width()).ceil().max(0.0) as u32;
+          let max_y = (intersection.y() + intersection.height()).ceil().max(0.0) as u32;
+          if max_x == 0 || max_y == 0 {
+            continue;
+          }
+          let tile_x0 = min_x / tile_size;
+          let tile_y0 = min_y / tile_size;
+          let tile_x1 = max_x.saturating_sub(1) / tile_size;
+          let tile_y1 = max_y.saturating_sub(1) / tile_size;
+          for ty in tile_y0..=tile_y1 {
+            for tx in tile_x0..=tile_x1 {
+              let id = u64::from(ty).saturating_mul(u64::from(tiles_x)) + u64::from(tx);
+              if image_tiles.contains(&id) {
+                continue;
+              }
+              image_tiles.push(id);
+              if image_tiles.len() >= tile_cap {
+                break;
+              }
+            }
+            if image_tiles.len() >= tile_cap {
+              break;
+            }
+          }
         }
         DisplayItem::ImagePattern(item) => {
           let weight = match item.filter_quality {
             ImageFilterQuality::Nearest => 1,
             ImageFilterQuality::Linear => IMAGE_LINEAR_WEIGHT,
           };
-          add_rect(&mut total, self.ds_rect(item.dest_rect), weight);
+          let _ = add_rect(&mut total, self.ds_rect(item.dest_rect), weight);
         }
         DisplayItem::BoxShadow(item) => {
           let shadow = BoxShadow {
@@ -5524,7 +5598,7 @@ impl DisplayListRenderer {
       }
     }
 
-    Ok(total)
+    Ok((total, image_source_pixels, image_tiles.len()))
   }
 
   fn max_effect_padding(&self, items: &[DisplayItem]) -> Result<f32> {
@@ -10538,6 +10612,51 @@ mod tests {
     );
   }
 
+  #[test]
+  fn parallel_paint_is_enabled_for_expensive_image_conversions_spread_across_tiles() {
+    if crate::paint::paint_thread_pool::paint_pool().threads < 2 {
+      return;
+    }
+
+    let pixels_a = vec![128u8; 1024 * 1024 * 4];
+    let pixels_b = vec![64u8; 1024 * 1024 * 4];
+    let image_a = Arc::new(ImageData::new_pixels(1024, 1024, pixels_a));
+    let image_b = Arc::new(ImageData::new_pixels(1024, 1024, pixels_b));
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::Image(ImageItem {
+      dest_rect: Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+      image: image_a,
+      filter_quality: ImageFilterQuality::Nearest,
+      src_rect: None,
+    }));
+    // Place the second image into the adjacent tile (tile_size defaults to 256px).
+    list.push(DisplayItem::Image(ImageItem {
+      dest_rect: Rect::from_xywh(300.0, 0.0, 32.0, 32.0),
+      image: image_b,
+      filter_quality: ImageFilterQuality::Nearest,
+      src_rect: None,
+    }));
+
+    let mut parallelism = PaintParallelism::adaptive();
+    parallelism.max_threads = Some(2);
+
+    let renderer = DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .with_parallelism(parallelism);
+    let report = renderer.render_with_report(&list).unwrap();
+
+    assert!(
+      report.parallel_used,
+      "expected parallel paint to activate for expensive image conversions"
+    );
+    assert!(
+      report.tiles > 1,
+      "expected multiple tiles, got {}",
+      report.tiles
+    );
+  }
+
   fn expected_linear_red_blue(
     rect: Rect,
     start: Point,
@@ -10702,7 +10821,9 @@ mod tests {
   }
 
   fn setup_translate_clip_path(renderer: &mut DisplayListRenderer) {
-    renderer.canvas.set_transform(Transform::from_translate(20.0, 0.0));
+    renderer
+      .canvas
+      .set_transform(Transform::from_translate(20.0, 0.0));
     let square = ResolvedClipPath::Polygon {
       points: vec![
         Point::new(0.0, 0.0),
@@ -10762,7 +10883,11 @@ mod tests {
       ("outset_rotate", setup_rotate, &outset),
       ("outset_clipped", setup_clip_mask, &outset),
       ("outset_rotated_clipped", setup_rotated_clip_mask, &outset),
-      ("outset_translate_clip_path", setup_translate_clip_path, &outset),
+      (
+        "outset_translate_clip_path",
+        setup_translate_clip_path,
+        &outset,
+      ),
     ];
 
     for (name, setup, item) in cases {
