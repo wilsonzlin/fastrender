@@ -252,6 +252,80 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
     true
   }
 
+  fn is_likely_comma_in_percent_encoded_space_filename(
+    bytes: &[u8],
+    _url_start: usize,
+    comma_idx: usize,
+  ) -> bool {
+    // Another production `srcset` compatibility issue:
+    //
+    // Some sites (notably Condé Nast properties like newyorker.com) include commas inside the
+    // filename itself, followed by a percent-encoded space (`,%20`) and the rest of the filename:
+    //
+    //   https://media.example/.../Artist%20-%20Title,%202023.jpg 120w, ...
+    //
+    // In valid `srcset`, commas separate candidates, but treating this comma as a separator
+    // produces a bogus relative URL like `%202023.jpg`.
+    //
+    // Heuristic: treat the comma as part of the URL when it is immediately followed by `%20` and
+    // the remainder looks like a filename with a common image extension.
+    if comma_idx + 3 >= bytes.len() {
+      return false;
+    }
+    if bytes[comma_idx + 1] != b'%' {
+      return false;
+    }
+    if bytes[comma_idx + 2].to_ascii_lowercase() != b'2' || bytes[comma_idx + 3] != b'0' {
+      return false;
+    }
+
+    // Scan forward to the end of the URL token (whitespace separates URL and descriptors).
+    let mut end = comma_idx + 4;
+    while end < bytes.len() {
+      let b = bytes[end];
+      if b.is_ascii_whitespace() {
+        break;
+      }
+      // Stop at another comma so we don't scan into the next candidate if we're wrong.
+      if b == b',' {
+        break;
+      }
+      end += 1;
+    }
+    if comma_idx + 1 >= end {
+      return false;
+    }
+
+    let tail = &bytes[comma_idx + 1..end];
+    let tail_end = tail
+      .iter()
+      .position(|&b| matches!(b, b'?' | b'#'))
+      .unwrap_or(tail.len());
+    let tail = &tail[..tail_end];
+
+    // Look for a likely image extension at the end of the tail.
+    let Some(dot_pos) = tail.iter().rposition(|&b| b == b'.') else {
+      return false;
+    };
+    let ext = &tail[dot_pos + 1..];
+    if ext.is_empty() || ext.len() > 5 {
+      return false;
+    }
+    if !ext.iter().all(|b| b.is_ascii_alphabetic()) {
+      return false;
+    }
+    let ext = ext
+      .iter()
+      .map(|b| b.to_ascii_lowercase())
+      .collect::<Vec<_>>();
+    // A small allowlist keeps the heuristic tight; expand if new cases appear.
+    let ext = ext.as_slice();
+    matches!(
+      ext,
+      b"jpg" | b"jpeg" | b"png" | b"gif" | b"webp" | b"avif" | b"svg"
+    )
+  }
+
   let bytes = attr.as_bytes();
   let mut out = Vec::new();
   let mut idx = 0;
@@ -285,6 +359,7 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
           if is_likely_comma_in_cdn_transform_url(bytes, url_start, idx)
             || is_likely_comma_in_query_numeric_list(bytes, url_start, idx)
             || is_likely_comma_in_path_crop_rect(bytes, url_start, idx)
+            || is_likely_comma_in_percent_encoded_space_filename(bytes, url_start, idx)
           {
             idx += 1;
             continue;
@@ -594,6 +669,21 @@ mod tests {
     assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
     assert_eq!(parsed[1].url, "https://img.example/bar.jpg");
     assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 2.0));
+  }
+
+  #[test]
+  fn parse_srcset_allows_commas_in_filenames_with_percent_encoded_space() {
+    let parsed = parse_srcset(
+      "https://media.example/Artist%20-%20Title,%202023.jpg 120w, https://media.example/other.jpg 240w",
+    );
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(
+      parsed[0].url,
+      "https://media.example/Artist%20-%20Title,%202023.jpg"
+    );
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Width(120)));
+    assert_eq!(parsed[1].url, "https://media.example/other.jpg");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Width(240)));
   }
 
   #[test]
