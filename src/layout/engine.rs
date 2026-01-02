@@ -22,6 +22,7 @@ use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::intrinsic_cache_use_epoch;
+use crate::layout::formatting_context::layout_cache_entry_limit_for_box_tree;
 use crate::layout::formatting_context::layout_cache_stats;
 use crate::layout::formatting_context::layout_cache_use_epoch;
 use crate::layout::formatting_context::IntrinsicSizingMode;
@@ -808,10 +809,10 @@ impl LayoutEngine {
     reset_caches: bool,
     trace: Option<&TraceHandle>,
   ) -> Result<FragmentTree, LayoutError> {
-    let (_parallelism, _workload, parallel_pool, factory) =
-      self.resolve_parallelism_for_tree(box_tree);
+    let (_parallelism, workload, parallel_pool, factory) = self.resolve_parallelism_for_tree(box_tree);
+    let box_tree_nodes = workload.nodes;
     self.run_in_pool(parallel_pool.as_deref(), || {
-      self.layout_tree_inner(&factory, box_tree, reset_caches, trace)
+      self.layout_tree_inner(&factory, box_tree, reset_caches, trace, box_tree_nodes)
     })
   }
 
@@ -821,6 +822,7 @@ impl LayoutEngine {
     box_tree: &BoxTree,
     reset_caches: bool,
     trace: Option<&TraceHandle>,
+    box_tree_nodes: usize,
   ) -> Result<FragmentTree, LayoutError> {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
@@ -840,7 +842,13 @@ impl LayoutEngine {
     let reset_for_run = reset_caches || !use_cache;
 
     let epoch = self.cache.start_run(reset_for_run);
-    layout_cache_use_epoch(epoch, use_cache, reset_for_run, self.config.fragmentation);
+    layout_cache_use_epoch(
+      epoch,
+      use_cache,
+      reset_for_run,
+      self.config.fragmentation,
+      layout_cache_entry_limit_for_box_tree(box_tree_nodes),
+    );
     intrinsic_cache_use_epoch(epoch, reset_for_run);
     if reset_for_run {
       crate::layout::flex_profile::reset_layout_cache_clones();
@@ -1512,17 +1520,18 @@ mod tests {
     let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
     let tree = BoxTree::new(root);
 
-    let (_, _, _, factory) = engine.resolve_parallelism_for_tree(&tree);
+    let (_, workload, _, factory) = engine.resolve_parallelism_for_tree(&tree);
+    let box_tree_nodes = workload.nodes;
     assert!(!factory.cached_context_is_initialized(FormattingContextType::Block));
 
     engine
-      .layout_tree_inner(&factory, &tree, true, None)
+      .layout_tree_inner(&factory, &tree, true, None, box_tree_nodes)
       .unwrap();
     assert!(factory.cached_context_is_initialized(FormattingContextType::Block));
 
     let first = factory.get(FormattingContextType::Block);
     engine
-      .layout_tree_inner(&factory, &tree, true, None)
+      .layout_tree_inner(&factory, &tree, true, None, box_tree_nodes)
       .unwrap();
     let second = factory.get(FormattingContextType::Block);
     assert!(Arc::ptr_eq(&first, &second));

@@ -363,6 +363,12 @@ struct LayoutCacheEntry {
 
 /// Default per-thread layout cache entry cap. Override via `FASTR_LAYOUT_CACHE_MAX_ENTRIES`.
 const DEFAULT_LAYOUT_CACHE_MAX_ENTRIES: Option<usize> = Some(8192);
+/// Upper bound for the adaptive per-thread layout cache entry cap.
+///
+/// Layout cache entries store `Arc<FragmentNode>` values (deep-cloned subtrees), so keeping the
+/// default cap bounded avoids runaway memory usage on extremely large documents. Callers that
+/// want to trade memory for reuse can still override this via `FASTR_LAYOUT_CACHE_MAX_ENTRIES`.
+const MAX_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
 /// Number of entries to drop when the cache exceeds the cap.
 const LAYOUT_CACHE_EVICTION_BATCH: usize = 64;
 
@@ -597,11 +603,21 @@ fn layout_cache_key(
   })
 }
 
-fn resolve_layout_cache_entry_limit() -> Option<usize> {
+fn resolve_layout_cache_entry_limit(default: Option<usize>) -> Option<usize> {
   let limit = runtime::runtime_toggles()
     .usize("FASTR_LAYOUT_CACHE_MAX_ENTRIES")
-    .or(DEFAULT_LAYOUT_CACHE_MAX_ENTRIES);
+    .or(default);
   limit.filter(|limit| *limit > 0)
+}
+
+/// Returns a default layout cache entry cap derived from the box tree size.
+///
+/// Large pages can build many cacheable formatting contexts (notably flex/grid) and will churn the
+/// default 8k entry cap, evicting reusable fragments during Taffy measurement passes. Scaling the
+/// cap with the overall box count keeps reuse stable on these pages while still bounding memory.
+pub(crate) fn layout_cache_entry_limit_for_box_tree(box_tree_nodes: usize) -> Option<usize> {
+  let base = DEFAULT_LAYOUT_CACHE_MAX_ENTRIES.unwrap_or(0);
+  Some(box_tree_nodes.max(base).min(MAX_LAYOUT_CACHE_MAX_ENTRIES)).filter(|v| *v > 0)
 }
 
 fn enforce_layout_cache_entry_limit(
@@ -692,6 +708,7 @@ pub(crate) fn layout_cache_use_epoch(
   enabled: bool,
   reset_counters: bool,
   fragmentation: Option<FragmentationOptions>,
+  default_entry_limit: Option<usize>,
 ) {
   #[cfg(test)]
   let _guard = layout_cache_test_lock();
@@ -699,7 +716,7 @@ pub(crate) fn layout_cache_use_epoch(
   let epoch = epoch.max(1);
   let fragmentation_hash = fragmentation_fingerprint(fragmentation);
   let entry_limit = if enabled {
-    resolve_layout_cache_entry_limit()
+    resolve_layout_cache_entry_limit(default_entry_limit.or(DEFAULT_LAYOUT_CACHE_MAX_ENTRIES))
   } else {
     None
   };
@@ -1355,7 +1372,7 @@ mod tests {
   #[test]
   fn layout_epoch_clears_subgrid_cache() {
     let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(9, false, true, None);
+    layout_cache_use_epoch(9, false, true, None, None);
 
     let child = BoxNode::new_block(
       Arc::new(ComputedStyle::default()),
@@ -1383,13 +1400,32 @@ mod tests {
     assert!(!subtree_contains_subgrid(&root, epoch));
     assert_eq!(subgrid_walk_count(), 0);
 
-    layout_cache_use_epoch(epoch + 1, false, true, None);
+    layout_cache_use_epoch(epoch + 1, false, true, None, None);
     let new_epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
     reset_subgrid_walk_count();
     assert!(subtree_contains_subgrid(&root, new_epoch));
     assert!(subgrid_walk_count() > 0);
 
-    layout_cache_use_epoch(1, false, true, None);
+    layout_cache_use_epoch(1, false, true, None, None);
+  }
+
+  #[test]
+  fn layout_cache_entry_limit_scales_with_box_tree_size() {
+    assert_eq!(
+      layout_cache_entry_limit_for_box_tree(1),
+      DEFAULT_LAYOUT_CACHE_MAX_ENTRIES,
+      "small trees should still use the baseline entry cap"
+    );
+    assert_eq!(
+      layout_cache_entry_limit_for_box_tree(10_000),
+      Some(10_000),
+      "large trees should raise the cap to avoid churn"
+    );
+    assert_eq!(
+      layout_cache_entry_limit_for_box_tree(1_000_000),
+      Some(MAX_LAYOUT_CACHE_MAX_ENTRIES),
+      "adaptive cap should be bounded to avoid runaway memory usage"
+    );
   }
 
   fn flow_root_style() -> Arc<ComputedStyle> {
@@ -1405,7 +1441,7 @@ mod tests {
   #[test]
   fn layout_cache_hits_on_stable_style() {
     let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(1, true, true, None);
+    layout_cache_use_epoch(1, true, true, None, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
     node.id = 1;
@@ -1430,13 +1466,13 @@ mod tests {
     assert_eq!(stores, 1);
     assert_eq!(evictions, 0);
 
-    layout_cache_use_epoch(1, false, true, None);
+    layout_cache_use_epoch(1, false, true, None, None);
   }
 
   #[test]
   fn layout_cache_misses_on_constraint_change() {
     let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(1, true, true, None);
+    layout_cache_use_epoch(1, true, true, None, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
     node.id = 1;
@@ -1458,13 +1494,13 @@ mod tests {
       "changing constraints must invalidate the cached entry"
     );
 
-    layout_cache_use_epoch(1, false, true, None);
+    layout_cache_use_epoch(1, false, true, None, None);
   }
 
   #[test]
   fn layout_cache_does_not_cross_contaminate_nodes() {
     let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(1, true, true, None);
+    layout_cache_use_epoch(1, true, true, None, None);
 
     let mut node_a = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
     node_a.id = 1;
@@ -1488,7 +1524,7 @@ mod tests {
       "layout cache entries must not be reused across different box ids"
     );
 
-    layout_cache_use_epoch(1, false, true, None);
+    layout_cache_use_epoch(1, false, true, None, None);
   }
 
   #[test]
@@ -1497,7 +1533,7 @@ mod tests {
     // itself can fan out to rayon worker threads. The cache must be usable from those workers
     // without requiring each thread to call `layout_cache_use_epoch` manually.
     let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(1, true, true, None);
+    layout_cache_use_epoch(1, true, true, None, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Flex, vec![]);
     node.id = 1;
@@ -1534,13 +1570,13 @@ mod tests {
       "expected worker thread to observe layout cache hit after store"
     );
 
-    layout_cache_use_epoch(1, false, true, None);
+    layout_cache_use_epoch(1, false, true, None, None);
   }
 
   #[test]
   fn layout_cache_overwrites_style_changes() {
     let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(1, true, true, None);
+    layout_cache_use_epoch(1, true, true, None, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
     node.id = 1;
@@ -1582,13 +1618,13 @@ mod tests {
     assert_eq!(stores, 2);
     assert_eq!(evictions, 1);
 
-    layout_cache_use_epoch(1, false, true, None);
+    layout_cache_use_epoch(1, false, true, None, None);
   }
 
   #[test]
   fn layout_cache_evicted_on_epoch_change() {
     let _guard = layout_cache_test_lock();
-    layout_cache_use_epoch(1, true, true, None);
+    layout_cache_use_epoch(1, true, true, None, None);
 
     let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
     node.id = 1;
@@ -1618,6 +1654,6 @@ mod tests {
     // count stale entries from previous epochs as evictions in the current run.
     assert_eq!(evictions, 0);
 
-    layout_cache_use_epoch(1, false, true, None);
+    layout_cache_use_epoch(1, false, true, None, None);
   }
 }
