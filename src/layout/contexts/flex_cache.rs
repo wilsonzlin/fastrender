@@ -1,13 +1,28 @@
 use crate::geometry::Size;
 use crate::layout::flex_profile::{self, CacheKind};
 use crate::tree::fragment_tree::FragmentNode;
+use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::RwLock;
 
 pub(crate) type FlexCacheKey = (Option<u32>, Option<u32>);
-pub(crate) type FlexCacheEntry = FxHashMap<FlexCacheKey, (Size, Arc<FragmentNode>)>;
+
+#[derive(Clone)]
+pub(crate) struct FlexCacheValue {
+  /// The size returned to Taffy’s measure function (typically a content-box size).
+  pub measured_size: Size,
+  /// The corresponding used border-box size that Taffy will position (measured size + padding/border
+  /// + any reserved scrollbar gutter).
+  ///
+  /// Note: this may intentionally diverge from `fragment.bounds.size` when we clamp runaway
+  /// measurements. In those cases we still want to reuse the fragment tree, but need a stable size
+  /// key that matches what Taffy used for layout.
+  pub border_size: Size,
+  pub fragment: Arc<FragmentNode>,
+}
+
+pub(crate) type FlexCacheEntry = FxHashMap<FlexCacheKey, FlexCacheValue>;
 
 const DEFAULT_SHARD_COUNT: usize = 64;
 
@@ -56,9 +71,7 @@ impl ShardedFlexCache {
 
   pub(crate) fn clear(&self) {
     for shard in &self.shards {
-      if let Ok(mut map) = shard.map.write() {
-        map.clear();
-      }
+      shard.map.write().clear();
       shard.hits.store(0, Ordering::Relaxed);
       shard.misses.store(0, Ordering::Relaxed);
     }
@@ -78,29 +91,43 @@ impl ShardedFlexCache {
     flex_profile::record_cache_shard_lookup(self.kind, shard_idx, hit);
   }
 
-  pub(crate) fn get(&self, node_key: u64, key: &FlexCacheKey) -> Option<(Size, Arc<FragmentNode>)> {
+  pub(crate) fn get(&self, node_key: u64, key: &FlexCacheKey) -> Option<FlexCacheValue> {
     let shard_idx = self.shard_index(node_key);
     let result = self.shards.get(shard_idx).and_then(|shard| {
       shard
         .map
         .read()
-        .ok()
-        .and_then(|map| map.get(&node_key).and_then(|entry| entry.get(key)).cloned())
+        .get(&node_key)
+        .and_then(|entry| entry.get(key))
+        .cloned()
     });
     self.record_lookup(shard_idx, result.is_some());
     result
   }
 
-  pub(crate) fn find_fragment(
+  pub(crate) fn find_fragment(&self, node_key: u64, target_size: Size) -> Option<FlexCacheValue> {
+    let shard_idx = self.shard_index(node_key);
+    let result = self.shards.get(shard_idx).and_then(|shard| {
+      let map = shard.map.read();
+      let entry = map.get(&node_key)?;
+      find_cached_fragment(entry, target_size)
+    });
+    self.record_lookup(shard_idx, result.is_some());
+    result
+  }
+
+  /// Finds a cached fragment by comparing the stored *used border-box* size (`value.border_size`)
+  /// against the provided target size.
+  pub(crate) fn find_fragment_by_border_size(
     &self,
     node_key: u64,
     target_size: Size,
-  ) -> Option<(Size, Arc<FragmentNode>)> {
+  ) -> Option<FlexCacheValue> {
     let shard_idx = self.shard_index(node_key);
     let result = self.shards.get(shard_idx).and_then(|shard| {
-      let map = shard.map.read().ok()?;
+      let map = shard.map.read();
       let entry = map.get(&node_key)?;
-      find_cached_fragment(entry, target_size)
+      find_cached_fragment_by_border_size(entry, target_size)
     });
     self.record_lookup(shard_idx, result.is_some());
     result
@@ -110,17 +137,14 @@ impl ShardedFlexCache {
     &self,
     node_key: u64,
     key: FlexCacheKey,
-    value: (Size, Arc<FragmentNode>),
+    value: FlexCacheValue,
     per_node_cap: usize,
   ) -> bool {
     let shard_idx = self.shard_index(node_key);
     let Some(shard) = self.shards.get(shard_idx) else {
       return false;
     };
-    let mut map = match shard.map.write() {
-      Ok(guard) => guard,
-      Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut map = shard.map.write();
     let entry = map.entry(node_key).or_default();
     if entry.contains_key(&key) {
       return false;
@@ -177,11 +201,12 @@ pub(crate) fn cache_tolerances(target_size: Size) -> (f32, f32) {
 pub(crate) fn find_cached_fragment(
   cache: &FlexCacheEntry,
   target_size: Size,
-) -> Option<(Size, Arc<FragmentNode>)> {
-  let mut best: Option<(Size, Arc<FragmentNode>)> = None;
+) -> Option<FlexCacheValue> {
+  let mut best: Option<FlexCacheValue> = None;
   let mut best_score = f32::MAX;
   let (eps_w, eps_h) = cache_tolerances(target_size);
-  for (size, frag) in cache.values() {
+  for value in cache.values() {
+    let size = value.measured_size;
     if !size.width.is_finite() || !size.height.is_finite() {
       continue;
     }
@@ -191,7 +216,7 @@ pub(crate) fn find_cached_fragment(
       let score = dw + dh;
       if score < best_score {
         best_score = score;
-        best = Some((*size, frag.clone()));
+        best = Some(value.clone());
       }
     }
   }
@@ -201,6 +226,81 @@ pub(crate) fn find_cached_fragment(
 pub(crate) fn find_layout_cache_fragment(
   cache: &FlexCacheEntry,
   target_size: Size,
-) -> Option<(Size, Arc<FragmentNode>)> {
+) -> Option<FlexCacheValue> {
   find_cached_fragment(cache, target_size)
+}
+
+pub(crate) fn find_cached_fragment_by_border_size(
+  cache: &FlexCacheEntry,
+  target_size: Size,
+) -> Option<FlexCacheValue> {
+  let mut best: Option<FlexCacheValue> = None;
+  let mut best_score = f32::MAX;
+  let (eps_w, eps_h) = cache_tolerances(target_size);
+  for value in cache.values() {
+    let size = value.border_size;
+    if !size.width.is_finite() || !size.height.is_finite() {
+      continue;
+    }
+    let dw = (size.width - target_size.width).abs();
+    let dh = (size.height - target_size.height).abs();
+    if dw <= eps_w && dh <= eps_h {
+      let score = dw + dh;
+      if score < best_score {
+        best_score = score;
+        best = Some(value.clone());
+      }
+    }
+  }
+  best
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::geometry::Rect;
+  use crate::tree::fragment_tree::FragmentContent;
+  use crate::tree::fragment_tree::FragmentNode;
+  use std::sync::Arc;
+
+  #[test]
+  fn find_fragment_by_border_size_matches_used_border_box_size() {
+    let cache = ShardedFlexCache::new_measure();
+    let node_key = 123u64;
+    let key: FlexCacheKey = (Some(1), None);
+
+    let fragment_bounds = Rect::from_xywh(0.0, 0.0, 500.0, 300.0);
+    let fragment = Arc::new(FragmentNode::new(
+      fragment_bounds,
+      FragmentContent::Block { box_id: None },
+      vec![],
+    ));
+
+    // Simulate a measured entry where the stored size is the *content-box* size (smaller than the
+    // fragment's border-box bounds). This mirrors flex/grid measurement, which returns a content
+    // size to Taffy but stores the full fragment tree for later reuse, potentially clamping the
+    // returned size without reflowing the fragment tree.
+    let content_size = Size::new(100.0, 20.0);
+    let used_border_size = Size::new(120.0, 40.0);
+    assert!(cache.insert(
+      node_key,
+      key,
+      FlexCacheValue {
+        measured_size: content_size,
+        border_size: used_border_size,
+        fragment: Arc::clone(&fragment),
+      },
+      16
+    ));
+
+    // The legacy lookup matches on stored content-box size, so searching by border-box size should fail.
+    assert!(cache.find_fragment(node_key, used_border_size).is_none());
+
+    // The border-box lookup should find the fragment when searching by the used border size.
+    let found = cache
+      .find_fragment_by_border_size(node_key, used_border_size)
+      .expect("expected border-box cache hit");
+    assert_eq!(found.border_size, used_border_size);
+    assert_eq!(found.fragment.bounds.size, fragment_bounds.size);
+  }
 }

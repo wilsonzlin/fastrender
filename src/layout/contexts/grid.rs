@@ -1868,15 +1868,11 @@ impl GridFormattingContext {
           bounds.height(),
         ) {
           fragment_clone_profile::record_fragment_reuse_without_clone(CloneSite::GridMeasureReuse);
-          debug_assert!(
-            reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
-            "measured fragments should be normalized to the origin",
+          let delta = Point::new(
+            bounds.x() - reused.bounds.x(),
+            bounds.y() - reused.bounds.y(),
           );
-          if let Err(err) = translate_fragment_tree(
-            &mut reused,
-            Point::new(bounds.x(), bounds.y()),
-            &mut deadline_counter,
-          ) {
+          if let Err(err) = translate_fragment_tree(&mut reused, delta, &mut deadline_counter) {
             return Some(Err(err));
           }
           reused_fragments[idx] = Some(reused);
@@ -1932,6 +1928,18 @@ impl GridFormattingContext {
             let child_constraints = child_constraints
               .with_used_border_box_size(Some(bounds.width()), Some(bounds.height()));
             fc.layout(child, &child_constraints)?
+          } else if matches!(
+            fc_type,
+            FormattingContextType::Flex | FormattingContextType::Grid
+          ) {
+            let mut layout_style = (*child.style).clone();
+            layout_style.width = Some(Length::px(bounds.width()));
+            layout_style.height = Some(Length::px(bounds.height()));
+            crate::layout::style_override::with_style_override(
+              child.id,
+              Arc::new(layout_style),
+              || fc.layout(child, &child_constraints),
+            )?
           } else {
             let mut layout_style = (*child.style).clone();
             layout_style.width = Some(Length::px(bounds.width()));
@@ -2141,15 +2149,11 @@ impl GridFormattingContext {
           bounds.height(),
         ) {
           fragment_clone_profile::record_fragment_reuse_without_clone(CloneSite::GridMeasureReuse);
-          debug_assert!(
-            reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
-            "measured fragments should be normalized to the origin",
+          let delta = Point::new(
+            bounds.x() - reused.bounds.x(),
+            bounds.y() - reused.bounds.y(),
           );
-          translate_fragment_tree(
-            &mut reused,
-            Point::new(bounds.x(), bounds.y()),
-            deadline_counter,
-          )?;
+          translate_fragment_tree(&mut reused, delta, deadline_counter)?;
           return Ok(reused);
         }
       }
@@ -2178,6 +2182,18 @@ impl GridFormattingContext {
         let child_constraints =
           child_constraints.with_used_border_box_size(Some(bounds.width()), Some(bounds.height()));
         fc.layout(box_node, &child_constraints)?
+      } else if matches!(
+        fc_type,
+        FormattingContextType::Flex | FormattingContextType::Grid
+      ) {
+        let mut layout_style = (*box_node.style).clone();
+        layout_style.width = Some(Length::px(bounds.width()));
+        layout_style.height = Some(Length::px(bounds.height()));
+        crate::layout::style_override::with_style_override(
+          box_node.id,
+          Arc::new(layout_style),
+          || fc.layout(box_node, &child_constraints),
+        )?
       } else {
         let mut layout_style = (*box_node.style).clone();
         layout_style.width = Some(Length::px(bounds.width()));
@@ -2333,7 +2349,6 @@ impl GridFormattingContext {
           || child.is_replaced());
       let needs_block_intrinsics = positioned_style.height.is_auto()
         && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-
       let mut static_style = (*child.style).clone();
       static_style.position = crate::style::position::Position::Relative;
       static_style.top = None;
@@ -2812,12 +2827,21 @@ impl GridFormattingContext {
       ),
       "GridFormattingContext must only query grid containers",
     );
+    if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
+      return Ok(cached);
+    }
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    let style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or(style);
     if style.containment.isolates_inline_size() {
       let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
+      intrinsic_cache_store(box_node, mode, edges.max(0.0));
       return Ok(edges.max(0.0));
     }
 
-    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+    // Use a pooled Taffy tree to avoid repeated allocation churn during intrinsic sizing probes.
+    let mut taffy = crate::layout::taffy_integration::PooledTaffyTree::new();
     let mut positioned_children: FxHashMap<TaffyNodeId, Vec<*const BoxNode>> = FxHashMap::default();
     let intrinsic_constraints = LayoutConstraints::new(
       match mode {
@@ -2833,6 +2857,28 @@ impl GridFormattingContext {
       &intrinsic_constraints,
       &mut positioned_children,
     )?;
+    if let Some(style_override) = style_override.as_deref() {
+      let in_flow_children: Vec<&BoxNode> = box_node
+        .children
+        .iter()
+        .filter(|child| {
+          !matches!(
+            child.style.position,
+            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+          )
+        })
+        .collect();
+      let mut style_deadline_counter = 0usize;
+      let simple_grid = self.is_simple_grid(
+        style_override,
+        &in_flow_children,
+        &mut style_deadline_counter,
+      )?;
+      let override_taffy_style = self.convert_style(style_override, None, simple_grid, true);
+      taffy
+        .set_style(root_id, override_taffy_style)
+        .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+    }
 
     // Use appropriate available space for intrinsic sizing
     let available_space = match mode {
@@ -3008,7 +3054,9 @@ impl GridFormattingContext {
       .layout(root_id)
       .map_err(|e| LayoutError::MissingContext(format!("Taffy layout error: {:?}", e)))?;
 
-    Ok(layout.size.width)
+    let result = layout.size.width.max(0.0);
+    intrinsic_cache_store(box_node, mode, result);
+    Ok(result)
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -3197,12 +3245,6 @@ impl GridFormattingContext {
       box_id: Some(box_node.id),
     };
     fragment.style = Some(box_node.style.clone());
-    let mut normalize_deadline_counter = 0usize;
-    let fragment = match normalize_fragment_origin(fragment, &mut normalize_deadline_counter) {
-      Ok(fragment) => fragment,
-      Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
-      Err(_) => return taffy::geometry::Size::ZERO,
-    };
     let content_size = self.content_box_size(&fragment, &box_node.style, percentage_base);
     let size = taffy::geometry::Size {
       width: content_size.width.max(0.0),
@@ -3228,8 +3270,9 @@ fn grid_child_fingerprint(
   children.len().hash(&mut h);
   for child in children {
     check_layout_deadline(deadline_counter)?;
-    std::mem::discriminant(&child.box_type).hash(&mut h);
-    child.formatting_context().hash(&mut h);
+    // The cached Taffy template stores converted styles only; box type/formatting context affects
+    // measurement/layout callbacks, not the style conversion output. Hash only style fingerprints so
+    // we maximize template reuse across repeated component trees.
     taffy_grid_item_style_fingerprint(child.style.as_ref()).hash(&mut h);
   }
   Ok(h.finish())
@@ -3250,9 +3293,6 @@ fn translate_fragment_tree(
       Point::new(logical.x() + delta.x, logical.y() + delta.y),
       logical.size,
     ));
-  }
-  for child in fragment.children_mut() {
-    translate_fragment_tree(child, delta, deadline_counter)?;
   }
   Ok(())
 }
@@ -3300,25 +3340,25 @@ impl Drop for GridTestMeasureHookGuard {
   }
 }
 
-fn find_first_baseline_absolute(
+fn find_first_baseline_offset(
   fragment: &FragmentNode,
   deadline_counter: &mut usize,
 ) -> Result<Option<f32>, LayoutError> {
   check_layout_deadline(deadline_counter)?;
   if let Some(baseline) = fragment.baseline {
-    return Ok(Some(fragment.bounds.y() + baseline));
+    return Ok(Some(baseline));
   }
   match &fragment.content {
-    FragmentContent::Line { baseline } => return Ok(Some(fragment.bounds.y() + *baseline)),
+    FragmentContent::Line { baseline } => return Ok(Some(*baseline)),
     FragmentContent::Text {
       baseline_offset, ..
-    } => return Ok(Some(fragment.bounds.y() + *baseline_offset)),
+    } => return Ok(Some(*baseline_offset)),
     _ => {}
   }
 
   for child in fragment.children.iter() {
-    if let Some(b) = find_first_baseline_absolute(child, deadline_counter)? {
-      return Ok(Some(b));
+    if let Some(b) = find_first_baseline_offset(child, deadline_counter)? {
+      return Ok(Some(child.bounds.y() + b));
     }
   }
 
@@ -3329,7 +3369,7 @@ fn first_baseline_offset(
   fragment: &FragmentNode,
   deadline_counter: &mut usize,
 ) -> Result<Option<f32>, LayoutError> {
-  Ok(find_first_baseline_absolute(fragment, deadline_counter)?.map(|abs| abs - fragment.bounds.y()))
+  find_first_baseline_offset(fragment, deadline_counter)
 }
 
 fn apply_alignment_fallback_for_grid(
@@ -3596,9 +3636,6 @@ impl FormattingContext for GridFormattingContext {
     }
     let style_override = crate::layout::style_override::style_override_for(box_node.id);
     let override_active = style_override.is_some();
-    let style: &ComputedStyle = style_override
-      .as_deref()
-      .unwrap_or_else(|| box_node.style.as_ref());
     if !override_active {
       if let Some(cached) = layout_cache_lookup(
         box_node,
@@ -3609,15 +3646,20 @@ impl FormattingContext for GridFormattingContext {
         return Ok(cached);
       }
     }
+    let style: &ComputedStyle = style_override
+      .as_deref()
+      .unwrap_or_else(|| box_node.style.as_ref());
 
     let trace_grid_layout =
       crate::debug::runtime::runtime_toggles().truthy("FASTR_TRACE_GRID_LAYOUT");
     let grid_trace_start = trace_grid_layout.then(std::time::Instant::now);
 
-    // Create fresh Taffy tree for this layout
-    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let mut positioned_children_map: FxHashMap<TaffyNodeId, Vec<*const BoxNode>> =
-      FxHashMap::default();
+    // Create a fresh Taffy tree for this layout.
+    //
+    // Use a pooled instance to reduce allocation churn when many grid containers are laid out
+    // during a single render.
+    let mut taffy = crate::layout::taffy_integration::PooledTaffyTree::new();
+    let mut positioned_children_map: FxHashMap<TaffyNodeId, Vec<*const BoxNode>> = FxHashMap::default();
 
     // Partition children into in-flow vs. out-of-flow positioned.
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
@@ -3649,6 +3691,20 @@ impl FormattingContext for GridFormattingContext {
       constraints,
       &mut positioned_children_map,
     )?;
+    if let Some(style_override) = style_override.as_deref() {
+      // Patch the root style in-place so we can avoid deep-cloning box subtrees when sizing hints
+      // are temporarily overridden (e.g. flex/grid intrinsic probes or final item sizing).
+      let mut style_deadline_counter = 0usize;
+      let simple_grid = self.is_simple_grid(
+        style_override,
+        &in_flow_children,
+        &mut style_deadline_counter,
+      )?;
+      let override_taffy_style = self.convert_style(style_override, None, simple_grid, true);
+      taffy
+        .set_style(root_id, override_taffy_style)
+        .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+    }
 
     if trace_grid_layout {
       let selector = box_node
@@ -3674,26 +3730,14 @@ impl FormattingContext for GridFormattingContext {
         && self.inline_axis_is_horizontal(style)
       {
         let percentage_base = outer_width;
-        let padding_left = self.resolve_length_for_width(
-          style.padding_left,
-          percentage_base,
-          style,
-        );
-        let padding_right = self.resolve_length_for_width(
-          style.padding_right,
-          percentage_base,
-          style,
-        );
-        let border_left = self.resolve_length_for_width(
-          style.border_left_width,
-          percentage_base,
-          style,
-        );
-        let border_right = self.resolve_length_for_width(
-          style.border_right_width,
-          percentage_base,
-          style,
-        );
+        let padding_left =
+          self.resolve_length_for_width(style.padding_left, percentage_base, style);
+        let padding_right =
+          self.resolve_length_for_width(style.padding_right, percentage_base, style);
+        let border_left =
+          self.resolve_length_for_width(style.border_left_width, percentage_base, style);
+        let border_right =
+          self.resolve_length_for_width(style.border_right_width, percentage_base, style);
         let content_width =
           (outer_width - padding_left - padding_right - border_left - border_right).max(0.0);
         if let Ok(existing) = taffy.style(root_id) {
@@ -4141,7 +4185,6 @@ impl FormattingContext for GridFormattingContext {
             || child.is_replaced());
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
-
         let mut static_style = (*child.style).clone();
         static_style.position = crate::style::position::Position::Relative;
         static_style.top = None;
@@ -4325,31 +4368,7 @@ impl FormattingContext for GridFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    let override_active = crate::layout::style_override::has_style_override(box_node.id);
-    if !override_active {
-      if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
-        return Ok(cached);
-      }
-    }
-    let style_override = if override_active {
-      let override_style = crate::layout::style_override::style_override_for(box_node.id);
-      debug_assert!(
-        override_style.is_some(),
-        "expected style override for node_id={}",
-        box_node.id
-      );
-      override_style
-    } else {
-      None
-    };
-    let style: &ComputedStyle = style_override
-      .as_deref()
-      .unwrap_or_else(|| box_node.style.as_ref());
-    let size = self.compute_intrinsic_size(box_node, style, mode)?;
-    if !override_active {
-      intrinsic_cache_store(box_node, mode, size);
-    }
-    Ok(size)
+    self.compute_intrinsic_size(box_node, box_node.style.as_ref(), mode)
   }
 }
 
@@ -4712,7 +4731,7 @@ mod tests {
     }
 
     let mut deadline_counter = 0usize;
-    let result = find_first_baseline_absolute(&fragment, &mut deadline_counter);
+    let result = find_first_baseline_offset(&fragment, &mut deadline_counter);
     assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
@@ -4724,16 +4743,30 @@ mod tests {
     let deadline = RenderDeadline::new(Some(Duration::ZERO), None);
     let _guard = DeadlineGuard::install(Some(&deadline));
 
-    let leaf = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), "x", 0.5);
-    let mut fragment = leaf;
+    let mut deadline_counter = 0usize;
+    let mut fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![]);
+    let mut result = Ok(());
     for _ in 0..(GRID_DEADLINE_CHECK_STRIDE + 16) {
-      fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![fragment]);
+      result = translate_fragment_tree(&mut fragment, Point::new(0.0, 0.0), &mut deadline_counter);
+      if result.is_err() {
+        break;
+      }
     }
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
+  fn grid_translate_fragment_tree_moves_root_only() {
+    let child = FragmentNode::new_block(Rect::from_xywh(5.0, 7.0, 1.0, 1.0), vec![]);
+    let mut fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![child]);
 
     let mut deadline_counter = 0usize;
-    let result =
-      translate_fragment_tree(&mut fragment, Point::new(10.0, 5.0), &mut deadline_counter);
-    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+    translate_fragment_tree(&mut fragment, Point::new(10.0, 5.0), &mut deadline_counter).unwrap();
+
+    assert_eq!(fragment.bounds.x(), 10.0);
+    assert_eq!(fragment.bounds.y(), 5.0);
+    assert_eq!(fragment.children[0].bounds.x(), 5.0);
+    assert_eq!(fragment.children[0].bounds.y(), 7.0);
   }
 
   #[test]
@@ -6562,15 +6595,17 @@ mod tests {
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
     let mut deadline_counter = 0usize;
-    let baseline0 =
-      super::find_first_baseline_absolute(&fragment.children[0], &mut deadline_counter)
+    let baseline0_offset =
+      super::first_baseline_offset(&fragment.children[0], &mut deadline_counter)
         .expect("baseline computation")
         .expect("baseline");
+    let baseline0 = fragment.children[0].bounds.y() + baseline0_offset;
     let mut deadline_counter = 0usize;
-    let baseline1 =
-      super::find_first_baseline_absolute(&fragment.children[1], &mut deadline_counter)
+    let baseline1_offset =
+      super::first_baseline_offset(&fragment.children[1], &mut deadline_counter)
         .expect("baseline computation")
         .expect("baseline");
+    let baseline1 = fragment.children[1].bounds.y() + baseline1_offset;
 
     assert!(
       (baseline0 - baseline1).abs() < 0.05,

@@ -4,7 +4,10 @@ use fastrender::layout::engine::{
   reset_layout_parallel_debug_counters, LayoutParallelismMode, DEFAULT_LAYOUT_MIN_FANOUT,
 };
 use fastrender::snapshot_fragment_tree;
-use fastrender::{BoxNode, BoxTree, FormattingContextType, LayoutConfig, LayoutEngine, LayoutParallelism, RenderArtifactRequest, Size};
+use fastrender::{
+  BoxNode, BoxTree, FormattingContextType, LayoutConfig, LayoutEngine, LayoutParallelism,
+  RenderArtifactRequest, Size,
+};
 use std::fmt::Write;
 use std::sync::{Mutex, OnceLock};
 
@@ -111,8 +114,9 @@ fn auto_parallel_layout_engages_on_wide_html() {
 
   enable_layout_parallel_debug_counters(true);
   reset_layout_parallel_debug_counters();
-  let options = RenderOptions::new()
-    .with_layout_parallelism(LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT).with_max_threads(Some(2)));
+  let options = RenderOptions::new().with_layout_parallelism(
+    LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT).with_max_threads(Some(2)),
+  );
   let _ = renderer
     .render_html_with_stylesheets_report(
       &html,
@@ -143,8 +147,8 @@ fn auto_parallel_layout_does_not_engage_on_tiny_html() {
   let config = FastRenderConfig::new().with_default_viewport(64, 64);
   assert_eq!(
     config.layout_parallelism.mode,
-    LayoutParallelismMode::Auto,
-    "expected default layout parallelism mode to be auto"
+    LayoutParallelismMode::Disabled,
+    "expected default layout parallelism mode to be disabled"
   );
   let mut renderer = FastRender::with_config(config).expect("renderer");
 
@@ -180,8 +184,7 @@ fn auto_parallel_layout_engages_on_large_synthetic_box_tree() {
   let root = BoxNode::new_block(style, FormattingContextType::Block, children);
   let tree = BoxTree::new(root);
 
-  let parallelism = LayoutParallelism::default().with_max_threads(Some(2));
-  assert_eq!(parallelism.mode, LayoutParallelismMode::Auto);
+  let parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT).with_max_threads(Some(2));
   let engine = LayoutEngine::new(
     LayoutConfig::for_viewport(Size::new(800.0, 600.0)).with_parallelism(parallelism),
   );

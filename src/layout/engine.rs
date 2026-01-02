@@ -310,7 +310,7 @@ impl LayoutParallelism {
 
 impl Default for LayoutParallelism {
   fn default() -> Self {
-    LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT)
+    LayoutParallelism::disabled()
   }
 }
 
@@ -850,6 +850,7 @@ impl LayoutEngine {
       layout_cache_entry_limit_for_box_tree(box_tree_nodes),
     );
     intrinsic_cache_use_epoch(epoch, reset_for_run);
+    crate::layout::taffy_integration::taffy_style_fingerprint_cache_use_epoch(epoch);
     if reset_for_run {
       crate::layout::flex_profile::reset_layout_cache_clones();
     }
@@ -1225,7 +1226,9 @@ mod tests {
       .build()
       .expect("build rayon pool");
     pool.install(|| {
-      let engine = LayoutEngine::new(LayoutConfig::for_viewport(Size::new(800.0, 600.0)));
+      let mut config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
+      config.parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT);
+      let engine = LayoutEngine::new(config);
       assert_eq!(
         engine.config().parallelism.max_threads,
         Some(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
@@ -1240,7 +1243,9 @@ mod tests {
       .build()
       .expect("build rayon pool");
     pool.install(|| {
-      let engine = LayoutEngine::new(LayoutConfig::for_viewport(Size::new(800.0, 600.0)));
+      let mut config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
+      config.parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT);
+      let engine = LayoutEngine::new(config);
       assert_eq!(engine.config().parallelism.max_threads, None);
     });
   }
@@ -1253,7 +1258,8 @@ mod tests {
       .expect("build rayon pool");
     pool.install(|| {
       let mut config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-      config.parallelism = config.parallelism.with_max_threads(Some(32));
+      config.parallelism =
+        LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT).with_max_threads(Some(32));
       let engine = LayoutEngine::new(config);
       assert_eq!(engine.config().parallelism.max_threads, Some(32));
     });

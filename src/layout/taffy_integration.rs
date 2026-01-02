@@ -24,15 +24,20 @@ use crate::geometry::Size;
 use crate::style::types::{AspectRatio, FlexBasis, GridTrack};
 use crate::style::values::{CalcLength, Length};
 use crate::style::ComputedStyle;
+use crate::tree::box_tree::BoxNode;
+use parking_lot::Mutex;
 use rustc_hash::{FxHashMap, FxHasher};
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 #[cfg(test)]
 use std::sync::LazyLock;
 use std::time::Duration;
 use taffy::style::Style as TaffyStyle;
+use taffy::TaffyTree;
 
 /// Count of Taffy layout invocations per adapter.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -593,11 +598,121 @@ fn hash_grid_tracks(tracks: &[GridTrack], hasher: &mut FxHasher) {
   }
 }
 
+thread_local! {
+  /// Pool of reusable `TaffyTree` instances.
+  ///
+  /// Building and dropping fresh `TaffyTree` allocations for every flex/grid layout can dominate
+  /// runtime on pages with thousands of formatting contexts (e.g., complex dashboards). Reusing the
+  /// underlying slotmap allocations keeps these hot paths allocation-light while still resetting
+  /// node storage via `TaffyTree::clear()`.
+  static TAFFY_TREE_POOL: RefCell<Vec<TaffyTree<*const BoxNode>>> = RefCell::new(Vec::new());
+}
+
+/// Maximum number of cleared `TaffyTree` instances to retain per thread.
+///
+/// Layout can recurse through nested flex/grid containers, so the pool is a small stack rather than
+/// a single cached instance. We cap it to keep memory usage bounded even when deep nesting occurs.
+const TAFFY_TREE_POOL_MAX: usize = 8;
+
+/// RAII wrapper that returns a cleared `TaffyTree` to the per-thread pool on drop.
+pub(crate) struct PooledTaffyTree {
+  tree: Option<TaffyTree<*const BoxNode>>,
+}
+
+impl PooledTaffyTree {
+  pub(crate) fn new() -> Self {
+    let tree = TAFFY_TREE_POOL
+      .with(|pool| pool.borrow_mut().pop())
+      .unwrap_or_else(TaffyTree::new);
+    Self { tree: Some(tree) }
+  }
+}
+
+impl Deref for PooledTaffyTree {
+  type Target = TaffyTree<*const BoxNode>;
+
+  fn deref(&self) -> &Self::Target {
+    self
+      .tree
+      .as_ref()
+      .expect("PooledTaffyTree missing inner tree")
+  }
+}
+
+impl DerefMut for PooledTaffyTree {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    self
+      .tree
+      .as_mut()
+      .expect("PooledTaffyTree missing inner tree")
+  }
+}
+
+impl Drop for PooledTaffyTree {
+  fn drop(&mut self) {
+    let Some(mut tree) = self.tree.take() else {
+      return;
+    };
+    tree.clear();
+    TAFFY_TREE_POOL.with(|pool| {
+      let mut pool = pool.borrow_mut();
+      if pool.len() < TAFFY_TREE_POOL_MAX {
+        pool.push(tree);
+      }
+    });
+  }
+}
+
+static TAFFY_STYLE_FINGERPRINT_EPOCH: AtomicUsize = AtomicUsize::new(1);
+
+thread_local! {
+  /// Tracks the last epoch observed by this thread for Taffy style fingerprint memoization.
+  ///
+  /// When the epoch changes we clear the per-thread memoization maps to keep them bounded and to
+  /// avoid caching fingerprints for style pointers that might be recycled across runs.
+  static TAFFY_STYLE_FINGERPRINT_CACHE_EPOCH: Cell<usize> = const { Cell::new(0) };
+  static TAFFY_FLEX_STYLE_FINGERPRINT_CACHE: RefCell<FxHashMap<usize, u64>> =
+    RefCell::new(FxHashMap::default());
+  static TAFFY_GRID_CONTAINER_STYLE_FINGERPRINT_CACHE: RefCell<FxHashMap<usize, u64>> =
+    RefCell::new(FxHashMap::default());
+  static TAFFY_GRID_ITEM_STYLE_FINGERPRINT_CACHE: RefCell<FxHashMap<usize, u64>> =
+    RefCell::new(FxHashMap::default());
+}
+
+/// Maximum number of memoized Taffy style fingerprints kept per thread.
+///
+/// This is a tradeoff between reducing repeated hashing of large `ComputedStyle` values and keeping
+/// memory usage bounded on extremely large pages.
+const TAFFY_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES: usize = 32_768;
+
+/// Sets the active epoch used for Taffy style fingerprint memoization.
+///
+/// The epoch should match the layout cache epoch so memoization is preserved across relayout within
+/// the same run (e.g., container query second passes) while still clearing between independent
+/// renders.
+pub(crate) fn taffy_style_fingerprint_cache_use_epoch(epoch: usize) {
+  TAFFY_STYLE_FINGERPRINT_EPOCH.store(epoch.max(1), Ordering::Relaxed);
+}
+
+#[inline]
+fn ensure_taffy_style_fingerprint_cache_epoch() {
+  let epoch = TAFFY_STYLE_FINGERPRINT_EPOCH.load(Ordering::Relaxed);
+  TAFFY_STYLE_FINGERPRINT_CACHE_EPOCH.with(|cell| {
+    if cell.get() == epoch {
+      return;
+    }
+    cell.set(epoch);
+    TAFFY_FLEX_STYLE_FINGERPRINT_CACHE.with(|cache| cache.borrow_mut().clear());
+    TAFFY_GRID_CONTAINER_STYLE_FINGERPRINT_CACHE.with(|cache| cache.borrow_mut().clear());
+    TAFFY_GRID_ITEM_STYLE_FINGERPRINT_CACHE.with(|cache| cache.borrow_mut().clear());
+  });
+}
+
 /// Stable, value-based fingerprint for flex `ComputedStyle` -> Taffy style conversion.
 ///
 /// This deliberately avoids pointer identity so repeated component templates can reuse cached
 /// converted styles across different box ids and `Arc<ComputedStyle>` allocations.
-pub(crate) fn taffy_flex_style_fingerprint(style: &ComputedStyle) -> u64 {
+fn taffy_flex_style_fingerprint_uncached(style: &ComputedStyle) -> u64 {
   let mut h = FxHasher::default();
   hash_enum_discriminant(&style.display, &mut h);
   hash_enum_discriminant(&style.writing_mode, &mut h);
@@ -666,8 +781,27 @@ pub(crate) fn taffy_flex_style_fingerprint(style: &ComputedStyle) -> u64 {
   h.finish()
 }
 
+pub(crate) fn taffy_flex_style_fingerprint(style: &ComputedStyle) -> u64 {
+  ensure_taffy_style_fingerprint_cache_epoch();
+  let style_ptr = style as *const ComputedStyle as usize;
+  if let Some(hit) =
+    TAFFY_FLEX_STYLE_FINGERPRINT_CACHE.with(|cache| cache.borrow().get(&style_ptr).copied())
+  {
+    return hit;
+  }
+  let fingerprint = taffy_flex_style_fingerprint_uncached(style);
+  TAFFY_FLEX_STYLE_FINGERPRINT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    if map.len() >= TAFFY_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES && !map.contains_key(&style_ptr) {
+      map.clear();
+    }
+    map.insert(style_ptr, fingerprint);
+  });
+  fingerprint
+}
+
 /// Stable, value-based fingerprint for grid container `ComputedStyle` -> Taffy style conversion.
-pub(crate) fn taffy_grid_container_style_fingerprint(style: &ComputedStyle) -> u64 {
+fn taffy_grid_container_style_fingerprint_uncached(style: &ComputedStyle) -> u64 {
   let mut h = FxHasher::default();
 
   hash_enum_discriminant(&style.writing_mode, &mut h);
@@ -752,9 +886,28 @@ pub(crate) fn taffy_grid_container_style_fingerprint(style: &ComputedStyle) -> u
   h.finish()
 }
 
+pub(crate) fn taffy_grid_container_style_fingerprint(style: &ComputedStyle) -> u64 {
+  ensure_taffy_style_fingerprint_cache_epoch();
+  let style_ptr = style as *const ComputedStyle as usize;
+  if let Some(hit) = TAFFY_GRID_CONTAINER_STYLE_FINGERPRINT_CACHE
+    .with(|cache| cache.borrow().get(&style_ptr).copied())
+  {
+    return hit;
+  }
+  let fingerprint = taffy_grid_container_style_fingerprint_uncached(style);
+  TAFFY_GRID_CONTAINER_STYLE_FINGERPRINT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    if map.len() >= TAFFY_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES && !map.contains_key(&style_ptr) {
+      map.clear();
+    }
+    map.insert(style_ptr, fingerprint);
+  });
+  fingerprint
+}
+
 /// Stable, value-based fingerprint for grid *item* (non-grid node) `ComputedStyle` -> Taffy style
 /// conversion. Omits grid-container-only fields that do not affect leaf conversion output.
-pub(crate) fn taffy_grid_item_style_fingerprint(style: &ComputedStyle) -> u64 {
+fn taffy_grid_item_style_fingerprint_uncached(style: &ComputedStyle) -> u64 {
   let mut h = FxHasher::default();
 
   hash_enum_discriminant(&style.writing_mode, &mut h);
@@ -818,6 +971,25 @@ pub(crate) fn taffy_grid_item_style_fingerprint(style: &ComputedStyle) -> u64 {
   hash_aspect_ratio(&style.aspect_ratio, &mut h);
 
   h.finish()
+}
+
+pub(crate) fn taffy_grid_item_style_fingerprint(style: &ComputedStyle) -> u64 {
+  ensure_taffy_style_fingerprint_cache_epoch();
+  let style_ptr = style as *const ComputedStyle as usize;
+  if let Some(hit) =
+    TAFFY_GRID_ITEM_STYLE_FINGERPRINT_CACHE.with(|cache| cache.borrow().get(&style_ptr).copied())
+  {
+    return hit;
+  }
+  let fingerprint = taffy_grid_item_style_fingerprint_uncached(style);
+  TAFFY_GRID_ITEM_STYLE_FINGERPRINT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    if map.len() >= TAFFY_STYLE_FINGERPRINT_CACHE_MAX_ENTRIES && !map.contains_key(&style_ptr) {
+      map.clear();
+    }
+    map.insert(style_ptr, fingerprint);
+  });
+  fingerprint
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -1051,10 +1223,7 @@ impl TaffyNodeCache {
 
   pub(crate) fn clear(&self) {
     for shard in self.shards.iter() {
-      let mut guard = match shard.inner.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-      };
+      let mut guard = shard.inner.lock();
       guard.templates.clear();
       guard.order.clear();
     }
@@ -1062,10 +1231,7 @@ impl TaffyNodeCache {
 
   pub(crate) fn get(&self, key: &TaffyNodeCacheKey) -> Option<Arc<CachedTaffyTemplate>> {
     let shard = self.shards.get(self.shard_index(key))?;
-    let guard = match shard.inner.lock() {
-      Ok(guard) => guard,
-      Err(poisoned) => poisoned.into_inner(),
-    };
+    let guard = shard.inner.lock();
     guard.templates.get(key).cloned()
   }
 
@@ -1074,10 +1240,7 @@ impl TaffyNodeCache {
     let Some(shard) = self.shards.get(shard_idx) else {
       return;
     };
-    let mut guard = match shard.inner.lock() {
-      Ok(guard) => guard,
-      Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut guard = shard.inner.lock();
     if let Some(pos) = guard.order.iter().position(|existing| existing == &key) {
       guard.order.remove(pos);
     }
@@ -1104,13 +1267,7 @@ impl TaffyNodeCache {
     self
       .shards
       .iter()
-      .map(|shard| {
-        shard
-          .inner
-          .lock()
-          .map(|guard| guard.templates.len())
-          .unwrap_or_else(|poisoned| poisoned.into_inner().templates.len())
-      })
+      .map(|shard| shard.inner.lock().templates.len())
       .sum()
   }
 }
@@ -1181,7 +1338,7 @@ mod tests {
     let entry_count: usize = cache
       .shards
       .iter()
-      .map(|shard| shard.inner.lock().unwrap().templates.len())
+      .map(|shard| shard.inner.lock().templates.len())
       .sum();
     assert_eq!(entry_count, 1);
   }

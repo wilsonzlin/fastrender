@@ -87,8 +87,7 @@ use crate::tree::fragment_tree::FragmentNode;
 use crate::{error::RenderError, error::RenderStage};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHasher};
-#[cfg(test)]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -99,6 +98,75 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 static LOG_CHILD_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
+
+thread_local! {
+  /// Memoized results for flexbox's content-based automatic minimum size computation.
+  ///
+  /// The Taffy template cache memoizes style → Taffy conversion, but flex auto minimum sizing
+  /// (`min-width/height:auto` on flex items) is content-dependent. Still, within a single layout run
+  /// the content size suggestion for a box is stable, and it is frequently requested repeatedly as
+  /// flex/grid layout re-enters nested formatting contexts.
+  ///
+  /// Scope this cache to the intrinsic/layout cache epoch so we do not retain stale pointers across
+  /// renders.
+  static FLEX_AUTO_MIN_CACHE_EPOCH: Cell<usize> = const { Cell::new(0) };
+  static FLEX_AUTO_MIN_CACHE: RefCell<FxHashMap<(usize, usize, bool), Option<f32>>> =
+    RefCell::new(FxHashMap::default());
+}
+
+const FLEX_AUTO_MIN_CACHE_MAX_ENTRIES: usize = 32_768;
+
+#[inline]
+fn ensure_flex_auto_min_cache_epoch() {
+  let epoch = crate::layout::formatting_context::intrinsic_cache_epoch();
+  FLEX_AUTO_MIN_CACHE_EPOCH.with(|cell| {
+    if cell.get() == epoch {
+      return;
+    }
+    cell.set(epoch);
+    FLEX_AUTO_MIN_CACHE.with(|cache| cache.borrow_mut().clear());
+  });
+}
+
+#[inline]
+fn flex_auto_min_cache_lookup(
+  box_id: usize,
+  style_ptr: usize,
+  main_axis_is_horizontal: bool,
+) -> Option<Option<f32>> {
+  if box_id == 0 {
+    return None;
+  }
+  ensure_flex_auto_min_cache_epoch();
+  FLEX_AUTO_MIN_CACHE.with(|cache| {
+    cache
+      .borrow()
+      .get(&(box_id, style_ptr, main_axis_is_horizontal))
+      .cloned()
+  })
+}
+
+#[inline]
+fn flex_auto_min_cache_store(
+  box_id: usize,
+  style_ptr: usize,
+  main_axis_is_horizontal: bool,
+  value: Option<f32>,
+) {
+  if box_id == 0 {
+    return;
+  }
+  ensure_flex_auto_min_cache_epoch();
+  FLEX_AUTO_MIN_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    if map.len() >= FLEX_AUTO_MIN_CACHE_MAX_ENTRIES
+      && !map.contains_key(&(box_id, style_ptr, main_axis_is_horizontal))
+    {
+      map.clear();
+    }
+    map.insert((box_id, style_ptr, main_axis_is_horizontal), value);
+  });
+}
 
 #[cfg(test)]
 thread_local! {
@@ -181,9 +249,6 @@ fn translate_fragment_tree(
       Point::new(logical.x() + delta.x, logical.y() + delta.y),
       logical.size,
     ));
-  }
-  for child in fragment.children_mut() {
-    translate_fragment_tree(child, delta, deadline_counter)?;
   }
   Ok(())
 }
@@ -299,7 +364,7 @@ fn fragment_first_baseline(
     _ => {
       for child in fragment.children.iter() {
         if let Some(baseline) = fragment_first_baseline(child, deadline_counter)? {
-          return Ok(Some(child.bounds.y() - fragment.bounds.y() + baseline));
+          return Ok(Some(child.bounds.y() + baseline));
         }
       }
       Ok(None)
@@ -510,16 +575,14 @@ impl FormattingContext for FlexFormattingContext {
         break;
       }
     }
-    if !has_running_children {
-      if !override_active {
-        if let Some(cached) = layout_cache_lookup(
-          box_node,
-          FormattingContextType::Flex,
-          &constraints,
-          self.viewport_size,
-        ) {
-          return Ok(cached);
-        }
+    if !override_active && !has_running_children {
+      if let Some(cached) = layout_cache_lookup(
+        box_node,
+        FormattingContextType::Flex,
+        &constraints,
+        self.viewport_size,
+      ) {
+        return Ok(cached);
       }
     }
 
@@ -527,7 +590,8 @@ impl FormattingContext for FlexFormattingContext {
     // identical available sizes (common on carousel-heavy pages). This is scoped per layout
     // run via the factory cache reset.
     let toggles = crate::debug::runtime::runtime_toggles();
-    let disable_cache = toggles.truthy("FASTR_DISABLE_FLEX_CACHE") || has_running_children;
+    let disable_cache =
+      toggles.truthy("FASTR_DISABLE_FLEX_CACHE") || has_running_children || override_active;
     let layout_cache_entry = if disable_cache {
       None
     } else {
@@ -537,7 +601,8 @@ impl FormattingContext for FlexFormattingContext {
 
     let _trace_text_ids = trace_flex_text_ids();
     if let Some((cache_key, key)) = layout_cache_entry {
-      if let Some((_, fragment)) = self.layout_fragments.get(cache_key, &key) {
+      if let Some(cached) = self.layout_fragments.get(cache_key, &key) {
+        let fragment = cached.fragment;
         flex_profile::record_layout_cache_hit();
         flex_profile::record_layout_cache_clone();
         record_fragment_clone(CloneSite::FlexLayoutCacheHit, fragment.as_ref());
@@ -545,14 +610,19 @@ impl FormattingContext for FlexFormattingContext {
       }
       let target_w = constraints.width().unwrap_or(self.viewport_size.width);
       let target_h = constraints.height().unwrap_or(self.viewport_size.height);
-      if let Some((stored_size, fragment)) = self
+      if let Some(cached) = self
         .layout_fragments
         .find_fragment(cache_key, Size::new(target_w.max(0.0), target_h.max(0.0)))
       {
+        let fragment = std::sync::Arc::clone(&cached.fragment);
         self.layout_fragments.insert(
           cache_key,
           key,
-          (stored_size, std::sync::Arc::clone(&fragment)),
+          crate::layout::contexts::flex_cache::FlexCacheValue {
+            measured_size: cached.measured_size,
+            border_size: cached.border_size,
+            fragment: std::sync::Arc::clone(&fragment),
+          },
           MAX_LAYOUT_CACHE_PER_NODE,
         );
         flex_profile::record_layout_cache_hit();
@@ -562,8 +632,11 @@ impl FormattingContext for FlexFormattingContext {
       }
     }
 
-    // Create a fresh Taffy tree for this layout
-    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    // Create a fresh Taffy tree for this layout.
+    //
+    // Use a pooled instance to avoid repeatedly allocating slotmap backing storage on pages with
+    // many nested flex/grid containers.
+    let mut taffy_tree = crate::layout::taffy_integration::PooledTaffyTree::new();
 
     // Partition children: out-of-flow abs/fixed are handled after flex layout per CSS positioning.
     let mut in_flow_children: Vec<(usize, &BoxNode)> = Vec::new();
@@ -630,6 +703,14 @@ impl FormattingContext for FlexFormattingContext {
       &constraints,
       &mut node_map,
     )?;
+    if let Some(style_override) = style_override.as_deref() {
+      // When a style override is active, update the root Taffy style in-place so we can keep
+      // reusing cached Taffy templates without deep-cloning the box subtree.
+      let override_style = self.computed_style_to_taffy_base(style_override, true, None)?;
+      taffy_tree
+        .set_style(root_node, override_style)
+        .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+    }
     flex_profile::record_build_time(build_timer);
 
     // Block-level flex containers with `width:auto` fill the available inline space. Root flex
@@ -798,8 +879,11 @@ impl FormattingContext for FlexFormattingContext {
 
                     flex_profile::record_measure_lookup();
                     let measure_timer = flex_profile::timer();
+                    let mut force_full_measure = false;
                     if let Some(node_ptr) = node_context.as_ref().map(|p| **p) {
                         let box_node = unsafe { &*node_ptr };
+                        force_full_measure = !log_measure_ids.is_empty()
+                          && log_measure_ids.contains(&box_node.id);
                         if known_dimensions.width == Some(0.0)
                             && matches!(avail.width, AvailableSpace::Definite(0.0))
                             && box_node.style.width.is_none()
@@ -858,6 +942,17 @@ impl FormattingContext for FlexFormattingContext {
                         {
                             avail.width = AvailableSpace::MaxContent;
                         }
+                    }
+                    // Fast path: when both dimensions are already known (typically from definite
+                    // authored sizes or a previous cached measurement), we don't need any cache-key
+                    // bookkeeping or intrinsic/layout work. This is a very hot path on large pages
+                    // where most flex items resolve to fixed sizes.
+                    if !force_full_measure {
+                      if let (Some(w), Some(h)) = (known_dimensions.width, known_dimensions.height) {
+                        let size = taffy::geometry::Size { width: w, height: h };
+                        flex_profile::record_measure_time(measure_timer);
+                        return size;
+                      }
                     }
                     let w_state = if known_dimensions.width.is_some() {
                         DimState::Known
@@ -1048,11 +1143,6 @@ impl FormattingContext for FlexFormattingContext {
                             }
                         }
                     }
-                    if let (Some(w), Some(h)) = (known_dimensions.width, known_dimensions.height) {
-                        let size = taffy::geometry::Size { width: w, height: h };
-                        flex_profile::record_measure_time(measure_timer);
-                        return size;
-                    }
                     static TRACE_COUNT: OnceLock<Mutex<usize>> = OnceLock::new();
                     static LOG_MEASURE_COUNTS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
                     let trace_enabled = toggles.truthy("FASTR_TRACE_FLEX");
@@ -1211,17 +1301,20 @@ impl FormattingContext for FlexFormattingContext {
                       .as_deref()
                       .unwrap_or_else(|| measure_box.style.as_ref());
                     let cache_key = flex_cache_key_with_style(measure_box, measure_style);
-                    if let Some((size, _)) = pass_cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
+                    if let Some(cached) = pass_cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
                         record_node_measure_hit(measure_box.id);
                         flex_profile::record_measure_hit();
                         flex_profile::record_measure_bucket_hit(w_state, h_state);
                         flex_profile::record_measure_time(measure_timer);
-                        return taffy::geometry::Size { width: size.width, height: size.height };
+                        return taffy::geometry::Size {
+                            width: cached.measured_size.width,
+                            height: cached.measured_size.height,
+                        };
                     }
                     if let Some(entry) = pass_cache.get(&cache_key) {
                         let target_w = fallback_size(known_dimensions.width, avail.width);
                         let target_h = fallback_size(known_dimensions.height, avail.height);
-                        if let Some((stored_size, frag)) =
+                        if let Some(cached) =
                             find_layout_cache_fragment(entry, Size::new(target_w, target_h))
                         {
                             record_node_measure_hit(measure_box.id);
@@ -1232,27 +1325,30 @@ impl FormattingContext for FlexFormattingContext {
                                 .entry(cache_key)
                                 .or_default()
                                 .entry(key)
-                                .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
+                                .or_insert_with(|| cached.clone());
                             return taffy::geometry::Size {
-                                width: stored_size.width,
-                                height: stored_size.height,
+                                width: cached.measured_size.width,
+                                height: cached.measured_size.height,
                             };
                         }
                     }
-                    if let Some((size, frag)) = measured_fragments.get(cache_key, &key) {
+                    if let Some(cached) = measured_fragments.get(cache_key, &key) {
                         pass_cache
                             .entry(cache_key)
                             .or_default()
                             .entry(key)
-                            .or_insert_with(|| (size, std::sync::Arc::clone(&frag)));
+                            .or_insert_with(|| cached.clone());
                         record_node_measure_hit(measure_box.id);
                         flex_profile::record_measure_hit();
                         flex_profile::record_measure_time(measure_timer);
-                        return taffy::geometry::Size { width: size.width, height: size.height };
+                        return taffy::geometry::Size {
+                            width: cached.measured_size.width,
+                            height: cached.measured_size.height,
+                        };
                     }
                     let target_w = fallback_size(known_dimensions.width, avail.width);
                     let target_h = fallback_size(known_dimensions.height, avail.height);
-                    if let Some((stored_size, frag)) =
+                    if let Some(cached) =
                         measured_fragments.find_fragment(cache_key, Size::new(target_w, target_h))
                     {
                         record_node_measure_hit(measure_box.id);
@@ -1261,17 +1357,21 @@ impl FormattingContext for FlexFormattingContext {
                         measured_fragments.insert(
                             cache_key,
                             key,
-                            (stored_size, std::sync::Arc::clone(&frag)),
+                            crate::layout::contexts::flex_cache::FlexCacheValue {
+                              measured_size: cached.measured_size,
+                              border_size: cached.border_size,
+                              fragment: std::sync::Arc::clone(&cached.fragment),
+                            },
                             MAX_MEASURE_CACHE_PER_NODE,
                         );
                         pass_cache
                             .entry(cache_key)
                             .or_default()
                             .entry(key)
-                            .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
+                            .or_insert_with(|| cached.clone());
                         return taffy::geometry::Size {
-                            width: stored_size.width,
-                            height: stored_size.height,
+                            width: cached.measured_size.width,
+                            height: cached.measured_size.height,
                         };
                     }
                     let fc_type = measure_box.formatting_context().unwrap_or(FormattingContextType::Block);
@@ -1384,10 +1484,117 @@ impl FormattingContext for FlexFormattingContext {
                     } else {
                         factory.get(fc_type)
                     };
+                    // Intrinsic width probes (`AvailableSpace::{MinContent,MaxContent}`) are used by
+                    // Taffy during flex base-size resolution. They do not need a fully laid out
+                    // fragment tree (we can't reuse those fragments for final placement anyway),
+                    // and laying out large subtrees purely to answer an intrinsic query is
+                    // disproportionately expensive on real-world pages (notably stripe.com).
+                    //
+                    // When possible, satisfy these probes via the formatting context's intrinsic
+                    // sizing API, which is heavily cached and avoids constructing fragment trees.
+                    let width_is_intrinsic_probe = known_dimensions.width.is_none()
+                      && matches!(
+                        avail.width,
+                        AvailableSpace::MinContent | AvailableSpace::MaxContent
+                      );
+                    if width_is_intrinsic_probe
+                      && crate::style::inline_axis_is_horizontal(measure_style.writing_mode)
+                    {
+                      let mode = match avail.width {
+                        AvailableSpace::MinContent => IntrinsicSizingMode::MinContent,
+                        AvailableSpace::MaxContent => IntrinsicSizingMode::MaxContent,
+                        _ => unreachable!("width_is_intrinsic_probe guarded avail.width"),
+                      };
+                      #[cfg(test)]
+                      if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
+                        // Mirror the debug-only max-content hint accounting used by the full
+                        // layout path so unit tests can detect when intrinsic sizing work is
+                        // performed specifically for flex-measure logging.
+                        record_flex_measure_inline_hint_call();
+                      }
+                      let intrinsic_result = if let Some(style) = override_style.clone() {
+                        crate::layout::style_override::with_style_override(
+                          measure_box.id,
+                          style,
+                          || fc.compute_intrinsic_inline_size(measure_box, mode),
+                        )
+                      } else {
+                        fc.compute_intrinsic_inline_size(measure_box, mode)
+                      };
+                      match intrinsic_result {
+                        Ok(border_box_width) => {
+                          // `compute_intrinsic_inline_size` returns a border-box size. Convert to a
+                          // content-box size because Taffy adds padding/border/scrollbars from the
+                          // style when computing the used border-box size for the flex item.
+                          let percentage_base = this.viewport_size.width.max(0.0);
+                          let reserve_scroll_y = matches!(measure_style.overflow_y, CssOverflow::Scroll)
+                            || (measure_style.scrollbar_gutter.stable
+                              && matches!(
+                                measure_style.overflow_y,
+                                CssOverflow::Auto | CssOverflow::Scroll
+                              ));
+                          let scrollbar_width = resolve_scrollbar_width(measure_style);
+                          let padding_left = this.resolve_length_for_width(
+                            measure_style.padding_left,
+                            percentage_base,
+                            measure_style,
+                          );
+                          let padding_right = this.resolve_length_for_width(
+                            measure_style.padding_right,
+                            percentage_base,
+                            measure_style,
+                          );
+                          let border_left = this.resolve_length_for_width(
+                            measure_style.border_left_width,
+                            percentage_base,
+                            measure_style,
+                          );
+                          let border_right = this.resolve_length_for_width(
+                            measure_style.border_right_width,
+                            percentage_base,
+                            measure_style,
+                          );
+                          let extra_w = padding_left
+                            + padding_right
+                            + border_left
+                            + border_right
+                            + if reserve_scroll_y {
+                              scrollbar_width
+                            } else {
+                              0.0
+                            };
+                          let mut content_w = (border_box_width - extra_w).max(0.0);
+                          // Mirror the clamp behavior from the full layout path to avoid runaway
+                          // intrinsic sizes propagating through flex sizing.
+                          content_w = content_w.min(this.viewport_size.width.max(0.0));
+
+                          let mut content_h = fallback_size(known_dimensions.height, avail.height);
+                          let max_h_bound = match avail.height {
+                            AvailableSpace::Definite(h) => h,
+                            _ => this.viewport_size.height,
+                          };
+                          if content_h.is_finite() {
+                            content_h = content_h.min(max_h_bound.max(0.0));
+                          } else {
+                            content_h = max_h_bound.max(0.0);
+                          }
+
+                          flex_profile::record_measure_time(measure_timer);
+                          return taffy::geometry::Size {
+                            width: content_w.max(0.0),
+                            height: content_h.max(0.0),
+                          };
+                        }
+                        Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                        Err(_) => {
+                          // Fall through to the full layout path below.
+                        }
+                      }
+                    }
                     let node_timer = flex_profile::node_timer();
                     let selector_for_profile = node_timer
-                        .as_ref()
-                        .and_then(|_| measure_box.debug_info.as_ref().map(|d| d.to_selector()));
+                      .as_ref()
+                      .and_then(|_| measure_box.debug_info.as_ref().map(|d| d.to_selector()));
                     let layout_result = if let Some(style) = override_style.clone() {
                       crate::layout::style_override::with_style_override(measure_box.id, style, || {
                         fc.layout(measure_box, &constraints)
@@ -1433,25 +1640,28 @@ impl FormattingContext for FlexFormattingContext {
                         _ => constraints.width().unwrap_or_else(|| fragment.bounds.width()),
                     };
                     let mut content_size = this.content_box_size(&fragment, &box_node.style, percentage_base);
-                    // Guard against zero-sized measurements when the fragment actually has content.
-                    let mut subtree_deadline_counter = 0usize;
-                    let intrinsic_size = match Self::fragment_subtree_size(&fragment, &mut subtree_deadline_counter) {
-                      Ok(size) => size,
-                      Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
-                      Err(_) => Size::new(0.0, 0.0),
-                    };
                     let eps = 0.01;
-                    if content_size.width <= eps && intrinsic_size.width > eps {
+                    let mut subtree_deadline_counter = 0usize;
+                    let mut intrinsic_size = Size::new(0.0, 0.0);
+                    let needs_intrinsic_size = content_size.width <= eps
+                      || content_size.height <= eps
+                      || log_skinny
+                      || (!log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id));
+                    if needs_intrinsic_size {
+                      // Guard against zero-sized measurements when the fragment actually has content.
+                      intrinsic_size =
+                        match Self::fragment_subtree_size(&fragment, &mut subtree_deadline_counter) {
+                          Ok(size) => size,
+                          Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                          Err(_) => Size::new(0.0, 0.0),
+                        };
+                      if content_size.width <= eps && intrinsic_size.width > eps {
                         content_size.width = intrinsic_size.width;
-                    }
-                    if content_size.height <= eps && intrinsic_size.height > eps {
+                      }
+                      if content_size.height <= eps && intrinsic_size.height > eps {
                         content_size.height = intrinsic_size.height;
+                      }
                     }
-                    let descendant_span = match Self::fragment_descendant_span(&fragment, &mut subtree_deadline_counter) {
-                      Ok(span) => span,
-                      Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
-                      Err(_) => None,
-                    };
                     if matches!(
                         constraints.available_width,
                         CrateAvailableSpace::MaxContent | CrateAvailableSpace::MinContent
@@ -1459,6 +1669,12 @@ impl FormattingContext for FlexFormattingContext {
                         && measure_style.min_width.is_none()
                         && measure_style.max_width.is_none()
                     {
+                        let descendant_span =
+                          match Self::fragment_descendant_span(&fragment, &mut subtree_deadline_counter) {
+                            Ok(span) => span,
+                            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                            Err(_) => None,
+                          };
                         if let Some(span) = descendant_span {
                             if span.width > eps
                                 && content_size.width > span.width + 0.5
@@ -1619,8 +1835,37 @@ impl FormattingContext for FlexFormattingContext {
                           }
                       }
 
-                    let stored_size =
+                    let measured_size =
                       Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
+                    let border_size = {
+                      let reserve_scroll_x = matches!(measure_style.overflow_x, CssOverflow::Scroll)
+                        || (measure_style.scrollbar_gutter.stable
+                          && matches!(
+                            measure_style.overflow_x,
+                            CssOverflow::Auto | CssOverflow::Scroll
+                          ));
+                      let reserve_scroll_y = matches!(measure_style.overflow_y, CssOverflow::Scroll)
+                        || (measure_style.scrollbar_gutter.stable
+                          && matches!(
+                            measure_style.overflow_y,
+                            CssOverflow::Auto | CssOverflow::Scroll
+                          ));
+                      let scrollbar_width = resolve_scrollbar_width(measure_style);
+                      let padding_left = this.resolve_length_for_width(measure_style.padding_left, percentage_base, measure_style);
+                      let padding_right = this.resolve_length_for_width(measure_style.padding_right, percentage_base, measure_style);
+                      let padding_top = this.resolve_length_for_width(measure_style.padding_top, percentage_base, measure_style);
+                      let padding_bottom =
+                        this.resolve_length_for_width(measure_style.padding_bottom, percentage_base, measure_style);
+                      let border_left = this.resolve_length_for_width(measure_style.border_left_width, percentage_base, measure_style);
+                      let border_right =
+                        this.resolve_length_for_width(measure_style.border_right_width, percentage_base, measure_style);
+                      let border_top = this.resolve_length_for_width(measure_style.border_top_width, percentage_base, measure_style);
+                      let border_bottom =
+                        this.resolve_length_for_width(measure_style.border_bottom_width, percentage_base, measure_style);
+                      let extra_w = padding_left + padding_right + border_left + border_right + if reserve_scroll_y { scrollbar_width } else { 0.0 };
+                      let extra_h = padding_top + padding_bottom + border_top + border_bottom + if reserve_scroll_x { scrollbar_width } else { 0.0 };
+                      Size::new((measured_size.width + extra_w).max(0.0), (measured_size.height + extra_h).max(0.0))
+                    };
                     let pass_entry_vacant = node_ptr.is_some()
                       && !pass_cache
                         .get(&cache_key)
@@ -1652,7 +1897,11 @@ impl FormattingContext for FlexFormattingContext {
                       let inserted = measured_fragments.insert(
                         cache_key,
                         key,
-                        (stored_size, normalized_fragment),
+                        crate::layout::contexts::flex_cache::FlexCacheValue {
+                          measured_size,
+                          border_size,
+                          fragment: normalized_fragment,
+                        },
                         MAX_MEASURE_CACHE_PER_NODE,
                       );
                       flex_profile::record_measure_store(inserted);
@@ -1664,17 +1913,21 @@ impl FormattingContext for FlexFormattingContext {
                     }
                     if pass_entry_vacant {
                       let entry = pass_cache.entry(cache_key).or_default();
-                      if let Entry::Vacant(e) = entry.entry(key) {
-                        let normalized_fragment =
-                          normalize_for_cache(&mut fragment, &mut normalized_fragment);
-                        e.insert((stored_size, normalized_fragment));
-                        record_node_measure_store(measure_box.id);
+                        if let Entry::Vacant(e) = entry.entry(key) {
+                          let normalized_fragment =
+                            normalize_for_cache(&mut fragment, &mut normalized_fragment);
+                          e.insert(crate::layout::contexts::flex_cache::FlexCacheValue {
+                            measured_size,
+                            border_size,
+                            fragment: normalized_fragment,
+                          });
+                          record_node_measure_store(measure_box.id);
+                        }
                       }
-                    }
 
                     let size = taffy::geometry::Size {
-                        width: content_size.width.max(0.0),
-                        height: content_size.height.max(0.0),
+                        width: measured_size.width,
+                        height: measured_size.height,
                     };
                     flex_profile::record_measure_time(measure_timer);
                     size
@@ -2219,7 +2472,11 @@ impl FormattingContext for FlexFormattingContext {
         self.layout_fragments.insert(
           cache_key,
           key,
-          (size, std::sync::Arc::new(fragment.clone())),
+          crate::layout::contexts::flex_cache::FlexCacheValue {
+            measured_size: size,
+            border_size: size,
+            fragment: std::sync::Arc::new(fragment.clone()),
+          },
           MAX_LAYOUT_CACHE_PER_NODE,
         );
         flex_profile::record_layout_cache_store();
@@ -2555,26 +2812,16 @@ impl FormattingContext for FlexFormattingContext {
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
     count_flex_intrinsic_call();
-    let override_active = crate::layout::style_override::has_style_override(box_node.id);
-    if !override_active {
-      if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
-        return Ok(cached);
-      }
+    let style_override = crate::layout::style_override::style_override_for(box_node.id);
+    if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
+      return Ok(cached);
     }
-
-    let style_override = if override_active {
-      crate::layout::style_override::style_override_for(box_node.id)
-    } else {
-      None
-    };
     let style: &ComputedStyle = style_override
       .as_deref()
       .unwrap_or_else(|| box_node.style.as_ref());
     if style.containment.isolates_inline_size() {
       let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
-      if !override_active {
-        intrinsic_cache_store(box_node, mode, edges.max(0.0));
-      }
+      intrinsic_cache_store(box_node, mode, edges.max(0.0));
       return Ok(edges.max(0.0));
     }
 
@@ -2654,9 +2901,7 @@ impl FormattingContext for FlexFormattingContext {
 
     let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
     let width = (contribution + edges).max(0.0);
-    if !override_active {
-      intrinsic_cache_store(box_node, mode, width);
-    }
+    intrinsic_cache_store(box_node, mode, width);
     Ok(width)
   }
 }
@@ -2982,8 +3227,10 @@ fn flex_child_fingerprint(
   children.len().hash(&mut h);
   for child in children {
     check_layout_deadline(deadline_counter)?;
-    std::mem::discriminant(&child.box_type).hash(&mut h);
-    child.formatting_context().hash(&mut h);
+    // The cached Taffy template only memoizes the style-to-Taffy conversion, which depends on the
+    // computed style (and the parent flex container style) but not on box type or formatting
+    // context. Including those would unnecessarily fragment the template cache and hurt reuse on
+    // component-heavy pages.
     taffy_flex_style_fingerprint(child.style.as_ref()).hash(&mut h);
   }
   Ok(h.finish())
@@ -3364,11 +3611,21 @@ impl FlexFormattingContext {
       .formatting_context()
       .unwrap_or(FormattingContextType::Block);
     let item_fc = self.factory.get(item_fc_type);
+    let style_ptr = Arc::as_ptr(&box_node.style) as usize;
+    let box_id = box_node.id();
 
     if container_main_is_horizontal {
       if taffy_style.min_size.width == Dimension::AUTO
         && matches!(style.overflow_x, CssOverflow::Visible)
       {
+        if let Some(cached) = flex_auto_min_cache_lookup(box_id, style_ptr, true) {
+          if let Some(min_candidate) = cached {
+            if min_candidate.is_finite() && min_candidate > 0.0 {
+              taffy_style.min_size.width = Dimension::length(min_candidate);
+            }
+          }
+          return Ok(());
+        }
         let specified_size_suggestion = style.width.as_ref().and_then(|len| {
           let px = self.resolve_length_px(len, style)?;
           if px <= 0.0 {
@@ -3417,14 +3674,30 @@ impl FlexFormattingContext {
             if min_candidate.is_finite() && min_candidate > 0.0 {
               taffy_style.min_size.width = Dimension::length(min_candidate);
             }
+            flex_auto_min_cache_store(
+              box_id,
+              style_ptr,
+              true,
+              (min_candidate.is_finite() && min_candidate > 0.0).then_some(min_candidate),
+            );
           }
           Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-          Err(_) => {}
+          Err(_) => {
+            flex_auto_min_cache_store(box_id, style_ptr, true, None);
+          }
         }
       }
     } else if taffy_style.min_size.height == Dimension::AUTO
       && matches!(style.overflow_y, CssOverflow::Visible)
     {
+      if let Some(cached) = flex_auto_min_cache_lookup(box_id, style_ptr, false) {
+        if let Some(min_candidate) = cached {
+          if min_candidate.is_finite() && min_candidate > 0.0 {
+            taffy_style.min_size.height = Dimension::length(min_candidate);
+          }
+        }
+        return Ok(());
+      }
       let specified_size_suggestion = style.height.as_ref().and_then(|len| {
         let px = self.resolve_length_px(len, style)?;
         if px <= 0.0 {
@@ -3465,9 +3738,17 @@ impl FlexFormattingContext {
           if min_candidate.is_finite() && min_candidate > 0.0 {
             taffy_style.min_size.height = Dimension::length(min_candidate);
           }
+          flex_auto_min_cache_store(
+            box_id,
+            style_ptr,
+            false,
+            (min_candidate.is_finite() && min_candidate > 0.0).then_some(min_candidate),
+          );
         }
         Err(err @ LayoutError::Timeout { .. }) => return Err(err),
-        Err(_) => {}
+        Err(_) => {
+          flex_auto_min_cache_store(box_id, style_ptr, false, None);
+        }
       }
     }
 
@@ -3742,13 +4023,13 @@ impl FlexFormattingContext {
       });
 
       if !needs_intrinsic_main {
-        if let Some((stored_size, frag)) = measured_fragments.find_fragment(
+        if let Some(cached) = measured_fragments.find_fragment_by_border_size(
           flex_cache_key(child_box),
           Size::new(target_width, target_height),
         ) {
           child_plans[dom_idx] = ChildPlan::Reuse {
-            stored_size,
-            fragment: frag,
+            stored_size: cached.border_size,
+            fragment: cached.fragment,
           };
           continue;
         }
@@ -3948,9 +4229,9 @@ impl FlexFormattingContext {
               FormattingContextType::Block
                 | FormattingContextType::Flex
                 | FormattingContextType::Grid
+                | FormattingContextType::Inline
             ) {
-            mc_constraints
-              .with_used_border_box_size(work.used_border_box_width, work.used_border_box_height)
+            mc_constraints.with_used_border_box_size(work.used_border_box_width, work.used_border_box_height)
           } else {
             mc_constraints
           };
@@ -5276,7 +5557,7 @@ impl FlexFormattingContext {
       positioned_index.insert(candidate.child_id, idx);
     }
 
-    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut taffy = crate::layout::taffy_integration::PooledTaffyTree::new();
     let mut child_nodes = Vec::new();
     let mut node_lookup: FxHashMap<usize, NodeId> =
       FxHashMap::with_capacity_and_hasher(positioned.len(), Default::default());
@@ -7105,7 +7386,7 @@ mod tests {
       cache_key,
       Size::new(first_child.bounds.width(), first_child.bounds.height()),
     );
-    let (_stored_size, cached_fragment) = cached.expect("child fragment cached");
+    let cached_fragment = cached.expect("child fragment cached").fragment;
     assert_eq!(cached_fragment.bounds.origin, Point::new(0.0, 0.0));
 
     let shard_hits_before: u64 = measured_fragments

@@ -61,8 +61,3 @@ pub(crate) fn style_override_for(node_id: usize) -> Option<Arc<ComputedStyle>> {
       .find_map(|(id, style)| (*id == node_id).then(|| style.clone()))
   })
 }
-
-/// Returns true when `node_id` currently has an active style override.
-pub(crate) fn has_style_override(node_id: usize) -> bool {
-  STYLE_OVERRIDES.with(|stack| stack.borrow().iter().rev().any(|(id, _)| *id == node_id))
-}

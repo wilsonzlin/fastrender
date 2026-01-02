@@ -260,8 +260,13 @@ pub(crate) fn update_runtime_toggles(toggles: Arc<RuntimeToggles>) {
 
 /// Convenience helper to run a closure with a temporary toggles override.
 pub fn with_runtime_toggles<T>(toggles: Arc<RuntimeToggles>, f: impl FnOnce() -> T) -> T {
-  let guard = set_runtime_toggles(toggles);
+  // Most toggle lookups happen on the same thread that installs the override (render pipeline hot
+  // paths). Install a thread-local copy so repeated `runtime_toggles()` calls avoid taking the
+  // global RwLock.
+  let guard = set_runtime_toggles(toggles.clone());
+  let thread_guard = set_thread_runtime_toggles(toggles);
   let result = f();
+  drop(thread_guard);
   drop(guard);
   result
 }

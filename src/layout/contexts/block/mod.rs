@@ -3953,13 +3953,10 @@ impl FormattingContext for BlockFormattingContext {
   fn compute_intrinsic_inline_sizes(&self, box_node: &BoxNode) -> Result<(f32, f32), LayoutError> {
     count_block_intrinsic_call();
     let style_override = crate::layout::style_override::style_override_for(box_node.id);
-    let override_active = style_override.is_some();
-    if !override_active {
-      let min_cached = intrinsic_cache_lookup(box_node, IntrinsicSizingMode::MinContent);
-      let max_cached = intrinsic_cache_lookup(box_node, IntrinsicSizingMode::MaxContent);
-      if let (Some(min), Some(max)) = (min_cached, max_cached) {
-        return Ok((min, max));
-      }
+    let min_cached = intrinsic_cache_lookup(box_node, IntrinsicSizingMode::MinContent);
+    let max_cached = intrinsic_cache_lookup(box_node, IntrinsicSizingMode::MaxContent);
+    if let (Some(min), Some(max)) = (min_cached, max_cached) {
+      return Ok((min, max));
     }
 
     let style = style_override.as_ref().unwrap_or(&box_node.style);
@@ -3976,19 +3973,15 @@ impl FormattingContext for BlockFormattingContext {
       // Ignore auto/relative cases that resolve to 0.0.
       if resolved > 0.0 {
         let result = border_size_from_box_sizing(resolved, edges, style.box_sizing);
-        if !override_active {
-          intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, result);
-          intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, result);
-        }
+        intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, result);
+        intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, result);
         return Ok((result, result));
       }
     }
 
     if style.containment.size || style.containment.inline_size {
-      if !override_active {
-        intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, edges);
-        intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, edges);
-      }
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, edges);
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, edges);
       return Ok((edges, edges));
     }
 
@@ -3998,10 +3991,8 @@ impl FormattingContext for BlockFormattingContext {
       let edges =
         horizontal_padding_and_borders(style, size.width, self.viewport_size, &self.font_context);
       let result = size.width + edges;
-      if !override_active {
-        intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, result);
-        intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, result);
-      }
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, result);
+      intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, result);
       return Ok((result, result));
     }
 
@@ -4173,10 +4164,8 @@ impl FormattingContext for BlockFormattingContext {
       );
     }
 
-    if !override_active {
-      intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, clamped_min);
-      intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, clamped_max);
-    }
+    intrinsic_cache_store(box_node, IntrinsicSizingMode::MinContent, clamped_min);
+    intrinsic_cache_store(box_node, IntrinsicSizingMode::MaxContent, clamped_max);
     Ok((clamped_min, clamped_max))
   }
 
@@ -4185,11 +4174,9 @@ impl FormattingContext for BlockFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    if !crate::layout::style_override::has_style_override(box_node.id) {
-      if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
-        count_block_intrinsic_call();
-        return Ok(cached);
-      }
+    if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
+      count_block_intrinsic_call();
+      return Ok(cached);
     }
     // For blocks, computing min/max-content widths shares most of the work (inline item
     // collection, shaping, descendant traversal). When we're missing a single intrinsic mode,
