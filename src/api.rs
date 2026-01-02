@@ -189,6 +189,7 @@ use rustc_hash::FxHasher as DefaultHasher;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
@@ -5798,9 +5799,11 @@ impl FastRender {
               Ok(resource) => resource,
               Err(err) => {
                 // Per spec, stylesheet loads are best-effort. On failure, continue.
-                if let Some(diag) = diagnostics.as_ref() {
-                  if let Ok(mut guard) = diag.lock() {
-                    guard.record_error(ResourceKind::Stylesheet, &url, &err);
+                if !should_suppress_stylesheet_network_error(&url, &err) {
+                  if let Some(diag) = diagnostics.as_ref() {
+                    if let Ok(mut guard) = diag.lock() {
+                      guard.record_error(ResourceKind::Stylesheet, &url, &err);
+                    }
                   }
                 }
                 return Ok((None, local_media_cache));
@@ -6169,9 +6172,11 @@ impl FastRender {
             }
             Err(err) => {
               // Per spec, stylesheet loads are best-effort. On failure, continue.
-              if let Some(diag) = &self.diagnostics {
-                if let Ok(mut guard) = diag.lock() {
-                  guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
+              if !should_suppress_stylesheet_network_error(&stylesheet_url, &err) {
+                if let Some(diag) = &self.diagnostics {
+                  if let Ok(mut guard) = diag.lock() {
+                    guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
+                  }
                 }
               }
               continue;
@@ -6625,7 +6630,8 @@ impl FastRender {
     .with_device_pixel_ratio(self.device_pixel_ratio)
     .with_env_overrides();
 
-    let _image_probe_prefetch = self.spawn_image_probe_prefetch(&dom_with_state, &media_ctx, deadline);
+    let _image_probe_prefetch =
+      self.spawn_image_probe_prefetch(&dom_with_state, &media_ctx, deadline);
 
     // CSS fetching/parsing happens before cascade; keep the stage heartbeat in sync so
     // render runners can attribute stalls/timeouts correctly.
@@ -6662,8 +6668,8 @@ impl FastRender {
     let style_load_start = timings_enabled.then(Instant::now);
     self.font_context.clear_web_fonts();
     let css_metadata_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let css_metadata =
-      style_set.collect_css_metadata_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let css_metadata = style_set
+      .collect_css_metadata_all_scopes_with_cache(&media_ctx, Some(&mut media_query_cache));
     let font_faces = css_metadata.font_faces;
     let keyframes = css_metadata.keyframes;
     let has_container_queries = css_metadata.has_container_rules;
@@ -8262,8 +8268,12 @@ impl FastRender {
                   Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
                 }
                 Err(err) => {
-                  diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
-                  Err(err)
+                  if should_suppress_stylesheet_network_error(u, &err) {
+                    Ok(String::new())
+                  } else {
+                    diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
+                    Err(err)
+                  }
                 }
               }
             };
@@ -8315,7 +8325,9 @@ impl FastRender {
               fetch_timer,
             );
           }
-          diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err)
+          if !should_suppress_stylesheet_network_error(&css_url, &err) {
+            diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err);
+          }
         }
       }
     }
@@ -8390,7 +8402,10 @@ impl FastRender {
       crate::tree::box_tree::ImageSelectionContext {
         device_pixel_ratio: media_ctx.device_pixel_ratio,
         slot_width: None,
-        viewport: Some(Size::new(media_ctx.viewport_width, media_ctx.viewport_height)),
+        viewport: Some(Size::new(
+          media_ctx.viewport_width,
+          media_ctx.viewport_height,
+        )),
         media_context: Some(media_ctx),
         font_size: Some(media_ctx.base_font_size),
         base_url: self.base_url.as_deref(),
@@ -8493,92 +8508,94 @@ impl FastRender {
         && (style.width.is_some() || style.height.is_some())
     }
 
-    let maybe_collect = |box_id: usize,
-                         replaced_box: &ReplacedBox,
-                          style: &Arc<ComputedStyle>,
-                          viewport: Size,
-                          media_ctx: &MediaContext,
-                          profile_enabled: bool,
-                          jobs: &mut HashMap<String, Vec<ImageIntrinsicProbeJob>>| {
-      let ReplacedType::Image {
-        src,
-        srcset,
-        picture_sources,
-        ..
-      } = &replaced_box.replaced_type
-      else {
-        return;
-      };
+    let maybe_collect =
+      |box_id: usize,
+       replaced_box: &ReplacedBox,
+       style: &Arc<ComputedStyle>,
+       viewport: Size,
+       media_ctx: &MediaContext,
+       profile_enabled: bool,
+       jobs: &mut HashMap<String, Vec<ImageIntrinsicProbeJob>>| {
+        let ReplacedType::Image {
+          src,
+          srcset,
+          picture_sources,
+          ..
+        } = &replaced_box.replaced_type
+        else {
+          return;
+        };
 
-      // Mirrors the early-return logic in `resolve_intrinsic_for_replaced_for_media` so we don't
-      // schedule unnecessary probes.
-      if replaced_box.intrinsic_size.is_some() {
-        return;
-      }
-      if style.width.is_some() && style.height.is_some() {
-        return;
-      }
-      if should_skip_image_probe(style.as_ref()) {
-        return;
-      }
-
-      let has_image_source = !src.trim().is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
-      if !has_image_source {
-        return;
-      }
-
-      let selected = if srcset.is_empty() && picture_sources.is_empty() {
-        crate::tree::box_tree::SelectedImageSource {
-          url: src.as_str(),
-          descriptor: None,
-          density: None,
-          from_picture: false,
+        // Mirrors the early-return logic in `resolve_intrinsic_for_replaced_for_media` so we don't
+        // schedule unnecessary probes.
+        if replaced_box.intrinsic_size.is_some() {
+          return;
         }
-      } else {
-        let select_start = profile_enabled.then(Instant::now);
-        let selected = replaced_box
-          .replaced_type
-          .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-            device_pixel_ratio: self.device_pixel_ratio,
-            slot_width: None,
-            viewport: Some(viewport),
-            media_context: Some(media_ctx),
-            font_size: Some(style.font_size),
-            base_url: self.base_url.as_deref(),
-          });
-        if let Some(start) = select_start {
-          let ms = start.elapsed().as_secs_f64() * 1000.0;
-          REPLACED_INTRINSIC_PROFILE.with(|state| {
-            let mut state = state.borrow_mut();
-            state.selection_calls += 1;
-            state.selection_ms += ms;
-          });
+        if style.width.is_some() && style.height.is_some() {
+          return;
         }
-        selected
-      };
+        if should_skip_image_probe(style.as_ref()) {
+          return;
+        }
 
-      let selected_url = selected.url.trim();
-      if selected_url.is_empty() {
-        return;
-      }
+        let has_image_source =
+          !src.trim().is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
+        if !has_image_source {
+          return;
+        }
 
-      let resolved_url = if selected_url.starts_with('<') {
-        selected_url.to_string()
-      } else {
-        self.image_cache.resolve_url(selected_url)
+        let selected = if srcset.is_empty() && picture_sources.is_empty() {
+          crate::tree::box_tree::SelectedImageSource {
+            url: src.as_str(),
+            descriptor: None,
+            density: None,
+            from_picture: false,
+          }
+        } else {
+          let select_start = profile_enabled.then(Instant::now);
+          let selected = replaced_box
+            .replaced_type
+            .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+              device_pixel_ratio: self.device_pixel_ratio,
+              slot_width: None,
+              viewport: Some(viewport),
+              media_context: Some(media_ctx),
+              font_size: Some(style.font_size),
+              base_url: self.base_url.as_deref(),
+            });
+          if let Some(start) = select_start {
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            REPLACED_INTRINSIC_PROFILE.with(|state| {
+              let mut state = state.borrow_mut();
+              state.selection_calls += 1;
+              state.selection_ms += ms;
+            });
+          }
+          selected
+        };
+
+        let selected_url = selected.url.trim();
+        if selected_url.is_empty() {
+          return;
+        }
+
+        let resolved_url = if selected_url.starts_with('<') {
+          selected_url.to_string()
+        } else {
+          self.image_cache.resolve_url(selected_url)
+        };
+        if resolved_url.is_empty() {
+          return;
+        }
+        jobs
+          .entry(resolved_url)
+          .or_default()
+          .push(ImageIntrinsicProbeJob {
+            box_id,
+            density: selected.density,
+            style: Arc::clone(style),
+          });
       };
-      if resolved_url.is_empty() {
-        return;
-      }
-      jobs
-        .entry(resolved_url)
-        .or_default()
-        .push(ImageIntrinsicProbeJob {
-          box_id,
-          density: selected.density,
-          style: Arc::clone(style),
-        });
-    };
 
     if let BoxType::Marker(marker_box) = &node.box_type {
       if let MarkerContent::Image(replaced) = &marker_box.content {
@@ -8627,10 +8644,14 @@ impl FastRender {
     }
 
     let job_groups: Vec<(String, Vec<ImageIntrinsicProbeJob>)> = jobs.into_iter().collect();
-    let box_jobs = job_groups.iter().map(|(_, group)| group.len()).sum::<usize>();
+    let box_jobs = job_groups
+      .iter()
+      .map(|(_, group)| group.len())
+      .sum::<usize>();
 
     let parallelism = self.intrinsic_probe_parallelism();
-    let pool = (parallelism > 1 && job_groups.len() > 1).then(|| Self::intrinsic_probe_pool(parallelism));
+    let pool =
+      (parallelism > 1 && job_groups.len() > 1).then(|| Self::intrinsic_probe_pool(parallelism));
     let deadline = crate::render_control::active_deadline();
     let image_cache = self.image_cache.clone();
     let device_pixel_ratio = self.device_pixel_ratio;
@@ -8667,9 +8688,10 @@ impl FastRender {
           ) {
             outcome.intrinsic_size = Some(Size::new(w, h));
             if !outcome.explicit_no_ratio {
-              outcome.aspect_ratio = meta
-                .intrinsic_ratio(orientation)
-                .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+              outcome.aspect_ratio =
+                meta
+                  .intrinsic_ratio(orientation)
+                  .or_else(|| if h > 0.0 { Some(w / h) } else { None });
             }
           }
         }
@@ -8680,7 +8702,8 @@ impl FastRender {
       (outcomes, probe_ms, probe_ok)
     };
 
-    let job_results: Vec<(Vec<(usize, ImageIntrinsicProbeOutcome)>, Option<f64>, bool)> = match pool {
+    let job_results: Vec<(Vec<(usize, ImageIntrinsicProbeOutcome)>, Option<f64>, bool)> = match pool
+    {
       Some(pool) => pool.install(|| job_groups.into_par_iter().map(run_job).collect()),
       None => job_groups.into_iter().map(run_job).collect(),
     };
@@ -9510,6 +9533,99 @@ impl FastRender {
   }
 }
 
+fn url_is_http_like(url: &str) -> bool {
+  url
+    .get(..8)
+    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+    || url
+      .get(..7)
+      .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+}
+
+fn message_looks_like_network_error(message: &str) -> bool {
+  let msg = message.to_ascii_lowercase();
+  msg.contains("error sending request")
+    || msg.contains("error trying to connect")
+    || msg.contains("could not resolve host")
+    || msg.contains("couldn't resolve host")
+    || msg.contains("failed to resolve host")
+    || msg.contains("no such host")
+    || msg.contains("dns error")
+    || msg.contains("failed to lookup address information")
+    || msg.contains("name or service not known")
+    || msg.contains("nodename nor servname provided")
+    || msg.contains("getaddrinfo")
+    || msg.contains("name resolution")
+    || msg.contains("connection refused")
+    || msg.contains("connection reset")
+    || msg.contains("connection aborted")
+    || msg.contains("broken pipe")
+    || msg.contains("unexpected eof")
+    || msg.contains("timed out")
+}
+
+fn io_kind_is_network_error(kind: io::ErrorKind) -> bool {
+  matches!(
+    kind,
+    io::ErrorKind::TimedOut
+      | io::ErrorKind::ConnectionRefused
+      | io::ErrorKind::ConnectionReset
+      | io::ErrorKind::ConnectionAborted
+      | io::ErrorKind::NotConnected
+      | io::ErrorKind::BrokenPipe
+      | io::ErrorKind::UnexpectedEof
+      | io::ErrorKind::AddrInUse
+      | io::ErrorKind::AddrNotAvailable
+      | io::ErrorKind::WouldBlock
+      | io::ErrorKind::Interrupted
+  )
+}
+
+fn should_suppress_stylesheet_network_error(url: &str, err: &Error) -> bool {
+  if !url_is_http_like(url) {
+    return false;
+  }
+
+  match err {
+    Error::Resource(resource_err) => {
+      if resource_err.status.is_some() {
+        return false;
+      }
+
+      if message_looks_like_network_error(&resource_err.message) {
+        return true;
+      }
+    }
+    Error::Io(io_err) => {
+      if io_kind_is_network_error(io_err.kind())
+        || message_looks_like_network_error(&io_err.to_string())
+      {
+        return true;
+      }
+    }
+    _ => return false,
+  }
+
+  let mut source: Option<&(dyn std::error::Error + 'static)> = err.source();
+  while let Some(current) = source {
+    if let Some(io_err) = current.downcast_ref::<io::Error>() {
+      if io_kind_is_network_error(io_err.kind())
+        || message_looks_like_network_error(&io_err.to_string())
+      {
+        return true;
+      }
+    }
+
+    if message_looks_like_network_error(&current.to_string()) {
+      return true;
+    }
+
+    source = current.source();
+  }
+
+  false
+}
+
 /// CSS import loader that uses a ResourceFetcher for byte fetching
 struct CssImportFetcher {
   base_url: Option<String>,
@@ -9572,6 +9688,9 @@ impl CssImportLoader for CssImportFetcher {
     let resource = match self.fetcher.fetch_with_request(request) {
       Ok(res) => res,
       Err(err) => {
+        if should_suppress_stylesheet_network_error(&resolved, &err) {
+          return Ok(String::new());
+        }
         if let Some(ctx) = &self.resource_context {
           if let Some(diag) = &ctx.diagnostics {
             diag.record_error(ResourceKind::Stylesheet, resolved.as_str(), &err);
@@ -11139,6 +11258,104 @@ mod tests {
     assert_eq!(entry.final_url.as_deref(), Some(css_url.as_str()));
 
     server.join().unwrap();
+  }
+
+  #[derive(Clone, Default)]
+  struct DnsFailureFetcher;
+
+  impl ResourceFetcher for DnsFailureFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      let cause = io::Error::new(
+        io::ErrorKind::Other,
+        "dns error: failed to lookup address information",
+      );
+      Err(Error::Resource(
+        ResourceError::new(
+          url.to_string(),
+          format!("error sending request for url ({url})"),
+        )
+        .with_final_url(url.to_string())
+        .with_source(cause),
+      ))
+    }
+  }
+
+  #[derive(Clone, Default)]
+  struct Http404Fetcher;
+
+  impl ResourceFetcher for Http404Fetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      let mut resource = FetchedResource::new(Vec::new(), Some("text/css".to_string()));
+      resource.status = Some(404);
+      resource.final_url = Some(url.to_string());
+      Ok(resource)
+    }
+  }
+
+  #[test]
+  fn css_import_fetcher_network_error_returns_empty_without_diagnostics() {
+    let sink = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let ctx = ResourceContext {
+      document_url: Some("https://example.com/".to_string()),
+      policy: ResourceAccessPolicy::default(),
+      diagnostics: Some(SharedRenderDiagnostics {
+        inner: Arc::clone(&sink),
+      }),
+      iframe_depth_remaining: None,
+    };
+    let loader = CssImportFetcher::new(
+      Some("https://example.com/".to_string()),
+      Arc::new(DnsFailureFetcher),
+      Some(ctx),
+      None,
+    );
+
+    let css = loader
+      .load("https://sf-saas.cdn-apple.com/2.4.0-beta.0/animations/all.css")
+      .expect("dns failure should return empty stylesheet");
+    assert!(css.is_empty());
+
+    let guard = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(
+      guard.fetch_errors.is_empty(),
+      "dns failures should not be recorded as fetch errors"
+    );
+    assert!(
+      guard.failure_stage.is_none(),
+      "dns failures should not set failure_stage"
+    );
+  }
+
+  #[test]
+  fn css_import_fetcher_http_error_still_records_diagnostics() {
+    let sink = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let ctx = ResourceContext {
+      document_url: Some("https://example.com/".to_string()),
+      policy: ResourceAccessPolicy::default(),
+      diagnostics: Some(SharedRenderDiagnostics {
+        inner: Arc::clone(&sink),
+      }),
+      iframe_depth_remaining: None,
+    };
+    let loader = CssImportFetcher::new(
+      Some("https://example.com/".to_string()),
+      Arc::new(Http404Fetcher),
+      Some(ctx),
+      None,
+    );
+
+    let result = loader.load("https://example.com/missing.css");
+    assert!(result.is_err(), "expected 404 import to fail");
+
+    let guard = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(guard.fetch_errors.len(), 1);
+    assert_eq!(guard.fetch_errors[0].kind, ResourceKind::Stylesheet);
+    assert_eq!(guard.fetch_errors[0].url, "https://example.com/missing.css");
+    assert_eq!(guard.fetch_errors[0].status, Some(404));
+    assert!(
+      guard.failure_stage.is_none(),
+      "stylesheet fetch errors should not mark the render as failed"
+    );
   }
 
   #[derive(Clone, Default)]
