@@ -1712,6 +1712,23 @@ fn is_grapheme_prepend(cp: u32) -> bool {
 }
 
 #[inline]
+fn is_emoji_sequence_trigger(ch: char) -> bool {
+  // We only need to run `emoji::find_emoji_sequence_spans` when the text could contain a
+  // multi-codepoint emoji sequence. Those sequences are always signaled by one of:
+  // - VS15/VS16 (emoji/text presentation)
+  // - ZWJ
+  // - Regional indicator symbols (flags)
+  // - Emoji modifier + base
+  // - Tag characters (subdivision flags)
+  // - Combining enclosing keycap (keycap sequences)
+  let cp = ch as u32;
+  matches!(cp, 0x200d | 0xfe0e | 0xfe0f | 0x20e3)
+    || (0x1f1e0..=0x1f1ff).contains(&cp)
+    || (0x1f3fb..=0x1f3ff).contains(&cp)
+    || (0xe0020..=0xe007f).contains(&cp)
+}
+
+#[inline]
 fn requires_full_grapheme_segmentation(ch: char) -> bool {
   // Most real-world "Latin" text is cluster-trivial even when it contains a small amount of
   // non-ASCII punctuation (curly quotes, dashes, etc). We only fall back to full grapheme
@@ -1787,12 +1804,31 @@ fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) 
   // Try the "cluster-trivial" Unicode path while scanning for codepoints that require full
   // grapheme segmentation. This avoids a separate pre-scan pass for long runs that are safe to
   // cluster by scalar boundaries (e.g. CJK text or Latin text with curly quotes/dashes).
-  clusters.reserve(text.len().saturating_sub(clusters.len()));
+  const CLUSTER_TRIVIAL_RESERVE_LIMIT: usize = 4096;
+  clusters.reserve(text.len().min(CLUSTER_TRIVIAL_RESERVE_LIMIT));
   let mut iter = text.char_indices().peekable();
+  let mut needs_full_segmentation = false;
+  let mut needs_emoji_sequence_spans = false;
+
   while let Some((start, ch)) = iter.next() {
+    if !needs_emoji_sequence_spans && is_emoji_sequence_trigger(ch) {
+      needs_emoji_sequence_spans = true;
+      if needs_full_segmentation {
+        break;
+      }
+    }
+
+    if needs_full_segmentation {
+      continue;
+    }
+
     if requires_full_grapheme_segmentation(ch) {
+      needs_full_segmentation = true;
       clusters.clear();
-      break;
+      if needs_emoji_sequence_spans {
+        break;
+      }
+      continue;
     }
 
     if ch == '\r' {
@@ -1806,7 +1842,8 @@ fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) 
     }
     clusters.push((start, start + ch.len_utf8()));
   }
-  if !clusters.is_empty() {
+
+  if !needs_full_segmentation {
     return;
   }
 
@@ -1820,28 +1857,30 @@ fn atomic_shaping_clusters_into(text: &str, clusters: &mut Vec<(usize, usize)>) 
     boundaries.push(text.len());
   }
 
-  let sequences = emoji::find_emoji_sequence_spans(text);
-  if !sequences.is_empty() {
-    let mut filtered = Vec::with_capacity(boundaries.len());
-    let mut seq_iter = sequences.iter().peekable();
-    for boundary in boundaries {
-      while let Some(seq) = seq_iter.peek() {
-        if seq.end <= boundary {
-          seq_iter.next();
-        } else {
-          break;
+  if needs_emoji_sequence_spans {
+    let sequences = emoji::find_emoji_sequence_spans(text);
+    if !sequences.is_empty() {
+      let mut filtered = Vec::with_capacity(boundaries.len());
+      let mut seq_iter = sequences.iter().peekable();
+      for boundary in boundaries {
+        while let Some(seq) = seq_iter.peek() {
+          if seq.end <= boundary {
+            seq_iter.next();
+          } else {
+            break;
+          }
+        }
+        if let Some(seq) = seq_iter.peek() {
+          if seq.start < boundary && boundary < seq.end {
+            continue;
+          }
+        }
+        if filtered.last().copied() != Some(boundary) {
+          filtered.push(boundary);
         }
       }
-      if let Some(seq) = seq_iter.peek() {
-        if seq.start < boundary && boundary < seq.end {
-          continue;
-        }
-      }
-      if filtered.last().copied() != Some(boundary) {
-        filtered.push(boundary);
-      }
+      boundaries = filtered;
     }
-    boundaries = filtered;
   }
 
   let estimated = boundaries.len().saturating_sub(1);
@@ -6568,6 +6607,32 @@ mod tests {
         "base cluster should emit .notdef when glyph is missing"
       );
     }
+  }
+
+  #[test]
+  fn atomic_clusters_skip_emoji_sequence_spans_for_non_emoji_text() {
+    crate::text::emoji::debug_reset_emoji_sequence_span_calls();
+    let text = "a\u{0301}";
+    let clusters = atomic_shaping_clusters(text);
+    assert_eq!(clusters, vec![(0, text.len())]);
+    assert_eq!(
+      crate::text::emoji::debug_emoji_sequence_span_calls(),
+      0,
+      "combining-mark clusters should not run emoji sequence detection"
+    );
+  }
+
+  #[test]
+  fn atomic_clusters_run_emoji_sequence_spans_for_zwj_sequences() {
+    crate::text::emoji::debug_reset_emoji_sequence_span_calls();
+    let text = "👨\u{200d}👩";
+    let clusters = atomic_shaping_clusters(text);
+    assert_eq!(clusters, vec![(0, text.len())]);
+    assert_eq!(
+      crate::text::emoji::debug_emoji_sequence_span_calls(),
+      1,
+      "ZWJ sequences need emoji sequence detection to stay atomic"
+    );
   }
 
   #[test]

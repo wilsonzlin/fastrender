@@ -24,6 +24,23 @@
 //! - Unicode Technical Standard #51: <https://www.unicode.org/reports/tr51/>
 //! - Unicode Emoji Data: <https://unicode.org/Public/emoji/latest/>
 
+#[cfg(test)]
+thread_local! {
+  static EMOJI_SEQUENCE_SPAN_CALLS: std::cell::Cell<usize> = std::cell::Cell::new(0);
+}
+
+#[cfg(test)]
+#[doc(hidden)]
+pub(crate) fn debug_reset_emoji_sequence_span_calls() {
+  EMOJI_SEQUENCE_SPAN_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+#[doc(hidden)]
+pub(crate) fn debug_emoji_sequence_span_calls() -> usize {
+  EMOJI_SEQUENCE_SPAN_CALLS.with(|calls| calls.get())
+}
+
 /// An emoji sequence found in text
 ///
 /// Emoji can be composed of multiple codepoints:
@@ -498,6 +515,9 @@ pub fn is_tag_base(c: char) -> bool {
 /// assert_eq!(seqs.len(), 1);
 /// ```
 pub(crate) fn find_emoji_sequence_spans(text: &str) -> Vec<EmojiSequenceSpan> {
+  #[cfg(test)]
+  EMOJI_SEQUENCE_SPAN_CALLS.with(|calls| calls.set(calls.get() + 1));
+
   if text.is_ascii() {
     return Vec::new();
   }
