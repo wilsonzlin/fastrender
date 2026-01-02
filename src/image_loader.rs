@@ -55,6 +55,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tiny_skia::{FilterQuality, IntSize, Pixmap};
 use url::Url;
@@ -1162,6 +1163,48 @@ impl From<&CachedImage> for CachedImageMetadata {
   }
 }
 
+fn is_about_url(url: &str) -> bool {
+  let trimmed = url.trim_start();
+  trimmed
+    .get(..6)
+    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("about:"))
+}
+
+fn about_url_placeholder_image() -> Arc<CachedImage> {
+  static PLACEHOLDER: OnceLock<Arc<CachedImage>> = OnceLock::new();
+  Arc::clone(PLACEHOLDER.get_or_init(|| {
+    // A 1×1 fully transparent RGBA buffer so layout/paint can proceed deterministically for
+    // non-fetchable `about:` URLs (e.g. `about:blank`).
+    let img = RgbaImage::new(1, 1);
+    Arc::new(CachedImage {
+      image: Arc::new(DynamicImage::ImageRgba8(img)),
+      orientation: None,
+      resolution: None,
+      is_vector: false,
+      intrinsic_ratio: None,
+      aspect_ratio_none: false,
+      svg_content: None,
+    })
+  }))
+}
+
+fn about_url_placeholder_metadata() -> Arc<CachedImageMetadata> {
+  static PLACEHOLDER_META: OnceLock<Arc<CachedImageMetadata>> = OnceLock::new();
+  Arc::clone(
+    PLACEHOLDER_META
+      .get_or_init(|| Arc::new(CachedImageMetadata::from(&*about_url_placeholder_image()))),
+  )
+}
+
+fn about_url_placeholder_pixmap() -> Arc<tiny_skia::Pixmap> {
+  static PLACEHOLDER_PIXMAP: OnceLock<Arc<tiny_skia::Pixmap>> = OnceLock::new();
+  Arc::clone(PLACEHOLDER_PIXMAP.get_or_init(|| {
+    // new_pixmap returns a zeroed RGBA buffer, which is already a premultiplied fully-transparent
+    // pixel for tiny-skia.
+    Arc::new(new_pixmap(1, 1).expect("1x1 pixmap allocation must succeed"))
+  }))
+}
+
 // ============================================================================
 // ImageCache
 // ============================================================================
@@ -1715,6 +1758,9 @@ impl ImageCache {
     if trimmed.starts_with('<') {
       return self.render_svg(trimmed);
     }
+    if is_about_url(trimmed) {
+      return Ok(about_url_placeholder_image());
+    }
 
     // Resolve the URL first
     let resolved_url = self.resolve_url(url);
@@ -1770,6 +1816,9 @@ impl ImageCache {
     decorative: bool,
   ) -> Result<Option<Arc<tiny_skia::Pixmap>>> {
     let resolved_url = self.resolve_url(url);
+    if is_about_url(&resolved_url) {
+      return Ok(Some(about_url_placeholder_pixmap()));
+    }
     self.enforce_image_policy(&resolved_url)?;
 
     let key = raster_pixmap_full_key(&resolved_url, orientation, decorative);
@@ -1870,6 +1919,9 @@ impl ImageCache {
       return Ok(None);
     }
     let resolved_url = self.resolve_url(url);
+    if is_about_url(&resolved_url) {
+      return Ok(Some(about_url_placeholder_pixmap()));
+    }
     self.enforce_image_policy(&resolved_url)?;
 
     let key = raster_pixmap_key(
@@ -2025,6 +2077,9 @@ impl ImageCache {
       inflight_guard.finish(shared);
       return result;
     }
+    if is_about_url(trimmed) {
+      return Ok(about_url_placeholder_metadata());
+    }
 
     let resolved_url = self.resolve_url(url);
     self.probe_resolved_url(&resolved_url)
@@ -2045,6 +2100,9 @@ impl ImageCache {
         url: resolved_url.to_string(),
         reason: "image probe URL is empty".to_string(),
       }));
+    }
+    if is_about_url(resolved_url) {
+      return Ok(about_url_placeholder_metadata());
     }
 
     self.enforce_image_policy(resolved_url)?;
@@ -2207,7 +2265,11 @@ impl ImageCache {
         }
 
         let href = attr.value().trim();
-        if href.is_empty() || href.starts_with('#') || crate::resource::is_data_url(href) {
+        if href.is_empty()
+          || href.starts_with('#')
+          || crate::resource::is_data_url(href)
+          || is_about_url(href)
+        {
           continue;
         }
 
@@ -3933,6 +3995,70 @@ mod tests {
     server.join().unwrap();
   }
 
+  #[test]
+  fn image_cache_load_about_blank_returns_transparent_placeholder() {
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("fetch should not be called for about: URLs");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        _url: &str,
+        _max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        panic!("partial fetch should not be called for about: URLs");
+      }
+    }
+
+    let cache = ImageCache::with_fetcher(Arc::new(PanicFetcher));
+    let image = cache
+      .load("about:blank")
+      .expect("about:blank placeholder loads");
+    assert!(!image.is_vector);
+    assert_eq!(image.dimensions(), (1, 1));
+
+    let rgba = image.image.to_rgba8();
+    assert_eq!(rgba.dimensions(), (1, 1));
+    assert_eq!(rgba.get_pixel(0, 0).0, [0, 0, 0, 0]);
+  }
+
+  #[test]
+  fn image_cache_probe_about_blank_returns_placeholder_metadata() {
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("fetch should not be called for about: URLs");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        _url: &str,
+        _max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        panic!("partial fetch should not be called for about: URLs");
+      }
+    }
+
+    let cache = ImageCache::with_fetcher(Arc::new(PanicFetcher));
+    let meta = cache
+      .probe("about:blank")
+      .expect("about:blank probe succeeds");
+    assert!(!meta.is_vector);
+    assert_eq!(meta.dimensions(), (1, 1));
+    assert_eq!(
+      meta.intrinsic_ratio(OrientationTransform::IDENTITY),
+      Some(1.0)
+    );
+  }
+
   fn padded_png() -> Vec<u8> {
     // 1x1 RGBA PNG, padded with trailing bytes so that the probe must use a prefix fetch.
     const PNG_1X1: &[u8] = &[
@@ -4123,7 +4249,9 @@ mod tests {
       },
     );
     let cache2 = ImageCache::with_fetcher(Arc::new(disk2));
-    let meta2 = cache2.probe_resolved(url).expect("probe succeeds from disk");
+    let meta2 = cache2
+      .probe_resolved(url)
+      .expect("probe succeeds from disk");
     assert_eq!(meta2.dimensions(), (1, 1));
     assert_eq!(
       calls2.load(Ordering::SeqCst),
@@ -5418,7 +5546,10 @@ mod tests {
     }
 
     for handle in handles {
-      let probed = handle.join().expect("probe thread panicked").expect("probe ok");
+      let probed = handle
+        .join()
+        .expect("probe thread panicked")
+        .expect("probe ok");
       assert_eq!(probed.dimensions(), (42, 24));
     }
 
