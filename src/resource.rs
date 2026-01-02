@@ -1970,19 +1970,27 @@ fn mime_is_svg(mime: &str) -> bool {
 }
 
 fn url_looks_like_suffix(url: &str, suffix: &str) -> bool {
+  let url = url_without_query_fragment(url);
+  ends_with_ignore_ascii_case(url, suffix)
+}
+
+fn url_without_query_fragment(url: &str) -> &str {
   let url = url.trim();
   let url = url
     .split_once('#')
     .map(|(before, _)| before)
     .unwrap_or(url);
-  let url = url
+  url
     .split_once('?')
     .map(|(before, _)| before)
-    .unwrap_or(url);
-  let Some(tail) = url
+    .unwrap_or(url)
+}
+
+fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
+  let Some(tail) = value
     .len()
     .checked_sub(suffix.len())
-    .and_then(|idx| url.get(idx..))
+    .and_then(|idx| value.get(idx..))
   else {
     return false;
   };
@@ -1994,12 +2002,13 @@ fn url_looks_like_html(url: &str) -> bool {
 }
 
 fn url_looks_like_image_asset(url: &str) -> bool {
+  let url = url_without_query_fragment(url);
   [
     ".png", ".apng", ".gif", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".ico", ".tif", ".tiff",
     ".svg", ".svgz", ".jxl", ".heic", ".heif",
   ]
   .into_iter()
-  .any(|suffix| url_looks_like_suffix(url, suffix))
+  .any(|suffix| ends_with_ignore_ascii_case(url, suffix))
 }
 
 fn url_looks_like_svg_or_html(url: &str) -> bool {
@@ -7644,6 +7653,14 @@ mod tests {
       ".jpg"
     ));
     assert!(!url_looks_like_suffix("jpg", ".jpeg"));
+  }
+
+  #[test]
+  fn url_looks_like_image_asset_ignores_query_fragment_and_case() {
+    assert!(url_looks_like_image_asset(
+      "  http://example.com/PHOTO.JPG?x=1#frag  "
+    ));
+    assert!(!url_looks_like_image_asset("http://example.com/photo.html"));
   }
 
   #[test]
