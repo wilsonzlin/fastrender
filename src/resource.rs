@@ -2001,7 +2001,7 @@ fn url_looks_like_html(url: &str) -> bool {
   url_looks_like_suffix(url, ".html") || url_looks_like_suffix(url, ".htm")
 }
 
-fn url_looks_like_image_asset(url: &str) -> bool {
+pub(crate) fn url_looks_like_image_asset(url: &str) -> bool {
   let url = url_without_query_fragment(url);
   [
     ".png", ".apng", ".gif", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".ico", ".tif", ".tiff",

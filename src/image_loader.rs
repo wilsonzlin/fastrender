@@ -1356,6 +1356,35 @@ fn payload_looks_like_markup_but_not_svg(bytes: &[u8]) -> bool {
   true
 }
 
+fn should_substitute_markup_payload_for_image(
+  requested_url: &str,
+  final_url: Option<&str>,
+  status: Option<u16>,
+  content_type: Option<&str>,
+  bytes: &[u8],
+) -> bool {
+  if !status_is_http_success(status) || !payload_looks_like_markup_but_not_svg(bytes) {
+    return false;
+  }
+  let final_url = final_url.unwrap_or(requested_url);
+  let url_looks_like_real_image = crate::resource::url_looks_like_image_asset(requested_url)
+    || crate::resource::url_looks_like_image_asset(final_url);
+  if !url_looks_like_real_image {
+    return true;
+  }
+
+  let mime_looks_like_html = content_type.is_some_and(|ct| {
+    let mime = ct.split(';').next().unwrap_or(ct).trim();
+    mime.eq_ignore_ascii_case("text/html")
+      || mime.eq_ignore_ascii_case("application/xhtml+xml")
+      || mime.eq_ignore_ascii_case("text/plain")
+  });
+  // Avoid masking explicit HTML responses for URLs that look like real image assets (common
+  // bot-mitigation behavior). In those cases, allow `ensure_image_mime_sane` to surface a
+  // `ResourceError` instead of silently substituting a placeholder.
+  !mime_looks_like_html
+}
+
 // ============================================================================
 // ImageCache
 // ============================================================================
@@ -2521,9 +2550,13 @@ impl ImageCache {
         return Err(blocked);
       }
     }
-    if status_is_http_success(resource.status)
-      && payload_looks_like_markup_but_not_svg(&resource.bytes)
-    {
+    if should_substitute_markup_payload_for_image(
+      resolved_url,
+      resource.final_url.as_deref(),
+      resource.status,
+      resource.content_type.as_deref(),
+      &resource.bytes,
+    ) {
       self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_image(resolved_url));
     }
@@ -2596,9 +2629,13 @@ impl ImageCache {
     resolved_url: &str,
     resource: &FetchedResource,
   ) -> Result<Arc<CachedImage>> {
-    if status_is_http_success(resource.status)
-      && payload_looks_like_markup_but_not_svg(&resource.bytes)
-    {
+    if should_substitute_markup_payload_for_image(
+      resolved_url,
+      resource.final_url.as_deref(),
+      resource.status,
+      resource.content_type.as_deref(),
+      &resource.bytes,
+    ) {
       self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_image(resolved_url));
     }
@@ -2713,9 +2750,13 @@ impl ImageCache {
         }
         return Err(err);
       }
-      if status_is_http_success(resource.status)
-        && payload_looks_like_markup_but_not_svg(&resource.bytes)
-      {
+      if should_substitute_markup_payload_for_image(
+        resolved_url,
+        resource.final_url.as_deref(),
+        resource.status,
+        resource.content_type.as_deref(),
+        &resource.bytes,
+      ) {
         self.record_invalid_image(resolved_url);
         return Ok(self.cache_placeholder_metadata(resolved_url));
       }
@@ -2824,7 +2865,13 @@ impl ImageCache {
       }
       return Err(err);
     }
-    if status_is_http_success(resource.status) && payload_looks_like_markup_but_not_svg(&resource.bytes) {
+    if should_substitute_markup_payload_for_image(
+      resolved_url,
+      resource.final_url.as_deref(),
+      resource.status,
+      resource.content_type.as_deref(),
+      &resource.bytes,
+    ) {
       self.record_invalid_image(resolved_url);
       return Ok(self.cache_placeholder_metadata(resolved_url));
     }
@@ -4445,6 +4492,81 @@ mod tests {
       .expect("diagnostics entry");
     assert_eq!(entry.status, Some(403));
     assert_eq!(entry.final_url.as_deref(), Some(url.as_str()));
+
+    server.join().unwrap();
+  }
+
+  #[test]
+  fn http_200_html_for_jpg_is_reported_as_resource_error() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => listener,
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
+        eprintln!("skipping http_200_html_for_jpg_is_reported_as_resource_error: cannot bind localhost: {err}");
+        return;
+      }
+      Err(err) => panic!("bind localhost: {err}"),
+    };
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/photo.jpg");
+
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept");
+      let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+      let mut buf = [0u8; 1024];
+      let _ = stream.read(&mut buf);
+
+      let body = "<!doctype html><html><body>blocked</body></html>";
+      let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .expect("write response");
+      let _ = stream.flush();
+    });
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let mut cache = ImageCache::with_fetcher(Arc::new(HttpFetcher::new()));
+    cache.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+
+    let err = match cache.load(&url) {
+      Ok(_) => panic!("image load should fail"),
+      Err(err) => err,
+    };
+    match err {
+      Error::Resource(ref res) => {
+        assert_eq!(res.status, Some(200));
+        assert!(
+          res.message.contains("unexpected content-type"),
+          "unexpected error message: {}",
+          res.message
+        );
+      }
+      other => panic!("expected resource error, got {other:?}"),
+    }
+
+    let diag = diagnostics.lock().unwrap().clone();
+    let entry = diag
+      .fetch_errors
+      .iter()
+      .find(|e| e.kind == ResourceKind::Image && e.url == url)
+      .expect("diagnostics entry");
+    assert_eq!(entry.status, Some(200));
+    assert!(
+      diag.invalid_images.iter().all(|u| u != &url),
+      "expected invalid_images to not contain url"
+    );
 
     server.join().unwrap();
   }
