@@ -1838,6 +1838,12 @@ struct SelectorMetadata {
   has_requirement_groups: Vec<Vec<HasRequirement>>,
 }
 
+impl SelectorMetadata {
+  fn is_empty(&self) -> bool {
+    self.namespace.is_none() && self.has_requirement_groups.is_empty()
+  }
+}
+
 fn selector_metadata_matches_node(
   metadata: &SelectorMetadata,
   node: &DomNode,
@@ -1934,7 +1940,7 @@ struct IndexedSelector<'a> {
   selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
   specificity: u32,
   ancestor_hashes: AncestorHashes,
-  metadata: SelectorMetadata,
+  metadata_id: u32,
   fast_reject: u32,
 }
 
@@ -1947,7 +1953,7 @@ struct IndexedSlottedSelector<'a> {
   prelude_fast_reject: u32,
   args_ancestor_hashes: Vec<AncestorHashes>,
   args_fast_reject: Vec<u32>,
-  metadata: SelectorMetadata,
+  metadata_id: u32,
 }
 
 type SelectorBucketKey = u64;
@@ -2151,6 +2157,7 @@ struct RuleIndex<'a> {
   rule_sets_content: Vec<bool>,
   has_has_requirements: bool,
   selectors: Vec<IndexedSelector<'a>>,
+  metadatas: Vec<SelectorMetadata>,
   fast_rejects: Vec<RightmostFastReject>,
   by_id: SelectorBucketMap<Vec<usize>>,
   by_class: SelectorBucketMap<Vec<usize>>,
@@ -3877,11 +3884,10 @@ fn selector_has_requirement_groups(
           quirks_hashes: quirks,
         });
       }
-      if unprunable {
-        groups.push(Vec::new());
-      } else {
-        groups.push(group);
+      if unprunable || group.iter().any(|req| req.is_empty()) {
+        continue;
       }
+      groups.push(group);
     }
   }
 
@@ -4052,6 +4058,29 @@ impl<'a> RuleIndex<'a> {
     }
   }
 
+  #[inline]
+  fn metadata(&self, id: u32) -> Option<&SelectorMetadata> {
+    if id == 0 {
+      None
+    } else {
+      self.metadatas.get(id.saturating_sub(1) as usize)
+    }
+  }
+
+  #[inline(always)]
+  fn metadata_matches_node(
+    &self,
+    id: u32,
+    node: &DomNode,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
+    quirks_mode: QuirksMode,
+  ) -> bool {
+    let Some(metadata) = self.metadata(id) else {
+      return true;
+    };
+    selector_metadata_matches_node(metadata, node, summary, quirks_mode)
+  }
+
   fn new(rules: Vec<CascadeRule<'a>>, quirks_mode: QuirksMode) -> Self {
     let mut index = RuleIndex {
       // Keep the caller-provided rule Vec rather than moving each rule into a second Vec.
@@ -4061,6 +4090,7 @@ impl<'a> RuleIndex<'a> {
       rule_sets_content: Vec::new(),
       has_has_requirements: false,
       selectors: Vec::new(),
+      metadatas: Vec::new(),
       fast_rejects: Vec::new(),
       by_id: SelectorBucketMap::default(),
       by_class: SelectorBucketMap::default(),
@@ -4184,6 +4214,12 @@ impl<'a> RuleIndex<'a> {
             {
               index.has_has_requirements = true;
             }
+            let metadata_id = if metadata.is_empty() {
+              0
+            } else {
+              index.metadatas.push(metadata);
+              u32::try_from(index.metadatas.len()).expect("selector metadata cache overflow")
+            };
             index.slotted_selectors.push(IndexedSlottedSelector {
               rule_idx,
               selector,
@@ -4193,7 +4229,7 @@ impl<'a> RuleIndex<'a> {
               prelude_fast_reject,
               args_ancestor_hashes,
               args_fast_reject,
-              metadata,
+              metadata_id,
             });
 
             let arg_analyses: Vec<SelectorKeyAnalysis> = match pe {
@@ -4228,6 +4264,12 @@ impl<'a> RuleIndex<'a> {
           {
             index.has_has_requirements = true;
           }
+          let metadata_id = if metadata.is_empty() {
+            0
+          } else {
+            index.metadatas.push(metadata);
+            u32::try_from(index.metadatas.len()).expect("selector metadata cache overflow")
+          };
           let ancestor_hashes = cascade_ancestor_hashes(selector, quirks_mode);
           let fast_reject = match pseudo_selector_subject_fast_reject(selector, quirks_mode) {
             Some(desc) => {
@@ -4241,7 +4283,7 @@ impl<'a> RuleIndex<'a> {
             selector,
             specificity: selector.specificity(),
             ancestor_hashes,
-            metadata,
+            metadata_id,
             fast_reject,
           });
 
@@ -4268,6 +4310,12 @@ impl<'a> RuleIndex<'a> {
         {
           index.has_has_requirements = true;
         }
+        let metadata_id = if metadata.is_empty() {
+          0
+        } else {
+          index.metadatas.push(metadata);
+          u32::try_from(index.metadatas.len()).expect("selector metadata cache overflow")
+        };
         let ancestor_hashes = cascade_ancestor_hashes(selector, quirks_mode);
         let fast_reject = match selector_rightmost_compound_fast_reject(selector, quirks_mode) {
           Some(desc) => {
@@ -4281,7 +4329,7 @@ impl<'a> RuleIndex<'a> {
           selector,
           specificity: selector.specificity(),
           ancestor_hashes,
-          metadata,
+          metadata_id,
           fast_reject,
         });
 
@@ -4670,8 +4718,8 @@ impl<'a> RuleIndex<'a> {
         if !seen.mark_seen(selector_idx) {
           continue;
         }
-        if !selector_metadata_matches_node(
-          &selectors[selector_idx].metadata,
+        if !self.metadata_matches_node(
+          selectors[selector_idx].metadata_id,
           node,
           summary,
           quirks_mode,
@@ -4747,8 +4795,8 @@ impl<'a> RuleIndex<'a> {
         if !seen.mark_seen(selector_idx) {
           continue;
         }
-        if !selector_metadata_matches_node(
-          &selectors[selector_idx].metadata,
+        if !self.metadata_matches_node(
+          selectors[selector_idx].metadata_id,
           node,
           summary,
           quirks_mode,
@@ -4855,8 +4903,8 @@ impl<'a> RuleIndex<'a> {
         if !seen.mark_seen(selector_idx) {
           continue;
         }
-        if !selector_metadata_matches_node(
-          &selectors[selector_idx].metadata,
+        if !self.metadata_matches_node(
+          selectors[selector_idx].metadata_id,
           node,
           summary,
           quirks_mode,
@@ -4917,12 +4965,8 @@ impl<'a> RuleIndex<'a> {
       if !seen.mark_seen(selector_idx) {
         continue;
       }
-      if !selector_metadata_matches_node(
-        &selectors[selector_idx].metadata,
-        node,
-        summary,
-        quirks_mode,
-      ) {
+      if !self.metadata_matches_node(selectors[selector_idx].metadata_id, node, summary, quirks_mode)
+      {
         if TRACK_STATS {
           stats.pruned += 1;
         }
@@ -5057,8 +5101,8 @@ impl<'a> RuleIndex<'a> {
         if !seen.mark_seen(selector_idx) {
           continue;
         }
-        if !selector_metadata_matches_node(
-          &selectors[selector_idx].metadata,
+        if !self.metadata_matches_node(
+          selectors[selector_idx].metadata_id,
           node,
           summary,
           quirks_mode,
@@ -5129,8 +5173,8 @@ impl<'a> RuleIndex<'a> {
         if !seen.mark_seen(selector_idx) {
           continue;
         }
-        if !selector_metadata_matches_node(
-          &selectors[selector_idx].metadata,
+        if !self.metadata_matches_node(
+          selectors[selector_idx].metadata_id,
           node,
           summary,
           quirks_mode,
@@ -5231,8 +5275,8 @@ impl<'a> RuleIndex<'a> {
         if !seen.mark_seen(selector_idx) {
           continue;
         }
-        if !selector_metadata_matches_node(
-          &selectors[selector_idx].metadata,
+        if !self.metadata_matches_node(
+          selectors[selector_idx].metadata_id,
           node,
           summary,
           quirks_mode,
@@ -5293,12 +5337,8 @@ impl<'a> RuleIndex<'a> {
       if !seen.mark_seen(selector_idx) {
         continue;
       }
-      if !selector_metadata_matches_node(
-        &selectors[selector_idx].metadata,
-        node,
-        summary,
-        quirks_mode,
-      ) {
+      if !self.metadata_matches_node(selectors[selector_idx].metadata_id, node, summary, quirks_mode)
+      {
         if TRACK_STATS {
           stats.pruned += 1;
         }
@@ -5372,8 +5412,8 @@ impl<'a> RuleIndex<'a> {
     };
 
     let mut consider_candidate = |idx: usize, bucket: &mut u64| {
-      if !selector_metadata_matches_node(
-        &self.pseudo_selectors[idx].metadata,
+      if !self.metadata_matches_node(
+        self.pseudo_selectors[idx].metadata_id,
         node,
         summary,
         quirks_mode,
