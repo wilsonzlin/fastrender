@@ -7,9 +7,10 @@
   "status": "ok",
   "total_ms": 183.935705,
   "stages_ms": {
-    "fetch": 112.76460306532665,
+    "fetch": 112.76460306532664,
     "css": 23.107500628140706,
-    "cascade": 17.561700477386935,
+    "cascade": 9.976108283102063,
+    "box_tree": 7.585592194284873,
     "layout": 8.318700226130654,
     "paint": 22.183200603015077
   },
@@ -51,7 +52,7 @@
         "text_fallback_cpu_ms": 0.038701,
         "text_shape_cpu_ms": 0.152124,
         "paint_build_ms": 10.703452,
-        "paint_optimize_ms": 0.0072699999999999996,
+        "paint_optimize_ms": 0.00727,
         "paint_rasterize_ms": 0.559333,
         "text_rasterize_cpu_ms": 0.473721,
         "encode_ms": null
