@@ -4534,6 +4534,38 @@ impl<'a> RuleIndex<'a> {
     stats: &mut CandidateStats,
     merge: &mut CandidateMergeScratch,
   ) {
+    self.selector_candidates_impl::<false>(
+      node, node_keys, summary, quirks_mode, out, seen, stats, merge,
+    );
+  }
+
+  fn selector_candidates_profiled(
+    &self,
+    node: &DomNode,
+    node_keys: NodeSelectorKeys<'_>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+    merge: &mut CandidateMergeScratch,
+  ) {
+    self.selector_candidates_impl::<true>(
+      node, node_keys, summary, quirks_mode, out, seen, stats, merge,
+    );
+  }
+
+  fn selector_candidates_impl<const TRACK_STATS: bool>(
+    &self,
+    node: &DomNode,
+    node_keys: NodeSelectorKeys<'_>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+    merge: &mut CandidateMergeScratch,
+  ) {
     out.clear();
     seen.reset();
     merge.cursors.clear();
@@ -4619,17 +4651,21 @@ impl<'a> RuleIndex<'a> {
           summary,
           quirks_mode,
         ) {
-          stats.pruned += 1;
+          if TRACK_STATS {
+            stats.pruned += 1;
+          }
           continue;
         }
         out.push(selector_idx);
-        match cursor.bucket {
-          CandidateBucket::Id => stats.by_id += 1,
-          CandidateBucket::Class => stats.by_class += 1,
-          CandidateBucket::AttrValue => stats.by_attr += 1,
-          CandidateBucket::Tag => stats.by_tag += 1,
-          CandidateBucket::Attr => stats.by_attr += 1,
-          CandidateBucket::Universal => stats.universal += 1,
+        if TRACK_STATS {
+          match cursor.bucket {
+            CandidateBucket::Id => stats.by_id += 1,
+            CandidateBucket::Class => stats.by_class += 1,
+            CandidateBucket::AttrValue => stats.by_attr += 1,
+            CandidateBucket::Tag => stats.by_tag += 1,
+            CandidateBucket::Attr => stats.by_attr += 1,
+            CandidateBucket::Universal => stats.universal += 1,
+          }
         }
       }
       return;
@@ -4840,22 +4876,58 @@ impl<'a> RuleIndex<'a> {
         summary,
         quirks_mode,
       ) {
-        stats.pruned += 1;
+        if TRACK_STATS {
+          stats.pruned += 1;
+        }
         continue;
       }
       out.push(selector_idx);
-      match cursor.bucket {
-        CandidateBucket::Id => stats.by_id += 1,
-        CandidateBucket::Class => stats.by_class += 1,
-        CandidateBucket::AttrValue => stats.by_attr += 1,
-        CandidateBucket::Tag => stats.by_tag += 1,
-        CandidateBucket::Attr => stats.by_attr += 1,
-        CandidateBucket::Universal => stats.universal += 1,
+      if TRACK_STATS {
+        match cursor.bucket {
+          CandidateBucket::Id => stats.by_id += 1,
+          CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::AttrValue => stats.by_attr += 1,
+          CandidateBucket::Tag => stats.by_tag += 1,
+          CandidateBucket::Attr => stats.by_attr += 1,
+          CandidateBucket::Universal => stats.universal += 1,
+        }
       }
     }
   }
 
   fn slotted_candidates(
+    &self,
+    node: &DomNode,
+    node_keys: NodeSelectorKeys<'_>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+    merge: &mut CandidateMergeScratch,
+  ) {
+    self.slotted_candidates_impl::<false>(
+      node, node_keys, summary, quirks_mode, out, seen, stats, merge,
+    );
+  }
+
+  fn slotted_candidates_profiled(
+    &self,
+    node: &DomNode,
+    node_keys: NodeSelectorKeys<'_>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+    merge: &mut CandidateMergeScratch,
+  ) {
+    self.slotted_candidates_impl::<true>(
+      node, node_keys, summary, quirks_mode, out, seen, stats, merge,
+    );
+  }
+
+  fn slotted_candidates_impl<const TRACK_STATS: bool>(
     &self,
     node: &DomNode,
     node_keys: NodeSelectorKeys<'_>,
@@ -4954,17 +5026,21 @@ impl<'a> RuleIndex<'a> {
           summary,
           quirks_mode,
         ) {
-          stats.pruned += 1;
+          if TRACK_STATS {
+            stats.pruned += 1;
+          }
           continue;
         }
         out.push(selector_idx);
-        match cursor.bucket {
-          CandidateBucket::Id => stats.by_id += 1,
-          CandidateBucket::Class => stats.by_class += 1,
-          CandidateBucket::AttrValue => stats.by_attr += 1,
-          CandidateBucket::Tag => stats.by_tag += 1,
-          CandidateBucket::Attr => stats.by_attr += 1,
-          CandidateBucket::Universal => stats.universal += 1,
+        if TRACK_STATS {
+          match cursor.bucket {
+            CandidateBucket::Id => stats.by_id += 1,
+            CandidateBucket::Class => stats.by_class += 1,
+            CandidateBucket::AttrValue => stats.by_attr += 1,
+            CandidateBucket::Tag => stats.by_tag += 1,
+            CandidateBucket::Attr => stats.by_attr += 1,
+            CandidateBucket::Universal => stats.universal += 1,
+          }
         }
       }
       return;
@@ -5165,22 +5241,58 @@ impl<'a> RuleIndex<'a> {
         summary,
         quirks_mode,
       ) {
-        stats.pruned += 1;
+        if TRACK_STATS {
+          stats.pruned += 1;
+        }
         continue;
       }
       out.push(selector_idx);
-      match cursor.bucket {
-        CandidateBucket::Id => stats.by_id += 1,
-        CandidateBucket::Class => stats.by_class += 1,
-        CandidateBucket::AttrValue => stats.by_attr += 1,
-        CandidateBucket::Tag => stats.by_tag += 1,
-        CandidateBucket::Attr => stats.by_attr += 1,
-        CandidateBucket::Universal => stats.universal += 1,
+      if TRACK_STATS {
+        match cursor.bucket {
+          CandidateBucket::Id => stats.by_id += 1,
+          CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::AttrValue => stats.by_attr += 1,
+          CandidateBucket::Tag => stats.by_tag += 1,
+          CandidateBucket::Attr => stats.by_attr += 1,
+          CandidateBucket::Universal => stats.universal += 1,
+        }
       }
     }
   }
 
   fn pseudo_candidates(
+    &self,
+    node: &DomNode,
+    pseudo: &PseudoElement,
+    node_keys: NodeSelectorKeys<'_>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+  ) {
+    self.pseudo_candidates_impl::<false>(
+      node, pseudo, node_keys, summary, quirks_mode, out, seen, stats,
+    );
+  }
+
+  fn pseudo_candidates_profiled(
+    &self,
+    node: &DomNode,
+    pseudo: &PseudoElement,
+    node_keys: NodeSelectorKeys<'_>,
+    summary: Option<SelectorBloomSummaryRef<'_>>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+  ) {
+    self.pseudo_candidates_impl::<true>(
+      node, pseudo, node_keys, summary, quirks_mode, out, seen, stats,
+    );
+  }
+
+  fn pseudo_candidates_impl<const TRACK_STATS: bool>(
     &self,
     node: &DomNode,
     pseudo: &PseudoElement,
@@ -5209,13 +5321,17 @@ impl<'a> RuleIndex<'a> {
         quirks_mode,
       ) {
         if seen.mark_seen(idx) {
-          stats.pruned += 1;
+          if TRACK_STATS {
+            stats.pruned += 1;
+          }
         }
         return;
       }
       if seen.mark_seen(idx) {
         out.push(idx);
-        *bucket += 1;
+        if TRACK_STATS {
+          *bucket += 1;
+        }
       }
     };
 
@@ -10004,7 +10120,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.selector_candidates(
+    index.selector_candidates_profiled(
       &node,
       node_keys,
       None,
@@ -10084,7 +10200,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.selector_candidates(
+    index.selector_candidates_profiled(
       &node,
       node_keys,
       None,
@@ -10468,7 +10584,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.selector_candidates(
+    index.selector_candidates_profiled(
       &node,
       node_keys,
       None,
@@ -11628,7 +11744,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.selector_candidates(
+    index.selector_candidates_profiled(
       &node,
       node_keys,
       None,
@@ -11725,7 +11841,7 @@ mod tests {
       &mut attr_keys,
       &mut attr_value_keys,
     );
-    index.pseudo_candidates(
+    index.pseudo_candidates_profiled(
       &node,
       &PseudoElement::Before,
       node_keys,
@@ -19112,30 +19228,56 @@ fn find_matching_rules<'a>(
   let node_keys = dom_maps.selector_keys(node_id);
   let candidates = &mut scratch.candidates;
   candidates.clear();
-  scratch.candidate_stats.reset();
-  rules.selector_candidates(
-    node,
-    node_keys,
-    node_summary,
-    quirks_mode,
-    candidates,
-    &mut scratch.candidate_seen,
-    &mut scratch.candidate_stats,
-    &mut scratch.candidate_merge,
-  );
-  let slotted_candidates = &mut scratch.slotted_candidates;
-  slotted_candidates.clear();
-  if assigned_slot.is_some() {
-    rules.slotted_candidates(
+  if profiling {
+    scratch.candidate_stats.reset();
+    rules.selector_candidates_profiled(
       node,
       node_keys,
       node_summary,
       quirks_mode,
-      slotted_candidates,
+      candidates,
       &mut scratch.candidate_seen,
       &mut scratch.candidate_stats,
       &mut scratch.candidate_merge,
     );
+  } else {
+    rules.selector_candidates(
+      node,
+      node_keys,
+      node_summary,
+      quirks_mode,
+      candidates,
+      &mut scratch.candidate_seen,
+      &mut scratch.candidate_stats,
+      &mut scratch.candidate_merge,
+    );
+  }
+  let slotted_candidates = &mut scratch.slotted_candidates;
+  slotted_candidates.clear();
+  if assigned_slot.is_some() {
+    if profiling {
+      rules.slotted_candidates_profiled(
+        node,
+        node_keys,
+        node_summary,
+        quirks_mode,
+        slotted_candidates,
+        &mut scratch.candidate_seen,
+        &mut scratch.candidate_stats,
+        &mut scratch.candidate_merge,
+      );
+    } else {
+      rules.slotted_candidates(
+        node,
+        node_keys,
+        node_summary,
+        quirks_mode,
+        slotted_candidates,
+        &mut scratch.candidate_seen,
+        &mut scratch.candidate_stats,
+        &mut scratch.candidate_merge,
+      );
+    }
   }
   if candidates.is_empty() && slotted_candidates.is_empty() {
     scratch.match_index.reset();
@@ -19758,17 +19900,30 @@ fn find_pseudo_element_rules<'a>(
   };
   let candidates = &mut scratch.candidates;
   candidates.clear();
-  scratch.candidate_stats.reset();
-  rules.pseudo_candidates(
-    node,
-    pseudo,
-    node_keys,
-    node_summary,
-    quirks_mode,
-    candidates,
-    &mut scratch.candidate_seen,
-    &mut scratch.candidate_stats,
-  );
+  if profiling {
+    scratch.candidate_stats.reset();
+    rules.pseudo_candidates_profiled(
+      node,
+      pseudo,
+      node_keys,
+      node_summary,
+      quirks_mode,
+      candidates,
+      &mut scratch.candidate_seen,
+      &mut scratch.candidate_stats,
+    );
+  } else {
+    rules.pseudo_candidates(
+      node,
+      pseudo,
+      node_keys,
+      node_summary,
+      quirks_mode,
+      candidates,
+      &mut scratch.candidate_seen,
+      &mut scratch.candidate_stats,
+    );
+  }
   if candidates.is_empty() {
     scratch.match_index.reset();
     return Vec::new();
