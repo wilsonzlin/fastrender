@@ -103,6 +103,8 @@ pub struct ResourceError {
   pub message: String,
   /// Optional lower-level cause (I/O, HTTP, etc.).
   cause: Option<Arc<dyn std::error::Error + Send + Sync>>,
+  /// HTTP Content-Type header when known.
+  pub content_type: Option<String>,
   /// HTTP status code when applicable.
   pub status: Option<u16>,
   /// Final URL after redirects (if known).
@@ -119,11 +121,17 @@ impl ResourceError {
       url: url.into(),
       message: message.into(),
       cause: None,
+      content_type: None,
       status: None,
       final_url: None,
       etag: None,
       last_modified: None,
     }
+  }
+
+  pub fn with_content_type(mut self, content_type: Option<String>) -> Self {
+    self.content_type = content_type;
+    self
   }
 
   pub fn with_status(mut self, status: u16) -> Self {

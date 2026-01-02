@@ -1211,6 +1211,12 @@ impl PageProgress {
           .and_then(|d| d.fetch_error_summary.as_ref())
           .is_some_and(|s| s.total > 0);
       let has_failures = has_failures
+        || self
+          .diagnostics
+          .as_ref()
+          .and_then(|d| d.bot_mitigation_summary.as_ref())
+          .is_some_and(|s| s.total > 0);
+      let has_failures = has_failures
         || cached_html_status_from_auto_notes(&self.auto_notes).is_some_and(|code| code >= 400);
       if !has_failures {
         self.auto_notes = String::new();
@@ -2477,9 +2483,15 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       let bot_mitigation_summary = build_fetch_error_summary(
         result
           .diagnostics
-          .fetch_errors
+          .blocked_fetch_errors
           .iter()
-          .filter(|err| is_bot_mitigation_fetch_error(err)),
+          .chain(
+            result
+              .diagnostics
+              .fetch_errors
+              .iter()
+              .filter(|err| is_bot_mitigation_fetch_error(err)),
+          ),
       );
       if !used_timeline && result.diagnostics.stats.is_none() {
         log.push_str(
@@ -2488,6 +2500,19 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       }
       progress.hotspot =
         infer_hotspot(result.diagnostics.stats.as_ref(), &progress.stages_ms).to_string();
+      let format_summary = |label: &str, summary: &ProgressFetchErrorSummary| {
+        let mut kind_parts = Vec::new();
+        for (kind, count) in &summary.by_kind {
+          kind_parts.push(format!("{}={count}", resource_kind_label(*kind)));
+        }
+        let kinds = if kind_parts.is_empty() {
+          String::new()
+        } else {
+          format!(" ({})", kind_parts.join(", "))
+        };
+        format!("{label}={}{}", summary.total, kinds)
+      };
+
       if progress.failure_stage.is_some() || fetch_error_summary.is_some() {
         let mut note = String::from("ok with failures: ");
         let mut parts: Vec<String> = Vec::new();
@@ -2495,19 +2520,18 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
           parts.push(format!("failure_stage={}", stage.as_str()));
         }
         if let Some(summary) = fetch_error_summary.as_ref() {
-          let mut kind_parts = Vec::new();
-          for (kind, count) in &summary.by_kind {
-            kind_parts.push(format!("{}={count}", resource_kind_label(*kind)));
-          }
-          let kinds = if kind_parts.is_empty() {
-            String::new()
-          } else {
-            format!(" ({})", kind_parts.join(", "))
-          };
-          parts.push(format!("fetch_errors={}{}", summary.total, kinds));
+          parts.push(format_summary("fetch_errors", summary));
+        }
+        if let Some(summary) = bot_mitigation_summary.as_ref() {
+          parts.push(format_summary("bot_mitigation", summary));
         }
         note.push_str(&parts.join(" "));
         progress.auto_notes = note;
+      } else if let Some(summary) = bot_mitigation_summary.as_ref() {
+        progress.auto_notes = format!(
+          "ok with bot mitigation blocks: {}",
+          format_summary("bot_mitigation", summary)
+        );
       }
       progress.diagnostics = if result.diagnostics.stats.is_some()
         || fetch_error_summary.is_some()
@@ -2660,37 +2684,43 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
 }
 
 fn append_fetch_error_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
-  if diagnostics.fetch_errors.is_empty() {
+  if diagnostics.fetch_errors.is_empty() && diagnostics.blocked_fetch_errors.is_empty() {
     return;
   }
-  log.push_str(&format!(
-    "Fetch errors: {}\n",
-    diagnostics.fetch_errors.len()
-  ));
-  for err in diagnostics.fetch_errors.iter().take(25) {
-    let kind = match err.kind {
-      ResourceKind::Document => "document",
-      ResourceKind::Stylesheet => "stylesheet",
-      ResourceKind::Image => "image",
-      ResourceKind::Font => "font",
-      ResourceKind::Other => "resource",
-    };
-    let mut meta = Vec::new();
-    if let Some(status) = err.status {
-      meta.push(format!("status {status}"));
+
+  let mut append = |label: &str, errors: &[ResourceFetchError]| {
+    if errors.is_empty() {
+      return;
     }
-    if let Some(final_url) = &err.final_url {
-      if final_url != &err.url {
-        meta.push(format!("final {final_url}"));
+    log.push_str(&format!("{label}: {}\n", errors.len()));
+    for err in errors.iter().take(25) {
+      let kind = match err.kind {
+        ResourceKind::Document => "document",
+        ResourceKind::Stylesheet => "stylesheet",
+        ResourceKind::Image => "image",
+        ResourceKind::Font => "font",
+        ResourceKind::Other => "resource",
+      };
+      let mut meta = Vec::new();
+      if let Some(status) = err.status {
+        meta.push(format!("status {status}"));
       }
+      if let Some(final_url) = &err.final_url {
+        if final_url != &err.url {
+          meta.push(format!("final {final_url}"));
+        }
+      }
+      let meta = if meta.is_empty() {
+        String::new()
+      } else {
+        format!(" ({})", meta.join(", "))
+      };
+      log.push_str(&format!("- {kind}: {}{meta}: {}\n", err.url, err.message));
     }
-    let meta = if meta.is_empty() {
-      String::new()
-    } else {
-      format!(" ({})", meta.join(", "))
-    };
-    log.push_str(&format!("- {kind}: {}{meta}: {}\n", err.url, err.message));
-  }
+  };
+
+  append("Fetch errors", &diagnostics.fetch_errors);
+  append("Blocked fetch errors (bot mitigation)", &diagnostics.blocked_fetch_errors);
 }
 
 fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {

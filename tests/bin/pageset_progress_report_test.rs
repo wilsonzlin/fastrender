@@ -696,3 +696,67 @@ fn pageset_progress_report_surfaces_ok_pages_with_failure_stage_and_can_gate() {
     "missing offender stem in ok-with-failures gate output"
   );
 }
+
+#[test]
+fn pageset_progress_report_surfaces_bot_mitigation_blocked_subresources() {
+  let dir = tempdir().expect("progress dir");
+  let progress = json!({
+    "url": "https://blocked.example.com/",
+    "status": "ok",
+    "total_ms": 10.0,
+    "stages_ms": {
+      "fetch": 1.0,
+      "css": 0.0,
+      "cascade": 0.0,
+      "layout": 0.0,
+      "paint": 9.0
+    },
+    "notes": "",
+    "hotspot": "paint",
+    "last_good_commit": "",
+    "last_regression_commit": "",
+    "diagnostics": {
+      "bot_mitigation_summary": {
+        "total": 1,
+        "by_kind": { "Image": 1 },
+        "samples": [
+          {
+            "kind": "Image",
+            "url": "https://example.com/a.jpg",
+            "status": 405,
+            "final_url": "https://example.com/a.jpg?captcha=deadbeef",
+            "message": "HTTP status 405"
+          }
+        ]
+      }
+    }
+  });
+  fs::write(
+    dir.path().join("blocked.json"),
+    serde_json::to_string_pretty(&progress).unwrap(),
+  )
+  .expect("write progress json");
+
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
+    .args(["report", "--progress-dir", dir.path().to_str().unwrap(), "--top", "0"])
+    .output()
+    .expect("run pageset_progress report");
+  assert!(output.status.success(), "expected report to succeed");
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(
+    stdout.contains("Pages with bot mitigation subresource blocks: 1"),
+    "missing blocked-subresources summary section"
+  );
+  assert!(stdout.contains("total unique blocks: 1"));
+  assert!(
+    stdout.contains("img: 1"),
+    "expected blocked-subresources summary to include img count"
+  );
+  assert!(
+    stdout.contains("blocked status=ok blocks=1"),
+    "expected report to list the blocked stem"
+  );
+}

@@ -196,7 +196,6 @@ use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-#[cfg(test)]
 use url::Url;
 
 use std::time::{Duration, Instant};
@@ -998,6 +997,12 @@ pub struct LayoutParallelismDiagnostics {
 pub struct RenderDiagnostics {
   /// Network fetch errors encountered while loading subresources.
   pub fetch_errors: Vec<ResourceFetchError>,
+  /// Fetch errors that appear to be bot-mitigation / captcha responses for subresources.
+  ///
+  /// These are surfaced separately so pageset accounting stays deterministic (we don't treat them
+  /// as renderer failures) while keeping the underlying blocked resources visible for debugging.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub blocked_fetch_errors: Vec<ResourceFetchError>,
   /// Document-level fetch failure message when a placeholder render is produced.
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
@@ -1031,12 +1036,25 @@ impl RenderDiagnostics {
       }
     }
     let url = url.into();
+    let content_type = match error {
+      Error::Resource(res) => res.content_type.as_deref(),
+      _ => None,
+    };
+    let entry = ResourceFetchError::from_error(kind, url, error);
+    if is_bot_mitigation_blocked_subresource(
+      entry.kind,
+      &entry.url,
+      entry.status,
+      entry.final_url.as_deref(),
+      content_type,
+    ) {
+      self.blocked_fetch_errors.push(entry);
+      return;
+    }
     if let Some(stage) = failure_stage_for_resource(kind) {
       self.note_failure_stage(stage);
     }
-    self
-      .fetch_errors
-      .push(ResourceFetchError::from_error(kind, url, error));
+    self.fetch_errors.push(entry);
   }
 
   /// Record a failed fetch with a plain message.
@@ -1064,6 +1082,16 @@ impl RenderDiagnostics {
     if entry.final_url.is_none() {
       entry.final_url = Some(entry.url.clone());
     }
+    if is_bot_mitigation_blocked_subresource(
+      entry.kind,
+      &entry.url,
+      entry.status,
+      entry.final_url.as_deref(),
+      None,
+    ) {
+      self.blocked_fetch_errors.push(entry);
+      return;
+    }
     if let Some(stage) = failure_stage_for_resource(kind) {
       self.note_failure_stage(stage);
     }
@@ -1083,6 +1111,125 @@ impl RenderDiagnostics {
   }
 }
 
+fn is_bot_mitigation_blocked_subresource(
+  kind: ResourceKind,
+  requested_url: &str,
+  status: Option<u16>,
+  final_url: Option<&str>,
+  content_type: Option<&str>,
+) -> bool {
+  // Keep this intentionally narrow: the pageset should stay deterministic, but we still want
+  // renderer regressions (real decode/paint failures) to surface.
+  if !matches!(
+    kind,
+    ResourceKind::Image | ResourceKind::Stylesheet | ResourceKind::Font
+  ) {
+    return false;
+  }
+  let Some(status) = status else {
+    return false;
+  };
+  if !matches!(status, 403 | 405 | 429) {
+    return false;
+  }
+
+  let final_url = final_url.unwrap_or(requested_url);
+  if url_has_captcha_query_param(final_url) {
+    return true;
+  }
+
+  if final_url_host_matches_known_waf(final_url) {
+    return true;
+  }
+
+  if let Some(content_type) = content_type {
+    if content_type_is_html(content_type) && url_looks_like_subresource(kind, requested_url) {
+      return true;
+    }
+  }
+
+  false
+}
+
+fn url_has_captcha_query_param(url: &str) -> bool {
+  let lower = url.to_ascii_lowercase();
+  lower.contains("?captcha=") || lower.contains("&captcha=")
+}
+
+fn content_type_is_html(content_type: &str) -> bool {
+  let mime = content_type
+    .split(';')
+    .next()
+    .unwrap_or(content_type)
+    .trim()
+    .to_ascii_lowercase();
+  mime.starts_with("text/html") || mime.starts_with("application/xhtml+xml")
+}
+
+fn url_looks_like_subresource(kind: ResourceKind, url: &str) -> bool {
+  match kind {
+    ResourceKind::Image => url_has_any_suffix(
+      url,
+      &[
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".apng", ".bmp", ".ico", ".tif",
+        ".tiff", ".svg", ".svgz",
+      ],
+    ),
+    ResourceKind::Stylesheet => url_has_any_suffix(url, &[".css"]),
+    ResourceKind::Font => url_has_any_suffix(url, &[".woff2", ".woff", ".ttf", ".otf", ".eot"]),
+    _ => false,
+  }
+}
+
+fn url_has_any_suffix(url: &str, suffixes: &[&str]) -> bool {
+  let trimmed = url.trim();
+  let trimmed = trimmed
+    .split_once('#')
+    .map(|(before, _)| before)
+    .unwrap_or(trimmed);
+  let trimmed = trimmed
+    .split_once('?')
+    .map(|(before, _)| before)
+    .unwrap_or(trimmed);
+  let lower = trimmed.to_ascii_lowercase();
+  suffixes.iter().any(|suffix| lower.ends_with(suffix))
+}
+
+fn final_url_host_matches_known_waf(final_url: &str) -> bool {
+  let Ok(parsed) = Url::parse(final_url) else {
+    return false;
+  };
+  let Some(host) = parsed.host_str() else {
+    return false;
+  };
+  let host = host.to_ascii_lowercase();
+
+  // Narrow allowlist of known bot-mitigation hosts. This is intentionally small to avoid hiding
+  // real subresource failures behind a "bot mitigation" label.
+  const HOST_SUFFIX_ALLOWLIST: [&str; 3] = [
+    "captcha-delivery.com",     // Akamai Bot Manager
+    "px-captcha.net",           // PerimeterX
+    "challenges.cloudflare.com", // Cloudflare challenge/turnstile
+  ];
+
+  HOST_SUFFIX_ALLOWLIST
+    .iter()
+    .any(|suffix| host_matches_suffix(&host, suffix))
+}
+
+fn host_matches_suffix(host: &str, suffix: &str) -> bool {
+  if host == suffix {
+    return true;
+  }
+  if host.len() <= suffix.len() {
+    return false;
+  }
+  if !host.ends_with(suffix) {
+    return false;
+  }
+  host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+}
+
 fn failure_stage_for_resource(kind: ResourceKind) -> Option<RenderStage> {
   match kind {
     ResourceKind::Document => Some(RenderStage::DomParse),
@@ -1090,6 +1237,91 @@ fn failure_stage_for_resource(kind: ResourceKind) -> Option<RenderStage> {
     ResourceKind::Font => Some(RenderStage::Css),
     ResourceKind::Image => Some(RenderStage::Paint),
     ResourceKind::Other => None,
+  }
+}
+
+#[cfg(test)]
+mod bot_mitigation_tests {
+  use super::*;
+
+  #[test]
+  fn bot_mitigation_classifier_recognizes_captcha_query_param() {
+    assert!(is_bot_mitigation_blocked_subresource(
+      ResourceKind::Image,
+      "https://example.com/a.jpg",
+      Some(405),
+      Some("https://example.com/a.jpg?captcha=deadbeef"),
+      None,
+    ));
+  }
+
+  #[test]
+  fn bot_mitigation_classifier_requires_status_allowlist() {
+    assert!(!is_bot_mitigation_blocked_subresource(
+      ResourceKind::Image,
+      "https://example.com/a.jpg",
+      Some(404),
+      Some("https://example.com/a.jpg?captcha=deadbeef"),
+      None,
+    ));
+  }
+
+  #[test]
+  fn bot_mitigation_classifier_recognizes_html_mime_for_static_subresources() {
+    assert!(is_bot_mitigation_blocked_subresource(
+      ResourceKind::Image,
+      "https://example.com/a.jpg",
+      Some(403),
+      Some("https://example.com/a.jpg"),
+      Some("text/html; charset=utf-8"),
+    ));
+    assert!(is_bot_mitigation_blocked_subresource(
+      ResourceKind::Stylesheet,
+      "https://example.com/site.css",
+      Some(403),
+      Some("https://example.com/site.css"),
+      Some("text/html"),
+    ));
+    assert!(is_bot_mitigation_blocked_subresource(
+      ResourceKind::Font,
+      "https://example.com/font.woff2",
+      Some(403),
+      Some("https://example.com/font.woff2"),
+      Some("application/xhtml+xml"),
+    ));
+  }
+
+  #[test]
+  fn bot_mitigation_classifier_does_not_trigger_on_non_html_mime() {
+    assert!(!is_bot_mitigation_blocked_subresource(
+      ResourceKind::Image,
+      "https://example.com/a.jpg",
+      Some(403),
+      Some("https://example.com/a.jpg"),
+      Some("image/jpeg"),
+    ));
+  }
+
+  #[test]
+  fn bot_mitigation_classifier_recognizes_known_waf_host_suffix() {
+    assert!(is_bot_mitigation_blocked_subresource(
+      ResourceKind::Image,
+      "https://example.com/a.jpg",
+      Some(403),
+      Some("https://geo.captcha-delivery.com/captcha"),
+      None,
+    ));
+  }
+
+  #[test]
+  fn bot_mitigation_classifier_ignores_non_subresource_kinds() {
+    assert!(!is_bot_mitigation_blocked_subresource(
+      ResourceKind::Document,
+      "https://example.com/",
+      Some(403),
+      Some("https://example.com/?captcha=deadbeef"),
+      Some("text/html"),
+    ));
   }
 }
 

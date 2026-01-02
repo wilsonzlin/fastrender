@@ -1934,7 +1934,8 @@ fn response_resource_error(
 ) -> Error {
   let mut err = ResourceError::new(requested_url.to_string(), message)
     .with_final_url(response_final_url(resource, requested_url))
-    .with_validators(resource.etag.clone(), resource.last_modified.clone());
+    .with_validators(resource.etag.clone(), resource.last_modified.clone())
+    .with_content_type(resource.content_type.clone());
   if let Some(status) = resource.status {
     err = err.with_status(status);
   }
