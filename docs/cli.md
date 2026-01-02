@@ -168,7 +168,7 @@ Notes:
     - For pages that crash or time out during capture, add `--no-render` (alias `--crawl`) to discover subresources by parsing HTML + CSS instead of rendering.
     - Use `--fetch-timeout-secs <secs>` to bound per-request network time when crawling large pages.
   - Cache (offline, from pageset caches): `cargo run --release --bin bundle_page -- cache <stem> --out <bundle_dir|.tar>`
-    - Reads HTML from `fetches/html/<stem>.html` (+ `.html.meta`) and subresources from the disk-backed cache under `fetches/assets/`.
+    - Reads HTML from `fetches/html/<stem>.html` (+ `.html.meta`) and subresources from the disk-backed cache under `fetches/assets/` (override with `--asset-cache-dir`; this should match the `--cache-dir` used when warming/running the pageset).
     - Fails if a discovered subresource is missing from the cache; pass `--allow-missing` to insert empty placeholders.
     - The disk cache key namespace depends on request headers. If you warmed `fetches/assets/` with non-default values (e.g. `pageset_progress --user-agent ... --accept-language ...`, or `FASTR_HTTP_BROWSER_HEADERS=0`), pass matching `bundle_page cache --user-agent ... --accept-language ...` (and the same env var) so cache capture hits the correct entries.
   - Render: `cargo run --release --bin bundle_page -- render <bundle> --out <png>`
