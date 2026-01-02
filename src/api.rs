@@ -1018,6 +1018,17 @@ impl RenderDiagnostics {
 
   /// Record a failed fetch using structured error information.
   pub fn record_error(&mut self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
+    // A missing remote font (HTTP 404) is not considered a renderer failure: browsers simply
+    // ignore that source and fall back. We still surface other font failures (policy blocks,
+    // MIME mismatches, decode/parse errors, other HTTP statuses, etc.) because they can indicate
+    // real regressions.
+    if kind == ResourceKind::Font {
+      if let Error::Resource(res) = error {
+        if res.status == Some(404) {
+          return;
+        }
+      }
+    }
     let url = url.into();
     if let Some(stage) = failure_stage_for_resource(kind) {
       self.note_failure_stage(stage);
@@ -1075,7 +1086,7 @@ fn failure_stage_for_resource(kind: ResourceKind) -> Option<RenderStage> {
   match kind {
     ResourceKind::Document => Some(RenderStage::DomParse),
     ResourceKind::Stylesheet => None,
-    ResourceKind::Font => None,
+    ResourceKind::Font => Some(RenderStage::Css),
     ResourceKind::Image => Some(RenderStage::Paint),
     ResourceKind::Other => None,
   }

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose, Engine as _};
 use fastrender::{
-  error::{Error, ResourceError},
+  error::{Error, RenderStage, ResourceError},
   DiagnosticsLevel, FastRender, FastRenderBuilder, FetchedResource, OutputFormat,
   RenderDiagnostics, RenderOptions, ResourceFetcher, ResourceKind,
 };
@@ -210,6 +210,34 @@ fn resource_error_metadata_is_captured() {
     Some("Tue, 20 Feb 2024 20:00:00 GMT")
   );
   assert!(entry.message.contains("not found"));
+}
+
+#[test]
+fn font_http_404_is_ignored_for_failure_stage_and_fetch_errors() {
+  let mut diagnostics = RenderDiagnostics::new();
+  let err = Error::Resource(
+    ResourceError::new("https://example.test/font.woff2", "not found").with_status(404),
+  );
+  diagnostics.record_error(ResourceKind::Font, "https://example.test/font.woff2", &err);
+
+  assert!(diagnostics.fetch_errors.is_empty());
+  assert_eq!(diagnostics.failure_stage, None);
+}
+
+#[test]
+fn font_http_403_is_recorded_for_failure_stage_and_fetch_errors() {
+  let mut diagnostics = RenderDiagnostics::new();
+  let err = Error::Resource(
+    ResourceError::new("https://example.test/font.woff2", "forbidden").with_status(403),
+  );
+  diagnostics.record_error(ResourceKind::Font, "https://example.test/font.woff2", &err);
+
+  assert_eq!(diagnostics.fetch_errors.len(), 1);
+  assert_eq!(diagnostics.failure_stage, Some(RenderStage::Css));
+  let entry = &diagnostics.fetch_errors[0];
+  assert_eq!(entry.kind, ResourceKind::Font);
+  assert_eq!(entry.status, Some(403));
+  assert!(entry.message.contains("forbidden"));
 }
 
 #[test]
