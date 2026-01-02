@@ -1505,9 +1505,36 @@ impl DisplayListBuilder {
       }
     }
 
+    let mut absolute_rects: Option<BackgroundRects> = None;
     let (overflow_clip, clip_rect) = if let Some(style) = style_opt {
+      let clip_x = matches!(
+        style.overflow_x,
+        crate::style::types::Overflow::Hidden
+          | crate::style::types::Overflow::Scroll
+          | crate::style::types::Overflow::Auto
+          | crate::style::types::Overflow::Clip
+      );
+      let clip_y = matches!(
+        style.overflow_y,
+        crate::style::types::Overflow::Hidden
+          | crate::style::types::Overflow::Scroll
+          | crate::style::types::Overflow::Auto
+          | crate::style::types::Overflow::Clip
+      );
       (
-        Self::overflow_clip_from_style(style, absolute_rect, self.viewport, self.build_breakdown.as_deref()),
+        if clip_x || clip_y {
+          let rects = absolute_rects.get_or_insert_with(|| {
+            Self::background_rects(absolute_rect, style, self.viewport)
+          });
+          Self::overflow_clip_from_style_with_rects(
+            style,
+            rects,
+            self.viewport,
+            self.build_breakdown.as_deref(),
+          )
+        } else {
+          None
+        },
         Self::clip_rect_from_style(style, absolute_rect, self.viewport),
       )
     } else {
@@ -1542,14 +1569,77 @@ impl DisplayListBuilder {
     if let Some(style) = style_opt {
       let (decoration_rect, decoration_clip) =
         Self::decoration_rect_and_clip(fragment, absolute_rect, style);
-      if let Some(clip) = decoration_clip.as_ref() {
-        self.list.push(DisplayItem::PushClip(clip.clone()));
+      let decoration_clip_pushed = decoration_clip.is_some();
+      if let Some(clip) = decoration_clip {
+        self.list.push(DisplayItem::PushClip(clip));
       }
-      self.emit_box_shadows_from_style(decoration_rect, style, false);
-      self.emit_background_from_style(decoration_rect, style);
-      self.emit_box_shadows_from_style(decoration_rect, style, true);
+
+      if !style.box_shadow.is_empty() {
+        let mut decoration_rects: Option<BackgroundRects> = None;
+        let rects = if decoration_rect == absolute_rect {
+          absolute_rects
+            .get_or_insert_with(|| Self::background_rects(absolute_rect, style, self.viewport))
+        } else {
+          decoration_rects.get_or_insert_with(|| {
+            Self::background_rects(decoration_rect, style, self.viewport)
+          })
+        };
+
+        let has_outer = style.box_shadow.iter().any(|shadow| !shadow.inset);
+        let has_inset = style.box_shadow.iter().any(|shadow| shadow.inset);
+        let outer_radii = if has_outer {
+          Self::border_radii(decoration_rect, style)
+            .clamped(decoration_rect.width(), decoration_rect.height())
+        } else {
+          crate::paint::display_list::BorderRadii::ZERO
+        };
+        let inner_radii = if has_inset {
+          if Self::border_radius_is_zero(style) {
+            crate::paint::display_list::BorderRadii::ZERO
+          } else {
+            Self::resolve_clip_radii(
+              style,
+              rects,
+              BackgroundBox::PaddingBox,
+              self.viewport,
+              self.build_breakdown.as_deref(),
+            )
+          }
+        } else {
+          crate::paint::display_list::BorderRadii::ZERO
+        };
+
+        if has_outer {
+          self.emit_box_shadows_from_style_with_base(
+            rects.border,
+            outer_radii,
+            decoration_rect.width(),
+            style,
+            false,
+          );
+        }
+        self.emit_background_from_style_with_rects(rects, style);
+        if has_inset {
+          self.emit_box_shadows_from_style_with_base(
+            rects.padding,
+            inner_radii,
+            decoration_rect.width(),
+            style,
+            true,
+          );
+        }
+      } else if decoration_rect == absolute_rect {
+        if let Some(rects) = absolute_rects.as_ref() {
+          self.emit_background_from_style_with_rects(rects, style);
+        } else {
+          self.emit_background_from_style(decoration_rect, style);
+        }
+      } else {
+        self.emit_background_from_style(decoration_rect, style);
+      }
+
       self.emit_border_from_style(decoration_rect, style);
-      if decoration_clip.is_some() {
+      if decoration_clip_pushed {
         self.list.push(DisplayItem::PopClip);
       }
     }
@@ -1675,12 +1765,13 @@ impl DisplayListBuilder {
     if let Some(style) = fragment.style.as_deref() {
       let (decoration_rect, decoration_clip) =
         Self::decoration_rect_and_clip(fragment, absolute_rect, style);
-      if let Some(clip) = decoration_clip.as_ref() {
-        self.list.push(DisplayItem::PushClip(clip.clone()));
+      let decoration_clip_pushed = decoration_clip.is_some();
+      if let Some(clip) = decoration_clip {
+        self.list.push(DisplayItem::PushClip(clip));
       }
       self.emit_background_from_style(decoration_rect, style);
       self.emit_border_from_style(decoration_rect, style);
-      if decoration_clip.is_some() {
+      if decoration_clip_pushed {
         self.list.push(DisplayItem::PopClip);
       }
     }
@@ -2245,6 +2336,15 @@ impl DisplayListBuilder {
     }
 
     let rects = Self::background_rects(bounds, style, viewport);
+    Self::overflow_clip_from_style_with_rects(style, &rects, viewport, breakdown)
+  }
+
+  fn overflow_clip_from_style_with_rects(
+    style: &ComputedStyle,
+    rects: &BackgroundRects,
+    viewport: Option<(f32, f32)>,
+    breakdown: Option<&BuildBreakdown>,
+  ) -> Option<ClipItem> {
     let clip_rect = rects.padding;
     if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
       return None;
@@ -2252,7 +2352,7 @@ impl DisplayListBuilder {
     let radii = if Self::border_radius_is_zero(style) {
       crate::paint::display_list::BorderRadii::ZERO
     } else {
-      Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, viewport, breakdown)
+      Self::resolve_clip_radii(style, rects, BackgroundBox::PaddingBox, viewport, breakdown)
     };
     Some(ClipItem {
       shape: ClipShape::Rect {
@@ -4185,6 +4285,15 @@ impl DisplayListBuilder {
     }
 
     let rects = Self::background_rects(rect, style, self.viewport);
+    self.emit_background_from_style_with_rects(&rects, style);
+  }
+
+  fn emit_background_from_style_with_rects(&mut self, rects: &BackgroundRects, style: &ComputedStyle) {
+    let has_images = style.background_layers.iter().any(|l| l.image.is_some());
+    if style.background_color.is_transparent() && !has_images {
+      return;
+    }
+
     let fallback = BackgroundLayer::default();
     let color_layer = style.background_layers.first().unwrap_or(&fallback);
     let color_clip_rect = match color_layer.clip {
@@ -4201,7 +4310,7 @@ impl DisplayListBuilder {
       } else {
         Self::resolve_clip_radii(
           style,
-          &rects,
+          rects,
           color_layer.clip,
           self.viewport,
           self.build_breakdown.as_deref(),
@@ -4222,7 +4331,7 @@ impl DisplayListBuilder {
 
     for layer in style.background_layers.iter().rev() {
       if let Some(image) = &layer.image {
-        self.emit_background_layer(&rects, style, layer, image);
+        self.emit_background_layer(rects, style, layer, image);
       }
     }
   }
@@ -5150,7 +5259,18 @@ impl DisplayListBuilder {
       )
     };
     let base_rect = if inset { rects.padding } else { rects.border };
+    let radii = if inset { inner_radii } else { outer_radii };
+    self.emit_box_shadows_from_style_with_base(base_rect, radii, rect.width(), style, inset);
+  }
 
+  fn emit_box_shadows_from_style_with_base(
+    &mut self,
+    base_rect: Rect,
+    radii: crate::paint::display_list::BorderRadii,
+    percentage_base: f32,
+    style: &ComputedStyle,
+    inset: bool,
+  ) {
     for shadow in &style.box_shadow {
       if shadow.inset != inset {
         continue;
@@ -5159,21 +5279,21 @@ impl DisplayListBuilder {
         &shadow.offset_x,
         style.font_size,
         style.root_font_size,
-        rect.width(),
+        percentage_base,
         self.viewport,
       );
       let offset_y = Self::resolve_length_for_paint(
         &shadow.offset_y,
         style.font_size,
         style.root_font_size,
-        rect.width(),
+        percentage_base,
         self.viewport,
       );
       let blur = Self::resolve_length_for_paint(
         &shadow.blur_radius,
         style.font_size,
         style.root_font_size,
-        rect.width(),
+        percentage_base,
         self.viewport,
       )
       .max(0.0);
@@ -5181,14 +5301,14 @@ impl DisplayListBuilder {
         &shadow.spread_radius,
         style.font_size,
         style.root_font_size,
-        rect.width(),
+        percentage_base,
         self.viewport,
       )
       .max(-1e6);
 
       self.list.push(DisplayItem::BoxShadow(BoxShadowItem {
         rect: base_rect,
-        radii: if inset { inner_radii } else { outer_radii },
+        radii,
         offset: Point::new(offset_x, offset_y),
         blur_radius: blur,
         spread_radius: spread,
