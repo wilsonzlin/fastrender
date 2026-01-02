@@ -2399,7 +2399,7 @@ impl FormattingContext for FlexFormattingContext {
         Err(_) => FxHashMap::default(),
       };
 
-      for mut candidate in positioned_candidates {
+      for candidate in positioned_candidates {
         check_layout_deadline(&mut deadline_counter)?;
         let mut input = AbsoluteLayoutInput::new(
           candidate.positioned_style,
@@ -2427,12 +2427,8 @@ impl FormattingContext for FlexFormattingContext {
           let relayout_constraints = LayoutConstraints::new(
             CrateAvailableSpace::Definite(result.size.width),
             CrateAvailableSpace::Definite(result.size.height),
-          );
-          {
-            let relayout_style = Arc::make_mut(&mut candidate.layout_child.style);
-            relayout_style.width = Some(Length::px(result.size.width));
-            relayout_style.height = Some(Length::px(result.size.height));
-          }
+          )
+          .with_used_border_box_size(Some(result.size.width), Some(result.size.height));
           child_fragment = fc.layout(&candidate.layout_child, &relayout_constraints)?;
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
