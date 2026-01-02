@@ -50,8 +50,8 @@ use crate::layout::taffy_integration::{
   record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
   record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
   record_taffy_style_cache_miss, taffy_grid_container_style_fingerprint,
-  taffy_grid_item_style_fingerprint, CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind,
-  TaffyNodeCache, TaffyNodeCacheKey, TAFFY_ABORT_CHECK_STRIDE, taffy_template_cache_limit,
+  taffy_grid_item_style_fingerprint, taffy_template_cache_limit, CachedTaffyTemplate,
+  SendSyncStyle, TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey, TAFFY_ABORT_CHECK_STRIDE,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -77,7 +77,6 @@ use crate::tree::fragment_tree::FragmentNode;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
@@ -385,17 +384,16 @@ impl GridFormattingContext {
     {
       return Ok(false);
     }
-    let auto_track = |tracks: &[GridTrack],
-                      deadline_counter: &mut usize|
-     -> Result<bool, LayoutError> {
-      for track in tracks {
-        check_layout_deadline(deadline_counter)?;
-        if !matches!(track, GridTrack::Auto) {
-          return Ok(false);
+    let auto_track =
+      |tracks: &[GridTrack], deadline_counter: &mut usize| -> Result<bool, LayoutError> {
+        for track in tracks {
+          check_layout_deadline(deadline_counter)?;
+          if !matches!(track, GridTrack::Auto) {
+            return Ok(false);
+          }
         }
-      }
-      Ok(true)
-    };
+        Ok(true)
+      };
     if !auto_track(&style.grid_auto_rows, deadline_counter)?
       || !auto_track(&style.grid_auto_columns, deadline_counter)?
     {
@@ -568,52 +566,74 @@ impl GridFormattingContext {
     style: &ComputedStyle,
     percentage_base: f32,
   ) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    let mut padding_left =
-      self.resolve_length_for_width(style.padding_left, percentage_base, style);
-    let mut padding_right =
-      self.resolve_length_for_width(style.padding_right, percentage_base, style);
-    let mut padding_top = self.resolve_length_for_width(style.padding_top, percentage_base, style);
-    let mut padding_bottom =
-      self.resolve_length_for_width(style.padding_bottom, percentage_base, style);
+    #[inline]
+    fn length_is_zero(length: Length) -> bool {
+      length.calc.is_none() && length.value == 0.0
+    }
+
+    let reserve_vertical_gutter = matches!(style.overflow_y, CssOverflow::Scroll)
+      || (style.scrollbar_gutter.stable
+        && matches!(style.overflow_y, CssOverflow::Auto | CssOverflow::Scroll));
+    let reserve_horizontal_gutter = matches!(style.overflow_x, CssOverflow::Scroll)
+      || (style.scrollbar_gutter.stable
+        && matches!(style.overflow_x, CssOverflow::Auto | CssOverflow::Scroll));
+    let gutter_width = if reserve_vertical_gutter || reserve_horizontal_gutter {
+      resolve_scrollbar_width(style)
+    } else {
+      0.0
+    };
+
+    // Fast-path the common case (no padding/border/gutters) to avoid repeated length resolution
+    // work in tight grid measurement loops.
+    if gutter_width == 0.0
+      && length_is_zero(style.padding_left)
+      && length_is_zero(style.padding_right)
+      && length_is_zero(style.padding_top)
+      && length_is_zero(style.padding_bottom)
+      && length_is_zero(style.border_left_width)
+      && length_is_zero(style.border_right_width)
+      && length_is_zero(style.border_top_width)
+      && length_is_zero(style.border_bottom_width)
+    {
+      return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    let resolve = |length: Length| {
+      if length_is_zero(length) {
+        0.0
+      } else {
+        self.resolve_length_for_width(length, percentage_base, style)
+      }
+    };
+
+    let mut padding_left = resolve(style.padding_left);
+    let mut padding_right = resolve(style.padding_right);
+    let mut padding_top = resolve(style.padding_top);
+    let mut padding_bottom = resolve(style.padding_bottom);
 
     // Reserve space for scrollbars when overflow/scrollbar-gutter request stable gutters. This
     // mirrors the block formatting context behaviour so grid measurement returns the true content
     // box size (excluding scrollbar gutters).
-    let reserve_vertical_gutter = matches!(style.overflow_y, CssOverflow::Scroll)
-      || (style.scrollbar_gutter.stable
-        && matches!(style.overflow_y, CssOverflow::Auto | CssOverflow::Scroll));
-    if reserve_vertical_gutter {
-      let gutter = resolve_scrollbar_width(style);
-      if gutter > 0.0 {
-        if style.scrollbar_gutter.both_edges {
-          padding_left += gutter;
-          padding_right += gutter;
-        } else {
-          padding_right += gutter;
-        }
+    if reserve_vertical_gutter && gutter_width > 0.0 {
+      if style.scrollbar_gutter.both_edges {
+        padding_left += gutter_width;
+        padding_right += gutter_width;
+      } else {
+        padding_right += gutter_width;
       }
     }
 
-    let reserve_horizontal_gutter = matches!(style.overflow_x, CssOverflow::Scroll)
-      || (style.scrollbar_gutter.stable
-        && matches!(style.overflow_x, CssOverflow::Auto | CssOverflow::Scroll));
-    if reserve_horizontal_gutter {
-      let gutter = resolve_scrollbar_width(style);
-      if gutter > 0.0 {
-        if style.scrollbar_gutter.both_edges {
-          padding_top += gutter;
-        }
-        padding_bottom += gutter;
+    if reserve_horizontal_gutter && gutter_width > 0.0 {
+      if style.scrollbar_gutter.both_edges {
+        padding_top += gutter_width;
       }
+      padding_bottom += gutter_width;
     }
 
-    let border_left =
-      self.resolve_length_for_width(style.border_left_width, percentage_base, style);
-    let border_right =
-      self.resolve_length_for_width(style.border_right_width, percentage_base, style);
-    let border_top = self.resolve_length_for_width(style.border_top_width, percentage_base, style);
-    let border_bottom =
-      self.resolve_length_for_width(style.border_bottom_width, percentage_base, style);
+    let border_left = resolve(style.border_left_width);
+    let border_right = resolve(style.border_right_width);
+    let border_top = resolve(style.border_top_width);
+    let border_bottom = resolve(style.border_bottom_width);
 
     (
       padding_left,
@@ -730,7 +750,8 @@ impl GridFormattingContext {
             false,
           ))));
         }
-        let simple_grid = self.is_simple_grid(&box_node.style, &in_flow_children, &mut deadline_counter)?;
+        let simple_grid =
+          self.is_simple_grid(&box_node.style, &in_flow_children, &mut deadline_counter)?;
         let root_style = std::sync::Arc::new(SendSyncStyle(self.convert_style(
           &box_node.style,
           None,
@@ -824,9 +845,8 @@ impl GridFormattingContext {
         for child in children_override {
           check_layout_deadline(deadline_counter)?;
           match child.style.position {
-            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
-              positioned.push((*child).clone())
-            }
+            crate::style::position::Position::Absolute
+            | crate::style::position::Position::Fixed => positioned.push((*child).clone()),
             _ => {
               if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
                 has_subgrid_child = true;
@@ -839,9 +859,8 @@ impl GridFormattingContext {
         for child in box_node.children.iter() {
           check_layout_deadline(deadline_counter)?;
           match child.style.position {
-            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
-              positioned.push(child.clone())
-            }
+            crate::style::position::Position::Absolute
+            | crate::style::position::Position::Fixed => positioned.push(child.clone()),
             _ => {
               if child.style.grid_row_subgrid || child.style.grid_column_subgrid {
                 has_subgrid_child = true;
@@ -864,8 +883,9 @@ impl GridFormattingContext {
       include_children |= is_subgrid || has_subgrid_child;
     }
 
-    let simple_grid =
-      include_children && is_root && self.is_simple_grid(&box_node.style, &children_iter, deadline_counter)?;
+    let simple_grid = include_children
+      && is_root
+      && self.is_simple_grid(&box_node.style, &children_iter, deadline_counter)?;
     let taffy_style = self.convert_style(
       &box_node.style,
       containing_grid,
@@ -1634,19 +1654,18 @@ impl GridFormattingContext {
   }
 
   fn take_matching_measured_fragment(
-    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
+    measured_fragments: &mut FxHashMap<MeasureKey, FragmentNode>,
     keys: &[MeasureKey],
     width: f32,
     height: f32,
   ) -> Option<FragmentNode> {
-    let mut measured = measured_fragments.borrow_mut();
     let matched_key = keys.iter().copied().find(|key| {
-      measured.get(key).map_or(false, |fragment| {
+      measured_fragments.get(key).map_or(false, |fragment| {
         (fragment.bounds.width() - width).abs() < 0.1
           && (fragment.bounds.height() - height).abs() < 0.1
       })
     })?;
-    measured.remove(&matched_key)
+    measured_fragments.remove(&matched_key)
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -1657,7 +1676,7 @@ impl GridFormattingContext {
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
     in_flow_children: &[&BoxNode],
-    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
+    measured_fragments: &mut FxHashMap<MeasureKey, FragmentNode>,
     measured_node_keys: &FxHashMap<TaffyNodeId, Vec<MeasureKey>>,
   ) -> Option<Result<FragmentNode, LayoutError>> {
     let child_ids = match taffy.children(root_id) {
@@ -1723,9 +1742,11 @@ impl GridFormattingContext {
             reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
             "measured fragments should be normalized to the origin",
           );
-          if let Err(err) =
-            translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()), &mut deadline_counter)
-          {
+          if let Err(err) = translate_fragment_tree(
+            &mut reused,
+            Point::new(bounds.x(), bounds.y()),
+            &mut deadline_counter,
+          ) {
             return Some(Err(err));
           }
           reused_fragments[idx] = Some(reused);
@@ -1895,7 +1916,7 @@ impl GridFormattingContext {
     node_id: TaffyNodeId,
     root_id: TaffyNodeId,
     constraints: &LayoutConstraints,
-    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
+    measured_fragments: &mut FxHashMap<MeasureKey, FragmentNode>,
     measured_node_keys: &FxHashMap<TaffyNodeId, Vec<MeasureKey>>,
     positioned_children: &FxHashMap<TaffyNodeId, Vec<BoxNode>>,
     deadline_counter: &mut usize,
@@ -2012,7 +2033,11 @@ impl GridFormattingContext {
         layout_child.style = Arc::new(layout_style);
         fc.layout(&layout_child, &child_constraints)?
       };
-      translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()), deadline_counter)?;
+      translate_fragment_tree(
+        &mut laid_out,
+        Point::new(bounds.x(), bounds.y()),
+        deadline_counter,
+      )?;
       laid_out.content = FragmentContent::Block {
         box_id: Some(box_node.id),
       };
@@ -2126,9 +2151,7 @@ impl GridFormattingContext {
       layout_child.style = Arc::new(style);
 
       let cb = match child.style.position {
-        crate::style::position::Position::Fixed => {
-          cb_for_fixed
-        }
+        crate::style::position::Position::Fixed => cb_for_fixed,
         _ => cb_for_absolute,
       };
 
@@ -2164,18 +2187,16 @@ impl GridFormattingContext {
           Ok((min, max)) => (Some(min), Some(max)),
           Err(err @ LayoutError::Timeout { .. }) => return Err(err),
           Err(_) => {
-            let min = match fc.compute_intrinsic_inline_size(
-              &layout_child,
-              IntrinsicSizingMode::MinContent,
-            ) {
+            let min = match fc
+              .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+            {
               Ok(size) => Some(size),
               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
               Err(_) => None,
             };
-            let max = match fc.compute_intrinsic_inline_size(
-              &layout_child,
-              IntrinsicSizingMode::MaxContent,
-            ) {
+            let max = match fc
+              .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+            {
               Ok(size) => Some(size),
               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
               Err(_) => None,
@@ -2496,11 +2517,8 @@ impl GridFormattingContext {
       if self.alignment_for_axis(Axis::Horizontal, child_style, container_style)
         == taffy::style::AlignItems::Baseline
       {
-        let baseline = self.baseline_offset_with_fallback(
-          child_fragment,
-          Axis::Horizontal,
-          deadline_counter,
-        )?;
+        let baseline =
+          self.baseline_offset_with_fallback(child_fragment, Axis::Horizontal, deadline_counter)?;
         if let (Some((area_start, area_end)), Some(baseline)) = (
           grid_area_for_item(&col_offsets, item_info.column_start, item_info.column_end),
           baseline,
@@ -2691,9 +2709,9 @@ impl GridFormattingContext {
     parent_inline_base: Option<f32>,
     container_justify_items: AlignItems,
     factory: &crate::layout::contexts::factory::FormattingContextFactory,
-    measure_cache: &Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>>,
-    measured_fragments: &Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>>,
-    measured_node_keys: &Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>>,
+    measure_cache: &mut FxHashMap<MeasureKey, taffy::geometry::Size<f32>>,
+    measured_fragments: &mut FxHashMap<MeasureKey, FragmentNode>,
+    measured_node_keys: &mut FxHashMap<TaffyNodeId, Vec<MeasureKey>>,
   ) -> taffy::geometry::Size<f32> {
     let box_node = unsafe { &*node_ptr };
     let fallback_size = |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
@@ -2704,11 +2722,11 @@ impl GridFormattingContext {
     };
 
     let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
-    if let Some(size) = measure_cache.borrow().get(&key) {
+    if let Some(size) = measure_cache.get(&key) {
       return *size;
     }
     if let Some(size) = grid_measure_size_cache_lookup(&key) {
-      measure_cache.borrow_mut().insert(key, size);
+      measure_cache.insert(key, size);
       return size;
     }
     let mut constraints = constraints_from_taffy(
@@ -2721,12 +2739,9 @@ impl GridFormattingContext {
     // Taffy frequently probes min/max-content sizes during track sizing.
     // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
     #[cfg(test)]
-    if let Some(mut fragment) = GRID_TEST_MEASURE_HOOK.with(|hook| {
-      hook
-        .borrow()
-        .as_ref()
-        .and_then(|hook| hook(box_node))
-    }) {
+    if let Some(mut fragment) =
+      GRID_TEST_MEASURE_HOOK.with(|hook| hook.borrow().as_ref().and_then(|hook| hook(box_node)))
+    {
       let mut normalize_deadline_counter = 0usize;
       fragment = match normalize_fragment_origin(fragment, &mut normalize_deadline_counter) {
         Ok(fragment) => fragment,
@@ -2749,12 +2764,9 @@ impl GridFormattingContext {
         height: content_size.height.max(0.0),
       };
       grid_measure_size_cache_store(key, size);
-      push_measured_key(
-        measured_node_keys.borrow_mut().entry(node_id).or_default(),
-        key,
-      );
-      measured_fragments.borrow_mut().insert(key, fragment);
-      measure_cache.borrow_mut().insert(key, size);
+      push_measured_key(measured_node_keys.entry(node_id).or_default(), key);
+      measured_fragments.insert(key, fragment);
+      measure_cache.insert(key, size);
       return size;
     }
 
@@ -2810,7 +2822,7 @@ impl GridFormattingContext {
 
       let size = taffy::geometry::Size { width, height };
       grid_measure_size_cache_store(key, size);
-      measure_cache.borrow_mut().insert(key, size);
+      measure_cache.insert(key, size);
       return size;
     }
 
@@ -2868,12 +2880,9 @@ impl GridFormattingContext {
       height: content_size.height.max(0.0),
     };
     grid_measure_size_cache_store(key, size);
-    push_measured_key(
-      measured_node_keys.borrow_mut().entry(node_id).or_default(),
-      key,
-    );
-    measured_fragments.borrow_mut().insert(key, fragment);
-    measure_cache.borrow_mut().insert(key, size);
+    push_measured_key(measured_node_keys.entry(node_id).or_default(), key);
+    measured_fragments.insert(key, fragment);
+    measure_cache.insert(key, size);
     size
   }
 }
@@ -2923,7 +2932,11 @@ fn normalize_fragment_origin(
 ) -> Result<FragmentNode, LayoutError> {
   let origin = fragment.bounds.origin;
   if origin.x != 0.0 || origin.y != 0.0 {
-    translate_fragment_tree(&mut fragment, Point::new(-origin.x, -origin.y), deadline_counter)?;
+    translate_fragment_tree(
+      &mut fragment,
+      Point::new(-origin.x, -origin.y),
+      deadline_counter,
+    )?;
   }
   Ok(fragment)
 }
@@ -3380,34 +3393,22 @@ impl FormattingContext for GridFormattingContext {
     let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
       .filter(|deadline| deadline.is_enabled())
       .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
-    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> = Rc::new(
-      RefCell::new(FxHashMap::with_capacity_and_hasher(
-        in_flow_children.len(),
-        Default::default(),
-      )),
-    );
-    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> = Rc::new(
-      RefCell::new(FxHashMap::with_capacity_and_hasher(
-        in_flow_children.len(),
-        Default::default(),
-      )),
-    );
-    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> = Rc::new(
-      RefCell::new(FxHashMap::with_capacity_and_hasher(
-        in_flow_children.len(),
-        Default::default(),
-      )),
-    );
-    let compute_result = taffy.compute_layout_with_measure_and_cancel(
-      root_id,
-      available_space,
-      {
-        let this = self.clone();
-        let parent_inline_base = constraints.inline_percentage_base;
-        let container_justify_items = box_node.style.justify_items;
-        let cache = measure_cache.clone();
-        let measured = measured_fragments.clone();
-        let measured_keys = measured_node_keys.clone();
+    let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> =
+      FxHashMap::with_capacity_and_hasher(in_flow_children.len(), Default::default());
+    let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> =
+      FxHashMap::with_capacity_and_hasher(in_flow_children.len(), Default::default());
+    let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> =
+      FxHashMap::with_capacity_and_hasher(in_flow_children.len(), Default::default());
+    let compute_result = {
+      let this = self.clone();
+      let parent_inline_base = constraints.inline_percentage_base;
+      let container_justify_items = box_node.style.justify_items;
+      let cache = &mut measure_cache;
+      let measured = &mut measured_fragments;
+      let measured_keys = &mut measured_node_keys;
+      taffy.compute_layout_with_measure_and_cancel(
+        root_id,
+        available_space,
         move |known_dimensions,
               available_space,
               node_id,
@@ -3495,15 +3496,15 @@ impl FormattingContext for GridFormattingContext {
             parent_inline_base,
             container_justify_items,
             &this.factory,
-            &cache,
-            &measured,
-            &measured_keys,
+            cache,
+            measured,
+            measured_keys,
           )
-        }
-      },
-      cancel,
-      TAFFY_ABORT_CHECK_STRIDE,
-    );
+        },
+        cancel,
+        TAFFY_ABORT_CHECK_STRIDE,
+      )
+    };
     if let Some(start) = taffy_compute_start {
       record_taffy_compute(TaffyAdapterKind::Grid, start.elapsed());
     }
@@ -3517,8 +3518,6 @@ impl FormattingContext for GridFormattingContext {
       _ => LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)),
     })?;
 
-    let measured_node_keys = measured_node_keys.borrow();
-
     if let Some(start) = grid_trace_start {
       let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
       eprintln!("[grid-layout] done id={} ms={elapsed_ms:.2}", box_node.id);
@@ -3527,26 +3526,27 @@ impl FormattingContext for GridFormattingContext {
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
     let mut deadline_counter = 0usize;
     let mut fragment = if !has_subgrid && !child_has_subgrid {
-      match self.try_parallel_root_children_conversion(
+      if let Some(result) = self.try_parallel_root_children_conversion(
         &taffy,
         root_id,
         box_node,
         constraints,
         &in_flow_children,
-        &measured_fragments,
+        &mut measured_fragments,
         &measured_node_keys,
       ) {
-        Some(result) => result?,
-        None => self.convert_to_fragments(
+        result?
+      } else {
+        self.convert_to_fragments(
           &taffy,
           root_id,
           root_id,
           &constraints,
-          &measured_fragments,
+          &mut measured_fragments,
           &measured_node_keys,
           &positioned_children_map,
           &mut deadline_counter,
-        )?,
+        )?
       }
     } else {
       self.convert_to_fragments(
@@ -3554,7 +3554,7 @@ impl FormattingContext for GridFormattingContext {
         root_id,
         root_id,
         &constraints,
-        &measured_fragments,
+        &mut measured_fragments,
         &measured_node_keys,
         &positioned_children_map,
         &mut deadline_counter,
@@ -3748,9 +3748,7 @@ impl FormattingContext for GridFormattingContext {
         layout_child.style = Arc::new(style);
 
         let cb = match child.style.position {
-          crate::style::position::Position::Fixed => {
-            cb_for_fixed
-          }
+          crate::style::position::Position::Fixed => cb_for_fixed,
           _ => cb_for_absolute,
         };
 
@@ -3789,18 +3787,16 @@ impl FormattingContext for GridFormattingContext {
             Ok((min, max)) => (Some(min), Some(max)),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
             Err(_) => {
-              let min = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MinContent,
-              ) {
+              let min = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+              {
                 Ok(size) => Some(size),
                 Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                 Err(_) => None,
               };
-              let max = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MaxContent,
-              ) {
+              let max = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+              {
                 Ok(size) => Some(size),
                 Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                 Err(_) => None,
@@ -3876,7 +3872,14 @@ impl FormattingContext for GridFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    self.compute_intrinsic_size(box_node, mode)
+    if let Some(cached) = crate::layout::formatting_context::intrinsic_cache_lookup(box_node, mode)
+    {
+      return Ok(cached);
+    }
+
+    let size = self.compute_intrinsic_size(box_node, mode)?;
+    crate::layout::formatting_context::intrinsic_cache_store(box_node, mode, size);
+    Ok(size)
   }
 }
 
@@ -4102,7 +4105,11 @@ mod tests {
 
     let mut root = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
     for _ in 0..(GRID_DEADLINE_CHECK_STRIDE + 16) {
-      root = BoxNode::new_block(subgrid_style.clone(), FormattingContextType::Grid, vec![root]);
+      root = BoxNode::new_block(
+        subgrid_style.clone(),
+        FormattingContextType::Grid,
+        vec![root],
+      );
     }
     let container = root;
     let constraints = LayoutConstraints::definite(100.0, 100.0);
@@ -4157,7 +4164,8 @@ mod tests {
     }
 
     let mut deadline_counter = 0usize;
-    let result = translate_fragment_tree(&mut fragment, Point::new(10.0, 5.0), &mut deadline_counter);
+    let result =
+      translate_fragment_tree(&mut fragment, Point::new(10.0, 5.0), &mut deadline_counter);
     assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
@@ -4249,12 +4257,9 @@ mod tests {
 
     let gc = GridFormattingContext::new();
     let factory = gc.factory.clone();
-    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
+    let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+    let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+    let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
 
     let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
     let node_ptr = &node as *const _;
@@ -4277,14 +4282,13 @@ mod tests {
         None,
         AlignItems::Stretch,
         &factory,
-        &measure_cache,
-        &measured_fragments,
-        &measured_node_keys,
+        &mut measure_cache,
+        &mut measured_fragments,
+        &mut measured_node_keys,
       );
     }
 
-    let keys = measured_node_keys.borrow();
-    let node_keys = keys.get(&node_id).expect("measured keys");
+    let node_keys = measured_node_keys.get(&node_id).expect("measured keys");
     assert!(
       node_keys.len() <= MAX_MEASURED_KEYS_PER_NODE,
       "measured keys should be capped per node"
@@ -4309,12 +4313,9 @@ mod tests {
 
     let gc = GridFormattingContext::new();
     let factory = gc.factory.clone();
-    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
+    let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+    let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+    let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
 
     reset_grid_measure_layout_calls();
 
@@ -4346,9 +4347,9 @@ mod tests {
             None,
             AlignItems::Stretch,
             &factory,
-            &measure_cache,
-            &measured_fragments,
-            &measured_node_keys,
+            &mut measure_cache,
+            &mut measured_fragments,
+            &mut measured_node_keys,
           );
         }
       }
@@ -4372,12 +4373,9 @@ mod tests {
         gc.viewport_size,
         gc.nearest_positioned_cb,
       );
-    let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
-    let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(FxHashMap::default()));
+    let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+    let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+    let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
 
     for (probe_height, label) in [
       (AvailableSpace::MinContent, "min-content"),
@@ -4408,9 +4406,9 @@ mod tests {
         Some(wide_width),
         AlignItems::Stretch,
         &factory,
-        &measure_cache,
-        &measured_fragments,
-        &measured_node_keys,
+        &mut measure_cache,
+        &mut measured_fragments,
+        &mut measured_node_keys,
       );
       assert!(
         wide.height > 0.0,
@@ -4438,9 +4436,9 @@ mod tests {
         Some(narrow_width),
         AlignItems::Stretch,
         &factory,
-        &measure_cache,
-        &measured_fragments,
-        &measured_node_keys,
+        &mut measure_cache,
+        &mut measured_fragments,
+        &mut measured_node_keys,
       );
       assert!(
         narrow.height > wide.height,
@@ -4652,12 +4650,10 @@ mod tests {
           )
           .expect("build taffy tree");
 
-        let measure_cache: Rc<RefCell<FxHashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-          Rc::new(RefCell::new(FxHashMap::default()));
-        let measured_fragments: Rc<RefCell<FxHashMap<MeasureKey, FragmentNode>>> =
-          Rc::new(RefCell::new(FxHashMap::default()));
-        let measured_node_keys: Rc<RefCell<FxHashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-          Rc::new(RefCell::new(FxHashMap::default()));
+        let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> =
+          FxHashMap::default();
+        let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+        let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
 
         let available_space = taffy::geometry::Size {
           width: taffy::style::AvailableSpace::Definite(constraints.width().unwrap()),
@@ -4667,9 +4663,9 @@ mod tests {
         let factory = fc.factory.clone();
         let viewport_size = fc.viewport_size;
         let parent_inline_base = constraints.inline_percentage_base;
-        let cache = measure_cache.clone();
-        let measured = measured_fragments.clone();
-        let measured_keys = measured_node_keys.clone();
+        let cache = &mut measure_cache;
+        let measured = &mut measured_fragments;
+        let measured_keys = &mut measured_node_keys;
         let this = fc.clone();
         taffy
           .compute_layout_with_measure(
@@ -4700,7 +4696,7 @@ mod tests {
               let box_node = unsafe { &*node_ptr };
 
               let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
-              if let Some(size) = cache.borrow().get(&key) {
+              if let Some(size) = cache.get(&key) {
                 return *size;
               }
               let fc_type = box_node
@@ -4708,7 +4704,7 @@ mod tests {
                 .unwrap_or(FormattingContextType::Block);
               let fc = factory.create(fc_type);
 
-              let mut child_constraints = constraints_from_taffy(
+              let child_constraints = constraints_from_taffy(
                 viewport_size,
                 known_dimensions,
                 available_space,
@@ -4735,13 +4731,9 @@ mod tests {
                 width: content_size.width.max(0.0),
                 height: content_size.height.max(0.0),
               };
-              measured_keys
-                .borrow_mut()
-                .entry(node_id)
-                .or_default()
-                .push(key);
-              measured.borrow_mut().insert(key, fragment);
-              cache.borrow_mut().insert(key, size);
+              measured_keys.entry(node_id).or_default().push(key);
+              measured.insert(key, fragment);
+              cache.insert(key, size);
               size
             },
           )
@@ -4749,15 +4741,13 @@ mod tests {
 
         let child_id = *taffy.children(root_id).unwrap().first().unwrap();
         let child_layout = taffy.layout(child_id).unwrap();
-        let measured_node_keys = measured_node_keys.borrow();
-        let before_len = measured_fragments.borrow().len();
+        let before_len = measured_fragments.len();
         assert!(before_len > 0, "expected measured fragments to be recorded");
         let matched_key = measured_node_keys
           .get(&child_id)
           .and_then(|keys| {
-            let measured = measured_fragments.borrow();
             keys.iter().copied().find(|key| {
-              measured.get(key).map_or(false, |fragment| {
+              measured_fragments.get(key).map_or(false, |fragment| {
                 (fragment.bounds.width() - child_layout.size.width).abs() < 0.1
                   && (fragment.bounds.height() - child_layout.size.height).abs() < 0.1
               })
@@ -4772,20 +4762,19 @@ mod tests {
             root_id,
             root_id,
             &constraints,
-            &measured_fragments,
+            &mut measured_fragments,
             &measured_node_keys,
             &positioned_children_map,
             &mut deadline_counter,
           )
           .expect("convert fragments");
 
-        let measured_after = measured_fragments.borrow();
         assert!(
-          !measured_after.contains_key(&matched_key),
+          !measured_fragments.contains_key(&matched_key),
           "reused fragments should be removed from the cache"
         );
         assert!(
-          measured_after.len() < before_len,
+          measured_fragments.len() < before_len,
           "reusing a fragment should reduce the cache size"
         );
         assert_eq!(fragment.children.len(), 1);
@@ -5014,6 +5003,40 @@ mod tests {
       .unwrap();
 
     assert!(size >= 0.0);
+  }
+
+  #[test]
+  fn grid_intrinsic_inline_size_reuses_intrinsic_cache() {
+    let _lock = crate::layout::formatting_context::intrinsic_cache_test_lock();
+    crate::layout::formatting_context::intrinsic_cache_clear();
+
+    let _taffy_guard = crate::layout::taffy_integration::enable_taffy_counters(true);
+    crate::layout::taffy_integration::reset_taffy_counters();
+
+    let fc = GridFormattingContext::new();
+    let child = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let mut grid = BoxNode::new_block(make_grid_style(), FormattingContextType::Grid, vec![child]);
+    grid.id = 1;
+    grid.children[0].id = 2;
+
+    let first = fc
+      .compute_intrinsic_inline_size(&grid, IntrinsicSizingMode::MinContent)
+      .unwrap();
+    assert_eq!(
+      crate::layout::taffy_integration::taffy_counters().grid,
+      1,
+      "expected first intrinsic call to invoke Taffy"
+    );
+
+    let second = fc
+      .compute_intrinsic_inline_size(&grid, IntrinsicSizingMode::MinContent)
+      .unwrap();
+    assert_eq!(second, first);
+    assert_eq!(
+      crate::layout::taffy_integration::taffy_counters().grid,
+      1,
+      "expected repeated intrinsic calls to reuse intrinsic_cache without re-running Taffy"
+    );
   }
 
   // Test 12: Grid with minmax track
@@ -5561,13 +5584,15 @@ mod tests {
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
     let mut deadline_counter = 0usize;
-    let baseline0 = super::find_first_baseline_absolute(&fragment.children[0], &mut deadline_counter)
-      .expect("baseline computation")
-      .expect("baseline");
+    let baseline0 =
+      super::find_first_baseline_absolute(&fragment.children[0], &mut deadline_counter)
+        .expect("baseline computation")
+        .expect("baseline");
     let mut deadline_counter = 0usize;
-    let baseline1 = super::find_first_baseline_absolute(&fragment.children[1], &mut deadline_counter)
-      .expect("baseline computation")
-      .expect("baseline");
+    let baseline1 =
+      super::find_first_baseline_absolute(&fragment.children[1], &mut deadline_counter)
+        .expect("baseline computation")
+        .expect("baseline");
 
     assert!(
       (baseline0 - baseline1).abs() < 0.05,
@@ -5605,13 +5630,15 @@ mod tests {
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
     let mut deadline_counter = 0usize;
-    let baseline_offset0 = super::first_baseline_offset(&fragment.children[0], &mut deadline_counter)
-      .expect("baseline computation")
-      .unwrap_or_else(|| fragment.children[0].bounds.width());
+    let baseline_offset0 =
+      super::first_baseline_offset(&fragment.children[0], &mut deadline_counter)
+        .expect("baseline computation")
+        .unwrap_or_else(|| fragment.children[0].bounds.width());
     let mut deadline_counter = 0usize;
-    let baseline_offset1 = super::first_baseline_offset(&fragment.children[1], &mut deadline_counter)
-      .expect("baseline computation")
-      .unwrap_or_else(|| fragment.children[1].bounds.width());
+    let baseline_offset1 =
+      super::first_baseline_offset(&fragment.children[1], &mut deadline_counter)
+        .expect("baseline computation")
+        .unwrap_or_else(|| fragment.children[1].bounds.width());
 
     let baseline0 = fragment.children[0].bounds.x() + baseline_offset0;
     let baseline1 = fragment.children[1].bounds.x() + baseline_offset1;
