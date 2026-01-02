@@ -1126,7 +1126,7 @@ where
     if !rerun_row_sizing {
       let min_content_contribution_changed = items
         .iter_mut()
-        .filter(|item| item.crosses_intrinsic_column)
+        .filter(|item| item.crosses_intrinsic_row)
         .any(|item| {
           let available_space = item.available_space(
             AbstractAxis::Block,

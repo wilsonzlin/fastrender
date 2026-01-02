@@ -6,11 +6,11 @@ use slotmap::SparseSecondaryMap as SecondaryMap;
 use slotmap::{DefaultKey, SlotMap};
 
 use crate::geometry::Size;
-use crate::style::{AvailableSpace, Display, Style};
+use crate::style::{AvailableSpace, CompactLength, Display, Style};
 use crate::sys::DefaultCheapStr;
 use crate::tree::{
   Cache, ClearState, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId, PrintTree,
-  RoundTree, RunMode, TraversePartialTree, TraverseTree,
+  RequestedAxis, RoundTree, RunMode, TraversePartialTree, TraverseTree,
 };
 use crate::util::debug::{debug_log, debug_log_node};
 use crate::util::sys::{new_vec_with_capacity, ChildrenVec, Vec};
@@ -336,16 +336,106 @@ impl LeafMeasureCacheKey {
   #[inline(always)]
   fn new(
     node_id: NodeId,
-    known_dimensions: Size<Option<f32>>,
-    available_space: Size<AvailableSpace>,
+    requested_axis: RequestedAxis,
+    mut known_dimensions: Size<Option<f32>>,
+    mut available_space: Size<AvailableSpace>,
+    style: &Style,
   ) -> Self {
-    Self {
+    // Our integration treats tiny definite constraints (e.g. 0px / 1px) as effectively
+    // unconstrained to avoid pathological "measure everything at 0px" probes during grid/flex
+    // track sizing. Mirror that normalization in the cache key so these probes hit without
+    // repeatedly invoking the measure callback.
+    //
+    // Note: This intentionally does *not* mutate the inputs passed to the measure callback;
+    // it only canonicalizes the cache key to match the effective behavior of downstream
+    // constraint normalization.
+    if let Some(w) = known_dimensions.width {
+      if w <= 1.0
+        && matches!(available_space.width, AvailableSpace::Definite(v) if v <= 1.0)
+      {
+        known_dimensions.width = None;
+        available_space.width = AvailableSpace::MaxContent;
+      }
+    }
+    if let AvailableSpace::Definite(w) = available_space.width {
+      if w <= 1.0 {
+        available_space.width = AvailableSpace::MaxContent;
+      }
+    }
+    if let Some(h) = known_dimensions.height {
+      if h <= 1.0
+        && matches!(available_space.height, AvailableSpace::Definite(v) if v <= 1.0)
+      {
+        known_dimensions.height = None;
+        available_space.height = AvailableSpace::MaxContent;
+      }
+    }
+    if let AvailableSpace::Definite(h) = available_space.height {
+      if h <= 1.0 {
+        available_space.height = AvailableSpace::MaxContent;
+      }
+    }
+
+    let mut key = Self {
       node_id: node_id.into(),
       known_width: known_dimensions.width.map(quantize_measure_cache_f32),
       known_height: known_dimensions.height.map(quantize_measure_cache_f32),
       available_width: LeafMeasureAvailableSpaceKey::from_available_space(available_space.width),
       available_height: LeafMeasureAvailableSpaceKey::from_available_space(available_space.height),
+    };
+
+    // When only the horizontal axis is requested (e.g. grid/flex intrinsic width probes),
+    // avoid keying the leaf-measure cache on block-size constraints for nodes that do not
+    // have an aspect ratio. This prevents redundant measure invocations when the same node
+    // is probed under many different estimated heights during track sizing.
+    //
+    // This is correctness-preserving because, without an aspect ratio, CSS box sizing does
+    // not allow the used width to depend on the available block-size.
+    if matches!(requested_axis, RequestedAxis::Horizontal)
+      && (style.aspect_ratio.is_none() || known_dimensions.height.is_none())
+    {
+      key.known_height = None;
+      key.available_height = LeafMeasureAvailableSpaceKey::MaxContent;
     }
+
+    // Similarly, when only the vertical axis is requested, auto-height non-replaced nodes without
+    // a block-size constraint do not have their resulting height depend on the incoming available
+    // block-size. Grid sizing can probe these nodes with many speculative heights; canonicalize
+    // the height portion of the key to avoid redundant measure invocations.
+    if matches!(requested_axis, RequestedAxis::Vertical)
+      && style.aspect_ratio.is_none()
+      && !style.item_is_replaced
+      && known_dimensions.height.is_none()
+      && style.size.height.is_auto()
+      && (style.min_size.height.is_auto()
+        || (style.min_size.height.tag() == CompactLength::LENGTH_TAG
+          && style.min_size.height.value() == 0.0))
+      && style.max_size.height.is_auto()
+    {
+      key.known_height = None;
+      key.available_height = LeafMeasureAvailableSpaceKey::MaxContent;
+    }
+
+    // When both axes are requested, the returned *height* can still be independent of the incoming
+    // available block-size for many leaf nodes (for example, auto-height non-replaced elements with
+    // no block-size constraints). Grid track sizing can probe these nodes with many speculative
+    // available heights; canonicalize the height portion of the key in the common "auto height"
+    // case to avoid redundant measure invocations.
+    if matches!(requested_axis, RequestedAxis::Both)
+      && style.aspect_ratio.is_none()
+      && !style.item_is_replaced
+      && known_dimensions.height.is_none()
+      && style.size.height.is_auto()
+      && (style.min_size.height.is_auto()
+        || (style.min_size.height.tag() == CompactLength::LENGTH_TAG
+          && style.min_size.height.value() == 0.0))
+      && style.max_size.height.is_auto()
+    {
+      key.known_height = None;
+      key.available_height = LeafMeasureAvailableSpaceKey::MaxContent;
+    }
+
+    key
   }
 }
 
@@ -501,7 +591,13 @@ where
           let node_context_data = &mut tree.taffy.node_context_data;
 
           let measure_function = |known_dimensions, available_space| {
-            let key = LeafMeasureCacheKey::new(node, known_dimensions, available_space);
+            let key = LeafMeasureCacheKey::new(
+              node,
+              inputs.axis,
+              known_dimensions,
+              available_space,
+              style,
+            );
             if let Some(cached) = leaf_measure_cache.get(&key) {
               return *cached;
             }
@@ -509,8 +605,8 @@ where
             let node_context = has_context
               .then(|| node_context_data.get_mut(node_key))
               .flatten();
-            let measured =
-              (measure_callback)(known_dimensions, available_space, node, node_context, style);
+           let measured =
+             (measure_callback)(known_dimensions, available_space, node, node_context, style);
             leaf_measure_cache.insert(key, measured);
             measured
           };

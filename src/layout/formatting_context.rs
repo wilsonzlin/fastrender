@@ -43,6 +43,7 @@ use crate::style::position::Position;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHasher as DefaultHasher;
 use std::cell::Cell;
@@ -90,27 +91,77 @@ pub enum IntrinsicSizingMode {
   MaxContent,
 }
 
-thread_local! {
-    /// Intrinsic sizing cache scoped per-thread so rayon fan-out does not require locking.
-    static INTRINSIC_INLINE_CACHE: RefCell<FxHashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
-        RefCell::new(FxHashMap::default());
+type IntrinsicCacheKey = (usize, usize, IntrinsicSizingMode);
+
+/// Number of shards used for intrinsic sizing caches.
+///
+/// The intrinsic sizing hot path is extremely sensitive to cache locality: layout fan-out can
+/// distribute work across rayon threads, and thread-local caches cause the same expensive intrinsic
+/// measurements to be recomputed on multiple workers. Using a sharded shared cache avoids this
+/// amplification while still allowing concurrent reads.
+const INTRINSIC_CACHE_SHARDS: usize = 64;
+
+struct ShardedIntrinsicCache {
+  shards: [RwLock<FxHashMap<IntrinsicCacheKey, (usize, f32)>>; INTRINSIC_CACHE_SHARDS],
 }
 
-thread_local! {
-  /// Intrinsic block-size cache scoped per-thread so rayon fan-out does not require locking.
-  ///
-  /// This mirrors `INTRINSIC_INLINE_CACHE` but stores sizes in the block axis. The cache is
-  /// invalidated on the same epoch boundaries to keep intrinsic sizing consistent within a layout
-  /// run while remaining thread-local and contention free.
-  static INTRINSIC_BLOCK_CACHE: RefCell<FxHashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
-    RefCell::new(FxHashMap::default());
+impl ShardedIntrinsicCache {
+  fn new() -> Self {
+    Self {
+      shards: std::array::from_fn(|_| RwLock::new(FxHashMap::default())),
+    }
+  }
+
+  #[inline]
+  fn shard_index_for_box_id(box_id: usize) -> usize {
+    // Box ids are dense and already act like a good hash for sharding.
+    box_id % INTRINSIC_CACHE_SHARDS
+  }
+
+  #[inline]
+  fn get(&self, key: &IntrinsicCacheKey, epoch: usize) -> Option<f32> {
+    let box_id = key.0;
+    let shard = &self.shards[Self::shard_index_for_box_id(box_id)];
+    let map = shard.read();
+    map.get(key)
+      .and_then(|(entry_epoch, value)| (*entry_epoch == epoch).then_some(*value))
+  }
+
+  #[inline]
+  fn insert(&self, key: IntrinsicCacheKey, epoch: usize, value: f32) {
+    let shard = &self.shards[Self::shard_index_for_box_id(key.0)];
+    shard.write().insert(key, (epoch, value));
+  }
+
+  fn clear(&self) {
+    for shard in &self.shards {
+      shard.write().clear();
+    }
+  }
 }
+
+static GLOBAL_INTRINSIC_INLINE_CACHE: LazyLock<ShardedIntrinsicCache> =
+  LazyLock::new(ShardedIntrinsicCache::new);
+static GLOBAL_INTRINSIC_BLOCK_CACHE: LazyLock<ShardedIntrinsicCache> =
+  LazyLock::new(ShardedIntrinsicCache::new);
 
 thread_local! {
   static FRAGMENTAINER_BLOCK_SIZE_HINT: Cell<Option<f32>> = Cell::new(None);
 }
 
 thread_local! {
+  /// Per-thread fast path for intrinsic sizing lookups.
+  ///
+  /// The global intrinsic caches are shared across rayon workers, but every lookup still requires
+  /// taking a (sharded) read lock. Hot grid/flex pages can issue hundreds of thousands of intrinsic
+  /// lookups; a tiny per-thread layer avoids repeated lock acquisitions once a value has been
+  /// observed on that worker.
+  static INTRINSIC_INLINE_CACHE_TL: RefCell<FxHashMap<IntrinsicCacheKey, f32>> =
+    RefCell::new(FxHashMap::default());
+  static INTRINSIC_BLOCK_CACHE_TL: RefCell<FxHashMap<IntrinsicCacheKey, f32>> =
+    RefCell::new(FxHashMap::default());
+  static INTRINSIC_CACHE_TL_EPOCH: Cell<usize> = const { Cell::new(0) };
+
   /// Subgrid dependency memoization keyed by node id within a cache epoch.
   static SUBGRID_DEPENDENT_CACHE: RefCell<FxHashMap<usize, (usize, bool)>> =
     RefCell::new(FxHashMap::default());
@@ -245,35 +296,55 @@ fn cache_key(
   Some((id, style_ptr, mode))
 }
 
+#[inline]
+fn ensure_intrinsic_thread_epoch(epoch: usize) {
+  INTRINSIC_CACHE_TL_EPOCH.with(|cell| {
+    if cell.get() == epoch {
+      return;
+    }
+    INTRINSIC_INLINE_CACHE_TL.with(|cache| cache.borrow_mut().clear());
+    INTRINSIC_BLOCK_CACHE_TL.with(|cache| cache.borrow_mut().clear());
+    cell.set(epoch);
+  });
+}
+
 pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
   CACHE_LOOKUPS.inc();
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   let key = cache_key(node, mode, epoch)?;
-  let hit = INTRINSIC_INLINE_CACHE.with(|cache| {
-    cache
-      .borrow()
-      .get(&key)
-      .and_then(|(entry_epoch, value)| (*entry_epoch == epoch).then_some(*value))
-  });
-  if hit.is_some() {
+  ensure_intrinsic_thread_epoch(epoch);
+
+  if let Some(hit) = INTRINSIC_INLINE_CACHE_TL.with(|cache| cache.borrow().get(&key).copied()) {
     CACHE_HITS.inc();
+    return Some(hit);
   }
-  hit
+
+  let hit = GLOBAL_INTRINSIC_INLINE_CACHE.get(&key, epoch)?;
+  INTRINSIC_INLINE_CACHE_TL.with(|cache| {
+    cache.borrow_mut().insert(key, hit);
+  });
+  CACHE_HITS.inc();
+  Some(hit)
 }
 
 pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, value: f32) {
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   if let Some(key) = cache_key(node, mode, epoch) {
-    INTRINSIC_INLINE_CACHE.with(|cache| {
-      cache.borrow_mut().insert(key, (epoch, value));
+    ensure_intrinsic_thread_epoch(epoch);
+    INTRINSIC_INLINE_CACHE_TL.with(|cache| {
+      cache.borrow_mut().insert(key, value);
     });
+    GLOBAL_INTRINSIC_INLINE_CACHE.insert(key, epoch, value);
     CACHE_STORES.inc();
   }
 }
 
 pub(crate) fn intrinsic_cache_clear() {
-  INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow_mut().clear());
-  INTRINSIC_BLOCK_CACHE.with(|cache| cache.borrow_mut().clear());
+  GLOBAL_INTRINSIC_INLINE_CACHE.clear();
+  GLOBAL_INTRINSIC_BLOCK_CACHE.clear();
+  INTRINSIC_INLINE_CACHE_TL.with(|cache| cache.borrow_mut().clear());
+  INTRINSIC_BLOCK_CACHE_TL.with(|cache| cache.borrow_mut().clear());
+  INTRINSIC_CACHE_TL_EPOCH.with(|cell| cell.set(0));
   clear_subgrid_cache();
 }
 
@@ -360,6 +431,93 @@ struct LayoutCacheEntry {
   fragment: Arc<FragmentNode>,
   style_hash: u64,
 }
+
+/// Number of shards used for the global (cross-thread) layout result cache.
+///
+/// We keep a small sharded cache in addition to the existing per-thread cache so that layout
+/// parallelism doesn't devolve into cache fragmentation. A thread-local cache is still the
+/// fast-path (no locking), but a shared cache allows different rayon workers to reuse expensive
+/// subtree layouts when they happen to touch the same nodes under identical constraints.
+const GLOBAL_LAYOUT_CACHE_SHARDS: usize = 64;
+
+struct ShardedLayoutResultCache {
+  shards: [RwLock<FxHashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>>; GLOBAL_LAYOUT_CACHE_SHARDS],
+}
+
+impl ShardedLayoutResultCache {
+  fn new() -> Self {
+    Self {
+      shards: std::array::from_fn(|_| RwLock::new(FxHashMap::default())),
+    }
+  }
+
+  #[inline]
+  fn shard_index_for_box_id(box_id: usize) -> usize {
+    box_id % GLOBAL_LAYOUT_CACHE_SHARDS
+  }
+
+  #[inline]
+  fn get(
+    &self,
+    key: &LayoutCacheKeyNoStyle,
+    epoch: usize,
+    style_hash: u64,
+  ) -> Option<Arc<FragmentNode>> {
+    let shard = &self.shards[Self::shard_index_for_box_id(key.box_id)];
+    {
+      let map = shard.read();
+      if let Some(entry) = map.get(key) {
+        if entry.epoch == epoch && entry.style_hash == style_hash {
+          return Some(entry.fragment.clone());
+        }
+        // Stale entries should be rare because we clear on epoch changes, but drop them lazily
+        // to avoid unbounded growth if something goes wrong with epoch management.
+        if entry.epoch != epoch {
+          // Upgrade to write lock outside the read scope.
+        } else {
+          return None;
+        }
+      } else {
+        return None;
+      }
+    }
+
+    // Slow path: remove stale entries under a write lock.
+    let mut map = shard.write();
+    if let Some(entry) = map.get(key) {
+      if entry.epoch != epoch {
+        map.remove(key);
+      } else if entry.epoch == epoch && entry.style_hash == style_hash {
+        return Some(entry.fragment.clone());
+      }
+    }
+    None
+  }
+
+  #[inline]
+  fn insert(&self, key: LayoutCacheKeyNoStyle, entry: LayoutCacheEntry) {
+    let shard = &self.shards[Self::shard_index_for_box_id(key.box_id)];
+    shard.write().insert(key, entry);
+  }
+
+  fn clear(&self) {
+    for shard in &self.shards {
+      shard.write().clear();
+    }
+  }
+
+  fn evict_box(&self, box_id: usize) -> usize {
+    let shard = &self.shards[Self::shard_index_for_box_id(box_id)];
+    let mut map = shard.write();
+    let before = map.len();
+    map.retain(|key, _| key.box_id != box_id);
+    before.saturating_sub(map.len())
+  }
+}
+
+static GLOBAL_LAYOUT_RESULT_CACHE: LazyLock<ShardedLayoutResultCache> =
+  LazyLock::new(ShardedLayoutResultCache::new);
+static GLOBAL_LAYOUT_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(0);
 
 /// Default per-thread layout cache entry cap. Override via `FASTR_LAYOUT_CACHE_MAX_ENTRIES`.
 const DEFAULT_LAYOUT_CACHE_MAX_ENTRIES: Option<usize> = Some(8192);
@@ -454,11 +612,16 @@ fn subtree_contains_subgrid(node: &BoxNode, epoch: usize) -> bool {
 
 fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
   let mut h = DefaultHasher::default();
+  let hash_f32 = |val: f32, hasher: &mut DefaultHasher| {
+    // Canonicalize -0.0 so cache keys don't splinter on harmless sign differences.
+    let bits = if val == 0.0 { 0.0f32.to_bits() } else { val.to_bits() };
+    bits.hash(hasher);
+  };
   let hash_space = |space: &crate::layout::constraints::AvailableSpace,
                     hasher: &mut DefaultHasher| match space {
     crate::layout::constraints::AvailableSpace::Definite(v) => {
       0u8.hash(hasher);
-      v.to_bits().hash(hasher);
+      hash_f32(*v, hasher);
     }
     crate::layout::constraints::AvailableSpace::Indefinite => 1u8.hash(hasher),
     crate::layout::constraints::AvailableSpace::MinContent => 2u8.hash(hasher),
@@ -469,21 +632,21 @@ fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
   match constraints.used_border_box_width {
     Some(v) => {
       1u8.hash(&mut h);
-      v.to_bits().hash(&mut h);
+      hash_f32(v, &mut h);
     }
     None => 0u8.hash(&mut h),
   }
   match constraints.used_border_box_height {
     Some(v) => {
       1u8.hash(&mut h);
-      v.to_bits().hash(&mut h);
+      hash_f32(v, &mut h);
     }
     None => 0u8.hash(&mut h),
   }
   match constraints.inline_percentage_base {
     Some(v) => {
       1u8.hash(&mut h);
-      v.to_bits().hash(&mut h);
+      hash_f32(v, &mut h);
     }
     None => 0u8.hash(&mut h),
   }
@@ -686,6 +849,10 @@ fn evict_cache_entries_for_box(box_id: usize) {
       LAYOUT_CACHE_EVICTIONS.add(evicted);
     }
   });
+  let evicted_global = GLOBAL_LAYOUT_RESULT_CACHE.evict_box(box_id);
+  if evicted_global > 0 {
+    LAYOUT_CACHE_EVICTIONS.add(evicted_global);
+  }
 }
 
 pub(crate) fn layout_cache_reset_counters() {
@@ -725,6 +892,13 @@ pub(crate) fn layout_cache_use_epoch(
   };
 
   let previous = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+
+  // Global layout cache entries are only valid within a single render/layout run. Clear the shared
+  // cache whenever the run epoch changes to avoid unbounded growth.
+  let previous_global_epoch = GLOBAL_LAYOUT_CACHE_EPOCH.swap(epoch, Ordering::Relaxed);
+  if previous_global_epoch != epoch {
+    GLOBAL_LAYOUT_RESULT_CACHE.clear();
+  }
 
   // Publish run configuration so rayon worker threads can observe it.
   LAYOUT_CACHE_GLOBAL_EPOCH.store(epoch, Ordering::Relaxed);
@@ -785,6 +959,29 @@ pub(crate) fn layout_cache_lookup(
     );
     return Some((*fragment).clone());
   }
+
+  // Second-level cache: cross-thread shared layout results.
+  if let Some(fragment) = GLOBAL_LAYOUT_RESULT_CACHE.get(&key.key, epoch, key.style_hash) {
+    // Populate the thread-local cache so repeated lookups on this worker don't pay the global lock.
+    LAYOUT_RESULT_CACHE.with(|cache| {
+      let mut map = cache.borrow_mut();
+      let entry = LayoutCacheEntry {
+        epoch,
+        fragment: fragment.clone(),
+        style_hash: key.style_hash,
+      };
+      map.insert(key.key, entry);
+      enforce_layout_cache_entry_limit(&mut map, &key.key);
+    });
+
+    LAYOUT_CACHE_HITS.inc();
+    LAYOUT_CACHE_CLONE_RETURNS.inc();
+    fragment_clone_profile::record_fragment_clone_from_fragment(
+      CloneSite::LayoutCacheHit,
+      fragment.as_ref(),
+    );
+    return Some((*fragment).clone());
+  }
   None
 }
 
@@ -807,20 +1004,23 @@ pub(crate) fn layout_cache_store(
     return;
   }
 
+  let fragment = Arc::new(fragment.clone());
+  let entry = LayoutCacheEntry {
+    epoch,
+    fragment: fragment.clone(),
+    style_hash: key.style_hash,
+  };
+
   LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
-    let new_entry = LayoutCacheEntry {
-      epoch,
-      fragment: Arc::new(fragment.clone()),
-      style_hash: key.style_hash,
-    };
-    if let Some(previous) = map.insert(key.key, new_entry) {
+    if let Some(previous) = map.insert(key.key, entry.clone()) {
       if previous.epoch != epoch || previous.style_hash != key.style_hash {
         LAYOUT_CACHE_EVICTIONS.inc();
       }
     }
     enforce_layout_cache_entry_limit(&mut map, &key.key);
   });
+  GLOBAL_LAYOUT_RESULT_CACHE.insert(key.key, entry);
 
   LAYOUT_CACHE_STORES.inc();
 }
@@ -1054,20 +1254,27 @@ pub(crate) fn intrinsic_block_cache_lookup(
 ) -> Option<f32> {
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   let key = cache_key(node, mode, epoch)?;
-  INTRINSIC_BLOCK_CACHE.with(|cache| {
-    cache
-      .borrow()
-      .get(&key)
-      .and_then(|(entry_epoch, value)| (*entry_epoch == epoch).then_some(*value))
-  })
+  ensure_intrinsic_thread_epoch(epoch);
+
+  if let Some(hit) = INTRINSIC_BLOCK_CACHE_TL.with(|cache| cache.borrow().get(&key).copied()) {
+    return Some(hit);
+  }
+
+  let hit = GLOBAL_INTRINSIC_BLOCK_CACHE.get(&key, epoch)?;
+  INTRINSIC_BLOCK_CACHE_TL.with(|cache| {
+    cache.borrow_mut().insert(key, hit);
+  });
+  Some(hit)
 }
 
 pub(crate) fn intrinsic_block_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, value: f32) {
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   if let Some(key) = cache_key(node, mode, epoch) {
-    INTRINSIC_BLOCK_CACHE.with(|cache| {
-      cache.borrow_mut().insert(key, (epoch, value));
+    ensure_intrinsic_thread_epoch(epoch);
+    INTRINSIC_BLOCK_CACHE_TL.with(|cache| {
+      cache.borrow_mut().insert(key, value);
     });
+    GLOBAL_INTRINSIC_BLOCK_CACHE.insert(key, epoch, value);
   }
 }
 

@@ -558,14 +558,14 @@ impl GridItem {
         // TODO: support overflow property
 
         // it spans at least one track in that axis whose min track sizing function is auto
-        let spans_auto_min_track = axis_tracks
+        let spans_auto_min_track = item_axis_tracks
           .iter()
           // TODO: should this be 'behaves as auto' rather than just literal auto?
           .any(|track| track.min_track_sizing_function.is_auto());
 
         // if it spans more than one track in that axis, none of those tracks are flexible
         let only_span_one_track = item_axis_tracks.len() == 1;
-        let spans_a_flexible_track = axis_tracks
+        let spans_a_flexible_track = item_axis_tracks
           .iter()
           .any(|track| track.max_track_sizing_function.is_fr());
 

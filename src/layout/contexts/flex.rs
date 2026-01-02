@@ -3898,7 +3898,12 @@ impl FlexFormattingContext {
           let mc_selector = mc_timer
             .as_ref()
             .and_then(|_| work.child_box.debug_info.as_ref().map(|d| d.to_selector()));
-          let mc_constraints = if work.fc_type == FormattingContextType::Block {
+          let mc_constraints = if work.layout_child_storage.is_none()
+            && matches!(
+              work.fc_type,
+              FormattingContextType::Block | FormattingContextType::Flex | FormattingContextType::Grid
+            )
+          {
             mc_constraints
               .with_used_border_box_size(work.used_border_box_width, work.used_border_box_height)
           } else {

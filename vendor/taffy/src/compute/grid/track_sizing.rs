@@ -44,6 +44,11 @@ impl ItemBatcher {
     &mut self,
     items: &'items mut [GridItem],
   ) -> Option<(&'items mut [GridItem], bool)> {
+    // `resolve_intrinsic_track_sizes` can run for a long time on large grids. Ensure we
+    // periodically check for cooperative abort requests so render deadlines can surface as
+    // structured timeouts rather than hard kills.
+    check_layout_abort();
+
     if self.current_is_flex || self.index_offset >= items.len() {
       return None;
     }
@@ -55,11 +60,17 @@ impl ItemBatcher {
     let next_index_offset = if self.current_is_flex {
       items.len()
     } else {
-      items
+      // `ItemBatcher` advances in monotonically increasing `index_offset` order, so scanning from
+      // the start of the slice would devolve into O(n^2) behaviour (re-checking already-processed
+      // items for every batch). Restrict the scan to the tail slice to keep the overall batching
+      // work O(n).
+      let start = (self.index_offset + 1).min(items.len());
+      items[start..]
         .iter()
         .position(|item: &GridItem| {
           item.crosses_flexible_track(self.axis) || item.span(self.axis) > self.current_span
         })
+        .map(|pos| start + pos)
         .unwrap_or(items.len())
     };
 

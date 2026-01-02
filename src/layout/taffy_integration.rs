@@ -1157,6 +1157,10 @@ mod tests {
       width: AvailableSpace::Definite(400.0),
       height: AvailableSpace::Definite(300.0),
     };
+    let def_space2 = TaffySize {
+      width: AvailableSpace::Definite(600.0),
+      height: AvailableSpace::Definite(300.0),
+    };
 
     let max_layout = LayoutOutput::from_outer_size(TaffySize {
       width: 123.0,
@@ -1166,9 +1170,14 @@ mod tests {
       width: 210.0,
       height: 60.0,
     });
+    let def_layout2 = LayoutOutput::from_outer_size(TaffySize {
+      width: 310.0,
+      height: 70.0,
+    });
 
     cache.store(known, max_space, RunMode::ComputeSize, max_layout);
     cache.store(known, def_space, RunMode::ComputeSize, def_layout);
+    cache.store(known, def_space2, RunMode::ComputeSize, def_layout2);
 
     let got_max = cache
       .get(known, max_space, RunMode::ComputeSize)
@@ -1179,6 +1188,11 @@ mod tests {
       .get(known, def_space, RunMode::ComputeSize)
       .expect("definite entry should remain cached");
     assert_eq!(got_def.size, def_layout.size);
+
+    let got_def2 = cache
+      .get(known, def_space2, RunMode::ComputeSize)
+      .expect("second definite entry should remain cached");
+    assert_eq!(got_def2.size, def_layout2.size);
   }
 
   #[test]

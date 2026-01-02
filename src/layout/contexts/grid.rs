@@ -106,7 +106,7 @@ use taffy::tree::NodeId as TaffyNodeId;
 use taffy::tree::TaffyTree;
 use taffy::DetailedGridTracksInfo;
 
-const MAX_MEASURED_KEYS_PER_NODE: usize = 12;
+const MAX_MEASURED_KEYS_PER_NODE: usize = 32;
 const GRID_DEADLINE_CHECK_STRIDE: usize = 64;
 
 #[inline]
@@ -328,6 +328,11 @@ impl MeasureKey {
 }
 
 fn push_measured_key(keys: &mut Vec<MeasureKey>, key: MeasureKey) -> Option<MeasureKey> {
+  // Keep the list small, but de-dup and move recently seen keys to the end so we have a better
+  // chance of reusing measured fragments when Taffy cycles through multiple sizing modes.
+  if let Some(pos) = keys.iter().position(|existing| *existing == key) {
+    keys.remove(pos);
+  }
   let evicted = if keys.len() >= MAX_MEASURED_KEYS_PER_NODE {
     Some(keys.remove(0))
   } else {
