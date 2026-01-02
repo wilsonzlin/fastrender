@@ -488,6 +488,23 @@ fn token_to_css_string(token: &Token) -> String {
   match token {
     Token::WhiteSpace(ws) => ws.to_string(),
     Token::Comment(text) => format!("/*{}*/", text),
+    // `cssparser`'s `to_css_string()` escapes quotes inside strings/URLs to guarantee the output is
+    // valid CSS. Our property-value parser, however, consumes the resolved string without
+    // interpreting CSS string escapes (it expects the raw token contents). This mismatch can turn
+    // `"` into `\"` inside `data:` URLs (e.g. SVG XML), breaking downstream consumers like `usvg`.
+    //
+    // Prefer emitting quoted strings with a quote character that does not appear in the content so
+    // we can preserve the raw value without adding backslash escapes.
+    Token::QuotedString(text) => {
+      let raw = text.as_ref();
+      if !raw.contains('\'') {
+        format!("'{raw}'")
+      } else if !raw.contains('"') {
+        format!("\"{raw}\"")
+      } else {
+        token.to_css_string()
+      }
+    }
     _ => token.to_css_string(),
   }
 }
@@ -809,6 +826,39 @@ mod tests {
         resolved
       );
     }
+  }
+
+  #[test]
+  fn resolve_var_preserves_quotes_inside_data_url_svg() {
+    let props = make_props(&[(
+      "--icon",
+      r#"url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6" fill="none"></svg>')"#,
+    )]);
+    let value = PropertyValue::Keyword("var(--icon)".to_string());
+    let resolved = resolve_var_for_property(&value, &props, "background-image");
+
+    let VarResolutionResult::Resolved { value, css_text } = resolved else {
+      panic!("expected successful var() resolution, got {resolved:?}");
+    };
+
+    match value.as_ref() {
+      PropertyValue::Url(url) => {
+        assert!(
+          url.contains(r#"xmlns="http://www.w3.org/2000/svg""#),
+          "resolved data URL should preserve raw quotes, got {url:?}"
+        );
+        assert!(
+          !url.contains("\\\""),
+          "resolved data URL should not contain CSS-escaped quotes, got {url:?}"
+        );
+      }
+      other => panic!("expected Url(...) after var() resolution, got {other:?}"),
+    }
+
+    assert!(
+      !css_text.contains("\\\""),
+      "resolved CSS text should avoid inserting escapes into quoted data URLs: {css_text}"
+    );
   }
 
   #[test]

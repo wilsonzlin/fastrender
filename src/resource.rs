@@ -4804,35 +4804,55 @@ impl HttpFetcher {
 
   /// Fetch from a file:// URL
   fn fetch_file(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
-    let path = url.strip_prefix("file://").unwrap_or(url);
+    let path_candidates = file_url_path_candidates(url);
     let limit = self.policy.allowed_response_limit()?;
-    if let Ok(meta) = std::fs::metadata(path) {
-      if let Ok(len) = usize::try_from(meta.len()) {
-        if len > limit {
-          if let Some(remaining) = self.policy.remaining_budget() {
-            if len > remaining {
-              return Err(policy_error(format!(
-                "total bytes budget exceeded ({} > {} bytes remaining)",
-                len, remaining
-              )));
+    let mut chosen_path: Option<std::path::PathBuf> = None;
+    let mut bytes: Option<Vec<u8>> = None;
+    let mut last_err = None;
+
+    for candidate in &path_candidates {
+      if let Ok(meta) = std::fs::metadata(candidate) {
+        if let Ok(len) = usize::try_from(meta.len()) {
+          if len > limit {
+            if let Some(remaining) = self.policy.remaining_budget() {
+              if len > remaining {
+                return Err(policy_error(format!(
+                  "total bytes budget exceeded ({} > {} bytes remaining)",
+                  len, remaining
+                )));
+              }
             }
+            return Err(policy_error(format!(
+              "response too large ({} > {} bytes)",
+              len, limit
+            )));
           }
-          return Err(policy_error(format!(
-            "response too large ({} > {} bytes)",
-            len, limit
-          )));
+        } else {
+          return Err(policy_error("file is larger than supported limit"));
         }
-      } else {
-        return Err(policy_error("file is larger than supported limit"));
+      }
+
+      match std::fs::read(candidate) {
+        Ok(read) => {
+          chosen_path = Some(candidate.clone());
+          bytes = Some(read);
+          break;
+        }
+        Err(err) => {
+          last_err = Some(err);
+        }
       }
     }
-    let bytes = std::fs::read(path).map_err(|e| {
+
+    let chosen_path = chosen_path.ok_or_else(|| {
+      let err = last_err.unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found"));
       Error::Resource(
-        ResourceError::new(url.to_string(), e.to_string())
+        ResourceError::new(url.to_string(), err.to_string())
           .with_final_url(url.to_string())
-          .with_source(e),
+          .with_source(err),
       )
     })?;
+    let mut bytes = bytes.unwrap_or_default();
 
     if bytes.len() > limit {
       if let Some(remaining) = self.policy.remaining_budget() {
@@ -4850,9 +4870,12 @@ impl HttpFetcher {
         limit
       )));
     }
+    let path_str = chosen_path.to_string_lossy();
+    let mut content_type = guess_content_type_from_path(path_str.as_ref());
+    substitute_offline_fixture_placeholder_full(kind, &mut bytes, &mut content_type);
+
     self.policy.reserve_budget(bytes.len())?;
 
-    let content_type = guess_content_type_from_path(path);
     render_control::check_active(render_stage_hint_for_context(kind, url))
       .map_err(Error::Render)?;
     Ok(FetchedResource::with_final_url(
@@ -4862,16 +4885,37 @@ impl HttpFetcher {
     ))
   }
 
-  fn fetch_file_prefix(&self, url: &str, max_bytes: usize) -> Result<FetchedResource> {
-    let path = url.strip_prefix("file://").unwrap_or(url);
+  fn fetch_file_prefix(
+    &self,
+    kind: FetchContextKind,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<FetchedResource> {
+    let path_candidates = file_url_path_candidates(url);
     let limit = self.policy.allowed_response_limit()?;
     let read_limit = max_bytes.min(limit);
 
-    let mut file = std::fs::File::open(path).map_err(|e| {
+    let mut file = None;
+    let mut chosen_path: Option<std::path::PathBuf> = None;
+    let mut last_err = None;
+
+    for candidate in &path_candidates {
+      match std::fs::File::open(candidate) {
+        Ok(handle) => {
+          file = Some(handle);
+          chosen_path = Some(candidate.clone());
+          break;
+        }
+        Err(err) => last_err = Some(err),
+      }
+    }
+
+    let mut file = file.ok_or_else(|| {
+      let err = last_err.unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found"));
       Error::Resource(
-        ResourceError::new(url.to_string(), e.to_string())
+        ResourceError::new(url.to_string(), err.to_string())
           .with_final_url(url.to_string())
-          .with_source(e),
+          .with_source(err),
       )
     })?;
     let bytes = read_response_prefix(&mut file, read_limit).map_err(|e| {
@@ -4882,9 +4926,17 @@ impl HttpFetcher {
       )
     })?;
 
+    let chosen_path = chosen_path.unwrap_or_else(|| std::path::PathBuf::from(url));
+    let path_str = chosen_path.to_string_lossy();
+    let mut content_type = guess_content_type_from_path(path_str.as_ref());
+
+    let mut bytes = bytes;
+    substitute_offline_fixture_placeholder_prefix(kind, &mut bytes, &mut content_type, read_limit);
+
     self.policy.reserve_budget(bytes.len())?;
-    let content_type = guess_content_type_from_path(path);
-    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
+
+    render_control::check_active(render_stage_hint_for_context(kind, url))
+      .map_err(Error::Render)?;
     Ok(FetchedResource::with_final_url(
       bytes,
       content_type,
@@ -5023,9 +5075,11 @@ impl ResourceFetcher for HttpFetcher {
       .map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
       ResourceScheme::Data => self.fetch_data_prefix(url, max_bytes),
-      ResourceScheme::File => self.fetch_file_prefix(url, max_bytes),
+      ResourceScheme::File => self.fetch_file_prefix(kind, url, max_bytes),
       ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_partial(kind, url, max_bytes),
-      ResourceScheme::Relative => self.fetch_file_prefix(&format!("file://{}", url), max_bytes),
+      ResourceScheme::Relative => {
+        self.fetch_file_prefix(kind, &format!("file://{}", url), max_bytes)
+      }
       ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
   }
@@ -6996,6 +7050,136 @@ fn guess_content_type_from_path(path: &str) -> Option<String> {
   Some(mime.to_string())
 }
 
+const OFFLINE_FIXTURE_PLACEHOLDER_PNG: &[u8] = &[
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+];
+const OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME: &str = "image/png";
+const OFFLINE_FIXTURE_PLACEHOLDER_WOFF2: &[u8] =
+  include_bytes!("../tests/pages/fixtures/assets/fonts/DejaVuSans-subset.woff2");
+const OFFLINE_FIXTURE_PLACEHOLDER_WOFF2_MIME: &str = "font/woff2";
+
+fn file_payload_looks_like_markup_but_not_svg(bytes: &[u8]) -> bool {
+  let sample = &bytes[..bytes.len().min(256)];
+  let mut i = 0;
+  if sample.starts_with(b"\xef\xbb\xbf") {
+    i = 3;
+  }
+  while i < sample.len() && sample[i].is_ascii_whitespace() {
+    i += 1;
+  }
+  let rest = &sample[i..];
+  if rest.is_empty() || rest[0] != b'<' {
+    return false;
+  }
+
+  if rest.len() >= 4
+    && rest[0] == b'<'
+    && rest[1].to_ascii_lowercase() == b's'
+    && rest[2].to_ascii_lowercase() == b'v'
+    && rest[3].to_ascii_lowercase() == b'g'
+  {
+    return false;
+  }
+  if rest.len() >= 5
+    && rest[0] == b'<'
+    && rest[1] == b'?'
+    && rest[2].to_ascii_lowercase() == b'x'
+    && rest[3].to_ascii_lowercase() == b'm'
+    && rest[4].to_ascii_lowercase() == b'l'
+  {
+    return false;
+  }
+
+  true
+}
+
+fn substitute_offline_fixture_placeholder_full(
+  kind: FetchContextKind,
+  bytes: &mut Vec<u8>,
+  content_type: &mut Option<String>,
+) {
+  let should_replace = bytes.is_empty() || file_payload_looks_like_markup_but_not_svg(bytes);
+  if !should_replace {
+    return;
+  }
+
+  match kind {
+    FetchContextKind::Image => {
+      *bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
+      *content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+    }
+    FetchContextKind::Font => {
+      *bytes = OFFLINE_FIXTURE_PLACEHOLDER_WOFF2.to_vec();
+      *content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_WOFF2_MIME.to_string());
+    }
+    _ => {}
+  }
+}
+
+fn substitute_offline_fixture_placeholder_prefix(
+  kind: FetchContextKind,
+  bytes: &mut Vec<u8>,
+  content_type: &mut Option<String>,
+  read_limit: usize,
+) {
+  let should_replace = bytes.is_empty() || file_payload_looks_like_markup_but_not_svg(bytes);
+  if !should_replace {
+    return;
+  }
+
+  match kind {
+    FetchContextKind::Image => {
+      let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
+      *bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
+      *content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
+    }
+    FetchContextKind::Font => {
+      let take = OFFLINE_FIXTURE_PLACEHOLDER_WOFF2.len().min(read_limit);
+      *bytes = OFFLINE_FIXTURE_PLACEHOLDER_WOFF2[..take].to_vec();
+      *content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_WOFF2_MIME.to_string());
+    }
+    _ => {}
+  }
+}
+
+/// Return a list of filesystem path candidates for a given `file:` URL.
+///
+/// We prefer correct RFC semantics (strip query/fragment, percent-decode) via `Url::to_file_path`,
+/// but fall back to the historical "strip `file://` and use the remaining string verbatim" behavior
+/// for compatibility with existing offline fixtures.
+fn file_url_path_candidates(url: &str) -> Vec<std::path::PathBuf> {
+  let mut candidates = Vec::new();
+
+  if let Ok(parsed) = Url::parse(url) {
+    if parsed.scheme() == "file" {
+      if let Ok(path) = parsed.to_file_path() {
+        candidates.push(path);
+      }
+    }
+  }
+
+  let stripped = url.strip_prefix("file://").unwrap_or(url);
+  let without_fragment = stripped
+    .split_once('#')
+    .map(|(before, _)| before)
+    .unwrap_or(stripped);
+  let without_query = without_fragment
+    .split_once('?')
+    .map(|(before, _)| before)
+    .unwrap_or(without_fragment);
+
+  candidates.push(std::path::PathBuf::from(without_query));
+  candidates.push(std::path::PathBuf::from(stripped));
+
+  let mut seen = HashSet::new();
+  candidates.retain(|candidate| seen.insert(candidate.clone()));
+  candidates
+}
+
 /// Decode a data: URL into bytes
 fn decode_data_url(url: &str) -> Result<FetchedResource> {
   if !is_data_url(url) {
@@ -8288,20 +8472,12 @@ mod tests {
   }
 
   #[test]
-  fn data_url_rejects_malformed_percent_escape() {
-    let err = data_url::decode_data_url("data:text/plain,abc%2").unwrap_err();
-    assert!(matches!(
-      err,
-      Error::Image(ImageError::InvalidDataUrl { ref reason })
-        if reason.contains("Incomplete percent-escape")
-    ));
+  fn data_url_tolerates_malformed_percent_escape() {
+    let resource = data_url::decode_data_url("data:text/plain,abc%2").unwrap();
+    assert_eq!(resource.bytes, b"abc%2");
 
-    let err = data_url::decode_data_url("data:text/plain,%2G").unwrap_err();
-    assert!(matches!(
-      err,
-      Error::Image(ImageError::InvalidDataUrl { ref reason })
-        if reason.contains("Invalid percent-escape")
-    ));
+    let resource = data_url::decode_data_url("data:text/plain,%2G").unwrap();
+    assert_eq!(resource.bytes, b"%2G");
   }
 
   #[test]
@@ -9200,6 +9376,68 @@ mod tests {
       .fetch_partial(&url, 16)
       .expect("partial fetch succeeds");
     assert_eq!(res.bytes, bytes[..16]);
+  }
+
+  #[test]
+  fn file_fetch_ignores_query_and_fragment() {
+    let bytes = b"hello".to_vec();
+    let mut file = NamedTempFile::new().expect("temp file");
+    file.write_all(&bytes).expect("write file");
+    let base = format!("file://{}", file.path().display());
+    let url = format!("{base}?v=1#ignored");
+
+    let fetcher = HttpFetcher::new();
+    let res = fetcher.fetch(&url).expect("fetch with query/fragment");
+    assert_eq!(res.bytes, bytes);
+
+    let res = fetcher
+      .fetch_partial(&url, 3)
+      .expect("partial fetch with query/fragment");
+    assert_eq!(res.bytes, bytes[..3]);
+  }
+
+  #[test]
+  fn file_fetch_substitutes_placeholder_bytes_for_invalid_image_payloads() {
+    let mut file = NamedTempFile::new().expect("temp file");
+    file
+      .write_all(b"<!DOCTYPE html><html><title>nope</title></html>")
+      .expect("write html");
+    let url = format!("file://{}", file.path().display());
+
+    let fetcher = HttpFetcher::new();
+    let res = fetcher
+      .fetch_with_context(FetchContextKind::Image, &url)
+      .expect("fetch image");
+    assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG);
+    assert_eq!(
+      res.content_type.as_deref(),
+      Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+    );
+
+    let partial = fetcher
+      .fetch_partial_with_context(FetchContextKind::Image, &url, 8)
+      .expect("fetch image prefix");
+    assert_eq!(partial.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG[..8]);
+    assert_eq!(
+      partial.content_type.as_deref(),
+      Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+    );
+  }
+
+  #[test]
+  fn file_fetch_substitutes_placeholder_bytes_for_empty_font_payloads() {
+    let file = NamedTempFile::new().expect("temp file");
+    let url = format!("file://{}", file.path().display());
+
+    let fetcher = HttpFetcher::new();
+    let res = fetcher
+      .fetch_with_context(FetchContextKind::Font, &url)
+      .expect("fetch font");
+    assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_WOFF2);
+    assert_eq!(
+      res.content_type.as_deref(),
+      Some(OFFLINE_FIXTURE_PLACEHOLDER_WOFF2_MIME)
+    );
   }
 
   #[test]

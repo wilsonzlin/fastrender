@@ -217,32 +217,18 @@ fn percent_decode(input: &str) -> Result<Vec<u8>> {
   let mut i = 0;
 
   while i < bytes.len() {
-    match bytes[i] {
-      b'%' => {
-        if i + 2 >= bytes.len() {
-          return Err(Error::Image(ImageError::InvalidDataUrl {
-            reason: "Incomplete percent-escape".to_string(),
-          }));
-        }
-        let hi = (bytes[i + 1] as char).to_digit(16);
-        let lo = (bytes[i + 2] as char).to_digit(16);
-        match (hi, lo) {
-          (Some(hi), Some(lo)) => {
-            out.push(((hi << 4) | lo) as u8);
-            i += 3;
-          }
-          _ => {
-            return Err(Error::Image(ImageError::InvalidDataUrl {
-              reason: "Invalid percent-escape".to_string(),
-            }));
-          }
-        }
-      }
-      byte => {
-        out.push(byte);
-        i += 1;
+    if bytes[i] == b'%' && i + 2 < bytes.len() {
+      let hi = (bytes[i + 1] as char).to_digit(16);
+      let lo = (bytes[i + 2] as char).to_digit(16);
+      if let (Some(hi), Some(lo)) = (hi, lo) {
+        out.push(((hi << 4) | lo) as u8);
+        i += 3;
+        continue;
       }
     }
+    // Spec-compatible behavior: invalid percent escapes are left as a literal '%'.
+    out.push(bytes[i]);
+    i += 1;
   }
 
   Ok(out)
@@ -258,32 +244,17 @@ fn percent_decode_prefix(input: &str, max_bytes: usize) -> Result<Vec<u8>> {
   let mut i = 0;
 
   while i < bytes.len() && out.len() < max_bytes {
-    match bytes[i] {
-      b'%' => {
-        if i + 2 >= bytes.len() {
-          return Err(Error::Image(ImageError::InvalidDataUrl {
-            reason: "Incomplete percent-escape".to_string(),
-          }));
-        }
-        let hi = (bytes[i + 1] as char).to_digit(16);
-        let lo = (bytes[i + 2] as char).to_digit(16);
-        match (hi, lo) {
-          (Some(hi), Some(lo)) => {
-            out.push(((hi << 4) | lo) as u8);
-            i += 3;
-          }
-          _ => {
-            return Err(Error::Image(ImageError::InvalidDataUrl {
-              reason: "Invalid percent-escape".to_string(),
-            }));
-          }
-        }
-      }
-      byte => {
-        out.push(byte);
-        i += 1;
+    if bytes[i] == b'%' && i + 2 < bytes.len() {
+      let hi = (bytes[i + 1] as char).to_digit(16);
+      let lo = (bytes[i + 2] as char).to_digit(16);
+      if let (Some(hi), Some(lo)) = (hi, lo) {
+        out.push(((hi << 4) | lo) as u8);
+        i += 3;
+        continue;
       }
     }
+    out.push(bytes[i]);
+    i += 1;
   }
 
   Ok(out)
