@@ -1764,6 +1764,11 @@ fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
   atomic_write(path, formatted.as_bytes())
 }
 
+fn write_progress_fast(path: &Path, progress: &PageProgress) -> io::Result<()> {
+  let formatted = serialize_progress(progress)?;
+  atomic_write_fast(path, formatted.as_bytes())
+}
+
 fn collect_cached_html_paths_in(dir: &Path) -> io::Result<BTreeMap<String, PathBuf>> {
   let mut entries: BTreeMap<String, PathBuf> = BTreeMap::new();
   for entry in
@@ -3378,7 +3383,11 @@ fn write_progress_with_sentinel(
   stage_path: Option<&Path>,
   progress: &PageProgress,
 ) -> io::Result<()> {
-  write_progress(progress_path, progress)?;
+  // Avoid `sync_all` during worker writes so pages that finish close to the hard timeout are not
+  // killed while committing progress artifacts. The parent uses the sentinel to detect that the
+  // worker has written progress for this run, and `atomic_write_fast` still provides an atomic
+  // tmp+rename write.
+  write_progress_fast(progress_path, progress)?;
   if let Some(stage_path) = stage_path {
     if std::env::var_os("FASTR_TEST_SKIP_PROGRESS_SENTINEL").is_some() {
       return Ok(());
