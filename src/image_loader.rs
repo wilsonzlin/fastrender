@@ -3416,7 +3416,81 @@ impl ImageCache {
     ImageFormat::from_mime_type(mime)
   }
 
+  fn looks_like_avif(bytes: &[u8]) -> bool {
+    // AVIF is an ISO-BMFF container. We only need a lightweight sniff (ftyp box contains the brand)
+    // rather than invoking a full parser (which can panic in debug builds for malformed/trailing
+    // data).
+    if bytes.len() < 12 {
+      return false;
+    }
+
+    let size = u32::from_be_bytes(bytes[0..4].try_into().unwrap_or([0; 4]));
+    if &bytes[4..8] != b"ftyp" {
+      return false;
+    }
+
+    let (header_len, box_size) = match size {
+      0 => (8usize, bytes.len()),
+      1 => {
+        if bytes.len() < 16 {
+          return false;
+        }
+        let ext = u64::from_be_bytes(bytes[8..16].try_into().unwrap_or([0; 8]));
+        let Ok(ext) = usize::try_from(ext) else {
+          return false;
+        };
+        (16usize, ext)
+      }
+      n => (8usize, n as usize),
+    };
+
+    if box_size < header_len + 8 {
+      return false;
+    }
+
+    let avail = bytes.len().min(box_size);
+    if avail < header_len + 8 {
+      return false;
+    }
+
+    let payload = &bytes[header_len..avail];
+    let major_brand = &payload[0..4];
+    if major_brand == b"avif" || major_brand == b"avis" {
+      return true;
+    }
+
+    // Skip minor_version (4 bytes) and scan compatible brands.
+    if payload.len() <= 8 {
+      return false;
+    }
+    payload[8..]
+      .chunks_exact(4)
+      .any(|brand| brand == b"avif" || brand == b"avis")
+  }
+
+  fn sniff_image_format_fast(bytes: &[u8]) -> Option<ImageFormat> {
+    if bytes.len() >= 8 && &bytes[..8] == b"\x89PNG\r\n\x1a\n" {
+      return Some(ImageFormat::Png);
+    }
+    if bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff {
+      return Some(ImageFormat::Jpeg);
+    }
+    if bytes.len() >= 6 && (&bytes[..6] == b"GIF87a" || &bytes[..6] == b"GIF89a") {
+      return Some(ImageFormat::Gif);
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+      return Some(ImageFormat::WebP);
+    }
+    if Self::looks_like_avif(bytes) {
+      return Some(ImageFormat::Avif);
+    }
+    None
+  }
+
   fn sniff_image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    if let Some(format) = Self::sniff_image_format_fast(bytes) {
+      return Some(format);
+    }
     // `image::guess_format` may invoke codec sniffers that use debug assertions (notably for AVIF).
     // Guard against panics so metadata probing can't crash the renderer in debug builds.
     std::panic::catch_unwind(|| image::guess_format(bytes).ok())
