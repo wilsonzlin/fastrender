@@ -1957,6 +1957,7 @@ struct IndexedSlottedSelector<'a> {
 }
 
 type SelectorBucketKey = u64;
+type SelectorIndex = u32;
 
 // The rule index stores pre-hashed selector keys (ids, classes, tags, attribute names) so we can:
 //   1. Avoid allocating/cloning `String`s when building the index.
@@ -2526,8 +2527,8 @@ impl MatchIndex {
 }
 
 struct CascadeScratch {
-  candidates: Vec<usize>,
-  slotted_candidates: Vec<usize>,
+  candidates: Vec<SelectorIndex>,
+  slotted_candidates: Vec<SelectorIndex>,
   match_index: MatchIndex,
   candidate_seen: CandidateSet,
   candidate_stats: CandidateStats,
@@ -4612,7 +4613,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
     merge: &mut CandidateMergeScratch,
@@ -4628,7 +4629,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
     merge: &mut CandidateMergeScratch,
@@ -4644,7 +4645,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
     merge: &mut CandidateMergeScratch,
@@ -4729,7 +4730,7 @@ impl<'a> RuleIndex<'a> {
           }
           continue;
         }
-        out.push(selector_idx);
+        out.push(selector_idx as SelectorIndex);
         if TRACK_STATS {
           match cursor.bucket {
             CandidateBucket::Id => stats.by_id += 1,
@@ -4806,7 +4807,7 @@ impl<'a> RuleIndex<'a> {
           }
           continue;
         }
-        out.push(selector_idx);
+        out.push(selector_idx as SelectorIndex);
         if TRACK_STATS {
           match if cursor_idx == 0 { a.bucket } else { b.bucket } {
             CandidateBucket::Id => stats.by_id += 1,
@@ -4914,7 +4915,7 @@ impl<'a> RuleIndex<'a> {
           }
           continue;
         }
-        out.push(selector_idx);
+        out.push(selector_idx as SelectorIndex);
         if TRACK_STATS {
           match bucket {
             CandidateBucket::Id => stats.by_id += 1,
@@ -4972,7 +4973,7 @@ impl<'a> RuleIndex<'a> {
         }
         continue;
       }
-      out.push(selector_idx);
+      out.push(selector_idx as SelectorIndex);
       if TRACK_STATS {
         match cursor.bucket {
           CandidateBucket::Id => stats.by_id += 1,
@@ -4992,7 +4993,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
     merge: &mut CandidateMergeScratch,
@@ -5008,7 +5009,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
     merge: &mut CandidateMergeScratch,
@@ -5024,7 +5025,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
     merge: &mut CandidateMergeScratch,
@@ -5112,7 +5113,7 @@ impl<'a> RuleIndex<'a> {
           }
           continue;
         }
-        out.push(selector_idx);
+        out.push(selector_idx as SelectorIndex);
         if TRACK_STATS {
           match cursor.bucket {
             CandidateBucket::Id => stats.by_id += 1,
@@ -5184,7 +5185,7 @@ impl<'a> RuleIndex<'a> {
           }
           continue;
         }
-        out.push(selector_idx);
+        out.push(selector_idx as SelectorIndex);
         if TRACK_STATS {
           match if cursor_idx == 0 { a.bucket } else { b.bucket } {
             CandidateBucket::Id => stats.by_id += 1,
@@ -5286,7 +5287,7 @@ impl<'a> RuleIndex<'a> {
           }
           continue;
         }
-        out.push(selector_idx);
+        out.push(selector_idx as SelectorIndex);
         if TRACK_STATS {
           match bucket {
             CandidateBucket::Id => stats.by_id += 1,
@@ -5344,7 +5345,7 @@ impl<'a> RuleIndex<'a> {
         }
         continue;
       }
-      out.push(selector_idx);
+      out.push(selector_idx as SelectorIndex);
       if TRACK_STATS {
         match cursor.bucket {
           CandidateBucket::Id => stats.by_id += 1,
@@ -5365,7 +5366,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
   ) {
@@ -5381,7 +5382,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
   ) {
@@ -5397,7 +5398,7 @@ impl<'a> RuleIndex<'a> {
     node_keys: NodeSelectorKeys<'_>,
     summary: Option<SelectorBloomSummaryRef<'_>>,
     quirks_mode: QuirksMode,
-    out: &mut Vec<usize>,
+    out: &mut Vec<SelectorIndex>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
   ) {
@@ -5426,7 +5427,7 @@ impl<'a> RuleIndex<'a> {
         return;
       }
       if seen.mark_seen(idx) {
-        out.push(idx);
+        out.push(idx as SelectorIndex);
         if TRACK_STATS {
           *bucket += 1;
         }
@@ -5503,7 +5504,7 @@ pub struct SelectorCandidateBench<'a, 'dom> {
   index: RuleIndex<'a>,
   dom_maps: DomMaps,
   element_nodes: Vec<(usize, *const DomNode)>,
-  out: Vec<usize>,
+  out: Vec<SelectorIndex>,
   seen: CandidateSet,
   stats: CandidateStats,
   merge: CandidateMergeScratch,
@@ -9644,7 +9645,7 @@ mod tests {
       &mut stats,
       &mut merge,
     );
-    assert_eq!(candidates.as_slice(), &[0usize, 1usize]);
+    assert_eq!(candidates.as_slice(), &[0, 1]);
     assert_eq!(stats.total(), 0);
     assert_eq!(stats.pruned, 0);
   }
@@ -9721,7 +9722,7 @@ mod tests {
         &mut stats,
         &mut merge,
       );
-      assert_eq!(candidates.as_slice(), &[0usize, 1usize, 2usize]);
+      assert_eq!(candidates.as_slice(), &[0, 1, 2]);
       assert_eq!(stats.total(), 0);
       assert_eq!(stats.pruned, 0);
     }
@@ -9741,7 +9742,7 @@ mod tests {
         &mut stats,
         &mut merge,
       );
-      assert_eq!(candidates.as_slice(), &[0usize, 1usize, 2usize]);
+      assert_eq!(candidates.as_slice(), &[0, 1, 2]);
       assert_eq!(stats.total(), 0);
       assert_eq!(stats.pruned, 0);
     }
@@ -10525,7 +10526,7 @@ mod tests {
       &mut stats,
       &mut merge,
     );
-    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(candidates.as_slice(), &[0]);
   }
 
   #[test]
@@ -10605,7 +10606,7 @@ mod tests {
       &mut stats,
       &mut merge,
     );
-    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(candidates.as_slice(), &[0]);
   }
 
   #[test]
@@ -10660,7 +10661,7 @@ mod tests {
       children: vec![],
     };
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -10729,7 +10730,7 @@ mod tests {
       children: vec![],
     };
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -10796,7 +10797,7 @@ mod tests {
       children: vec![],
     };
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -10878,7 +10879,7 @@ mod tests {
       children: vec![],
     };
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -10951,7 +10952,7 @@ mod tests {
       children: vec![],
     };
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -11056,7 +11057,7 @@ mod tests {
       &mut stats,
       &mut merge,
     );
-    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(candidates.as_slice(), &[0]);
   }
 
   #[test]
@@ -11145,7 +11146,7 @@ mod tests {
       );
       assert_eq!(
         candidates.as_slice(),
-        &[0usize],
+        &[0],
         "selector should match .{cls}"
       );
     }
@@ -11235,7 +11236,7 @@ mod tests {
       &mut stats,
       &mut merge,
     );
-    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(candidates.as_slice(), &[0]);
 
     let node_b = DomNode {
       node_type: DomNodeType::Element {
@@ -11262,7 +11263,7 @@ mod tests {
       &mut stats,
       &mut merge,
     );
-    assert_eq!(candidates.as_slice(), &[1usize]);
+    assert_eq!(candidates.as_slice(), &[1]);
 
     let node_c = DomNode {
       node_type: DomNodeType::Element {
@@ -11393,7 +11394,7 @@ mod tests {
       );
       assert_eq!(
         candidates.as_slice(),
-        &[0usize],
+        &[0],
         "selector should match class=\"{cls}\""
       );
     }
@@ -12216,7 +12217,7 @@ mod tests {
       &mut stats,
       &mut merge,
     );
-    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(candidates.as_slice(), &[0]);
     assert_eq!(stats.by_class, 1);
     assert_eq!(stats.universal, 0);
   }
@@ -12313,7 +12314,7 @@ mod tests {
       &mut seen,
       &mut stats,
     );
-    assert_eq!(candidates.as_slice(), &[0usize]);
+    assert_eq!(candidates.as_slice(), &[0]);
     assert_eq!(stats.by_class, 1);
     assert_eq!(stats.universal, 0);
   }
@@ -12745,7 +12746,7 @@ mod tests {
 
     let mut selected: Vec<String> = out
       .iter()
-      .map(|idx| index.selectors[*idx].selector.to_css_string())
+      .map(|idx| index.selectors[*idx as usize].selector.to_css_string())
       .collect();
     selected.sort();
 
@@ -13019,8 +13020,8 @@ mod tests {
         &mut attr_value_keys,
       );
 
-      let mut cached: Vec<usize> = Vec::new();
-      let mut uncached: Vec<usize> = Vec::new();
+      let mut cached: Vec<SelectorIndex> = Vec::new();
+      let mut uncached: Vec<SelectorIndex> = Vec::new();
       let mut cached_seen = CandidateSet::new(index.selectors.len());
       let mut uncached_seen = CandidateSet::new(index.selectors.len());
       let mut cached_stats = CandidateStats::default();
@@ -13052,8 +13053,8 @@ mod tests {
         "base selector candidates differ for node_id={node_id}"
       );
 
-      let mut cached: Vec<usize> = Vec::new();
-      let mut uncached: Vec<usize> = Vec::new();
+      let mut cached: Vec<SelectorIndex> = Vec::new();
+      let mut uncached: Vec<SelectorIndex> = Vec::new();
       let mut cached_seen = CandidateSet::new(index.pseudo_selectors.len());
       let mut uncached_seen = CandidateSet::new(index.pseudo_selectors.len());
       let mut cached_stats = CandidateStats::default();
@@ -13083,8 +13084,8 @@ mod tests {
         "pseudo selector candidates differ for node_id={node_id}"
       );
 
-      let mut cached: Vec<usize> = Vec::new();
-      let mut uncached: Vec<usize> = Vec::new();
+      let mut cached: Vec<SelectorIndex> = Vec::new();
+      let mut uncached: Vec<SelectorIndex> = Vec::new();
       let mut cached_seen = CandidateSet::new(index.slotted_selectors.len());
       let mut uncached_seen = CandidateSet::new(index.slotted_selectors.len());
       let mut cached_stats = CandidateStats::default();
@@ -13168,7 +13169,7 @@ mod tests {
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert!(index.has_has_requirements);
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -13235,7 +13236,7 @@ mod tests {
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert!(!index.has_has_requirements);
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -13302,7 +13303,7 @@ mod tests {
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert!(!index.has_has_requirements);
 
-    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidates: Vec<SelectorIndex> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
@@ -19795,10 +19796,11 @@ fn find_matching_rules<'a>(
   {
     let mut idx = 0;
     while idx < candidates.len() {
-      let first = &rules.selectors[candidates[idx]];
+      let first = &rules.selectors[candidates[idx] as usize];
       let rule_idx = first.rule_idx;
       let mut end = idx + 1;
-      while end < candidates.len() && rules.selectors[candidates[end]].rule_idx == rule_idx {
+      while end < candidates.len() && rules.selectors[candidates[end] as usize].rule_idx == rule_idx
+      {
         end += 1;
       }
 
@@ -19851,6 +19853,7 @@ fn find_matching_rules<'a>(
       };
 
       for &selector_idx in &candidates[idx..end] {
+        let selector_idx = selector_idx as usize;
         let indexed = &rules.selectors[selector_idx];
         check_active_periodic(
           &mut deadline_counter,
@@ -20067,10 +20070,10 @@ fn find_matching_rules<'a>(
 
     let mut idx = 0;
     while idx < slotted_candidates.len() {
-      let rule_idx = rules.slotted_selectors[slotted_candidates[idx]].rule_idx;
+      let rule_idx = rules.slotted_selectors[slotted_candidates[idx] as usize].rule_idx;
       let mut end = idx + 1;
       while end < slotted_candidates.len()
-        && rules.slotted_selectors[slotted_candidates[end]].rule_idx == rule_idx
+        && rules.slotted_selectors[slotted_candidates[end] as usize].rule_idx == rule_idx
       {
         end += 1;
       }
@@ -20116,6 +20119,7 @@ fn find_matching_rules<'a>(
       let mut best_specificity = pos.map(|pos| matches[pos].specificity);
 
       for &selector_idx in &slotted_candidates[idx..end] {
+        let selector_idx = selector_idx as usize;
         let indexed = &rules.slotted_selectors[selector_idx];
         check_active_periodic(
           &mut deadline_counter,
@@ -20392,7 +20396,7 @@ fn find_pseudo_element_rules<'a>(
   }
   if matches!(pseudo, PseudoElement::Before | PseudoElement::After) {
     let has_content_rule = candidates.iter().any(|&idx| {
-      let rule_idx = rules.pseudo_selectors[idx].rule_idx;
+      let rule_idx = rules.pseudo_selectors[idx as usize].rule_idx;
       rules.rule_sets_content[rule_idx]
     });
     if !has_content_rule {
@@ -20608,10 +20612,10 @@ fn find_pseudo_element_rules<'a>(
   if matches!(pseudo, PseudoElement::Before | PseudoElement::After) {
     let mut content_matched = false;
     for &selector_idx in candidates.iter().filter(|&&idx| {
-      let rule_idx = rules.pseudo_selectors[idx].rule_idx;
+      let rule_idx = rules.pseudo_selectors[idx as usize].rule_idx;
       rules.rule_sets_content[rule_idx]
     }) {
-      if match_candidate(selector_idx, &mut matches) {
+      if match_candidate(selector_idx as usize, &mut matches) {
         content_matched = true;
       }
     }
@@ -20622,14 +20626,14 @@ fn find_pseudo_element_rules<'a>(
     }
 
     for &selector_idx in candidates.iter().filter(|&&idx| {
-      let rule_idx = rules.pseudo_selectors[idx].rule_idx;
+      let rule_idx = rules.pseudo_selectors[idx as usize].rule_idx;
       !rules.rule_sets_content[rule_idx]
     }) {
-      let _ = match_candidate(selector_idx, &mut matches);
+      let _ = match_candidate(selector_idx as usize, &mut matches);
     }
   } else {
     for &selector_idx in candidates.iter() {
-      let _ = match_candidate(selector_idx, &mut matches);
+      let _ = match_candidate(selector_idx as usize, &mut matches);
     }
   }
 
