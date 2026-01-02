@@ -34,6 +34,73 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
       && bytes[start + 4] == b':'
   }
 
+  fn is_likely_comma_in_cdn_transform_url(bytes: &[u8], url_start: usize, comma_idx: usize) -> bool {
+    // Heuristic for malformed-but-common production markup:
+    //
+    // Many CDNs (including Condé Nast properties like wired.com) embed transform parameters
+    // directly in the URL path using unescaped commas, e.g.:
+    //   https://img.example/master/w_2560,c_limit/foo.jpg
+    //
+    // In valid `srcset`, commas are candidate separators, so such URLs should have escaped the
+    // comma. But in practice, treating every comma as a separator produces bogus relative URLs
+    // like `/c_limit/foo.jpg`.
+    //
+    // We treat a comma as part of the URL when it appears between two underscore-separated
+    // transform params (`w_2560,c_limit`) that are followed by another path segment or transform.
+
+    // Find the transform param before the comma (from the last `/`, `?`, or `#`).
+    let mut segment_start = url_start;
+    for i in (url_start..comma_idx).rev() {
+      match bytes[i] {
+        b'/' | b'?' | b'#' => {
+          segment_start = i + 1;
+          break;
+        }
+        _ => {}
+      }
+    }
+    if segment_start >= comma_idx {
+      return false;
+    }
+    let before = &bytes[segment_start..comma_idx];
+    if !before.contains(&b'_') || before.contains(&b'.') {
+      return false;
+    }
+
+    // Find the transform param after the comma (up to the next delimiter).
+    let mut after_end = comma_idx + 1;
+    while after_end < bytes.len() {
+      let b = bytes[after_end];
+      if b.is_ascii_whitespace() || matches!(b, b'/' | b'?' | b'#' | b',') {
+        break;
+      }
+      after_end += 1;
+    }
+    if comma_idx + 1 >= after_end {
+      return false;
+    }
+    let after = &bytes[comma_idx + 1..after_end];
+    if !after.contains(&b'_') || after.contains(&b'.') {
+      return false;
+    }
+
+    // Finally, ensure the URL continues after this transform list with another path segment
+    // (common patterns include `/foo.jpg`).
+    let mut idx = comma_idx + 1;
+    while idx < bytes.len() {
+      let b = bytes[idx];
+      if b.is_ascii_whitespace() {
+        break;
+      }
+      if b == b'/' {
+        return true;
+      }
+      idx += 1;
+    }
+
+    false
+  }
+
   let bytes = attr.as_bytes();
   let mut out = Vec::new();
   let mut idx = 0;
@@ -66,20 +133,14 @@ pub fn parse_srcset_with_limit(attr: &str, max_candidates: usize) -> Vec<SrcsetC
           idx += 1;
           continue;
         }
-        // Compatibility: many production pages include unescaped commas within
-        // the URL (e.g. transformation paths like `w_2560,c_limit/foo.jpg`).
-        //
-        // Treat commas as candidate separators only when they are followed by
-        // ASCII whitespace (or the end of the attribute). This matches common
-        // authoring patterns and avoids producing bogus relative URLs like
-        // `/c_limit/foo.jpg` when splitting a transformation URL.
-        let next_is_whitespace = idx + 1 >= bytes.len() || bytes[idx + 1].is_ascii_whitespace();
-        if next_is_whitespace {
-          // Candidate separator (no descriptors).
-          break;
+        if idx + 1 < bytes.len() && !bytes[idx + 1].is_ascii_whitespace() {
+          if is_likely_comma_in_cdn_transform_url(bytes, url_start, idx) {
+            idx += 1;
+            continue;
+          }
         }
-        idx += 1;
-        continue;
+        // Candidate separator (no descriptors).
+        break;
       }
       idx += 1;
     }
@@ -291,7 +352,7 @@ mod tests {
   #[test]
   fn parse_srcset_allows_commas_inside_urls() {
     let parsed = parse_srcset(
-      "https://img.example/master/w_2560,c_limit/foo.jpg 1x, https://img.example/bar.jpg 2x",
+      "https://img.example/master/w_2560,c_limit/foo.jpg 1x,https://img.example/bar.jpg 2x",
     );
     assert_eq!(parsed.len(), 2);
     assert_eq!(
@@ -306,6 +367,16 @@ mod tests {
   #[test]
   fn parse_srcset_parses_urls_without_descriptors() {
     let parsed = parse_srcset("a.png, b.png");
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].url, "a.png");
+    assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+    assert_eq!(parsed[1].url, "b.png");
+    assert!(matches!(parsed[1].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));
+  }
+
+  #[test]
+  fn parse_srcset_parses_urls_without_descriptors_without_whitespace() {
+    let parsed = parse_srcset("a.png,b.png");
     assert_eq!(parsed.len(), 2);
     assert_eq!(parsed[0].url, "a.png");
     assert!(matches!(parsed[0].descriptor, SrcsetDescriptor::Density(d) if d == 1.0));

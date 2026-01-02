@@ -610,27 +610,7 @@ fn rewrite_srcset(
   ctx: ReferenceContext,
   catalog: &mut AssetCatalog,
 ) -> Result<String> {
-  let mut rewritten = Vec::new();
-  for candidate in input.split(',') {
-    let trimmed = candidate.trim();
-    if trimmed.is_empty() {
-      continue;
-    }
-    let mut parts = trimmed.split_whitespace();
-    let Some(url_part) = parts.next() else {
-      continue;
-    };
-    let rewritten_url = rewrite_reference(url_part, base_url, ctx, catalog)?
-      .unwrap_or_else(|| url_part.to_string());
-    let descriptors = parts.collect::<Vec<_>>().join(" ");
-    let entry = if descriptors.is_empty() {
-      rewritten_url
-    } else {
-      format!("{rewritten_url} {descriptors}")
-    };
-    rewritten.push(entry);
-  }
-  Ok(rewritten.join(", "))
+  rewrite_srcset_with_limit(input, base_url, ctx, catalog, usize::MAX)
 }
 
 fn rewrite_css(
@@ -1054,22 +1034,10 @@ fn collect_remote_srcset_candidates(
 }
 
 fn parse_srcset_urls(srcset: &str, max_candidates: usize) -> Vec<String> {
-  let mut out = Vec::new();
-  for candidate in srcset.split(',') {
-    if out.len() >= max_candidates {
-      break;
-    }
-    let trimmed = candidate.trim();
-    if trimmed.is_empty() {
-      continue;
-    }
-    let url_part = trimmed.split_whitespace().next().unwrap_or("").trim();
-    if url_part.is_empty() {
-      continue;
-    }
-    out.push(url_part.to_string());
-  }
-  out
+  fastrender::html::image_attrs::parse_srcset_with_limit(srcset, max_candidates)
+    .into_iter()
+    .map(|candidate| candidate.url)
+    .collect()
 }
 
 fn rewrite_srcset_with_limit(
@@ -1079,26 +1047,15 @@ fn rewrite_srcset_with_limit(
   catalog: &mut AssetCatalog,
   max_candidates: usize,
 ) -> Result<String> {
+  use fastrender::tree::box_tree::SrcsetDescriptor;
+
   let mut rewritten = Vec::new();
-  for (idx, candidate) in input.split(',').enumerate() {
-    if idx >= max_candidates {
-      break;
-    }
-    let trimmed = candidate.trim();
-    if trimmed.is_empty() {
-      continue;
-    }
-    let mut parts = trimmed.split_whitespace();
-    let Some(url_part) = parts.next() else {
-      continue;
-    };
-    let rewritten_url = rewrite_reference(url_part, base_url, ctx, catalog)?
-      .unwrap_or_else(|| url_part.to_string());
-    let descriptors = parts.collect::<Vec<_>>().join(" ");
-    let entry = if descriptors.is_empty() {
-      rewritten_url
-    } else {
-      format!("{rewritten_url} {descriptors}")
+  for candidate in fastrender::html::image_attrs::parse_srcset_with_limit(input, max_candidates) {
+    let rewritten_url = rewrite_reference(&candidate.url, base_url, ctx, catalog)?
+      .unwrap_or_else(|| candidate.url);
+    let entry = match candidate.descriptor {
+      SrcsetDescriptor::Density(d) if d == 1.0 => rewritten_url,
+      descriptor => format!("{rewritten_url} {descriptor}"),
     };
     rewritten.push(entry);
   }
