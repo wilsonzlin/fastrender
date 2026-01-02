@@ -929,6 +929,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 
 #[derive(Copy, Clone)]
 struct PrefetchAssetsSupport {
+  prefetch_fonts: bool,
   prefetch_images: bool,
   prefetch_iframes: bool,
   prefetch_embeds: bool,
@@ -942,7 +943,8 @@ struct PrefetchAssetsSupport {
 
 impl PrefetchAssetsSupport {
   fn any(self) -> bool {
-    self.prefetch_images
+    self.prefetch_fonts
+      || self.prefetch_images
       || self.prefetch_iframes
       || self.prefetch_embeds
       || self.prefetch_icons
@@ -957,6 +959,7 @@ impl PrefetchAssetsSupport {
     let path = repo_root().join("src/bin/prefetch_assets.rs");
     let Ok(contents) = fs::read_to_string(path) else {
       return Self {
+        prefetch_fonts: false,
         prefetch_images: false,
         prefetch_iframes: false,
         prefetch_embeds: false,
@@ -970,6 +973,7 @@ impl PrefetchAssetsSupport {
     };
 
     Self {
+      prefetch_fonts: contents.contains("prefetch_fonts"),
       prefetch_images: contents.contains("prefetch_images"),
       prefetch_iframes: contents.contains("prefetch_iframes"),
       prefetch_embeds: contents.contains("prefetch_embeds"),
@@ -992,7 +996,9 @@ fn extract_prefetch_assets_args(
 
   let mut iter = extra.iter().peekable();
   while let Some(arg) = iter.next() {
-    let is_prefetch_arg = (support.prefetch_images
+    let is_prefetch_arg = (support.prefetch_fonts
+      && (arg == "--prefetch-fonts" || arg.starts_with("--prefetch-fonts=")))
+      || (support.prefetch_images
       && (arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")))
       || (support.prefetch_iframes
         && (arg == "--prefetch-iframes"

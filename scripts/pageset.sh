@@ -35,8 +35,8 @@ set -euo pipefail
 # Note: `--timings` is forwarded to `fetch_pages` so callers can inspect document fetch durations.
 #
 # Note: when disk cache is enabled (so `prefetch_assets` runs) and `prefetch_assets` supports
-# `--prefetch-images` / `--prefetch-iframes` (alias `--prefetch-documents`) / `--prefetch-embeds` /
-# `--prefetch-icons` / `--prefetch-video-posters` / `--prefetch-css-url-assets` /
+# `--prefetch-fonts` / `--prefetch-images` / `--prefetch-iframes` (alias `--prefetch-documents`) /
+# `--prefetch-embeds` / `--prefetch-icons` / `--prefetch-video-posters` / `--prefetch-css-url-assets` /
 # `--max-discovered-assets-per-page` / `--max-images-per-page` / `--max-image-urls-per-element`,
 # these flags are intercepted by the wrapper and forwarded to `prefetch_assets` (not
 # `pageset_progress`) so users can override the wrapper defaults without breaking `pageset_progress`
@@ -332,6 +332,7 @@ fi
 
 PREFETCH_ASSET_ARGS=()
 PAGESET_ARGS=()
+PREFETCH_FONTS_IN_ARGS=0
 PREFETCH_IMAGES_IN_ARGS=0
 PREFETCH_IFRAMES_IN_ARGS=0
 PREFETCH_EMBEDS_IN_ARGS=0
@@ -341,6 +342,7 @@ PREFETCH_CSS_URL_ASSETS_IN_ARGS=0
 MAX_DISCOVERED_ASSETS_IN_ARGS=0
 MAX_IMAGES_PER_PAGE_IN_ARGS=0
 MAX_IMAGE_URLS_PER_ELEMENT_IN_ARGS=0
+PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=0
 PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS=0
@@ -352,6 +354,9 @@ PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=0
 PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT=0
 PREFETCH_ASSETS_SOURCE="src/bin/prefetch_assets.rs"
 if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
+  if grep -q "prefetch_fonts" "${PREFETCH_ASSETS_SOURCE}"; then
+    PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS=1
+  fi
   if grep -q "prefetch_images" "${PREFETCH_ASSETS_SOURCE}"; then
     PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=1
   fi
@@ -402,6 +407,21 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
           PAGESET_ARGS+=("${next}")
           i=$((i + 1))
         fi
+      fi
+      ;;
+    --prefetch-fonts|--prefetch-fonts=*)
+      if [[ "${PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS}" -eq 1 ]]; then
+        PREFETCH_FONTS_IN_ARGS=1
+        PREFETCH_ASSET_ARGS+=("${arg}")
+        if [[ "${arg}" == "--prefetch-fonts" && $((i + 1)) -lt ${#ARGS[@]} ]]; then
+          next="${ARGS[$((i + 1))]}"
+          if [[ "${next}" != -* ]]; then
+            PREFETCH_ASSET_ARGS+=("${next}")
+            i=$((i + 1))
+          fi
+        fi
+      else
+        PAGESET_ARGS+=("${arg}")
       fi
       ;;
     --prefetch-images|--prefetch-images=*)
