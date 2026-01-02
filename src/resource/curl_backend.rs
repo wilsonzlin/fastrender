@@ -624,7 +624,13 @@ pub(super) fn fetch_http_with_accept_inner<'a>(
       let cache_policy = super::parse_http_cache_policy(&response.headers);
 
       let substitute_empty_image_body =
-        super::should_substitute_empty_image_body(kind, status_code, &response.headers);
+        super::should_substitute_empty_image_body(kind, status_code, &response.headers)
+          || super::should_substitute_akamai_pixel_empty_image_body(
+            kind,
+            &current,
+            status_code,
+            &response.headers,
+          );
       let mut bytes = match super::decode_content_encodings(
         response.body,
         &encodings,

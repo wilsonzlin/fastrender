@@ -901,6 +901,49 @@ fn http_status_allows_empty_body(status: u16) -> bool {
   matches!(status, 202 | 204 | 205 | 304) || (100..200).contains(&status) || status >= 400
 }
 
+const AKAMAI_TRACKING_PIXEL_PATH_NEEDLE: &[u8] = b"/akam/13/pixel_";
+
+fn url_is_akamai_tracking_pixel(url: &str) -> bool {
+  let Ok(parsed) = Url::parse(url) else {
+    return false;
+  };
+  let path = parsed.path().as_bytes();
+  if path.len() < AKAMAI_TRACKING_PIXEL_PATH_NEEDLE.len() {
+    return false;
+  }
+  path
+    .windows(AKAMAI_TRACKING_PIXEL_PATH_NEEDLE.len())
+    .any(|window| window.eq_ignore_ascii_case(AKAMAI_TRACKING_PIXEL_PATH_NEEDLE))
+}
+
+fn should_substitute_akamai_pixel_empty_image_body(
+  kind: FetchContextKind,
+  url: &str,
+  status: u16,
+  headers: &HeaderMap,
+) -> bool {
+  if kind != FetchContextKind::Image
+    || !(200..300).contains(&status)
+    || !url_is_akamai_tracking_pixel(url)
+  {
+    return false;
+  }
+
+  // Only replace responses that are actually empty (or explicitly `Content-Length: 0`). If the
+  // server claims a non-zero body, an empty read is more likely a broken/truncated transfer than
+  // a deliberate tracking pixel response.
+  if headers
+    .get("content-length")
+    .and_then(|h| h.to_str().ok())
+    .and_then(|raw| raw.trim().parse::<u64>().ok())
+    .is_some_and(|len| len > 0)
+  {
+    return false;
+  }
+
+  true
+}
+
 fn header_content_length_is_zero(headers: &HeaderMap) -> bool {
   headers
     .get("content-length")
@@ -2990,11 +3033,7 @@ impl HttpFetcher {
     let agent = &self.agent;
     let timeout_budget = self.timeout_budget(deadline);
     let max_attempts = match deadline.as_ref() {
-      Some(deadline)
-        if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
-      {
-        1
-      }
+      Some(deadline) if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() => 1,
       _ => self.retry_policy.max_attempts.max(1),
     };
 
@@ -3199,7 +3238,13 @@ impl HttpFetcher {
           http_response_allows_empty_body(kind, status_code, response.headers());
 
         let substitute_empty_image_body =
-          should_substitute_empty_image_body(kind, status_code, response.headers());
+          should_substitute_empty_image_body(kind, status_code, response.headers())
+            || should_substitute_akamai_pixel_empty_image_body(
+              kind,
+              &final_url,
+              status_code,
+              response.headers(),
+            );
         let mut body_reader = response.body_mut().as_reader();
         let body_result = read_response_prefix(&mut body_reader, read_limit);
         match body_result {
@@ -3445,11 +3490,7 @@ impl HttpFetcher {
     let client = &self.reqwest_client;
     let timeout_budget = self.timeout_budget(deadline);
     let max_attempts = match deadline.as_ref() {
-      Some(deadline)
-        if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
-      {
-        1
-      }
+      Some(deadline) if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() => 1,
       _ => self.retry_policy.max_attempts.max(1),
     };
 
@@ -3647,7 +3688,13 @@ impl HttpFetcher {
           http_response_allows_empty_body(kind, status_code, response.headers());
 
         let substitute_empty_image_body =
-          should_substitute_empty_image_body(kind, status_code, response.headers());
+          should_substitute_empty_image_body(kind, status_code, response.headers())
+            || should_substitute_akamai_pixel_empty_image_body(
+              kind,
+              &final_url,
+              status_code,
+              response.headers(),
+            );
         let body_result = read_response_prefix(&mut response, read_limit);
         match body_result {
           Ok(mut bytes) => {
@@ -3896,11 +3943,7 @@ impl HttpFetcher {
     let agent = &self.agent;
     let timeout_budget = self.timeout_budget(deadline);
     let max_attempts = match deadline.as_ref() {
-      Some(deadline)
-        if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
-      {
-        1
-      }
+      Some(deadline) if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() => 1,
       _ => self.retry_policy.max_attempts.max(1),
     };
 
@@ -4140,7 +4183,15 @@ impl HttpFetcher {
               };
 
             record_network_fetch_bytes(bytes.len());
-            if bytes.is_empty() && should_substitute_empty_image_body(kind, status_code, response.headers()) {
+            if bytes.is_empty()
+              && (should_substitute_empty_image_body(kind, status_code, response.headers())
+                || should_substitute_akamai_pixel_empty_image_body(
+                  kind,
+                  &final_url,
+                  status_code,
+                  response.headers(),
+                ))
+            {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
@@ -4421,8 +4472,7 @@ impl HttpFetcher {
     } else {
       match deadline.as_ref() {
         Some(deadline)
-          if deadline.timeout_limit().is_some()
-            && !deadline.http_retries_enabled() =>
+          if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
         {
           1
         }
@@ -4605,7 +4655,13 @@ impl HttpFetcher {
         let allows_empty_body =
           http_response_allows_empty_body(kind, status_code, response.headers());
         let substitute_empty_image_body =
-          should_substitute_empty_image_body(kind, status_code, response.headers());
+          should_substitute_empty_image_body(kind, status_code, response.headers())
+            || should_substitute_akamai_pixel_empty_image_body(
+              kind,
+              &final_url,
+              status_code,
+              response.headers(),
+            );
 
         let mut body = Vec::new();
         let body_result = response
@@ -5079,7 +5135,11 @@ impl HttpFetcher {
   fn fetch_data(&self, kind: FetchContextKind, url: &str) -> Result<FetchedResource> {
     let limit = self.policy.allowed_response_limit()?;
     let mut resource = data_url::decode_data_url(url)?;
-    substitute_offline_fixture_placeholder_full(kind, &mut resource.bytes, &mut resource.content_type);
+    substitute_offline_fixture_placeholder_full(
+      kind,
+      &mut resource.bytes,
+      &mut resource.content_type,
+    );
     let len = resource.bytes.len();
     if len > limit {
       if let Some(remaining) = self.policy.remaining_budget() {
@@ -8599,6 +8659,101 @@ mod tests {
     );
 
     handle.join().unwrap();
+  }
+
+  #[test]
+  fn http_akamai_pixel_empty_body_without_content_length_substitutes_placeholder() {
+    let Some(listener) = try_bind_localhost(
+      "http_akamai_pixel_empty_body_without_content_length_substitutes_placeholder",
+    ) else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers =
+        "HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/aKaM/13/pIxEl_deadbeef?a=1");
+    let res = fetcher
+      .fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Image,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect("pixel fetch should succeed");
+    handle.join().unwrap();
+
+    assert_eq!(res.status, Some(200));
+    assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG);
+    assert_eq!(
+      res.content_type.as_deref(),
+      Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME)
+    );
+  }
+
+  #[test]
+  fn http_empty_image_without_content_length_is_error() {
+    let Some(listener) = try_bind_localhost("http_empty_image_without_content_length_is_error")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let headers = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let deadline = None;
+    let started = Instant::now();
+    let url = format!("http://{addr}/empty.png");
+    let err = fetcher
+      .fetch_http_with_accept_inner_ureq(
+        FetchContextKind::Image,
+        &url,
+        None,
+        None,
+        None,
+        &deadline,
+        started,
+        false,
+      )
+      .expect_err("image fetch should reject unexpected empty body");
+    handle.join().unwrap();
+    assert!(
+      err.to_string().contains("empty HTTP response body"),
+      "unexpected error message: {err}"
+    );
   }
 
   #[test]
