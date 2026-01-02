@@ -12,6 +12,10 @@ set -euo pipefail
 #   FASTR_DISK_CACHE_LOCK_STALE_SECS=... (seconds before `.lock` files are treated as stale)
 #   FASTR_DISK_CACHE_ALLOW_NO_STORE=0|1 (do not override via wrapper defaults when set)
 #
+# Wrapper flags (accepted even if placed after `--`):
+#   --jobs/-j N --fetch-timeout SECS --render-timeout SECS --no-fetch
+#   --disk-cache --no-disk-cache
+#
 # Extra arguments are forwarded to `pageset_progress run`. Use `--` to separate them from the
 # wrapper flags, e.g.:
 #   scripts/pageset.sh -- --pages example.com --disk-cache-max-age-secs 0
@@ -38,9 +42,104 @@ JOBS="${JOBS:-${TOTAL_CPUS}}"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-30}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-5}"
 USE_DISK_CACHE="${DISK_CACHE:-1}"
+NO_FETCH=0
 
-if [[ "${JOBS}" -lt 1 ]]; then
-  echo "JOBS must be > 0" >&2
+if [[ -n "${NO_DISK_CACHE:-}" ]]; then
+  USE_DISK_CACHE=0
+fi
+
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  arg="$1"
+  # Be forgiving if callers accidentally place wrapper flags after `--` (intended for
+  # pageset_progress args). The underlying binaries do not recognize these flags, so it's always
+  # safe to treat them as wrapper flags.
+  case "${arg}" in
+    --no-disk-cache)
+      USE_DISK_CACHE=0
+      shift
+      continue
+      ;;
+    --disk-cache)
+      USE_DISK_CACHE=1
+      shift
+      continue
+      ;;
+    --no-fetch)
+      NO_FETCH=1
+      shift
+      continue
+      ;;
+    --jobs|-j)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      JOBS="$2"
+      shift 2
+      continue
+      ;;
+    --jobs=*)
+      JOBS="${arg#--jobs=}"
+      shift
+      continue
+      ;;
+    -j*)
+      JOBS="${arg#-j}"
+      if [[ -z "${JOBS}" ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      shift
+      continue
+      ;;
+    --fetch-timeout)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      FETCH_TIMEOUT="$2"
+      shift 2
+      continue
+      ;;
+    --fetch-timeout=*)
+      FETCH_TIMEOUT="${arg#--fetch-timeout=}"
+      shift
+      continue
+      ;;
+    --render-timeout)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      RENDER_TIMEOUT="$2"
+      shift 2
+      continue
+      ;;
+    --render-timeout=*)
+      RENDER_TIMEOUT="${arg#--render-timeout=}"
+      shift
+      continue
+      ;;
+    --)
+      shift
+      continue
+      ;;
+  esac
+  ARGS+=("${arg}")
+  shift
+done
+
+if ! [[ "${JOBS}" =~ ^[0-9]+$ ]] || [[ "${JOBS}" -lt 1 ]]; then
+  echo "JOBS must be an integer > 0" >&2
+  exit 2
+fi
+if ! [[ "${FETCH_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+  echo "FETCH_TIMEOUT must be an integer >= 0" >&2
+  exit 2
+fi
+if ! [[ "${RENDER_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+  echo "RENDER_TIMEOUT must be an integer >= 0" >&2
   exit 2
 fi
 
@@ -58,31 +157,6 @@ fi
 if [[ -z "${FASTR_LAYOUT_PARALLEL:-}" ]]; then
   export FASTR_LAYOUT_PARALLEL=auto
 fi
-
-if [[ -n "${NO_DISK_CACHE:-}" ]]; then
-  USE_DISK_CACHE=0
-fi
-
-ARGS=()
-for arg in "$@"; do
-  # Be forgiving if callers accidentally place disk-cache toggles after `--` (intended for
-  # pageset_progress args). The underlying binaries do not recognize these flags, so it's always
-  # safe to treat them as wrapper flags.
-  case "${arg}" in
-    --no-disk-cache)
-      USE_DISK_CACHE=0
-      continue
-      ;;
-    --disk-cache)
-      USE_DISK_CACHE=1
-      continue
-      ;;
-    --)
-      continue
-      ;;
-  esac
-  ARGS+=("${arg}")
-done
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   export DISK_CACHE=1
@@ -472,13 +546,26 @@ for ((i=0; i < ${#ARGS[@]}; i++)); do
   esac
 done
 
+if [[ "${NO_FETCH}" -ne 0 ]]; then
+  for arg in "${FETCH_EXTRA_ARGS[@]}"; do
+    if [[ "${arg}" == "--refresh" ]]; then
+      echo "--refresh cannot be used with --no-fetch" >&2
+      exit 2
+    fi
+  done
+fi
+
 FEATURE_ARGS=()
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   FEATURE_ARGS=(--features disk_cache)
 fi
 
-echo "Fetching pages (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, disk_cache=${USE_DISK_CACHE})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${SELECTION_ARGS[@]}" "${FETCH_KNOB_ARGS[@]}" "${FETCH_EXTRA_ARGS[@]}"
+if [[ "${NO_FETCH}" -eq 0 ]]; then
+  echo "Fetching pages (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, disk_cache=${USE_DISK_CACHE})..."
+  cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" "${SELECTION_ARGS[@]}" "${FETCH_KNOB_ARGS[@]}" "${FETCH_EXTRA_ARGS[@]}"
+else
+  echo "Skipping fetch_pages (--no-fetch); using existing cached HTML."
+fi
 
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   echo "Prefetching assets (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s)..."

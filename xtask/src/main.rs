@@ -565,28 +565,11 @@ fn run_update_goldens(args: UpdateGoldensArgs) -> Result<()> {
 }
 
 fn run_pageset(args: PagesetArgs) -> Result<()> {
-  if args.jobs == 0 {
-    bail!("jobs must be > 0");
-  }
-
+  let mut jobs = args.jobs;
   let mut fetch_timeout = args.fetch_timeout;
   let mut render_timeout = args.render_timeout;
   let mut no_fetch = args.no_fetch;
 
-  // `pageset_progress` runs up to `jobs` worker processes in parallel (one per page). The renderer
-  // itself can also use Rayon threads (e.g., layout fan-out, CSS selector work, etc). Without a
-  // cap, running N worker processes on a machine with M logical CPUs can oversubscribe
-  // catastrophically (N * M threads).
-  //
-  // Mirror `scripts/pageset.sh`: if the user hasn't provided `RAYON_NUM_THREADS`, divide the
-  // available CPU budget across the configured worker processes.
-  let total_cpus = std::thread::available_parallelism()
-    .map(|n| n.get())
-    .unwrap_or(1);
-  let mut threads_per_worker = total_cpus / args.jobs;
-  if threads_per_worker == 0 {
-    threads_per_worker = 1;
-  }
   let rayon_threads_env = std::env::var_os("RAYON_NUM_THREADS");
   let layout_parallel_env = std::env::var_os("FASTR_LAYOUT_PARALLEL");
 
@@ -618,6 +601,30 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   let (filtered_pageset_extra_args, pageset_overrides) =
     xtask::extract_pageset_extra_arg_overrides(&pageset_extra_args);
   pageset_extra_args = filtered_pageset_extra_args;
+
+  if let Some(jobs_override) = pageset_overrides.jobs {
+    jobs = jobs_override
+      .parse::<usize>()
+      .with_context(|| format!("failed to parse --jobs value \"{jobs_override}\""))?;
+  }
+  if jobs == 0 {
+    bail!("jobs must be > 0");
+  }
+
+  // `pageset_progress` runs up to `jobs` worker processes in parallel (one per page). The renderer
+  // itself can also use Rayon threads (e.g., layout fan-out, CSS selector work, etc). Without a
+  // cap, running N worker processes on a machine with M logical CPUs can oversubscribe
+  // catastrophically (N * M threads).
+  //
+  // Mirror `scripts/pageset.sh`: if the user hasn't provided `RAYON_NUM_THREADS`, divide the
+  // available CPU budget across the configured worker processes.
+  let total_cpus = std::thread::available_parallelism()
+    .map(|n| n.get())
+    .unwrap_or(1);
+  let mut threads_per_worker = total_cpus / jobs;
+  if threads_per_worker == 0 {
+    threads_per_worker = 1;
+  }
 
   if let Some(pages) = pageset_overrides.pages {
     match &pages_arg {
@@ -764,7 +771,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       .args(["--bin", "fetch_pages"])
       .arg("--")
       .arg("--jobs")
-      .arg(args.jobs.to_string())
+      .arg(jobs.to_string())
       .arg("--timeout")
       .arg(fetch_timeout.to_string());
     if let Some(pages) = &pages_arg {
@@ -794,7 +801,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     apply_disk_cache_env(&mut cmd);
     println!(
       "Updating cached pages (jobs={}, timeout={}s, disk_cache={})...",
-      args.jobs, fetch_timeout, disk_cache_status
+      jobs, fetch_timeout, disk_cache_status
     );
     run_command(cmd)?;
   }
@@ -808,7 +815,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       .args(["--bin", "prefetch_assets"])
       .arg("--")
       .arg("--jobs")
-      .arg(args.jobs.to_string())
+      .arg(jobs.to_string())
       .arg("--timeout")
       .arg(fetch_timeout.to_string());
     if let Some(pages) = &pages_arg {
@@ -840,7 +847,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     apply_disk_cache_env(&mut cmd);
     println!(
       "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
-      args.jobs, fetch_timeout
+      jobs, fetch_timeout
     );
     run_command(cmd)?;
   }
@@ -854,7 +861,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .arg("--")
     .arg("run")
     .arg("--jobs")
-    .arg(args.jobs.to_string())
+    .arg(jobs.to_string())
     .arg("--timeout")
     .arg(render_timeout.to_string())
     .arg("--bundled-fonts");
@@ -892,7 +899,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   apply_disk_cache_env(&mut cmd);
   println!(
     "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={})...",
-    args.jobs, render_timeout, disk_cache_status
+    jobs, render_timeout, disk_cache_status
   );
   run_command(cmd)?;
 

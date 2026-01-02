@@ -6,6 +6,8 @@ fn extracts_pageset_extra_arg_overrides() {
     "--foo".to_string(),
     "--no-disk-cache".to_string(),
     "--no-fetch".to_string(),
+    "--jobs".to_string(),
+    "3".to_string(),
     "--pages".to_string(),
     "discord.com".to_string(),
     "--user-agent=TestAgent".to_string(),
@@ -31,6 +33,7 @@ fn extracts_pageset_extra_arg_overrides() {
   assert_eq!(
     overrides,
     PagesetExtraArgsOverrides {
+      jobs: Some("3".to_string()),
       pages: Some("discord.com".to_string()),
       shard: Some("0/4".to_string()),
       user_agent: Some("TestAgent".to_string()),
@@ -54,6 +57,7 @@ fn extracts_pageset_extra_arg_overrides_disk_cache_enabled() {
   assert_eq!(
     overrides,
     PagesetExtraArgsOverrides {
+      jobs: None,
       pages: Some("example.com".to_string()),
       shard: None,
       user_agent: None,

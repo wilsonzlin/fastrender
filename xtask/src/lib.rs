@@ -67,6 +67,7 @@ pub fn extract_fetch_pages_flag_overrides(
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PagesetExtraArgsOverrides {
+  pub jobs: Option<String>,
   pub pages: Option<String>,
   pub shard: Option<String>,
   pub user_agent: Option<String>,
@@ -96,6 +97,16 @@ pub fn extract_pageset_extra_arg_overrides(
 
   while let Some(arg) = iter.next() {
     match arg.as_str() {
+      "--jobs" | "-j" => {
+        if let Some(next) = iter.peek() {
+          if !next.starts_with('-') {
+            overrides.jobs = Some((*next).clone());
+            iter.next();
+            continue;
+          }
+        }
+        out.push(arg.clone());
+      }
       "--disk-cache" => {
         overrides.disk_cache = Some(true);
         continue;
@@ -189,6 +200,16 @@ pub fn extract_pageset_extra_arg_overrides(
         out.push(arg.clone());
       }
       _ => {
+        if let Some(value) = arg.strip_prefix("--jobs=") {
+          overrides.jobs = Some(value.to_string());
+          continue;
+        }
+        if let Some(value) = arg.strip_prefix("-j") {
+          if !value.is_empty() {
+            overrides.jobs = Some(value.to_string());
+            continue;
+          }
+        }
         if let Some(value) = arg.strip_prefix("--pages=") {
           overrides.pages = Some(value.to_string());
           continue;
