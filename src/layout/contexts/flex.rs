@@ -3387,24 +3387,26 @@ impl FlexFormattingContext {
         // the content-based minimum is the smaller of the preferred size suggestion and the
         // content size suggestion.
         let needs_override = specified_size_suggestion.is_some() && style.width.is_some();
-        let intrinsic_result =
-          if needs_override && matches!(item_fc_type, FormattingContextType::Block) {
-            let mut cloned_style: ComputedStyle = (*box_node.style).clone();
-            cloned_style.width = None;
+        let intrinsic_result = if needs_override {
+          let mut override_style: ComputedStyle = (*box_node.style).clone();
+          override_style.width = None;
+          if box_node.id != 0 {
             crate::layout::style_override::with_style_override(
               box_node.id,
-              Arc::new(cloned_style),
+              Arc::new(override_style),
               || item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent),
             )
-          } else if needs_override {
-            let mut cloned = box_node.clone();
-            let mut cloned_style: ComputedStyle = (*box_node.style).clone();
-            cloned_style.width = None;
-            cloned.style = Arc::new(cloned_style);
-            item_fc.compute_intrinsic_inline_size(&cloned, IntrinsicSizingMode::MinContent)
           } else {
-            item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
-          };
+            // Tests and other ad-hoc callers sometimes build `BoxNode` trees without assigning
+            // unique ids (they default to 0). Style overrides are keyed by id, so fall back to the
+            // old cloning approach when ids are not initialized to avoid collisions.
+            let mut cloned = box_node.clone();
+            cloned.style = Arc::new(override_style);
+            item_fc.compute_intrinsic_inline_size(&cloned, IntrinsicSizingMode::MinContent)
+          }
+        } else {
+          item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
+        };
 
         match intrinsic_result {
           Ok(content_size_suggestion) => {
@@ -3436,24 +3438,23 @@ impl FlexFormattingContext {
       });
 
       let needs_override = specified_size_suggestion.is_some() && style.height.is_some();
-      let intrinsic_result =
-        if needs_override && matches!(item_fc_type, FormattingContextType::Block) {
-          let mut cloned_style: ComputedStyle = (*box_node.style).clone();
-          cloned_style.height = None;
+      let intrinsic_result = if needs_override {
+        let mut override_style: ComputedStyle = (*box_node.style).clone();
+        override_style.height = None;
+        if box_node.id != 0 {
           crate::layout::style_override::with_style_override(
             box_node.id,
-            Arc::new(cloned_style),
+            Arc::new(override_style),
             || item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent),
           )
-        } else if needs_override {
-          let mut cloned = box_node.clone();
-          let mut cloned_style: ComputedStyle = (*box_node.style).clone();
-          cloned_style.height = None;
-          cloned.style = Arc::new(cloned_style);
-          item_fc.compute_intrinsic_block_size(&cloned, IntrinsicSizingMode::MinContent)
         } else {
-          item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
-        };
+          let mut cloned = box_node.clone();
+          cloned.style = Arc::new(override_style);
+          item_fc.compute_intrinsic_block_size(&cloned, IntrinsicSizingMode::MinContent)
+        }
+      } else {
+        item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
+      };
 
       match intrinsic_result {
         Ok(content_size_suggestion) => {
@@ -6244,6 +6245,80 @@ mod tests {
     let constraints = LayoutConstraints::definite(100.0, 100.0);
     fc.layout(&container, &constraints)
       .expect("flex layout should succeed without calling flex layout on the block item");
+  }
+
+  #[test]
+  fn flex_auto_min_width_ignores_item_width_for_flex_items_with_flex_fc() {
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+
+    let mut item_style = ComputedStyle::default();
+    item_style.display = Display::Flex;
+    item_style.flex_direction = FlexDirection::Row;
+    item_style.width = Some(Length::px(100.0));
+    item_style.overflow_x = Overflow::Visible;
+
+    let mut item = BoxNode::new_block(
+      Arc::new(item_style),
+      FormattingContextType::Flex,
+      vec![BoxNode::new_block(
+        create_item_style(10.0, 10.0),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
+    item.id = 2;
+    item.children[0].id = 3;
+    let mut container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      vec![item],
+    );
+    container.id = 1;
+
+    let fc = FlexFormattingContext::new();
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+    let mut taffy_tree: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut node_map: FxHashMap<*const BoxNode, NodeId> = FxHashMap::default();
+    let root_children: Vec<&BoxNode> = container.children.iter().collect();
+    fc.build_taffy_tree_children(
+      &mut taffy_tree,
+      &container,
+      container.style.as_ref(),
+      &root_children,
+      &constraints,
+      &mut node_map,
+    )
+    .expect("build taffy tree");
+
+    let item_ptr: *const BoxNode = &container.children[0];
+    let child_node = node_map
+      .get(&item_ptr)
+      .copied()
+      .expect("item should exist in node_map");
+    let style = taffy_tree
+      .style(child_node)
+      .expect("taffy item style should be available");
+    let min_width = style.min_size.width;
+    assert!(
+      !min_width.is_auto(),
+      "expected flex auto min-size to resolve to a min-content length"
+    );
+    assert_eq!(
+      min_width.tag(),
+      Dimension::length(0.0).tag(),
+      "expected flex auto min-size to resolve to a length, got {min_width:?}"
+    );
+    let value = min_width.value();
+    assert!(
+      value > 0.0,
+      "expected auto min-width for nested flex items to be non-zero"
+    );
+    assert!(
+      value < 100.0,
+      "expected auto min-width ({value}) to ignore item width=100px"
+    );
   }
 
   #[test]
