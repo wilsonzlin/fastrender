@@ -2290,7 +2290,7 @@ impl BackgroundPaintSnapshot {
 
 #[derive(Clone, Copy)]
 struct ImageKey {
-  pixels_ptr: *const Vec<u8>,
+  pixels_ptr: usize,
   width: u32,
   height: u32,
   premultiplied: bool,
@@ -2299,7 +2299,7 @@ struct ImageKey {
 impl ImageKey {
   fn new(image: &ImageData) -> Self {
     Self {
-      pixels_ptr: Arc::as_ptr(&image.pixels),
+      pixels_ptr: Arc::as_ptr(&image.pixels) as usize,
       width: image.width,
       height: image.height,
       premultiplied: image.premultiplied,
@@ -2324,6 +2324,55 @@ struct ImageScaledKey {
   quality_bits: u8,
 }
 
+type SharedImagePixmapCell = OnceLock<RenderResult<Option<Arc<Pixmap>>>>;
+
+#[derive(Default)]
+struct SharedImagePixmaps {
+  image_cache: Mutex<HashMap<ImageKey, Arc<SharedImagePixmapCell>>>,
+  scaled_image_cache: Mutex<HashMap<ImageScaledKey, Arc<SharedImagePixmapCell>>>,
+  max_scaled_entries: usize,
+}
+
+impl SharedImagePixmaps {
+  fn new(max_scaled_entries: usize) -> Self {
+    Self {
+      image_cache: Mutex::new(HashMap::new()),
+      scaled_image_cache: Mutex::new(HashMap::new()),
+      max_scaled_entries,
+    }
+  }
+
+  fn image_cell(&self, key: ImageKey) -> Arc<SharedImagePixmapCell> {
+    let mut guard = self
+      .image_cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+      .entry(key)
+      .or_insert_with(|| Arc::new(OnceLock::new()))
+      .clone()
+  }
+
+  fn scaled_cell(&self, key: ImageScaledKey) -> Option<Arc<SharedImagePixmapCell>> {
+    if self.max_scaled_entries == 0 {
+      return None;
+    }
+    let mut guard = self
+      .scaled_image_cache
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(cell) = guard.get(&key) {
+      return Some(cell.clone());
+    }
+    if guard.len() >= self.max_scaled_entries {
+      return None;
+    }
+    let cell = Arc::new(OnceLock::new());
+    guard.insert(key, cell.clone());
+    Some(cell)
+  }
+}
+
 impl PartialEq for ImageKey {
   fn eq(&self, other: &Self) -> bool {
     self.pixels_ptr == other.pixels_ptr
@@ -2337,7 +2386,7 @@ impl Eq for ImageKey {}
 
 impl Hash for ImageKey {
   fn hash<H: Hasher>(&self, state: &mut H) {
-    (self.pixels_ptr as usize).hash(state);
+    self.pixels_ptr.hash(state);
     self.width.hash(state);
     self.height.hash(state);
     self.premultiplied.hash(state);
@@ -2366,6 +2415,7 @@ pub struct DisplayListRenderer {
   image_cache: HashMap<ImageKey, Arc<Pixmap>>,
   cropped_image_cache: LruCache<ImageCropKey, Arc<Pixmap>>,
   scaled_image_cache: LruCache<ImageScaledKey, Arc<Pixmap>>,
+  shared_image_pixmaps: Option<Arc<SharedImagePixmaps>>,
   #[cfg(test)]
   image_cache_misses: Arc<AtomicUsize>,
   image_pixmap_diagnostics: Option<Arc<ImagePixmapDiagnostics>>,
@@ -2974,6 +3024,7 @@ impl DisplayListRenderer {
         NonZeroUsize::new(SCALED_IMAGE_CACHE_CAPACITY)
           .unwrap_or_else(|| NonZeroUsize::new(1).expect("nonzero")),
       ),
+      shared_image_pixmaps: None,
       #[cfg(test)]
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
       image_pixmap_diagnostics: diagnostics_enabled
@@ -5624,6 +5675,7 @@ impl DisplayListRenderer {
     let deadline = active_deadline();
 
     let task_capacity = self.parallel_thread_budget(tile_count);
+    let shared_image_pixmaps = Arc::new(SharedImagePixmaps::new(SCALED_IMAGE_CACHE_CAPACITY));
     let chunk_size = tile_count
       .checked_add(task_capacity.saturating_sub(1))
       .unwrap_or(tile_count)
@@ -5664,6 +5716,7 @@ impl DisplayListRenderer {
               renderer.background_paint_diagnostics = background_paint_diagnostics.clone();
               renderer.clip_mask_diagnostics = clip_mask_diagnostics.clone();
               renderer.layer_alloc_diagnostics = layer_alloc_diagnostics.clone();
+              renderer.shared_image_pixmaps = Some(shared_image_pixmaps.clone());
               if work.render_x > 0 || work.render_y > 0 {
                 renderer
                   .canvas
@@ -7808,6 +7861,45 @@ impl DisplayListRenderer {
       return Ok(Some(cached.clone()));
     }
 
+    if let Some(shared) = self.shared_image_pixmaps.as_ref() {
+      if let Some(cell) = shared.scaled_cell(key) {
+        if let Some(cached) = cell.get() {
+          if let Some(diag) = self.image_pixmap_diagnostics.as_ref() {
+            diag.record_hit();
+          }
+          let cached = cached.clone()?;
+          if let Some(pixmap) = cached.as_ref() {
+            self.scaled_image_cache.put(key, pixmap.clone());
+          }
+          return Ok(cached);
+        }
+
+        let diag = self.image_pixmap_diagnostics.clone();
+        let cached = cell
+          .get_or_init(|| {
+            if let Some(diag) = diag.as_ref() {
+              diag.record_miss();
+            }
+            let timer = diag.as_ref().map(|_| Instant::now());
+            let Some(pixmap) =
+              image_data_to_scaled_pixmap_inner(image, target_width, target_height, quality)?
+            else {
+              return Ok(None);
+            };
+            let pixmap = Arc::new(pixmap);
+            if let (Some(diag), Some(start)) = (diag.as_ref(), timer) {
+              diag.record_duration(start.elapsed());
+            }
+            Ok(Some(pixmap))
+          })
+          .clone()?;
+        if let Some(pixmap) = cached.as_ref() {
+          self.scaled_image_cache.put(key, pixmap.clone());
+        }
+        return Ok(cached);
+      }
+    }
+
     let diag = self.image_pixmap_diagnostics.as_ref();
     if let Some(diag) = diag {
       diag.record_miss();
@@ -7835,6 +7927,42 @@ impl DisplayListRenderer {
         diag.record_hit();
       }
       return Ok(Some(cached.clone()));
+    }
+
+    if let Some(shared) = self.shared_image_pixmaps.as_ref() {
+      let cell = shared.image_cell(key);
+      if let Some(cached) = cell.get() {
+        if let Some(diag) = self.image_pixmap_diagnostics.as_ref() {
+          diag.record_hit();
+        }
+        let cached = cached.clone()?;
+        if let Some(pixmap) = cached.as_ref() {
+          self.image_cache.insert(key, pixmap.clone());
+        }
+        return Ok(cached);
+      }
+
+      let diag = self.image_pixmap_diagnostics.clone();
+      let cached = cell
+        .get_or_init(|| {
+          if let Some(diag) = diag.as_ref() {
+            diag.record_miss();
+          }
+          let timer = diag.as_ref().map(|_| Instant::now());
+          let Some(pixmap) = image_data_to_pixmap_inner(image)? else {
+            return Ok(None);
+          };
+          let pixmap = Arc::new(pixmap);
+          if let (Some(diag), Some(start)) = (diag.as_ref(), timer) {
+            diag.record_duration(start.elapsed());
+          }
+          Ok(Some(pixmap))
+        })
+        .clone()?;
+      if let Some(pixmap) = cached.as_ref() {
+        self.image_cache.insert(key, pixmap.clone());
+      }
+      return Ok(cached);
     }
 
     let diag = self.image_pixmap_diagnostics.as_ref();
@@ -11110,6 +11238,45 @@ mod tests {
       1,
       "expected pixmap conversion to be cached across repeated draws"
     );
+  }
+
+  #[test]
+  fn parallel_paint_shares_scaled_image_pixmaps_across_tiles() {
+    crate::paint::painter::enable_paint_diagnostics();
+    if crate::paint::paint_thread_pool::paint_pool().threads < 2 {
+      let _ = crate::paint::painter::take_paint_diagnostics();
+      return;
+    }
+
+    let pixels = vec![255u8; 64 * 64 * 4];
+    let image = Arc::new(ImageData::new_pixels(64, 64, pixels));
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::ImagePattern(ImagePatternItem {
+      dest_rect: Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+      image,
+      tile_size: Size::new(16.0, 16.0),
+      origin: Point::new(0.0, 0.0),
+      repeat: ImagePatternRepeat::Repeat,
+      filter_quality: ImageFilterQuality::Linear,
+    }));
+
+    let mut parallelism = PaintParallelism::enabled();
+    parallelism.tile_size = 16;
+    parallelism.min_display_items = 0;
+    parallelism.min_tiles = 0;
+    parallelism.max_threads = Some(2);
+
+    let renderer = DisplayListRenderer::new(64, 64, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .with_parallelism(parallelism);
+    let report = renderer.render_with_report(&list).unwrap();
+    assert_eq!(
+      report.image_pixmap_cache_misses, 1,
+      "expected scaled image pixmap conversion to be shared across tiles"
+    );
+
+    let _ = crate::paint::painter::take_paint_diagnostics();
   }
 
   #[test]
