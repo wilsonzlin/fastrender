@@ -1701,11 +1701,6 @@ impl DomMaps {
     (id != 0).then_some(id)
   }
 
-  fn exportparts_for(&self, node: &DomNode) -> Option<&Vec<(String, String)>> {
-    let id = self.id_map.get(&(node as *const DomNode))?;
-    self.exportparts_map.get(id)
-  }
-
   fn selector_blooms(&self) -> Option<&SelectorBloomStore> {
     self.selector_blooms.as_ref()
   }
@@ -8186,11 +8181,11 @@ fn part_names(node: &DomNode) -> Vec<CssString> {
 }
 
 fn exported_part_names(
-  host: &DomNode,
+  host_id: usize,
   names: &[CssString],
   dom_maps: &DomMaps,
 ) -> Option<Vec<CssString>> {
-  let Some(mappings) = dom_maps.exportparts_for(host) else {
+  let Some(mappings) = dom_maps.exportparts_map.get(&host_id) else {
     return None;
   };
 
@@ -8208,14 +8203,11 @@ fn exported_part_names(
   Some(exported)
 }
 
-fn containing_scope_host_id(dom_maps: &DomMaps, node: &DomNode) -> Option<usize> {
-  dom_maps.id_map.get(&(node as *const DomNode)).copied()
-}
-
 fn match_part_rules<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
   ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
+  ancestor_ids: &[usize],
   scopes: &'a RuleScopes<'a>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
@@ -8263,7 +8255,15 @@ fn match_part_rules<'a>(
     let host = ancestors[host_idx];
     let host_ancestors = &ancestors[..host_idx];
 
-    let exported = exported_part_names(host, &names, dom_maps);
+    let host_id = ancestor_ids.get(host_idx).copied().unwrap_or(0);
+    // `::part(...)` rules come from the tree scope *containing* the shadow host, not the host's own
+    // shadow tree. (Document rules can style parts inside a shadow root, and shadow-root rules can
+    // style parts of nested shadow trees.)
+    let containing_scope_host = dom_maps
+      .containing_shadow_root(host_id)
+      .and_then(|shadow_root| dom_maps.shadow_host_for_root(shadow_root));
+
+    let exported = exported_part_names(host_id, &names, dom_maps);
     let exported_some = exported.is_some();
     let mapped_names = exported.unwrap_or_default();
     let visible_names: &[CssString] = if exported_some {
@@ -8272,8 +8272,8 @@ fn match_part_rules<'a>(
       names.as_slice()
     };
 
-    let scope_host = containing_scope_host_id(dom_maps, host);
-    if let Some((rules, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host)
+    if let Some((rules, allow_shadow_host)) =
+      scope_rule_index_with_shadow_host(scopes, containing_scope_host)
     {
       if rules.part_pseudos.is_empty() {
         names = mapped_names;
@@ -8302,11 +8302,12 @@ fn match_part_rules<'a>(
           name_set.insert(name.as_str());
         }
 
-        let slot_map = match scope_host {
-          Some(host_id) => slot_map_for_host(host_id),
+        let slot_map = match containing_scope_host {
+          Some(scope_host_id) => slot_map_for_host(scope_host_id),
           None => current_slot_map,
         };
 
+        let host_keys = dom_maps.selector_keys(host_id);
         let candidates = scratch.part_candidates.clone();
         for idx in candidates {
           let info = &rules.part_pseudos[idx];
@@ -8317,8 +8318,6 @@ fn match_part_rules<'a>(
           if !name_set.contains(required) {
             continue;
           }
-          let host_id = scope_host.unwrap_or(0);
-          let host_keys = dom_maps.selector_keys(host_id);
           // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
           let part_matches = find_pseudo_element_rules(
             host,
@@ -8342,6 +8341,9 @@ fn match_part_rules<'a>(
               if rule.specificity > matched[pos].specificity {
                 matched[pos].specificity = rule.specificity;
               }
+            } else {
+              matched_by_order.insert(rule.order, matched.len());
+              matched.push(rule);
             }
           }
         }
@@ -8507,6 +8509,7 @@ fn collect_matching_rules<'a>(
     node,
     ancestors,
     ancestor_bloom,
+    ancestor_ids,
     scopes,
     selector_caches,
     scratch,

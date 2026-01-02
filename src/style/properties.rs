@@ -3078,6 +3078,17 @@ fn apply_property_from_source(
       styles.logical.border_style_orders = source.logical.border_style_orders.clone();
       styles.logical.border_color_orders = source.logical.border_color_orders.clone();
     }
+    "border-top" | "border-right" | "border-bottom" | "border-left" => {
+      let side = match property {
+        "border-top" => crate::style::PhysicalSide::Top,
+        "border-right" => crate::style::PhysicalSide::Right,
+        "border-bottom" => crate::style::PhysicalSide::Bottom,
+        _ => crate::style::PhysicalSide::Left,
+      };
+      set_border_width_side(styles, side, border_width_for_side(source, side), order);
+      set_border_style_side(styles, side, border_style_for_side(source, side), order);
+      set_border_color_side(styles, side, border_color_for_side(source, side), order);
+    }
     "border-inline" => {
       let start_side = inline_sides.0;
       let end_side = inline_sides.1;
@@ -5496,6 +5507,64 @@ pub fn apply_declaration_with_base(
           set_border_color_side(styles, crate::style::PhysicalSide::Right, c, order);
           set_border_color_side(styles, crate::style::PhysicalSide::Bottom, c, order);
           set_border_color_side(styles, crate::style::PhysicalSide::Left, c, order);
+        }
+      };
+
+      match resolved_value {
+        PropertyValue::Multiple(values) => apply_shorthand(values),
+        other => apply_shorthand(std::slice::from_ref(other)),
+      }
+    }
+    // Border side shorthands (border-top/right/bottom/left)
+    "border-top" | "border-right" | "border-bottom" | "border-left" => {
+      let side = match property {
+        "border-top" => crate::style::PhysicalSide::Top,
+        "border-right" => crate::style::PhysicalSide::Right,
+        "border-bottom" => crate::style::PhysicalSide::Bottom,
+        _ => crate::style::PhysicalSide::Left,
+      };
+      let current_color = styles.color;
+      let mut apply_shorthand = |values: &[PropertyValue]| {
+        let mut width: Option<Length> = None;
+        let mut style_val: Option<BorderStyle> = None;
+        let mut color: Option<Rgba> = None;
+
+        for val in values {
+          match val {
+            PropertyValue::Length(len) => width = Some(*len),
+            PropertyValue::Number(n) => width = Some(Length::px(*n)),
+            PropertyValue::Keyword(kw) => {
+              if kw.eq_ignore_ascii_case("currentcolor") {
+                color = Some(current_color);
+              } else {
+                style_val = Some(parse_border_style(kw));
+              }
+            }
+            PropertyValue::Color(c) => color = Some(c.to_rgba(current_color)),
+            _ => {}
+          }
+        }
+
+        if let Some(BorderStyle::None | BorderStyle::Hidden) = style_val {
+          width = Some(Length::px(0.0));
+        }
+
+        // Shorthand resets unspecified subproperties to their initial values.
+        if style_val.is_none() {
+          style_val = Some(BorderStyle::None);
+        }
+        if color.is_none() {
+          color = Some(current_color);
+        }
+
+        if let Some(w) = width {
+          set_border_width_side(styles, side, w, order);
+        }
+        if let Some(st) = style_val {
+          set_border_style_side(styles, side, st, order);
+        }
+        if let Some(c) = color {
+          set_border_color_side(styles, side, c, order);
         }
       };
 
