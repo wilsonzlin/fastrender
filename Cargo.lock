@@ -4095,7 +4095,6 @@ dependencies = [
  "clap",
  "cssparser",
  "fastrender",
- "image",
  "regex",
  "serde",
  "serde_json",

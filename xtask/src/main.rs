@@ -2,14 +2,12 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use image::{Rgba, RgbaImage};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
 use url::Url;
-use walkdir::WalkDir;
 
 mod chrome_baseline_fixtures;
 mod import_page_fixture;
@@ -1761,159 +1759,63 @@ fn run_render_page(args: RenderPageArgs) -> Result<()> {
 }
 
 fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
-  if args.before.is_file() != args.after.is_file() {
-    bail!("--before and --after must both be files or both be directories");
-  }
-
   fs::create_dir_all(&args.output).context("create diff output directory")?;
 
-  if args.before.is_file() {
-    let diff_path = args.output.join("diff.png");
-    let outcome = diff_pair(&args.before, &args.after, &diff_path, args.threshold)?;
-    print_diff_summary(Path::new("diff.png"), &outcome);
-    return Ok(());
+  let html_path = args.output.join("diff_report.html");
+  let json_path = args.output.join("diff_report.json");
+
+  let mut cmd = Command::new("cargo");
+  cmd
+    .arg("run")
+    .arg("--release")
+    .args(["--bin", "diff_renders"])
+    .arg("--")
+    .arg("--before")
+    .arg(&args.before)
+    .arg("--after")
+    .arg(&args.after)
+    .arg("--tolerance")
+    .arg(args.threshold.to_string())
+    .arg("--max-diff-percent")
+    .arg("0")
+    .arg("--json")
+    .arg(&json_path)
+    .arg("--html")
+    .arg(&html_path);
+
+  cmd.current_dir(repo_root());
+  println!("Running diff_renders...");
+  print_command(&cmd);
+
+  let status = cmd
+    .status()
+    .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
+
+  if !json_path.exists() {
+    bail!(
+      "diff_renders failed (status {status}) and did not produce {}",
+      json_path.display()
+    );
   }
 
-  let before_dir = &args.before;
-  let after_dir = &args.after;
+  let report: serde_json::Value =
+    serde_json::from_str(&fs::read_to_string(&json_path).context("read diff_renders json report")?)
+      .context("parse diff_renders json report")?;
 
-  let mut pairs = Vec::new();
-  let mut missing_in_before = Vec::new();
-
-  for entry in WalkDir::new(after_dir) {
-    let entry = entry.context("walk after directory")?;
-    if !entry.file_type().is_file() {
-      continue;
-    }
-    if entry
-      .path()
-      .extension()
-      .and_then(|e| e.to_str())
-      .map(|ext| ext.eq_ignore_ascii_case("png"))
-      != Some(true)
-    {
-      continue;
-    }
-
-    let rel = entry
-      .path()
-      .strip_prefix(after_dir)
-      .context("strip after prefix")?
-      .to_path_buf();
-    let before_path = before_dir.join(&rel);
-    if before_path.exists() {
-      pairs.push((rel, before_path, entry.path().to_path_buf()));
-    } else {
-      missing_in_before.push(rel);
-    }
-  }
-
-  let mut missing_in_after = Vec::new();
-  for entry in WalkDir::new(before_dir) {
-    let entry = entry.context("walk before directory")?;
-    if !entry.file_type().is_file() {
-      continue;
-    }
-    if entry
-      .path()
-      .extension()
-      .and_then(|e| e.to_str())
-      .map(|ext| ext.eq_ignore_ascii_case("png"))
-      != Some(true)
-    {
-      continue;
-    }
-
-    let rel = entry
-      .path()
-      .strip_prefix(before_dir)
-      .context("strip before prefix")?
-      .to_path_buf();
-    let after_path = after_dir.join(&rel);
-    if !after_path.exists() {
-      missing_in_after.push(rel);
-    }
-  }
-
-  if pairs.is_empty() {
-    println!("No PNG files found under {}", after_dir.display());
-    return Ok(());
-  }
-
-  pairs.sort_by(|a, b| a.0.cmp(&b.0));
-  missing_in_before.sort();
-  missing_in_after.sort();
-
-  let mut changed = 0usize;
-  let mut compared = 0usize;
-
-  for (rel, before, after) in pairs {
-    compared += 1;
-    let diff_path = args.output.join(&rel).with_extension("diff.png");
-    let outcome = diff_pair(&before, &after, &diff_path, args.threshold)?;
-    if outcome.changed {
-      changed += 1;
-    }
-    print_diff_summary(&rel, &outcome);
-  }
+  let totals = &report["totals"];
+  let discovered = totals["discovered"].as_u64().unwrap_or(0);
+  let processed = totals["processed"].as_u64().unwrap_or(0);
+  let diffs = totals["differences"].as_u64().unwrap_or(0);
+  let missing = totals["missing"].as_u64().unwrap_or(0);
+  let errors = totals["errors"].as_u64().unwrap_or(0);
 
   println!(
-    "Compared {compared} render(s); {changed} differed (threshold {})",
-    args.threshold
+    "Processed {processed} of {discovered} candidate(s); {diffs} diffs, {missing} missing, {errors} error(s)."
   );
-
-  if !missing_in_before.is_empty() {
-    println!(
-      "Files only in --after (new renders): {}",
-      format_path_list(&missing_in_before)
-    );
-  }
-  if !missing_in_after.is_empty() {
-    println!(
-      "Files only in --before (removed renders): {}",
-      format_path_list(&missing_in_after)
-    );
-  }
+  println!("HTML report: {}", html_path.display());
+  println!("JSON report: {}", json_path.display());
 
   Ok(())
-}
-
-fn format_path_list(paths: &[PathBuf]) -> String {
-  const MAX_ENTRIES: usize = 8;
-  if paths.len() <= MAX_ENTRIES {
-    return paths
-      .iter()
-      .map(|p| p.display().to_string())
-      .collect::<Vec<_>>()
-      .join(", ");
-  }
-
-  let shown = paths
-    .iter()
-    .take(MAX_ENTRIES)
-    .map(|p| p.display().to_string())
-    .collect::<Vec<_>>()
-    .join(", ");
-  format!("{shown}, … ({} more)", paths.len() - MAX_ENTRIES)
-}
-
-fn parse_viewport(raw: &str) -> Result<(u32, u32)> {
-  let (width, height) = raw
-    .split_once('x')
-    .ok_or_else(|| anyhow!("viewport must be formatted as WxH"))?;
-
-  let width = width
-    .parse::<u32>()
-    .context("failed to parse viewport width")?;
-  let height = height
-    .parse::<u32>()
-    .context("failed to parse viewport height")?;
-
-  if width == 0 || height == 0 {
-    bail!("viewport dimensions must be greater than zero");
-  }
-
-  Ok((width, height))
 }
 
 fn parse_shard(s: &str) -> Result<(usize, usize), String> {
@@ -1981,115 +1883,21 @@ fn file_to_url(path: &Path) -> Result<String> {
     .map_err(|_| anyhow!("could not convert {} to a file:// URL", absolute.display()))
 }
 
-fn diff_pair(before: &Path, after: &Path, diff_path: &Path, threshold: u8) -> Result<DiffOutcome> {
-  let before_img = load_png(before)?;
-  let after_img = load_png(after)?;
+fn parse_viewport(raw: &str) -> Result<(u32, u32)> {
+  let (width, height) = raw
+    .split_once('x')
+    .ok_or_else(|| anyhow!("viewport must be formatted as WxH"))?;
 
-  let max_width = before_img.width().max(after_img.width());
-  let max_height = before_img.height().max(after_img.height());
+  let width = width
+    .parse::<u32>()
+    .context("failed to parse viewport width")?;
+  let height = height
+    .parse::<u32>()
+    .context("failed to parse viewport height")?;
 
-  let mut diff_image = RgbaImage::new(max_width, max_height);
-  let mut different_pixels = 0u64;
-  let mut max_channel_diff = 0u8;
-
-  for y in 0..max_height {
-    for x in 0..max_width {
-      let before_px = if x < before_img.width() && y < before_img.height() {
-        Some(*before_img.get_pixel(x, y))
-      } else {
-        None
-      };
-      let after_px = if x < after_img.width() && y < after_img.height() {
-        Some(*after_img.get_pixel(x, y))
-      } else {
-        None
-      };
-
-      let (diff_pixel, max_diff) = match (before_px, after_px) {
-        (Some(before_px), Some(after_px)) => {
-          let diff_r = before_px.0[0].abs_diff(after_px.0[0]);
-          let diff_g = before_px.0[1].abs_diff(after_px.0[1]);
-          let diff_b = before_px.0[2].abs_diff(after_px.0[2]);
-          let diff_a = before_px.0[3].abs_diff(after_px.0[3]);
-          let max_diff = *[diff_r, diff_g, diff_b, diff_a].iter().max().unwrap();
-          (Rgba([diff_r, diff_g, diff_b, max_diff.max(10)]), max_diff)
-        }
-        (Some(_), None) | (None, Some(_)) => (Rgba([255, 0, 255, 255]), 255),
-        (None, None) => unreachable!("loop bounds ensure at least one pixel"),
-      };
-
-      if max_diff > threshold {
-        different_pixels += 1;
-      }
-
-      max_channel_diff = max_channel_diff.max(max_diff);
-      diff_image.put_pixel(x, y, diff_pixel);
-    }
+  if width == 0 || height == 0 {
+    bail!("viewport dimensions must be greater than zero");
   }
 
-  let total_pixels = (max_width as u64) * (max_height as u64);
-  let different_percent = if total_pixels == 0 {
-    0.0
-  } else {
-    (different_pixels as f64 / total_pixels as f64) * 100.0
-  };
-
-  let dimensions_match =
-    before_img.width() == after_img.width() && before_img.height() == after_img.height();
-
-  let diff_path_written = if different_pixels > 0 || !dimensions_match {
-    if let Some(parent) = diff_path.parent() {
-      fs::create_dir_all(parent).with_context(|| {
-        format!(
-          "failed to create diff output directory {}",
-          parent.display()
-        )
-      })?;
-    }
-    diff_image
-      .save(diff_path)
-      .with_context(|| format!("failed to write diff image to {}", diff_path.display()))?;
-    Some(diff_path.to_path_buf())
-  } else {
-    None
-  };
-
-  Ok(DiffOutcome {
-    changed: different_pixels > 0 || !dimensions_match,
-    dimensions_match,
-    total_pixels,
-    different_pixels,
-    different_percent,
-    max_channel_diff,
-    diff_path: diff_path_written,
-  })
-}
-
-fn load_png(path: &Path) -> Result<RgbaImage> {
-  Ok(
-    image::open(path)
-      .with_context(|| format!("failed to read image at {}", path.display()))?
-      .to_rgba8(),
-  )
-}
-
-fn print_diff_summary(relative_path: &Path, outcome: &DiffOutcome) {
-  let status = if outcome.changed { "DIFF" } else { "OK" };
-  let percent = format!("{:.4}", outcome.different_percent);
-  let mut parts = vec![format!(
-    "{status} {} – {} differing pixels of {} ({percent}%), max channel diff {}",
-    relative_path.display(),
-    outcome.different_pixels,
-    outcome.total_pixels,
-    outcome.max_channel_diff
-  )];
-
-  if !outcome.dimensions_match {
-    parts.push("dimensions differ".to_string());
-  }
-  if let Some(path) = &outcome.diff_path {
-    parts.push(format!("diff: {}", path.display()));
-  }
-
-  println!("{}", parts.join(" | "));
+  Ok((width, height))
 }
