@@ -2801,6 +2801,93 @@ fn apply_dom_compatibility_mutations(
   node: &mut DomNode,
   deadline_counter: &mut usize,
 ) -> Result<()> {
+  fn img_src_is_placeholder(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+      return true;
+    }
+    if value.eq_ignore_ascii_case("about:blank") {
+      return true;
+    }
+    if value == "#" {
+      return true;
+    }
+
+    // Treat the common "1x1 transparent GIF" data URLs used as placeholders for lazy-loaded images
+    // as empty. These are typically replaced by client-side bootstrap JS with the real image URL.
+    if !value
+      .get(.."data:".len())
+      .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+      .unwrap_or(false)
+    {
+      return false;
+    }
+
+    let rest = &value["data:".len()..];
+    let Some((metadata, payload)) = rest.split_once(',') else {
+      return false;
+    };
+
+    let mut parts = metadata.split(';');
+    let mediatype = parts.next().unwrap_or("").trim();
+    if !mediatype.eq_ignore_ascii_case("image/gif") {
+      return false;
+    }
+    let is_base64 = parts.any(|part| part.trim().eq_ignore_ascii_case("base64"));
+    if !is_base64 {
+      return false;
+    }
+
+    let payload = payload.trim();
+    if payload.is_empty() {
+      return true;
+    }
+    // Avoid decoding unusually large data URLs; placeholders are tiny and should decode quickly.
+    if payload.len() > 512 {
+      return false;
+    }
+
+    use base64::Engine;
+    let decoded = {
+      let mut cleaned: Option<Vec<u8>> = None;
+      let input = if payload.bytes().any(|b| b.is_ascii_whitespace()) {
+        let mut buf = Vec::with_capacity(payload.len());
+        buf.extend(payload.bytes().filter(|b| !b.is_ascii_whitespace()));
+        cleaned = Some(buf);
+        cleaned.as_ref().unwrap().as_slice()
+      } else {
+        payload.as_bytes()
+      };
+      base64::engine::general_purpose::STANDARD.decode(input).ok()
+    };
+    let Some(decoded) = decoded else {
+      return false;
+    };
+
+    if decoded.len() < 10 {
+      return false;
+    }
+
+    if &decoded[..6] != b"GIF87a" && &decoded[..6] != b"GIF89a" {
+      return false;
+    }
+
+    let width = u16::from_le_bytes([decoded[6], decoded[7]]);
+    let height = u16::from_le_bytes([decoded[8], decoded[9]]);
+    width == 1 && height == 1
+  }
+
+  fn first_non_empty_attr(attrs: &[(String, String)], names: &[&str]) -> Option<String> {
+    for &name in names {
+      if let Some((_, value)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
+        if !value.trim().is_empty() {
+          return Some(value.clone());
+        }
+      }
+    }
+    None
+  }
+
   let mut stack: Vec<*mut DomNode> = Vec::new();
   stack.push(node as *mut DomNode);
 
@@ -2859,54 +2946,158 @@ fn apply_dom_compatibility_mutations(
       }
 
       if tag_name.eq_ignore_ascii_case("img") {
-        // Some pages stash image URLs in nonstandard attributes (e.g. `data-gl-src` /
-        // `data-gl-srcset`) and rely on their bootstrap JS to populate `src`/`srcset`. When we
-        // don't execute scripts, CSS like `img:not([src]):not([srcset]) { visibility: hidden }`
-        // can permanently suppress the image. Compatibility mode mirrors this common bootstrap
-        // step by copying the URLs into the real attributes when they're missing.
-        let mut src_idx: Option<usize> = None;
-        let mut srcset_idx: Option<usize> = None;
-        let mut data_src: Option<String> = None;
-        let mut data_srcset: Option<String> = None;
+        // Some pages stash image URLs in `data-*` attributes (common for JS-driven lazy loading)
+        // and rely on their bootstrap JS to populate `src`/`srcset`/`sizes`. When we don't execute
+        // scripts, CSS like `img:not([src]):not([srcset]) { visibility: hidden }` can permanently
+        // suppress the image.
+        //
+        // Compatibility mode mirrors this common bootstrap step by copying the first non-empty URL
+        // from the following attributes, in priority order:
+        //
+        // - `src` ← `data-gl-src`, `data-src`, `data-lazy-src`, `data-original`, `data-url`,
+        //   `data-actualsrc`, `data-img-src`
+        // - `srcset` ← `data-gl-srcset`, `data-srcset`, `data-lazy-srcset`, `data-original-srcset`,
+        //   `data-actualsrcset`
+        // - `sizes` ← `data-sizes`
+        //
+        // Never override a non-empty authored attribute (except for known `src` placeholders like
+        // `about:blank`, `#`, or 1×1 transparent GIF data URLs).
+        const SRC_CANDIDATES: [&str; 7] = [
+          "data-gl-src",
+          "data-src",
+          "data-lazy-src",
+          "data-original",
+          "data-url",
+          "data-actualsrc",
+          "data-img-src",
+        ];
+        const SRCSET_CANDIDATES: [&str; 5] = [
+          "data-gl-srcset",
+          "data-srcset",
+          "data-lazy-srcset",
+          "data-original-srcset",
+          "data-actualsrcset",
+        ];
 
-        for (idx, (name, value)) in attributes.iter().enumerate() {
-          if name.eq_ignore_ascii_case("src") {
-            src_idx = Some(idx);
-          } else if name.eq_ignore_ascii_case("srcset") {
-            srcset_idx = Some(idx);
-          } else if name.eq_ignore_ascii_case("data-gl-src") {
-            if !value.trim().is_empty() {
-              data_src = Some(value.clone());
-            }
-          } else if name.eq_ignore_ascii_case("data-gl-srcset") {
-            if !value.trim().is_empty() {
-              data_srcset = Some(value.clone());
+        let src_idx = attributes
+          .iter()
+          .position(|(name, _)| name.eq_ignore_ascii_case("src"));
+        let srcset_idx = attributes
+          .iter()
+          .position(|(name, _)| name.eq_ignore_ascii_case("srcset"));
+        let sizes_idx = attributes
+          .iter()
+          .position(|(name, _)| name.eq_ignore_ascii_case("sizes"));
+
+        let needs_src = match src_idx {
+          Some(idx) => img_src_is_placeholder(&attributes[idx].1),
+          None => true,
+        };
+
+        if needs_src {
+          if let Some(candidate) = first_non_empty_attr(attributes, &SRC_CANDIDATES) {
+            match src_idx {
+              Some(idx) => {
+                if img_src_is_placeholder(&attributes[idx].1) {
+                  attributes[idx].1 = candidate;
+                }
+              }
+              None => {
+                attributes.push(("src".to_string(), candidate));
+              }
             }
           }
         }
 
-        if let Some(data_src) = data_src {
-          match src_idx {
-            Some(idx) => {
-              if attributes[idx].1.trim().is_empty() {
-                attributes[idx].1 = data_src;
+        let needs_srcset = match srcset_idx {
+          Some(idx) => attributes[idx].1.trim().is_empty(),
+          None => true,
+        };
+        if needs_srcset {
+          if let Some(candidate) = first_non_empty_attr(attributes, &SRCSET_CANDIDATES) {
+            match srcset_idx {
+              Some(idx) => {
+                if attributes[idx].1.trim().is_empty() {
+                  attributes[idx].1 = candidate;
+                }
               }
-            }
-            None => {
-              attributes.push(("src".to_string(), data_src));
+              None => {
+                attributes.push(("srcset".to_string(), candidate));
+              }
             }
           }
         }
 
-        if let Some(data_srcset) = data_srcset {
-          match srcset_idx {
-            Some(idx) => {
-              if attributes[idx].1.trim().is_empty() {
-                attributes[idx].1 = data_srcset;
+        let needs_sizes = match sizes_idx {
+          Some(idx) => attributes[idx].1.trim().is_empty(),
+          None => true,
+        };
+        if needs_sizes {
+          if let Some(candidate) = first_non_empty_attr(attributes, &["data-sizes"]) {
+            match sizes_idx {
+              Some(idx) => {
+                if attributes[idx].1.trim().is_empty() {
+                  attributes[idx].1 = candidate;
+                }
+              }
+              None => {
+                attributes.push(("sizes".to_string(), candidate));
               }
             }
-            None => {
-              attributes.push(("srcset".to_string(), data_srcset));
+          }
+        }
+      } else if tag_name.eq_ignore_ascii_case("source") {
+        // Lazy-loaded `<picture>` sources often mirror the `<img>` pattern and delay populating
+        // `srcset`/`sizes` until JS runs.
+        const SRCSET_CANDIDATES: [&str; 5] = [
+          "data-srcset",
+          "data-lazy-srcset",
+          "data-gl-srcset",
+          "data-original-srcset",
+          "data-actualsrcset",
+        ];
+
+        let srcset_idx = attributes
+          .iter()
+          .position(|(name, _)| name.eq_ignore_ascii_case("srcset"));
+        let sizes_idx = attributes
+          .iter()
+          .position(|(name, _)| name.eq_ignore_ascii_case("sizes"));
+
+        let needs_srcset = match srcset_idx {
+          Some(idx) => attributes[idx].1.trim().is_empty(),
+          None => true,
+        };
+        if needs_srcset {
+          if let Some(candidate) = first_non_empty_attr(attributes, &SRCSET_CANDIDATES) {
+            match srcset_idx {
+              Some(idx) => {
+                if attributes[idx].1.trim().is_empty() {
+                  attributes[idx].1 = candidate;
+                }
+              }
+              None => {
+                attributes.push(("srcset".to_string(), candidate));
+              }
+            }
+          }
+        }
+
+        let needs_sizes = match sizes_idx {
+          Some(idx) => attributes[idx].1.trim().is_empty(),
+          None => true,
+        };
+        if needs_sizes {
+          if let Some(candidate) = first_non_empty_attr(attributes, &["data-sizes"]) {
+            match sizes_idx {
+              Some(idx) => {
+                if attributes[idx].1.trim().is_empty() {
+                  attributes[idx].1 = candidate;
+                }
+              }
+              None => {
+                attributes.push(("sizes".to_string(), candidate));
+              }
             }
           }
         }
@@ -9247,6 +9438,53 @@ mod tests {
   }
 
   #[test]
+  fn parse_html_compat_mode_copies_data_src_into_img_src() {
+    let dom = parse_html_with_options(
+      "<img id='img' data-src='a.jpg'>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
+    let img = find_element_by_id(&dom, "img").expect("img element");
+    assert_eq!(img.get_attribute_ref("src"), Some("a.jpg"));
+  }
+
+  #[test]
+  fn parse_html_compat_mode_replaces_placeholder_img_src() {
+    let dom = parse_html_with_options(
+      "<img id='img' src='data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==' data-src='real.jpg'>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
+    let img = find_element_by_id(&dom, "img").expect("img element");
+    assert_eq!(img.get_attribute_ref("src"), Some("real.jpg"));
+  }
+
+  #[test]
+  fn parse_html_compat_mode_does_not_override_authored_img_src() {
+    let dom = parse_html_with_options(
+      "<img id='img' src='author.jpg' data-src='lazy.jpg'>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
+    let img = find_element_by_id(&dom, "img").expect("img element");
+    assert_eq!(img.get_attribute_ref("src"), Some("author.jpg"));
+  }
+
+  #[test]
+  fn parse_html_compat_mode_copies_source_data_srcset_into_source_attrs() {
+    let dom = parse_html_with_options(
+      "<picture><source id='source' data-srcset='a.webp 1x, b.webp 2x'><img src='fallback.jpg'></picture>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
+    let source = find_element_by_id(&dom, "source").expect("source element");
+    assert_eq!(
+      source.get_attribute_ref("srcset"),
+      Some("a.webp 1x, b.webp 2x")
+    );
+  }
+
+  #[test]
   fn parse_html_standard_keeps_data_gl_src_out_of_img_attrs() {
     let dom = parse_html(
       "<html><body><img data-gl-src='a.jpg' data-gl-srcset='a1.jpg 1x, a2.jpg 2x'></body></html>",
@@ -9274,6 +9512,16 @@ mod tests {
     assert!(
       img.get_attribute_ref("srcset").is_none(),
       "standard DOM parse should not synthesize srcset"
+    );
+  }
+
+  #[test]
+  fn parse_html_standard_keeps_data_src_out_of_img_attrs() {
+    let dom = parse_html("<img id='img' data-src='a.jpg'>").expect("parse");
+    let img = find_element_by_id(&dom, "img").expect("img element");
+    assert!(
+      img.get_attribute_ref("src").is_none(),
+      "standard DOM parse should not synthesize src"
     );
   }
 
