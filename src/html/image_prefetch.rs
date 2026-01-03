@@ -9,10 +9,12 @@ use crate::css::loader::resolve_href_with_base;
 use crate::css::parser::tokenize_rel_list;
 use crate::dom::{DomNode, HTML_NAMESPACE};
 use crate::html::image_attrs::{parse_sizes, parse_srcset};
-use crate::html::images::{image_sources_with_fallback, select_image_source, ImageSelectionContext};
+use crate::html::images::{
+  image_sources_with_fallback, select_image_source, ImageSelectionContext,
+};
 use crate::resource::is_data_url;
-use crate::style::media::MediaQuery;
 use crate::style::media::MediaContext;
+use crate::style::media::MediaQuery;
 use crate::tree::box_tree::{PictureSource, SizesList, SrcsetDescriptor};
 use std::collections::HashSet;
 
@@ -46,6 +48,48 @@ pub struct ImagePrefetchDiscovery {
 }
 
 const WIDTH_DESCRIPTOR_SECONDARY_SLOT_SCALE: f32 = 0.75;
+
+// Keep the discovery fallback list aligned with `DomCompatibilityMode::Compatibility`-style remaps
+// so developer tooling prefetches the same image URLs the renderer will actually request.
+//
+// Attribute precedence mirrors the compatibility behavior: keep real `src`/`srcset` if present,
+// otherwise fall back to common lazy-load `data-*` attributes used by production sites.
+const IMG_SRC_ATTR_FALLBACKS: &[&str] = &[
+  "src",
+  "data-gl-src",
+  "data-src",
+  "data-lazy-src",
+  "data-original",
+  "data-url",
+  "data-actualsrc",
+  "data-img-src",
+];
+const IMG_SRCSET_ATTR_FALLBACKS: &[&str] = &[
+  "srcset",
+  "data-gl-srcset",
+  "data-srcset",
+  "data-lazy-srcset",
+  "data-original-srcset",
+  "data-actualsrcset",
+];
+const SOURCE_SRCSET_ATTR_FALLBACKS: &[&str] = &[
+  "srcset",
+  "data-srcset",
+  "data-lazy-srcset",
+  "data-gl-srcset",
+  "data-original-srcset",
+  "data-actualsrcset",
+];
+
+fn get_non_empty_attr<'a>(node: &'a DomNode, name: &str) -> Option<&'a str> {
+  node
+    .get_attribute_ref(name)
+    .filter(|value| !value.trim().is_empty())
+}
+
+fn get_first_non_empty_attr<'a>(node: &'a DomNode, names: &[&str]) -> Option<&'a str> {
+  names.iter().find_map(|name| get_non_empty_attr(node, name))
+}
 
 fn normalize_mime_type(value: &str) -> Option<String> {
   let base = value.split(';').next().unwrap_or("").trim();
@@ -146,7 +190,9 @@ fn select_picture_source<'a>(
   sources: &'a [PictureSource],
   ctx: ImageSelectionContext<'_>,
 ) -> Option<&'a PictureSource> {
-  sources.iter().find(|source| picture_source_matches(source, ctx))
+  sources
+    .iter()
+    .find(|source| picture_source_matches(source, ctx))
 }
 
 fn estimate_source_size(sizes: Option<&SizesList>, ctx: ImageSelectionContext<'_>) -> Option<f32> {
@@ -194,7 +240,7 @@ fn picture_sources_and_fallback_img<'a>(
     };
 
     if tag.eq_ignore_ascii_case("source") {
-      let Some(srcset_attr) = child.get_attribute_ref("srcset") else {
+      let Some(srcset_attr) = get_first_non_empty_attr(child, SOURCE_SRCSET_ATTR_FALLBACKS) else {
         continue;
       };
       let parsed_srcset = parse_srcset(srcset_attr);
@@ -254,9 +300,10 @@ fn push_prefetch_selection(
     let Some(source_size) = estimate_source_size(sizes_for_estimate, ctx) else {
       // Fallback to the renderer-aligned selection which will pick a candidate based on `sizes`
       // evaluation when slot widths are unknown.
-      for selected in image_sources_with_fallback(img_src, img_srcset, img_sizes, picture_sources, ctx)
-        .into_iter()
-        .take(limits.max_urls_per_element)
+      for selected in
+        image_sources_with_fallback(img_src, img_srcset, img_sizes, picture_sources, ctx)
+          .into_iter()
+          .take(limits.max_urls_per_element)
       {
         push_unique_url(ctx, seen_urls, urls, selected.url);
       }
@@ -279,7 +326,13 @@ fn push_prefetch_selection(
         slot_width: Some(slot_width),
         ..ctx
       };
-      let selected = select_image_source(img_src, img_srcset, img_sizes, picture_sources, selection_ctx);
+      let selected = select_image_source(
+        img_src,
+        img_srcset,
+        img_sizes,
+        picture_sources,
+        selection_ctx,
+      );
       if selected.url.trim().is_empty() {
         continue;
       }
@@ -349,23 +402,8 @@ pub fn discover_image_prefetch_urls(
           }
           *image_elements += 1;
 
-          let img_src = img
-            .get_attribute_ref("src")
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-              img
-                .get_attribute_ref("data-gl-src")
-                .filter(|value| !value.trim().is_empty())
-            })
-            .unwrap_or("");
-          let img_srcset = img
-            .get_attribute_ref("srcset")
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-              img
-                .get_attribute_ref("data-gl-srcset")
-                .filter(|value| !value.trim().is_empty())
-            })
+          let img_src = get_first_non_empty_attr(img, IMG_SRC_ATTR_FALLBACKS).unwrap_or("");
+          let img_srcset = get_first_non_empty_attr(img, IMG_SRCSET_ATTR_FALLBACKS)
             .map(parse_srcset)
             .unwrap_or_default();
           let img_sizes = img.get_attribute_ref("sizes").and_then(parse_sizes);
@@ -391,24 +429,9 @@ pub fn discover_image_prefetch_urls(
           *limited = true;
           return false;
         }
-        let img_src = node
-          .get_attribute_ref("src")
-          .filter(|value| !value.trim().is_empty())
-          .or_else(|| {
-            node
-              .get_attribute_ref("data-gl-src")
-              .filter(|value| !value.trim().is_empty())
-          })
-          .unwrap_or("");
+        let img_src = get_first_non_empty_attr(node, IMG_SRC_ATTR_FALLBACKS).unwrap_or("");
         let has_src = !img_src.trim().is_empty();
-        let img_srcset_attr = node
-          .get_attribute_ref("srcset")
-          .filter(|value| !value.trim().is_empty())
-          .or_else(|| {
-            node
-              .get_attribute_ref("data-gl-srcset")
-              .filter(|value| !value.trim().is_empty())
-          });
+        let img_srcset_attr = get_first_non_empty_attr(node, IMG_SRCSET_ATTR_FALLBACKS);
         let has_srcset = img_srcset_attr.is_some();
         if has_src || has_srcset {
           *image_elements += 1;
@@ -675,6 +698,27 @@ mod tests {
   }
 
   #[test]
+  fn discovers_img_src_from_data_src() {
+    let html = r#"<img data-src="a.jpg">"#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/a.jpg".to_string()]);
+  }
+
+  #[test]
   fn discovers_img_srcset_from_data_gl_srcset() {
     let html = r#"<img data-gl-srcset="a1.jpg 1x, a2.jpg 2x">"#;
     let dom = parse_html(html).unwrap();
@@ -693,6 +737,38 @@ mod tests {
     assert_eq!(out.image_elements, 1);
     assert!(!out.limited);
     assert_eq!(out.urls, vec!["https://example.com/a2.jpg".to_string()]);
+  }
+
+  #[test]
+  fn discovers_picture_source_srcset_from_data_srcset() {
+    let html = r#"
+      <picture>
+        <source data-srcset="a1.jpg 1x, a2.jpg 2x">
+        <img src="fallback.jpg">
+      </picture>
+    "#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 2.0);
+    let ctx = ctx_for((800.0, 600.0), 2.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(
+      out.urls,
+      vec![
+        "https://example.com/a2.jpg".to_string(),
+        "https://example.com/fallback.jpg".to_string(),
+      ]
+    );
   }
 
   #[test]
