@@ -1,3 +1,9 @@
+# Manifest for WPT-style tests under `tests/wpt/tests`.
+#
+# Optional reftest metadata:
+# - `reference = "..."` marks the test as a reftest and points at the reference HTML.
+# - `reftest = "match" | "mismatch"` controls the expected comparison (defaults to `"match"`).
+
 [[tests]]
 id = "columns/multicol-001"
 path = "columns/multicol-001.html"

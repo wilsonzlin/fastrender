@@ -12,6 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
+use url::Url;
 
 type Result<T> = std::result::Result<T, ImportError>;
 
@@ -80,6 +81,11 @@ struct Args {
   /// Allow overwriting existing files/manifest entries
   #[arg(long)]
   overwrite: bool,
+
+  /// Allow leaving `http(s)://` and `//` URLs in imported HTML/CSS. By default, the importer
+  /// fails if any network URL remains after rewriting.
+  #[arg(long, default_value_t = false)]
+  allow_network: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +96,7 @@ struct ImportConfig {
   manifest_path: Option<PathBuf>,
   dry_run: bool,
   overwrite: bool,
+  allow_network: bool,
 }
 
 impl ImportConfig {
@@ -122,6 +129,7 @@ impl ImportConfig {
       manifest_path,
       dry_run: args.dry_run,
       overwrite: args.overwrite,
+      allow_network: args.allow_network,
     })
   }
 }
@@ -142,6 +150,27 @@ struct Reference {
   dest_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReftestRelation {
+  Match,
+  Mismatch,
+}
+
+impl ReftestRelation {
+  fn as_manifest_value(self) -> &'static str {
+    match self {
+      ReftestRelation::Match => "match",
+      ReftestRelation::Mismatch => "mismatch",
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+struct ReftestMetadata {
+  reference: Reference,
+  relation: ReftestRelation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ManifestFile {
   #[serde(default)]
@@ -154,6 +183,8 @@ struct ManifestEntry {
   path: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   reference: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  reftest: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   test_type: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,6 +223,8 @@ enum ImportError {
   InvalidUtf8(PathBuf),
   #[error("manifest has conflicting entry for {0}; use --overwrite to replace")]
   ManifestConflict(String),
+  #[error("network URL(s) remain in rewritten {0}: {1}")]
+  NetworkUrlsRemaining(PathBuf, String),
   #[error("glob error: {0}")]
   Glob(#[from] glob::PatternError),
   #[error("glob iteration error: {0}")]
@@ -285,7 +318,7 @@ fn import_test(
 
   let mut processed: HashSet<PathBuf> = HashSet::new();
   let mut queue: VecDeque<(PathBuf, PathBuf)> = VecDeque::new();
-  let mut reftest_reference: Option<Reference> = None;
+  let mut reftest_metadata: Option<ReftestMetadata> = None;
 
   processed.insert(dest_path.clone());
   let outcome = rewrite_and_copy(
@@ -293,7 +326,7 @@ fn import_test(
     src_path,
     &dest_path,
     true,
-    &mut reftest_reference,
+    &mut reftest_metadata,
     summary,
   )?;
   for reference in outcome {
@@ -317,15 +350,20 @@ fn import_test(
   let manifest_entry = ManifestEntry {
     id,
     path: normalize_to_forward_slashes(relative),
-    reference: reftest_reference.as_ref().map(|r| {
+    reference: reftest_metadata.as_ref().map(|meta| {
       normalize_to_forward_slashes(
-        r.dest_path
+        meta
+          .reference
+          .dest_path
           .strip_prefix(&config.out_dir)
-          .unwrap_or(&r.dest_path),
+          .unwrap_or(&meta.reference.dest_path),
       )
     }),
+    reftest: reftest_metadata
+      .as_ref()
+      .map(|meta| meta.relation.as_manifest_value().to_string()),
     test_type: Some(
-      reftest_reference
+      reftest_metadata
         .as_ref()
         .map(|_| "reftest")
         .unwrap_or("visual")
@@ -349,7 +387,7 @@ fn rewrite_and_copy(
   src_path: &Path,
   dest_path: &Path,
   track_reftest: bool,
-  reftest_reference: &mut Option<Reference>,
+  reftest_metadata: &mut Option<ReftestMetadata>,
   summary: &mut ImportSummary,
 ) -> Result<Vec<Reference>> {
   ensure_within_root(src_path, &config.wpt_root)?;
@@ -366,15 +404,21 @@ fn rewrite_and_copy(
       };
 
       if track_reftest {
-        *reftest_reference = reftest;
+        *reftest_metadata = reftest;
+      }
+
+      if !config.allow_network {
+        validate_offline(dest_path, &rewritten)?;
       }
 
       write_file(dest_path, rewritten.as_bytes(), config, summary)?;
+      copy_ini_sidecar(config, src_path, dest_path, summary)?;
       Ok(references)
     }
     FileKind::Other => {
       let data = fs::read(src_path).map_err(|e| ImportError::Io(src_path.to_path_buf(), e))?;
       write_file(dest_path, &data, config, summary)?;
+      copy_ini_sidecar(config, src_path, dest_path, summary)?;
       Ok(Vec::new())
     }
   }
@@ -385,7 +429,7 @@ fn rewrite_html(
   src_path: &Path,
   dest_path: &Path,
   content: &str,
-) -> Result<(String, Vec<Reference>, Option<Reference>)> {
+) -> Result<(String, Vec<Reference>, Option<ReftestMetadata>)> {
   let src_dir = src_path
     .parent()
     .ok_or_else(|| ImportError::Message(format!("missing parent for {}", src_path.display())))?;
@@ -395,18 +439,16 @@ fn rewrite_html(
 
   let mut references = Vec::new();
   let mut seen = HashSet::new();
-  let mut reftest_reference: Option<Reference> = None;
+  let mut reftest_metadata: Option<ReftestMetadata> = None;
 
-  if let Some(cap) = Regex::new("(?i)<link[^>]*rel=[\"']match[\"'][^>]*href=[\"']([^\"']+)[\"']")
-    .unwrap()
-    .captures(content)
-  {
-    if let Some(href) = cap.get(1) {
-      if let Some(reference) = resolve_reference(config, src_dir, dest_dir, href.as_str().trim())? {
-        reftest_reference = Some(reference.clone());
-        if seen.insert(reference.dest_path.clone()) {
-          references.push(reference);
-        }
+  if let Some((relation, href)) = find_reftest_link_in_html(content) {
+    if let Some(reference) = resolve_reference(config, src_dir, dest_dir, href.trim())? {
+      reftest_metadata = Some(ReftestMetadata {
+        reference: reference.clone(),
+        relation,
+      });
+      if seen.insert(reference.dest_path.clone()) {
+        references.push(reference);
       }
     }
   }
@@ -450,7 +492,7 @@ fn rewrite_html(
     &mut seen,
   )?;
 
-  Ok((rewritten, references, reftest_reference))
+  Ok((rewritten, references, reftest_metadata))
 }
 
 fn rewrite_css(
@@ -458,7 +500,7 @@ fn rewrite_css(
   src_path: &Path,
   dest_path: &Path,
   content: &str,
-) -> Result<(String, Vec<Reference>, Option<Reference>)> {
+) -> Result<(String, Vec<Reference>, Option<ReftestMetadata>)> {
   let src_dir = src_path
     .parent()
     .ok_or_else(|| ImportError::Message(format!("missing parent for {}", src_path.display())))?;
@@ -559,22 +601,33 @@ fn resolve_reference(
 ) -> Result<Option<Reference>> {
   const DATA_URL_PREFIX: &str = "data:";
   let trimmed = value.trim();
+  let mut absolute_origin_path: Option<(String, String)> = None;
   if trimmed.is_empty()
     || trimmed.starts_with('#')
     || trimmed
       .get(..DATA_URL_PREFIX.len())
       .map(|prefix| prefix.eq_ignore_ascii_case(DATA_URL_PREFIX))
       .unwrap_or(false)
-    || trimmed.starts_with("http://")
-    || trimmed.starts_with("https://")
-    || trimmed.starts_with("//")
     || trimmed.starts_with("about:")
     || trimmed.starts_with("javascript:")
   {
     return Ok(None);
   }
 
-  let (path_part, suffix) = split_path_and_suffix(trimmed);
+  if trimmed.starts_with("http://") || trimmed.starts_with("https://") || trimmed.starts_with("//")
+  {
+    if let Some((path, suffix)) = map_wpt_absolute_origin(trimmed) {
+      absolute_origin_path = Some((path, suffix));
+    } else {
+      return Ok(None);
+    }
+  }
+
+  let (path_part, suffix) = if let Some((path, suffix)) = absolute_origin_path {
+    (path, suffix)
+  } else {
+    split_path_and_suffix(trimmed)
+  };
   if path_part.is_empty() {
     return Ok(None);
   }
@@ -620,12 +673,135 @@ fn resolve_reference(
   }))
 }
 
+fn find_reftest_link_in_html(content: &str) -> Option<(ReftestRelation, String)> {
+  let link_tag = Regex::new("(?i)<link\\b[^>]*>").ok()?;
+  let rel_attr = Regex::new("(?i)\\brel\\s*=\\s*['\"]([^'\"]+)['\"]").ok()?;
+  let href_attr = Regex::new("(?i)\\bhref\\s*=\\s*['\"]([^'\"]+)['\"]").ok()?;
+
+  for link in link_tag.find_iter(content) {
+    let tag = link.as_str();
+    let Some(rel) = rel_attr
+      .captures(tag)
+      .and_then(|c| c.get(1))
+      .map(|m| m.as_str())
+    else {
+      continue;
+    };
+    let Some(href) = href_attr
+      .captures(tag)
+      .and_then(|c| c.get(1))
+      .map(|m| m.as_str())
+    else {
+      continue;
+    };
+
+    for token in rel.split_whitespace() {
+      if token.eq_ignore_ascii_case("match") {
+        return Some((ReftestRelation::Match, href.to_string()));
+      }
+      if token.eq_ignore_ascii_case("mismatch") {
+        return Some((ReftestRelation::Mismatch, href.to_string()));
+      }
+    }
+  }
+
+  None
+}
+
+fn map_wpt_absolute_origin(value: &str) -> Option<(String, String)> {
+  let candidate = if value.starts_with("//") {
+    format!("http:{value}")
+  } else {
+    value.to_string()
+  };
+  let url = Url::parse(&candidate).ok()?;
+  let host = url.host_str()?;
+  let host = host.trim_end_matches('.').to_ascii_lowercase();
+  if host != "web-platform.test" && host != "www.web-platform.test" {
+    return None;
+  }
+
+  let path = url.path().to_string();
+  let mut suffix = String::new();
+  if let Some(query) = url.query() {
+    suffix.push('?');
+    suffix.push_str(query);
+  }
+  if let Some(fragment) = url.fragment() {
+    suffix.push('#');
+    suffix.push_str(fragment);
+  }
+
+  Some((path, suffix))
+}
+
 fn split_path_and_suffix(value: &str) -> (String, String) {
   if let Some(pos) = value.find(|c| c == '?' || c == '#') {
     (value[..pos].to_string(), value[pos..].to_string())
   } else {
     (value.to_string(), String::new())
   }
+}
+
+fn validate_offline(dest_path: &Path, content: &str) -> Result<()> {
+  let mut found = find_network_urls(content);
+  if found.is_empty() {
+    return Ok(());
+  }
+  found.truncate(5);
+  let urls = found.join(", ");
+  Err(ImportError::NetworkUrlsRemaining(
+    dest_path.to_path_buf(),
+    urls,
+  ))
+}
+
+fn find_network_urls(content: &str) -> Vec<String> {
+  let mut urls = Vec::new();
+  let http_re = Regex::new(r#"(?i)https?://[^\s"'<>)]{1,200}"#).unwrap();
+  for m in http_re.find_iter(content) {
+    urls.push(m.as_str().to_string());
+  }
+
+  let scheme_re = Regex::new(r#"(?i)//[^\s"'<>)]{1,200}"#).unwrap();
+  for m in scheme_re.find_iter(content) {
+    if m.start() > 0 {
+      if content.as_bytes()[m.start() - 1] == b':' {
+        continue;
+      }
+    }
+    urls.push(m.as_str().to_string());
+  }
+
+  urls.sort();
+  urls.dedup();
+  urls
+}
+
+fn copy_ini_sidecar(
+  config: &ImportConfig,
+  src_path: &Path,
+  dest_path: &Path,
+  summary: &mut ImportSummary,
+) -> Result<()> {
+  let Some(src_ini) = sidecar_ini_path(src_path) else {
+    return Ok(());
+  };
+  if !src_ini.is_file() {
+    return Ok(());
+  }
+  let Some(dest_ini) = sidecar_ini_path(dest_path) else {
+    return Ok(());
+  };
+
+  let data = fs::read(&src_ini).map_err(|e| ImportError::Io(src_ini.to_path_buf(), e))?;
+  write_file(&dest_ini, &data, config, summary)?;
+  Ok(())
+}
+
+fn sidecar_ini_path(path: &Path) -> Option<PathBuf> {
+  let file_name = path.file_name()?.to_str()?;
+  Some(path.with_file_name(format!("{file_name}.ini")))
 }
 
 fn write_file(
@@ -865,19 +1041,24 @@ mod tests {
       manifest_path: Some(manifest_path.clone()),
       dry_run: false,
       overwrite: false,
+      allow_network: false,
     };
 
     let summary = run_import(config.clone()).expect("import should succeed");
     assert!(!summary.copied.is_empty());
 
     let test_html = fs::read_to_string(out_dir.path().join("wpt/css/simple/reftest.html")).unwrap();
-    assert!(!test_html.contains("/resources/"));
+    assert!(!test_html.contains("href=\"/resources/"));
+    assert!(!test_html.contains("href='/resources/"));
+    assert!(!test_html.contains("src=\"/resources/"));
+    assert!(!test_html.contains("src='/resources/"));
     assert!(test_html.contains("reftest-ref.html"));
 
     let css =
       fs::read_to_string(out_dir.path().join("wpt/css/simple/support/relative.css")).unwrap();
     assert!(css.contains("resources/green.png"));
-    assert!(!css.contains("/resources/"));
+    assert!(!css.contains("url(\"/resources/"));
+    assert!(!css.contains("url('/resources/"));
 
     let manifest = fs::read_to_string(manifest_path).unwrap();
     assert!(manifest.contains("reftest-ref.html"));
@@ -895,6 +1076,7 @@ mod tests {
       manifest_path: Some(manifest_path),
       dry_run: false,
       overwrite: false,
+      allow_network: false,
     };
 
     run_import(config.clone()).unwrap();
@@ -918,11 +1100,106 @@ mod tests {
       manifest_path: Some(manifest_path.clone()),
       dry_run: true,
       overwrite: false,
+      allow_network: false,
     };
 
     let summary = run_import(config).unwrap();
     assert!(!summary.copied.is_empty());
     assert!(!out_dir.path().join("dry").exists());
     assert!(!manifest_path.exists());
+  }
+
+  #[test]
+  fn rewrites_web_platform_test_origin_to_local_files() {
+    let out_dir = TempDir::new().unwrap();
+    let manifest_path = out_dir.path().join("manifest.toml");
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["css/simple/origin-url.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: Some(manifest_path),
+      dry_run: false,
+      overwrite: false,
+      allow_network: false,
+    };
+
+    run_import(config).unwrap();
+
+    let imported =
+      fs::read_to_string(out_dir.path().join("out/css/simple/origin-url.html")).unwrap();
+    assert!(!imported.contains("web-platform.test"));
+    assert!(!imported.contains("http://"));
+    assert!(imported.contains("green.png"));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
+  }
+
+  #[test]
+  fn copies_ini_sidecars_for_tests_and_references() {
+    let out_dir = TempDir::new().unwrap();
+    let manifest_path = out_dir.path().join("manifest.toml");
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["css/simple/mismatch.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: Some(manifest_path),
+      dry_run: false,
+      overwrite: false,
+      allow_network: false,
+    };
+
+    run_import(config).unwrap();
+    assert!(out_dir
+      .path()
+      .join("out/css/simple/mismatch.html.ini")
+      .exists());
+    assert!(out_dir
+      .path()
+      .join("out/css/simple/mismatch-ref.html.ini")
+      .exists());
+  }
+
+  #[test]
+  fn records_mismatch_expectation_in_manifest() {
+    let out_dir = TempDir::new().unwrap();
+    let manifest_path = out_dir.path().join("manifest.toml");
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["css/simple/mismatch.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: Some(manifest_path.clone()),
+      dry_run: false,
+      overwrite: false,
+      allow_network: false,
+    };
+
+    run_import(config).unwrap();
+    let manifest = fs::read_to_string(manifest_path).unwrap();
+    assert!(manifest.contains("mismatch-ref.html"));
+    assert!(manifest.contains("test_type = \"reftest\""));
+    assert!(manifest.contains("reftest = \"mismatch\""));
+  }
+
+  #[test]
+  fn strict_offline_mode_fails_when_network_urls_remain() {
+    let out_dir = TempDir::new().unwrap();
+    let manifest_path = out_dir.path().join("manifest.toml");
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/external-url.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: Some(manifest_path),
+      dry_run: false,
+      overwrite: false,
+      allow_network: false,
+    };
+
+    let err = run_import(config).unwrap_err();
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path.to_string_lossy().contains("external-url.html"));
+        assert!(urls.contains("example.com"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
   }
 }

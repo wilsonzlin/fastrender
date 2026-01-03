@@ -126,6 +126,8 @@ struct ManifestEntry {
   #[serde(default)]
   reference: Option<String>,
   #[serde(default)]
+  reftest: Option<String>,
+  #[serde(default)]
   test_type: Option<String>,
   #[serde(default)]
   id: Option<String>,
@@ -556,6 +558,10 @@ impl WptRunner {
     let path = Self::resolve_path(manifest_dir, suite_dir, &entry.path);
     let mut metadata = TestMetadata::from_path(path);
 
+    // Lowest-precedence metadata: infer reftest link relations from the HTML itself.
+    // Manifest fields and `.ini` sidecars can override this.
+    Self::apply_html_discovery(&mut metadata);
+
     metadata.id = entry
       .id
       .unwrap_or_else(|| Self::test_id_for_path(&metadata.path, &self.config.test_dir));
@@ -567,8 +573,20 @@ impl WptRunner {
       metadata.viewport_height = viewport.height;
     }
 
-    if let Some(reference) = entry.reference {
+    let manifest_reference = entry.reference;
+    let manifest_reftest = entry.reftest;
+    if let Some(reference) = manifest_reference {
       metadata.reference_path = Some(Self::resolve_path(manifest_dir, suite_dir, &reference));
+      metadata.test_type = TestType::Reftest;
+      if let Some(raw) = &manifest_reftest {
+        metadata.reftest_expectation = Self::parse_reftest_expectation(raw);
+      } else {
+        // If the manifest declares a reference but does not specify an expectation,
+        // default to "match" rather than re-discovering from HTML.
+        metadata.reftest_expectation = ReftestExpectation::Match;
+      }
+    } else if let Some(raw) = &manifest_reftest {
+      metadata.reftest_expectation = Self::parse_reftest_expectation(raw);
     }
 
     if let Some(kind) = entry.test_type {
@@ -583,7 +601,12 @@ impl WptRunner {
       metadata = metadata.disable(reason);
     }
 
-    self.apply_sidecar_metadata(&mut metadata);
+    // Highest-precedence metadata: `.ini` sidecars.
+    self.apply_ini_sidecar_overrides(&mut metadata);
+
+    if metadata.timeout_ms == 0 {
+      metadata.timeout_ms = self.config.default_timeout_ms;
+    }
 
     metadata
   }
@@ -620,20 +643,35 @@ impl WptRunner {
   }
 
   fn apply_sidecar_metadata(&self, metadata: &mut TestMetadata) {
-    if let Some(ini_path) = Self::ini_metadata_path(&metadata.path) {
-      if let Ok(Some(ini)) = self.parse_ini_metadata(&ini_path, metadata) {
-        self.apply_ini_overrides(metadata, ini);
-      }
-    }
+    Self::apply_html_discovery(metadata);
+    self.apply_ini_sidecar_overrides(metadata);
 
+    if metadata.timeout_ms == 0 {
+      metadata.timeout_ms = self.config.default_timeout_ms;
+    }
+  }
+
+  fn apply_html_discovery(metadata: &mut TestMetadata) {
     if let Some((reference, expectation)) = Self::discover_reference_from_html(&metadata.path) {
       metadata.reference_path = Some(reference);
       metadata.reftest_expectation = expectation;
       metadata.test_type = TestType::Reftest;
     }
+  }
 
-    if metadata.timeout_ms == 0 {
-      metadata.timeout_ms = self.config.default_timeout_ms;
+  fn apply_ini_sidecar_overrides(&self, metadata: &mut TestMetadata) {
+    if let Some(ini_path) = Self::ini_metadata_path(&metadata.path) {
+      if let Ok(Some(ini)) = self.parse_ini_metadata(&ini_path, metadata) {
+        self.apply_ini_overrides(metadata, ini);
+      }
+    }
+  }
+
+  fn parse_reftest_expectation(raw: &str) -> ReftestExpectation {
+    if raw.eq_ignore_ascii_case("mismatch") {
+      ReftestExpectation::Mismatch
+    } else {
+      ReftestExpectation::Match
     }
   }
 
@@ -1942,5 +1980,53 @@ mod tests {
     let expected_path = WptRunner::get_expected_image_path(runner.config(), &metadata);
 
     assert!(expected_path.ends_with("css/test.png"));
+  }
+
+  #[test]
+  fn manifest_reftest_expectation_obeys_precedence() {
+    let renderer = create_test_renderer();
+    let mut runner = WptRunner::new(renderer);
+
+    let temp = TempDir::new().unwrap();
+    runner.config_mut().test_dir = temp.path().to_path_buf();
+    runner.config_mut().output_dir = temp.path().join("out");
+
+    // HTML discovery indicates mismatch.
+    let test_html = r#"<!doctype html>
+<link rel="mismatch" href="ref.html">"#;
+    std::fs::write(temp.path().join("test.html"), test_html).unwrap();
+    std::fs::write(temp.path().join("ref.html"), "<!doctype html>").unwrap();
+
+    // The manifest declares a reference but omits `reftest`, so it should default to match
+    // (overriding HTML discovery).
+    let manifest_path = temp.path().join("manifest.toml");
+    std::fs::write(
+      &manifest_path,
+      r#"
+[[tests]]
+path = "test.html"
+reference = "ref.html"
+test_type = "reftest"
+"#,
+    )
+    .unwrap();
+
+    let entries = runner
+      .load_manifest(&manifest_path, temp.path())
+      .expect("manifest should load");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].reftest_expectation, ReftestExpectation::Match);
+
+    // `.ini` sidecars override the manifest.
+    std::fs::write(
+      temp.path().join("test.html.ini"),
+      "[test.html]\nreftest: mismatch\n",
+    )
+    .unwrap();
+
+    let entries = runner
+      .load_manifest(&manifest_path, temp.path())
+      .expect("manifest should load");
+    assert_eq!(entries[0].reftest_expectation, ReftestExpectation::Mismatch);
   }
 }
