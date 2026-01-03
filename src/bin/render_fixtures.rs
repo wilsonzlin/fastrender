@@ -1,225 +1,475 @@
-use clap::Parser;
+//! Render offline page fixtures to PNGs (deterministic, no network).
+//!
+//! This binary renders fixtures under `tests/pages/fixtures/*` (or a custom root)
+//! by reading `<fixture>/index.html`, resolving subresources against `file://` URLs,
+//! and writing `<out-dir>/<fixture>.png`.
+//!
+//! The renderer is configured to be deterministic by default:
+//! - bundled fonts only (no system font discovery)
+//! - offline resource policy (file:/data: only; no http(s))
+//!
+//! Successful renders must not attempt to fetch blocked resources; any subresource
+//! fetch errors are treated as fixture failures.
+
+use clap::{Parser, ValueEnum};
+use fastrender::api::{DiagnosticsLevel, FastRenderConfig, FastRenderPool, FastRenderPoolConfig};
+use fastrender::api::{RenderOptions, ResourceFetchError};
 use fastrender::image_output::encode_image;
-use fastrender::{FastRender, FontConfig, RenderOptions, ResourcePolicy};
+use fastrender::resource::ResourcePolicy;
+use fastrender::style::media::MediaType;
+use fastrender::text::font_db::FontConfig;
+use fastrender::OutputFormat;
+use rayon::ThreadPoolBuilder;
 use std::collections::BTreeSet;
 use std::fs;
+use std::io;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use url::Url;
 
-/// Render offline page fixtures under `tests/pages/fixtures` into a flat PNG directory.
+/// Stack size for worker threads running fixture renders.
 ///
-/// This binary is intended for deterministic offline evidence loops (e.g. comparing FastRender
-/// output against a headless Chrome baseline).
-#[derive(Parser, Debug)]
+/// This matches `common::render_pipeline::CLI_RENDER_STACK_SIZE` used by other CLI tools,
+/// but we keep it local here to avoid pulling in the full `src/bin/common` module tree.
+const CLI_RENDER_STACK_SIZE: usize = 128 * 1024 * 1024; // 128MB
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum MediaArg {
+  Screen,
+  Print,
+}
+
+impl MediaArg {
+  fn as_media_type(self) -> MediaType {
+    match self {
+      MediaArg::Screen => MediaType::Screen,
+      MediaArg::Print => MediaType::Print,
+    }
+  }
+}
+
+/// Render offline page fixtures to PNGs.
+#[derive(Parser, Debug, Clone)]
 #[command(name = "render_fixtures", version, about)]
 struct Args {
   /// Root directory containing fixture subdirectories.
-  ///
-  /// Each fixture is expected to live under `<fixtures-root>/<fixture>/index.html`.
-  #[arg(long, default_value = "tests/pages/fixtures", value_name = "DIR")]
+  #[arg(long, default_value = "tests/pages/fixtures")]
   fixtures_root: PathBuf,
 
-  /// Only render fixtures matching these names (comma-separated).
-  #[arg(long, value_delimiter = ',')]
-  only: Option<Vec<String>>,
+  /// Output directory for rendered PNGs.
+  #[arg(long, default_value = "target/fixture_renders")]
+  out_dir: PathBuf,
 
-  /// Viewport size as WxH (e.g. 1200x800).
+  /// Number of parallel renders.
+  #[arg(long, short = 'j', default_value_t = fastrender::system::cpu_budget())]
+  jobs: usize,
+
+  /// Viewport size as WxH (e.g., 1200x800).
   #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
   viewport: (u32, u32),
 
   /// Device pixel ratio for media queries/srcset.
-  #[arg(long, default_value_t = 1.0)]
+  #[arg(long, default_value = "1.0")]
   dpr: f32,
 
-  /// Hard per-fixture timeout in seconds (0 disables).
+  /// Media type for evaluating media queries.
+  #[arg(long, value_enum, default_value_t = MediaArg::Screen)]
+  media: MediaArg,
+
+  /// Hard per-fixture render timeout in seconds (cooperative).
   #[arg(long, default_value_t = 5)]
   timeout: u64,
 
-  /// Output directory to write PNGs into.
-  #[arg(long, default_value = "target/render_fixtures", value_name = "DIR")]
-  out: PathBuf,
+  /// Write structured diagnostics alongside renders.
+  #[arg(long)]
+  diagnostics_json: bool,
 
-  /// Positional fixture names (equivalent to `--only`).
-  #[arg(value_name = "FIXTURE")]
-  fixtures: Vec<String>,
+  /// Render only the listed fixtures (comma-separated).
+  #[arg(long, value_delimiter = ',')]
+  only: Vec<String>,
+
+  /// Positional fixture filters (fixture directory names).
+  #[arg(trailing_var_arg = true)]
+  filter_fixtures: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct FixtureTask {
+  name: String,
+  dir_path: PathBuf,
+  index_path: PathBuf,
+}
+
+#[derive(Debug)]
+enum FixtureStatus {
+  Ok { png_bytes: usize },
+  Error { message: String },
+  Crash { message: String },
+}
+
+#[derive(Debug)]
+struct FixtureResult {
+  name: String,
+  elapsed_ms: u128,
+  status: FixtureStatus,
+}
+
+#[derive(Clone)]
+struct Shared {
+  render_pool: FastRenderPool,
+  options: RenderOptions,
+  out_dir: PathBuf,
+  diagnostics_json: bool,
 }
 
 fn main() {
-  if let Err(err) = run() {
-    eprintln!("error: {err}");
-    std::process::exit(1);
+  let args = Args::parse();
+  let code = match run(args) {
+    Ok(()) => 0,
+    Err(code) => code,
+  };
+  std::process::exit(code);
+}
+
+fn run(args: Args) -> Result<(), i32> {
+  if args.jobs == 0 {
+    eprintln!("jobs must be > 0");
+    return Err(2);
+  }
+  if args.timeout == 0 {
+    eprintln!("timeout must be > 0");
+    return Err(2);
+  }
+  if args.viewport.0 == 0 || args.viewport.1 == 0 {
+    eprintln!("viewport width and height must be > 0");
+    return Err(2);
+  }
+  if !args.dpr.is_finite() || args.dpr <= 0.0 {
+    eprintln!("dpr must be a positive number");
+    return Err(2);
+  }
+
+  fs::create_dir_all(&args.out_dir).map_err(|err| {
+    eprintln!("failed to create out-dir {}: {err}", args.out_dir.display());
+    1
+  })?;
+
+  let fixtures = select_fixtures(&args).map_err(|err| {
+    eprintln!("{err}");
+    1
+  })?;
+  if fixtures.is_empty() {
+    eprintln!(
+      "no fixtures found under {} (expected <fixture>/index.html)",
+      args.fixtures_root.display()
+    );
+    return Err(1);
+  }
+
+  let render_pool = build_render_pool(&args).map_err(|err| {
+    eprintln!("failed to initialize renderer: {err}");
+    1
+  })?;
+  let options = build_render_options(&args);
+
+  let shared = Shared {
+    render_pool,
+    options,
+    out_dir: args.out_dir.clone(),
+    diagnostics_json: args.diagnostics_json,
+  };
+
+  println!(
+    "Rendering {} fixture(s) ({} parallel) to {}",
+    fixtures.len(),
+    args.jobs,
+    args.out_dir.display()
+  );
+  println!(
+    "Viewport: {}x{}  DPR: {}  Media: {:?}  Timeout: {}s",
+    args.viewport.0, args.viewport.1, args.dpr, args.media, args.timeout
+  );
+  println!();
+
+  let results: Mutex<Vec<FixtureResult>> = Mutex::new(Vec::with_capacity(fixtures.len()));
+  let pool = ThreadPoolBuilder::new()
+    .num_threads(args.jobs)
+    .stack_size(CLI_RENDER_STACK_SIZE)
+    .build()
+    .map_err(|err| {
+      eprintln!("failed to create thread pool: {err}");
+      1
+    })?;
+
+  pool.scope(|scope| {
+    for fixture in fixtures {
+      let shared = shared.clone();
+      let results = &results;
+      scope.spawn(move |_| {
+        let result = render_fixture(shared, fixture);
+        results.lock().unwrap().push(result);
+      });
+    }
+  });
+
+  let mut results = results.into_inner().unwrap_or_default();
+  results.sort_by(|a, b| a.name.cmp(&b.name));
+
+  let mut ok = 0usize;
+  let mut failed = 0usize;
+  for result in &results {
+    match &result.status {
+      FixtureStatus::Ok { png_bytes } => {
+        ok += 1;
+        println!(
+          "OK  {:<40} {:>6}ms  {}b",
+          result.name, result.elapsed_ms, png_bytes
+        );
+      }
+      FixtureStatus::Error { message } => {
+        failed += 1;
+        eprintln!(
+          "ERR {:<40} {:>6}ms  {message}",
+          result.name, result.elapsed_ms
+        );
+      }
+      FixtureStatus::Crash { message } => {
+        failed += 1;
+        eprintln!(
+          "CRASH {:<38} {:>6}ms  {message}",
+          result.name, result.elapsed_ms
+        );
+      }
+    }
+  }
+
+  println!();
+  println!("Done: {} ok, {} failed", ok, failed);
+  if failed > 0 {
+    Err(1)
+  } else {
+    Ok(())
   }
 }
 
-fn run() -> Result<(), String> {
-  let args = Args::parse();
-
-  if !args.dpr.is_finite() || args.dpr <= 0.0 {
-    return Err("--dpr must be a finite number > 0".to_string());
-  }
-
-  if !args.fixtures_root.is_dir() {
-    return Err(format!(
-      "--fixtures-root {} is not a directory",
-      args.fixtures_root.display()
-    ));
-  }
-
-  let mut requested = Vec::new();
-  if let Some(only) = args.only.clone() {
-    requested.extend(only);
-  }
-  requested.extend(args.fixtures.clone());
-  let requested: Option<BTreeSet<String>> = if requested.is_empty() {
-    None
-  } else {
-    Some(requested.into_iter().collect())
-  };
-
-  let mut candidates = discover_fixtures(&args.fixtures_root)?;
-  candidates.sort();
-
-  let fixtures: Vec<String> = if let Some(requested) = requested {
-    let candidate_set: BTreeSet<String> = candidates.iter().cloned().collect();
-    let missing: Vec<String> = requested
-      .iter()
-      .filter(|name| !candidate_set.contains(*name))
-      .cloned()
-      .collect();
-    if !missing.is_empty() {
-      return Err(format!(
-        "unknown fixture(s) under {}: {}",
-        args.fixtures_root.display(),
-        missing.join(", ")
+fn select_fixtures(args: &Args) -> io::Result<Vec<FixtureTask>> {
+  let mut selected: BTreeSet<String> = BTreeSet::new();
+  for name in args.only.iter().chain(args.filter_fixtures.iter()) {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    // Keep filtering strict to avoid surprising path traversal.
+    if trimmed.contains('/') || trimmed.contains('\\') {
+      return Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("invalid fixture name (must be a directory name): {trimmed}"),
       ));
     }
-    requested.into_iter().collect()
-  } else {
-    candidates
-  };
-
-  if fixtures.is_empty() {
-    return Err(format!(
-      "no fixtures discovered under {}",
-      args.fixtures_root.display()
-    ));
+    selected.insert(trimmed.to_string());
   }
 
-  fs::create_dir_all(&args.out)
-    .map_err(|e| format!("failed to create output dir {}: {e}", args.out.display()))?;
+  if selected.is_empty() {
+    discover_all_fixtures(&args.fixtures_root)
+  } else {
+    Ok(
+      selected
+        .into_iter()
+        .map(|name| {
+          let dir_path = args.fixtures_root.join(&name);
+          let index_path = dir_path.join("index.html");
+          FixtureTask {
+            name,
+            dir_path,
+            index_path,
+          }
+        })
+        .collect(),
+    )
+  }
+}
 
-  // Keep renders deterministic across machines by using the bundled font set and blocking
-  // network fetches.
-  let fetch_policy = ResourcePolicy::default()
+fn discover_all_fixtures(fixtures_root: &Path) -> io::Result<Vec<FixtureTask>> {
+  let mut fixtures = Vec::new();
+  for entry in fs::read_dir(fixtures_root)? {
+    let entry = entry?;
+    let path = entry.path();
+    let file_type = entry.file_type()?;
+    if !file_type.is_dir() {
+      continue;
+    }
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+      continue;
+    };
+    let index_path = path.join("index.html");
+    if !index_path.is_file() {
+      continue;
+    }
+    fixtures.push(FixtureTask {
+      name: name.to_string(),
+      dir_path: path,
+      index_path,
+    });
+  }
+  fixtures.sort_by(|a, b| a.name.cmp(&b.name));
+  Ok(fixtures)
+}
+
+fn build_render_pool(args: &Args) -> fastrender::Result<FastRenderPool> {
+  let resource_policy = ResourcePolicy::default()
     .allow_http(false)
     .allow_https(false)
     .allow_file(true)
     .allow_data(true);
 
-  let mut renderer = FastRender::builder()
-    .font_sources(FontConfig::bundled_only())
-    .resource_policy(fetch_policy)
-    .build()
-    .map_err(|e| format!("failed to build renderer: {e:?}"))?;
+  let config = FastRenderConfig::new()
+    .with_default_viewport(args.viewport.0, args.viewport.1)
+    .with_device_pixel_ratio(args.dpr)
+    .with_meta_viewport(true)
+    .with_resource_policy(resource_policy)
+    .with_font_sources(FontConfig::bundled_only());
 
-  let timeout = if args.timeout == 0 {
-    None
-  } else {
-    Some(Duration::from_secs(args.timeout))
+  FastRenderPool::with_config(
+    FastRenderPoolConfig::new()
+      .with_renderer_config(config)
+      .with_pool_size(args.jobs),
+  )
+}
+
+fn build_render_options(args: &Args) -> RenderOptions {
+  let mut options = RenderOptions::new()
+    .with_viewport(args.viewport.0, args.viewport.1)
+    .with_device_pixel_ratio(args.dpr)
+    .with_media_type(args.media.as_media_type());
+  options.timeout = Some(Duration::from_secs(args.timeout));
+  if args.diagnostics_json {
+    options = options.with_diagnostics_level(DiagnosticsLevel::Basic);
+  }
+  options
+}
+
+fn render_fixture(shared: Shared, fixture: FixtureTask) -> FixtureResult {
+  let started = Instant::now();
+  let name = fixture.name.clone();
+  let result = catch_unwind(AssertUnwindSafe(|| render_fixture_inner(&shared, &fixture)));
+  let status = match result {
+    Ok(Ok(png_bytes)) => FixtureStatus::Ok { png_bytes },
+    Ok(Err(message)) => FixtureStatus::Error { message },
+    Err(panic) => FixtureStatus::Crash {
+      message: panic_to_string(panic),
+    },
   };
 
-  let mut failures = Vec::new();
-
-  for fixture in fixtures {
-    let dir = args.fixtures_root.join(&fixture);
-    let html_path = dir.join("index.html");
-    if !html_path.is_file() {
-      failures.push(format!("{fixture}: missing {}/index.html", dir.display()));
-      continue;
-    }
-
-    let canonical_dir = fs::canonicalize(&dir)
-      .map_err(|e| format!("failed to canonicalize {}: {e}", dir.display()))?;
-    let base_url = Url::from_directory_path(&canonical_dir)
-      .map_err(|_| format!("failed to build base_url for {}", dir.display()))?
-      .to_string();
-    renderer.set_base_url(base_url);
-
-    let html =
-      fs::read_to_string(&html_path).map_err(|e| format!("read {}: {e}", html_path.display()))?;
-
-    let options = RenderOptions::new()
-      .with_viewport(args.viewport.0, args.viewport.1)
-      .with_device_pixel_ratio(args.dpr)
-      .with_timeout(timeout);
-
-    let rendered = match renderer.render_html_with_options(&html, options) {
-      Ok(pixmap) => pixmap,
-      Err(err) => {
-        failures.push(format!("{fixture}: render failed: {err:?}"));
-        continue;
-      }
-    };
-
-    let png = encode_image(&rendered, fastrender::OutputFormat::Png)
-      .map_err(|e| format!("{fixture}: failed to encode PNG: {e:?}"))?;
-
-    let out_path = args.out.join(format!("{fixture}.png"));
-    if let Err(err) = fs::write(&out_path, png) {
-      failures.push(format!(
-        "{fixture}: failed to write {}: {err}",
-        out_path.display()
-      ));
-      continue;
-    }
-
-    println!("✓ {fixture}");
+  FixtureResult {
+    name,
+    elapsed_ms: started.elapsed().as_millis(),
+    status,
   }
-
-  if !failures.is_empty() {
-    eprintln!("render_fixtures failures ({}):", failures.len());
-    for failure in &failures {
-      eprintln!("  {failure}");
-    }
-    return Err("one or more fixtures failed".to_string());
-  }
-
-  Ok(())
 }
 
-fn discover_fixtures(root: &Path) -> Result<Vec<String>, String> {
-  let mut fixtures = Vec::new();
-  let entries = fs::read_dir(root).map_err(|e| format!("read {}: {e}", root.display()))?;
+fn render_fixture_inner(shared: &Shared, fixture: &FixtureTask) -> Result<usize, String> {
+  let html = fs::read_to_string(&fixture.index_path)
+    .map_err(|err| format!("failed to read {}: {err}", fixture.index_path.display()))?;
 
-  for entry in entries {
-    let entry = entry.map_err(|e| format!("read entry under {}: {e}", root.display()))?;
-    let ty = entry
-      .file_type()
-      .map_err(|e| format!("stat {}: {e}", entry.path().display()))?;
-    if !ty.is_dir() {
-      continue;
-    }
-    let path = entry.path();
-    if path.join("index.html").is_file() {
-      fixtures.push(entry.file_name().to_string_lossy().to_string());
-    }
+  let base_hint = file_url_for_dir(&fixture.dir_path)
+    .map_err(|err| format!("failed to build file:// base URL for fixture: {err}"))?
+    .to_string();
+
+  let options = shared.options.clone();
+  let render_result = shared
+    .render_pool
+    .with_renderer(|renderer| renderer.render_html_with_stylesheets(&html, &base_hint, options))
+    .map_err(|err| err.to_string())?;
+
+  if shared.diagnostics_json {
+    let diag_path = diagnostics_path_for(&shared.out_dir, &fixture.name);
+    let json = serde_json::to_string_pretty(&render_result.diagnostics)
+      .map_err(|err| format!("failed to serialize diagnostics: {err}"))?;
+    fs::write(&diag_path, json)
+      .map_err(|err| format!("failed to write diagnostics {}: {err}", diag_path.display()))?;
   }
 
-  Ok(fixtures)
+  if let Some(message) = disallowed_resource_message(&render_result.diagnostics.fetch_errors) {
+    return Err(message);
+  }
+  if let Some(message) =
+    disallowed_resource_message(&render_result.diagnostics.blocked_fetch_errors)
+  {
+    return Err(message);
+  }
+
+  let png_bytes = encode_image(&render_result.pixmap, OutputFormat::Png)
+    .map_err(|err| format!("failed to encode PNG: {err}"))?;
+  let out_path = output_path_for(&shared.out_dir, &fixture.name);
+  fs::write(&out_path, &png_bytes)
+    .map_err(|err| format!("failed to write PNG {}: {err}", out_path.display()))?;
+  Ok(png_bytes.len())
 }
 
-fn parse_viewport(raw: &str) -> Result<(u32, u32), String> {
-  let (width, height) = raw
-    .split_once('x')
-    .ok_or_else(|| "viewport must be WxH (e.g. 1200x800)".to_string())?;
-
-  let width = width.parse::<u32>().map_err(|_| "invalid width".to_string())?;
-  let height = height.parse::<u32>().map_err(|_| "invalid height".to_string())?;
-
-  if width == 0 || height == 0 {
-    return Err("viewport width/height must be > 0".to_string());
+fn disallowed_resource_message(errors: &[ResourceFetchError]) -> Option<String> {
+  let first = errors.first()?;
+  if first.url.starts_with("http://") || first.url.starts_with("https://") {
+    Some(format!(
+      "blocked http/https resource: {} ({})",
+      first.url, first.message
+    ))
+  } else {
+    Some(format!(
+      "subresource fetch failed: {} ({})",
+      first.url, first.message
+    ))
   }
+}
 
-  Ok((width, height))
+fn output_path_for(out_dir: &Path, fixture: &str) -> PathBuf {
+  out_dir.join(format!("{fixture}.png"))
+}
+
+fn diagnostics_path_for(out_dir: &Path, fixture: &str) -> PathBuf {
+  out_dir.join(format!("{fixture}.diagnostics.json"))
+}
+
+fn file_url_for_dir(dir: &Path) -> Result<Url, io::Error> {
+  let canonical = fs::canonicalize(dir)?;
+  Url::from_directory_path(&canonical).map_err(|()| {
+    io::Error::new(
+      io::ErrorKind::InvalidInput,
+      format!("cannot convert {} to file:// URL", canonical.display()),
+    )
+  })
+}
+
+fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
+  let parts: Vec<&str> = s.split('x').collect();
+  if parts.len() != 2 {
+    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
+  }
+  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
+  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
+  if w == 0 || h == 0 {
+    return Err("width and height must be > 0".to_string());
+  }
+  Ok((w, h))
+}
+
+fn panic_to_string(panic: Box<dyn std::any::Any + Send + 'static>) -> String {
+  panic
+    .downcast_ref::<&str>()
+    .map(|s| s.to_string())
+    .or_else(|| panic.downcast_ref::<String>().cloned())
+    .unwrap_or_else(|| "unknown panic".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::parse_viewport;
+
+  #[test]
+  fn parse_viewport_values() {
+    assert_eq!(parse_viewport("1200x800"), Ok((1200, 800)));
+    assert!(parse_viewport("0x800").is_err());
+    assert!(parse_viewport("800").is_err());
+  }
 }
