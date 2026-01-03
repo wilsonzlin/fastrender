@@ -496,38 +496,37 @@ PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=0
 PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=0
 PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=0
 PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT=0
-PREFETCH_ASSETS_SOURCE="src/bin/prefetch_assets.rs"
-if [[ -f "${PREFETCH_ASSETS_SOURCE}" ]]; then
-  if grep -q "prefetch_fonts" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS=1
+
+prefetch_assets_capability_is_true() {
+  local json="$1"
+  local key="$2"
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys; data=json.load(sys.stdin); sys.stdout.write("1" if data.get(sys.argv[1]) else "0")' \
+      "${key}" <<<"${json}"
+    return
   fi
-  if grep -q "prefetch_images" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=1
+
+  if printf '%s' "${json}" | grep -Eq "\"${key}\"[[:space:]]*:[[:space:]]*true"; then
+    echo 1
+  else
+    echo 0
   fi
-  if grep -q "prefetch_iframes" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=1
-  fi
-  if grep -q "prefetch_embeds" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS=1
-  fi
-  if grep -q "prefetch_icons" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS=1
-  fi
-  if grep -q "prefetch_video_posters" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS=1
-  fi
-  if grep -q "prefetch_css_url_assets" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=1
-  fi
-  if grep -q "max_discovered_assets_per_page" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=1
-  fi
-  if grep -q "max_images_per_page" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=1
-  fi
-  if grep -q "max_image_urls_per_element" "${PREFETCH_ASSETS_SOURCE}"; then
-    PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT=1
-  fi
+}
+
+if [[ "${USE_DISK_CACHE}" != 0 ]]; then
+  PREFETCH_ASSETS_CAPABILITIES_JSON="$(cargo run --release --features disk_cache --bin prefetch_assets -- --print-capabilities-json)"
+
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_fonts")"
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_images")"
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_iframes")"
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_embeds")"
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_icons")"
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_video_posters")"
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_css_url_assets")"
+  PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_discovered_assets_per_page")"
+  PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_images_per_page")"
+  PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_image_urls_per_element")"
 fi
 
 for ((i=0; i < ${#ARGS[@]}; i++)); do

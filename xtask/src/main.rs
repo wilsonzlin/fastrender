@@ -3,9 +3,10 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use image::{Rgba, RgbaImage};
+use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::TempDir;
 use url::Url;
 use walkdir::WalkDir;
@@ -1243,6 +1244,31 @@ struct PrefetchAssetsSupport {
   max_image_urls_per_element: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct PrefetchAssetsCapabilities {
+  schema_version: u32,
+  #[serde(default)]
+  prefetch_fonts: bool,
+  #[serde(default)]
+  prefetch_images: bool,
+  #[serde(default)]
+  prefetch_iframes: bool,
+  #[serde(default)]
+  prefetch_embeds: bool,
+  #[serde(default)]
+  prefetch_icons: bool,
+  #[serde(default)]
+  prefetch_video_posters: bool,
+  #[serde(default)]
+  prefetch_css_url_assets: bool,
+  #[serde(default)]
+  max_discovered_assets_per_page: bool,
+  #[serde(default)]
+  max_images_per_page: bool,
+  #[serde(default)]
+  max_image_urls_per_element: bool,
+}
+
 impl PrefetchAssetsSupport {
   fn any(self) -> bool {
     self.prefetch_fonts
@@ -1258,34 +1284,110 @@ impl PrefetchAssetsSupport {
   }
 
   fn detect() -> Self {
-    let path = repo_root().join("src/bin/prefetch_assets.rs");
-    let Ok(contents) = fs::read_to_string(path) else {
-      return Self {
-        prefetch_fonts: false,
-        prefetch_images: false,
-        prefetch_iframes: false,
-        prefetch_embeds: false,
-        prefetch_icons: false,
-        prefetch_video_posters: false,
-        prefetch_css_url_assets: false,
-        max_discovered_assets_per_page: false,
-        max_images_per_page: false,
-        max_image_urls_per_element: false,
-      };
-    };
+    let mut cmd = Command::new("cargo");
+    cmd
+      .arg("run")
+      .arg("--release")
+      .apply_disk_cache_feature(true)
+      .args(["--bin", "prefetch_assets"])
+      .arg("--")
+      .arg("--print-capabilities-json");
+    cmd.current_dir(repo_root());
+    // Keep cargo build noise visible while still capturing the JSON payload.
+    cmd.stderr(Stdio::inherit());
 
-    Self {
-      prefetch_fonts: contents.contains("prefetch_fonts"),
-      prefetch_images: contents.contains("prefetch_images"),
-      prefetch_iframes: contents.contains("prefetch_iframes"),
-      prefetch_embeds: contents.contains("prefetch_embeds"),
-      prefetch_icons: contents.contains("prefetch_icons"),
-      prefetch_video_posters: contents.contains("prefetch_video_posters"),
-      prefetch_css_url_assets: contents.contains("prefetch_css_url_assets"),
-      max_discovered_assets_per_page: contents.contains("max_discovered_assets_per_page"),
-      max_images_per_page: contents.contains("max_images_per_page"),
-      max_image_urls_per_element: contents.contains("max_image_urls_per_element"),
+    let Ok(output) = cmd.output() else {
+      return Self::none();
+    };
+    if !output.status.success() {
+      return Self::none();
     }
+
+    Self::from_capabilities_json(&output.stdout).unwrap_or_else(Self::none)
+  }
+
+  fn from_capabilities_json(json: &[u8]) -> Option<Self> {
+    let capabilities: PrefetchAssetsCapabilities = serde_json::from_slice(json).ok()?;
+    if capabilities.schema_version == 0 {
+      return None;
+    }
+
+    Some(Self {
+      prefetch_fonts: capabilities.prefetch_fonts,
+      prefetch_images: capabilities.prefetch_images,
+      prefetch_iframes: capabilities.prefetch_iframes,
+      prefetch_embeds: capabilities.prefetch_embeds,
+      prefetch_icons: capabilities.prefetch_icons,
+      prefetch_video_posters: capabilities.prefetch_video_posters,
+      prefetch_css_url_assets: capabilities.prefetch_css_url_assets,
+      max_discovered_assets_per_page: capabilities.max_discovered_assets_per_page,
+      max_images_per_page: capabilities.max_images_per_page,
+      max_image_urls_per_element: capabilities.max_image_urls_per_element,
+    })
+  }
+
+  fn none() -> Self {
+    Self {
+      prefetch_fonts: false,
+      prefetch_images: false,
+      prefetch_iframes: false,
+      prefetch_embeds: false,
+      prefetch_icons: false,
+      prefetch_video_posters: false,
+      prefetch_css_url_assets: false,
+      max_discovered_assets_per_page: false,
+      max_images_per_page: false,
+      max_image_urls_per_element: false,
+    }
+  }
+}
+
+#[cfg(test)]
+mod prefetch_assets_support_tests {
+  use super::PrefetchAssetsSupport;
+
+  #[test]
+  fn parses_prefetch_assets_capabilities_json() {
+    let json = r#"{
+      "schema_version": 1,
+      "prefetch_fonts": true,
+      "prefetch_images": false,
+      "prefetch_iframes": true,
+      "prefetch_embeds": false,
+      "prefetch_icons": true,
+      "prefetch_video_posters": false,
+      "prefetch_css_url_assets": true,
+      "max_discovered_assets_per_page": true,
+      "max_images_per_page": false,
+      "max_image_urls_per_element": true
+    }"#;
+
+    let support =
+      PrefetchAssetsSupport::from_capabilities_json(json.as_bytes()).expect("parsed support");
+    assert!(support.prefetch_fonts);
+    assert!(!support.prefetch_images);
+    assert!(support.prefetch_iframes);
+    assert!(!support.prefetch_embeds);
+    assert!(support.prefetch_icons);
+    assert!(!support.prefetch_video_posters);
+    assert!(support.prefetch_css_url_assets);
+    assert!(support.max_discovered_assets_per_page);
+    assert!(!support.max_images_per_page);
+    assert!(support.max_image_urls_per_element);
+  }
+
+  #[test]
+  fn missing_capabilities_schema_version_is_rejected() {
+    let json = r#"{"prefetch_fonts": true}"#;
+    assert!(PrefetchAssetsSupport::from_capabilities_json(json.as_bytes()).is_none());
+  }
+
+  #[test]
+  fn missing_capabilities_fields_default_to_false() {
+    let json = r#"{"schema_version": 1}"#;
+    let support =
+      PrefetchAssetsSupport::from_capabilities_json(json.as_bytes()).expect("parsed support");
+    assert!(!support.any());
   }
 }
 
