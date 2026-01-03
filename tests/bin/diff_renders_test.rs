@@ -9,6 +9,18 @@ fn write_color_png(path: &Path, color: [u8; 4]) {
   img.save(path).expect("save png");
 }
 
+fn diff_renders_cmd(tmp_dir: &Path) -> Command {
+  let mut cmd = Command::new(env!("CARGO_BIN_EXE_diff_renders"));
+  cmd.current_dir(tmp_dir);
+  // Keep tests hermetic even if the caller has fixture env vars set.
+  cmd.env_remove("FIXTURE_TOLERANCE");
+  cmd.env_remove("FIXTURE_MAX_DIFFERENT_PERCENT");
+  cmd.env_remove("FIXTURE_FUZZY");
+  cmd.env_remove("FIXTURE_IGNORE_ALPHA");
+  cmd.env_remove("FIXTURE_MAX_PERCEPTUAL_DISTANCE");
+  cmd
+}
+
 #[test]
 fn diff_renders_reports_matches() {
   let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -20,9 +32,7 @@ fn diff_renders_reports_matches() {
   write_color_png(&before.join("page.png"), [10, 20, 30, 255]);
   write_color_png(&after.join("page.png"), [10, 20, 30, 255]);
 
-  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
-    .current_dir(tmp.path())
-    .args([
+  let status = diff_renders_cmd(tmp.path()).args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -69,9 +79,7 @@ fn diff_renders_exits_non_zero_on_diff() {
   write_color_png(&before.join("page.png"), [255, 0, 0, 255]);
   write_color_png(&after.join("page.png"), [0, 0, 255, 255]);
 
-  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
-    .current_dir(tmp.path())
-    .args([
+  let status = diff_renders_cmd(tmp.path()).args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -122,8 +130,7 @@ fn diff_renders_respects_shard_and_env_tolerance() {
   write_color_png(&before.join("b.png"), [0, 0, 0, 255]);
   write_color_png(&after.join("b.png"), [255, 255, 255, 255]);
 
-  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
-    .current_dir(tmp.path())
+  let status = diff_renders_cmd(tmp.path())
     .env("FIXTURE_TOLERANCE", "5")
     .args([
       "--before",
@@ -161,9 +168,7 @@ fn diff_renders_supports_recursive_directories() {
   write_color_png(&before.join("a").join("x.png"), [255, 0, 0, 255]);
   write_color_png(&after.join("a").join("x.png"), [0, 0, 255, 255]);
 
-  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
-    .current_dir(tmp.path())
-    .args([
+  let status = diff_renders_cmd(tmp.path()).args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -219,9 +224,7 @@ fn diff_renders_supports_file_to_file_diffs() {
   write_color_png(&before, [0, 255, 0, 255]);
   write_color_png(&after, [0, 0, 0, 255]);
 
-  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
-    .current_dir(tmp.path())
-    .args([
+  let status = diff_renders_cmd(tmp.path()).args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -252,4 +255,114 @@ fn diff_renders_supports_file_to_file_diffs() {
     "diff image missing at {}",
     diff_path
   );
+}
+
+#[test]
+fn diff_renders_reports_perceptual_metric() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  write_color_png(&before.join("page.png"), [0, 0, 0, 255]);
+  write_color_png(&after.join("page.png"), [20, 20, 20, 255]);
+
+  let status = diff_renders_cmd(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--max-diff-percent",
+      "100",
+      "--max-perceptual-distance",
+      "1",
+    ])
+    .status()
+    .expect("run diff_renders");
+  assert!(status.success());
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+  let dist = report["results"][0]["metrics"]["perceptual_distance"]
+    .as_f64()
+    .expect("perceptual_distance missing");
+  assert!(dist > 0.0);
+}
+
+#[test]
+fn diff_renders_enforces_max_perceptual_distance() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  write_color_png(&before.join("page.png"), [0, 0, 0, 255]);
+  write_color_png(&after.join("page.png"), [255, 255, 255, 255]);
+
+  let status = diff_renders_cmd(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--max-diff-percent",
+      "100",
+      "--max-perceptual-distance",
+      "0",
+    ])
+    .status()
+    .expect("run diff_renders");
+
+  assert!(!status.success(), "expected non-zero exit due to perceptual fail");
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+  assert_eq!(report["totals"]["differences"].as_u64(), Some(1));
+  assert_eq!(report["results"][0]["status"], "diff");
+}
+
+#[test]
+fn diff_renders_sorts_by_perceptual_distance() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  // Both entries differ in 100% of pixels, but with very different perceptual distance.
+  write_color_png(&before.join("a.png"), [0, 0, 0, 255]);
+  write_color_png(&after.join("a.png"), [10, 10, 10, 255]);
+  write_color_png(&before.join("b.png"), [0, 0, 0, 255]);
+  write_color_png(&after.join("b.png"), [255, 255, 255, 255]);
+
+  let status = diff_renders_cmd(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--max-diff-percent",
+      "100",
+      "--max-perceptual-distance",
+      "1",
+      "--sort-by",
+      "perceptual",
+    ])
+    .status()
+    .expect("run diff_renders");
+  assert!(status.success());
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+  assert_eq!(report["sort_by"], "perceptual");
+  assert_eq!(report["results"][0]["name"], "b");
 }

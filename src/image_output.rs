@@ -14,6 +14,8 @@ pub struct DiffMetrics {
   pub pixel_diff: u64,
   pub total_pixels: u64,
   pub diff_percentage: f64,
+  /// SSIM-derived perceptual distance (0.0 = identical, higher = more different).
+  pub perceptual_distance: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -145,6 +147,7 @@ pub fn diff_png(rendered: &[u8], expected: &[u8], tolerance: u8) -> Result<(Diff
     pixel_diff: diff.statistics.different_pixels,
     total_pixels: diff.statistics.total_pixels,
     diff_percentage: diff.statistics.different_percent,
+    perceptual_distance: diff.statistics.perceptual_distance,
   };
 
   Ok((metrics, diff_png))

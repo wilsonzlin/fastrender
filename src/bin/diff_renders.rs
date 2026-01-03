@@ -9,6 +9,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SortBy {
+  Pixel,
+  Percent,
+  Perceptual,
+}
+
+impl SortBy {
+  fn label(&self) -> &'static str {
+    match self {
+      SortBy::Pixel => "pixel",
+      SortBy::Percent => "percent",
+      SortBy::Perceptual => "perceptual",
+    }
+  }
+}
+
 #[derive(Parser, Debug)]
 #[command(
   name = "diff_renders",
@@ -31,6 +49,14 @@ struct Args {
   #[arg(long)]
   max_diff_percent: Option<f64>,
 
+  /// Maximum allowed perceptual distance (0.0 = identical). Defaults to env compat vars when set.
+  #[arg(long)]
+  max_perceptual_distance: Option<f64>,
+
+  /// Sort report entries by metric within each status group.
+  #[arg(long, value_enum, default_value_t = SortBy::Percent)]
+  sort_by: SortBy,
+
   /// Only diff a deterministic shard of the inputs (index/total, 0-based)
   #[arg(long, value_parser = parse_shard)]
   shard: Option<(usize, usize)>,
@@ -50,6 +76,9 @@ struct DiffReport {
   after_dir: String,
   tolerance: u8,
   max_diff_percent: f64,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  max_perceptual_distance: Option<f64>,
+  sort_by: SortBy,
   shard: Option<ShardInfo>,
   totals: DiffReportTotals,
   results: Vec<DiffReportEntry>,
@@ -134,6 +163,7 @@ struct MetricsSummary {
   pixel_diff: u64,
   total_pixels: u64,
   diff_percentage: f64,
+  perceptual_distance: f64,
 }
 
 impl From<DiffMetrics> for MetricsSummary {
@@ -142,6 +172,7 @@ impl From<DiffMetrics> for MetricsSummary {
       pixel_diff: metrics.pixel_diff,
       total_pixels: metrics.total_pixels,
       diff_percentage: metrics.diff_percentage,
+      perceptual_distance: metrics.perceptual_distance,
     }
   }
 }
@@ -161,6 +192,7 @@ fn run() -> Result<i32, String> {
 
   let tolerance = resolve_tolerance(args.tolerance)?;
   let max_diff_percent = resolve_max_diff_percent(args.max_diff_percent)?;
+  let max_perceptual_distance = resolve_max_perceptual_distance(args.max_perceptual_distance)?;
 
   let before_meta =
     fs::metadata(&args.before).map_err(|e| format!("{}: {e}", args.before.display()))?;
@@ -200,8 +232,8 @@ fn run() -> Result<i32, String> {
   fs::create_dir_all(&diff_dir)
     .map_err(|e| format!("failed to create diff dir {}: {e}", diff_dir.display()))?;
 
-  let (before_root, after_root, results, totals) = match (before_meta.is_dir(), after_meta.is_dir())
-  {
+  let (before_root, after_root, mut results, totals) =
+    match (before_meta.is_dir(), after_meta.is_dir()) {
     (true, true) => {
       let before_dir = normalize_dir(&args.before)?;
       let after_dir = normalize_dir(&args.after)?;
@@ -212,6 +244,7 @@ fn run() -> Result<i32, String> {
         &diff_dir,
         tolerance,
         max_diff_percent,
+        max_perceptual_distance,
         args.shard,
       )?;
       (before_dir, after_dir, results, totals)
@@ -226,6 +259,7 @@ fn run() -> Result<i32, String> {
         &diff_dir,
         tolerance,
         max_diff_percent,
+        max_perceptual_distance,
         args.shard,
       )?;
       (before_file, after_file, results, totals)
@@ -234,6 +268,8 @@ fn run() -> Result<i32, String> {
       return Err("--before and --after must both be directories or both be PNG files".to_string());
     }
   };
+
+  sort_entries(&mut results, args.sort_by);
 
   let shard = args.shard.map(|(index, total)| ShardInfo {
     index,
@@ -246,6 +282,8 @@ fn run() -> Result<i32, String> {
     after_dir: display_path(&after_root),
     tolerance,
     max_diff_percent,
+    max_perceptual_distance,
+    sort_by: args.sort_by,
     shard,
     totals,
     results,
@@ -338,6 +376,32 @@ fn validate_percent(value: f64) -> Result<(), String> {
   }
 }
 
+fn resolve_max_perceptual_distance(flag: Option<f64>) -> Result<Option<f64>, String> {
+  if let Some(value) = flag {
+    validate_perceptual_distance(value)?;
+    return Ok(Some(value));
+  }
+  if let Ok(env) = std::env::var("FIXTURE_MAX_PERCEPTUAL_DISTANCE") {
+    let parsed = env
+      .parse::<f64>()
+      .map_err(|e| format!("Invalid FIXTURE_MAX_PERCEPTUAL_DISTANCE '{env}': {e}"))?;
+    validate_perceptual_distance(parsed)?;
+    return Ok(Some(parsed));
+  }
+  if std::env::var("FIXTURE_FUZZY").is_ok() {
+    return Ok(Some(0.05));
+  }
+  Ok(None)
+}
+
+fn validate_perceptual_distance(value: f64) -> Result<(), String> {
+  if value.is_finite() && (0.0..=1.0).contains(&value) {
+    Ok(())
+  } else {
+    Err("max_perceptual_distance must be a finite number between 0 and 1".to_string())
+  }
+}
+
 fn process_directory(
   before_dir: &Path,
   after_dir: &Path,
@@ -345,6 +409,7 @@ fn process_directory(
   diff_dir: &Path,
   tolerance: u8,
   max_diff_percent: f64,
+  max_perceptual_distance: Option<f64>,
   shard: Option<(usize, usize)>,
 ) -> Result<(Vec<DiffReportEntry>, DiffReportTotals), String> {
   let before_pngs = collect_pngs(before_dir)?;
@@ -378,6 +443,7 @@ fn process_directory(
       diff_dir,
       tolerance,
       max_diff_percent,
+      max_perceptual_distance,
       &mut totals,
     );
     track_status(&mut totals, entry.status);
@@ -394,6 +460,7 @@ fn process_files(
   diff_dir: &Path,
   tolerance: u8,
   max_diff_percent: f64,
+  max_perceptual_distance: Option<f64>,
   shard: Option<(usize, usize)>,
 ) -> Result<(Vec<DiffReportEntry>, DiffReportTotals), String> {
   let name = before
@@ -422,6 +489,7 @@ fn process_files(
     diff_dir,
     tolerance,
     max_diff_percent,
+    max_perceptual_distance,
     &mut totals,
   );
   track_status(&mut totals, entry.status);
@@ -437,6 +505,7 @@ fn process_entry(
   diff_dir: &Path,
   tolerance: u8,
   max_diff_percent: f64,
+  max_perceptual_distance: Option<f64>,
   totals: &mut DiffReportTotals,
 ) -> DiffReportEntry {
   let before_rel = before_path.map(|p| path_for_report(html_dir, p));
@@ -494,9 +563,14 @@ fn process_entry(
               error: Some(format!("Diff failed: {e}")),
             },
             Ok((metrics, diff_image)) => {
-              let status = if metrics.diff_percentage == 0.0 {
+              let passes_pixels = metrics.diff_percentage <= max_diff_percent + f64::EPSILON;
+              let passes_perceptual = max_perceptual_distance
+                .map(|max| metrics.perceptual_distance <= max + f64::EPSILON)
+                .unwrap_or(true);
+
+              let status = if metrics.diff_percentage == 0.0 && passes_perceptual {
                 EntryStatus::Match
-              } else if metrics.diff_percentage <= max_diff_percent {
+              } else if passes_pixels && passes_perceptual {
                 EntryStatus::WithinThreshold
               } else {
                 EntryStatus::Diff
@@ -619,28 +693,15 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
   ensure_parent_dir(path)?;
 
   let mut rows = String::new();
-  let mut sorted = report.results.clone();
-  sorted.sort_by(|a, b| {
-    let a_score = (
-      a.status.sort_weight(),
-      a.metrics.map(|m| m.diff_percentage).unwrap_or(0.0),
-    );
-    let b_score = (
-      b.status.sort_weight(),
-      b.metrics.map(|m| m.diff_percentage).unwrap_or(0.0),
-    );
-    b_score.0.cmp(&a_score.0).then_with(|| {
-      b_score
-        .1
-        .partial_cmp(&a_score.1)
-        .unwrap_or(std::cmp::Ordering::Equal)
-    })
-  });
 
-  for entry in sorted {
+  for entry in &report.results {
     let diff_percent = entry
       .metrics
       .map(|m| format!("{:.4}%", m.diff_percentage))
+      .unwrap_or_else(|| "-".to_string());
+    let perceptual = entry
+      .metrics
+      .map(|m| format!("{:.4}", m.perceptual_distance))
       .unwrap_or_else(|| "-".to_string());
     let pixel_diff = entry
       .metrics
@@ -672,13 +733,14 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
       after_cell
     };
 
-    let error = entry.error.unwrap_or_default();
+    let error = entry.error.as_deref().unwrap_or_default();
     rows.push_str(&format!(
-      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
+      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
       entry.status.label(),
       escape_html(&entry.name),
       escape_html(entry.status.label()),
       diff_percent,
+      perceptual,
       pixel_diff,
       total_pixels,
       before_cell,
@@ -721,7 +783,7 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
     <h1>Render diff report</h1>
     <p><strong>Before:</strong> {before}</p>
     <p><strong>After:</strong> {after}</p>
-    <p><strong>Tolerance:</strong> {tolerance} | <strong>Max diff %:</strong> {max_diff_percent:.4} {shard}</p>
+    <p><strong>Tolerance:</strong> {tolerance} | <strong>Max diff %:</strong> {max_diff_percent:.4} | <strong>Max perceptual:</strong> {max_perceptual} | <strong>Sort:</strong> {sort_by} {shard}</p>
     <p>Processed {processed} of {discovered} candidates ({matches} exact, {within} within threshold, {diffs} failing, {missing} missing, {errors} errors{skipped}).</p>
     <table>
       <thead>
@@ -729,6 +791,7 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
           <th>Name</th>
           <th>Status</th>
           <th>Diff %</th>
+          <th>Perceptual</th>
           <th>Pixel diff</th>
           <th>Total pixels</th>
           <th>Before</th>
@@ -747,6 +810,11 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
     after = escape_html(&report.after_dir),
     tolerance = report.tolerance,
     max_diff_percent = report.max_diff_percent,
+    max_perceptual = report
+      .max_perceptual_distance
+      .map(|d| format!("{d:.4}"))
+      .unwrap_or_else(|| "-".to_string()),
+    sort_by = escape_html(report.sort_by.label()),
     shard = if shard_info.is_empty() {
       "".to_string()
     } else {
@@ -768,6 +836,40 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
   );
 
   fs::write(path, content).map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
+
+fn sort_entries(entries: &mut [DiffReportEntry], sort_by: SortBy) {
+  entries.sort_by(|a, b| {
+    let status = b.status.sort_weight().cmp(&a.status.sort_weight());
+    if status != std::cmp::Ordering::Equal {
+      return status;
+    }
+
+    let metric_cmp = match sort_by {
+      SortBy::Pixel => b
+        .metrics
+        .map(|m| m.pixel_diff)
+        .unwrap_or(0)
+        .cmp(&a.metrics.map(|m| m.pixel_diff).unwrap_or(0)),
+      SortBy::Percent => b
+        .metrics
+        .map(|m| m.diff_percentage)
+        .unwrap_or(0.0)
+        .partial_cmp(&a.metrics.map(|m| m.diff_percentage).unwrap_or(0.0))
+        .unwrap_or(std::cmp::Ordering::Equal),
+      SortBy::Perceptual => b
+        .metrics
+        .map(|m| m.perceptual_distance)
+        .unwrap_or(0.0)
+        .partial_cmp(&a.metrics.map(|m| m.perceptual_distance).unwrap_or(0.0))
+        .unwrap_or(std::cmp::Ordering::Equal),
+    };
+    if metric_cmp != std::cmp::Ordering::Equal {
+      return metric_cmp;
+    }
+
+    a.name.cmp(&b.name)
+  });
 }
 
 fn format_linked_image(label: &str, path: &str) -> String {

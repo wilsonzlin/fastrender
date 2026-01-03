@@ -257,12 +257,12 @@ Notes:
 
 ## `diff_renders`
 
-- Purpose: compare two render output directories (e.g., `fetches/renders` from two revisions) and summarize pixel diffs.
+- Purpose: compare two render output directories (e.g., `fetches/renders` from two revisions) and summarize pixel + perceptual diffs.
 - Entry: `src/bin/diff_renders.rs`
 - Run: `cargo run --release --bin diff_renders -- --before <dir> --after <dir>`
 - Matching: directory inputs are walked recursively and paired by relative path (minus the `.png` extension). This allows diffing nested render trees (for example fixture render outputs or pageset dump layouts) without flattening them first.
 - Outputs: `diff_report.json` and `diff_report.html` plus per-page diff PNGs alongside the HTML report.
-- Tuning: `--tolerance` and `--max-diff-percent` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_FUZZY` env vars are honored when flags are omitted).
+- Tuning: `--tolerance`, `--max-diff-percent`, and `--max-perceptual-distance` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_MAX_PERCEPTUAL_DISTANCE`, and `FIXTURE_FUZZY` env vars are honored when flags are omitted). Use `--sort-by perceptual` to rank diffs by SSIM-derived distance.
 - Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
 
 ## `diff_snapshots`
