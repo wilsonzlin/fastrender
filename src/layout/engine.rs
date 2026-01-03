@@ -256,7 +256,7 @@ impl LayoutParallelism {
   }
 
   pub fn should_parallelize(&self, work_items: usize) -> bool {
-    self.is_active() && work_items >= self.min_fanout && rayon::current_num_threads() > 1
+    self.is_active() && work_items >= self.min_fanout && self.expected_workers() > 1
   }
 
   pub fn is_active(&self) -> bool {
@@ -1283,6 +1283,24 @@ mod tests {
       assert_eq!(
         parallelism.estimated_workers_for_workload(&workload),
         DEFAULT_LAYOUT_AUTO_MAX_THREADS
+      );
+    });
+  }
+
+  #[test]
+  fn enabled_parallelism_respects_max_threads_one() {
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(4)
+      .build()
+      .expect("build rayon pool");
+    pool.install(|| {
+      assert!(rayon::current_num_threads() > 1);
+      let parallelism =
+        LayoutParallelism::enabled(DEFAULT_LAYOUT_MIN_FANOUT).with_max_threads(Some(1));
+      assert_eq!(parallelism.expected_workers(), 1);
+      assert!(
+        !parallelism.should_parallelize(DEFAULT_LAYOUT_MIN_FANOUT),
+        "max_threads=1 should disable fan-out parallelism"
       );
     });
   }
