@@ -22,7 +22,7 @@ pub struct ChromeBaselineFixturesArgs {
   fixture_dir: PathBuf,
 
   /// Directory to write PNGs/logs into.
-  #[arg(long, default_value = "target/chrome_fixtures", value_name = "DIR")]
+  #[arg(long, default_value = "target/chrome_fixture_renders", value_name = "DIR")]
   out_dir: PathBuf,
 
   /// Only render listed fixture directory names (comma-separated).
@@ -47,8 +47,8 @@ pub struct ChromeBaselineFixturesArgs {
   #[arg(long, value_name = "DIR")]
   chrome_dir: Option<PathBuf>,
 
-  /// Viewport size as WxH (e.g. 1200x800).
-  #[arg(long, value_parser = crate::parse_viewport, default_value = "1200x800")]
+  /// Viewport size as WxH (e.g. 1040x1240).
+  #[arg(long, value_parser = crate::parse_viewport, default_value = "1040x1240")]
   viewport: (u32, u32),
 
   /// Device pixel ratio for media queries/srcset.
@@ -207,24 +207,19 @@ fn render_fixture(
   fs::create_dir_all(&tmp_png_dir).context("create temp screenshot directory")?;
   let tmp_png_path = tmp_png_dir.join(format!("{}.png", fixture.stem));
 
-  let url = match args.js {
-    JsMode::On => file_url(&index_path)?,
-    JsMode::Off => {
-      let base_url = Url::from_directory_path(&fixture.dir)
-        .map(|u| u.to_string())
-        .map_err(|_| {
-          anyhow!(
-            "could not convert {} to a file:// base URL",
-            fixture.dir.display()
-          )
-        })?;
-      let patched_dir = temp_root.join("html");
-      fs::create_dir_all(&patched_dir).context("create patched HTML directory")?;
-      let patched_html = patched_dir.join(format!("{}.html", fixture.stem));
-      write_patched_html(&index_path, &patched_html, Some(&base_url), true)?;
-      file_url(&patched_html)?
-    }
-  };
+  let base_url = Url::from_directory_path(&fixture.dir)
+    .map(|u| u.to_string())
+    .map_err(|_| {
+      anyhow!(
+        "could not convert {} to a file:// base URL",
+        fixture.dir.display()
+      )
+    })?;
+  let patched_dir = temp_root.join("html");
+  fs::create_dir_all(&patched_dir).context("create patched HTML directory")?;
+  let patched_html = patched_dir.join(format!("{}.html", fixture.stem));
+  write_patched_html(&index_path, &patched_html, Some(&base_url), matches!(args.js, JsMode::Off))?;
+  let url = file_url(&patched_html)?;
 
   if tmp_png_path.exists() {
     let _ = fs::remove_file(&tmp_png_path);
@@ -604,6 +599,14 @@ fn build_chrome_args(
     // Keep behaviour consistent with scripts/chrome_baseline.sh when loading local fixtures.
     "--disable-web-security".to_string(),
     "--allow-file-access-from-files".to_string(),
+    // Keep renders deterministic/offline when fixture HTML accidentally references http(s).
+    "--disable-background-networking".to_string(),
+    "--no-first-run".to_string(),
+    "--no-default-browser-check".to_string(),
+    "--disable-component-update".to_string(),
+    "--disable-default-apps".to_string(),
+    "--disable-sync".to_string(),
+    "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost".to_string(),
     profile_arg,
     screenshot_arg,
   ])
@@ -700,13 +703,16 @@ fn patch_html_bytes(data: &[u8], base_url: Option<&str>, disable_js: bool) -> Ve
   if let Some(base_url) = base_url {
     inserts.extend_from_slice(format!("<base href=\"{base_url}\">\n").as_bytes());
   }
-  if disable_js {
-    // Best-effort JS disable: inject a CSP that blocks script execution.
-    // This matches FastRender's no-JS model while keeping the fixture directory immutable.
-    inserts.extend_from_slice(
-      b"<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none';\">\n",
-    );
-  }
+  // Enforce a deterministic/offline page load: allow only file/data subresources.
+  // If JS is enabled, allow inline/file scripts for experimentation; otherwise block scripts.
+  let csp = if disable_js {
+    "default-src file: data:; style-src file: data: 'unsafe-inline'; script-src 'none';"
+  } else {
+    "default-src file: data:; style-src file: data: 'unsafe-inline'; script-src file: data: 'unsafe-inline' 'unsafe-eval';"
+  };
+  inserts.extend_from_slice(
+    format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\">\n").as_bytes(),
+  );
 
   if inserts.is_empty() {
     return data.to_vec();

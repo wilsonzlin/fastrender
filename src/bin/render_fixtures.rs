@@ -55,8 +55,8 @@ struct Cli {
   #[arg(long, short, default_value_t = default_jobs())]
   jobs: usize,
 
-  /// Viewport size as WxH (e.g., 1200x800)
-  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
+  /// Viewport size as WxH (e.g., 1040x1240).
+  #[arg(long, value_parser = parse_viewport, default_value = "1040x1240")]
   viewport: (u32, u32),
 
   /// Device pixel ratio for media queries/srcset.

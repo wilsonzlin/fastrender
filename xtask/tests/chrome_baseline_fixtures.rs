@@ -148,12 +148,17 @@ fn chrome_baseline_fixtures_builds_expected_chrome_command_flags() {
     "chrome args should include CI-safe flags; got:\n{log}"
   );
   assert!(
-    log.contains("--window-size=1200,800"),
+    log.contains("--window-size=1040,1240"),
     "chrome args should include default viewport; got:\n{log}"
   );
   assert!(
     log.contains("--force-device-scale-factor=1"),
     "chrome args should include default DPR; got:\n{log}"
+  );
+  assert!(
+    log.contains("--disable-background-networking")
+      && log.contains("--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost"),
+    "chrome args should include offline network blocking flags; got:\n{log}"
   );
   assert!(
     log.contains("--screenshot="),

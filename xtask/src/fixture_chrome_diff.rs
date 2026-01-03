@@ -6,7 +6,7 @@ use std::process::Command;
 
 const DEFAULT_FIXTURES_DIR: &str = "tests/pages/fixtures";
 const DEFAULT_OUT_DIR: &str = "target/fixture_chrome_diff";
-const DEFAULT_VIEWPORT: &str = "1200x800";
+const DEFAULT_VIEWPORT: &str = "1040x1240";
 const DEFAULT_DPR: f32 = 1.0;
 
 #[derive(Args, Debug)]
@@ -27,7 +27,7 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long, value_name = "DIR", default_value = DEFAULT_OUT_DIR)]
   pub out_dir: PathBuf,
 
-  /// Viewport size as WxH (e.g. 1200x800; forwarded to both renderers).
+  /// Viewport size as WxH (e.g. 1040x1240; forwarded to both renderers).
   #[arg(long, value_parser = crate::parse_viewport, default_value = DEFAULT_VIEWPORT)]
   pub viewport: (u32, u32),
 
@@ -306,4 +306,3 @@ fn run_diff_renders_allowing_differences(mut cmd: Command, layout: &Layout) -> R
 
   bail!("diff_renders failed with status {}", output.status);
 }
-

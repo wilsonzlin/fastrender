@@ -18,6 +18,10 @@ These are optional wrappers for the most common loops:
   - Defaults to `viewport=1200x800`, `dpr=1.0`, JavaScript disabled (to match FastRender’s “no JS” model).
   - Writes a report at `<out>/report.html` (default: `target/chrome_vs_fastrender/report.html`).
   - Core flags: `--pages <csv>`, `--viewport <WxH>`, `--dpr <float>`, `--jobs <n>`, `--timeout <secs>`, `--out-dir <dir>`, `--chrome <path>`, `--js {on|off}`, `--tolerance <u8>`, `--max-diff-percent <float>`.
+- Offline fixture Chrome-vs-FastRender diff (deterministic; offline): `scripts/chrome_vs_fastrender_fixtures.sh [fixture_glob...]`
+  - Wraps `scripts/chrome_fixture_baseline.sh`, `render_fixtures`, and `diff_renders`.
+  - Defaults to `viewport=1040x1240`, `dpr=1.0`, JavaScript disabled, and the fixture set in `tests/pages_regression_test.rs`.
+  - Writes `target/chrome_vs_fastrender_fixtures.html` plus PNG/log artifacts under `target/chrome_fixture_renders/` and `target/fastrender_fixture_renders/`.
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
@@ -211,11 +215,47 @@ Notes:
 - Layout fan-out defaults to `auto` (only engages once the box tree is large enough and has sufficient independent sibling work); use `--layout-parallel off` to force serial layout, `--layout-parallel on` to force fan-out, or tune thresholds with `--layout-parallel-min-fanout`, `--layout-parallel-auto-min-nodes`, and `--layout-parallel-max-threads`.
 - Worker Rayon threads: in the default per-page worker mode, `render_pages` sets `RAYON_NUM_THREADS` for each worker process to `available_parallelism()/jobs` (min 1, additionally clamped by a detected cgroup CPU quota on Linux) to avoid CPU oversubscription. Set `RAYON_NUM_THREADS` in the parent environment to override this.
 
+### Offline fixture Chrome-vs-FastRender diffs (deterministic)
+
+For pixel-accuracy work where you want stable evidence artifacts without network instability, use the self-contained offline fixtures under `tests/pages/fixtures/*`:
+
+```bash
+# One command: capture Chrome baselines + render FastRender output + generate an HTML diff report.
+scripts/chrome_vs_fastrender_fixtures.sh grid_news
+
+# With no positional filters, defaults to the fixture set in tests/pages_regression_test.rs:
+scripts/chrome_vs_fastrender_fixtures.sh
+```
+
+Outputs (all under `target/` by default):
+
+- Chrome: `target/chrome_fixture_renders/<fixture>.png` + `*.chrome.log`
+- FastRender: `target/fastrender_fixture_renders/<fixture>.png` + `*.log`
+- Diff report: `target/chrome_vs_fastrender_fixtures.html` (plus JSON and embedded images under `*_files/`)
+
+Guarantees:
+
+- Chrome loads fixtures from `file://.../tests/pages/fixtures/<fixture>/index.html` and injects:
+  - `<base href="file://.../<fixture>/">` so patched HTML can live in a temp dir
+  - A CSP that disables JS by default (and always blocks `http(s)` via `default-src file: data:`)
+- FastRender renders fixtures with a `ResourcePolicy` that denies `http(s)://` fetches (fixtures must be self-contained).
+
+You can also run the pieces independently:
+
+```bash
+scripts/chrome_fixture_baseline.sh grid_news
+cargo run --release --bin render_fixtures -- --fixtures grid_news --out-dir target/fastrender_fixture_renders
+cargo run --release --bin diff_renders -- \
+  --before target/chrome_fixture_renders \
+  --after target/fastrender_fixture_renders \
+  --html target/chrome_vs_fastrender_fixtures.html
+```
+
 ## `render_fixtures`
 
 - Purpose: render offline page fixtures (under `tests/pages/fixtures/`) to PNGs for deterministic debugging and Chrome-vs-FastRender diff reports.
 - Run: `cargo run --release --bin render_fixtures -- --help`
-- Defaults: fixed, deterministic viewport/DPR (1200x800 @ 1.0) unless overridden.
+- Defaults: fixed, deterministic viewport/DPR (1040x1240 @ 1.0) unless overridden.
 - Offline policy: fixtures are rendered **without network access**; only `file://` and `data:` subresources are allowed.
 - Fixture completeness: any blocked `http(s)://` subresource (network access) is treated as a fixture failure so captures stay self-contained/offline. Other fetch errors are reported in `<fixture>.log` (and in `diagnostics.json` when `--write-snapshot` is enabled).
 - Fonts: uses bundled fonts (`FontConfig::bundled_only`) so outputs are stable across machines.
@@ -233,10 +273,10 @@ Notes:
 - Purpose: render the same offline fixtures in headless Chrome/Chromium to generate a “known-correct engine” PNG baseline for comparisons.
 - Notes:
   - These baselines are **local-only** artifacts under `target/` (they are not committed).
-  - Defaults match the fixture runner viewport/DPR (1200x800 @ 1.0) unless overridden.
-  - JavaScript is disabled by default to match FastRender’s “no JS” model.
+  - Defaults match the fixture runner viewport/DPR (1040x1240 @ 1.0) unless overridden.
+  - JavaScript is disabled by default to match FastRender’s “no JS” model (enforced via injected CSP).
   - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
-  - Output defaults to `target/chrome_fixtures/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
+  - Output defaults to `target/chrome_fixture_renders/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
 - Core flags:
   - Selection: `--fixtures <csv>` (alias `--only`) or positional fixture names.
   - Paths: `--fixture-dir <dir>` (alias `--fixtures-root`), `--out-dir <dir>`.
@@ -248,20 +288,21 @@ Notes:
 - Purpose: render offline fixtures with FastRender and headless Chrome, then generate a single HTML report comparing the two.
 - Typical usage:
   - `cargo xtask fixture-chrome-diff` (writes `target/fixture_chrome_diff/report.html` and prints the path)
-  - Reuse a previously generated Chrome render directory: `cargo xtask fixture-chrome-diff --chrome-dir <dir>`
-  - For advanced filtering/output control, see `cargo xtask fixture-chrome-diff --help` (supports `--only`, `--viewport`, `--dpr`, and diff tolerances).
-  - Tip: in environments without Chrome installed, you can enforce “diff only” mode with `--no-chrome --chrome-dir <dir>`.
+  - Select fixtures: `cargo xtask fixture-chrome-diff --fixtures grid_news,flex_dashboard`
+  - Re-run only the diff step (reuse the existing `<out>/chrome` renders): `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --no-chrome`
 - Output layout:
   - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`)
   - `<out>/fastrender/<fixture>.png` (rendered by `render_fixtures`)
   - `<out>/report.html`, `<out>/report.json`
-  - Note: `fixture-chrome-diff` does not currently enable `render_fixtures --write-snapshot`. If you need per-fixture snapshots/diagnostics, run `render_fixtures --write-snapshot` separately.
+- Notes:
+  - JavaScript is disabled by default (Chrome baseline uses an injected CSP, matching FastRender's no-JS model).
+  - `fixture-chrome-diff` does not currently enable `render_fixtures --write-snapshot`. If you need per-fixture snapshots/diagnostics (for `diff_snapshots`), run `render_fixtures --write-snapshot` separately.
 - Core flags:
-  - Selection: `--only <csv>` and/or positional fixture names.
-  - Paths: `--fixtures-root <dir>`, `--out <dir>`, `--chrome-dir <dir>`.
-  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--render-timeout <secs>`, `--timeout <secs>` (Chrome), `--js {on|off}`, `--chrome <path>`.
-  - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`.
-  - Chrome-less mode: `--no-chrome --chrome-dir <dir>` (reuse an existing baseline instead of invoking Chrome).
+  - Selection: `--fixtures <csv>`, `--shard <index>/<total>`
+  - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
+  - Render params: `--viewport <WxH>`, `--dpr <float>`
+  - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`
+  - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`
 
 ## `fetch_and_render`
 
