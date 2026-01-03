@@ -12,6 +12,7 @@ use walkdir::WalkDir;
 
 mod chrome_baseline_fixtures;
 mod import_page_fixture;
+mod fixture_chrome_diff;
 mod recapture_page_fixtures;
 mod update_pageset_guardrails;
 mod update_pageset_guardrails_budgets;
@@ -26,6 +27,7 @@ fn main() -> Result<()> {
     Commands::Pageset(args) => run_pageset(args),
     Commands::PagesetDiff(args) => run_pageset_diff(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
+    Commands::FixtureChromeDiff(args) => fixture_chrome_diff::run_fixture_chrome_diff(args),
     Commands::ImportPageFixture(args) => import_page_fixture::run_import_page_fixture(args),
     Commands::ChromeBaselineFixtures(args) => {
       chrome_baseline_fixtures::run_chrome_baseline_fixtures(args)
@@ -69,6 +71,8 @@ enum Commands {
   PagesetDiff(PagesetDiffArgs),
   /// Compare two render outputs and write visual diffs
   DiffRenders(DiffRendersArgs),
+  /// Render offline fixtures with FastRender + headless Chrome and produce an HTML diff report
+  FixtureChromeDiff(fixture_chrome_diff::FixtureChromeDiffArgs),
   /// Convert a captured bundle into a pages_regression fixture
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
   /// Render offline page fixtures in headless Chrome/Chromium (deterministic JS-off baseline).
