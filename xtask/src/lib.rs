@@ -1,5 +1,7 @@
 //! Shared helpers for the `xtask` developer workflow binary.
 
+pub mod pageset_failure_fixtures;
+
 /// Extract `--disk-cache-*` flags from an argument vector while preserving ordering.
 ///
 /// The pageset wrappers forward `args.extra` (intended for `pageset_progress`) through to
