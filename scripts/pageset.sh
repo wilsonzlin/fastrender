@@ -1,6 +1,47 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Determine the effective CPU budget for default `JOBS`/Rayon thread budgeting.
+#
+# We prefer `nproc` when available because it respects cpusets/affinity. On Linux, also honor cgroup
+# CPU quotas when possible so the default parallelism doesn't oversubscribe in containers/CI.
+detect_total_cpus() {
+  local cpus
+  if command -v nproc >/dev/null 2>&1; then
+    cpus="$(nproc)"
+  else
+    cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  fi
+
+  # cgroup v2: `cpu.max` is "<quota> <period>" where quota is "max" when unbounded.
+  if [[ -r /sys/fs/cgroup/cpu.max ]]; then
+    local quota period
+    read -r quota period < /sys/fs/cgroup/cpu.max || true
+    if [[ "${quota:-}" != "max" && "${quota:-0}" -gt 0 && "${period:-0}" -gt 0 ]]; then
+      local quota_cpus=$(((quota + period - 1) / period))
+      if [[ "${quota_cpus}" -gt 0 && "${quota_cpus}" -lt "${cpus}" ]]; then
+        cpus="${quota_cpus}"
+      fi
+    fi
+  # cgroup v1: `cpu.cfs_quota_us` is -1 when unbounded.
+  elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us && -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]]; then
+    local quota period
+    quota="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo -1)"
+    period="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null || echo 0)"
+    if [[ "${quota}" -gt 0 && "${period}" -gt 0 ]]; then
+      local quota_cpus=$(((quota + period - 1) / period))
+      if [[ "${quota_cpus}" -gt 0 && "${quota_cpus}" -lt "${cpus}" ]]; then
+        cpus="${quota_cpus}"
+      fi
+    fi
+  fi
+
+  if [[ -z "${cpus}" || "${cpus}" -lt 1 ]]; then
+    cpus=1
+  fi
+  echo "${cpus}"
+}
+
 # Convenience wrapper for the main planner loop:
 #   fetch_pages -> prefetch_assets -> pageset_progress
 #
@@ -42,7 +83,7 @@ set -euo pipefail
 # `pageset_progress`) so users can override the wrapper defaults without breaking `pageset_progress`
 # arg parsing.
 
-TOTAL_CPUS="$(nproc)"
+TOTAL_CPUS="$(detect_total_cpus)"
 JOBS="${JOBS:-${TOTAL_CPUS}}"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-30}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-5}"
@@ -169,7 +210,7 @@ fi
 
 # pageset_progress runs up to JOBS worker processes in parallel (one per page). The renderer
 # itself can also use Rayon threads (e.g., layout fan-out). Without a cap, enabling layout
-# parallelism by default can oversubscribe CPUs catastrophically (JOBS * nproc threads).
+# parallelism by default can oversubscribe CPUs catastrophically (JOBS * total_cpus threads).
 THREADS_PER_WORKER=$((TOTAL_CPUS / JOBS))
 if [[ "${THREADS_PER_WORKER}" -lt 1 ]]; then
   THREADS_PER_WORKER=1
