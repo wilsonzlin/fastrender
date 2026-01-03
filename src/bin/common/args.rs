@@ -320,7 +320,9 @@ pub struct ResourceAccessArgs {
   #[arg(long)]
   pub block_mixed_content: bool,
 
-  /// Restrict subresource loads to the document origin unless allowlisted.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin unless allowlisted.
+  ///
+  /// Note: this does not block cross-origin iframe/embed navigation (document loads).
   #[arg(long)]
   pub same_origin_subresources: bool,
 

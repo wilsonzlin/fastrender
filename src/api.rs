@@ -14829,6 +14829,46 @@ mod tests {
   }
 
   #[test]
+  fn same_origin_subresources_blocks_subresources_but_allows_documents() {
+    let document_origin = origin_from_url("https://example.com/").expect("document origin");
+    let ctx = ResourceContext {
+      document_url: Some("https://example.com/".to_string()),
+      policy: ResourceAccessPolicy {
+        document_origin: Some(document_origin),
+        allow_file_from_http: false,
+        block_mixed_content: false,
+        same_origin_only: true,
+        allowed_origins: Vec::new(),
+      },
+      diagnostics: None,
+      iframe_depth_remaining: None,
+    };
+
+    assert!(
+      ctx
+        .check_allowed(ResourceKind::Stylesheet, "https://other.com/a.css")
+        .is_err(),
+      "expected cross-origin stylesheet to be blocked when same_origin_subresources is enabled",
+    );
+    assert!(
+      ctx
+        .check_allowed(ResourceKind::Document, "https://other.com/frame.html")
+        .is_ok(),
+      "expected document navigations (e.g. iframes) to ignore same_origin_subresources",
+    );
+    assert!(
+      ctx
+        .check_allowed_with_final(
+          ResourceKind::Document,
+          "https://example.com/frame.html",
+          Some("https://other.com/frame.html"),
+        )
+        .is_ok(),
+      "expected document navigations to remain allowed even when redirected cross-origin",
+    );
+  }
+
+  #[test]
   fn fetch_link_css_toggle_disables_linked_stylesheets_via_builder() {
     let base_url = "https://example.com/page.html";
     let fetcher = Arc::new(

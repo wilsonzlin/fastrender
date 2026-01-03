@@ -194,7 +194,11 @@ impl ResourceAccessPolicy {
     self.allows_with_final(target_url, None)
   }
 
-  /// Check whether a document URL is allowed under this policy, ignoring same-origin restrictions.
+  /// Check whether a document URL is allowed under this policy.
+  ///
+  /// Document navigations (e.g. iframe/embed loads) intentionally skip `same_origin_only`
+  /// enforcement. The `same_origin_subresources` knob is intended for subresources like
+  /// stylesheets/images/fonts; blocking cross-origin frames requires a dedicated policy.
   pub fn allows_document(&self, target_url: &str) -> std::result::Result<(), PolicyError> {
     self.allows_document_with_final(target_url, None)
   }
