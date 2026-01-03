@@ -56,7 +56,7 @@ pub const DEFAULT_LAYOUT_AUTO_MIN_NODES: usize = 1024;
 ///
 /// Keep this large enough to satisfy the deep-nesting regression coverage under `--layout-parallel`
 /// (see `fetch_and_render_layout_parallel_stack_size_test`).
-const DEFAULT_LAYOUT_RAYON_STACK_SIZE: usize = 64 * 1024 * 1024;
+const DEFAULT_LAYOUT_RAYON_STACK_SIZE: usize = 128 * 1024 * 1024;
 /// Default ceiling on rayon worker threads used for auto layout fan-out when the global pool is
 /// very large.
 ///
