@@ -3469,17 +3469,20 @@ impl FlexFormattingContext {
     let reserve_scroll_y = style.scrollbar_gutter.stable
       && matches!(style.overflow_y, CssOverflow::Auto | CssOverflow::Scroll);
     let map_overflow = |value: CssOverflow, reserve: bool| match value {
-      // Taffy lacks an Auto variant; treat it like Visible unless scrollbar-gutter requests stability.
-      CssOverflow::Visible | CssOverflow::Auto => {
+      // Taffy lacks a distinct `Auto` variant. CSS `overflow: auto` is still a scroll container
+      // (automatic min size = 0), but it should only reserve scrollbar space when
+      // `scrollbar-gutter: stable` (or `overflow: scroll`) requests it.
+      CssOverflow::Visible => TaffyOverflow::Visible,
+      CssOverflow::Clip => TaffyOverflow::Clip,
+      CssOverflow::Hidden => TaffyOverflow::Hidden,
+      CssOverflow::Scroll => TaffyOverflow::Scroll,
+      CssOverflow::Auto => {
         if reserve {
           TaffyOverflow::Scroll
         } else {
-          TaffyOverflow::Visible
+          TaffyOverflow::Hidden
         }
       }
-      CssOverflow::Hidden => TaffyOverflow::Hidden,
-      CssOverflow::Scroll => TaffyOverflow::Scroll,
-      CssOverflow::Clip => TaffyOverflow::Clip,
     };
 
     let min_width_dimension =
