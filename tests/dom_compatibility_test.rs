@@ -1,4 +1,8 @@
-use fastrender::dom::{parse_html, parse_html_with_options, DomNode, DomNodeType, DomParseOptions};
+use fastrender::dom::{
+  compute_slot_assignment_with_ids, enumerate_dom_ids, parse_html, parse_html_with_options, DomNode,
+  DomNodeType, DomParseOptions,
+};
+use std::collections::HashMap;
 
 fn find_element<'a>(node: &'a DomNode, tag: &str) -> Option<&'a DomNode> {
   if matches!(node.tag_name(), Some(t) if t.eq_ignore_ascii_case(tag)) {
@@ -25,45 +29,34 @@ fn collect_classes(node: &DomNode) -> Vec<String> {
   }
 }
 
-fn collect_slots<'a>(node: &'a DomNode, out: &mut Vec<&'a DomNode>) {
-  if matches!(node.node_type, DomNodeType::Slot { .. }) {
-    out.push(node);
+fn find_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {
+  if node.has_id(id) {
+    return Some(node);
   }
-
-  for child in node.children.iter() {
-    collect_slots(child, out);
-  }
+  node.children.iter().find_map(|child| find_by_id(child, id))
 }
 
-fn slot_texts_by_name(dom: &DomNode) -> Vec<(Option<String>, Vec<String>)> {
-  let mut slots = Vec::new();
-  collect_slots(dom, &mut slots);
-
-  slots
-    .into_iter()
-    .map(|slot| {
-      let name = match &slot.node_type {
-        DomNodeType::Slot { attributes, .. } => attributes
-          .iter()
-          .find(|(k, _)| k.eq_ignore_ascii_case("name"))
-          .map(|(_, v)| v.clone()),
-        _ => None,
-      };
-
-      let mut texts = Vec::new();
-      collect_text(slot, &mut texts);
-      (name, texts)
-    })
-    .collect()
+fn find_slot_by_name<'a>(node: &'a DomNode, slot_name: Option<&str>) -> Option<&'a DomNode> {
+  if matches!(node.node_type, DomNodeType::Slot { .. }) && node.get_attribute_ref("name") == slot_name
+  {
+    return Some(node);
+  }
+  node
+    .children
+    .iter()
+    .find_map(|child| find_slot_by_name(child, slot_name))
 }
 
-fn collect_text(node: &DomNode, texts: &mut Vec<String>) {
-  if let DomNodeType::Text { content } = &node.node_type {
-    texts.push(content.clone());
+fn build_id_to_node<'a>(
+  node: &'a DomNode,
+  ids: &HashMap<*const DomNode, usize>,
+  out: &mut HashMap<usize, &'a DomNode>,
+) {
+  if let Some(id) = ids.get(&(node as *const DomNode)) {
+    out.insert(*id, node);
   }
-
   for child in node.children.iter() {
-    collect_text(child, texts);
+    build_id_to_node(child, ids, out);
   }
 }
 
@@ -104,17 +97,105 @@ fn compatibility_mode_flips_expected_classes() {
 fn compatibility_mode_preserves_shadow_slot_distribution() {
   let html = "<html><body><div id='host'><template shadowroot='open'><div id='shadow'><slot name='named'></slot><slot></slot></div></template><span slot='named'>named</span><span>default</span></div></body></html>";
 
-  let standard_slots = slot_texts_by_name(&parse_html(html).expect("standard dom"));
-  let compat_slots = slot_texts_by_name(
-    &parse_html_with_options(html, DomParseOptions::compatibility()).expect("compat dom"),
+  let standard_dom = parse_html(html).expect("standard dom");
+  let compat_dom =
+    parse_html_with_options(html, DomParseOptions::compatibility()).expect("compat dom");
+
+  let standard_ids = enumerate_dom_ids(&standard_dom);
+  let compat_ids = enumerate_dom_ids(&compat_dom);
+
+  let standard_assignment = compute_slot_assignment_with_ids(&standard_dom, &standard_ids);
+  let compat_assignment = compute_slot_assignment_with_ids(&compat_dom, &compat_ids);
+
+  let mut standard_id_to_node = HashMap::new();
+  build_id_to_node(&standard_dom, &standard_ids, &mut standard_id_to_node);
+  let mut compat_id_to_node = HashMap::new();
+  build_id_to_node(&compat_dom, &compat_ids, &mut compat_id_to_node);
+
+  let standard_host = find_by_id(&standard_dom, "host").expect("standard host element");
+  assert!(
+    standard_host.is_shadow_host(),
+    "standard parse should attach declarative shadow root"
+  );
+  let compat_host = find_by_id(&compat_dom, "host").expect("compat host element");
+  assert!(
+    compat_host.is_shadow_host(),
+    "compat parse should attach declarative shadow root"
   );
 
-  assert_eq!(standard_slots, compat_slots);
   assert_eq!(
-    standard_slots,
-    vec![
-      (Some("named".to_string()), vec!["named".to_string()]),
-      (None, vec!["default".to_string()])
-    ]
+    standard_assignment.slot_to_nodes, compat_assignment.slot_to_nodes,
+    "compatibility mode should not alter slot assignment"
   );
+
+  let standard_shadow_root = standard_host
+    .children
+    .iter()
+    .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+    .expect("standard shadow root");
+  let named_slot = find_slot_by_name(standard_shadow_root, Some("named")).expect("named slot");
+  let default_slot = find_slot_by_name(standard_shadow_root, None).expect("default slot");
+  let named_slot_id = *standard_ids
+    .get(&(named_slot as *const DomNode))
+    .expect("named slot id");
+  let default_slot_id = *standard_ids
+    .get(&(default_slot as *const DomNode))
+    .expect("default slot id");
+
+  let named_span = standard_host
+    .children
+    .iter()
+    .find(|child| {
+      matches!(child.tag_name(), Some(t) if t.eq_ignore_ascii_case("span"))
+        && child.get_attribute_ref("slot") == Some("named")
+    })
+    .expect("named light DOM span");
+  let default_span = standard_host
+    .children
+    .iter()
+    .find(|child| {
+      matches!(child.tag_name(), Some(t) if t.eq_ignore_ascii_case("span"))
+        && child.get_attribute_ref("slot").is_none()
+    })
+    .expect("default light DOM span");
+  let named_span_id = *standard_ids
+    .get(&(named_span as *const DomNode))
+    .expect("named span id");
+  let default_span_id = *standard_ids
+    .get(&(default_span as *const DomNode))
+    .expect("default span id");
+
+  let assigned_named = standard_assignment
+    .slot_to_nodes
+    .get(&named_slot_id)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(assigned_named, vec![named_span_id]);
+  assert_eq!(
+    standard_id_to_node
+      .get(&assigned_named[0])
+      .and_then(|node| node.get_attribute_ref("slot")),
+    Some("named")
+  );
+
+  let assigned_default = standard_assignment
+    .slot_to_nodes
+    .get(&default_slot_id)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(assigned_default, vec![default_span_id]);
+  assert_eq!(
+    standard_id_to_node
+      .get(&assigned_default[0])
+      .and_then(|node| node.get_attribute_ref("slot")),
+    None
+  );
+
+  // Ensure the compat id lookup stays in sync with the assignment ids so future debug assertions
+  // can safely translate them back into nodes.
+  assert!(compat_assignment
+    .slot_to_nodes
+    .values()
+    .flatten()
+    .all(|id| compat_id_to_node.contains_key(id)));
 }
