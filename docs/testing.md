@@ -59,6 +59,7 @@ When doing accuracy work, it’s often useful to compare an offline fixture rend
 ```bash
 # One-command evidence report (runs FastRender render + Chrome baseline + diff):
 cargo xtask fixture-chrome-diff
+# Report: target/fixture_chrome_diff/report.html
 
 # 1) Render the offline fixture(s) with FastRender (offline; bundled fonts):
 cargo run --release --bin render_fixtures
