@@ -149,3 +149,107 @@ fn diff_renders_respects_shard_and_env_tolerance() {
   assert_eq!(report["totals"]["shard_skipped"].as_u64(), Some(1));
   assert_eq!(report["results"][0]["status"], "match");
 }
+
+#[test]
+fn diff_renders_supports_recursive_directories() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(before.join("a")).unwrap();
+  fs::create_dir_all(after.join("a")).unwrap();
+
+  write_color_png(&before.join("a").join("x.png"), [255, 0, 0, 255]);
+  write_color_png(&after.join("a").join("x.png"), [0, 0, 255, 255]);
+
+  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
+    .current_dir(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--max-diff-percent",
+      "100",
+    ])
+    .status()
+    .expect("run diff_renders");
+
+  assert!(status.success(), "expected success with max diff percent");
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+
+  let entry = report["results"]
+    .as_array()
+    .expect("results array")
+    .iter()
+    .find(|e| e["name"] == "a/x")
+    .expect("expected recursive entry name a/x");
+
+  let diff_path = entry["diff"].as_str().expect("diff path missing");
+  assert!(
+    tmp.path().join(diff_path).exists(),
+    "diff image missing at {}",
+    diff_path
+  );
+  assert!(
+    tmp
+      .path()
+      .join("diff_report_files")
+      .join("diffs")
+      .join("a")
+      .join("x.png")
+      .exists(),
+    "expected diff image at diff_report_files/diffs/a/x.png"
+  );
+}
+
+#[test]
+fn diff_renders_supports_file_to_file_diffs() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before_dir = tmp.path().join("before");
+  let after_dir = tmp.path().join("after");
+  fs::create_dir_all(&before_dir).unwrap();
+  fs::create_dir_all(&after_dir).unwrap();
+
+  let before = before_dir.join("page.png");
+  let after = after_dir.join("page.png");
+  write_color_png(&before, [0, 255, 0, 255]);
+  write_color_png(&after, [0, 0, 0, 255]);
+
+  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
+    .current_dir(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+    ])
+    .status()
+    .expect("run diff_renders");
+
+  assert!(
+    !status.success(),
+    "expected failure exit code for file diff"
+  );
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+
+  assert_eq!(report["totals"]["discovered"].as_u64(), Some(1));
+  assert_eq!(report["results"][0]["name"], "page");
+  assert_eq!(report["results"][0]["status"], "diff");
+
+  let diff_path = report["results"][0]["diff"]
+    .as_str()
+    .expect("diff path missing");
+  assert!(
+    tmp.path().join(diff_path).exists(),
+    "diff image missing at {}",
+    diff_path
+  );
+}

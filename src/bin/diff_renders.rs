@@ -7,18 +7,19 @@ use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
 #[command(
   name = "diff_renders",
-  about = "Compare two render output directories and produce a report"
+  about = "Compare two render outputs (directories or PNG files) and produce a report"
 )]
 struct Args {
-  /// Directory containing "before" PNGs
+  /// Directory of PNGs (recursively) or a single PNG file ("before")
   #[arg(long)]
   before: PathBuf,
 
-  /// Directory containing "after" PNGs
+  /// Directory of PNGs (recursively) or a single PNG file ("after")
   #[arg(long)]
   after: PathBuf,
 
@@ -161,19 +162,10 @@ fn run() -> Result<i32, String> {
   let tolerance = resolve_tolerance(args.tolerance)?;
   let max_diff_percent = resolve_max_diff_percent(args.max_diff_percent)?;
 
-  let before_dir = normalize_dir(&args.before)?;
-  let after_dir = normalize_dir(&args.after)?;
-
-  let before_pngs = collect_pngs(&before_dir)?;
-  let after_pngs = collect_pngs(&after_dir)?;
-
-  let mut stems = BTreeSet::new();
-  for key in before_pngs.keys() {
-    stems.insert(key.clone());
-  }
-  for key in after_pngs.keys() {
-    stems.insert(key.clone());
-  }
+  let before_meta =
+    fs::metadata(&args.before).map_err(|e| format!("{}: {e}", args.before.display()))?;
+  let after_meta =
+    fs::metadata(&args.after).map_err(|e| format!("{}: {e}", args.after.display()))?;
 
   let html_dir = args
     .html
@@ -208,136 +200,50 @@ fn run() -> Result<i32, String> {
   fs::create_dir_all(&diff_dir)
     .map_err(|e| format!("failed to create diff dir {}: {e}", diff_dir.display()))?;
 
-  let mut totals = DiffReportTotals {
-    discovered: stems.len(),
-    ..DiffReportTotals::default()
-  };
-  let mut results = Vec::new();
-
-  for (idx, stem) in stems.iter().enumerate() {
-    if let Some((shard_index, shard_total)) = args.shard {
-      if idx % shard_total != shard_index {
-        totals.shard_skipped += 1;
-        continue;
-      }
+  let (before_root, after_root, results, totals) = match (before_meta.is_dir(), after_meta.is_dir())
+  {
+    (true, true) => {
+      let before_dir = normalize_dir(&args.before)?;
+      let after_dir = normalize_dir(&args.after)?;
+      let (results, totals) = process_directory(
+        &before_dir,
+        &after_dir,
+        &html_dir,
+        &diff_dir,
+        tolerance,
+        max_diff_percent,
+        args.shard,
+      )?;
+      (before_dir, after_dir, results, totals)
     }
-
-    let before_path = before_pngs.get(stem);
-    let after_path = after_pngs.get(stem);
-
-    let before_rel = before_path.map(|p| path_for_report(&html_dir, p));
-    let after_rel = after_path.map(|p| path_for_report(&html_dir, p));
-
-    let entry = match (before_path, after_path) {
-      (None, Some(_)) => DiffReportEntry {
-        name: stem.clone(),
-        status: EntryStatus::MissingBefore,
-        before: None,
-        after: after_rel,
-        diff: None,
-        metrics: None,
-        error: Some("Missing in before dir".to_string()),
-      },
-      (Some(_), None) => DiffReportEntry {
-        name: stem.clone(),
-        status: EntryStatus::MissingAfter,
-        before: before_rel,
-        after: None,
-        diff: None,
-        metrics: None,
-        error: Some("Missing in after dir".to_string()),
-      },
-      (Some(before), Some(after)) => {
-        totals.processed += 1;
-        match fs::read(before) {
-          Err(e) => DiffReportEntry {
-            name: stem.clone(),
-            status: EntryStatus::Error,
-            before: before_rel,
-            after: after_rel,
-            diff: None,
-            metrics: None,
-            error: Some(format!("Failed to read {}: {e}", before.display())),
-          },
-          Ok(before_png) => match fs::read(after) {
-            Err(e) => DiffReportEntry {
-              name: stem.clone(),
-              status: EntryStatus::Error,
-              before: before_rel,
-              after: after_rel,
-              diff: None,
-              metrics: None,
-              error: Some(format!("Failed to read {}: {e}", after.display())),
-            },
-            Ok(after_png) => match diff_png(&after_png, &before_png, tolerance) {
-              Err(e) => DiffReportEntry {
-                name: stem.clone(),
-                status: EntryStatus::Error,
-                before: before_rel,
-                after: after_rel,
-                diff: None,
-                metrics: None,
-                error: Some(format!("Diff failed: {e}")),
-              },
-              Ok((metrics, diff_image)) => {
-                let status = if metrics.diff_percentage == 0.0 {
-                  EntryStatus::Match
-                } else if metrics.diff_percentage <= max_diff_percent {
-                  EntryStatus::WithinThreshold
-                } else {
-                  EntryStatus::Diff
-                };
-
-                let mut diff_path = None;
-                let mut final_status = status;
-                let mut error = None;
-                if metrics.pixel_diff > 0 {
-                  let path = diff_dir.join(format!("{stem}.png"));
-                  let write_result = fs::write(&path, diff_image);
-                  match write_result {
-                    Ok(_) => {
-                      diff_path = Some(path_for_report(&html_dir, &path));
-                    }
-                    Err(e) => {
-                      final_status = EntryStatus::Error;
-                      error = Some(format!(
-                        "Failed to write diff image {}: {e}",
-                        path.display()
-                      ));
-                    }
-                  }
-                }
-
-                DiffReportEntry {
-                  name: stem.clone(),
-                  status: final_status,
-                  before: before_rel,
-                  after: after_rel,
-                  diff: diff_path,
-                  metrics: Some(metrics.into()),
-                  error,
-                }
-              }
-            },
-          },
-        }
-      }
-      (None, None) => continue,
-    };
-
-    track_status(&mut totals, entry.status);
-    results.push(entry);
-  }
+    (false, false) => {
+      let before_file = normalize_png_file(&args.before)?;
+      let after_file = normalize_png_file(&args.after)?;
+      let (results, totals) = process_files(
+        &before_file,
+        &after_file,
+        &html_dir,
+        &diff_dir,
+        tolerance,
+        max_diff_percent,
+        args.shard,
+      )?;
+      (before_file, after_file, results, totals)
+    }
+    _ => {
+      return Err("--before and --after must both be directories or both be PNG files".to_string());
+    }
+  };
 
   let shard = args.shard.map(|(index, total)| ShardInfo {
     index,
     total,
-    discovered: stems.len(),
+    discovered: totals.discovered,
   });
 
   let report = DiffReport {
-    before_dir: display_path(&before_dir),
-    after_dir: display_path(&after_dir),
+    before_dir: display_path(&before_root),
+    after_dir: display_path(&after_root),
     tolerance,
     max_diff_percent,
     shard,
@@ -432,31 +338,274 @@ fn validate_percent(value: f64) -> Result<(), String> {
   }
 }
 
-fn collect_pngs(dir: &Path) -> Result<HashMap<String, PathBuf>, String> {
-  if !dir.is_dir() {
-    return Err(format!("{} is not a directory", dir.display()));
+fn process_directory(
+  before_dir: &Path,
+  after_dir: &Path,
+  html_dir: &Path,
+  diff_dir: &Path,
+  tolerance: u8,
+  max_diff_percent: f64,
+  shard: Option<(usize, usize)>,
+) -> Result<(Vec<DiffReportEntry>, DiffReportTotals), String> {
+  let before_pngs = collect_pngs(before_dir)?;
+  let after_pngs = collect_pngs(after_dir)?;
+
+  let mut keys = BTreeSet::new();
+  keys.extend(before_pngs.keys().cloned());
+  keys.extend(after_pngs.keys().cloned());
+
+  let mut totals = DiffReportTotals {
+    discovered: keys.len(),
+    ..DiffReportTotals::default()
+  };
+  let mut results = Vec::new();
+
+  for (idx, key) in keys.iter().enumerate() {
+    if let Some((shard_index, shard_total)) = shard {
+      if idx % shard_total != shard_index {
+        totals.shard_skipped += 1;
+        continue;
+      }
+    }
+
+    let before_path = before_pngs.get(key).map(PathBuf::as_path);
+    let after_path = after_pngs.get(key).map(PathBuf::as_path);
+    let entry = process_entry(
+      key,
+      before_path,
+      after_path,
+      html_dir,
+      diff_dir,
+      tolerance,
+      max_diff_percent,
+      &mut totals,
+    );
+    track_status(&mut totals, entry.status);
+    results.push(entry);
+  }
+
+  Ok((results, totals))
+}
+
+fn process_files(
+  before: &Path,
+  after: &Path,
+  html_dir: &Path,
+  diff_dir: &Path,
+  tolerance: u8,
+  max_diff_percent: f64,
+  shard: Option<(usize, usize)>,
+) -> Result<(Vec<DiffReportEntry>, DiffReportTotals), String> {
+  let name = before
+    .file_stem()
+    .or_else(|| after.file_stem())
+    .map(|s| s.to_string_lossy().to_string())
+    .unwrap_or_else(|| "render".to_string());
+
+  let mut totals = DiffReportTotals {
+    discovered: 1,
+    ..DiffReportTotals::default()
+  };
+
+  if let Some((shard_index, shard_total)) = shard {
+    if 0 % shard_total != shard_index {
+      totals.shard_skipped = 1;
+      return Ok((Vec::new(), totals));
+    }
+  }
+
+  let entry = process_entry(
+    &name,
+    Some(before),
+    Some(after),
+    html_dir,
+    diff_dir,
+    tolerance,
+    max_diff_percent,
+    &mut totals,
+  );
+  track_status(&mut totals, entry.status);
+
+  Ok((vec![entry], totals))
+}
+
+fn process_entry(
+  name: &str,
+  before_path: Option<&Path>,
+  after_path: Option<&Path>,
+  html_dir: &Path,
+  diff_dir: &Path,
+  tolerance: u8,
+  max_diff_percent: f64,
+  totals: &mut DiffReportTotals,
+) -> DiffReportEntry {
+  let before_rel = before_path.map(|p| path_for_report(html_dir, p));
+  let after_rel = after_path.map(|p| path_for_report(html_dir, p));
+
+  match (before_path, after_path) {
+    (None, Some(_)) => DiffReportEntry {
+      name: name.to_string(),
+      status: EntryStatus::MissingBefore,
+      before: None,
+      after: after_rel,
+      diff: None,
+      metrics: None,
+      error: Some("Missing in before input".to_string()),
+    },
+    (Some(_), None) => DiffReportEntry {
+      name: name.to_string(),
+      status: EntryStatus::MissingAfter,
+      before: before_rel,
+      after: None,
+      diff: None,
+      metrics: None,
+      error: Some("Missing in after input".to_string()),
+    },
+    (Some(before), Some(after)) => {
+      totals.processed += 1;
+      match fs::read(before) {
+        Err(e) => DiffReportEntry {
+          name: name.to_string(),
+          status: EntryStatus::Error,
+          before: before_rel,
+          after: after_rel,
+          diff: None,
+          metrics: None,
+          error: Some(format!("Failed to read {}: {e}", before.display())),
+        },
+        Ok(before_png) => match fs::read(after) {
+          Err(e) => DiffReportEntry {
+            name: name.to_string(),
+            status: EntryStatus::Error,
+            before: before_rel,
+            after: after_rel,
+            diff: None,
+            metrics: None,
+            error: Some(format!("Failed to read {}: {e}", after.display())),
+          },
+          Ok(after_png) => match diff_png(&after_png, &before_png, tolerance) {
+            Err(e) => DiffReportEntry {
+              name: name.to_string(),
+              status: EntryStatus::Error,
+              before: before_rel,
+              after: after_rel,
+              diff: None,
+              metrics: None,
+              error: Some(format!("Diff failed: {e}")),
+            },
+            Ok((metrics, diff_image)) => {
+              let status = if metrics.diff_percentage == 0.0 {
+                EntryStatus::Match
+              } else if metrics.diff_percentage <= max_diff_percent {
+                EntryStatus::WithinThreshold
+              } else {
+                EntryStatus::Diff
+              };
+
+              let mut diff_path = None;
+              let mut final_status = status;
+              let mut error = None;
+              if metrics.pixel_diff > 0 {
+                let path = diff_path_for_name(diff_dir, name);
+                if let Err(e) = ensure_parent_dir(&path) {
+                  final_status = EntryStatus::Error;
+                  error = Some(e);
+                } else {
+                  match fs::write(&path, diff_image) {
+                    Ok(_) => {
+                      diff_path = Some(path_for_report(html_dir, &path));
+                    }
+                    Err(e) => {
+                      final_status = EntryStatus::Error;
+                      error = Some(format!(
+                        "Failed to write diff image {}: {e}",
+                        path.display()
+                      ));
+                    }
+                  }
+                }
+              }
+
+              DiffReportEntry {
+                name: name.to_string(),
+                status: final_status,
+                before: before_rel,
+                after: after_rel,
+                diff: diff_path,
+                metrics: Some(metrics.into()),
+                error,
+              }
+            }
+          },
+        },
+      }
+    }
+    (None, None) => DiffReportEntry {
+      name: name.to_string(),
+      status: EntryStatus::Error,
+      before: None,
+      after: None,
+      diff: None,
+      metrics: None,
+      error: Some("Missing in both inputs".to_string()),
+    },
+  }
+}
+
+fn collect_pngs(root: &Path) -> Result<HashMap<String, PathBuf>, String> {
+  if !root.is_dir() {
+    return Err(format!("{} is not a directory", root.display()));
   }
   let mut map = HashMap::new();
-  for entry in fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))? {
-    let entry = entry.map_err(|e| format!("failed to read entry: {e}"))?;
-    let path = entry.path();
-    if path.is_dir() {
+  for entry in WalkDir::new(root) {
+    let entry = entry.map_err(|e| format!("failed to walk {}: {e}", root.display()))?;
+    if !entry.file_type().is_file() {
       continue;
     }
-    let ext = path
+    if entry
+      .path()
       .extension()
-      .and_then(|e| e.to_str())
-      .map(|s| s.to_ascii_lowercase());
-    if ext.as_deref() != Some("png") {
+      .and_then(|ext| ext.to_str())
+      .map(|ext| ext.eq_ignore_ascii_case("png"))
+      != Some(true)
+    {
       continue;
     }
-    let stem = match path.file_stem().map(|s| s.to_string_lossy().to_string()) {
-      Some(s) => s,
-      None => continue,
-    };
-    map.entry(stem).or_insert(path);
+    let rel = entry
+      .path()
+      .strip_prefix(root)
+      .map_err(|e| format!("failed to strip prefix {}: {e}", root.display()))?;
+    let mut key_path = rel.to_path_buf();
+    key_path.set_extension("");
+    let key = path_to_forward_slashes(&key_path);
+    if key.is_empty() {
+      continue;
+    }
+    map.entry(key).or_insert_with(|| entry.path().to_path_buf());
   }
   Ok(map)
+}
+
+fn diff_path_for_name(diff_dir: &Path, name: &str) -> PathBuf {
+  let mut parts = name
+    .split('/')
+    .filter(|p| !p.is_empty())
+    .collect::<Vec<_>>();
+  let file_stem = parts.pop().unwrap_or("diff");
+  let mut path = diff_dir.to_path_buf();
+  for part in parts {
+    path.push(part);
+  }
+  path.push(format!("{file_stem}.png"));
+  path
+}
+
+fn path_to_forward_slashes(path: &Path) -> String {
+  path
+    .iter()
+    .map(|c| c.to_string_lossy())
+    .collect::<Vec<_>>()
+    .join("/")
 }
 
 fn write_json_report(report: &DiffReport, path: &Path) -> Result<(), String> {
@@ -634,6 +783,22 @@ fn normalize_dir(path: &Path) -> Result<PathBuf, String> {
   let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
   if !canonical.is_dir() {
     return Err(format!("{} is not a directory", canonical.display()));
+  }
+  Ok(canonical)
+}
+
+fn normalize_png_file(path: &Path) -> Result<PathBuf, String> {
+  let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+  if !canonical.is_file() {
+    return Err(format!("{} is not a file", canonical.display()));
+  }
+  if canonical
+    .extension()
+    .and_then(|ext| ext.to_str())
+    .map(|ext| ext.eq_ignore_ascii_case("png"))
+    != Some(true)
+  {
+    return Err(format!("{} is not a PNG file", canonical.display()));
   }
   Ok(canonical)
 }

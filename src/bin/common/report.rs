@@ -14,10 +14,13 @@ pub fn escape_html(input: &str) -> String {
 
 /// Produce a path relative to the HTML/JSON output (falls back to absolute).
 pub fn path_for_report(base: &Path, target: &Path) -> String {
-  diff_paths(target, base)
-    .unwrap_or_else(|| target.to_path_buf())
-    .display()
-    .to_string()
+  let path = diff_paths(target, base).unwrap_or_else(|| target.to_path_buf());
+  let rendered = path.display().to_string();
+  if cfg!(windows) {
+    rendered.replace('\\', "/")
+  } else {
+    rendered
+  }
 }
 
 /// Canonicalize for display while tolerating missing paths.

@@ -78,6 +78,7 @@ http = "1"
 libc = { version = "0.2", optional = true }
 read-fonts = "0.20"
 skrifa = "0.20"
+walkdir = "2"
 
 [dev-dependencies]
 criterion = "0.5"
