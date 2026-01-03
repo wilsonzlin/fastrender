@@ -86,7 +86,7 @@ fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
   }
 }
 
-fn layout_thread_pool_for_threads(threads: usize) -> Option<Arc<ThreadPool>> {
+pub(crate) fn layout_thread_pool_for_threads(threads: usize) -> Option<Arc<ThreadPool>> {
   let threads = threads.max(1);
   if threads <= 1 {
     return None;
