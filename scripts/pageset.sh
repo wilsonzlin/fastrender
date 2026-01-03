@@ -14,14 +14,51 @@ detect_total_cpus() {
   fi
 
   # cgroup v2: `cpu.max` is "<quota> <period>" where quota is "max" when unbounded.
+  #
+  # Quotas are hierarchical: the effective CPU budget is the minimum quota found in the current
+  # cgroup and all its ancestors. Walk upwards so we honor quotas applied at higher-level slices.
   if [[ -r /sys/fs/cgroup/cpu.max ]]; then
-    local quota period
-    read -r quota period < /sys/fs/cgroup/cpu.max || true
-    if [[ "${quota:-}" != "max" && "${quota:-0}" -gt 0 && "${period:-0}" -gt 0 ]]; then
-      local quota_cpus=$(((quota + period - 1) / period))
-      if [[ "${quota_cpus}" -gt 0 && "${quota_cpus}" -lt "${cpus}" ]]; then
-        cpus="${quota_cpus}"
+    local cgroup_path="/"
+    if [[ -r /proc/self/cgroup ]]; then
+      cgroup_path="$(awk -F: '$1=="0" && $2=="" {print $3; exit}' /proc/self/cgroup 2>/dev/null || echo "/")"
+      if [[ -z "${cgroup_path}" ]]; then
+        cgroup_path="/"
       fi
+    fi
+
+    local dir="/sys/fs/cgroup${cgroup_path}"
+    if [[ "${dir}" == "/sys/fs/cgroup/" ]]; then
+      dir="/sys/fs/cgroup"
+    fi
+
+    local best_quota_cpus=""
+    while true; do
+      if [[ -r "${dir}/cpu.max" ]]; then
+        local quota period
+        read -r quota period < "${dir}/cpu.max" || true
+        if [[ "${quota:-}" != "max" && "${quota:-0}" -gt 0 && "${period:-0}" -gt 0 ]]; then
+          local quota_cpus=$(((quota + period - 1) / period))
+          if [[ "${quota_cpus}" -gt 0 ]]; then
+            if [[ -z "${best_quota_cpus}" || "${quota_cpus}" -lt "${best_quota_cpus}" ]]; then
+              best_quota_cpus="${quota_cpus}"
+            fi
+          fi
+        fi
+      fi
+
+      if [[ "${dir}" == "/sys/fs/cgroup" ]]; then
+        break
+      fi
+
+      local next_dir="${dir%/*}"
+      if [[ -z "${next_dir}" || "${next_dir}" == "${dir}" ]]; then
+        break
+      fi
+      dir="${next_dir}"
+    done
+
+    if [[ -n "${best_quota_cpus}" && "${best_quota_cpus}" -gt 0 && "${best_quota_cpus}" -lt "${cpus}" ]]; then
+      cpus="${best_quota_cpus}"
     fi
   # cgroup v1: `cpu.cfs_quota_us` is -1 when unbounded.
   elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us && -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]]; then
