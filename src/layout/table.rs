@@ -44,7 +44,8 @@ use crate::layout::contexts::table::column_distribution::ColumnConstraints;
 use crate::layout::contexts::table::column_distribution::ColumnDistributor;
 use crate::layout::contexts::table::column_distribution::DistributionMode;
 use crate::layout::engine::{
-  layout_thread_pool_for_threads, LayoutParallelism, DEFAULT_LAYOUT_AUTO_MAX_THREADS,
+  layout_thread_pool_for_threads, LayoutParallelism, LayoutParallelismMode,
+  DEFAULT_LAYOUT_AUTO_MAX_THREADS,
 };
 use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::layout_cache_lookup;
@@ -4605,8 +4606,16 @@ impl TableFormattingContext {
     let mut deadline_counter = 0usize;
     let source_rows = collect_source_rows(table_box);
     let cell_bfc = &self.cell_bfc;
+    let max_threads = match self.parallelism.mode {
+      LayoutParallelismMode::Disabled => 1,
+      _ => self
+        .parallelism
+        .max_threads
+        .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
+        .max(1),
+    };
     let measure_cells_in_parallel = self.parallelism.should_parallelize(structure.cells.len())
-      || (structure.cells.len() > 256 && rayon::current_num_threads() > 1);
+      || (structure.cells.len() > 256 && max_threads > 1);
     let measurements: Vec<Option<(f32, f32)>> = if matches!(mode, DistributionMode::Auto) {
       if measure_cells_in_parallel {
         let deadline = active_deadline();
@@ -4641,10 +4650,7 @@ impl TableFormattingContext {
           // (e.g. large tables where every row group stays below the `min_fanout` threshold). Run
           // that work inside the large-stack layout pool so we don't overflow the default Rayon
           // stack in worker threads.
-          let threads = rayon::current_num_threads()
-            .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
-            .max(1);
-          if let Some(pool) = layout_thread_pool_for_threads(threads) {
+          if let Some(pool) = layout_thread_pool_for_threads(max_threads) {
             pool.install(measure)?
           } else {
             measure()?
@@ -5929,9 +5935,17 @@ impl FormattingContext for TableFormattingContext {
       }
     };
 
+    let max_threads = match self.parallelism.mode {
+      LayoutParallelismMode::Disabled => 1,
+      _ => self
+        .parallelism
+        .max_threads
+        .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
+        .max(1),
+    };
     let should_parallelize_cells = !dump
       && (self.parallelism.should_parallelize(structure.cells.len())
-        || (structure.cells.len() > 256 && rayon::current_num_threads() > 1));
+        || (structure.cells.len() > 256 && max_threads > 1));
     let outcomes: Vec<CellOutcome> = if should_parallelize_cells {
       let deadline = active_deadline();
       let layout_cells = || {
@@ -5950,10 +5964,7 @@ impl FormattingContext for TableFormattingContext {
       if self.parallelism.is_active() {
         layout_cells()
       } else {
-        let threads = rayon::current_num_threads()
-          .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
-          .max(1);
-        if let Some(pool) = layout_thread_pool_for_threads(threads) {
+        if let Some(pool) = layout_thread_pool_for_threads(max_threads) {
           pool.install(layout_cells)
         } else {
           layout_cells()
