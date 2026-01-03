@@ -36,8 +36,10 @@ mod disk_cache_main {
   use fastrender::image_loader::ImageCache;
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
-    is_data_url, CachingFetcherConfig, DiskCachingFetcher, FetchDestination, FetchRequest,
-    FetchedResource, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    ensure_font_mime_sane, ensure_http_success, ensure_image_mime_sane,
+    ensure_stylesheet_mime_sane, is_data_url, CachingFetcherConfig, DiskCachingFetcher,
+    FetchDestination, FetchRequest, FetchedResource, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
+    DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::{MediaContext, MediaQuery, MediaQueryCache};
   use rayon::prelude::*;
@@ -934,6 +936,12 @@ mod disk_cache_main {
         FetchRequest::new(url, FetchDestination::Style).with_referrer(self.referrer),
       ) {
         Ok(res) => {
+          if let Err(err) =
+            ensure_http_success(&res, url).and_then(|()| ensure_stylesheet_mime_sane(&res, url))
+          {
+            self.summary.borrow_mut().failed_imports += 1;
+            return Err(err);
+          }
           self.summary.borrow_mut().fetched_imports += 1;
           let base = res.final_url.as_deref().unwrap_or(url);
           let decoded = decode_css_bytes(&res.bytes, res.content_type.as_deref());
@@ -1116,7 +1124,16 @@ mod disk_cache_main {
         match fetcher.fetch_with_request(
           FetchRequest::new(&resolved, FetchDestination::Font).with_referrer(referrer),
         ) {
-          Ok(_) => summary.fetched_fonts += 1,
+          Ok(res) => {
+            if ensure_http_success(&res, &resolved)
+              .and_then(|()| ensure_font_mime_sane(&res, &resolved))
+              .is_ok()
+            {
+              summary.fetched_fonts += 1;
+            } else {
+              summary.failed_fonts += 1;
+            }
+          }
           Err(_) => summary.failed_fonts += 1,
         }
       }
@@ -1450,6 +1467,14 @@ mod disk_cache_main {
             FetchRequest::new(css_url.as_str(), FetchDestination::Style).with_referrer(base_hint),
           ) {
             Ok(res) => {
+              if ensure_http_success(&res, &css_url)
+                .and_then(|()| ensure_stylesheet_mime_sane(&res, &css_url))
+                .is_err()
+              {
+                summary.borrow_mut().failed_css += 1;
+                continue;
+              }
+
               summary.borrow_mut().fetched_css += 1;
               let sheet_base = res.final_url.as_deref().unwrap_or(&css_url);
               let mut css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
@@ -1533,12 +1558,19 @@ mod disk_cache_main {
         match fetcher.fetch_with_request(
           FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(base_hint),
         ) {
-          Ok(_) => {
-            summary.fetched_images += 1;
-            // Best-effort: probe now (outside the 5s render deadline) and persist intrinsic sizing
-            // metadata into the disk cache so subsequent renders can avoid repeating image header
-            // parsing during box-tree construction.
-            let _ = image_cache.probe(url.as_str());
+          Ok(res) => {
+            if ensure_http_success(&res, url)
+              .and_then(|()| ensure_image_mime_sane(&res, url))
+              .is_ok()
+            {
+              summary.fetched_images += 1;
+              // Best-effort: probe now (outside the 5s render deadline) and persist intrinsic sizing
+              // metadata into the disk cache so subsequent renders can avoid repeating image header
+              // parsing during box-tree construction.
+              let _ = image_cache.probe(url.as_str());
+            } else {
+              summary.failed_images += 1;
+            }
           }
           Err(_) => summary.failed_images += 1,
         }
@@ -1547,11 +1579,7 @@ mod disk_cache_main {
 
     if opts.prefetch_iframes || opts.prefetch_embeds {
       let mut fetched_docs: Vec<(String, FetchedResource)> = Vec::new();
-      let fetch_destination = if opts.prefetch_iframes {
-        FetchDestination::Document
-      } else {
-        FetchDestination::Other
-      };
+      let fetch_destination = FetchDestination::Document;
       {
         let mut summary = summary.borrow_mut();
         for url in &document_urls {
@@ -1559,8 +1587,15 @@ mod disk_cache_main {
             FetchRequest::new(url.as_str(), fetch_destination).with_referrer(base_hint),
           ) {
             Ok(res) => {
-              summary.fetched_documents += 1;
-              fetched_docs.push((url.clone(), res));
+              let is_html = ensure_http_success(&res, url).is_ok()
+                && !res.bytes.is_empty()
+                && looks_like_html_document(&res, url);
+              if is_html {
+                summary.fetched_documents += 1;
+                fetched_docs.push((url.clone(), res));
+              } else {
+                summary.failed_documents += 1;
+              }
             }
             Err(_) => summary.failed_documents += 1,
           }
@@ -1576,9 +1611,6 @@ mod disk_cache_main {
         ..opts
       };
       for (url, res) in fetched_docs {
-        if !looks_like_html_document(&res, &url) {
-          continue;
-        }
         let base_hint = res.final_url.as_deref().unwrap_or(&url);
         let doc = decode_html_resource(&res, base_hint);
         let nested_summary = prefetch_assets_for_html(
@@ -1601,7 +1633,16 @@ mod disk_cache_main {
         match fetcher.fetch_with_request(
           FetchRequest::new(url.as_str(), FetchDestination::Image).with_referrer(base_hint),
         ) {
-          Ok(_) => summary.fetched_css_assets += 1,
+          Ok(res) => {
+            if ensure_http_success(&res, url)
+              .and_then(|()| ensure_image_mime_sane(&res, url))
+              .is_ok()
+            {
+              summary.fetched_css_assets += 1;
+            } else {
+              summary.failed_css_assets += 1;
+            }
+          }
           Err(_) => summary.failed_css_assets += 1,
         }
       }
@@ -1655,7 +1696,7 @@ mod disk_cache_main {
     use serde_json::Value;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1822,6 +1863,129 @@ mod disk_cache_main {
       assert_eq!(calls[0].0, "https://example.com/base/frame.html");
       assert_eq!(calls[0].1, FetchDestination::Document);
       assert_eq!(calls[0].2.as_deref(), Some(document_url));
+    }
+
+    #[test]
+    fn stylesheet_http_error_is_not_parsed_for_css_url_discovery() {
+      let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+      listener.set_nonblocking(true).expect("set_nonblocking");
+      let addr = listener.local_addr().expect("addr");
+
+      let done = Arc::new(AtomicBool::new(false));
+      let poison_hits = Arc::new(AtomicUsize::new(0));
+      let server_done = Arc::clone(&done);
+      let server_poison_hits = Arc::clone(&poison_hits);
+      let handle = std::thread::spawn(move || {
+        while !server_done.load(Ordering::SeqCst) {
+          match listener.accept() {
+            Ok((mut stream, _)) => {
+              let mut buf = [0u8; 4096];
+              let n = stream.read(&mut buf).unwrap_or(0);
+              let req = String::from_utf8_lossy(&buf[..n]);
+              let path = req
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("/");
+              let path = path.split('?').next().unwrap_or(path);
+
+              let (status, content_type, body): (&str, &str, &[u8]) = match path {
+                "/style.css" => (
+                  "403 Forbidden",
+                  "text/html",
+                  b"<!doctype html><html><body>forbidden url(/poison.png)</body></html>",
+                ),
+                "/poison.png" => {
+                  server_poison_hits.fetch_add(1, Ordering::SeqCst);
+                  ("200 OK", "image/png", b"poison")
+                }
+                _ => ("404 Not Found", "text/plain", b"not found"),
+              };
+
+              let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+                body.len()
+              );
+              let _ = stream.write_all(response.as_bytes());
+              let _ = stream.write_all(body);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+              std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => break,
+          }
+        }
+      });
+
+      let tmp = tempfile::tempdir().expect("tempdir");
+      let cache_dir = tmp.path().join("cache");
+
+      let base = format!("http://{addr}");
+      let document_url = format!("{base}/index.html");
+      let html = r#"<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body></body></html>"#;
+
+      let http = build_http_fetcher(
+        DEFAULT_USER_AGENT,
+        DEFAULT_ACCEPT_LANGUAGE,
+        Some(Duration::from_secs(2)),
+      );
+      let mut disk_config = DiskCacheConfig {
+        max_bytes: 0,
+        ..DiskCacheConfig::default()
+      };
+      disk_config.namespace = Some(disk_cache_namespace(
+        DEFAULT_USER_AGENT,
+        DEFAULT_ACCEPT_LANGUAGE,
+      ));
+
+      let fetcher = DiskCachingFetcher::with_configs(
+        http,
+        &cache_dir,
+        CachingFetcherConfig {
+          honor_http_cache_freshness: true,
+          ..CachingFetcherConfig::default()
+        },
+        disk_config,
+      );
+      let fetcher: Arc<dyn ResourceFetcher> = Arc::new(fetcher);
+
+      let media_ctx = MediaContext::screen(800.0, 600.0);
+      let opts = PrefetchOptions {
+        prefetch_fonts: false,
+        prefetch_images: false,
+        prefetch_icons: false,
+        prefetch_video_posters: false,
+        prefetch_iframes: false,
+        prefetch_embeds: false,
+        prefetch_css_url_assets: true,
+        max_discovered_assets_per_page: 2000,
+        image_limits: ImagePrefetchLimits {
+          max_image_elements: 150,
+          max_urls_per_element: 2,
+        },
+      };
+
+      let summary = prefetch_assets_for_html(
+        "test",
+        &document_url,
+        html,
+        &document_url,
+        &document_url,
+        &fetcher,
+        &media_ctx,
+        opts,
+      );
+
+      done.store(true, Ordering::SeqCst);
+      handle.join().expect("server thread");
+
+      assert_eq!(summary.discovered_css, 1);
+      assert_eq!(summary.fetched_css, 0);
+      assert_eq!(summary.failed_css, 1);
+      assert_eq!(summary.discovered_css_assets, 0);
+      assert_eq!(summary.fetched_css_assets, 0);
+      assert_eq!(summary.failed_css_assets, 0);
+      assert_eq!(poison_hits.load(Ordering::SeqCst), 0);
     }
 
     #[test]
