@@ -4,15 +4,35 @@
 //! These tests verify that the public API works correctly and covers
 //! all major use cases.
 //!
-//! Note: Tests that require the full rendering pipeline are marked with
-//! #[ignore] as the pipeline integration is pending (matching the pattern
-//! in integration_test.rs).
+//! Note: Pipeline tests explicitly use bundled fonts and disallow HTTP(S)
+//! fetches so they remain deterministic in CI.
 
-use fastrender::api::FastRender;
-use fastrender::api::FastRenderConfig;
+use fastrender::api::{FastRender, FastRenderConfig, FastRenderPool, FastRenderPoolConfig};
 use fastrender::compat::CompatProfile;
 use fastrender::dom::DomCompatibilityMode;
-use fastrender::Rgba;
+use fastrender::{FontConfig, ResourcePolicy, Rgba};
+
+fn deterministic_config() -> FastRenderConfig {
+  FastRenderConfig::new()
+    // Keep defaults small so accidental default rendering stays fast.
+    .with_default_viewport(128, 128)
+    // Avoid scanning system fonts (and keep font metrics stable).
+    .with_font_sources(FontConfig::bundled_only())
+    // Tests must not reach the network.
+    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+}
+
+fn deterministic_renderer() -> FastRender {
+  FastRender::with_config(deterministic_config()).expect("create deterministic renderer")
+}
+
+fn assert_png_header(png_bytes: &[u8]) {
+  const PNG_HEADER: &[u8] = b"\x89PNG\r\n\x1a\n";
+  assert!(
+    png_bytes.starts_with(PNG_HEADER),
+    "PNG encoding should produce a valid PNG header"
+  );
+}
 
 // =============================================================================
 // FastRender Creation Tests
@@ -27,7 +47,9 @@ fn test_fastrender_new() {
 
 #[test]
 fn test_fastrender_with_default_config() {
-  let config = FastRenderConfig::default();
+  let config = FastRenderConfig::default()
+    .with_font_sources(FontConfig::bundled_only())
+    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false));
   let result = FastRender::with_config(config);
   assert!(
     result.is_ok(),
@@ -39,7 +61,9 @@ fn test_fastrender_with_default_config() {
 fn test_fastrender_with_custom_config() {
   let config = FastRenderConfig::new()
     .with_default_background(Rgba::rgb(240, 240, 240))
-    .with_default_viewport(1920, 1080);
+    .with_default_viewport(1920, 1080)
+    .with_font_sources(FontConfig::bundled_only())
+    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false));
 
   let result = FastRender::with_config(config);
   assert!(
@@ -55,7 +79,12 @@ fn test_fastrender_with_custom_config() {
 
 #[test]
 fn test_thread_safe_pool_creation() {
-  let pool = fastrender::api::FastRenderPool::new().expect("pool");
+  let pool = FastRenderPool::with_config(
+    FastRenderPoolConfig::new()
+      .with_renderer_config(deterministic_config())
+      .with_pool_size(1),
+  )
+  .expect("pool");
   let pixmap = pool
     .render_html("<div>pool</div>", 64, 64)
     .expect("render html");
@@ -68,6 +97,8 @@ fn test_builder_chain_for_compatibility() {
   let renderer = FastRender::builder()
     .compat_mode(CompatProfile::Standards)
     .with_site_compat_hacks()
+    .font_sources(FontConfig::bundled_only())
+    .resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
     .build();
 
   assert!(renderer.is_ok(), "Builder should produce a renderer");
@@ -122,14 +153,14 @@ fn test_config_compatibility_chain() {
 
 #[test]
 fn test_parse_html_simple() {
-  let renderer = FastRender::new().unwrap();
+  let renderer = deterministic_renderer();
   let result = renderer.parse_html("<div>Hello</div>");
   assert!(result.is_ok(), "Simple HTML should parse successfully");
 }
 
 #[test]
 fn test_parse_html_full_document() {
-  let renderer = FastRender::new().unwrap();
+  let renderer = deterministic_renderer();
   let html = r#"
         <!DOCTYPE html>
         <html>
@@ -152,7 +183,7 @@ fn test_parse_html_full_document() {
 
 #[test]
 fn test_parse_html_with_style() {
-  let renderer = FastRender::new().unwrap();
+  let renderer = deterministic_renderer();
   let html = r#"
         <html>
             <head>
@@ -176,7 +207,7 @@ fn test_parse_html_with_style() {
 
 #[test]
 fn test_parse_html_empty() {
-  let renderer = FastRender::new().unwrap();
+  let renderer = deterministic_renderer();
   let result = renderer.parse_html("");
   assert!(result.is_ok(), "Empty HTML should parse successfully");
 }
@@ -187,28 +218,28 @@ fn test_parse_html_empty() {
 
 #[test]
 fn test_font_context_access() {
-  let renderer = FastRender::new().unwrap();
+  let renderer = deterministic_renderer();
   let _font_context = renderer.font_context();
   // Just verify we can access it
 }
 
 #[test]
 fn test_font_context_mut_access() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let _font_context = renderer.font_context_mut();
   // Just verify we can access it
 }
 
 #[test]
 fn test_layout_engine_access() {
-  let renderer = FastRender::new().unwrap();
+  let renderer = deterministic_renderer();
   let _layout_engine = renderer.layout_engine();
   // Just verify we can access it
 }
 
 #[test]
 fn test_background_color_get_set() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
 
   // Default is white
   assert_eq!(renderer.background_color(), Rgba::WHITE);
@@ -226,7 +257,7 @@ fn test_background_color_get_set() {
 
 #[test]
 fn test_render_html_invalid_dimensions() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
 
   // Zero width
   let result = renderer.render_html("<div>Test</div>", 0, 600);
@@ -252,7 +283,9 @@ fn test_reexports_from_lib() {
   use fastrender::FastRenderConfig;
   use fastrender::Pixmap;
 
-  let config = FastRenderConfig::new();
+  let config = FastRenderConfig::new()
+    .with_font_sources(FontConfig::bundled_only())
+    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false));
   let renderer = FastRender::with_config(config);
   assert!(renderer.is_ok());
 
@@ -278,27 +311,26 @@ fn test_rgba_available() {
 }
 
 // =============================================================================
-// Rendering Tests (Full Pipeline - Pending Integration)
-// These tests require the full rendering pipeline to be integrated.
-// They are marked with #[ignore] to match the pattern in integration_test.rs.
+// Rendering Tests (Full Pipeline)
+// These tests exercise the full parse/style/layout/paint pipeline and run in CI.
 // =============================================================================
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_render_html_simple() {
-  let mut renderer = FastRender::new().unwrap();
-  let result = renderer.render_html("<div>Hello World</div>", 100, 100);
+  let mut renderer = deterministic_renderer();
+  let result = renderer.render_html("<div>Hello World</div>", 64, 64);
   assert!(result.is_ok(), "Simple HTML should render successfully");
 
   let pixmap = result.unwrap();
-  assert_eq!(pixmap.width(), 100);
-  assert_eq!(pixmap.height(), 100);
+  assert_eq!(pixmap.width(), 64);
+  assert_eq!(pixmap.height(), 64);
+  let png_bytes = pixmap.encode_png().expect("encode PNG");
+  assert_png_header(&png_bytes);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_render_html_with_style() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let html = r#"
         <html>
             <head>
@@ -313,55 +345,61 @@ fn test_render_html_with_style() {
         </html>
     "#;
 
-  let result = renderer.render_html(html, 200, 200);
+  let result = renderer.render_html(html, 128, 128);
   assert!(result.is_ok(), "HTML with CSS should render successfully");
 
   let pixmap = result.unwrap();
-  assert_eq!(pixmap.width(), 200);
-  assert_eq!(pixmap.height(), 200);
+  assert_eq!(pixmap.width(), 128);
+  assert_eq!(pixmap.height(), 128);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_render_html_various_sizes() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let html = "<div>Test</div>";
 
   // Small size
   let result = renderer.render_html(html, 10, 10);
   assert!(result.is_ok());
-  assert_eq!(result.unwrap().width(), 10);
+  let pixmap = result.unwrap();
+  assert_eq!(pixmap.width(), 10);
+  assert_eq!(pixmap.height(), 10);
 
   // Medium size
-  let result = renderer.render_html(html, 800, 600);
+  let result = renderer.render_html(html, 80, 60);
   assert!(result.is_ok());
-  assert_eq!(result.unwrap().width(), 800);
+  let pixmap = result.unwrap();
+  assert_eq!(pixmap.width(), 80);
+  assert_eq!(pixmap.height(), 60);
 
   // Large size
-  let result = renderer.render_html(html, 1920, 1080);
+  let result = renderer.render_html(html, 160, 120);
   assert!(result.is_ok());
-  assert_eq!(result.unwrap().width(), 1920);
+  let pixmap = result.unwrap();
+  assert_eq!(pixmap.width(), 160);
+  assert_eq!(pixmap.height(), 120);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_render_html_with_background() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let html = "<div>Test</div>";
 
-  let result = renderer.render_html_with_background(html, 100, 100, Rgba::rgb(255, 0, 0));
+  let result = renderer.render_html_with_background(html, 64, 64, Rgba::rgb(255, 0, 0));
   assert!(result.is_ok());
+  let pixmap = result.unwrap();
+  assert_eq!(pixmap.width(), 64);
+  assert_eq!(pixmap.height(), 64);
 
   // Background color should be restored
   assert_eq!(renderer.background_color(), Rgba::WHITE);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_layout_document() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let dom = renderer.parse_html("<div>Content</div>").unwrap();
-  let result = renderer.layout_document(&dom, 800, 600);
+  let result = renderer.layout_document(&dom, 200, 150);
 
   assert!(result.is_ok(), "Layout should succeed");
 
@@ -370,14 +408,13 @@ fn test_layout_document() {
     fragment_tree.fragment_count() > 0,
     "Fragment tree should have fragments"
   );
-  assert_eq!(fragment_tree.viewport_size().width, 800.0);
-  assert_eq!(fragment_tree.viewport_size().height, 600.0);
+  assert_eq!(fragment_tree.viewport_size().width, 200.0);
+  assert_eq!(fragment_tree.viewport_size().height, 150.0);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_layout_complex_document() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let html = r#"
         <html>
             <body>
@@ -396,61 +433,63 @@ fn test_layout_complex_document() {
     "#;
 
   let dom = renderer.parse_html(html).unwrap();
-  let result = renderer.layout_document(&dom, 1024, 768);
+  let result = renderer.layout_document(&dom, 240, 180);
 
   assert!(result.is_ok(), "Complex layout should succeed");
+  let fragment_tree = result.unwrap();
+  assert!(fragment_tree.fragment_count() > 0);
+  assert_eq!(fragment_tree.viewport_size().width, 240.0);
+  assert_eq!(fragment_tree.viewport_size().height, 180.0);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_paint() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let dom = renderer.parse_html("<div>Content</div>").unwrap();
-  let fragment_tree = renderer.layout_document(&dom, 800, 600).unwrap();
+  let fragment_tree = renderer.layout_document(&dom, 200, 150).unwrap();
 
-  let result = renderer.paint(&fragment_tree, 800, 600);
+  let result = renderer.paint(&fragment_tree, 200, 150);
   assert!(result.is_ok(), "Paint should succeed");
 
   let pixmap = result.unwrap();
-  assert_eq!(pixmap.width(), 800);
-  assert_eq!(pixmap.height(), 600);
+  assert_eq!(pixmap.width(), 200);
+  assert_eq!(pixmap.height(), 150);
+  let png_bytes = pixmap.encode_png().expect("encode PNG");
+  assert_png_header(&png_bytes);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_paint_different_size_than_layout() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let dom = renderer.parse_html("<div>Content</div>").unwrap();
 
   // Layout at one size
-  let fragment_tree = renderer.layout_document(&dom, 800, 600).unwrap();
+  let fragment_tree = renderer.layout_document(&dom, 200, 150).unwrap();
 
   // Paint at different size (should use paint dimensions)
-  let result = renderer.paint(&fragment_tree, 400, 300);
+  let result = renderer.paint(&fragment_tree, 100, 80);
   assert!(result.is_ok());
 
   let pixmap = result.unwrap();
-  assert_eq!(pixmap.width(), 400);
-  assert_eq!(pixmap.height(), 300);
+  assert_eq!(pixmap.width(), 100);
+  assert_eq!(pixmap.height(), 80);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_end_to_end_simple() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
 
   let html = "<h1>Hello, FastRender!</h1>";
-  let pixmap = renderer.render_html(html, 800, 600).unwrap();
+  let pixmap = renderer.render_html(html, 200, 150).unwrap();
 
-  assert_eq!(pixmap.width(), 800);
-  assert_eq!(pixmap.height(), 600);
+  assert_eq!(pixmap.width(), 200);
+  assert_eq!(pixmap.height(), 150);
   assert!(!pixmap.data().is_empty(), "Pixmap should have data");
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_end_to_end_styled() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
 
   let html = r#"
         <!DOCTYPE html>
@@ -480,48 +519,50 @@ fn test_end_to_end_styled() {
         </html>
     "#;
 
-  let pixmap = renderer.render_html(html, 1024, 768).unwrap();
+  let pixmap = renderer.render_html(html, 240, 180).unwrap();
 
-  assert_eq!(pixmap.width(), 1024);
-  assert_eq!(pixmap.height(), 768);
+  assert_eq!(pixmap.width(), 240);
+  assert_eq!(pixmap.height(), 180);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_end_to_end_multiple_renders() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
 
   // Render multiple documents with the same renderer
-  for i in 0..5 {
+  for i in 0..3 {
     let html = format!("<div>Render #{}</div>", i);
-    let result = renderer.render_html(&html, 200, 100);
+    let result = renderer.render_html(&html, 120, 60);
     assert!(result.is_ok(), "Render {} should succeed", i);
+    let pixmap = result.unwrap();
+    assert_eq!(pixmap.width(), 120);
+    assert_eq!(pixmap.height(), 60);
   }
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_end_to_end_step_by_step() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
 
   // Step 1: Parse
   let html = "<div style='width: 100px; height: 100px; background: red;'>Box</div>";
   let dom = renderer.parse_html(html).unwrap();
 
   // Step 2: Layout
-  let fragment_tree = renderer.layout_document(&dom, 800, 600).unwrap();
+  let fragment_tree = renderer.layout_document(&dom, 200, 150).unwrap();
   assert!(fragment_tree.fragment_count() > 0);
 
   // Step 3: Paint
-  let pixmap = renderer.paint(&fragment_tree, 800, 600).unwrap();
-  assert_eq!(pixmap.width(), 800);
-  assert_eq!(pixmap.height(), 600);
+  let pixmap = renderer.paint(&fragment_tree, 200, 150).unwrap();
+  assert_eq!(pixmap.width(), 200);
+  assert_eq!(pixmap.height(), 150);
+  let png_bytes = pixmap.encode_png().expect("encode PNG");
+  assert_png_header(&png_bytes);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_render_with_flexbox() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let html = r#"
         <html>
             <head>
@@ -547,14 +588,16 @@ fn test_render_with_flexbox() {
         </html>
     "#;
 
-  let result = renderer.render_html(html, 400, 200);
+  let result = renderer.render_html(html, 240, 120);
   assert!(result.is_ok(), "Flexbox layout should succeed");
+  let pixmap = result.unwrap();
+  assert_eq!(pixmap.width(), 240);
+  assert_eq!(pixmap.height(), 120);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_render_with_grid() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let html = r#"
         <html>
             <head>
@@ -580,14 +623,16 @@ fn test_render_with_grid() {
         </html>
     "#;
 
-  let result = renderer.render_html(html, 600, 400);
+  let result = renderer.render_html(html, 240, 120);
   assert!(result.is_ok(), "Grid layout should succeed");
+  let pixmap = result.unwrap();
+  assert_eq!(pixmap.width(), 240);
+  assert_eq!(pixmap.height(), 120);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_render_with_table() {
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let html = r#"
         <html>
             <body>
@@ -605,18 +650,20 @@ fn test_render_with_table() {
         </html>
     "#;
 
-  let result = renderer.render_html(html, 500, 300);
+  let result = renderer.render_html(html, 240, 160);
   assert!(result.is_ok(), "Table layout should succeed");
+  let pixmap = result.unwrap();
+  assert_eq!(pixmap.width(), 240);
+  assert_eq!(pixmap.height(), 160);
 }
 
 #[test]
-#[ignore = "Full rendering pipeline integration pending"]
 fn test_fragment_tree_reexport_with_layout() {
   // FragmentTree should be accessible and usable with layout
   use fastrender::FragmentTree;
 
-  let mut renderer = FastRender::new().unwrap();
+  let mut renderer = deterministic_renderer();
   let dom = renderer.parse_html("<div>Test</div>").unwrap();
-  let fragment_tree: FragmentTree = renderer.layout_document(&dom, 800, 600).unwrap();
+  let fragment_tree: FragmentTree = renderer.layout_document(&dom, 200, 150).unwrap();
   assert!(fragment_tree.fragment_count() > 0);
 }
