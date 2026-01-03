@@ -82,7 +82,9 @@ use crate::paint::text_rasterize::{
 };
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
-use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
+use crate::render_control::{
+  active_deadline, active_stage, check_active, check_active_periodic, with_deadline, StageGuard,
+};
 use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
@@ -5785,6 +5787,7 @@ impl DisplayListRenderer {
     let layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
 
     let deadline = active_deadline();
+    let stage = active_stage();
 
     let task_capacity = self.parallel_thread_budget(tile_count);
     let shared_image_pixmaps = Arc::new(SharedImagePixmaps::new(SCALED_IMAGE_CACHE_CAPACITY));
@@ -5806,6 +5809,7 @@ impl DisplayListRenderer {
         .map(|chunk| {
           let _diagnostics_guard = diagnostics_session.map(PaintDiagnosticsThreadGuard::enter);
           with_deadline(deadline.as_ref(), || {
+            let _stage_guard = StageGuard::install(stage);
             let mut out = Vec::with_capacity(chunk.len());
             for work in chunk {
               check_active(RenderStage::Paint).map_err(Error::Render)?;
@@ -9854,7 +9858,7 @@ mod tests {
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
   use crate::paint::rasterize::render_box_shadow;
-  use crate::render_control::{CancelCallback, RenderDeadline};
+  use crate::render_control::{CancelCallback, RenderDeadline, StageGuard};
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackfaceVisibility;
   use crate::style::types::BackgroundImage;
@@ -10627,6 +10631,58 @@ mod tests {
       report.tiles > 1,
       "expected multiple tiles, got {}",
       report.tiles
+    );
+    assert!(
+      report.parallel_threads > 1,
+      "expected dedicated paint pool to use >1 thread, got {}",
+      report.parallel_threads
+    );
+  }
+
+  #[test]
+  fn parallel_tiling_propagates_active_stage_into_rayon_workers() {
+    let _guard = EnvGuard::set("FASTR_PAINT_THREADS", "4");
+
+    let mut list = DisplayList::new();
+    for i in 0..256 {
+      let shade = (i % 255) as u8;
+      list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 512.0, 512.0),
+        color: Rgba::from_rgba8(shade, shade, shade, 255),
+      }));
+    }
+
+    let cancel: Arc<CancelCallback> = Arc::new(|| {
+      rayon::current_thread_index().is_some() && crate::render_control::active_stage() != Some(RenderStage::Paint)
+    });
+    let deadline = RenderDeadline::new(None, Some(cancel));
+
+    let one_thread = ThreadPoolBuilder::new()
+      .num_threads(1)
+      .build()
+      .expect("single-thread rayon pool");
+
+    let report = one_thread.install(|| {
+      let _stage_guard = StageGuard::install(Some(RenderStage::Paint));
+      with_deadline(Some(&deadline), || {
+        let mut parallelism = PaintParallelism::adaptive();
+        parallelism.tile_size = 128;
+        DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new())
+          .unwrap()
+          .with_parallelism(parallelism)
+          .render_with_report(&list)
+      })
+    });
+
+    let report = match report {
+      Ok(report) => report,
+      Err(err) => panic!(
+        "expected stage-propagated parallel paint to ignore worker-thread cancellation, got err={err:?}"
+      ),
+    };
+    assert!(
+      report.parallel_used,
+      "expected tiled parallel paint to activate"
     );
     assert!(
       report.parallel_threads > 1,

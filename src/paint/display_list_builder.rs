@@ -107,7 +107,9 @@ use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
-use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
+use crate::render_control::{
+  active_deadline, active_stage, check_active, check_active_periodic, with_deadline, StageGuard,
+};
 use crate::scroll::ScrollState;
 use crate::style::block_axis_is_horizontal;
 use crate::style::block_axis_positive;
@@ -3633,6 +3635,7 @@ impl DisplayListBuilder {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
       let root_deadline = crate::render_control::root_deadline();
+      let stage = active_stage();
       let diagnostics_session = paint_diagnostics_session_id();
       let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
         fragments
@@ -3646,6 +3649,7 @@ impl DisplayListBuilder {
             let root_deadline = root_deadline.clone();
             with_deadline(root_deadline.as_ref(), || {
               with_deadline(deadline.as_ref(), || {
+                let _stage_guard = StageGuard::install(stage);
                 let mut builder = self.fork();
                 let mut counter = 0usize;
                 for fragment in chunk {
@@ -3706,6 +3710,7 @@ impl DisplayListBuilder {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
       let root_deadline = crate::render_control::root_deadline();
+      let stage = active_stage();
       let diagnostics_session = paint_diagnostics_session_id();
       let run_build = || -> Vec<(usize, DisplayList, ThreadId)> {
         fragments
@@ -3719,6 +3724,7 @@ impl DisplayListBuilder {
             let root_deadline = root_deadline.clone();
             with_deadline(root_deadline.as_ref(), || {
               with_deadline(deadline.as_ref(), || {
+                let _stage_guard = StageGuard::install(stage);
                 let mut builder = self.fork();
                 let mut counter = 0usize;
                 for fragment in chunk {
