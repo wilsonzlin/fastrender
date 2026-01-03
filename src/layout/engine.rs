@@ -71,6 +71,16 @@ static DEFAULT_LAYOUT_THREAD_POOL: OnceLock<Result<Arc<ThreadPool>, String>> = O
 static LAYOUT_THREAD_POOL_CACHE: OnceLock<Mutex<HashMap<usize, Result<Arc<ThreadPool>, String>>>> =
   OnceLock::new();
 
+pub(crate) fn default_layout_thread_budget() -> usize {
+  // `rayon::current_num_threads()` reflects the installed pool when we're already executing inside a
+  // scoped thread pool (e.g. `render_pages --in-process`). Clamp it by the process CPU budget so
+  // we don't oversubscribe in cgroup quota environments where Rayon may still see the host CPU
+  // count.
+  let threads = rayon::current_num_threads().max(1);
+  let budget = crate::system::cpu_budget().max(1);
+  threads.min(budget).min(DEFAULT_LAYOUT_AUTO_MAX_THREADS).max(1)
+}
+
 fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
   match DEFAULT_LAYOUT_THREAD_POOL.get_or_init(|| {
     ThreadPoolBuilder::new()
@@ -280,7 +290,7 @@ impl LayoutParallelism {
       LayoutParallelismMode::Auto => {
         let available_threads = self
           .max_threads
-          .unwrap_or_else(rayon::current_num_threads)
+          .unwrap_or_else(default_layout_thread_budget)
           .max(1);
         let work_items = workload.work_items().max(1);
         let threshold = self
@@ -303,7 +313,7 @@ impl LayoutParallelism {
     }
     self
       .max_threads
-      .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
+      .unwrap_or_else(default_layout_thread_budget)
       .max(1)
   }
 }
@@ -676,9 +686,13 @@ impl LayoutEngine {
   pub fn with_font_context(mut config: LayoutConfig, font_context: FontContext) -> Self {
     if config.parallelism.mode == LayoutParallelismMode::Auto
       && config.parallelism.max_threads.is_none()
-      && rayon::current_num_threads() > DEFAULT_LAYOUT_AUTO_MAX_THREADS
     {
-      config.parallelism.max_threads = Some(DEFAULT_LAYOUT_AUTO_MAX_THREADS);
+      let cap = crate::system::cpu_budget()
+        .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+        .max(1);
+      if rayon::current_num_threads() > cap {
+        config.parallelism.max_threads = Some(cap);
+      }
     }
     let factory = FormattingContextFactory::with_font_context_and_viewport(
       font_context.clone(),
@@ -947,7 +961,7 @@ impl LayoutEngine {
     factory.tune_taffy_template_cache_for_box_tree(workload.nodes);
     let threads_for_pool = parallelism
       .max_threads
-      .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
+      .unwrap_or_else(default_layout_thread_budget)
       .max(1);
     let parallel_pool = if parallelism.is_active() && threads_for_pool > 1 {
       if let Some(pool) = &self.parallel_pool {
@@ -1221,25 +1235,28 @@ mod tests {
 
   #[test]
   fn auto_parallelism_caps_threads_for_large_rayon_pools() {
+    let cap = crate::system::cpu_budget()
+      .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .max(1);
     let pool = ThreadPoolBuilder::new()
-      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2)
+      .num_threads(cap.saturating_add(1))
       .build()
       .expect("build rayon pool");
     pool.install(|| {
       let mut config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
       config.parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT);
       let engine = LayoutEngine::new(config);
-      assert_eq!(
-        engine.config().parallelism.max_threads,
-        Some(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
-      );
+      assert_eq!(engine.config().parallelism.max_threads, Some(cap));
     });
   }
 
   #[test]
   fn auto_parallelism_does_not_cap_small_rayon_pools() {
+    let cap = crate::system::cpu_budget()
+      .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .max(1);
     let pool = ThreadPoolBuilder::new()
-      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .num_threads(cap)
       .build()
       .expect("build rayon pool");
     pool.install(|| {
@@ -1252,23 +1269,30 @@ mod tests {
 
   #[test]
   fn auto_parallelism_respects_explicit_max_threads() {
+    let cap = crate::system::cpu_budget()
+      .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .max(1);
+    let explicit = 3usize;
     let pool = ThreadPoolBuilder::new()
-      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2)
+      .num_threads(cap.saturating_add(1))
       .build()
       .expect("build rayon pool");
     pool.install(|| {
       let mut config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
       config.parallelism =
-        LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT).with_max_threads(Some(32));
+        LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT).with_max_threads(Some(explicit));
       let engine = LayoutEngine::new(config);
-      assert_eq!(engine.config().parallelism.max_threads, Some(32));
+      assert_eq!(engine.config().parallelism.max_threads, Some(explicit));
     });
   }
 
   #[test]
   fn expected_workers_respects_auto_thread_cap() {
+    let cap = crate::system::cpu_budget()
+      .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+      .max(1);
     let pool = ThreadPoolBuilder::new()
-      .num_threads(DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2)
+      .num_threads(cap.saturating_add(1))
       .build()
       .expect("build rayon pool");
     pool.install(|| {
@@ -1279,11 +1303,8 @@ mod tests {
       };
       let parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT)
         .resolve_for_workload(workload);
-      assert!(parallelism.is_active());
-      assert_eq!(
-        parallelism.estimated_workers_for_workload(&workload),
-        DEFAULT_LAYOUT_AUTO_MAX_THREADS
-      );
+      assert_eq!(parallelism.is_active(), cap > 1);
+      assert_eq!(parallelism.estimated_workers_for_workload(&workload), cap);
     });
   }
 

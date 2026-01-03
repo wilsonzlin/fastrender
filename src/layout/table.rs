@@ -44,8 +44,8 @@ use crate::layout::contexts::table::column_distribution::ColumnConstraints;
 use crate::layout::contexts::table::column_distribution::ColumnDistributor;
 use crate::layout::contexts::table::column_distribution::DistributionMode;
 use crate::layout::engine::{
-  layout_thread_pool_for_threads, LayoutParallelism, LayoutParallelismMode,
-  DEFAULT_LAYOUT_AUTO_MAX_THREADS,
+  default_layout_thread_budget, layout_thread_pool_for_threads, LayoutParallelism,
+  LayoutParallelismMode,
 };
 use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::layout_cache_lookup;
@@ -4611,7 +4611,7 @@ impl TableFormattingContext {
       _ => self
         .parallelism
         .max_threads
-        .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
+        .unwrap_or_else(default_layout_thread_budget)
         .max(1),
     };
     let measure_cells_in_parallel = self.parallelism.should_parallelize(structure.cells.len())
@@ -5940,7 +5940,7 @@ impl FormattingContext for TableFormattingContext {
       _ => self
         .parallelism
         .max_threads
-        .unwrap_or_else(|| rayon::current_num_threads().min(DEFAULT_LAYOUT_AUTO_MAX_THREADS))
+        .unwrap_or_else(default_layout_thread_budget)
         .max(1),
     };
     let should_parallelize_cells = !dump

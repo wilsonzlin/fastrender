@@ -4,6 +4,7 @@
 //! duplicating platform quirks.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// Determine a conservative CPU budget for default parallelism.
 ///
@@ -14,14 +15,17 @@ use std::path::Path;
 /// On Linux, the budget is clamped by cgroup CPU quotas when available so container/CI runs don't
 /// oversubscribe the host.
 pub fn cpu_budget() -> usize {
-  let mut cpus = std::thread::available_parallelism().map_or(1, |n| n.get()).max(1);
-  #[cfg(target_os = "linux")]
-  {
-    if let Some(quota) = linux_cgroup_cpu_quota() {
-      cpus = cpus.min(quota);
+  static CPU_BUDGET: OnceLock<usize> = OnceLock::new();
+  *CPU_BUDGET.get_or_init(|| {
+    let mut cpus = std::thread::available_parallelism().map_or(1, |n| n.get()).max(1);
+    #[cfg(target_os = "linux")]
+    {
+      if let Some(quota) = linux_cgroup_cpu_quota() {
+        cpus = cpus.min(quota);
+      }
     }
-  }
-  cpus.max(1)
+    cpus.max(1)
+  })
 }
 
 #[cfg(target_os = "linux")]
@@ -239,4 +243,3 @@ mod tests {
     assert_eq!(cgroup_v1_cpu_quota(root, Some(proc_cgroup)), Some(2));
   }
 }
-
