@@ -7,6 +7,7 @@
 //! Note: Pipeline tests explicitly use bundled fonts and disallow HTTP(S)
 //! fetches so they remain deterministic in CI.
 
+mod test_public_api {
 use fastrender::api::{FastRender, FastRenderConfig, FastRenderPool, FastRenderPoolConfig};
 use fastrender::compat::CompatProfile;
 use fastrender::dom::DomCompatibilityMode;
@@ -666,4 +667,5 @@ fn test_fragment_tree_reexport_with_layout() {
   let dom = renderer.parse_html("<div>Test</div>").unwrap();
   let fragment_tree: FragmentTree = renderer.layout_document(&dom, 200, 150).unwrap();
   assert!(fragment_tree.fragment_count() > 0);
+}
 }
