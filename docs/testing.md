@@ -52,6 +52,23 @@ This suite renders a curated set of realistic pages under `tests/pages/fixtures/
 
 Artifacts for failures land in `target/pages_diffs/<page>_{actual,expected,diff}.png`. Comparison defaults to strict pixel matching but respects the same knobs as the fixture harness with `PAGES_TOLERANCE`, `PAGES_MAX_DIFFERENT_PERCENT`, `PAGES_FUZZY=1`, `PAGES_IGNORE_ALPHA=1`, and `PAGES_MAX_PERCEPTUAL_DISTANCE=0.05`.
 
+### Chrome baselines + evidence reports (offline fixtures)
+
+When doing accuracy work, it’s often useful to compare an offline fixture render against Chrome using the **same** deterministic inputs (no network). Chrome baselines are **local-only artifacts** and are not committed.
+
+```bash
+# 1) Render the offline fixture(s) with FastRender (offline; bundled fonts):
+cargo run --release --bin render_fixtures
+
+# 2) Produce local Chrome baseline PNGs for those fixture(s):
+cargo xtask chrome-baseline-fixtures
+
+# 3) Generate a combined Chrome-vs-FastRender HTML report under target/:
+cargo xtask fixture-chrome-diff
+```
+
+Defaults are aligned with the pageset workflow (`viewport=1200x800`, `dpr=1.0`) unless you override them.
+
 ### Importing new offline page fixtures
 
 Use `bundle_page` to capture a page once, then convert that bundle into a deterministic fixture consumable by `pages_regression`:
@@ -85,6 +102,10 @@ Use `import_wpt` to bring small slices of upstream WPT into `tests/wpt/tests/` w
 - Preview changes without writing: add `--dry-run`
 - Update existing files/manifest entries: add `--overwrite`
 - Control metadata: `--manifest <path>` overrides the default `tests/wpt/manifest.toml`; `--no-manifest` skips updates
+- Offline behavior (important for deterministic tests):
+  - Root-relative URLs (e.g. `/resources/foo.png`) and `web-platform.test` URLs are rewritten to file-relative paths inside the imported tree.
+  - Sidecar metadata files (e.g. `.html.ini`) are copied alongside tests when present so the local WPT harness can apply expectations/viewport/DPR.
+  - The importer is strict: missing referenced files fail the import rather than silently leaving network URLs behind.
 
 A tiny synthetic WPT-like tree lives under `tests/wpt/_import_testdata/` and is exercised in CI. You can sanity check the importer locally via:
 

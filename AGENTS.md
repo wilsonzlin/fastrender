@@ -37,7 +37,8 @@ If you can’t show a measurable/evidenced delta, you are not done.
 For accuracy tasks, evidence should usually be one of:
 
 - **Offline repro + golden/regression** (preferred): a minimized fixture, imported page fixture, or WPT-style reftest with an updated/added expected image.
-- **Chrome-vs-FastRender diff** on the **same cached HTML/bundle** (acceptable for early triage): a repeatable diff report under `target/` that demonstrates improvement.
+- **Chrome-vs-FastRender diff** on **offline fixtures** (preferred for early triage): a deterministic report under `target/` (see the fixture triage loop below).
+- **Chrome-vs-FastRender diff** on the **same cached HTML/bundle** (acceptable best-effort triage): a report under `target/` that demonstrates improvement, but may be non-deterministic due to live subresources.
 
 “Looks better” without artifacts is not evidence.
 
@@ -61,6 +62,24 @@ cargo run --release --bin pageset_progress -- report --pages example.com
 **Accuracy triage loop (compare against a correct engine):**
 
 ```bash
+# Deterministic fixture evidence loop (preferred):
+# - Renders are offline/repeatable (no network).
+# - Uses bundled fonts so output is stable across machines.
+# - Chrome baselines are local-only artifacts (not committed).
+# - Defaults match the pageset viewport/DPR (1200x800 @ 1.0) unless you override them.
+#
+# 1) Render the fixture(s) with FastRender:
+cargo run --release --bin render_fixtures
+#
+# 2) Generate Chrome baseline PNGs for the same fixture(s):
+cargo xtask chrome-baseline-fixtures
+#
+# 3) Generate a combined Chrome-vs-FastRender diff report:
+cargo xtask fixture-chrome-diff
+#
+# Cached-pages Chrome loop (best-effort; non-deterministic):
+# Live subresources can change, so treat this as rapid triage only.
+#
 # Ubuntu one-time setup (python + fonts + chrome/chromium):
 scripts/install_chrome_baseline_deps_ubuntu.sh
 
@@ -179,9 +198,10 @@ when available and rescaled so buckets sum (within rounding error) to `total_ms`
 
 - **Pageset loop**: `scripts/pageset.sh`, `cargo xtask pageset`
 - **Scoreboard**: `pageset_progress report`
-- **Correct-engine baseline**: `scripts/chrome_baseline.sh` (+ Ubuntu deps helper)
+- **Correct-engine baseline (cached pages; best-effort)**: `scripts/chrome_baseline.sh` (+ Ubuntu deps helper)
 - **Render outputs**: `render_pages` (writes `fetches/renders/*.png`)
 - **Diffs**: `diff_renders`
+- **Deterministic fixture evidence**: `render_fixtures`, `cargo xtask chrome-baseline-fixtures`, `cargo xtask fixture-chrome-diff`
 - **Offline repros**: `bundle_page` + `cargo xtask import-page-fixture`
 - **Inspection**: `inspect_frag`
 - **Debug/perf docs**: `docs/debugging.md`, `docs/env-vars.md`, `docs/instrumentation.md`, `docs/profiling-linux.md`

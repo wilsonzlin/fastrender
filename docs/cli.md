@@ -13,6 +13,9 @@ These are optional wrappers for the most common loops:
   - Supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--cache-dir`, `--no-fetch`, `--allow-collisions`, and `--timings`.
   - Prefetch toggles like `--prefetch-fonts` passed after `--` are forwarded to `prefetch_assets`.
   - Pass extra `pageset_progress run` flags after `--`.
+- Cached-pages Chrome-vs-FastRender diff (best-effort; non-deterministic): `scripts/chrome_vs_fastrender.sh [--] [page_stem...]`
+  - Wraps `scripts/chrome_baseline.sh`, `render_pages`, and `diff_renders` into one command.
+  - Defaults to `viewport=1200x800`, `dpr=1.0`, JavaScript disabled (to match FastRender’s “no JS” model).
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
@@ -72,6 +75,8 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
   - Stage-bucket sanity guardrail: when changing stage timing accounting, run `pageset_progress report --fail-on-stage-sum-exceeds-total` (tune `--stage-sum-tolerance-percent`, default 10%) to catch double-counting/CPU-sum mixups early.
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
+- Chrome baseline screenshots for offline fixtures (local-only; not committed): `cargo xtask chrome-baseline-fixtures`
+- Chrome-vs-FastRender diff report for offline fixtures (deterministic; offline): `cargo xtask fixture-chrome-diff`
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
 - Update `tests/pages/pageset_guardrails.json` from the pageset scoreboard: `cargo xtask update-pageset-guardrails`
   - Defaults to `--strategy coverage`; always includes every `timeout`/`panic`/`error` page from `progress/pages/*.json` for offline triage, then adds a small set of slow `ok` pages for hotspot coverage.
@@ -133,7 +138,11 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 
 ### Chrome baseline screenshots (from cached HTML)
 
-If you want a “known-correct engine” visual baseline for the same cached HTML that FastRender renders, you can use headless Chrome/Chromium to screenshot `fetches/html/*.html`:
+If you want a “known-correct engine” visual baseline for the same cached HTML that FastRender renders, you can use headless Chrome/Chromium to screenshot `fetches/html/*.html`.
+
+This workflow is **best-effort / non-deterministic** because it still depends on live subresources. Prefer the offline fixture loop (`render_fixtures` + `cargo xtask fixture-chrome-diff`) once you’ve captured a deterministic repro.
+
+For convenience, `scripts/chrome_vs_fastrender.sh` wraps the full cached-pages loop and writes a `target/` HTML report in one command.
 
 ```bash
 # Install deps on Ubuntu (python + fonts + chrome/chromium):
@@ -169,6 +178,33 @@ Notes:
   - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
 - Layout fan-out defaults to `auto` (only engages once the box tree is large enough and has sufficient independent sibling work); use `--layout-parallel off` to force serial layout, `--layout-parallel on` to force fan-out, or tune thresholds with `--layout-parallel-min-fanout`, `--layout-parallel-auto-min-nodes`, and `--layout-parallel-max-threads`.
 - Worker Rayon threads: in the default per-page worker mode, `render_pages` sets `RAYON_NUM_THREADS` for each worker process to `available_parallelism()/jobs` (min 1, additionally clamped by a detected cgroup CPU quota on Linux) to avoid CPU oversubscription. Set `RAYON_NUM_THREADS` in the parent environment to override this.
+
+## `render_fixtures`
+
+- Purpose: render offline page fixtures (under `tests/pages/fixtures/`) to PNGs for deterministic debugging and Chrome-vs-FastRender diff reports.
+- Run: `cargo run --release --bin render_fixtures -- --help`
+- Defaults: fixed, deterministic viewport/DPR (1200x800 @ 1.0) unless overridden.
+- Offline policy: fixtures are rendered **without network access**; only `file://` and `data:` subresources are allowed.
+- Fonts: uses bundled fonts by default (equivalent to `FASTR_USE_BUNDLED_FONTS=1`) so outputs are stable across machines.
+- Common usage:
+  - Render everything in the default fixture set: `cargo run --release --bin render_fixtures`
+  - Render a subset and/or override output directories/viewports: see `--help`.
+
+## `cargo xtask chrome-baseline-fixtures`
+
+- Purpose: render the same offline fixtures in headless Chrome/Chromium to generate a “known-correct engine” PNG baseline for comparisons.
+- Notes:
+  - These baselines are **local-only** artifacts under `target/` (they are not committed).
+  - Defaults match the fixture runner viewport/DPR (1200x800 @ 1.0) unless overridden.
+  - JavaScript is disabled by default to match FastRender’s “no JS” model.
+  - Set `CHROME_BIN=/path/to/chrome` if auto-detection fails.
+
+## `cargo xtask fixture-chrome-diff`
+
+- Purpose: produce a single HTML report that compares Chrome baseline renders against FastRender renders for the offline fixture set.
+- Typical usage:
+  - `cargo xtask fixture-chrome-diff` (writes a report under `target/` and prints the path)
+  - For advanced filtering/output control, see `cargo xtask fixture-chrome-diff --help`.
 
 ## `fetch_and_render`
 
@@ -219,6 +255,7 @@ Notes:
 - Purpose: compare two render output directories (e.g., `fetches/renders` from two revisions) and summarize pixel diffs.
 - Entry: `src/bin/diff_renders.rs`
 - Run: `cargo run --release --bin diff_renders -- --before <dir> --after <dir>`
+- Matching: directory inputs are walked recursively and paired by relative path (minus the `.png` extension). This allows diffing nested render trees (for example fixture render outputs or pageset dump layouts) without flattening them first.
 - Outputs: `diff_report.json` and `diff_report.html` plus per-page diff PNGs alongside the HTML report.
 - Tuning: `--tolerance` and `--max-diff-percent` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_FUZZY` env vars are honored when flags are omitted).
 - Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
@@ -228,7 +265,9 @@ Notes:
 - Purpose: compare pipeline snapshots (`*.snapshot.json`) and highlight stage-level deltas that explain pixel diffs.
 - Entry: `src/bin/diff_snapshots.rs`
 - Run: `cargo run --release --bin diff_snapshots -- --before <dir|file> --after <dir|file>`
-- Matching: directory inputs pair `*.snapshot.json` by stem (same matching rules as `diff_renders`).
+- Matching:
+  - Directory inputs are walked recursively and paired by relative path.
+  - Supports both the render-page snapshot layout (`<stem>.snapshot.json`) and the pageset dump layout (`<stem>/snapshot.json` produced by `pageset_progress --dump-*`).
 - Outputs: `diff_snapshots.json` and `diff_snapshots.html` summarizing schema versions, per-stage counts, DOM/box/fragment/display list changes, and links to sibling `*.png` renders when present.
 
 ## `dump_a11y`
