@@ -57,13 +57,16 @@ Artifacts for failures land in `target/pages_diffs/<page>_{actual,expected,diff}
 When doing accuracy work, it’s often useful to compare an offline fixture render against Chrome using the **same** deterministic inputs (no network). Chrome baselines are **local-only artifacts** and are not committed.
 
 ```bash
+# One-command evidence report (runs FastRender render + Chrome baseline + diff):
+cargo xtask fixture-chrome-diff
+
 # 1) Render the offline fixture(s) with FastRender (offline; bundled fonts):
 cargo run --release --bin render_fixtures
 
 # 2) Produce local Chrome baseline PNGs for those fixture(s):
 cargo xtask chrome-baseline-fixtures
 
-# 3) Generate a combined Chrome-vs-FastRender HTML report under target/:
+# 3) Generate a combined Chrome-vs-FastRender HTML report under target/ (also re-runs steps 1-2 unless `--chrome-dir` is provided):
 cargo xtask fixture-chrome-diff
 ```
 

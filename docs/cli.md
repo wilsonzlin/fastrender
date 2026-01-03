@@ -13,9 +13,10 @@ These are optional wrappers for the most common loops:
   - Supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--cache-dir`, `--no-fetch`, `--allow-collisions`, and `--timings`.
   - Prefetch toggles like `--prefetch-fonts` passed after `--` are forwarded to `prefetch_assets`.
   - Pass extra `pageset_progress run` flags after `--`.
-- Cached-pages Chrome-vs-FastRender diff (best-effort; non-deterministic): `scripts/chrome_vs_fastrender.sh [--] [page_stem...]`
+- Cached-pages Chrome-vs-FastRender diff (best-effort; non-deterministic): `scripts/chrome_vs_fastrender.sh [--pages example.com,github.com] [--out target/chrome_vs_fastrender]`
   - Wraps `scripts/chrome_baseline.sh`, `render_pages`, and `diff_renders` into one command.
   - Defaults to `viewport=1200x800`, `dpr=1.0`, JavaScript disabled (to match FastRender’s “no JS” model).
+  - Writes a report at `<out>/diff_report.html` (default: `target/chrome_vs_fastrender/diff_report.html`).
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
@@ -142,7 +143,8 @@ If you want a “known-correct engine” visual baseline for the same cached HTM
 
 This workflow is **best-effort / non-deterministic** because it still depends on live subresources. Prefer the offline fixture loop (`render_fixtures` + `cargo xtask fixture-chrome-diff`) once you’ve captured a deterministic repro.
 
-For convenience, `scripts/chrome_vs_fastrender.sh` wraps the full cached-pages loop and writes a `target/` HTML report in one command.
+For convenience, `scripts/chrome_vs_fastrender.sh` wraps the full cached-pages loop and writes a
+report at `target/chrome_vs_fastrender/diff_report.html` by default.
 
 ```bash
 # Install deps on Ubuntu (python + fonts + chrome/chromium):
@@ -185,10 +187,11 @@ Notes:
 - Run: `cargo run --release --bin render_fixtures -- --help`
 - Defaults: fixed, deterministic viewport/DPR (1200x800 @ 1.0) unless overridden.
 - Offline policy: fixtures are rendered **without network access**; only `file://` and `data:` subresources are allowed.
-- Fonts: uses bundled fonts by default (equivalent to `FASTR_USE_BUNDLED_FONTS=1`) so outputs are stable across machines.
-- Common usage:
-  - Render everything in the default fixture set: `cargo run --release --bin render_fixtures`
-  - Render a subset and/or override output directories/viewports: see `--help`.
+- Fonts: uses bundled fonts (`FontConfig::bundled_only`) so outputs are stable across machines.
+- Output: by default writes `<fixture>.png` into `target/render_fixtures/` (override with `--out`).
+- Core flags:
+  - Selection: `--only <csv>` or positional fixture names.
+  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`.
 
 ## `cargo xtask chrome-baseline-fixtures`
 
@@ -197,14 +200,16 @@ Notes:
   - These baselines are **local-only** artifacts under `target/` (they are not committed).
   - Defaults match the fixture runner viewport/DPR (1200x800 @ 1.0) unless overridden.
   - JavaScript is disabled by default to match FastRender’s “no JS” model.
-  - Set `CHROME_BIN=/path/to/chrome` if auto-detection fails.
+  - Pass `--chrome /path/to/chrome` if auto-detection fails.
+  - Output defaults to `target/chrome_fixture_renders/<fixture>.png` plus `*.chrome.log` alongside.
 
 ## `cargo xtask fixture-chrome-diff`
 
-- Purpose: produce a single HTML report that compares Chrome baseline renders against FastRender renders for the offline fixture set.
+- Purpose: render offline fixtures with FastRender and headless Chrome, then generate a single HTML report comparing the two.
 - Typical usage:
-  - `cargo xtask fixture-chrome-diff` (writes a report under `target/` and prints the path)
-  - For advanced filtering/output control, see `cargo xtask fixture-chrome-diff --help`.
+  - `cargo xtask fixture-chrome-diff` (writes `target/fixture_chrome_diff/report.html` and prints the path)
+  - Reuse a previously generated Chrome render directory: `cargo xtask fixture-chrome-diff --chrome-dir <dir>`
+  - For advanced filtering/output control, see `cargo xtask fixture-chrome-diff --help` (supports `--only`, `--viewport`, `--dpr`, and diff tolerances).
 
 ## `fetch_and_render`
 
@@ -266,8 +271,8 @@ Notes:
 - Entry: `src/bin/diff_snapshots.rs`
 - Run: `cargo run --release --bin diff_snapshots -- --before <dir|file> --after <dir|file>`
 - Matching:
-  - Directory inputs are walked recursively and paired by relative path.
-  - Supports both the render-page snapshot layout (`<stem>.snapshot.json`) and the pageset dump layout (`<stem>/snapshot.json` produced by `pageset_progress --dump-*`).
+  - Directory inputs support both the render-pages layout (`<stem>.snapshot.json`) and the pageset dump layout (`<stem>/snapshot.json` produced by `pageset_progress --dump-*`).
+  - Entries are paired by stem (the `<stem>` part of the filename/directory). For pageset dumps, `render.png` is linked when present.
 - Outputs: `diff_snapshots.json` and `diff_snapshots.html` summarizing schema versions, per-stage counts, DOM/box/fragment/display list changes, and links to sibling `*.png` renders when present.
 
 ## `dump_a11y`
