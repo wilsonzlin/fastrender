@@ -61,14 +61,61 @@ detect_total_cpus() {
       cpus="${best_quota_cpus}"
     fi
   # cgroup v1: `cpu.cfs_quota_us` is -1 when unbounded.
-  elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us && -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]]; then
-    local quota period
-    quota="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo -1)"
-    period="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null || echo 0)"
-    if [[ "${quota}" -gt 0 && "${period}" -gt 0 ]]; then
-      local quota_cpus=$(((quota + period - 1) / period))
-      if [[ "${quota_cpus}" -gt 0 && "${quota_cpus}" -lt "${cpus}" ]]; then
-        cpus="${quota_cpus}"
+  #
+  # Like cgroup v2, quotas can be applied on ancestor cgroups. Parse the per-controller cgroup path
+  # from `/proc/self/cgroup` and walk up to the mountpoint, taking the minimum quota observed.
+  elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us || -r /sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us ]]; then
+    local mountpoint=""
+    for candidate in /sys/fs/cgroup/cpu /sys/fs/cgroup/cpu,cpuacct; do
+      if [[ -r "${candidate}/cpu.cfs_quota_us" && -r "${candidate}/cpu.cfs_period_us" ]]; then
+        mountpoint="${candidate}"
+        break
+      fi
+    done
+
+    if [[ -n "${mountpoint}" ]]; then
+      local cgroup_path="/"
+      if [[ -r /proc/self/cgroup ]]; then
+        cgroup_path="$(awk -F: '$2 ~ /(^|,)cpu(,|$)/ {print $3; exit}' /proc/self/cgroup 2>/dev/null || echo "/")"
+        if [[ -z "${cgroup_path}" ]]; then
+          cgroup_path="/"
+        fi
+      fi
+
+      local dir="${mountpoint}${cgroup_path}"
+      if [[ "${dir}" == "${mountpoint}/" ]]; then
+        dir="${mountpoint}"
+      fi
+
+      local best_quota_cpus=""
+      while true; do
+        if [[ -r "${dir}/cpu.cfs_quota_us" && -r "${dir}/cpu.cfs_period_us" ]]; then
+          local quota period
+          quota="$(cat "${dir}/cpu.cfs_quota_us" 2>/dev/null || echo -1)"
+          period="$(cat "${dir}/cpu.cfs_period_us" 2>/dev/null || echo 0)"
+          if [[ "${quota}" -gt 0 && "${period}" -gt 0 ]]; then
+            local quota_cpus=$(((quota + period - 1) / period))
+            if [[ "${quota_cpus}" -gt 0 ]]; then
+              if [[ -z "${best_quota_cpus}" || "${quota_cpus}" -lt "${best_quota_cpus}" ]]; then
+                best_quota_cpus="${quota_cpus}"
+              fi
+            fi
+          fi
+        fi
+
+        if [[ "${dir}" == "${mountpoint}" ]]; then
+          break
+        fi
+
+        local next_dir="${dir%/*}"
+        if [[ -z "${next_dir}" || "${next_dir}" == "${dir}" ]]; then
+          break
+        fi
+        dir="${next_dir}"
+      done
+
+      if [[ -n "${best_quota_cpus}" && "${best_quota_cpus}" -gt 0 && "${best_quota_cpus}" -lt "${cpus}" ]]; then
+        cpus="${best_quota_cpus}"
       fi
     fi
   fi
