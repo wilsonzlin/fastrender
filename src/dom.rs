@@ -2435,6 +2435,16 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
   Some((mode, delegates_focus))
 }
 
+fn is_inert_html_template(node: &DomNode) -> bool {
+  matches!(
+    node.tag_name(),
+    Some(tag) if tag.eq_ignore_ascii_case("template")
+  ) && matches!(
+    node.namespace(),
+    Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE
+  ) && parse_shadow_root_definition(node).is_none()
+}
+
 fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Result<()> {
   // `attach_shadow_roots` needs to run in post-order so shadow root templates are promoted after
   // their template contents have been scanned (allowing nested declarative shadow roots inside the
@@ -2461,14 +2471,7 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
       for idx in (0..len).rev() {
         let child_ptr = unsafe { children_ptr.add(idx) };
         let child = unsafe { &*child_ptr };
-        let is_inert_template = matches!(
-          child.tag_name(),
-          Some(tag) if tag.eq_ignore_ascii_case("template")
-        ) && matches!(
-          child.namespace(),
-          Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE
-        ) && parse_shadow_root_definition(child).is_none();
-        if is_inert_template {
+        if is_inert_html_template(child) {
           continue;
         }
 
@@ -2527,6 +2530,10 @@ fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
       out.insert(current.get_attribute_ref("name").unwrap_or(""));
     }
 
+    if is_inert_html_template(current) {
+      continue;
+    }
+
     if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
       // Slot assignment is scoped to a single shadow root; do not treat slots inside nested shadow
       // roots as "available" when assigning this host's light DOM children.
@@ -2534,6 +2541,9 @@ fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
     }
 
     for child in current.children.iter().rev() {
+      if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+        continue;
+      }
       stack.push(child);
     }
   }
@@ -2576,7 +2586,7 @@ fn fill_slot_assignments(
   stack.push(node);
 
   while let Some(current) = stack.pop() {
-    let mut traverse_children = true;
+    let mut traverse_children = !is_inert_html_template(current);
 
     if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
       // Shadow tree boundaries block assignment of this host's light DOM into nested shadow roots.
@@ -2617,6 +2627,9 @@ fn fill_slot_assignments(
 
     if traverse_children {
       for child in current.children.iter().rev() {
+        if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+          continue;
+        }
         stack.push(child);
       }
     }

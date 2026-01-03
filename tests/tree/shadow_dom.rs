@@ -279,3 +279,111 @@ fn nested_named_slots_in_fallback_receive_assignments_when_outer_is_unassigned()
     Some("light-inner")
   );
 }
+
+#[test]
+fn nested_shadow_root_slots_do_not_capture_outer_light_dom() {
+  let html = r#"
+    <div id='outer-host'>
+      <template shadowroot='open'>
+        <x-inner id='inner-host'>
+          <template shadowroot='open'>
+            <slot name='inner' id='inner-slot'></slot>
+          </template>
+        </x-inner>
+        <slot name='outer' id='outer-slot'></slot>
+        <slot id='default-slot'></slot>
+      </template>
+      <span slot='inner' id='light-inner'>A</span>
+      <span slot='outer' id='light-outer'>B</span>
+      <span id='light-default'>C</span>
+    </div>
+  "#;
+  let dom = parse_html(html).expect("parse html");
+  let ids = enumerate_dom_ids(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
+  let mut lookup = HashMap::new();
+  build_id_lookup(&dom, &ids, &mut lookup);
+
+  let outer_slot = find_by_id(&dom, "outer-slot").expect("outer slot");
+  let outer_slot_id = *ids.get(&(outer_slot as *const DomNode)).expect("outer slot id");
+  let outer_assigned = assignments
+    .slot_to_nodes
+    .get(&outer_slot_id)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(
+    outer_assigned
+      .iter()
+      .filter_map(|id| lookup.get(id).and_then(|n| n.get_attribute_ref("id")))
+      .collect::<Vec<_>>(),
+    vec!["light-outer"]
+  );
+
+  let default_slot = find_by_id(&dom, "default-slot").expect("default slot");
+  let default_slot_id = *ids
+    .get(&(default_slot as *const DomNode))
+    .expect("default slot id");
+  let default_assigned = assignments
+    .slot_to_nodes
+    .get(&default_slot_id)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(
+    default_assigned
+      .iter()
+      .filter_map(|id| lookup.get(id).and_then(|n| n.get_attribute_ref("id")))
+      .collect::<Vec<_>>(),
+    vec!["light-inner", "light-default"]
+  );
+
+  let inner_slot = find_by_id(&dom, "inner-slot").expect("inner slot");
+  let inner_slot_id = *ids.get(&(inner_slot as *const DomNode)).expect("inner slot id");
+  assert!(
+    !assignments.slot_to_nodes.contains_key(&inner_slot_id),
+    "slots inside nested shadow roots should not be assigned by outer host distribution"
+  );
+}
+
+#[test]
+fn slots_inside_inert_template_are_ignored_for_assignment() {
+  let html = r#"
+    <div id='host'>
+      <template shadowroot='open'>
+        <template>
+          <slot name='foo' id='slot-in-template'></slot>
+        </template>
+        <slot name='foo' id='real-slot'></slot>
+      </template>
+      <span slot='foo' id='light-foo'>X</span>
+    </div>
+  "#;
+  let dom = parse_html(html).expect("parse html");
+  let ids = enumerate_dom_ids(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
+  let mut lookup = HashMap::new();
+  build_id_lookup(&dom, &ids, &mut lookup);
+
+  let real_slot = find_by_id(&dom, "real-slot").expect("real slot");
+  let real_slot_id = *ids.get(&(real_slot as *const DomNode)).expect("real slot id");
+  let real_assigned = assignments
+    .slot_to_nodes
+    .get(&real_slot_id)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(
+    real_assigned
+      .iter()
+      .filter_map(|id| lookup.get(id).and_then(|n| n.get_attribute_ref("id")))
+      .collect::<Vec<_>>(),
+    vec!["light-foo"]
+  );
+
+  let slot_in_template = find_by_id(&dom, "slot-in-template").expect("slot in inert template");
+  let slot_in_template_id = *ids
+    .get(&(slot_in_template as *const DomNode))
+    .expect("slot-in-template id");
+  assert!(
+    !assignments.slot_to_nodes.contains_key(&slot_in_template_id),
+    "slots inside inert template contents should not be considered for assignment"
+  );
+}
