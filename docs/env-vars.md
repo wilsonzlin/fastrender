@@ -183,6 +183,11 @@ High eviction counts typically imply cache pressure (raise `FASTR_TEXT_FALLBACK_
 
 ## Parallelism tuning
 
+- `RAYON_NUM_THREADS=<N>` – cap Rayon’s global thread pool. This is not a FastRender-specific env var,
+  but the pageset runners and wrappers rely on it to avoid CPU oversubscription when many worker
+  processes run in parallel. When unset, `scripts/pageset.sh` / `cargo xtask pageset` and the
+  `pageset_progress`/`render_pages` worker orchestration default to a per-worker budget derived from
+  `available_parallelism()/jobs` (min 1). Set it explicitly to override the default.
 - `FASTR_DISPLAY_LIST_PARALLEL=0|1` – enable/disable Rayon fan-out while building display lists (default enabled).
 - `FASTR_DISPLAY_LIST_PARALLEL_MIN=<N>` – fragment-count threshold before the builder fans out (default 32).
 - `FASTR_PAINT_PARALLEL=off|on|auto` – control tiled parallel rasterization when painting display lists (default `auto`).
