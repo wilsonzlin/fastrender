@@ -168,6 +168,7 @@ Notes:
   - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
   - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
 - Layout fan-out defaults to `auto` (only engages once the box tree is large enough and has sufficient independent sibling work); use `--layout-parallel off` to force serial layout, `--layout-parallel on` to force fan-out, or tune thresholds with `--layout-parallel-min-fanout`, `--layout-parallel-auto-min-nodes`, and `--layout-parallel-max-threads`.
+- Worker Rayon threads: in the default per-page worker mode, `render_pages` sets `RAYON_NUM_THREADS` for each worker process to `available_parallelism()/jobs` (min 1) to avoid CPU oversubscription. Set `RAYON_NUM_THREADS` in the parent environment to override this.
 
 ## `fetch_and_render`
 
@@ -298,6 +299,7 @@ Notes:
       --fail-on-stage-sum-exceeds-total
     ```
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
+- Worker Rayon threads: `pageset_progress run` spawns up to `--jobs` worker processes in parallel and sets `RAYON_NUM_THREADS` for each worker to `available_parallelism()/jobs` (min 1) unless the parent environment already defines it.
 - Outputs:
   - `progress/pages/<stem>.json` — small, committed per-page progress artifact
   - `target/pageset/logs/<stem>.log` — per-page log (not committed)
