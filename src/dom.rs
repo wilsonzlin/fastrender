@@ -2518,12 +2518,19 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
 }
 
 fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
+  let root_ptr = node as *const DomNode;
   let mut stack: Vec<&'a DomNode> = Vec::new();
   stack.push(node);
 
   while let Some(current) = stack.pop() {
     if matches!(current.node_type, DomNodeType::Slot { .. }) {
       out.insert(current.get_attribute_ref("name").unwrap_or(""));
+    }
+
+    if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
+      // Slot assignment is scoped to a single shadow root; do not treat slots inside nested shadow
+      // roots as "available" when assigning this host's light DOM children.
+      continue;
     }
 
     for child in current.children.iter().rev() {
@@ -2564,11 +2571,17 @@ fn fill_slot_assignments(
   ids: &HashMap<*const DomNode, usize>,
   out: &mut SlotAssignment,
 ) {
+  let root_ptr = node as *const DomNode;
   let mut stack: Vec<&DomNode> = Vec::new();
   stack.push(node);
 
   while let Some(current) = stack.pop() {
     let mut traverse_children = true;
+
+    if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
+      // Shadow tree boundaries block assignment of this host's light DOM into nested shadow roots.
+      traverse_children = false;
+    }
 
     if matches!(current.node_type, DomNodeType::Slot { .. }) {
       let slot_name = current.get_attribute_ref("name").unwrap_or("");
@@ -2682,6 +2695,132 @@ pub fn compute_slot_assignment_with_ids(
     }
   }
   assignment
+}
+
+/// Create a composed-tree view of the DOM for debugging and tooling.
+///
+/// The returned tree represents the DOM as it would appear after:
+/// - Shadow DOM: shadow roots replace the host's light DOM children.
+/// - Slotting: `<slot>` elements expand to their assigned nodes (or fallback children when empty).
+///
+/// This is a snapshot-only transformation; it does not mutate the input DOM and does not require
+/// style/layout.
+pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
+  const COMPOSED_SNAPSHOT_DEADLINE_STRIDE: usize = 1024;
+
+  let ids = enumerate_dom_ids(root);
+  let assignment = compute_slot_assignment_with_ids(root, &ids);
+
+  let mut id_to_node: Vec<*const DomNode> = vec![ptr::null(); ids.len() + 1];
+  for (ptr, id) in ids.iter() {
+    if *id < id_to_node.len() {
+      id_to_node[*id] = *ptr;
+    }
+  }
+
+  struct Frame {
+    out: DomNode,
+    children: Vec<*const DomNode>,
+    next_child: usize,
+  }
+
+  fn composed_children_for(
+    src: &DomNode,
+    src_ptr: *const DomNode,
+    ids: &HashMap<*const DomNode, usize>,
+    id_to_node: &[*const DomNode],
+    assignment: &SlotAssignment,
+    out: &mut DomNode,
+  ) -> Vec<*const DomNode> {
+    if src.is_shadow_host() {
+      if let Some(shadow_root) = src
+        .children
+        .iter()
+        .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+      {
+        return vec![shadow_root as *const DomNode];
+      }
+    }
+
+    if matches!(src.node_type, DomNodeType::Slot { .. }) {
+      let slot_id = ids.get(&src_ptr).copied().unwrap_or(0);
+      if let Some(assigned_ids) = assignment.slot_to_nodes.get(&slot_id) {
+        if !assigned_ids.is_empty() {
+          if let DomNodeType::Slot { assigned, .. } = &mut out.node_type {
+            *assigned = true;
+          }
+          let mut children = Vec::with_capacity(assigned_ids.len());
+          for node_id in assigned_ids.iter() {
+            let Some(ptr) = id_to_node.get(*node_id).copied() else {
+              continue;
+            };
+            if ptr.is_null() {
+              continue;
+            }
+            children.push(ptr);
+          }
+          return children;
+        }
+      }
+
+      if let DomNodeType::Slot { assigned, .. } = &mut out.node_type {
+        *assigned = false;
+      }
+      return src.children.iter().map(|child| child as *const DomNode).collect();
+    }
+
+    src.children.iter().map(|child| child as *const DomNode).collect()
+  }
+
+  let mut deadline_counter = 0usize;
+
+  let root_ptr = root as *const DomNode;
+  let mut out_root = root.clone_without_children();
+  let root_children = composed_children_for(root, root_ptr, &ids, &id_to_node, &assignment, &mut out_root);
+  let mut stack = vec![Frame {
+    out: out_root,
+    children: root_children,
+    next_child: 0,
+  }];
+
+  while let Some(frame) = stack.last_mut() {
+    check_active_periodic(
+      &mut deadline_counter,
+      COMPOSED_SNAPSHOT_DEADLINE_STRIDE,
+      RenderStage::DomParse,
+    )?;
+
+    if frame.next_child < frame.children.len() {
+      let child_ptr = frame.children[frame.next_child];
+      frame.next_child += 1;
+      // Safety: pointers are to nodes owned by `root`, which is immutable for the duration of this
+      // traversal.
+      let child = unsafe { &*child_ptr };
+      let mut out_child = child.clone_without_children();
+      let child_children =
+        composed_children_for(child, child_ptr, &ids, &id_to_node, &assignment, &mut out_child);
+      stack.push(Frame {
+        out: out_child,
+        children: child_children,
+        next_child: 0,
+      });
+      continue;
+    }
+
+    let finished = stack
+      .pop()
+      .expect("stack non-empty implies a frame is present")
+      .out;
+    if let Some(parent) = stack.last_mut() {
+      parent.out.children.push(finished);
+    } else {
+      return Ok(finished);
+    }
+  }
+
+  Err(Error::Other(
+    "composed_dom_snapshot: traversal stack unexpectedly empty".to_string(),
+  ))
 }
 
 fn push_part_export(exports: &mut HashMap<String, Vec<usize>>, name: &str, node_id: usize) {
