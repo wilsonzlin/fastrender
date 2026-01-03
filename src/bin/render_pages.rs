@@ -1834,7 +1834,14 @@ fn truncate_text(text: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::pageset_stem;
+  use super::{
+    default_rayon_threads_per_worker, maybe_set_worker_rayon_threads, pageset_stem,
+    WORKER_RAYON_THREADS_ENV,
+  };
+  use std::ffi::OsStr;
+  use std::process::Command;
+
+  static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
   #[test]
   fn normalize_page_name_strips_scheme_and_www() {
@@ -1860,5 +1867,76 @@ mod tests {
       pageset_stem(" https://Example.com./path/ ").as_deref(),
       Some("example.com_path")
     );
+  }
+
+  #[test]
+  fn default_rayon_threads_per_worker_never_returns_zero() {
+    assert_eq!(default_rayon_threads_per_worker(0, 0), 1);
+    assert_eq!(default_rayon_threads_per_worker(1, 0), 1);
+    assert_eq!(default_rayon_threads_per_worker(0, 1), 1);
+    assert_eq!(default_rayon_threads_per_worker(1, 8), 1);
+  }
+
+  #[test]
+  fn default_rayon_threads_per_worker_matches_pageset_wrapper_math() {
+    // `scripts/pageset.sh` uses integer division (`TOTAL_CPUS / JOBS`) with a minimum of 1.
+    assert_eq!(default_rayon_threads_per_worker(16, 1), 16);
+    assert_eq!(default_rayon_threads_per_worker(16, 2), 8);
+    assert_eq!(default_rayon_threads_per_worker(16, 3), 5);
+    assert_eq!(default_rayon_threads_per_worker(16, 16), 1);
+    assert_eq!(default_rayon_threads_per_worker(16, 32), 1);
+  }
+
+  #[test]
+  fn maybe_set_worker_rayon_threads_respects_parent_env_override() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let prev = std::env::var_os(WORKER_RAYON_THREADS_ENV);
+    std::env::set_var(WORKER_RAYON_THREADS_ENV, "99");
+
+    let mut cmd = Command::new("render_pages");
+    maybe_set_worker_rayon_threads(&mut cmd, 1);
+
+    let has_override = cmd
+      .get_envs()
+      .any(|(key, _)| key == OsStr::new(WORKER_RAYON_THREADS_ENV));
+    assert!(!has_override, "should not override explicit RAYON_NUM_THREADS");
+
+    match prev {
+      Some(value) => std::env::set_var(WORKER_RAYON_THREADS_ENV, value),
+      None => std::env::remove_var(WORKER_RAYON_THREADS_ENV),
+    }
+  }
+
+  #[test]
+  fn maybe_set_worker_rayon_threads_sets_threads_when_env_missing_or_empty() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let prev = std::env::var_os(WORKER_RAYON_THREADS_ENV);
+    std::env::remove_var(WORKER_RAYON_THREADS_ENV);
+
+    let mut cmd = Command::new("render_pages");
+    maybe_set_worker_rayon_threads(&mut cmd, 3);
+
+    let value = cmd
+      .get_envs()
+      .find(|(key, _)| *key == OsStr::new(WORKER_RAYON_THREADS_ENV))
+      .and_then(|(_, value)| value)
+      .map(|value| value.to_string_lossy().into_owned());
+    assert_eq!(value.as_deref(), Some("3"));
+
+    // Empty should be treated as unset (Rayon will reject it if left unmodified).
+    std::env::set_var(WORKER_RAYON_THREADS_ENV, "");
+    let mut cmd = Command::new("render_pages");
+    maybe_set_worker_rayon_threads(&mut cmd, 2);
+    let value = cmd
+      .get_envs()
+      .find(|(key, _)| *key == OsStr::new(WORKER_RAYON_THREADS_ENV))
+      .and_then(|(_, value)| value)
+      .map(|value| value.to_string_lossy().into_owned());
+    assert_eq!(value.as_deref(), Some("2"));
+
+    match prev {
+      Some(value) => std::env::set_var(WORKER_RAYON_THREADS_ENV, value),
+      None => std::env::remove_var(WORKER_RAYON_THREADS_ENV),
+    }
   }
 }
