@@ -1,4 +1,5 @@
-use fastrender::render_control::RenderDeadline;
+use fastrender::error::RenderStage;
+use fastrender::render_control::{RenderDeadline, StageGuard};
 use fastrender::snapshot_fragment_tree;
 use fastrender::layout::engine::{
   enable_layout_parallel_debug_counters, layout_parallel_debug_counters,
@@ -527,6 +528,49 @@ fn parallel_layout_respects_deadline() {
     .layout_tree_with_deadline(&box_tree, Some(&deadline))
     .unwrap_err();
   assert!(matches!(err, LayoutError::Timeout { .. }), "expected timeout, got {err:?}");
+}
+
+#[test]
+fn parallel_layout_propagates_active_stage_into_workers() {
+  let viewport = Size::new(800.0, 600.0);
+  // A moderately sized tree so block-child layout work is parallelized across multiple workers.
+  let box_tree = build_block_stack(256);
+  let _stage_guard = StageGuard::install(Some(RenderStage::Layout));
+
+  // Cancel only when we're on a rayon worker thread AND the active stage hint is missing.
+  // This ensures we exercise stage propagation for layout parallelism rather than just deadlines.
+  let cancel = Arc::new(|| {
+    rayon::current_thread_index().is_some()
+      && fastrender::render_control::active_stage() != Some(RenderStage::Layout)
+  });
+  let deadline = RenderDeadline::new(None, Some(cancel));
+
+  let threads = available_threads();
+  let parallelism = LayoutParallelism::enabled(1).with_max_threads(Some(threads));
+  let engine = LayoutEngine::with_font_context(
+    LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
+    FontContext::new(),
+  );
+
+  enable_layout_parallel_debug_counters(true);
+  reset_layout_parallel_debug_counters();
+  let result = engine.layout_tree_with_deadline(&box_tree, Some(&deadline));
+  let counters = layout_parallel_debug_counters();
+  enable_layout_parallel_debug_counters(false);
+  reset_layout_parallel_debug_counters();
+
+  assert!(
+    result.is_ok(),
+    "expected layout to complete when stage is propagated into rayon workers, got {result:?}"
+  );
+  assert!(
+    counters.worker_threads > 1,
+    "expected layout to run on multiple workers, counters={counters:?}"
+  );
+  assert!(
+    counters.work_items > 0,
+    "expected layout to record parallel work, counters={counters:?}"
+  );
 }
 
 #[test]

@@ -57,7 +57,9 @@ use crate::layout::taffy_integration::{
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
+use crate::render_control::{
+  active_deadline, active_stage, check_active, check_active_periodic, with_deadline, StageGuard,
+};
 use crate::style::display::Display as CssDisplay;
 use crate::style::display::FormattingContextType;
 use crate::style::grid::validate_area_rectangles;
@@ -1893,10 +1895,12 @@ impl GridFormattingContext {
     let factory = std::sync::Arc::new(self.factory.clone());
 
     let deadline = active_deadline();
+    let stage = active_stage();
     let child_results = indices_to_layout
       .par_iter()
       .map(|&idx| {
         with_deadline(deadline.as_ref(), || {
+          let _stage_guard = StageGuard::install(stage);
           crate::layout::engine::debug_record_parallel_work();
 
           let child = in_flow_children[idx];

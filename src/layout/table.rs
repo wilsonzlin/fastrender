@@ -80,7 +80,7 @@ use crate::tree::fragment_tree::TableCollapsedBorders;
 use crate::tree::table_fixup::TableStructureFixer;
 use crate::{
   render_control::active_deadline, render_control::check_active_periodic,
-  render_control::with_deadline,
+  render_control::with_deadline, render_control::active_stage, render_control::StageGuard,
 };
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -4619,12 +4619,14 @@ impl TableFormattingContext {
     let measurements: Vec<Option<(f32, f32)>> = if matches!(mode, DistributionMode::Auto) {
       if measure_cells_in_parallel {
         let deadline = active_deadline();
+        let stage = active_stage();
         let measure = || {
           structure
             .cells
             .par_iter()
             .map(|cell| {
               with_deadline(deadline.as_ref(), || {
+                let _stage_guard = StageGuard::install(stage);
                 let Some(row) = source_rows.get(cell.source_row) else {
                   return Ok(None);
                 };
@@ -5948,12 +5950,14 @@ impl FormattingContext for TableFormattingContext {
         || (structure.cells.len() > 256 && max_threads > 1));
     let outcomes: Vec<CellOutcome> = if should_parallelize_cells {
       let deadline = active_deadline();
+      let stage = active_stage();
       let layout_cells = || {
         structure
           .cells
           .par_iter()
           .map(|cell| {
             with_deadline(deadline.as_ref(), || {
+              let _stage_guard = StageGuard::install(stage);
               crate::layout::engine::debug_record_parallel_work();
               layout_single_cell(cell)
             })

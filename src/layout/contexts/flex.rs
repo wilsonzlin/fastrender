@@ -62,7 +62,9 @@ use crate::layout::taffy_integration::{
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
+use crate::render_control::{
+  active_deadline, active_stage, check_active, check_active_periodic, with_deadline, StageGuard,
+};
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
@@ -2867,6 +2869,7 @@ impl FormattingContext for FlexFormattingContext {
     let mut deadline_counter = 0usize;
     let contributions = if self.parallelism.should_parallelize(box_node.children.len()) {
       let deadline = active_deadline();
+      let stage = active_stage();
       box_node
         .children
         .par_iter()
@@ -2874,6 +2877,7 @@ impl FormattingContext for FlexFormattingContext {
           || 0usize,
           |deadline_counter, child| {
             with_deadline(deadline.as_ref(), || {
+              let _stage_guard = StageGuard::install(stage);
               crate::layout::engine::debug_record_parallel_work();
               check_layout_deadline(deadline_counter)?;
               compute_child_contribution(child)
@@ -4267,12 +4271,14 @@ impl FlexFormattingContext {
       };
 
       let outputs = if should_parallel_layout {
+        let stage = active_stage();
         layout_work
           .par_iter()
           .map_init(
             || 0usize,
             |thread_deadline_counter, work| {
               with_deadline(deadline.as_ref(), || {
+                let _stage_guard = StageGuard::install(stage);
                 crate::layout::engine::debug_record_parallel_work();
                 run_layout(thread_deadline_counter, work)
               })
