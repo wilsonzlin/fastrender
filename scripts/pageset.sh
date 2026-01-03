@@ -527,6 +527,19 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_discovered_assets_per_page")"
   PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_images_per_page")"
   PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_image_urls_per_element")"
+else
+  # Prefetch knobs do not apply when the disk cache is disabled, but we still intercept them so
+  # pageset_progress arg parsing stays forgiving (and consistent with the xtask wrapper).
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS=1
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=1
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=1
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS=1
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS=1
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS=1
+  PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS=1
+  PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=1
+  PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=1
+  PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT=1
 fi
 
 for ((i=0; i < ${#ARGS[@]}; i++)); do
