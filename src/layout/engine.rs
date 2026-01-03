@@ -30,7 +30,8 @@ use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::render_control::{
-  check_active, deadline_stack_snapshot, DeadlineGuard, DeadlineStackGuard, RenderDeadline,
+  active_stage, check_active, deadline_stack_snapshot, DeadlineGuard, DeadlineStackGuard, RenderDeadline,
+  StageGuard,
 };
 use crate::style::display::FormattingContextType;
 use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal};
@@ -943,8 +944,10 @@ impl LayoutEngine {
   fn run_in_pool<T: Send>(&self, pool: Option<&ThreadPool>, f: impl FnOnce() -> T + Send) -> T {
     if let Some(pool) = pool {
       let deadline_stack = deadline_stack_snapshot();
+      let stage = active_stage();
       pool.install(move || {
         let _guard = DeadlineStackGuard::install(deadline_stack);
+        let _stage_guard = StageGuard::install(stage);
         f()
       })
     } else {
@@ -1330,6 +1333,71 @@ mod tests {
         "max_threads=1 should disable fan-out parallelism"
       );
     });
+  }
+
+  #[test]
+  fn run_in_pool_propagates_deadline_stack() {
+    let engine = LayoutEngine::with_defaults();
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(2)
+      .build()
+      .expect("build rayon pool");
+    let main_thread_id = std::thread::current().id();
+    let root_cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let root_deadline = RenderDeadline::new(None, Some(root_cancel));
+    let active_cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| false);
+    let active_deadline = RenderDeadline::new(None, Some(active_cancel));
+
+    let (root_is_timeout, active_is_timeout, ran_off_main) =
+      crate::render_control::with_deadline(Some(&root_deadline), || {
+        crate::render_control::with_deadline(Some(&active_deadline), || {
+          engine.run_in_pool(Some(&pool), || {
+            let ran_off_main = std::thread::current().id() != main_thread_id;
+            let root = crate::render_control::root_deadline().expect("root deadline");
+            let active = crate::render_control::active_deadline().expect("active deadline");
+            let root_is_timeout = root.check(RenderStage::Layout).is_err();
+            let active_is_timeout = active.check(RenderStage::Layout).is_err();
+            (root_is_timeout, active_is_timeout, ran_off_main)
+          })
+        })
+      });
+
+    assert!(
+      ran_off_main,
+      "expected pool.install closure to run on a pool worker thread"
+    );
+    assert!(
+      root_is_timeout,
+      "expected the root deadline cancel callback to be observed"
+    );
+    assert!(
+      !active_is_timeout,
+      "expected the active deadline cancel callback to remain false"
+    );
+  }
+
+  #[test]
+  fn run_in_pool_propagates_active_stage() {
+    let engine = LayoutEngine::with_defaults();
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(2)
+      .build()
+      .expect("build rayon pool");
+    let main_thread_id = std::thread::current().id();
+    let _stage_guard = StageGuard::install(Some(RenderStage::Layout));
+
+    let (stage, ran_off_main) = engine.run_in_pool(Some(&pool), || {
+      (
+        crate::render_control::active_stage(),
+        std::thread::current().id() != main_thread_id,
+      )
+    });
+
+    assert!(
+      ran_off_main,
+      "expected pool.install closure to run on a pool worker thread"
+    );
+    assert_eq!(stage, Some(RenderStage::Layout));
   }
 
   // === LayoutEngine Creation Tests ===
