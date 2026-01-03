@@ -15,8 +15,8 @@ mod stage_buckets;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use common::args::{
-  parse_shard, CompatArgs, CompatProfileArg, DiskCacheArgs, DomCompatArg, LayoutParallelArgs,
-  LayoutParallelModeArg, ResourceAccessArgs, DEFAULT_DISK_CACHE_MAX_AGE_SECS,
+  cpu_budget, default_jobs, parse_shard, CompatArgs, CompatProfileArg, DiskCacheArgs, DomCompatArg,
+  LayoutParallelArgs, LayoutParallelModeArg, ResourceAccessArgs, DEFAULT_DISK_CACHE_MAX_AGE_SECS,
   DEFAULT_DISK_CACHE_MAX_BYTES,
 };
 use common::render_pipeline::{
@@ -271,10 +271,6 @@ enum ProgressStatusArg {
   Timeout,
   Panic,
   Error,
-}
-
-fn default_jobs() -> usize {
-  std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
 #[derive(Args, Debug, Default, Clone)]
@@ -6711,7 +6707,7 @@ fn run_queue(
   dump: Option<&DumpSettings>,
 ) -> io::Result<()> {
   let mut running: Vec<RunningChild> = Vec::new();
-  let total_cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+  let total_cpus = cpu_budget();
   let rayon_threads_per_worker = default_rayon_threads_per_worker(total_cpus, jobs);
   let current_sha = current_git_sha();
   let progress_config = current_progress_config(&args.disk_cache);

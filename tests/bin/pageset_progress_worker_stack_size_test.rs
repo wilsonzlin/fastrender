@@ -23,7 +23,7 @@ fn pageset_progress_worker_runs_on_large_stack_thread() {
   // thread like `render_pages` and `fetch_and_render`.
   let temp = tempdir().expect("tempdir");
   let cache_path = temp.path().join("deep.html");
-  // Keep this below the 64MB CLI worker stack limit while still being deep enough to overflow the
+  // Keep this below the 128MB CLI worker stack limit while still being deep enough to overflow the
   // default process stack.
   fs::write(&cache_path, build_deep_html(500)).expect("write deep html");
 

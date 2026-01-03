@@ -33,7 +33,7 @@ use std::time::Duration;
 ///
 /// Large pages (or deeply nested DOM/style trees) can otherwise overflow the default thread stack
 /// and abort the process. Keep this in sync across CLI binaries.
-pub const CLI_RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB
+pub const CLI_RENDER_STACK_SIZE: usize = 128 * 1024 * 1024; // 128MB
 
 /// Bundle of renderer configuration and per-render options parsed from CLI flags.
 #[derive(Debug, Clone)]

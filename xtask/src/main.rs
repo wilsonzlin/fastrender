@@ -187,9 +187,71 @@ struct PagesetArgs {
 }
 
 fn default_jobs() -> usize {
-  std::thread::available_parallelism()
+  cpu_budget()
+}
+
+fn cpu_budget() -> usize {
+  let mut cpus = std::thread::available_parallelism()
     .map(|n| n.get())
     .unwrap_or(1)
+    .max(1);
+  #[cfg(target_os = "linux")]
+  {
+    if let Some(quota) = linux_cgroup_cpu_quota() {
+      cpus = cpus.min(quota);
+    }
+  }
+  cpus.max(1)
+}
+
+#[cfg(target_os = "linux")]
+fn ceil_div_u64(numer: u64, denom: u64) -> u64 {
+  if denom == 0 {
+    return 0;
+  }
+  numer
+    .saturating_add(denom.saturating_sub(1))
+    .saturating_div(denom)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_cgroup_v2_cpu_max(contents: &str) -> Option<usize> {
+  let mut it = contents.split_whitespace();
+  let quota_raw = it.next()?;
+  let period_raw = it.next()?;
+  if quota_raw == "max" {
+    return None;
+  }
+  let quota = quota_raw.parse::<u64>().ok()?;
+  let period = period_raw.parse::<u64>().ok()?;
+  if quota == 0 || period == 0 {
+    return None;
+  }
+  let cpus = ceil_div_u64(quota, period).max(1);
+  Some(cpus as usize)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_cgroup_v1_cpu_quota(quota_raw: &str, period_raw: &str) -> Option<usize> {
+  let quota = quota_raw.trim().parse::<i64>().ok()?;
+  let period = period_raw.trim().parse::<i64>().ok()?;
+  if quota <= 0 || period <= 0 {
+    return None;
+  }
+  let cpus = ceil_div_u64(quota as u64, period as u64).max(1);
+  Some(cpus as usize)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cgroup_cpu_quota() -> Option<usize> {
+  if let Ok(contents) = std::fs::read_to_string("/sys/fs/cgroup/cpu.max") {
+    if let Some(cpus) = parse_cgroup_v2_cpu_max(&contents) {
+      return Some(cpus);
+    }
+  }
+  let quota = std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").ok()?;
+  let period = std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_period_us").ok()?;
+  parse_cgroup_v1_cpu_quota(&quota, &period)
 }
 
 #[derive(Args)]
@@ -642,9 +704,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   //
   // Mirror `scripts/pageset.sh`: if the user hasn't provided `RAYON_NUM_THREADS`, divide the
   // available CPU budget across the configured worker processes.
-  let total_cpus = std::thread::available_parallelism()
-    .map(|n| n.get())
-    .unwrap_or(1);
+  let total_cpus = cpu_budget();
   let mut threads_per_worker = total_cpus / jobs;
   if threads_per_worker == 0 {
     threads_per_worker = 1;

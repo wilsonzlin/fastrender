@@ -8,7 +8,7 @@ mod common;
 
 use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use common::args::{
-  default_jobs, parse_bool_preference, parse_color_scheme, parse_contrast, parse_shard,
+  cpu_budget, default_jobs, parse_bool_preference, parse_color_scheme, parse_contrast, parse_shard,
   parse_viewport,
   CompatArgs, DiskCacheArgs, LayoutParallelArgs, ResourceAccessArgs,
 };
@@ -1217,7 +1217,7 @@ fn run_workers(
   soft_timeout_ms: Option<u64>,
 ) -> io::Result<Vec<PageResult>> {
   let exe = std::env::current_exe()?;
-  let total_cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+  let total_cpus = cpu_budget();
   let rayon_threads_per_worker = default_rayon_threads_per_worker(total_cpus, args.jobs);
   let mut queue: VecDeque<CachedEntry> = VecDeque::from(entries);
   let mut running: Vec<RunningChild> = Vec::new();

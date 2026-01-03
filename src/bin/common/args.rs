@@ -8,8 +8,70 @@ use fastrender::style::media::MediaType;
 use std::time::Duration;
 
 #[allow(dead_code)]
+pub fn cpu_budget() -> usize {
+  let mut cpus = std::thread::available_parallelism().map_or(1, |n| n.get()).max(1);
+  #[cfg(target_os = "linux")]
+  {
+    if let Some(quota) = linux_cgroup_cpu_quota() {
+      cpus = cpus.min(quota);
+    }
+  }
+  cpus.max(1)
+}
+
+#[allow(dead_code)]
 pub fn default_jobs() -> usize {
-  std::thread::available_parallelism().map_or(1, |n| n.get())
+  cpu_budget()
+}
+
+#[cfg(target_os = "linux")]
+fn ceil_div_u64(numer: u64, denom: u64) -> u64 {
+  if denom == 0 {
+    return 0;
+  }
+  numer
+    .saturating_add(denom.saturating_sub(1))
+    .saturating_div(denom)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_cgroup_v2_cpu_max(contents: &str) -> Option<usize> {
+  let mut it = contents.split_whitespace();
+  let quota_raw = it.next()?;
+  let period_raw = it.next()?;
+  if quota_raw == "max" {
+    return None;
+  }
+  let quota = quota_raw.parse::<u64>().ok()?;
+  let period = period_raw.parse::<u64>().ok()?;
+  if quota == 0 || period == 0 {
+    return None;
+  }
+  let cpus = ceil_div_u64(quota, period).max(1);
+  Some(cpus as usize)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_cgroup_v1_cpu_quota(quota_raw: &str, period_raw: &str) -> Option<usize> {
+  let quota = quota_raw.trim().parse::<i64>().ok()?;
+  let period = period_raw.trim().parse::<i64>().ok()?;
+  if quota <= 0 || period <= 0 {
+    return None;
+  }
+  let cpus = ceil_div_u64(quota as u64, period as u64).max(1);
+  Some(cpus as usize)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cgroup_cpu_quota() -> Option<usize> {
+  if let Ok(contents) = std::fs::read_to_string("/sys/fs/cgroup/cpu.max") {
+    if let Some(cpus) = parse_cgroup_v2_cpu_max(&contents) {
+      return Some(cpus);
+    }
+  }
+  let quota = std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").ok()?;
+  let period = std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_period_us").ok()?;
+  parse_cgroup_v1_cpu_quota(&quota, &period)
 }
 
 /// Default on-disk cache budget (512MB).
@@ -599,5 +661,29 @@ mod tests {
       disk_cache_max_age_from_secs(123),
       Some(Duration::from_secs(123))
     );
+  }
+
+  #[cfg(target_os = "linux")]
+  #[test]
+  fn parse_cgroup_v2_cpu_max_values() {
+    assert_eq!(parse_cgroup_v2_cpu_max("max 100000"), None);
+    assert_eq!(parse_cgroup_v2_cpu_max("100000 100000"), Some(1));
+    assert_eq!(parse_cgroup_v2_cpu_max("200000 100000"), Some(2));
+    assert_eq!(parse_cgroup_v2_cpu_max("50000 100000"), Some(1));
+    assert_eq!(parse_cgroup_v2_cpu_max("0 100000"), None);
+    assert_eq!(parse_cgroup_v2_cpu_max("100000 0"), None);
+    assert_eq!(parse_cgroup_v2_cpu_max("oops"), None);
+  }
+
+  #[cfg(target_os = "linux")]
+  #[test]
+  fn parse_cgroup_v1_cpu_quota_values() {
+    assert_eq!(parse_cgroup_v1_cpu_quota("-1", "100000"), None);
+    assert_eq!(parse_cgroup_v1_cpu_quota("0", "100000"), None);
+    assert_eq!(parse_cgroup_v1_cpu_quota("100000", "100000"), Some(1));
+    assert_eq!(parse_cgroup_v1_cpu_quota("200000", "100000"), Some(2));
+    assert_eq!(parse_cgroup_v1_cpu_quota("50000", "100000"), Some(1));
+    assert_eq!(parse_cgroup_v1_cpu_quota("100000", "0"), None);
+    assert_eq!(parse_cgroup_v1_cpu_quota("oops", "100000"), None);
   }
 }
