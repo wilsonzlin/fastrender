@@ -9,8 +9,8 @@ use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::BuildHasherDefault;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 use tiny_skia::Pixmap;
@@ -246,10 +246,28 @@ fn blur_deadline_exceeded(counter: &mut usize) -> Option<RenderError> {
 
 #[inline]
 fn blur_should_parallelize(width: usize, height: usize) -> bool {
-  if rayon::current_num_threads() <= 1 {
+  if blur_thread_budget() <= 1 {
     return false;
   }
   width.checked_mul(height).unwrap_or(usize::MAX) >= PARALLEL_BLUR_MIN_PIXELS
+}
+
+#[inline]
+fn blur_thread_budget() -> usize {
+  rayon::current_num_threads()
+    .max(1)
+    .min(crate::system::cpu_budget().max(1))
+    .max(1)
+}
+
+#[inline]
+fn blur_parallel_min_len(items: usize) -> usize {
+  let items = items.max(1);
+  let threads = blur_thread_budget().max(1);
+  let tasks = threads.min(items).max(1);
+  items
+    .saturating_add(tasks.saturating_sub(1))
+    .saturating_div(tasks)
 }
 
 #[inline]
@@ -661,6 +679,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       let cancelled = AtomicBool::new(false);
       let deadline_counter = AtomicUsize::new(0);
       let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
+      let min_len = blur_parallel_min_len(height);
 
       let convolve_row_x = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
@@ -680,14 +699,19 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       };
 
       if deadline_enabled {
-        buf.par_chunks_mut(row_stride).enumerate().for_each_init(
-          || DeadlineGuard::install(deadline.as_ref()),
-          |_, (y, out_row)| convolve_row_x(y, out_row),
-        );
+        buf
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .with_min_len(min_len)
+          .for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_x(y, out_row),
+          );
       } else {
         buf
           .par_chunks_mut(row_stride)
           .enumerate()
+          .with_min_len(min_len)
           .for_each(|(y, out_row)| convolve_row_x(y, out_row));
       }
 
@@ -720,14 +744,19 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       };
 
       if deadline_enabled {
-        dst.par_chunks_mut(row_stride).enumerate().for_each_init(
-          || DeadlineGuard::install(deadline.as_ref()),
-          |_, (y, out_row)| convolve_row_y(y, out_row),
-        );
+        dst
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .with_min_len(min_len)
+          .for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_y(y, out_row),
+          );
       } else {
         dst
           .par_chunks_mut(row_stride)
           .enumerate()
+          .with_min_len(min_len)
           .for_each(|(y, out_row)| convolve_row_y(y, out_row));
       }
 
@@ -785,7 +814,10 @@ impl FastDivU32 {
   fn new(divisor: u32) -> Self {
     debug_assert!(divisor > 0);
     let multiplier = ((1u64 << 32) + divisor as u64 - 1) / divisor as u64;
-    Self { divisor, multiplier }
+    Self {
+      divisor,
+      multiplier,
+    }
   }
 
   #[inline]
@@ -1108,7 +1140,7 @@ fn box_blur_h_parallel(
   src: &[u8],
   dst: &mut [u8],
   width: usize,
-  _height: usize,
+  height: usize,
   radius: usize,
   deadline: &Option<crate::render_control::RenderDeadline>,
   deadline_enabled: bool,
@@ -1124,6 +1156,7 @@ fn box_blur_h_parallel(
   let half = window / 2;
   let div = FastDivU32::new(window as u32);
   let row_stride = width * 4;
+  let min_len = blur_parallel_min_len(height);
 
   let blur_row = |y: usize, out_row: &mut [u8]| {
     if cancelled.load(Ordering::Relaxed) {
@@ -1144,14 +1177,19 @@ fn box_blur_h_parallel(
   };
 
   if deadline_enabled {
-    dst.par_chunks_mut(row_stride).enumerate().for_each_init(
-      || DeadlineGuard::install(deadline.as_ref()),
-      |_, (y, out_row)| blur_row(y, out_row),
-    );
+    dst
+      .par_chunks_mut(row_stride)
+      .enumerate()
+      .with_min_len(min_len)
+      .for_each_init(
+        || DeadlineGuard::install(deadline.as_ref()),
+        |_, (y, out_row)| blur_row(y, out_row),
+      );
   } else {
     dst
       .par_chunks_mut(row_stride)
       .enumerate()
+      .with_min_len(min_len)
       .for_each(|(y, out_row)| blur_row(y, out_row));
   }
 
@@ -1228,6 +1266,7 @@ fn box_blur_v_parallel(
   let blocks = (width + COLUMN_BLOCK - 1) / COLUMN_BLOCK;
   let dst_base = dst.as_mut_ptr() as usize;
   let row_stride = width * 4;
+  let min_len = blur_parallel_min_len(blocks);
 
   let blur_block = |block: usize| {
     let x_start = block * COLUMN_BLOCK;
@@ -1258,13 +1297,17 @@ fn box_blur_v_parallel(
   };
 
   if deadline_enabled {
-    (0..blocks).into_par_iter().for_each_init(
-      || DeadlineGuard::install(deadline.as_ref()),
-      |_, block| blur_block(block),
-    );
+    (0..blocks)
+      .into_par_iter()
+      .with_min_len(min_len)
+      .for_each_init(
+        || DeadlineGuard::install(deadline.as_ref()),
+        |_, block| blur_block(block),
+      );
   } else {
     (0..blocks)
       .into_par_iter()
+      .with_min_len(min_len)
       .for_each(|block| blur_block(block));
   }
 
@@ -1564,16 +1607,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
             return;
           }
           let out_row = &mut tmp[y * row_stride..(y + 1) * row_stride];
-          convolve_row_vertical_fixed(
-            src,
-            out_row,
-            width,
-            height,
-            y,
-            &kernel_y,
-            radius_y,
-            scale_y,
-          );
+          convolve_row_vertical_fixed(src, out_row, width, height, y, &kernel_y, radius_y, scale_y);
         }
         std::mem::swap(&mut cur, &mut tmp);
         cur_valid = true;
@@ -1621,6 +1655,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
     } else if radius_x != 0 && !kernel_x.is_empty() && scale_x > 0 {
       did_work = true;
       let src = if cur_valid { &cur[..] } else { pixmap.data() };
+      let min_len = blur_parallel_min_len(height);
       let convolve_row_x = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
           return;
@@ -1639,14 +1674,19 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
       };
 
       if deadline_enabled {
-        tmp.par_chunks_mut(row_stride).enumerate().for_each_init(
-          || DeadlineGuard::install(deadline.as_ref()),
-          |_, (y, out_row)| convolve_row_x(y, out_row),
-        );
+        tmp
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .with_min_len(min_len)
+          .for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_x(y, out_row),
+          );
       } else {
         tmp
           .par_chunks_mut(row_stride)
           .enumerate()
+          .with_min_len(min_len)
           .for_each(|(y, out_row)| convolve_row_x(y, out_row));
       }
       if cancelled.load(Ordering::Relaxed) {
@@ -1689,6 +1729,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
     } else if radius_y != 0 && !kernel_y.is_empty() && scale_y > 0 {
       did_work = true;
       let src = if cur_valid { &cur[..] } else { pixmap.data() };
+      let min_len = blur_parallel_min_len(height);
       let convolve_row_y = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
           return;
@@ -1706,14 +1747,19 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
       };
 
       if deadline_enabled {
-        tmp.par_chunks_mut(row_stride).enumerate().for_each_init(
-          || DeadlineGuard::install(deadline.as_ref()),
-          |_, (y, out_row)| convolve_row_y(y, out_row),
-        );
+        tmp
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .with_min_len(min_len)
+          .for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_y(y, out_row),
+          );
       } else {
         tmp
           .par_chunks_mut(row_stride)
           .enumerate()
+          .with_min_len(min_len)
           .for_each(|(y, out_row)| convolve_row_y(y, out_row));
       }
 
@@ -2037,6 +2083,7 @@ fn blur_anisotropic_body_with_parallelism(
       let cancelled = AtomicBool::new(false);
       let deadline_counter = AtomicUsize::new(0);
       let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
+      let min_len = blur_parallel_min_len(height);
 
       // Horizontal pass (if needed): src -> tmp, otherwise copy
       if radius_x == 0 || kernel_x.is_empty() {
@@ -2059,14 +2106,19 @@ fn blur_anisotropic_body_with_parallelism(
         };
 
         if deadline_enabled {
-          tmp.par_chunks_mut(row_stride).enumerate().for_each_init(
-            || DeadlineGuard::install(deadline.as_ref()),
-            |_, (y, out_row)| convolve_row_x(y, out_row),
-          );
+          tmp
+            .par_chunks_mut(row_stride)
+            .enumerate()
+            .with_min_len(min_len)
+            .for_each_init(
+              || DeadlineGuard::install(deadline.as_ref()),
+              |_, (y, out_row)| convolve_row_x(y, out_row),
+            );
         } else {
           tmp
             .par_chunks_mut(row_stride)
             .enumerate()
+            .with_min_len(min_len)
             .for_each(|(y, out_row)| convolve_row_x(y, out_row));
         }
 
@@ -2111,14 +2163,19 @@ fn blur_anisotropic_body_with_parallelism(
       };
 
       if deadline_enabled {
-        dst.par_chunks_mut(row_stride).enumerate().for_each_init(
-          || DeadlineGuard::install(deadline.as_ref()),
-          |_, (y, out_row)| convolve_row_y(y, out_row),
-        );
+        dst
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .with_min_len(min_len)
+          .for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_y(y, out_row),
+          );
       } else {
         dst
           .par_chunks_mut(row_stride)
           .enumerate()
+          .with_min_len(min_len)
           .for_each(|(y, out_row)| convolve_row_y(y, out_row));
       }
 
@@ -2247,7 +2304,7 @@ fn tile_blur(
   let max_src_h = height.min(tile_h.saturating_add(pad_y.saturating_mul(2)));
   let max_tile_pixels = (max_src_w as usize).saturating_mul(max_src_h as usize);
   let parallel_tiles =
-    max_tile_pixels < PARALLEL_BLUR_MIN_PIXELS && tiles > 1 && rayon::current_num_threads() > 1;
+    max_tile_pixels < PARALLEL_BLUR_MIN_PIXELS && tiles > 1 && blur_thread_budget() > 1;
 
   if parallel_tiles {
     let out_stride = row_stride;
@@ -2387,12 +2444,14 @@ fn tile_blur(
 
       (0..total_tiles)
         .into_par_iter()
+        .with_min_len(blur_parallel_min_len(total_tiles))
         .for_each_init(init, |state, idx| blur_tile(idx, &mut state.1));
     } else {
       // Extremely high tile counts can overflow usize on 32-bit platforms; fall back to row-parallel
       // iteration rather than allocating a tile job list.
       (0..tiles_y as usize)
         .into_par_iter()
+        .with_min_len(blur_parallel_min_len(tiles_y as usize))
         .for_each_init(init, |state, ty| {
           let scratch = &mut state.1;
           let y = (ty as u32).saturating_mul(tile_h);
