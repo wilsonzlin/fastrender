@@ -477,37 +477,111 @@ fn normalize_file(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn collect_snapshots(dir: &Path) -> Result<HashMap<String, PathBuf>, String> {
-  let mut map = HashMap::new();
-  for entry in fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))? {
+  // Prefer explicitly named `<stem>.snapshot.json` files (render_pages dump layout) over
+  // directory-based snapshots (`<stem>/snapshot.json`, pageset_progress dump layout) when both
+  // exist for the same stem.
+  let mut map: HashMap<String, (PathBuf, SnapshotOrigin)> = HashMap::new();
+
+  let entries =
+    fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+
+  for entry in entries {
     let entry = entry.map_err(|e| format!("failed to read entry: {e}"))?;
     let path = entry.path();
-    if !path.is_file() {
+    let file_type = entry
+      .file_type()
+      .map_err(|e| format!("{}: failed to stat entry: {e}", path.display()))?;
+
+    if file_type.is_file() {
+      if let Some((stem, origin)) = snapshot_stem(&path) {
+        let canonical =
+          fs::canonicalize(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        upsert_snapshot(&mut map, stem, canonical, origin);
+      }
       continue;
     }
-    let Some(stem) = stem_from_snapshot_path(&path) else {
-      continue;
-    };
-    let canonical = fs::canonicalize(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    map.entry(stem).or_insert(canonical);
+
+    if file_type.is_dir() {
+      let snapshot_path = path.join("snapshot.json");
+      if snapshot_path.is_file() {
+        let stem = entry.file_name().to_string_lossy().to_string();
+        let canonical = fs::canonicalize(&snapshot_path)
+          .map_err(|e| format!("{}: {e}", snapshot_path.display()))?;
+        upsert_snapshot(&mut map, stem, canonical, SnapshotOrigin::Directory);
+      }
+    }
   }
-  Ok(map)
+
+  Ok(map.into_iter().map(|(k, (v, _))| (k, v)).collect())
 }
 
 fn stem_from_snapshot_path(path: &Path) -> Option<String> {
-  let file_name = path.file_name()?.to_string_lossy();
-  file_name
-    .strip_suffix(".snapshot.json")
-    .map(|s| s.to_string())
+  snapshot_stem(path).map(|(stem, _)| stem)
 }
 
 fn png_for_snapshot(path: &Path, stem: &str, html_dir: &Path) -> Option<String> {
   let parent = path.parent()?;
-  let png = parent.join(format!("{stem}.png"));
-  if png.exists() {
-    Some(path_for_report(html_dir, &png))
-  } else {
-    None
+  let file_name = path.file_name().map(|s| s.to_string_lossy());
+
+  // For pageset_progress dumps, try the common `render.png` convention first.
+  if file_name.as_deref() == Some("snapshot.json") {
+    let render = parent.join("render.png");
+    if render.exists() {
+      return Some(path_for_report(html_dir, &render));
+    }
   }
+
+  // Fallback to the legacy `<stem>.png` naming (used by render_pages dumps and sometimes copied
+  // into pageset_progress dump directories).
+  let png = parent.join(format!("{stem}.png"));
+  png.exists().then(|| path_for_report(html_dir, &png))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SnapshotOrigin {
+  FlatFile,
+  Directory,
+}
+
+impl SnapshotOrigin {
+  fn weight(self) -> u8 {
+    match self {
+      SnapshotOrigin::Directory => 0,
+      SnapshotOrigin::FlatFile => 1,
+    }
+  }
+}
+
+fn snapshot_stem(path: &Path) -> Option<(String, SnapshotOrigin)> {
+  let file_name = path.file_name()?.to_string_lossy();
+  if let Some(stem) = file_name.strip_suffix(".snapshot.json") {
+    return Some((stem.to_string(), SnapshotOrigin::FlatFile));
+  }
+  if file_name == "snapshot.json" {
+    let stem = path
+      .parent()?
+      .file_name()
+      .map(|s| s.to_string_lossy().to_string())?;
+    return Some((stem, SnapshotOrigin::Directory));
+  }
+  None
+}
+
+fn upsert_snapshot(
+  map: &mut HashMap<String, (PathBuf, SnapshotOrigin)>,
+  stem: String,
+  path: PathBuf,
+  origin: SnapshotOrigin,
+) {
+  map
+    .entry(stem)
+    .and_modify(|(existing_path, existing_origin)| {
+      if origin.weight() > existing_origin.weight() {
+        *existing_path = path.clone();
+        *existing_origin = origin;
+      }
+    })
+    .or_insert((path, origin));
 }
 
 fn load_snapshot(path: &Path) -> Result<LoadedSnapshot, String> {
