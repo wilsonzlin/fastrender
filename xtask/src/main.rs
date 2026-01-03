@@ -10,6 +10,7 @@ use tempfile::TempDir;
 use url::Url;
 use walkdir::WalkDir;
 
+mod chrome_baseline_fixtures;
 mod import_page_fixture;
 mod recapture_page_fixtures;
 mod update_pageset_guardrails;
@@ -26,6 +27,9 @@ fn main() -> Result<()> {
     Commands::PagesetDiff(args) => run_pageset_diff(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
     Commands::ImportPageFixture(args) => import_page_fixture::run_import_page_fixture(args),
+    Commands::ChromeBaselineFixtures(args) => {
+      chrome_baseline_fixtures::run_chrome_baseline_fixtures(args)
+    }
     Commands::RecapturePageFixtures(args) => {
       recapture_page_fixtures::run_recapture_page_fixtures(args)
     }
@@ -67,6 +71,8 @@ enum Commands {
   DiffRenders(DiffRendersArgs),
   /// Convert a captured bundle into a pages_regression fixture
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
+  /// Render offline page fixtures in headless Chrome/Chromium (deterministic JS-off baseline).
+  ChromeBaselineFixtures(chrome_baseline_fixtures::ChromeBaselineFixturesArgs),
   /// (Re)capture and (re)import offline page fixtures from a manifest
   RecapturePageFixtures(recapture_page_fixtures::RecapturePageFixturesArgs),
   /// Update `tests/pages/pageset_guardrails.json` based on `progress/pages/*.json`

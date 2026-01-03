@@ -19,6 +19,7 @@ fn help_lists_commands() {
       && stdout.contains("diff-renders")
       && stdout.contains("pageset")
       && stdout.contains("pageset-diff")
+      && stdout.contains("chrome-baseline-fixtures")
       && stdout.contains("perf-smoke")
       && stdout.contains("recapture-page-fixtures")
       && stdout.contains("import-page-fixture"),
