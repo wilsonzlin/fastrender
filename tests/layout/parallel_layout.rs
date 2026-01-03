@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 fn available_threads() -> usize {
-  std::thread::available_parallelism().map_or(1, |n| n.get())
+  // Keep test pools small even on beefy CI machines so we don't allocate excessive stacks or spawn
+  // huge pools when `available_parallelism()` sees host CPUs outside a cgroup quota.
+  fastrender::system::cpu_budget().min(4).max(2)
 }
 
 struct EnvGuard(&'static str);
@@ -415,7 +417,7 @@ fn parallel_grid_children_match_serial_fragments() {
     LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), FontContext::new());
   let parallel_engine = LayoutEngine::with_font_context(
     LayoutConfig::for_viewport(viewport).with_parallelism(
-      LayoutParallelism::enabled(4).with_max_threads(Some(available_threads().max(2))),
+      LayoutParallelism::enabled(4).with_max_threads(Some(available_threads())),
     ),
     FontContext::new(),
   );
@@ -535,7 +537,7 @@ fn parallel_layout_respects_deadline() {
 fn auto_parallel_layout_spawns_workers() {
   let box_tree = build_block_stack(1024);
   let viewport = Size::new(1200.0, 900.0);
-  let threads = available_threads().max(2);
+  let threads = available_threads();
   let parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT)
     .with_max_threads(Some(threads));
   let config = LayoutConfig::for_viewport(viewport).with_parallelism(parallelism);

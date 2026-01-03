@@ -1163,9 +1163,7 @@ pub(crate) fn taffy_template_cache_limit_for_box_tree(
 impl TaffyNodeCache {
   pub(crate) fn new(capacity: usize) -> Self {
     let capacity = capacity.max(1);
-    let available = std::thread::available_parallelism()
-      .map(|threads| threads.get())
-      .unwrap_or(1);
+    let available = crate::system::cpu_budget();
     let desired = available.next_power_of_two();
     let max_shards = capacity.min(desired).max(1);
     let next_pow2 = max_shards.next_power_of_two();
