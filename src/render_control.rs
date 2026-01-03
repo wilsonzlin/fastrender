@@ -28,6 +28,14 @@ pub struct DeadlineGuard {
   previous_len: usize,
 }
 
+/// Guard that swaps the entire per-thread deadline stack.
+///
+/// This is primarily used to propagate an existing deadline context (including nested deadline
+/// scopes) into rayon thread pool workers where the caller thread's TLS is not visible.
+pub(crate) struct DeadlineStackGuard {
+  previous: Vec<Option<RenderDeadline>>,
+}
+
 /// Guard that installs an active stage hint for deadline attribution.
 pub struct StageGuard {
   previous: Option<RenderStage>,
@@ -259,6 +267,20 @@ impl DeadlineGuard {
   }
 }
 
+pub(crate) fn deadline_stack_snapshot() -> Vec<Option<RenderDeadline>> {
+  DEADLINE_STACK.with(|stack| stack.borrow().clone())
+}
+
+impl DeadlineStackGuard {
+  pub(crate) fn install(next: Vec<Option<RenderDeadline>>) -> Self {
+    let previous = DEADLINE_STACK.with(|stack| {
+      let mut stack = stack.borrow_mut();
+      std::mem::replace(&mut *stack, next)
+    });
+    Self { previous }
+  }
+}
+
 impl StageGuard {
   /// Installs the provided stage hint as the active stage for the current thread.
   pub fn install(stage: Option<RenderStage>) -> Self {
@@ -276,6 +298,15 @@ impl Drop for DeadlineGuard {
     let previous_len = self.previous_len;
     DEADLINE_STACK.with(|stack| {
       stack.borrow_mut().truncate(previous_len);
+    });
+  }
+}
+
+impl Drop for DeadlineStackGuard {
+  fn drop(&mut self) {
+    let previous = std::mem::take(&mut self.previous);
+    DEADLINE_STACK.with(|stack| {
+      *stack.borrow_mut() = previous;
     });
   }
 }

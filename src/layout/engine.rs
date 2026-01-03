@@ -29,7 +29,9 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
 use crate::layout::fragmentation::FragmentationOptions;
-use crate::render_control::{check_active, DeadlineGuard, RenderDeadline};
+use crate::render_control::{
+  check_active, deadline_stack_snapshot, DeadlineGuard, DeadlineStackGuard, RenderDeadline,
+};
 use crate::style::display::FormattingContextType;
 use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal};
 use crate::text::font_loader::FontContext;
@@ -940,7 +942,11 @@ impl LayoutEngine {
 
   fn run_in_pool<T: Send>(&self, pool: Option<&ThreadPool>, f: impl FnOnce() -> T + Send) -> T {
     if let Some(pool) = pool {
-      pool.install(f)
+      let deadline_stack = deadline_stack_snapshot();
+      pool.install(move || {
+        let _guard = DeadlineStackGuard::install(deadline_stack);
+        f()
+      })
     } else {
       f()
     }

@@ -19,6 +19,7 @@ mod multicol;
 mod nested_absolute;
 mod noscript_layout;
 mod paged_media;
+mod parallel_layout;
 mod render_wrap;
 mod ruby;
 mod running_elements;
