@@ -13021,6 +13021,119 @@ mod tests {
   }
 
   #[test]
+  fn caching_fetcher_does_not_update_aliases_on_http_error() {
+    #[derive(Clone, Debug)]
+    struct AliasingResponse {
+      status: u16,
+      body: Vec<u8>,
+      etag: Option<String>,
+      final_url: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct AliasingFetcher {
+      responses: Arc<Mutex<VecDeque<AliasingResponse>>>,
+      calls: Arc<Mutex<Vec<MockCall>>>,
+    }
+
+    impl AliasingFetcher {
+      fn new(responses: Vec<AliasingResponse>) -> Self {
+        Self {
+          responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+          calls: Arc::new(Mutex::new(Vec::new())),
+        }
+      }
+
+      fn record_call(&self, url: &str, etag: Option<&str>, last_modified: Option<&str>) {
+        self.calls.lock().unwrap().push(MockCall {
+          url: url.to_string(),
+          etag: etag.map(|s| s.to_string()),
+          last_modified: last_modified.map(|s| s.to_string()),
+        });
+      }
+
+      fn next_response(&self, url: &str) -> Result<FetchedResource> {
+        let mut responses = self.responses.lock().unwrap();
+        let resp = responses
+          .pop_front()
+          .expect("scripted fetcher ran out of responses");
+        let mut resource = FetchedResource::new(resp.body, Some("text/plain".to_string()));
+        resource.status = Some(resp.status);
+        resource.etag = resp.etag;
+        resource.final_url = resp.final_url.or_else(|| Some(url.to_string()));
+        Ok(resource)
+      }
+
+      fn calls(&self) -> Vec<MockCall> {
+        self.calls.lock().unwrap().clone()
+      }
+    }
+
+    impl ResourceFetcher for AliasingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.record_call(url, None, None);
+        self.next_response(url)
+      }
+
+      fn fetch_with_validation(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+      ) -> Result<FetchedResource> {
+        self.record_call(url, etag, last_modified);
+        self.next_response(url)
+      }
+    }
+
+    let start_url = "http://example.com/start";
+    let canonical_url = "http://example.com/canonical";
+    let error_final_url = "http://example.com/error";
+
+    let fetcher = AliasingFetcher::new(vec![
+      AliasingResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        final_url: Some(canonical_url.to_string()),
+      },
+      AliasingResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        final_url: Some(error_final_url.to_string()),
+      },
+      AliasingResponse {
+        status: 200,
+        body: b"network".to_vec(),
+        etag: None,
+        final_url: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::new(fetcher.clone());
+
+    let first = cache.fetch(start_url).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    assert_eq!(first.final_url.as_deref(), Some(canonical_url));
+
+    let second = cache.fetch(start_url).expect("fallback fetch");
+    assert_eq!(second.bytes, b"cached");
+
+    let third = cache
+      .fetch(error_final_url)
+      .expect("error final url should not be aliased/cached");
+    assert_eq!(third.bytes, b"network");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].url, start_url);
+    assert_eq!(calls[1].url, start_url);
+    assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(calls[2].url, error_final_url);
+  }
+
+  #[test]
   fn caching_fetcher_fetch_with_request_does_not_poison_successful_entry_on_http_error() {
     #[derive(Clone, Debug)]
     struct RecordedRequestCall {
