@@ -349,6 +349,12 @@ totals = delta.get("totals", {})
 mismatches = delta.get("config_mismatches")
 if not isinstance(mismatches, list):
   mismatches = []
+top_regressions = delta.get("top_regressions")
+top_improvements = delta.get("top_improvements")
+if not isinstance(top_regressions, list):
+  top_regressions = []
+if not isinstance(top_improvements, list):
+  top_improvements = []
 
 def fmt(key: str) -> str:
   value = totals.get(key)
@@ -363,6 +369,39 @@ print(f"| Unchanged | {fmt('unchanged')} |")
 if mismatches:
   print()
   print(f"Config mismatches vs baseline: {len(mismatches)} (see delta.html for details).")
+
+def format_top(entries, label):
+  if not entries:
+    return
+  print()
+  print(f"**{label}**")
+  for entry in entries[:5]:
+    if not isinstance(entry, dict):
+      continue
+    name = entry.get("name")
+    diff_delta = entry.get("diff_percentage_delta")
+    perceptual_delta = entry.get("perceptual_distance_delta")
+    if not isinstance(name, str):
+      continue
+    try:
+      diff_delta = float(diff_delta)
+    except Exception:
+      diff_delta = None
+    try:
+      perceptual_delta = float(perceptual_delta)
+    except Exception:
+      perceptual_delta = None
+    if diff_delta is None and perceptual_delta is None:
+      print(f"- `{name}`")
+    elif perceptual_delta is None:
+      print(f"- `{name}`: {diff_delta:+.4f}%")
+    elif diff_delta is None:
+      print(f"- `{name}`: perceptual {perceptual_delta:+.4f}")
+    else:
+      print(f"- `{name}`: {diff_delta:+.4f}% (perceptual {perceptual_delta:+.4f})")
+
+format_top(top_regressions, "Top regressions")
+format_top(top_improvements, "Top improvements")
 
 fail_on_regression = (os.getenv("FAIL_ON_REGRESSION") or "").lower() == "true"
 threshold = os.getenv("REGRESSION_THRESHOLD_PERCENT") or "0"
