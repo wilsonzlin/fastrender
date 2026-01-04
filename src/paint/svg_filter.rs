@@ -3144,7 +3144,7 @@ fn apply_primitive(
       };
       let radius = filter.resolve_primitive_pair(*radius, css_bbox);
       let radius = (radius.0 * scale_x, radius.1 * scale_y);
-      apply_morphology(&mut img.pixmap, radius, *op)?;
+      apply_morphology(&mut img.pixmap, radius, *op, color_interpolation_filters)?;
       img.region = clip_region(
         match op {
           MorphologyOp::Dilate => inflate_rect_xy(img.region, radius.0, radius.1),
@@ -4727,7 +4727,12 @@ fn unpremultiply(px: PremultipliedColorU8) -> (f32, f32, f32, f32) {
   }
 }
 
-fn apply_morphology(pixmap: &mut Pixmap, radius: (f32, f32), op: MorphologyOp) -> RenderResult<()> {
+fn apply_morphology(
+  pixmap: &mut Pixmap,
+  radius: (f32, f32),
+  op: MorphologyOp,
+  color_interpolation_filters: ColorInterpolationFilters,
+) -> RenderResult<()> {
   check_active(RenderStage::Paint)?;
   let rx = radius.0.abs().ceil() as i32;
   let ry = radius.1.abs().ceil() as i32;
@@ -4739,7 +4744,14 @@ fn apply_morphology(pixmap: &mut Pixmap, radius: (f32, f32), op: MorphologyOp) -
   if width <= 0 || height <= 0 {
     return Ok(());
   }
-  let original = pixmap.clone();
+
+  let mut original = pixmap.clone();
+  if matches!(
+    color_interpolation_filters,
+    ColorInterpolationFilters::LinearRGB
+  ) {
+    reencode_pixmap_to_linear_rgb(&mut original);
+  }
   let src = original.pixels();
   let dst = pixmap.pixels_mut();
   let row_len = width as usize;
@@ -4767,33 +4779,42 @@ fn apply_morphology(pixmap: &mut Pixmap, radius: (f32, f32), op: MorphologyOp) -
             }
             let x = x as i32;
             let mut agg = match op {
-              MorphologyOp::Dilate => [0u8; 4],
-              MorphologyOp::Erode => [255u8; 4],
+              MorphologyOp::Dilate => UnpremultipliedColor {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+              },
+              MorphologyOp::Erode => UnpremultipliedColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+              },
             };
             for dy in -ry..=ry {
               for dx in -rx..=rx {
                 let ny = (y + dy).clamp(0, height - 1);
                 let nx = (x + dx).clamp(0, width - 1);
                 let sample_idx = (ny as usize) * row_len + nx as usize;
-                let px = src[sample_idx];
+                let px = to_unpremultiplied(src[sample_idx]);
                 match op {
                   MorphologyOp::Dilate => {
-                    agg[0] = agg[0].max(px.red());
-                    agg[1] = agg[1].max(px.green());
-                    agg[2] = agg[2].max(px.blue());
-                    agg[3] = agg[3].max(px.alpha());
+                    agg.r = agg.r.max(px.r);
+                    agg.g = agg.g.max(px.g);
+                    agg.b = agg.b.max(px.b);
+                    agg.a = agg.a.max(px.a);
                   }
                   MorphologyOp::Erode => {
-                    agg[0] = agg[0].min(px.red());
-                    agg[1] = agg[1].min(px.green());
-                    agg[2] = agg[2].min(px.blue());
-                    agg[3] = agg[3].min(px.alpha());
+                    agg.r = agg.r.min(px.r);
+                    agg.g = agg.g.min(px.g);
+                    agg.b = agg.b.min(px.b);
+                    agg.a = agg.a.min(px.a);
                   }
                 }
               }
             }
-            *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
-              .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+            *dst_px = pack_color(agg, color_interpolation_filters);
           }
           Ok(())
         })
@@ -5753,7 +5774,13 @@ mod tests {
     let idx = 1 * 5 + 2;
     pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
 
-    apply_morphology(&mut pixmap, (1.0, 0.0), MorphologyOp::Dilate).unwrap();
+    apply_morphology(
+      &mut pixmap,
+      (1.0, 0.0),
+      MorphologyOp::Dilate,
+      ColorInterpolationFilters::SRGB,
+    )
+    .unwrap();
 
     let pixels = pixmap.pixels();
     for y in 0..3 {
@@ -5767,6 +5794,23 @@ mod tests {
         }
       }
     }
+  }
+
+  #[test]
+  fn morphology_dilate_operates_on_unpremultiplied_channels() {
+    let mut pixmap = new_pixmap(2, 1).unwrap();
+    pixmap.pixels_mut()[0] = premul(255, 0, 0, 64);
+    pixmap.pixels_mut()[1] = premul(100, 0, 0, 255);
+
+    apply_morphology(
+      &mut pixmap,
+      (1.0, 0.0),
+      MorphologyOp::Dilate,
+      ColorInterpolationFilters::SRGB,
+    )
+    .unwrap();
+
+    assert_eq!(pixels_to_vec(&pixmap), vec![(255, 0, 0, 255), (255, 0, 0, 255)]);
   }
 
   #[test]
