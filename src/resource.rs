@@ -3516,9 +3516,9 @@ impl HttpFetcher {
             resource.status = Some(status_code);
             resource.etag = etag;
             resource.last_modified = last_modified;
-            resource.cache_policy = cache_policy;
             resource.access_control_allow_origin = access_control_allow_origin;
             resource.timing_allow_origin = timing_allow_origin;
+            resource.cache_policy = cache_policy;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -3985,9 +3985,9 @@ impl HttpFetcher {
             resource.status = Some(status_code);
             resource.etag = etag;
             resource.last_modified = last_modified;
-            resource.cache_policy = cache_policy;
             resource.access_control_allow_origin = access_control_allow_origin;
             resource.timing_allow_origin = timing_allow_origin;
+            resource.cache_policy = cache_policy;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -4529,9 +4529,9 @@ impl HttpFetcher {
             resource.status = Some(status.as_u16());
             resource.etag = etag;
             resource.last_modified = last_modified;
-            resource.cache_policy = cache_policy;
             resource.access_control_allow_origin = access_control_allow_origin;
             resource.timing_allow_origin = timing_allow_origin;
+            resource.cache_policy = cache_policy;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -5085,9 +5085,9 @@ impl HttpFetcher {
             resource.status = Some(status.as_u16());
             resource.etag = etag;
             resource.last_modified = last_modified;
-            resource.cache_policy = cache_policy;
             resource.access_control_allow_origin = access_control_allow_origin;
             resource.timing_allow_origin = timing_allow_origin;
+            resource.cache_policy = cache_policy;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -7260,6 +7260,9 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
   }
 }
 
+/// Returns a sanitized header value from a response header map.
+///
+/// When the header appears multiple times, values are joined with `", "` (after trimming).
 fn header_values_joined(headers: &HeaderMap, name: &str) -> Option<String> {
   let values: Vec<&str> = headers
     .get_all(name)
@@ -8274,6 +8277,54 @@ mod tests {
       !msg.contains("empty HTTP response body"),
       "unexpected error: {msg}"
     );
+  }
+
+  #[test]
+  fn http_fetch_populates_cors_response_headers() {
+    if matches!(http_backend_mode(), HttpBackendMode::Curl) && !curl_backend::curl_available() {
+      eprintln!(
+        "skipping http_fetch_populates_cors_response_headers: curl backend selected but curl is unavailable"
+      );
+      return;
+    }
+
+    let Some(listener) = try_bind_localhost("http_fetch_populates_cors_response_headers") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream);
+      let body = b"ok";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin:  https://example.com  \r\nTiming-Allow-Origin: *  \r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(HttpRetryPolicy {
+        max_attempts: 1,
+        ..HttpRetryPolicy::default()
+      });
+    let url = format!("http://{addr}/cors.txt");
+    let res = fetcher
+      .fetch_with_context(FetchContextKind::Other, &url)
+      .expect("fetch");
+
+    handle.join().unwrap();
+
+    assert_eq!(
+      res.access_control_allow_origin.as_deref(),
+      Some("https://example.com")
+    );
+    assert_eq!(res.timing_allow_origin.as_deref(), Some("*"));
   }
 
   #[test]

@@ -1392,9 +1392,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       last_modified: last_modified
         .map(|s| s.to_string())
         .or_else(|| resource.last_modified.clone()),
-      final_url: resource.final_url.clone().or_else(|| Some(url.to_string())),
       access_control_allow_origin: resource.access_control_allow_origin.clone(),
       timing_allow_origin: resource.timing_allow_origin.clone(),
+      final_url: resource.final_url.clone().or_else(|| Some(url.to_string())),
       stored_at,
       len: resource.bytes.len(),
       cache: cache_metadata
@@ -1525,9 +1525,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       content_encoding: None,
       etag: error.etag.clone(),
       last_modified: error.last_modified.clone(),
-      final_url: error.final_url.clone(),
       access_control_allow_origin: None,
       timing_allow_origin: None,
+      final_url: error.final_url.clone(),
       stored_at,
       len: 0,
       cache: StoredCacheMetadata::from_http(&cache_metadata),
@@ -1740,6 +1740,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       resource.status = source.status;
       resource.etag = source.etag.clone();
       resource.last_modified = source.last_modified.clone();
+      resource.access_control_allow_origin = source.access_control_allow_origin.clone();
+      resource.timing_allow_origin = source.timing_allow_origin.clone();
       resource.final_url = source.final_url.clone();
       resource.cache_policy = source.cache_policy.clone();
       resource.access_control_allow_origin = source.access_control_allow_origin.clone();
@@ -1808,12 +1810,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       content_encoding: resource.content_encoding.clone(),
       etag: resource.etag.clone(),
       last_modified: resource.last_modified.clone(),
+      access_control_allow_origin: resource.access_control_allow_origin.clone(),
+      timing_allow_origin: resource.timing_allow_origin.clone(),
       // The artifact entry is keyed by the canonical URL (after redirects). Store the canonical
       // URL here as well so callers consuming the cached artifact can still enforce final-URL
       // policies without hitting the network.
       final_url: Some(canonical.clone()),
-      access_control_allow_origin: resource.access_control_allow_origin.clone(),
-      timing_allow_origin: resource.timing_allow_origin.clone(),
       stored_at,
       len: resource.bytes.len(),
       cache: cache_metadata
@@ -2337,11 +2339,11 @@ pub(super) struct StoredMetadata {
   content_encoding: Option<String>,
   etag: Option<String>,
   last_modified: Option<String>,
-  final_url: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   access_control_allow_origin: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   timing_allow_origin: Option<String>,
+  final_url: Option<String>,
   stored_at: u64,
   len: usize,
   cache: Option<StoredCacheMetadata>,
@@ -3014,6 +3016,41 @@ mod tests {
   }
 
   #[test]
+  fn disk_cache_persists_cors_headers_across_instances() {
+    #[derive(Clone)]
+    struct CorsFetcher;
+
+    impl ResourceFetcher for CorsFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        let mut resource = FetchedResource::new(b"cors".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        resource.access_control_allow_origin = Some("https://example.com".to_string());
+        resource.timing_allow_origin = Some("*".to_string());
+        Ok(resource)
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/cors";
+
+    let disk = DiskCachingFetcher::new(CorsFetcher, tmp.path());
+    let first = disk.fetch(url).expect("seed fetch");
+    assert_eq!(
+      first.access_control_allow_origin.as_deref(),
+      Some("https://example.com")
+    );
+    assert_eq!(first.timing_allow_origin.as_deref(), Some("*"));
+
+    let disk_again = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let second = disk_again.fetch(url).expect("disk hit");
+    assert_eq!(
+      second.access_control_allow_origin.as_deref(),
+      Some("https://example.com")
+    );
+    assert_eq!(second.timing_allow_origin.as_deref(), Some("*"));
+  }
+
+  #[test]
   fn disk_cache_persists_status_across_instances() {
     #[derive(Clone)]
     struct StatusFetcher {
@@ -3304,9 +3341,9 @@ mod tests {
       content_encoding: None,
       etag: None,
       last_modified: None,
-      final_url: Some(url.to_string()),
       access_control_allow_origin: None,
       timing_allow_origin: None,
+      final_url: Some(url.to_string()),
       stored_at: now_seconds().saturating_sub(60),
       len: cached_bytes.len(),
       cache: None,
@@ -3359,9 +3396,9 @@ mod tests {
       content_encoding: None,
       etag: None,
       last_modified: None,
-      final_url: Some(url.to_string()),
       access_control_allow_origin: None,
       timing_allow_origin: None,
+      final_url: Some(url.to_string()),
       stored_at: now_seconds().saturating_sub(60),
       len: cached_bytes.len(),
       cache: None,
@@ -4690,9 +4727,9 @@ mod tests {
       content_encoding: None,
       etag: None,
       last_modified: None,
-      final_url: Some(url.to_string()),
       access_control_allow_origin: None,
       timing_allow_origin: None,
+      final_url: Some(url.to_string()),
       stored_at: now_seconds(),
       len: bytes.len(),
       cache: None,
@@ -4930,6 +4967,8 @@ mod tests {
           content_encoding: None,
           etag: None,
           last_modified: None,
+          access_control_allow_origin: None,
+          timing_allow_origin: None,
           final_url: Some(url.to_string()),
           stored_at: 0,
           len: 0,

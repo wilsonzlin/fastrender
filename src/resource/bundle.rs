@@ -380,4 +380,119 @@ mod tests {
     assert_eq!(res.bytes, b"hi");
     assert_eq!(res.content_type.as_deref(), Some("text/plain"));
   }
+
+  #[test]
+  fn bundled_fetcher_roundtrips_cors_headers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("document.html"), "<!doctype html><html></html>")
+      .expect("write doc");
+    std::fs::write(tmp.path().join("style.css"), "body{}").expect("write css");
+
+    let manifest = BundleManifest {
+      version: BUNDLE_VERSION,
+      original_url: "https://example.com/".to_string(),
+      document: BundledDocument {
+        path: "document.html".to_string(),
+        content_type: Some("text/html".to_string()),
+        final_url: "https://example.com/".to_string(),
+        status: Some(200),
+        etag: None,
+        last_modified: None,
+        access_control_allow_origin: Some("*".to_string()),
+        timing_allow_origin: Some("https://timing.example".to_string()),
+      },
+      render: BundleRenderConfig {
+        viewport: (1200, 800),
+        device_pixel_ratio: 1.0,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        full_page: false,
+        same_origin_subresources: false,
+        allowed_subresource_origins: Vec::new(),
+        compat_profile: CompatProfile::default(),
+        dom_compat_mode: DomCompatibilityMode::default(),
+      },
+      resources: BTreeMap::from([(
+        "https://example.com/style.css".to_string(),
+        BundledResourceInfo {
+          path: "style.css".to_string(),
+          content_type: Some("text/css".to_string()),
+          status: Some(200),
+          final_url: Some("https://example.com/style.css".to_string()),
+          etag: None,
+          last_modified: None,
+          access_control_allow_origin: Some("https://example.com".to_string()),
+          timing_allow_origin: Some("*".to_string()),
+        },
+      )]),
+    };
+    std::fs::write(
+      tmp.path().join(BUNDLE_MANIFEST),
+      serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+
+    let bundle = Bundle::load(tmp.path()).expect("load bundle");
+    let fetcher = BundledFetcher::new(bundle);
+
+    let doc = fetcher.fetch("https://example.com/").expect("fetch doc");
+    assert_eq!(doc.access_control_allow_origin.as_deref(), Some("*"));
+    assert_eq!(
+      doc.timing_allow_origin.as_deref(),
+      Some("https://timing.example")
+    );
+
+    let css = fetcher
+      .fetch("https://example.com/style.css")
+      .expect("fetch css");
+    assert_eq!(
+      css.access_control_allow_origin.as_deref(),
+      Some("https://example.com")
+    );
+    assert_eq!(css.timing_allow_origin.as_deref(), Some("*"));
+  }
+
+  #[test]
+  fn bundle_loads_v1_manifest_without_cors_fields() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("document.html"), "<!doctype html><html></html>")
+      .expect("write doc");
+
+    // Older bundles (v1) may not include CORS header fields; they should deserialize as `None`.
+    let manifest_json = serde_json::json!({
+      "version": BUNDLE_VERSION,
+      "original_url": "https://example.com/",
+      "document": {
+        "path": "document.html",
+        "content_type": "text/html",
+        "final_url": "https://example.com/",
+        "status": 200,
+        "etag": null,
+        "last_modified": null
+      },
+      "render": {
+        "viewport": [1200, 800],
+        "device_pixel_ratio": 1.0,
+        "scroll_x": 0.0,
+        "scroll_y": 0.0,
+        "full_page": false,
+        "same_origin_subresources": false,
+        "allowed_subresource_origins": [],
+        "compat_profile": CompatProfile::default(),
+        "dom_compat_mode": DomCompatibilityMode::default()
+      },
+      "resources": {}
+    });
+    std::fs::write(
+      tmp.path().join(BUNDLE_MANIFEST),
+      serde_json::to_vec_pretty(&manifest_json).expect("serialize manifest json"),
+    )
+    .expect("write manifest");
+
+    let bundle = Bundle::load(tmp.path()).expect("load bundle");
+    let fetcher = BundledFetcher::new(bundle);
+    let doc = fetcher.fetch("https://example.com/").expect("fetch doc");
+    assert_eq!(doc.access_control_allow_origin, None);
+    assert_eq!(doc.timing_allow_origin, None);
+  }
 }
