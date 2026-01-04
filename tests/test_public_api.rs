@@ -41,6 +41,11 @@ fn assert_png_header(png_bytes: &[u8]) {
   );
 }
 
+fn pix_rgba(pixmap: &fastrender::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+  let px = pixmap.pixel(x, y).expect("pixel in bounds");
+  (px.red(), px.green(), px.blue(), px.alpha())
+}
+
 // =============================================================================
 // FastRender Creation Tests
 // =============================================================================
@@ -371,6 +376,9 @@ fn test_render_html_with_style() {
   let pixmap = result.unwrap();
   assert_eq!(pixmap.width(), 128);
   assert_eq!(pixmap.height(), 128);
+  // Pixel assertions are chosen to avoid antialiased edges: sample well inside/outside the box.
+  assert_eq!(pix_rgba(&pixmap, 25, 25), (0, 0, 255, 255));
+  assert_eq!(pix_rgba(&pixmap, 100, 100), (255, 255, 255, 255));
 }
 
 #[test]
@@ -410,6 +418,7 @@ fn test_render_html_with_background() {
   let pixmap = result.unwrap();
   assert_eq!(pixmap.width(), 64);
   assert_eq!(pixmap.height(), 64);
+  assert_eq!(pix_rgba(&pixmap, 0, 0), (255, 0, 0, 255));
 
   // Background color should be restored
   assert_eq!(renderer.background_color(), Rgba::WHITE);
