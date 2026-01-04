@@ -1,9 +1,11 @@
 use fastrender::css::parser::extract_css;
+use fastrender::css::types::StyleSheet;
 use fastrender::dom;
-use fastrender::style::cascade::apply_styles_with_media;
+use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::media::MediaContext;
 use fastrender::tree::box_generation::generate_box_tree;
 use fastrender::tree::box_tree::{BoxNode, BoxType, ReplacedType, SvgContent};
+use fastrender::Rgba;
 
 fn find_svg_content(node: &BoxNode) -> Option<SvgContent> {
   if let BoxType::Replaced(replaced) = &node.box_type {
@@ -17,6 +19,21 @@ fn find_svg_content(node: &BoxNode) -> Option<SvgContent> {
     }
   }
   None
+}
+
+fn find_styled_by_id<'a>(node: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
+  if node
+    .node
+    .get_attribute_ref("id")
+    .is_some_and(|value| value.eq_ignore_ascii_case(id))
+  {
+    return Some(node);
+  }
+
+  node
+    .children
+    .iter()
+    .find_map(|child| find_styled_by_id(child, id))
 }
 
 #[test]
@@ -64,6 +81,39 @@ fn inert_template_styles_are_not_collected_into_document_css() {
         !compact_css.contains("color:red"),
         "inert template styles should not appear in collected document CSS"
       );
+    })
+    .unwrap()
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn inert_template_styles_are_not_collected_into_shadow_stylesheets() {
+  std::thread::Builder::new()
+    .stack_size(64 * 1024 * 1024)
+    .spawn(|| {
+      let html = r#"
+      <x-host>
+        <template shadowroot="open">
+          <style>
+            #target { color: rgb(0, 0, 255); }
+          </style>
+          <template>
+            <style>
+              #target { color: rgb(255, 0, 0) !important; }
+            </style>
+          </template>
+          <span id="target">Hello</span>
+        </template>
+      </x-host>
+      "#;
+
+      let dom = dom::parse_html(html).expect("parse html");
+      let stylesheet = StyleSheet::new();
+      let media = MediaContext::screen(800.0, 600.0);
+      let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+      let target = find_styled_by_id(&styled, "target").expect("shadow node");
+      assert_eq!(target.styles.color, Rgba::rgb(0, 0, 255));
     })
     .unwrap()
     .join()

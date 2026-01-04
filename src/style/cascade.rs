@@ -896,7 +896,7 @@ fn collect_shadow_stylesheets(
         }
       }
 
-      for child in current.children.iter().rev() {
+      for child in current.traversal_children().iter().rev() {
         stack.push(child);
       }
     }
@@ -922,7 +922,7 @@ fn collect_shadow_stylesheets(
       }
     }
 
-    for child in node.children.iter().rev() {
+    for child in node.traversal_children().iter().rev() {
       stack.push(child);
     }
   }
