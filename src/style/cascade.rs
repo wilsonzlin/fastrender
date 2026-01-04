@@ -9724,6 +9724,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.svg_stroke = parent.svg_stroke;
   styles.svg_stroke_width = parent.svg_stroke_width;
   styles.svg_fill_rule = parent.svg_fill_rule;
+  styles.svg_clip_rule = parent.svg_clip_rule;
   styles.svg_stroke_linecap = parent.svg_stroke_linecap;
   styles.svg_stroke_linejoin = parent.svg_stroke_linejoin;
   styles.svg_stroke_miterlimit = parent.svg_stroke_miterlimit;

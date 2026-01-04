@@ -27,8 +27,28 @@
           aria-label="svg presentation demo"
         >
           <!-- Inherits fill/stroke/stroke-width from the HTML ancestor .svg-scope -->
+          <defs>
+            <clipPath id="clip-rule-demo" clipPathUnits="userSpaceOnUse">
+              <path
+                class="clipper"
+                d="M110 56H208V72H110Z M132 60H186V68H132Z"
+              />
+            </clipPath>
+          </defs>
+
           <rect class="fade-fill" x="12" y="12" width="70" height="42" rx="6" />
           <circle class="fade-stroke" cx="140" cy="34" r="20" fill="none" />
+
+          <!-- clip-rule affects how clipPath geometry is interpreted -->
+          <rect x="110" y="56" width="98" height="16" fill="rgb(226, 232, 240)" />
+          <rect
+            x="110"
+            y="56"
+            width="98"
+            height="16"
+            fill="rgb(15, 23, 42)"
+            clip-path="url(#clip-rule-demo)"
+          />
 
           <!-- Dash patterns + cap styles -->
           <line class="dashed" x1="12" y1="78" x2="208" y2="78" />
@@ -46,4 +66,3 @@
     </section>
   </body>
 </html>
-

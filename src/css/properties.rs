@@ -197,6 +197,7 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "clear",
   "clip",
   "clip-path",
+  "clip-rule",
   "color",
   "color-scheme",
   "contain",

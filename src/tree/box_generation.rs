@@ -1146,6 +1146,17 @@ fn serialize_svg_subtree(
       }
     }
 
+    if let Some(clip_rule) = style.svg_clip_rule {
+      if parent.and_then(|p| p.svg_clip_rule) != Some(clip_rule) {
+        start_decl(&mut out, &mut any);
+        out.push_str("clip-rule: ");
+        match clip_rule {
+          FillRule::NonZero => out.push_str("nonzero"),
+          FillRule::EvenOdd => out.push_str("evenodd"),
+        }
+      }
+    }
+
     if let Some(linecap) = style.svg_stroke_linecap {
       if parent.and_then(|p| p.svg_stroke_linecap) != Some(linecap) {
         start_decl(&mut out, &mut any);

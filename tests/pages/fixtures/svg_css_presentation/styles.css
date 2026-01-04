@@ -34,6 +34,10 @@
   fill-rule: evenodd;
 }
 
+.clipper {
+  clip-rule: evenodd;
+}
+
 .join {
   stroke: rgb(249, 115, 22);
   stroke-width: 10;
@@ -41,4 +45,3 @@
   stroke-miterlimit: 1;
   stroke-linecap: square;
 }
-

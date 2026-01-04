@@ -2561,6 +2561,7 @@ fn is_inherited_property(name: &str) -> bool {
       | "fill"
       | "fill-opacity"
       | "fill-rule"
+      | "clip-rule"
       | "list-style-type"
       | "list-style-position"
       | "list-style-image"
@@ -4149,6 +4150,7 @@ fn apply_property_from_source(
     "stroke" => styles.svg_stroke = source.svg_stroke,
     "stroke-width" => styles.svg_stroke_width = source.svg_stroke_width,
     "fill-rule" => styles.svg_fill_rule = source.svg_fill_rule,
+    "clip-rule" => styles.svg_clip_rule = source.svg_clip_rule,
     "stroke-linecap" => styles.svg_stroke_linecap = source.svg_stroke_linecap,
     "stroke-linejoin" => styles.svg_stroke_linejoin = source.svg_stroke_linejoin,
     "stroke-miterlimit" => styles.svg_stroke_miterlimit = source.svg_stroke_miterlimit,
@@ -9083,6 +9085,15 @@ fn apply_declaration_with_base_internal(
           styles.svg_fill_rule = Some(FillRule::NonZero);
         } else if kw.eq_ignore_ascii_case("evenodd") {
           styles.svg_fill_rule = Some(FillRule::EvenOdd);
+        }
+      }
+    }
+    "clip-rule" => {
+      if let PropertyValue::Keyword(kw) = resolved_value {
+        if kw.eq_ignore_ascii_case("nonzero") {
+          styles.svg_clip_rule = Some(FillRule::NonZero);
+        } else if kw.eq_ignore_ascii_case("evenodd") {
+          styles.svg_clip_rule = Some(FillRule::EvenOdd);
         }
       }
     }
@@ -14826,6 +14837,22 @@ mod tests {
       16.0,
     );
     assert_eq!(style.svg_fill_rule, Some(FillRule::EvenOdd));
+
+    let clip_rule = parse_property_value("clip-rule", "evenodd").expect("clip-rule");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "clip-rule".into(),
+        value: clip_rule,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_clip_rule, Some(FillRule::EvenOdd));
 
     let linecap = parse_property_value("stroke-linecap", "round").expect("linecap");
     apply_declaration(
