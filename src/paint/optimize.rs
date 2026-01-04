@@ -34,10 +34,8 @@ use crate::paint::display_list::DisplayList;
 use crate::paint::display_list::DisplayListView;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::StackingContextItem;
-use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
 use crate::paint::filter_outset::filter_outset_with_bounds;
-use crate::paint::homography::Homography;
 use crate::render_control::{check_active, check_active_periodic};
 use crate::style::types::TransformStyle;
 
@@ -409,8 +407,7 @@ impl DisplayListOptimizer {
       match item {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
-          transform_state.matrix = transform_state.matrix.multiply(&t.transform);
-          transform_state.mapping = Self::transform_mapping(&transform_state.matrix);
+          transform_state.current_3d = transform_state.current_3d.multiply(&t.transform);
           include_item = true;
         }
         DisplayItem::PopTransform => {
@@ -421,20 +418,13 @@ impl DisplayListOptimizer {
         }
         DisplayItem::PushStackingContext(sc) => {
           let pushed_transform = sc.transform.is_some() || sc.child_perspective.is_some();
-          let mut context_matrix = transform_state.matrix;
+          let mut context_transform = transform_state.current_3d;
           if let Some(transform) = sc.transform.as_ref() {
-            context_matrix = context_matrix.multiply(transform);
+            context_transform = context_transform.multiply(transform);
           }
           if let Some(perspective) = sc.child_perspective.as_ref() {
-            context_matrix = context_matrix.multiply(perspective);
+            context_transform = context_transform.multiply(perspective);
           }
-          let context_transform = if pushed_transform {
-            Self::transform_mapping(&context_matrix)
-          } else {
-            transform_state.mapping.clone()
-          };
-          let context_culling_disabled = transform_state.culling_disabled()
-            || matches!(context_transform, TransformMapping::Unsupported);
           if pushed_transform {
             transform_stack.push(transform_state.clone());
             if !clip_stack.is_empty()
@@ -443,16 +433,13 @@ impl DisplayListOptimizer {
               clips_can_cull_any = active_cull_clips > 0;
               refresh_context_clipping(&mut context_stack, clips_can_cull_any);
             }
-            transform_state.matrix = context_matrix;
-            transform_state.mapping = context_transform.clone();
+            transform_state.current_3d = context_transform;
           }
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
           let backdrop_outset =
             filter_outset_with_bounds(&sc.backdrop_filters, 1.0, Some(sc.bounds));
           let max_outset = filters_outset.max_side().max(backdrop_outset.max_side());
-          let world_outset = if matches!(context_transform, TransformMapping::Unsupported) {
-            0.0
-          } else if max_outset == 0.0 {
+          let world_outset = if max_outset == 0.0 {
             0.0
           } else {
             max_outset * Self::transform_scale_factor(&context_transform, sc.bounds)
@@ -460,19 +447,13 @@ impl DisplayListOptimizer {
           filter_stack.push(world_outset);
           filter_outset_sum += world_outset;
 
-          let transform_for_bounds = if matches!(context_transform, TransformMapping::Unsupported) {
-            None
-          } else {
-            Some(context_transform.clone())
-          };
-
           context_stack.push(ContextRecord {
             start_index: result.len(),
             bounds: None,
             item: sc.clone(),
-            transform_for_bounds,
+            transform_for_bounds: Some(context_transform),
             clipped_by_clip: clips_can_cull_any,
-            culling_disabled: context_culling_disabled,
+            culling_disabled: false,
             pushed_transform,
           });
           include_item = true;
@@ -491,6 +472,9 @@ impl DisplayListOptimizer {
 
             if record.culling_disabled {
               // Keep conservatively when transforms prevented culling
+              if let Some(parent) = context_stack.last_mut() {
+                parent.culling_disabled = true;
+              }
             } else if record.clipped_by_clip {
               result.truncate(record.start_index);
               refresh_context_clipping(&mut context_stack, clips_can_cull_any);
@@ -509,6 +493,11 @@ impl DisplayListOptimizer {
                   .unwrap_or(true)
               };
               if keep {
+                if ctx_bounds.is_none() {
+                  if let Some(parent) = context_stack.last_mut() {
+                    parent.culling_disabled = true;
+                  }
+                }
                 if let Some(parent) = context_stack.last_mut() {
                   if !parent.culling_disabled && active_cull_clips == 0 {
                     if let Some(ctx_bounds) = ctx_bounds {
@@ -532,10 +521,8 @@ impl DisplayListOptimizer {
             crate::paint::display_list::ClipShape::Rect { rect, .. } => *rect,
             crate::paint::display_list::ClipShape::Path { path } => path.bounds(),
           };
-          let can_cull = if transform_state.culling_disabled() {
-            false
-          } else if let Some(mut world_bounds) =
-            Self::transform_rect_any(&transform_state.mapping, local_bounds)
+          let can_cull = if let Some(mut world_bounds) =
+            Self::transform_rect_3d_z0(&transform_state.current_3d, local_bounds)
           {
             let inflate = filter_outset_sum;
             if inflate > 0.0 {
@@ -580,11 +567,9 @@ impl DisplayListOptimizer {
       }
 
       if !include_item {
-        if transform_state.culling_disabled() {
-          include_item = true;
-        } else if let Some(local_bounds) = self.item_bounds(item) {
+        if let Some(local_bounds) = self.item_bounds(item) {
           if let Some(mut bounds) =
-            Self::transform_rect_any(&transform_state.mapping, local_bounds)
+            Self::transform_rect_3d_z0(&transform_state.current_3d, local_bounds)
           {
             let inflate = filter_outset_sum;
             if inflate > 0.0 {
@@ -594,6 +579,9 @@ impl DisplayListOptimizer {
             transformed_bounds = Some(bounds);
           } else {
             include_item = true;
+            if let Some(context) = context_stack.last_mut() {
+              context.culling_disabled = true;
+            }
           }
         } else {
           include_item = item.is_stack_operation();
@@ -602,26 +590,30 @@ impl DisplayListOptimizer {
 
       if include_item {
         result.push(index);
-        if transformed_bounds.is_none() && !transform_state.culling_disabled() {
+        if transformed_bounds.is_none() {
           if let Some(local_bounds) = self.item_bounds(item) {
             if let Some(mut bounds) =
-              Self::transform_rect_any(&transform_state.mapping, local_bounds)
+              Self::transform_rect_3d_z0(&transform_state.current_3d, local_bounds)
             {
               let inflate = filter_outset_sum;
               if inflate > 0.0 {
                 bounds = bounds.inflate(inflate);
               }
               transformed_bounds = Some(bounds);
+            } else if let Some(context) = context_stack.last_mut() {
+              context.culling_disabled = true;
             }
           }
         }
         if let Some(bounds) = transformed_bounds {
-          if !transform_state.culling_disabled() && active_cull_clips == 0 {
+          if active_cull_clips == 0 {
             if let Some(context) = context_stack.last_mut() {
-              context.bounds = Some(match context.bounds {
-                Some(existing) => existing.union(bounds),
-                None => bounds,
-              });
+              if !context.culling_disabled {
+                context.bounds = Some(match context.bounds {
+                  Some(existing) => existing.union(bounds),
+                  None => bounds,
+                });
+              }
             }
           }
         }
@@ -998,6 +990,50 @@ impl DisplayListOptimizer {
     Some(Rect::from_xywh(min_x, min_y, width, height))
   }
 
+  fn transform_rect_3d_z0(transform: &Transform3D, rect: Rect) -> Option<Rect> {
+    if transform.is_identity() {
+      return Some(rect);
+    }
+    let corners = [
+      (rect.min_x(), rect.min_y()),
+      (rect.max_x(), rect.min_y()),
+      (rect.max_x(), rect.max_y()),
+      (rect.min_x(), rect.max_y()),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for (x, y) in corners {
+      let (tx, ty, _tz, tw) = transform.transform_point(x, y, 0.0);
+      if !tx.is_finite()
+        || !ty.is_finite()
+        || !tw.is_finite()
+        || tw.abs() < Transform3D::MIN_PROJECTIVE_W
+        || tw <= 0.0
+      {
+        return None;
+      }
+      let px = tx / tw;
+      let py = ty / tw;
+      if !px.is_finite() || !py.is_finite() {
+        return None;
+      }
+      min_x = min_x.min(px);
+      min_y = min_y.min(py);
+      max_x = max_x.max(px);
+      max_y = max_y.max(py);
+    }
+
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+    if width <= 0.0 || height <= 0.0 {
+      return None;
+    }
+    Some(Rect::from_xywh(min_x, min_y, width, height))
+  }
+
   fn transform_collapses(transform: &Transform3D) -> bool {
     matches!(
       Self::map_rect_with_transform(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), transform),
@@ -1005,83 +1041,46 @@ impl DisplayListOptimizer {
     )
   }
 
-  fn transform_mapping(transform: &Transform3D) -> TransformMapping {
-    let homography = Homography::from_transform3d_z0(transform);
-    if let Some(affine) = homography.to_affine() {
-      if affine.inverse().is_some() {
-        return TransformMapping::Affine(affine);
-      }
+  fn transform_scale_factor(transform: &Transform3D, reference: Rect) -> f32 {
+    if transform.is_identity() {
+      return 1.0;
     }
-
-    if transform.project_point_2d(0.0, 0.0).is_none()
-      || transform.project_point_2d(1.0, 0.0).is_none()
-      || transform.project_point_2d(0.0, 1.0).is_none()
-    {
-      return TransformMapping::Unsupported;
+    let samples = [
+      reference.origin,
+      Point::new(reference.max_x(), reference.min_y()),
+      Point::new(reference.min_x(), reference.max_y()),
+      Point::new(reference.max_x(), reference.max_y()),
+      Point::new(
+        reference.min_x() + reference.width() * 0.5,
+        reference.min_y() + reference.height() * 0.5,
+      ),
+    ];
+    let mut max_scale: f32 = 1.0;
+    for p in samples {
+      let base = match transform.project_point_2d(p.x, p.y) {
+        Some(p) => p,
+        None => return f32::INFINITY,
+      };
+      let dx = match transform.project_point_2d(p.x + 1.0, p.y) {
+        Some(p) => p,
+        None => return f32::INFINITY,
+      };
+      let dy = match transform.project_point_2d(p.x, p.y + 1.0) {
+        Some(p) => p,
+        None => return f32::INFINITY,
+      };
+      let scale_x = ((dx.x - base.x).powi(2) + (dx.y - base.y).powi(2)).sqrt();
+      let scale_y = ((dy.x - base.x).powi(2) + (dy.y - base.y).powi(2)).sqrt();
+      max_scale = max_scale.max(scale_x.max(scale_y));
     }
-
-    if homography.is_invertible() {
-      TransformMapping::Projective(homography)
-    } else {
-      TransformMapping::Unsupported
-    }
-  }
-
-  fn transform_rect_any(mapping: &TransformMapping, rect: Rect) -> Option<Rect> {
-    match mapping {
-      TransformMapping::Affine(transform) => Some(transform.transform_rect(rect)),
-      TransformMapping::Projective(homography) => homography.map_rect_aabb(rect),
-      TransformMapping::Unsupported => None,
-    }
-  }
-
-  fn transform_scale_factor(transform: &TransformMapping, reference: Rect) -> f32 {
-    match transform {
-      TransformMapping::Affine(transform) => {
-        let scale_x = (transform.a * transform.a + transform.b * transform.b).sqrt();
-        let scale_y = (transform.c * transform.c + transform.d * transform.d).sqrt();
-        scale_x.max(scale_y)
-      }
-      TransformMapping::Projective(homography) => {
-        let samples = [
-          reference.origin,
-          Point::new(reference.max_x(), reference.min_y()),
-          Point::new(reference.min_x(), reference.max_y()),
-          Point::new(reference.max_x(), reference.max_y()),
-          Point::new(
-            reference.min_x() + reference.width() * 0.5,
-            reference.min_y() + reference.height() * 0.5,
-          ),
-        ];
-        let mut max_scale: f32 = 1.0;
-        for p in samples {
-          let base = match homography.map_point(p) {
-            Some(p) => p,
-            None => return f32::INFINITY,
-          };
-          let dx = match homography.map_point(Point::new(p.x + 1.0, p.y)) {
-            Some(p) => p,
-            None => return f32::INFINITY,
-          };
-          let dy = match homography.map_point(Point::new(p.x, p.y + 1.0)) {
-            Some(p) => p,
-            None => return f32::INFINITY,
-          };
-          let scale_x = ((dx.x - base.x).powi(2) + (dx.y - base.y).powi(2)).sqrt();
-          let scale_y = ((dy.x - base.x).powi(2) + (dy.y - base.y).powi(2)).sqrt();
-          max_scale = max_scale.max(scale_x.max(scale_y));
-        }
-        max_scale
-      }
-      TransformMapping::Unsupported => 1.0,
-    }
+    max_scale
   }
 
   fn stacking_context_bounds(
     &self,
     item: &StackingContextItem,
     children: Option<Rect>,
-    transform: Option<&TransformMapping>,
+    transform: Option<&Transform3D>,
   ) -> Option<Rect> {
     let filters_outset = filter_outset_with_bounds(&item.filters, 1.0, Some(item.bounds));
     let backdrop_outset = filter_outset_with_bounds(&item.backdrop_filters, 1.0, Some(item.bounds));
@@ -1093,7 +1092,7 @@ impl DisplayListOptimizer {
     let mut bounds = match children {
       Some(bounds) => bounds,
       None => match transform {
-        Some(transform) => Self::transform_rect_any(transform, item.bounds)?,
+        Some(transform) => Self::transform_rect_3d_z0(transform, item.bounds)?,
         None => item.bounds,
       },
     };
@@ -1190,42 +1189,21 @@ struct ContextRecord {
   start_index: usize,
   bounds: Option<Rect>,
   item: StackingContextItem,
-  transform_for_bounds: Option<TransformMapping>,
+  transform_for_bounds: Option<Transform3D>,
   clipped_by_clip: bool,
   culling_disabled: bool,
   pushed_transform: bool,
 }
 
 #[derive(Clone)]
-enum TransformMapping {
-  Affine(Transform2D),
-  Projective(Homography),
-  Unsupported,
-}
-
-impl TransformMapping {
-  fn identity() -> Self {
-    Self::Affine(Transform2D::identity())
-  }
-}
-
-#[derive(Clone)]
 struct TransformState {
-  matrix: Transform3D,
-  mapping: TransformMapping,
-}
-
-impl TransformState {
-  fn culling_disabled(&self) -> bool {
-    matches!(self.mapping, TransformMapping::Unsupported)
-  }
+  current_3d: Transform3D,
 }
 
 impl Default for TransformState {
   fn default() -> Self {
     Self {
-      matrix: Transform3D::identity(),
-      mapping: TransformMapping::identity(),
+      current_3d: Transform3D::identity(),
     }
   }
 }
@@ -1278,7 +1256,7 @@ mod tests {
     TransformStyle,
   };
   use crate::style::values::Length;
-  use std::f32::consts::FRAC_PI_4;
+  use std::f32::consts::{FRAC_PI_3, FRAC_PI_4};
 
   fn make_fill_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba) -> DisplayItem {
     DisplayItem::FillRect(FillRectItem {
@@ -1946,6 +1924,82 @@ mod tests {
     assert_eq!(fill_rects.len(), 1, "exactly one fill rect should remain");
     assert!(out.len() < list.len(), "culling should reduce the slice size");
     assert_balanced(&out);
+  }
+
+  #[test]
+  fn child_perspective_projects_rotated_child_into_view_and_still_culls_other_children() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 4000.0, 100.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 4000.0, 100.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      child_perspective: Some(Transform3D::perspective(200.0)),
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+
+    let child_transform = Some(Transform3D::rotate_y(FRAC_PI_3));
+
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 4000.0, 100.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 4000.0, 100.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: child_transform,
+      child_perspective: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(make_fill_rect(300.0, 0.0, 50.0, 50.0, Rgba::RED));
+    list.push(DisplayItem::PopStackingContext);
+
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 4000.0, 100.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 4000.0, 100.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: child_transform,
+      child_perspective: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(make_fill_rect(3000.0, 0.0, 50.0, 50.0, Rgba::BLUE));
+    list.push(DisplayItem::PopStackingContext);
+
+    list.push(DisplayItem::PopStackingContext);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, _stats) = optimize_with_stats(list, viewport);
+
+    assert!(optimized.items().iter().any(|item| matches!(
+      item,
+      DisplayItem::FillRect(fill) if fill.rect.x() == 300.0
+    )));
+    assert!(!optimized.items().iter().any(|item| matches!(
+      item,
+      DisplayItem::FillRect(fill) if fill.rect.x() == 3000.0
+    )));
+    assert_balanced(optimized.items());
   }
 
   #[test]
