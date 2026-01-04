@@ -506,3 +506,44 @@ fn huge_effect_halo_triggers_serial_fallback() {
   );
   assert_eq!(serial.data(), report.pixmap.data());
 }
+
+#[test]
+fn modest_halo_allows_parallel_tiling() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 256.0, 256.0),
+    color: Rgba::WHITE,
+  }));
+  list.push(DisplayItem::BoxShadow(BoxShadowItem {
+    rect: Rect::from_xywh(64.0, 64.0, 64.0, 64.0),
+    radii: BorderRadii::ZERO,
+    offset: Point::new(4.0, 4.0),
+    blur_radius: 6.0,
+    spread_radius: 2.0,
+    color: Rgba::new(0, 0, 0, 0.4),
+    inset: false,
+  }));
+
+  let parallelism = PaintParallelism {
+    tile_size: 64,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::auto()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(256, 256, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("render")
+  });
+
+  assert!(
+    report.parallel_used,
+    "expected modest halo to keep parallel tiling enabled (fallback={:?})",
+    report.fallback_reason
+  );
+}
