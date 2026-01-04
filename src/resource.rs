@@ -12993,6 +12993,20 @@ mod tests {
       "expected cached bytes to be served instead of 403 body"
     );
 
+    let cached = cache
+      .cached_entry(&CacheKey::new(FetchContextKind::Other, url.to_string()))
+      .expect("cache entry should remain after fallback");
+    let cached_res = cached.value.as_result().expect("cache entry should be a resource");
+    assert_eq!(
+      cached_res.bytes, b"cached",
+      "cache entry must not be overwritten by HTTP error response"
+    );
+    assert_eq!(
+      cached.etag.as_deref(),
+      Some("etag1"),
+      "cache entry validators must not be overwritten by HTTP error response"
+    );
+
     let third = cache.fetch(url).expect("fresh fetch should update cache");
     assert_eq!(third.bytes, b"fresh");
 
@@ -13111,6 +13125,23 @@ mod tests {
 
     let second = cache.fetch_with_request(req).expect("fallback fetch");
     assert_eq!(second.bytes, b"cached");
+
+    let cached = cache
+      .cached_entry(&CacheKey::new(
+        FetchContextKind::Stylesheet,
+        url.to_string(),
+      ))
+      .expect("cache entry should remain after fallback");
+    let cached_res = cached.value.as_result().expect("cache entry should be a resource");
+    assert_eq!(
+      cached_res.bytes, b"cached",
+      "cache entry must not be overwritten by HTTP error response"
+    );
+    assert_eq!(
+      cached.etag.as_deref(),
+      Some("etag1"),
+      "cache entry validators must not be overwritten by HTTP error response"
+    );
 
     let third = cache.fetch_with_request(req).expect("fresh fetch");
     assert_eq!(third.bytes, b"fresh");

@@ -3702,10 +3702,27 @@ mod tests {
       "expected cached bytes to be served instead of 403 body"
     );
 
+    let calls = fetcher.calls();
     assert_eq!(
-      fetcher.calls().len(),
+      calls.len(),
       2,
       "expected both the seed and refresh network requests to run"
+    );
+    assert_eq!(
+      calls[1].etag.as_deref(),
+      Some("etag1"),
+      "refresh should attempt conditional revalidation"
+    );
+
+    let data_path = disk.data_path(TEST_KIND, url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    let meta_bytes = fs::read(meta_path).expect("meta present");
+    let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).expect("valid meta");
+    assert_eq!(meta.status, Some(200));
+    assert_eq!(meta.etag.as_deref(), Some("etag1"));
+    assert!(
+      meta.error.is_none(),
+      "unexpected cached error metadata after fallback"
     );
 
     // A fresh disk cache instance should still serve the original bytes even if the refresh failed
@@ -3713,6 +3730,7 @@ mod tests {
     let offline = DiskCachingFetcher::new(PanicFetcher, tmp.path());
     let cached = offline.fetch(url).expect("disk cache hit");
     assert_eq!(cached.bytes, b"cached");
+    assert_eq!(cached.status, Some(200));
   }
 
   #[test]
