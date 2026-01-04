@@ -930,7 +930,8 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
     language: None,
     synthetic_bold: 0.0,
     synthetic_oblique: 0.0,
-    rotation: RunRotation::None,
+    // Sideways writing modes keep horizontal shaping but rotate the run during paint.
+    rotation: RunRotation::Cw90,
     palette_index: 1,
     palette_overrides: Arc::new(Vec::new()),
     palette_override_hash: 0,
@@ -963,9 +964,10 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
 
   assert_eq!(text_item.glyphs.len(), 1);
   assert_eq!(text_item.palette_index, 1);
+  assert_eq!(text_item.rotation, RunRotation::Cw90);
   let glyph = &text_item.glyphs[0];
-  assert_eq!(glyph.x_offset, 0.0);
-  assert_eq!(glyph.y_offset, 5.0);
+  assert_eq!(glyph.x_offset, 5.0);
+  assert_eq!(glyph.y_offset, 0.0);
 
   let decoration = list
     .items()
