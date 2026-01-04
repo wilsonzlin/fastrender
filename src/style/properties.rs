@@ -2028,23 +2028,53 @@ enum GlobalKeyword {
 }
 
 fn global_keyword_text(value: &str) -> Option<GlobalKeyword> {
+  #[inline]
+  fn match_ident(value: &str) -> Option<GlobalKeyword> {
+    if value.eq_ignore_ascii_case("inherit") {
+      return Some(GlobalKeyword::Inherit);
+    }
+    if value.eq_ignore_ascii_case("initial") {
+      return Some(GlobalKeyword::Initial);
+    }
+    if value.eq_ignore_ascii_case("unset") {
+      return Some(GlobalKeyword::Unset);
+    }
+    if value.eq_ignore_ascii_case("revert-layer") {
+      return Some(GlobalKeyword::RevertLayer);
+    }
+    if value.eq_ignore_ascii_case("revert") {
+      return Some(GlobalKeyword::Revert);
+    }
+    None
+  }
+
   let value = value.trim();
-  if value.eq_ignore_ascii_case("inherit") {
-    return Some(GlobalKeyword::Inherit);
+  if !value.as_bytes().contains(&b'\\')
+    && !value.as_bytes().windows(2).any(|pair| pair == b"/*")
+  {
+    return match_ident(value);
   }
-  if value.eq_ignore_ascii_case("initial") {
-    return Some(GlobalKeyword::Initial);
+
+  // CSS-wide keywords are identifiers. When the authored string contains escapes or comments, the
+  // raw text may not match the keyword string even though the token stream does. Parse with
+  // `cssparser` so `revert\-layer` and `revert-layer/*comment*/` are recognized.
+  let mut input = ParserInput::new(value);
+  let mut parser = Parser::new(&mut input);
+  let mut ident: Option<String> = None;
+  while let Ok(token) = parser.next_including_whitespace_and_comments() {
+    match token {
+      Token::WhiteSpace(_) | Token::Comment(_) => continue,
+      Token::Ident(name) => {
+        if ident.is_some() {
+          return None;
+        }
+        ident = Some(name.as_ref().to_string());
+      }
+      _ => return None,
+    }
   }
-  if value.eq_ignore_ascii_case("unset") {
-    return Some(GlobalKeyword::Unset);
-  }
-  if value.eq_ignore_ascii_case("revert-layer") {
-    return Some(GlobalKeyword::RevertLayer);
-  }
-  if value.eq_ignore_ascii_case("revert") {
-    return Some(GlobalKeyword::Revert);
-  }
-  None
+
+  match_ident(ident?.as_str())
 }
 
 fn global_keyword(value: &PropertyValue) -> Option<GlobalKeyword> {

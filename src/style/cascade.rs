@@ -16401,6 +16401,72 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn registered_custom_property_revert_layer_accepts_trailing_comment() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer base { #target { --len: 10px; } }
+        @layer theme {
+          #target { --len: 20px; }
+          #target { --len: revert-layer/*comment*/; }
+        }
+        #target { width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(10.0)));
+    let value = styled
+      .styles
+      .custom_properties
+      .get("--len")
+      .expect("registered custom property");
+    assert!(matches!(
+      value.typed,
+      Some(CustomPropertyTypedValue::Length(len)) if len == Length::px(10.0)
+    ));
+  }
+
+  #[test]
+  fn registered_custom_property_revert_layer_accepts_escape_sequence() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer base { #target { --len: 10px; } }
+        @layer theme {
+          #target { --len: 20px; }
+          #target { --len: revert\-layer; }
+        }
+        #target { width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(10.0)));
+    let value = styled
+      .styles
+      .custom_properties
+      .get("--len")
+      .expect("registered custom property");
+    assert!(matches!(
+      value.typed,
+      Some(CustomPropertyTypedValue::Length(len)) if len == Length::px(10.0)
+    ));
+  }
+
+  #[test]
   fn text_combine_upright_inherits() {
     let mut parent = ComputedStyle::default();
     parent.text_combine_upright = TextCombineUpright::Digits(3);
