@@ -68,6 +68,48 @@ fn composed_snapshot_slot_fallback_is_used_when_unassigned() {
 }
 
 #[test]
+fn composed_snapshot_named_and_default_slots_use_assignment_and_suppress_fallback() {
+  let html = r#"<div id="host"><template shadowroot="open"><slot name="title" id="title-slot"><span id="fallback-title">Fallback title</span></slot><slot id="default-slot"><span id="fallback-default">Fallback default</span></slot></template><span slot="title" id="title">Title</span><span id="body">Body</span></div>"#;
+  let dom = dom::parse_html(html).expect("parse html");
+  let ids = dom::enumerate_dom_ids(&dom);
+  let assignment = dom::compute_slot_assignment_with_ids(&dom, &ids).expect("slot assignment");
+  let snapshot =
+    dom::composed_dom_snapshot_with_ids_and_assignment(&dom, &ids, &assignment).expect("snapshot");
+
+  let host = find_by_id(&snapshot, "host").expect("host element");
+  assert_eq!(host.children.len(), 1);
+  assert!(
+    matches!(host.children[0].node_type, DomNodeType::ShadowRoot { .. }),
+    "shadow host should expose its shadow root"
+  );
+  let shadow_root = &host.children[0];
+
+  let title_slot = find_by_id(shadow_root, "title-slot").expect("title slot");
+  assert!(
+    matches!(title_slot.node_type, DomNodeType::Slot { assigned: true, .. }),
+    "slot should be marked assigned when it receives nodes"
+  );
+  assert_eq!(title_slot.children.len(), 1);
+  assert_eq!(title_slot.children[0].get_attribute_ref("id"), Some("title"));
+  assert!(
+    find_by_id(title_slot, "fallback-title").is_none(),
+    "fallback subtree should be suppressed when assigned"
+  );
+
+  let default_slot = find_by_id(shadow_root, "default-slot").expect("default slot");
+  assert!(
+    matches!(default_slot.node_type, DomNodeType::Slot { assigned: true, .. }),
+    "default slot should be marked assigned when it receives nodes"
+  );
+  assert_eq!(default_slot.children.len(), 1);
+  assert_eq!(default_slot.children[0].get_attribute_ref("id"), Some("body"));
+  assert!(
+    find_by_id(default_slot, "fallback-default").is_none(),
+    "fallback subtree should be suppressed when assigned"
+  );
+}
+
+#[test]
 fn composed_snapshot_respects_nested_shadow_root_boundaries() {
   let html = r#"<div id="outer"><template shadowroot="open"><slot></slot><div id="inner-host"><template shadowroot="open"><slot name="inner"><span id="inner-fallback">fallback</span></slot></template></div></template><span id="outer-light" slot="inner">outer</span></div>"#;
   let dom = dom::parse_html(html).expect("parse html");
@@ -116,4 +158,3 @@ fn composed_snapshot_respects_nested_shadow_root_boundaries() {
     "inner slot should use fallback when it has no light DOM assigned"
   );
 }
-

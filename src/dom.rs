@@ -2821,19 +2821,17 @@ pub fn compute_slot_assignment_with_ids(
   Ok(assignment)
 }
 
-/// Create a composed-tree view of the DOM for debugging and tooling.
-///
-/// The returned tree represents the DOM as it would appear after:
-/// - Shadow DOM: shadow roots replace the host's light DOM children.
-/// - Slotting: `<slot>` elements expand to their assigned nodes (or fallback children when empty).
+/// Create a composed-tree view of the DOM using precomputed node IDs and slot assignment.
 ///
 /// This is a snapshot-only transformation; it does not mutate the input DOM and does not require
 /// style/layout.
-pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
+#[doc(hidden)]
+pub fn composed_dom_snapshot_with_ids_and_assignment(
+  root: &DomNode,
+  ids: &HashMap<*const DomNode, usize>,
+  assignment: &SlotAssignment,
+) -> Result<DomNode> {
   const COMPOSED_SNAPSHOT_DEADLINE_STRIDE: usize = 1024;
-
-  let ids = enumerate_dom_ids(root);
-  let assignment = compute_slot_assignment_with_ids(root, &ids)?;
 
   let mut id_to_node: Vec<*const DomNode> = vec![ptr::null(); ids.len() + 1];
   for (ptr, id) in ids.iter() {
@@ -2907,17 +2905,17 @@ pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
   let mut deadline_counter = 0usize;
 
   let root_ptr = root as *const DomNode;
-  let mut out_root = root.clone_without_children();
-  let root_children = composed_children_for(
-    root,
-    root_ptr,
-    &ids,
-    &id_to_node,
-    &assignment,
-    &mut out_root,
-  );
-  let mut stack = vec![Frame {
-    out: out_root,
+    let mut out_root = root.clone_without_children();
+    let root_children = composed_children_for(
+      root,
+      root_ptr,
+      ids,
+      &id_to_node,
+      assignment,
+      &mut out_root,
+    );
+    let mut stack = vec![Frame {
+      out: out_root,
     children: root_children,
     next_child: 0,
   }];
@@ -2939,9 +2937,9 @@ pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
       let child_children = composed_children_for(
         child,
         child_ptr,
-        &ids,
+        ids,
         &id_to_node,
-        &assignment,
+        assignment,
         &mut out_child,
       );
       stack.push(Frame {
@@ -2966,6 +2964,20 @@ pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
   Err(Error::Other(
     "composed_dom_snapshot: traversal stack unexpectedly empty".to_string(),
   ))
+}
+
+/// Create a composed-tree view of the DOM for debugging and tooling.
+///
+/// The returned tree represents the DOM as it would appear after:
+/// - Shadow DOM: shadow roots replace the host's light DOM children.
+/// - Slotting: `<slot>` elements expand to their assigned nodes (or fallback children when empty).
+///
+/// This is a snapshot-only transformation; it does not mutate the input DOM and does not require
+/// style/layout.
+pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
+  let ids = enumerate_dom_ids(root);
+  let assignment = compute_slot_assignment_with_ids(root, &ids)?;
+  composed_dom_snapshot_with_ids_and_assignment(root, &ids, &assignment)
 }
 
 fn push_part_export(exports: &mut HashMap<String, Vec<usize>>, name: &str, node_id: usize) {
