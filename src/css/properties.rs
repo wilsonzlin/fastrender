@@ -1575,20 +1575,50 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         return Some(PropertyValue::Scale(ScaleValue::None));
       }
 
+      fn parse_number_percentage_component(parser: &mut Parser) -> Result<f32, ()> {
+        let token = parser.next().map_err(|_| ())?;
+        match token {
+          Token::Number { value, .. } => Ok(*value),
+          Token::Percentage { unit_value, .. } => Ok(*unit_value),
+          Token::Function(name) => {
+            // Support basic calc-like expressions (e.g. `calc(95%)`).
+            if !name.eq_ignore_ascii_case("calc") {
+              return Err(());
+            }
+            let component = parser.parse_nested_block(parse_calc_sum).map_err(|_| ())?;
+            match component {
+              CalcComponent::Number(n) => Ok(n),
+              CalcComponent::Length(calc) => {
+                let mut total = 0.0;
+                for term in calc.terms() {
+                  if term.unit != LengthUnit::Percent {
+                    return Err(());
+                  }
+                  total += term.value;
+                }
+                Ok(total / 100.0)
+              }
+              _ => Err(()),
+            }
+          }
+          _ => Err(()),
+        }
+      }
+
       let mut input = ParserInput::new(value_str);
       let mut parser = Parser::new(&mut input);
-      let x = parse_number_component(&mut parser).ok()?;
+      let x = parse_number_percentage_component(&mut parser).ok()?;
       parser.skip_whitespace();
       let y = if parser.is_exhausted() {
         x
       } else {
-        parse_number_component(&mut parser).ok()?
+        parse_number_percentage_component(&mut parser).ok()?
       };
       parser.skip_whitespace();
       let z = if parser.is_exhausted() {
         1.0
       } else {
-        parse_number_component(&mut parser).ok()?
+        parse_number_percentage_component(&mut parser).ok()?
       };
       parser.skip_whitespace();
       if !parser.is_exhausted() {
@@ -4116,19 +4146,27 @@ mod tests {
       parse_property_value("scale", "none").expect("parsed"),
       PropertyValue::Scale(ScaleValue::None)
     ));
-    let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
-      parse_property_value("scale", "2 3").expect("parsed")
-    else {
-      panic!("expected Scale value");
-    };
-    assert!((x - 2.0).abs() < 1e-6);
-    assert!((y - 3.0).abs() < 1e-6);
-    assert!((z - 1.0).abs() < 1e-6);
-    assert!(parse_property_value("scale", "2px").is_none());
+      let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
+        parse_property_value("scale", "2 3").expect("parsed")
+      else {
+        panic!("expected Scale value");
+      };
+      assert!((x - 2.0).abs() < 1e-6);
+      assert!((y - 3.0).abs() < 1e-6);
+      assert!((z - 1.0).abs() < 1e-6);
+      assert!(parse_property_value("scale", "2px").is_none());
+      let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
+        parse_property_value("scale", "95% 50%").expect("parsed")
+      else {
+        panic!("expected Scale value");
+      };
+      assert!((x - 0.95).abs() < 1e-6);
+      assert!((y - 0.5).abs() < 1e-6);
+      assert!((z - 1.0).abs() < 1e-6);
 
-    assert!(matches!(
-      parse_property_value("rotate", "none").expect("parsed"),
-      PropertyValue::Rotate(RotateValue::None)
+      assert!(matches!(
+        parse_property_value("rotate", "none").expect("parsed"),
+        PropertyValue::Rotate(RotateValue::None)
     ));
     let PropertyValue::Rotate(RotateValue::Angle(angle)) =
       parse_property_value("rotate", "90deg").expect("parsed")
