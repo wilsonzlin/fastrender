@@ -572,6 +572,11 @@ fn build_gradient_lut(
   period: f32,
   bucket: u16,
 ) -> GradientLut {
+  let premultiply_rgba = |color: Rgba| -> PremultipliedColorU8 {
+    let alpha_u8 = (color.a * 255.0).round().clamp(0.0, 255.0) as u8;
+    ColorU8::from_rgba(color.r, color.g, color.b, alpha_u8).premultiply()
+  };
+
   let max_idx = bucket.max(1) as usize;
   let step_count = max_idx + 1;
   let max_idx = max_idx as f32;
@@ -609,17 +614,20 @@ fn build_gradient_lut(
     } else {
       stops.last().map(|(_, c)| *c).unwrap_or(Rgba::TRANSPARENT)
     };
-    let alpha_u8 = (color.a * 255.0).round().clamp(0.0, 255.0) as u8;
-    colors.push(ColorU8::from_rgba(color.r, color.g, color.b, alpha_u8).premultiply());
+    colors.push(premultiply_rgba(color));
   }
 
   let colors = Arc::new(colors);
   let last_idx = colors.len().saturating_sub(1);
-  let first = colors
+  // Pad gradients use `first/last` directly when clamping outside the stop range, so make sure
+  // these match the actual terminal stop colors rather than the sampled LUT values. This matters
+  // when there are duplicate stops at the terminal positions (e.g. a sharp edge at `t==period`),
+  // where the LUT sample at the exact position can come from the preceding segment.
+  let first = stops
     .first()
-    .copied()
+    .map(|(_, c)| premultiply_rgba(*c))
     .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-  let last = colors.last().copied().unwrap_or(first);
+  let last = stops.last().map(|(_, c)| premultiply_rgba(*c)).unwrap_or(first);
   let scale = max_idx / period.max(1e-6);
 
   GradientLut {
@@ -805,7 +813,12 @@ pub fn rasterize_conic_gradient(
   };
 
   let start_angle = start_angle.rem_euclid(std::f32::consts::PI * 2.0);
-  let angle_scale = period * 0.5 / std::f32::consts::PI;
+  // `dx.atan2(-dy)` yields an angle in [-π, π] where 0 points "up" and angles increase clockwise
+  // (matching CSS conic gradients). Map it into a [0, 1) turn fraction. Importantly, we map the
+  // full circle into [0, 1) regardless of the last stop position; for non-repeating conic
+  // gradients, the terminal stop color should simply extend through the remainder of the circle
+  // (e.g. stops ending at 0.5 should dominate angles in [0.5, 1.0)).
+  let angle_scale = 0.5 / std::f32::consts::PI;
   let stride = width as usize;
   let pixels = pixmap.pixels_mut();
   let dx0 = 0.5 - center.x;
@@ -820,13 +833,13 @@ pub fn rasterize_conic_gradient(
         for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
           check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
           for pixel in chunk {
-            let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
-            if pos < 0.0 {
-              pos += period;
-            } else if pos >= period {
-              pos -= period;
+            let mut t = (dx.atan2(-dy) + start_angle) * angle_scale;
+            if t < 0.0 {
+              t += 1.0;
+            } else if t >= 1.0 {
+              t -= 1.0;
             }
-            *pixel = lut.sample_pad(pos);
+            *pixel = lut.sample_pad(t);
             dx += 1.0;
           }
         }
@@ -835,13 +848,13 @@ pub fn rasterize_conic_gradient(
         for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
           check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
           for pixel in chunk {
-            let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
-            if pos < 0.0 {
-              pos += period;
-            } else if pos >= period {
-              pos -= period;
+            let mut t = (dx.atan2(-dy) + start_angle) * angle_scale;
+            if t < 0.0 {
+              t += 1.0;
+            } else if t >= 1.0 {
+              t -= 1.0;
             }
-            *pixel = lut.sample_repeat(pos);
+            *pixel = lut.sample_repeat(t);
             dx += 1.0;
           }
         }
@@ -850,13 +863,13 @@ pub fn rasterize_conic_gradient(
         for chunk in row.chunks_mut(DEADLINE_PIXELS_STRIDE) {
           check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
           for pixel in chunk {
-            let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
-            if pos < 0.0 {
-              pos += period;
-            } else if pos >= period {
-              pos -= period;
+            let mut t = (dx.atan2(-dy) + start_angle) * angle_scale;
+            if t < 0.0 {
+              t += 1.0;
+            } else if t >= 1.0 {
+              t -= 1.0;
             }
-            *pixel = lut.sample_reflect(pos);
+            *pixel = lut.sample_reflect(t);
             dx += 1.0;
           }
         }
@@ -952,7 +965,7 @@ pub fn rasterize_conic_gradient_scaled(
   };
 
   let start_angle = start_angle.rem_euclid(std::f32::consts::PI * 2.0);
-  let angle_scale = period * 0.5 / std::f32::consts::PI;
+  let angle_scale = 0.5 / std::f32::consts::PI;
   let stride = width as usize;
   let pixels = pixmap.pixels_mut();
   let dx0 = (0.5 - center.x) * scale_x;
@@ -965,13 +978,13 @@ pub fn rasterize_conic_gradient_scaled(
     for chunk in pixels[row_base..row_base + stride].chunks_mut(DEADLINE_PIXELS_STRIDE) {
       check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
       for pixel in chunk {
-        let mut pos = (dx.atan2(-dy) + start_angle) * angle_scale;
-        if pos < 0.0 {
-          pos += period;
-        } else if pos >= period {
-          pos -= period;
+        let mut t = (dx.atan2(-dy) + start_angle) * angle_scale;
+        if t < 0.0 {
+          t += 1.0;
+        } else if t >= 1.0 {
+          t -= 1.0;
         }
-        *pixel = lut.sample(pos.max(0.0));
+        *pixel = lut.sample(t);
         dx += scale_x;
       }
     }
