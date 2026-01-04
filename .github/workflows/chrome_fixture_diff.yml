@@ -11,6 +11,15 @@ on:
         description: "Optional deterministic shard (index/total, 0-based, e.g. 0/4)"
         required: false
         type: string
+      fail_on_regression:
+        description: "Fail the workflow when the fixture-vs-Chrome diff regresses vs the last successful main run."
+        type: boolean
+        default: false
+      regression_threshold_percent:
+        description: "Allowed regression threshold in percent (0 = any regression fails when fail_on_regression=true)."
+        required: false
+        type: string
+        default: "0"
   schedule:
     # Weekly report so maintainers have fresh evidence artifacts without running Chrome locally.
     - cron: "0 7 * * 1"
@@ -19,12 +28,21 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   OUT_DIR: target/fixture_chrome_diff_ci
+  REPORT_ARTIFACT: fixture_chrome_diff_ci
+  REPORT_JSON_ARTIFACT: fixture_chrome_diff_report_json
+  DELTA_ARTIFACT: fixture_chrome_diff_delta
 
 jobs:
   fixture-chrome-diff:
     name: Fixture vs Chrome diff report
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # workflow_dispatch inputs are only populated for dispatch runs. Use github.event.inputs so
+      # this workflow can run on the weekly main schedule as well.
+      FAIL_ON_REGRESSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.fail_on_regression || 'false' }}
+      REGRESSION_THRESHOLD_PERCENT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.regression_threshold_percent || '0' }}
+      BASELINE_FOUND: "0"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -145,16 +163,90 @@ jobs:
       - name: Upload report directory
         uses: actions/upload-artifact@v4
         with:
-          name: fixture_chrome_diff_ci
-          path: target/fixture_chrome_diff_ci/
+          name: ${{ env.REPORT_ARTIFACT }}
+          path: ${{ env.OUT_DIR }}/
           if-no-files-found: error
 
-      - name: Upload report.json
+      - name: Prepare report.json artifact payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${OUT_DIR}/report.json" report.json
+
+      - name: Upload report.json (baseline for comparisons)
         uses: actions/upload-artifact@v4
         with:
-          name: fixture_chrome_diff_ci_report_json
-          path: target/fixture_chrome_diff_ci/report.json
+          name: ${{ env.REPORT_JSON_ARTIFACT }}
+          path: report.json
           if-no-files-found: error
+
+      - name: Download main baseline report.json artifact (last successful)
+        id: download_baseline
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: chrome_fixture_diff.yml
+          workflow_conclusion: success
+          branch: main
+          name: ${{ env.REPORT_JSON_ARTIFACT }}
+          path: baseline
+
+      - name: Locate baseline report.json
+        if: steps.download_baseline.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -f baseline/report.json ]]; then
+            echo "BASELINE_FOUND=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          match=$(find baseline -type f -name report.json | head -n 1 || true)
+          if [[ -z "${match}" ]]; then
+            echo "baseline artifact downloaded, but report.json was not found; skipping delta compare" >&2
+            exit 0
+          fi
+
+          cp "${match}" baseline/report.json
+          echo "BASELINE_FOUND=1" >> "$GITHUB_ENV"
+
+      - name: Build compare_diff_reports
+        if: env.BASELINE_FOUND == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --bin compare_diff_reports
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+
+      - name: Compare diff reports vs main baseline
+        if: env.BASELINE_FOUND == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          extra_args=()
+          if [[ "${FAIL_ON_REGRESSION}" == "true" ]]; then
+            extra_args+=(--fail-on-regression --regression-threshold-percent "${REGRESSION_THRESHOLD_PERCENT}")
+          fi
+
+          compare_diff_reports \
+            --baseline baseline/report.json \
+            --new "${OUT_DIR}/report.json" \
+            --html "${OUT_DIR}/delta.html" \
+            --json "${OUT_DIR}/delta.json" \
+            "${extra_args[@]}"
+
+      - name: Upload delta artifacts (delta.html + delta.json)
+        if: always() && env.BASELINE_FOUND == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DELTA_ARTIFACT }}
+          path: |
+            ${{ env.OUT_DIR }}/delta.html
+            ${{ env.OUT_DIR }}/delta.json
+          if-no-files-found: warn
 
       - name: Step summary
         if: always()
@@ -163,7 +255,7 @@ jobs:
           {
             echo "## Fixture vs Chrome diff report"
             echo
-            echo "Download the **fixture_chrome_diff_ci** artifact from this workflow run."
+            echo "Download the **${REPORT_ARTIFACT}** artifact from this workflow run."
             echo
             echo "- HTML report: \`${OUT_DIR}/report.html\`"
             echo "- JSON report: \`${OUT_DIR}/report.json\`"
@@ -193,3 +285,110 @@ print(f"- Errors: {fmt('errors')}")
 PY
           fi
 
+          if [[ "${BASELINE_FOUND}" != "1" ]]; then
+            {
+              echo
+              echo "### Delta vs \`main\`"
+              echo
+              echo "Baseline report.json from \`main\` was not available; skipping delta compare."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo
+            echo "### Delta vs \`main\`"
+            echo
+            echo "- Delta artifact: \`${DELTA_ARTIFACT}\`"
+            if [[ "${FAIL_ON_REGRESSION}" == "true" ]]; then
+              echo "- Regression gate: enabled (\`--fail-on-regression\`), threshold: ${REGRESSION_THRESHOLD_PERCENT}%"
+            else
+              echo "- Regression gate: disabled (set \`fail_on_regression=true\` on workflow_dispatch to enable)"
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+import json
+from pathlib import Path
+
+baseline_path = Path("baseline/report.json")
+new_path = Path("target/fixture_chrome_diff_ci/report.json")
+
+def severity(status: str) -> int:
+  return {
+    "match": 0,
+    "within_threshold": 1,
+    "within-threshold": 1,
+    "diff": 2,
+    "missing_before": 3,
+    "missing-before": 3,
+    "missing_after": 3,
+    "missing-after": 3,
+    "error": 4,
+  }.get(status, 4)
+
+def diff_percent(entry):
+  metrics = entry.get("metrics")
+  if not isinstance(metrics, dict):
+    return None
+  value = metrics.get("diff_percentage")
+  if value is None:
+    return None
+  try:
+    return float(value)
+  except Exception:
+    return None
+
+baseline = json.loads(baseline_path.read_text()) if baseline_path.is_file() else {}
+latest = json.loads(new_path.read_text()) if new_path.is_file() else {}
+
+baseline_entries = {
+  e["name"]: e
+  for e in baseline.get("results", [])
+  if isinstance(e, dict) and isinstance(e.get("name"), str)
+}
+latest_entries = {
+  e["name"]: e
+  for e in latest.get("results", [])
+  if isinstance(e, dict) and isinstance(e.get("name"), str)
+}
+
+improved = 0
+regressed = 0
+unchanged = 0
+
+for name in sorted(set(baseline_entries) & set(latest_entries)):
+  b = baseline_entries[name]
+  n = latest_entries[name]
+  sb = severity(str(b.get("status", "")))
+  sn = severity(str(n.get("status", "")))
+  if sn < sb:
+    improved += 1
+    continue
+  if sn > sb:
+    regressed += 1
+    continue
+  pb = diff_percent(b)
+  pn = diff_percent(n)
+  if pb is None or pn is None:
+    unchanged += 1
+  elif pn < pb - 1e-12:
+    improved += 1
+  elif pn > pb + 1e-12:
+    regressed += 1
+  else:
+    unchanged += 1
+
+added = len(set(latest_entries) - set(baseline_entries))
+removed = len(set(baseline_entries) - set(latest_entries))
+
+print("| Change | Count |")
+print("| --- | ---: |")
+print(f"| Improved | {improved} |")
+print(f"| Regressed | {regressed} |")
+print(f"| Unchanged | {unchanged} |")
+if added or removed:
+  print(f"| Added | {added} |")
+  print(f"| Removed | {removed} |")
+PY
