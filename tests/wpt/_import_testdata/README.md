@@ -2,7 +2,14 @@ Synthetic WPT-like test data used by `import_wpt` tests.
 
 The layout mirrors a tiny subset of upstream WPT with:
 - a reftest under `css/simple/` that depends on `/resources` and a support stylesheet
-- a mismatch reftest under `css/simple/` with `.html.ini` sidecars
-- an absolute-origin resource URL under `css/simple/` (`http://web-platform.test:8000/...`)
+- a mismatch reftest under `css/simple/` with `.html.ini` sidecars (and whitespace-separated `rel` tokens)
+- absolute-origin resource URL fixtures under `css/simple/` (`http(s)://web-platform.test/...`)
+- a `srcset` rewriter fixture under `css/simple/`
 - a visual test under `html/standalone/` that pulls in nested CSS with `@import`
-- an external URL fixture under `html/network/` used to assert strict offline imports
+- a set of network/url validation fixtures under `html/network/`:
+  - `external-url.html`: simple `src="https://example.com/..."` rejection
+  - `srcset-external.html`: `srcset="https://example.com/..."` rejection
+  - `unquoted-external.html`: unquoted `src=https://example.com/...` rejection
+  - `text-url.html`: strict-offline rejection of network-looking strings outside fetch contexts
+  - `data-url.html`: data: URLs containing `http://...` substrings in payloads (should not trigger validation)
+  - `data-attrs.html`: `data-src`/`data-srcset` containing network URLs (should not trigger non-strict validation)
