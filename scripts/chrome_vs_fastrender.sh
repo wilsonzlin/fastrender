@@ -28,7 +28,9 @@ Compatibility / extras:
   --out <dir>          Alias for --out-dir
   --tolerance <u8>     Forwarded to diff_renders
   --max-diff-percent <f64>
-                       Forwarded to diff_renders
+                        Forwarded to diff_renders
+  --max-perceptual-distance <f64>
+                        Forwarded to diff_renders
 
 Output layout:
   <out>/chrome/        Chrome PNGs/logs
@@ -53,6 +55,7 @@ CHROME_BIN=""
 JS="off"
 TOLERANCE=""
 MAX_DIFF_PERCENT=""
+MAX_PERCEPTUAL_DISTANCE=""
 PAGES_CSV=""
 
 FILTERS=()
@@ -86,6 +89,8 @@ while [[ $# -gt 0 ]]; do
         TOLERANCE="${2:-}"; shift 2; continue ;;
       --max-diff-percent)
         MAX_DIFF_PERCENT="${2:-}"; shift 2; continue ;;
+      --max-perceptual-distance)
+        MAX_PERCEPTUAL_DISTANCE="${2:-}"; shift 2; continue ;;
       --pages)
         PAGES_CSV="${2:-}"; shift 2; continue ;;
       --)
@@ -275,6 +280,9 @@ fi
 if [[ -n "${MAX_DIFF_PERCENT}" ]]; then
   diff_args+=(--max-diff-percent "${MAX_DIFF_PERCENT}")
 fi
+if [[ -n "${MAX_PERCEPTUAL_DISTANCE}" ]]; then
+  diff_args+=(--max-perceptual-distance "${MAX_PERCEPTUAL_DISTANCE}")
+fi
 
 echo "Output: ${OUT_DIR}"
 echo "Viewport: ${VIEWPORT}  DPR: ${DPR}  JS: ${JS,,}"
@@ -339,4 +347,3 @@ elif [[ "${diff_status}" -ne 0 ]]; then
   exit_code="${diff_status}"
 fi
 exit "${exit_code}"
-

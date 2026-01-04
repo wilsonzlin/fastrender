@@ -27,6 +27,8 @@ Options:
   --js <on|off>             Enable JavaScript in Chrome (default: off)
   --tolerance <0-255>       Pixel diff tolerance (passed to diff_renders)
   --max-diff-percent <f64>  Allowed diff percent (passed to diff_renders)
+  --max-perceptual-distance <f64>
+                           Allowed perceptual distance (passed to diff_renders)
   --no-clean                Do not delete previous output dirs under target/
   -h, --help                Show help
 
@@ -50,6 +52,7 @@ CHROME_BIN="${CHROME_BIN:-}"
 JS="${JS:-off}"
 TOLERANCE=""
 MAX_DIFF_PERCENT=""
+MAX_PERCEPTUAL_DISTANCE=""
 CLEAN=1
 
 FILTERS=()
@@ -87,6 +90,8 @@ while [[ $# -gt 0 ]]; do
         TOLERANCE="${2:-}"; shift 2 ;;
       --max-diff-percent)
         MAX_DIFF_PERCENT="${2:-}"; shift 2 ;;
+      --max-perceptual-distance)
+        MAX_PERCEPTUAL_DISTANCE="${2:-}"; shift 2 ;;
       --no-clean)
         CLEAN=0; shift ;;
       --)
@@ -254,6 +259,9 @@ if [[ -n "${TOLERANCE}" ]]; then
 fi
 if [[ -n "${MAX_DIFF_PERCENT}" ]]; then
   diff_args+=(--max-diff-percent "${MAX_DIFF_PERCENT}")
+fi
+if [[ -n "${MAX_PERCEPTUAL_DISTANCE}" ]]; then
+  diff_args+=(--max-perceptual-distance "${MAX_PERCEPTUAL_DISTANCE}")
 fi
 
 if cargo run --release --bin diff_renders -- "${diff_args[@]}"; then
