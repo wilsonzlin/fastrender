@@ -2744,90 +2744,132 @@ pub(crate) fn apply_svg_filter_with_cache(
     apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   }
-
-  let scale_res_x = res_w as f32 / filter_region.width();
-  let scale_res_y = res_h as f32 / filter_region.height();
-  let scale_valid =
-    scale_res_x.is_finite() && scale_res_x > 0.0 && scale_res_y.is_finite() && scale_res_y > 0.0;
-  if !scale_valid {
+  let filter_region_is_pixmap_bounds =
+    rect_matches_pixmap_bounds(filter_region, target_w, target_h);
+  if filter_region_is_pixmap_bounds && res_w == target_w && res_h == target_h {
     apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   }
 
-  let mut working_w = (target_w as f32 * scale_res_x).round();
-  let mut working_h = (target_h as f32 * scale_res_y).round();
-  if !working_w.is_finite() || !working_h.is_finite() || working_w <= 0.0 || working_h <= 0.0 {
+  let region_w = filter_region.width();
+  let region_h = filter_region.height();
+  if !region_w.is_finite()
+    || !region_h.is_finite()
+    || region_w <= 0.0
+    || region_h <= 0.0
+    || !filter_region.x().is_finite()
+    || !filter_region.y().is_finite()
+  {
     apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   }
 
-  working_w = working_w.clamp(1.0, MAX_FILTER_RES as f32);
-  working_h = working_h.clamp(1.0, MAX_FILTER_RES as f32);
-  let working_w = working_w as u32;
-  let working_h = working_h as u32;
-
-  let eff_scale_res_x = working_w as f32 / target_w as f32;
-  let eff_scale_res_y = working_h as f32 / target_h as f32;
-  let eff_scale_valid = eff_scale_res_x.is_finite()
-    && eff_scale_res_x > 0.0
-    && eff_scale_res_y.is_finite()
-    && eff_scale_res_y > 0.0;
-  if !eff_scale_valid {
+  let scale_region_x = res_w as f32 / region_w;
+  let scale_region_y = res_h as f32 / region_h;
+  if !scale_region_x.is_finite()
+    || !scale_region_y.is_finite()
+    || scale_region_x <= 0.0
+    || scale_region_y <= 0.0
+  {
     apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   }
 
-  if working_w == target_w && working_h == target_h {
-    apply_svg_filter_scaled(
-      def,
-      pixmap,
-      scale * eff_scale_res_x,
-      scale * eff_scale_res_y,
-      bbox,
-      blur_cache.as_deref_mut(),
-    )?;
+  // If filterRes matches the resolved filter region size and the region aligns to device pixels,
+  // it should behave like the default filter resolution for that region (i.e. no resampling).
+  // Avoiding the extra resample+composite path also sidesteps tiny-skia bilinear filtering
+  // shifting/crossfading pixels when applying integer translations.
+  let eps = 1e-6;
+  let region_origin_aligned = (filter_region.x() - filter_region.x().round()).abs() <= eps
+    && (filter_region.y() - filter_region.y().round()).abs() <= eps;
+  let filter_res_matches_region =
+    (scale_region_x - 1.0).abs() <= eps && (scale_region_y - 1.0).abs() <= eps;
+  if region_origin_aligned && filter_res_matches_region {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
+  }
+
+  // Ensure pixels outside the filter region do not influence the downsampled working pixmap.
+  // This is required to keep filterRes sampling stable when the filter region is offset or
+  // smaller than the backing pixmap.
+  if !filter_region_is_pixmap_bounds {
     clip_to_region(pixmap, filter_region)?;
-    return Ok(());
   }
 
-  let Some(mut working_pixmap) =
-    resize_pixmap(pixmap, working_w, working_h, def.color_interpolation_filters)?
-  else {
+  let Some(mut working_pixmap) = (if filter_region_is_pixmap_bounds {
+    resize_pixmap(pixmap, res_w, res_h, def.color_interpolation_filters)?
+  } else {
+    resample_pixmap_region(
+      pixmap,
+      filter_region,
+      res_w,
+      res_h,
+      def.color_interpolation_filters,
+    )?
+  }) else {
     apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   };
 
   let bbox_working = Rect::from_xywh(
-    bbox.x() * eff_scale_res_x,
-    bbox.y() * eff_scale_res_y,
-    bbox.width() * eff_scale_res_x,
-    bbox.height() * eff_scale_res_y,
+    (bbox.x() - filter_region.x()) * scale_region_x,
+    (bbox.y() - filter_region.y()) * scale_region_y,
+    bbox.width() * scale_region_x,
+    bbox.height() * scale_region_y,
   );
 
+  let mut local_def = def.clone();
+  let origin_css_x = filter_region.x() / scale;
+  let origin_css_y = filter_region.y() / scale;
+  translate_filter_user_space_numbers_for_filter_res(&mut local_def, origin_css_x, origin_css_y);
+  local_def.refresh_fingerprint();
+
   apply_svg_filter_scaled(
-    def,
+    &local_def,
     &mut working_pixmap,
-    scale * eff_scale_res_x,
-    scale * eff_scale_res_y,
+    scale * scale_region_x,
+    scale * scale_region_y,
     bbox_working,
     blur_cache.as_deref_mut(),
   )?;
 
-  let Some(resized_back) =
-    resize_pixmap(&working_pixmap, target_w, target_h, def.color_interpolation_filters)?
-  else {
-    apply_svg_filter_scaled(
-      def,
-      pixmap,
-      scale,
-      scale,
-      bbox,
-      blur_cache.as_deref_mut(),
-    )?;
+  let Some(mut out_pixmap) = new_pixmap(target_w, target_h) else {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   };
-  *pixmap = resized_back;
-  clip_to_region(pixmap, filter_region)?;
+
+  let mut paint = PixmapPaint::default();
+  paint.quality = FilterQuality::Bilinear;
+  let scale_back_x = region_w / res_w as f32;
+  let scale_back_y = region_h / res_h as f32;
+  if scale_back_x.is_finite()
+    && scale_back_y.is_finite()
+    && scale_back_x > 0.0
+    && scale_back_y > 0.0
+  {
+    let transform = Transform::from_row(
+      scale_back_x,
+      0.0,
+      0.0,
+      scale_back_y,
+      filter_region.x(),
+      filter_region.y(),
+    );
+    match def.color_interpolation_filters {
+      ColorInterpolationFilters::SRGB => {
+        out_pixmap.draw_pixmap(0, 0, working_pixmap.as_ref(), &paint, transform, None);
+      }
+      ColorInterpolationFilters::LinearRGB => {
+        let mut temp = working_pixmap.clone();
+        reencode_pixmap_to_linear_rgb(&mut temp)?;
+        out_pixmap.draw_pixmap(0, 0, temp.as_ref(), &paint, transform, None);
+        reencode_pixmap_to_srgb(&mut out_pixmap)?;
+      }
+    }
+  }
+
+  clip_to_region(&mut out_pixmap, filter_region)?;
+  *pixmap = out_pixmap;
   Ok(())
 }
 
@@ -2869,6 +2911,137 @@ fn resize_pixmap(
     }
   }
   Ok(Some(out))
+}
+
+fn rect_matches_pixmap_bounds(region: Rect, width: u32, height: u32) -> bool {
+  let eps = 1e-4;
+  (region.x().abs() <= eps)
+    && (region.y().abs() <= eps)
+    && ((region.width() - width as f32).abs() <= eps)
+    && ((region.height() - height as f32).abs() <= eps)
+}
+
+fn resample_pixmap_region(
+  source: &Pixmap,
+  region: Rect,
+  width: u32,
+  height: u32,
+  color_interpolation_filters: ColorInterpolationFilters,
+) -> RenderResult<Option<Pixmap>> {
+  if width == 0 || height == 0 || source.width() == 0 || source.height() == 0 {
+    return Ok(None);
+  }
+  let mut out = match new_pixmap(width, height) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
+  let scale_x = width as f32 / region.width();
+  let scale_y = height as f32 / region.height();
+  if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
+    return Ok(None);
+  }
+  let mut paint = PixmapPaint::default();
+  paint.quality = FilterQuality::Bilinear;
+  let transform = Transform::from_row(
+    scale_x,
+    0.0,
+    0.0,
+    scale_y,
+    -region.x() * scale_x,
+    -region.y() * scale_y,
+  );
+  match color_interpolation_filters {
+    ColorInterpolationFilters::SRGB => {
+      out.draw_pixmap(0, 0, source.as_ref(), &paint, transform, None);
+    }
+    ColorInterpolationFilters::LinearRGB => {
+      let mut temp = source.clone();
+      reencode_pixmap_to_linear_rgb(&mut temp)?;
+      out.draw_pixmap(0, 0, temp.as_ref(), &paint, transform, None);
+      reencode_pixmap_to_srgb(&mut out)?;
+    }
+  }
+  Ok(Some(out))
+}
+
+fn translate_length_number(len: &mut SvgLength, delta: f32) {
+  if !delta.is_finite() {
+    return;
+  }
+  if let SvgLength::Number(v) = len {
+    *v -= delta;
+  }
+}
+
+fn translate_filter_region_user_space_numbers(
+  region: &mut SvgFilterRegion,
+  origin_x: f32,
+  origin_y: f32,
+) {
+  if !matches!(region.units, SvgFilterUnits::UserSpaceOnUse) {
+    return;
+  }
+  translate_length_number(&mut region.x, origin_x);
+  translate_length_number(&mut region.y, origin_y);
+}
+
+fn translate_light_source_user_space_numbers(
+  light: &mut LightSource,
+  origin_x: f32,
+  origin_y: f32,
+) {
+  match light {
+    LightSource::None | LightSource::Distant { .. } => {}
+    LightSource::Point { x, y, .. } => {
+      translate_length_number(x, origin_x);
+      translate_length_number(y, origin_y);
+    }
+    LightSource::Spot {
+      x, y, points_at, ..
+    } => {
+      translate_length_number(x, origin_x);
+      translate_length_number(y, origin_y);
+      translate_length_number(&mut points_at.0, origin_x);
+      translate_length_number(&mut points_at.1, origin_y);
+    }
+  }
+}
+
+fn translate_image_primitive_user_space_numbers(
+  prim: &mut ImagePrimitive,
+  origin_x: f32,
+  origin_y: f32,
+) {
+  if !matches!(prim.units, SvgCoordinateUnits::UserSpaceOnUse) {
+    return;
+  }
+  translate_length_number(&mut prim.x, origin_x);
+  translate_length_number(&mut prim.y, origin_y);
+}
+
+fn translate_filter_user_space_numbers_for_filter_res(
+  def: &mut SvgFilter,
+  origin_x: f32,
+  origin_y: f32,
+) {
+  translate_filter_region_user_space_numbers(&mut def.region, origin_x, origin_y);
+  for step in &mut def.steps {
+    if let Some(region) = &mut step.region {
+      translate_filter_region_user_space_numbers(region, origin_x, origin_y);
+    }
+    match &mut step.primitive {
+      FilterPrimitive::DiffuseLighting { light, .. }
+      | FilterPrimitive::SpecularLighting { light, .. } => {
+        if matches!(def.primitive_units, SvgFilterUnits::UserSpaceOnUse) {
+          translate_light_source_user_space_numbers(light, origin_x, origin_y);
+        }
+      }
+      FilterPrimitive::Image(prim) => {
+        translate_image_primitive_user_space_numbers(prim, origin_x, origin_y);
+      }
+      _ => {}
+    }
+  }
 }
 
 fn resolve_filter_regions(
@@ -6855,6 +7028,48 @@ mod filter_res_tests {
     let linear = apply(ColorInterpolationFilters::LinearRGB);
     assert_pixel_close(pixel(&linear, 0, 0), (188, 188, 188, 255));
     assert_eq!(pixel(&linear, 0, 0), pixel(&linear, 1, 0));
+  }
+
+  #[test]
+  fn filter_res_is_relative_to_offset_filter_region() {
+    let _guard = svg_filter_test_guard();
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='1' y='1' width='2' height='2' filterRes='2 2'><feOffset dx='0' dy='0'/></filter></svg>";
+    let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(4, 4).unwrap();
+    for y in 0..4u32 {
+      for x in 0..4u32 {
+        let r = (x * 50) as u8;
+        let g = (y * 50) as u8;
+        let b = ((x + y) * 30) as u8;
+        let px = PremultipliedColorU8::from_rgba(r, g, b, 255)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        pixmap.pixels_mut()[(y * 4 + x) as usize] = px;
+      }
+    }
+    let original = pixmap.clone();
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    for y in 0..4u32 {
+      for x in 0..4u32 {
+        if (1..=2).contains(&x) && (1..=2).contains(&y) {
+          assert_eq!(
+            pixmap.pixel(x, y).unwrap(),
+            original.pixel(x, y).unwrap(),
+            "expected pixel at ({x},{y}) to be preserved"
+          );
+        } else {
+          assert_eq!(
+            pixel(&pixmap, x, y),
+            (0, 0, 0, 0),
+            "expected pixel at ({x},{y}) to be transparent"
+          );
+        }
+      }
+    }
   }
 }
 
