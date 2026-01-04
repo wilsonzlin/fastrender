@@ -23,6 +23,8 @@ Compatibility / extras:
   --pages <csv>        Alias for passing stems as positional args (comma-separated). For values
                        that look like URLs, we attempt to normalize to cached stems so Chrome and
                        FastRender render the same set.
+  --shard <index>/<total>
+                       Only process a deterministic shard of the selected cached pages (0-based)
   --chrome-timeout <s> Override Chrome timeout only (default: --timeout)
   --render-timeout <s> Override FastRender timeout only (default: --timeout)
   --out <dir>          Alias for --out-dir
@@ -63,6 +65,7 @@ MAX_PERCEPTUAL_DISTANCE=""
 IGNORE_ALPHA=0
 SORT_BY=""
 FAIL_ON_DIFFERENCES=0
+SHARD=""
 PAGES_CSV=""
 
 FILTERS=()
@@ -106,6 +109,8 @@ while [[ $# -gt 0 ]]; do
         FAIL_ON_DIFFERENCES=1; shift; continue ;;
       --pages)
         PAGES_CSV="${2:-}"; shift 2; continue ;;
+      --shard)
+        SHARD="${2:-}"; shift 2; continue ;;
       --)
         PARSE_FLAGS=0
         shift
@@ -251,6 +256,58 @@ if [[ "${#HTML_FILES[@]}" -eq 0 ]]; then
   exit 1
 fi
 
+if [[ -n "${SHARD}" ]]; then
+  if ! [[ "${SHARD}" =~ ^[0-9]+/[0-9]+$ ]]; then
+    echo "invalid --shard: ${SHARD} (expected index/total like 0/4)" >&2
+    exit 2
+  fi
+  SHARD_INDEX="${SHARD%%/*}"
+  SHARD_TOTAL="${SHARD#*/}"
+  if [[ "${SHARD_TOTAL}" -lt 1 ]]; then
+    echo "invalid --shard: ${SHARD} (total must be >= 1)" >&2
+    exit 2
+  fi
+  if [[ "${SHARD_INDEX}" -ge "${SHARD_TOTAL}" ]]; then
+    echo "invalid --shard: ${SHARD} (index must be < total)" >&2
+    exit 2
+  fi
+
+  AVAILABLE_STEMS=()
+  for html in "${HTML_FILES[@]}"; do
+    AVAILABLE_STEMS+=("$(basename "${html}" .html)")
+  done
+
+  MATCHED=()
+  if [[ "${#FILTERS[@]}" -gt 0 ]]; then
+    declare -A AVAILABLE=()
+    for stem in "${AVAILABLE_STEMS[@]}"; do
+      AVAILABLE["${stem}"]=1
+    done
+    for stem in "${FILTERS[@]}"; do
+      if [[ -n "${AVAILABLE[${stem}]:-}" ]]; then
+        MATCHED+=("${stem}")
+      fi
+    done
+  else
+    MATCHED=("${AVAILABLE_STEMS[@]}")
+  fi
+
+  mapfile -t MATCHED_SORTED < <(printf '%s\n' "${MATCHED[@]}" | sort -u)
+  MATCHED_COUNT="${#MATCHED_SORTED[@]}"
+
+  SHARDED=()
+  for i in "${!MATCHED_SORTED[@]}"; do
+    if (( i % SHARD_TOTAL == SHARD_INDEX )); then
+      SHARDED+=("${MATCHED_SORTED[$i]}")
+    fi
+  done
+  if [[ "${#SHARDED[@]}" -eq 0 ]]; then
+    echo "Shard ${SHARD_INDEX}/${SHARD_TOTAL} selected no cached pages (${MATCHED_COUNT} matched before sharding). Nothing to do." >&2
+    exit 1
+  fi
+  FILTERS=("${SHARDED[@]}")
+fi
+
 CHROME_OUT="${OUT_DIR}/chrome"
 FASTRENDER_OUT="${OUT_DIR}/fastrender"
 REPORT_HTML="${OUT_DIR}/report.html"
@@ -306,7 +363,11 @@ fi
 echo "Output: ${OUT_DIR}"
 echo "Viewport: ${VIEWPORT}  DPR: ${DPR}  JS: ${JS,,}"
 if [[ "${#FILTERS[@]}" -gt 0 ]]; then
-  echo "Pages: ${FILTERS[*]}"
+  if [[ -n "${SHARD}" ]]; then
+    echo "Pages: ${#FILTERS[@]} pages (shard ${SHARD})"
+  else
+    echo "Pages: ${FILTERS[*]}"
+  fi
 else
   echo "Pages: (all cached)"
 fi

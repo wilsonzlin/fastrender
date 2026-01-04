@@ -25,6 +25,7 @@ Options:
   --timeout <secs>          Per-fixture timeout (Chrome + FastRender) (default: 15)
   --chrome <path>           Chrome/Chromium binary (default: auto-detect)
   --js <on|off>             Enable JavaScript in Chrome (default: off)
+  --shard <index>/<total>   Only process a deterministic shard of fixtures (0-based)
   --tolerance <0-255>       Pixel diff tolerance (passed to diff_renders)
   --max-diff-percent <f64>  Allowed diff percent (passed to diff_renders)
   --max-perceptual-distance <f64>
@@ -53,6 +54,7 @@ MEDIA="${MEDIA:-screen}"
 TIMEOUT="${TIMEOUT:-15}"
 CHROME_BIN="${CHROME_BIN:-}"
 JS="${JS:-off}"
+SHARD=""
 TOLERANCE=""
 MAX_DIFF_PERCENT=""
 MAX_PERCEPTUAL_DISTANCE=""
@@ -92,6 +94,8 @@ while [[ $# -gt 0 ]]; do
         CHROME_BIN="${2:-}"; shift 2 ;;
       --js)
         JS="${2:-}"; shift 2 ;;
+      --shard)
+        SHARD="${2:-}"; shift 2 ;;
       --tolerance)
         TOLERANCE="${2:-}"; shift 2 ;;
       --max-diff-percent)
@@ -193,6 +197,35 @@ mapfile -t FIXTURES < <(resolve_fixtures "${FILTERS[@]}")
 if [[ "${#FIXTURES[@]}" -eq 0 ]]; then
   echo "No fixtures selected." >&2
   exit 1
+fi
+if [[ -n "${SHARD}" ]]; then
+  if ! [[ "${SHARD}" =~ ^[0-9]+/[0-9]+$ ]]; then
+    echo "invalid --shard: ${SHARD} (expected index/total like 0/4)" >&2
+    exit 2
+  fi
+  SHARD_INDEX="${SHARD%%/*}"
+  SHARD_TOTAL="${SHARD#*/}"
+  if [[ "${SHARD_TOTAL}" -lt 1 ]]; then
+    echo "invalid --shard: ${SHARD} (total must be >= 1)" >&2
+    exit 2
+  fi
+  if [[ "${SHARD_INDEX}" -ge "${SHARD_TOTAL}" ]]; then
+    echo "invalid --shard: ${SHARD} (index must be < total)" >&2
+    exit 2
+  fi
+
+  BEFORE_SHARD_COUNT="${#FIXTURES[@]}"
+  SHARDED_FIXTURES=()
+  for i in "${!FIXTURES[@]}"; do
+    if (( i % SHARD_TOTAL == SHARD_INDEX )); then
+      SHARDED_FIXTURES+=("${FIXTURES[$i]}")
+    fi
+  done
+  if [[ "${#SHARDED_FIXTURES[@]}" -eq 0 ]]; then
+    echo "Shard ${SHARD_INDEX}/${SHARD_TOTAL} selected no fixtures (${BEFORE_SHARD_COUNT} matched before sharding). Nothing to do." >&2
+    exit 1
+  fi
+  FIXTURES=("${SHARDED_FIXTURES[@]}")
 fi
 
 if [[ "${CLEAN}" -eq 1 ]]; then
