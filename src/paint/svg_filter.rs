@@ -489,6 +489,80 @@ fn record_filter_cache_miss() {
   with_paint_diagnostics(|diag| diag.filter_cache_misses += 1);
 }
 
+fn svg_filter_weight_bytes(filter: &SvgFilter, fetched_svg_bytes: usize) -> usize {
+  let mut weight = fetched_svg_bytes;
+
+  // Account for the filter graph itself.
+  weight = weight.saturating_add(filter.steps.len().saturating_mul(std::mem::size_of::<FilterStep>()));
+  for step in &filter.steps {
+    if let Some(result) = &step.result {
+      weight = weight.saturating_add(result.len());
+    }
+    weight = weight.saturating_add(filter_primitive_weight_bytes(&step.primitive));
+  }
+
+  weight
+}
+
+fn filter_primitive_weight_bytes(primitive: &FilterPrimitive) -> usize {
+  match primitive {
+    FilterPrimitive::Flood { .. } => 0,
+    FilterPrimitive::GaussianBlur { input, .. } => filter_input_weight_bytes(input),
+    FilterPrimitive::Offset { input, .. } => filter_input_weight_bytes(input),
+    FilterPrimitive::ColorMatrix { input, .. } => filter_input_weight_bytes(input),
+    FilterPrimitive::Composite {
+      input1, input2, ..
+    } => filter_input_weight_bytes(input1).saturating_add(filter_input_weight_bytes(input2)),
+    FilterPrimitive::Merge { inputs } => {
+      let mut weight =
+        inputs.len().saturating_mul(std::mem::size_of::<FilterInput>());
+      for input in inputs {
+        weight = weight.saturating_add(filter_input_weight_bytes(input));
+      }
+      weight
+    }
+    FilterPrimitive::DropShadow { input, .. } => filter_input_weight_bytes(input),
+    FilterPrimitive::Blend {
+      input1, input2, ..
+    } => filter_input_weight_bytes(input1).saturating_add(filter_input_weight_bytes(input2)),
+    FilterPrimitive::Morphology { input, .. } => filter_input_weight_bytes(input),
+    FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
+      let mut weight = filter_input_weight_bytes(input);
+      weight = weight.saturating_add(transfer_fn_weight_bytes(r));
+      weight = weight.saturating_add(transfer_fn_weight_bytes(g));
+      weight = weight.saturating_add(transfer_fn_weight_bytes(b));
+      weight = weight.saturating_add(transfer_fn_weight_bytes(a));
+      weight
+    }
+    FilterPrimitive::DiffuseLighting { input, .. } => filter_input_weight_bytes(input),
+    FilterPrimitive::SpecularLighting { input, .. } => filter_input_weight_bytes(input),
+    FilterPrimitive::Image(prim) => prim.pixmap.data().len(),
+    FilterPrimitive::Tile { input } => filter_input_weight_bytes(input),
+    FilterPrimitive::Turbulence { .. } => 0,
+    FilterPrimitive::DisplacementMap { in1, in2, .. } => {
+      filter_input_weight_bytes(in1).saturating_add(filter_input_weight_bytes(in2))
+    }
+    FilterPrimitive::ConvolveMatrix { input, kernel, .. } => filter_input_weight_bytes(input)
+      .saturating_add(kernel.len().saturating_mul(std::mem::size_of::<f32>())),
+  }
+}
+
+fn filter_input_weight_bytes(input: &FilterInput) -> usize {
+  match input {
+    FilterInput::Reference(name) => name.len(),
+    _ => 0,
+  }
+}
+
+fn transfer_fn_weight_bytes(tf: &TransferFn) -> usize {
+  match tf {
+    TransferFn::Table { values } | TransferFn::Discrete { values } => {
+      values.len().saturating_mul(std::mem::size_of::<f32>())
+    }
+    _ => 0,
+  }
+}
+
 #[derive(Clone, Debug)]
 pub struct SvgFilter {
   pub color_interpolation_filters: ColorInterpolationFilters,
@@ -1637,11 +1711,12 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
         .unwrap_or(true)
   })?;
   let filter = parse_filter_node(&filter_node, &scoped_cache)?;
+  let weight = svg_filter_weight_bytes(filter.as_ref(), resource_size);
 
   filter_cache()
     .lock()
     .unwrap_or_else(|poisoned| poisoned.into_inner())
-    .insert(cache_key, filter.clone(), resource_size);
+    .insert(cache_key, filter.clone(), weight);
 
   Some(filter)
 }
@@ -6043,7 +6118,12 @@ mod filter_cache_tests {
   use super::*;
   use crate::api::ResourceContext;
   use crate::image_loader::ImageCache;
-  use crate::resource::{FetchDestination, FetchedResource, ResourceFetcher};
+  use crate::resource::{FetchDestination, FetchedResource, HttpFetcher, ResourceFetcher};
+  use base64::engine::general_purpose::STANDARD;
+  use base64::Engine;
+  use image::codecs::png::PngEncoder;
+  use image::ColorType;
+  use image::ImageEncoder;
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::{Arc, Mutex, OnceLock};
@@ -6074,6 +6154,11 @@ mod filter_cache_tests {
 
   impl ResourceFetcher for TestFilterFetcher {
     fn fetch(&self, url: &str) -> crate::Result<FetchedResource> {
+      if crate::resource::is_data_url(url) {
+        // `feImage` tests embed data URLs for images; delegate those to the default fetcher so
+        // they don't need to be explicitly registered in the fixture map.
+        return HttpFetcher::new().fetch(url);
+      }
       self.fetch_count.fetch_add(1, Ordering::SeqCst);
       let svg = self
         .responses
@@ -6092,6 +6177,16 @@ mod filter_cache_tests {
     format!(
       r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="{id}"><feGaussianBlur stdDeviation="2"/></filter></svg>"#
     )
+  }
+
+  fn png_data_url(width: u32, height: u32) -> String {
+    let pixels = vec![0u8; width as usize * height as usize * 4];
+    let mut buffer = Vec::new();
+    let encoder = PngEncoder::new(&mut buffer);
+    encoder
+      .write_image(&pixels, width, height, ColorType::Rgba8.into())
+      .expect("encode png");
+    format!("data:image/png;base64,{}", STANDARD.encode(buffer))
   }
 
   #[derive(Default)]
@@ -6245,6 +6340,49 @@ mod filter_cache_tests {
       "expected cached filter to be reused after lock poison recovery"
     );
     assert_eq!(fetcher.fetches(), 1, "expected no refetch after poisoning");
+  }
+
+  #[test]
+  fn filter_cache_skips_when_entry_exceeds_byte_budget_due_to_embedded_pixmap() {
+    let _guard = test_lock().lock().unwrap();
+    reset_filter_cache_for_tests(FilterCacheConfig {
+      max_items: 64,
+      max_bytes: 1024,
+    });
+
+    let image_url = png_data_url(64, 64);
+    let svg = format!(
+      r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="big"><feImage href="{url}"/></filter></svg>"#,
+      url = image_url
+    );
+    assert!(
+      svg.as_bytes().len() < 1024,
+      "test SVG filter document should fit inside the byte budget"
+    );
+
+    let fetcher = Arc::new(TestFilterFetcher::new([(
+      "test://filters/big.svg".to_string(),
+      svg,
+    )]));
+    let cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
+
+    let first = load_svg_filter("test://filters/big.svg#big", &cache).expect("load filter");
+    let FilterPrimitive::Image(prim) = &first.steps[0].primitive else {
+      panic!("expected parsed filter to contain a feImage primitive");
+    };
+    assert!(
+      prim.pixmap.data().len() > 1024,
+      "embedded pixmap should exceed cache budget"
+    );
+
+    let second = load_svg_filter("test://filters/big.svg#big", &cache).expect("reload filter");
+
+    assert_eq!(fetcher.fetches(), 2, "expected filter document to be refetched");
+    assert!(
+      !Arc::ptr_eq(&first, &second),
+      "expected oversized filter not to be cached"
+    );
+    assert_eq!(filter_cache_len(), 0, "expected oversized filter to be skipped");
   }
 }
 
