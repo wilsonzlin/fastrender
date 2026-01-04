@@ -3391,13 +3391,12 @@ fn apply_primitive(
       let radius = filter.resolve_primitive_pair(*radius, css_bbox);
       let radius = (radius.0 * scale_x, radius.1 * scale_y);
       apply_morphology(&mut img.pixmap, radius, *op, color_interpolation_filters)?;
-      img.region = clip_region(
-        match op {
-          MorphologyOp::Dilate => inflate_rect_xy(img.region, radius.0, radius.1),
-          MorphologyOp::Erode => inflate_rect_xy(img.region, -radius.0, -radius.1),
-        },
-        filter_region,
-      );
+      img.region = match op {
+        MorphologyOp::Dilate => {
+          clip_region(inflate_rect_xy(img.region, radius.0, radius.1), filter_region)
+        }
+        MorphologyOp::Erode => img.region,
+      };
       Some(img)
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
@@ -6763,6 +6762,23 @@ mod tests {
     .unwrap();
 
     assert_eq!(pixels_to_vec(&pixmap), vec![(25, 0, 0, 64), (25, 0, 0, 64)]);
+  }
+
+  #[test]
+  fn morphology_erode_does_not_break_tile_region_tracking() {
+    let mut pixmap = new_pixmap(2, 1).unwrap();
+    pixmap.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+
+    let erode = FilterPrimitive::Morphology {
+      input: FilterInput::SourceGraphic,
+      radius: (1.0, 0.0),
+      op: MorphologyOp::Erode,
+    };
+    let eroded = apply_for_test(&erode, &pixmap);
+
+    let filter_region = filter_region_for_pixmap(&pixmap);
+    let tiled = tile_pixmap(eroded, filter_region).expect("tile result");
+    assert_eq!(pixels_to_vec(&tiled.pixmap), vec![(255, 0, 0, 255), (255, 0, 0, 255)]);
   }
 
   #[test]
