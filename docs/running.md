@@ -8,7 +8,7 @@ Use the `xtask` wrapper for common local loops:
 
 - Test: `cargo xtask test [core|style|fixtures|wpt|all]` (default: `core`)
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]`
-- Update pageset scoreboard: `cargo xtask pageset`
+- Update pageset scoreboard: `cargo xtask pageset` (add `--capture-missing-failure-fixtures` to auto-import offline fixtures for failing pages from warmed caches)
 - Render a page: `cargo xtask render-page --url https://example.com --output out.png`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new`
 - Deterministic fixture-vs-Chrome evidence report (offline): `cargo xtask fixture-chrome-diff`
