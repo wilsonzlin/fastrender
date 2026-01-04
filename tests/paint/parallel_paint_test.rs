@@ -1,4 +1,5 @@
 use fastrender::error::{Error, RenderError, RenderStage};
+use fastrender::paint::clip_path::ResolvedClipPath;
 use fastrender::paint::display_list::{
   BlendMode, BoxShadowItem, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem,
   ImageData, MaskReferenceRects, ResolvedFilter, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
@@ -186,6 +187,65 @@ fn clip_transform_and_stacking_context_match_serial_output() {
     color: Rgba::new(90, 200, 160, 1.0),
   }));
   list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 24,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert_eq!(serial.data(), report.pixmap.data());
+}
+
+#[test]
+fn clip_path_polygon_matches_serial_output_under_tiling() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 96.0, 96.0),
+    color: Rgba::new(245, 245, 245, 1.0),
+  }));
+
+  // Place the polygon away from the origin so it falls within a non-origin tile when using a
+  // small tile size. This exercises the per-tile canvas translation in the parallel renderer.
+  let polygon = ResolvedClipPath::Polygon {
+    points: vec![
+      Point::new(28.0, 30.0),
+      Point::new(42.0, 30.0),
+      Point::new(44.0, 40.0),
+      Point::new(36.0, 46.0),
+      Point::new(28.0, 38.0),
+    ],
+    fill_rule: tiny_skia::FillRule::Winding,
+  };
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Path { path: polygon },
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    // Deliberately larger than the polygon bounds so the clip-path mask controls the output.
+    rect: Rect::from_xywh(26.0, 27.0, 21.0, 20.0),
+    color: Rgba::new(40, 160, 220, 1.0),
+  }));
+  list.push(DisplayItem::PopClip);
 
   let font_ctx = FontContext::new();
   let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
