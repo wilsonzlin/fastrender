@@ -121,6 +121,18 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     to linearRGB. The displacement map sampling (for channel selection) and the displaced primary
     resampling/interpolation are performed in that space, then the output pixmap is re-encoded back
     to sRGB.
+- `feFlood`
+  - Outputs a solid color pixmap (premultiplied RGBA8).
+  - Currently does not consult `color-interpolation-filters` (it writes the specified sRGB bytes
+    directly).
+- `feImage`
+  - Draws the referenced raster pixmap into the filter output using tiny-skia `draw_pixmap` with
+    `FilterQuality::Nearest` (no CIF-specific conversion today).
+- `feTile`
+  - Copies/tiles the input pixels (no CIF-specific conversion today).
+- `feTurbulence`
+  - Procedurally generates noise and writes channel bytes directly (no CIF-specific conversion
+    today; see remaining gaps below).
 
 Primitives/operations that currently **do not fully honor `color-interpolation-filters`**
 (they still operate directly on stored sRGB bytes in places where linearRGB would require
