@@ -7221,6 +7221,58 @@ mod tests {
   }
 
   #[test]
+  fn selector_bloom_store_ids_align_when_templates_have_children() {
+    set_selector_bloom_enabled(true);
+
+    let dom = document(vec![element_with_attrs(
+      "div",
+      vec![("id", "root")],
+      vec![
+        element_with_attrs(
+          "template",
+          vec![("id", "tpl")],
+          vec![element_with_attrs("span", vec![("id", "inert")], vec![])],
+        ),
+        element_with_attrs("p", vec![("id", "after")], vec![]),
+      ],
+    )]);
+
+    let ids = enumerate_dom_ids(&dom);
+    let store = build_selector_bloom_store(&dom, &ids).expect("selector bloom store");
+
+    let summary_len = match &store {
+      SelectorBloomStore::Bits256(store) => store.summaries.len(),
+      SelectorBloomStore::Bits512(store) => store.summaries.len(),
+      SelectorBloomStore::Bits1024(store) => store.summaries.len(),
+    };
+    assert_eq!(
+      summary_len,
+      ids.len() + 1,
+      "selector bloom store should allocate one summary slot per node id, even when templates have children"
+    );
+
+    let after = find_node_by_id(&dom, "after").expect("after node");
+    let after_id = ids
+      .get(&(after as *const DomNode))
+      .copied()
+      .expect("after node id");
+    assert!(
+      store.summary_for_id(after_id).is_some(),
+      "expected bloom summary for node after <template>"
+    );
+
+    let inert = find_node_by_id(&dom, "inert").expect("template content node");
+    let inert_id = ids
+      .get(&(inert as *const DomNode))
+      .copied()
+      .expect("template content node id");
+    assert!(
+      store.summary_for_id(inert_id).is_some(),
+      "expected bloom summary for node inside <template> contents"
+    );
+  }
+
+  #[test]
   fn deep_select_option_traversals_do_not_overflow_stack() {
     let depth = 100_000usize;
 
