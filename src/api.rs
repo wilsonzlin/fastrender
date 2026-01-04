@@ -7286,7 +7286,7 @@ impl FastRender {
     let cascade_timer = stats.as_deref().and_then(|rec| rec.timer());
     let style_apply_start = timings_enabled.then(Instant::now);
     record_stage(StageHeartbeat::Cascade);
-    let starting_tree = if options.animation_time.is_some() && has_starting_style_rules {
+    let starting_tree = if has_starting_style_rules {
       apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
         &dom_with_state,
         &style_set,
@@ -7304,6 +7304,7 @@ impl FastRender {
     } else {
       None
     };
+    let has_starting_tree = starting_tree.is_some();
     let (mut prepared_cascade, mut styled_tree) = {
       let _span = trace.span("cascade", "style");
       let mut prepared = PreparedCascade::new_for_style_set_owned(
@@ -8018,7 +8019,9 @@ impl FastRender {
       fragment_tree.svg_filter_defs = Some(defs);
     }
 
-    fragment_tree.attach_starting_styles_from_boxes(&box_tree);
+    if has_starting_tree {
+      fragment_tree.attach_starting_styles_from_boxes(&box_tree);
+    }
 
     if report_intrinsic {
       let (lookups, hits, stores, block_calls, flex_calls, inline_calls) = intrinsic_cache_stats();
@@ -8055,10 +8058,6 @@ impl FastRender {
 
     if report_table_stats {
       crate::layout::table::log_table_stats();
-    }
-
-    if options.animation_time.is_some() && has_starting_style_rules {
-      fragment_tree.attach_starting_styles_from_boxes(&box_tree);
     }
 
     if !keyframes.is_empty() {

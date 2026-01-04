@@ -12,9 +12,7 @@ use std::path::PathBuf;
 
 fn prepare(html: &str, width: u32, height: u32) -> (BoxTree, FragmentTree, StyledNode) {
   let mut renderer = FastRender::new().expect("renderer");
-  let options = RenderOptions::new()
-    .with_viewport(width, height)
-    .with_animation_time(0.0);
+  let options = RenderOptions::new().with_viewport(width, height);
   let prepared = renderer.prepare_html(html, options).expect("prepare");
   (
     prepared.box_tree().clone(),
@@ -205,9 +203,7 @@ fn visual_fixture_matches_goldens() {
   let prepared = renderer
     .prepare_html(
       &html,
-      RenderOptions::new()
-        .with_viewport(260, 180)
-        .with_animation_time(0.0),
+      RenderOptions::new().with_viewport(260, 180),
     )
     .expect("prepare");
   let cases = [
