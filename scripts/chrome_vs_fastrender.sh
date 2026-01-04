@@ -30,9 +30,11 @@ Compatibility / extras:
   --max-diff-percent <f64>
                         Forwarded to diff_renders
   --max-perceptual-distance <f64>
-                        Forwarded to diff_renders
+                         Forwarded to diff_renders
   --ignore-alpha       Forwarded to diff_renders (ignore alpha differences)
   --sort-by <mode>     Forwarded to diff_renders (pixel|percent|perceptual)
+  --fail-on-differences
+                        Exit non-zero when diff_renders reports differences (default: keep report and exit 0)
 
 Output layout:
   <out>/chrome/        Chrome PNGs/logs
@@ -60,6 +62,7 @@ MAX_DIFF_PERCENT=""
 MAX_PERCEPTUAL_DISTANCE=""
 IGNORE_ALPHA=0
 SORT_BY=""
+FAIL_ON_DIFFERENCES=0
 PAGES_CSV=""
 
 FILTERS=()
@@ -99,6 +102,8 @@ while [[ $# -gt 0 ]]; do
         IGNORE_ALPHA=1; shift; continue ;;
       --sort-by)
         SORT_BY="${2:-}"; shift 2; continue ;;
+      --fail-on-differences)
+        FAIL_ON_DIFFERENCES=1; shift; continue ;;
       --pages)
         PAGES_CSV="${2:-}"; shift 2; continue ;;
       --)
@@ -345,6 +350,13 @@ cargo build --release --bin diff_renders
 "${DIFF_BIN}" "${diff_args[@]}"
 diff_status=$?
 set -e
+
+if [[ "${diff_status}" -eq 1 && "${FAIL_ON_DIFFERENCES}" -eq 0 ]]; then
+  if [[ -f "${REPORT_JSON}" ]]; then
+    echo "diff_renders reported differences; keeping report and exiting 0 (pass --fail-on-differences to fail)." >&2
+    diff_status=0
+  fi
+fi
 
 echo
 echo "Report: ${REPORT_HTML}"

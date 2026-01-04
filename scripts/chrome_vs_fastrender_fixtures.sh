@@ -31,6 +31,7 @@ Options:
                             Allowed perceptual distance (passed to diff_renders)
   --ignore-alpha            Ignore alpha differences (passed to diff_renders)
   --sort-by <mode>          Sort report entries (pixel|percent|perceptual) (passed to diff_renders)
+  --fail-on-differences     Exit non-zero when diff_renders reports differences (default: keep report and exit 0)
   --no-clean                Do not delete previous output dirs under target/
   -h, --help                Show help
 
@@ -57,6 +58,7 @@ MAX_DIFF_PERCENT=""
 MAX_PERCEPTUAL_DISTANCE=""
 IGNORE_ALPHA=0
 SORT_BY=""
+FAIL_ON_DIFFERENCES=0
 CLEAN=1
 
 FILTERS=()
@@ -100,6 +102,8 @@ while [[ $# -gt 0 ]]; do
         IGNORE_ALPHA=1; shift ;;
       --sort-by)
         SORT_BY="${2:-}"; shift 2 ;;
+      --fail-on-differences)
+        FAIL_ON_DIFFERENCES=1; shift ;;
       --no-clean)
         CLEAN=0; shift ;;
       --)
@@ -271,6 +275,13 @@ if cargo build --release --bin diff_renders && "${DIFF_BIN}" "${diff_args[@]}"; 
   :
 else
   diff_status=$?
+fi
+
+if [[ "${diff_status}" -eq 1 && "${FAIL_ON_DIFFERENCES}" -eq 0 ]]; then
+  if [[ -f "${REPORT_JSON}" ]]; then
+    echo "diff_renders reported differences; keeping report and exiting 0 (pass --fail-on-differences to fail)." >&2
+    diff_status=0
+  fi
 fi
 
 echo
