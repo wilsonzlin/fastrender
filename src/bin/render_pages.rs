@@ -133,10 +133,6 @@ struct Args {
   #[arg(long)]
   in_process: bool,
 
-  /// Output directory for PNG renders and logs
-  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
-  out_dir: PathBuf,
-
   /// Viewport size as WxH (e.g., 1200x800)
   #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
   viewport: (u32, u32),
