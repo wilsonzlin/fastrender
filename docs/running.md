@@ -21,6 +21,7 @@ Use the `xtask` wrapper for common local loops:
 Note on offline vs network:
 - `pageset` / `fetch_pages` use the network by default (unless you pass `--no-fetch` / reuse cached HTML).
 - Offline fixture workflows (`fixture-chrome-diff`, `chrome-baseline-fixtures`, `render_fixtures`, `pages_regression`) do not hit the network.
+- `recapture-page-fixtures` uses the network for `--capture-mode crawl|render`, and is offline for `--capture-mode cache` (requires a warmed disk cache). `validate-page-fixtures` is always offline.
 - `render-page` is offline with `--file` and uses the network with `--url`.
 
 ## Pageset scoreboard loop (recommended)
