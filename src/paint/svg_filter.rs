@@ -2530,7 +2530,15 @@ fn parse_fe_image(
   let rgba = dyn_img.to_rgba8();
   let (w, h) = rgba.dimensions();
   let size = tiny_skia::IntSize::from_wh(w, h)?;
-  let pixmap = Pixmap::from_vec(rgba.into_raw(), size)?;
+  let mut data = rgba.into_raw();
+  // tiny-skia expects premultiplied RGBA.
+  for pixel in data.chunks_exact_mut(4) {
+    let alpha = pixel[3] as f32 / 255.0;
+    pixel[0] = (pixel[0] as f32 * alpha).round() as u8;
+    pixel[1] = (pixel[1] as f32 * alpha).round() as u8;
+    pixel[2] = (pixel[2] as f32 * alpha).round() as u8;
+  }
+  let pixmap = Pixmap::from_vec(data, size)?;
   let x = SvgLength::parse(node.attribute("x"), SvgLength::Percent(0.0));
   let y = SvgLength::parse(node.attribute("y"), SvgLength::Percent(0.0));
   let width = SvgLength::parse(node.attribute("width"), SvgLength::Percent(1.0));
@@ -6416,6 +6424,16 @@ mod fe_image_tests {
     format!("data:image/png;base64,{}", STANDARD.encode(buffer))
   }
 
+  fn test_semitransparent_image_data_url() -> String {
+    let mut buffer = Vec::new();
+    let pixels = [200, 0, 0, 128];
+    let encoder = PngEncoder::new(&mut buffer);
+    encoder
+      .write_image(&pixels, 1, 1, ColorType::Rgba8.into())
+      .expect("encode png");
+    format!("data:image/png;base64,{}", STANDARD.encode(buffer))
+  }
+
   fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let width = pixmap.width() as usize;
     let idx = y as usize * width + x as usize;
@@ -6461,6 +6479,33 @@ mod fe_image_tests {
     }
     assert_eq!(pixel_rgba(&canvas, 0, 0), (0, 0, 0, 0));
     assert_eq!(pixel_rgba(&canvas, 4, 4), (0, 0, 0, 0));
+  }
+
+  #[test]
+  fn fe_image_raster_inputs_are_premultiplied_for_pixmap() {
+    let data_url = test_semitransparent_image_data_url();
+    let svg = format!(
+      r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="1" height="1"><feImage href="{url}" x="0" y="0" width="1" height="1" preserveAspectRatio="none"/></filter></svg>"#,
+      url = data_url
+    );
+    let cache = ImageCache::new();
+    let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
+    let mut canvas = new_pixmap(1, 1).unwrap();
+    let bbox = Rect::from_xywh(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
+    apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox).unwrap();
+
+    let (r, g, b, a) = pixel_rgba(&canvas, 0, 0);
+    assert_eq!(g, 0);
+    assert_eq!(b, 0);
+    assert!(
+      (a as i32 - 128).abs() <= 1,
+      "expected alpha around 128, got {a}"
+    );
+    assert!(
+      (r as i32 - 100).abs() <= 1,
+      "expected premultiplied red around 100, got {r}"
+    );
+    assert!(r <= a, "expected premultiplied red <= alpha, got r={r}, a={a}");
   }
 }
 
