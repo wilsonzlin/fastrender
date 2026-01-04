@@ -27,6 +27,8 @@ Options:
   --viewport <WxH>      Viewport size (default: 1040x1240)
   --dpr <float>         Device pixel ratio (default: 1.0)
   --timeout <secs>      Per-fixture hard timeout (default: 15)
+  --shard <index>/<total>
+                       Only process a deterministic shard of selected fixtures (0-based)
   --chrome <path>       Chrome/Chromium binary (default: auto-detect)
   --js <on|off>         Enable JavaScript (default: off)
   -h, --help            Show help
@@ -53,6 +55,7 @@ DPR="${DPR:-1.0}"
 TIMEOUT="${TIMEOUT:-15}"
 CHROME_BIN="${CHROME_BIN:-}"
 JS="${JS:-off}"
+SHARD=""
 
 FILTERS=()
 PARSE_FLAGS=1
@@ -73,6 +76,8 @@ while [[ $# -gt 0 ]]; do
         DPR="${2:-}"; shift 2 ;;
       --timeout)
         TIMEOUT="${2:-}"; shift 2 ;;
+      --shard)
+        SHARD="${2:-}"; shift 2 ;;
       --chrome)
         CHROME_BIN="${2:-}"; shift 2 ;;
       --js)
@@ -169,6 +174,35 @@ mapfile -t FIXTURES < <(resolve_fixtures "${FILTERS[@]}")
 if [[ "${#FIXTURES[@]}" -eq 0 ]]; then
   echo "No fixtures selected." >&2
   exit 1
+fi
+if [[ -n "${SHARD}" ]]; then
+  if ! [[ "${SHARD}" =~ ^[0-9]+/[0-9]+$ ]]; then
+    echo "invalid --shard: ${SHARD} (expected index/total like 0/4)" >&2
+    exit 2
+  fi
+  SHARD_INDEX="${SHARD%%/*}"
+  SHARD_TOTAL="${SHARD#*/}"
+  if [[ "${SHARD_TOTAL}" -lt 1 ]]; then
+    echo "invalid --shard: ${SHARD} (total must be >= 1)" >&2
+    exit 2
+  fi
+  if [[ "${SHARD_INDEX}" -ge "${SHARD_TOTAL}" ]]; then
+    echo "invalid --shard: ${SHARD} (index must be < total)" >&2
+    exit 2
+  fi
+
+  BEFORE_SHARD_COUNT="${#FIXTURES[@]}"
+  SHARDED_FIXTURES=()
+  for i in "${!FIXTURES[@]}"; do
+    if (( i % SHARD_TOTAL == SHARD_INDEX )); then
+      SHARDED_FIXTURES+=("${FIXTURES[$i]}")
+    fi
+  done
+  if [[ "${#SHARDED_FIXTURES[@]}" -eq 0 ]]; then
+    echo "Shard ${SHARD_INDEX}/${SHARD_TOTAL} selected no fixtures (${BEFORE_SHARD_COUNT} matched before sharding). Nothing to do." >&2
+    exit 1
+  fi
+  FIXTURES=("${SHARDED_FIXTURES[@]}")
 fi
 
 echo "Fixtures: ${FIXTURES_DIR}"
