@@ -893,7 +893,29 @@ fn build_margin_box_fragments(
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
 
-  for (area, box_style) in &style.margin_boxes {
+  const CANONICAL_MARGIN_AREA_ORDER: [PageMarginArea; 16] = [
+    PageMarginArea::TopLeftCorner,
+    PageMarginArea::TopLeft,
+    PageMarginArea::TopCenter,
+    PageMarginArea::TopRight,
+    PageMarginArea::TopRightCorner,
+    PageMarginArea::RightTop,
+    PageMarginArea::RightMiddle,
+    PageMarginArea::RightBottom,
+    PageMarginArea::BottomRightCorner,
+    PageMarginArea::BottomRight,
+    PageMarginArea::BottomCenter,
+    PageMarginArea::BottomLeft,
+    PageMarginArea::BottomLeftCorner,
+    PageMarginArea::LeftBottom,
+    PageMarginArea::LeftMiddle,
+    PageMarginArea::LeftTop,
+  ];
+
+  for area in CANONICAL_MARGIN_AREA_ORDER {
+    let Some(box_style) = style.margin_boxes.get(&area) else {
+      continue;
+    };
     if matches!(
       box_style.content_value,
       ContentValue::None | ContentValue::Normal
@@ -904,7 +926,7 @@ fn build_margin_box_fragments(
       continue;
     }
 
-    if let Some(bounds) = margin_box_bounds(*area, style) {
+    if let Some(bounds) = margin_box_bounds(area, style) {
       if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
         continue;
       }
@@ -1192,6 +1214,7 @@ mod tests {
   use super::*;
   use crate::style::display::Display;
   use crate::style::ComputedStyle;
+  use crate::text::font_db::FontDatabase;
   use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
   use std::sync::Arc;
 
@@ -1267,5 +1290,92 @@ mod tests {
       !contains_running_anchor(snapshot),
       "running anchors should be stripped from snapshots"
     );
+  }
+
+  #[test]
+  fn margin_box_fragments_follow_canonical_area_order() {
+    let expected_order = [
+      PageMarginArea::TopLeftCorner,
+      PageMarginArea::TopLeft,
+      PageMarginArea::TopCenter,
+      PageMarginArea::TopRight,
+      PageMarginArea::TopRightCorner,
+      PageMarginArea::RightTop,
+      PageMarginArea::RightMiddle,
+      PageMarginArea::RightBottom,
+      PageMarginArea::BottomRightCorner,
+      PageMarginArea::BottomRight,
+      PageMarginArea::BottomCenter,
+      PageMarginArea::BottomLeft,
+      PageMarginArea::BottomLeftCorner,
+      PageMarginArea::LeftBottom,
+      PageMarginArea::LeftMiddle,
+      PageMarginArea::LeftTop,
+    ];
+    let expected_text: Vec<String> = expected_order.iter().map(|area| format!("{area:?}")).collect();
+
+    let font_ctx = FontContext::with_database(Arc::new(FontDatabase::empty()));
+    let running_strings: HashMap<String, RunningStringValues> = HashMap::new();
+    let running_elements: HashMap<String, Vec<FragmentNode>> = HashMap::new();
+
+    for _ in 0..8 {
+      let mut margin_boxes: HashMap<PageMarginArea, ComputedStyle> = HashMap::new();
+      let mut running_state: HashMap<String, FragmentNode> = HashMap::new();
+
+      for area in expected_order {
+        let ident = format!("{area:?}");
+        let mut box_style = ComputedStyle::default();
+        box_style.display = Display::Block;
+        box_style.content_value = ContentValue::Items(vec![ContentItem::Element {
+          ident: ident.clone(),
+          select: RunningElementSelect::Start,
+        }]);
+        margin_boxes.insert(area, box_style);
+        running_state.insert(
+          ident.clone(),
+          FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 0.0, 0.0), ident, 0.0),
+        );
+      }
+
+      let page_style = ResolvedPageStyle {
+        page_size: Size::new(100.0, 100.0),
+        total_size: Size::new(100.0, 100.0),
+        content_size: Size::new(80.0, 80.0),
+        content_origin: Point::new(10.0, 10.0),
+        margin_top: 10.0,
+        margin_right: 10.0,
+        margin_bottom: 10.0,
+        margin_left: 10.0,
+        bleed: 0.0,
+        trim: 0.0,
+        margin_boxes,
+        page_style: ComputedStyle::default(),
+      };
+
+      let fragments = build_margin_box_fragments(
+        &page_style,
+        &font_ctx,
+        0,
+        1,
+        &running_strings,
+        &running_elements,
+        &running_state,
+      );
+
+      assert_eq!(fragments.len(), expected_text.len());
+      let actual_text: Vec<String> = fragments
+        .iter()
+        .map(|fragment| {
+          fragment
+            .children
+            .first()
+            .and_then(|child| child.content.text())
+            .unwrap_or("")
+            .to_string()
+        })
+        .collect();
+
+      assert_eq!(actual_text, expected_text);
+    }
   }
 }
