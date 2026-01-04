@@ -3037,9 +3037,16 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       invalid,
     })
   } else if tag.eq_ignore_ascii_case("textarea") {
+    let placeholder = styled
+      .node
+      .get_attribute_ref("placeholder")
+      .map(|p| p.trim())
+      .filter(|p| !p.is_empty())
+      .map(|p| p.to_string());
     Some(FormControl {
       control: FormControlKind::TextArea {
         value: textarea_value.unwrap_or_else(|| collect_text_content(styled)),
+        placeholder,
         rows: styled
           .node
           .get_attribute_ref("rows")

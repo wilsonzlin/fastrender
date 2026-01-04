@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Textarea Placeholder Fixture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #1f2933;
+      font: 16px/1.4 "Segoe UI", Arial, sans-serif;
+      color: #111111;
+    }
+
+    .panel {
+      width: 420px;
+      background: #ffffff;
+      border: 1px solid #111111;
+      padding: 16px;
+    }
+
+    .label {
+      margin: 0 0 6px;
+      font-weight: 600;
+      color: #111111;
+    }
+
+    textarea {
+      display: block;
+      width: 100%;
+      height: 78px;
+      padding: 10px;
+      border: 1px solid #111111;
+      box-sizing: border-box;
+      font: inherit;
+      color: #111111;
+      background: #ffffff;
+    }
+
+    .spacer {
+      height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <p class="label">Empty textarea (placeholder visible)</p>
+    <textarea placeholder="First line&#10;Second line"></textarea>
+
+    <div class="spacer"></div>
+
+    <p class="label">Textarea with value (value overrides placeholder)</p>
+    <textarea placeholder="First line&#10;Second line">Hello from FastRender.</textarea>
+  </div>
+</body>
+</html>

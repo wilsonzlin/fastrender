@@ -222,6 +222,7 @@ fn test_all_fixture_files_exist() {
     // Forms
     "form_controls",
     "form_controls_appearance_none",
+    "form_controls_textarea_placeholder",
     // Text
     "text_complex_scripts",
     "text_additional_scripts",
@@ -483,6 +484,12 @@ fn test_fixture_form_controls_appearance_none() {
     .expect("form_controls_appearance_none fixture should render");
 }
 
+#[test]
+fn test_fixture_form_controls_textarea_placeholder() {
+  test_fixture("form_controls_textarea_placeholder")
+    .expect("form_controls_textarea_placeholder fixture should render");
+}
+
 //
 // Text Tests
 //
@@ -654,6 +661,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     // Forms
     "form_controls",
     "form_controls_appearance_none",
+    "form_controls_textarea_placeholder",
     // Text
     "text_complex_scripts",
     "text_additional_scripts",
@@ -791,6 +799,11 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "form_controls_appearance_none",
       "Forms",
       "Form controls with appearance: none should still paint values/labels",
+    ),
+    (
+      "form_controls_textarea_placeholder",
+      "Forms",
+      "Textarea placeholder rendering when empty",
     ),
     (
       "text_complex_scripts",

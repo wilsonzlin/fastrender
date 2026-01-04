@@ -130,6 +130,8 @@ pub enum FormControlKind {
   TextArea {
     /// Raw text content
     value: String,
+    /// Placeholder text to render when value is empty
+    placeholder: Option<String>,
     /// Optional rows hint (default 2)
     rows: Option<u32>,
     /// Optional cols hint (default 20)

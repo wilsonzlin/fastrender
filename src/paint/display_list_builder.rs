@@ -6646,22 +6646,32 @@ impl DisplayListBuilder {
         }
         true
       }
-      FormControlKind::TextArea { value, .. } => {
-        if value.is_empty() {
+      FormControlKind::TextArea {
+        value,
+        placeholder,
+        ..
+      } => {
+        let base_color = if control.invalid { accent } else { style.color };
+        let placeholder_color = base_color.with_alpha(0.6);
+
+        let value_trimmed = value.trim();
+        let (text, color) = if !value_trimmed.is_empty() {
+          (value.as_str(), base_color)
+        } else if let Some(placeholder) = placeholder.as_deref().filter(|p| !p.is_empty()) {
+          (placeholder, placeholder_color)
+        } else {
           return true;
-        }
+        };
         let rect = inset_rect(rect, 2.0);
         let mut text_style = style.clone();
-        if control.invalid {
-          text_style.color = accent;
-        }
+        text_style.color = color;
         let line_height = compute_line_height_with_metrics_viewport(
           &text_style,
           None,
           self.viewport.map(|(w, h)| Size::new(w, h)),
         );
         let mut y = rect.y();
-        for line in value.split('\n') {
+        for line in text.split('\n') {
           if y > rect.y() + rect.height() {
             break;
           }
