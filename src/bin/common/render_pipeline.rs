@@ -705,6 +705,20 @@ mod tests {
     assert_eq!(referrer.as_deref(), Some(base_hint));
     assert_eq!(url, "https://cdn.example/next");
   }
+
+  #[test]
+  fn prepared_document_ignores_base_like_text_in_script() {
+    let html = r#"<!doctype html>
+<html>
+  <head>
+    <script>var s='<base href="https://bad.example/">'</script>
+  </head>
+  <body>ok</body>
+</html>"#;
+    let base_hint = "https://good.example/page.html";
+    let doc = PreparedDocument::new(html.to_string(), base_hint.to_string());
+    assert_eq!(doc.base_url, base_hint);
+  }
 }
 
 /// Render prepared HTML using the shared render pipeline (including linked stylesheets).

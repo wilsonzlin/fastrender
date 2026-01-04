@@ -202,10 +202,6 @@ struct Args {
   #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
   cache_dir: PathBuf,
 
-  /// Override render output directory (PNG/logs/diagnostics)
-  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
-  out_dir: PathBuf,
-
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
   css_limit: Option<usize>,
@@ -296,7 +292,6 @@ struct RenderShared {
   out_dir: PathBuf,
   viewport: (u32, u32),
   user_agent: String,
-  out_dir: PathBuf,
   timeout_secs: Option<u64>,
 }
 
@@ -758,7 +753,6 @@ fn build_render_shared(
     out_dir: args.out_dir.clone(),
     viewport: args.viewport,
     user_agent: args.user_agent.clone(),
-    out_dir: args.out_dir.clone(),
     timeout_secs: render_timeout_secs,
   }
 }
