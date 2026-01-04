@@ -7,6 +7,7 @@ mod bundle_page_test;
 mod bundled_font_coverage_test;
 mod diff_renders_test;
 mod diff_snapshots_pageset_dump_layout_test;
+mod diff_snapshots_pageset_progress_layout_test;
 mod fetch_and_render_dom_compat_test;
 mod fetch_and_render_exit_test;
 mod fetch_and_render_help_test;

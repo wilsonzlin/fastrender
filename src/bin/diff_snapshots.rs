@@ -477,9 +477,9 @@ fn normalize_file(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn collect_snapshots(dir: &Path) -> Result<HashMap<String, PathBuf>, String> {
-  // Prefer explicitly named `<stem>.snapshot.json` files (render_pages dump layout) over
-  // directory-based snapshots (`<stem>/snapshot.json`, pageset_progress dump layout) when both
-  // exist for the same stem.
+  // Prefer directory-based snapshots (`<stem>/snapshot.json`, pageset_progress dump layout) over
+  // explicitly named `<stem>.snapshot.json` files (render_pages dump layout) when both exist for
+  // the same stem.
   let mut map: HashMap<String, (PathBuf, SnapshotOrigin)> = HashMap::new();
 
   let entries =
@@ -546,8 +546,8 @@ enum SnapshotOrigin {
 impl SnapshotOrigin {
   fn weight(self) -> u8 {
     match self {
-      SnapshotOrigin::Directory => 0,
-      SnapshotOrigin::FlatFile => 1,
+      SnapshotOrigin::Directory => 1,
+      SnapshotOrigin::FlatFile => 0,
     }
   }
 }
