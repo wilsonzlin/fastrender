@@ -34,6 +34,9 @@ cargo run --release --bin bundled_font_coverage -- --pageset --include-css-conte
 The report lists every unique Unicode codepoint found in visible DOM text nodes that does not have
 any glyph in `FontDatabase::shared_bundled()` (including the bundled emoji face when enabled).
 
+Note: this is strictly a glyph *coverage* check. It does not validate correct shaping, script
+tagging, or segmentation for complex scripts (Arabic/Indic/etc) or emoji sequences (see Task 93).
+
 ## Pageset audit snapshot
 
 The canonical (cached) pageset HTML lives under `fetches/html/`. For repeatable diffs while working
@@ -49,20 +52,26 @@ cargo run --release --bin bundled_font_coverage -- --pageset --include-css-conte
 
 ### Summary (current `main`)
 
-The audit currently scans **146** cached pages (3 cached HTML files are missing:
-`nhk.or.jp`, `tesco.com`, `washingtonpost.com`).
+The audit currently scans **136** cached pages (13 cached HTML files are missing:
+`bloomberg.com`, `britannica.com`, `economist.com`, `etsy.com`, `medium.com`, `npmjs.com`,
+`openai.com`, `quora.com`, `reddit.com`, `reuters.com`, `tripadvisor.com`, `wsj.com`, `yelp.com`).
 
-- **DOM text only:** **177** uncovered codepoints.
-  - `wikipedia.org`: 121 (mostly Wikipedia language list samples for scripts we do not bundle yet,
-    e.g. Armenian `U+0531` "Ա", Tibetan `U+0F40` "ཀ", etc.)
-  - `bbc.com`: 36 (language links using Gurmukhi/Gujarati/Sinhala/Ethiopic, e.g. `Punjabi ਪੰਜਾਬੀ`,
-    `Gujarati ગુજરાતીમાં`, `Sinhala සිංහල`, `Amharic ዜና በአማርኛ`).
-  - `sina.com.cn`: 5 (mojibake/control codepoints like `U+0081`).
-- **With `--include-css-content`:** **388** uncovered codepoints.
-  - `howtogeek.com`: 209, almost entirely Private Use Area glyphs (`U+E900..`) from icon-font
+Compared to older snapshots, pages like `wikipedia.org`/`bbc.com` no longer dominate the uncovered
+list: their language samples (Armenian/Georgian/Ethiopic/Lao/Tibetan/etc) are covered by bundled
+Noto script subsets.
+
+- **DOM text only:** **14** uncovered codepoints.
+  - `techmeme.com`: 9 (emoji not present in `FastRenderEmoji.ttf`, plus the keycap mark `U+20E3`)
+  - `ebay.com`: 4 (emoji, plus `U+FE0F` which is a variation selector used in emoji sequences)
+  - `google.com`: 1 (`U+1F34C` "🍌")
+  - A few other pages have only `U+FE0F` (e.g. `aliexpress.com`, `buzzfeed.com`, `espn.com`,
+    `neverssl.com`)
+- **With `--include-css-content`:** **224** uncovered codepoints.
+  - `howtogeek.com`: 208, almost entirely Private Use Area glyphs (`U+E900..`) from icon-font
     pseudo-elements (`content: "\e9xx"`). These are expected to be drawn by site-provided webfonts
     rather than the bundled fallback fonts.
-  - Remaining uncovered codepoints largely match the DOM-text-only scan (`wikipedia.org`/`bbc.com`).
+  - Remaining uncovered codepoints largely match the DOM-text-only scan (emoji + variation
+    selectors). The other notable outlier is `craigslist.org` (one PUA codepoint: `U+EB23`).
 
 ### Pageset-motivated fixes validated by the audit
 
@@ -79,13 +88,15 @@ in the Telugu/Myanmar blocks and does not report the regional indicator codepoin
 
 The audit also previously identified ~40 additional emoji codepoints present across the pageset
 (Craigslist/eBay/ESPN/Buzzfeed/etc). The FastRenderEmoji generator maps those codepoints onto the
-existing fixture glyphs so bundled-only runs do not render tofu for common emoji.
+existing fixture glyphs so bundled-only runs do not render tofu for common emoji; keep that mapping
+updated as the pageset changes.
 
 ### Follow-ups (keep pageset-driven)
 
-If pageset diffs show that the remaining missing scripts are significant, consider adding new Noto
-subsets + `Script` variants (e.g. Gurmukhi/Gujarati/Sinhala/Ethiopic) rather than expanding the
-core Latin font.
+If pageset diffs show that the remaining missing DOM-text emoji are significant, extend
+`FastRenderEmoji.ttf`/its generator to cover them (currently: `🍌`, `⚾`, `💎`, `💜`, `💩`, `🔴`,
+`🙏`, `🤣`, `🤮`, `🥳`, `🧵`, `🪬`). Note that the remaining non-emoji uncovered codepoints are
+emoji-related marks (`U+20E3`, `U+FE0F`) which are not meaningful standalone glyphs.
 
 For `--include-css-content`, large runs of PUA codepoints typically imply an icon font; they should
 only be addressed if we confirm that the pageset run is not fetching/using the page’s webfonts.
