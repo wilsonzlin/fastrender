@@ -34,6 +34,71 @@ impl Drop for EnvGuard {
   }
 }
 
+fn assert_rgba8888_pixels_eq(
+  width: u32,
+  height: u32,
+  expected: &[u8],
+  actual: &[u8],
+  label: &str,
+) {
+  assert_eq!(
+    expected.len(),
+    actual.len(),
+    "{label}: pixel buffer sizes differ"
+  );
+  assert_eq!(
+    expected.len(),
+    width as usize * height as usize * 4,
+    "{label}: expected buffer is not width*height*4"
+  );
+
+  if expected == actual {
+    return;
+  }
+
+  let mut mismatched_bytes = 0usize;
+  let mut mismatched_pixels = 0usize;
+  let mut first: Option<(usize, [u8; 4], [u8; 4])> = None;
+  let mut min_x = usize::MAX;
+  let mut min_y = usize::MAX;
+  let mut max_x = 0usize;
+  let mut max_y = 0usize;
+  let mut samples: Vec<(usize, usize, [u8; 4], [u8; 4])> = Vec::new();
+  for (idx, (a, b)) in expected
+    .chunks_exact(4)
+    .zip(actual.chunks_exact(4))
+    .enumerate()
+  {
+    let a = [a[0], a[1], a[2], a[3]];
+    let b = [b[0], b[1], b[2], b[3]];
+    if a != b {
+      mismatched_pixels += 1;
+      mismatched_bytes += a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
+      if first.is_none() {
+        first = Some((idx, a, b));
+      }
+      let x = idx % (width as usize);
+      let y = idx / (width as usize);
+      min_x = min_x.min(x);
+      min_y = min_y.min(y);
+      max_x = max_x.max(x);
+      max_y = max_y.max(y);
+      if samples.len() < 16 {
+        samples.push((x, y, a, b));
+      }
+    }
+  }
+
+  if let Some((idx, a, b)) = first {
+    let x = idx % (width as usize);
+    let y = idx / (width as usize);
+    panic!(
+      "{label}: {mismatched_pixels} pixels ({mismatched_bytes} bytes) differ; bounds=({min_x},{min_y})..=({max_x},{max_y}); first at ({x}, {y}) expected={a:?} actual={b:?}; sample={samples:?}"
+    );
+  }
+  panic!("{label}: buffers differ");
+}
+
 fn basic_list() -> DisplayList {
   let mut list = DisplayList::new();
   list.push(DisplayItem::FillRect(FillRectItem {
@@ -1128,40 +1193,49 @@ fn stacking_context_filter_radii_match_serial_output_under_tiling() {
 }
 
 #[test]
-fn backdrop_filters_trigger_serial_fallback() {
+fn path_clips_survive_tiling() {
+  let (width, height) = (192, 192);
   let mut list = DisplayList::new();
-  let stacking = StackingContextItem {
-    z_index: 0,
-    creates_stacking_context: true,
-    bounds: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
-    plane_rect: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
-    mix_blend_mode: BlendMode::Normal,
-    is_isolated: false,
-    transform: None,
-    child_perspective: None,
-    transform_style: TransformStyle::Flat,
-    backface_visibility: BackfaceVisibility::Visible,
-    filters: Vec::new(),
-    backdrop_filters: vec![ResolvedFilter::Blur(3.0)],
+  // Add an invisible shadow solely to inflate the per-tile halo region. Tiny-skia's
+  // path mask rasterizer can produce subtly different antialiasing coverage when a
+  // polygon is clipped to the tile's mask bounds, so we make each tile render a
+  // large enough region that the full clip path fits inside.
+  list.push(DisplayItem::BoxShadow(BoxShadowItem {
+    rect: Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
     radii: BorderRadii::ZERO,
-    mask: None,
-  };
-  list.push(DisplayItem::PushStackingContext(stacking));
-  list.push(DisplayItem::FillRect(FillRectItem {
-    rect: Rect::from_xywh(8.0, 8.0, 40.0, 40.0),
-    color: Rgba::new(0, 200, 120, 0.8),
+    offset: Point::new(0.0, 0.0),
+    blur_radius: 20.0,
+    spread_radius: 0.0,
+    color: Rgba::new(0, 0, 0, 0.0),
+    inset: false,
   }));
-  list.push(DisplayItem::PopStackingContext);
+  let polygon = ResolvedClipPath::Polygon {
+    points: vec![
+      Point::new(72.0, 90.0),
+      Point::new(148.0, 72.0),
+      Point::new(150.0, 148.0),
+      Point::new(90.0, 156.0),
+    ],
+    fill_rule: tiny_skia::FillRule::Winding,
+  };
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Path { path: polygon },
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, width as f32, height as f32),
+    color: Rgba::rgb(20, 120, 200),
+  }));
+  list.push(DisplayItem::PopClip);
 
   let font_ctx = FontContext::new();
-  let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
+  let serial = DisplayListRenderer::new(width, height, Rgba::WHITE, font_ctx.clone())
     .unwrap()
     .with_parallelism(PaintParallelism::disabled())
     .render(&list)
     .expect("serial paint");
 
   let parallelism = PaintParallelism {
-    tile_size: 24,
+    tile_size: 32,
     log_timing: false,
     min_display_items: 1,
     min_tiles: 1,
@@ -1171,7 +1245,73 @@ fn backdrop_filters_trigger_serial_fallback() {
   };
   let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
   let report = pool.install(|| {
-    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+    DisplayListRenderer::new(width, height, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert!(report.tiles > 1, "expected multiple tiles to be rendered");
+  assert_rgba8888_pixels_eq(
+    width,
+    height,
+    serial.data(),
+    report.pixmap.data(),
+    &format!("path clip tiling mismatch (tiles={})", report.tiles),
+  );
+}
+
+#[test]
+fn backdrop_filters_survive_tiling() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+    color: Rgba::rgb(255, 0, 0),
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(64.0, 0.0, 64.0, 64.0),
+    color: Rgba::rgb(0, 0, 255),
+  }));
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(32.0, 0.0, 64.0, 64.0),
+    plane_rect: Rect::from_xywh(32.0, 0.0, 64.0, 64.0),
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: vec![ResolvedFilter::Blur(6.0)],
+    radii: BorderRadii::ZERO,
+    mask: None,
+  };
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(128, 64, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 32,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(128, 64, Rgba::WHITE, font_ctx)
       .unwrap()
       .with_parallelism(parallelism)
       .render_with_report(&list)
@@ -1179,10 +1319,18 @@ fn backdrop_filters_trigger_serial_fallback() {
   });
 
   assert!(
-    !report.parallel_used,
-    "backdrop filters should disable parallel painting"
+    report.parallel_used,
+    "expected backdrop-filter rendering to use parallel painting (fallback={:?})",
+    report.fallback_reason
   );
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert!(report.tiles > 1, "expected multiple tiles to be rendered");
+  assert_rgba8888_pixels_eq(
+    128,
+    64,
+    serial.data(),
+    report.pixmap.data(),
+    &format!("backdrop filter tiling mismatch (tiles={})", report.tiles),
+  );
 }
 
 #[test]
