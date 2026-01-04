@@ -1569,6 +1569,15 @@ fn run_render_page(args: RenderPageArgs) -> Result<()> {
 }
 
 fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
+  if !(0.0..=100.0).contains(&args.max_diff_percent) || !args.max_diff_percent.is_finite() {
+    bail!("--max-diff-percent must be a finite number between 0 and 100");
+  }
+  if let Some(max) = args.max_perceptual_distance {
+    if !(0.0..=1.0).contains(&max) || !max.is_finite() {
+      bail!("--max-perceptual-distance must be a finite number between 0 and 1");
+    }
+  }
+
   // Historically `cargo xtask diff-renders` interpreted relative paths relative to the caller's
   // current directory (because it used `std::fs` directly). Keep that behaviour even though we run
   // `cargo` from the repo root.
