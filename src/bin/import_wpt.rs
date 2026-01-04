@@ -756,11 +756,11 @@ fn apply_link_href_rewrite(
 
   let mut error: Option<ImportError> = None;
   let rewritten = link_tag
-    .replace_all(input, |m: &regex::Match<'_>| {
+    .replace_all(input, |caps: &regex::Captures<'_>| {
       if error.is_some() {
-        return m.as_str().to_string();
+        return caps[0].to_string();
       }
-      let tag = m.as_str();
+      let tag = &caps[0];
 
       let Some(rel_caps) = rel_attr.captures(tag) else {
         return tag.to_string();
