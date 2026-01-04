@@ -114,6 +114,23 @@ cargo run --release --bin compare_diff_reports -- \
 #   --fail-on-regression --regression-threshold-percent 0.05
 ```
 
+The same delta tool also works with cached-page reports from `scripts/chrome_vs_fastrender.sh` (best-effort / non-deterministic because live subresources can change):
+
+```bash
+# On a baseline commit:
+scripts/chrome_vs_fastrender.sh --out-dir target/chrome_vs_fastrender_before --pages example.com
+
+# On your current commit:
+scripts/chrome_vs_fastrender.sh --out-dir target/chrome_vs_fastrender_after --pages example.com
+
+# Summarize deltas between the two runs:
+cargo run --release --bin compare_diff_reports -- \
+  --baseline target/chrome_vs_fastrender_before/report.json \
+  --new target/chrome_vs_fastrender_after/report.json \
+  --json target/chrome_vs_fastrender_delta/report.json \
+  --html target/chrome_vs_fastrender_delta/report.html
+```
+
 #### CI option (no local Chrome required)
 
 If you can’t install Chrome/Chromium locally, the repository provides an **optional** GitHub Actions workflow that generates the same deterministic fixture-vs-Chrome diff report and uploads it as an artifact:

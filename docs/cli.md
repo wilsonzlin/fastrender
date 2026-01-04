@@ -495,6 +495,7 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
 - Outputs: `diff_report_delta.json` + `diff_report_delta.html` by default.
 - Safety: refuses to compare reports generated with different diff parameters (`tolerance`, `max_diff_percent`, `max_perceptual_distance`, `ignore_alpha`) unless you pass `--allow-config-mismatch` (mismatches are recorded in the delta report).
 - Gating: `--fail-on-regression` (plus `--regression-threshold-percent <PERCENT>`) exits non-zero when any entry regresses.
+- Works with both deterministic fixture diffs (`cargo xtask fixture-chrome-diff`) and cached-page diffs (`scripts/chrome_vs_fastrender.sh`), as long as you have two `report.json` files to compare.
 
 ## `diff_snapshots`
 
