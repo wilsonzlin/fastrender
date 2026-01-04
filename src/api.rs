@@ -1703,6 +1703,7 @@ pub struct PreparedDocument {
   image_cache: ImageCache,
   max_iframe_depth: usize,
   paint_parallelism: PaintParallelism,
+  runtime_toggles: Arc<RuntimeToggles>,
 }
 
 /// Painting options for a prepared document.
@@ -1798,34 +1799,36 @@ impl PreparedDocument {
 
   /// Paints the prepared document using a rich options struct.
   pub fn paint_with_options(&self, options: PreparedPaintOptions) -> Result<Pixmap> {
-    if let Some((w, h)) = options.viewport {
-      if w == 0 || h == 0 {
-        return Err(Error::Render(RenderError::InvalidParameters {
-          message: format!("Invalid viewport override: width={w}, height={h}"),
-        }));
+    runtime::with_runtime_toggles(Arc::clone(&self.runtime_toggles), || {
+      if let Some((w, h)) = options.viewport {
+        if w == 0 || h == 0 {
+          return Err(Error::Render(RenderError::InvalidParameters {
+            message: format!("Invalid viewport override: width={w}, height={h}"),
+          }));
+        }
       }
-    }
 
-    let viewport = options.viewport.map(|(w, h)| Size::new(w as f32, h as f32));
-    let paint_scale =
-      (self.device_pixel_ratio / self.page_zoom.max(f32::EPSILON)).max(f32::EPSILON);
-    let scroll_state = options
-      .scroll
-      .clone()
-      .unwrap_or_else(|| self.default_scroll.clone());
-    let animation_time = options.animation_time.or(self.animation_time);
-    paint_fragment_tree_with_state(
-      self.fragment_tree.clone(),
-      scroll_state,
-      viewport,
-      options.background.unwrap_or(self.background_color),
-      &self.font_context,
-      &self.image_cache,
-      paint_scale,
-      animation_time,
-      self.paint_parallelism,
-      self.max_iframe_depth,
-    )
+      let viewport = options.viewport.map(|(w, h)| Size::new(w as f32, h as f32));
+      let paint_scale =
+        (self.device_pixel_ratio / self.page_zoom.max(f32::EPSILON)).max(f32::EPSILON);
+      let scroll_state = options
+        .scroll
+        .clone()
+        .unwrap_or_else(|| self.default_scroll.clone());
+      let animation_time = options.animation_time.or(self.animation_time);
+      paint_fragment_tree_with_state(
+        self.fragment_tree.clone(),
+        scroll_state,
+        viewport,
+        options.background.unwrap_or(self.background_color),
+        &self.font_context,
+        &self.image_cache,
+        paint_scale,
+        animation_time,
+        self.paint_parallelism,
+        self.max_iframe_depth,
+      )
+    })
   }
 
   /// Paints the prepared document with an explicit scroll state and animation time.
@@ -3834,9 +3837,7 @@ fn paint_fragment_tree_with_state(
   paint_parallelism: PaintParallelism,
   max_iframe_depth: usize,
 ) -> Result<Pixmap> {
-  let expand_full_page = std::env::var("FASTR_FULL_PAGE")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false);
+  let expand_full_page = runtime::runtime_toggles().truthy("FASTR_FULL_PAGE");
 
   let viewport_size = viewport_override.unwrap_or_else(|| fragment_tree.viewport_size());
   let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
@@ -5102,7 +5103,13 @@ impl FastRender {
     result
   }
 
-  fn prepare_html_internal(
+  fn prepare_html_internal(&mut self, html: &str, options: RenderOptions) -> Result<PreparedDocument> {
+    let toggles = self.resolve_runtime_toggles(&options);
+    let _toggles_guard = RuntimeTogglesSwap::new(&mut self.runtime_toggles, toggles.clone());
+    runtime::with_runtime_toggles(toggles, || self.prepare_html_internal_inner(html, options))
+  }
+
+  fn prepare_html_internal_inner(
     &mut self,
     html: &str,
     options: RenderOptions,
@@ -5349,6 +5356,7 @@ impl FastRender {
       image_cache: self.image_cache.clone(),
       max_iframe_depth: self.max_iframe_depth,
       paint_parallelism,
+      runtime_toggles: Arc::clone(&self.runtime_toggles),
     })
   }
 
@@ -5370,9 +5378,7 @@ impl FastRender {
   }
 
   fn fit_canvas_env_enabled() -> bool {
-    std::env::var("FASTR_FULL_PAGE")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
+    runtime::runtime_toggles().truthy("FASTR_FULL_PAGE")
   }
 
   /// Renders HTML with a custom background color
@@ -8058,24 +8064,26 @@ impl FastRender {
   /// # }
   /// ```
   pub fn paint(&self, fragment_tree: &FragmentTree, width: u32, height: u32) -> Result<Pixmap> {
-    let fit_canvas = self.fit_canvas_to_content || Self::fit_canvas_env_enabled();
-    let (target_width, target_height) =
-      self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
+    runtime::with_runtime_toggles(Arc::clone(&self.runtime_toggles), || {
+      let fit_canvas = self.fit_canvas_to_content || Self::fit_canvas_env_enabled();
+      let (target_width, target_height) =
+        self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
 
-    paint_tree_with_resources_scaled_offset_backend_with_iframe_depth(
-      fragment_tree,
-      target_width,
-      target_height,
-      self.background_color,
-      self.font_context.clone(),
-      self.image_cache.clone(),
-      self.device_pixel_ratio,
-      Point::ZERO,
-      self.paint_parallelism,
-      &ScrollState::default(),
-      paint_backend_from_env(),
-      self.max_iframe_depth,
-    )
+      paint_tree_with_resources_scaled_offset_backend_with_iframe_depth(
+        fragment_tree,
+        target_width,
+        target_height,
+        self.background_color,
+        self.font_context.clone(),
+        self.image_cache.clone(),
+        self.device_pixel_ratio,
+        Point::ZERO,
+        self.paint_parallelism,
+        &ScrollState::default(),
+        paint_backend_from_env(),
+        self.max_iframe_depth,
+      )
+    })
   }
 
   /// Paints a fragment tree with an additional translation applied to all fragments.
@@ -8086,20 +8094,22 @@ impl FastRender {
     height: u32,
     offset: Point,
   ) -> Result<Pixmap> {
-    let trace = TraceHandle::disabled();
-    let fit_canvas = self.fit_canvas_to_content || Self::fit_canvas_env_enabled();
-    let (target_width, target_height) =
-      self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
-    let scroll_state = ScrollState::default();
-    self.paint_with_offset_traced(
-      fragment_tree,
-      target_width,
-      target_height,
-      offset,
-      self.paint_parallelism,
-      &scroll_state,
-      &trace,
-    )
+    runtime::with_runtime_toggles(Arc::clone(&self.runtime_toggles), || {
+      let trace = TraceHandle::disabled();
+      let fit_canvas = self.fit_canvas_to_content || Self::fit_canvas_env_enabled();
+      let (target_width, target_height) =
+        self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
+      let scroll_state = ScrollState::default();
+      self.paint_with_offset_traced(
+        fragment_tree,
+        target_width,
+        target_height,
+        offset,
+        self.paint_parallelism,
+        &scroll_state,
+        &trace,
+      )
+    })
   }
 
   fn paint_with_offset_traced(
