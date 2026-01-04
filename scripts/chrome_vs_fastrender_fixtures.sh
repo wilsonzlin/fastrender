@@ -34,6 +34,7 @@ Options:
   --sort-by <mode>          Sort report entries (pixel|percent|perceptual) (passed to diff_renders)
   --no-chrome               Skip generating Chrome baseline renders (reuse existing --chrome-out-dir)
   --no-fastrender           Skip generating FastRender renders (reuse existing --fastr-out-dir)
+  --diff-only               Alias for --no-chrome --no-fastrender
   --fail-on-differences     Exit non-zero when diff_renders reports differences (default: keep report and exit 0)
   --no-clean                Do not delete previous output dirs under target/
   -h, --help                Show help
@@ -114,6 +115,8 @@ while [[ $# -gt 0 ]]; do
         NO_CHROME=1; shift ;;
       --no-fastrender)
         NO_FASTRENDER=1; shift ;;
+      --diff-only)
+        NO_CHROME=1; NO_FASTRENDER=1; shift ;;
       --fail-on-differences)
         FAIL_ON_DIFFERENCES=1; shift ;;
       --no-clean)

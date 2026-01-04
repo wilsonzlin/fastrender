@@ -30,6 +30,7 @@ Compatibility / extras:
   --out <dir>          Alias for --out-dir
   --no-chrome          Reuse existing <out>/chrome output (skip chrome_baseline.sh)
   --no-fastrender      Reuse existing <out>/fastrender output (skip render_pages)
+  --diff-only          Alias for --no-chrome --no-fastrender
   --tolerance <u8>     Forwarded to diff_renders
   --max-diff-percent <f64>
                          Forwarded to diff_renders
@@ -99,6 +100,8 @@ while [[ $# -gt 0 ]]; do
         NO_CHROME=1; shift; continue ;;
       --no-fastrender)
         NO_FASTRENDER=1; shift; continue ;;
+      --diff-only)
+        NO_CHROME=1; NO_FASTRENDER=1; shift; continue ;;
       --chrome)
         CHROME_BIN="${2:-}"; shift 2; continue ;;
       --js)
