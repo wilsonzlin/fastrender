@@ -27,6 +27,7 @@ use crate::style::values::LengthUnit;
 use cssparser::BasicParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
+use cssparser::ToCss;
 use cssparser::Token;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
@@ -1823,6 +1824,148 @@ fn keyword_parse<T>(value: &PropertyValue, parse: impl Fn(&str) -> Option<T>) ->
   }
 }
 
+fn supports_animation_timeline_value(raw_value: &str) -> bool {
+  let raw_value = raw_value.trim();
+  if raw_value.is_empty() {
+    return false;
+  }
+
+  let mut saw_any = false;
+  for item in split_top_level_commas(raw_value) {
+    let item = item.trim();
+    if item.is_empty() {
+      return false;
+    }
+    saw_any = true;
+    if !supports_animation_timeline_item(item) {
+      return false;
+    }
+  }
+  saw_any
+}
+
+fn supports_animation_timeline_item(item: &str) -> bool {
+  let mut input = ParserInput::new(item);
+  let mut parser = Parser::new(&mut input);
+  parser.skip_whitespace();
+  let token = match parser.next() {
+    Ok(token) => token,
+    Err(_) => return false,
+  };
+  let matches = match token {
+    Token::Ident(_) => true,
+    Token::Function(name) => {
+      if name.eq_ignore_ascii_case("scroll") {
+        parser
+          .parse_nested_block(supports_scroll_timeline_function)
+          .is_ok()
+      } else if name.eq_ignore_ascii_case("view") {
+        parser.parse_nested_block(supports_view_timeline_function).is_ok()
+      } else {
+        false
+      }
+    }
+    _ => false,
+  };
+  if !matches {
+    return false;
+  }
+  parser.skip_whitespace();
+  parser.is_exhausted()
+}
+
+fn supports_scroll_timeline_function<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<(), cssparser::ParseError<'i, ()>> {
+  let mut has_scroller = false;
+  let mut has_axis = false;
+
+  while !input.is_exhausted() {
+    input.skip_whitespace();
+    if input.is_exhausted() {
+      break;
+    }
+    let ident = input.expect_ident()?.as_ref().to_ascii_lowercase();
+    if matches!(ident.as_str(), "root" | "nearest" | "self") {
+      if has_scroller {
+        return Err(input.new_custom_error(()));
+      }
+      has_scroller = true;
+      continue;
+    }
+    if matches!(ident.as_str(), "block" | "inline" | "x" | "y") {
+      if has_axis {
+        return Err(input.new_custom_error(()));
+      }
+      has_axis = true;
+      continue;
+    }
+    return Err(input.new_custom_error(()));
+  }
+
+  Ok(())
+}
+
+fn supports_view_timeline_function<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<(), cssparser::ParseError<'i, ()>> {
+  let mut has_axis = false;
+  let mut inset_count: usize = 0;
+
+  while !input.is_exhausted() {
+    input.skip_whitespace();
+    if input.is_exhausted() {
+      break;
+    }
+
+    let token = input.next()?;
+    match token {
+      Token::Ident(ident) => {
+        let lower = ident.as_ref().to_ascii_lowercase();
+        if !has_axis && matches!(lower.as_str(), "block" | "inline" | "x" | "y") {
+          has_axis = true;
+          continue;
+        }
+
+        if inset_count < 2 && lower.eq_ignore_ascii_case("auto") {
+          inset_count += 1;
+          continue;
+        }
+
+        return Err(input.new_custom_error(()));
+      }
+      Token::Dimension { .. } | Token::Number { .. } | Token::Percentage { .. } => {
+        if inset_count >= 2 {
+          return Err(input.new_custom_error(()));
+        }
+        let token_text = token.to_css_string();
+        if parse_length(&token_text).is_some() {
+          inset_count += 1;
+          continue;
+        }
+        return Err(input.new_custom_error(()));
+      }
+      Token::Function(name) => {
+        if inset_count >= 2 {
+          return Err(input.new_custom_error(()));
+        }
+        let func = name.as_ref().to_string();
+        let inner =
+          input.parse_nested_block(|block| Ok(block.slice_from(block.position()).to_string()))?;
+        let token_text = format!("{func}({inner})");
+        if parse_length(&token_text).is_some() {
+          inset_count += 1;
+          continue;
+        }
+        return Err(input.new_custom_error(()));
+      }
+      _ => return Err(input.new_custom_error(())),
+    }
+  }
+
+  Ok(())
+}
+
 fn parse_background_box_keyword(kw: &str, allow_text: bool) -> Option<BackgroundBox> {
   match kw {
     "border-box" => Some(BackgroundBox::BorderBox),
@@ -1982,6 +2125,7 @@ pub(crate) fn supports_parsed_declaration_is_valid(
         ],
       )
     }
+    "animation-timeline" => return supports_animation_timeline_value(raw_value),
     "direction" => return keyword_in_list(parsed, &["ltr", "rtl"]),
     "visibility" => return keyword_in_list(parsed, &["visible", "hidden", "collapse"]),
     "flex-direction" => {

@@ -5198,6 +5198,32 @@ mod tests {
   }
 
   #[test]
+  fn supports_rule_applies_when_animation_timeline_supported() {
+    let css = r"@supports (animation-timeline: scroll(self)) { .ok { color: red; } }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let rules = stylesheet.collect_style_rules(&media);
+    assert_eq!(
+      rules.len(),
+      1,
+      "animation-timeline: scroll(self) should be supported"
+    );
+  }
+
+  #[test]
+  fn supports_rule_rejects_invalid_animation_timeline_value() {
+    let css = r"@supports (animation-timeline: scroll(bad)) { .skip { color: red; } }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let rules = stylesheet.collect_style_rules(&media);
+    assert_eq!(
+      rules.len(),
+      0,
+      "invalid animation-timeline value should cause @supports to fail"
+    );
+  }
+
+  #[test]
   fn supports_rule_skipped_when_feature_unsupported() {
     let css = r"@supports (not-a-prop: foo) { .skip { color: red; } }";
     let stylesheet = parse_stylesheet(css).unwrap();
