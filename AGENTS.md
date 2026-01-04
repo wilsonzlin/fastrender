@@ -83,6 +83,7 @@ cargo xtask chrome-baseline-fixtures
 # (This re-runs steps 1-2 by default; pass `--no-chrome` to reuse an existing baseline under `<out-dir>/chrome`.)
 # Add `--fail-on-differences` to exit non-zero on diffs, and `--no-build` to reuse an existing
 # `target/release/diff_renders` binary.
+# Add `--write-snapshot` to also write FastRender snapshots/diagnostics (for later `diff_snapshots`).
 cargo xtask fixture-chrome-diff
 # Report: target/fixture_chrome_diff/report.html
 #

@@ -80,6 +80,7 @@ Artifacts and PR guidance:
 - Report: `target/fixture_chrome_diff/report.html` (plus `report.json` and per-fixture PNG/log/metadata artifacts under `target/fixture_chrome_diff/{chrome,fastrender,...}`).
 - Re-run without invoking Chrome (reuse existing renders under `target/fixture_chrome_diff/chrome`): `cargo xtask fixture-chrome-diff --no-chrome`.
 - Exit non-zero when diffs are found (useful for gating local scripts): `cargo xtask fixture-chrome-diff --fail-on-differences`.
+- Write FastRender pipeline snapshots for later `diff_snapshots`: `cargo xtask fixture-chrome-diff --write-snapshot` (writes under `target/fixture_chrome_diff/fastrender/<fixture>/snapshot.json`).
 - **Do not commit** Chrome baseline PNGs or diff reports; they are local artifacts. Attach the generated report directory (or at least `report.html` + the referenced PNGs) to your PR description instead.
 - **Do commit** new/updated fixtures under `tests/pages/fixtures/<fixture>/` when they are part of the regression story.
 
