@@ -16,6 +16,7 @@
         src: url("tests/fixtures/fonts/NotoSansSymbols2-subset.ttf");
       }
 
+      html,
       body {
         margin: 0;
         padding: 0;
@@ -23,52 +24,42 @@
         font-family: "Noto Sans", sans-serif;
       }
 
-      table {
+      .grid {
+        display: grid;
+        grid-template-columns: 240px 180px 180px;
         width: 600px;
-        border-collapse: collapse;
-        table-layout: fixed;
       }
 
-      col.label {
-        width: 240px;
-      }
-
-      col.variant {
-        width: 180px;
-      }
-
-      th,
-      td {
+      .grid > div {
         border: 1px solid #dee2e6;
       }
 
-      th {
+      .head {
         background: #f8f9fa;
         font-weight: 600;
         font-size: 12px;
         padding: 6px 4px;
         color: #343a40;
-      }
-
-      td {
         text-align: center;
-        vertical-align: middle;
+        line-height: 1.2;
       }
 
-      td.label {
+      .label {
         text-align: left;
         font-size: 11px;
         padding: 4px 6px;
         color: #495057;
         white-space: nowrap;
+        line-height: 1.2;
       }
 
-      td.cell {
+      .cell {
         font-size: 44px;
         line-height: 1;
         padding: 10px 0;
         font-family: "CustomFont", "TextSymbols", "Noto Sans Symbols 2", "Noto Sans Symbols",
           "Noto Sans", "FastRender Emoji";
+        text-align: center;
       }
 
       .fv-emoji {
@@ -80,32 +71,18 @@
     </style>
   </head>
   <body>
-    <table>
-      <colgroup>
-        <col class="label" />
-        <col class="variant" />
-        <col class="variant" />
-      </colgroup>
-      <thead>
-        <tr>
-          <th>sequence</th>
-          <th>emoji</th>
-          <th>text</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td class="label">U+2764</td>
-          <td class="cell fv-emoji">&#x2764;</td>
-          <td class="cell fv-text">&#x2764;</td>
-        </tr>
-        <tr>
-          <td class="label">U+2602</td>
-          <td class="cell fv-emoji">&#x2602;</td>
-          <td class="cell fv-text">&#x2602;</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="grid">
+      <div class="head">sequence</div>
+      <div class="head">emoji</div>
+      <div class="head">text</div>
+
+      <div class="label">U+2764</div>
+      <div class="cell fv-emoji">&#x2764;</div>
+      <div class="cell fv-text">&#x2764;</div>
+
+      <div class="label">U+2602</div>
+      <div class="cell fv-emoji">&#x2602;</div>
+      <div class="cell fv-text">&#x2602;</div>
+    </div>
   </body>
 </html>
-
