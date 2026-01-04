@@ -155,6 +155,8 @@ use tiny_skia::Transform;
 const DEADLINE_STRIDE: usize = 256;
 const CLIP_MASK_DEADLINE_STRIDE: usize = 16 * 1024;
 const PRESERVE_3D_SCENE_RECURSION_LIMIT: usize = 32;
+const TILE_HALO_SAFETY_MARGIN_CSS: f32 = 4.0;
+const MAX_PARALLEL_TILE_PIXEL_AMPLIFICATION: u128 = 8;
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
   match mode {
@@ -5248,65 +5250,71 @@ impl DisplayListRenderer {
       self.should_render_parallel(list, tile_estimate, &mut fallback_reason)?;
 
     if parallel_supported {
-      let (pixmap, tiles, tasks, threads_used, parallel_duration) = self.render_parallel(list)?;
-      // Ensure we catch deadlines that expire during the final tile render/blit.
-      check_active(RenderStage::Paint).map_err(Error::Render)?;
-      let duration = start.elapsed();
-      let serial_duration = duration.saturating_sub(parallel_duration);
-      if self.paint_parallelism.log_timing {
-        eprintln!(
-          "paint_parallel tiles={} threads={} tile_size={} duration_ms={:.2}",
+      let halo_px = self.tile_halo_px(list)?;
+      if let Some(reason) = self.halo_amplification_fallback_reason(halo_px) {
+        fallback_reason = Some(reason);
+      } else {
+        let (pixmap, tiles, tasks, threads_used, parallel_duration) =
+          self.render_parallel(list, halo_px)?;
+        // Ensure we catch deadlines that expire during the final tile render/blit.
+        check_active(RenderStage::Paint).map_err(Error::Render)?;
+        let duration = start.elapsed();
+        let serial_duration = duration.saturating_sub(parallel_duration);
+        if self.paint_parallelism.log_timing {
+          eprintln!(
+            "paint_parallel tiles={} threads={} tile_size={} duration_ms={:.2}",
+            tiles,
+            threads_used,
+            self.paint_parallelism.tile_size,
+            duration.as_secs_f64() * 1000.0
+          );
+        }
+        let image_stats = self
+          .image_pixmap_diagnostics
+          .as_ref()
+          .map(|d| d.snapshot())
+          .unwrap_or_default();
+        let background_stats = self
+          .background_paint_diagnostics
+          .as_ref()
+          .map(|d| d.snapshot())
+          .unwrap_or_default();
+        let clip_stats = self
+          .clip_mask_diagnostics
+          .as_ref()
+          .map(|d| d.snapshot())
+          .unwrap_or_default();
+        let layer_stats = self
+          .layer_alloc_diagnostics
+          .as_ref()
+          .map(|d| d.snapshot())
+          .unwrap_or_default();
+        let gradient_pixmap_stats = self.gradient_pixmap_cache.snapshot();
+        return Ok(RenderReport {
+          pixmap,
+          parallel_used: true,
           tiles,
-          threads_used,
-          self.paint_parallelism.tile_size,
-          duration.as_secs_f64() * 1000.0
-        );
+          duration,
+          fallback_reason,
+          gradient_stats: self.gradient_stats,
+          gradient_pixmap_cache_hits: gradient_pixmap_stats.hits,
+          gradient_pixmap_cache_misses: gradient_pixmap_stats.misses,
+          gradient_pixmap_cache_bytes: gradient_pixmap_stats.bytes,
+          image_pixmap_cache_hits: image_stats.hits,
+          image_pixmap_cache_misses: image_stats.misses,
+          image_pixmap_ms: image_stats.millis(),
+          background_ms: background_stats.millis(),
+          clip_mask_calls: clip_stats.calls,
+          clip_mask_ms: clip_stats.millis(),
+          clip_mask_pixels: clip_stats.pixels,
+          layer_allocations: layer_stats.allocations,
+          layer_alloc_bytes: layer_stats.bytes,
+          parallel_tasks: tasks,
+          parallel_threads: threads_used,
+          parallel_duration,
+          serial_duration,
+        });
       }
-      let image_stats = self
-        .image_pixmap_diagnostics
-        .as_ref()
-        .map(|d| d.snapshot())
-        .unwrap_or_default();
-      let background_stats = self
-        .background_paint_diagnostics
-        .as_ref()
-        .map(|d| d.snapshot())
-        .unwrap_or_default();
-      let clip_stats = self
-        .clip_mask_diagnostics
-        .as_ref()
-        .map(|d| d.snapshot())
-        .unwrap_or_default();
-      let layer_stats = self
-        .layer_alloc_diagnostics
-        .as_ref()
-        .map(|d| d.snapshot())
-        .unwrap_or_default();
-      let gradient_pixmap_stats = self.gradient_pixmap_cache.snapshot();
-      return Ok(RenderReport {
-        pixmap,
-        parallel_used: true,
-        tiles,
-        duration,
-        fallback_reason,
-        gradient_stats: self.gradient_stats,
-        gradient_pixmap_cache_hits: gradient_pixmap_stats.hits,
-        gradient_pixmap_cache_misses: gradient_pixmap_stats.misses,
-        gradient_pixmap_cache_bytes: gradient_pixmap_stats.bytes,
-        image_pixmap_cache_hits: image_stats.hits,
-        image_pixmap_cache_misses: image_stats.misses,
-        image_pixmap_ms: image_stats.millis(),
-        background_ms: background_stats.millis(),
-        clip_mask_calls: clip_stats.calls,
-        clip_mask_ms: clip_stats.millis(),
-        clip_mask_pixels: clip_stats.pixels,
-        layer_allocations: layer_stats.allocations,
-        layer_alloc_bytes: layer_stats.bytes,
-        parallel_tasks: tasks,
-        parallel_threads: threads_used,
-        parallel_duration,
-        serial_duration,
-      });
     }
 
     self.render_slice(list.items())?;
@@ -5779,14 +5787,67 @@ impl DisplayListRenderer {
     Ok(max_pad)
   }
 
-  fn build_tiles<'a>(&self, list: &'a DisplayList) -> Result<Vec<TileWork<'a>>> {
+  fn tile_halo_px(&self, list: &DisplayList) -> Result<u32> {
+    // Add a small safety margin to avoid seams from antialiasing or filter kernels that extend
+    // slightly beyond our conservative padding estimates.
+    let halo_css = self.max_effect_padding(list.items())? + TILE_HALO_SAFETY_MARGIN_CSS;
+    Ok((halo_css * self.scale).ceil() as u32)
+  }
+
+  fn estimate_tiled_render_pixels(&self, halo_px: u32) -> u128 {
     let tile_size = self.paint_parallelism.tile_size.max(1);
     let width = self.canvas.width();
     let height = self.canvas.height();
-    // Add a small safety margin to avoid seams from antialiasing or filter kernels that
-    // extend slightly beyond our conservative padding estimates.
-    let halo_css = self.max_effect_padding(list.items())? + 4.0;
-    let halo_px = (halo_css * self.scale).ceil() as u32;
+    let halo2 = halo_px.saturating_mul(2);
+
+    let mut sum_w = 0u128;
+    for x in (0..width).step_by(tile_size as usize) {
+      let tile_w = width.saturating_sub(x).min(tile_size);
+      let render_x = x.saturating_sub(halo_px);
+      let max_w = width.saturating_sub(render_x);
+      let render_w = tile_w.saturating_add(halo2).min(max_w).max(tile_w);
+      sum_w = sum_w.saturating_add(u128::from(render_w));
+    }
+
+    let mut sum_h = 0u128;
+    for y in (0..height).step_by(tile_size as usize) {
+      let tile_h = height.saturating_sub(y).min(tile_size);
+      let render_y = y.saturating_sub(halo_px);
+      let max_h = height.saturating_sub(render_y);
+      let render_h = tile_h.saturating_add(halo2).min(max_h).max(tile_h);
+      sum_h = sum_h.saturating_add(u128::from(render_h));
+    }
+
+    sum_w.saturating_mul(sum_h)
+  }
+
+  fn halo_amplification_fallback_reason(&self, halo_px: u32) -> Option<String> {
+    let canvas_pixels =
+      u128::from(self.canvas.width()).saturating_mul(u128::from(self.canvas.height()));
+    if canvas_pixels == 0 {
+      return None;
+    }
+
+    let tiled_pixels = self.estimate_tiled_render_pixels(halo_px);
+    let max_pixels = canvas_pixels.saturating_mul(MAX_PARALLEL_TILE_PIXEL_AMPLIFICATION);
+    if tiled_pixels > max_pixels {
+      let amplification = tiled_pixels as f64 / canvas_pixels as f64;
+      Some(format!(
+        "halo amplification too large ({:.1}x, halo_px={}, tile_size={})",
+        amplification,
+        halo_px,
+        self.paint_parallelism.tile_size.max(1)
+      ))
+    } else {
+      None
+    }
+  }
+
+  fn build_tiles<'a>(&self, list: &'a DisplayList, halo_px: u32) -> Result<Vec<TileWork<'a>>> {
+    let tile_size = self.paint_parallelism.tile_size.max(1);
+    let width = self.canvas.width();
+    let height = self.canvas.height();
+    let halo2 = halo_px.saturating_mul(2);
     let optimizer = DisplayListOptimizer::new();
     let mut tiles = Vec::new();
     let mut deadline_counter = 0usize;
@@ -5802,8 +5863,8 @@ impl DisplayListRenderer {
         let render_y = y.saturating_sub(halo_px);
         let max_w = width.saturating_sub(render_x);
         let max_h = height.saturating_sub(render_y);
-        let render_w = (tile_w + halo_px * 2).min(max_w).max(tile_w);
-        let render_h = (tile_h + halo_px * 2).min(max_h).max(tile_h);
+        let render_w = tile_w.saturating_add(halo2).min(max_w).max(tile_w);
+        let render_h = tile_h.saturating_add(halo2).min(max_h).max(tile_h);
 
         let render_css_rect = Rect::from_xywh(
           render_x as f32 / self.scale,
@@ -5856,8 +5917,9 @@ impl DisplayListRenderer {
   fn render_parallel(
     &mut self,
     list: &DisplayList,
+    halo_px: u32,
   ) -> Result<(Pixmap, usize, usize, usize, Duration)> {
-    let mut tiles = self.build_tiles(list)?;
+    let mut tiles = self.build_tiles(list, halo_px)?;
     let tile_count = tiles.len();
     self.canvas.clear(self.background);
 

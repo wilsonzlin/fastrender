@@ -448,3 +448,61 @@ fn auto_parallelizes_expensive_gradients() {
   assert!(report.parallel_threads > 1, "expected multiple threads");
   assert_eq!(serial.data(), report.pixmap.data());
 }
+
+#[test]
+fn huge_effect_halo_triggers_serial_fallback() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 128.0, 128.0),
+    color: Rgba::WHITE,
+  }));
+  list.push(DisplayItem::BoxShadow(BoxShadowItem {
+    rect: Rect::from_xywh(32.0, 32.0, 64.0, 64.0),
+    radii: BorderRadii::ZERO,
+    offset: Point::new(0.0, 0.0),
+    blur_radius: 60.0,
+    spread_radius: 0.0,
+    color: Rgba::new(0, 0, 0, 0.6),
+    inset: false,
+  }));
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 16,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(
+    !report.parallel_used,
+    "expected tiling to be disabled due to huge halo amplification"
+  );
+  assert!(
+    report
+      .fallback_reason
+      .as_deref()
+      .unwrap_or_default()
+      .contains("halo amplification"),
+    "expected halo amplification fallback reason, got {:?}",
+    report.fallback_reason
+  );
+  assert_eq!(serial.data(), report.pixmap.data());
+}
