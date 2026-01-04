@@ -5,7 +5,11 @@ use std::path::Path;
 use std::process::Command;
 
 fn write_color_png(path: &Path, color: [u8; 4]) {
-  let img = RgbaImage::from_pixel(2, 2, image::Rgba(color));
+  write_solid_png(path, 2, 2, color);
+}
+
+fn write_solid_png(path: &Path, width: u32, height: u32, color: [u8; 4]) {
+  let img = RgbaImage::from_pixel(width, height, image::Rgba(color));
   img.save(path).expect("save png");
 }
 
@@ -32,7 +36,8 @@ fn diff_renders_reports_matches() {
   write_color_png(&before.join("page.png"), [10, 20, 30, 255]);
   write_color_png(&after.join("page.png"), [10, 20, 30, 255]);
 
-  let status = diff_renders_cmd(tmp.path()).args([
+  let status = diff_renders_cmd(tmp.path())
+    .args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -79,7 +84,8 @@ fn diff_renders_exits_non_zero_on_diff() {
   write_color_png(&before.join("page.png"), [255, 0, 0, 255]);
   write_color_png(&after.join("page.png"), [0, 0, 255, 255]);
 
-  let status = diff_renders_cmd(tmp.path()).args([
+  let status = diff_renders_cmd(tmp.path())
+    .args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -168,7 +174,8 @@ fn diff_renders_supports_recursive_directories() {
   write_color_png(&before.join("a").join("x.png"), [255, 0, 0, 255]);
   write_color_png(&after.join("a").join("x.png"), [0, 0, 255, 255]);
 
-  let status = diff_renders_cmd(tmp.path()).args([
+  let status = diff_renders_cmd(tmp.path())
+    .args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -224,7 +231,8 @@ fn diff_renders_supports_file_to_file_diffs() {
   write_color_png(&before, [0, 255, 0, 255]);
   write_color_png(&after, [0, 0, 0, 255]);
 
-  let status = diff_renders_cmd(tmp.path()).args([
+  let status = diff_renders_cmd(tmp.path())
+    .args([
       "--before",
       before.to_str().unwrap(),
       "--after",
@@ -245,6 +253,51 @@ fn diff_renders_supports_file_to_file_diffs() {
 
   assert_eq!(report["totals"]["discovered"].as_u64(), Some(1));
   assert_eq!(report["results"][0]["name"], "page");
+  assert_eq!(report["results"][0]["status"], "diff");
+
+  let diff_path = report["results"][0]["diff"]
+    .as_str()
+    .expect("diff path missing");
+  assert!(
+    tmp.path().join(diff_path).exists(),
+    "diff image missing at {}",
+    diff_path
+  );
+}
+
+#[test]
+fn diff_renders_handles_dimension_mismatches() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  write_solid_png(&before.join("page.png"), 2, 2, [10, 20, 30, 255]);
+  write_solid_png(&after.join("page.png"), 3, 2, [10, 20, 30, 255]);
+
+  let status = Command::new(env!("CARGO_BIN_EXE_diff_renders"))
+    .current_dir(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+    ])
+    .status()
+    .expect("run diff_renders");
+
+  assert!(
+    !status.success(),
+    "expected non-zero exit code for dimension mismatch"
+  );
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+
+  assert_eq!(report["totals"]["differences"].as_u64(), Some(1));
   assert_eq!(report["results"][0]["status"], "diff");
 
   let diff_path = report["results"][0]["diff"]
@@ -318,7 +371,10 @@ fn diff_renders_enforces_max_perceptual_distance() {
     .status()
     .expect("run diff_renders");
 
-  assert!(!status.success(), "expected non-zero exit due to perceptual fail");
+  assert!(
+    !status.success(),
+    "expected non-zero exit due to perceptual fail"
+  );
 
   let report: Value = serde_json::from_str(
     &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),

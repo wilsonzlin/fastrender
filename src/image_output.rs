@@ -3,6 +3,7 @@ use crate::error::RenderError;
 use crate::error::Result;
 use crate::image_compare::{self, CompareConfig};
 use image::ImageFormat;
+use image::Rgba;
 use image::RgbaImage;
 use std::io::Cursor;
 use tiny_skia::Pixmap;
@@ -129,25 +130,85 @@ pub fn diff_png(rendered: &[u8], expected: &[u8], tolerance: u8) -> Result<(Diff
   config.max_different_percent = 100.0;
 
   let diff = image_compare::compare_png(rendered, expected, &config)?;
-  if !diff.dimensions_match {
-    return Err(Error::Render(RenderError::InvalidParameters {
-      message: format!(
-        "Image dimensions differ: rendered {}x{}, expected {}x{}",
-        diff.actual_dimensions.0,
-        diff.actual_dimensions.1,
-        diff.expected_dimensions.0,
-        diff.expected_dimensions.1
-      ),
-    }));
+  if diff.dimensions_match {
+    let diff_png = diff.diff_png()?.unwrap_or_default();
+
+    let metrics = DiffMetrics {
+      pixel_diff: diff.statistics.different_pixels,
+      total_pixels: diff.statistics.total_pixels,
+      diff_percentage: diff.statistics.different_percent,
+      perceptual_distance: diff.statistics.perceptual_distance,
+    };
+
+    return Ok((metrics, diff_png));
   }
 
-  let diff_png = diff.diff_png()?.unwrap_or_default();
+  // When dimensions differ, fall back to a padded diff so reports remain usable (mirrors the old
+  // `cargo xtask diff-renders` behaviour). Missing pixels are treated as differences.
+  let rendered_img = image_compare::decode_png(rendered)?;
+  let expected_img = image_compare::decode_png(expected)?;
 
+  let max_width = rendered_img.width().max(expected_img.width());
+  let max_height = rendered_img.height().max(expected_img.height());
+  let total_pixels = (max_width as u64) * (max_height as u64);
+
+  let mut diff_image = RgbaImage::new(max_width, max_height);
+  let mut different_pixels = 0u64;
+
+  for y in 0..max_height {
+    for x in 0..max_width {
+      let rendered_px = if x < rendered_img.width() && y < rendered_img.height() {
+        Some(*rendered_img.get_pixel(x, y))
+      } else {
+        None
+      };
+      let expected_px = if x < expected_img.width() && y < expected_img.height() {
+        Some(*expected_img.get_pixel(x, y))
+      } else {
+        None
+      };
+
+      match (rendered_px, expected_px) {
+        (Some(rendered_px), Some(expected_px)) => {
+          let diff_r = rendered_px[0].abs_diff(expected_px[0]);
+          let diff_g = rendered_px[1].abs_diff(expected_px[1]);
+          let diff_b = rendered_px[2].abs_diff(expected_px[2]);
+          let diff_a = rendered_px[3].abs_diff(expected_px[3]);
+          let max_diff = diff_r.max(diff_g).max(diff_b).max(diff_a);
+
+          let is_different =
+            diff_r > tolerance || diff_g > tolerance || diff_b > tolerance || diff_a > tolerance;
+          if is_different {
+            different_pixels += 1;
+            let alpha = max_diff.saturating_mul(2).min(255);
+            diff_image.put_pixel(x, y, Rgba([255, 0, 0, alpha]));
+          } else {
+            diff_image.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+          }
+        }
+        (Some(_), None) | (None, Some(_)) => {
+          different_pixels += 1;
+          diff_image.put_pixel(x, y, Rgba([255, 0, 255, 255]));
+        }
+        (None, None) => unreachable!("loop bounds ensure at least one pixel is present"),
+      }
+    }
+  }
+
+  let diff_percentage = if total_pixels > 0 {
+    (different_pixels as f64 / total_pixels as f64) * 100.0
+  } else {
+    0.0
+  };
+
+  let diff_png = image_compare::encode_png(&diff_image)?;
   let metrics = DiffMetrics {
-    pixel_diff: diff.statistics.different_pixels,
-    total_pixels: diff.statistics.total_pixels,
-    diff_percentage: diff.statistics.different_percent,
-    perceptual_distance: diff.statistics.perceptual_distance,
+    pixel_diff: different_pixels,
+    total_pixels,
+    diff_percentage,
+    // Perceptual distance is ill-defined when dimensions don't match; treat this as maximally
+    // different for now.
+    perceptual_distance: 1.0,
   };
 
   Ok((metrics, diff_png))
