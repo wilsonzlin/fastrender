@@ -264,7 +264,16 @@ if [[ -n "${MAX_PERCEPTUAL_DISTANCE}" ]]; then
   diff_args+=(--max-perceptual-distance "${MAX_PERCEPTUAL_DISTANCE}")
 fi
 
-if cargo run --release --bin diff_renders -- "${diff_args[@]}"; then
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+if [[ "${TARGET_DIR}" != /* ]]; then
+  TARGET_DIR="${REPO_ROOT}/${TARGET_DIR}"
+fi
+DIFF_BIN="${TARGET_DIR}/release/diff_renders"
+if [[ -f "${DIFF_BIN}.exe" ]]; then
+  DIFF_BIN="${DIFF_BIN}.exe"
+fi
+
+if cargo build --release --bin diff_renders && "${DIFF_BIN}" "${diff_args[@]}"; then
   :
 else
   diff_status=$?
