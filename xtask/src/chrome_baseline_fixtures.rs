@@ -199,6 +199,15 @@ fn render_fixture(
   let chrome_log = out_dir.join(format!("{}.chrome.log", fixture.stem));
   let metadata_path = out_dir.join(format!("{}.json", fixture.stem));
 
+  // Avoid leaving stale output artifacts around when a fixture fails to render (for example when
+  // Chrome times out or crashes). We treat each run as authoritative; if it fails, callers should
+  // not accidentally reuse a PNG/metadata from an earlier successful run.
+  for path in [&output_png, &chrome_log, &metadata_path] {
+    if path.exists() {
+      let _ = fs::remove_file(path);
+    }
+  }
+
   let profile_dir = temp_root.join("profile").join(&fixture.stem);
   fs::create_dir_all(&profile_dir)
     .with_context(|| format!("create chrome profile dir {}", profile_dir.display()))?;

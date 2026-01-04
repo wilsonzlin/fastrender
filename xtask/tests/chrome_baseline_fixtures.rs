@@ -66,6 +66,36 @@ exit 0
   path
 }
 
+fn write_failing_stub_chrome(dir: &std::path::Path) -> PathBuf {
+  let path = dir.join("chrome");
+  fs::write(
+    &path,
+    r#"#!/usr/bin/env sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo "Chromium 123.0.0.0"
+  exit 0
+fi
+
+echo "stub chrome failing args: $@"
+exit 1
+"#,
+  )
+  .expect("write failing stub chrome");
+
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&path)
+      .expect("stat failing chrome")
+      .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).expect("chmod failing chrome");
+  }
+
+  path
+}
+
 #[test]
 fn chrome_baseline_fixtures_respects_sharding_and_writes_outputs() {
   let repo_root = repo_root();
@@ -224,5 +254,53 @@ fn chrome_baseline_fixtures_errors_on_non_finite_dpr() {
   assert!(
     stderr.contains("--dpr must be a positive, finite number"),
     "error should mention invalid dpr; got:\n{stderr}"
+  );
+}
+
+#[test]
+fn chrome_baseline_fixtures_removes_stale_outputs_on_failure() {
+  let repo_root = repo_root();
+  let temp = tempdir().expect("temp dir");
+  let fixture_root = temp.path().join("fixtures");
+  let out_dir = temp.path().join("out");
+  let chrome_dir = temp.path().join("chrome");
+  fs::create_dir_all(&chrome_dir).expect("create chrome dir");
+  write_failing_stub_chrome(&chrome_dir);
+
+  write_fixture(&fixture_root, "hello");
+  fs::create_dir_all(&out_dir).expect("create out dir");
+  fs::write(out_dir.join("hello.png"), b"old png").expect("write stale png");
+  fs::write(out_dir.join("hello.json"), b"{\"stale\":true}").expect("write stale json");
+  fs::write(out_dir.join("hello.chrome.log"), b"old log").expect("write stale log");
+
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(&repo_root)
+    .arg("chrome-baseline-fixtures")
+    .arg("--fixture-dir")
+    .arg(&fixture_root)
+    .arg("--out-dir")
+    .arg(&out_dir)
+    .arg("--chrome-dir")
+    .arg(&chrome_dir)
+    .arg("--fixtures")
+    .arg("hello")
+    .output()
+    .expect("run chrome-baseline-fixtures");
+  assert!(
+    !output.status.success(),
+    "command should fail when stub chrome fails"
+  );
+
+  assert!(
+    !out_dir.join("hello.png").exists(),
+    "stale png should have been removed on failure"
+  );
+  assert!(
+    !out_dir.join("hello.json").exists(),
+    "stale json should have been removed on failure"
+  );
+  assert!(
+    out_dir.join("hello.chrome.log").is_file(),
+    "chrome log should be replaced on failure"
   );
 }
