@@ -80,9 +80,10 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
   - Implementation: `reencode_pixmap_to_linear_rgb()` -> `apply_gaussian_blur_cached()` ->
     `reencode_pixmap_to_srgb()`.
 - `feDropShadow`
-  - The blur portion follows the same policy as `feGaussianBlur` using the same re-encode helpers.
-  - Note: the final “shadow over source” merge is currently done via tiny-skia `SourceOver` on the
-    stored pixmap bytes (no re-encoding), so `linearRGB` is not fully honored for that step.
+  - Runs in **linearRGB** when requested.
+  - Implementation: the shadow pixmap is re-encoded to linearRGB before blurring and compositing,
+    and `SourceGraphic` is also re-encoded to linearRGB before the final `SourceOver` merge. Output
+    is then re-encoded back to sRGB.
 - `feOffset`
   - Runs in **linearRGB** when requested *and* the offset requires interpolation (fractional
     `dx`/`dy`).
@@ -137,15 +138,12 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
 - `feTile`
   - Copies/tiles the input pixels (no CIF-specific conversion today).
 - `feTurbulence`
-  - Procedurally generates noise and writes channel bytes directly (no CIF-specific conversion
-    today; see remaining gaps below).
+  - Procedurally generates noise and encodes the output according to the step’s
+    `color-interpolation-filters`: for `linearRGB`, the generated values are treated as linear and
+    encoded via `linear_to_srgb()` before being written to the pixmap.
 
-Primitives/operations that currently **do not fully honor `color-interpolation-filters`**
-(they still operate directly on stored sRGB bytes in places where linearRGB would require
-conversion):
-
-- `feTurbulence` (outputs are generated/written as premultiplied RGBA8 with no CIF-aware encoding)
-- `feDropShadow` (CIF is applied to the blur, but not to the final shadow+source compositing step)
+No known remaining gaps in `color-interpolation-filters` handling for the currently-supported
+primitives.
 
 ## Known limitations / implications
 
@@ -153,7 +151,5 @@ conversion):
   back to 8-bit at primitive outputs.
 - **Conversions at primitive boundaries:** linearRGB primitives convert in/out of linear for their
   computation instead of keeping a float/linear surface across multiple primitives.
-- **Partial coverage of `color-interpolation-filters`:** some primitives do not yet apply explicit
-  sRGB <-> linearRGB conversion for every stage; `linearRGB` may not be fully honored for filter
-  graphs that rely on `feDropShadow`’s final “shadow over source” merge, or on primitives like
-  `feTurbulence` that currently generate channel values without CIF-aware encoding.
+- **`color-interpolation-filters` coverage:** all currently-supported primitives apply explicit
+  sRGB <-> linearRGB conversion for color-space-dependent operations.
