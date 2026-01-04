@@ -1759,6 +1759,99 @@ fn parse_transition_timing_function(raw: &str) -> Option<TransitionTimingFunctio
     return Some(TransitionTimingFunction::Steps(1, StepPosition::End));
   }
 
+  if starts_with_ignore_ascii_case(trimmed, "linear(") && trimmed.ends_with(')') {
+    let args = &trimmed["linear(".len()..trimmed.len() - 1];
+    let mut raw_stops: Vec<(Option<f32>, f32)> = Vec::new();
+    for stop in split_top_level_commas(args) {
+      let pieces: Vec<&str> = stop.split_whitespace().collect();
+      if pieces.is_empty() {
+        return None;
+      }
+      let y = pieces[0].trim().parse::<f32>().ok()?;
+      if !y.is_finite() {
+        return None;
+      }
+      match pieces.len() {
+        1 => raw_stops.push((None, y)),
+        2 => {
+          let x = parse_percentage(pieces[1]).map(|v| v / 100.0)?;
+          if !x.is_finite() {
+            return None;
+          }
+          raw_stops.push((Some(x), y));
+        }
+        3 => {
+          let x1 = parse_percentage(pieces[1]).map(|v| v / 100.0)?;
+          let x2 = parse_percentage(pieces[2]).map(|v| v / 100.0)?;
+          if !x1.is_finite() || !x2.is_finite() {
+            return None;
+          }
+          raw_stops.push((Some(x1), y));
+          raw_stops.push((Some(x2), y));
+        }
+        _ => return None,
+      }
+    }
+
+    if raw_stops.len() < 2 {
+      return None;
+    }
+
+    let mut xs: Vec<Option<f32>> = raw_stops.iter().map(|(x, _)| *x).collect();
+    if xs[0].is_none() {
+      xs[0] = Some(0.0);
+    }
+    let last = xs.len() - 1;
+    if xs[last].is_none() {
+      xs[last] = Some(1.0);
+    }
+
+    let mut idx = 0usize;
+    while idx < xs.len() {
+      while idx < xs.len() && xs[idx].is_some() {
+        idx += 1;
+      }
+      if idx >= xs.len() {
+        break;
+      }
+      let start = idx.saturating_sub(1);
+      let start_x = xs[start].unwrap_or(0.0);
+      let mut end = idx + 1;
+      while end < xs.len() && xs[end].is_none() {
+        end += 1;
+      }
+      if end >= xs.len() {
+        break;
+      }
+      let end_x = xs[end].unwrap();
+      if end_x < start_x {
+        return None;
+      }
+      let gaps = end - start;
+      for step in 1..gaps {
+        let pos = start_x + (end_x - start_x) * (step as f32 / gaps as f32);
+        xs[start + step] = Some(pos);
+      }
+      idx = end + 1;
+    }
+
+    let mut stops = Vec::with_capacity(raw_stops.len());
+    for (idx, (_, y)) in raw_stops.into_iter().enumerate() {
+      let x = xs.get(idx).copied().flatten()?;
+      stops.push(LinearStop { input: x, output: y });
+    }
+    if stops.len() < 2 {
+      return None;
+    }
+    if stops
+      .windows(2)
+      .any(|pair| pair[1].input.is_nan() || pair[1].input < pair[0].input)
+    {
+      return None;
+    }
+    return Some(TransitionTimingFunction::LinearFunction(stops));
+  }
+
   if starts_with_ignore_ascii_case(trimmed, "cubic-bezier(") && trimmed.ends_with(')') {
     let args = &trimmed["cubic-bezier(".len()..trimmed.len() - 1];
     let nums: Vec<f32> = args
@@ -15555,6 +15648,51 @@ mod tests {
   }
 
   #[test]
+  fn transition_shorthand_parses_linear_function_tokens() {
+    let decls = parse_declarations("transition: 200ms linear(0,0.5,1) opacity;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.transition_properties,
+      vec![TransitionProperty::Name("opacity".to_string())].into()
+    );
+    assert_eq!(styles.transition_durations, vec![200.0].into());
+    assert_eq!(styles.transition_delays, vec![0.0].into());
+    assert_eq!(
+      styles.transition_timing_functions,
+      vec![TransitionTimingFunction::LinearFunction(vec![
+        LinearStop {
+          input: 0.0,
+          output: 0.0,
+        },
+        LinearStop {
+          input: 0.5,
+          output: 0.5,
+        },
+        LinearStop {
+          input: 1.0,
+          output: 1.0,
+        },
+      ])]
+      .into()
+    );
+  }
+
+  #[test]
   fn transition_shorthand_parses_comma_list_with_mixed_entries() {
     let decls = parse_declarations(
       "transition: 200ms cubic-bezier(.25,1,.5,1) 50ms opacity, transform 1s;",
@@ -15818,6 +15956,51 @@ mod tests {
     assert_eq!(
       styles.animation_timing_functions,
       vec![TransitionTimingFunction::Steps(4, StepPosition::End)].into()
+    );
+    assert_eq!(
+      styles.animation_iteration_counts,
+      vec![AnimationIterationCount::Infinite].into()
+    );
+  }
+
+  #[test]
+  fn animation_shorthand_parses_linear_function_and_out_of_order_tokens() {
+    let decls = parse_declarations("animation: 2s linear(0,0.5,1) infinite spin;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(styles.animation_names, vec!["spin".to_string()]);
+    assert_eq!(styles.animation_durations, vec![2000.0].into());
+    assert_eq!(
+      styles.animation_timing_functions,
+      vec![TransitionTimingFunction::LinearFunction(vec![
+        LinearStop {
+          input: 0.0,
+          output: 0.0,
+        },
+        LinearStop {
+          input: 0.5,
+          output: 0.5,
+        },
+        LinearStop {
+          input: 1.0,
+          output: 1.0,
+        },
+      ])]
+      .into()
     );
     assert_eq!(
       styles.animation_iteration_counts,

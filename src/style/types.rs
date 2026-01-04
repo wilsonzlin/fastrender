@@ -1249,6 +1249,15 @@ pub enum StepPosition {
   End,
 }
 
+/// Stop in a `linear()` easing function.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinearStop {
+  /// Input progress in the range [0, 1] (though authored percentages may exceed this).
+  pub input: f32,
+  /// Output progress at this stop (can overshoot).
+  pub output: f32,
+}
+
 /// Timing function used by CSS transitions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransitionTimingFunction {
@@ -1259,6 +1268,8 @@ pub enum TransitionTimingFunction {
   EaseInOut,
   CubicBezier(f32, f32, f32, f32),
   Steps(u32, StepPosition),
+  /// CSS Easing Level 2 `linear()` function, represented as a list of piecewise-linear stops.
+  LinearFunction(Vec<LinearStop>),
 }
 
 impl TransitionTimingFunction {
@@ -1280,6 +1291,7 @@ impl TransitionTimingFunction {
           StepPosition::End => ((t * steps as f32).floor() / steps as f32).clamp(0.0, 1.0),
         }
       }
+      TransitionTimingFunction::LinearFunction(stops) => linear_function_value(stops, t),
     }
   }
 }
@@ -1298,6 +1310,28 @@ fn cubic_bezier_value(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
   } else {
     t
   }
+}
+
+fn linear_function_value(stops: &[LinearStop], t: f32) -> f32 {
+  if stops.len() < 2 {
+    return t;
+  }
+  let mut prev = stops[0];
+  if t <= prev.input {
+    return prev.output;
+  }
+  for &next in &stops[1..] {
+    if t <= next.input {
+      let denom = next.input - prev.input;
+      if denom.abs() <= f32::EPSILON {
+        return next.output;
+      }
+      let alpha = ((t - prev.input) / denom).clamp(0.0, 1.0);
+      return prev.output + (next.output - prev.output) * alpha;
+    }
+    prev = next;
+  }
+  prev.output
 }
 
 /// CSS `scrollbar-gutter`
