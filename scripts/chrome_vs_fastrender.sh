@@ -329,6 +329,9 @@ if [[ "${TARGET_DIR}" != /* ]]; then
   TARGET_DIR="${ROOT}/${TARGET_DIR}"
 fi
 DIFF_BIN="${TARGET_DIR}/release/diff_renders"
+if [[ -f "${DIFF_BIN}.exe" ]]; then
+  DIFF_BIN="${DIFF_BIN}.exe"
+fi
 
 set +e
 cargo build --release --bin diff_renders
