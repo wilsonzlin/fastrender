@@ -1866,6 +1866,31 @@ pub fn sample_keyframes(
       .partial_cmp(&b.offset)
       .unwrap_or(std::cmp::Ordering::Equal)
   });
+  // Browsers treat missing 0%/100% keyframes as implicit endpoints that use the
+  // underlying style. We model this by adding synthetic keyframes with empty
+  // declarations so `from_style`/`to_style` fall back to `base_style`.
+  const ENDPOINT_EPS: f32 = 1e-6;
+  let has_start = frames
+    .first()
+    .is_some_and(|frame| (frame.offset - 0.0).abs() <= ENDPOINT_EPS);
+  if !has_start {
+    frames.insert(
+      0,
+      Keyframe {
+        offset: 0.0,
+        declarations: Vec::new(),
+      },
+    );
+  }
+  let has_end = frames
+    .last()
+    .is_some_and(|frame| (frame.offset - 1.0).abs() <= ENDPOINT_EPS);
+  if !has_end {
+    frames.push(Keyframe {
+      offset: 1.0,
+      declarations: Vec::new(),
+    });
+  }
   let progress = clamp_progress(progress);
 
   let mut prev: &Keyframe = &frames[0];
@@ -2616,6 +2641,26 @@ mod tests {
     }
   }
 
+  fn sampled_opacity_with_base_opacity(
+    rule: &KeyframesRule,
+    progress: f32,
+    base_opacity: f32,
+  ) -> f32 {
+    let mut base_style = ComputedStyle::default();
+    base_style.opacity = base_opacity;
+    let values = sample_keyframes(
+      rule,
+      progress,
+      &base_style,
+      Size::new(800.0, 600.0),
+      Size::new(100.0, 100.0),
+    );
+    match values.get("opacity") {
+      Some(AnimatedValue::Opacity(v)) => *v,
+      other => panic!("expected opacity, got {other:?}"),
+    }
+  }
+
   fn sampled_translate(rule: &KeyframesRule, progress: f32, element_size: Size) -> TranslateValue {
     let values = sample_keyframes(
       rule,
@@ -2723,10 +2768,9 @@ mod tests {
 
   #[test]
   fn sample_keyframes_translate_interpolates_percentages() {
-    let sheet = parse_stylesheet(
-      "@keyframes move { from { translate: 0 -100%; } to { translate: 0 0; } }",
-    )
-    .unwrap();
+    let sheet =
+      parse_stylesheet("@keyframes move { from { translate: 0 -100%; } to { translate: 0 0; } }")
+        .unwrap();
     let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
     let rule = &keyframes[0];
 
@@ -2744,8 +2788,7 @@ mod tests {
   #[test]
   fn sample_keyframes_rotate_interpolates_angle() {
     let sheet =
-      parse_stylesheet("@keyframes spin { from { rotate: 0deg; } to { rotate: 90deg; } }")
-        .unwrap();
+      parse_stylesheet("@keyframes spin { from { rotate: 0deg; } to { rotate: 90deg; } }").unwrap();
     let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
     let rule = &keyframes[0];
 
@@ -2758,8 +2801,8 @@ mod tests {
 
   #[test]
   fn sample_keyframes_scale_interpolates_numbers() {
-    let sheet = parse_stylesheet("@keyframes zoom { from { scale: 1; } to { scale: 2 3; } }")
-      .unwrap();
+    let sheet =
+      parse_stylesheet("@keyframes zoom { from { scale: 1; } to { scale: 2 3; } }").unwrap();
     let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
     let rule = &keyframes[0];
 
@@ -2772,6 +2815,39 @@ mod tests {
       }
       ScaleValue::None => panic!("expected scale values"),
     }
+  }
+
+  #[test]
+  fn sample_keyframes_to_only_inserts_implicit_from() {
+    let sheet = parse_stylesheet("@keyframes k { to { opacity: 1; } }").unwrap();
+    let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+    let rule = &keyframes[0];
+
+    let opacity = sampled_opacity_with_base_opacity(rule, 0.5, 0.0);
+    assert!((opacity - 0.5).abs() < 1e-6, "opacity={opacity}");
+  }
+
+  #[test]
+  fn sample_keyframes_from_only_inserts_implicit_to() {
+    let sheet = parse_stylesheet("@keyframes k { from { opacity: 0; } }").unwrap();
+    let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+    let rule = &keyframes[0];
+
+    let opacity = sampled_opacity_with_base_opacity(rule, 0.5, 1.0);
+    assert!((opacity - 0.5).abs() < 1e-6, "opacity={opacity}");
+  }
+
+  #[test]
+  fn sample_keyframes_mid_only_inserts_both_endpoints() {
+    let sheet = parse_stylesheet("@keyframes k { 50% { opacity: 0; } }").unwrap();
+    let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+    let rule = &keyframes[0];
+
+    let before_mid = sampled_opacity_with_base_opacity(rule, 0.25, 1.0);
+    assert!((before_mid - 0.5).abs() < 1e-6, "before_mid={before_mid}");
+
+    let after_mid = sampled_opacity_with_base_opacity(rule, 0.75, 1.0);
+    assert!((after_mid - 0.5).abs() < 1e-6, "after_mid={after_mid}");
   }
 
   fn decode_png(bytes: &[u8]) -> image::RgbaImage {
