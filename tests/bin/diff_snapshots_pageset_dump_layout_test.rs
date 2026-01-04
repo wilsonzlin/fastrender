@@ -143,6 +143,16 @@ fn diff_snapshots_supports_pageset_dump_layout() {
     })
     .expect("missing entry for a");
   assert_eq!(entry["status"], "matched");
+  assert_eq!(
+    entry["before_snapshot"].as_str(),
+    Some("before/a/snapshot.json"),
+    "expected before_snapshot to be relative to report.html"
+  );
+  assert_eq!(
+    entry["after_snapshot"].as_str(),
+    Some("after/a/snapshot.json"),
+    "expected after_snapshot to be relative to report.html"
+  );
 }
 
 #[test]

@@ -271,6 +271,7 @@ fn run() -> Result<(), String> {
       html_dir.display()
     )
   })?;
+  let html_dir = fs::canonicalize(&html_dir).unwrap_or(html_dir);
 
   let (before_root, after_root, entries, totals) = match (before_meta.is_dir(), after_meta.is_dir())
   {
