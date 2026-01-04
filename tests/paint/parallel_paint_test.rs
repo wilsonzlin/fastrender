@@ -1,8 +1,8 @@
 use fastrender::error::{Error, RenderError, RenderStage};
 use fastrender::paint::clip_path::ResolvedClipPath;
 use fastrender::paint::display_list::{
-  BlendMode, BoxShadowItem, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem,
-  ImageData, MaskReferenceRects, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
+  BlendMode, BoxShadowItem, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem, ImageData,
+  MaskReferenceRects, ResolvedFilter, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
   StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, Transform3D, TransformItem,
 };
 use fastrender::paint::display_list_renderer::{DisplayListRenderer, PaintParallelism};
@@ -484,6 +484,93 @@ fn parallel_paint_respects_deadline() {
       .render(&basic_list())
       .unwrap_err()
   });
+
+  match err {
+    Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Paint),
+    other => panic!("expected paint timeout, got {other:?}"),
+  }
+}
+
+#[test]
+fn mask_composite_respects_deadline() {
+  // Regression test for `mask-composite` per-pixel compositing loops: under a tight deadline the
+  // renderer must abort (instead of finishing the O(pixels) loop and only noticing the timeout
+  // afterwards).
+  let size = 2048u32;
+  let bounds = Rect::from_xywh(0.0, 0.0, size as f32, size as f32);
+  let mask_rects = MaskReferenceRects {
+    border: bounds,
+    padding: bounds,
+    content: bounds,
+  };
+
+  let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+  let layer_template = ResolvedMaskLayer {
+    image: ResolvedMaskImage::Raster(image),
+    repeat: BackgroundRepeat::no_repeat(),
+    position: BackgroundPosition::Position {
+      x: BackgroundPositionComponent {
+        alignment: 0.0,
+        offset: Length::px(0.0),
+      },
+      y: BackgroundPositionComponent {
+        alignment: 0.0,
+        offset: Length::px(0.0),
+      },
+    },
+    size: BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    ),
+    origin: BackgroundBox::BorderBox,
+    clip: MaskClip::BorderBox,
+    mode: MaskMode::Alpha,
+    composite: MaskComposite::Add,
+  };
+
+  let mask = ResolvedMask {
+    layers: vec![
+      layer_template.clone(),
+      layer_template.clone(),
+      layer_template.clone(),
+      layer_template,
+    ],
+    color: Rgba::BLACK,
+    font_size: 16.0,
+    root_font_size: 16.0,
+    rects: mask_rects,
+  };
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(mask),
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::new(30, 160, 220, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let renderer = DisplayListRenderer::new(size, size, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled());
+
+  let deadline = RenderDeadline::new(Some(Duration::from_millis(1)), None);
+  let _guard = DeadlineGuard::install(Some(&deadline));
+  let err = renderer.render(&list).unwrap_err();
 
   match err {
     Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Paint),
