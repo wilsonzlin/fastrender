@@ -16,6 +16,7 @@ pub(super) struct DiskCacheIndex {
   cache_dir: PathBuf,
   journal_path: PathBuf,
   journal_lock_path: PathBuf,
+  journal_lock_legacy_path: PathBuf,
   state: Arc<Mutex<IndexState>>,
   loaded: Arc<AtomicBool>,
 }
@@ -85,26 +86,32 @@ pub(super) struct DebugStats {
 }
 
 struct JournalLock {
-  _file: File,
+  _files: Vec<File>,
 }
 
 impl Drop for JournalLock {
   fn drop(&mut self) {
-    let _ = self._file.unlock();
+    for file in &self._files {
+      let _ = file.unlock();
+    }
   }
 }
 
 impl DiskCacheIndex {
   pub(super) fn new(cache_dir: PathBuf) -> Self {
     let journal_path = cache_dir.join("index.jsonl");
-    // This lock file is only used for advisory cross-process synchronization. Avoid a `.lock`
-    // suffix so tooling that scans for stale per-entry lock files (`*.bin.lock`) does not treat
-    // this as an orphaned cache entry.
+    // This lock file is only used for advisory cross-process synchronization.
+    //
+    // We also keep (and lock) the legacy `index.jsonl.lock` filename for compatibility with older
+    // fastrender versions; this ensures mixed-version pageset workers still serialize journal
+    // mutations.
     let journal_lock_path = cache_dir.join("index.jsonl.journal_lock");
+    let journal_lock_legacy_path = cache_dir.join("index.jsonl.lock");
     Self {
       cache_dir,
       journal_path,
       journal_lock_path,
+      journal_lock_legacy_path,
       state: Arc::new(Mutex::new(IndexState::default())),
       loaded: Arc::new(AtomicBool::new(false)),
     }
@@ -826,13 +833,17 @@ impl DiskCacheIndex {
   }
 
   fn lock_journal(&self) -> std::io::Result<JournalLock> {
-    let file = OpenOptions::new()
-      .create(true)
-      .read(true)
-      .write(true)
-      .open(&self.journal_lock_path)?;
-    file.lock_exclusive()?;
-    Ok(JournalLock { _file: file })
+    let mut files = Vec::with_capacity(2);
+    for path in [&self.journal_lock_legacy_path, &self.journal_lock_path] {
+      let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)?;
+      file.lock_exclusive()?;
+      files.push(file);
+    }
+    Ok(JournalLock { _files: files })
   }
 
   fn write_journal_bytes(&self, file: &mut File, bytes: &[u8]) -> std::io::Result<()> {

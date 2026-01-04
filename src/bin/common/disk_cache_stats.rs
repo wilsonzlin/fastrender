@@ -161,6 +161,7 @@ mod tests {
 
     fs::write(dir.join("fresh.bin.lock"), b"lock").unwrap();
     fs::write(dir.join("stale.bin.lock"), b"lock").unwrap();
+    fs::write(dir.join("index.jsonl.lock"), b"lock").unwrap();
     fs::write(dir.join("partial.bin.tmp"), b"partial").unwrap();
     fs::write(dir.join("index.jsonl"), [0u8; 7]).unwrap();
 
