@@ -302,6 +302,14 @@ pub fn is_emoji_presentation(c: char) -> bool {
     return true;
   }
 
+  // Some Miscellaneous Symbols and Arrows that default to emoji presentation.
+  //
+  // Our emoji coverage is intentionally minimal; we include the codepoints we observe
+  // in pageset runs + deterministic fixtures.
+  if matches!(cp, 0x2B06 | 0x2B07 | 0x2B50) {
+    return true;
+  }
+
   false
 }
 
@@ -1147,6 +1155,13 @@ mod tests {
     assert!(is_emoji_presentation('🚀'));
     assert!(is_emoji_presentation('🚗'));
     assert!(is_emoji_presentation('🛸'));
+  }
+
+  #[test]
+  fn test_is_emoji_presentation_misc_symbols_and_arrows() {
+    assert!(is_emoji_presentation('⭐'));
+    assert!(is_emoji_presentation('⬆'));
+    assert!(is_emoji_presentation('⬇'));
   }
 
   #[test]

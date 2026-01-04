@@ -90,10 +90,11 @@ pip install -r tests/fixtures/fonts/requirements.txt
     marks (U+0300–036F); JP adds kana (U+3040–31FF) and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
   - `NotoSansSymbols-subset.ttf` / `NotoSansSymbols2-subset.ttf`: UI arrows, checkmarks, stars, alerts, and related
     symbol glyphs used by fallback chains.
-  - `FastRenderEmoji.ttf`: COLR/CPAL emoji fixture that covers 😀 (U+1F600), ❤ (U+2764), 👍 (U+1F44D), and 🇺🇸
-    (U+1F1FA U+1F1F8 via a GSUB ligature). Pageset-derived emoji codepoints (including the Finland flag regional
-    indicator letters U+1F1EB/U+1F1EE) are mapped onto the fixture glyphs so hermetic runs avoid missing-emoji tofu; see
-    `generate_fastrender_emoji_font.py` for the authoritative list.
+- `FastRenderEmoji.ttf`: COLR/CPAL emoji fixture that covers 😀 (U+1F600), ❤ (U+2764), 👍 (U+1F44D), 🇺🇸
+    (U+1F1FA U+1F1F8 via a GSUB ligature), and 👨‍👩‍👧‍👦 (U+1F468 U+200D U+1F469 U+200D U+1F467 U+200D U+1F466 via a GSUB
+    ligature). Pageset-derived emoji codepoints (including the Finland flag regional indicator letters U+1F1EB/U+1F1EE)
+    are mapped onto the fixture glyphs so hermetic runs avoid missing-emoji tofu; see `generate_fastrender_emoji_font.py`
+    for the authoritative list.
   - `STIXTwoMath-Regular.otf`: Math operators and alphanumeric symbols preserved with the `MATH` table intact so math
     layout has a bundled fallback in hermetic runs.
 
@@ -400,8 +401,10 @@ pip install -r tests/fixtures/fonts/requirements.txt
 - **Source:** Generated in-repo with `fontTools` 4.61.1 via `generate_fastrender_emoji_font.py`.
 - **License:** Public Domain / CC0.
 - **Glyphs:** Base emoji glyphs are U+1F600 (😀), U+2764 (❤), and U+1F44D (👍), plus a few regional indicator tiles
-  (including the 🇺🇸 codepoints U+1F1FA/U+1F1F8 and the 🇫🇮 codepoints U+1F1EB/U+1F1EE) and U+0020 (space).
-  A tiny GSUB ligature maps 🇺🇸 to a single `flag_us` glyph so flag sequences render as a single emoji glyph.
+  (including the 🇺🇸 codepoints U+1F1FA/U+1F1F8 and the 🇫🇮 codepoints U+1F1EB/U+1F1EE), a minimal ZWJ family sequence
+  (U+1F468 U+200D U+1F469 U+200D U+1F467 U+200D U+1F466), and U+0020 (space).
+  Tiny GSUB ligatures map 🇺🇸 to a single `flag_us` glyph and 👨‍👩‍👧‍👦 to a single `family` glyph so multi-codepoint emoji
+  sequences can be rendered atomically in hermetic runs.
   Additional pageset-derived emoji codepoints are mapped onto the existing fixture glyphs so bundled-font runs avoid
   missing-emoji tofu; see the generator script for the authoritative list.
 - **Regeneration:** From the repository root:

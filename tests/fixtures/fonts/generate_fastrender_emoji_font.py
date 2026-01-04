@@ -127,12 +127,22 @@ def main() -> None:
     "flag_us.layer1",
     "flag_us.layer2",
     "flag_us.layer3",
+    # Minimal ZWJ sequence components/ligature.
+    "zwj",
+    "man",
+    "woman",
+    "girl",
+    "boy",
+    "family",
+    "family.layer1",
+    "family.layer2",
   ]
 
   fb = FontBuilder(upem, isTTF=True)
   fb.setupGlyphOrder(glyph_order)
   cmap = {
     0x0020: "space",
+    0x200D: "zwj",
     0x1F600: "grin",
     0x2764: "heart",
     0x1F44D: "thumb",
@@ -141,14 +151,21 @@ def main() -> None:
     0x1F1EE: "ri_generic",  # 🇮
     0x1F1FA: "ri_u",
     0x1F1F8: "ri_s",
+    # ZWJ sequence (family) codepoints.
+    0x1F468: "man",  # 👨
+    0x1F469: "woman",  # 👩
+    0x1F467: "girl",  # 👧
+    0x1F466: "boy",  # 👦
   }
   # Pageset-derived emoji (from `bundled_font_coverage`) mapped onto the existing fixture glyphs
   # so bundled-font runs avoid missing-emoji tofu.
   for codepoint in [
+    0x2602,  # ☂ (emoji variant ☂️)
     0x2636,  # ☶
     0x26A0,  # ⚠ (emoji variant ⚠️)
     0x25B6,  # ▶ (emoji variant ▶️)
     0x2705,  # ✅
+    0x2714,  # ✔
     0x270D,  # ✍
     0x2726,  # ✦
     0x2728,  # ✨
@@ -227,6 +244,7 @@ def main() -> None:
   glyphs = {
     ".notdef": rect_glyph(100, 0, 900, 800),
     "space": rect_glyph(0, 0, 0, 0),
+    "zwj": rect_glyph(0, 0, 0, 0),
     # 😀
     "grin": rect_glyph(0, 0, 0, 0),
     "grin.layer1": rect_glyph(150, 150, 850, 850),
@@ -250,11 +268,20 @@ def main() -> None:
     "flag_us.layer1": rect_glyph(150, 180, 850, 720),  # white background
     "flag_us.layer2": flag_stripes_glyph(),
     "flag_us.layer3": rect_glyph(150, 480, 500, 720),  # blue canton
+    # ZWJ family sequence.
+    "man": rect_glyph(0, 0, 0, 0),
+    "woman": rect_glyph(0, 0, 0, 0),
+    "girl": rect_glyph(0, 0, 0, 0),
+    "boy": rect_glyph(0, 0, 0, 0),
+    "family": rect_glyph(0, 0, 0, 0),
+    "family.layer1": rect_glyph(150, 150, 850, 850),
+    "family.layer2": regional_indicator_generic_mark_glyph(),
   }
 
   advance = 1000
   metrics = {name: (advance, 0) for name in glyph_order}
   metrics["space"] = (500, 0)
+  metrics["zwj"] = (0, 0)
 
   fb.setupGlyf(glyphs)
   fb.setupHorizontalMetrics(metrics)
@@ -296,6 +323,11 @@ def main() -> None:
       "grin": [("grin.layer1", 0), ("grin.layer2", 1)],
       "heart": [("heart.layer1", 2)],
       "thumb": [("thumb.layer1", 3), ("thumb.layer2", 1)],
+      "man": [("grin.layer1", 0), ("grin.layer2", 1)],
+      "woman": [("grin.layer1", 0), ("grin.layer2", 1)],
+      "girl": [("grin.layer1", 0), ("grin.layer2", 1)],
+      "boy": [("grin.layer1", 0), ("grin.layer2", 1)],
+      "family": [("family.layer1", 3), ("family.layer2", 1)],
       "ri_generic": [("ri_generic.layer1", 4), ("ri_generic.layer2", 5)],
       "flag_us": [
         ("flag_us.layer1", 4),
@@ -315,6 +347,7 @@ languagesystem DFLT dflt;
 
 feature ccmp {
   sub ri_u ri_s by flag_us;
+  sub man zwj woman zwj girl zwj boy by family;
 } ccmp;
 """,
   )
