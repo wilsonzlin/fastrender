@@ -1,0 +1,149 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: #1c1c1c;
+  }
+
+  svg {
+    display: block;
+  }
+</style>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="64"
+  height="32"
+  viewBox="0 0 64 32"
+  shape-rendering="crispEdges"
+>
+  <defs>
+    <pattern id="stripes" width="2" height="1" patternUnits="userSpaceOnUse">
+      <rect width="1" height="1" fill="#000" />
+      <rect x="1" width="1" height="1" fill="#fff" />
+    </pattern>
+
+    <!-- Default (linearRGB) vs explicit sRGB for each primitive type. -->
+    <filter id="cif-composite-linear" x="0" y="0" width="100%" height="100%">
+      <feFlood flood-color="#fff" flood-opacity="0.5" result="overlay" />
+      <feComposite in="overlay" in2="SourceGraphic" operator="over" />
+    </filter>
+    <filter
+      id="cif-composite-srgb"
+      x="0"
+      y="0"
+      width="100%"
+      height="100%"
+      color-interpolation-filters="sRGB"
+    >
+      <feFlood flood-color="#fff" flood-opacity="0.5" result="overlay" />
+      <feComposite in="overlay" in2="SourceGraphic" operator="over" />
+    </filter>
+
+    <filter id="cif-blend-linear" x="0" y="0" width="100%" height="100%">
+      <feFlood flood-color="#fff" flood-opacity="0.5" result="overlay" />
+      <feBlend in="overlay" in2="SourceGraphic" mode="normal" result="mixed" />
+      <feFlood flood-color="#808080" flood-opacity="1" result="mul" />
+      <feBlend in="mixed" in2="mul" mode="multiply" />
+    </filter>
+    <filter
+      id="cif-blend-srgb"
+      x="0"
+      y="0"
+      width="100%"
+      height="100%"
+      color-interpolation-filters="sRGB"
+    >
+      <feFlood flood-color="#fff" flood-opacity="0.5" result="overlay" />
+      <feBlend in="overlay" in2="SourceGraphic" mode="normal" result="mixed" />
+      <feFlood flood-color="#808080" flood-opacity="1" result="mul" />
+      <feBlend in="mixed" in2="mul" mode="multiply" />
+    </filter>
+
+    <filter id="cif-convolve-linear" x="0" y="0" width="100%" height="100%">
+      <feConvolveMatrix
+        in="SourceGraphic"
+        order="2 1"
+        kernelMatrix="0.5 0.5"
+        targetX="0"
+        edgeMode="wrap"
+      />
+    </filter>
+    <filter
+      id="cif-convolve-srgb"
+      x="0"
+      y="0"
+      width="100%"
+      height="100%"
+      color-interpolation-filters="sRGB"
+    >
+      <feConvolveMatrix
+        in="SourceGraphic"
+        order="2 1"
+        kernelMatrix="0.5 0.5"
+        targetX="0"
+        edgeMode="wrap"
+      />
+    </filter>
+
+    <filter id="cif-displacement-linear" x="0" y="0" width="100%" height="100%">
+      <feFlood flood-color="rgb(255 0 0)" flood-opacity="0.5" result="map" />
+      <feDisplacementMap
+        in="SourceGraphic"
+        in2="map"
+        scale="1"
+        xChannelSelector="R"
+        yChannelSelector="A"
+      />
+    </filter>
+    <filter
+      id="cif-displacement-srgb"
+      x="0"
+      y="0"
+      width="100%"
+      height="100%"
+      color-interpolation-filters="sRGB"
+    >
+      <feFlood flood-color="rgb(255 0 0)" flood-opacity="0.5" result="map" />
+      <feDisplacementMap
+        in="SourceGraphic"
+        in2="map"
+        scale="1"
+        xChannelSelector="R"
+        yChannelSelector="A"
+      />
+    </filter>
+  </defs>
+
+  <rect width="64" height="32" fill="#1c1c1c" />
+
+  <!-- Row 1: default (linearRGB). -->
+  <g transform="translate(2 2)" filter="url(#cif-composite-linear)">
+    <rect width="12" height="12" fill="#000" />
+  </g>
+  <g transform="translate(18 2)" filter="url(#cif-blend-linear)">
+    <rect width="12" height="12" fill="#000" />
+  </g>
+  <g transform="translate(34 2)" filter="url(#cif-convolve-linear)">
+    <rect width="12" height="12" fill="url(#stripes)" />
+  </g>
+  <g transform="translate(50 2)" filter="url(#cif-displacement-linear)">
+    <rect width="12" height="12" fill="url(#stripes)" />
+  </g>
+
+  <!-- Row 2: explicit sRGB. -->
+  <g transform="translate(2 18)" filter="url(#cif-composite-srgb)">
+    <rect width="12" height="12" fill="#000" />
+  </g>
+  <g transform="translate(18 18)" filter="url(#cif-blend-srgb)">
+    <rect width="12" height="12" fill="#000" />
+  </g>
+  <g transform="translate(34 18)" filter="url(#cif-convolve-srgb)">
+    <rect width="12" height="12" fill="url(#stripes)" />
+  </g>
+  <g transform="translate(50 18)" filter="url(#cif-displacement-srgb)">
+    <rect width="12" height="12" fill="url(#stripes)" />
+  </g>
+</svg>

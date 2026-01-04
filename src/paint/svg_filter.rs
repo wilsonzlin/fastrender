@@ -3325,10 +3325,11 @@ fn apply_primitive(
       let Some(map) = resolve_input(in2, source, results, current, filter_region) else {
         return Ok(None);
       };
+      let scale = filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale_avg;
       let Some(output) = apply_displacement_map(
         &primary.pixmap,
         &map.pixmap,
-        filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale_avg,
+        scale,
         *x_channel,
         *y_channel,
         color_interpolation_filters,
@@ -4060,64 +4061,50 @@ fn composite_pixmaps(
     return None;
   }
 
-  let pixmap = match color_interpolation_filters {
-    ColorInterpolationFilters::SRGB => match op {
-      CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
-        arithmetic_composite(&a.pixmap, &b.pixmap, k1, k2, k3, k4)?
-      }
-      CompositeOperator::Over => {
-        composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, _| (1.0, 1.0 - a_a))?
-      }
-      CompositeOperator::In => {
-        composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (b_a, 0.0))?
-      }
-      CompositeOperator::Out => {
-        composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (1.0 - b_a, 0.0))?
-      }
-      CompositeOperator::Atop => {
-        composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (b_a, 1.0 - a_a))?
-      }
-      CompositeOperator::Xor => {
-        composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))?
-      }
-    },
-    ColorInterpolationFilters::LinearRGB => {
-      let mut a_linear = a.pixmap.clone();
-      let mut b_linear = b.pixmap.clone();
-      reencode_pixmap_to_linear_rgb(&mut a_linear);
-      reencode_pixmap_to_linear_rgb(&mut b_linear);
-      let mut out = match op {
-        CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
-          arithmetic_composite(&a_linear, &b_linear, k1, k2, k3, k4)?
-        }
-        CompositeOperator::Over => {
-          composite_porter_duff(&a_linear, &b_linear, |a_a, _| (1.0, 1.0 - a_a))?
-        }
-        CompositeOperator::In => {
-          composite_porter_duff(&a_linear, &b_linear, |_, b_a| (b_a, 0.0))?
-        }
-        CompositeOperator::Out => {
-          composite_porter_duff(&a_linear, &b_linear, |_, b_a| (1.0 - b_a, 0.0))?
-        }
-        CompositeOperator::Atop => {
-          composite_porter_duff(&a_linear, &b_linear, |a_a, b_a| (b_a, 1.0 - a_a))?
-        }
-        CompositeOperator::Xor => {
-          composite_porter_duff(&a_linear, &b_linear, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))?
-        }
-      };
-      reencode_pixmap_to_srgb(&mut out);
-      out
+  let use_linear = matches!(
+    color_interpolation_filters,
+    ColorInterpolationFilters::LinearRGB
+  );
+  let a_region = a.region;
+  let b_region = b.region;
+  let mut a_pixmap = a.pixmap;
+  let mut b_pixmap = b.pixmap;
+  if use_linear {
+    reencode_pixmap_to_linear_rgb(&mut a_pixmap);
+    reencode_pixmap_to_linear_rgb(&mut b_pixmap);
+  }
+
+  let mut pixmap = match op {
+    CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
+      arithmetic_composite(&a_pixmap, &b_pixmap, k1, k2, k3, k4)?
     }
+    CompositeOperator::Over => {
+      composite_porter_duff(&a_pixmap, &b_pixmap, |a_a, _| (1.0, 1.0 - a_a))?
+    }
+    CompositeOperator::In => {
+      composite_porter_duff(&a_pixmap, &b_pixmap, |_, b_a| (b_a, 0.0))?
+    }
+    CompositeOperator::Out => {
+      composite_porter_duff(&a_pixmap, &b_pixmap, |_, b_a| (1.0 - b_a, 0.0))?
+    }
+    CompositeOperator::Atop => {
+      composite_porter_duff(&a_pixmap, &b_pixmap, |a_a, b_a| (b_a, 1.0 - a_a))?
+    }
+    CompositeOperator::Xor => composite_porter_duff(&a_pixmap, &b_pixmap, |a_a, b_a| {
+      (1.0 - b_a, 1.0 - a_a)
+    })?,
   };
+  if use_linear {
+    reencode_pixmap_to_srgb(&mut pixmap);
+  }
 
   let region = match op {
     CompositeOperator::In => clip_region(
-      a.region.intersection(b.region).unwrap_or(Rect::ZERO),
+      a_region.intersection(b_region).unwrap_or(Rect::ZERO),
       filter_region,
     ),
-    CompositeOperator::Out => clip_region(a.region, filter_region),
-    _ => clip_region(a.region.union(b.region), filter_region),
+    CompositeOperator::Out => clip_region(a_region, filter_region),
+    _ => clip_region(a_region.union(b_region), filter_region),
   };
   Some(FilterResult { pixmap, region })
 }
@@ -4130,37 +4117,27 @@ fn blend_pixmaps(
   color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<FilterResult> {
   let mut base = a?;
-  let top = b.unwrap_or_else(|| base.clone());
+  let mut top = b.unwrap_or_else(|| base.clone());
+  let use_linear = matches!(
+    color_interpolation_filters,
+    ColorInterpolationFilters::LinearRGB
+  );
+  if use_linear {
+    reencode_pixmap_to_linear_rgb(&mut base.pixmap);
+    reencode_pixmap_to_linear_rgb(&mut top.pixmap);
+  }
   let mut paint = PixmapPaint::default();
   paint.blend_mode = mode;
-
-  match color_interpolation_filters {
-    ColorInterpolationFilters::SRGB => {
-      base.pixmap.draw_pixmap(
-        0,
-        0,
-        top.pixmap.as_ref(),
-        &paint,
-        Transform::identity(),
-        None,
-      );
-    }
-    ColorInterpolationFilters::LinearRGB => {
-      let mut base_pixmap = base.pixmap.clone();
-      let mut top_pixmap = top.pixmap.clone();
-      reencode_pixmap_to_linear_rgb(&mut base_pixmap);
-      reencode_pixmap_to_linear_rgb(&mut top_pixmap);
-      base_pixmap.draw_pixmap(
-        0,
-        0,
-        top_pixmap.as_ref(),
-        &paint,
-        Transform::identity(),
-        None,
-      );
-      reencode_pixmap_to_srgb(&mut base_pixmap);
-      base.pixmap = base_pixmap;
-    }
+  base.pixmap.draw_pixmap(
+    0,
+    0,
+    top.pixmap.as_ref(),
+    &paint,
+    Transform::identity(),
+    None,
+  );
+  if use_linear {
+    reencode_pixmap_to_srgb(&mut base.pixmap);
   }
   let region = clip_region(base.region.union(top.region), filter_region);
   Some(FilterResult {
