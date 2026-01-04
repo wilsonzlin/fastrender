@@ -221,6 +221,7 @@ fn test_all_fixture_files_exist() {
     "mask_composite",
     // Forms
     "form_controls",
+    "form_controls_appearance_none",
     // Text
     "text_complex_scripts",
     "text_additional_scripts",
@@ -473,6 +474,12 @@ fn test_fixture_form_controls() {
   test_fixture("form_controls").expect("form_controls fixture should render");
 }
 
+#[test]
+fn test_fixture_form_controls_appearance_none() {
+  test_fixture("form_controls_appearance_none")
+    .expect("form_controls_appearance_none fixture should render");
+}
+
 //
 // Text Tests
 //
@@ -626,6 +633,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "mask_composite",
     // Forms
     "form_controls",
+    "form_controls_appearance_none",
     // Text
     "text_complex_scripts",
     "text_additional_scripts",
@@ -757,6 +765,11 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "Compositing multiple CSS mask layers",
     ),
     ("form_controls", "Forms", "Default form control styling"),
+    (
+      "form_controls_appearance_none",
+      "Forms",
+      "Form controls with appearance: none should still paint values/labels",
+    ),
     (
       "text_complex_scripts",
       "Text",

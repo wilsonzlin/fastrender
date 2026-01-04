@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Form Controls appearance:none Fixture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #f7f9fb;
+      font: 15px/1.4 "Segoe UI", Arial, sans-serif;
+      color: #23374d;
+    }
+
+    .fixture {
+      width: 460px;
+      background: #ffffff;
+      border: 1px solid #d6deeb;
+      border-radius: 10px;
+      padding: 16px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+    }
+
+    h1 {
+      font-size: 16px;
+      margin: 0 0 12px;
+    }
+
+    .field {
+      margin: 0 0 12px;
+    }
+
+    label {
+      display: block;
+      margin: 0 0 4px;
+      font-size: 13px;
+      color: #415a77;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      appearance: none;
+      -webkit-appearance: none;
+      font: inherit;
+      box-sizing: border-box;
+      border: 2px solid #23374d;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #1f2937;
+    }
+
+    input[type="text"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 8px 10px;
+    }
+
+    textarea {
+      height: 70px;
+      resize: none;
+    }
+
+    button {
+      padding: 8px 14px;
+      font-weight: 600;
+      background: #e5f0ff;
+    }
+
+    .inline-controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .inline-controls label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0;
+      font-size: 14px;
+      color: #23374d;
+    }
+
+    .inline-controls input[type="checkbox"],
+    .inline-controls input[type="radio"] {
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      background: #ffffff;
+    }
+
+    .inline-controls input[type="radio"] {
+      border-radius: 999px;
+    }
+  </style>
+</head>
+<body>
+  <div class="fixture">
+    <h1>appearance: none should not hide form control text</h1>
+
+    <div class="field">
+      <label for="text">Text input (value + placeholder)</label>
+      <input id="text" type="text" value="Value text" placeholder="Placeholder text">
+    </div>
+
+    <div class="field">
+      <label for="textarea">Textarea (content)</label>
+      <textarea id="textarea">Textarea content line 1
+Textarea content line 2</textarea>
+    </div>
+
+    <div class="field">
+      <label for="select">Select (selected option)</label>
+      <select id="select">
+        <option>First option</option>
+        <option selected>Selected option</option>
+        <option>Third option</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Checkbox / Radio (checked)</label>
+      <div class="inline-controls">
+        <label><input type="checkbox" checked> Checkbox</label>
+        <label><input type="radio" checked> Radio</label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Button (label)</label>
+      <button type="button">Button label</button>
+    </div>
+  </div>
+</body>
+</html>

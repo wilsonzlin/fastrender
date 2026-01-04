@@ -29,7 +29,6 @@ use crate::style::defaults::parse_color_attribute;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::media::MediaQuery;
-use crate::style::types::Appearance;
 use crate::style::types::FontStyle;
 use crate::style::types::ListStyleType;
 use crate::style::types::TextTransform;
@@ -2847,10 +2846,6 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
   let tag = styled.node.tag_name()?;
   let appearance = styled.styles.appearance.clone();
 
-  if matches!(appearance, Appearance::None) {
-    return None;
-  }
-
   if !tag.eq_ignore_ascii_case("input")
     && !tag.eq_ignore_ascii_case("textarea")
     && !tag.eq_ignore_ascii_case("select")
@@ -3286,6 +3281,7 @@ mod tests {
   use crate::style::cascade::StartingStyleSet;
   use crate::style::counter_styles::{CounterStyleRegistry, CounterStyleRule, CounterSystem};
   use crate::style::counters::CounterSet;
+  use crate::style::types::Appearance;
   use crate::tree::box_tree::FormControl;
   use crate::tree::box_tree::FormControlKind;
   use crate::tree::box_tree::MarkerContent;
@@ -3370,6 +3366,47 @@ mod tests {
       }
       other => panic!("expected replaced box, got {other:?}"),
     }
+  }
+
+  #[test]
+  fn appearance_none_form_controls_still_generate_replaced_boxes() {
+    fn set_attr(node: &mut StyledNode, name: &str, value: &str) {
+      match &mut node.node.node_type {
+        DomNodeType::Element { attributes, .. } => {
+          attributes.push((name.to_string(), value.to_string()));
+        }
+        _ => panic!("expected element node"),
+      }
+    }
+
+    let mut input_style = ComputedStyle::default();
+    input_style.appearance = Appearance::None;
+
+    let mut input = styled_element("input");
+    input.node_id = 1;
+    input.styles = Arc::new(input_style);
+    set_attr(&mut input, "value", "x");
+    set_attr(&mut input, "placeholder", "placeholder");
+
+    let mut root = styled_element("div");
+    root.children = vec![input];
+
+    let tree = generate_box_tree(&root);
+    assert_eq!(tree.root.children.len(), 1);
+
+    let child = &tree.root.children[0];
+    let BoxType::Replaced(replaced) = &child.box_type else {
+      panic!("expected replaced box, got {:?}", child.box_type);
+    };
+    let ReplacedType::FormControl(control) = &replaced.replaced_type else {
+      panic!("expected form control replaced type, got {:?}", replaced.replaced_type);
+    };
+    assert!(matches!(control.appearance, Appearance::None));
+    assert!(
+      matches!(&control.control, FormControlKind::Text { value, .. } if value == "x"),
+      "expected input to preserve value for painting, got {:?}",
+      control.control
+    );
   }
 
   #[test]
@@ -3817,7 +3854,7 @@ mod tests {
   }
 
   #[test]
-  fn appearance_none_avoids_form_control_replacement() {
+  fn appearance_none_does_not_disable_form_control_replacement() {
     let html =
       "<html><body><input id=\"plain\" style=\"appearance: none; border: 0\"></body></html>";
     let dom = crate::dom::parse_html(html).expect("parse");
@@ -3839,8 +3876,8 @@ mod tests {
 
     assert_eq!(
       count_replaced(&box_tree.root),
-      0,
-      "appearance:none should disable native control replacement"
+      1,
+      "appearance:none should not disable native control replacement"
     );
   }
 
