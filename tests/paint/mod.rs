@@ -20,6 +20,7 @@ mod display_list_paint_multi_root;
 mod display_list_regressions;
 mod display_list_renderer_test;
 mod display_list_skip_ink_test;
+mod text_decoration_skip_ink_offset_golden_test;
 mod display_list_svg_filter_defs_backend;
 mod display_list_test;
 mod filter_cache_regressions;

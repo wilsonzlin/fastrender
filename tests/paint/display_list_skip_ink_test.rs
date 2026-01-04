@@ -84,3 +84,38 @@ fn display_list_skip_ink_all_carves_out_segment() {
   assert_eq!(pixel(&pixmap, 1, 5), (255, 255, 255, 255));
   assert_eq!(pixel(&pixmap, 8, 5), (255, 255, 255, 255));
 }
+
+#[test]
+fn display_list_skip_ink_segments_respect_line_start() {
+  // Segments are stored relative to `line_start`; the renderer must offset them when painting.
+  let mut list = fastrender::paint::display_list::DisplayList::new();
+  let decoration = DecorationPaint {
+    style: TextDecorationStyle::Solid,
+    color: Rgba::BLACK,
+    underline: Some(DecorationStroke {
+      center: 5.0,
+      thickness: 2.0,
+      segments: Some(vec![(0.0, 10.0)]),
+    }),
+    overline: None,
+    line_through: None,
+  };
+
+  list.push(DisplayItem::TextDecoration(TextDecorationItem {
+    bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+    line_start: 5.0,
+    line_width: 10.0,
+    decorations: vec![decoration],
+    inline_vertical: false,
+  }));
+
+  let pixmap = DisplayListRenderer::new(20, 10, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .render(&list)
+    .unwrap();
+
+  // Underline should start at x = line_start (5px), not at 0.
+  assert_eq!(pixel(&pixmap, 7, 5), (0, 0, 0, 255));
+  assert_eq!(pixel(&pixmap, 2, 5), (255, 255, 255, 255));
+  assert_eq!(pixel(&pixmap, 17, 5), (255, 255, 255, 255));
+}

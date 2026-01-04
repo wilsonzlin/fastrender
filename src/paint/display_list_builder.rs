@@ -5865,7 +5865,6 @@ impl DisplayListBuilder {
           runs.map(|r| {
             self.build_underline_segments(
               r,
-              inline_start,
               inline_len,
               center,
               thickness,
@@ -6074,7 +6073,6 @@ impl DisplayListBuilder {
   fn build_underline_segments(
     &self,
     runs: &[ShapedRun],
-    line_start: f32,
     line_width: f32,
     center: f32,
     thickness: f32,
@@ -6093,7 +6091,6 @@ impl DisplayListBuilder {
       let band_right = center + band_half;
       collect_underline_exclusions_vertical(
         runs,
-        line_start,
         baseline_y,
         band_left,
         band_right,
@@ -6104,7 +6101,6 @@ impl DisplayListBuilder {
       let band_bottom = center + band_half;
       collect_underline_exclusions(
         runs,
-        line_start,
         baseline_y,
         band_top,
         band_bottom,
@@ -6112,10 +6108,10 @@ impl DisplayListBuilder {
       )
     };
 
-    let mut segments = subtract_intervals((line_start, line_start + line_width), &mut exclusions);
+    let mut segments = subtract_intervals((0.0, line_width), &mut exclusions);
     if segments.is_empty() && skip_ink != TextDecorationSkipInk::All {
       // Never drop the underline entirely when skipping ink; fall back to a full span.
-      segments.push((line_start, line_start + line_width));
+      segments.push((0.0, line_width));
     }
 
     if let (Some(breakdown), Some(start)) = (self.build_breakdown.as_ref(), decoration_timer) {
@@ -7274,7 +7270,6 @@ fn underline_variations_hash(variations: &[rustybuzz::Variation]) -> u64 {
 
 fn collect_underline_exclusions(
   runs: &[ShapedRun],
-  line_start: f32,
   baseline_y: f32,
   band_top: f32,
   band_bottom: f32,
@@ -7283,7 +7278,7 @@ fn collect_underline_exclusions(
   let mut intervals = Vec::new();
   let tolerance = 0.5;
 
-  let mut pen_x = line_start;
+  let mut pen_x = 0.0;
   for run in runs {
     let Some(face) = crate::text::face_cache::get_ttf_face(&run.font) else {
       continue;
@@ -7329,14 +7324,13 @@ fn collect_underline_exclusions(
 
 fn collect_underline_exclusions_vertical(
   runs: &[ShapedRun],
-  inline_start: f32,
   block_baseline: f32,
   band_left: f32,
   band_right: f32,
   skip_all: bool,
 ) -> Vec<(f32, f32)> {
   let mut intervals = Vec::new();
-  let mut pen_inline = inline_start;
+  let mut pen_inline = 0.0;
 
   for run in runs {
     let Some(face) = crate::text::face_cache::get_ttf_face(&run.font) else {
@@ -9627,12 +9621,89 @@ mod tests {
 
     let _guard = face_cache::FaceParseCountGuard::start();
     for _ in 0..3 {
-      let _ = collect_underline_exclusions(&runs, 0.0, 0.0, -2.0, 2.0, false);
+      let _ = collect_underline_exclusions(&runs, 0.0, -2.0, 2.0, false);
     }
 
     assert!(
       face_cache::face_parse_count() <= 1,
       "underline exclusions should reuse cached faces"
+    );
+  }
+
+  #[test]
+  fn underline_exclusions_apply_run_scale() {
+    let font_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("tests/fixtures/fonts/DejaVuSans-subset.ttf");
+    let data = Arc::new(std::fs::read(font_path).expect("read test font"));
+    let font = crate::text::font_db::LoadedFont {
+      id: None,
+      data,
+      index: 0,
+      family: "DejaVu Sans Subset".to_string(),
+      weight: crate::text::font_db::FontWeight::NORMAL,
+      style: FontStyle::Normal,
+      stretch: FontStretch::Normal,
+    };
+
+    let cached_face = face_cache::get_ttf_face(&font).expect("parse test font");
+    let face = cached_face.face();
+    let (ch, glyph_id, bbox) = ['W', 'O', 'F', '2']
+      .iter()
+      .copied()
+      .find_map(|ch| {
+        let glyph_id = face.glyph_index(ch)?;
+        let bbox = face.glyph_bounding_box(glyph_id)?;
+        Some((ch, glyph_id.0 as u32, bbox))
+      })
+      .expect("expected at least one ASCII glyph with bbox in test font");
+    let units_per_em = face.units_per_em() as f32;
+    assert!(units_per_em > 0.0);
+
+    let font_size = 20.0;
+    let run_scale = 0.5;
+    let scale = font_size / units_per_em * run_scale;
+    let expected_width = (bbox.x_max as f32 - bbox.x_min as f32) * scale + 1.0; // tolerance = 0.5px per side
+    let text = ch.to_string();
+    let end = text.len();
+
+    let run = ShapedRun {
+      text,
+      start: 0,
+      end,
+      glyphs: vec![crate::text::pipeline::GlyphPosition {
+        glyph_id,
+        cluster: 0,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 0.0,
+        y_advance: 0.0,
+      }],
+      direction: crate::text::pipeline::Direction::LeftToRight,
+      level: 0,
+      advance: 0.0,
+      font: Arc::new(font),
+      font_size,
+      baseline_shift: 0.0,
+      language: None,
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      rotation: crate::text::pipeline::RunRotation::None,
+      palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
+      variations: Vec::new(),
+      scale: run_scale,
+    };
+
+    let intervals = collect_underline_exclusions(&[run], 0.0, -1.0, 1.0, true);
+    assert_eq!(intervals.len(), 1);
+    let width = intervals[0].1 - intervals[0].0;
+    assert!(
+      (width - expected_width).abs() < 0.01,
+      "expected exclusion width ~{} for glyph '{}', got {}",
+      expected_width,
+      ch,
+      width
     );
   }
 
