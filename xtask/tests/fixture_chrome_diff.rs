@@ -158,7 +158,9 @@ fn no_chrome_fails_fast_on_stale_baselines_unless_allowed() {
   fs::write(fastrender_out.join("a.png"), "PNG").expect("write dummy fastrender png");
   fs::write(
     chrome_out.join("a.json"),
-    format!(r#"{{"viewport":[1040,1240],"dpr":1.0,"js":"off","input_sha256":"{hash_v1}"}}"#),
+    format!(
+      r#"{{"viewport":[1040,1240],"dpr":1.0,"media":"screen","js":"off","input_sha256":"{hash_v1}"}}"#
+    ),
   )
   .expect("write chrome metadata");
 

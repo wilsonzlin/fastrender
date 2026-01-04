@@ -71,6 +71,8 @@ impl JsMode {
 struct ChromeFixtureMetadata {
   viewport: (u32, u32),
   dpr: f32,
+  #[serde(default)]
+  media: Option<String>,
   js: JsMode,
   #[serde(default)]
   input_sha256: Option<String>,
@@ -481,6 +483,7 @@ fn validate_chrome_baseline_metadata(
   stems: &[String],
   args: &FixtureChromeDiffArgs,
 ) -> Result<()> {
+  let wanted_media = args.media.as_cli_value();
   for stem in stems {
     let metadata_path = chrome_dir.join(format!("{stem}.json"));
     if !metadata_path.exists() {
@@ -503,22 +506,26 @@ fn validate_chrome_baseline_metadata(
     let metadata: ChromeFixtureMetadata = serde_json::from_slice(&bytes)
       .with_context(|| format!("parse chrome fixture metadata {}", metadata_path.display()))?;
 
-    let mismatch =
-      metadata.viewport != args.viewport || metadata.dpr != args.dpr || metadata.js != args.js;
+    let mismatch = metadata.viewport != args.viewport
+      || metadata.dpr != args.dpr
+      || metadata.js != args.js
+      || metadata.media.as_deref() != Some(wanted_media);
     if mismatch {
       bail!(
         "chrome baseline mismatch for fixture '{stem}'.\n\
-         Baseline ({}): viewport {}x{}, dpr {}, js {}.\n\
-         Current invocation: viewport {}x{}, dpr {}, js {}.\n\
+         Baseline ({}): viewport {}x{}, dpr {}, media {}, js {}.\n\
+         Current invocation: viewport {}x{}, dpr {}, media {}, js {}.\n\
          Rerun without --no-chrome (or regenerate baselines) so diffs are meaningful.",
         metadata_path.display(),
         metadata.viewport.0,
         metadata.viewport.1,
         metadata.dpr,
+        metadata.media.as_deref().unwrap_or("<missing>"),
         metadata.js.as_cli_value(),
         args.viewport.0,
         args.viewport.1,
         args.dpr,
+        wanted_media,
         args.js.as_cli_value(),
       );
     }

@@ -326,7 +326,7 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
   - `<out>/report.html`, `<out>/report.json`
 - Notes:
   - JavaScript is disabled by default (Chrome baseline uses an injected CSP, matching FastRender's no-JS model).
-  - When `--no-chrome` is set, existing Chrome baseline metadata (`<out>/chrome/<fixture>.json`) is validated against the current `--viewport`, `--dpr`, and `--js` values when present. Missing metadata emits a warning; use `--require-chrome-metadata` to fail fast.
+  - When `--no-chrome` is set, existing Chrome baseline metadata (`<out>/chrome/<fixture>.json`) is validated against the current `--viewport`, `--dpr`, `--media`, and `--js` values when present. Missing metadata emits a warning; use `--require-chrome-metadata` to fail fast.
   - When `--no-chrome` is set, the command checks the stored Chrome baseline metadata against the current fixture `index.html` (and per-fixture `assets/` when available). If the fixture inputs have changed since the baseline was generated, it fails fast to avoid misleading diffs. Use `--allow-stale-chrome-baselines` to downgrade this to a warning.
   - Pass `--write-snapshot` to also write per-fixture snapshots/diagnostics for later `diff_snapshots` (equivalent to `render_fixtures --write-snapshot`).
 - Core flags:
