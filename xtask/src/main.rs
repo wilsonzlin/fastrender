@@ -10,8 +10,8 @@ use tempfile::TempDir;
 use url::Url;
 
 mod chrome_baseline_fixtures;
-mod import_page_fixture;
 mod fixture_chrome_diff;
+mod import_page_fixture;
 mod recapture_page_fixtures;
 mod update_pageset_guardrails;
 mod update_pageset_guardrails_budgets;
@@ -195,17 +195,17 @@ struct PagesetArgs {
   capture_missing_failure_fixtures: bool,
 
   /// How to capture missing failure fixtures (default: cache, no network).
-  #[arg(
-    long,
-    value_enum,
-    requires = "capture_missing_failure_fixtures"
-  )]
+  #[arg(long, value_enum, requires = "capture_missing_failure_fixtures")]
   capture_mode: Option<recapture_page_fixtures::CaptureMode>,
 
   /// Disk-backed subresource cache directory passed to `bundle_page cache`.
   ///
   /// Defaults to the pageset `--cache-dir` value (or `fetches/assets`).
-  #[arg(long, value_name = "DIR", requires = "capture_missing_failure_fixtures")]
+  #[arg(
+    long,
+    value_name = "DIR",
+    requires = "capture_missing_failure_fixtures"
+  )]
   fixture_cache_dir: Option<PathBuf>,
 
   /// Allow missing subresources by inserting deterministic empty placeholder assets.
@@ -219,7 +219,11 @@ struct PagesetArgs {
   overwrite_fixtures: bool,
 
   /// Continue after failures to collect a full report (default true).
-  #[arg(long, requires = "capture_missing_failure_fixtures", conflicts_with = "no_keep_going")]
+  #[arg(
+    long,
+    requires = "capture_missing_failure_fixtures",
+    conflicts_with = "no_keep_going"
+  )]
   keep_going: bool,
 
   /// Stop after the first fixture failure instead of continuing.
@@ -411,7 +415,7 @@ struct DiffRendersArgs {
   #[arg(long)]
   after: PathBuf,
 
-  /// Directory to write diff images into (mirrors input structure)
+  /// Directory to write the diff report into (`diff_report.html`/`diff_report.json` + artifacts).
   #[arg(long, default_value = "target/render-diffs")]
   output: PathBuf,
 
@@ -534,16 +538,6 @@ impl PerfSmokeSuite {
       Self::All => "all",
     }
   }
-}
-
-struct DiffOutcome {
-  changed: bool,
-  dimensions_match: bool,
-  total_pixels: u64,
-  different_pixels: u64,
-  different_percent: f64,
-  max_channel_diff: u8,
-  diff_path: Option<PathBuf>,
 }
 
 fn run_tests(args: TestArgs) -> Result<()> {
@@ -1038,23 +1032,23 @@ fn capture_missing_failure_fixtures(
   let progress_dir = root.join("progress/pages");
   let fixtures_root = root.join("tests/pages/fixtures");
 
-  let plan = xtask::pageset_failure_fixtures::plan_missing_failure_fixtures(
-    &progress_dir,
-    &fixtures_root,
-  )?;
+  let plan =
+    xtask::pageset_failure_fixtures::plan_missing_failure_fixtures(&progress_dir, &fixtures_root)?;
 
   println!();
   println!("Pageset failure fixture scan:");
   println!("  failing pages found: {}", plan.failing_pages.len());
-  println!("  fixtures already present: {}", plan.existing_fixtures.len());
+  println!(
+    "  fixtures already present: {}",
+    plan.existing_fixtures.len()
+  );
   println!("  missing fixtures: {}", plan.missing_fixtures.len());
 
   if plan.missing_fixtures.is_empty() {
     return Ok(());
   }
 
-  if matches!(capture_mode, recapture_page_fixtures::CaptureMode::Cache) && !disk_cache_enabled
-  {
+  if matches!(capture_mode, recapture_page_fixtures::CaptureMode::Cache) && !disk_cache_enabled {
     println!(
       "Warning: pageset disk cache is disabled; `--capture-mode cache` may fail due to missing cached assets. \
        Re-run with --disk-cache, or use --capture-mode crawl/render."
@@ -1179,8 +1173,8 @@ fn capture_missing_failure_fixtures(
     }
     captured_ok += 1;
 
-    let import_result = import_page_fixture::run_import_page_fixture(
-      import_page_fixture::ImportPageFixtureArgs {
+    let import_result =
+      import_page_fixture::run_import_page_fixture(import_page_fixture::ImportPageFixtureArgs {
         bundle: bundle_path.clone(),
         fixture_name: page.stem.clone(),
         output_root: fixtures_root.clone(),
@@ -1189,9 +1183,8 @@ fn capture_missing_failure_fixtures(
         allow_http_references: false,
         legacy_rewrite: false,
         dry_run: false,
-      },
-    )
-    .with_context(|| format!("import {}", page.stem));
+      })
+      .with_context(|| format!("import {}", page.stem));
 
     if let Err(err) = import_result {
       failures.push(format!("{}: import failed: {}", page.stem, err));
@@ -1206,7 +1199,10 @@ fn capture_missing_failure_fixtures(
   println!();
   println!("Pageset failure fixture capture summary:");
   println!("  failing pages found: {}", plan.failing_pages.len());
-  println!("  fixtures already present: {}", plan.existing_fixtures.len());
+  println!(
+    "  fixtures already present: {}",
+    plan.existing_fixtures.len()
+  );
   println!("  planned captures: {}", plan.missing_fixtures.len());
   println!("  attempted: {attempted}");
   println!("  captured: {captured_ok}");
