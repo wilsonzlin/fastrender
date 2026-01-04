@@ -99,6 +99,8 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
   - Use `--no-build` to reuse an existing `target/release/diff_renders` binary (skips `cargo build`).
 - Chrome baseline screenshots for offline fixtures (local-only; not committed): `cargo xtask chrome-baseline-fixtures`
 - Chrome-vs-FastRender diff report for offline fixtures (deterministic; offline): `cargo xtask fixture-chrome-diff`
+  - Defaults to the curated `pages_regression` fixture set in `tests/pages_regression_test.rs`.
+  - Pass `--all-fixtures` to render every fixture under `tests/pages/fixtures/`.
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
   - Relative `<bundle>` and `--output-root` paths are resolved relative to the repository root so the command behaves consistently even when invoked from subdirectories (pass absolute paths to override).
 - Recapture and (re)import offline page fixtures from a manifest (pageset guardrails by default): `cargo xtask recapture-page-fixtures [--capture-mode cache|crawl|render] [--only stripe.com] [--overwrite]`

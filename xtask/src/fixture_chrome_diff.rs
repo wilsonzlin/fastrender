@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
+use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,6 +10,7 @@ const DEFAULT_OUT_DIR: &str = "target/fixture_chrome_diff";
 const DEFAULT_VIEWPORT: &str = "1040x1240";
 const DEFAULT_DPR: f32 = 1.0;
 const DEFAULT_TIMEOUT: u64 = 15;
+const PAGES_REGRESSION_TEST_RS: &str = "tests/pages_regression_test.rs";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -67,8 +69,16 @@ pub struct FixtureChromeDiffArgs {
   pub fixtures_dir: PathBuf,
 
   /// Only render fixtures matching these names (comma-separated stems).
+  ///
+  /// When omitted, the default fixture set is derived from `tests/pages_regression_test.rs` (the
+  /// curated pages_regression suite). Pass `--all-fixtures` to render everything under
+  /// `--fixtures-dir` instead.
   #[arg(long, value_delimiter = ',', value_name = "STEM,...")]
   pub fixtures: Option<Vec<String>>,
+
+  /// Render every fixture under `--fixtures-dir` (disable the default pages_regression fixture set).
+  #[arg(long, conflicts_with = "fixtures")]
+  pub all_fixtures: bool,
 
   /// Only process a deterministic shard of the fixtures (index/total, 0-based).
   #[arg(long, value_parser = crate::parse_shard)]
@@ -178,6 +188,8 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
       fixtures_root.display()
     );
   }
+
+  apply_default_fixture_selection(&repo_root, &mut args);
 
   let out_root = resolve_repo_path(&repo_root, &args.out_dir);
   let layout = Layout::new(&out_root);
@@ -453,6 +465,39 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
   Ok(())
 }
 
+fn apply_default_fixture_selection(repo_root: &Path, args: &mut FixtureChromeDiffArgs) {
+  if args.all_fixtures || args.fixtures.is_some() {
+    return;
+  }
+
+  let source = match fs::read_to_string(repo_root.join(PAGES_REGRESSION_TEST_RS)) {
+    Ok(source) => source,
+    Err(_) => return,
+  };
+
+  let fixtures = extract_pages_regression_fixture_stems(&source);
+  if fixtures.is_empty() {
+    return;
+  }
+  args.fixtures = Some(fixtures);
+}
+
+fn extract_pages_regression_fixture_stems(source: &str) -> Vec<String> {
+  // Pages fixtures in `tests/pages_regression_test.rs` look like:
+  //   html: "flex_dashboard/index.html",
+  // so we can extract the fixture stem by matching the string literal up to `/index.html`.
+  let re = Regex::new(r#"html:\s*"([^"]+)/index\.html""#)
+    .expect("regex for pages_regression html paths should compile");
+  let mut out = re
+    .captures_iter(source)
+    .filter_map(|caps| caps.get(1).map(|m| m.as_str().trim().to_string()))
+    .filter(|stem| !stem.is_empty())
+    .collect::<Vec<_>>();
+  out.sort();
+  out.dedup();
+  out
+}
+
 fn run_diff_renders_allowing_differences(
   mut cmd: Command,
   layout: &Layout,
@@ -493,4 +538,27 @@ fn run_diff_renders_allowing_differences(
   }
 
   bail!("diff_renders failed with status {}", output.status);
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn extract_pages_regression_fixture_stems_dedups_and_sorts() {
+    let source = r#"
+      const PAGE_FIXTURES: &[PageFixture] = &[
+        PageFixture { name: "a", html: "zeta/index.html", shots: DEFAULT_SHOTS },
+        PageFixture { name: "b", html:"alpha/index.html", shots: DEFAULT_SHOTS },
+        PageFixture { name: "c", html: "alpha/index.html", shots: DEFAULT_SHOTS },
+        // Ignore non-index references.
+        PageFixture { name: "d", html: "not_a_fixture/other.html", shots: DEFAULT_SHOTS },
+      ];
+    "#;
+
+    assert_eq!(
+      extract_pages_regression_fixture_stems(source),
+      vec!["alpha".to_string(), "zeta".to_string()]
+    );
+  }
 }

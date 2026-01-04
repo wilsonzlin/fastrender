@@ -60,6 +60,8 @@ When doing accuracy work, it’s often useful to compare an offline fixture rend
 # One-command evidence report (runs FastRender render + Chrome baseline + diff):
 cargo xtask fixture-chrome-diff
 # Report: target/fixture_chrome_diff/report.html
+# Defaults to the curated pages_regression fixture set from tests/pages_regression_test.rs.
+# Pass --all-fixtures to render everything under tests/pages/fixtures instead.
 
 # 1) Render the offline fixture(s) with FastRender (offline; bundled fonts):
 cargo run --release --bin render_fixtures -- --out-dir target/fixture_chrome_diff/fastrender

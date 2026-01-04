@@ -76,6 +76,7 @@ fn fixture_chrome_diff_help_mentions_flags() {
     stdout.contains("--fixtures-dir")
       && stdout.contains("--out-dir")
       && stdout.contains("--fixtures")
+      && stdout.contains("--all-fixtures")
       && stdout.contains("--shard")
       && stdout.contains("--jobs")
       && stdout.contains("--write-snapshot")
