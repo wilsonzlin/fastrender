@@ -299,6 +299,7 @@ cargo run --release --bin diff_renders -- \
   - Select fixtures: `cargo xtask fixture-chrome-diff --fixtures grid_news,flex_dashboard`
   - Re-run only the diff step (reuse the existing `<out>/chrome` renders): `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --no-chrome`
   - Re-run only the diff step (reuse both Chrome + FastRender renders): `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --no-chrome --no-fastrender`
+  - Shorthand for diff-only: `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --diff-only`
 - Output layout:
   - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`, `<fixture>.json` metadata)
   - `<out>/fastrender/<fixture>.png` (rendered by `render_fixtures`)
@@ -311,7 +312,7 @@ cargo run --release --bin diff_renders -- \
   - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--jobs/-j <n>`, `--js {on|off}`
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`, `--fail-on-differences`
-  - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--no-fastrender`
+  - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--no-fastrender`, `--diff-only`
 
 ## `cargo xtask recapture-page-fixtures`
 

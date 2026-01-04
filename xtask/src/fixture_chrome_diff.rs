@@ -147,9 +147,19 @@ pub struct FixtureChromeDiffArgs {
   /// Print the computed plan (commands + output paths) without executing.
   #[arg(long, hide = true)]
   pub dry_run: bool,
+
+  /// Alias for `--no-chrome --no-fastrender`.
+  #[arg(long)]
+  pub diff_only: bool,
 }
 
 pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
+  let mut args = args;
+  if args.diff_only {
+    args.no_chrome = true;
+    args.no_fastrender = true;
+  }
+
   validate_args(&args)?;
 
   let repo_root = crate::repo_root();

@@ -303,6 +303,50 @@ fn dry_run_respects_no_fastrender() {
 }
 
 #[test]
+fn dry_run_respects_diff_only_alias() {
+  let temp = tempdir().expect("tempdir");
+  let fixtures_root = temp.path().join("fixtures");
+  write_fixture(&fixtures_root, "a");
+  let out_dir = temp.path().join("out");
+
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .args([
+      "fixture-chrome-diff",
+      "--dry-run",
+      "--diff-only",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+    ])
+    .output()
+    .expect("run fixture-chrome-diff --dry-run --diff-only");
+
+  assert!(
+    output.status.success(),
+    "expected dry-run to succeed; stderr:\n{}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    !stdout.contains("--bin render_fixtures"),
+    "plan should skip render_fixtures when --diff-only is set; got:\n{stdout}"
+  );
+  assert!(
+    !stdout.contains("chrome-baseline-fixtures"),
+    "plan should skip chrome-baseline-fixtures when --diff-only is set; got:\n{stdout}"
+  );
+  assert!(
+    stdout.contains("diff_renders") && stdout.contains("--before"),
+    "plan should still include diff_renders; got:\n{stdout}"
+  );
+}
+
+#[test]
 #[cfg(unix)]
 fn end_to_end_runs_with_stub_cargo_and_fake_chrome() {
   let temp = tempdir().expect("tempdir");
