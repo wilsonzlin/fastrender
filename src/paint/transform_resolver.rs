@@ -615,6 +615,44 @@ mod tests {
   }
 
   #[test]
+  fn resolves_viewport_units_inside_transform_calc_when_viewport_provided() {
+    let parent = ComputedStyle::default();
+    let revert_base = ComputedStyle::default();
+    let mut style = ComputedStyle::default();
+    style.transform_origin.x = Length::px(0.0);
+    style.transform_origin.y = Length::px(0.0);
+
+    let value = parse_property_value("transform", "translateX(calc(-100vw + 50% + 10px))")
+      .expect("transform");
+    let decl = Declaration {
+      property: "transform".into(),
+      value,
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration_with_base(
+      &mut style,
+      &decl,
+      &parent,
+      &revert_base,
+      None,
+      parent.font_size,
+      parent.root_font_size,
+      DEFAULT_VIEWPORT,
+    );
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    let matrix = resolve_transform3d(&style, bounds, Some((200.0, 100.0)))
+      .expect("transform")
+      .to_2d()
+      .expect("affine transform");
+    // -100vw (200px) + 50% (50px) + 10px = -140px.
+    assert!((matrix.e + 140.0).abs() < 1e-4);
+    assert!(matrix.f.abs() < 1e-4);
+  }
+
+  #[test]
   fn resolves_scale_property() {
     let mut style = ComputedStyle::default();
     style.scale = ScaleValue::Values {
