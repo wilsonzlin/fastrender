@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::css::types::{
-  CssRule, Declaration, FontPaletteBase, FontPaletteOverride, PropertyValue,
+  CssRule, Declaration, FontPaletteBase, FontPaletteOverride, FontPaletteValuesRule, PropertyValue,
 };
 use fastrender::paint::text_rasterize::TextRasterizer;
 use fastrender::style::color::{Color, Rgba};
-use fastrender::style::font_palette::FontPaletteRegistry;
+use fastrender::style::font_palette::{resolve_font_palette_for_font, FontPaletteRegistry};
 use fastrender::style::media::MediaContext;
 use fastrender::style::properties::{apply_declaration_with_base, DEFAULT_VIEWPORT};
 use fastrender::style::types::FontPalette;
@@ -147,6 +147,39 @@ fn color_histogram(pixmap: &Pixmap) -> HashMap<[u8; 3], usize> {
 }
 
 #[test]
+fn resolve_font_palette_current_color_override_ignores_text_alpha() {
+  let mut registry = FontPaletteRegistry::default();
+  let mut rule = FontPaletteValuesRule::new("--test");
+  rule.font_families = vec!["TestFont".to_string()];
+  rule.base_palette = FontPaletteBase::Index(0);
+  rule.overrides = vec![
+    FontPaletteOverride {
+      index: 1,
+      color: Color::CurrentColor,
+    },
+    FontPaletteOverride {
+      index: 2,
+      color: Color::Rgba(Rgba::new(1, 2, 3, 0.25)),
+    },
+  ];
+  registry.register(rule);
+
+  let palette = FontPalette::Named("--test".into());
+  let current_a = Rgba::new(10, 20, 30, 0.5);
+  let current_b = Rgba::new(10, 20, 30, 0.25);
+
+  let resolved_a = resolve_font_palette_for_font(&palette, &registry, "TestFont", current_a);
+  let resolved_b = resolve_font_palette_for_font(&palette, &registry, "TestFont", current_b);
+
+  assert_eq!(
+    resolved_a.overrides,
+    vec![(1, Rgba::new(10, 20, 30, 1.0)), (2, Rgba::new(1, 2, 3, 0.25))]
+  );
+  assert_eq!(resolved_b.overrides, resolved_a.overrides);
+  assert_eq!(resolved_b.override_hash, resolved_a.override_hash);
+}
+
+#[test]
 fn palette_overrides_recolor_colr_glyphs() {
   let (font_context, family) = load_test_font();
   let palette_registry = build_palette_registry(&family);
@@ -244,5 +277,84 @@ fn palette_overrides_follow_current_color_across_cached_runs() {
   assert_eq!(
     green_runs[0].palette_overrides.as_ref(),
     &vec![(1, green_style.color)]
+  );
+}
+
+#[test]
+fn current_color_palette_overrides_do_not_double_apply_text_alpha() {
+  let (font_context, family) = load_test_font();
+  let palette_registry = build_current_color_palette_registry(&family);
+
+  let mut style = ComputedStyle::default();
+  style.font_family = vec![family.clone()].into();
+  style.font_size = 32.0;
+  style.font_palette = FontPalette::Named("--current".into());
+  style.font_palettes = palette_registry;
+  style.color = Rgba::new(0, 255, 0, 0.5);
+
+  let pipeline = ShapingPipeline::new();
+  let runs = pipeline
+    .shape("A", &style, &font_context)
+    .expect("shaping should succeed");
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut pixmap = Pixmap::new(64, 64).unwrap();
+  rasterizer
+    .render_runs(&runs, 8.0, 48.0, style.color, &mut pixmap)
+    .unwrap();
+
+  let mut green_count = 0usize;
+  let mut green_sum = 0u64;
+  let mut green_max = 0u8;
+  let mut blue_count = 0usize;
+  let mut blue_sum = 0u64;
+  let mut blue_max = 0u8;
+
+  for px in pixmap.data().chunks_exact(4) {
+    let alpha = px[3];
+    if alpha == 0 {
+      continue;
+    }
+
+    let rgb = [
+      unpremultiply(px[2], alpha),
+      unpremultiply(px[1], alpha),
+      unpremultiply(px[0], alpha),
+    ];
+
+    let is_green = rgb[1] >= 200 && rgb[0] <= 60 && rgb[2] <= 60;
+    let is_blue = rgb[2] >= 200 && rgb[0] <= 60 && rgb[1] <= 60;
+
+    if is_green {
+      green_count += 1;
+      green_sum += alpha as u64;
+      green_max = green_max.max(alpha);
+    } else if is_blue {
+      blue_count += 1;
+      blue_sum += alpha as u64;
+      blue_max = blue_max.max(alpha);
+    }
+  }
+
+  assert!(
+    green_count > 0 && blue_count > 0,
+    "expected both green (currentColor override) and blue (unmodified palette) pixels; got green={green_count} blue={blue_count}"
+  );
+
+  let green_mean = green_sum as f32 / green_count as f32;
+  let blue_mean = blue_sum as f32 / blue_count as f32;
+  let expected_alpha = (style.color.a * 255.0).round();
+
+  assert!(
+    (blue_max as f32) >= expected_alpha - 30.0,
+    "expected blue pixels near CSS alpha (~{expected_alpha}) but max alpha was {blue_max}"
+  );
+  assert!(
+    (green_max as f32) >= expected_alpha - 30.0,
+    "expected currentColor override pixels near CSS alpha (~{expected_alpha}) but max alpha was {green_max} (likely double-applied)"
+  );
+  assert!(
+    green_mean >= blue_mean * 0.8,
+    "expected currentColor override alpha similar to other palette colors; got mean alpha green={green_mean:.1} blue={blue_mean:.1}"
   );
 }

@@ -74,7 +74,7 @@ pub fn resolve_font_palette_for_font(
     .into_iter()
     .map(|ov| {
       let resolved = match ov.color {
-        Color::CurrentColor => current_color,
+        Color::CurrentColor => Rgba { a: 1.0, ..current_color },
         _ => ov.color.to_rgba(current_color),
       };
       (ov.index, resolved)

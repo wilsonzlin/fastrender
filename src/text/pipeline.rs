@@ -5466,11 +5466,10 @@ pub(crate) fn shaping_style_hash(style: &ComputedStyle) -> u64 {
     }
   }
 
-  // Palette overrides can resolve currentColor, so cache entries must vary with text color.
+  // Palette overrides can resolve currentColor, so cache entries must vary with text color RGB.
   style.color.r.hash(&mut hasher);
   style.color.g.hash(&mut hasher);
   style.color.b.hash(&mut hasher);
-  style.color.a.to_bits().hash(&mut hasher);
 
   match &style.font_palette {
     FontPalette::Normal => 0u8.hash(&mut hasher),
