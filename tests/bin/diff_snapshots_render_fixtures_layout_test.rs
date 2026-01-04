@@ -135,6 +135,14 @@ fn diff_snapshots_links_render_fixtures_layout_pngs() {
     html.contains(r#"<a href="after/foo.png">after.png</a>"#),
     "expected after.png HTML link"
   );
+  assert!(
+    html.contains(r#"<img src="before/foo.png""#),
+    "expected before.png thumbnail"
+  );
+  assert!(
+    html.contains(r#"<img src="after/foo.png""#),
+    "expected after.png thumbnail"
+  );
 
   let report: Value =
     serde_json::from_str(&fs::read_to_string(&report_json).expect("read report"))

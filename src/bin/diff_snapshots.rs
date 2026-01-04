@@ -1323,6 +1323,17 @@ fn write_html_report(report: &SnapshotDiffReport, path: &Path) -> Result<(), Str
     }
     entries_html.push_str("</div>");
 
+    if entry.before_png.is_some() || entry.after_png.is_some() {
+      entries_html.push_str("<div class=\"thumbs\">");
+      if let Some(png) = &entry.before_png {
+        entries_html.push_str(&format_linked_image("Before", png));
+      }
+      if let Some(png) = &entry.after_png {
+        entries_html.push_str(&format_linked_image("After", png));
+      }
+      entries_html.push_str("</div>");
+    }
+
     if let Some(err) = &entry.error {
       entries_html.push_str(&format!("<div class=\"error\">{}</div>", escape_html(err)));
     }
@@ -1351,6 +1362,8 @@ fn write_html_report(report: &SnapshotDiffReport, path: &Path) -> Result<(), Str
       details.missing-before, details.missing-after, details.error {{ background: #fff0f0; }}
       details.schema-mismatch {{ background: #fff7e0; }}
       .paths {{ font-size: 0.9em; color: #444; }}
+      .thumbs {{ display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }}
+      .thumb img {{ max-width: 320px; max-height: 240px; display: block; }}
       table {{ border-collapse: collapse; margin: 8px 0; width: 100%; }}
       th, td {{ border: 1px solid #ddd; padding: 4px 6px; text-align: left; }}
       th {{ background: #f0f0f0; }}
@@ -1381,6 +1394,15 @@ fn write_html_report(report: &SnapshotDiffReport, path: &Path) -> Result<(), Str
   );
 
   fs::write(path, content).map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
+
+fn format_linked_image(label: &str, path: &str) -> String {
+  let escaped = escape_html(path);
+  format!(
+    r#"<div class="thumb"><a href="{p}">{l}</a><br><img src="{p}" loading="lazy"></div>"#,
+    p = escaped,
+    l = escape_html(label)
+  )
 }
 
 fn render_schema(schema: &SchemaSummary) -> String {
