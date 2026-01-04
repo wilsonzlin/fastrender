@@ -1863,7 +1863,7 @@ pub(crate) fn supports_parsed_declaration_is_valid(
     | "text-emphasis-color"
     | "column-rule-color" => return Color::parse(raw_value).is_ok(),
     "display" => return keyword_parse(parsed, |kw| Display::parse(kw).ok()),
-    "-webkit-box-orient" => return keyword_in_list(parsed, &["horizontal", "vertical"]),
+    "-webkit-box-orient" | "box-orient" => return keyword_in_list(parsed, &["horizontal", "vertical"]),
     "position" => return keyword_parse(parsed, |kw| Position::parse(kw).ok()),
     "float" => return keyword_parse(parsed, |kw| Float::parse(kw).ok()),
     "clear" => return keyword_parse(parsed, |kw| Clear::parse(kw).ok()),

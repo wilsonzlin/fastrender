@@ -72,3 +72,25 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
 
   supports_parsed_declaration_is_valid(canonical_property, value_without_important, &parsed)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn supports_legacy_webkit_box_display_values() {
+    assert!(supports_declaration("display", "-webkit-box"));
+    assert!(supports_declaration("display", "-webkit-inline-box"));
+  }
+
+  #[test]
+  fn supports_webkit_box_orient_keywords_only() {
+    assert!(supports_declaration("-webkit-box-orient", "horizontal"));
+    assert!(supports_declaration("-webkit-box-orient", "vertical"));
+    assert!(!supports_declaration("-webkit-box-orient", "diagonal"));
+
+    assert!(supports_declaration("box-orient", "horizontal"));
+    assert!(supports_declaration("box-orient", "vertical"));
+    assert!(!supports_declaration("box-orient", "diagonal"));
+  }
+}
