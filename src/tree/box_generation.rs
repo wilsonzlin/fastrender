@@ -2246,10 +2246,6 @@ fn create_pseudo_element_box(
 
   flush_text(&mut text_buf, &pseudo_style, &mut children);
 
-  if children.is_empty() {
-    return None;
-  }
-
   // Determine the box type based on display property
   let fc_type = styles
     .display
@@ -5688,9 +5684,30 @@ mod tests {
     pseudo_style.content_value = ContentValue::Items(vec![ContentItem::Url(String::new())]);
     let pseudo_style = Arc::new(pseudo_style);
 
+    let pseudo_box =
+      create_pseudo_element_box(&styled, &pseudo_style, None, "before", &counters).expect(
+        "pseudo-element boxes should still be generated when content isn't none/normal, even if the resolved url is empty",
+      );
     assert!(
-      create_pseudo_element_box(&styled, &pseudo_style, None, "before", &counters).is_none(),
-      "empty url() content items should not generate replaced boxes"
+      pseudo_box.children.is_empty(),
+      "empty url() content items should not generate replaced children"
+    );
+  }
+
+  #[test]
+  fn pseudo_element_content_generates_box_for_empty_string() {
+    let styled = styled_element("div");
+    let counters = CounterManager::new();
+
+    let mut pseudo_style = ComputedStyle::default();
+    pseudo_style.content_value = ContentValue::Items(vec![ContentItem::String(String::new())]);
+    let pseudo_style = Arc::new(pseudo_style);
+
+    let pseudo_box = create_pseudo_element_box(&styled, &pseudo_style, None, "before", &counters)
+      .expect("empty string content should still generate the pseudo-element box");
+    assert!(
+      pseudo_box.children.is_empty(),
+      "empty string content shouldn't implicitly create placeholder text children"
     );
   }
 
