@@ -86,7 +86,8 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
       &layout,
     )?)
   };
-  let diff_renders = build_diff_renders_command(&repo_root, &layout, &args)?;
+  let diff_renders_exe = diff_renders_executable(&repo_root);
+  let diff_renders = build_diff_renders_command(&diff_renders_exe, &layout, &args)?;
 
   if args.dry_run {
     println!("fixture-chrome-diff plan:");
@@ -133,6 +134,17 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     println!("Rendering fixtures with Chrome baseline...");
     crate::run_command(cmd).context("chrome-baseline-fixtures failed")?;
   }
+
+  // Avoid `cargo run` here since `diff_renders` intentionally exits 1 when differences are found,
+  // and `cargo run` would wrap that with a scary `error: process didn't exit successfully` line.
+  let mut build_cmd = Command::new("cargo");
+  build_cmd
+    .arg("build")
+    .arg("--release")
+    .args(["--bin", "diff_renders"])
+    .current_dir(&repo_root);
+  println!("Building diff_renders...");
+  crate::run_command(build_cmd).context("build diff_renders failed")?;
 
   println!("Diffing renders...");
   run_diff_renders_allowing_differences(diff_renders, &layout)?;
@@ -239,15 +251,11 @@ fn build_chrome_baseline_command(
 }
 
 fn build_diff_renders_command(
-  repo_root: &Path,
+  diff_renders_exe: &Path,
   layout: &Layout,
   args: &FixtureChromeDiffArgs,
 ) -> Result<Command> {
-  let mut cmd = Command::new("cargo");
-  cmd
-    .arg("run")
-    .arg("--release")
-    .args(["--bin", "diff_renders", "--"]);
+  let mut cmd = Command::new(diff_renders_exe);
   cmd.arg("--before").arg(&layout.chrome);
   cmd.arg("--after").arg(&layout.fastrender);
   cmd.arg("--html").arg(&layout.report_html);
@@ -256,8 +264,17 @@ fn build_diff_renders_command(
   cmd
     .arg("--max-diff-percent")
     .arg(args.max_diff_percent.to_string());
-  cmd.current_dir(repo_root);
   Ok(cmd)
+}
+
+fn diff_renders_executable(repo_root: &Path) -> PathBuf {
+  repo_root
+    .join("target")
+    .join("release")
+    .join(format!(
+      "diff_renders{}",
+      std::env::consts::EXE_SUFFIX
+    ))
 }
 
 fn clear_dir(path: &Path) -> Result<()> {
