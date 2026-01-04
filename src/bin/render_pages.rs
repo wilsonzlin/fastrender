@@ -202,6 +202,10 @@ struct Args {
   #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
   cache_dir: PathBuf,
 
+  /// Override render output directory (PNG/logs/diagnostics)
+  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
+  out_dir: PathBuf,
+
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
   css_limit: Option<usize>,
@@ -289,6 +293,7 @@ struct RenderShared {
   only_failures: bool,
   diagnostics_json: bool,
   verbose: bool,
+  out_dir: PathBuf,
   viewport: (u32, u32),
   user_agent: String,
   out_dir: PathBuf,
@@ -750,6 +755,7 @@ fn build_render_shared(
     only_failures: args.only_failures,
     diagnostics_json: args.diagnostics_json,
     verbose: args.verbose,
+    out_dir: args.out_dir.clone(),
     viewport: args.viewport,
     user_agent: args.user_agent.clone(),
     out_dir: args.out_dir.clone(),
@@ -1114,6 +1120,7 @@ fn spawn_worker(
   );
   cmd.arg("--out-dir").arg(&args.out_dir);
   cmd.arg("--cache-dir").arg(&args.cache_dir);
+  cmd.arg("--out-dir").arg(&args.out_dir);
   cmd
     .arg("--disk-cache-max-bytes")
     .arg(args.disk_cache.max_bytes.to_string())

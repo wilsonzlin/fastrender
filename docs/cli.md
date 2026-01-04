@@ -13,10 +13,10 @@ These are optional wrappers for the most common loops:
   - Supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--cache-dir`, `--no-fetch`, `--allow-collisions`, and `--timings`.
   - Prefetch toggles like `--prefetch-fonts` passed after `--` are forwarded to `prefetch_assets`.
   - Pass extra `pageset_progress run` flags after `--`.
-- Cached-pages Chrome-vs-FastRender diff (best-effort; non-deterministic): `scripts/chrome_vs_fastrender.sh [--pages example.com,github.com] [--out target/chrome_vs_fastrender]`
+- Cached-pages Chrome-vs-FastRender diff (best-effort; non-deterministic): `scripts/chrome_vs_fastrender.sh [options] [--] [page_stem...]`
   - Wraps `scripts/chrome_baseline.sh`, `render_pages`, and `diff_renders` into one command.
   - Defaults to `viewport=1200x800`, `dpr=1.0`, JavaScript disabled (to match FastRender’s “no JS” model).
-  - Writes a report at `<out>/diff_report.html` (default: `target/chrome_vs_fastrender/diff_report.html`).
+  - Writes a report at `<out>/report.html` (default: `target/chrome_vs_fastrender/report.html`).
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
@@ -154,7 +154,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 
 ## `render_pages`
 
-- Purpose: render all cached HTML in `fetches/html/` to PNGs (defaults to `fetches/renders/`; override with `--out-dir`).
+- Purpose: render all cached HTML in `fetches/html/` to PNGs (plus per-page logs and `_summary.log`) (defaults to `fetches/renders/`; override with `--out-dir`).
 
 ### Chrome baseline screenshots (from cached HTML)
 
@@ -163,7 +163,7 @@ If you want a “known-correct engine” visual baseline for the same cached HTM
 This workflow is **best-effort / non-deterministic** because it still depends on live subresources. Prefer the offline fixture loop (`render_fixtures` + `cargo xtask fixture-chrome-diff`) once you’ve captured a deterministic repro.
 
 For convenience, `scripts/chrome_vs_fastrender.sh` wraps the full cached-pages loop and writes a
-report at `target/chrome_vs_fastrender/diff_report.html` by default.
+report at `target/chrome_vs_fastrender/report.html` by default.
 
 ```bash
 # Install deps on Ubuntu (python + fonts + chrome/chromium):
@@ -182,8 +182,15 @@ cargo run --release --bin render_pages
 cargo run --release --bin diff_renders -- \
   --before fetches/chrome_renders \
   --after fetches/renders \
-  --json target/chrome_vs_fastrender/diff_report.json \
-  --html target/chrome_vs_fastrender/diff_report.html
+  --json target/chrome_vs_fastrender/report.json \
+  --html target/chrome_vs_fastrender/report.html
+```
+
+For a one-command wrapper that runs all three steps (Chrome baseline → FastRender → diff report),
+use:
+
+```bash
+scripts/chrome_vs_fastrender.sh [--] [stem...]
 ```
 
 Notes:

@@ -1,8 +1,8 @@
 //! CLI integration tests.
 
-mod bundle_page_cache_offline_test;
 mod bundle_page_cache_alias_test;
 mod bundle_page_cache_help_test;
+mod bundle_page_cache_offline_test;
 mod bundle_page_same_origin_policy_test;
 mod bundle_page_test;
 mod bundled_font_coverage_test;
@@ -49,6 +49,7 @@ mod render_pages_diagnostics_test;
 mod render_pages_exit_test;
 mod render_pages_in_process_panic_test;
 mod render_pages_output_paths;
+mod render_pages_out_dir_test;
 mod render_pages_panic_worker_test;
 mod render_pages_worker_timeout_test;
 mod render_fixtures_test;
