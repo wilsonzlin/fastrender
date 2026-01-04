@@ -12,7 +12,10 @@ use fastrender::api::{FastRender, FastRenderConfig, FastRenderPool, FastRenderPo
 use fastrender::compat::CompatProfile;
 use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::dom::DomCompatibilityMode;
-use fastrender::{FontConfig, LayoutParallelism, PaintParallelism, ResourcePolicy, Rgba};
+use fastrender::{
+  FontConfig, LayoutParallelism, PaintParallelism, RenderOptions, ResourceKind, ResourcePolicy,
+  Rgba,
+};
 
 fn deterministic_config() -> FastRenderConfig {
   FastRenderConfig::new()
@@ -422,6 +425,42 @@ fn test_render_html_with_background() {
 
   // Background color should be restored
   assert_eq!(renderer.background_color(), Rgba::WHITE);
+}
+
+#[test]
+fn test_resource_policy_blocks_https_stylesheet_fetch() {
+  let mut renderer = deterministic_renderer();
+  let html = r#"
+        <html>
+            <head>
+                <link rel="stylesheet" href="https://example.com/blocked.css">
+            </head>
+            <body>
+                <div>OK</div>
+            </body>
+        </html>
+    "#;
+
+  // Rendering should still succeed because stylesheet loads are best-effort, but the failure
+  // should be recorded in diagnostics (and must not require network access).
+  let result = renderer
+    .render_html_with_diagnostics(html, RenderOptions::new().with_viewport(32, 32))
+    .expect("render");
+
+  assert_eq!(result.pixmap.width(), 32);
+  assert_eq!(result.pixmap.height(), 32);
+
+  let entry = result
+    .diagnostics
+    .fetch_errors
+    .iter()
+    .find(|e| e.kind == ResourceKind::Stylesheet && e.url == "https://example.com/blocked.css")
+    .expect("diagnostics should include blocked stylesheet fetch");
+  assert!(
+    entry.message.contains("fetch blocked by policy"),
+    "expected policy-blocked error, got: {:?}",
+    entry.message
+  );
 }
 
 #[test]
