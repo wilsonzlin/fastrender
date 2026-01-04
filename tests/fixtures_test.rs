@@ -230,6 +230,7 @@ fn test_all_fixture_files_exist() {
     "text_bidi_mirror",
     "text_line_break",
     "text_font_variant_emoji",
+    "text_font_variant_emoji_clusters",
     "text_font_variant_emoji_webfont",
     "text_overflow_vertical",
     "text_overflow_wrap_word_break_priority",
@@ -544,6 +545,12 @@ fn test_fixture_text_font_variant_emoji() {
 }
 
 #[test]
+fn test_fixture_text_font_variant_emoji_clusters() {
+  test_fixture("text_font_variant_emoji_clusters")
+    .expect("text_font_variant_emoji_clusters fixture should render");
+}
+
+#[test]
 fn test_fixture_text_font_variant_emoji_webfont() {
   test_fixture("text_font_variant_emoji_webfont")
     .expect("text_font_variant_emoji_webfont fixture should render");
@@ -676,6 +683,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "text_bidi_mirror",
     "text_line_break",
     "text_font_variant_emoji",
+    "text_font_variant_emoji_clusters",
     "text_font_variant_emoji_webfont",
     "text_overflow_vertical",
     "text_overflow_wrap_word_break_priority",

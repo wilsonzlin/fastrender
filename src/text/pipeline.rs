@@ -3039,52 +3039,29 @@ fn assign_fonts_internal(
       let first_char = cluster_iter.next().unwrap_or(' ');
       let is_single_char_cluster = cluster_iter.as_str().is_empty();
       let emoji_variant = style.font_variant_emoji;
+      let emoji_pref = emoji_preference_for_cluster(cluster_text, emoji_variant);
 
-      let (emoji_pref, base_char, cluster_chars) = if is_single_char_cluster {
-        (
-          emoji_preference_with_selector(first_char, None, emoji_variant),
-          first_char,
-          &[] as &[char],
-        )
+      let (base_char, cluster_chars) = if is_single_char_cluster {
+        (first_char, &[] as &[char])
       } else {
         relevant_chars.clear();
         let mut base: Option<char> = None;
-        let mut emoji_pref: Option<EmojiPreference> = None;
-        let mut second_char: Option<char> = None;
-        let mut iter = cluster_iter.peekable();
-
         if !is_non_rendering_for_coverage(first_char) {
           base = Some(first_char);
-          emoji_pref = Some(emoji_preference_with_selector(
-            first_char,
-            iter.peek().copied(),
-            emoji_variant,
-          ));
           relevant_chars.push(first_char);
         }
 
-        while let Some(ch) = iter.next() {
-          second_char.get_or_insert(ch);
+        for ch in cluster_iter {
           if is_non_rendering_for_coverage(ch) {
             continue;
           }
-          if base.is_none() {
-            emoji_pref = Some(emoji_preference_with_selector(
-              ch,
-              iter.peek().copied(),
-              emoji_variant,
-            ));
-            base = Some(ch);
-          }
+          base.get_or_insert(ch);
           relevant_chars.push(ch);
         }
 
         let base_char = base.unwrap_or(first_char);
-        let emoji_pref = emoji_pref.unwrap_or_else(|| {
-          emoji_preference_with_selector(first_char, second_char, emoji_variant)
-        });
         let cluster_chars = relevant_chars.as_slice();
-        (emoji_pref, base_char, cluster_chars)
+        (base_char, cluster_chars)
       };
       let require_base_glyph = !is_non_rendering_for_coverage(base_char);
       let base_arr = [base_char];
@@ -4152,29 +4129,80 @@ fn emoji_preference_for_char(ch: char, variant: FontVariantEmoji) -> EmojiPrefer
   }
 }
 
-fn emoji_preference_with_selector(
-  ch: char,
-  next: Option<char>,
-  variant: FontVariantEmoji,
-) -> EmojiPreference {
-  if let Some(sel) = next {
-    if sel == '\u{FE0F}' {
-      return EmojiPreference::PreferEmoji;
+fn emoji_preference_for_cluster(cluster_text: &str, variant: FontVariantEmoji) -> EmojiPreference {
+  let mut chars = cluster_text.chars();
+  let Some(first) = chars.next() else {
+    return EmojiPreference::Neutral;
+  };
+  if chars.as_str().is_empty() {
+    return emoji_preference_for_char(first, variant);
+  }
+
+  let mut base_char: Option<char> = None;
+  let mut prev_renderable: Option<char> = None;
+  let mut saw_vs15 = false;
+  let mut saw_vs16 = false;
+  let mut has_zwj = false;
+  let mut has_keycap = false;
+  let mut has_tag_chars = false;
+  let mut has_emoji = false;
+
+  for ch in cluster_text.chars() {
+    let cp = ch as u32;
+    match cp {
+      0x200d => has_zwj = true,
+      0x20e3 => has_keycap = true,
+      0xfe0e => {
+        if prev_renderable.is_some() {
+          saw_vs15 = true;
+        }
+      }
+      0xfe0f => {
+        if prev_renderable.is_some() {
+          saw_vs16 = true;
+        }
+      }
+      _ => {}
     }
-    if sel == '\u{FE0E}' {
-      return EmojiPreference::AvoidEmoji;
+
+    if (0xe0020..=0xe007f).contains(&cp) {
+      has_tag_chars = true;
+    }
+
+    if !is_non_rendering_for_coverage(ch) {
+      prev_renderable = Some(ch);
+      base_char.get_or_insert(ch);
+      if emoji::is_emoji(ch) || emoji::is_emoji_presentation(ch) {
+        has_emoji = true;
+      }
     }
   }
 
-  let base_pref = emoji_preference_for_char(ch, variant);
-
-  if let Some('\u{200d}') = next {
-    if emoji::is_emoji(ch) || emoji::is_emoji_presentation(ch) {
-      return EmojiPreference::PreferEmoji;
-    }
+  // Explicit variation selectors always win.
+  if saw_vs15 {
+    return EmojiPreference::AvoidEmoji;
+  }
+  if saw_vs16 {
+    return EmojiPreference::PreferEmoji;
   }
 
-  base_pref
+  // Keycap sequences render as emoji even without an explicit VS16 (UAX #51).
+  if matches!(first, '0'..='9' | '#' | '*') && has_keycap {
+    return EmojiPreference::PreferEmoji;
+  }
+
+  // Emoji tag sequences (subdivision flags).
+  if first == '\u{1F3F4}' && has_tag_chars {
+    return EmojiPreference::PreferEmoji;
+  }
+
+  // ZWJ sequences that involve emoji should prefer emoji fonts even under
+  // `font-variant-emoji: text`.
+  if has_zwj && has_emoji {
+    return EmojiPreference::PreferEmoji;
+  }
+
+  emoji_preference_for_char(base_char.unwrap_or(first), variant)
 }
 
 fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback::FamilyEntry> {
@@ -9225,11 +9253,11 @@ mod tests {
   #[test]
   fn emoji_variation_selectors_override_property_preference() {
     assert_eq!(
-      emoji_preference_with_selector('😀', Some('\u{fe0e}'), FontVariantEmoji::Emoji),
+      emoji_preference_for_cluster("😀\u{fe0e}", FontVariantEmoji::Emoji),
       EmojiPreference::AvoidEmoji
     );
     assert_eq!(
-      emoji_preference_with_selector('😀', Some('\u{fe0f}'), FontVariantEmoji::Text),
+      emoji_preference_for_cluster("😀\u{fe0f}", FontVariantEmoji::Text),
       EmojiPreference::PreferEmoji
     );
   }
@@ -9237,7 +9265,41 @@ mod tests {
   #[test]
   fn zwj_sequences_prefer_emoji_fonts() {
     assert_eq!(
-      emoji_preference_with_selector('👩', Some('\u{200d}'), FontVariantEmoji::Text),
+      emoji_preference_for_cluster("👩\u{200d}🔬", FontVariantEmoji::Text),
+      EmojiPreference::PreferEmoji
+    );
+  }
+
+  #[test]
+  fn keycap_sequences_prefer_emoji_unless_forced_text() {
+    assert_eq!(
+      emoji_preference_for_cluster("1\u{20e3}", FontVariantEmoji::Text),
+      EmojiPreference::PreferEmoji
+    );
+    assert_eq!(
+      emoji_preference_for_cluster("1\u{fe0f}\u{20e3}", FontVariantEmoji::Text),
+      EmojiPreference::PreferEmoji
+    );
+    assert_eq!(
+      emoji_preference_for_cluster("1\u{fe0e}\u{20e3}", FontVariantEmoji::Emoji),
+      EmojiPreference::AvoidEmoji
+    );
+  }
+
+  #[test]
+  fn zwj_sequences_prefer_emoji_even_when_zwj_after_modifier() {
+    assert_eq!(
+      emoji_preference_for_cluster("👩\u{1f3fb}\u{200d}🔬", FontVariantEmoji::Text),
+      EmojiPreference::PreferEmoji
+    );
+  }
+
+  #[test]
+  fn tag_sequences_prefer_emoji_fonts() {
+    // England subdivision flag tag sequence.
+    let england = "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}";
+    assert_eq!(
+      emoji_preference_for_cluster(england, FontVariantEmoji::Text),
       EmojiPreference::PreferEmoji
     );
   }
@@ -9341,7 +9403,7 @@ mod tests {
   fn emoji_variation_selector_fe0e_forces_text_font() {
     let text_font = dummy_font("Example Text");
     let emoji_font = dummy_font("Noto Color Emoji");
-    let pref = emoji_preference_with_selector('😀', Some('\u{fe0e}'), FontVariantEmoji::Emoji);
+    let pref = emoji_preference_for_cluster("😀\u{fe0e}", FontVariantEmoji::Emoji);
     assert_eq!(pref, EmojiPreference::AvoidEmoji);
     let mut picker = FontPreferencePicker::new(pref);
     let idx = picker.bump_order();
@@ -9357,7 +9419,7 @@ mod tests {
   fn emoji_variation_selector_fe0f_prefers_emoji_font() {
     let text_font = dummy_font("Example Text");
     let emoji_font = dummy_font("Twemoji");
-    let pref = emoji_preference_with_selector('😀', Some('\u{fe0f}'), FontVariantEmoji::Text);
+    let pref = emoji_preference_for_cluster("😀\u{fe0f}", FontVariantEmoji::Text);
     assert_eq!(pref, EmojiPreference::PreferEmoji);
     let mut picker = FontPreferencePicker::new(pref);
     let idx = picker.bump_order();

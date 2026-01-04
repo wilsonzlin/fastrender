@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Text - font-variant-emoji (clusters)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            /* Keep fixtures deterministic under FASTR_USE_BUNDLED_FONTS=1 by preferring bundled family names. */
+            font-family: "Noto Sans Symbols 2", "Noto Sans Symbols", "Noto Sans", "FastRender Emoji";
+            background: #ffffff;
+        }
+
+        table {
+            width: 600px;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        col.label {
+            width: 240px;
+        }
+
+        col.variant {
+            width: 90px;
+        }
+
+        th, td {
+            border: 1px solid #dee2e6;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            font-size: 12px;
+            padding: 6px 4px;
+            color: #343a40;
+        }
+
+        td {
+            text-align: center;
+            vertical-align: middle;
+        }
+
+        td.label {
+            text-align: left;
+            font-family: "Noto Sans", sans-serif;
+            font-size: 11px;
+            padding: 4px 6px;
+            color: #495057;
+            white-space: nowrap;
+        }
+
+        td.cell {
+            font-size: 40px;
+            line-height: 1;
+            padding: 8px 0;
+        }
+
+        .fv-normal { font-variant-emoji: normal; }
+        .fv-emoji { font-variant-emoji: emoji; }
+        .fv-text { font-variant-emoji: text; }
+        .fv-unicode { font-variant-emoji: unicode; }
+    </style>
+</head>
+<body>
+    <table>
+        <colgroup>
+            <col class="label">
+            <col class="variant">
+            <col class="variant">
+            <col class="variant">
+            <col class="variant">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>sequence</th>
+                <th>normal</th>
+                <th>emoji</th>
+                <th>text</th>
+                <th>unicode</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td class="label">keycap: U+0031 U+20E3</td>
+                <td class="cell fv-normal">&#x31;&#x20E3;</td>
+                <td class="cell fv-emoji">&#x31;&#x20E3;</td>
+                <td class="cell fv-text">&#x31;&#x20E3;</td>
+                <td class="cell fv-unicode">&#x31;&#x20E3;</td>
+            </tr>
+            <tr>
+                <td class="label">keycap: U+0031 U+FE0F U+20E3</td>
+                <td class="cell fv-normal">&#x31;&#xFE0F;&#x20E3;</td>
+                <td class="cell fv-emoji">&#x31;&#xFE0F;&#x20E3;</td>
+                <td class="cell fv-text">&#x31;&#xFE0F;&#x20E3;</td>
+                <td class="cell fv-unicode">&#x31;&#xFE0F;&#x20E3;</td>
+            </tr>
+            <tr>
+                <td class="label">keycap: U+0031 U+FE0E U+20E3</td>
+                <td class="cell fv-normal">&#x31;&#xFE0E;&#x20E3;</td>
+                <td class="cell fv-emoji">&#x31;&#xFE0E;&#x20E3;</td>
+                <td class="cell fv-text">&#x31;&#xFE0E;&#x20E3;</td>
+                <td class="cell fv-unicode">&#x31;&#xFE0E;&#x20E3;</td>
+            </tr>
+            <tr>
+                <td class="label">ZWJ after modifier: 👩🏻‍🔬</td>
+                <td class="cell fv-normal">&#x1F469;&#x1F3FB;&#x200D;&#x1F52C;</td>
+                <td class="cell fv-emoji">&#x1F469;&#x1F3FB;&#x200D;&#x1F52C;</td>
+                <td class="cell fv-text">&#x1F469;&#x1F3FB;&#x200D;&#x1F52C;</td>
+                <td class="cell fv-unicode">&#x1F469;&#x1F3FB;&#x200D;&#x1F52C;</td>
+            </tr>
+            <tr>
+                <td class="label">ZWJ + VS16 after later base: 👩🏻‍⚕️</td>
+                <td class="cell fv-normal">&#x1F469;&#x1F3FB;&#x200D;&#x2695;&#xFE0F;</td>
+                <td class="cell fv-emoji">&#x1F469;&#x1F3FB;&#x200D;&#x2695;&#xFE0F;</td>
+                <td class="cell fv-text">&#x1F469;&#x1F3FB;&#x200D;&#x2695;&#xFE0F;</td>
+                <td class="cell fv-unicode">&#x1F469;&#x1F3FB;&#x200D;&#x2695;&#xFE0F;</td>
+            </tr>
+            <tr>
+                <td class="label">tag sequence: England (🏴)</td>
+                <td class="cell fv-normal">&#x1F3F4;&#xE0067;&#xE0062;&#xE0065;&#xE006E;&#xE0067;&#xE007F;</td>
+                <td class="cell fv-emoji">&#x1F3F4;&#xE0067;&#xE0062;&#xE0065;&#xE006E;&#xE0067;&#xE007F;</td>
+                <td class="cell fv-text">&#x1F3F4;&#xE0067;&#xE0062;&#xE0065;&#xE006E;&#xE0067;&#xE007F;</td>
+                <td class="cell fv-unicode">&#x1F3F4;&#xE0067;&#xE0062;&#xE0065;&#xE006E;&#xE0067;&#xE007F;</td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>
