@@ -28,6 +28,7 @@ use crate::geometry::Size;
 use crate::layout::absolute_positioning::resolve_positioned_style;
 use crate::layout::absolute_positioning::AbsoluteLayout;
 use crate::layout::absolute_positioning::AbsoluteLayoutInput;
+use crate::layout::axis::FragmentAxes;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
@@ -2725,8 +2726,17 @@ impl FormattingContext for FlexFormattingContext {
     }
 
     if !running_children.is_empty() {
+      // Running elements are removed from the flex layout tree, but still need anchors positioned
+      // as-if they were in-flow. Unlike block layout, flexbox can reorder items (`order`) and even
+      // reverse the main axis, so we synthesize anchors based on flex ordering instead of DOM
+      // sibling position.
+      let axes = FragmentAxes::from_writing_mode_and_direction(style.writing_mode, style.direction);
+      let container_block_size = axes.block_size(&fragment.logical_bounds());
+
       let mut id_to_bounds: FxHashMap<usize, Rect> =
         FxHashMap::with_capacity_and_hasher(fragment.children.len(), Default::default());
+      let mut end_of_flow_block_end = 0.0f32;
+
       let mut deadline_counter = 0usize;
       for child in fragment.children.iter() {
         check_layout_deadline(&mut deadline_counter)?;
@@ -2740,33 +2750,109 @@ impl FormattingContext for FlexFormattingContext {
           continue;
         };
         id_to_bounds.entry(box_id).or_insert(child.bounds);
+
+        if let Some(style) = child.style.as_deref() {
+          if style.running_position.is_none()
+            && !matches!(style.position, Position::Absolute | Position::Fixed)
+          {
+            let child_end = axes.block_end(&child.bounds, container_block_size);
+            if child_end.is_finite() {
+              end_of_flow_block_end = end_of_flow_block_end.max(child_end);
+            }
+          }
+        }
+      }
+
+      #[derive(Clone, Copy)]
+      struct OrderedFlexChild {
+        dom_index: usize,
+        order: i32,
+        id: usize,
+        is_running: bool,
+      }
+
+      let mut ordered_children: Vec<OrderedFlexChild> = Vec::new();
+      for (dom_index, child) in box_node.children.iter().enumerate() {
+        check_layout_deadline(&mut deadline_counter)?;
+        if matches!(child.style.position, Position::Absolute | Position::Fixed) {
+          continue;
+        }
+        ordered_children.push(OrderedFlexChild {
+          dom_index,
+          order: child.style.order,
+          id: child.id,
+          is_running: child.style.running_position.is_some(),
+        });
+      }
+
+      // Deterministically order by CSS `order` then DOM index tiebreak.
+      ordered_children.sort_by(|a, b| {
+        a.order
+          .cmp(&b.order)
+          .then_with(|| a.dom_index.cmp(&b.dom_index))
+      });
+
+      // Map running children by box id so we can process them in flex order without depending on
+      // their DOM siblings.
+      let mut running_by_id: FxHashMap<usize, BoxNode> =
+        FxHashMap::with_capacity_and_hasher(running_children.len(), Default::default());
+      for (_, child) in running_children.into_iter() {
+        running_by_id.insert(child.id, child);
+      }
+
+      // Precompute the next non-running item in flex order for each index.
+      let mut next_non_running: Option<usize> = None;
+      let mut next_non_running_for_index: Vec<Option<usize>> = vec![None; ordered_children.len()];
+      for (idx, entry) in ordered_children.iter().enumerate().rev() {
+        if entry.is_running {
+          next_non_running_for_index[idx] = next_non_running;
+        } else {
+          next_non_running = Some(entry.id);
+        }
       }
 
       let snapshot_factory = base_factory.clone();
-      for (order, (running_idx, running_child)) in running_children.into_iter().enumerate() {
+      let mut running_sequence = 0usize;
+      for (idx, entry) in ordered_children.iter().enumerate() {
+        if !entry.is_running {
+          continue;
+        }
         check_layout_deadline(&mut deadline_counter)?;
+
+        let Some(running_child) = running_by_id.get(&entry.id) else {
+          continue;
+        };
         let Some(name) = running_child.style.running_position.clone() else {
           continue;
         };
 
-        let mut anchor_x = 0.0f32;
-        let mut anchor_y = 0.0f32;
-        if let Some((_, next_child)) = box_node
-          .children
-          .iter()
-          .enumerate()
-          .filter(|(idx, child)| {
-            *idx > running_idx
-              && child.style.running_position.is_none()
-              && !matches!(child.style.position, Position::Absolute | Position::Fixed)
+        let (anchor_ref_bounds, mut anchor_block_start) = next_non_running_for_index
+          .get(idx)
+          .and_then(|next| next.as_ref())
+          .and_then(|id| id_to_bounds.get(id))
+          .map(|bounds| {
+            let anchor_block = if matches!(style.flex_direction, FlexDirection::ColumnReverse) {
+              axes.block_end(bounds, container_block_size)
+            } else {
+              axes.block_start(bounds, container_block_size)
+            };
+            (Some(*bounds), anchor_block)
           })
-          .min_by_key(|(idx, _)| *idx)
-        {
-          if let Some(bounds) = id_to_bounds.get(&next_child.id) {
-            anchor_x = bounds.x();
-            anchor_y = bounds.y();
-          }
-        }
+          .unwrap_or((None, end_of_flow_block_end));
+
+        // Ensure deterministic ordering for multiple running elements at the same anchor position.
+        anchor_block_start += (running_sequence as f32) * 1e-4;
+        running_sequence += 1;
+
+        let base_anchor_rect = anchor_ref_bounds
+          .map(|b| Rect::from_xywh(b.x(), b.y(), 0.0, 0.0))
+          .unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 0.0, 0.0));
+        let anchor_bounds = axes.set_block_start_and_size(
+          base_anchor_rect,
+          container_block_size,
+          anchor_block_start,
+          0.01,
+        );
 
         let mut snapshot_node = running_child.clone();
         let mut snapshot_style = snapshot_node.style.as_ref().clone();
@@ -2784,8 +2870,6 @@ impl FormattingContext for FlexFormattingContext {
         );
         match fc.layout(&snapshot_node, &snapshot_constraints) {
           Ok(snapshot_fragment) => {
-            let anchor_bounds =
-              Rect::from_xywh(anchor_x, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
             let mut anchor =
               FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
             anchor.style = Some(running_child.style.clone());
@@ -4241,7 +4325,8 @@ impl FlexFormattingContext {
                 | FormattingContextType::Grid
                 | FormattingContextType::Inline
             ) {
-            mc_constraints.with_used_border_box_size(work.used_border_box_width, work.used_border_box_height)
+            mc_constraints
+              .with_used_border_box_size(work.used_border_box_width, work.used_border_box_height)
           } else {
             mc_constraints
           };
