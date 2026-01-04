@@ -54,6 +54,60 @@ fn write_progress(
     .unwrap_or_else(|_| panic!("write {}", path.display()));
 }
 
+fn write_progress_with_accuracy(
+  dir: &Path,
+  stem: &str,
+  diff_percent: f64,
+  failure_stage: Option<&str>,
+) {
+  let mut progress = json!({
+    "url": format!("https://{stem}.example.com/"),
+    "status": "ok",
+    "total_ms": 10.0,
+    "stages_ms": {
+      "fetch": 1.0,
+      "css": 1.0,
+      "cascade": 1.0,
+      "layout": 7.0,
+      "paint": 0.0
+    },
+    "notes": "",
+    "hotspot": "layout",
+    "last_good_commit": "",
+    "last_regression_commit": "",
+    "accuracy": {
+      "baseline": "chrome",
+      "diff_pixels": 1000,
+      "diff_percent": diff_percent,
+      "perceptual": 0.1234,
+      "tolerance": 0,
+      "max_diff_percent": 0.0,
+      "computed_at_commit": "deadbeef"
+    }
+  });
+  if let Some(stage) = failure_stage {
+    progress
+      .as_object_mut()
+      .expect("progress is object")
+      .insert("failure_stage".to_string(), json!(stage));
+  }
+  let path = dir.join(format!("{stem}.json"));
+  fs::write(&path, serde_json::to_string_pretty(&progress).unwrap())
+    .unwrap_or_else(|_| panic!("write {}", path.display()));
+}
+
+fn extract_accuracy_lines(stdout: &str) -> Vec<&str> {
+  let mut lines = stdout.lines();
+  while let Some(line) = lines.next() {
+    if line.starts_with("Worst accuracy pages") {
+      break;
+    }
+  }
+  lines
+    .take_while(|line| line.starts_with("  ") && !line.trim().is_empty())
+    .collect()
+}
+
 #[test]
 fn pageset_progress_report_outputs_summary() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
@@ -776,6 +830,55 @@ fn pageset_progress_report_surfaces_ok_pages_with_failure_stage_and_can_gate() {
   assert!(
     stderr.contains("ok_with_failure_stage"),
     "missing offender stem in ok-with-failures gate output"
+  );
+}
+
+#[test]
+fn pageset_progress_report_accuracy_only_clean_filters_ok_pages_with_failures() {
+  let dir = tempdir().expect("progress dir");
+  write_progress_with_accuracy(dir.path(), "clean_accuracy", 10.0, None);
+  write_progress_with_accuracy(dir.path(), "dirty_accuracy", 25.0, Some("paint"));
+
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
+    .args([
+      "report",
+      "--progress-dir",
+      dir.path().to_str().unwrap(),
+      "--top",
+      "10",
+      "--rank-accuracy",
+      "--accuracy-only-clean",
+    ])
+    .output()
+    .expect("run pageset_progress report --accuracy-only-clean");
+  assert!(
+    output.status.success(),
+    "expected report to succeed, stderr:\n{}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(
+    stdout.contains("Worst accuracy pages (top 1 of 1 with accuracy):"),
+    "expected filtered accuracy header, got:\n{stdout}"
+  );
+  let lines = extract_accuracy_lines(&stdout);
+  assert_eq!(
+    lines.len(),
+    1,
+    "expected only one accuracy line after filtering, got:\n{stdout}"
+  );
+  assert!(
+    lines[0].contains("clean_accuracy"),
+    "expected clean page to remain in accuracy list, got: {}",
+    lines[0]
+  );
+  assert!(
+    !lines[0].contains("dirty_accuracy"),
+    "expected dirty page to be filtered out of accuracy list, got: {}",
+    lines[0]
   );
 }
 

@@ -498,6 +498,14 @@ struct RunArgs {
   #[arg(long)]
   accuracy: bool,
 
+  /// When capturing accuracy, require pages to be free of known subresource failures.
+  ///
+  /// This skips `status=ok` pages that still have `failure_stage` set or recorded fetch errors
+  /// (including bot-mitigation blocks). Their pixel diffs are often dominated by missing
+  /// resources rather than renderer correctness.
+  #[arg(long, requires = "accuracy")]
+  accuracy_require_clean: bool,
+
   /// Directory containing baseline PNGs (e.g. `fetches/chrome_renders/<stem>.png`)
   #[arg(long, value_name = "DIR", requires = "accuracy")]
   baseline_dir: Option<PathBuf>,
@@ -569,6 +577,10 @@ struct ReportArgs {
   #[arg(long, value_name = "PERCENT")]
   min_diff_percent: Option<f64>,
 
+  /// When ranking accuracy, only include clean ok pages (no failure_stage or subresource fetch errors).
+  #[arg(long)]
+  accuracy_only_clean: bool,
+
   /// Compare against another progress directory
   #[arg(long, value_name = "DIR")]
   compare: Option<PathBuf>,
@@ -598,6 +610,13 @@ struct ReportArgs {
     value_name = "PERCENT"
   )]
   accuracy_regression_threshold_percent: f64,
+
+  /// Include ok pages with subresource failures when evaluating `--fail-on-accuracy-regression`
+  ///
+  /// By default, `--fail-on-accuracy-regression` behaves as if `--accuracy-only-clean` is set so
+  /// noisy pages don't trip the gate.
+  #[arg(long, requires = "fail_on_accuracy_regression")]
+  allow_ok_with_failures: bool,
 
   /// Exit non-zero when any page timed out or panicked
   #[arg(long)]
@@ -783,6 +802,10 @@ struct WorkerArgs {
   /// Capture pixel-diff accuracy metrics against baseline renders (stored in progress JSON)
   #[arg(long)]
   accuracy: bool,
+
+  /// When capturing accuracy, require pages to be free of known subresource failures.
+  #[arg(long, requires = "accuracy")]
+  accuracy_require_clean: bool,
 
   /// Directory containing baseline PNGs (e.g. `fetches/chrome_renders/<stem>.png`)
   #[arg(long, value_name = "DIR", requires = "accuracy")]
@@ -1666,6 +1689,31 @@ struct ProgressDiagnostics {
   bot_mitigation_summary: Option<ProgressFetchErrorSummary>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   external_network_failure_summary: Option<ProgressFetchErrorSummary>,
+}
+
+fn progress_is_clean_for_accuracy(progress: &PageProgress) -> bool {
+  if progress.status != ProgressStatus::Ok {
+    return false;
+  }
+  if progress.failure_stage.is_some() {
+    return false;
+  }
+  let Some(diag) = progress.diagnostics.as_ref() else {
+    return true;
+  };
+  let has_fetch_errors = diag
+    .fetch_error_summary
+    .as_ref()
+    .is_some_and(|s| s.total > 0);
+  let has_bot_mitigation = diag
+    .bot_mitigation_summary
+    .as_ref()
+    .is_some_and(|s| s.total > 0);
+  let has_external_network_failures = diag
+    .external_network_failure_summary
+    .as_ref()
+    .is_some_and(|s| s.total > 0);
+  !(has_fetch_errors || has_bot_mitigation || has_external_network_failures)
 }
 
 pub(crate) fn is_bot_mitigation_block(status: Option<u16>, url: &str) -> bool {
@@ -3117,7 +3165,12 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   }
 
   if args.accuracy && progress.status == ProgressStatus::Ok {
-    if let (Some(baseline_dir), Some(pixmap)) =
+    if args.accuracy_require_clean && !progress_is_clean_for_accuracy(&progress) {
+      ensure_auto_note_includes(&mut progress, "Accuracy skipped: ok-with-failures");
+      if let Err(err) = write_progress_fast(&args.progress_path, &progress) {
+        log.push_str(&format!("Accuracy: progress rewrite failed ({err})\n"));
+      }
+    } else if let (Some(baseline_dir), Some(pixmap)) =
       (args.baseline_dir.as_deref(), rendered_pixmap.as_ref())
     {
       if let Some(accuracy) = compute_accuracy_for_pixmap(
@@ -5220,6 +5273,9 @@ fn report(args: ReportArgs) -> io::Result<()> {
     }
   }
 
+  let accuracy_only_clean =
+    args.accuracy_only_clean || (args.fail_on_accuracy_regression && !args.allow_ok_with_failures);
+
   let page_filter = args
     .pages
     .as_ref()
@@ -5703,6 +5759,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
     let mut accuracy_pages: Vec<(&LoadedProgress, &ProgressAccuracy)> = progresses
       .iter()
       .filter(|entry| entry.progress.status == ProgressStatus::Ok)
+      .filter(|entry| !accuracy_only_clean || progress_is_clean_for_accuracy(&entry.progress))
       .filter_map(|entry| entry.progress.accuracy.as_ref().map(|acc| (entry, acc)))
       .collect();
     if args.only_diff {
@@ -6610,6 +6667,13 @@ fn report(args: ReportArgs) -> io::Result<()> {
 
       if baseline_entry.progress.status != ProgressStatus::Ok
         || current_entry.progress.status != ProgressStatus::Ok
+      {
+        continue;
+      }
+
+      if accuracy_only_clean
+        && (!progress_is_clean_for_accuracy(&baseline_entry.progress)
+          || !progress_is_clean_for_accuracy(&current_entry.progress))
       {
         continue;
       }
@@ -7522,6 +7586,9 @@ fn push_worker_args(
   }
   if args.accuracy {
     cmd.arg("--accuracy");
+    if args.accuracy_require_clean {
+      cmd.arg("--accuracy-require-clean");
+    }
     if let Some(dir) = &args.baseline_dir {
       cmd.arg("--baseline-dir").arg(dir);
     }
@@ -9005,11 +9072,13 @@ mod tests {
       rank_accuracy: false,
       only_diff: false,
       min_diff_percent: None,
+      accuracy_only_clean: false,
       compare: None,
       fail_on_regression: false,
-      regression_threshold_percent: 10.0,
       fail_on_accuracy_regression: false,
+      regression_threshold_percent: 10.0,
       accuracy_regression_threshold_percent: 0.0,
+      allow_ok_with_failures: false,
       fail_on_bad: false,
       include_trace: false,
       trace_progress_dir: PathBuf::new(),
@@ -9330,6 +9399,7 @@ mod tests {
       dump_soft_timeout_ms: None,
       diagnostics: DiagnosticsArg::None,
       accuracy: false,
+      accuracy_require_clean: false,
       baseline_dir: None,
       baseline: None,
       baseline_refresh: false,
@@ -10377,6 +10447,63 @@ mod tests {
     let merged = new_progress.merge_preserving_manual(Some(previous), None);
     assert!(merged.notes.trim().is_empty());
     assert!(merged.auto_notes.trim().is_empty());
+  }
+
+  #[test]
+  fn progress_is_clean_for_accuracy_accepts_ok_without_failures() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    progress.status = ProgressStatus::Ok;
+    assert!(progress_is_clean_for_accuracy(&progress));
+  }
+
+  #[test]
+  fn progress_is_clean_for_accuracy_rejects_failure_stage() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    progress.status = ProgressStatus::Ok;
+    progress.failure_stage = Some(ProgressStage::Paint);
+    assert!(!progress_is_clean_for_accuracy(&progress));
+  }
+
+  #[test]
+  fn progress_is_clean_for_accuracy_rejects_fetch_error_summaries() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    progress.status = ProgressStatus::Ok;
+    progress.diagnostics = Some(ProgressDiagnostics {
+      fetch_error_summary: Some(ProgressFetchErrorSummary {
+        total: 1,
+        ..ProgressFetchErrorSummary::default()
+      }),
+      ..ProgressDiagnostics::default()
+    });
+    assert!(!progress_is_clean_for_accuracy(&progress));
+  }
+
+  #[test]
+  fn progress_is_clean_for_accuracy_rejects_bot_mitigation_summaries() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    progress.status = ProgressStatus::Ok;
+    progress.diagnostics = Some(ProgressDiagnostics {
+      bot_mitigation_summary: Some(ProgressFetchErrorSummary {
+        total: 1,
+        ..ProgressFetchErrorSummary::default()
+      }),
+      ..ProgressDiagnostics::default()
+    });
+    assert!(!progress_is_clean_for_accuracy(&progress));
+  }
+
+  #[test]
+  fn progress_is_clean_for_accuracy_rejects_external_network_failures() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    progress.status = ProgressStatus::Ok;
+    progress.diagnostics = Some(ProgressDiagnostics {
+      external_network_failure_summary: Some(ProgressFetchErrorSummary {
+        total: 1,
+        ..ProgressFetchErrorSummary::default()
+      }),
+      ..ProgressDiagnostics::default()
+    });
+    assert!(!progress_is_clean_for_accuracy(&progress));
   }
 
   #[test]
