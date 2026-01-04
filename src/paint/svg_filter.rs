@@ -1588,24 +1588,32 @@ fn pack_color(
   to_premultiplied(color)
 }
 
-fn reencode_pixmap_to_linear_rgb(pixmap: &mut Pixmap) {
-  for px in pixmap.pixels_mut() {
+fn reencode_pixmap_to_linear_rgb(pixmap: &mut Pixmap) -> RenderResult<()> {
+  for (idx, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+    if (idx + 1) % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let mut color = to_unpremultiplied(*px);
     color.r = srgb_to_linear(color.r);
     color.g = srgb_to_linear(color.g);
     color.b = srgb_to_linear(color.b);
     *px = to_premultiplied(color);
   }
+  Ok(())
 }
 
-fn reencode_pixmap_to_srgb(pixmap: &mut Pixmap) {
-  for px in pixmap.pixels_mut() {
+fn reencode_pixmap_to_srgb(pixmap: &mut Pixmap) -> RenderResult<()> {
+  for (idx, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+    if (idx + 1) % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let mut color = to_unpremultiplied(*px);
     color.r = linear_to_srgb(color.r);
     color.g = linear_to_srgb(color.g);
     color.b = linear_to_srgb(color.b);
     *px = to_premultiplied(color);
   }
+  Ok(())
 }
 
 /// Load and parse an SVG filter from a URL (including data URLs), caching the result.
@@ -2775,7 +2783,7 @@ pub(crate) fn apply_svg_filter_with_cache(
   }
 
   let Some(mut working_pixmap) =
-    resize_pixmap(pixmap, working_w, working_h, def.color_interpolation_filters)
+    resize_pixmap(pixmap, working_w, working_h, def.color_interpolation_filters)?
   else {
     apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
@@ -2798,7 +2806,7 @@ pub(crate) fn apply_svg_filter_with_cache(
   )?;
 
   let Some(resized_back) =
-    resize_pixmap(&working_pixmap, target_w, target_h, def.color_interpolation_filters)
+    resize_pixmap(&working_pixmap, target_w, target_h, def.color_interpolation_filters)?
   else {
     apply_svg_filter_scaled(
       def,
@@ -2820,18 +2828,21 @@ fn resize_pixmap(
   width: u32,
   height: u32,
   color_interpolation_filters: ColorInterpolationFilters,
-) -> Option<Pixmap> {
+) -> RenderResult<Option<Pixmap>> {
   if width == 0 || height == 0 {
-    return None;
+    return Ok(None);
   }
   if source.width() == width && source.height() == height {
-    return Some(source.clone());
+    return Ok(Some(source.clone()));
   }
   if source.width() == 0 || source.height() == 0 {
-    return None;
+    return Ok(None);
   }
 
-  let mut out = new_pixmap(width, height)?;
+  let mut out = match new_pixmap(width, height) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   let mut paint = PixmapPaint::default();
   paint.quality = FilterQuality::Bilinear;
   let transform = Transform::from_scale(
@@ -2844,12 +2855,12 @@ fn resize_pixmap(
     }
     ColorInterpolationFilters::LinearRGB => {
       let mut temp = source.clone();
-      reencode_pixmap_to_linear_rgb(&mut temp);
+      reencode_pixmap_to_linear_rgb(&mut temp)?;
       out.draw_pixmap(0, 0, temp.as_ref(), &paint, transform, None);
-      reencode_pixmap_to_srgb(&mut out);
+      reencode_pixmap_to_srgb(&mut out)?;
     }
   }
-  Some(out)
+  Ok(Some(out))
 }
 
 fn resolve_filter_regions(
@@ -3100,13 +3111,13 @@ fn apply_primitive(
           ColorInterpolationFilters::LinearRGB
         );
         if use_linear {
-          reencode_pixmap_to_linear_rgb(&mut img.pixmap);
+          reencode_pixmap_to_linear_rgb(&mut img.pixmap)?;
         }
         with_blur_cache(blur_cache, |cache| {
           apply_gaussian_blur_cached(&mut img.pixmap, sigma_x, sigma_y, cache, scale_avg)
         })?;
         if use_linear {
-          reencode_pixmap_to_srgb(&mut img.pixmap);
+          reencode_pixmap_to_srgb(&mut img.pixmap)?;
         }
         let expanded = inflate_rect_xy(img.region, sigma_x.abs() * 3.0, sigma_y.abs() * 3.0);
         img.region = clip_region(expanded, filter_region);
@@ -3144,7 +3155,7 @@ fn apply_primitive(
       *operator,
       color_interpolation_filters,
       filter_region,
-    ),
+    )?,
     FilterPrimitive::Merge { inputs } => Some(merge_inputs(
       inputs,
       source,
@@ -3152,7 +3163,7 @@ fn apply_primitive(
       current,
       color_interpolation_filters,
       filter_region,
-    )),
+    )?),
     FilterPrimitive::DropShadow {
       input,
       dx,
@@ -3191,7 +3202,7 @@ fn apply_primitive(
       *mode,
       filter_region,
       color_interpolation_filters,
-    ),
+    )?,
     FilterPrimitive::Morphology { input, radius, op } => {
       let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
         return Ok(None);
@@ -3279,8 +3290,10 @@ fn apply_primitive(
       filter_region,
     ),
     FilterPrimitive::Tile { input } => {
-      resolve_input(input, source, results, current, filter_region)
-        .and_then(|img| tile_pixmap(img, filter_region))
+      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
+      tile_pixmap(img, filter_region)?
     }
     FilterPrimitive::Turbulence {
       base_frequency,
@@ -3949,7 +3962,7 @@ fn offset_pixmap(
   );
   let needs_interpolation = dx.fract() != 0.0 || dy.fract() != 0.0;
   if use_linear_rgb && needs_interpolation {
-    reencode_pixmap_to_linear_rgb(&mut input);
+    reencode_pixmap_to_linear_rgb(&mut input)?;
   }
 
   let width = input.width();
@@ -4022,7 +4035,7 @@ fn offset_pixmap(
   }
 
   if use_linear_rgb && needs_interpolation {
-    reencode_pixmap_to_srgb(&mut out);
+    reencode_pixmap_to_srgb(&mut out)?;
   }
 
   Ok(out)
@@ -4047,11 +4060,13 @@ fn composite_pixmaps(
   op: CompositeOperator,
   color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
-) -> Option<FilterResult> {
-  let a = input1?;
+) -> RenderResult<Option<FilterResult>> {
+  let Some(a) = input1 else {
+    return Ok(None);
+  };
   let b = input2.unwrap_or_else(|| a.clone());
   if a.pixmap.width() != b.pixmap.width() || a.pixmap.height() != b.pixmap.height() {
-    return None;
+    return Ok(None);
   }
 
   let use_linear = matches!(
@@ -4063,20 +4078,18 @@ fn composite_pixmaps(
   let mut a_pixmap = a.pixmap;
   let mut b_pixmap = b.pixmap;
   if use_linear {
-    reencode_pixmap_to_linear_rgb(&mut a_pixmap);
-    reencode_pixmap_to_linear_rgb(&mut b_pixmap);
+    reencode_pixmap_to_linear_rgb(&mut a_pixmap)?;
+    reencode_pixmap_to_linear_rgb(&mut b_pixmap)?;
   }
 
-  let mut pixmap = match op {
+  let pixmap = match op {
     CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
       arithmetic_composite(&a_pixmap, &b_pixmap, k1, k2, k3, k4)?
     }
     CompositeOperator::Over => {
       composite_porter_duff(&a_pixmap, &b_pixmap, |a_a, _| (1.0, 1.0 - a_a))?
     }
-    CompositeOperator::In => {
-      composite_porter_duff(&a_pixmap, &b_pixmap, |_, b_a| (b_a, 0.0))?
-    }
+    CompositeOperator::In => composite_porter_duff(&a_pixmap, &b_pixmap, |_, b_a| (b_a, 0.0))?,
     CompositeOperator::Out => {
       composite_porter_duff(&a_pixmap, &b_pixmap, |_, b_a| (1.0 - b_a, 0.0))?
     }
@@ -4087,8 +4100,11 @@ fn composite_pixmaps(
       (1.0 - b_a, 1.0 - a_a)
     })?,
   };
+  let Some(mut pixmap) = pixmap else {
+    return Ok(None);
+  };
   if use_linear {
-    reencode_pixmap_to_srgb(&mut pixmap);
+    reencode_pixmap_to_srgb(&mut pixmap)?;
   }
 
   let region = match op {
@@ -4099,7 +4115,7 @@ fn composite_pixmaps(
     CompositeOperator::Out => clip_region(a_region, filter_region),
     _ => clip_region(a_region.union(b_region), filter_region),
   };
-  Some(FilterResult { pixmap, region })
+  Ok(Some(FilterResult { pixmap, region }))
 }
 
 fn blend_pixmaps(
@@ -4108,17 +4124,20 @@ fn blend_pixmaps(
   mode: BlendMode,
   filter_region: Rect,
   color_interpolation_filters: ColorInterpolationFilters,
-) -> Option<FilterResult> {
-  let mut base = a?;
+) -> RenderResult<Option<FilterResult>> {
+  let Some(mut base) = a else {
+    return Ok(None);
+  };
   let mut top = b.unwrap_or_else(|| base.clone());
   let use_linear = matches!(
     color_interpolation_filters,
     ColorInterpolationFilters::LinearRGB
   );
   if use_linear {
-    reencode_pixmap_to_linear_rgb(&mut base.pixmap);
-    reencode_pixmap_to_linear_rgb(&mut top.pixmap);
+    reencode_pixmap_to_linear_rgb(&mut base.pixmap)?;
+    reencode_pixmap_to_linear_rgb(&mut top.pixmap)?;
   }
+
   let mut paint = PixmapPaint::default();
   paint.blend_mode = mode;
   base.pixmap.draw_pixmap(
@@ -4130,13 +4149,13 @@ fn blend_pixmaps(
     None,
   );
   if use_linear {
-    reencode_pixmap_to_srgb(&mut base.pixmap);
+    reencode_pixmap_to_srgb(&mut base.pixmap)?;
   }
   let region = clip_region(base.region.union(top.region), filter_region);
-  Some(FilterResult {
+  Ok(Some(FilterResult {
     pixmap: base.pixmap,
     region,
-  })
+  }))
 }
 
 fn merge_inputs(
@@ -4146,8 +4165,11 @@ fn merge_inputs(
   current: &FilterResult,
   color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
-) -> FilterResult {
-  let mut out = new_pixmap(source.pixmap.width(), source.pixmap.height()).unwrap();
+) -> RenderResult<FilterResult> {
+  let width = source.pixmap.width();
+  let height = source.pixmap.height();
+  let mut out =
+    new_pixmap(width, height).ok_or(RenderError::CanvasCreationFailed { width, height })?;
   let mut region = Rect::ZERO;
   let mut seen_any = false;
   let mut paint = PixmapPaint::default();
@@ -4168,7 +4190,7 @@ fn merge_inputs(
         }
         ColorInterpolationFilters::LinearRGB => {
           let mut linear = img.pixmap.clone();
-          reencode_pixmap_to_linear_rgb(&mut linear);
+          reencode_pixmap_to_linear_rgb(&mut linear)?;
           out.draw_pixmap(0, 0, linear.as_ref(), &paint, Transform::identity(), None);
         }
       }
@@ -4182,17 +4204,17 @@ fn merge_inputs(
   }
 
   if matches!(color_interpolation_filters, ColorInterpolationFilters::LinearRGB) {
-    reencode_pixmap_to_srgb(&mut out);
+    reencode_pixmap_to_srgb(&mut out)?;
   }
 
-  FilterResult {
+  Ok(FilterResult {
     pixmap: out,
     region: if seen_any {
       clip_region(region, filter_region)
     } else {
       Rect::ZERO
     },
-  }
+  })
 }
 
 fn drop_shadow_pixmap(
@@ -4227,10 +4249,15 @@ fn drop_shadow_pixmap(
     let src_stride = input.pixmap.width() as usize;
     let dst_stride = shadow.width() as usize;
     let dst = shadow.pixels_mut();
+    let mut counter = 0usize;
     for y in 0..bounds_h as usize {
       let src_row = (min_y as usize + y) * src_stride;
       let dst_row = (blur_pad_y as usize + y) * dst_stride;
       for x in 0..bounds_w as usize {
+        counter = counter.wrapping_add(1);
+        if counter % FILTER_DEADLINE_STRIDE == 0 {
+          check_active(RenderStage::Paint)?;
+        }
         let src_px = src[src_row + min_x as usize + x];
         let alpha = src_px.alpha() as f32 / 255.0 * opacity * color.a;
         let dst_idx = dst_row + blur_pad_x as usize + x;
@@ -4255,7 +4282,7 @@ fn drop_shadow_pixmap(
   }
 
   if use_linear {
-    reencode_pixmap_to_linear_rgb(&mut shadow);
+    reencode_pixmap_to_linear_rgb(&mut shadow)?;
   }
 
   if stddev.0 != 0.0 || stddev.1 != 0.0 {
@@ -4281,7 +4308,7 @@ fn drop_shadow_pixmap(
   );
   let mut input = input;
   if use_linear {
-    reencode_pixmap_to_linear_rgb(&mut input.pixmap);
+    reencode_pixmap_to_linear_rgb(&mut input.pixmap)?;
   }
   out.draw_pixmap(
     0,
@@ -4292,7 +4319,7 @@ fn drop_shadow_pixmap(
     None,
   );
   if use_linear {
-    reencode_pixmap_to_srgb(&mut out);
+    reencode_pixmap_to_srgb(&mut out)?;
   }
 
   let base_region = input.region;
@@ -4318,19 +4345,26 @@ fn draw_over(bottom: &Pixmap, top: &Pixmap) -> Pixmap {
   out
 }
 
-fn composite_porter_duff<F>(a: &Pixmap, b: &Pixmap, factors: F) -> Option<Pixmap>
+fn composite_porter_duff<F>(a: &Pixmap, b: &Pixmap, factors: F) -> RenderResult<Option<Pixmap>>
 where
   F: Fn(f32, f32) -> (f32, f32),
 {
-  let mut out = new_pixmap(a.width(), a.height())?;
+  let mut out = match new_pixmap(a.width(), a.height()) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   let a_pixels = a.pixels();
   let b_pixels = b.pixels();
-  for ((dst, pa), pb) in out
+  for (idx, ((dst, pa), pb)) in out
     .pixels_mut()
     .iter_mut()
     .zip(a_pixels.iter())
     .zip(b_pixels.iter())
+    .enumerate()
   {
+    if (idx + 1) % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let (ar, ag, ab, aa) = premultiplied_components(pa);
     let (br, bg, bb, ba) = premultiplied_components(pb);
     let (mut fa, mut fb) = factors(aa, ba);
@@ -4342,7 +4376,7 @@ where
     let out_b = ab * fa + bb * fb;
     *dst = premul_from_components(out_r, out_g, out_b, out_a);
   }
-  Some(out)
+  Ok(Some(out))
 }
 
 fn arithmetic_composite(
@@ -4352,14 +4386,21 @@ fn arithmetic_composite(
   k2: f32,
   k3: f32,
   k4: f32,
-) -> Option<Pixmap> {
-  let mut out = new_pixmap(a.width(), a.height())?;
-  for ((dst, pa), pb) in out
+) -> RenderResult<Option<Pixmap>> {
+  let mut out = match new_pixmap(a.width(), a.height()) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
+  for (idx, ((dst, pa), pb)) in out
     .pixels_mut()
     .iter_mut()
     .zip(a.pixels().iter())
     .zip(b.pixels().iter())
+    .enumerate()
   {
+    if (idx + 1) % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let (a_r, a_g, a_b, a_a) = unpremultiply_components(pa);
     let (b_r, b_g, b_b, b_a) = unpremultiply_components(pb);
     let apply =
@@ -4370,7 +4411,7 @@ fn arithmetic_composite(
     let out_b = apply(a_b, b_b);
     *dst = premul_from_components(out_r * out_a, out_g * out_a, out_b * out_a, out_a);
   }
-  Some(out)
+  Ok(Some(out))
 }
 
 fn premultiplied_components(px: &PremultipliedColorU8) -> (f32, f32, f32, f32) {
@@ -4426,25 +4467,28 @@ fn region_to_int_bounds(
   Some((x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
-fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult> {
+fn tile_pixmap(input: FilterResult, filter_region: Rect) -> RenderResult<Option<FilterResult>> {
   let width = input.pixmap.width();
   let height = input.pixmap.height();
-  let mut out = new_pixmap(width, height)?;
+  let mut out = match new_pixmap(width, height) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   let Some((start_x, start_y, tile_width, tile_height)) =
     region_to_int_bounds(input.region, width, height)
   else {
-    return Some(FilterResult {
+    return Ok(Some(FilterResult {
       pixmap: out,
       region: Rect::ZERO,
-    });
+    }));
   };
   let Some((target_x, target_y, target_w, target_h)) =
     region_to_int_bounds(filter_region, width, height)
   else {
-    return Some(FilterResult {
+    return Ok(Some(FilterResult {
       pixmap: out,
       region: Rect::ZERO,
-    });
+    }));
   };
 
   let wrap = |value: i32, origin: i32, size: i32| -> i32 {
@@ -4462,11 +4506,16 @@ fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult>
   let src_pixels = input.pixmap.pixels();
   let dst_pixels = out.pixels_mut();
 
+  let mut counter = 0usize;
   for y in (target_y as i32)..(target_y as i32 + target_h as i32) {
     let src_y = wrap(y, start_y as i32, tile_h);
     let src_row = src_y as usize * src_stride;
     let dst_row = y as usize * dst_stride;
     for x in (target_x as i32)..(target_x as i32 + target_w as i32) {
+      counter = counter.wrapping_add(1);
+      if counter % FILTER_DEADLINE_STRIDE == 0 {
+        check_active(RenderStage::Paint)?;
+      }
       let src_x = wrap(x, start_x as i32, tile_w);
       let dst_idx = dst_row + x as usize;
       let src_idx = src_row + src_x as usize;
@@ -4475,10 +4524,10 @@ fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult>
   }
 
   let output_region = clip_region(filter_region, filter_region_for_pixmap(&out));
-  Some(FilterResult {
+  Ok(Some(FilterResult {
     pixmap: out,
     region: output_region,
-  })
+  }))
 }
 
 fn apply_displacement_map(
@@ -4505,8 +4554,8 @@ fn apply_displacement_map(
   let (primary, map) = if use_linear {
     primary_linear = primary.clone();
     map_linear = map.clone();
-    reencode_pixmap_to_linear_rgb(&mut primary_linear);
-    reencode_pixmap_to_linear_rgb(&mut map_linear);
+    reencode_pixmap_to_linear_rgb(&mut primary_linear)?;
+    reencode_pixmap_to_linear_rgb(&mut map_linear)?;
     (&primary_linear, &map_linear)
   } else {
     (primary, map)
@@ -4538,7 +4587,7 @@ fn apply_displacement_map(
   }
 
   if use_linear {
-    reencode_pixmap_to_srgb(&mut out);
+    reencode_pixmap_to_srgb(&mut out)?;
   }
 
   Ok(Some(out))
@@ -4638,7 +4687,7 @@ fn apply_convolve_matrix(
     ColorInterpolationFilters::LinearRGB
   );
   if use_linear {
-    reencode_pixmap_to_linear_rgb(&mut input);
+    reencode_pixmap_to_linear_rgb(&mut input)?;
   }
 
   let divisor = match divisor {
@@ -4759,7 +4808,7 @@ fn apply_convolve_matrix(
   }
 
   if use_linear {
-    reencode_pixmap_to_srgb(&mut out);
+    reencode_pixmap_to_srgb(&mut out)?;
   }
   Ok(out)
 }
@@ -4840,7 +4889,7 @@ fn apply_morphology(
     color_interpolation_filters,
     ColorInterpolationFilters::LinearRGB
   ) {
-    reencode_pixmap_to_linear_rgb(&mut original);
+    reencode_pixmap_to_linear_rgb(&mut original)?;
   }
   let src = original.pixels();
   let dst = pixmap.pixels_mut();
@@ -5882,6 +5931,137 @@ mod tests {
   }
 
   #[test]
+  fn composite_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let mut pixmap = new_pixmap(32, 32).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(10, 20, 30, 255);
+    }
+    let prim = FilterPrimitive::Composite {
+      input1: FilterInput::SourceGraphic,
+      input2: FilterInput::SourceGraphic,
+      operator: CompositeOperator::Over,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn tile_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let mut pixmap = new_pixmap(32, 32).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(10, 20, 30, 255);
+    }
+    let prim = FilterPrimitive::Tile {
+      input: FilterInput::SourceGraphic,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn drop_shadow_respects_cancel_callback_without_blur() {
+    let (deadline, calls) = deadline_after_first_check();
+    let mut pixmap = new_pixmap(32, 32).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(10, 20, 30, 255);
+    }
+    let prim = FilterPrimitive::DropShadow {
+      input: FilterInput::SourceGraphic,
+      dx: 0.0,
+      dy: 0.0,
+      std_dev: (0.0, 0.0),
+      color: Rgba::new(0, 0, 0, 1.0),
+      opacity: 1.0,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn reencode_to_linear_rgb_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let mut pixmap = new_pixmap(32, 32).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(128, 64, 0, 255);
+    }
+
+    let result = with_deadline(Some(&deadline), || reencode_pixmap_to_linear_rgb(&mut pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn reencode_to_srgb_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let mut pixmap = new_pixmap(32, 32).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(128, 64, 0, 255);
+    }
+
+    let result = with_deadline(Some(&deadline), || reencode_pixmap_to_srgb(&mut pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
   fn clip_to_region_clears_pixels_outside_rect() {
     let mut pixmap = new_pixmap(4, 4).unwrap();
     let color = PremultipliedColorU8::from_rgba(10, 20, 30, 255).unwrap();
@@ -6253,7 +6433,9 @@ mod tests {
       pixmap,
       region: Rect::from_xywh(1.0, 0.0, 2.0, 2.0),
     };
-    let out = tile_pixmap(input, Rect::from_xywh(0.0, 0.0, 4.0, 4.0)).unwrap();
+    let out = tile_pixmap(input, Rect::from_xywh(0.0, 0.0, 4.0, 4.0))
+      .unwrap()
+      .unwrap();
 
     let px = |pixmap: &Pixmap, x: usize, y: usize| {
       let p = pixmap.pixels()[y * 4 + x];
@@ -6803,11 +6985,13 @@ mod tests_composite {
     input1: Option<Pixmap>,
     input2: Option<Pixmap>,
     op: CompositeOperator,
-  ) -> Option<Pixmap> {
-    let a = input1?;
+  ) -> RenderResult<Option<Pixmap>> {
+    let Some(a) = input1 else {
+      return Ok(None);
+    };
     let b = input2.unwrap_or_else(|| a.clone());
     if a.width() != b.width() || a.height() != b.height() {
-      return None;
+      return Ok(None);
     }
     match op {
       CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
@@ -6825,7 +7009,9 @@ mod tests_composite {
   fn composite_over_blends_in_premultiplied_space() {
     let top = pixmap_from_colors(1, 1, &[(255, 0, 0, 128)]);
     let bottom = pixmap_from_colors(1, 1, &[(0, 0, 255, 255)]);
-    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Over).unwrap();
+    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Over)
+      .unwrap()
+      .unwrap();
     assert_eq!(pixel(&result, 0, 0), (128, 0, 127, 255));
   }
 
@@ -6833,7 +7019,9 @@ mod tests_composite {
   fn composite_in_uses_second_alpha() {
     let top = pixmap_from_colors(1, 1, &[(255, 0, 0, 128)]);
     let mask = pixmap_from_colors(1, 1, &[(0, 0, 0, 64)]);
-    let result = composite_pixmaps(Some(top), Some(mask), CompositeOperator::In).unwrap();
+    let result = composite_pixmaps(Some(top), Some(mask), CompositeOperator::In)
+      .unwrap()
+      .unwrap();
     assert_eq!(pixel(&result, 0, 0), (32, 0, 0, 32));
   }
 
@@ -6841,7 +7029,9 @@ mod tests_composite {
   fn composite_out_excludes_overlap() {
     let top = pixmap_from_colors(1, 1, &[(0, 255, 0, 128)]);
     let mask = pixmap_from_colors(1, 1, &[(0, 0, 0, 128)]);
-    let result = composite_pixmaps(Some(top), Some(mask), CompositeOperator::Out).unwrap();
+    let result = composite_pixmaps(Some(top), Some(mask), CompositeOperator::Out)
+      .unwrap()
+      .unwrap();
     assert_eq!(pixel(&result, 0, 0), (0, 64, 0, 64));
   }
 
@@ -6849,7 +7039,9 @@ mod tests_composite {
   fn composite_atop_preserves_destination_shape() {
     let top = pixmap_from_colors(2, 1, &[(255, 0, 0, 255), (255, 0, 0, 128)]);
     let bottom = pixmap_from_colors(2, 1, &[(0, 0, 255, 255), (0, 0, 255, 255)]);
-    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Atop).unwrap();
+    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Atop)
+      .unwrap()
+      .unwrap();
     assert_eq!(pixel(&result, 0, 0), (255, 0, 0, 255));
     assert_eq!(pixel(&result, 1, 0), (128, 0, 127, 255));
   }
@@ -6858,7 +7050,9 @@ mod tests_composite {
   fn composite_xor_combines_non_overlapping_regions() {
     let top = pixmap_from_colors(2, 1, &[(255, 0, 0, 255), (0, 0, 0, 0)]);
     let bottom = pixmap_from_colors(2, 1, &[(0, 0, 255, 255), (0, 0, 255, 255)]);
-    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Xor).unwrap();
+    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Xor)
+      .unwrap()
+      .unwrap();
     assert_eq!(pixel(&result, 0, 0), (0, 0, 0, 0));
     assert_eq!(pixel(&result, 1, 0), (0, 0, 255, 255));
   }
@@ -6877,6 +7071,7 @@ mod tests_composite {
         k4: 0.05,
       },
     )
+    .unwrap()
     .unwrap();
     assert_eq!(pixel(&result, 0, 0), (8, 14, 3, 54));
   }
@@ -7471,6 +7666,7 @@ mod blend_pixmaps_tests {
       filter_region,
       ColorInterpolationFilters::SRGB,
     )
+    .unwrap()
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (50, 50, 86, 255));
@@ -7487,6 +7683,7 @@ mod blend_pixmaps_tests {
       filter_region,
       ColorInterpolationFilters::SRGB,
     )
+    .unwrap()
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (214, 190, 234, 255));
@@ -7503,6 +7700,7 @@ mod blend_pixmaps_tests {
       filter_region,
       ColorInterpolationFilters::SRGB,
     )
+    .unwrap()
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (100, 125, 212, 255));
@@ -7519,6 +7717,7 @@ mod blend_pixmaps_tests {
       filter_region,
       ColorInterpolationFilters::SRGB,
     )
+    .unwrap()
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (136, 80, 120, 255));
@@ -7535,6 +7734,7 @@ mod blend_pixmaps_tests {
       filter_region,
       ColorInterpolationFilters::SRGB,
     )
+    .unwrap()
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (164, 140, 147, 255));
@@ -7553,6 +7753,7 @@ mod blend_pixmaps_tests {
       filter_region,
       ColorInterpolationFilters::SRGB,
     )
+    .unwrap()
     .unwrap();
     let srgb_px = srgb.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(srgb_px, (128, 128, 128, 255));
@@ -7564,6 +7765,7 @@ mod blend_pixmaps_tests {
       filter_region,
       ColorInterpolationFilters::LinearRGB,
     )
+    .unwrap()
     .unwrap();
     let linear_px = linear.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(linear_px, (188, 188, 188, 255));
@@ -7622,6 +7824,7 @@ mod color_interpolation_filters_compositing_tests {
       ColorInterpolationFilters::SRGB,
       filter_region,
     )
+    .unwrap()
     .unwrap();
     assert_pixel_exact(srgb.pixmap.pixel(0, 0).unwrap(), (128, 128, 128, 255));
 
@@ -7632,6 +7835,7 @@ mod color_interpolation_filters_compositing_tests {
       ColorInterpolationFilters::LinearRGB,
       filter_region,
     )
+    .unwrap()
     .unwrap();
     assert_pixel_close(linear.pixmap.pixel(0, 0).unwrap(), (188, 188, 188, 255), 1);
   }
@@ -7657,7 +7861,8 @@ mod color_interpolation_filters_compositing_tests {
       &current,
       ColorInterpolationFilters::SRGB,
       filter_region,
-    );
+    )
+    .unwrap();
     assert_pixel_exact(srgb.pixmap.pixel(0, 0).unwrap(), (128, 128, 128, 255));
 
     let linear = merge_inputs(
@@ -7667,7 +7872,8 @@ mod color_interpolation_filters_compositing_tests {
       &current,
       ColorInterpolationFilters::LinearRGB,
       filter_region,
-    );
+    )
+    .unwrap();
     assert_pixel_close(linear.pixmap.pixel(0, 0).unwrap(), (188, 188, 188, 255), 1);
   }
 
