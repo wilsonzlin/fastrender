@@ -1,4 +1,5 @@
 use super::util::bounding_box_for_color;
+use fastrender::debug::runtime::{with_thread_runtime_toggles, RuntimeToggles};
 use fastrender::paint::display_list::{
   BlendMode, BorderRadii, DisplayItem, DisplayList, FillRectItem, StackingContextItem, Transform3D,
 };
@@ -7,34 +8,8 @@ use fastrender::style::color::Rgba;
 use fastrender::style::types::{BackfaceVisibility, TransformStyle};
 use fastrender::text::font_loader::FontContext;
 use fastrender::Rect;
-
-struct EnvVarGuard {
-  key: &'static str,
-  previous: Option<String>,
-}
-
-impl EnvVarGuard {
-  fn set(key: &'static str, value: &str) -> Self {
-    let previous = std::env::var(key).ok();
-    std::env::set_var(key, value);
-    Self { key, previous }
-  }
-
-  fn unset(key: &'static str) -> Self {
-    let previous = std::env::var(key).ok();
-    std::env::remove_var(key);
-    Self { key, previous }
-  }
-}
-
-impl Drop for EnvVarGuard {
-  fn drop(&mut self) {
-    match self.previous.take() {
-      Some(value) => std::env::set_var(self.key, value),
-      None => std::env::remove_var(self.key),
-    }
-  }
-}
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[test]
 fn preserve3d_degenerate_transform_renders() {
@@ -139,9 +114,27 @@ where
 }
 
 #[test]
-fn preserve3d_disable_warp_env_forces_affine_approximation() {
-  // Ensure we start from the default (warp enabled) behavior.
-  let _unset = EnvVarGuard::unset("FASTR_PRESERVE3D_DISABLE_WARP");
+fn preserve3d_disable_warp_toggle_forces_affine_approximation() {
+  fn render_with_toggles(list: &DisplayList, toggles: Arc<RuntimeToggles>) -> tiny_skia::Pixmap {
+    with_thread_runtime_toggles(toggles, || {
+      DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(list)
+        .unwrap()
+    })
+  }
+
+  fn toggles(disable_warp: bool) -> Arc<RuntimeToggles> {
+    // Install the preserve-3d toggles as thread-local runtime config so we don't mutate process
+    // environment variables (tests in this crate execute in parallel).
+    let mut raw = HashMap::new();
+    raw.insert("FASTR_PRESERVE3D_WARP".to_string(), "1".to_string());
+    raw.insert(
+      "FASTR_PRESERVE3D_DISABLE_WARP".to_string(),
+      if disable_warp { "1" } else { "0" }.to_string(),
+    );
+    Arc::new(RuntimeToggles::from_map(raw))
+  }
 
   let plane = Rect::from_xywh(10.0, 10.0, 40.0, 40.0);
   let perspective = Transform3D::perspective(50.0);
@@ -195,21 +188,14 @@ fn preserve3d_disable_warp_env_forces_affine_approximation() {
 
   let predicate = |(r, g, b, a): (u8, u8, u8, u8)| a > 0 && r > 200 && g < 250 && b < 250;
 
-  let warped = DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new())
-    .unwrap()
-    .render(&list)
-    .unwrap();
+  let warped = render_with_toggles(&list, toggles(false));
   let warped_variation = scanline_width_variation(&warped, predicate);
   assert!(
     warped_variation >= 8,
     "expected projective warp to create a trapezoid-like shape (scanline width variation {warped_variation})"
   );
 
-  let _disabled = EnvVarGuard::set("FASTR_PRESERVE3D_DISABLE_WARP", "1");
-  let affine = DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new())
-    .unwrap()
-    .render(&list)
-    .unwrap();
+  let affine = render_with_toggles(&list, toggles(true));
   let affine_variation = scanline_width_variation(&affine, predicate);
   assert!(
     affine_variation <= 4,

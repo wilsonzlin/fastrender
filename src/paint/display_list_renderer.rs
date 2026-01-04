@@ -488,15 +488,14 @@ fn clamp01(value: f32) -> f32 {
   value.clamp(0.0, 1.0)
 }
 
-fn env_flag(name: &str) -> bool {
-  std::env::var(name)
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false)
+fn runtime_flag(name: &str) -> bool {
+  crate::debug::runtime::runtime_toggles().truthy(name)
 }
 
-fn projective_warp_enabled_from_env() -> bool {
-  let warp_enabled = cfg!(feature = "preserve3d_warp") || env_flag("FASTR_PRESERVE3D_WARP");
-  warp_enabled && !env_flag("FASTR_PRESERVE3D_DISABLE_WARP")
+fn projective_warp_enabled() -> bool {
+  let toggles = crate::debug::runtime::runtime_toggles();
+  let warp_enabled = cfg!(feature = "preserve3d_warp") || toggles.truthy("FASTR_PRESERVE3D_WARP");
+  warp_enabled && !toggles.truthy("FASTR_PRESERVE3D_DISABLE_WARP")
 }
 
 static INV_U8_TO_F32: OnceLock<[f32; 256]> = OnceLock::new();
@@ -3118,8 +3117,8 @@ impl DisplayListRenderer {
       culled_depth: 0,
       preserve_3d_disabled: false,
       preserve_3d_scene_depth: 0,
-      projective_warp_enabled: projective_warp_enabled_from_env(),
-      preserve_3d_debug: env_flag("FASTR_PRESERVE3D_DEBUG"),
+      projective_warp_enabled: projective_warp_enabled(),
+      preserve_3d_debug: runtime_flag("FASTR_PRESERVE3D_DEBUG"),
       background,
       paint_parallelism: PaintParallelism::default(),
       image_cache: HashMap::new(),
