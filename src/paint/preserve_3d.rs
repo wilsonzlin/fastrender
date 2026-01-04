@@ -240,10 +240,7 @@ fn compose_fragments(
         } else {
           evaluate_depth(&depth_transform, item.bounds)
         };
-        let fallback = if options.warp_available
-          && matches!(classification, TransformKind::Perspective3D)
-          && depth.is_some()
-        {
+        let fallback = if options.warp_available && depth.is_some() {
           FallbackPath::Warp
         } else if depth.is_none() {
           FallbackPath::FlatOrder

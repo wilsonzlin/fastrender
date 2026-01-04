@@ -2565,9 +2565,14 @@ enum SceneEffect {
 }
 
 impl SceneEffect {
-  fn push_item(&self) -> DisplayItem {
+  fn push_item(&self, raster_bounds: Rect) -> DisplayItem {
     match self {
-      SceneEffect::Clip(clip) => DisplayItem::PushClip(clip.clone()),
+      SceneEffect::Clip(_) => DisplayItem::PushClip(ClipItem {
+        shape: ClipShape::Rect {
+          rect: raster_bounds,
+          radii: None,
+        },
+      }),
       SceneEffect::Opacity(opacity) => DisplayItem::PushOpacity(OpacityItem { opacity: *opacity }),
     }
   }
@@ -6170,34 +6175,49 @@ impl DisplayListRenderer {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
         .map_err(Error::Render)?;
       let scene_item = &scene_items[idx];
-      if let Some(pixmap) = self.render_scene_item(scene_item)? {
-        let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
-          scene_item.bounds.x(),
-          scene_item.bounds.y(),
-          0.0,
-        ));
-        if self.preserve_3d_debug {
-          let is_affine = Homography::from_transform3d_z0(&adjusted_transform).is_affine();
-          let depth = {
-            let center = scene_item.plane_rect.center();
-            let (_tx, _ty, tz, tw) = scene_item.transform.transform_point(center.x, center.y, 0.0);
-            if tz.is_finite() && tw.is_finite() && tw.abs() >= Transform3D::MIN_PROJECTIVE_W {
-              tz / tw
-            } else {
-              f32::NAN
-            }
-          };
-          eprintln!(
-            "preserve-3d item order={} depth={depth:.4} affine={is_affine} bounds=({}, {}, {}, {})",
-            scene_item.paint_order,
+      let mut pushed_clips = 0usize;
+      for effect in &scene_item.effects {
+        if let SceneEffect::Clip(clip) = effect {
+          self.push_clip(clip)?;
+          pushed_clips += 1;
+        }
+      }
+      let scene_result = (|| -> Result<()> {
+        if let Some(pixmap) = self.render_scene_item(scene_item)? {
+          let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
             scene_item.bounds.x(),
             scene_item.bounds.y(),
-            scene_item.bounds.width(),
-            scene_item.bounds.height(),
-          );
+            0.0,
+          ));
+          if self.preserve_3d_debug {
+            let is_affine = Homography::from_transform3d_z0(&adjusted_transform).is_affine();
+            let depth = {
+              let center = scene_item.plane_rect.center();
+              let (_tx, _ty, tz, tw) =
+                scene_item.transform.transform_point(center.x, center.y, 0.0);
+              if tz.is_finite() && tw.is_finite() && tw.abs() >= Transform3D::MIN_PROJECTIVE_W {
+                tz / tw
+              } else {
+                f32::NAN
+              }
+            };
+            eprintln!(
+              "preserve-3d item order={} depth={depth:.4} affine={is_affine} bounds=({}, {}, {}, {})",
+              scene_item.paint_order,
+              scene_item.bounds.x(),
+              scene_item.bounds.y(),
+              scene_item.bounds.width(),
+              scene_item.bounds.height(),
+            );
+          }
+          self.warp_pixmap(&pixmap, &adjusted_transform)?;
         }
-        self.warp_pixmap(&pixmap, &adjusted_transform)?;
+        Ok(())
+      })();
+      for _ in 0..pushed_clips {
+        self.pop_clip();
       }
+      scene_result?;
     }
 
     Ok(end_idx)
@@ -6218,7 +6238,7 @@ impl DisplayListRenderer {
       transform: translation,
     }));
     for effect in &item.effects {
-      list.push(effect.push_item());
+      list.push(effect.push_item(bounds));
     }
 
     let mut effects_after = item.effects.clone();

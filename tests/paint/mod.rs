@@ -45,6 +45,7 @@ mod paged_media_margin_boxes;
 mod parallel_paint_test;
 mod picture_source_selection;
 mod preserve3d_scene;
+mod preserve_3d_clipping;
 mod preserve_3d_depth_sort;
 mod preserve_3d_nested_affine;
 mod preserve_3d_nested_context;
