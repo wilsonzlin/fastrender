@@ -236,6 +236,11 @@ Notes:
   - JavaScript is disabled by default to match FastRender’s “no JS” model.
   - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
   - Output defaults to `target/chrome_fixtures/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
+- Core flags:
+  - Selection: `--fixtures <csv>` (alias `--only`) and/or positional fixture names.
+  - Paths: `--fixture-dir <dir>` (alias `--fixtures-root`), `--out-dir <dir>`.
+  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--js {on|off}`.
+  - Parallelism: `--shard <index>/<total>`.
 
 ## `cargo xtask fixture-chrome-diff`
 
@@ -250,6 +255,11 @@ Notes:
   - `<out>/fastrender/<fixture>.png` (rendered by `render_fixtures`)
   - `<out>/report.html`, `<out>/report.json`
   - Note: `fixture-chrome-diff` does not currently enable `render_fixtures --write-snapshot`. If you need per-fixture snapshots/diagnostics, run `render_fixtures --write-snapshot` separately.
+- Core flags:
+  - Selection: `--only <csv>` and/or positional fixture names.
+  - Paths: `--fixtures-root <dir>`, `--out <dir>`, `--chrome-dir <dir>`.
+  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--render-timeout <secs>`, `--timeout <secs>` (Chrome), `--js {on|off}`.
+  - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`.
 
 ## `fetch_and_render`
 
