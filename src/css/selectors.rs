@@ -797,10 +797,88 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
 pub(crate) fn build_relative_selectors(
   selector_list: SelectorList<FastRenderSelectorImpl>,
 ) -> Box<[RelativeSelector<FastRenderSelectorImpl>]> {
+  use selectors::parser::Component;
+
+  fn normalize_leading_scope_relative_selector(
+    selector: &Selector<FastRenderSelectorImpl>,
+  ) -> Selector<FastRenderSelectorImpl> {
+    // The selectors crate always injects a relative selector anchor and a leading combinator when
+    // parsing :has() arguments (defaulting to the descendant combinator when omitted).
+    //
+    // This interacts poorly with authors writing selectors that start with `:scope`, e.g.
+    // `:has(:scope > .child)` or `:has(:scope ~ .sibling)`. In that case, the injected descendant
+    // combinator becomes a no-op hop to `:scope`, which can never match because `:scope` refers to
+    // the anchor element itself (and an element is not a descendant of itself).
+    //
+    // Normalize such selectors by treating the leading `:scope` compound selector as the anchor,
+    // and re-anchoring the selector with the combinator that follows it.
+    let components: Vec<Component<FastRenderSelectorImpl>> =
+      selector.iter_raw_parse_order_from(0).cloned().collect();
+    if components.len() < 4 {
+      return selector.clone();
+    }
+
+    // Expected parse order for `:has(:scope > .foo)`:
+    //   RelativeSelectorAnchor, Descendant, Scope, Child, Class(foo)
+    if !matches!(components[0], Component::RelativeSelectorAnchor) {
+      return selector.clone();
+    }
+    if !matches!(components[1], Component::Combinator(Combinator::Descendant)) {
+      return selector.clone();
+    }
+    if !matches!(components[2], Component::Scope) {
+      return selector.clone();
+    }
+
+    // Find the end of the `:scope...` compound selector.
+    let mut scope_compound_end = 3;
+    while scope_compound_end < components.len()
+      && !matches!(components[scope_compound_end], Component::Combinator(_))
+    {
+      scope_compound_end += 1;
+    }
+
+    // If `:scope` is the last compound, we cannot re-anchor. Fall back to the original selector.
+    let Some(Component::Combinator(reanchor_combinator)) = components.get(scope_compound_end)
+    else {
+      return selector.clone();
+    };
+
+    // Preserve the specificity contribution of the removed `:scope` compound selector by adding an
+    // always-true `:is(<scope-compound>, *)` to the next compound selector.
+    let scope_arg_selector = Selector::from_components(components[2..scope_compound_end].to_vec());
+    let universal_selector =
+      Selector::from_components(vec![Component::ExplicitUniversalType]);
+    let is_list = SelectorList::from_iter(
+      vec![scope_arg_selector, universal_selector]
+        .into_iter(),
+    );
+    let is_component = Component::Is(is_list);
+
+    // Everything after the combinator that follows the scope compound.
+    let mut rest = components[(scope_compound_end + 1)..].to_vec();
+    // Insert into the first compound of the rest (before the next combinator, if any).
+    let mut insert_at = rest.len();
+    for (idx, component) in rest.iter().enumerate() {
+      if matches!(component, Component::Combinator(_)) {
+        insert_at = idx;
+        break;
+      }
+    }
+    rest.insert(insert_at, is_component);
+
+    let mut normalized = Vec::with_capacity(2 + rest.len());
+    normalized.push(Component::RelativeSelectorAnchor);
+    normalized.push(Component::Combinator(*reanchor_combinator));
+    normalized.extend(rest);
+    Selector::from_components(normalized)
+  }
+
   selector_list
     .slice()
     .iter()
     .map(|selector| {
+      let selector = normalize_leading_scope_relative_selector(selector);
       let mut has_child_or_descendants = false;
       let mut has_adjacent_or_next_siblings = false;
       let mut iter = selector.iter_skip_relative_selector_anchor();
@@ -824,8 +902,8 @@ pub(crate) fn build_relative_selectors(
         has_child_or_descendants,
         has_adjacent_or_next_siblings,
       );
-      let bloom_hashes = RelativeSelectorBloomHashes::new(selector);
-      let ancestor_hashes = RelativeSelectorAncestorHashes::new(selector);
+      let bloom_hashes = RelativeSelectorBloomHashes::new(&selector);
+      let ancestor_hashes = RelativeSelectorAncestorHashes::new(&selector);
 
       RelativeSelector {
         match_hint,

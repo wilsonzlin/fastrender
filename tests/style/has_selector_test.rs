@@ -304,6 +304,23 @@ fn has_respects_shadow_boundaries() {
 }
 
 #[test]
+fn has_ignores_html_template_contents() {
+  let html = r#"<div id="host"><template><span class="hit"></span></template></div>"#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"
+    #host:has(.hit) { display: inline; }
+    #host:has(template) { display: inline-block; }
+  "#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "host").expect("host")),
+    "inline-block"
+  );
+}
+
+#[test]
 fn has_inside_shadow_root_skips_nested_shadow_trees() {
   let html = r#"
     <div id="host">

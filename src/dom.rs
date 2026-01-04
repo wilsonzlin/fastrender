@@ -780,6 +780,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
   let root_id = summaries.len();
   summaries.push([0u64; WORDS]);
   let root_is_element = root.is_element();
+  let root_is_template = node_is_html_template_element(root);
   let mut root_summary = [0u64; WORDS];
   if root_is_element {
     add_selector_bloom_hashes_internal(root, quirks_mode, &mut |hash| {
@@ -791,7 +792,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
     id: root_id,
     is_element: root_is_element,
     is_shadow_root: matches!(root.node_type, DomNodeType::ShadowRoot { .. }),
-    is_template: node_is_html_template_element(root),
+    is_template: root_is_template,
     next_child: 0,
     summary: root_summary,
   });
@@ -807,6 +808,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
       summaries.push([0u64; WORDS]);
 
       let child_is_element = child.is_element();
+      let child_is_template = node_is_html_template_element(child);
       let mut child_summary = [0u64; WORDS];
       if child_is_element {
         add_selector_bloom_hashes_internal(child, quirks_mode, &mut |hash| {
@@ -819,7 +821,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
         id: child_id,
         is_element: child_is_element,
         is_shadow_root: matches!(child.node_type, DomNodeType::ShadowRoot { .. }),
-        is_template: node_is_html_template_element(child),
+        is_template: child_is_template,
         next_child: 0,
         summary: child_summary,
       });
@@ -864,7 +866,7 @@ fn build_selector_bloom_map_legacy<const WORDS: usize>(
       add_selector_bloom_hashes(node, &mut |hash| insert_summary_hash(&mut summary, hash));
     }
 
-    for child in node.children.iter() {
+    for child in node.traversal_children().iter() {
       let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
         walk(child, map);
         None
@@ -872,10 +874,8 @@ fn build_selector_bloom_map_legacy<const WORDS: usize>(
         Some(walk(child, map))
       };
       if node.is_element() {
-        if !node_is_html_template_element(node) {
-          if let Some(summary_child) = child_summary.as_ref() {
-            merge_summary(&mut summary, summary_child);
-          }
+        if let Some(summary_child) = child_summary.as_ref() {
+          merge_summary(&mut summary, summary_child);
         }
       }
     }
@@ -6228,6 +6228,12 @@ fn match_relative_selector_descendants<'a>(
   context: &mut MatchingContext<FastRenderSelectorImpl>,
   deadline_counter: &mut usize,
 ) -> bool {
+  // HTML template contents are not part of the DOM tree for selector matching; do not traverse into
+  // them. The <template> element itself is still matchable via its parent.
+  if node_is_html_template_element(anchor) {
+    return false;
+  }
+
   let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
   ancestors.with_pushed(anchor, |ancestors| {
     if use_ancestor_bloom {
@@ -6375,6 +6381,7 @@ fn match_relative_selector_subtree<'a>(
   deadline_counter: &mut usize,
 ) -> bool {
   debug_assert!(selector.match_hint.is_subtree());
+  // HTML template contents are inert and should not be traversed for selector matching.
   if node_is_html_template_element(node) {
     return false;
   }
@@ -6496,17 +6503,19 @@ fn match_relative_selector_subtree<'a>(
       break;
     }
 
-    // HTML templates are inert: do not traverse into their contents.
-    if !node_is_html_template_element(child) {
-      ancestors.push(child);
-      let child_bloomed = use_ancestor_bloom && stack.len() < ANCESTOR_BLOOM_MAX_DEPTH;
-      push_bloom(child, bloom_filter, child_bloomed, element_attr_cache);
-      stack.push(Frame {
-        node: child,
-        next_child: 0,
-        bloomed: child_bloomed,
-      });
+    // Do not recurse into HTML template contents.
+    if node_is_html_template_element(child) {
+      continue;
     }
+
+    ancestors.push(child);
+    let child_bloomed = use_ancestor_bloom && stack.len() < ANCESTOR_BLOOM_MAX_DEPTH;
+    push_bloom(child, bloom_filter, child_bloomed, element_attr_cache);
+    stack.push(Frame {
+      node: child,
+      next_child: 0,
+      bloomed: child_bloomed,
+    });
   }
 
   while let Some(frame) = stack.pop() {
