@@ -408,8 +408,8 @@ impl DisplayListOptimizer {
       match item {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
-          let mapping = Self::transform_mapping(&t.transform);
-          transform_state.current = transform_state.current.multiply(&mapping);
+          transform_state.matrix = transform_state.matrix.multiply(&t.transform);
+          transform_state.mapping = Self::transform_mapping(&transform_state.matrix);
           include_item = true;
         }
         DisplayItem::PopTransform => {
@@ -420,11 +420,18 @@ impl DisplayListOptimizer {
         }
         DisplayItem::PushStackingContext(sc) => {
           let pushed_transform = sc.transform.is_some() || sc.child_perspective.is_some();
-          let mut context_transform = transform_state.current.clone();
+          let mut context_matrix = transform_state.matrix;
           if let Some(transform) = sc.transform.as_ref() {
-            let mapping = Self::transform_mapping(transform);
-            context_transform = context_transform.multiply(&mapping);
+            context_matrix = context_matrix.multiply(transform);
           }
+          if let Some(perspective) = sc.child_perspective.as_ref() {
+            context_matrix = context_matrix.multiply(perspective);
+          }
+          let context_transform = if pushed_transform {
+            Self::transform_mapping(&context_matrix)
+          } else {
+            transform_state.mapping.clone()
+          };
           let context_culling_disabled = transform_state.culling_disabled()
             || matches!(context_transform, TransformMapping::Unsupported);
           if pushed_transform {
@@ -435,10 +442,8 @@ impl DisplayListOptimizer {
               clips_can_cull_any = active_cull_clips > 0;
               refresh_context_clipping(&mut context_stack, clips_can_cull_any);
             }
-            transform_state.current = context_transform.clone();
-            if sc.child_perspective.is_some() {
-              transform_state.suppress_culling = true;
-            }
+            transform_state.matrix = context_matrix;
+            transform_state.mapping = context_transform.clone();
           }
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
           let backdrop_outset =
@@ -529,7 +534,7 @@ impl DisplayListOptimizer {
           let can_cull = if transform_state.culling_disabled() {
             false
           } else if let Some(mut world_bounds) =
-            Self::transform_rect_any(&transform_state.current, local_bounds)
+            Self::transform_rect_any(&transform_state.mapping, local_bounds)
           {
             let inflate = filter_outset_sum;
             if inflate > 0.0 {
@@ -577,7 +582,8 @@ impl DisplayListOptimizer {
         if transform_state.culling_disabled() {
           include_item = true;
         } else if let Some(local_bounds) = self.item_bounds(item) {
-          if let Some(mut bounds) = Self::transform_rect_any(&transform_state.current, local_bounds)
+          if let Some(mut bounds) =
+            Self::transform_rect_any(&transform_state.mapping, local_bounds)
           {
             let inflate = filter_outset_sum;
             if inflate > 0.0 {
@@ -598,7 +604,7 @@ impl DisplayListOptimizer {
         if transformed_bounds.is_none() && !transform_state.culling_disabled() {
           if let Some(local_bounds) = self.item_bounds(item) {
             if let Some(mut bounds) =
-              Self::transform_rect_any(&transform_state.current, local_bounds)
+              Self::transform_rect_any(&transform_state.mapping, local_bounds)
             {
               let inflate = filter_outset_sum;
               if inflate > 0.0 {
@@ -1167,61 +1173,25 @@ impl TransformMapping {
   fn identity() -> Self {
     Self::Affine(Transform2D::identity())
   }
-
-  fn as_homography(&self) -> Option<Homography> {
-    match self {
-      TransformMapping::Affine(t) => Some(Homography::from_affine(t)),
-      TransformMapping::Projective(h) => Some(*h),
-      TransformMapping::Unsupported => None,
-    }
-  }
-
-  fn multiply(&self, other: &TransformMapping) -> TransformMapping {
-    match (self, other) {
-      (TransformMapping::Unsupported, _) | (_, TransformMapping::Unsupported) => {
-        TransformMapping::Unsupported
-      }
-      (TransformMapping::Affine(a), TransformMapping::Affine(b)) => {
-        TransformMapping::Affine(a.multiply(b))
-      }
-      (lhs, rhs) => {
-        if let (Some(lhs), Some(rhs)) = (lhs.as_homography(), rhs.as_homography()) {
-          let combined = lhs.multiply(&rhs);
-          if let Some(affine) = combined.to_affine() {
-            if affine.inverse().is_some() {
-              return TransformMapping::Affine(affine);
-            }
-          }
-          if combined.is_invertible() {
-            TransformMapping::Projective(combined)
-          } else {
-            TransformMapping::Unsupported
-          }
-        } else {
-          TransformMapping::Unsupported
-        }
-      }
-    }
-  }
 }
 
 #[derive(Clone)]
 struct TransformState {
-  current: TransformMapping,
-  suppress_culling: bool,
+  matrix: Transform3D,
+  mapping: TransformMapping,
 }
 
 impl TransformState {
   fn culling_disabled(&self) -> bool {
-    self.suppress_culling || matches!(self.current, TransformMapping::Unsupported)
+    matches!(self.mapping, TransformMapping::Unsupported)
   }
 }
 
 impl Default for TransformState {
   fn default() -> Self {
     Self {
-      current: TransformMapping::identity(),
-      suppress_culling: false,
+      matrix: Transform3D::identity(),
+      mapping: TransformMapping::identity(),
     }
   }
 }
@@ -1695,6 +1665,80 @@ mod tests {
       .items()
       .iter()
       .any(|item| matches!(item, DisplayItem::FillRect(_))));
+  }
+
+  #[test]
+  fn child_perspective_enables_viewport_culling() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 400.0, 200.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 400.0, 200.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      child_perspective: Some(Transform3D::perspective(200.0)),
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 400.0, 200.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 400.0, 200.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: Some(Transform3D::translate(0.0, 0.0, -100.0)),
+      child_perspective: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+
+    list.push(make_fill_rect(150.0, 10.0, 20.0, 20.0, Rgba::RED));
+    list.push(make_fill_rect(300.0, 10.0, 20.0, 20.0, Rgba::GREEN));
+    list.push(DisplayItem::PopStackingContext);
+    list.push(DisplayItem::PopStackingContext);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let optimizer = DisplayListOptimizer::new();
+    let view = optimizer
+      .intersect_view(list.items(), viewport)
+      .expect("intersect_view failed");
+
+    let out: Vec<DisplayItem> = view.iter().cloned().collect();
+    let fill_rects: Vec<Rect> = out
+      .iter()
+      .filter_map(|item| match item {
+        DisplayItem::FillRect(fill) => Some(fill.rect),
+        _ => None,
+      })
+      .collect();
+
+    assert!(
+      fill_rects
+        .iter()
+        .any(|rect| (rect.x() - 150.0).abs() < f32::EPSILON),
+      "rect at x=150 should be kept; got {fill_rects:?}"
+    );
+    assert!(
+      !fill_rects
+        .iter()
+        .any(|rect| (rect.x() - 300.0).abs() < f32::EPSILON),
+      "rect at x=300 should be culled; got {fill_rects:?}"
+    );
+    assert_eq!(fill_rects.len(), 1, "exactly one fill rect should remain");
+    assert!(out.len() < list.len(), "culling should reduce the slice size");
+    assert_balanced(&out);
   }
 
   #[test]
