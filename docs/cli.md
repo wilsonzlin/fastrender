@@ -118,6 +118,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 - Run: `cargo run --release --bin prefetch_assets -- --help`
 - HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
 - Most useful when built with `--features disk_cache` (so cache entries persist across processes).
+- Tooling: `prefetch_assets --print-capabilities-json` (hidden; `disk_cache` build only) prints stable JSON describing which optional knobs are supported. Pageset wrappers use this instead of grepping the repo source tree.
 - Key flags: page selection (`--pages`), deterministic sharding (`--shard <index>/<total>`), parallelism (`--jobs`), and fetch timeout (`--timeout`). See `--help` for the full flag list.
   - Cache directory: `--cache-dir <dir>` overrides the disk-backed cache location (defaults to `fetches/assets/`). Use the same value for `pageset_progress` so warmed entries are reused during render.
   - Optional subresource warming:
