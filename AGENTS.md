@@ -32,13 +32,15 @@ A task only “counts” if it produces at least one of:
 
 If you can’t show a measurable/evidenced delta, you are not done.
 
-### Evidence requirement (accuracy work)
+### Evidence loop (accuracy work)
 
 For accuracy tasks, evidence should usually be one of:
 
 - **Offline repro + golden/regression** (preferred): a minimized fixture, imported page fixture, or WPT-style reftest with an updated/added expected image.
 - **Chrome-vs-FastRender diff** on **offline fixtures** (preferred for early triage): a deterministic report under `target/` (see the fixture triage loop below).
 - **Chrome-vs-FastRender diff** on the **same cached HTML/bundle** (acceptable best-effort triage): a report under `target/` that demonstrates improvement, but may be non-deterministic due to live subresources.
+
+Chrome diffs/baselines are local artifacts and are not required CI gates unless we explicitly decide otherwise.
 
 “Looks better” without artifacts is not evidence.
 

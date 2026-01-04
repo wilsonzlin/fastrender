@@ -154,7 +154,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 
 ## `render_pages`
 
-- Purpose: render all cached HTML in `fetches/html/` to `fetches/renders/` (PNG + per-page logs + `_summary.log`).
+- Purpose: render all cached HTML in `fetches/html/` to PNGs (defaults to `fetches/renders/`; override with `--out-dir`).
 
 ### Chrome baseline screenshots (from cached HTML)
 
@@ -194,10 +194,11 @@ Notes:
 - HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
 - Accepts `--shard <index>/<total>` to render a slice of the cached pages in a stable order.
 - `--pages` (and positional filters) use the same canonical stems as `fetch_pages` (strip scheme + leading `www.`). Cached filenames are normalized when matching filters so `www.`/non-`www` variants map consistently.
+- Output directory: `--out-dir <dir>` overrides where renders/logs are written (defaults to `fetches/renders/`).
 - Disk cache directory: `--cache-dir <dir>` overrides the disk-backed subresource cache location (defaults to `fetches/assets/`; only has an effect when built with `--features disk_cache`).
 - Optional outputs:
-  - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
-  - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/composed DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
+  - `--diagnostics-json` writes `<out-dir>/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
+  - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/composed DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `<out-dir>/<page>.snapshot.json` pipeline snapshot.
 - Layout fan-out defaults to `auto` (only engages once the box tree is large enough and has sufficient independent sibling work); use `--layout-parallel off` to force serial layout, `--layout-parallel on` to force fan-out, or tune thresholds with `--layout-parallel-min-fanout`, `--layout-parallel-auto-min-nodes`, and `--layout-parallel-max-threads`.
 - Worker Rayon threads: in the default per-page worker mode, `render_pages` sets `RAYON_NUM_THREADS` for each worker process to `available_parallelism()/jobs` (min 1, additionally clamped by a detected cgroup CPU quota on Linux) to avoid CPU oversubscription. Set `RAYON_NUM_THREADS` in the parent environment to override this.
 
@@ -287,9 +288,9 @@ Notes:
 
 ## `diff_renders`
 
-- Purpose: compare two render output directories (e.g., `fetches/renders` from two revisions) and summarize pixel + perceptual diffs.
+- Purpose: compare two render outputs (directories or PNG files) and summarize pixel + perceptual diffs.
 - Entry: `src/bin/diff_renders.rs`
-- Run: `cargo run --release --bin diff_renders -- --before <dir> --after <dir>`
+- Run: `cargo run --release --bin diff_renders -- --before <dir|file.png> --after <dir|file.png>`
 - Matching: directory inputs are walked recursively and paired by relative path (minus the `.png` extension). This allows diffing nested render trees (for example fixture render outputs or pageset dump layouts) without flattening them first.
 - Outputs: `diff_report.json` and `diff_report.html` plus per-page diff PNGs alongside the HTML report.
 - Tuning: `--tolerance`, `--max-diff-percent`, and `--max-perceptual-distance` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_MAX_PERCEPTUAL_DISTANCE`, and `FIXTURE_FUZZY` env vars are honored when flags are omitted). Use `--sort-by perceptual` to rank diffs by SSIM-derived distance.
@@ -329,7 +330,7 @@ Notes:
 
 ## Diagnostics
 
-- `render_pages` emits per-page logs in `fetches/renders/<page>.log` plus a summary in `_summary.log`. CSS fetch failures show up there and correspond to `ResourceKind::Stylesheet` entries in the library diagnostics model.
+- `render_pages` emits per-page logs in `<out-dir>/<page>.log` plus a summary in `<out-dir>/_summary.log` (defaults to `fetches/renders/`). CSS fetch failures show up there and correspond to `ResourceKind::Stylesheet` entries in the library diagnostics model.
 - The library API exposes structured diagnostics via `render_url_with_options` returning `RenderResult { pixmap, accessibility, diagnostics }`. Set `RenderOptions::allow_partial(true)` to receive a placeholder image and a `document_error` string when the root fetch fails; subresource fetch errors are collected in `diagnostics.fetch_errors` with status codes, final URLs, and any cache validators observed.
 - `render_pages` can emit structured reports via `--diagnostics-json` (per-page) plus `--dump-intermediate` for summaries or full intermediate dumps.
 - The shipped binaries print a concise diagnostics summary (including status/final URL). Pass `--verbose` to `fetch_and_render` or `render_pages` to include full error chains when something fails.

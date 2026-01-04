@@ -73,12 +73,21 @@ cargo xtask fixture-chrome-diff
 
 Defaults are aligned with the pageset workflow (`viewport=1200x800`, `dpr=1.0`) unless you override them.
 
+Artifacts and PR guidance:
+
+- Report: `target/fixture_chrome_diff/report.html` (plus `report.json` and per-fixture PNGs under `target/fixture_chrome_diff/{chrome,fastrender,...}`).
+- **Do not commit** Chrome baseline PNGs or diff reports; they are local artifacts. Attach the generated report directory (or at least `report.html` + the referenced PNGs) to your PR description instead.
+- **Do commit** new/updated fixtures under `tests/pages/fixtures/<fixture>/` when they are part of the regression story.
+
 ### Importing new offline page fixtures
 
 Use `bundle_page` to capture a page once, then convert that bundle into a deterministic fixture consumable by `pages_regression`:
 
-1. Capture: `cargo run --release --bin bundle_page -- fetch <url> --out /tmp/capture.tar` (or a directory path)
-   - If a page crashes or times out during capture, add `--no-render` to crawl HTML + CSS for subresources without doing a full render.
+1. Capture a bundle:
+   - Online (network): `cargo run --release --bin bundle_page -- fetch <url> --out /tmp/capture.tar` (or a directory path)
+     - If a page crashes or times out during capture, add `--no-render` to crawl HTML + CSS for subresources without doing a full render.
+   - Offline (from warmed pageset caches): `cargo run --release --features disk_cache --bin bundle_page -- cache <stem> --out /tmp/capture.tar`
+     - Reads HTML from `fetches/html/<stem>.html` and subresources from the disk-backed cache under `fetches/assets/` (override with `--asset-cache-dir` / `--cache-dir`).
 2. Import: `cargo xtask import-page-fixture /tmp/capture.tar <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
 3. Add the new fixture to `tests/pages_regression_test.rs` and generate a golden if you want it covered by the suite.
 
@@ -90,6 +99,7 @@ Tip: if you already have a warmed pageset disk cache, `cargo xtask pageset --cap
 
 There is a self-contained WPT-style runner under `tests/wpt/` for local “render and compare” tests. It does not talk to upstream WPT and never fetches from the network.
 
+- Run: `cargo xtask test wpt` (or `cargo test --quiet wpt_local_suite_passes -- --exact`)
 - Each rendered document is given a per-document `file://` base URL (the test HTML path for the test render, and the reference HTML path for the reference render) so relative resources like `support/*.css`, images, and fonts resolve reliably regardless of the current working directory.
 - `WptRunnerBuilder::build()` defaults to an offline renderer (`ResourcePolicy` with `http/https` disabled). Advanced callers can still inject a custom renderer via `.renderer(...)`.
 
@@ -97,7 +107,8 @@ There is a self-contained WPT-style runner under `tests/wpt/` for local “rende
   - `.html.ini` files set expectations (`expected: FAIL`), `disabled` reasons, timeouts, viewport, and DPR.
   - `<link rel="match" | rel="mismatch">` inside HTML declares reftest references without touching the manifest.
   - The legacy `tests/wpt/manifest.toml` is still honored; set `HarnessConfig::with_discovery_mode(DiscoveryMode::MetadataOnly)` to ignore it when adding new offline WPT dumps.
-- Visual baselines live under `tests/wpt/expected/` following the same relative path structure. Missing images are auto-generated on first run; set `UPDATE_WPT_EXPECTED=1 cargo test wpt_local_suite_passes -- --exact` to refresh everything. Reftests compare against the reference HTML and do not require a PNG.
+- The `wpt_local_suite_passes` smoke-test suite generates expected images under `target/wpt-expected/` by default so local runs don’t require checked-in PNGs. Reftests compare against the reference HTML and do not require a PNG.
+- The repo also contains `tests/wpt/expected/` for curated baselines; harness configurations that point `expected_dir` there can use it for stricter gating.
 - Artifacts always land in `target/wpt-output/<id>/{actual,expected,diff}.png` with a filterable `report.html`.
 - Viewport/DPR are fixed per-test from metadata. CI can pin fonts for deterministic renders via `HarnessConfig::with_font_dir`/`WptRunnerBuilder::font_dir` (for example, point at `tests/fonts/`).
 - The runner supports parallel execution and per-test timeouts (see `HarnessConfig`).
@@ -108,6 +119,7 @@ There is a self-contained WPT-style runner under `tests/wpt/` for local “rende
 Use `import_wpt` to bring small slices of upstream WPT into `tests/wpt/tests/` without curating each support file by hand. The importer is entirely file-based and rewrites absolute URLs so tests work offline.
 
 - Example (against a local WPT checkout): `cargo run --bin import_wpt -- --wpt-root ~/code/wpt --suite css/css-text/white-space --out tests/wpt/tests`
+- `--suite` can be repeated and supports directories, individual files, and globs (e.g. `--suite css/css-text/* --suite html/semantics/forms/the-input-element/input-type-number.html`).
 - Preview changes without writing: add `--dry-run`
 - Update existing files/manifest entries: add `--overwrite`
 - Control metadata: `--manifest <path>` overrides the default `tests/wpt/manifest.toml`; `--no-manifest` skips updates
