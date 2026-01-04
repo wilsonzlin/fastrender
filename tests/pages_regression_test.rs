@@ -2,6 +2,7 @@ mod r#ref;
 
 use fastrender::api::DiagnosticsLevel;
 use fastrender::image_output::{encode_image, OutputFormat};
+use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::style::media::MediaType;
 use fastrender::{FastRender, FontConfig, RenderOptions, RenderStageTimings, ResourcePolicy};
 use r#ref::image_compare::{compare_config_from_env, compare_pngs, CompareEnvVars};
@@ -19,6 +20,7 @@ struct PageShot {
   viewport: (u32, u32),
   dpr: f32,
   media: MediaType,
+  force_parallel_tiling: bool,
 }
 
 impl PageShot {
@@ -42,6 +44,7 @@ const DEFAULT_SHOT: PageShot = PageShot {
   viewport: (1040, 1240),
   dpr: 1.0,
   media: MediaType::Screen,
+  force_parallel_tiling: false,
 };
 
 const PRINT_SHOT: PageShot = PageShot {
@@ -49,10 +52,20 @@ const PRINT_SHOT: PageShot = PageShot {
   viewport: (920, 1180),
   dpr: 1.0,
   media: MediaType::Print,
+  force_parallel_tiling: false,
 };
 
 const DEFAULT_SHOTS: &[PageShot] = &[DEFAULT_SHOT];
 const PRINT_SHOTS: &[PageShot] = &[PRINT_SHOT];
+const PARALLEL_TILING_SHOTS: &[PageShot] = &[PageShot {
+  label: "default",
+  viewport: (1200, 800),
+  dpr: 1.0,
+  media: MediaType::Screen,
+  // This fixture is only meaningful when the display-list renderer is split into tiles, since the
+  // bug only reproduces when each tile paints into a translated canvas.
+  force_parallel_tiling: true,
+}];
 
 const PAGE_FIXTURES: &[PageFixture] = &[
   PageFixture {
@@ -94,6 +107,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     name: "vendor_prefixes",
     html: "vendor_prefixes/index.html",
     shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
+    name: "mask_parallel_tiling_translation",
+    html: "mask_parallel_tiling_translation/index.html",
+    shots: PARALLEL_TILING_SHOTS,
   },
   PageFixture {
     name: "svg_embed",
@@ -445,10 +463,13 @@ fn base_url_for(html_path: &Path) -> Result<String, String> {
 }
 
 fn render_page(renderer: &mut FastRender, html: &str, shot: &PageShot) -> Result<Vec<u8>, String> {
-  let options = RenderOptions::new()
+  let mut options = RenderOptions::new()
     .with_viewport(shot.viewport.0, shot.viewport.1)
     .with_device_pixel_ratio(shot.dpr)
     .with_media_type(shot.media);
+  if shot.force_parallel_tiling {
+    options = options.with_paint_parallelism(PaintParallelism::enabled());
+  }
 
   let pixmap = renderer
     .render_html_with_options(html, options)

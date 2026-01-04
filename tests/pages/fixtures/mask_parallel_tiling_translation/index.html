@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>mask-image parallel tiling translation regression</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 1200px;
+        height: 800px;
+        overflow: hidden;
+        background: white;
+      }
+
+      /*
+        Regression fixture: `mask-image` must respect per-tile canvas translation.
+
+        Parallel/tiled painting renders each tile into a translated canvas so display items can
+        remain in absolute page coordinates. If mask rasterization forgets to subtract the tile's
+        origin translation, the mask can be drawn far outside the tile, leaving the tile's mask
+        empty and making the element disappear.
+
+        This page positions a single masked element far from (0,0) so it lands entirely in a
+        non-origin tile.
+      */
+      .target {
+        position: absolute;
+        left: 900px;
+        top: 600px;
+        width: 120px;
+        height: 120px;
+        background: rgb(255, 0, 0);
+
+        /* The expected output is a solid red rectangle with the bottom half masked out. */
+        mask-image: linear-gradient(
+          to bottom,
+          rgba(0 0 0 / 1) 0%,
+          rgba(0 0 0 / 1) 50%,
+          rgba(0 0 0 / 0) 50%,
+          rgba(0 0 0 / 0) 100%
+        );
+        mask-size: 100% 100%;
+        mask-repeat: no-repeat;
+        mask-position: 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="target"></div>
+  </body>
+</html>
+
