@@ -688,45 +688,78 @@ impl BlockFormattingContext {
       *nearest_positioned_cb
     };
 
+    let skip_contents = match style.content_visibility {
+      crate::style::types::ContentVisibility::Hidden => true,
+      crate::style::types::ContentVisibility::Auto => {
+        // A deterministic heuristic aligned with Chrome: if the element's border box is fully
+        // outside the paint viewport, treat it as skipped content and size the box using
+        // `contain-intrinsic-size` fallback rules.
+        //
+        // The block formatting context operates in logical axes; apply this heuristic only when
+        // the block axis maps to physical y (horizontal writing modes).
+        !block_axis_is_horizontal(style.writing_mode) && box_y >= self.viewport_size.height
+      }
+      crate::style::types::ContentVisibility::Visible => false,
+    };
+
     let use_columns = Self::is_multicol_container(style);
-    let (mut child_fragments, content_height, positioned_children, column_info) = if let Some(
-      fc_type,
-    ) = fc_type
-    {
-      if fc_type != FormattingContextType::Block {
-        // Child establishes a non-block FC - use the appropriate FC
-        let factory = self.child_factory_for_cb(*nearest_positioned_cb);
-        let fc = factory.get(fc_type);
+    let (mut child_fragments, mut content_height, positioned_children, column_info) =
+      if skip_contents {
+        (Vec::new(), 0.0, Vec::new(), None)
+      } else if let Some(fc_type) = fc_type {
+        if fc_type != FormattingContextType::Block {
+          // Child establishes a non-block FC - use the appropriate FC
+          let factory = self.child_factory_for_cb(*nearest_positioned_cb);
+          let fc = factory.get(fc_type);
 
-        let log_skinny = toggles.truthy("FASTR_LOG_SKINNY_FLEX");
-        if log_skinny && computed_width.content_width <= 1.0 {
-          let selector = child
-            .debug_info
-            .as_ref()
-            .map(|d| d.to_selector())
-            .unwrap_or_else(|| "<anon>".to_string());
-          eprintln!(
-                        "[skinny-flex-constraint] id={} selector={} fc={:?} containing_w={:.1} width={:.1} margins=({:.1},{:.1}) min_w={:?} max_w={:?}",
-                        child.id,
-                        selector,
-                        fc_type,
-                        containing_width,
-                        computed_width.content_width,
-                        computed_width.margin_left,
-                        computed_width.margin_right,
-                        child.style.min_width,
-                        child.style.max_width
-                    );
+          let log_skinny = toggles.truthy("FASTR_LOG_SKINNY_FLEX");
+          if log_skinny && computed_width.content_width <= 1.0 {
+            let selector = child
+              .debug_info
+              .as_ref()
+              .map(|d| d.to_selector())
+              .unwrap_or_else(|| "<anon>".to_string());
+            eprintln!(
+                          "[skinny-flex-constraint] id={} selector={} fc={:?} containing_w={:.1} width={:.1} margins=({:.1},{:.1}) min_w={:?} max_w={:?}",
+                          child.id,
+                          selector,
+                          fc_type,
+                          containing_width,
+                          computed_width.content_width,
+                          computed_width.margin_left,
+                          computed_width.margin_right,
+                          child.style.min_width,
+                          child.style.max_width
+                      );
+          }
+
+          // Layout using the child's FC
+          let child_frag = fc.layout(child, &child_constraints)?;
+          let height = child_frag.bounds.height();
+
+          // Return fragment wrapped in vec and height
+          (vec![child_frag], height, Vec::new(), None)
+        } else {
+          // Block FC - layout children normally
+          if use_columns {
+            let (frags, height, positioned, info) = self.layout_multicolumn(
+              child,
+              &child_constraints,
+              &descendant_nearest_positioned_cb,
+              computed_width.content_width,
+            )?;
+            (frags, height, positioned, info)
+          } else {
+            let (frags, height, positioned) = self.layout_children(
+              child,
+              &child_constraints,
+              &descendant_nearest_positioned_cb,
+            )?;
+            (frags, height, positioned, None)
+          }
         }
-
-        // Layout using the child's FC
-        let child_frag = fc.layout(child, &child_constraints)?;
-        let height = child_frag.bounds.height();
-
-        // Return fragment wrapped in vec and height
-        (vec![child_frag], height, Vec::new(), None)
       } else {
-        // Block FC - layout children normally
+        // No FC (inline, text, etc.) - layout children normally
         if use_columns {
           let (frags, height, positioned, info) = self.layout_multicolumn(
             child,
@@ -740,23 +773,28 @@ impl BlockFormattingContext {
             self.layout_children(child, &child_constraints, &descendant_nearest_positioned_cb)?;
           (frags, height, positioned, None)
         }
-      }
-    } else {
-      // No FC (inline, text, etc.) - layout children normally
-      if use_columns {
-        let (frags, height, positioned, info) = self.layout_multicolumn(
-          child,
-          &child_constraints,
-          &descendant_nearest_positioned_cb,
-          computed_width.content_width,
-        )?;
-        (frags, height, positioned, info)
+      };
+
+    if skip_contents || style.containment.size {
+      let axis = if block_axis_is_horizontal(style.writing_mode) {
+        style.contain_intrinsic_width
       } else {
-        let (frags, height, positioned) =
-          self.layout_children(child, &child_constraints, &descendant_nearest_positioned_cb)?;
-        (frags, height, positioned, None)
-      }
-    };
+        style.contain_intrinsic_height
+      };
+      content_height = axis
+        .length
+        .and_then(|l| {
+          resolve_length_with_percentage(
+            l,
+            containing_height,
+            self.viewport_size,
+            style.font_size,
+            style.root_font_size,
+          )
+        })
+        .unwrap_or(0.0)
+        .max(0.0);
+    }
 
     // Height computation (CSS 2.1 Section 10.6.3) with aspect-ratio adjustment (CSS Sizing L4)
     let mut height = specified_height.unwrap_or(content_height);
@@ -3550,8 +3588,14 @@ impl FormattingContext for BlockFormattingContext {
       ));
     }
     let use_columns = Self::is_multicol_container(style);
-    let (mut child_fragments, mut content_height, positioned_children, column_info) = if use_columns
+    let skip_contents = matches!(
+      style.content_visibility,
+      crate::style::types::ContentVisibility::Hidden
+    );
+    let (mut child_fragments, mut content_height, positioned_children, column_info) = if skip_contents
     {
+      (Vec::new(), 0.0, Vec::new(), None)
+    } else if use_columns {
       let (frags, height, positioned, info) = child_ctx.layout_multicolumn(
         box_node,
         &child_constraints,
@@ -3564,8 +3608,25 @@ impl FormattingContext for BlockFormattingContext {
         child_ctx.layout_children(box_node, &child_constraints, &nearest_cb)?;
       (frags, height, positioned, None)
     };
-    if style.containment.size {
-      content_height = 0.0;
+    if skip_contents || style.containment.size {
+      let axis = if block_axis_is_horizontal(style.writing_mode) {
+        style.contain_intrinsic_width
+      } else {
+        style.contain_intrinsic_height
+      };
+      content_height = axis
+        .length
+        .and_then(|l| {
+          resolve_length_with_percentage(
+            l,
+            containing_height,
+            self.viewport_size,
+            style.font_size,
+            style.root_font_size,
+          )
+        })
+        .unwrap_or(0.0)
+        .max(0.0);
     }
 
     let min_height = style

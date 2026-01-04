@@ -7,7 +7,10 @@ use crate::css::types::{CollectedPageRule, PageMarginArea, PagePseudoClass, Page
 use crate::geometry::{Point, Size};
 use crate::style::cascade::inherit_styles;
 use crate::style::display::Display;
-use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties};
+use crate::style::properties::{
+  apply_content_visibility_implied_containment, apply_declaration_with_base,
+  resolve_pending_logical_properties,
+};
 use crate::style::types::TextAlign;
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -153,11 +156,13 @@ pub fn resolve_page_style(
 
   for style in margin_styles.values_mut() {
     resolve_pending_logical_properties(style);
+    apply_content_visibility_implied_containment(style);
     if matches!(style.display, Display::Inline) {
       style.display = Display::Block;
     }
   }
   resolve_pending_logical_properties(&mut page_style);
+  apply_content_visibility_implied_containment(&mut page_style);
   if matches!(page_style.display, Display::Inline) {
     page_style.display = Display::Block;
   }

@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+
+  /* A simple reference bar to anchor the top of the viewport. */
+  .header {
+    height: 24px;
+    background: #222;
+  }
+
+  /* content-visibility:hidden should keep the element's box/decorations but skip descendants. */
+  #hidden-box {
+    content-visibility: hidden;
+    contain-intrinsic-size: 0px 70px;
+    margin: 8px;
+    padding: 8px;
+    background: #cfe8ff;
+    border: 4px solid #0077cc;
+  }
+  #hidden-box .inner {
+    height: 120px;
+    background: #ff00ff;
+  }
+
+  /* A visible block after the hidden subtree to verify sizing. */
+  .after {
+    height: 30px;
+    margin: 8px;
+    background: #00cc66;
+  }
+
+  /* Spacer pushes the auto subtree below the viewport. */
+  .spacer {
+    height: 220px;
+    background: #f0f0f0;
+  }
+
+  /* content-visibility:auto should skip descendants when the border box is offscreen. */
+  #auto-box {
+    content-visibility: auto;
+    height: 80px;
+    margin: 8px;
+    background: #ffffff;
+    /* Transparent shadow ensures the subtree is visited even though the border box is offscreen. */
+    box-shadow: 0 -260px 0 0 rgba(0, 0, 0, 0);
+  }
+  #auto-box .inner {
+    height: 60px;
+    background: #ff0000;
+    position: relative;
+    top: -250px;
+  }
+</style>
+
+<div class="header"></div>
+<div id="hidden-box"><div class="inner"></div></div>
+<div class="after"></div>
+<div class="spacer"></div>
+<div id="auto-box"><div class="inner"></div></div>

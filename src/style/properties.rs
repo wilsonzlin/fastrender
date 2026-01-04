@@ -1977,6 +1977,46 @@ fn set_axis_max_dimension(
   }
 }
 
+fn set_contain_intrinsic_with_order(
+  target: &mut ContainIntrinsicSizeAxis,
+  order_slot: &mut i32,
+  value: ContainIntrinsicSizeAxis,
+  order: i32,
+) {
+  if order < *order_slot {
+    return;
+  }
+  *target = value;
+  *order_slot = order;
+}
+
+fn set_axis_contain_intrinsic_size(
+  styles: &mut ComputedStyle,
+  axis: crate::style::LogicalAxis,
+  value: ContainIntrinsicSizeAxis,
+  order: i32,
+) {
+  let is_horizontal = match axis {
+    crate::style::LogicalAxis::Inline => inline_axis_is_horizontal(styles.writing_mode),
+    crate::style::LogicalAxis::Block => block_axis_is_horizontal(styles.writing_mode),
+  };
+  if is_horizontal {
+    set_contain_intrinsic_with_order(
+      &mut styles.contain_intrinsic_width,
+      &mut styles.logical.contain_intrinsic_width_order,
+      value,
+      order,
+    );
+  } else {
+    set_contain_intrinsic_with_order(
+      &mut styles.contain_intrinsic_height,
+      &mut styles.logical.contain_intrinsic_height_order,
+      value,
+      order,
+    );
+  }
+}
+
 #[derive(Copy, Clone)]
 enum GlobalKeyword {
   Inherit,
@@ -2056,6 +2096,8 @@ fn set_all_logical_orders(logical: &mut crate::style::LogicalState, order: i32, 
   logical.min_height_order = order;
   logical.max_width_order = order;
   logical.max_height_order = order;
+  logical.contain_intrinsic_width_order = order;
+  logical.contain_intrinsic_height_order = order;
 
   logical.set_next_order(next_order);
 }
@@ -3718,6 +3760,57 @@ fn apply_property_from_source(
     "isolation" => styles.isolation = source.isolation,
     "will-change" => styles.will_change = source.will_change.clone(),
     "contain" => styles.containment = source.containment,
+    "content-visibility" => styles.content_visibility = source.content_visibility,
+    "contain-intrinsic-size" => {
+      set_contain_intrinsic_with_order(
+        &mut styles.contain_intrinsic_width,
+        &mut styles.logical.contain_intrinsic_width_order,
+        source.contain_intrinsic_width,
+        order,
+      );
+      set_contain_intrinsic_with_order(
+        &mut styles.contain_intrinsic_height,
+        &mut styles.logical.contain_intrinsic_height_order,
+        source.contain_intrinsic_height,
+        order,
+      );
+    }
+    "contain-intrinsic-width" => set_contain_intrinsic_with_order(
+      &mut styles.contain_intrinsic_width,
+      &mut styles.logical.contain_intrinsic_width_order,
+      source.contain_intrinsic_width,
+      order,
+    ),
+    "contain-intrinsic-height" => set_contain_intrinsic_with_order(
+      &mut styles.contain_intrinsic_height,
+      &mut styles.logical.contain_intrinsic_height_order,
+      source.contain_intrinsic_height,
+      order,
+    ),
+    "contain-intrinsic-inline-size" => {
+      let value = if inline_axis_is_horizontal(source.writing_mode) {
+        source.contain_intrinsic_width
+      } else {
+        source.contain_intrinsic_height
+      };
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::ContainIntrinsicInlineSize { value: Some(value) },
+        order,
+      );
+    }
+    "contain-intrinsic-block-size" => {
+      let value = if block_axis_is_horizontal(source.writing_mode) {
+        source.contain_intrinsic_width
+      } else {
+        source.contain_intrinsic_height
+      };
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::ContainIntrinsicBlockSize { value: Some(value) },
+        order,
+      );
+    }
     "border-collapse" => styles.border_collapse = source.border_collapse,
     "border-spacing" => {
       styles.border_spacing_horizontal = source.border_spacing_horizontal;
@@ -8775,6 +8868,73 @@ fn apply_declaration_with_base_internal(
         styles.containment = value;
       }
     }
+    "content-visibility" => {
+      if let PropertyValue::Keyword(kw) = resolved_value {
+        styles.content_visibility = if kw.eq_ignore_ascii_case("visible") {
+          ContentVisibility::Visible
+        } else if kw.eq_ignore_ascii_case("hidden") {
+          ContentVisibility::Hidden
+        } else if kw.eq_ignore_ascii_case("auto") {
+          ContentVisibility::Auto
+        } else {
+          styles.content_visibility
+        };
+      }
+    }
+    "contain-intrinsic-size" => {
+      if let Some((inline, block)) = parse_contain_intrinsic_size_shorthand(resolved_value) {
+        set_contain_intrinsic_with_order(
+          &mut styles.contain_intrinsic_width,
+          &mut styles.logical.contain_intrinsic_width_order,
+          inline,
+          order,
+        );
+        set_contain_intrinsic_with_order(
+          &mut styles.contain_intrinsic_height,
+          &mut styles.logical.contain_intrinsic_height_order,
+          block,
+          order,
+        );
+      }
+    }
+    "contain-intrinsic-width" => {
+      if let Some(axis) = parse_contain_intrinsic_size_axis(resolved_value) {
+        set_contain_intrinsic_with_order(
+          &mut styles.contain_intrinsic_width,
+          &mut styles.logical.contain_intrinsic_width_order,
+          axis,
+          order,
+        );
+      }
+    }
+    "contain-intrinsic-height" => {
+      if let Some(axis) = parse_contain_intrinsic_size_axis(resolved_value) {
+        set_contain_intrinsic_with_order(
+          &mut styles.contain_intrinsic_height,
+          &mut styles.logical.contain_intrinsic_height_order,
+          axis,
+          order,
+        );
+      }
+    }
+    "contain-intrinsic-inline-size" => {
+      if let Some(axis) = parse_contain_intrinsic_size_axis(resolved_value) {
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::ContainIntrinsicInlineSize { value: Some(axis) },
+          order,
+        );
+      }
+    }
+    "contain-intrinsic-block-size" => {
+      if let Some(axis) = parse_contain_intrinsic_size_axis(resolved_value) {
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::ContainIntrinsicBlockSize { value: Some(axis) },
+          order,
+        );
+      }
+    }
 
     "border-collapse" => {
       if let PropertyValue::Keyword(kw) = resolved_value {
@@ -10578,6 +10738,89 @@ fn parse_containment(value: &PropertyValue) -> Option<Containment> {
     ))
   } else {
     None
+  }
+}
+
+fn contain_intrinsic_length_from_value(value: &PropertyValue) -> Option<Length> {
+  match value {
+    PropertyValue::Length(l) => Some(*l),
+    PropertyValue::Percentage(p) => Some(Length::new(*p, LengthUnit::Percent)),
+    PropertyValue::Number(n) if *n == 0.0 => Some(Length::px(0.0)),
+    PropertyValue::Keyword(kw) => parse_length(kw),
+    _ => None,
+  }
+}
+
+fn parse_contain_intrinsic_axis_tokens(
+  tokens: &[PropertyValue],
+  start: usize,
+) -> Option<(ContainIntrinsicSizeAxis, usize)> {
+  let token = tokens.get(start)?;
+  if let PropertyValue::Keyword(kw) = token {
+    if kw.eq_ignore_ascii_case("none") {
+      return Some((ContainIntrinsicSizeAxis::none(), start + 1));
+    }
+    if kw.eq_ignore_ascii_case("auto") {
+      let value = if let Some(len) = tokens
+        .get(start + 1)
+        .and_then(contain_intrinsic_length_from_value)
+      {
+        ContainIntrinsicSizeAxis {
+          auto: true,
+          length: Some(len),
+        }
+      } else {
+        ContainIntrinsicSizeAxis {
+          auto: true,
+          length: None,
+        }
+      };
+      let next = if value.length.is_some() { start + 2 } else { start + 1 };
+      return Some((value, next));
+    }
+  }
+
+  let len = contain_intrinsic_length_from_value(token)?;
+  Some((
+    ContainIntrinsicSizeAxis {
+      auto: false,
+      length: Some(len),
+    },
+    start + 1,
+  ))
+}
+
+fn parse_contain_intrinsic_size_axis(value: &PropertyValue) -> Option<ContainIntrinsicSizeAxis> {
+  match value {
+    PropertyValue::Multiple(tokens) => {
+      let (axis, next) = parse_contain_intrinsic_axis_tokens(tokens, 0)?;
+      if next == tokens.len() { Some(axis) } else { None }
+    }
+    other => parse_contain_intrinsic_axis_tokens(std::slice::from_ref(other), 0)
+      .and_then(|(axis, next)| if next == 1 { Some(axis) } else { None }),
+  }
+}
+
+fn parse_contain_intrinsic_size_shorthand(
+  value: &PropertyValue,
+) -> Option<(ContainIntrinsicSizeAxis, ContainIntrinsicSizeAxis)> {
+  match value {
+    PropertyValue::Multiple(tokens) => {
+      let (first, idx) = parse_contain_intrinsic_axis_tokens(tokens, 0)?;
+      if idx == tokens.len() {
+        return Some((first, first));
+      }
+      let (second, idx2) = parse_contain_intrinsic_axis_tokens(tokens, idx)?;
+      if idx2 == tokens.len() {
+        Some((first, second))
+      } else {
+        None
+      }
+    }
+    other => {
+      let axis = parse_contain_intrinsic_size_axis(other)?;
+      Some((axis, axis))
+    }
   }
 }
 
@@ -13402,6 +13645,92 @@ mod tests {
 
     apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
     assert_eq!(style.object_fit, ObjectFit::Cover);
+  }
+
+  #[test]
+  fn parses_content_visibility_keyword_values() {
+    let parent_styles = ComputedStyle::default();
+    for (value, expected) in [
+      ("visible", crate::style::types::ContentVisibility::Visible),
+      ("hidden", crate::style::types::ContentVisibility::Hidden),
+      ("auto", crate::style::types::ContentVisibility::Auto),
+    ] {
+      let decls = parse_declarations(&format!("content-visibility: {};", value));
+      assert_eq!(decls.len(), 1);
+      let decl = &decls[0];
+      let mut styles = ComputedStyle::default();
+      apply_declaration_with_base(
+        &mut styles,
+        decl,
+        &parent_styles,
+        default_computed_style(),
+        None,
+        16.0,
+        16.0,
+        DEFAULT_VIEWPORT,
+      );
+      assert_eq!(styles.content_visibility, expected);
+    }
+  }
+
+  #[test]
+  fn contain_intrinsic_size_shorthand_applies() {
+    let parent_styles = ComputedStyle::default();
+    let decls = parse_declarations("contain-intrinsic-size: 3000px 1500px;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+    assert_eq!(
+      styles.contain_intrinsic_width,
+      crate::style::types::ContainIntrinsicSizeAxis {
+        auto: false,
+        length: Some(Length::px(3000.0)),
+      }
+    );
+    assert_eq!(
+      styles.contain_intrinsic_height,
+      crate::style::types::ContainIntrinsicSizeAxis {
+        auto: false,
+        length: Some(Length::px(1500.0)),
+      }
+    );
+  }
+
+  #[test]
+  fn contain_intrinsic_size_var_resolves() {
+    let parent_styles = ComputedStyle::default();
+    let decls = parse_declarations("contain-intrinsic-size: var(--cis);");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    assert!(decl.contains_var);
+
+    let mut styles = ComputedStyle::default();
+    styles.custom_properties.insert(
+      "--cis".into(),
+      CustomPropertyValue::new("3000px 1500px", None),
+    );
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+    assert_eq!(styles.contain_intrinsic_width.length, Some(Length::px(3000.0)));
+    assert_eq!(styles.contain_intrinsic_height.length, Some(Length::px(1500.0)));
   }
 
   #[test]
@@ -22708,6 +23037,16 @@ pub fn resolve_pending_logical_properties(styles: &mut ComputedStyle) {
           );
         }
       }
+      crate::style::LogicalProperty::ContainIntrinsicInlineSize { value } => {
+        if let Some(v) = value {
+          set_axis_contain_intrinsic_size(styles, crate::style::LogicalAxis::Inline, v, pending_prop.order);
+        }
+      }
+      crate::style::LogicalProperty::ContainIntrinsicBlockSize { value } => {
+        if let Some(v) = value {
+          set_axis_contain_intrinsic_size(styles, crate::style::LogicalAxis::Block, v, pending_prop.order);
+        }
+      }
       crate::style::LogicalProperty::Inset { axis, start, end } => {
         let (start_side, end_side) = sides_for_axis(axis, inline_sides, block_sides);
         if let Some(v) = start {
@@ -22738,4 +23077,19 @@ pub fn resolve_pending_logical_properties(styles: &mut ComputedStyle) {
       }
     }
   }
+}
+
+/// Applies containment effects implied by `content-visibility`.
+///
+/// The spec defines `content-visibility:auto|hidden` as implicitly establishing layout/style/paint
+/// containment. FastRender stores containment as a single bitfield on `ComputedStyle`, so we fold
+/// the implied flags into the final computed style after cascade.
+pub fn apply_content_visibility_implied_containment(styles: &mut ComputedStyle) {
+  if matches!(styles.content_visibility, ContentVisibility::Visible) {
+    return;
+  }
+
+  styles.containment.layout = true;
+  styles.containment.style = true;
+  styles.containment.paint = true;
 }

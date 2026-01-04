@@ -76,6 +76,8 @@ use types::ColumnFill;
 use types::ColumnSpan;
 use types::ContainerType;
 use types::Containment;
+use types::ContainIntrinsicSizeAxis;
+use types::ContentVisibility;
 use types::CursorImage;
 use types::CursorKeyword;
 use types::Direction;
@@ -316,6 +318,12 @@ pub enum LogicalProperty {
   MaxBlockSize {
     value: Option<Option<Length>>,
   },
+  ContainIntrinsicInlineSize {
+    value: Option<ContainIntrinsicSizeAxis>,
+  },
+  ContainIntrinsicBlockSize {
+    value: Option<ContainIntrinsicSizeAxis>,
+  },
   Inset {
     axis: LogicalAxis,
     start: Option<Option<Length>>,
@@ -366,6 +374,8 @@ pub struct LogicalState {
   pub min_height_order: i32,
   pub max_width_order: i32,
   pub max_height_order: i32,
+  pub contain_intrinsic_width_order: i32,
+  pub contain_intrinsic_height_order: i32,
   next_order: i32,
 }
 
@@ -386,6 +396,8 @@ impl Default for LogicalState {
       min_height_order: -1,
       max_width_order: -1,
       max_height_order: -1,
+      contain_intrinsic_width_order: -1,
+      contain_intrinsic_height_order: -1,
       next_order: 0,
     }
   }
@@ -734,6 +746,14 @@ pub struct ComputedStyle {
   pub will_change: WillChange,
   /// CSS containment
   pub containment: Containment,
+  /// Whether the element's contents may be skipped.
+  pub content_visibility: ContentVisibility,
+  /// Intrinsic width fallback used when the element establishes size containment or its contents are
+  /// skipped (e.g. via `content-visibility`).
+  pub contain_intrinsic_width: ContainIntrinsicSizeAxis,
+  /// Intrinsic height fallback used when the element establishes size containment or its contents are
+  /// skipped (e.g. via `content-visibility`).
+  pub contain_intrinsic_height: ContainIntrinsicSizeAxis,
 
   // Visual effects
   pub opacity: f32,
@@ -1039,6 +1059,9 @@ impl Default for ComputedStyle {
       isolation: Isolation::Auto,
       will_change: WillChange::Auto,
       containment: Containment::none(),
+      content_visibility: ContentVisibility::Visible,
+      contain_intrinsic_width: ContainIntrinsicSizeAxis::default(),
+      contain_intrinsic_height: ContainIntrinsicSizeAxis::default(),
 
       opacity: 1.0,
       box_shadow: Vec::new(),

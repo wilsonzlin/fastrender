@@ -1467,6 +1467,64 @@ impl Containment {
   }
 }
 
+/// Controls whether an element's contents are rendered.
+///
+/// CSS: `content-visibility`
+/// Reference: CSS Containment Module Level 3 / CSS Content Visibility Module Level 1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentVisibility {
+  Visible,
+  Hidden,
+  Auto,
+}
+
+impl Default for ContentVisibility {
+  fn default() -> Self {
+    Self::Visible
+  }
+}
+
+/// Intrinsic size fallback for an axis when an element's contents are skipped.
+///
+/// CSS: `contain-intrinsic-*`
+/// Reference: CSS Containment Module Level 3 / CSS Content Visibility Module Level 1
+///
+/// This engine supports a subset of the grammar used on real pages:
+/// - `none`
+/// - `<length-percentage>`
+/// - `auto`
+/// - `auto <length-percentage>`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContainIntrinsicSizeAxis {
+  /// Whether the axis uses the `auto` keyword semantics.
+  pub auto: bool,
+  /// Optional fallback length (e.g. `contain-intrinsic-size: auto 100px`).
+  pub length: Option<Length>,
+}
+
+impl ContainIntrinsicSizeAxis {
+  pub const fn none() -> Self {
+    Self {
+      auto: false,
+      length: None,
+    }
+  }
+
+  pub const fn auto() -> Self {
+    Self {
+      auto: true,
+      length: None,
+    }
+  }
+}
+
+impl Default for ContainIntrinsicSizeAxis {
+  fn default() -> Self {
+    // The initial value is `auto` (with no explicit fallback length).
+    Self::auto()
+  }
+}
+
 impl Default for Containment {
   fn default() -> Self {
     Self::none()

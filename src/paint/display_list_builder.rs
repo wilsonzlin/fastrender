@@ -128,6 +128,7 @@ use crate::style::types::BackgroundSizeComponent;
 use crate::style::types::BackgroundSizeKeyword;
 use crate::style::types::BorderImageSource;
 use crate::style::types::BoxDecorationBreak;
+use crate::style::types::ContentVisibility;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
 use crate::style::types::Isolation;
@@ -1473,6 +1474,13 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
+    let skip_contents = style_opt.is_some_and(|style| match style.content_visibility {
+      ContentVisibility::Hidden => true,
+      ContentVisibility::Auto => visibility
+        .rect
+        .is_some_and(|vis| !vis.intersects(absolute_rect)),
+      ContentVisibility::Visible => false,
+    });
     let mut paint_bounds = self.fragment_paint_bounds(fragment, absolute_rect, style_opt);
 
     if let Some(style) = style_opt {
@@ -1654,62 +1662,64 @@ impl DisplayListBuilder {
 
     // Clip descendant/content painting but leave outer effects (e.g., box shadows, outlines)
     // unaffected.
-    let mut pushed_clips = 0;
-    if let Some(clip) = overflow_clip {
-      self.list.push(DisplayItem::PushClip(clip));
-      pushed_clips += 1;
-    }
-    if let Some(clip) = clip_rect {
-      self.list.push(DisplayItem::PushClip(clip));
-      pushed_clips += 1;
-    }
+    if !skip_contents {
+      let mut pushed_clips = 0;
+      if let Some(clip) = overflow_clip {
+        self.list.push(DisplayItem::PushClip(clip));
+        pushed_clips += 1;
+      }
+      if let Some(clip) = clip_rect {
+        self.list.push(DisplayItem::PushClip(clip));
+        pushed_clips += 1;
+      }
 
-    self.emit_content(fragment, absolute_rect);
+      self.emit_content(fragment, absolute_rect);
 
-    if recurse_children {
-      let element_scroll = self.element_scroll_offset(fragment);
-      let child_offset = Point::new(
-        absolute_rect.origin.x - element_scroll.x,
-        absolute_rect.origin.y - element_scroll.y,
-      );
-      let mut counter = 0usize;
-      for child in fragment.children.iter() {
-        if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
-          break;
-        }
-        if self.skip_stacking_context_children {
-          if let Some(child_style) = child.style.as_deref() {
-            if crate::paint::stacking::creates_stacking_context(child_style, style_opt, false) {
-              continue;
+      if recurse_children {
+        let element_scroll = self.element_scroll_offset(fragment);
+        let child_offset = Point::new(
+          absolute_rect.origin.x - element_scroll.x,
+          absolute_rect.origin.y - element_scroll.y,
+        );
+        let mut counter = 0usize;
+        for child in fragment.children.iter() {
+          if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+            break;
+          }
+          if self.skip_stacking_context_children {
+            if let Some(child_style) = child.style.as_deref() {
+              if crate::paint::stacking::creates_stacking_context(child_style, style_opt, false) {
+                continue;
+              }
             }
           }
+          self.build_fragment_internal(child, child_offset, true, false, child_visibility);
         }
-        self.build_fragment_internal(child, child_offset, true, false, child_visibility);
       }
-    }
 
-    if let Some(table_borders) = fragment.table_borders.as_ref() {
-      let origin = absolute_rect.origin;
-      let bounds = table_borders.paint_bounds.translate(origin);
-      let has_visible_borders = table_borders
-        .vertical_borders
-        .iter()
-        .chain(table_borders.horizontal_borders.iter())
-        .chain(table_borders.corner_borders.iter())
-        .any(|b| b.is_visible());
-      if has_visible_borders {
-        self.list.push(DisplayItem::TableCollapsedBorders(
-          TableCollapsedBordersItem {
-            origin,
-            bounds,
-            borders: table_borders.clone(),
-          },
-        ));
+      if let Some(table_borders) = fragment.table_borders.as_ref() {
+        let origin = absolute_rect.origin;
+        let bounds = table_borders.paint_bounds.translate(origin);
+        let has_visible_borders = table_borders
+          .vertical_borders
+          .iter()
+          .chain(table_borders.horizontal_borders.iter())
+          .chain(table_borders.corner_borders.iter())
+          .any(|b| b.is_visible());
+        if has_visible_borders {
+          self.list.push(DisplayItem::TableCollapsedBorders(
+            TableCollapsedBordersItem {
+              origin,
+              bounds,
+              borders: table_borders.clone(),
+            },
+          ));
+        }
       }
-    }
 
-    for _ in 0..pushed_clips {
-      self.list.push(DisplayItem::PopClip);
+      for _ in 0..pushed_clips {
+        self.list.push(DisplayItem::PopClip);
+      }
     }
 
     if let Some(style) = style_opt {
@@ -1760,6 +1770,13 @@ impl DisplayListBuilder {
         return;
       }
     }
+    let skip_contents = fragment.style.as_deref().is_some_and(|style| match style.content_visibility {
+      ContentVisibility::Hidden => true,
+      ContentVisibility::Auto => visibility
+        .rect
+        .is_some_and(|vis| !vis.intersects(absolute_rect)),
+      ContentVisibility::Visible => false,
+    });
     if push_opacity {
       self.push_opacity(opacity);
     }
@@ -1781,56 +1798,58 @@ impl DisplayListBuilder {
     let box_id = Self::get_box_id(fragment);
     let should_clip = clips.contains(&box_id);
 
-    // Emit content before clipping children
-    self.emit_content(fragment, absolute_rect);
+    if !skip_contents {
+      // Emit content before clipping children
+      self.emit_content(fragment, absolute_rect);
 
-    // Push clip if needed
-    if should_clip {
-      self.list.push(DisplayItem::PushClip(ClipItem {
-        shape: ClipShape::Rect {
-          rect: absolute_rect,
-          radii: None,
-        },
-      }));
-    }
-
-    // Recurse to children
-    let element_scroll = self.element_scroll_offset(fragment);
-    let child_offset = Point::new(
-      absolute_rect.origin.x - element_scroll.x,
-      absolute_rect.origin.y - element_scroll.y,
-    );
-    let mut counter = 0usize;
-    for child in fragment.children.iter() {
-      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
-        break;
-      }
-      self.build_fragment_with_clips(child, child_offset, clips, visibility);
-    }
-
-    if let Some(table_borders) = fragment.table_borders.as_ref() {
-      let origin = absolute_rect.origin;
-      let bounds = table_borders.paint_bounds.translate(origin);
-      let has_visible_borders = table_borders
-        .vertical_borders
-        .iter()
-        .chain(table_borders.horizontal_borders.iter())
-        .chain(table_borders.corner_borders.iter())
-        .any(|b| b.is_visible());
-      if has_visible_borders {
-        self.list.push(DisplayItem::TableCollapsedBorders(
-          TableCollapsedBordersItem {
-            origin,
-            bounds,
-            borders: table_borders.clone(),
+      // Push clip if needed
+      if should_clip {
+        self.list.push(DisplayItem::PushClip(ClipItem {
+          shape: ClipShape::Rect {
+            rect: absolute_rect,
+            radii: None,
           },
-        ));
+        }));
       }
-    }
 
-    // Pop clip
-    if should_clip {
-      self.list.push(DisplayItem::PopClip);
+      // Recurse to children
+      let element_scroll = self.element_scroll_offset(fragment);
+      let child_offset = Point::new(
+        absolute_rect.origin.x - element_scroll.x,
+        absolute_rect.origin.y - element_scroll.y,
+      );
+      let mut counter = 0usize;
+      for child in fragment.children.iter() {
+        if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+          break;
+        }
+        self.build_fragment_with_clips(child, child_offset, clips, visibility);
+      }
+
+      if let Some(table_borders) = fragment.table_borders.as_ref() {
+        let origin = absolute_rect.origin;
+        let bounds = table_borders.paint_bounds.translate(origin);
+        let has_visible_borders = table_borders
+          .vertical_borders
+          .iter()
+          .chain(table_borders.horizontal_borders.iter())
+          .chain(table_borders.corner_borders.iter())
+          .any(|b| b.is_visible());
+        if has_visible_borders {
+          self.list.push(DisplayItem::TableCollapsedBorders(
+            TableCollapsedBordersItem {
+              origin,
+              bounds,
+              borders: table_borders.clone(),
+            },
+          ));
+        }
+      }
+
+      // Pop clip
+      if should_clip {
+        self.list.push(DisplayItem::PopClip);
+      }
     }
 
     if let Some(style) = fragment.style.as_deref() {
@@ -1920,6 +1939,13 @@ impl DisplayListBuilder {
         ),
         fragment.bounds.size,
       )
+    });
+    let skip_contents = root_style.is_some_and(|style| match style.content_visibility {
+      ContentVisibility::Hidden => true,
+      ContentVisibility::Auto => visibility
+        .rect
+        .is_some_and(|vis| root_fragment_rect.is_some_and(|rect| !vis.intersects(rect))),
+      ContentVisibility::Visible => false,
     });
     let plane_rect = match (root_style, root_fragment_rect) {
       (Some(style), Some(rect)) => Self::transform_reference_box(style, rect, self.viewport),
@@ -2139,6 +2165,18 @@ impl DisplayListBuilder {
       if let Some((rect, style)) = root_background.as_ref() {
         self.emit_background_from_style(*rect, style);
       }
+      if skip_contents {
+        self.emit_fragment_list_shallow(
+          &context.fragments,
+          root_fragment_offset,
+          apply_opacity,
+          child_visibility,
+        );
+        if pushed_opacity {
+          self.pop_opacity();
+        }
+        return;
+      }
       let mut deadline_counter = 0usize;
       for child in neg {
         if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
@@ -2244,6 +2282,19 @@ impl DisplayListBuilder {
       apply_opacity,
       child_visibility,
     );
+    if skip_contents {
+      for _ in 0..pushed_clips {
+        self.list.push(DisplayItem::PopClip);
+      }
+      self.list.push(DisplayItem::PopStackingContext);
+      if has_paint_containment_clip {
+        self.list.push(DisplayItem::PopClip);
+      }
+      if pushed_opacity {
+        self.pop_opacity();
+      }
+      return;
+    }
 
     let mut overflow_clip_pushed = false;
     if let Some(clip) = overflow_clip {

@@ -158,10 +158,16 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "color",
   "color-scheme",
   "contain",
+  "contain-intrinsic-block-size",
+  "contain-intrinsic-height",
+  "contain-intrinsic-inline-size",
+  "contain-intrinsic-size",
+  "contain-intrinsic-width",
   "container",
   "container-name",
   "container-type",
   "content",
+  "content-visibility",
   "counter-increment",
   "counter-reset",
   "counter-set",
@@ -1435,6 +1441,11 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
       | "quotes"
       | "size"
       | "text-combine-upright"
+      | "contain-intrinsic-size"
+      | "contain-intrinsic-width"
+      | "contain-intrinsic-height"
+      | "contain-intrinsic-inline-size"
+      | "contain-intrinsic-block-size"
   );
 
   if wants_tokenization && value_has_top_level_separator(value_str, allow_commas) {

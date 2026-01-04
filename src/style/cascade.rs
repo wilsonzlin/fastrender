@@ -62,6 +62,7 @@ use crate::style::media::ColorScheme;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQueryCache;
 use crate::style::normalize_language_tag;
+use crate::style::properties::apply_content_visibility_implied_containment;
 use crate::style::properties::apply_declaration_with_base;
 use crate::style::properties::apply_declaration_with_base_and_custom_properties;
 use crate::style::properties::resolve_pending_logical_properties;
@@ -21894,6 +21895,7 @@ fn apply_cascaded_declarations<'a, F>(
   }
   if total_decls == 0 {
     resolve_pending_logical_properties(styles);
+    apply_content_visibility_implied_containment(styles);
     resolve_absolute_lengths(styles, root_font_size, viewport);
     return;
   }
@@ -22273,6 +22275,7 @@ fn apply_cascaded_declarations<'a, F>(
     }
   }
   resolve_pending_logical_properties(styles);
+  apply_content_visibility_implied_containment(styles);
 
   resolve_absolute_lengths(styles, root_font_size, viewport);
 }
