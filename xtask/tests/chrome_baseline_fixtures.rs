@@ -84,7 +84,7 @@ fn chrome_baseline_fixtures_respects_sharding_and_writes_outputs() {
   let status = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .current_dir(&repo_root)
     .arg("chrome-baseline-fixtures")
-    .arg("--fixture-dir")
+    .arg("--fixtures-dir")
     .arg(&fixture_root)
     .arg("--out-dir")
     .arg(&out_dir)
@@ -130,7 +130,7 @@ fn chrome_baseline_fixtures_builds_expected_chrome_command_flags() {
     .arg("--chrome-dir")
     .arg(&chrome_dir)
     .arg("--fixtures")
-    .arg("hello")
+    .arg("hello, hello")
     .status()
     .expect("run chrome-baseline-fixtures");
   assert!(status.success(), "command exited with {status}");

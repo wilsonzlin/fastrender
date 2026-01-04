@@ -15,7 +15,7 @@ pub struct ChromeBaselineFixturesArgs {
   /// Root directory containing fixture directories (each must contain an index.html).
   #[arg(
     long,
-    alias = "fixtures-root",
+    visible_aliases = ["fixtures-dir", "fixtures-root"],
     default_value = "tests/pages/fixtures",
     value_name = "DIR"
   )]
@@ -330,7 +330,15 @@ fn select_fixtures(
   shard: Option<(usize, usize)>,
 ) -> Result<Vec<Fixture>> {
   if let Some(stems) = stems {
-    let want: HashSet<&str> = stems.iter().map(|s| s.as_str()).collect();
+    let mut normalized = stems
+      .iter()
+      .map(|s| s.trim())
+      .filter(|s| !s.is_empty())
+      .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+
+    let want: HashSet<&str> = normalized.iter().copied().collect();
     let mut found = HashSet::<String>::new();
     fixtures.retain(|fixture| {
       if want.contains(fixture.stem.as_str()) {
@@ -341,10 +349,10 @@ fn select_fixtures(
       }
     });
 
-    let mut missing = stems
+    let mut missing = normalized
       .iter()
-      .filter(|stem| !found.contains(stem.as_str()))
-      .cloned()
+      .filter(|stem| !found.contains::<str>(*stem))
+      .map(|stem| stem.to_string())
       .collect::<Vec<_>>();
     missing.sort();
     missing.dedup();

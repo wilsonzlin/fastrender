@@ -281,7 +281,7 @@ cargo run --release --bin diff_renders -- \
   - Output defaults to `target/chrome_fixture_renders/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
 - Core flags:
   - Selection: `--fixtures <csv>` (alias `--only`) or positional fixture names.
-  - Paths: `--fixture-dir <dir>` (alias `--fixtures-root`), `--out-dir <dir>`.
+  - Paths: `--fixture-dir <dir>` (aliases `--fixtures-dir`, `--fixtures-root`), `--out-dir <dir>`.
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--js {on|off}`.
   - Parallelism: `--shard <index>/<total>`.
 
