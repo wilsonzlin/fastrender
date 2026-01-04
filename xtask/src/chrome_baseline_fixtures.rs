@@ -746,7 +746,16 @@ fn patch_html_bytes(data: &[u8], base_url: Option<&str>, disable_js: bool) -> Ve
     return out;
   }
 
-  [wrapped, data.to_vec()].concat()
+  // Some fixtures omit `<html>`/`<head>` but still include a `<!doctype html>` declaration. Do not
+  // inject anything before the doctype because that would flip the document into quirks mode in
+  // Chrome and make the baseline useless. Instead, inject our tags immediately after the doctype.
+  if let Some(out) = insert_after_doctype(data, &lower, &inserts) {
+    return out;
+  }
+
+  // Fall back to prefixing the tags; the HTML parser will usually move them into an implicit head
+  // element.
+  [inserts, data.to_vec()].concat()
 }
 
 fn insert_after_open_tag(
@@ -782,10 +791,64 @@ fn insert_after_open_tag(
   None
 }
 
+fn insert_after_doctype(data: &[u8], lower: &[u8], insertion: &[u8]) -> Option<Vec<u8>> {
+  const DOCTYPE: &[u8] = b"<!doctype";
+  let mut search_start = 0usize;
+  while let Some(pos) = lower[search_start..]
+    .windows(DOCTYPE.len())
+    .position(|window| window == DOCTYPE)
+    .map(|rel| rel + search_start)
+  {
+    let after = lower.get(pos + DOCTYPE.len());
+    let boundary_ok = matches!(
+      after,
+      Some(b'>') | Some(b' ') | Some(b'\n') | Some(b'\r') | Some(b'\t')
+    );
+    if !boundary_ok {
+      search_start = pos + DOCTYPE.len();
+      continue;
+    }
+
+    let end = lower[pos..].iter().position(|&b| b == b'>')? + pos + 1;
+    let mut out = Vec::with_capacity(data.len() + insertion.len() + 1);
+    out.extend_from_slice(&data[..end]);
+    out.extend_from_slice(b"\n");
+    out.extend_from_slice(insertion);
+    out.extend_from_slice(&data[end..]);
+    return Some(out);
+  }
+  None
+}
+
 fn absolutize_path(repo_root: &Path, path: &Path) -> PathBuf {
   if path.is_absolute() {
     path.to_path_buf()
   } else {
     repo_root.join(path)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::patch_html_bytes;
+
+  #[test]
+  fn patch_html_keeps_doctype_first_when_head_missing() {
+    let input = b"<!doctype html>\n<meta charset=\"utf-8\">\n<body>Hello</body>\n";
+    let output = patch_html_bytes(input, Some("file:///tmp/fixture/"), true);
+    assert!(
+      output.starts_with(b"<!doctype html>"),
+      "doctype must remain the first token to avoid quirks mode"
+    );
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+      output_str.contains("Content-Security-Policy"),
+      "patched HTML should include CSP injection"
+    );
+    assert!(
+      output_str.contains("<base href=\"file:///tmp/fixture/\">"),
+      "patched HTML should include base href injection"
+    );
   }
 }

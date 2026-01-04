@@ -281,15 +281,38 @@ if len(sys.argv) >= 5:
 data = open(in_path, "rb").read()
 lower = data.lower()
 
-def insert_after_tag(tag: bytes, insertion: bytes):
-    idx = lower.find(tag)
-    if idx == -1:
-        return None
-    end = lower.find(b">", idx)
-    if end == -1:
-        return None
-    end += 1
-    return data[:end] + b"\n" + insertion + data[end:]
+def insert_after_open_tag(tag: bytes, insertion: bytes):
+    start = 0
+    while True:
+        idx = lower.find(tag, start)
+        if idx == -1:
+            return None
+        after = lower[idx + len(tag): idx + len(tag) + 1]
+        if after and after not in b">\t\r\n /":
+            start = idx + len(tag)
+            continue
+        end = lower.find(b">", idx)
+        if end == -1:
+            return None
+        end += 1
+        return data[:end] + b"\n" + insertion + data[end:]
+
+def insert_after_doctype(insertion: bytes):
+    tag = b"<!doctype"
+    start = 0
+    while True:
+        idx = lower.find(tag, start)
+        if idx == -1:
+            return None
+        after = lower[idx + len(tag): idx + len(tag) + 1]
+        if after and after not in b">\t\r\n ":
+            start = idx + len(tag)
+            continue
+        end = lower.find(b">", idx)
+        if end == -1:
+            return None
+        end += 1
+        return data[:end] + b"\n" + insertion + data[end:]
 
 inserts = []
 if base_url:
@@ -305,11 +328,16 @@ inserts.append(f'<meta http-equiv="Content-Security-Policy" content="{csp}">'.en
 
 insertion = b"".join(inserts)
 
-out = insert_after_tag(b"<head", insertion)
+out = insert_after_open_tag(b"<head", insertion)
 if out is None:
-    out = insert_after_tag(b"<html", b"<head>\n" + insertion + b"</head>\n")
+    wrapped = b"<head>\n" + insertion + b"</head>\n"
+    out = insert_after_open_tag(b"<html", wrapped)
 if out is None:
-    out = b"<head>\n" + insertion + b"</head>\n" + data
+    # Some fixtures omit `<html>`/`<head>` but still include a `<!doctype html>` declaration. Do
+    # not insert anything before the doctype (that would force quirks mode in Chrome).
+    out = insert_after_doctype(insertion)
+if out is None:
+    out = insertion + data
 
 open(out_path, "wb").write(out)
 PY
@@ -377,4 +405,3 @@ echo "Logs:  ${OUT_DIR}/*.chrome.log"
 if [[ "${fail}" -gt 0 ]]; then
   exit 1
 fi
-
