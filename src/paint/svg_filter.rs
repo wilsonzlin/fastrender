@@ -6777,7 +6777,9 @@ mod tests {
     let eroded = apply_for_test(&erode, &pixmap);
 
     let filter_region = filter_region_for_pixmap(&pixmap);
-    let tiled = tile_pixmap(eroded, filter_region).expect("tile result");
+    let tiled = tile_pixmap(eroded, filter_region)
+      .unwrap()
+      .expect("tile result");
     assert_eq!(pixels_to_vec(&tiled.pixmap), vec![(255, 0, 0, 255), (255, 0, 0, 255)]);
   }
 
