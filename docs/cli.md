@@ -191,7 +191,7 @@ Notes:
 - Disk cache directory: `--cache-dir <dir>` overrides the disk-backed subresource cache location (defaults to `fetches/assets/`; only has an effect when built with `--features disk_cache`).
 - Optional outputs:
   - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
-  - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
+  - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/composed DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
 - Layout fan-out defaults to `auto` (only engages once the box tree is large enough and has sufficient independent sibling work); use `--layout-parallel off` to force serial layout, `--layout-parallel on` to force fan-out, or tune thresholds with `--layout-parallel-min-fanout`, `--layout-parallel-auto-min-nodes`, and `--layout-parallel-max-threads`.
 - Worker Rayon threads: in the default per-page worker mode, `render_pages` sets `RAYON_NUM_THREADS` for each worker process to `available_parallelism()/jobs` (min 1, additionally clamped by a detected cgroup CPU quota on Linux) to avoid CPU oversubscription. Set `RAYON_NUM_THREADS` in the parent environment to override this.
 
@@ -267,7 +267,7 @@ Notes:
 - Purpose: inspect fragment output (and related style/layout state) for a single input.
 - Entry: `src/bin/inspect_frag.rs`
 - Run: `cargo run --release --bin inspect_frag -- --help`
-- `--dump-json <dir>` writes deterministic snapshots of each pipeline stage (`dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, `display_list.json`). Pair with `--filter-selector` / `--filter-id` to focus on a subtree.
+- `--dump-json <dir>` writes deterministic snapshots of each pipeline stage (`dom.json`, `composed_dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, `display_list.json`). Pair with `--filter-selector` / `--filter-id` to focus on a subtree.
 - `--dump-snapshot` prints a combined pipeline snapshot JSON to stdout (and exits).
 - `--render-overlay <png>` renders the page with optional overlays for fragment bounds, box ids, stacking contexts, and scroll containers.
 - Pagination/debugging: set `FASTR_FRAGMENTATION_PAGE_HEIGHT=<css px>` (and optional `FASTR_FRAGMENTATION_GAP=<css px>`) to paginate layout during inspection. The fixture at `tests/fixtures/inspect_frag_two_pages.html` forces two pages via `@page` and `break-after: page`:

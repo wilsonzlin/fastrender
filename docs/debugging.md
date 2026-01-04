@@ -39,7 +39,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 FASTR_HTTP_LOG_RETRIES=1
 
 ## inspect_frag overlays and dumps
 
-- `inspect_frag --dump-json <dir> tests/fixtures/html/block_simple.html` writes `dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, and `display_list.json` for downstream tooling. Pair with `--filter-selector`/`--filter-id` to focus on a specific subtree.
+- `inspect_frag --dump-json <dir> tests/fixtures/html/block_simple.html` writes `dom.json`, `composed_dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, and `display_list.json` for downstream tooling. Pair with `--filter-selector`/`--filter-id` to focus on a specific subtree.
 - `inspect_frag --render-overlay out.png <file>` renders the document with overlays for fragment bounds, box ids, stacking contexts, and scroll containers to quickly correlate geometry with the rendered pixels.
 
 ## Display-list dumps (paint pipeline)

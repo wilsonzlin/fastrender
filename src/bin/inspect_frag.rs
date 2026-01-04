@@ -53,9 +53,9 @@ struct Args {
 
   /// Write deterministic pipeline stage snapshots into this directory
   ///
-  /// Writes `dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, and
-  /// `display_list.json`. When filters are provided, the dumps are restricted to the
-  /// first matching subtree.
+  /// Writes `dom.json`, `composed_dom.json`, `styled.json`, `box_tree.json`,
+  /// `fragment_tree.json`, and `display_list.json`. When filters are provided, the
+  /// dumps are restricted to the first matching subtree.
   #[arg(long, value_name = "DIR")]
   dump_json: Option<PathBuf>,
 
