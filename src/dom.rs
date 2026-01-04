@@ -2878,7 +2878,7 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
         // The `ShadowRoot` node itself is an internal representation detail of the parsed DOM and
         // is not exposed as part of the composed snapshot.
         return shadow_root
-          .children
+          .traversal_children()
           .iter()
           .map(|child| child as *const DomNode)
           .collect();
@@ -2910,14 +2910,14 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
         *assigned = false;
       }
       return src
-        .children
+        .traversal_children()
         .iter()
         .map(|child| child as *const DomNode)
         .collect();
     }
 
     src
-      .children
+      .traversal_children()
       .iter()
       .map(|child| child as *const DomNode)
       .collect()
