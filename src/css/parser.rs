@@ -2660,7 +2660,10 @@ fn parse_property_descriptors<'i, 't>(
     }
   }
 
-  if !inherits && initial_value.is_none() {
+  // The Properties & Values API requires an `initial-value` for typed syntaxes. The universal
+  // syntax (`*`) behaves like an unregistered custom property, so Tailwind and other toolchains
+  // omit `initial-value` even when `inherits:false`.
+  if initial_value.is_none() && !matches!(syntax, CustomPropertySyntax::Universal) {
     return Ok(None);
   }
 
@@ -4468,6 +4471,9 @@ mod tests {
   use crate::css::types::CssImportLoader;
   use crate::css::types::FontFaceStyle;
   use crate::css::types::FontSourceFormat;
+  use crate::style::custom_properties::CustomPropertyRegistry;
+  use crate::style::custom_properties::PropertyRule as RegisteredPropertyRule;
+  use crate::style::values::{CustomPropertyTypedValue, Length};
   use crate::PropertyValue;
 
   #[test]
@@ -5407,5 +5413,78 @@ mod tests {
       }
       other => panic!("expected inline style, got {:?}", other),
     }
+  }
+
+  #[test]
+  fn property_rule_allows_universal_syntax_without_initial_value() {
+    let css = r#"@property --x { syntax:"*"; inherits:false }"#;
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    assert_eq!(sheet.rules.len(), 1);
+    let CssRule::Property(rule) = &sheet.rules[0] else {
+      panic!("expected @property rule, got {:?}", sheet.rules[0]);
+    };
+    assert_eq!(rule.name, "--x");
+    assert_eq!(rule.syntax, CustomPropertySyntax::Universal);
+    assert!(!rule.inherits);
+    assert!(rule.initial_value.is_none());
+  }
+
+  #[test]
+  fn property_rule_parses_length_percentage_syntax_and_registers() {
+    let css =
+      r#"@property --p { syntax:"<length-percentage>"; inherits:false; initial-value:50% }"#;
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+
+    let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let collected = sheet.collect_property_rules(&media_ctx);
+    assert_eq!(collected.len(), 1);
+
+    let mut registry = CustomPropertyRegistry::new();
+    for rule in collected {
+      registry.register(RegisteredPropertyRule {
+        name: rule.rule.name.clone(),
+        syntax: rule.rule.syntax,
+        inherits: rule.rule.inherits,
+        initial_value: rule.rule.initial_value.clone(),
+      });
+    }
+
+    let rule = registry.get("--p").expect("expected property to be registered");
+    assert_eq!(rule.syntax, CustomPropertySyntax::LengthPercentage);
+    assert!(!rule.inherits);
+    let initial = rule.initial_value.as_ref().expect("expected initial-value");
+    assert_eq!(initial.value, "50%");
+    assert_eq!(
+      initial.typed,
+      Some(CustomPropertyTypedValue::Length(Length::percent(50.0)))
+    );
+  }
+
+  #[test]
+  fn property_rule_length_percentage_accepts_zero_initial_value() {
+    let css = r#"@property --p0 { syntax:"<length-percentage>"; inherits:false; initial-value:0 }"#;
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let collected = sheet.collect_property_rules(&media_ctx);
+    assert_eq!(collected.len(), 1);
+
+    let mut registry = CustomPropertyRegistry::new();
+    for rule in collected {
+      registry.register(RegisteredPropertyRule {
+        name: rule.rule.name.clone(),
+        syntax: rule.rule.syntax,
+        inherits: rule.rule.inherits,
+        initial_value: rule.rule.initial_value.clone(),
+      });
+    }
+
+    let rule = registry.get("--p0").expect("expected property to be registered");
+    assert_eq!(rule.syntax, CustomPropertySyntax::LengthPercentage);
+    let initial = rule.initial_value.as_ref().expect("expected initial-value");
+    assert_eq!(initial.value, "0");
+    assert_eq!(
+      initial.typed,
+      Some(CustomPropertyTypedValue::Length(Length::px(0.0)))
+    );
   }
 }

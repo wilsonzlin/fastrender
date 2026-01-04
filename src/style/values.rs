@@ -1224,6 +1224,9 @@ impl fmt::Display for LengthOrAuto {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomPropertySyntax {
   Length,
+  /// `<length-percentage>` from the Properties & Values API, represented using `Length` since
+  /// `LengthUnit::Percent` and `CalcLength` already model percentage components.
+  LengthPercentage,
   Number,
   Percentage,
   Color,
@@ -1288,6 +1291,7 @@ impl CustomPropertySyntax {
   pub fn parse(s: &str) -> Option<Self> {
     match s.trim().to_ascii_lowercase().as_str() {
       "<length>" => Some(CustomPropertySyntax::Length),
+      "<length-percentage>" => Some(CustomPropertySyntax::LengthPercentage),
       "<number>" => Some(CustomPropertySyntax::Number),
       "<percentage>" => Some(CustomPropertySyntax::Percentage),
       "<color>" => Some(CustomPropertySyntax::Color),
@@ -1301,6 +1305,9 @@ impl CustomPropertySyntax {
   pub fn parse_value(&self, value: &str) -> Option<CustomPropertyTypedValue> {
     match self {
       CustomPropertySyntax::Length => {
+        crate::css::properties::parse_length(value.trim()).map(CustomPropertyTypedValue::Length)
+      }
+      CustomPropertySyntax::LengthPercentage => {
         crate::css::properties::parse_length(value.trim()).map(CustomPropertyTypedValue::Length)
       }
       CustomPropertySyntax::Number => value
