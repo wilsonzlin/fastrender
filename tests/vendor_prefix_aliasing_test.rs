@@ -37,10 +37,23 @@ fn parses_vendor_prefixed_properties_as_canonical() {
 }
 
 #[test]
+fn parses_vendor_prefixed_flex_properties_as_canonical() {
+  let decls = parse_declarations("-webkit-justify-content: center; -webkit-align-items: flex-end;");
+  assert_eq!(decls.len(), 2);
+  match &decls[0].property {
+    PropertyName::Known(name) => assert_eq!(*name, "justify-content"),
+    PropertyName::Custom(_) => panic!("expected known property"),
+  }
+  match &decls[1].property {
+    PropertyName::Known(name) => assert_eq!(*name, "align-items"),
+    PropertyName::Custom(_) => panic!("expected known property"),
+  }
+}
+
+#[test]
 fn supports_vendor_prefixed_transform_matches_like_unprefixed() {
   let css_prefixed = r"@supports (-webkit-transform: rotate(10deg)) { div { display: inline; } }";
   let css_unprefixed = r"@supports (transform: rotate(10deg)) { div { display: inline; } }";
   assert_eq!(render_div_display(css_prefixed), "inline");
   assert_eq!(render_div_display(css_unprefixed), "inline");
 }
-

@@ -522,49 +522,19 @@ fn is_known_page_property(property: &str) -> bool {
 /// Safety: Only aliases prefixes where the semantics match the unprefixed property as implemented
 /// by the engine. Unknown prefixed properties remain unsupported and will continue to be ignored.
 pub(crate) fn vendor_prefixed_property_alias(property: &str) -> Option<&'static str> {
+  // Avoid blanket `-ms-` stripping: old IE Grid properties like `-ms-grid-row` share prefixes but
+  // do not match standard Grid semantics and can conflict with authored `grid-row-start/end`.
   match property {
-    // Legacy transform prefixes (Safari/old browsers). Semantics match our `transform`.
-    "-webkit-transform" | "-moz-transform" | "-ms-transform" | "-o-transform" => Some("transform"),
-
-    // Safari still emits `-webkit-transition*` alongside or instead of the standard properties.
-    "-webkit-transition" => Some("transition"),
-    "-webkit-transition-property" => Some("transition-property"),
-    "-webkit-transition-duration" => Some("transition-duration"),
-    "-webkit-transition-delay" => Some("transition-delay"),
-    "-webkit-transition-timing-function" => Some("transition-timing-function"),
-
-    // WebKit prefix required for backdrop-filter on some Safari versions; treated as standard.
-    "-webkit-backdrop-filter" => Some("backdrop-filter"),
-    // Older Safari uses the prefixed filter property; treat as standard `filter`.
-    "-webkit-filter" => Some("filter"),
-
-    // Selection + appearance prefixes are common and map cleanly to their standard properties.
-    "-webkit-user-select" | "-moz-user-select" | "-ms-user-select" => Some("user-select"),
-    "-webkit-appearance" | "-moz-appearance" => Some("appearance"),
-
-    // Box model / effects.
-    "-webkit-box-shadow" => Some("box-shadow"),
-    "-webkit-box-sizing" => Some("box-sizing"),
-    // Legacy 2009 flexbox draft properties, commonly used to implement `-webkit-line-clamp`.
-    "-webkit-box-orient" | "-moz-box-orient" => Some("box-orient"),
-    "-webkit-line-clamp" => Some("line-clamp"),
-
-    // Masking properties are widely prefixed in the wild; our implementation accepts the
-    // standard names and (where needed) common WebKit keyword aliases.
-    "-webkit-mask" => Some("mask"),
-    "-webkit-mask-image" => Some("mask-image"),
-    "-webkit-mask-position" => Some("mask-position"),
-    "-webkit-mask-size" => Some("mask-size"),
-    "-webkit-mask-repeat" => Some("mask-repeat"),
-    "-webkit-mask-origin" => Some("mask-origin"),
-    "-webkit-mask-clip" => Some("mask-clip"),
-    "-webkit-mask-composite" => Some("mask-composite"),
-    "-webkit-mask-mode" => Some("mask-mode"),
-
-    // Text sizing on mobile Safari.
-    "-webkit-text-size-adjust" => Some("text-size-adjust"),
-
-    _ => None,
+    "-ms-transform" => Some("transform"),
+    "-ms-user-select" => Some("user-select"),
+    "-ms-text-size-adjust" => Some("text-size-adjust"),
+    _ => {
+      let stripped = property
+        .strip_prefix("-webkit-")
+        .or_else(|| property.strip_prefix("-moz-"))
+        .or_else(|| property.strip_prefix("-o-"))?;
+      known_style_property_set().get(stripped).copied()
+    }
   }
 }
 
