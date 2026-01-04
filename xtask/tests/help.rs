@@ -204,8 +204,11 @@ fn pageset_help_mentions_capture_missing_failure_fixtures() {
 
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert!(
-    stdout.contains("--capture-missing-failure-fixtures"),
-    "pageset help should mention --capture-missing-failure-fixtures; got:\n{stdout}"
+    stdout.contains("--capture-missing-failure-fixtures")
+      && stdout.contains("--capture-missing-failure-fixtures-out-dir")
+      && stdout.contains("--capture-missing-failure-fixtures-allow-missing-resources")
+      && stdout.contains("--capture-missing-failure-fixtures-overwrite"),
+    "pageset help should mention the capture-missing-failure-fixtures flags; got:\n{stdout}"
   );
 }
 
@@ -229,24 +232,6 @@ fn pageset_help_mentions_refresh_flag() {
 }
 
 #[test]
-fn pageset_help_mentions_failure_fixture_capture_flag() {
-  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-    .args(["pageset", "--help"])
-    .output()
-    .expect("run cargo xtask pageset --help");
-
-  assert!(
-    output.status.success(),
-    "xtask pageset help should exit successfully"
-  );
-
-  let stdout = String::from_utf8_lossy(&output.stdout);
-  assert!(
-    stdout.contains("--capture-missing-failure-fixtures"),
-    "pageset help should mention --capture-missing-failure-fixtures; got:\n{stdout}"
-  );
-}
-
 #[test]
 fn update_pageset_guardrails_help_mentions_strategy_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
