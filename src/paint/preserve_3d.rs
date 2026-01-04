@@ -11,7 +11,6 @@ use crate::style::types::{BackfaceVisibility, TransformStyle};
 #[cfg(test)]
 use crate::Transform2D;
 use std::cmp::Ordering;
-use std::sync::OnceLock;
 
 /// Classification of a 3D transform for preserve-3d composition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,22 +64,14 @@ impl Default for Preserve3dOptions {
   }
 }
 
-fn env_flag(name: &str) -> bool {
-  std::env::var(name)
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false)
-}
-
 fn default_options() -> Preserve3dOptions {
-  static OPTIONS: OnceLock<Preserve3dOptions> = OnceLock::new();
-  *OPTIONS.get_or_init(|| {
-    let warp_disabled = env_flag("FASTR_PRESERVE3D_DISABLE_WARP");
-    let warp_enabled = cfg!(feature = "preserve3d_warp") || env_flag("FASTR_PRESERVE3D_WARP");
-    Preserve3dOptions {
-      warp_available: warp_enabled && !warp_disabled,
-      diagnostics: env_flag("FASTR_PRESERVE3D_DEBUG"),
-    }
-  })
+  let toggles = crate::debug::runtime::runtime_toggles();
+  let warp_disabled = toggles.truthy("FASTR_PRESERVE3D_DISABLE_WARP");
+  let warp_enabled = cfg!(feature = "preserve3d_warp") || toggles.truthy("FASTR_PRESERVE3D_WARP");
+  Preserve3dOptions {
+    warp_available: warp_enabled && !warp_disabled,
+    diagnostics: toggles.truthy("FASTR_PRESERVE3D_DEBUG"),
+  }
 }
 
 /// Classify a scene item transform for preserve-3d composition.
