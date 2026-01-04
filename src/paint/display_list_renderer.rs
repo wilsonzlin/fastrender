@@ -10374,6 +10374,111 @@ mod tests {
     (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
   }
 
+  #[test]
+  fn preserve_3d_scene_depth_limit_disables_depth_sorting() {
+    // Preserve-3D rendering recurses through `render_scene_item` for planes that must be
+    // flattened into offscreen pixmaps. The renderer guards against pathological recursion
+    // depth by disabling preserve-3d processing once `preserve_3d_scene_depth` reaches
+    // `PRESERVE_3D_SCENE_RECURSION_LIMIT`.
+    //
+    // This test asserts that the guard is actually wired up by forcing the renderer to start
+    // at the recursion limit and verifying that it falls back to DOM paint order (no depth
+    // sorting) for a scene where preserve-3d depth sorting changes the final pixels.
+    let tilted_rect = Rect::from_xywh(10.0, 10.0, 40.0, 20.0);
+    let front_rect = Rect::from_xywh(5.0, 10.0, 20.0, 20.0);
+
+    let tilt = Transform3D::translate(0.0, 0.0, 5.0)
+      .multiply(&Transform3D::translate(30.0, 20.0, 0.0))
+      .multiply(&Transform3D::rotate_y(60_f32.to_radians()))
+      .multiply(&Transform3D::translate(-30.0, -20.0, 0.0));
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 80.0, 50.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 80.0, 50.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      child_perspective: None,
+      transform_style: TransformStyle::Preserve3d,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+
+    // Tilted plane is emitted first in DOM order but should win at the overlap point when
+    // preserve-3d depth sorting is active.
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: tilted_rect,
+      plane_rect: tilted_rect,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: Some(tilt),
+      child_perspective: None,
+      transform_style: TransformStyle::Preserve3d,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: tilted_rect,
+      color: Rgba::BLUE,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    // Front plane is emitted later in DOM order but is further away at the overlap point.
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: front_rect,
+      plane_rect: front_rect,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: Some(Transform3D::translate(0.0, 0.0, 10.0)),
+      child_perspective: None,
+      transform_style: TransformStyle::Preserve3d,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: front_rect,
+      color: Rgba::GREEN,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = DisplayListRenderer::new(80, 50, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .render(&list)
+      .unwrap();
+    let overlap = pixel(&pixmap, 22, 20);
+    assert!(
+      overlap.2 > overlap.1,
+      "expected preserve-3d depth sorting to paint the tilted plane on top"
+    );
+
+    let mut renderer = DisplayListRenderer::new(80, 50, Rgba::WHITE, FontContext::new()).unwrap();
+    renderer.preserve_3d_scene_depth = PRESERVE_3D_SCENE_RECURSION_LIMIT;
+    let pixmap = renderer.render(&list).unwrap();
+    let overlap = pixel(&pixmap, 22, 20);
+    assert!(
+      overlap.1 > overlap.2,
+      "expected recursion depth guard to disable preserve-3d depth sorting and fall back to DOM paint order"
+    );
+  }
+
   fn legacy_tile_positions(
     repeat: BackgroundRepeatKeyword,
     area_start: f32,
