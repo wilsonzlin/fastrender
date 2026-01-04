@@ -190,7 +190,7 @@ Notes:
 - Defaults: fixed, deterministic viewport/DPR (1200x800 @ 1.0) unless overridden.
 - Offline policy: fixtures are rendered **without network access**; only `file://` and `data:` subresources are allowed.
 - Fonts: uses bundled fonts (`FontConfig::bundled_only`) so outputs are stable across machines.
-- Output: by default writes `<fixture>.png` into `target/render_fixtures/` (override with `--out`).
+- Output: by default writes `<fixture>.png` into `target/fixture_renders/` (override with `--out-dir`).
 - Core flags:
   - Selection: `--only <csv>` or positional fixture names.
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`.
