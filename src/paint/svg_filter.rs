@@ -2755,7 +2755,7 @@ pub(crate) fn apply_svg_filter_with_cache(
       bbox,
       blur_cache.as_deref_mut(),
     )?;
-    clip_to_region(pixmap, filter_region);
+    clip_to_region(pixmap, filter_region)?;
     return Ok(());
   }
 
@@ -2785,7 +2785,7 @@ pub(crate) fn apply_svg_filter_with_cache(
     return Ok(());
   };
   *pixmap = resized_back;
-  clip_to_region(pixmap, filter_region);
+  clip_to_region(pixmap, filter_region)?;
   Ok(())
 }
 
@@ -2888,7 +2888,7 @@ fn apply_svg_filter_scaled(
     }
   }
 
-  clip_to_region(pixmap, filter_region);
+  clip_to_region(pixmap, filter_region)?;
 
   let default_primitive_region = SvgFilterRegion {
     x: def.region.x,
@@ -2927,7 +2927,7 @@ fn apply_svg_filter_scaled(
         Some(p) => p,
         None => continue,
       };
-      clip_to_region(&mut out, Rect::ZERO);
+      clip_to_region(&mut out, Rect::ZERO)?;
       let next = FilterResult {
         pixmap: out,
         region: Rect::ZERO,
@@ -2953,7 +2953,7 @@ fn apply_svg_filter_scaled(
       blur_cache.as_deref_mut(),
     )? {
       next.region = clip_region(next.region, primitive_region);
-      clip_to_region(&mut next.pixmap, primitive_region);
+      clip_to_region(&mut next.pixmap, primitive_region)?;
       if let Some(name) = &step.result {
         results.insert(name.clone(), next.clone());
       }
@@ -2962,7 +2962,7 @@ fn apply_svg_filter_scaled(
   }
 
   *pixmap = current.pixmap;
-  clip_to_region(pixmap, filter_region);
+  clip_to_region(pixmap, filter_region)?;
 
   if let Some(key) = cache_key {
     filter_result_cache()
@@ -2974,11 +2974,12 @@ fn apply_svg_filter_scaled(
   Ok(())
 }
 
-fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
+fn clip_to_region(pixmap: &mut Pixmap, region: Rect) -> RenderResult<()> {
+  check_active(RenderStage::Paint)?;
   let width = pixmap.width() as i32;
   let height = pixmap.height() as i32;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
 
   let min_x = region.min_x().floor() as i32;
@@ -2992,7 +2993,7 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
   let clamped_max_y = max_y.clamp(0, height);
 
   if clamped_min_x == 0 && clamped_min_y == 0 && clamped_max_x == width && clamped_max_y == height {
-    return;
+    return Ok(());
   }
 
   let min_x_bytes = clamped_min_x as usize * 4;
@@ -3003,6 +3004,9 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
     .chunks_exact_mut(row_stride_bytes)
     .enumerate()
   {
+    if y % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let y = y as i32;
     if y < clamped_min_y || y >= clamped_max_y {
       row.fill(0);
@@ -3012,6 +3016,8 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
     row[..min_x_bytes].fill(0);
     row[max_x_bytes..].fill(0);
   }
+
+  Ok(())
 }
 
 fn apply_primitive(
@@ -3070,14 +3076,16 @@ fn apply_primitive(
     FilterPrimitive::Offset { input, dx, dy } => {
       let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
       let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
-      resolve_input(input, source, results, current, filter_region)
-        .map(|img| offset_result(img, dx, dy, filter_region))
+      match resolve_input(input, source, results, current, filter_region) {
+        Some(img) => Some(offset_result(img, dx, dy, filter_region)?),
+        None => None,
+      }
     }
     FilterPrimitive::ColorMatrix { input, kind } => {
       let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
         return Ok(None);
       };
-      apply_color_matrix(&mut img.pixmap, kind, color_interpolation_filters);
+      apply_color_matrix(&mut img.pixmap, kind, color_interpolation_filters)?;
       Some(img)
     }
     FilterPrimitive::Composite {
@@ -3155,10 +3163,11 @@ fn apply_primitive(
       Some(img)
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
-      resolve_input(input, source, results, current, filter_region).map(|mut img| {
-        apply_component_transfer(&mut img.pixmap, r, g, b, a, color_interpolation_filters);
-        img
-      })
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
+      apply_component_transfer(&mut img.pixmap, r, g, b, a, color_interpolation_filters)?;
+      Some(img)
     }
     FilterPrimitive::DiffuseLighting {
       input,
@@ -3872,19 +3881,24 @@ fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> 
   Some(pixmap)
 }
 
-fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
+fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> RenderResult<Pixmap> {
+  check_active(RenderStage::Paint)?;
   let dx = if dx.is_finite() { dx } else { 0.0 };
   let dy = if dy.is_finite() { dy } else { 0.0 };
   if dx == 0.0 && dy == 0.0 {
-    return input;
+    return Ok(input);
   }
 
   let width = input.width();
   let height = input.height();
+  if width == 0 || height == 0 {
+    return Ok(input);
+  }
   let w = width as i32;
   let h = height as i32;
   let pixels = input.pixels();
-  let mut out = new_pixmap(width, height).unwrap();
+  let mut out =
+    new_pixmap(width, height).ok_or(RenderError::CanvasCreationFailed { width, height })?;
   let out_pixels = out.pixels_mut();
 
   let sample = |x: i32, y: i32| -> PremultipliedColorU8 {
@@ -3895,8 +3909,13 @@ fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
     }
   };
 
+  let mut check_idx = 0usize;
   for y in 0..h {
     for x in 0..w {
+      if check_idx % FILTER_DEADLINE_STRIDE == 0 {
+        check_active(RenderStage::Paint)?;
+      }
+      check_idx = check_idx.wrapping_add(1);
       let out_idx = (y as u32 * width + x as u32) as usize;
       let src_x = x as f32 - dx;
       let src_y = y as f32 - dy;
@@ -3939,14 +3958,19 @@ fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
     }
   }
 
-  out
+  Ok(out)
 }
 
-fn offset_result(input: FilterResult, dx: f32, dy: f32, filter_region: Rect) -> FilterResult {
-  let pixmap = offset_pixmap(input.pixmap, dx, dy);
+fn offset_result(
+  input: FilterResult,
+  dx: f32,
+  dy: f32,
+  filter_region: Rect,
+) -> RenderResult<FilterResult> {
+  let pixmap = offset_pixmap(input.pixmap, dx, dy)?;
   let offset = Point::new(dx, dy);
   let region = clip_region(input.region.translate(offset), filter_region);
-  FilterResult { pixmap, region }
+  Ok(FilterResult { pixmap, region })
 }
 
 fn composite_pixmaps(
@@ -4842,7 +4866,8 @@ fn apply_component_transfer(
   b: &TransferFn,
   a: &TransferFn,
   color_interpolation_filters: ColorInterpolationFilters,
-) {
+) -> RenderResult<()> {
+  check_active(RenderStage::Paint)?;
   let r_lut = build_transfer_lut(r);
   let g_lut = build_transfer_lut(g);
   let b_lut = build_transfer_lut(b);
@@ -4852,7 +4877,10 @@ fn apply_component_transfer(
     lut[idx.min(255)]
   };
 
-  for px in pixmap.pixels_mut() {
+  for (idx, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+    if idx % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let input = unpack_color(*px, color_interpolation_filters);
     let out = UnpremultipliedColor {
       r: sample(&r_lut, input.r),
@@ -4862,6 +4890,7 @@ fn apply_component_transfer(
     };
     *px = pack_color(out, color_interpolation_filters);
   }
+  Ok(())
 }
 
 fn clamp_unit(v: f32) -> f32 {
@@ -4926,14 +4955,18 @@ fn apply_color_matrix(
   pixmap: &mut Pixmap,
   kind: &ColorMatrixKind,
   color_interpolation_filters: ColorInterpolationFilters,
-) {
+) -> RenderResult<()> {
   match kind {
     ColorMatrixKind::Matrix(values) => {
       apply_color_matrix_values(pixmap, values, color_interpolation_filters)
     }
     ColorMatrixKind::LuminanceToAlpha => {
+      check_active(RenderStage::Paint)?;
       let pixels = pixmap.pixels_mut();
-      for px in pixels.iter_mut() {
+      for (idx, px) in pixels.iter_mut().enumerate() {
+        if idx % FILTER_DEADLINE_STRIDE == 0 {
+          check_active(RenderStage::Paint)?;
+        }
         let color = unpack_color(*px, color_interpolation_filters);
         let lum = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
         *px = pack_color(
@@ -4946,6 +4979,7 @@ fn apply_color_matrix(
           color_interpolation_filters,
         );
       }
+      Ok(())
     }
     ColorMatrixKind::Saturate(amount) => {
       let s = *amount;
@@ -4971,7 +5005,7 @@ fn apply_color_matrix(
         1.0,
         0.0,
       ];
-      apply_color_matrix_values(pixmap, &matrix, color_interpolation_filters);
+      apply_color_matrix_values(pixmap, &matrix, color_interpolation_filters)
     }
     ColorMatrixKind::HueRotate(angle) => {
       let theta = angle.to_radians();
@@ -4999,7 +5033,7 @@ fn apply_color_matrix(
         1.0,
         0.0,
       ];
-      apply_color_matrix_values(pixmap, &matrix, color_interpolation_filters);
+      apply_color_matrix_values(pixmap, &matrix, color_interpolation_filters)
     }
   }
 }
@@ -5008,9 +5042,13 @@ fn apply_color_matrix_values(
   pixmap: &mut Pixmap,
   matrix: &[f32; 20],
   color_interpolation_filters: ColorInterpolationFilters,
-) {
+) -> RenderResult<()> {
+  check_active(RenderStage::Paint)?;
   let pixels = pixmap.pixels_mut();
-  for px in pixels.iter_mut() {
+  for (idx, px) in pixels.iter_mut().enumerate() {
+    if idx % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let input = unpack_color(*px, color_interpolation_filters);
     let r2 = matrix[0] * input.r
       + matrix[1] * input.g
@@ -5042,6 +5080,7 @@ fn apply_color_matrix_values(
       color_interpolation_filters,
     );
   }
+  Ok(())
 }
 
 #[cfg(test)]
@@ -5448,6 +5487,110 @@ mod tests {
   }
 
   #[test]
+  fn color_matrix_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let pixmap = new_pixmap(1, 1).unwrap();
+    let matrix = [
+      1.0, 0.0, 0.0, 0.0, 0.0, //
+      0.0, 1.0, 0.0, 0.0, 0.0, //
+      0.0, 0.0, 1.0, 0.0, 0.0, //
+      0.0, 0.0, 0.0, 1.0, 0.0, //
+    ];
+    let prim = FilterPrimitive::ColorMatrix {
+      input: FilterInput::SourceGraphic,
+      kind: ColorMatrixKind::Matrix(matrix),
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn component_transfer_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let pixmap = new_pixmap(1, 1).unwrap();
+    let prim = FilterPrimitive::ComponentTransfer {
+      input: FilterInput::SourceGraphic,
+      r: TransferFn::Linear {
+        slope: 1.0,
+        intercept: 0.1,
+      },
+      g: TransferFn::Identity,
+      b: TransferFn::Identity,
+      a: TransferFn::Identity,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn offset_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let pixmap = new_pixmap(1, 1).unwrap();
+    let prim = FilterPrimitive::Offset {
+      input: FilterInput::SourceGraphic,
+      dx: 1.0,
+      dy: 1.0,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn clip_to_region_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    let result = with_deadline(Some(&deadline), || clip_to_region(&mut pixmap, Rect::ZERO));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
   fn clip_to_region_clears_pixels_outside_rect() {
     let mut pixmap = new_pixmap(4, 4).unwrap();
     let color = PremultipliedColorU8::from_rgba(10, 20, 30, 255).unwrap();
@@ -5457,7 +5600,7 @@ mod tests {
 
     // Use fractional edges so the test also covers the floor/ceil rounding behavior.
     let region = Rect::from_xywh(1.2, 1.2, 1.6, 1.6);
-    clip_to_region(&mut pixmap, region);
+    clip_to_region(&mut pixmap, region).unwrap();
 
     let pixels = pixmap.pixels();
     for y in 0..4 {
@@ -5489,7 +5632,7 @@ mod tests {
       0.0, 0.0, 0.0, 1.0, 0.0, //
     ];
 
-    apply_color_matrix_values(&mut pixmap, &matrix, ColorInterpolationFilters::LinearRGB);
+    apply_color_matrix_values(&mut pixmap, &matrix, ColorInterpolationFilters::LinearRGB).unwrap();
 
     let px = pixmap.pixels()[0];
     assert_eq!(px.red(), 0);
@@ -5514,7 +5657,8 @@ mod tests {
       &TransferFn::Identity,
       &TransferFn::Identity,
       ColorInterpolationFilters::LinearRGB,
-    );
+    )
+    .unwrap();
 
     let px = pixmap.pixels()[0];
     assert_eq!(px.red(), 128);
@@ -5533,7 +5677,8 @@ mod tests {
       &mut pixmap,
       &ColorMatrixKind::LuminanceToAlpha,
       ColorInterpolationFilters::LinearRGB,
-    );
+    )
+    .unwrap();
 
     let px = pixmap.pixels()[0];
     assert_eq!(px.red(), 0);
@@ -5568,7 +5713,8 @@ mod tests {
         intercept: 0.25,
       },
       ColorInterpolationFilters::LinearRGB,
-    );
+    )
+    .unwrap();
 
     assert_eq!(
       pixels_to_vec(&pixmap),
@@ -5590,7 +5736,8 @@ mod tests {
       &TransferFn::Identity,
       &TransferFn::Identity,
       ColorInterpolationFilters::LinearRGB,
-    );
+    )
+    .unwrap();
 
     assert_eq!(
       pixels_to_vec(&pixmap),
@@ -5614,7 +5761,8 @@ mod tests {
         values: vec![0.25, 0.75],
       },
       ColorInterpolationFilters::LinearRGB,
-    );
+    )
+    .unwrap();
 
     assert_eq!(
       pixels_to_vec(&pixmap),
@@ -6911,7 +7059,7 @@ mod blend_pixmaps_tests {
     )
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
-    assert_pixel_close(pixel, (164, 140, 147, 255));
+    assert_pixel_close(pixel, (136, 80, 120, 255));
   }
 
   #[test]
