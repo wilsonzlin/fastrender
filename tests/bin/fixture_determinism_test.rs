@@ -217,25 +217,6 @@ fn fixture_renders_are_deterministic_across_processes() {
         run2_diag.display()
       ));
     }
-
-    // Copy the rerendered PNGs into the snapshot directories so diff_snapshots can link them.
-    if snapshot_capture_error.is_none() {
-      for (out_dir, snapshot_dir) in [
-        (&snapshot_run1_out, &snapshot_run1_dir),
-        (&snapshot_run2_out, &snapshot_run2_dir),
-      ] {
-        let png = out_dir.join(format!("{fixture}.png"));
-        let dest = snapshot_dir.join("render.png");
-        if let Err(err) = fs::copy(&png, &dest) {
-          snapshot_capture_error = Some(format!(
-            "failed to copy {} to {}: {err}",
-            png.display(),
-            dest.display()
-          ));
-          break;
-        }
-      }
-    }
   }
 
   let diff_snapshots_json = artifact_root.join("diff_snapshots.json");
@@ -282,4 +263,3 @@ fn fixture_renders_are_deterministic_across_processes() {
 
   panic!("{message}");
 }
-
