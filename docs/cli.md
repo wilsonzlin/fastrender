@@ -10,8 +10,8 @@ These are optional wrappers for the most common loops:
 
 - Pageset loop (`fetch_pages` → `prefetch_assets` (disk cache only) → `pageset_progress`, defaults to bundled fonts): `scripts/pageset.sh`
   - Defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out; pass `--disk-cache` to force-enable.
-  - Supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--cache-dir`, `--no-fetch`, `--allow-collisions`, and `--timings`.
-  - Prefetch toggles like `--prefetch-fonts` passed after `--` are forwarded to `prefetch_assets`.
+  - Supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--cache-dir`, `--no-fetch`, `--refresh`, `--pages`, `--shard`, `--allow-http-error-status`, `--allow-collisions`, and `--timings`.
+  - Prefetch toggles like `--prefetch-fonts` / `--prefetch-images` passed after `--` are forwarded to `prefetch_assets` when disk cache is enabled.
   - Pass extra `pageset_progress run` flags after `--`.
 - Cached-pages Chrome-vs-FastRender diff (best-effort; non-deterministic): `scripts/chrome_vs_fastrender.sh [options] [--] [page_stem...]`
   - Wraps `scripts/chrome_baseline.sh`, `render_pages`, and `diff_renders` into one command.
