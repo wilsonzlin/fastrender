@@ -298,7 +298,7 @@ cargo run --release --bin diff_renders -- \
   - Select fixtures: `cargo xtask fixture-chrome-diff --fixtures grid_news,flex_dashboard`
   - Re-run only the diff step (reuse the existing `<out>/chrome` renders): `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --no-chrome`
 - Output layout:
-  - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`)
+  - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`, `<fixture>.json` metadata)
   - `<out>/fastrender/<fixture>.png` (rendered by `render_fixtures`)
   - `<out>/report.html`, `<out>/report.json`
 - Notes:
