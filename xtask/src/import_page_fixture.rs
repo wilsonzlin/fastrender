@@ -53,7 +53,15 @@ pub struct ImportPageFixtureArgs {
   pub dry_run: bool,
 }
 
-pub fn run_import_page_fixture(args: ImportPageFixtureArgs) -> Result<()> {
+pub fn run_import_page_fixture(mut args: ImportPageFixtureArgs) -> Result<()> {
+  let repo_root = crate::repo_root();
+  if !args.bundle.is_absolute() {
+    args.bundle = repo_root.join(&args.bundle);
+  }
+  if !args.output_root.is_absolute() {
+    args.output_root = repo_root.join(&args.output_root);
+  }
+
   let fixture_dir = args.output_root.join(&args.fixture_name);
   if fixture_dir.exists() {
     if !args.overwrite {
