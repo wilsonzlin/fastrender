@@ -2142,8 +2142,13 @@ impl GridFormattingContext {
           )?;
         }
         if let Some(positioned) = positioned_children.get(&node_id) {
-          let mut abs_children =
-            self.layout_positioned_children_for_node(box_node, bounds, positioned)?;
+          let mut abs_children = self.layout_positioned_children_for_node(
+            taffy,
+            node_id,
+            box_node,
+            bounds,
+            positioned,
+          )?;
           fragment.children_mut().append(&mut abs_children);
         }
         return Ok(fragment);
@@ -2234,6 +2239,8 @@ impl GridFormattingContext {
 
   fn layout_positioned_children_for_node(
     &self,
+    taffy: &TaffyTree<*const BoxNode>,
+    node_id: TaffyNodeId,
     box_node: &BoxNode,
     bounds: Rect,
     positioned_children: &[*const BoxNode],
@@ -2273,6 +2280,8 @@ impl GridFormattingContext {
       bounds.height() - border_top - border_bottom,
     );
     let padding_rect = crate::geometry::Rect::new(padding_origin, padding_size);
+    let padding_bottom = padding_rect.size.height - padding_top;
+    let padding_right = padding_rect.size.width - padding_left;
 
     let block_base = if box_node.style.height.is_some() {
       Some(padding_rect.size.height)
@@ -2317,6 +2326,236 @@ impl GridFormattingContext {
       }
     };
 
+    #[derive(Clone)]
+    struct SubgridAxisContext {
+      offsets: Vec<f32>,
+      line_offset: u16,
+      node_offset: f32,
+    }
+
+    let mut row_offsets: Option<Vec<f32>> = None;
+    let mut col_offsets: Option<Vec<f32>> = None;
+    let mut row_subgrid_ctx: Option<SubgridAxisContext> = None;
+    let mut col_subgrid_ctx: Option<SubgridAxisContext> = None;
+
+    if let DetailedLayoutInfo::Grid(info) = taffy.detailed_layout_info(node_id) {
+      if let Ok(container_style) = taffy.style(node_id) {
+        row_offsets = Some(compute_track_offsets(
+          &info.rows,
+          bounds.height(),
+          padding_top,
+          padding_bottom,
+          border_top,
+          border_bottom,
+          container_style
+            .align_content
+            .unwrap_or(taffy::style::AlignContent::Stretch),
+        ));
+        col_offsets = Some(compute_track_offsets(
+          &info.columns,
+          bounds.width(),
+          padding_left,
+          padding_right,
+          border_left,
+          border_right,
+          container_style
+            .justify_content
+            .unwrap_or(taffy::style::AlignContent::Stretch),
+        ));
+      } else if crate::debug::runtime::runtime_toggles().truthy("FASTR_LOG_GRID_STATIC_POS") {
+        eprintln!(
+          "[grid-static-pos] missing style for node {node_id:?} (box_id={})",
+          box_node.id
+        );
+      }
+    } else {
+      // Subgrid nodes do not always expose per-node track info in Taffy. When that happens,
+      // derive track offsets from the nearest ancestor grid that does provide them, then map
+      // local grid line numbers into the ancestor grid's line space.
+      let toggles = crate::debug::runtime::runtime_toggles();
+      let maybe_axis_ctx = |axis_is_columns: bool| -> Option<SubgridAxisContext> {
+        let mut line_offset: i32 = 0;
+        let mut node_offset: f32 = 0.0;
+        let mut current = node_id;
+
+        loop {
+          let current_ptr = *taffy.get_node_context(current)?;
+          let current_box_node = unsafe { &*current_ptr };
+          let is_subgrid_axis = if axis_is_columns {
+            current_box_node.style.grid_column_subgrid
+          } else {
+            current_box_node.style.grid_row_subgrid
+          };
+          if !is_subgrid_axis {
+            return None;
+          }
+          let start_line = if axis_is_columns {
+            current_box_node.style.grid_column_start
+          } else {
+            current_box_node.style.grid_row_start
+          };
+          if start_line <= 0 {
+            return None;
+          }
+          line_offset = line_offset.saturating_add(start_line.saturating_sub(1) as i32);
+
+          let layout = taffy.layout(current).ok()?;
+          node_offset += if axis_is_columns {
+            layout.location.x
+          } else {
+            layout.location.y
+          };
+
+          let parent = taffy.parent(current)?;
+          current = parent;
+
+          if let DetailedLayoutInfo::Grid(info) = taffy.detailed_layout_info(current) {
+            let container_style = taffy.style(current).ok()?;
+            let ancestor_layout = taffy.layout(current).ok()?;
+            let ancestor_bounds = Rect::from_xywh(
+              ancestor_layout.location.x,
+              ancestor_layout.location.y,
+              ancestor_layout.size.width,
+              ancestor_layout.size.height,
+            );
+
+            let ancestor_ptr = *taffy.get_node_context(current)?;
+            let ancestor_box_node = unsafe { &*ancestor_ptr };
+
+            let ancestor_padding_left = self.resolve_length_for_width(
+              ancestor_box_node.style.padding_left,
+              ancestor_bounds.width(),
+              &ancestor_box_node.style,
+            );
+            let ancestor_padding_top = self.resolve_length_for_width(
+              ancestor_box_node.style.padding_top,
+              ancestor_bounds.width(),
+              &ancestor_box_node.style,
+            );
+            let ancestor_border_left = self.resolve_length_for_width(
+              ancestor_box_node.style.border_left_width,
+              ancestor_bounds.width(),
+              &ancestor_box_node.style,
+            );
+            let ancestor_border_top = self.resolve_length_for_width(
+              ancestor_box_node.style.border_top_width,
+              ancestor_bounds.width(),
+              &ancestor_box_node.style,
+            );
+            let ancestor_border_right = self.resolve_length_for_width(
+              ancestor_box_node.style.border_right_width,
+              ancestor_bounds.width(),
+              &ancestor_box_node.style,
+            );
+            let ancestor_border_bottom = self.resolve_length_for_width(
+              ancestor_box_node.style.border_bottom_width,
+              ancestor_bounds.width(),
+              &ancestor_box_node.style,
+            );
+            let ancestor_padding_size = crate::geometry::Size::new(
+              ancestor_bounds.width() - ancestor_border_left - ancestor_border_right,
+              ancestor_bounds.height() - ancestor_border_top - ancestor_border_bottom,
+            );
+            let ancestor_padding_right = ancestor_padding_size.width - ancestor_padding_left;
+            let ancestor_padding_bottom = ancestor_padding_size.height - ancestor_padding_top;
+
+            let offsets = if axis_is_columns {
+              compute_track_offsets(
+                &info.columns,
+                ancestor_bounds.width(),
+                ancestor_padding_left,
+                ancestor_padding_right,
+                ancestor_border_left,
+                ancestor_border_right,
+                container_style
+                  .justify_content
+                  .unwrap_or(taffy::style::AlignContent::Stretch),
+              )
+            } else {
+              compute_track_offsets(
+                &info.rows,
+                ancestor_bounds.height(),
+                ancestor_padding_top,
+                ancestor_padding_bottom,
+                ancestor_border_top,
+                ancestor_border_bottom,
+                container_style
+                  .align_content
+                  .unwrap_or(taffy::style::AlignContent::Stretch),
+              )
+            };
+
+            let line_offset = u16::try_from(line_offset).ok()?;
+            return Some(SubgridAxisContext {
+              offsets,
+              line_offset,
+              node_offset,
+            });
+          }
+        }
+      };
+
+      if box_node.style.grid_row_subgrid {
+        row_subgrid_ctx = maybe_axis_ctx(false);
+      }
+      if box_node.style.grid_column_subgrid {
+        col_subgrid_ctx = maybe_axis_ctx(true);
+      }
+
+      if toggles.truthy("FASTR_LOG_GRID_STATIC_POS")
+        && row_subgrid_ctx.is_none()
+        && col_subgrid_ctx.is_none()
+      {
+        eprintln!(
+          "[grid-static-pos] missing grid track info for node {node_id:?} (box_id={})",
+          box_node.id
+        );
+      }
+    }
+
+    let mut static_positions: FxHashMap<usize, Point> = FxHashMap::default();
+    for &child_ptr in positioned_children {
+      let child = unsafe { &*child_ptr };
+      let mut pos = Point::ZERO;
+      if child.style.grid_column_start > 0
+        && child.style.grid_column_end > 0
+        && child.style.grid_column_end == child.style.grid_column_start + 1
+      {
+        let start_line = child.style.grid_column_start as u16;
+        let end_line = child.style.grid_column_end as u16;
+        if let Some(col_offsets) = col_offsets.as_ref() {
+          if let Some((start, _)) = grid_area_for_item(col_offsets, start_line, end_line) {
+            pos.x = start - padding_origin.x;
+          }
+        } else if let Some(ctx) = col_subgrid_ctx.as_ref() {
+          let mapped_start = ctx.line_offset.saturating_add(start_line);
+          let mapped_end = ctx.line_offset.saturating_add(end_line);
+          if let Some((start, _)) = grid_area_for_item(&ctx.offsets, mapped_start, mapped_end) {
+            pos.x = (start - ctx.node_offset) - padding_origin.x;
+          }
+        }
+      }
+      if child.style.grid_row_start > 0
+        && child.style.grid_row_end > 0
+        && child.style.grid_row_end == child.style.grid_row_start + 1
+      {
+        let start_line = child.style.grid_row_start as u16;
+        let end_line = child.style.grid_row_end as u16;
+        if let Some(row_offsets) = row_offsets.as_ref() {
+          if let Some((start, _)) = grid_area_for_item(row_offsets, start_line, end_line) {
+            pos.y = start - padding_origin.y;
+          }
+        } else if let Some(ctx) = row_subgrid_ctx.as_ref() {
+          let mapped_start = ctx.line_offset.saturating_add(start_line);
+          let mapped_end = ctx.line_offset.saturating_add(end_line);
+          if let Some((start, _)) = grid_area_for_item(&ctx.offsets, mapped_start, mapped_end) {
+            pos.y = (start - ctx.node_offset) - padding_origin.y;
+          }
+        }
+      }
+      static_positions.insert(ensure_box_id(child), pos);
+    }
+
     let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(
       self.font_context.clone(),
     );
@@ -2350,7 +2589,10 @@ impl GridFormattingContext {
       );
       // Static position resolves to where the element would be in flow; use the
       // content origin here since AbsoluteLayout adds padding/border.
-      let static_pos = crate::geometry::Point::ZERO;
+      let static_pos = static_positions
+        .get(&ensure_box_id(child))
+        .copied()
+        .unwrap_or(crate::geometry::Point::ZERO);
       let needs_inline_intrinsics = positioned_style.width.is_auto()
         && (positioned_style.left.is_auto()
           || positioned_style.right.is_auto()
