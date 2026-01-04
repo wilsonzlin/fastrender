@@ -10,17 +10,23 @@
 mod test_public_api {
 use fastrender::api::{FastRender, FastRenderConfig, FastRenderPool, FastRenderPoolConfig};
 use fastrender::compat::CompatProfile;
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::dom::DomCompatibilityMode;
-use fastrender::{FontConfig, ResourcePolicy, Rgba};
+use fastrender::{FontConfig, LayoutParallelism, PaintParallelism, ResourcePolicy, Rgba};
 
 fn deterministic_config() -> FastRenderConfig {
   FastRenderConfig::new()
+    // Ensure deterministic behavior regardless of any FASTR_* env vars in the test runner.
+    .with_runtime_toggles(RuntimeToggles::default())
     // Keep defaults small so accidental default rendering stays fast.
     .with_default_viewport(128, 128)
     // Avoid scanning system fonts (and keep font metrics stable).
     .with_font_sources(FontConfig::bundled_only())
     // Tests must not reach the network.
     .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+    // Avoid spawning rayon work for tiny test documents and keep execution predictable.
+    .with_paint_parallelism(PaintParallelism::disabled())
+    .with_layout_parallelism(LayoutParallelism::disabled())
 }
 
 fn deterministic_renderer() -> FastRender {
@@ -49,8 +55,11 @@ fn test_fastrender_new() {
 #[test]
 fn test_fastrender_with_default_config() {
   let config = FastRenderConfig::default()
+    .with_runtime_toggles(RuntimeToggles::default())
     .with_font_sources(FontConfig::bundled_only())
-    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false));
+    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+    .with_paint_parallelism(PaintParallelism::disabled())
+    .with_layout_parallelism(LayoutParallelism::disabled());
   let result = FastRender::with_config(config);
   assert!(
     result.is_ok(),
@@ -63,8 +72,11 @@ fn test_fastrender_with_custom_config() {
   let config = FastRenderConfig::new()
     .with_default_background(Rgba::rgb(240, 240, 240))
     .with_default_viewport(1920, 1080)
+    .with_runtime_toggles(RuntimeToggles::default())
     .with_font_sources(FontConfig::bundled_only())
-    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false));
+    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+    .with_paint_parallelism(PaintParallelism::disabled())
+    .with_layout_parallelism(LayoutParallelism::disabled());
 
   let result = FastRender::with_config(config);
   assert!(
@@ -100,6 +112,8 @@ fn test_builder_chain_for_compatibility() {
     .with_site_compat_hacks()
     .font_sources(FontConfig::bundled_only())
     .resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+    .paint_parallelism(PaintParallelism::disabled())
+    .runtime_toggles(RuntimeToggles::default())
     .build();
 
   assert!(renderer.is_ok(), "Builder should produce a renderer");
@@ -285,8 +299,11 @@ fn test_reexports_from_lib() {
   use fastrender::Pixmap;
 
   let config = FastRenderConfig::new()
+    .with_runtime_toggles(RuntimeToggles::default())
     .with_font_sources(FontConfig::bundled_only())
-    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false));
+    .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+    .with_paint_parallelism(PaintParallelism::disabled())
+    .with_layout_parallelism(LayoutParallelism::disabled());
   let renderer = FastRender::with_config(config);
   assert!(renderer.is_ok());
 
