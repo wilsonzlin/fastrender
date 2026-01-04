@@ -62,6 +62,8 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
       "800x600",
       "--dpr",
       "2",
+      "--timeout",
+      "12",
       "--tolerance",
       "5",
       "--max-diff-percent",
@@ -105,6 +107,14 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     stdout.contains("--bin render_fixtures"),
     "plan should include render_fixtures invocation; got:\n{stdout}"
   );
+  let render_line = stdout
+    .lines()
+    .find(|line| line.contains("--bin render_fixtures"))
+    .expect("render_fixtures command line should be printed");
+  assert!(
+    render_line.contains("--timeout 12"),
+    "render_fixtures should receive timeout; got:\n{render_line}"
+  );
   assert!(
     stdout.contains(&format!("--fixtures-dir {}", fixtures_root.display())),
     "render_fixtures should receive fixtures-dir; got:\n{stdout}"
@@ -125,6 +135,14 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
   assert!(
     stdout.contains("chrome-baseline-fixtures"),
     "plan should include chrome-baseline-fixtures invocation; got:\n{stdout}"
+  );
+  let chrome_line = stdout
+    .lines()
+    .find(|line| line.contains("chrome-baseline-fixtures"))
+    .expect("chrome-baseline-fixtures command line should be printed");
+  assert!(
+    chrome_line.contains("--timeout 12"),
+    "chrome-baseline-fixtures should receive timeout; got:\n{chrome_line}"
   );
   assert!(
     stdout.contains(&format!("--out-dir {}", out_dir.join("chrome").display())),
@@ -369,4 +387,3 @@ exit 0
     "missing diff artifacts dir"
   );
 }
-

@@ -8,6 +8,7 @@ const DEFAULT_FIXTURES_DIR: &str = "tests/pages/fixtures";
 const DEFAULT_OUT_DIR: &str = "target/fixture_chrome_diff";
 const DEFAULT_VIEWPORT: &str = "1040x1240";
 const DEFAULT_DPR: f32 = 1.0;
+const DEFAULT_TIMEOUT: u64 = 15;
 
 #[derive(Args, Debug)]
 pub struct FixtureChromeDiffArgs {
@@ -34,6 +35,10 @@ pub struct FixtureChromeDiffArgs {
   /// Device pixel ratio for media queries/srcset (forwarded to both renderers).
   #[arg(long, default_value_t = DEFAULT_DPR)]
   pub dpr: f32,
+
+  /// Per-fixture hard timeout in seconds (forwarded to both Chrome and FastRender steps).
+  #[arg(long, default_value_t = DEFAULT_TIMEOUT, value_name = "SECS")]
+  pub timeout: u64,
 
   /// Per-channel tolerance forwarded to `diff_renders`.
   #[arg(long, default_value_t = 0)]
@@ -157,6 +162,9 @@ fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
   if args.dpr <= 0.0 || !args.dpr.is_finite() {
     bail!("--dpr must be a positive, finite number");
   }
+  if args.timeout == 0 {
+    bail!("--timeout must be > 0");
+  }
   if !(0.0..=100.0).contains(&args.max_diff_percent) || !args.max_diff_percent.is_finite() {
     bail!("--max-diff-percent must be between 0 and 100");
   }
@@ -209,6 +217,7 @@ fn build_render_fixtures_command(
     .arg("--viewport")
     .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
   cmd.arg("--dpr").arg(args.dpr.to_string());
+  cmd.arg("--timeout").arg(args.timeout.to_string());
   if let Some(fixtures) = &args.fixtures {
     cmd.arg("--fixtures").arg(fixtures.join(","));
   }
@@ -234,6 +243,7 @@ fn build_chrome_baseline_command(
     .arg("--viewport")
     .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
   cmd.arg("--dpr").arg(args.dpr.to_string());
+  cmd.arg("--timeout").arg(args.timeout.to_string());
   if let Some(chrome) = &args.chrome {
     cmd.arg("--chrome").arg(chrome);
   }
