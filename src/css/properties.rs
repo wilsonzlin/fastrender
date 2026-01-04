@@ -1197,6 +1197,15 @@ fn parse_property_value_in_context_internal(
   }
   let trimmed = trimmed.trim_end_matches("!important").trim();
 
+  // CSS-wide keywords are valid for all properties (including those we otherwise parse strictly,
+  // like `text-shadow`). Accept them unconditionally so cascade-time keyword handling can run.
+  //
+  // Note: this is intentionally before the parsed-value cache lookup, because the cache stores
+  // owned `String`s for keyword values and doesn't avoid allocations on hits.
+  if is_global_keyword_str(trimmed) {
+    return Some(PropertyValue::Keyword(trimmed.to_string()));
+  }
+
   let cache_key =
     value_cache::ParsedPropertyValueCacheKey::new(context, property, trimmed, skip_var_guard);
   if let Some(cached) = value_cache::get(&cache_key) {
@@ -3025,6 +3034,15 @@ mod tests {
   #[test]
   fn font_family_parses_global_keyword_with_escape_sequence() {
     let parsed = parse_property_value("font-family", "revert\\-layer").expect("parsed");
+    assert!(matches!(parsed, PropertyValue::Keyword(_)));
+  }
+
+  #[test]
+  fn strict_properties_accept_css_wide_keywords() {
+    let parsed = parse_property_value("text-shadow", "inherit").expect("parsed");
+    assert!(matches!(parsed, PropertyValue::Keyword(_)));
+
+    let parsed = parse_property_value("box-shadow", "revert-layer/*comment*/").expect("parsed");
     assert!(matches!(parsed, PropertyValue::Keyword(_)));
   }
 
