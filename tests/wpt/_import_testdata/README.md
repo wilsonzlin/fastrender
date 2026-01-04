@@ -11,5 +11,9 @@ The layout mirrors a tiny subset of upstream WPT with:
   - `srcset-external.html`: `srcset="https://example.com/..."` rejection
   - `unquoted-external.html`: unquoted `src=https://example.com/...` rejection
   - `text-url.html`: strict-offline rejection of network-looking strings outside fetch contexts
+  - `imagesrcset-external.html`: `imagesrcset="https://example.com/..."` rejection
   - `data-url.html`: data: URLs containing `http://...` substrings in payloads (should not trigger validation)
   - `data-attrs.html`: `data-src`/`data-srcset` containing network URLs (should not trigger non-strict validation)
+  - `mailto.html`: non-fetchable `mailto:` links
+  - `poster.html`: `poster="/resources/..."` rewrite
+  - `object-data.html`: `data="/resources/..."` rewrite
