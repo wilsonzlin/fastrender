@@ -361,6 +361,7 @@ PY
     --disable-web-security
     --allow-file-access-from-files
     --disable-background-networking
+    --dns-prefetch-disable
     --no-first-run
     --no-default-browser-check
     --disable-component-update
