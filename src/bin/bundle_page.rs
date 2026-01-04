@@ -1887,19 +1887,19 @@ mod tests {
         ));
 
         match req.url {
-          "https://example.com/" => Ok(FetchedResource::with_final_url(
-            br#"<html><body><iframe src="https://frame.com/frame.html"></iframe></body></html>"#
+          "https://root.test/" => Ok(FetchedResource::with_final_url(
+            br#"<html><body><iframe src="https://frame.test/frame.html"></iframe></body></html>"#
               .to_vec(),
             Some("text/html".to_string()),
             Some(req.url.to_string()),
           )),
-          "https://frame.com/frame.html" => Ok(FetchedResource::with_final_url(
-            br#"<html><head><link rel="stylesheet" href="frame.css"></head><body></body></html>"#
+          "https://frame.test/frame.html" => Ok(FetchedResource::with_final_url(
+            br#"<html><head><link rel="stylesheet" href="/frame.css"></head><body></body></html>"#
               .to_vec(),
             Some("text/html".to_string()),
             Some(req.url.to_string()),
           )),
-          "https://frame.com/frame.css" => Ok(FetchedResource::with_final_url(
+          "https://frame.test/frame.css" => Ok(FetchedResource::with_final_url(
             b"body { background: black; }".to_vec(),
             Some("text/css".to_string()),
             Some(req.url.to_string()),
@@ -1913,7 +1913,7 @@ mod tests {
 
     let inner = Arc::new(NestedFrameFetcher::default());
     let recording = RecordingFetcher::new(inner.clone());
-    let (doc, _) = fetch_document(&recording, "https://example.com/")?;
+    let (doc, _) = fetch_document(&recording, "https://root.test/")?;
 
     let render = BundleRenderConfig {
       viewport: (1200, 800),
@@ -1931,9 +1931,15 @@ mod tests {
 
     let calls = inner.calls();
     assert!(calls.iter().any(|(url, dest, referrer)| {
-      url == "https://frame.com/frame.css"
+      url == "https://frame.test/frame.html"
+        && *dest == FetchDestination::Document
+        && referrer.as_deref() == Some("https://root.test/")
+    }));
+
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://frame.test/frame.css"
         && *dest == FetchDestination::Style
-        && referrer.as_deref() == Some("https://frame.com/frame.html")
+        && referrer.as_deref() == Some("https://frame.test/frame.html")
     }));
 
     Ok(())
