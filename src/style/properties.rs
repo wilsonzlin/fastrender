@@ -37,6 +37,7 @@ use crate::style::values::CustomPropertyValue;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::var_resolution::resolve_var_for_property;
+use crate::style::var_resolution::ResolvedPropertyValue;
 use crate::style::var_resolution::VarResolutionResult;
 use crate::style::ComputedStyle;
 use cssparser::BasicParseErrorKind;
@@ -4516,7 +4517,6 @@ fn apply_declaration_with_base_internal(
     let raw_text = decl_raw_text(decl);
     let raw_trimmed = raw_text.trim();
     let registration = styles.custom_property_registry.get(decl.property.as_str());
-
     // Unregistered custom properties behave like token streams: keep the authored value verbatim and
     // do not interpret CSS-wide keywords at computed-value time.
     let Some(rule) = registration else {
@@ -4534,6 +4534,48 @@ fn apply_declaration_with_base_internal(
       return;
     };
 
+    // Registered custom properties resolve var() at computed-value time (even for `syntax: *`) and
+    // support CSS-wide keywords.
+    if decl.contains_var {
+      let resolved = match resolve_var_for_property(&decl.value, &styles.custom_properties, "") {
+        VarResolutionResult::Resolved { value, css_text } => match value {
+          ResolvedPropertyValue::Borrowed(_) => raw_trimmed.to_string(),
+          ResolvedPropertyValue::Owned(_) => css_text.into_owned(),
+        },
+        _ => return,
+      };
+
+      if let Some(global) = global_keyword_text(&resolved) {
+        apply_registered_custom_property_global_keyword(
+          &mut styles.custom_properties,
+          &parent_styles.custom_properties,
+          &revert_base.custom_properties,
+          revert_layer_custom_properties,
+          custom_name,
+          rule,
+          global,
+        );
+        return;
+      }
+
+      if matches!(rule.syntax, CustomPropertySyntax::Universal) {
+        styles.custom_properties.insert(
+          Arc::clone(custom_name),
+          CustomPropertyValue::new(resolved, None),
+        );
+        return;
+      }
+
+      let Some(typed) = rule.syntax.parse_value(resolved.trim()) else {
+        return;
+      };
+      styles.custom_properties.insert(
+        Arc::clone(custom_name),
+        CustomPropertyValue::new(resolved, Some(typed)),
+      );
+      return;
+    }
+
     if let Some(global) = global_keyword_text(raw_trimmed) {
       apply_registered_custom_property_global_keyword(
         &mut styles.custom_properties,
@@ -4547,8 +4589,8 @@ fn apply_declaration_with_base_internal(
       return;
     }
 
-    // Registered custom properties with `syntax: *` still behave like token streams, but they do
-    // participate in CSS-wide keywords (handled above).
+    // Registered custom properties with `syntax: *` behave like token streams, but still use the
+    // registered keyword behavior (handled above).
     if matches!(rule.syntax, CustomPropertySyntax::Universal) {
       if styles
         .custom_properties
@@ -4564,58 +4606,20 @@ fn apply_declaration_with_base_internal(
       return;
     }
 
-    // Registered custom properties with typed syntaxes parse at computed-value time. That means we
-    // must perform var() substitution before attempting to parse the typed grammar. If resolution
-    // fails (missing var, recursion, invalid syntax, or invalid after substitution), the
-    // declaration is ignored so the cascade falls back to a lower-priority declaration or the
-    // property’s inherited/initial value.
-    //
-    // Performance guard: only run the var() resolver when the value actually contains var().
-    if decl.contains_var {
-      let resolved = match resolve_var_for_property(&decl.value, &styles.custom_properties, "") {
-        VarResolutionResult::Resolved { css_text, .. } => css_text,
-        _ => return,
-      };
-      let resolved = if resolved.is_empty() {
-        raw_trimmed.to_string()
-      } else {
-        resolved.into_owned()
-      };
-      if let Some(global) = global_keyword_text(&resolved) {
-        apply_registered_custom_property_global_keyword(
-          &mut styles.custom_properties,
-          &parent_styles.custom_properties,
-          &revert_base.custom_properties,
-          revert_layer_custom_properties,
-          custom_name,
-          rule,
-          global,
-        );
-        return;
-      }
-      let Some(typed) = rule.syntax.parse_value(&resolved) else {
-        return;
-      };
-      styles.custom_properties.insert(
-        Arc::clone(custom_name),
-        CustomPropertyValue::new(resolved, Some(typed)),
-      );
-    } else {
-      if styles
-        .custom_properties
-        .get(custom_name.as_ref())
-        .is_some_and(|existing| existing.value == raw_text && existing.typed.is_some())
-      {
-        return;
-      }
-      let Some(typed) = rule.syntax.parse_value(raw_trimmed) else {
-        return;
-      };
-      styles.custom_properties.insert(
-        Arc::clone(custom_name),
-        CustomPropertyValue::new(raw_text, Some(typed)),
-      );
+    if styles
+      .custom_properties
+      .get(custom_name.as_ref())
+      .is_some_and(|existing| existing.value == raw_text && existing.typed.is_some())
+    {
+      return;
     }
+    let Some(typed) = rule.syntax.parse_value(raw_trimmed) else {
+      return;
+    };
+    styles.custom_properties.insert(
+      Arc::clone(custom_name),
+      CustomPropertyValue::new(raw_text, Some(typed)),
+    );
     return;
   }
 

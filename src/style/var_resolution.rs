@@ -170,6 +170,12 @@ fn parse_simple_var_call<'a>(raw: &'a str) -> Option<(&'a str, Option<&'a str>)>
 
   let fallback = fallback_chunk.map(str::trim);
   if let Some(fallback) = fallback {
+    // `var(--x,)` uses an *empty* fallback. This is distinct from omitting the fallback entirely
+    // (`var(--x)`) because empty fallbacks are valid in contexts where the substituted token stream
+    // can disappear (e.g. Tailwind-style `transform: var(--tw-rotate-x,) ...`).
+    if fallback.is_empty() {
+      return Some((name, Some("")));
+    }
     // Only support a single comma here; multiple commas require tokenization to disambiguate.
     if fallback_chunk.is_some_and(|rest| rest.contains(',')) {
       return None;
