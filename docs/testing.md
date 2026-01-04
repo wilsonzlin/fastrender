@@ -76,6 +76,7 @@ Defaults are aligned with the pageset workflow (`viewport=1200x800`, `dpr=1.0`) 
 Artifacts and PR guidance:
 
 - Report: `target/fixture_chrome_diff/report.html` (plus `report.json` and per-fixture PNGs under `target/fixture_chrome_diff/{chrome,fastrender,...}`).
+- Reuse a previously generated Chrome render directory (or run in environments without Chrome installed): `cargo xtask fixture-chrome-diff --no-chrome --chrome-dir <dir>`.
 - **Do not commit** Chrome baseline PNGs or diff reports; they are local artifacts. Attach the generated report directory (or at least `report.html` + the referenced PNGs) to your PR description instead.
 - **Do commit** new/updated fixtures under `tests/pages/fixtures/<fixture>/` when they are part of the regression story.
 
