@@ -2,7 +2,7 @@ use fastrender::css::parser::parse_stylesheet;
 use fastrender::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use fastrender::style::cascade::apply_styles;
 use fastrender::style::color::Rgba;
-use fastrender::style::values::{CustomPropertyTypedValue, LengthUnit};
+use fastrender::style::values::{CustomPropertySyntax, CustomPropertyTypedValue, Length, LengthUnit};
 
 fn dom_with_child() -> DomNode {
   DomNode {
@@ -107,4 +107,137 @@ fn initial_value_applied_without_declaration() {
     }
     other => panic!("expected typed color, got {other:?}"),
   }
+}
+
+#[test]
+fn tailwind_style_property_registration_allows_inherits_false_without_initial_value() {
+  // Tailwind registers many `syntax:"*"` properties without an explicit initial value, then
+  // assigns `initial` in a universal reset so `var(--x,)` falls back to the empty string.
+  let css = r#"
+    @property --x {
+      syntax: "*";
+      inherits: false;
+    }
+    #root { --x: initial; width: var(--x, 10px); }
+  "#;
+  let sheet = parse_stylesheet(css).unwrap();
+  let dom = DomNode {
+    node_type: DomNodeType::Element {
+      tag_name: "div".to_string(),
+      namespace: HTML_NAMESPACE.to_string(),
+      attributes: vec![("id".to_string(), "root".to_string())],
+    },
+    children: vec![],
+  };
+  let styled = apply_styles(&dom, &sheet);
+
+  let rule = styled
+    .styles
+    .custom_property_registry
+    .get("--x")
+    .expect("registered property");
+  assert_eq!(rule.syntax, CustomPropertySyntax::Universal);
+  assert!(!rule.inherits);
+  assert!(rule.initial_value.is_none());
+
+  assert_eq!(styled.styles.width, Some(Length::px(10.0)));
+  assert!(
+    styled.styles.custom_properties.get("--x").is_none(),
+    "global keyword `initial` should reset to the guaranteed-invalid value"
+  );
+}
+
+#[test]
+fn property_rule_missing_syntax_descriptor_is_rejected() {
+  let css = r#"
+    @property --missing-syntax {
+      inherits: false;
+      initial-value: 0;
+    }
+  "#;
+  let sheet = parse_stylesheet(css).unwrap();
+  let dom = simple_div_dom();
+  let styled = apply_styles(&dom, &sheet);
+  assert!(styled
+    .styles
+    .custom_property_registry
+    .get("--missing-syntax")
+    .is_none());
+}
+
+#[test]
+fn property_rule_with_invalid_syntax_descriptor_is_rejected() {
+  let css = r#"
+    @property --bad-syntax {
+      syntax: "<definitely-not-a-syntax>";
+      inherits: false;
+      initial-value: 0;
+    }
+  "#;
+  let sheet = parse_stylesheet(css).unwrap();
+  let dom = simple_div_dom();
+  let styled = apply_styles(&dom, &sheet);
+  assert!(styled
+    .styles
+    .custom_property_registry
+    .get("--bad-syntax")
+    .is_none());
+}
+
+#[test]
+fn custom_property_syntax_length_percentage_parses_length_and_percentage() {
+  assert_eq!(
+    CustomPropertySyntax::parse("<length-percentage>"),
+    Some(CustomPropertySyntax::LengthPercentage)
+  );
+  assert_eq!(
+    CustomPropertySyntax::LengthPercentage.parse_value("10px"),
+    Some(CustomPropertyTypedValue::Length(Length::px(10.0)))
+  );
+  assert_eq!(
+    CustomPropertySyntax::LengthPercentage.parse_value("25%"),
+    Some(CustomPropertyTypedValue::Length(Length::new(25.0, LengthUnit::Percent)))
+  );
+  assert!(CustomPropertySyntax::LengthPercentage
+    .parse_value("not-a-length")
+    .is_none());
+}
+
+#[test]
+fn length_percentage_property_registration_parses_initial_value() {
+  let css = r#"
+    @property --pos {
+      syntax: "<length-percentage>";
+      inherits: false;
+      initial-value: 50%;
+    }
+    div { --pos: 10px; }
+  "#;
+  let sheet = parse_stylesheet(css).unwrap();
+  let dom = simple_div_dom();
+  let styled = apply_styles(&dom, &sheet);
+
+  let rule = styled
+    .styles
+    .custom_property_registry
+    .get("--pos")
+    .expect("registered property");
+  assert_eq!(rule.syntax, CustomPropertySyntax::LengthPercentage);
+  let initial = rule.initial_value.as_ref().expect("initial value");
+  assert_eq!(initial.value.trim(), "50%");
+  assert_eq!(
+    initial.typed,
+    Some(CustomPropertyTypedValue::Length(Length::new(50.0, LengthUnit::Percent)))
+  );
+
+  let value = styled
+    .styles
+    .custom_properties
+    .get("--pos")
+    .expect("computed property");
+  assert_eq!(value.value.trim(), "10px");
+  assert_eq!(
+    value.typed,
+    Some(CustomPropertyTypedValue::Length(Length::px(10.0)))
+  );
 }

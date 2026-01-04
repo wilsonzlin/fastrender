@@ -2623,9 +2623,9 @@ fn parse_property_descriptors<'i, 't>(
   parser: &mut Parser<'i, 't>,
   name: &str,
 ) -> std::result::Result<Option<PropertyRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let mut syntax = CustomPropertySyntax::Universal;
+  let mut syntax: Option<CustomPropertySyntax> = None;
   let mut inherits = true;
-  let mut initial_value: Option<CustomPropertyValue> = None;
+  let mut initial_value_raw: Option<String> = None;
 
   while !parser.is_exhausted() {
     if !css_deadline_allows_progress() {
@@ -2665,7 +2665,7 @@ fn parse_property_descriptors<'i, 't>(
       "syntax" => {
         let unquoted = strip_quotes(value);
         if let Some(parsed) = CustomPropertySyntax::parse(unquoted) {
-          syntax = parsed;
+          syntax = Some(parsed);
         } else {
           return Ok(None);
         }
@@ -2679,19 +2679,29 @@ fn parse_property_descriptors<'i, 't>(
         }
       }
       "initial-value" => {
-        let typed = match syntax {
-          CustomPropertySyntax::Universal => None,
-          _ => syntax.parse_value(value),
-        };
-        if matches!(syntax, CustomPropertySyntax::Universal) || typed.is_some() {
-          initial_value = Some(CustomPropertyValue::new(value, typed));
-        } else {
-          return Ok(None);
-        }
+        initial_value_raw = Some(value.to_string());
       }
       _ => {}
     }
   }
+
+  let Some(syntax) = syntax else {
+    return Ok(None);
+  };
+
+  let initial_value = if let Some(raw) = initial_value_raw {
+    let typed = match syntax {
+      CustomPropertySyntax::Universal => None,
+      _ => syntax.parse_value(&raw),
+    };
+    if matches!(syntax, CustomPropertySyntax::Universal) || typed.is_some() {
+      Some(CustomPropertyValue::new(raw, typed))
+    } else {
+      return Ok(None);
+    }
+  } else {
+    None
+  };
 
   // The Properties & Values API requires an `initial-value` for typed syntaxes. The universal
   // syntax (`*`) behaves like an unregistered custom property, so Tailwind and other toolchains
