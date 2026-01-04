@@ -989,20 +989,31 @@ fn write_html_report(
   let top_improvements = format_top_list("Top improvements", &report.top_improvements, true);
   let top_regressions = format_top_list("Top regressions", &report.top_regressions, false);
 
-  let baseline_report_dir = baseline_report_json
-    .parent()
+  let baseline_report_html = guess_report_html_path(baseline_report_json);
+  let new_report_html = guess_report_html_path(new_report_json);
+
+  // The diff report's `before`/`after`/`diff` paths are emitted relative to the directory
+  // containing the report HTML, so prefer that directory when we can find the HTML file.
+  let baseline_report_dir = baseline_report_html
+    .as_ref()
+    .and_then(|path| path.parent())
     .filter(|p| !p.as_os_str().is_empty())
+    .or_else(|| baseline_report_json.parent().filter(|p| !p.as_os_str().is_empty()))
     .unwrap_or_else(|| Path::new("."));
-  let new_report_dir = new_report_json
-    .parent()
+  let new_report_dir = new_report_html
+    .as_ref()
+    .and_then(|path| path.parent())
     .filter(|p| !p.as_os_str().is_empty())
+    .or_else(|| new_report_json.parent().filter(|p| !p.as_os_str().is_empty()))
     .unwrap_or_else(|| Path::new("."));
 
-  let baseline_html_link = guess_report_html_path(baseline_report_json)
-    .map(|path| path_for_report(&html_dir, &path))
+  let baseline_html_link = baseline_report_html
+    .as_deref()
+    .map(|path| path_for_report(&html_dir, path))
     .unwrap_or_else(|| "-".to_string());
-  let new_html_link = guess_report_html_path(new_report_json)
-    .map(|path| path_for_report(&html_dir, &path))
+  let new_html_link = new_report_html
+    .as_deref()
+    .map(|path| path_for_report(&html_dir, path))
     .unwrap_or_else(|| "-".to_string());
 
   let mut rows = String::new();
