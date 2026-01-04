@@ -101,6 +101,21 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+refuse_unsafe_path() {
+  local label="$1"
+  local value="$2"
+  if [[ -z "${value}" || "${value}" == "/" ]]; then
+    echo "refusing to use unsafe ${label}: ${value}" >&2
+    exit 2
+  fi
+}
+
+refuse_unsafe_path "fixtures dir" "${FIXTURES_DIR}"
+refuse_unsafe_path "chrome out dir" "${CHROME_OUT_DIR}"
+refuse_unsafe_path "fastrender out dir" "${FASTR_OUT_DIR}"
+refuse_unsafe_path "report html path" "${REPORT_HTML}"
+refuse_unsafe_path "report json path" "${REPORT_JSON}"
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required." >&2
   exit 2
