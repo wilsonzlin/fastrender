@@ -199,6 +199,8 @@ impl ResourceAccessPolicy {
   /// Document navigations (e.g. iframe/embed loads) intentionally skip `same_origin_only`
   /// enforcement. The `same_origin_subresources` knob is intended for subresources like
   /// stylesheets/images/fonts; blocking cross-origin frames requires a dedicated policy.
+  ///
+  /// Note: other checks (e.g. mixed content and `file://` from HTTP(S)) still apply.
   pub fn allows_document(&self, target_url: &str) -> std::result::Result<(), PolicyError> {
     self.allows_document_with_final(target_url, None)
   }
