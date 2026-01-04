@@ -7587,7 +7587,7 @@ impl Painter {
     style: &ComputedStyle,
   ) -> Option<f32> {
     match thickness {
-      TextDecorationThickness::Auto => Some((style.font_size * 0.05).max(1.0) * self.scale),
+      TextDecorationThickness::Auto => Some((style.font_size * 0.1).max(1.0) * self.scale),
       TextDecorationThickness::FromFont => None,
       TextDecorationThickness::Length(l) => {
         if l.unit == LengthUnit::Percent {
@@ -14330,6 +14330,13 @@ mod tests {
       .resolve_decoration_thickness_value(TextDecorationThickness::Auto, &style)
       .expect("auto thickness");
     assert!((auto_thickness - 2.0).abs() < 0.0001);
+
+    style.font_size = 200.0;
+    let auto_thickness_large = painter
+      .resolve_decoration_thickness_value(TextDecorationThickness::Auto, &style)
+      .expect("auto thickness");
+    assert!((auto_thickness_large - 40.0).abs() < 0.0001);
+
     assert!(painter
       .resolve_decoration_thickness_value(TextDecorationThickness::FromFont, &style)
       .is_none());
