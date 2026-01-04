@@ -1561,6 +1561,58 @@ mod tests {
   }
 
   #[test]
+  fn child_perspective_offscreen_parent_not_culled_when_child_moves_into_view() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(500.0, 0.0, 100.0, 100.0),
+      plane_rect: Rect::from_xywh(500.0, 0.0, 100.0, 100.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      child_perspective: Some(Transform3D::perspective(200.0)),
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(500.0, 0.0, 50.0, 50.0),
+      plane_rect: Rect::from_xywh(500.0, 0.0, 50.0, 50.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: Some(Transform3D::translate(-500.0, 0.0, 0.0)),
+      child_perspective: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(make_fill_rect(500.0, 0.0, 50.0, 50.0, Rgba::GREEN));
+    list.push(DisplayItem::PopStackingContext);
+    list.push(DisplayItem::PopStackingContext);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, _stats) = optimize_with_stats(list, viewport);
+
+    assert!(
+      optimized
+        .items()
+        .iter()
+        .any(|item| matches!(item, DisplayItem::FillRect(_))),
+      "child_perspective stacking contexts should not be culled solely based on parent bounds"
+    );
+    assert_balanced(optimized.items());
+  }
+
+  #[test]
   fn test_noop_removal() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushOpacity(OpacityItem { opacity: 1.0 }));
