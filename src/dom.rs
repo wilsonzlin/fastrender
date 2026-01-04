@@ -2819,21 +2819,36 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
     id_to_node: &[*const DomNode],
     assignment: &SlotAssignment,
     out: &mut DomNode,
-  ) -> Vec<*const DomNode> {
+    deadline_counter: &mut usize,
+  ) -> Result<Vec<*const DomNode>> {
     if src.is_shadow_host() {
-      if let Some(shadow_root) = src
-        .children
-        .iter()
-        .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
-      {
+      let mut shadow_root: Option<&DomNode> = None;
+      for child in src.children.iter() {
+        check_active_periodic(
+          deadline_counter,
+          COMPOSED_SNAPSHOT_DEADLINE_STRIDE,
+          RenderStage::DomParse,
+        )?;
+        if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+          shadow_root = Some(child);
+          break;
+        }
+      }
+      if let Some(shadow_root) = shadow_root {
         // In the composed tree, the shadow root's children replace the host's light DOM children.
         // The `ShadowRoot` node itself is an internal representation detail of the parsed DOM and
         // is not exposed as part of the composed snapshot.
-        return shadow_root
-          .traversal_children()
-          .iter()
-          .map(|child| child as *const DomNode)
-          .collect();
+        let children = shadow_root.traversal_children();
+        let mut out_children = Vec::with_capacity(children.len());
+        for child in children {
+          check_active_periodic(
+            deadline_counter,
+            COMPOSED_SNAPSHOT_DEADLINE_STRIDE,
+            RenderStage::DomParse,
+          )?;
+          out_children.push(child as *const DomNode);
+        }
+        return Ok(out_children);
       }
     }
 
@@ -2846,6 +2861,11 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
           }
           let mut children = Vec::with_capacity(assigned_ids.len());
           for node_id in assigned_ids.iter() {
+            check_active_periodic(
+              deadline_counter,
+              COMPOSED_SNAPSHOT_DEADLINE_STRIDE,
+              RenderStage::DomParse,
+            )?;
             let Some(ptr) = id_to_node.get(*node_id).copied() else {
               continue;
             };
@@ -2854,25 +2874,37 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
             }
             children.push(ptr);
           }
-          return children;
+          return Ok(children);
         }
       }
 
       if let DomNodeType::Slot { assigned, .. } = &mut out.node_type {
         *assigned = false;
       }
-      return src
-        .traversal_children()
-        .iter()
-        .map(|child| child as *const DomNode)
-        .collect();
+      let children = src.traversal_children();
+      let mut out_children = Vec::with_capacity(children.len());
+      for child in children {
+        check_active_periodic(
+          deadline_counter,
+          COMPOSED_SNAPSHOT_DEADLINE_STRIDE,
+          RenderStage::DomParse,
+        )?;
+        out_children.push(child as *const DomNode);
+      }
+      return Ok(out_children);
     }
 
-    src
-      .traversal_children()
-      .iter()
-      .map(|child| child as *const DomNode)
-      .collect()
+    let children = src.traversal_children();
+    let mut out_children = Vec::with_capacity(children.len());
+    for child in children {
+      check_active_periodic(
+        deadline_counter,
+        COMPOSED_SNAPSHOT_DEADLINE_STRIDE,
+        RenderStage::DomParse,
+      )?;
+      out_children.push(child as *const DomNode);
+    }
+    Ok(out_children)
   }
 
   let mut deadline_counter = 0usize;
@@ -2886,7 +2918,8 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
     &id_to_node,
     assignment,
     &mut out_root,
-  );
+    &mut deadline_counter,
+  )?;
   let mut stack = vec![Frame {
     out: out_root,
     children: root_children,
@@ -2914,7 +2947,8 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
         &id_to_node,
         assignment,
         &mut out_child,
-      );
+        &mut deadline_counter,
+      )?;
       stack.push(Frame {
         out: out_child,
         children: child_children,
