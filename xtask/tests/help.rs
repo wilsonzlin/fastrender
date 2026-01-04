@@ -44,6 +44,8 @@ fn chrome_baseline_fixtures_help_mentions_flags() {
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert!(
     stdout.contains("--fixture-dir")
+      && stdout.contains("--fixtures-dir")
+      && stdout.contains("--fixtures-root")
       && stdout.contains("--out-dir")
       && stdout.contains("--fixtures")
       && stdout.contains("--shard")
