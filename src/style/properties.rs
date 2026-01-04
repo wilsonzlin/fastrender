@@ -171,6 +171,12 @@ fn synthesize_area_line_names(styles: &mut ComputedStyle) {
   }
 
   if let Some(bounds) = crate::style::grid::validate_area_rectangles(&styles.grid_template_areas) {
+    // `validate_area_rectangles` returns a HashMap, whose iteration order depends on the per-process
+    // hash seed. Avoid leaking that nondeterminism into the per-line Vec order by sorting the
+    // bounds entries and then sorting each line's name list after insertion.
+    let mut bounds: Vec<_> = bounds.into_iter().collect();
+    bounds.sort_by(|a, b| a.0.cmp(&b.0));
+
     let ensure_line = |lines: &mut Vec<Vec<String>>,
                        names: &mut HashMap<String, Vec<usize>>,
                        idx: usize,
@@ -224,6 +230,13 @@ fn synthesize_area_line_names(styles: &mut ComputedStyle) {
         row_end,
         format!("{}-end", name),
       );
+    }
+
+    for line in styles.grid_column_line_names.iter_mut() {
+      line.sort_unstable();
+    }
+    for line in styles.grid_row_line_names.iter_mut() {
+      line.sort_unstable();
     }
   }
 }
@@ -19274,6 +19287,50 @@ mod tests {
     assert_eq!(style.grid_template_rows.len(), 2);
     assert_eq!(style.grid_template_columns.len(), 2);
     assert_eq!(style.grid_template_areas.len(), 2);
+  }
+
+  #[test]
+  fn grid_template_areas_synthesized_line_names_are_sorted() {
+    let assert_sorted = |line_names: &[String]| {
+      for window in line_names.windows(2) {
+        assert!(
+          window[0] <= window[1],
+          "line names must be sorted; got {:?}",
+          line_names
+        );
+      }
+    };
+
+    // Use many distinct area names to make it astronomically unlikely that HashMap iteration
+    // accidentally yields a sorted order.
+    let area_names: Vec<String> = (0..12).map(|i| format!("area{i:02}")).collect();
+    let areas: Vec<Vec<Option<String>>> = vec![area_names.iter().map(|n| Some(n.clone())).collect()];
+
+    let mut expected_row_start: Vec<String> =
+      area_names.iter().map(|n| format!("{n}-start")).collect();
+    expected_row_start.sort_unstable();
+    let mut expected_row_end: Vec<String> = area_names.iter().map(|n| format!("{n}-end")).collect();
+    expected_row_end.sort_unstable();
+
+    for _ in 0..8 {
+      let mut style = ComputedStyle::default();
+      style.grid_template_areas = areas.clone();
+      style.grid_template_columns = vec![GridTrack::Auto; area_names.len()];
+      style.grid_template_rows = vec![GridTrack::Auto; 1];
+
+      synthesize_area_line_names(&mut style);
+
+      assert_eq!(style.grid_row_line_names.len(), 2);
+      assert_eq!(style.grid_row_line_names[0], expected_row_start);
+      assert_eq!(style.grid_row_line_names[1], expected_row_end);
+
+      for line in &style.grid_column_line_names {
+        assert_sorted(line);
+      }
+      for line in &style.grid_row_line_names {
+        assert_sorted(line);
+      }
+    }
   }
 
   #[test]

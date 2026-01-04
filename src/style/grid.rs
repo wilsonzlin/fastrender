@@ -116,6 +116,9 @@ pub fn parse_grid_template_areas(value: &str) -> Option<Vec<Vec<Option<String>>>
 }
 
 /// Validate that each named area forms a rectangle and return area bounds per name.
+///
+/// Note: The returned [`HashMap`] has nondeterministic iteration order; callers must not rely on
+/// it for stable output (sort the entries first if ordering matters).
 pub fn validate_area_rectangles(
   rows: &[Vec<Option<String>>],
 ) -> Option<HashMap<String, (usize, usize, usize, usize)>> {
