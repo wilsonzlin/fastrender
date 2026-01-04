@@ -11,6 +11,7 @@ use url::Url;
 mod chrome_baseline_fixtures;
 mod fixture_chrome_diff;
 mod fixture_determinism;
+mod generate_emoji_tables;
 mod import_page_fixture;
 mod recapture_page_fixtures;
 mod sync_progress_accuracy;
@@ -51,6 +52,7 @@ fn main() -> Result<()> {
       validate_page_fixtures::run_validate_page_fixtures(args)
     }
     Commands::PerfSmoke(args) => run_perf_smoke(args),
+    Commands::GenerateEmojiTables(args) => generate_emoji_tables::run_generate_emoji_tables(args),
   }
 }
 
@@ -108,6 +110,9 @@ enum Commands {
   PerfSmoke(PerfSmokeArgs),
   /// Ensure checked-in page fixtures do not reference network resources (offline invariant)
   ValidatePageFixtures(validate_page_fixtures::ValidatePageFixturesArgs),
+  /// Regenerate the Unicode emoji property tables used by the renderer.
+  #[command(alias = "gen-emoji-tables")]
+  GenerateEmojiTables(generate_emoji_tables::GenerateEmojiTablesArgs),
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]

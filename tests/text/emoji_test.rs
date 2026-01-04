@@ -35,6 +35,7 @@ fn test_basic_emoji_objects() {
   assert!(is_emoji('🔥')); // Fire
   assert!(is_emoji('💧')); // Droplet
   assert!(is_emoji('⭐')); // Star
+  assert!(is_emoji('▶')); // Play button
   assert!(is_emoji('🌍')); // Earth globe Europe-Africa
   assert!(is_emoji('🎉')); // Party popper
   assert!(is_emoji('💎')); // Gem stone
@@ -191,6 +192,7 @@ fn test_text_presentation_default() {
   assert!(!is_emoji_presentation('#')); // Number sign
   assert!(!is_emoji_presentation('*')); // Asterisk
   assert!(!is_emoji_presentation('0')); // Digit zero
+  assert!(!is_emoji_presentation('▶')); // Play button
   assert!(!is_emoji_presentation('©')); // Copyright
   assert!(!is_emoji_presentation('®')); // Registered
 }

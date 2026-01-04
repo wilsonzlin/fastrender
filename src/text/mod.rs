@@ -81,6 +81,7 @@ pub(crate) mod script_fallback;
 
 pub mod cluster;
 pub mod emoji;
+mod emoji_tables;
 pub mod hyphenation;
 pub mod justify;
 pub mod line_break;

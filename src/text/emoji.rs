@@ -110,10 +110,17 @@ pub(crate) struct EmojiSequenceSpan {
 // Core Emoji Detection Functions
 // =============================================================================
 
-/// Check if a character has the Unicode Emoji property
+/// Check if a character should be treated as emoji for rendering/fallback.
 ///
-/// This returns true for characters that are recommended for use as emoji,
-/// including those that may have text presentation by default.
+/// This is based on Unicode's emoji data (UTS #51, `emoji-data.txt`):
+/// - `Emoji=Yes`
+/// - `Emoji_Component=Yes` (ZWJ, VS16, tag chars, skin tone modifiers, keycap mark, ...)
+///
+/// ## Renderer convenience
+///
+/// `emoji-data.txt` does not include U+FE0E (VS15) in `Emoji_Component`, but it is used inside
+/// emoji/text presentation sequences. The renderer treats VS15 as emoji so the whole sequence
+/// stays on the emoji fallback path.
 ///
 /// # Examples
 ///
@@ -131,100 +138,11 @@ pub fn is_emoji(c: char) -> bool {
     return matches!(c, '0'..='9' | '*' | '#');
   }
   let cp = c as u32;
-
-  // Check various emoji ranges based on Unicode 15.0 Emoji data
-
-  // Emoticons (U+1F600 - U+1F64F)
-  if (0x1f600..=0x1f64f).contains(&cp) {
+  if cp == 0xfe0e {
     return true;
   }
 
-  // Miscellaneous Symbols and Pictographs (U+1F300 - U+1F5FF)
-  if (0x1f300..=0x1f5ff).contains(&cp) {
-    return true;
-  }
-
-  // Transport and Map Symbols (U+1F680 - U+1F6FF)
-  if (0x1f680..=0x1f6ff).contains(&cp) {
-    return true;
-  }
-
-  // Supplemental Symbols and Pictographs (U+1F900 - U+1F9FF)
-  if (0x1f900..=0x1f9ff).contains(&cp) {
-    return true;
-  }
-
-  // Symbols and Pictographs Extended-A (U+1FA00 - U+1FA6F)
-  if (0x1fa00..=0x1fa6f).contains(&cp) {
-    return true;
-  }
-
-  // Symbols and Pictographs Extended-B (U+1FA70 - U+1FAFF)
-  if (0x1fa70..=0x1faff).contains(&cp) {
-    return true;
-  }
-
-  // Dingbats (U+2700 - U+27BF) - many are emoji
-  if (0x2700..=0x27bf).contains(&cp) {
-    return true;
-  }
-
-  // Miscellaneous Symbols (U+2600 - U+26FF)
-  if (0x2600..=0x26ff).contains(&cp) {
-    return true;
-  }
-
-  // Miscellaneous Symbols and Arrows (U+2B00 - U+2BFF) - includes ⭐ star
-  if (0x2b00..=0x2bff).contains(&cp) {
-    return true;
-  }
-
-  // Regional Indicator Symbols (U+1F1E0 - U+1F1FF) - for flags
-  if (0x1f1e0..=0x1f1ff).contains(&cp) {
-    return true;
-  }
-
-  // Skin tone modifiers (U+1F3FB - U+1F3FF)
-  if (0x1f3fb..=0x1f3ff).contains(&cp) {
-    return true;
-  }
-
-  // Zero Width Joiner (used in emoji sequences)
-  if cp == 0x200d {
-    return true;
-  }
-
-  // Variation selectors
-  if cp == 0xfe0e || cp == 0xfe0f {
-    return true;
-  }
-
-  // Keycap base characters (0-9, *, #)
-  if matches!(c, '0'..='9' | '*' | '#') {
-    return true;
-  }
-
-  // Combining Enclosing Keycap
-  if cp == 0x20e3 {
-    return true;
-  }
-
-  // Copyright, Registered, Trade Mark
-  if matches!(cp, 0x00a9 | 0x00ae | 0x2122) {
-    return true;
-  }
-
-  // Various single-character emoji
-  if is_misc_emoji(cp) {
-    return true;
-  }
-
-  // Tag characters (for subdivision flags)
-  if (0xe0020..=0xe007f).contains(&cp) {
-    return true;
-  }
-
-  false
+  super::emoji_tables::is_emoji(cp)
 }
 
 /// Check if a character has the Emoji_Presentation property
@@ -248,69 +166,7 @@ pub fn is_emoji_presentation(c: char) -> bool {
     return false;
   }
   let cp = c as u32;
-
-  // Most emoji in these ranges default to emoji presentation
-
-  // Emoticons (all default to emoji presentation)
-  if (0x1f600..=0x1f64f).contains(&cp) {
-    return true;
-  }
-
-  // Most of Miscellaneous Symbols and Pictographs
-  if (0x1f300..=0x1f5ff).contains(&cp) {
-    return true;
-  }
-
-  // Transport and Map Symbols
-  if (0x1f680..=0x1f6ff).contains(&cp) {
-    return true;
-  }
-
-  // Supplemental Symbols and Pictographs
-  if (0x1f900..=0x1f9ff).contains(&cp) {
-    return true;
-  }
-
-  // Symbols and Pictographs Extended-A
-  if (0x1fa00..=0x1fa6f).contains(&cp) {
-    return true;
-  }
-
-  // Symbols and Pictographs Extended-B
-  if (0x1fa70..=0x1faff).contains(&cp) {
-    return true;
-  }
-
-  // Regional Indicators (for flags)
-  if (0x1f1e0..=0x1f1ff).contains(&cp) {
-    return true;
-  }
-
-  // Skin tone modifiers
-  if (0x1f3fb..=0x1f3ff).contains(&cp) {
-    return true;
-  }
-
-  // Some Miscellaneous Symbols that default to emoji
-  // These are specific codepoints that have Emoji_Presentation=Yes
-  if is_emoji_presentation_misc_symbols(cp) {
-    return true;
-  }
-
-  // Some Dingbats that default to emoji presentation
-  if is_emoji_presentation_dingbats(cp) {
-    return true;
-  }
-
-  // Some Miscellaneous Symbols and Arrows that default to emoji presentation.
-  //
-  // Our emoji coverage is intentionally minimal; we include the codepoints we observe
-  // in pageset runs + deterministic fixtures.
-  if matches!(cp, 0x2B06 | 0x2B07 | 0x2B50) {
-    return true;
-  }
-
-  false
+  super::emoji_tables::is_emoji_presentation(cp)
 }
 
 /// Check if a character is an emoji modifier (skin tone)
@@ -583,7 +439,11 @@ pub(crate) fn find_emoji_sequence_spans(text: &str) -> Vec<EmojiSequenceSpan> {
 
       sequences.push(EmojiSequenceSpan {
         start: start_idx,
-        end: if found_tags { end_idx } else { start_idx + ch.len_utf8() },
+        end: if found_tags {
+          end_idx
+        } else {
+          start_idx + ch.len_utf8()
+        },
         sequence_type: if found_tags {
           EmojiSequenceType::TagSequence
         } else {
@@ -891,149 +751,6 @@ fn can_take_modifier(seq_chars: &[char]) -> bool {
   false
 }
 
-// =============================================================================
-// Helper Functions for Unicode Ranges
-// =============================================================================
-
-/// Check for miscellaneous single-character emoji
-fn is_misc_emoji(cp: u32) -> bool {
-  matches!(
-      cp,
-      // Arrows and symbols
-      0x2194..=0x2199
-      | 0x21A9..=0x21AA
-      // Watch and hourglass
-      | 0x231A..=0x231B
-      // Keyboard
-      | 0x2328
-      // Eject
-      | 0x23CF
-      // Play buttons, etc.
-      | 0x23E9..=0x23F3
-      | 0x23F8..=0x23FA
-      // Medical symbol
-      | 0x2695
-      // Scales and other symbols
-      | 0x2696..=0x2697
-      // Fleur-de-lis
-      | 0x269B..=0x269C
-      // Atom, etc.
-      | 0x2699
-      // Ballot box
-      | 0x2611
-      // Checkmark
-      | 0x2714
-      // Multiplication X
-      | 0x2716
-      // Star
-      | 0x2733..=0x2734
-      // Question marks
-      | 0x2753..=0x2755
-      // Exclamation
-      | 0x2757
-      // Star of David
-      | 0x2721
-      // Peace
-      | 0x262E
-      // Yin Yang
-      | 0x262F
-      // Latin Cross
-      | 0x271D
-      // Star and crescent
-      | 0x262A
-      // Om
-      | 0x1F549
-      // Wheel of dharma
-      | 0x2638
-      // Heavy heart
-      | 0x2764
-      // Orange heart, etc.
-      | 0x1F9E1
-      // Recycling
-      | 0x267B
-      // Trident
-      | 0x1F531
-      // Male/Female
-      | 0x2640
-      | 0x2642
-      // Infinity
-      | 0x267E
-      // Sparkle
-      | 0x2747
-      // Bangbang
-      | 0x203C
-      // Interrobang
-      | 0x2049
-      // Wavy dash
-      | 0x3030
-      // Part alternation mark
-      | 0x303D
-      // Circled M
-      | 0x24C2
-      // Information
-      | 0x2139
-      // Letter symbols
-      | 0x1F170..=0x1F171
-      | 0x1F17E..=0x1F17F
-      | 0x1F18E
-      | 0x1F191..=0x1F19A
-      // Circled letters
-      | 0x1F1E6..=0x1F1FF
-  )
-}
-
-/// Check for Miscellaneous Symbols with emoji presentation
-fn is_emoji_presentation_misc_symbols(cp: u32) -> bool {
-  matches!(
-      cp,
-      0x2614 // Umbrella with rain drops
-      | 0x2615 // Hot beverage
-      | 0x2648..=0x2653 // Zodiac signs
-      | 0x267F // Wheelchair
-      | 0x2693 // Anchor
-      | 0x26A1 // High voltage
-      | 0x26AA..=0x26AB // Circles
-      | 0x26BD..=0x26BE // Soccer, baseball
-      | 0x26C4..=0x26C5 // Snowman, sun
-      | 0x26CE // Ophiuchus
-      | 0x26D4 // No entry
-      | 0x26EA // Church
-      | 0x26F2..=0x26F3 // Fountain, golf
-      | 0x26F5 // Sailboat
-      | 0x26FA // Tent
-      | 0x26FD // Fuel pump
-  )
-}
-
-/// Check for Dingbats with emoji presentation
-fn is_emoji_presentation_dingbats(cp: u32) -> bool {
-  matches!(
-      cp,
-      0x2702 // Scissors
-      | 0x2705 // Check mark
-      | 0x2708..=0x270D // Airplane to writing hand
-      | 0x270F // Pencil
-      | 0x2712 // Black nib
-      | 0x2714 // Check mark
-      | 0x2716 // Multiplication X
-      | 0x271D // Latin cross
-      | 0x2721 // Star of David
-      | 0x2728 // Sparkles
-      | 0x2733..=0x2734 // Eight spoked asterisk
-      | 0x2744 // Snowflake
-      | 0x2747 // Sparkle
-      | 0x274C // Cross mark
-      | 0x274E // Cross mark with X
-      | 0x2753..=0x2755 // Question marks
-      | 0x2757 // Exclamation mark
-      | 0x2763..=0x2764 // Heart exclamation, heart
-      | 0x2795..=0x2797 // Plus, minus, divide
-      | 0x27A1 // Right arrow
-      | 0x27B0 // Curly loop
-      | 0x27BF // Double curly loop
-  )
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1098,6 +815,13 @@ mod tests {
     assert!(is_emoji('🇿')); // Regional indicator Z
     assert!(is_emoji('🇺')); // Regional indicator U
     assert!(is_emoji('🇸')); // Regional indicator S
+  }
+
+  #[test]
+  fn test_is_emoji_play_button() {
+    // U+25B6 is Emoji=Yes but was previously missed by our ad-hoc ranges.
+    assert!(is_emoji('▶'));
+    assert!(!is_emoji_presentation('▶'));
   }
 
   #[test]
@@ -1170,6 +894,7 @@ mod tests {
     assert!(!is_emoji_presentation('#'));
     assert!(!is_emoji_presentation('*'));
     assert!(!is_emoji_presentation('0'));
+    assert!(!is_emoji_presentation('▶'));
     // Copyright, registered, trademark default to text
     assert!(!is_emoji_presentation('©'));
     assert!(!is_emoji_presentation('®'));
