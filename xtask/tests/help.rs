@@ -17,14 +17,42 @@ fn help_lists_commands() {
     stdout.contains("render-page")
       && stdout.contains("update-goldens")
       && stdout.contains("diff-renders")
+      && stdout.contains("chrome-baseline-fixtures")
       && stdout.contains("fixture-chrome-diff")
       && stdout.contains("pageset")
       && stdout.contains("pageset-diff")
-      && stdout.contains("chrome-baseline-fixtures")
       && stdout.contains("perf-smoke")
       && stdout.contains("recapture-page-fixtures")
       && stdout.contains("import-page-fixture"),
     "help output should mention available subcommands; got:\n{stdout}"
+  );
+}
+
+#[test]
+fn chrome_baseline_fixtures_help_mentions_flags() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["chrome-baseline-fixtures", "--help"])
+    .output()
+    .expect("run cargo xtask chrome-baseline-fixtures --help");
+
+  assert!(
+    output.status.success(),
+    "chrome-baseline-fixtures help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--fixture-dir")
+      && stdout.contains("--out-dir")
+      && stdout.contains("--fixtures")
+      && stdout.contains("--shard")
+      && stdout.contains("--chrome")
+      && stdout.contains("--chrome-dir")
+      && stdout.contains("--viewport")
+      && stdout.contains("--dpr")
+      && stdout.contains("--timeout")
+      && stdout.contains("--js"),
+    "help output should mention key flags; got:\n{stdout}"
   );
 }
 
