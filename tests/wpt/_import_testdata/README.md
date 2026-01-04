@@ -11,6 +11,8 @@ The layout mirrors a tiny subset of upstream WPT with:
   - `external-url.html`: simple `src="https://example.com/..."` rejection
   - `help-link.html`: `rel=help` links are allowed in non-strict mode (strict-offline still rejects)
   - `srcset-external.html`: `srcset="https://example.com/..."` rejection
+  - `svg-image-href.html`: SVG `<image href="...web-platform.test...">` rewrite
+  - `svg-image-href-external.html`: SVG `<image href="https://example.com/...">` rejection
   - `unquoted-external.html`: unquoted `src=https://example.com/...` rejection
   - `text-url.html`: strict-offline rejection of network-looking strings outside fetch contexts
   - `imagesrcset.html`: `imagesrcset="...web-platform.test..."` rewrite

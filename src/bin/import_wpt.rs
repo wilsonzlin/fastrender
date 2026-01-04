@@ -1040,6 +1040,25 @@ fn find_network_urls(content: &str) -> Vec<String> {
     }
   }
 
+  // SVG fetch contexts commonly use `href=` (SVG2) or `xlink:href=` (SVG1). We already scan
+  // `xlink:href`, but `href` would otherwise be missed when we avoid flagging non-fetchable
+  // HTML anchors and metadata links.
+  let svg_href = Regex::new(
+    "(?is)<(?:image|use|feimage)\\b[^>]*\\shref\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+  )
+  .unwrap();
+  for caps in svg_href.captures_iter(content) {
+    let raw = caps
+      .get(1)
+      .or_else(|| caps.get(2))
+      .or_else(|| caps.get(3))
+      .map(|m| m.as_str())
+      .unwrap_or("");
+    if is_network_url(raw) {
+      urls.push(raw.to_string());
+    }
+  }
+
   fn is_css_namespace_rule_prefix(content: &str, at: usize) -> bool {
     let bytes = content.as_bytes();
     let mut start = at;
@@ -1668,6 +1687,48 @@ mod tests {
     match err {
       ImportError::NetworkUrlsRemaining(path, urls) => {
         assert!(path.to_string_lossy().contains("srcset-external.html"));
+        assert!(urls.contains("example.com"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
+  }
+
+  #[test]
+  fn rewrites_and_validates_svg_image_href() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/svg-image-href.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+    let imported =
+      fs::read_to_string(out_dir.path().join("out/html/network/svg-image-href.html")).unwrap();
+    assert!(!imported.contains("web-platform.test"));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
+
+    let out_dir2 = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/svg-image-href-external.html".to_string()],
+      out_dir: out_dir2.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    let err = run_import(config).unwrap_err();
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path.to_string_lossy().contains("svg-image-href-external.html"));
         assert!(urls.contains("example.com"));
       }
       other => panic!("unexpected error: {other:?}"),
