@@ -1210,12 +1210,13 @@ fn margin_box_bounds(area: PageMarginArea, style: &ResolvedPageStyle) -> Option<
 }
 
 #[cfg(test)]
-mod tests {
+  mod tests {
   use super::*;
   use crate::style::display::Display;
   use crate::style::ComputedStyle;
   use crate::text::font_db::FontDatabase;
   use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+  use std::collections::BTreeMap;
   use std::sync::Arc;
 
   fn contains_running_anchor(node: &FragmentNode) -> bool {
@@ -1319,7 +1320,7 @@ mod tests {
     let running_elements: HashMap<String, Vec<FragmentNode>> = HashMap::new();
 
     for _ in 0..8 {
-      let mut margin_boxes: HashMap<PageMarginArea, ComputedStyle> = HashMap::new();
+      let mut margin_boxes: BTreeMap<PageMarginArea, ComputedStyle> = BTreeMap::new();
       let mut running_state: HashMap<String, FragmentNode> = HashMap::new();
 
       for area in expected_order {
