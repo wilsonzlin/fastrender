@@ -3100,7 +3100,13 @@ fn apply_primitive(
       let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
       let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
       match resolve_input(input, source, results, current, filter_region) {
-        Some(img) => Some(offset_result(img, dx, dy, filter_region)?),
+        Some(img) => Some(offset_result(
+          img,
+          dx,
+          dy,
+          color_interpolation_filters,
+          filter_region,
+        )?),
         None => None,
       }
     }
@@ -3905,12 +3911,26 @@ fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> 
   Some(pixmap)
 }
 
-fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> RenderResult<Pixmap> {
+fn offset_pixmap(
+  mut input: Pixmap,
+  dx: f32,
+  dy: f32,
+  color_interpolation_filters: ColorInterpolationFilters,
+) -> RenderResult<Pixmap> {
   check_active(RenderStage::Paint)?;
   let dx = if dx.is_finite() { dx } else { 0.0 };
   let dy = if dy.is_finite() { dy } else { 0.0 };
   if dx == 0.0 && dy == 0.0 {
     return Ok(input);
+  }
+
+  let use_linear_rgb = matches!(
+    color_interpolation_filters,
+    ColorInterpolationFilters::LinearRGB
+  );
+  let needs_interpolation = dx.fract() != 0.0 || dy.fract() != 0.0;
+  if use_linear_rgb && needs_interpolation {
+    reencode_pixmap_to_linear_rgb(&mut input);
   }
 
   let width = input.width();
@@ -3982,6 +4002,10 @@ fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> RenderResult<Pixmap> {
     }
   }
 
+  if use_linear_rgb && needs_interpolation {
+    reencode_pixmap_to_srgb(&mut out);
+  }
+
   Ok(out)
 }
 
@@ -3989,9 +4013,10 @@ fn offset_result(
   input: FilterResult,
   dx: f32,
   dy: f32,
+  color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
 ) -> RenderResult<FilterResult> {
-  let pixmap = offset_pixmap(input.pixmap, dx, dy)?;
+  let pixmap = offset_pixmap(input.pixmap, dx, dy, color_interpolation_filters)?;
   let offset = Point::new(dx, dy);
   let region = clip_region(input.region.translate(offset), filter_region);
   Ok(FilterResult { pixmap, region })
@@ -5279,6 +5304,40 @@ mod tests {
       .expect("primitive output")
   }
 
+  fn apply_for_test_with_cif(
+    prim: &FilterPrimitive,
+    pixmap: &Pixmap,
+    color_interpolation_filters: ColorInterpolationFilters,
+  ) -> FilterResult {
+    let region = filter_region_for_pixmap(pixmap);
+    let src = FilterResult::full_region(pixmap.clone(), region);
+    let mut filter = SvgFilter {
+      color_interpolation_filters,
+      steps: Vec::new(),
+      region: SvgFilterRegion::default_for_units(SvgFilterUnits::UserSpaceOnUse),
+      filter_res: None,
+      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+      fingerprint: 0,
+    };
+    filter.refresh_fingerprint();
+    let results = HashMap::new();
+    apply_primitive(
+      &filter,
+      &region,
+      prim,
+      &src,
+      &results,
+      &src,
+      1.0,
+      1.0,
+      region,
+      color_interpolation_filters,
+      None,
+    )
+    .unwrap()
+    .expect("primitive output")
+  }
+
   #[test]
   fn source_alpha_input_has_zero_rgb() {
     let mut pixmap = new_pixmap(1, 1).unwrap();
@@ -5735,6 +5794,40 @@ mod tests {
         }
       }
     }
+  }
+
+  #[test]
+  fn offset_interpolates_in_color_interpolation_filters_space() {
+    let pixmap = pixmap_from_rgba(&[(0, 0, 0, 255), (255, 255, 255, 255)]);
+    let prim = FilterPrimitive::Offset {
+      input: FilterInput::SourceGraphic,
+      dx: 0.5,
+      dy: 0.0,
+    };
+
+    let srgb_out = apply_for_test_with_cif(&prim, &pixmap, ColorInterpolationFilters::SRGB);
+    let linear_out = apply_for_test_with_cif(&prim, &pixmap, ColorInterpolationFilters::LinearRGB);
+
+    let srgb_px = srgb_out.pixmap.pixels()[1];
+    let linear_px = linear_out.pixmap.pixels()[1];
+
+    let assert_close = |actual: u8, expected: u8| {
+      let delta = i16::from(actual) - i16::from(expected);
+      assert!(
+        delta.abs() <= 1,
+        "expected {expected}±1, got {actual}"
+      );
+    };
+
+    assert_close(srgb_px.red(), 128);
+    assert_close(srgb_px.green(), 128);
+    assert_close(srgb_px.blue(), 128);
+    assert_eq!(srgb_px.alpha(), 255);
+
+    assert_close(linear_px.red(), 188);
+    assert_close(linear_px.green(), 188);
+    assert_close(linear_px.blue(), 188);
+    assert_eq!(linear_px.alpha(), 255);
   }
 
   #[test]
