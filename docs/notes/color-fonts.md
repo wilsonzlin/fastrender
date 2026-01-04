@@ -1,42 +1,154 @@
 # Color font rendering
 
-FastRender supports a subset of OpenType color glyph formats. This note captures the current renderers, palette handling, and limitations so callers know what to expect.
+FastRender supports multiple OpenType color glyph formats. This note captures the
+renderer entry points, format preference order, palette plumbing, and known
+limitations.
 
 ## Rendering entry points
 
-- [`TextRasterizer`](../../src/paint/text_rasterize.rs) is the only renderer that consults [`ColorFontRenderer`](../../src/text/color_fonts/mod.rs). `render_shaped_run` tries, in order:
-  1. Embedded bitmaps from sbix (PNG/JPEG) or CBDT/CBLC (`ttf_parser::Face::glyph_raster_image`). Payloads are decoded into premultiplied RGBA and oversized strikes are rejected.
-  2. SVG-in-OT glyphs rendered with `resvg`/`usvg`, scaled from the font's units-per-em to the requested size (after sanitizing the embedded SVG; see limitations below).
-  3. COLR v1 paint graphs (`text/color_fonts/colr_v1.rs`) with solid/gradient brushes, transforms, and composite modes. Linear/radial/sweep gradients (including Var* forms and VarColorLine stops) honor run variations; unsupported/unknown paint parameters abort COLR rendering and trigger a fallback.
-  4. COLR/CPAL v0 layered outlines filled with palette colors (0xFFFF resolves to the resolved text color).
+- Low-level rasterization: [`TextRasterizer`](../../src/paint/text_rasterize.rs)
+  - Main entry points are `render_shaped_run*`, `render_runs`, and `render_glyph_run`.
+  - `TextRasterizer` delegates per-glyph color rasterization to
+    [`ColorFontRenderer`](../../src/text/color_fonts/mod.rs); when it returns `None`,
+    glyphs fall back to monochrome outline rendering.
+  - `TextRenderState` (transform, clip, opacity, blend mode) applies to both
+    outline and color glyph draws.
 
-  When none of these apply, glyphs fall back to monochrome outlines tinted with the text color. `TextRasterizer` can also be called with an explicit [`TextRenderState`](../../src/paint/text_rasterize.rs) to apply additional transforms, clips, opacity, and blend modes.
+- Default page renderer: display list
+  - [`DisplayListRenderer`](../../src/paint/display_list_renderer.rs) executes a
+    [`DisplayList`](../../src/paint/display_list.rs) into a
+    [`Canvas`](../../src/paint/canvas.rs).
+  - `Canvas` owns a `TextRasterizer`. `DisplayListRenderer::new_with_text_state`
+    constructs it with shared glyph + color-glyph caches so bitmap/SVG/COLR rasters
+    are reused across display-list tiles and threads.
+  - Display-list text items are built from shaped runs in
+    [`DisplayListBuilder`](../../src/paint/display_list_builder.rs) and rendered via
+    `Canvas::draw_text` plus the display-list text-shadow path.
 
-- The display list path ([`display_list_renderer`](../../src/paint/display_list_renderer.rs) → [`canvas`](../../src/paint/canvas.rs)) uses `TextRasterizer` + `ColorFontRenderer` when drawing text items. This means bitmap/SVG/COLR fonts render in the main pipeline and share the same glyph/color caches as the direct `TextRasterizer` APIs.
+## Supported formats (preference order)
+
+[`ColorFontRenderer::render`](../../src/text/color_fonts/mod.rs) tries, in order:
+
+1. Embedded bitmaps (CBDT/CBLC or sbix):
+   [`bitmap.rs`](../../src/text/color_fonts/bitmap.rs)
+   - `sbix` strikes are preferred when present; supported encodings are PNG
+     (`"png "`) and JPEG (`"jpg "`/`"jpeg"`).
+   - CBDT/CBLC payloads surfaced by `ttf_parser::Face::glyph_raster_image` are
+     decoded as PNG (`RasterImageFormat::PNG`), premultiplied BGRA32
+     (`BitmapPremulBgra32`), or (where possible) via the `image` crate.
+2. SVG-in-OT glyphs: [`svg.rs`](../../src/text/color_fonts/svg.rs) rendered with
+   `resvg`/`usvg` and scaled from the font's units-per-em to the requested size.
+3. COLR v1 paint graphs: [`colr_v1.rs`](../../src/text/color_fonts/colr_v1.rs).
+4. COLR/CPAL v0 layered outlines: [`colr_v0.rs`](../../src/text/color_fonts/colr_v0.rs).
+5. Fallback: monochrome outline rendering tinted with the text color.
 
 ## Palette handling
 
-- CSS `font-palette` and `@font-palette-values` are parsed and resolved via [`style/font_palette.rs`](../../src/style/font_palette.rs); shaped runs carry a `palette_index` and `palette_overrides` ([`text/pipeline.rs`](../../src/text/pipeline.rs)) derived from the active style.
-- CPAL parsing/selection lives in [`text/color_fonts/cpal.rs`](../../src/text/color_fonts/cpal.rs) (re-exported via [`text::cpal`](../../src/text/cpal.rs)). `select_cpal_palette` respects CPAL v1 `paletteTypes` bits for light/dark palettes and clamps indices to the available count. `parse_cpal_palette` returns palette colors and optional palette type metadata.
-- Override colors are applied to COLR v0/v1 rendering; missing entries and palette indices of 0xFFFF resolve to the resolved text color. CPAL palette labels are not consulted yet.
-- **Display list caveat:** display list [`TextItem`](../../src/paint/display_list.rs) currently stores only `palette_index`, so `@font-palette-values override-colors` are honoured when rendering `ShapedRun`s directly via `TextRasterizer` but are not yet plumbed through display-list text items.
+### From CSS to shaped runs
+
+- CSS parsing/cascade:
+  - `font-palette` is stored on `ComputedStyle` as `FontPalette` (see
+    [`src/style/types.rs`](../../src/style/types.rs)).
+  - `@font-palette-values` rules are stored in a `FontPaletteRegistry` (see
+    [`src/style/font_palette.rs`](../../src/style/font_palette.rs)).
+
+- Shaping:
+  - During shaping in [`src/text/pipeline.rs`](../../src/text/pipeline.rs)
+    (`push_font_run`), FastRender resolves the active palette for the chosen font
+    family via
+    [`resolve_font_palette_for_font`](../../src/style/font_palette.rs).
+    - Returns a base palette preference (`normal|light|dark|index(n)`), plus a list
+      of `(palette_entry_index, Rgba)` overrides with `currentColor` already
+      resolved.
+    - Computes `override_hash` (0 when there are no overrides).
+  - The base preference is converted to a CPAL palette index via
+    [`select_cpal_palette`](../../src/text/color_fonts/cpal.rs) and stored on the run
+    as `palette_index`.
+  - The resolved overrides + hash are stored on the run as
+    `palette_overrides: Arc<Vec<(u16, Rgba)>>` and `palette_override_hash`.
+
+### During rasterization
+
+- `TextRasterizer::render_glyph_run` passes `palette_index`, `palette_overrides`,
+  and `palette_override_hash` into `ColorFontRenderer::render`.
+- COLR v0/v1 apply overrides by replacing entries in the selected CPAL palette
+  before resolving layer colors (see
+  [`colr_v0.rs`](../../src/text/color_fonts/colr_v0.rs) and
+  [`colr_v1.rs`](../../src/text/color_fonts/colr_v1.rs)).
+- `palette_override_hash` is included in color-glyph cache keys (e.g.
+  `ColorGlyphCacheKey` in `TextRasterizer` and `PaintCacheKey` for COLRv1 plans) so
+  different override sets do not alias.
+
+### What the display list backend uses today
+
+- `TextItem` in the display list carries `palette_index` (see
+  [`src/paint/display_list.rs`](../../src/paint/display_list.rs)) and the renderer
+  passes it through when drawing text.
+- Palette overrides are currently *not* recorded in display list text items:
+  - `DisplayListBuilder::emit_shaped_runs` copies `run.palette_index` but drops
+    `run.palette_overrides` / `run.palette_override_hash` (see
+    [`src/paint/display_list_builder.rs`](../../src/paint/display_list_builder.rs)).
+  - `Canvas::draw_text` therefore calls `TextRasterizer::render_glyph_run` with
+    `palette_overrides = &[]` and `palette_override_hash = 0` (see
+    [`src/paint/canvas.rs`](../../src/paint/canvas.rs)).
+- Net effect: base palette selection (`font-palette: normal|light|dark` and
+  `@font-palette-values base-palette`) affects the default renderer, but
+  `@font-palette-values override-colors` is not applied end-to-end via the display
+  list path.
 
 ## COLR v1 coverage and variations
 
-- COLR v1 paints are parsed with `read_fonts` and rendered by [`text/color_fonts/colr_v1.rs`](../../src/text/color_fonts/colr_v1.rs), reusing the CPAL palette + per-run overrides and any per-glyph clip boxes to bound the raster.
-- Supported paints include `PaintColrLayers`/`PaintColrGlyph`, `PaintGlyph` filled by `PaintSolid`/`PaintVarSolid`, linear/radial gradients (and their Var* counterparts) with PAD/REPEAT/REFLECT extends, transform nodes (translate/scale/rotate/skew, including around-center and Var* forms), and `PaintComposite` with blend modes mapped to tiny-skia equivalents.
-- Sweep gradients (`PaintSweepGradient`/`PaintVarSweepGradient`) are implemented, including transform accumulation and PAD/REPEAT/REFLECT extends (see `tests/colr_v1_sweep_gradient_test.rs` and the `colrv1-sweep-test.ttf` / `colrv1-var-sweep-test.ttf` fixtures described in [`tests/fixtures/fonts/README.md`](../../tests/fixtures/fonts/README.md)).
-- Shaped-run variations (`rustybuzz::Variation`) are applied before color rasterization: they are set on the `ttf_parser` face for outlines, and `read_fonts` resolves Var* paints/`VarColorLine` stops against the same normalized coords via the COLR `ItemVariationStore`. The `colrv1-var-test.ttf` fixtures cover gradient endpoint + stop adjustments at `wght=1`, and color glyph cache keys include variations to keep instances distinct.
+COLRv1 rendering lives in
+[`src/text/color_fonts/colr_v1.rs`](../../src/text/color_fonts/colr_v1.rs) and is
+exercised by tests such as:
+
+- `tests/colr_v1_color_font_test.rs`
+- `tests/colr_v1_radial_gradient_test.rs`
+- `tests/colr_v1_sweep_gradient_test.rs` (see also `colrv1-sweep-test.ttf` /
+  `colrv1-var-sweep-test.ttf` in
+  [`tests/fixtures/fonts/README.md`](../../tests/fixtures/fonts/README.md))
+
+Implemented COLRv1 features include:
+
+- `PaintColrLayers` / `PaintColrGlyph` / `PaintGlyph` outline painting.
+- Solids (`PaintSolid`, `PaintVarSolid`).
+- Gradients: linear, radial, and sweep (`PaintSweepGradient` /
+  `PaintVarSweepGradient`), with PAD/REPEAT/REFLECT extends.
+- Transform nodes (translate/scale/rotate/skew and around-center variants,
+  including Var* forms).
+- `PaintComposite` with `CompositeMode` mapped onto tiny-skia blend modes.
+- Variable font support:
+  - Run variations are applied to outlines (`FontInstance` /
+    `apply_rustybuzz_variations`).
+  - Var* gradients and `VarColorLine` stop deltas are resolved via the COLR
+    `ItemVariationStore` using normalized variation coordinates.
+- Encountering an unsupported/unknown COLRv1 paint record causes the COLRv1 path
+  to abort so `ColorFontRenderer` can fall back to COLRv0 or monochrome.
 
 ## Transforms, opacity, and shadows
 
-- `TextRasterizer` composites color glyph pixmaps with SourceOver blending and optional run rotation. It applies global text alpha/opacity at draw time (cached rasters keep `currentColor` paints opaque), so changing CSS opacity does not require re-rasterizing color glyphs (see `tests/color_glyph_opacity.rs`).
-- `Canvas` passes stacking-context transforms, clips, opacity, and blend modes down to `TextRasterizer` so both outline and color-glyph rendering participate in those effects.
-- Display-list text shadows are rendered by rasterizing the glyph run into an offscreen pixmap (via `TextRasterizer`) and then blurring it. For color fonts, this means palette/gradient layers remain colored in the shadow; the `text-shadow` color primarily affects `currentColor` paints.
+- `TextRasterizer` applies global text alpha/opacity at draw time (cached rasters
+  keep `currentColor` paints opaque), so changing CSS opacity does not require
+  re-rasterizing color glyphs (see `tests/color_glyph_opacity.rs`).
+- `Canvas` passes stacking-context transforms, clips, opacity, and blend modes down
+  to `TextRasterizer` so both outline and color-glyph rendering participate in
+  those effects.
+- Display-list text shadows are rendered by rasterizing the glyph run into an
+  offscreen pixmap (via `TextRasterizer`) and then blurring it. For color fonts,
+  this means palette/gradient layers remain colored in the shadow; the
+  `text-shadow` color primarily affects `currentColor` paints.
 
 ## Limitations
 
-- Display-list text currently does not carry `palette_overrides`, so `@font-palette-values override-colors` only affect callers rendering `ShapedRun`s directly (or callers that pass overrides explicitly).
-- sbix bitmap glyphs support PNG and JPEG payloads; other sbix image tags are skipped.
-- SVG-in-OT glyphs are rendered from the embedded document only; external references are rejected and large `data:` URLs are capped (see `MAX_SVG_GLYPH_*` constants in [`text/color_fonts/svg.rs`](../../src/text/color_fonts/svg.rs)).
-- COLR v1 rendering is best-effort: malformed tables, unknown extend modes, unknown composite modes, or cyclic paint graphs abort color rendering for that glyph and fall back to monochrome outlines.
+- Display-list text currently does not carry `palette_overrides`, so
+  `@font-palette-values override-colors` only affect callers rendering `ShapedRun`s
+  directly (or callers that pass overrides explicitly).
+- `sbix` supports PNG + JPEG only; other `sbix` tags are skipped (see
+  [`bitmap.rs`](../../src/text/color_fonts/bitmap.rs)).
+- SVG glyphs are rendered with `usvg` resources disabled and are rejected if the
+  SVG contains external references (`href`/`url()`). Only fragment references and
+  bounded-size `data:` URLs are allowed (see
+  [`svg.rs`](../../src/text/color_fonts/svg.rs)).
+- COLR v1 rendering is best-effort: malformed tables, unknown extend modes, unknown
+  composite modes, or cyclic paint graphs abort color rendering for that glyph and
+  fall back to COLRv0/monochrome.
