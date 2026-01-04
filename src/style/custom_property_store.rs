@@ -31,7 +31,7 @@ pub(crate) fn test_hamt_inserts() -> u64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CustomPropertyStore {
   map: CustomPropertyMap,
-  /// Count of custom property values that are the CSS-wide keyword `revert-layer`.
+  /// Count of custom property values containing the keyword `revert-layer`.
   ///
   /// This is an optimization for `apply_cascaded_declarations`, which otherwise would scan every
   /// custom-property value for the token on every element. Large real-world pages often define
@@ -136,8 +136,8 @@ pub(crate) fn contains_revert_layer_token(haystack: &str) -> bool {
     return true;
   }
 
-  // Fast-path: if there are no escapes and the literal substring isn't present, the value can't be
-  // the keyword.
+  // Fast-path: if there are no escapes and the literal substring isn't present, the token stream
+  // cannot contain `revert-layer`.
   if !has_backslash {
     let mut has_candidate = false;
     for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
@@ -158,26 +158,38 @@ pub(crate) fn contains_revert_layer_token(haystack: &str) -> bool {
     }
   }
 
-  let mut input = ParserInput::new(haystack);
-  let mut parser = Parser::new(&mut input);
-  let mut matched = false;
-  while let Ok(token) = parser.next_including_whitespace_and_comments() {
-    match token {
-      Token::WhiteSpace(_) | Token::Comment(_) => continue,
-      Token::Ident(ident) => {
-        if matched {
-          return false;
+  fn contains_revert_layer_in_parser<'i, 't>(parser: &mut Parser<'i, 't>) -> bool {
+    while let Ok(token) = parser.next_including_whitespace_and_comments() {
+      match token {
+        Token::Ident(ident) if ident.eq_ignore_ascii_case("revert-layer") => return true,
+        Token::Function(name) if name.eq_ignore_ascii_case("url") => {
+          // `url(...)` arguments are URL tokens; the substring `revert-layer` inside them cannot
+          // produce the CSS-wide keyword, so skip scanning inside.
+          let _ =
+            parser.parse_nested_block(|_| Ok::<_, cssparser::ParseError<'i, ()>>(false));
         }
-        matched = ident.eq_ignore_ascii_case("revert-layer");
-        if !matched {
-          return false;
+        Token::Function(_)
+        | Token::ParenthesisBlock
+        | Token::SquareBracketBlock
+        | Token::CurlyBracketBlock => {
+          if let Ok(nested_found) = parser.parse_nested_block(|nested| {
+            Ok::<_, cssparser::ParseError<'i, ()>>(contains_revert_layer_in_parser(nested))
+          }) {
+            if nested_found {
+              return true;
+            }
+          }
         }
+        _ => {}
       }
-      _ => return false,
     }
+
+    false
   }
 
-  matched
+  let mut input = ParserInput::new(haystack);
+  let mut parser = Parser::new(&mut input);
+  contains_revert_layer_in_parser(&mut parser)
 }
 
 #[cfg(test)]
@@ -189,7 +201,8 @@ mod tests {
     assert!(contains_revert_layer_token("revert-layer"));
     assert!(contains_revert_layer_token("revert\\-layer"));
     assert!(contains_revert_layer_token("revert-layer/*comment*/"));
-    assert!(!contains_revert_layer_token("foo revert-layer bar"));
+    assert!(contains_revert_layer_token("foo revert-layer bar"));
+    assert!(contains_revert_layer_token("var(--missing, revert-layer)"));
 
     // Must not match the substring inside a larger identifier.
     assert!(!contains_revert_layer_token("revert-layerx"));
