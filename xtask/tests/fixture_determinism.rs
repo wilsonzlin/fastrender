@@ -7,7 +7,9 @@ use tempfile::tempdir;
 #[cfg(unix)]
 fn make_executable(path: &Path) {
   use std::os::unix::fs::PermissionsExt;
-  let mut perms = fs::metadata(path).expect("stat stub executable").permissions();
+  let mut perms = fs::metadata(path)
+    .expect("stat stub executable")
+    .permissions();
   perms.set_mode(0o755);
   fs::set_permissions(path, perms).expect("chmod stub executable");
 }
@@ -176,35 +178,6 @@ exit 0
   diff_renders
 }
 
-fn write_stub_diff_snapshots(target_dir: &Path) -> PathBuf {
-  let diff_snapshots = target_dir.join("release").join("diff_snapshots");
-  fs::write(
-    &diff_snapshots,
-    r#"#!/usr/bin/env sh
-set -eu
-
-html=""
-json=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --html) html="$2"; shift 2;;
-    --json) json="$2"; shift 2;;
-    *) shift;;
-  esac
-done
-
-mkdir -p "$(dirname "$html")"
-mkdir -p "$(dirname "$json")"
-echo "<!doctype html><title>stub diff_snapshots</title>" > "$html"
-echo "{}" > "$json"
-exit 0
-"#,
-  )
-  .expect("write stub diff_snapshots");
-  make_executable(&diff_snapshots);
-  diff_snapshots
-}
-
 fn run_fixture_determinism(
   bin_dir: &Path,
   target_dir: &Path,
@@ -240,7 +213,6 @@ fn fixture_determinism_no_build_writes_report() {
   write_stub_cargo(&bin_dir);
   write_stub_render_fixtures(&target_dir);
   write_stub_diff_renders(&target_dir, false);
-  write_stub_diff_snapshots(&target_dir);
 
   let fixtures_dir = temp.path().join("fixtures");
   fs::create_dir_all(&fixtures_dir).expect("create fixtures dir");
@@ -275,7 +247,6 @@ fn fixture_determinism_fails_when_differences_found() {
   write_stub_cargo(&bin_dir);
   write_stub_render_fixtures(&target_dir);
   write_stub_diff_renders(&target_dir, true);
-  write_stub_diff_snapshots(&target_dir);
 
   let fixtures_dir = temp.path().join("fixtures");
   fs::create_dir_all(&fixtures_dir).expect("create fixtures dir");
@@ -310,7 +281,6 @@ fn fixture_determinism_allow_differences_exits_zero() {
   write_stub_cargo(&bin_dir);
   write_stub_render_fixtures(&target_dir);
   write_stub_diff_renders(&target_dir, true);
-  write_stub_diff_snapshots(&target_dir);
 
   let fixtures_dir = temp.path().join("fixtures");
   fs::create_dir_all(&fixtures_dir).expect("create fixtures dir");

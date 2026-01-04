@@ -253,10 +253,14 @@ struct DeterminismArtifacts {
   actual_png: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   diff_png: Option<String>,
-  snapshot_before_dir: String,
-  snapshot_after_dir: String,
-  diff_snapshots_html: String,
-  diff_snapshots_json: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  snapshot_before_dir: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  snapshot_after_dir: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  diff_snapshots_html: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  diff_snapshots_json: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -290,14 +294,18 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
   let render_fixtures_exe = render_fixtures_executable(&repo_root);
   let diff_renders_exe = crate::diff_renders_executable(&repo_root);
   let diff_snapshots_exe = diff_snapshots_executable(&repo_root);
+  let mut diff_snapshots_exe_opt = None;
   if args.no_build {
-    for exe in [&render_fixtures_exe, &diff_renders_exe, &diff_snapshots_exe] {
+    for exe in [&render_fixtures_exe, &diff_renders_exe] {
       if !exe.is_file() {
         bail!(
           "--no-build was set, but required executable does not exist at {}",
           exe.display()
         );
       }
+    }
+    if diff_snapshots_exe.is_file() {
+      diff_snapshots_exe_opt = Some(diff_snapshots_exe.clone());
     }
   } else {
     let mut build_cmd = Command::new("cargo");
@@ -310,6 +318,7 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
       .current_dir(&repo_root);
     println!("Building render_fixtures + diff_renders + diff_snapshots...");
     crate::run_command(build_cmd)?;
+    diff_snapshots_exe_opt = Some(diff_snapshots_exe.clone());
   }
 
   println!(
@@ -491,6 +500,20 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
     a.name.cmp(&b.name)
   });
 
+  let has_diff_entries = nondeterministic.iter().any(|fixture| {
+    fixture
+      .occurrences
+      .iter()
+      .any(|occurrence| occurrence.status == EntryStatus::Diff)
+  });
+
+  if has_diff_entries && diff_snapshots_exe_opt.is_none() {
+    eprintln!(
+      "Warning: diff_snapshots binary not found at {}; snapshot diffs will be skipped.",
+      diff_snapshots_exe.display()
+    );
+  }
+
   let determinism_root = crate::cargo_target_dir(&repo_root).join(DETERMINISM_DIFFS_DIR);
   let mut artifact_failures = Vec::new();
   for fixture in &mut nondeterministic {
@@ -498,7 +521,7 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
       &repo_root,
       &fixtures_root,
       &render_fixtures_exe,
-      &diff_snapshots_exe,
+      diff_snapshots_exe_opt.as_deref(),
       &determinism_root,
       fixture,
       &layout,
@@ -587,9 +610,15 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
         if let Some(diff) = artifacts.diff_png.as_deref() {
           println!("    diff:     {diff}");
         }
-        println!("    snapshot run1: {}", artifacts.snapshot_before_dir);
-        println!("    snapshot run2: {}", artifacts.snapshot_after_dir);
-        println!("    diff_snapshots: {}", artifacts.diff_snapshots_html);
+        if let (Some(run1), Some(run2), Some(stage)) = (
+          artifacts.snapshot_before_dir.as_deref(),
+          artifacts.snapshot_after_dir.as_deref(),
+          artifacts.diff_snapshots_html.as_deref(),
+        ) {
+          println!("    snapshot run1: {}", run1);
+          println!("    snapshot run2: {}", run2);
+          println!("    diff_snapshots: {}", stage);
+        }
       }
     }
   }
@@ -646,15 +675,18 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
       message.push_str("\n\nPer-fixture determinism artifacts:");
       for fixture in &report.nondeterministic {
         if let Some(artifacts) = fixture.artifacts.as_ref() {
+          let snap1 = artifacts.snapshot_before_dir.as_deref().unwrap_or("-");
+          let snap2 = artifacts.snapshot_after_dir.as_deref().unwrap_or("-");
+          let stage = artifacts.diff_snapshots_html.as_deref().unwrap_or("-");
           message.push_str(&format!(
             "\n- {name}\n  expected: {expected}\n  actual:   {actual}\n  diff:     {diff}\n  snapshot run1: {snap1}\n  snapshot run2: {snap2}\n  diff_snapshots: {stage}",
             name = fixture.name,
             expected = artifacts.expected_png,
             actual = artifacts.actual_png,
             diff = artifacts.diff_png.as_deref().unwrap_or("-"),
-            snap1 = artifacts.snapshot_before_dir,
-            snap2 = artifacts.snapshot_after_dir,
-            stage = artifacts.diff_snapshots_html,
+            snap1 = snap1,
+            snap2 = snap2,
+            stage = stage,
           ));
         } else {
           let error = fixture.worst.error.as_deref().unwrap_or("-");
@@ -1023,17 +1055,22 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
     );
 
     let artifacts_cell = if let Some(artifacts) = fixture.artifacts.as_ref() {
-      let expected_href =
-        path_for_report(&layout.root, &resolve_repo_relative(&repo_root, &artifacts.expected_png));
-      let actual_href =
-        path_for_report(&layout.root, &resolve_repo_relative(&repo_root, &artifacts.actual_png));
-      let diff_href = artifacts.diff_png.as_deref().map(|p| {
-        path_for_report(&layout.root, &resolve_repo_relative(&repo_root, p))
-      });
-      let snapshot_href = path_for_report(
+      let expected_href = path_for_report(
         &layout.root,
-        &resolve_repo_relative(&repo_root, &artifacts.diff_snapshots_html),
+        &resolve_repo_relative(&repo_root, &artifacts.expected_png),
       );
+      let actual_href = path_for_report(
+        &layout.root,
+        &resolve_repo_relative(&repo_root, &artifacts.actual_png),
+      );
+      let diff_href = artifacts
+        .diff_png
+        .as_deref()
+        .map(|p| path_for_report(&layout.root, &resolve_repo_relative(&repo_root, p)));
+      let snapshot_href = artifacts
+        .diff_snapshots_html
+        .as_deref()
+        .map(|p| path_for_report(&layout.root, &resolve_repo_relative(&repo_root, p)));
 
       let diff_row = diff_href
         .as_deref()
@@ -1045,17 +1082,27 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
         })
         .unwrap_or_default();
 
+      let snapshot_row = snapshot_href
+        .as_deref()
+        .map(|href| {
+          format!(
+            r#"<li><a href="{href}">diff_snapshots.html</a></li>"#,
+            href = escape_html(href)
+          )
+        })
+        .unwrap_or_default();
+
       format!(
         r#"<details><summary>artifacts</summary><ul>
   <li><a href="{expected_href}">expected.png</a></li>
   <li><a href="{actual_href}">actual.png</a></li>
   {diff_row}
-  <li><a href="{snapshot_href}">diff_snapshots.html</a></li>
-</ul></details>"#,
+  {snapshot_row}
+ </ul></details>"#,
         expected_href = escape_html(&expected_href),
         actual_href = escape_html(&actual_href),
         diff_row = diff_row,
-        snapshot_href = escape_html(&snapshot_href),
+        snapshot_row = snapshot_row,
       )
     } else {
       "-".to_string()
@@ -1179,7 +1226,7 @@ fn capture_artifacts_for_fixture(
   repo_root: &Path,
   fixtures_root: &Path,
   render_fixtures_exe: &Path,
-  diff_snapshots_exe: &Path,
+  diff_snapshots_exe: Option<&Path>,
   determinism_root: &Path,
   fixture: &mut FixtureNondeterminism,
   layout: &Layout,
@@ -1239,10 +1286,28 @@ fn capture_artifacts_for_fixture(
   let diff_png_path = out_root.join(format!("{name}_diff.png"));
   let diff_written = match diff.diff_png().context("encode diff png")? {
     Some(bytes) => {
-      fs::write(&diff_png_path, bytes).with_context(|| format!("write {}", diff_png_path.display()))?;
+      fs::write(&diff_png_path, bytes)
+        .with_context(|| format!("write {}", diff_png_path.display()))?;
       Some(diff_png_path)
     }
     None => None,
+  };
+
+  fixture.artifacts = Some(DeterminismArtifacts {
+    root: path_relative_to_root(repo_root, &out_root),
+    expected_png: path_relative_to_root(repo_root, &expected_png_path),
+    actual_png: path_relative_to_root(repo_root, &actual_png_path),
+    diff_png: diff_written
+      .as_deref()
+      .map(|p| path_relative_to_root(repo_root, p)),
+    snapshot_before_dir: None,
+    snapshot_after_dir: None,
+    diff_snapshots_html: None,
+    diff_snapshots_json: None,
+  });
+
+  let Some(diff_snapshots_exe) = diff_snapshots_exe else {
+    return Ok(());
   };
 
   // --- Snapshot capture (re-run with --write-snapshot) ---
@@ -1252,8 +1317,13 @@ fn capture_artifacts_for_fixture(
   clear_dir(&run2_out).with_context(|| format!("clear {}", run2_out.display()))?;
 
   for (idx, out_dir) in [(1usize, &run1_out), (2usize, &run2_out)] {
-    let mut cmd =
-      build_render_fixtures_snapshot_command(render_fixtures_exe, fixtures_root, out_dir, args, name)?;
+    let mut cmd = build_render_fixtures_snapshot_command(
+      render_fixtures_exe,
+      fixtures_root,
+      out_dir,
+      args,
+      name,
+    )?;
     cmd.current_dir(repo_root);
     println!("Capturing snapshot for {name} (run {idx}/2)...");
     let status = run_command_allow_failure(cmd).context("render_fixtures failed to run")?;
@@ -1307,16 +1377,12 @@ fn capture_artifacts_for_fixture(
   println!("Generating diff_snapshots report for {name}...");
   crate::run_command(cmd).context("diff_snapshots failed")?;
 
-  fixture.artifacts = Some(DeterminismArtifacts {
-    root: path_relative_to_root(repo_root, &out_root),
-    expected_png: path_relative_to_root(repo_root, &expected_png_path),
-    actual_png: path_relative_to_root(repo_root, &actual_png_path),
-    diff_png: diff_written.as_deref().map(|p| path_relative_to_root(repo_root, p)),
-    snapshot_before_dir: path_relative_to_root(repo_root, &snapshot_before_dir),
-    snapshot_after_dir: path_relative_to_root(repo_root, &snapshot_after_dir),
-    diff_snapshots_html: path_relative_to_root(repo_root, &diff_snapshots_html),
-    diff_snapshots_json: path_relative_to_root(repo_root, &diff_snapshots_json),
-  });
+  if let Some(artifacts) = fixture.artifacts.as_mut() {
+    artifacts.snapshot_before_dir = Some(path_relative_to_root(repo_root, &snapshot_before_dir));
+    artifacts.snapshot_after_dir = Some(path_relative_to_root(repo_root, &snapshot_after_dir));
+    artifacts.diff_snapshots_html = Some(path_relative_to_root(repo_root, &diff_snapshots_html));
+    artifacts.diff_snapshots_json = Some(path_relative_to_root(repo_root, &diff_snapshots_json));
+  }
 
   Ok(())
 }
