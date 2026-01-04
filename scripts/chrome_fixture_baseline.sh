@@ -5,6 +5,7 @@ set -euo pipefail
 # and write PNG screenshots.
 #
 # This is the deterministic/offline counterpart to `scripts/chrome_baseline.sh`:
+# - This script is a thin wrapper around `cargo xtask chrome-baseline-fixtures`.
 # - Targets self-contained fixtures (HTML + local assets) under `tests/pages/fixtures/`
 # - Loads fixtures via `file://` and injects:
 #   - `<base href="file://.../fixture/">` so patched HTML can live in a temp dir
@@ -91,8 +92,6 @@ if ! [[ "${VIEWPORT}" =~ ^[0-9]+x[0-9]+$ ]]; then
   echo "invalid --viewport: ${VIEWPORT} (expected WxH like 1040x1240)" >&2
   exit 2
 fi
-VIEWPORT_W="${VIEWPORT%x*}"
-VIEWPORT_H="${VIEWPORT#*x}"
 
 case "${JS,,}" in
   on|off) ;;
@@ -102,30 +101,6 @@ case "${JS,,}" in
     ;;
 esac
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required for HTML patching." >&2
-  exit 2
-fi
-
-CHROME=""
-if [[ -n "${CHROME_BIN}" ]]; then
-  CHROME="${CHROME_BIN}"
-elif command -v google-chrome-stable >/dev/null 2>&1; then
-  CHROME="google-chrome-stable"
-elif command -v google-chrome >/dev/null 2>&1; then
-  CHROME="google-chrome"
-elif command -v chromium >/dev/null 2>&1; then
-  CHROME="chromium"
-elif command -v chromium-browser >/dev/null 2>&1; then
-  CHROME="chromium-browser"
-fi
-
-if [[ -z "${CHROME}" ]]; then
-  echo "No Chrome/Chromium binary found." >&2
-  echo "Install one (e.g. google-chrome or chromium) or pass --chrome /path/to/chrome." >&2
-  exit 2
-fi
-
 if [[ ! -d "${FIXTURES_DIR}" ]]; then
   echo "Fixtures dir not found: ${FIXTURES_DIR}" >&2
   exit 1
@@ -133,56 +108,17 @@ fi
 
 mkdir -p "${OUT_DIR}"
 
-# Snap-packaged Chromium runs under strict confinement (AppArmor + mount namespaces).
-# In that configuration, `/tmp` is private to the snap, and Chromium may be unable to
-# write screenshots to arbitrary repo paths. Use a temp dir under the snap's common
-# directory when available so the screenshot is visible to the host process.
-CHROME_PATH="$(command -v "${CHROME}" || true)"
-TMP_TEMPLATE=""
-if [[ "${CHROME_PATH}" == /snap/bin/chromium* ]]; then
-  SNAP_COMMON_DIR="${HOME}/snap/chromium/common"
-  mkdir -p "${SNAP_COMMON_DIR}" 2>/dev/null || true
-  if [[ -d "${SNAP_COMMON_DIR}" ]]; then
-    TMP_TEMPLATE="${SNAP_COMMON_DIR}/fastrender-chrome-fixtures.XXXXXX"
-  fi
-fi
-
-if [[ -n "${TMP_TEMPLATE}" ]]; then
-  TMP_ROOT="$(mktemp -d "${TMP_TEMPLATE}")"
-else
-  TMP_ROOT="$(mktemp -d)"
-fi
-cleanup() {
-  rm -rf "${TMP_ROOT}"
-}
-trap cleanup EXIT
-
 discover_default_fixtures() {
   local out=()
   if [[ -f tests/pages_regression_test.rs ]]; then
     # Extract `html: "name/index.html"` entries from the regression suite.
-    mapfile -t out < <(python3 - <<'PY'
-import re
-from pathlib import Path
-
-src = Path("tests/pages_regression_test.rs")
-try:
-    text = src.read_text(encoding="utf-8")
-except Exception:
-    raise SystemExit(0)
-
-paths = re.findall(r'html:\s*"([^"]+)"', text)
-seen = set()
-names = []
-for p in paths:
-    name = p.split("/", 1)[0]
-    if name and name not in seen:
-        seen.add(name)
-        names.append(name)
-for n in names:
-    print(n)
-PY
-)
+    mapfile -t out < <(
+      (
+        grep -Eo 'html:[[:space:]]*"[^"]+"' tests/pages_regression_test.rs 2>/dev/null || true
+      ) | sed -E 's/.*"([^"]+)".*/\1/' \
+        | awk -F/ '{print $1}' \
+        | awk '!seen[$0]++'
+    )
   fi
 
   if [[ "${#out[@]}" -eq 0 ]]; then
@@ -234,175 +170,23 @@ if [[ "${#FIXTURES[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-fail=0
-ok=0
-
-echo "Chrome: ${CHROME}"
 echo "Fixtures: ${FIXTURES_DIR}"
 echo "Output:   ${OUT_DIR}"
 echo "Viewport: ${VIEWPORT}  DPR: ${DPR}  JS: ${JS,,}  Timeout: ${TIMEOUT}s"
 echo
 
-patched_dir="${TMP_ROOT}/html"
-mkdir -p "${patched_dir}"
-
-tmp_png_dir="${TMP_ROOT}/screenshots"
-mkdir -p "${tmp_png_dir}"
-
-for fixture in "${FIXTURES[@]}"; do
-  fixture_dir="${FIXTURES_DIR}/${fixture}"
-  html_path="${fixture_dir}/index.html"
-  if [[ ! -f "${html_path}" ]]; then
-    echo "✗ ${fixture} (missing ${html_path})" >&2
-    fail=$((fail + 1))
-    continue
-  fi
-
-  fixture_abs="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "${fixture_dir}")"
-  base_url="file://${fixture_abs}/"
-
-  patched_html="${patched_dir}/${fixture}.html"
-
-  disable_js="0"
-  if [[ "${JS,,}" == "off" ]]; then
-    disable_js="1"
-  fi
-
-  python3 - "${html_path}" "${patched_html}" "${base_url}" "${disable_js}" <<'PY'
-import sys
-
-in_path = sys.argv[1]
-out_path = sys.argv[2]
-base_url = sys.argv[3].strip()
-disable_js = False
-if len(sys.argv) >= 5:
-    disable_js = sys.argv[4].strip() == "1"
-
-data = open(in_path, "rb").read()
-lower = data.lower()
-
-def insert_after_open_tag(tag: bytes, insertion: bytes):
-    start = 0
-    while True:
-        idx = lower.find(tag, start)
-        if idx == -1:
-            return None
-        after = lower[idx + len(tag): idx + len(tag) + 1]
-        if after and after not in b">\t\r\n /":
-            start = idx + len(tag)
-            continue
-        end = lower.find(b">", idx)
-        if end == -1:
-            return None
-        end += 1
-        return data[:end] + b"\n" + insertion + data[end:]
-
-def insert_after_doctype(insertion: bytes):
-    tag = b"<!doctype"
-    start = 0
-    while True:
-        idx = lower.find(tag, start)
-        if idx == -1:
-            return None
-        after = lower[idx + len(tag): idx + len(tag) + 1]
-        if after and after not in b">\t\r\n ":
-            start = idx + len(tag)
-            continue
-        end = lower.find(b">", idx)
-        if end == -1:
-            return None
-        end += 1
-        return data[:end] + b"\n" + insertion + data[end:]
-
-inserts = []
-if base_url:
-    inserts.append(f'<base href="{base_url}">'.encode("utf-8") + b"\n")
-
-# Enforce a deterministic/offline page load: allow only file/data subresources.
-# If JS is enabled, allow inline/file scripts for experimentation; otherwise block scripts.
-if disable_js:
-    csp = "default-src file: data:; style-src file: data: 'unsafe-inline'; script-src 'none';"
-else:
-    csp = "default-src file: data:; style-src file: data: 'unsafe-inline'; script-src file: data: 'unsafe-inline' 'unsafe-eval';"
-inserts.append(f'<meta http-equiv="Content-Security-Policy" content="{csp}">'.encode("utf-8") + b"\n")
-
-insertion = b"".join(inserts)
-
-out = insert_after_open_tag(b"<head", insertion)
-if out is None:
-    wrapped = b"<head>\n" + insertion + b"</head>\n"
-    out = insert_after_open_tag(b"<html", wrapped)
-if out is None:
-    # Some fixtures omit `<html>`/`<head>` but still include a `<!doctype html>` declaration. Do
-    # not insert anything before the doctype (that would force quirks mode in Chrome).
-    out = insert_after_doctype(insertion)
-if out is None:
-    out = insertion + data
-
-open(out_path, "wb").write(out)
-PY
-
-  url="file://${patched_html}"
-  png_path="${OUT_DIR}/${fixture}.png"
-  chrome_log="${OUT_DIR}/${fixture}.chrome.log"
-  tmp_png_path="${tmp_png_dir}/${fixture}.png"
-
-  profile_dir="${TMP_ROOT}/profile-${fixture}"
-  mkdir -p "${profile_dir}"
-
-  chrome_args=(
-    --headless=new
-    --no-sandbox
-    --disable-dev-shm-usage
-    --disable-gpu
-    --hide-scrollbars
-    --window-size="${VIEWPORT_W},${VIEWPORT_H}"
-    --force-device-scale-factor="${DPR}"
-    --disable-web-security
-    --allow-file-access-from-files
-    --disable-background-networking
-    --dns-prefetch-disable
-    --no-first-run
-    --no-default-browser-check
-    --disable-component-update
-    --disable-default-apps
-    --disable-sync
-    --host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE localhost"
-    --user-data-dir="${profile_dir}"
-    # Always write the screenshot to a temp directory and then copy it into OUT_DIR.
-    --screenshot="${tmp_png_path}"
-  )
-
-  ran_ok=0
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout "${TIMEOUT}s" "${CHROME}" "${chrome_args[@]}" "${url}" >"${chrome_log}" 2>&1; then
-      ran_ok=1
-    fi
-  else
-    if "${CHROME}" "${chrome_args[@]}" "${url}" >"${chrome_log}" 2>&1; then
-      ran_ok=1
-    fi
-  fi
-
-  if [[ "${ran_ok}" -eq 1 && -s "${tmp_png_path}" ]]; then
-    cp -f "${tmp_png_path}" "${png_path}"
-    ok=$((ok + 1))
-    echo "✓ ${fixture}"
-  else
-    fail=$((fail + 1))
-    if [[ "${ran_ok}" -eq 1 ]]; then
-      echo "✗ ${fixture} (no screenshot produced; see ${chrome_log})" >&2
-    else
-      echo "✗ ${fixture} (failed; see ${chrome_log})" >&2
-    fi
-  fi
-done
-
-echo
-echo "Done: ${ok} ok, ${fail} failed (out of ${#FIXTURES[@]})"
-echo "PNGs:  ${OUT_DIR}/*.png"
-echo "Logs:  ${OUT_DIR}/*.chrome.log"
-
-if [[ "${fail}" -gt 0 ]]; then
-  exit 1
+xtask_args=(
+  chrome-baseline-fixtures
+  --fixture-dir "${FIXTURES_DIR}"
+  --out-dir "${OUT_DIR}"
+  --viewport "${VIEWPORT}"
+  --dpr "${DPR}"
+  --timeout "${TIMEOUT}"
+  --js "${JS,,}"
+)
+if [[ -n "${CHROME_BIN}" ]]; then
+  xtask_args+=(--chrome "${CHROME_BIN}")
 fi
+xtask_args+=(-- "${FIXTURES[@]}")
+
+cargo xtask "${xtask_args[@]}"
