@@ -86,6 +86,28 @@ Artifacts and PR guidance:
 - **Do not commit** Chrome baseline PNGs or diff reports; they are local artifacts. Attach the generated report directory (or at least `report.html` + the referenced PNGs) to your PR description instead.
 - **Do commit** new/updated fixtures under `tests/pages/fixtures/<fixture>/` when they are part of the regression story.
 
+#### Comparing two Chrome-vs-FastRender reports (delta)
+
+When iterating on correctness, it’s often useful to quantify “did accuracy vs Chrome improve overall?” between two runs. You can compare two `diff_renders` reports (including `fixture-chrome-diff`’s `report.json`) with `compare_diff_reports`:
+
+```bash
+# On a baseline commit:
+cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff_before
+
+# On your current commit:
+cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff_after
+
+# Summarize deltas (improvements/regressions) between the two reports:
+cargo run --release --bin compare_diff_reports -- \
+  --baseline target/fixture_chrome_diff_before/report.json \
+  --new target/fixture_chrome_diff_after/report.json \
+  --json target/fixture_chrome_diff_delta/report.json \
+  --html target/fixture_chrome_diff_delta/report.html
+
+# Optional gating (exit non-zero on regressions):
+#   --fail-on-regression --regression-threshold-percent 0.05
+```
+
 #### CI option (no local Chrome required)
 
 If you can’t install Chrome/Chromium locally, the repository provides an **optional** GitHub Actions workflow that generates the same deterministic fixture-vs-Chrome diff report and uploads it as an artifact:
