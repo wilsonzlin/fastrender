@@ -141,10 +141,6 @@ struct Args {
   #[arg(long, default_value = "1.0")]
   dpr: f32,
 
-  /// Directory to write renders/logs (PNGs + *.log)
-  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
-  out_dir: PathBuf,
-
   /// Reduced transparency preference (reduce|no-preference)
   #[arg(long, value_parser = parse_bool_preference)]
   prefers_reduced_transparency: Option<bool>,
