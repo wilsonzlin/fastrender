@@ -247,6 +247,9 @@ Outputs (all under `target/` by default):
 - FastRender: `target/fastrender_fixture_renders/<fixture>.png` + `*.log`
 - Diff report: `target/chrome_vs_fastrender_fixtures.html` (plus JSON and embedded images under `*_files/`)
 
+By default the wrapper deletes the previous Chrome/FastRender output directories before rerunning.
+Pass `--no-clean` to preserve existing artifacts.
+
 Guarantees:
 
 - Chrome loads fixtures from `file://.../tests/pages/fixtures/<fixture>/index.html` and injects:
