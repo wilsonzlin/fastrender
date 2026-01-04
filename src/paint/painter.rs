@@ -12226,7 +12226,9 @@ pub enum PaintBackend {
 }
 
 pub(crate) fn paint_backend_from_env() -> PaintBackend {
-  let Ok(raw) = std::env::var("FASTR_PAINT_BACKEND") else {
+  // Prefer the active runtime toggles so library users (and tests) can override env-derived
+  // behavior without mutating the process environment.
+  let Some(raw) = crate::debug::runtime::runtime_toggles().get("FASTR_PAINT_BACKEND") else {
     return PaintBackend::DisplayList;
   };
   match raw.trim().to_ascii_lowercase().as_str() {
