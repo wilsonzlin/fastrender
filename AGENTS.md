@@ -60,6 +60,11 @@ Chrome diffs/baselines are local artifacts and are not required CI gates unless 
 scripts/pageset.sh
 # or:
 cargo xtask pageset
+# Capture accuracy telemetry (writes `progress.pages[*].accuracy`; requires Chrome baselines):
+# - Compare against existing baselines under `fetches/chrome_renders/`:
+#   cargo xtask pageset --accuracy
+# - Or auto-generate missing baselines via headless Chrome/Chromium:
+#   cargo xtask pageset --accuracy --accuracy-baseline chrome
 # or (auto-capture offline fixtures for failing pages from the warmed disk cache;
 # scans progress/pages/*.json and imports missing fixtures under tests/pages/fixtures/):
 cargo xtask pageset --capture-missing-failure-fixtures

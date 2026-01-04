@@ -235,6 +235,30 @@ fn pageset_help_mentions_cache_dir() {
 }
 
 #[test]
+fn pageset_help_mentions_accuracy_flags() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["pageset", "--help"])
+    .output()
+    .expect("run cargo xtask pageset --help");
+
+  assert!(
+    output.status.success(),
+    "xtask pageset help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--accuracy")
+      && stdout.contains("--accuracy-baseline")
+      && stdout.contains("--accuracy-baseline-dir")
+      && stdout.contains("--accuracy-tolerance")
+      && stdout.contains("--accuracy-max-diff-percent")
+      && stdout.contains("--accuracy-diff-dir"),
+    "pageset help should mention accuracy flags; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn pageset_diff_help_mentions_accuracy_regression_flags() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["pageset-diff", "--help"])

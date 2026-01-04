@@ -97,6 +97,14 @@ enum Commands {
   ValidatePageFixtures(validate_page_fixtures::ValidatePageFixturesArgs),
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum PagesetAccuracyBaseline {
+  /// Compare against an existing baseline directory only (do not invoke Chrome).
+  Existing,
+  /// Compare against headless Chrome baselines, auto-generating missing PNGs.
+  Chrome,
+}
+
 #[derive(Args)]
 struct PagesetArgs {
   /// Number of parallel fetch/render jobs
@@ -188,6 +196,41 @@ struct PagesetArgs {
   /// Defaults to the pageset_progress default (500ms) when unset.
   #[arg(long, value_name = "MS", requires = "cascade_diagnostics")]
   cascade_diagnostics_slow_ms: Option<u64>,
+
+  /// Capture pixel-diff accuracy metrics against baseline renders (stored in progress JSON).
+  #[arg(long)]
+  accuracy: bool,
+
+  /// Baseline strategy for accuracy capture.
+  ///
+  /// - `existing` (default): compare against an existing baseline directory; do not invoke Chrome.
+  /// - `chrome`: forward `--baseline=chrome` so `pageset_progress` auto-generates missing baselines.
+  #[arg(long, value_enum, requires = "accuracy")]
+  accuracy_baseline: Option<PagesetAccuracyBaseline>,
+
+  /// Directory containing baseline PNGs (e.g. `fetches/chrome_renders/<stem>.png`).
+  ///
+  /// Defaults to `fetches/chrome_renders` (matching `pageset_progress --baseline=chrome`).
+  #[arg(long, value_name = "DIR", requires = "accuracy")]
+  accuracy_baseline_dir: Option<PathBuf>,
+
+  /// Per-channel tolerance for pixel diffs (0-255).
+  ///
+  /// Forwarded to `pageset_progress run --tolerance`.
+  #[arg(long, requires = "accuracy")]
+  accuracy_tolerance: Option<u8>,
+
+  /// Maximum percent of pixels allowed to differ (0-100).
+  ///
+  /// Forwarded to `pageset_progress run --max-diff-percent`.
+  #[arg(long, requires = "accuracy", value_name = "PERCENT")]
+  accuracy_max_diff_percent: Option<f64>,
+
+  /// Directory to write diff PNGs into (not committed).
+  ///
+  /// Forwarded to `pageset_progress run --diff-dir`.
+  #[arg(long, value_name = "DIR", requires = "accuracy")]
+  accuracy_diff_dir: Option<PathBuf>,
 
   /// After the pageset run, auto-capture deterministic offline fixtures for failing pages whose
   /// fixtures are missing.
@@ -1048,6 +1091,66 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     cmd.arg("--cascade-diagnostics");
     if let Some(ms) = args.cascade_diagnostics_slow_ms {
       cmd.arg("--cascade-diagnostics-slow-ms").arg(ms.to_string());
+    }
+  }
+  if args.accuracy {
+    let extra_has_accuracy = pageset_extra_args.iter().any(|arg| arg == "--accuracy");
+    let extra_has_baseline = pageset_extra_args
+      .iter()
+      .any(|arg| arg == "--baseline" || arg.starts_with("--baseline="));
+    let extra_has_baseline_dir = pageset_extra_args
+      .iter()
+      .any(|arg| arg == "--baseline-dir" || arg.starts_with("--baseline-dir="));
+    let extra_has_tolerance = pageset_extra_args
+      .iter()
+      .any(|arg| arg == "--tolerance" || arg.starts_with("--tolerance="));
+    let extra_has_max_diff_percent = pageset_extra_args
+      .iter()
+      .any(|arg| arg == "--max-diff-percent" || arg.starts_with("--max-diff-percent="));
+    let extra_has_diff_dir = pageset_extra_args
+      .iter()
+      .any(|arg| arg == "--diff-dir" || arg.starts_with("--diff-dir="));
+
+    if !extra_has_accuracy {
+      cmd.arg("--accuracy");
+    }
+
+    let baseline = args.accuracy_baseline.unwrap_or(PagesetAccuracyBaseline::Existing);
+    let baseline_dir = args
+      .accuracy_baseline_dir
+      .clone()
+      .unwrap_or_else(|| PathBuf::from("fetches/chrome_renders"));
+
+    match baseline {
+      PagesetAccuracyBaseline::Existing => {
+        if !extra_has_baseline && !extra_has_baseline_dir {
+          cmd.arg("--baseline-dir").arg(&baseline_dir);
+        }
+      }
+      PagesetAccuracyBaseline::Chrome => {
+        if !extra_has_baseline {
+          cmd.arg("--baseline=chrome");
+        }
+        if !extra_has_baseline_dir {
+          cmd.arg("--baseline-dir").arg(&baseline_dir);
+        }
+      }
+    }
+
+    if let Some(tolerance) = args.accuracy_tolerance {
+      if !extra_has_tolerance {
+        cmd.arg("--tolerance").arg(tolerance.to_string());
+      }
+    }
+    if let Some(max) = args.accuracy_max_diff_percent {
+      if !extra_has_max_diff_percent {
+        cmd.arg("--max-diff-percent").arg(max.to_string());
+      }
+    }
+    if let Some(dir) = &args.accuracy_diff_dir {
+      if !extra_has_diff_dir {
+        cmd.arg("--diff-dir").arg(dir);
+      }
     }
   }
   cmd.args(&pageset_extra_args);

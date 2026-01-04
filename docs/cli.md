@@ -10,7 +10,7 @@ These are optional wrappers for the most common loops:
 
 - Pageset loop (`fetch_pages` → `prefetch_assets` (disk cache only) → `pageset_progress`, defaults to bundled fonts): `scripts/pageset.sh`
   - Defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out; pass `--disk-cache` to force-enable.
-  - Supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--cache-dir`, `--no-fetch`, `--refresh`, `--pages`, `--shard`, `--allow-http-error-status`, `--allow-collisions`, `--timings`, and `--capture-missing-failure-fixtures` (plus `--capture-missing-failure-fixtures-out-dir`, `--capture-missing-failure-fixtures-allow-missing-resources`, and `--capture-missing-failure-fixtures-overwrite`).
+  - Supports `--jobs/-j`, `--fetch-timeout`, `--render-timeout`, `--cache-dir`, `--no-fetch`, `--refresh`, `--pages`, `--shard`, `--allow-http-error-status`, `--allow-collisions`, `--timings`, `--accuracy` (plus `--accuracy-baseline`, `--accuracy-baseline-dir`, `--accuracy-tolerance`, `--accuracy-max-diff-percent`, and `--accuracy-diff-dir`), and `--capture-missing-failure-fixtures` (plus `--capture-missing-failure-fixtures-out-dir`, `--capture-missing-failure-fixtures-allow-missing-resources`, and `--capture-missing-failure-fixtures-overwrite`).
   - Prefetch toggles like `--prefetch-fonts` / `--prefetch-images` passed after `--` are forwarded to `prefetch_assets` when disk cache is enabled.
   - Pass extra `pageset_progress run` flags after `--`.
 - Cached-pages Chrome-vs-FastRender diff (best-effort; non-deterministic): `scripts/chrome_vs_fastrender.sh [options] [--] [page_stem...]`
@@ -73,12 +73,15 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
-- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--refresh] [--allow-http-error-status] [--allow-collisions] [--timings] [--disk-cache] [--no-disk-cache] [--cache-dir <dir>] [--cascade-diagnostics] [--cascade-diagnostics-slow-ms 500] [--capture-missing-failure-fixtures] [-- <pageset_progress args...>]`
+- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--refresh] [--allow-http-error-status] [--allow-collisions] [--timings] [--disk-cache] [--no-disk-cache] [--cache-dir <dir>] [--cascade-diagnostics] [--cascade-diagnostics-slow-ms 500] [--accuracy] [--accuracy-baseline existing|chrome] [--accuracy-baseline-dir <dir>] [--accuracy-tolerance <u8>] [--accuracy-max-diff-percent <float>] [--accuracy-diff-dir <dir>] [--capture-missing-failure-fixtures] [-- <pageset_progress args...>]`
   - Sharded example: `cargo xtask pageset --shard 0/4` (applies to fetch + prefetch (disk cache only) + render; add `--no-fetch` to reuse cached pages)
   - Forward compatibility gates when needed: `--compat-profile site` and/or `--dom-compat compat` are passed through to `pageset_progress run` but remain off by default.
   - Disk cache directory override: `--cache-dir <dir>` is forwarded to both `prefetch_assets` and `pageset_progress` so the warmed cache matches the render step (defaults to `fetches/assets/`).
   - Disk cache tuning flags passed after `--` (e.g. `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--disk-cache-lock-stale-secs`) are also forwarded to `prefetch_assets` when it runs.
   - Prefetch tuning flags passed after `--` (e.g. `--prefetch-fonts`, `--prefetch-images`, `--prefetch-iframes`) are also forwarded to `prefetch_assets` when it runs.
+  - Accuracy capture: `--accuracy` stores Chrome-vs-FastRender diff metrics per ok page in `progress/pages/*.json`.
+    - Defaults to comparing against existing baselines under `fetches/chrome_renders/`.
+    - Use `--accuracy-baseline chrome` to auto-generate missing baseline PNGs via `scripts/chrome_baseline.sh`.
   - Cascade triage: `--cascade-diagnostics` re-runs slow-cascade ok pages (defaults to 500ms threshold; override with `--cascade-diagnostics-slow-ms`) plus cascade timeouts with cascade profiling enabled, then merges `diagnostics.stats.cascade` into the committed progress JSON.
   - Fixture capture helper: `--capture-missing-failure-fixtures` scans `progress/pages/*.json` after the run and, for each `status != ok` page missing `tests/pages/fixtures/<stem>/index.html`, captures a bundle from the warmed disk cache (`bundle_page cache`) and imports it via `cargo xtask import-page-fixture`.
     - Requires disk cache enabled (either by default, or explicitly via `--disk-cache`; it is skipped with a warning when disk cache is disabled).

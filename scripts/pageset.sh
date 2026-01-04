@@ -145,6 +145,12 @@ detect_total_cpus() {
 # Wrapper flags (accepted even if placed after `--`):
 #   --jobs/-j N --fetch-timeout SECS --render-timeout SECS --cache-dir DIR --no-fetch
 #   --disk-cache --no-disk-cache
+#   --accuracy
+#   --accuracy-baseline <existing|chrome>
+#   --accuracy-baseline-dir DIR
+#   --accuracy-tolerance <0-255>
+#   --accuracy-max-diff-percent <0-100>
+#   --accuracy-diff-dir DIR
 #   --capture-missing-failure-fixtures
 #   --capture-missing-failure-fixtures-out-dir DIR
 #   --capture-missing-failure-fixtures-allow-missing-resources
@@ -187,6 +193,16 @@ CAPTURE_MISSING_FAILURE_FIXTURES=0
 CAPTURE_MISSING_FAILURE_FIXTURES_OUT_DIR="target/pageset_failure_fixture_bundles"
 CAPTURE_MISSING_FAILURE_FIXTURES_ALLOW_MISSING_RESOURCES=0
 CAPTURE_MISSING_FAILURE_FIXTURES_OVERWRITE=0
+ACCURACY=0
+ACCURACY_BASELINE="existing"
+ACCURACY_BASELINE_DIR="fetches/chrome_renders"
+ACCURACY_BASELINE_DIR_SET=0
+ACCURACY_TOLERANCE=""
+ACCURACY_TOLERANCE_SET=0
+ACCURACY_MAX_DIFF_PERCENT=""
+ACCURACY_MAX_DIFF_PERCENT_SET=0
+ACCURACY_DIFF_DIR=""
+ACCURACY_DIFF_DIR_SET=0
 
 if [[ -n "${NO_DISK_CACHE:-}" ]]; then
   USE_DISK_CACHE=0
@@ -308,6 +324,106 @@ while [[ $# -gt 0 ]]; do
       shift
       continue
       ;;
+    --accuracy)
+      ACCURACY=1
+      shift
+      continue
+      ;;
+    --accuracy-baseline)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      case "$2" in
+        existing|chrome)
+          ACCURACY_BASELINE="$2"
+          ;;
+        *)
+          echo "${arg} must be one of: existing, chrome" >&2
+          exit 2
+          ;;
+      esac
+      shift 2
+      continue
+      ;;
+    --accuracy-baseline=*)
+      value="${arg#--accuracy-baseline=}"
+      case "${value}" in
+        existing|chrome)
+          ACCURACY_BASELINE="${value}"
+          ;;
+        *)
+          echo "--accuracy-baseline must be one of: existing, chrome" >&2
+          exit 2
+          ;;
+      esac
+      shift
+      continue
+      ;;
+    --accuracy-baseline-dir)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      ACCURACY_BASELINE_DIR="$2"
+      ACCURACY_BASELINE_DIR_SET=1
+      shift 2
+      continue
+      ;;
+    --accuracy-baseline-dir=*)
+      ACCURACY_BASELINE_DIR="${arg#--accuracy-baseline-dir=}"
+      ACCURACY_BASELINE_DIR_SET=1
+      shift
+      continue
+      ;;
+    --accuracy-tolerance)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      ACCURACY_TOLERANCE="$2"
+      ACCURACY_TOLERANCE_SET=1
+      shift 2
+      continue
+      ;;
+    --accuracy-tolerance=*)
+      ACCURACY_TOLERANCE="${arg#--accuracy-tolerance=}"
+      ACCURACY_TOLERANCE_SET=1
+      shift
+      continue
+      ;;
+    --accuracy-max-diff-percent)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      ACCURACY_MAX_DIFF_PERCENT="$2"
+      ACCURACY_MAX_DIFF_PERCENT_SET=1
+      shift 2
+      continue
+      ;;
+    --accuracy-max-diff-percent=*)
+      ACCURACY_MAX_DIFF_PERCENT="${arg#--accuracy-max-diff-percent=}"
+      ACCURACY_MAX_DIFF_PERCENT_SET=1
+      shift
+      continue
+      ;;
+    --accuracy-diff-dir)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      ACCURACY_DIFF_DIR="$2"
+      ACCURACY_DIFF_DIR_SET=1
+      shift 2
+      continue
+      ;;
+    --accuracy-diff-dir=*)
+      ACCURACY_DIFF_DIR="${arg#--accuracy-diff-dir=}"
+      ACCURACY_DIFF_DIR_SET=1
+      shift
+      continue
+      ;;
     --)
       shift
       continue
@@ -331,6 +447,20 @@ if ! [[ "${RENDER_TIMEOUT}" =~ ^[0-9]+$ ]]; then
 fi
 if [[ -z "${CACHE_DIR}" ]]; then
   echo "CACHE_DIR must be non-empty" >&2
+  exit 2
+fi
+if [[ "${ACCURACY_TOLERANCE_SET}" -eq 1 ]]; then
+  if ! [[ "${ACCURACY_TOLERANCE}" =~ ^[0-9]+$ ]] || [[ "${ACCURACY_TOLERANCE}" -lt 0 || "${ACCURACY_TOLERANCE}" -gt 255 ]]; then
+    echo "--accuracy-tolerance must be an integer in the range 0..=255" >&2
+    exit 2
+  fi
+fi
+if [[ "${ACCURACY_BASELINE_DIR}" == "" ]]; then
+  echo "--accuracy-baseline-dir must be non-empty" >&2
+  exit 2
+fi
+if [[ "${ACCURACY_DIFF_DIR_SET}" -eq 1 && "${ACCURACY_DIFF_DIR}" == "" ]]; then
+  echo "--accuracy-diff-dir must be non-empty" >&2
   exit 2
 fi
 
@@ -805,8 +935,73 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}" --cache-dir "${CACHE_DIR}" "${SELECTION_ARGS[@]}" "${PREFETCH_KNOB_ARGS[@]}" "${PREFETCH_ASSET_ARGS[@]}" "${DISK_CACHE_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
 fi
 
+PAGESET_ACCURACY_ARGS=()
+if [[ "${ACCURACY}" -eq 1 ]]; then
+  BASELINE_DIR_IN_ARGS=0
+  BASELINE_IN_ARGS=0
+  TOLERANCE_IN_ARGS=0
+  MAX_DIFF_PERCENT_IN_ARGS=0
+  DIFF_DIR_IN_ARGS=0
+  for ((i=0; i < ${#PAGESET_ARGS[@]}; i++)); do
+    arg="${PAGESET_ARGS[$i]}"
+    case "${arg}" in
+      --baseline-dir|--baseline-dir=*)
+        BASELINE_DIR_IN_ARGS=1
+        ;;
+      --baseline|--baseline=*)
+        BASELINE_IN_ARGS=1
+        ;;
+      --tolerance|--tolerance=*)
+        TOLERANCE_IN_ARGS=1
+        ;;
+      --max-diff-percent|--max-diff-percent=*)
+        MAX_DIFF_PERCENT_IN_ARGS=1
+        ;;
+      --diff-dir|--diff-dir=*)
+        DIFF_DIR_IN_ARGS=1
+        ;;
+    esac
+  done
+
+  PAGESET_ACCURACY_ARGS+=(--accuracy)
+  case "${ACCURACY_BASELINE}" in
+    chrome)
+      if [[ "${BASELINE_IN_ARGS}" -eq 0 ]]; then
+        PAGESET_ACCURACY_ARGS+=(--baseline=chrome)
+      fi
+      if [[ "${ACCURACY_BASELINE_DIR_SET}" -eq 1 && "${BASELINE_DIR_IN_ARGS}" -eq 0 ]]; then
+        PAGESET_ACCURACY_ARGS+=(--baseline-dir "${ACCURACY_BASELINE_DIR}")
+      fi
+      ;;
+    existing)
+      # `pageset_progress run --accuracy` requires `--baseline-dir <dir>` unless a renderer
+      # baseline (e.g. `--baseline=chrome`) is provided. Default to the Chrome baseline directory
+      # so callers can simply pass `--accuracy` when reusing existing baselines.
+      if [[ "${BASELINE_DIR_IN_ARGS}" -eq 0 && "${BASELINE_IN_ARGS}" -eq 0 ]]; then
+        PAGESET_ACCURACY_ARGS+=(--baseline-dir "${ACCURACY_BASELINE_DIR}")
+      elif [[ "${ACCURACY_BASELINE_DIR_SET}" -eq 1 && "${BASELINE_DIR_IN_ARGS}" -eq 0 ]]; then
+        PAGESET_ACCURACY_ARGS+=(--baseline-dir "${ACCURACY_BASELINE_DIR}")
+      fi
+      ;;
+    *)
+      echo "Unexpected --accuracy-baseline value: ${ACCURACY_BASELINE}" >&2
+      exit 2
+      ;;
+  esac
+
+  if [[ "${ACCURACY_TOLERANCE_SET}" -eq 1 && "${TOLERANCE_IN_ARGS}" -eq 0 ]]; then
+    PAGESET_ACCURACY_ARGS+=(--tolerance "${ACCURACY_TOLERANCE}")
+  fi
+  if [[ "${ACCURACY_MAX_DIFF_PERCENT_SET}" -eq 1 && "${MAX_DIFF_PERCENT_IN_ARGS}" -eq 0 ]]; then
+    PAGESET_ACCURACY_ARGS+=(--max-diff-percent "${ACCURACY_MAX_DIFF_PERCENT}")
+  fi
+  if [[ "${ACCURACY_DIFF_DIR_SET}" -eq 1 && "${DIFF_DIR_IN_ARGS}" -eq 0 ]]; then
+    PAGESET_ACCURACY_ARGS+=(--diff-dir "${ACCURACY_DIFF_DIR}")
+  fi
+fi
+
 echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, cache_dir=${CACHE_DIR}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
-cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts --cache-dir "${CACHE_DIR}" "${PAGESET_KNOB_ARGS[@]}" "${PAGESET_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
+cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts --cache-dir "${CACHE_DIR}" "${PAGESET_KNOB_ARGS[@]}" "${PAGESET_ACCURACY_ARGS[@]}" "${PAGESET_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
 
 if [[ "${CAPTURE_MISSING_FAILURE_FIXTURES}" -eq 1 ]]; then
   if [[ "${USE_DISK_CACHE}" == 0 ]]; then
