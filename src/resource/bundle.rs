@@ -23,8 +23,13 @@ pub struct BundleRenderConfig {
   pub scroll_x: f32,
   pub scroll_y: f32,
   pub full_page: bool,
+  /// When true, restrict subresource loads (CSS/images/fonts/etc.) to the document origin unless
+  /// allowlisted.
+  ///
+  /// Note: this does not block cross-origin iframe/embed document navigation.
   #[serde(default)]
   pub same_origin_subresources: bool,
+  /// Additional origins allowed when `same_origin_subresources` is enabled.
   #[serde(default)]
   pub allowed_subresource_origins: Vec<String>,
   #[serde(default)]
