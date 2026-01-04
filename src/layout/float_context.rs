@@ -233,6 +233,13 @@ impl Ord for FloatEvent {
 struct FloatSweepState {
   current_y: f32,
   pending_events: BinaryHeap<Reverse<FloatEvent>>,
+  /// Pending float start events, used to cheaply detect whether a range scan can become more
+  /// constrained (i.e. whether any floats start inside the queried range).
+  ///
+  /// This is kept as a separate min-heap so `edges_in_range_min_width_with_state` can avoid
+  /// scanning through long runs of end events (which can only relax constraints) when the caller's
+  /// `y` is constant and many floats share a start edge.
+  pending_start_events: BinaryHeap<Reverse<FloatEvent>>,
   active: Vec<bool>,
   active_left: BinaryHeap<(FloatKey, usize)>,
   active_right: BinaryHeap<(Reverse<FloatKey>, usize)>,
@@ -243,9 +250,16 @@ struct FloatSweepState {
 impl FloatSweepState {
   fn new(float_count: usize, events: &[FloatEvent]) -> Self {
     let pending_events = events.iter().copied().map(Reverse).collect();
+    let pending_start_events = events
+      .iter()
+      .filter(|event| event.kind == FloatEventKind::Start)
+      .copied()
+      .map(Reverse)
+      .collect();
     Self {
       current_y: f32::NEG_INFINITY,
       pending_events,
+      pending_start_events,
       active: vec![false; float_count],
       active_left: BinaryHeap::new(),
       active_right: BinaryHeap::new(),
@@ -689,6 +703,29 @@ impl FloatContext {
     );
     self.advance_sweep_to(start, state);
 
+    // Fast path: if there are no active shapes and no *start* events before `end`, then the set of
+    // active floats can only shrink within `[start, end]`. For rectangular floats this means the
+    // available width can only stay the same or increase (end events relax constraints), so the
+    // minimum width must occur at `start`.
+    //
+    // This case is common on float-heavy pages that stack many floats at the same y. Without this
+    // early exit, each range query would advance through all the "float ends" inside the range
+    // even though none of them can make the range more constrained.
+    if state.active_shape_left.is_empty() && state.active_shape_right.is_empty() {
+      let next_start = self.next_float_start_y(state);
+      if next_start >= end {
+        let (left_edge, right_edge) = self.rect_edges(state);
+        let next_boundary = self.next_float_boundary_after_internal(&*state, start);
+        return (left_edge, right_edge, next_boundary);
+      }
+    }
+
+    // Full scan: range queries need to advance a sweep state boundary-by-boundary. Historically we
+    // reused the shared `state` for this scan, which meant queries at the same (or slightly earlier)
+    // `y` had to rebuild the entire sweep from scratch after each call. To avoid this amplification,
+    // we clone a local sweep snapshot and keep the shared state pinned at `start`.
+    let mut scan_state = state.clone();
+
     let mut counter = 0usize;
     let mut scan_start = start;
     let mut best_left = 0.0f32;
@@ -703,7 +740,7 @@ impl FloatContext {
     // We therefore return the next float boundary *after* the scan region, even when it lies
     // below `end`. Callers can safely skip to this boundary because the active float set (and
     // therefore available width) is constant within a segment with no boundaries.
-    let mut next_boundary = self.next_float_boundary_after_internal(&*state, start);
+    let mut next_boundary = self.next_float_boundary_after_internal(&scan_state, start);
 
     loop {
       if let Err(RenderError::Timeout { elapsed, .. }) =
@@ -713,9 +750,10 @@ impl FloatContext {
         break;
       }
 
-      let next = self.next_float_boundary_after_internal(&*state, scan_start);
+      let next = self.next_float_boundary_after_internal(&scan_state, scan_start);
       let boundary = next.min(end);
-      let (left_edge, right_edge) = self.edges_in_range_with_state(state, scan_start, boundary);
+      let (left_edge, right_edge) =
+        self.edges_in_range_with_state(&mut scan_state, scan_start, boundary);
       let width = (right_edge - left_edge).max(0.0);
       if width < best_width - f32::EPSILON
         || (width - best_width).abs() < f32::EPSILON && left_edge > best_left
@@ -730,7 +768,7 @@ impl FloatContext {
         break;
       }
       scan_start = boundary;
-      self.advance_sweep_to(scan_start, state);
+      self.advance_sweep_to(scan_start, &mut scan_state);
     }
 
     (best_left, best_right, next_boundary)
@@ -747,6 +785,19 @@ impl FloatContext {
       .peek()
       .map(|Reverse(event)| event.y)
       .unwrap_or(f32::INFINITY)
+  }
+
+  fn next_float_start_y(&self, state: &mut FloatSweepState) -> f32 {
+    while let Some(Reverse(event)) = state.pending_start_events.peek().copied() {
+      // `advance_sweep_to` consumes all events with `event.y <= current_y`, so anything at or below
+      // `current_y` has already been applied to the active set.
+      if event.y <= state.current_y {
+        state.pending_start_events.pop();
+        continue;
+      }
+      return event.y;
+    }
+    f32::INFINITY
   }
 
   fn next_shape_boundary_after(&self, state: &FloatSweepState, y: f32) -> f32 {
@@ -902,6 +953,7 @@ impl FloatContext {
     sweep_state.active.push(false);
     sweep_state.pending_events.push(Reverse(start_event));
     sweep_state.pending_events.push(Reverse(end_event));
+    sweep_state.pending_start_events.push(Reverse(start_event));
     let current_y = sweep_state.current_y;
     self.advance_sweep_to(current_y, &mut sweep_state);
   }
@@ -1989,6 +2041,38 @@ mod tests {
       stats.boundary_steps <= 2500,
       "range queries should sweep floats once, got {}",
       stats.boundary_steps
+    );
+  }
+
+  #[test]
+  fn range_queries_avoid_quadratic_resets_when_y_constant() {
+    let _guard = FloatProfileGuard::new(true);
+    reset_float_profile_counters();
+    let mut ctx = FloatContext::new(10_000.0);
+
+    // This is a worst-case pattern for float-heavy pages like stackoverflow.com:
+    // - many floats all start at the same y
+    // - heights vary, so each placement query spans a range containing many "float end" boundaries
+    // Historically `edges_in_range_min_width_with_state` advanced the shared sweep state through
+    // those end boundaries, forcing subsequent queries at the same y to rebuild the sweep from
+    // scratch (quadratic boundary steps).
+    //
+    // We expect boundary steps to stay roughly linear with the number of placed floats.
+    let n = 200usize;
+    for i in 0..n {
+      let width = 1.0;
+      let height = (i + 1) as f32;
+      let (x, y) = ctx.compute_float_position(FloatSide::Left, width, height, 0.0);
+      assert_eq!(y, 0.0);
+      ctx.add_float_at(FloatSide::Left, x, y, width, height);
+    }
+
+    let stats = float_profile_stats();
+    assert!(
+      stats.boundary_steps < (20 * n) as u64,
+      "boundary steps should not be quadratic when repeatedly querying the same y; got {} for {} floats",
+      stats.boundary_steps,
+      n
     );
   }
 
