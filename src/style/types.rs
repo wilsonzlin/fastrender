@@ -1247,6 +1247,8 @@ pub enum TransitionProperty {
 pub enum StepPosition {
   Start,
   End,
+  JumpNone,
+  JumpBoth,
 }
 
 /// Stop in a `linear()` easing function.
@@ -1286,9 +1288,28 @@ impl TransitionTimingFunction {
       }
       TransitionTimingFunction::Steps(steps, position) => {
         let steps = (*steps).max(1);
+        let steps_f = steps as f32;
         match position {
-          StepPosition::Start => ((t * steps as f32).ceil() / steps as f32).clamp(0.0, 1.0),
-          StepPosition::End => ((t * steps as f32).floor() / steps as f32).clamp(0.0, 1.0),
+          StepPosition::Start => ((t * steps_f).ceil() / steps_f).clamp(0.0, 1.0),
+          StepPosition::End => ((t * steps_f).floor() / steps_f).clamp(0.0, 1.0),
+          StepPosition::JumpNone => {
+            if steps <= 1 {
+              if t >= 1.0 { 1.0 } else { 0.0 }
+            } else {
+              let denom = (steps - 1) as f32;
+              let idx = (t * steps_f).floor().min((steps - 1) as f32);
+              (idx / denom).clamp(0.0, 1.0)
+            }
+          }
+          StepPosition::JumpBoth => {
+            let denom = (steps + 1) as f32;
+            if t <= 0.0 {
+              0.0
+            } else {
+              let idx = (t * steps_f).floor() + 1.0;
+              (idx / denom).clamp(0.0, 1.0)
+            }
+          }
         }
       }
       TransitionTimingFunction::LinearFunction(stops) => linear_function_value(stops, t),

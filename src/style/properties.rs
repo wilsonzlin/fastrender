@@ -1873,6 +1873,10 @@ fn parse_transition_timing_function(raw: &str) -> Option<TransitionTimingFunctio
       let position = match parts.next() {
         Some(p) if p.eq_ignore_ascii_case("start") => StepPosition::Start,
         Some(p) if p.eq_ignore_ascii_case("end") => StepPosition::End,
+        Some(p) if p.eq_ignore_ascii_case("jump-start") => StepPosition::Start,
+        Some(p) if p.eq_ignore_ascii_case("jump-end") => StepPosition::End,
+        Some(p) if p.eq_ignore_ascii_case("jump-none") => StepPosition::JumpNone,
+        Some(p) if p.eq_ignore_ascii_case("jump-both") => StepPosition::JumpBoth,
         _ => StepPosition::End,
       };
       return Some(TransitionTimingFunction::Steps(count, position));
@@ -15956,6 +15960,37 @@ mod tests {
     assert_eq!(
       styles.animation_timing_functions,
       vec![TransitionTimingFunction::Steps(4, StepPosition::End)].into()
+    );
+    assert_eq!(
+      styles.animation_iteration_counts,
+      vec![AnimationIterationCount::Infinite].into()
+    );
+  }
+
+  #[test]
+  fn animation_shorthand_parses_steps_jump_none() {
+    let decls = parse_declarations("animation: spin 2s steps(4,jump-none) infinite;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(styles.animation_names, vec!["spin".to_string()]);
+    assert_eq!(styles.animation_durations, vec![2000.0].into());
+    assert_eq!(
+      styles.animation_timing_functions,
+      vec![TransitionTimingFunction::Steps(4, StepPosition::JumpNone)].into()
     );
     assert_eq!(
       styles.animation_iteration_counts,
