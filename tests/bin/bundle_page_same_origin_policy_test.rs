@@ -125,7 +125,7 @@ impl Drop for TestServer {
 fn bundle_page_same_origin_subresources_does_not_block_cross_origin_iframe_documents() {
   let Some(cross_origin) = TestServer::start(
     "bundle_page_same_origin_subresources_does_not_block_cross_origin_iframe_documents.cross_origin",
-    1,
+    10,
     |path| match path {
       "/frame.html" => (
         200,
@@ -146,7 +146,7 @@ fn bundle_page_same_origin_subresources_does_not_block_cross_origin_iframe_docum
  
   let Some(origin) = TestServer::start(
     "bundle_page_same_origin_subresources_does_not_block_cross_origin_iframe_documents.origin",
-    1,
+    10,
     move |path| match path {
       "/page.html" => (
         200,
@@ -205,7 +205,27 @@ fn bundle_page_same_origin_subresources_does_not_block_cross_origin_iframe_docum
     "expected blocked stylesheet {blocked_css_url} to be absent from bundle resources (keys={:?})",
     resources.keys().collect::<Vec<_>>()
   );
- 
+
+  let output_png = tmp.path().join("out.png");
+  let status = Command::new(env!("CARGO_BIN_EXE_bundle_page"))
+    .args([
+      "render",
+      bundle_dir.to_str().expect("bundle dir str"),
+      "--out",
+      output_png.to_str().expect("out png str"),
+    ])
+    .status()
+    .expect("run bundle_page render");
+  assert!(status.success(), "bundle_page render should succeed offline");
+  let png_bytes = std::fs::read(&output_png).expect("read rendered png");
+  assert!(!png_bytes.is_empty(), "expected output PNG to be written");
+
+  let cross_requests_after_render = cross_origin.requests();
+  assert_eq!(
+    cross_requests_after_render, cross_requests,
+    "expected bundle replay to be offline; server requests changed from {cross_requests:?} to {cross_requests_after_render:?}"
+  );
+
   origin.join();
   cross_origin.join();
 }
