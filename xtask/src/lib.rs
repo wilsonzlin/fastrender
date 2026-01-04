@@ -2,6 +2,7 @@
 
 pub mod capture_missing_failure_fixtures;
 pub mod pageset_failure_fixtures;
+use serde::Deserialize;
 
 /// Extract `--disk-cache-*` flags from an argument vector while preserving ordering.
 ///
@@ -37,6 +38,122 @@ pub fn extract_disk_cache_args(extra: &[String]) -> Vec<String> {
   }
 
   out
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PrefetchAssetsSupport {
+  pub prefetch_fonts: bool,
+  pub prefetch_images: bool,
+  pub prefetch_iframes: bool,
+  pub prefetch_embeds: bool,
+  pub prefetch_icons: bool,
+  pub prefetch_video_posters: bool,
+  pub prefetch_css_url_assets: bool,
+  pub max_discovered_assets_per_page: bool,
+  pub max_images_per_page: bool,
+  pub max_image_urls_per_element: bool,
+}
+
+impl PrefetchAssetsSupport {
+  pub fn assume_supported() -> Self {
+    Self {
+      prefetch_fonts: true,
+      prefetch_images: true,
+      prefetch_iframes: true,
+      prefetch_embeds: true,
+      prefetch_icons: true,
+      prefetch_video_posters: true,
+      prefetch_css_url_assets: true,
+      max_discovered_assets_per_page: true,
+      max_images_per_page: true,
+      max_image_urls_per_element: true,
+    }
+  }
+
+  pub fn any(self) -> bool {
+    self.prefetch_fonts
+      || self.prefetch_images
+      || self.prefetch_iframes
+      || self.prefetch_embeds
+      || self.prefetch_icons
+      || self.prefetch_video_posters
+      || self.prefetch_css_url_assets
+      || self.max_discovered_assets_per_page
+      || self.max_images_per_page
+      || self.max_image_urls_per_element
+  }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PrefetchAssetsCapabilities {
+  pub name: String,
+  pub disk_cache_feature: bool,
+  pub flags: PrefetchAssetsSupport,
+}
+
+pub fn parse_prefetch_assets_capabilities(
+  json: &str,
+) -> Result<PrefetchAssetsCapabilities, serde_json::Error> {
+  serde_json::from_str(json)
+}
+
+pub fn extract_prefetch_assets_args(
+  extra: &[String],
+  support: PrefetchAssetsSupport,
+) -> (Vec<String>, Vec<String>) {
+  let mut prefetch_args = Vec::new();
+  let mut pageset_args = Vec::new();
+
+  let mut iter = extra.iter().peekable();
+  while let Some(arg) = iter.next() {
+    let is_prefetch_arg = (support.prefetch_fonts
+      && (arg == "--prefetch-fonts" || arg.starts_with("--prefetch-fonts=")))
+      || (support.prefetch_images
+        && (arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")))
+      || (support.prefetch_iframes
+        && (arg == "--prefetch-iframes"
+          || arg.starts_with("--prefetch-iframes=")
+          || arg == "--prefetch-documents"
+          || arg.starts_with("--prefetch-documents=")))
+      || (support.prefetch_embeds
+        && (arg == "--prefetch-embeds" || arg.starts_with("--prefetch-embeds=")))
+      || (support.prefetch_icons
+        && (arg == "--prefetch-icons" || arg.starts_with("--prefetch-icons=")))
+      || (support.prefetch_video_posters
+        && (arg == "--prefetch-video-posters" || arg.starts_with("--prefetch-video-posters=")))
+      || (support.prefetch_css_url_assets
+        && (arg == "--prefetch-css-url-assets" || arg.starts_with("--prefetch-css-url-assets=")));
+    let is_prefetch_arg = is_prefetch_arg
+      || (support.max_discovered_assets_per_page
+        && (arg == "--max-discovered-assets-per-page"
+          || arg.starts_with("--max-discovered-assets-per-page=")));
+    let is_prefetch_arg = is_prefetch_arg
+      || (support.max_images_per_page
+        && (arg == "--max-images-per-page" || arg.starts_with("--max-images-per-page=")));
+    let is_prefetch_arg = is_prefetch_arg
+      || (support.max_image_urls_per_element
+        && (arg == "--max-image-urls-per-element"
+          || arg.starts_with("--max-image-urls-per-element=")));
+
+    if is_prefetch_arg {
+      prefetch_args.push(arg.clone());
+
+      if !arg.contains('=') {
+        if let Some(next) = iter.peek() {
+          if !next.starts_with('-') {
+            prefetch_args.push((*next).clone());
+            iter.next();
+          }
+        }
+      }
+    } else {
+      pageset_args.push(arg.clone());
+    }
+  }
+
+  (prefetch_args, pageset_args)
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

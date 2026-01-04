@@ -2,10 +2,9 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use tempfile::TempDir;
 use url::Url;
 
@@ -640,7 +639,6 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   let mut cache_dir_arg = args.cache_dir.clone();
 
   let mut pageset_extra_args = args.extra.clone();
-  let mut prefetch_asset_args: Vec<String> = Vec::new();
 
   let mut fetch_refresh = args.refresh;
   let mut fetch_allow_http_error_status = args.allow_http_error_status;
@@ -790,19 +788,16 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   };
 
   let prefetch_support = if disk_cache_enabled {
-    PrefetchAssetsSupport::detect()
+    query_prefetch_assets_support(disk_cache_enabled)?
   } else {
     // Mirror `scripts/pageset.sh`: prefetch-specific flags don't apply when disk cache is disabled
     // (the prefetch step is skipped), but we still intercept them so pageset_progress arg parsing
     // stays forgiving.
-    PrefetchAssetsSupport::assume_supported()
+    xtask::PrefetchAssetsSupport::assume_supported()
   };
-  if prefetch_support.any() {
-    let (prefetch_args, filtered) =
-      extract_prefetch_assets_args(&pageset_extra_args, prefetch_support);
-    prefetch_asset_args = prefetch_args;
-    pageset_extra_args = filtered;
-  }
+  let (mut prefetch_asset_args, filtered_pageset_extra_args) =
+    xtask::extract_prefetch_assets_args(&pageset_extra_args, prefetch_support);
+  pageset_extra_args = filtered_pageset_extra_args;
 
   let mut disk_cache_extra_args = extract_disk_cache_args(&pageset_extra_args);
   if disk_cache_enabled
@@ -1114,297 +1109,49 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   Ok(())
 }
 
-#[derive(Copy, Clone)]
-struct PrefetchAssetsSupport {
-  prefetch_fonts: bool,
-  prefetch_images: bool,
-  prefetch_iframes: bool,
-  prefetch_embeds: bool,
-  prefetch_icons: bool,
-  prefetch_video_posters: bool,
-  prefetch_css_url_assets: bool,
-  max_discovered_assets_per_page: bool,
-  max_images_per_page: bool,
-  max_image_urls_per_element: bool,
-}
+fn query_prefetch_assets_support(disk_cache_feature: bool) -> Result<xtask::PrefetchAssetsSupport> {
+  let mut cmd = Command::new("cargo");
+  cmd
+    .arg("run")
+    .arg("--release")
+    .apply_disk_cache_feature(disk_cache_feature)
+    .args(["--bin", "prefetch_assets"])
+    .arg("--")
+    .arg("--capabilities")
+    .current_dir(repo_root());
 
-#[derive(Debug, Deserialize)]
-struct PrefetchAssetsCapabilities {
-  schema_version: u32,
-  #[serde(default)]
-  prefetch_fonts: bool,
-  #[serde(default)]
-  prefetch_images: bool,
-  #[serde(default)]
-  prefetch_iframes: bool,
-  #[serde(default)]
-  prefetch_embeds: bool,
-  #[serde(default)]
-  prefetch_icons: bool,
-  #[serde(default)]
-  prefetch_video_posters: bool,
-  #[serde(default)]
-  prefetch_css_url_assets: bool,
-  #[serde(default)]
-  max_discovered_assets_per_page: bool,
-  #[serde(default)]
-  max_images_per_page: bool,
-  #[serde(default)]
-  max_image_urls_per_element: bool,
-}
-
-impl PrefetchAssetsSupport {
-  fn any(self) -> bool {
-    self.prefetch_fonts
-      || self.prefetch_images
-      || self.prefetch_iframes
-      || self.prefetch_embeds
-      || self.prefetch_icons
-      || self.prefetch_video_posters
-      || self.prefetch_css_url_assets
-      || self.max_discovered_assets_per_page
-      || self.max_images_per_page
-      || self.max_image_urls_per_element
-  }
-
-  fn detect() -> Self {
-    let mut cmd = Command::new("cargo");
-    cmd
-      .arg("run")
-      .arg("--release")
-      .apply_disk_cache_feature(true)
-      .args(["--bin", "prefetch_assets"])
-      .arg("--")
-      .arg("--print-capabilities-json");
-    cmd.current_dir(repo_root());
-    // Keep cargo build noise visible while still capturing the JSON payload.
-    cmd.stderr(Stdio::inherit());
-
-    let Ok(output) = cmd.output() else {
-      return Self::none();
-    };
-    if !output.status.success() {
-      return Self::none();
-    }
-
-    Self::from_capabilities_json(&output.stdout).unwrap_or_else(Self::none)
-  }
-
-  fn from_capabilities_json(json: &[u8]) -> Option<Self> {
-    let capabilities: PrefetchAssetsCapabilities = serde_json::from_slice(json).ok()?;
-    if capabilities.schema_version == 0 {
-      return None;
-    }
-
-    Some(Self {
-      prefetch_fonts: capabilities.prefetch_fonts,
-      prefetch_images: capabilities.prefetch_images,
-      prefetch_iframes: capabilities.prefetch_iframes,
-      prefetch_embeds: capabilities.prefetch_embeds,
-      prefetch_icons: capabilities.prefetch_icons,
-      prefetch_video_posters: capabilities.prefetch_video_posters,
-      prefetch_css_url_assets: capabilities.prefetch_css_url_assets,
-      max_discovered_assets_per_page: capabilities.max_discovered_assets_per_page,
-      max_images_per_page: capabilities.max_images_per_page,
-      max_image_urls_per_element: capabilities.max_image_urls_per_element,
-    })
-  }
-
-  fn none() -> Self {
-    Self {
-      prefetch_fonts: false,
-      prefetch_images: false,
-      prefetch_iframes: false,
-      prefetch_embeds: false,
-      prefetch_icons: false,
-      prefetch_video_posters: false,
-      prefetch_css_url_assets: false,
-      max_discovered_assets_per_page: false,
-      max_images_per_page: false,
-      max_image_urls_per_element: false,
-    }
-  }
-
-  fn assume_supported() -> Self {
-    Self {
-      prefetch_fonts: true,
-      prefetch_images: true,
-      prefetch_iframes: true,
-      prefetch_embeds: true,
-      prefetch_icons: true,
-      prefetch_video_posters: true,
-      prefetch_css_url_assets: true,
-      max_discovered_assets_per_page: true,
-      max_images_per_page: true,
-      max_image_urls_per_element: true,
-    }
-  }
-}
-
-#[cfg(test)]
-mod prefetch_assets_support_tests {
-  use super::PrefetchAssetsSupport;
-
-  #[test]
-  fn parses_prefetch_assets_capabilities_json() {
-    let json = r#"{
-      "schema_version": 1,
-      "prefetch_fonts": true,
-      "prefetch_images": false,
-      "prefetch_iframes": true,
-      "prefetch_embeds": false,
-      "prefetch_icons": true,
-      "prefetch_video_posters": false,
-      "prefetch_css_url_assets": true,
-      "max_discovered_assets_per_page": true,
-      "max_images_per_page": false,
-      "max_image_urls_per_element": true
-    }"#;
-
-    let support =
-      PrefetchAssetsSupport::from_capabilities_json(json.as_bytes()).expect("parsed support");
-    assert!(support.prefetch_fonts);
-    assert!(!support.prefetch_images);
-    assert!(support.prefetch_iframes);
-    assert!(!support.prefetch_embeds);
-    assert!(support.prefetch_icons);
-    assert!(!support.prefetch_video_posters);
-    assert!(support.prefetch_css_url_assets);
-    assert!(support.max_discovered_assets_per_page);
-    assert!(!support.max_images_per_page);
-    assert!(support.max_image_urls_per_element);
-  }
-
-  #[test]
-  fn missing_capabilities_schema_version_is_rejected() {
-    let json = r#"{"prefetch_fonts": true}"#;
-    assert!(PrefetchAssetsSupport::from_capabilities_json(json.as_bytes()).is_none());
-  }
-
-  #[test]
-  fn missing_capabilities_fields_default_to_false() {
-    let json = r#"{"schema_version": 1}"#;
-    let support =
-      PrefetchAssetsSupport::from_capabilities_json(json.as_bytes()).expect("parsed support");
-    assert!(!support.any());
-  }
-}
-
-#[cfg(test)]
-mod prefetch_assets_args_tests {
-  use super::{extract_prefetch_assets_args, PrefetchAssetsSupport};
-
-  #[test]
-  fn extracts_supported_prefetch_flags() {
-    let extra = vec![
-      "--foo".to_string(),
-      "--prefetch-images".to_string(),
-      "false".to_string(),
-      "--max-images-per-page=10".to_string(),
-      "--prefetch-documents".to_string(),
-      "--bar".to_string(),
-      "--max-image-urls-per-element".to_string(),
-      "3".to_string(),
-    ];
-
-    let (prefetch, pageset) =
-      extract_prefetch_assets_args(&extra, PrefetchAssetsSupport::assume_supported());
-    assert_eq!(
-      prefetch,
-      vec![
-        "--prefetch-images".to_string(),
-        "false".to_string(),
-        "--max-images-per-page=10".to_string(),
-        "--prefetch-documents".to_string(),
-        "--max-image-urls-per-element".to_string(),
-        "3".to_string(),
-      ]
+  let output = cmd
+    .output()
+    .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
+  if !output.status.success() {
+    bail!(
+      "`prefetch_assets --capabilities` failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+      output.status,
+      String::from_utf8_lossy(&output.stdout),
+      String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(pageset, vec!["--foo".to_string(), "--bar".to_string()]);
   }
 
-  #[test]
-  fn leaves_prefetch_flags_in_pageset_args_when_unsupported() {
-    let extra = vec![
-      "--prefetch-images".to_string(),
-      "false".to_string(),
-      "--max-images-per-page".to_string(),
-      "10".to_string(),
-    ];
-
-    let support = PrefetchAssetsSupport {
-      prefetch_fonts: false,
-      prefetch_images: false,
-      prefetch_iframes: false,
-      prefetch_embeds: false,
-      prefetch_icons: false,
-      prefetch_video_posters: false,
-      prefetch_css_url_assets: false,
-      max_discovered_assets_per_page: false,
-      max_images_per_page: false,
-      max_image_urls_per_element: false,
-    };
-    let (prefetch, pageset) = extract_prefetch_assets_args(&extra, support);
-    assert!(prefetch.is_empty());
-    assert_eq!(pageset, extra);
+  let stdout = String::from_utf8(output.stdout).context("decode prefetch_assets capabilities")?;
+  let capabilities = xtask::parse_prefetch_assets_capabilities(&stdout).with_context(|| {
+    format!(
+      "parse JSON from `prefetch_assets --capabilities` (stdout={})",
+      stdout.trim()
+    )
+  })?;
+  if capabilities.name != "prefetch_assets" {
+    bail!(
+      "unexpected `prefetch_assets --capabilities` name field: expected \"prefetch_assets\", got {:?}",
+      capabilities.name
+    );
   }
-}
-
-fn extract_prefetch_assets_args(
-  extra: &[String],
-  support: PrefetchAssetsSupport,
-) -> (Vec<String>, Vec<String>) {
-  let mut prefetch_args = Vec::new();
-  let mut pageset_args = Vec::new();
-
-  let mut iter = extra.iter().peekable();
-  while let Some(arg) = iter.next() {
-    let is_prefetch_arg = (support.prefetch_fonts
-      && (arg == "--prefetch-fonts" || arg.starts_with("--prefetch-fonts=")))
-      || (support.prefetch_images
-        && (arg == "--prefetch-images" || arg.starts_with("--prefetch-images=")))
-      || (support.prefetch_iframes
-        && (arg == "--prefetch-iframes"
-          || arg.starts_with("--prefetch-iframes=")
-          || arg == "--prefetch-documents"
-          || arg.starts_with("--prefetch-documents=")))
-      || (support.prefetch_embeds
-        && (arg == "--prefetch-embeds" || arg.starts_with("--prefetch-embeds=")))
-      || (support.prefetch_icons
-        && (arg == "--prefetch-icons" || arg.starts_with("--prefetch-icons=")))
-      || (support.prefetch_video_posters
-        && (arg == "--prefetch-video-posters" || arg.starts_with("--prefetch-video-posters=")))
-      || (support.prefetch_css_url_assets
-        && (arg == "--prefetch-css-url-assets" || arg.starts_with("--prefetch-css-url-assets=")));
-    let is_prefetch_arg = is_prefetch_arg
-      || (support.max_discovered_assets_per_page
-        && (arg == "--max-discovered-assets-per-page"
-          || arg.starts_with("--max-discovered-assets-per-page=")));
-    let is_prefetch_arg = is_prefetch_arg
-      || (support.max_images_per_page
-        && (arg == "--max-images-per-page" || arg.starts_with("--max-images-per-page=")));
-    let is_prefetch_arg = is_prefetch_arg
-      || (support.max_image_urls_per_element
-        && (arg == "--max-image-urls-per-element"
-          || arg.starts_with("--max-image-urls-per-element=")));
-
-    if is_prefetch_arg {
-      prefetch_args.push(arg.clone());
-
-      if !arg.contains('=') {
-        if let Some(next) = iter.peek() {
-          if !next.starts_with('-') {
-            prefetch_args.push((*next).clone());
-            iter.next();
-          }
-        }
-      }
-    } else {
-      pageset_args.push(arg.clone());
-    }
+  if disk_cache_feature && !capabilities.disk_cache_feature {
+    bail!(
+      "`prefetch_assets --capabilities` reported disk_cache_feature=false even though disk_cache was requested"
+    );
   }
 
-  (prefetch_args, pageset_args)
+  Ok(capabilities.flags)
 }
 
 fn extract_disk_cache_args(extra: &[String]) -> Vec<String> {

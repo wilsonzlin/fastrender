@@ -516,6 +516,11 @@ if [[ "${USE_DISK_CACHE}" != 0 ]]; then
   fi
 fi
 
+FEATURE_ARGS=()
+if [[ "${USE_DISK_CACHE}" != 0 ]]; then
+  FEATURE_ARGS=(--features disk_cache)
+fi
+
 PREFETCH_ASSET_ARGS=()
 PAGESET_ARGS=()
 PREFETCH_FONTS_IN_ARGS=0
@@ -539,39 +544,37 @@ PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS=0
 PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE=0
 PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT=0
 
-prefetch_assets_capability_is_true() {
-  local json="$1"
-  local key="$2"
-
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import json,sys; data=json.load(sys.stdin); sys.stdout.write("1" if data.get(sys.argv[1]) else "0")' \
-      "${key}" <<<"${json}"
-    return
-  fi
-
-  if printf '%s' "${json}" | grep -Eq "\"${key}\"[[:space:]]*:[[:space:]]*true"; then
-    echo 1
-  else
-    echo 0
-  fi
-}
-
 if [[ "${USE_DISK_CACHE}" != 0 ]]; then
-  PREFETCH_ASSETS_CAPABILITIES_JSON="$(cargo run --release --features disk_cache --bin prefetch_assets -- --print-capabilities-json)"
+  PREFETCH_ASSETS_CAPABILITIES_JSON="$(cargo run --release "${FEATURE_ARGS[@]}" --bin prefetch_assets -- --capabilities)"
+  eval "$(
+    python3 - <<'PY' <<<"${PREFETCH_ASSETS_CAPABILITIES_JSON}"
+import json
+import sys
 
-  PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_fonts")"
-  PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_images")"
-  PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_iframes")"
-  PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_embeds")"
-  PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_icons")"
-  PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_video_posters")"
-  PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "prefetch_css_url_assets")"
-  PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_discovered_assets_per_page")"
-  PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_images_per_page")"
-  PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT="$(prefetch_assets_capability_is_true "${PREFETCH_ASSETS_CAPABILITIES_JSON}" "max_image_urls_per_element")"
+caps = json.load(sys.stdin)
+if caps.get("name") != "prefetch_assets":
+  raise SystemExit(f"unexpected prefetch_assets capabilities name: {caps.get('name')!r}")
+flags = caps.get("flags") or {}
+
+def emit(var, key):
+  value = 1 if flags.get(key) else 0
+  print(f"{var}={value}")
+
+emit("PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS", "prefetch_fonts")
+emit("PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES", "prefetch_images")
+emit("PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES", "prefetch_iframes")
+emit("PREFETCH_ASSETS_SUPPORT_PREFETCH_EMBEDS", "prefetch_embeds")
+emit("PREFETCH_ASSETS_SUPPORT_PREFETCH_ICONS", "prefetch_icons")
+emit("PREFETCH_ASSETS_SUPPORT_PREFETCH_VIDEO_POSTERS", "prefetch_video_posters")
+emit("PREFETCH_ASSETS_SUPPORT_PREFETCH_CSS_URL_ASSETS", "prefetch_css_url_assets")
+emit("PREFETCH_ASSETS_SUPPORT_MAX_DISCOVERED_ASSETS", "max_discovered_assets_per_page")
+emit("PREFETCH_ASSETS_SUPPORT_MAX_IMAGES_PER_PAGE", "max_images_per_page")
+emit("PREFETCH_ASSETS_SUPPORT_MAX_IMAGE_URLS_PER_ELEMENT", "max_image_urls_per_element")
+PY
+  )"
 else
   # Prefetch knobs do not apply when the disk cache is disabled, but we still intercept them so
-  # pageset_progress arg parsing stays forgiving (and consistent with the xtask wrapper).
+  # pageset_progress arg parsing stays forgiving.
   PREFETCH_ASSETS_SUPPORT_PREFETCH_FONTS=1
   PREFETCH_ASSETS_SUPPORT_PREFETCH_IMAGES=1
   PREFETCH_ASSETS_SUPPORT_PREFETCH_IFRAMES=1
@@ -782,11 +785,6 @@ if [[ "${NO_FETCH}" -ne 0 ]]; then
       exit 2
     fi
   done
-fi
-
-FEATURE_ARGS=()
-if [[ "${USE_DISK_CACHE}" != 0 ]]; then
-  FEATURE_ARGS=(--features disk_cache)
 fi
 
 if [[ "${NO_FETCH}" -eq 0 ]]; then

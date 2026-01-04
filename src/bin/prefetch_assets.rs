@@ -6,8 +6,120 @@
 
 mod common;
 
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct PrefetchAssetsCapabilities {
+  name: &'static str,
+  disk_cache_feature: bool,
+  flags: PrefetchAssetsCapabilitiesFlags,
+}
+
+#[derive(Serialize)]
+struct PrefetchAssetsCapabilitiesFlags {
+  prefetch_fonts: bool,
+  prefetch_images: bool,
+  prefetch_iframes: bool,
+  prefetch_embeds: bool,
+  prefetch_icons: bool,
+  prefetch_video_posters: bool,
+  prefetch_css_url_assets: bool,
+  max_discovered_assets_per_page: bool,
+  max_images_per_page: bool,
+  max_image_urls_per_element: bool,
+}
+
+fn capabilities_json(disk_cache_feature: bool) -> String {
+  let flags = if disk_cache_feature {
+    PrefetchAssetsCapabilitiesFlags {
+      prefetch_fonts: true,
+      prefetch_images: true,
+      prefetch_iframes: true,
+      prefetch_embeds: true,
+      prefetch_icons: true,
+      prefetch_video_posters: true,
+      prefetch_css_url_assets: true,
+      max_discovered_assets_per_page: true,
+      max_images_per_page: true,
+      max_image_urls_per_element: true,
+    }
+  } else {
+    PrefetchAssetsCapabilitiesFlags {
+      prefetch_fonts: false,
+      prefetch_images: false,
+      prefetch_iframes: false,
+      prefetch_embeds: false,
+      prefetch_icons: false,
+      prefetch_video_posters: false,
+      prefetch_css_url_assets: false,
+      max_discovered_assets_per_page: false,
+      max_images_per_page: false,
+      max_image_urls_per_element: false,
+    }
+  };
+
+  let caps = PrefetchAssetsCapabilities {
+    name: "prefetch_assets",
+    disk_cache_feature,
+    flags,
+  };
+  serde_json::to_string(&caps).expect("serialize prefetch_assets capabilities")
+}
+
+fn print_capabilities(disk_cache_feature: bool) {
+  println!("{}", capabilities_json(disk_cache_feature));
+}
+
+#[cfg(all(test, not(feature = "disk_cache")))]
+mod capabilities_tests {
+  use super::*;
+  use serde_json::Value;
+
+  #[test]
+  fn capabilities_json_includes_expected_keys_without_disk_cache() {
+    let json = capabilities_json(false);
+    let parsed: Value = serde_json::from_str(&json).expect("capabilities JSON should parse");
+
+    assert_eq!(
+      parsed.get("name").and_then(Value::as_str),
+      Some("prefetch_assets")
+    );
+    assert_eq!(
+      parsed.get("disk_cache_feature").and_then(Value::as_bool),
+      Some(false)
+    );
+
+    let flags = parsed
+      .get("flags")
+      .and_then(Value::as_object)
+      .expect("capabilities should include flags object");
+    for key in [
+      "prefetch_fonts",
+      "prefetch_images",
+      "prefetch_iframes",
+      "prefetch_embeds",
+      "prefetch_icons",
+      "prefetch_video_posters",
+      "prefetch_css_url_assets",
+      "max_discovered_assets_per_page",
+      "max_images_per_page",
+      "max_image_urls_per_element",
+    ] {
+      assert_eq!(
+        flags.get(key).and_then(Value::as_bool),
+        Some(false),
+        "capabilities should report flags.{key}=false when disk_cache is unavailable"
+      );
+    }
+  }
+}
+
 #[cfg(not(feature = "disk_cache"))]
 fn main() {
+  if std::env::args().any(|arg| arg == "--capabilities" || arg == "--print-capabilities-json") {
+    print_capabilities(false);
+    return;
+  }
   eprintln!(
     "prefetch_assets requires the `disk_cache` feature. Re-run with `--features disk_cache`."
   );
@@ -45,7 +157,6 @@ mod disk_cache_main {
   use rayon::prelude::*;
   use rayon::ThreadPoolBuilder;
   use regex::Regex;
-  use serde::Serialize;
   use std::cell::RefCell;
   use std::collections::{BTreeSet, HashMap, HashSet};
   use std::path::{Path, PathBuf};
@@ -60,53 +171,13 @@ mod disk_cache_main {
   };
 
   const DEFAULT_ASSET_DIR: &str = "fetches/assets";
-  const CAPABILITIES_SCHEMA_VERSION: u32 = 1;
-
-  #[derive(Debug, Serialize)]
-  struct PrefetchAssetsCapabilities {
-    schema_version: u32,
-    prefetch_fonts: bool,
-    prefetch_images: bool,
-    prefetch_iframes: bool,
-    prefetch_embeds: bool,
-    prefetch_icons: bool,
-    prefetch_video_posters: bool,
-    prefetch_css_url_assets: bool,
-    max_discovered_assets_per_page: bool,
-    max_images_per_page: bool,
-    max_image_urls_per_element: bool,
-  }
-
-  fn prefetch_assets_capabilities() -> PrefetchAssetsCapabilities {
-    // Keep this in sync with the flags supported by `prefetch_assets` (and any wrappers that
-    // forward them). Tooling should rely on `--print-capabilities-json` instead of grepping the
-    // source tree.
-    PrefetchAssetsCapabilities {
-      schema_version: CAPABILITIES_SCHEMA_VERSION,
-      prefetch_fonts: true,
-      prefetch_images: true,
-      prefetch_iframes: true,
-      prefetch_embeds: true,
-      prefetch_icons: true,
-      prefetch_video_posters: true,
-      prefetch_css_url_assets: true,
-      max_discovered_assets_per_page: true,
-      max_images_per_page: true,
-      max_image_urls_per_element: true,
-    }
-  }
-
-  fn prefetch_assets_capabilities_json() -> String {
-    serde_json::to_string(&prefetch_assets_capabilities())
-      .expect("prefetch_assets capabilities should serialize to JSON")
-  }
 
   #[derive(Parser, Debug)]
   #[command(name = "prefetch_assets", version, about)]
   struct Args {
-    /// Print supported CLI capabilities as stable JSON and exit.
-    #[arg(long, hide = true)]
-    print_capabilities_json: bool,
+    /// Print machine-readable JSON describing supported CLI flags and exit.
+    #[arg(long, alias = "print-capabilities-json")]
+    capabilities: bool,
 
     /// Number of parallel pages to prefetch
     #[arg(long, short, default_value_t = default_jobs())]
@@ -1689,14 +1760,22 @@ mod disk_cache_main {
 
     #[test]
     fn capabilities_json_includes_expected_keys() {
-      let json = prefetch_assets_capabilities_json();
+      let json = crate::capabilities_json(true);
       let parsed: Value = serde_json::from_str(&json).expect("capabilities JSON should parse");
 
-      assert!(
-        parsed.get("schema_version").and_then(Value::as_u64).is_some(),
-        "capabilities should include a schema_version integer"
+      assert_eq!(
+        parsed.get("name").and_then(Value::as_str),
+        Some("prefetch_assets")
+      );
+      assert_eq!(
+        parsed.get("disk_cache_feature").and_then(Value::as_bool),
+        Some(true)
       );
 
+      let flags = parsed
+        .get("flags")
+        .and_then(Value::as_object)
+        .expect("capabilities should include flags object");
       for key in [
         "prefetch_fonts",
         "prefetch_images",
@@ -1710,8 +1789,8 @@ mod disk_cache_main {
         "max_image_urls_per_element",
       ] {
         assert!(
-          parsed.get(key).and_then(Value::as_bool).is_some(),
-          "capabilities should include boolean key {key}"
+          flags.get(key).and_then(Value::as_bool).is_some(),
+          "capabilities should include boolean key flags.{key}"
         );
       }
     }
@@ -2200,9 +2279,8 @@ mod disk_cache_main {
 
   pub fn main() {
     let args = Args::parse();
-
-    if args.print_capabilities_json {
-      println!("{}", prefetch_assets_capabilities_json());
+    if args.capabilities {
+      crate::print_capabilities(true);
       return;
     }
 
