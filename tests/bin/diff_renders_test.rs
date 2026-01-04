@@ -300,7 +300,11 @@ fn diff_renders_avoids_name_collisions_for_nested_paths() {
     .status()
     .expect("run diff_renders");
 
-  assert!(status.success(), "expected success, got {:?}", status.code());
+  assert!(
+    status.success(),
+    "expected success, got {:?}",
+    status.code()
+  );
 
   let report: Value = serde_json::from_str(
     &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
@@ -309,6 +313,56 @@ fn diff_renders_avoids_name_collisions_for_nested_paths() {
   assert_eq!(report["results"].as_array().unwrap().len(), 2);
   assert_eq!(report["results"][0]["name"], "a/x");
   assert_eq!(report["results"][1]["name"], "b/x");
+}
+
+#[test]
+fn diff_renders_missing_entries_report_expected_paths() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(before.join("a")).unwrap();
+  fs::create_dir_all(after.join("a")).unwrap();
+
+  write_color_png(&before.join("a").join("page.png"), [10, 20, 30, 255]);
+
+  let status = diff_renders_cmd(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+    ])
+    .status()
+    .expect("run diff_renders");
+
+  assert!(
+    !status.success(),
+    "expected non-zero exit code for missing entry"
+  );
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+
+  let entry = report["results"]
+    .as_array()
+    .expect("results array")
+    .iter()
+    .find(|e| e["name"] == "a/page")
+    .expect("expected entry a/page");
+  assert_eq!(entry["status"], "missing_after");
+
+  let error = entry["error"].as_str().expect("error missing");
+  let expected_path = after
+    .canonicalize()
+    .expect("canonicalize after dir")
+    .join("a")
+    .join("page.png");
+  assert!(
+    error.contains(&expected_path.display().to_string()),
+    "expected error to mention {expected_path:?}, got {error}"
+  );
 }
 
 #[test]
