@@ -606,18 +606,13 @@ mod tests {
         "deadline should have timeout configured"
       );
       self.observed_deadline.store(true, Ordering::Relaxed);
-      Ok(FetchedResource {
-        bytes: b"<html><head><title>ok</title></head><body>ok</body></html>".to_vec(),
-        content_type: Some("text/html".to_string()),
-        content_encoding: None,
-        status: Some(200),
-        etag: None,
-        last_modified: None,
-        final_url: Some(url.to_string()),
-        cache_policy: None,
-        access_control_allow_origin: None,
-        timing_allow_origin: None,
-      })
+      let mut res = FetchedResource::with_final_url(
+        b"<html><head><title>ok</title></head><body>ok</body></html>".to_vec(),
+        Some("text/html".to_string()),
+        Some(url.to_string()),
+      );
+      res.status = Some(200);
+      Ok(res)
     }
   }
 

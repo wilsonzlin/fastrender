@@ -3715,6 +3715,15 @@ struct StickyTraversalContext {
   sticky_scrollport_y: StickyScrollport,
 }
 
+fn overflow_establishes_sticky_scrollport(overflow: crate::style::types::Overflow) -> bool {
+  matches!(
+    overflow,
+    crate::style::types::Overflow::Hidden
+      | crate::style::types::Overflow::Scroll
+      | crate::style::types::Overflow::Auto
+  )
+}
+
 fn sticky_delta_axis(
   box_start: f32,
   box_size: f32,
@@ -3886,8 +3895,8 @@ fn apply_sticky_offsets_with_context(
   };
 
   if let Some(style) = fragment.style.as_deref() {
-    let is_scrollport_x = style.overflow_x != crate::style::types::Overflow::Visible;
-    let is_scrollport_y = style.overflow_y != crate::style::types::Overflow::Visible;
+    let is_scrollport_x = overflow_establishes_sticky_scrollport(style.overflow_x);
+    let is_scrollport_y = overflow_establishes_sticky_scrollport(style.overflow_y);
     if is_scrollport_x || is_scrollport_y {
       let inline_base = Some(parent_rect.width());
       let block_base = if parent_rect.height() > 0.0 {
@@ -13513,6 +13522,74 @@ mod tests {
     assert!(
       (sticky_screen.y() - inner_screen.y()).abs() < 0.01,
       "expected sticky to pin to the inner scrollport (nearest scroll container)"
+    );
+  }
+
+  #[test]
+  fn sticky_ignores_overflow_clip_when_selecting_scroll_container() {
+    use crate::style::position::Position;
+    use crate::style::types::Overflow;
+    use crate::style::values::Length;
+
+    let renderer = FastRender::new().unwrap();
+    let viewport = Size::new(200.0, 200.0);
+
+    let mut clip_style = ComputedStyle::default();
+    clip_style.overflow_y = Overflow::Clip;
+    clip_style.border_top_width = Length::px(0.0);
+    clip_style.border_right_width = Length::px(0.0);
+    clip_style.border_bottom_width = Length::px(0.0);
+    clip_style.border_left_width = Length::px(0.0);
+    let clip_style = Arc::new(clip_style);
+
+    let mut sticky_style = ComputedStyle::default();
+    sticky_style.position = Position::Sticky;
+    sticky_style.top = Some(Length::px(0.0));
+    sticky_style.border_top_width = Length::px(0.0);
+    sticky_style.border_right_width = Length::px(0.0);
+    sticky_style.border_bottom_width = Length::px(0.0);
+    sticky_style.border_left_width = Length::px(0.0);
+    let sticky_style = Arc::new(sticky_style);
+
+    let sticky = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 40.0, 200.0, 10.0),
+      FragmentContent::Block { box_id: Some(2) },
+      vec![],
+      sticky_style,
+    );
+    let filler = FragmentNode::new(
+      Rect::from_xywh(0.0, 50.0, 200.0, 200.0),
+      FragmentContent::Block { box_id: None },
+      vec![],
+    );
+    let clip_container = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 50.0, 200.0, 100.0),
+      FragmentContent::Block { box_id: Some(1) },
+      vec![sticky, filler],
+      clip_style,
+    );
+    let root = FragmentNode::new(
+      Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+      FragmentContent::Block { box_id: None },
+      vec![clip_container],
+    );
+    let mut tree = FragmentTree::with_viewport(root, viewport);
+
+    let scroll_state = ScrollState::with_viewport(Point::new(0.0, 100.0));
+    renderer.apply_sticky_offsets_to_tree_with_scroll_state(&mut tree, &scroll_state);
+
+    let sticky_screen = find_screen_rect_by_box_id(
+      &tree.root,
+      2,
+      Point::ZERO,
+      scroll_state.viewport,
+      &scroll_state,
+    )
+    .expect("sticky screen rect");
+
+    assert!(
+      sticky_screen.y().abs() < 0.01,
+      "expected sticky to pin to the viewport scrollport when ancestor uses overflow: clip"
     );
   }
 
