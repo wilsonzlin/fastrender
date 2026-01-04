@@ -2341,7 +2341,175 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
     let inner = extract_function_inner(trimmed, "-ms-repeating-conic-gradient".len())?;
     return parse_conic_gradient(inner, true);
   }
+  if is_single_function_call(trimmed, "-webkit-gradient") {
+    let inner = extract_function_inner(trimmed, "-webkit-gradient".len())?;
+    return parse_webkit_gradient(inner);
+  }
   None
+}
+
+fn parse_webkit_gradient(inner: &str) -> Option<PropertyValue> {
+  #[derive(Clone, Copy)]
+  enum Axis {
+    X,
+    Y,
+  }
+
+  fn parse_coord(token: &str, axis: Axis) -> Option<f32> {
+    let t = token.trim();
+    if t.is_empty() {
+      return None;
+    }
+
+    match axis {
+      Axis::X => {
+        if t.eq_ignore_ascii_case("left") {
+          return Some(0.0);
+        }
+        if t.eq_ignore_ascii_case("center") {
+          return Some(0.5);
+        }
+        if t.eq_ignore_ascii_case("right") {
+          return Some(1.0);
+        }
+      }
+      Axis::Y => {
+        if t.eq_ignore_ascii_case("top") {
+          return Some(0.0);
+        }
+        if t.eq_ignore_ascii_case("center") {
+          return Some(0.5);
+        }
+        if t.eq_ignore_ascii_case("bottom") {
+          return Some(1.0);
+        }
+      }
+    }
+
+    if let Some(num) = t.strip_suffix('%') {
+      let pct = num.trim().parse::<f32>().ok()?;
+      return Some(pct / 100.0);
+    }
+
+    t.parse::<f32>().ok()
+  }
+
+  fn parse_point(token: &str) -> Option<(f32, f32)> {
+    let mut parts = token.split_whitespace();
+    let x_token = parts.next()?;
+    let y_token = parts.next()?;
+    if parts.next().is_some() {
+      return None;
+    }
+    let x = parse_coord(x_token, Axis::X)?;
+    let y = parse_coord(y_token, Axis::Y)?;
+    Some((x, y))
+  }
+
+  fn extract_simple_function_inner<'a>(token: &'a str, name: &str) -> Option<&'a str> {
+    let token = token.trim();
+    if !token.ends_with(')') {
+      return None;
+    }
+    let name_len = name.len();
+    if token.len() < name_len + 2 {
+      return None;
+    }
+    let head = token.get(..name_len)?;
+    if !head.eq_ignore_ascii_case(name) {
+      return None;
+    }
+    if token.as_bytes().get(name_len) != Some(&b'(') {
+      return None;
+    }
+    token.get(name_len + 1..token.len() - 1).map(str::trim)
+  }
+
+  fn parse_stop(token: &str, stops: &mut Vec<crate::css::types::ColorStop>) -> bool {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+      return false;
+    }
+
+    if let Some(inner) = extract_simple_function_inner(trimmed, "from") {
+      let Ok(color) = Color::parse(inner) else {
+        return false;
+      };
+      stops.push(crate::css::types::ColorStop {
+        color,
+        position: Some(0.0),
+      });
+      return true;
+    }
+
+    if let Some(inner) = extract_simple_function_inner(trimmed, "to") {
+      let Ok(color) = Color::parse(inner) else {
+        return false;
+      };
+      stops.push(crate::css::types::ColorStop {
+        color,
+        position: Some(1.0),
+      });
+      return true;
+    }
+
+    if let Some(inner) = extract_simple_function_inner(trimmed, "color-stop") {
+      let mut args = split_top_level_commas(inner);
+      let Some(pos_token) = args.next() else {
+        return false;
+      };
+      let Some(color_token) = args.next() else {
+        return false;
+      };
+      if args.next().is_some() {
+        return false;
+      }
+
+      let position = parse_stop_position(pos_token);
+      let Ok(color) = Color::parse(color_token) else {
+        return false;
+      };
+      stops.push(crate::css::types::ColorStop { color, position });
+      return true;
+    }
+
+    false
+  }
+
+  fn parse_linear<'a>(
+    start_token: &str,
+    end_token: &str,
+    rest: &mut TopLevelCommaSplit<'a>,
+  ) -> Option<PropertyValue> {
+    let (x1, y1) = parse_point(start_token)?;
+    let (x2, y2) = parse_point(end_token)?;
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let angle = dx.atan2(-dy).to_degrees().rem_euclid(360.0);
+
+    let mut stops = Vec::new();
+    for part in rest {
+      let _ = parse_stop(part, &mut stops);
+    }
+    if stops.len() < 2 {
+      return None;
+    }
+    Some(PropertyValue::LinearGradient { angle, stops })
+  }
+
+  let mut parts = split_top_level_commas(inner);
+  let first = parts.next()?.trim();
+  if first.eq_ignore_ascii_case("linear") {
+    let start = parts.next()?;
+    let end = parts.next()?;
+    return parse_linear(start, end, &mut parts);
+  }
+  if first.eq_ignore_ascii_case("radial") {
+    return None;
+  }
+
+  let end = parts.next()?;
+  parse_linear(first, end, &mut parts)
 }
 
 fn parse_linear_gradient(
@@ -3551,6 +3719,51 @@ mod tests {
     };
     assert!((angle - 270.0).abs() < 0.01);
     assert_eq!(stops.len(), 2);
+  }
+
+  #[test]
+  fn parses_webkit_gradient_linear_from_to() {
+    let value = "-webkit-gradient(linear, left top, left bottom, from(#000), to(#fff))";
+    let PropertyValue::LinearGradient { angle, stops } =
+      parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+    assert!((angle - 180.0).abs() < 0.01);
+    assert_eq!(stops.len(), 2);
+    assert_eq!(stops[0].position, Some(0.0));
+    assert_eq!(stops[1].position, Some(1.0));
+  }
+
+  #[test]
+  fn parses_webkit_gradient_linear_color_stop() {
+    let value =
+      "-webkit-gradient(linear, left top, right top, from(red), color-stop(50%, blue), to(green))";
+    let PropertyValue::LinearGradient { angle, stops } =
+      parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+    assert!((angle - 90.0).abs() < 0.01);
+    assert_eq!(stops.len(), 3);
+    assert_eq!(stops[0].position, Some(0.0));
+    assert_eq!(stops[1].position, Some(0.5));
+    assert_eq!(stops[2].position, Some(1.0));
+  }
+
+  #[test]
+  fn parses_webkit_gradient_without_explicit_type() {
+    let value =
+      "-webkit-gradient(left top, right bottom, color-stop(0%, #000), color-stop(100%, #fff))";
+    let PropertyValue::LinearGradient { angle, stops } =
+      parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+    assert!((angle - 135.0).abs() < 0.01);
+    assert_eq!(stops.len(), 2);
+    assert_eq!(stops[0].position, Some(0.0));
+    assert_eq!(stops[1].position, Some(1.0));
   }
 
   #[test]
