@@ -613,9 +613,9 @@ fn test_ref_harness_render_and_compare_identical() {
 }
 
 #[test]
-#[ignore = "Requires full rendering pipeline which may have layout limitations"]
 fn test_ref_harness_create_reference() {
   use std::fs;
+  use tempfile::TempDir;
 
   let mut harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
 
@@ -634,8 +634,8 @@ fn test_ref_harness_create_reference() {
     "#;
 
   // Create a temp file for the reference
-  let temp_dir = std::env::temp_dir();
-  let reference_path = temp_dir.join("test_ref_harness_reference.png");
+  let temp_dir = TempDir::new().expect("temp dir");
+  let reference_path = temp_dir.path().join("reference.png");
 
   // Create the reference
   let create_result = harness.create_reference(html, &reference_path);
@@ -653,17 +653,13 @@ fn test_ref_harness_create_reference() {
   // Now run a test against this reference - should pass
   let result = harness.run_ref_test_inline("test_blue_box", html, &reference_path);
 
-  // Clean up
-  let _ = fs::remove_file(&reference_path);
-
   // Verify the test passed
   assert!(result.passed, "Test should pass: {}", result.summary());
 }
 
 #[test]
-#[ignore = "Requires full rendering pipeline which may have layout limitations"]
 fn test_ref_harness_detect_difference() {
-  use std::fs;
+  use tempfile::TempDir;
 
   let mut harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
 
@@ -696,17 +692,14 @@ fn test_ref_harness_detect_difference() {
     "#;
 
   // Create a reference from html1
-  let temp_dir = std::env::temp_dir();
-  let reference_path = temp_dir.join("test_ref_harness_diff_reference.png");
+  let temp_dir = TempDir::new().expect("temp dir");
+  let reference_path = temp_dir.path().join("reference.png");
 
   let create_result = harness.create_reference(html1, &reference_path);
   assert!(create_result.is_ok());
 
   // Run a test with html2 - should fail because colors differ
   let result = harness.run_ref_test_inline("test_color_diff", html2, &reference_path);
-
-  // Clean up
-  let _ = fs::remove_file(&reference_path);
 
   // Verify the test failed due to visual difference
   assert!(!result.passed, "Test should fail due to color difference");
@@ -723,9 +716,8 @@ fn test_ref_harness_detect_difference() {
 }
 
 #[test]
-#[ignore = "Requires full rendering pipeline which may have layout limitations"]
 fn test_ref_harness_with_lenient_config() {
-  use std::fs;
+  use tempfile::TempDir;
 
   // Use lenient config to allow small differences
   let config = RefTestConfig::with_viewport(100, 100).with_compare_config(CompareConfig::lenient());
@@ -746,17 +738,14 @@ fn test_ref_harness_with_lenient_config() {
     "#;
 
   // Create reference
-  let temp_dir = std::env::temp_dir();
-  let reference_path = temp_dir.join("test_ref_harness_lenient_reference.png");
+  let temp_dir = TempDir::new().expect("temp dir");
+  let reference_path = temp_dir.path().join("reference.png");
 
   let create_result = harness.create_reference(html, &reference_path);
   assert!(create_result.is_ok());
 
   // Test against same HTML - should definitely pass
   let result = harness.run_ref_test_inline("test_lenient", html, &reference_path);
-
-  // Clean up
-  let _ = fs::remove_file(&reference_path);
 
   assert!(result.passed, "Test should pass: {}", result.summary());
 }

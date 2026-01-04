@@ -52,6 +52,7 @@ use fastrender::FastRender;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Once;
 use std::time::Duration;
 use std::time::Instant;
 use tiny_skia::Pixmap;
@@ -289,11 +290,25 @@ pub struct RefTestHarness {
   config: RefTestConfig,
 }
 
+static SET_BUNDLED_FONTS: Once = Once::new();
+
+fn ensure_bundled_fonts() {
+  SET_BUNDLED_FONTS.call_once(|| {
+    // Keep reference renders deterministic across machines.
+    std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
+  });
+}
+
 impl RefTestHarness {
+  fn deterministic_renderer() -> FastRender {
+    ensure_bundled_fonts();
+    FastRender::new().expect("Failed to create renderer")
+  }
+
   /// Creates a new reference test harness with default configuration
   pub fn new() -> Self {
     Self {
-      renderer: FastRender::new().expect("Failed to create renderer"),
+      renderer: Self::deterministic_renderer(),
       config: RefTestConfig::default(),
     }
   }
@@ -301,7 +316,7 @@ impl RefTestHarness {
   /// Creates a new harness with custom configuration
   pub fn with_config(config: RefTestConfig) -> Self {
     Self {
-      renderer: FastRender::new().expect("Failed to create renderer"),
+      renderer: Self::deterministic_renderer(),
       config,
     }
   }
