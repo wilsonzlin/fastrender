@@ -258,8 +258,9 @@ Notes:
 - Core flags:
   - Selection: `--only <csv>` and/or positional fixture names.
   - Paths: `--fixtures-root <dir>`, `--out <dir>`, `--chrome-dir <dir>`.
-  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--render-timeout <secs>`, `--timeout <secs>` (Chrome), `--js {on|off}`.
+  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--render-timeout <secs>`, `--timeout <secs>` (Chrome), `--js {on|off}`, `--chrome <path>`.
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`.
+  - Chrome-less mode: `--no-chrome --chrome-dir <dir>` (reuse an existing baseline instead of invoking Chrome).
 
 ## `fetch_and_render`
 
