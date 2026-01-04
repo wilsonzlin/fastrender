@@ -80,6 +80,83 @@ const SOURCE_SRCSET_ATTR_FALLBACKS: &[&str] = &[
   "data-original-srcset",
   "data-actualsrcset",
 ];
+const SIZES_ATTR_FALLBACKS: &[&str] = &["sizes", "data-sizes"];
+
+fn img_src_is_placeholder(value: &str) -> bool {
+  let value = value.trim();
+  if value.is_empty() {
+    return true;
+  }
+  if value.eq_ignore_ascii_case("about:blank") {
+    return true;
+  }
+  if value == "#" {
+    return true;
+  }
+
+  // Treat the common "1x1 transparent GIF" data URLs used as placeholders for lazy-loaded images
+  // as empty. These are typically replaced by client-side bootstrap JS with the real image URL.
+  if !value
+    .get(.."data:".len())
+    .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    .unwrap_or(false)
+  {
+    return false;
+  }
+
+  let rest = &value["data:".len()..];
+  let Some((metadata, payload)) = rest.split_once(',') else {
+    return false;
+  };
+
+  let mut parts = metadata.split(';');
+  let mediatype = parts.next().unwrap_or("").trim();
+  if !mediatype.eq_ignore_ascii_case("image/gif") {
+    return false;
+  }
+  let is_base64 = parts.any(|part| part.trim().eq_ignore_ascii_case("base64"));
+  if !is_base64 {
+    return false;
+  }
+
+  let payload = payload.trim();
+  if payload.is_empty() {
+    return true;
+  }
+  // Avoid decoding unusually large data URLs; placeholders are tiny and should decode quickly.
+  if payload.len() > 512 {
+    return false;
+  }
+
+  use base64::Engine;
+  let decoded = {
+    let mut cleaned: Option<Vec<u8>> = None;
+    let input = if payload.bytes().any(|b| b.is_ascii_whitespace()) {
+      let mut buf = Vec::with_capacity(payload.len());
+      buf.extend(payload.bytes().filter(|b| !b.is_ascii_whitespace()));
+      cleaned = Some(buf);
+      cleaned.as_ref().unwrap().as_slice()
+    } else {
+      payload.as_bytes()
+    };
+    base64::engine::general_purpose::STANDARD.decode(input).ok()
+  };
+  let Some(decoded) = decoded else {
+    return false;
+  };
+
+  if decoded.len() < 10 {
+    return false;
+  }
+
+  if &decoded[..6] != b"GIF87a" && &decoded[..6] != b"GIF89a" {
+    return false;
+  }
+
+  let width = u16::from_le_bytes([decoded[6], decoded[7]]);
+  let height = u16::from_le_bytes([decoded[8], decoded[9]]);
+  width == 1 && height == 1
+}
 
 fn get_non_empty_attr<'a>(node: &'a DomNode, name: &str) -> Option<&'a str> {
   node
@@ -89,6 +166,19 @@ fn get_non_empty_attr<'a>(node: &'a DomNode, name: &str) -> Option<&'a str> {
 
 fn get_first_non_empty_attr<'a>(node: &'a DomNode, names: &[&str]) -> Option<&'a str> {
   names.iter().find_map(|name| get_non_empty_attr(node, name))
+}
+
+fn get_img_src_attr<'a>(node: &'a DomNode) -> Option<&'a str> {
+  for name in IMG_SRC_ATTR_FALLBACKS {
+    let Some(value) = get_non_empty_attr(node, name) else {
+      continue;
+    };
+    if *name == "src" && img_src_is_placeholder(value) {
+      continue;
+    }
+    return Some(value);
+  }
+  None
 }
 
 fn normalize_mime_type(value: &str) -> Option<String> {
@@ -248,7 +338,7 @@ fn picture_sources_and_fallback_img<'a>(
         continue;
       }
 
-      let sizes = child.get_attribute_ref("sizes").and_then(parse_sizes);
+      let sizes = get_first_non_empty_attr(child, SIZES_ATTR_FALLBACKS).and_then(parse_sizes);
       let media = child
         .get_attribute_ref("media")
         .and_then(|m| MediaQuery::parse_list(m).ok());
@@ -402,11 +492,11 @@ pub fn discover_image_prefetch_urls(
           }
           *image_elements += 1;
 
-          let img_src = get_first_non_empty_attr(img, IMG_SRC_ATTR_FALLBACKS).unwrap_or("");
+          let img_src = get_img_src_attr(img).unwrap_or("");
           let img_srcset = get_first_non_empty_attr(img, IMG_SRCSET_ATTR_FALLBACKS)
             .map(parse_srcset)
             .unwrap_or_default();
-          let img_sizes = img.get_attribute_ref("sizes").and_then(parse_sizes);
+          let img_sizes = get_first_non_empty_attr(img, SIZES_ATTR_FALLBACKS).and_then(parse_sizes);
 
           push_prefetch_selection(
             ctx,
@@ -429,7 +519,7 @@ pub fn discover_image_prefetch_urls(
           *limited = true;
           return false;
         }
-        let img_src = get_first_non_empty_attr(node, IMG_SRC_ATTR_FALLBACKS).unwrap_or("");
+        let img_src = get_img_src_attr(node).unwrap_or("");
         let has_src = !img_src.trim().is_empty();
         let img_srcset_attr = get_first_non_empty_attr(node, IMG_SRCSET_ATTR_FALLBACKS);
         let has_srcset = img_srcset_attr.is_some();
@@ -437,7 +527,8 @@ pub fn discover_image_prefetch_urls(
           *image_elements += 1;
 
           let img_srcset = img_srcset_attr.map(parse_srcset).unwrap_or_default();
-          let img_sizes = node.get_attribute_ref("sizes").and_then(parse_sizes);
+          let img_sizes =
+            get_first_non_empty_attr(node, SIZES_ATTR_FALLBACKS).and_then(parse_sizes);
 
           push_prefetch_selection(
             ctx,
@@ -719,6 +810,48 @@ mod tests {
   }
 
   #[test]
+  fn falls_back_from_placeholder_src_to_data_src() {
+    let html = r#"<img src="about:blank" data-src="a.jpg">"#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/a.jpg".to_string()]);
+  }
+
+  #[test]
+  fn falls_back_from_1x1_gif_data_src_to_data_src() {
+    let html = r#"<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" data-src="a.jpg">"#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/a.jpg".to_string()]);
+  }
+
+  #[test]
   fn discovers_img_srcset_from_data_gl_srcset() {
     let html = r#"<img data-gl-srcset="a1.jpg 1x, a2.jpg 2x">"#;
     let dom = parse_html(html).unwrap();
@@ -769,6 +902,33 @@ mod tests {
         "https://example.com/fallback.jpg".to_string(),
       ]
     );
+  }
+
+  #[test]
+  fn discovers_sizes_from_data_sizes() {
+    let html = r#"
+      <img
+        src="fallback.jpg"
+        srcset="small.jpg 600w, large.jpg 1200w"
+        data-sizes="600px"
+      >
+    "#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 1,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/small.jpg".to_string()]);
   }
 
   #[test]
