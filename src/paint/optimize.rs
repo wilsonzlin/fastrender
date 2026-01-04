@@ -407,6 +407,12 @@ impl DisplayListOptimizer {
       match item {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
+          if !clip_stack.is_empty()
+            && disable_clip_culling(&mut clip_stack, &mut active_cull_clips)
+          {
+            clips_can_cull_any = active_cull_clips > 0;
+            refresh_context_clipping(&mut context_stack, clips_can_cull_any);
+          }
           transform_state.current_3d = transform_state.current_3d.multiply(&t.transform);
           include_item = true;
         }
@@ -844,11 +850,9 @@ impl DisplayListOptimizer {
   }
 
   fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
-    if item.transform_style == TransformStyle::Preserve3d {
-      return false;
-    }
-
-    item.child_perspective.is_none()
+    item.z_index == 0
+      && matches!(item.transform_style, TransformStyle::Flat)
+      && item.child_perspective.is_none()
       && item.transform.is_none()
       && item.filters.is_empty()
       && item.backdrop_filters.is_empty()
@@ -1922,7 +1926,10 @@ mod tests {
       "rect at x=300 should be culled; got {fill_rects:?}"
     );
     assert_eq!(fill_rects.len(), 1, "exactly one fill rect should remain");
-    assert!(out.len() < list.len(), "culling should reduce the slice size");
+    assert!(
+      out.len() < list.len(),
+      "culling should reduce the slice size"
+    );
     assert_balanced(&out);
   }
 
