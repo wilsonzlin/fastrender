@@ -7,7 +7,7 @@
 
 use crate::css::loader::resolve_href_with_base;
 use crate::css::parser::tokenize_rel_list;
-use crate::dom::{is_inert_html_template, DomNode};
+use crate::dom::{img_src_is_placeholder, is_inert_html_template, DomNode};
 use crate::html::image_attrs::{parse_sizes, parse_srcset};
 use crate::html::images::{
   image_sources_with_fallback, select_image_source, ImageSelectionContext,
@@ -81,81 +81,6 @@ const SOURCE_SRCSET_ATTR_FALLBACKS: &[&str] = &[
   "data-actualsrcset",
 ];
 const SIZES_ATTR_FALLBACKS: &[&str] = &["sizes", "data-sizes"];
-
-fn img_src_is_placeholder(value: &str) -> bool {
-  let value = value.trim();
-  if value.is_empty() {
-    return true;
-  }
-  if value.eq_ignore_ascii_case("about:blank") {
-    return true;
-  }
-  if value == "#" {
-    return true;
-  }
-
-  // Treat the common "1x1 transparent GIF" data URLs used as placeholders for lazy-loaded images
-  // as empty. These are typically replaced by client-side bootstrap JS with the real image URL.
-  if !value
-    .get(.."data:".len())
-    .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
-    .unwrap_or(false)
-  {
-    return false;
-  }
-
-  let rest = &value["data:".len()..];
-  let Some((metadata, payload)) = rest.split_once(',') else {
-    return false;
-  };
-
-  let mut parts = metadata.split(';');
-  let mediatype = parts.next().unwrap_or("").trim();
-  if !mediatype.eq_ignore_ascii_case("image/gif") {
-    return false;
-  }
-  let is_base64 = parts.any(|part| part.trim().eq_ignore_ascii_case("base64"));
-  if !is_base64 {
-    return false;
-  }
-
-  let payload = payload.trim();
-  if payload.is_empty() {
-    return true;
-  }
-  // Avoid decoding unusually large data URLs; placeholders are tiny and should decode quickly.
-  if payload.len() > 512 {
-    return false;
-  }
-
-  use base64::Engine;
-  let decoded = if payload.bytes().any(|b| b.is_ascii_whitespace()) {
-    let mut cleaned = Vec::with_capacity(payload.len());
-    cleaned.extend(payload.bytes().filter(|b| !b.is_ascii_whitespace()));
-    base64::engine::general_purpose::STANDARD
-      .decode(cleaned.as_slice())
-      .ok()
-  } else {
-    base64::engine::general_purpose::STANDARD
-      .decode(payload.as_bytes())
-      .ok()
-  };
-  let Some(decoded) = decoded else {
-    return false;
-  };
-
-  if decoded.len() < 10 {
-    return false;
-  }
-
-  if &decoded[..6] != b"GIF87a" && &decoded[..6] != b"GIF89a" {
-    return false;
-  }
-
-  let width = u16::from_le_bytes([decoded[6], decoded[7]]);
-  let height = u16::from_le_bytes([decoded[8], decoded[9]]);
-  width == 1 && height == 1
-}
 
 fn get_non_empty_attr<'a>(node: &'a DomNode, name: &str) -> Option<&'a str> {
   node

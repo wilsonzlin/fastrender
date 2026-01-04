@@ -2867,17 +2867,32 @@ pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
       if let DomNodeType::Slot { assigned, .. } = &mut out.node_type {
         *assigned = false;
       }
-      return src.children.iter().map(|child| child as *const DomNode).collect();
+      return src
+        .children
+        .iter()
+        .map(|child| child as *const DomNode)
+        .collect();
     }
 
-    src.children.iter().map(|child| child as *const DomNode).collect()
+    src
+      .children
+      .iter()
+      .map(|child| child as *const DomNode)
+      .collect()
   }
 
   let mut deadline_counter = 0usize;
 
   let root_ptr = root as *const DomNode;
   let mut out_root = root.clone_without_children();
-  let root_children = composed_children_for(root, root_ptr, &ids, &id_to_node, &assignment, &mut out_root);
+  let root_children = composed_children_for(
+    root,
+    root_ptr,
+    &ids,
+    &id_to_node,
+    &assignment,
+    &mut out_root,
+  );
   let mut stack = vec![Frame {
     out: out_root,
     children: root_children,
@@ -2898,8 +2913,14 @@ pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
       // traversal.
       let child = unsafe { &*child_ptr };
       let mut out_child = child.clone_without_children();
-      let child_children =
-        composed_children_for(child, child_ptr, &ids, &id_to_node, &assignment, &mut out_child);
+      let child_children = composed_children_for(
+        child,
+        child_ptr,
+        &ids,
+        &id_to_node,
+        &assignment,
+        &mut out_child,
+      );
       stack.push(Frame {
         out: out_child,
         children: child_children,
@@ -3088,6 +3109,81 @@ pub fn compute_part_export_map_with_ids(
   Ok(map)
 }
 
+pub(crate) fn img_src_is_placeholder(value: &str) -> bool {
+  let value = value.trim();
+  if value.is_empty() {
+    return true;
+  }
+  if value.eq_ignore_ascii_case("about:blank") {
+    return true;
+  }
+  if value == "#" {
+    return true;
+  }
+
+  // Treat the common "1x1 transparent GIF" data URLs used as placeholders for lazy-loaded images
+  // as empty. These are typically replaced by client-side bootstrap JS with the real image URL.
+  if !value
+    .get(.."data:".len())
+    .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    .unwrap_or(false)
+  {
+    return false;
+  }
+
+  let rest = &value["data:".len()..];
+  let Some((metadata, payload)) = rest.split_once(',') else {
+    return false;
+  };
+
+  let mut parts = metadata.split(';');
+  let mediatype = parts.next().unwrap_or("").trim();
+  if !mediatype.eq_ignore_ascii_case("image/gif") {
+    return false;
+  }
+  let is_base64 = parts.any(|part| part.trim().eq_ignore_ascii_case("base64"));
+  if !is_base64 {
+    return false;
+  }
+
+  let payload = payload.trim();
+  if payload.is_empty() {
+    return true;
+  }
+  // Avoid decoding unusually large data URLs; placeholders are tiny and should decode quickly.
+  if payload.len() > 512 {
+    return false;
+  }
+
+  use base64::Engine;
+  let decoded = if payload.bytes().any(|b| b.is_ascii_whitespace()) {
+    let mut cleaned = Vec::with_capacity(payload.len());
+    cleaned.extend(payload.bytes().filter(|b| !b.is_ascii_whitespace()));
+    base64::engine::general_purpose::STANDARD
+      .decode(cleaned.as_slice())
+      .ok()
+  } else {
+    base64::engine::general_purpose::STANDARD
+      .decode(payload.as_bytes())
+      .ok()
+  };
+  let Some(decoded) = decoded else {
+    return false;
+  };
+
+  if decoded.len() < 10 {
+    return false;
+  }
+
+  if &decoded[..6] != b"GIF87a" && &decoded[..6] != b"GIF89a" {
+    return false;
+  }
+
+  let width = u16::from_le_bytes([decoded[6], decoded[7]]);
+  let height = u16::from_le_bytes([decoded[8], decoded[9]]);
+  width == 1 && height == 1
+}
+
 /// Optional DOM compatibility tweaks applied after HTML parsing.
 ///
 /// Some documents bootstrap by marking the root with `no-js` and replacing it with a
@@ -3099,82 +3195,6 @@ fn apply_dom_compatibility_mutations(
   node: &mut DomNode,
   deadline_counter: &mut usize,
 ) -> Result<()> {
-  fn img_src_is_placeholder(value: &str) -> bool {
-    let value = value.trim();
-    if value.is_empty() {
-      return true;
-    }
-    if value.eq_ignore_ascii_case("about:blank") {
-      return true;
-    }
-    if value == "#" {
-      return true;
-    }
-
-    // Treat the common "1x1 transparent GIF" data URLs used as placeholders for lazy-loaded images
-    // as empty. These are typically replaced by client-side bootstrap JS with the real image URL.
-    if !value
-      .get(.."data:".len())
-      .map(|prefix| prefix.eq_ignore_ascii_case("data:"))
-      .unwrap_or(false)
-    {
-      return false;
-    }
-
-    let rest = &value["data:".len()..];
-    let Some((metadata, payload)) = rest.split_once(',') else {
-      return false;
-    };
-
-    let mut parts = metadata.split(';');
-    let mediatype = parts.next().unwrap_or("").trim();
-    if !mediatype.eq_ignore_ascii_case("image/gif") {
-      return false;
-    }
-    let is_base64 = parts.any(|part| part.trim().eq_ignore_ascii_case("base64"));
-    if !is_base64 {
-      return false;
-    }
-
-    let payload = payload.trim();
-    if payload.is_empty() {
-      return true;
-    }
-    // Avoid decoding unusually large data URLs; placeholders are tiny and should decode quickly.
-    if payload.len() > 512 {
-      return false;
-    }
-
-    use base64::Engine;
-    let decoded = {
-      let mut cleaned: Option<Vec<u8>> = None;
-      let input = if payload.bytes().any(|b| b.is_ascii_whitespace()) {
-        let mut buf = Vec::with_capacity(payload.len());
-        buf.extend(payload.bytes().filter(|b| !b.is_ascii_whitespace()));
-        cleaned = Some(buf);
-        cleaned.as_ref().unwrap().as_slice()
-      } else {
-        payload.as_bytes()
-      };
-      base64::engine::general_purpose::STANDARD.decode(input).ok()
-    };
-    let Some(decoded) = decoded else {
-      return false;
-    };
-
-    if decoded.len() < 10 {
-      return false;
-    }
-
-    if &decoded[..6] != b"GIF87a" && &decoded[..6] != b"GIF89a" {
-      return false;
-    }
-
-    let width = u16::from_le_bytes([decoded[6], decoded[7]]);
-    let height = u16::from_le_bytes([decoded[8], decoded[9]]);
-    width == 1 && height == 1
-  }
-
   fn first_non_empty_attr(attrs: &[(String, String)], names: &[&str]) -> Option<String> {
     for &name in names {
       if let Some((_, value)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
