@@ -289,6 +289,35 @@ fn nested_shadow_root_inside_first_declarative_template_is_attached() {
 }
 
 #[test]
+fn nested_declarative_shadow_template_without_host_is_not_attached() {
+  let html = "<div id='host'>\n  <template shadowroot='open'>\n    <template id='inner-template' shadowroot='open'>\n      <div id='should-not-attach'></div>\n    </template>\n    <div id='shadow-ok'></div>\n  </template>\n</div>";
+  let dom = parse_html(html).expect("parse html");
+
+  assert_eq!(
+    count_shadow_roots(&dom),
+    1,
+    "nested declarative templates without a shadow host must remain inert"
+  );
+
+  let host = find_by_id(&dom, "host").expect("host element");
+  let shadow_root = find_shadow_root(host).expect("shadow root child");
+  assert!(
+    find_by_id(shadow_root, "shadow-ok").is_some(),
+    "shadow root should be populated from the promoted declarative template"
+  );
+
+  let inner_template = find_by_id(shadow_root, "inner-template").expect("inner template element");
+  assert!(
+    inner_template.is_template_element(),
+    "nested declarative templates without a host should remain <template> elements"
+  );
+  assert!(
+    find_by_id(inner_template, "should-not-attach").is_some(),
+    "nested template contents should remain inert and unpromoted"
+  );
+}
+
+#[test]
 fn nested_default_slot_in_fallback_prefers_outer_slot() {
   let html = "<div id='host'><template shadowroot='open'><slot id='outer'><div><slot id='inner'></slot></div></slot></template><span id='light'>X</span></div>";
   let dom = parse_html(html).expect("parse html");
