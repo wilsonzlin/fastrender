@@ -3305,6 +3305,7 @@ fn apply_primitive(
         *edge_mode,
         *preserve_alpha,
         *subregion,
+        color_interpolation_filters,
       )?;
       Some(FilterResult::new(output, region, filter_region))
     }
@@ -4528,7 +4529,7 @@ fn to_byte(v: f32) -> u8 {
 }
 
 fn apply_convolve_matrix(
-  input: Pixmap,
+  mut input: Pixmap,
   order_x: usize,
   order_y: usize,
   kernel: &[f32],
@@ -4539,11 +4540,20 @@ fn apply_convolve_matrix(
   edge_mode: EdgeMode,
   preserve_alpha: bool,
   subregion: Option<(f32, f32, f32, f32)>,
+  color_interpolation_filters: ColorInterpolationFilters,
 ) -> RenderResult<Pixmap> {
   check_active(RenderStage::Paint)?;
   if order_x == 0 || order_y == 0 || kernel.is_empty() || input.width() == 0 || input.height() == 0
   {
     return Ok(input);
+  }
+
+  let use_linear = matches!(
+    color_interpolation_filters,
+    ColorInterpolationFilters::LinearRGB
+  );
+  if use_linear {
+    reencode_pixmap_to_linear_rgb(&mut input);
   }
 
   let divisor = match divisor {
@@ -4663,6 +4673,9 @@ fn apply_convolve_matrix(
       })?;
   }
 
+  if use_linear {
+    reencode_pixmap_to_srgb(&mut out);
+  }
   Ok(out)
 }
 
@@ -5177,6 +5190,52 @@ mod tests {
   }
 
   #[test]
+  fn convolve_matrix_respects_color_interpolation_filters() {
+    let pixmap = pixmap_from_rgba(&[(0, 0, 0, 255), (255, 255, 255, 255)]);
+    let kernel = [0.5, 0.5];
+    let apply = |space| {
+      apply_convolve_matrix(
+        pixmap.clone(),
+        2,
+        1,
+        &kernel,
+        None,
+        0.0,
+        0,
+        0,
+        EdgeMode::Duplicate,
+        false,
+        None,
+        space,
+      )
+      .unwrap()
+    };
+
+    let srgb = apply(ColorInterpolationFilters::SRGB);
+    let linear = apply(ColorInterpolationFilters::LinearRGB);
+
+    let assert_approx = |label: &str, actual: u8, expected: u8| {
+      let diff = (actual as i32 - expected as i32).abs();
+      assert!(
+        diff <= 1,
+        "{label}: expected ≈{expected}, got {actual} (diff {diff})"
+      );
+    };
+
+    let px_srgb = srgb.pixels()[0];
+    assert_approx("sRGB red", px_srgb.red(), 128);
+    assert_approx("sRGB green", px_srgb.green(), 128);
+    assert_approx("sRGB blue", px_srgb.blue(), 128);
+    assert_eq!(px_srgb.alpha(), 255);
+
+    let px_linear = linear.pixels()[0];
+    assert_approx("linearRGB red", px_linear.red(), 188);
+    assert_approx("linearRGB green", px_linear.green(), 188);
+    assert_approx("linearRGB blue", px_linear.blue(), 188);
+    assert_eq!(px_linear.alpha(), 255);
+  }
+
+  #[test]
   fn convolve_matrix_respects_cancel_callback() {
     let (deadline, calls) = deadline_after_first_check();
     let pixmap = new_pixmap(1, 1).unwrap();
@@ -5517,9 +5576,12 @@ mod tests {
 
     let out = apply_for_test(&prim, &pixmap);
     let center = out.pixmap.pixels()[4];
-    assert_eq!(center.red(), 40);
-    assert_eq!(center.green(), 40);
-    assert_eq!(center.blue(), 40);
+    // `apply_for_test` uses the default `color-interpolation-filters` value of `linearRGB`, so
+    // the averaged output differs from a naive byte-average in sRGB space.
+    let expected = 46;
+    assert!((center.red() as i32 - expected).abs() <= 1);
+    assert!((center.green() as i32 - expected).abs() <= 1);
+    assert!((center.blue() as i32 - expected).abs() <= 1);
     assert_eq!(center.alpha(), 255);
   }
 
