@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>sticky_nested_scroll</title>
+<style>
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+    font-family: sans-serif;
+  }
+
+  /* Viewport sticky: should remain pinned to the viewport when viewport scroll is applied. */
+  .sticky-viewport {
+    position: sticky;
+    top: 0;
+    height: 32px;
+    background: rgb(240, 0, 0);
+    color: #fff;
+    line-height: 32px;
+    padding-left: 8px;
+    z-index: 2;
+  }
+
+  .spacer {
+    height: 48px;
+    background: rgb(240, 240, 240);
+  }
+
+  /* Outer scroll container to exercise nested scrollport selection. */
+  .outer-scroller {
+    width: 320px;
+    height: 180px;
+    overflow: auto;
+    border: 4px solid rgb(0, 0, 0);
+    margin: 16px;
+  }
+
+  .outer-content {
+    height: 400px;
+    padding: 12px;
+    background: rgb(245, 245, 255);
+  }
+
+  /* Inner scroll container with its own sticky header. */
+  .inner-scroller {
+    height: 120px;
+    overflow: auto;
+    border: 4px solid rgb(0, 0, 120);
+    background: rgb(255, 255, 255);
+  }
+
+  .sticky-inner {
+    position: sticky;
+    top: 0;
+    height: 28px;
+    background: rgb(0, 90, 200);
+    color: #fff;
+    line-height: 28px;
+    padding-left: 8px;
+    z-index: 1;
+  }
+
+  .inner-content {
+    height: 260px;
+    background: linear-gradient(
+      180deg,
+      rgb(0, 220, 0) 0px,
+      rgb(0, 220, 0) 40px,
+      rgb(0, 180, 0) 40px,
+      rgb(0, 180, 0) 80px,
+      rgb(0, 140, 0) 80px,
+      rgb(0, 140, 0) 120px,
+      rgb(0, 100, 0) 120px,
+      rgb(0, 100, 0) 160px,
+      rgb(0, 60, 0) 160px,
+      rgb(0, 60, 0) 200px,
+      rgb(0, 20, 0) 200px,
+      rgb(0, 20, 0) 260px
+    );
+  }
+</style>
+
+<div class="sticky-viewport">viewport sticky</div>
+<div class="spacer"></div>
+
+<div class="outer-scroller">
+  <div class="outer-content">
+    <div class="inner-scroller">
+      <div class="sticky-inner">inner sticky</div>
+      <div class="inner-content"></div>
+    </div>
+  </div>
+</div>

@@ -3700,12 +3700,90 @@ mod viewport_resolution_tests {
   }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct StickyScrollport {
+  rect: Rect,
+  screen_offset: Point,
+  #[allow(dead_code)]
+  scroll_offset: Point,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StickyTraversalContext {
+  cumulative_scroll: Point,
+  sticky_scrollport_x: StickyScrollport,
+  sticky_scrollport_y: StickyScrollport,
+}
+
+fn sticky_delta_axis(
+  box_start: f32,
+  box_size: f32,
+  scrollport_start: f32,
+  scrollport_end: f32,
+  inset_start: Option<f32>,
+  inset_end: Option<f32>,
+) -> f32 {
+  if inset_start.is_none() && inset_end.is_none() {
+    return 0.0;
+  }
+
+  let start_inset = inset_start.unwrap_or(0.0);
+  let end_inset = inset_end.unwrap_or(0.0);
+  let view_start = scrollport_start + start_inset;
+  let mut view_end = scrollport_end - end_inset;
+
+  if view_end - view_start < box_size {
+    view_end = view_start + box_size;
+  }
+
+  let min_allowed = if inset_start.is_some() {
+    view_start
+  } else {
+    f32::NEG_INFINITY
+  };
+  let max_allowed = if inset_end.is_some() {
+    view_end - box_size
+  } else {
+    f32::INFINITY
+  };
+
+  let desired_start = if max_allowed < min_allowed {
+    min_allowed
+  } else {
+    box_start.clamp(min_allowed, max_allowed)
+  };
+  desired_start - box_start
+}
+
+fn clamp_delta_to_containing_block(
+  delta: Point,
+  margin_box: Rect,
+  containing_block: Rect,
+) -> Point {
+  let min_dx = (containing_block.min_x() - margin_box.min_x()).min(0.0);
+  let max_dx = (containing_block.max_x() - margin_box.max_x()).max(0.0);
+  let min_dy = (containing_block.min_y() - margin_box.min_y()).min(0.0);
+  let max_dy = (containing_block.max_y() - margin_box.max_y()).max(0.0);
+
+  let dx = if min_dx <= max_dx {
+    delta.x.clamp(min_dx, max_dx)
+  } else {
+    0.0
+  };
+  let dy = if min_dy <= max_dy {
+    delta.y.clamp(min_dy, max_dy)
+  } else {
+    0.0
+  };
+
+  Point::new(dx, dy)
+}
+
 fn apply_sticky_offsets_with_context(
   font_context: &FontContext,
   fragment: &mut FragmentNode,
   parent_rect: Rect,
-  scroll_for_self: Point,
-  parent_scroll: Point,
+  context: StickyTraversalContext,
   scroll_state: &ScrollState,
   viewport: Size,
 ) {
@@ -3738,50 +3816,51 @@ fn apply_sticky_offsets_with_context(
       );
 
       if constraints.has_constraints() {
-        let mut screen_x = abs_rect.x() - scroll_for_self.x;
-        let mut screen_y = abs_rect.y() - scroll_for_self.y;
+        let margin_width =
+          (abs_rect.width() + positioned.margin.left + positioned.margin.right).max(0.0);
+        let margin_height =
+          (abs_rect.height() + positioned.margin.top + positioned.margin.bottom).max(0.0);
+        let margin_box = Rect::from_xywh(
+          abs_rect.x() - positioned.margin.left,
+          abs_rect.y() - positioned.margin.top,
+          margin_width,
+          margin_height,
+        );
 
-        let container_screen_min_x = parent_rect.x() - parent_scroll.x;
-        let container_screen_max_x = parent_rect.max_x() - parent_scroll.x;
-        let container_screen_min_y = parent_rect.y() - parent_scroll.y;
-        let container_screen_max_y = parent_rect.max_y() - parent_scroll.y;
+        let margin_box_screen = margin_box.translate(Point::new(
+          -context.cumulative_scroll.x,
+          -context.cumulative_scroll.y,
+        ));
 
-        let left = constraints.left.unwrap_or(0.0);
-        let right = constraints.right.unwrap_or(0.0);
-        let top = constraints.top.unwrap_or(0.0);
-        let bottom = constraints.bottom.unwrap_or(0.0);
+        let scrollport_screen_x = context.sticky_scrollport_x.rect.translate(Point::new(
+          -context.sticky_scrollport_x.screen_offset.x,
+          -context.sticky_scrollport_x.screen_offset.y,
+        ));
+        let scrollport_screen_y = context.sticky_scrollport_y.rect.translate(Point::new(
+          -context.sticky_scrollport_y.screen_offset.x,
+          -context.sticky_scrollport_y.screen_offset.y,
+        ));
 
-        if constraints.left.is_some() || constraints.right.is_some() {
-          let min_x = container_screen_min_x + left;
-          let max_x = container_screen_max_x - right - abs_rect.width();
-          let viewport_min_x = left;
-          let viewport_max_x = viewport.width - right - abs_rect.width();
-          let clamp_min_x = min_x.max(viewport_min_x);
-          let clamp_max_x = max_x.min(viewport_max_x);
-          screen_x = screen_x.max(clamp_min_x).min(clamp_max_x);
-        }
+        let mut delta = Point::new(
+          sticky_delta_axis(
+            margin_box_screen.min_x(),
+            margin_box_screen.width(),
+            scrollport_screen_x.min_x(),
+            scrollport_screen_x.max_x(),
+            constraints.left,
+            constraints.right,
+          ),
+          sticky_delta_axis(
+            margin_box_screen.min_y(),
+            margin_box_screen.height(),
+            scrollport_screen_y.min_y(),
+            scrollport_screen_y.max_y(),
+            constraints.top,
+            constraints.bottom,
+          ),
+        );
 
-        if constraints.top.is_some() || constraints.bottom.is_some() {
-          let min_y = container_screen_min_y + top;
-          let max_y = container_screen_max_y - bottom - abs_rect.height();
-          let viewport_min_y = top;
-          let viewport_max_y = viewport.height - bottom - abs_rect.height();
-          let clamp_min_y = min_y.max(viewport_min_y);
-          let clamp_max_y = max_y.min(viewport_max_y);
-          screen_y = screen_y.max(clamp_min_y).min(clamp_max_y);
-        }
-
-        let mut new_abs_x = screen_x + scroll_for_self.x;
-        let mut new_abs_y = screen_y + scroll_for_self.y;
-
-        let cb_min_x = parent_rect.x();
-        let cb_min_y = parent_rect.y();
-        let cb_max_x = parent_rect.max_x();
-        let cb_max_y = parent_rect.max_y();
-        new_abs_x = new_abs_x.min(cb_max_x - abs_rect.width()).max(cb_min_x);
-        new_abs_y = new_abs_y.min(cb_max_y - abs_rect.height()).max(cb_min_y);
-
-        let delta = Point::new(new_abs_x - abs_rect.x(), new_abs_y - abs_rect.y());
+        delta = clamp_delta_to_containing_block(delta, margin_box, parent_rect);
         if delta.x.abs() > f32::EPSILON || delta.y.abs() > f32::EPSILON {
           fragment.bounds = fragment.bounds.translate(delta);
           if let Some(logical) = fragment.logical_override {
@@ -3797,39 +3876,100 @@ fn apply_sticky_offsets_with_context(
     .box_id()
     .and_then(|id| scroll_state.elements.get(&id).copied())
     .unwrap_or(Point::ZERO);
-  let child_scroll = Point::new(
-    scroll_for_self.x + self_scroll.x,
-    scroll_for_self.y + self_scroll.y,
-  );
+
+  let mut child_context = StickyTraversalContext {
+    cumulative_scroll: Point::new(
+      context.cumulative_scroll.x + self_scroll.x,
+      context.cumulative_scroll.y + self_scroll.y,
+    ),
+    ..context
+  };
+
+  if let Some(style) = fragment.style.as_deref() {
+    let is_scrollport_x = style.overflow_x != crate::style::types::Overflow::Visible;
+    let is_scrollport_y = style.overflow_y != crate::style::types::Overflow::Visible;
+    if is_scrollport_x || is_scrollport_y {
+      let inline_base = Some(parent_rect.width());
+      let block_base = if parent_rect.height() > 0.0 {
+        Some(parent_rect.height())
+      } else {
+        None
+      };
+      let containing_block =
+        ContainingBlock::with_viewport_and_bases(parent_rect, viewport, inline_base, block_base);
+      let positioned = resolve_positioned_style(style, &containing_block, viewport, font_context);
+      let padding_rect = Rect::from_xywh(
+        abs_rect.x() + positioned.border_width.left,
+        abs_rect.y() + positioned.border_width.top,
+        (abs_rect.width() - positioned.border_width.left - positioned.border_width.right).max(0.0),
+        (abs_rect.height() - positioned.border_width.top - positioned.border_width.bottom).max(0.0),
+      );
+      let scrollport = StickyScrollport {
+        rect: padding_rect,
+        screen_offset: context.cumulative_scroll,
+        scroll_offset: self_scroll,
+      };
+      if is_scrollport_x {
+        child_context.sticky_scrollport_x = scrollport;
+      }
+      if is_scrollport_y {
+        child_context.sticky_scrollport_y = scrollport;
+      }
+    }
+  }
+
   for child in fragment.children_mut().iter_mut() {
     apply_sticky_offsets_with_context(
       font_context,
       child,
       abs_rect,
-      scroll_for_self,
-      child_scroll,
+      child_context,
       scroll_state,
       viewport,
     );
   }
 }
 
+fn apply_sticky_offsets_to_root(
+  font_context: &FontContext,
+  fragment: &mut FragmentNode,
+  viewport_rect: Rect,
+  scroll_state: &ScrollState,
+  viewport: Size,
+) {
+  let viewport_scroll = scroll_state.viewport;
+  let viewport_scrollport = StickyScrollport {
+    rect: viewport_rect,
+    screen_offset: Point::ZERO,
+    scroll_offset: viewport_scroll,
+  };
+  let context = StickyTraversalContext {
+    cumulative_scroll: viewport_scroll,
+    sticky_scrollport_x: viewport_scrollport,
+    sticky_scrollport_y: viewport_scrollport,
+  };
+  apply_sticky_offsets_with_context(
+    font_context,
+    fragment,
+    viewport_rect,
+    context,
+    scroll_state,
+    viewport,
+  );
+}
+
 impl FastRender {
   fn apply_sticky_offsets(
     &self,
     fragment: &mut FragmentNode,
-    parent_rect: Rect,
-    parent_scroll: Point,
-    scroll_for_self: Point,
+    viewport_rect: Rect,
     viewport: Size,
     scroll_state: &ScrollState,
   ) {
-    apply_sticky_offsets_with_context(
+    apply_sticky_offsets_to_root(
       &self.font_context,
       fragment,
-      parent_rect,
-      scroll_for_self,
-      parent_scroll,
+      viewport_rect,
       scroll_state,
       viewport,
     );
@@ -3862,22 +4002,18 @@ fn paint_fragment_tree_with_state(
   animation::apply_animations(&mut fragment_tree, &scroll_state, animation_duration);
 
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
-  apply_sticky_offsets_with_context(
+  apply_sticky_offsets_to_root(
     font_context,
     &mut fragment_tree.root,
     viewport_rect,
-    scroll,
-    scroll,
     &scroll_state,
     viewport_size,
   );
   for root in &mut fragment_tree.additional_fragments {
-    apply_sticky_offsets_with_context(
+    apply_sticky_offsets_to_root(
       font_context,
       root,
       viewport_rect,
-      scroll,
-      scroll,
       &scroll_state,
       viewport_size,
     );
@@ -5961,7 +6097,6 @@ impl FastRender {
       let scroll_result =
         crate::scroll::apply_scroll_snap(&mut intermediates.fragment_tree, &scroll_state);
       let scroll_state = scroll_result.state;
-      let scroll = scroll_state.viewport;
 
       if let Some(time_ms) = options.animation_time {
         animation::apply_transitions(&mut intermediates.fragment_tree, time_ms, viewport_size);
@@ -5975,12 +6110,8 @@ impl FastRender {
         animation_duration,
       );
 
-      self.apply_sticky_offsets(
-        &mut intermediates.fragment_tree.root,
-        Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
-        scroll_state.viewport,
-        scroll,
-        viewport_size,
+      self.apply_sticky_offsets_to_tree_with_scroll_state(
+        &mut intermediates.fragment_tree,
         &scroll_state,
       );
 
@@ -10016,20 +10147,11 @@ impl FastRender {
     self.apply_sticky_offsets(
       &mut fragment_tree.root,
       viewport_rect,
-      scroll_state.viewport,
-      scroll_state.viewport,
       viewport,
       scroll_state,
     );
     for fragment in fragment_tree.additional_fragments.iter_mut() {
-      self.apply_sticky_offsets(
-        fragment,
-        viewport_rect,
-        scroll_state.viewport,
-        scroll_state.viewport,
-        viewport,
-        scroll_state,
-      );
+      self.apply_sticky_offsets(fragment, viewport_rect, viewport, scroll_state);
     }
   }
 
@@ -13242,8 +13364,6 @@ mod tests {
     renderer.apply_sticky_offsets(
       &mut root,
       Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
-      Point::ZERO,
-      Point::ZERO,
       Size::new(200.0, 200.0),
       &ScrollState::default(),
     );
@@ -13251,6 +13371,149 @@ mod tests {
     let child = &root.children[0];
     assert!((child.bounds.x() - 20.0).abs() < 0.01);
     assert!((child.bounds.y() - 30.0).abs() < 0.01);
+  }
+
+  fn find_screen_rect_by_box_id(
+    node: &FragmentNode,
+    target: usize,
+    parent_origin: Point,
+    cumulative_scroll: Point,
+    scroll_state: &ScrollState,
+  ) -> Option<Rect> {
+    let abs_origin = Point::new(
+      parent_origin.x + node.bounds.x(),
+      parent_origin.y + node.bounds.y(),
+    );
+    let abs_rect = Rect::from_xywh(
+      abs_origin.x,
+      abs_origin.y,
+      node.bounds.width(),
+      node.bounds.height(),
+    );
+    let screen_rect = abs_rect.translate(Point::new(-cumulative_scroll.x, -cumulative_scroll.y));
+    if node.box_id() == Some(target) {
+      return Some(screen_rect);
+    }
+
+    let self_scroll = node
+      .box_id()
+      .and_then(|id| scroll_state.elements.get(&id).copied())
+      .unwrap_or(Point::ZERO);
+    let child_scroll = Point::new(
+      cumulative_scroll.x + self_scroll.x,
+      cumulative_scroll.y + self_scroll.y,
+    );
+    for child in node.children.iter() {
+      if let Some(found) =
+        find_screen_rect_by_box_id(child, target, abs_origin, child_scroll, scroll_state)
+      {
+        return Some(found);
+      }
+    }
+    None
+  }
+
+  #[test]
+  fn sticky_uses_nearest_scroll_container_for_nested_scrollers() {
+    use crate::style::position::Position;
+    use crate::style::types::Overflow;
+    use crate::style::values::Length;
+
+    let renderer = FastRender::new().unwrap();
+    let viewport = Size::new(200.0, 200.0);
+
+    let mut outer_style = ComputedStyle::default();
+    outer_style.overflow_y = Overflow::Scroll;
+    outer_style.border_top_width = Length::px(0.0);
+    outer_style.border_right_width = Length::px(0.0);
+    outer_style.border_bottom_width = Length::px(0.0);
+    outer_style.border_left_width = Length::px(0.0);
+    let outer_style = Arc::new(outer_style);
+
+    let mut inner_style = ComputedStyle::default();
+    inner_style.overflow_y = Overflow::Scroll;
+    inner_style.border_top_width = Length::px(0.0);
+    inner_style.border_right_width = Length::px(0.0);
+    inner_style.border_bottom_width = Length::px(0.0);
+    inner_style.border_left_width = Length::px(0.0);
+    let inner_style = Arc::new(inner_style);
+
+    let wrapper_style = Arc::new(ComputedStyle::default());
+
+    let mut sticky_style = ComputedStyle::default();
+    sticky_style.position = Position::Sticky;
+    sticky_style.top = Some(Length::px(0.0));
+    sticky_style.border_top_width = Length::px(0.0);
+    sticky_style.border_right_width = Length::px(0.0);
+    sticky_style.border_bottom_width = Length::px(0.0);
+    sticky_style.border_left_width = Length::px(0.0);
+    let sticky_style = Arc::new(sticky_style);
+
+    let sticky = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 200.0, 10.0),
+      FragmentContent::Block { box_id: Some(3) },
+      vec![],
+      sticky_style,
+    );
+    let content = FragmentNode::new(
+      Rect::from_xywh(0.0, 10.0, 200.0, 300.0),
+      FragmentContent::Block { box_id: None },
+      vec![],
+    );
+    let wrapper = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 200.0, 310.0),
+      FragmentContent::Block { box_id: Some(4) },
+      vec![sticky, content],
+      wrapper_style,
+    );
+
+    let inner = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 50.0, 200.0, 100.0),
+      FragmentContent::Block { box_id: Some(2) },
+      vec![wrapper],
+      inner_style,
+    );
+    let outer = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+      FragmentContent::Block { box_id: Some(1) },
+      vec![inner],
+      outer_style,
+    );
+    let root = FragmentNode::new(
+      Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+      FragmentContent::Block { box_id: None },
+      vec![outer],
+    );
+    let mut tree = FragmentTree::with_viewport(root, viewport);
+
+    let mut element_scroll_offsets = HashMap::new();
+    element_scroll_offsets.insert(1, Point::new(0.0, 20.0));
+    element_scroll_offsets.insert(2, Point::new(0.0, 30.0));
+    let scroll_state = ScrollState::from_parts(Point::ZERO, element_scroll_offsets);
+
+    renderer.apply_sticky_offsets_to_tree_with_scroll_state(&mut tree, &scroll_state);
+
+    let inner_screen = find_screen_rect_by_box_id(
+      &tree.root,
+      2,
+      Point::ZERO,
+      scroll_state.viewport,
+      &scroll_state,
+    )
+    .expect("inner scroll container screen rect");
+    let sticky_screen = find_screen_rect_by_box_id(
+      &tree.root,
+      3,
+      Point::ZERO,
+      scroll_state.viewport,
+      &scroll_state,
+    )
+    .expect("sticky screen rect");
+
+    assert!(
+      (sticky_screen.y() - inner_screen.y()).abs() < 0.01,
+      "expected sticky to pin to the inner scrollport (nearest scroll container)"
+    );
   }
 
   // ===  // Creation Tests (these should always pass)
