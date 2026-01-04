@@ -231,6 +231,10 @@ struct Args {
   #[arg(long)]
   only_failures: bool,
 
+  /// Output directory for renders/logs/diagnostics (PNGs + *.log, etc.)
+  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
+  out_dir: PathBuf,
+
   /// Print full error chains on failure
   #[arg(long)]
   verbose: bool,
