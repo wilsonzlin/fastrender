@@ -10,6 +10,7 @@ use url::Url;
 
 mod chrome_baseline_fixtures;
 mod fixture_chrome_diff;
+mod fixture_determinism;
 mod import_page_fixture;
 mod recapture_page_fixtures;
 mod update_pageset_guardrails;
@@ -27,6 +28,7 @@ fn main() -> Result<()> {
     Commands::PagesetDiff(args) => run_pageset_diff(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
     Commands::FixtureChromeDiff(args) => fixture_chrome_diff::run_fixture_chrome_diff(args),
+    Commands::FixtureDeterminism(args) => fixture_determinism::run_fixture_determinism(args),
     Commands::ImportPageFixture(args) => import_page_fixture::run_import_page_fixture(args),
     Commands::ChromeBaselineFixtures(args) => {
       chrome_baseline_fixtures::run_chrome_baseline_fixtures(args)
@@ -75,6 +77,8 @@ enum Commands {
   DiffRenders(DiffRendersArgs),
   /// Render offline fixtures in both Chrome and FastRender, then produce a diff report
   FixtureChromeDiff(fixture_chrome_diff::FixtureChromeDiffArgs),
+  /// Render offline fixtures multiple times and report nondeterministic fixtures (pixel diffs between runs)
+  FixtureDeterminism(fixture_determinism::FixtureDeterminismArgs),
   /// Convert a captured bundle into a pages_regression fixture
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
   /// Render offline page fixtures in headless Chrome/Chromium (deterministic JS-off baseline).
@@ -1184,10 +1188,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       let plan_args = xtask::capture_missing_failure_fixtures::CaptureMissingFailureFixturesArgs {
         progress_dir: repo_root.join("progress/pages"),
         fixtures_root: repo_root.join("tests/pages/fixtures"),
-        bundle_out_dir: if args
-          .capture_missing_failure_fixtures_out_dir
-          .is_absolute()
-        {
+        bundle_out_dir: if args.capture_missing_failure_fixtures_out_dir.is_absolute() {
           args.capture_missing_failure_fixtures_out_dir.clone()
         } else {
           repo_root.join(&args.capture_missing_failure_fixtures_out_dir)
@@ -1230,19 +1231,25 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
         if capture.bundle_path.exists() {
           if capture.bundle_path.is_dir() {
             fs::remove_dir_all(&capture.bundle_path).with_context(|| {
-              format!("failed to remove existing bundle {}", capture.bundle_path.display())
+              format!(
+                "failed to remove existing bundle {}",
+                capture.bundle_path.display()
+              )
             })?;
           } else {
             fs::remove_file(&capture.bundle_path).with_context(|| {
-              format!("failed to remove existing bundle {}", capture.bundle_path.display())
+              format!(
+                "failed to remove existing bundle {}",
+                capture.bundle_path.display()
+              )
             })?;
           }
         }
 
         let mut bundle_cmd = capture.bundle_command.to_command();
         bundle_cmd.current_dir(&repo_root);
-        let bundle_result = run_command(bundle_cmd)
-          .with_context(|| format!("bundle_page cache {}", capture.stem));
+        let bundle_result =
+          run_command(bundle_cmd).with_context(|| format!("bundle_page cache {}", capture.stem));
         if let Err(err) = bundle_result {
           failures.push((capture.stem.clone(), format!("capture failed: {err}")));
           continue;
@@ -1251,8 +1258,8 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 
         let mut import_cmd = capture.import_command.to_command();
         import_cmd.current_dir(&repo_root);
-        let import_result = run_command(import_cmd)
-          .with_context(|| format!("import-page-fixture {}", capture.stem));
+        let import_result =
+          run_command(import_cmd).with_context(|| format!("import-page-fixture {}", capture.stem));
         if let Err(err) = import_result {
           failures.push((capture.stem.clone(), format!("import failed: {err}")));
           continue;
@@ -1356,7 +1363,11 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
 
   let mut baseline_temp: Option<TempDir> = None;
   let baseline_dir = if let Some(dir) = args.baseline {
-    let absolute = if dir.is_absolute() { dir } else { cwd.join(&dir) };
+    let absolute = if dir.is_absolute() {
+      dir
+    } else {
+      cwd.join(&dir)
+    };
     if !absolute.is_dir() {
       bail!("baseline directory {} does not exist", absolute.display());
     }
@@ -1635,10 +1646,9 @@ fn cargo_target_dir(repo_root: &Path) -> PathBuf {
 }
 
 fn diff_renders_executable(repo_root: &Path) -> PathBuf {
-  cargo_target_dir(repo_root).join("release").join(format!(
-    "diff_renders{}",
-    std::env::consts::EXE_SUFFIX
-  ))
+  cargo_target_dir(repo_root)
+    .join("release")
+    .join(format!("diff_renders{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn run_render_page(args: RenderPageArgs) -> Result<()> {
@@ -1776,9 +1786,7 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
     .arg("--sort-by")
     .arg(args.sort_by.as_cli_value());
   if let Some(max) = args.max_perceptual_distance {
-    cmd
-      .arg("--max-perceptual-distance")
-      .arg(max.to_string());
+    cmd.arg("--max-perceptual-distance").arg(max.to_string());
   }
   if args.ignore_alpha {
     cmd.arg("--ignore-alpha");
@@ -1911,7 +1919,10 @@ mod tests {
   #[test]
   fn resolve_cargo_target_dir_uses_repo_target_by_default() {
     let repo_root = PathBuf::from("/repo");
-    assert_eq!(resolve_cargo_target_dir(&repo_root, None), repo_root.join("target"));
+    assert_eq!(
+      resolve_cargo_target_dir(&repo_root, None),
+      repo_root.join("target")
+    );
     assert_eq!(
       resolve_cargo_target_dir(&repo_root, Some(Path::new(""))),
       repo_root.join("target")
