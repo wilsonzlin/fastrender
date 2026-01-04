@@ -279,6 +279,26 @@ Notes:
 - Security: `--same-origin-subresources` (plus optional `--allow-subresource-origin`) applies both when capturing and replaying bundles to keep cross-origin assets out of offline artifacts. It does not block cross-origin iframe/embed document navigation.
 - Convert bundles to offline fixtures for the `pages_regression` harness: `cargo xtask import-page-fixture <bundle> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`. All HTML/CSS references are rewritten to hashed files under `assets/`, and the importer fails if any network URLs would remain.
 
+## `import_wpt`
+
+- Purpose: import a subset of Web Platform Tests from a local WPT checkout into `tests/wpt/tests/` for the offline WPT harness.
+- Entry: `src/bin/import_wpt.rs`
+- Run: `cargo run --release --bin import_wpt -- --help`
+- Typical usage:
+
+  ```bash
+  cargo run --release --bin import_wpt -- \
+    --wpt-root /path/to/wpt \
+    --suite css/css-text/white-space \
+    --out tests/wpt/tests
+  ```
+
+- Notes:
+  - `--suite` accepts one or more glob(s) relative to the WPT root (e.g. `css/css-text/*`).
+  - The importer is strict/offline by default: it rewrites `web-platform.test` and root-relative URLs to file-relative paths and fails if any `http(s)://` or `//` URL remains (use `--allow-network` to opt out; not recommended).
+  - Sidecar `.ini` metadata files (e.g. `*.html.ini`) are copied alongside tests when present so local expectations/viewport/DPR settings are preserved.
+  - Use `--dry-run` to preview, `--overwrite` to update existing files, and `--manifest <path>` / `--no-manifest` to control manifest updates.
+
 ## `inspect_frag`
 
 - Purpose: inspect fragment output (and related style/layout state) for a single input.
