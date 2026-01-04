@@ -767,20 +767,43 @@ fn validate_offline(dest_path: &Path, content: &str) -> Result<()> {
 }
 
 fn find_network_urls(content: &str) -> Vec<String> {
-  let mut urls = Vec::new();
-  let http_re = Regex::new(r#"(?i)https?://[^\s"'<>)]{1,200}"#).unwrap();
-  for m in http_re.find_iter(content) {
-    urls.push(m.as_str().to_string());
+  fn is_network_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed
+      .get(..7)
+      .map(|prefix| prefix.eq_ignore_ascii_case("http://"))
+      .unwrap_or(false)
+      || trimmed
+        .get(..8)
+        .map(|prefix| prefix.eq_ignore_ascii_case("https://"))
+        .unwrap_or(false)
+      || trimmed.starts_with("//")
   }
 
-  let scheme_re = Regex::new(r#"(?i)//[^\s"'<>)]{1,200}"#).unwrap();
-  for m in scheme_re.find_iter(content) {
-    if m.start() > 0 {
-      if content.as_bytes()[m.start() - 1] == b':' {
+  // Only validate URL-like substrings that can actually be fetched by the renderer:
+  // - `src=` / `href=` attributes
+  // - CSS `url(...)`
+  // - CSS `@import "..."`
+  //
+  // This avoids false positives for strings that look like network URLs but are not fetches,
+  // such as SVG namespace URIs (`xmlns="http://www.w3.org/2000/svg"`) or text embedded inside
+  // `data:` URLs.
+  let attr_regex =
+    Regex::new("(?i)(?:src|href)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']").unwrap();
+  let url_regex =
+    Regex::new("(?i)url\\(\\s*[\"']?(?P<url>[^\"')]+)[\"']?\\s*\\)").unwrap();
+  let import_regex = Regex::new("(?i)@import\\s+[\"'](?P<url>[^\"']+)[\"']").unwrap();
+
+  let mut urls = Vec::new();
+  for regex in [&attr_regex, &url_regex, &import_regex] {
+    for caps in regex.captures_iter(content) {
+      let Some(url) = caps.name("url").map(|m| m.as_str()) else {
         continue;
+      };
+      if is_network_url(url) {
+        urls.push(url.to_string());
       }
     }
-    urls.push(m.as_str().to_string());
   }
 
   urls.sort();
@@ -1211,5 +1234,24 @@ mod tests {
       }
       other => panic!("unexpected error: {other:?}"),
     }
+  }
+
+  #[test]
+  fn offline_validation_ignores_network_strings_inside_data_urls() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/data-url.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+    let imported = fs::read_to_string(out_dir.path().join("out/html/network/data-url.html")).unwrap();
+    assert!(imported.contains("data:image/svg+xml"));
+    assert!(imported.contains("http://www.w3.org/2000/svg"));
   }
 }
