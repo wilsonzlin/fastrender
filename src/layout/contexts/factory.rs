@@ -20,6 +20,7 @@
 //! - W3.T09: GridFormattingContext (Taffy-backed)
 //! - W4.T12: InlineFormattingContext
 
+use crate::image_loader::ImageCache;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::flex::FlexFormattingContext;
 use crate::layout::contexts::flex_cache::ShardedFlexCache;
@@ -97,6 +98,7 @@ impl CachedFormattingContexts {
 #[derive(Clone)]
 pub struct FormattingContextFactory {
   font_context: FontContext,
+  image_cache: ImageCache,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: ContainingBlock,
   flex_measure_cache: std::sync::Arc<ShardedFlexCache>,
@@ -226,6 +228,7 @@ impl FormattingContextFactory {
   ) -> Self {
     Self {
       font_context,
+      image_cache: ImageCache::new(),
       viewport_size,
       nearest_positioned_cb,
       flex_measure_cache,
@@ -315,6 +318,22 @@ impl FormattingContextFactory {
   /// Returns the font context backing formatting context construction.
   pub fn font_context(&self) -> &FontContext {
     &self.font_context
+  }
+
+  /// Returns the image cache backing formatting context construction.
+  pub fn image_cache(&self) -> &ImageCache {
+    &self.image_cache
+  }
+
+  pub(crate) fn image_cache_mut(&mut self) -> &mut ImageCache {
+    &mut self.image_cache
+  }
+
+  /// Returns a copy of this factory using the provided image cache for image-dependent layout.
+  pub fn with_image_cache(mut self, image_cache: ImageCache) -> Self {
+    self.image_cache = image_cache;
+    self.reset_cached_contexts();
+    self
   }
 
   /// Returns the viewport size used for viewport-relative length resolution.
@@ -753,6 +772,22 @@ mod tests {
     assert!(
       weak_cached_contexts.upgrade().is_none(),
       "cached_contexts should be freed after dropping the factory and its cached contexts",
+    );
+  }
+
+  #[test]
+  fn test_factory_exposes_image_cache() {
+    let cache = ImageCache::with_base_url("https://example.com/".to_string());
+    let factory = FormattingContextFactory::new().with_image_cache(cache);
+    assert_eq!(
+      factory.image_cache().base_url(),
+      Some("https://example.com/".to_string())
+    );
+
+    let detached = factory.detached();
+    assert_eq!(
+      detached.image_cache().base_url(),
+      Some("https://example.com/".to_string())
     );
   }
 }

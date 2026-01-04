@@ -19,6 +19,7 @@ use crate::debug::runtime;
 use crate::debug::trace::TraceHandle;
 use crate::error::{RenderError, RenderStage};
 use crate::geometry::Size;
+use crate::image_loader::ImageCache;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::intrinsic_cache_use_epoch;
@@ -30,8 +31,8 @@ use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::render_control::{
-  active_stage, check_active, deadline_stack_snapshot, DeadlineGuard, DeadlineStackGuard, RenderDeadline,
-  StageGuard,
+  active_stage, check_active, deadline_stack_snapshot, DeadlineGuard, DeadlineStackGuard,
+  RenderDeadline, StageGuard,
 };
 use crate::style::display::FormattingContextType;
 use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal};
@@ -81,7 +82,10 @@ pub(crate) fn default_layout_thread_budget() -> usize {
   // count.
   let threads = rayon::current_num_threads().max(1);
   let budget = crate::system::cpu_budget().max(1);
-  threads.min(budget).min(DEFAULT_LAYOUT_AUTO_MAX_THREADS).max(1)
+  threads
+    .min(budget)
+    .min(DEFAULT_LAYOUT_AUTO_MAX_THREADS)
+    .max(1)
 }
 
 fn default_layout_thread_pool() -> Option<Arc<ThreadPool>> {
@@ -686,7 +690,19 @@ impl LayoutEngine {
   ///
   /// Sharing the font context with paint keeps font fallback, cache warming, and font loading
   /// consistent across the pipeline.
-  pub fn with_font_context(mut config: LayoutConfig, font_context: FontContext) -> Self {
+  pub fn with_font_context(config: LayoutConfig, font_context: FontContext) -> Self {
+    Self::with_font_context_and_image_cache(config, font_context, ImageCache::new())
+  }
+
+  /// Creates a layout engine that uses the provided font context and image cache for all layout
+  /// operations.
+  ///
+  /// Sharing the image cache with paint de-duplicates image probes/decodes between layout and paint.
+  pub fn with_font_context_and_image_cache(
+    mut config: LayoutConfig,
+    font_context: FontContext,
+    image_cache: ImageCache,
+  ) -> Self {
     if config.parallelism.mode == LayoutParallelismMode::Auto
       && config.parallelism.max_threads.is_none()
     {
@@ -701,6 +717,7 @@ impl LayoutEngine {
       font_context.clone(),
       config.initial_containing_block,
     )
+    .with_image_cache(image_cache)
     .with_parallelism(config.parallelism);
     let parallel_pool = config
       .parallelism
@@ -734,6 +751,15 @@ impl LayoutEngine {
 
   pub fn shaping_cache_size(&self) -> usize {
     self.factory.shaping_cache_size()
+  }
+
+  /// Returns the image cache backing layout resource resolution.
+  pub fn image_cache(&self) -> &ImageCache {
+    self.factory.image_cache()
+  }
+
+  pub(crate) fn image_cache_mut(&mut self) -> &mut ImageCache {
+    self.factory.image_cache_mut()
   }
 
   /// Performs layout on an entire box tree
@@ -826,7 +852,8 @@ impl LayoutEngine {
     reset_caches: bool,
     trace: Option<&TraceHandle>,
   ) -> Result<FragmentTree, LayoutError> {
-    let (_parallelism, workload, parallel_pool, factory) = self.resolve_parallelism_for_tree(box_tree);
+    let (_parallelism, workload, parallel_pool, factory) =
+      self.resolve_parallelism_for_tree(box_tree);
     let box_tree_nodes = workload.nodes;
     self.run_in_pool(parallel_pool.as_deref(), || {
       self.layout_tree_inner(&factory, box_tree, reset_caches, trace, box_tree_nodes)
@@ -1310,8 +1337,8 @@ mod tests {
         max_fanout: DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2,
         parallel_children: DEFAULT_LAYOUT_AUTO_MAX_THREADS * 2,
       };
-      let parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT)
-        .resolve_for_workload(workload);
+      let parallelism =
+        LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT).resolve_for_workload(workload);
       assert_eq!(parallelism.is_active(), cap > 1);
       assert_eq!(parallelism.estimated_workers_for_workload(&workload), cap);
     });
@@ -1408,6 +1435,18 @@ mod tests {
     let engine = LayoutEngine::new(config);
     assert_eq!(engine.config().initial_containing_block.width, 1024.0);
     assert!(!engine.config().enable_cache);
+  }
+
+  #[test]
+  fn test_engine_threads_image_cache_into_factory() {
+    let config = LayoutConfig::new(Size::new(1024.0, 768.0));
+    let font_ctx = FontContext::new();
+    let image_cache = ImageCache::with_base_url("https://example.com/".to_string());
+    let engine = LayoutEngine::with_font_context_and_image_cache(config, font_ctx, image_cache);
+    assert_eq!(
+      engine.factory.image_cache().base_url(),
+      Some("https://example.com/".to_string())
+    );
   }
 
   #[test]

@@ -1223,8 +1223,8 @@ fn final_url_host_matches_known_waf(final_url: &str) -> bool {
   // Narrow allowlist of known bot-mitigation hosts. This is intentionally small to avoid hiding
   // real subresource failures behind a "bot mitigation" label.
   const HOST_SUFFIX_ALLOWLIST: [&str; 3] = [
-    "captcha-delivery.com",     // Akamai Bot Manager
-    "px-captcha.net",           // PerimeterX
+    "captcha-delivery.com",      // Akamai Bot Manager
+    "px-captcha.net",            // PerimeterX
     "challenges.cloudflare.com", // Cloudflare challenge/turnstile
   ];
 
@@ -3285,7 +3285,6 @@ mod pool_panic_tests {
 struct SharedPoolResources {
   config: FastRenderConfig,
   font_cache: FontCacheConfig,
-  image_cache_config: ImageCacheConfig,
   fetcher: Arc<dyn ResourceFetcher>,
   font_db: Arc<FontDbDatabase>,
   pool_size: usize,
@@ -3299,13 +3298,12 @@ impl SharedPoolResources {
       Arc::clone(&self.fetcher),
       self.font_cache,
     );
-    let mut renderer = FastRender::from_parts(
+    let renderer = FastRender::from_parts(
       self.config.clone(),
       Arc::clone(&self.fetcher),
       font_context,
-      self.image_cache_config,
+      self.image_cache.clone(),
     )?;
-    renderer.image_cache = self.image_cache.clone();
     Ok(renderer)
   }
 }
@@ -3334,7 +3332,6 @@ impl FastRenderPool {
       shared: Arc::new(SharedPoolResources {
         config: renderer,
         font_cache,
-        image_cache_config: image_cache,
         fetcher,
         font_db,
         pool_size,
@@ -4042,7 +4039,7 @@ impl FastRender {
     config: FastRenderConfig,
     fetcher: Arc<dyn ResourceFetcher>,
     font_context: FontContext,
-    image_cache_config: ImageCacheConfig,
+    image_cache: ImageCache,
   ) -> Result<Self> {
     let mut layout_config = LayoutConfig::for_viewport(Size::new(
       config.default_width as f32,
@@ -4051,8 +4048,11 @@ impl FastRender {
     .with_identifier("api");
     layout_config.fragmentation = config.fragmentation;
     layout_config.parallelism = config.layout_parallelism;
-    let layout_engine = LayoutEngine::with_font_context(layout_config, font_context.clone());
-    let image_cache = build_image_cache(&config.base_url, Arc::clone(&fetcher), image_cache_config);
+    let layout_engine = LayoutEngine::with_font_context_and_image_cache(
+      layout_config,
+      font_context.clone(),
+      image_cache.clone(),
+    );
 
     Ok(Self {
       font_context,
@@ -4179,7 +4179,12 @@ impl FastRender {
     let fetcher = resolve_fetcher(&config, fetcher);
     let font_context =
       FontContext::with_resource_fetcher_and_config(font_config, Arc::clone(&fetcher));
-    Self::from_parts(config, fetcher, font_context, ImageCacheConfig::default())
+    let image_cache = build_image_cache(
+      &config.base_url,
+      Arc::clone(&fetcher),
+      ImageCacheConfig::default(),
+    );
+    Self::from_parts(config, fetcher, font_context, image_cache)
   }
 
   fn resolve_runtime_toggles(&self, options: &RenderOptions) -> Arc<RuntimeToggles> {
@@ -4364,7 +4369,8 @@ impl FastRender {
             let _ = crate::paint::painter::take_paint_diagnostics();
             let _ = crate::text::pipeline::take_text_diagnostics();
             let _ =
-              crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
+              crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics(
+              );
             let _ = crate::dom::take_dom_parse_diagnostics();
           }
           if let Some(previous) = restore_cascade_profile {
@@ -4499,7 +4505,7 @@ impl FastRender {
         inner: Arc::clone(diag),
       });
     let context = Some(self.build_resource_context(self.document_url(), shared_diagnostics));
-    let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
+    let (prev_self, prev_image, prev_layout_image, prev_font) = self.push_resource_context(context);
     let result = self.render_html_internal(
       html,
       width,
@@ -4518,7 +4524,7 @@ impl FastRender {
       layout_parallelism,
       trace,
     );
-    self.pop_resource_context(prev_self, prev_image, prev_font);
+    self.pop_resource_context(prev_self, prev_image, prev_layout_image, prev_font);
     let result = match result {
       Ok(outputs) => Ok(outputs),
       Err(err) => {
@@ -4717,29 +4723,29 @@ impl FastRender {
           rec.stats.layout.table_cell_layouts = Some(table_stats.cell_layouts);
         }
 
-          let cascade_profile_active = crate::style::cascade::cascade_profile_enabled();
-          if rec.verbose() || cascade_profile_active {
-            let profile = crate::style::cascade::capture_cascade_profile();
-            rec.stats.cascade.nodes = Some(profile.nodes);
-            rec.stats.cascade.rule_candidates = Some(profile.rule_candidates);
-            rec.stats.cascade.rule_matches = Some(profile.rule_matches);
-            rec.stats.cascade.rule_candidates_pruned = Some(profile.rule_candidates_pruned);
-            rec.stats.cascade.rule_candidates_by_id = Some(profile.rule_candidates_by_id);
-            rec.stats.cascade.rule_candidates_by_class = Some(profile.rule_candidates_by_class);
-            rec.stats.cascade.rule_candidates_by_tag = Some(profile.rule_candidates_by_tag);
-            rec.stats.cascade.rule_candidates_by_attr = Some(profile.rule_candidates_by_attr);
-            rec.stats.cascade.rule_candidates_universal = Some(profile.rule_candidates_universal);
-            rec.stats.cascade.selector_bloom_built = Some(profile.selector_bloom_built);
-            rec.stats.cascade.selector_bloom_time_ms =
-              Some(profile.selector_bloom_time_ns as f64 / 1_000_000.0);
-            rec.stats.cascade.selector_rightmost_fast_rejects =
-              Some(profile.selector_rightmost_fast_rejects);
-            rec.stats.cascade.selector_match_calls = Some(profile.selector_match_calls);
-            rec.stats.cascade.selector_bloom_fast_rejects = Some(profile.selector_bloom_fast_rejects);
-            rec.stats.cascade.selector_attempts_total = Some(profile.selector_attempts_total);
-            rec.stats.cascade.selector_attempts_after_bloom =
-              Some(profile.selector_attempts_after_bloom);
-            rec.stats.cascade.selector_time_ms = Some(profile.selector_time_ns as f64 / 1_000_000.0);
+        let cascade_profile_active = crate::style::cascade::cascade_profile_enabled();
+        if rec.verbose() || cascade_profile_active {
+          let profile = crate::style::cascade::capture_cascade_profile();
+          rec.stats.cascade.nodes = Some(profile.nodes);
+          rec.stats.cascade.rule_candidates = Some(profile.rule_candidates);
+          rec.stats.cascade.rule_matches = Some(profile.rule_matches);
+          rec.stats.cascade.rule_candidates_pruned = Some(profile.rule_candidates_pruned);
+          rec.stats.cascade.rule_candidates_by_id = Some(profile.rule_candidates_by_id);
+          rec.stats.cascade.rule_candidates_by_class = Some(profile.rule_candidates_by_class);
+          rec.stats.cascade.rule_candidates_by_tag = Some(profile.rule_candidates_by_tag);
+          rec.stats.cascade.rule_candidates_by_attr = Some(profile.rule_candidates_by_attr);
+          rec.stats.cascade.rule_candidates_universal = Some(profile.rule_candidates_universal);
+          rec.stats.cascade.selector_bloom_built = Some(profile.selector_bloom_built);
+          rec.stats.cascade.selector_bloom_time_ms =
+            Some(profile.selector_bloom_time_ns as f64 / 1_000_000.0);
+          rec.stats.cascade.selector_rightmost_fast_rejects =
+            Some(profile.selector_rightmost_fast_rejects);
+          rec.stats.cascade.selector_match_calls = Some(profile.selector_match_calls);
+          rec.stats.cascade.selector_bloom_fast_rejects = Some(profile.selector_bloom_fast_rejects);
+          rec.stats.cascade.selector_attempts_total = Some(profile.selector_attempts_total);
+          rec.stats.cascade.selector_attempts_after_bloom =
+            Some(profile.selector_attempts_after_bloom);
+          rec.stats.cascade.selector_time_ms = Some(profile.selector_time_ns as f64 / 1_000_000.0);
           rec.stats.cascade.declaration_time_ms =
             Some(profile.declaration_time_ns as f64 / 1_000_000.0);
           rec.stats.cascade.pseudo_time_ms = Some(profile.pseudo_time_ns as f64 / 1_000_000.0);
@@ -5124,7 +5130,11 @@ impl FastRender {
     result
   }
 
-  fn prepare_html_internal(&mut self, html: &str, options: RenderOptions) -> Result<PreparedDocument> {
+  fn prepare_html_internal(
+    &mut self,
+    html: &str,
+    options: RenderOptions,
+  ) -> Result<PreparedDocument> {
     let toggles = self.resolve_runtime_toggles(&options);
     let _toggles_guard = RuntimeTogglesSwap::new(&mut self.runtime_toggles, toggles.clone());
     runtime::with_runtime_toggles(toggles, || self.prepare_html_internal_inner(html, options))
@@ -6106,7 +6116,9 @@ impl FastRender {
           node.namespace(),
           Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
         );
-      if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+      if node
+        .tag_name()
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
         && !prev_sibling_foreign
         && !in_foreign_namespace
         && matches!(
@@ -6156,7 +6168,9 @@ impl FastRender {
           node.namespace(),
           Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
         );
-      if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+      if node
+        .tag_name()
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
         && !prev_sibling_foreign
         && !in_foreign_namespace
         && matches!(
@@ -6338,18 +6352,18 @@ impl FastRender {
             if let Some(referrer) = referrer {
               request = request.with_referrer(referrer);
             }
-              let resource = match fetcher.fetch_with_request(request) {
-                Ok(resource) => resource,
-                Err(err) => {
-                  // Per spec, stylesheet loads are best-effort. On failure, continue.
-                  if let Some(diag) = diagnostics.as_ref() {
-                    if let Ok(mut guard) = diag.lock() {
-                      guard.record_error(ResourceKind::Stylesheet, &url, &err);
-                    }
+            let resource = match fetcher.fetch_with_request(request) {
+              Ok(resource) => resource,
+              Err(err) => {
+                // Per spec, stylesheet loads are best-effort. On failure, continue.
+                if let Some(diag) = diagnostics.as_ref() {
+                  if let Ok(mut guard) = diag.lock() {
+                    guard.record_error(ResourceKind::Stylesheet, &url, &err);
                   }
-                  return Ok((None, local_media_cache));
                 }
-              };
+                return Ok((None, local_media_cache));
+              }
+            };
 
             if let Some(ctx) = resource_context.as_ref() {
               if ctx
@@ -6688,11 +6702,8 @@ impl FastRender {
                 std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
               };
 
-              let sheet = parse_stylesheet_with_media(
-                css_text.as_ref(),
-                media_ctx,
-                Some(media_query_cache),
-              )?;
+              let sheet =
+                parse_stylesheet_with_media(css_text.as_ref(), media_ctx, Some(media_query_cache))?;
               if sheet.contains_imports() {
                 let loader = CssImportFetcher::new(
                   Some(sheet_base.clone()),
@@ -7329,11 +7340,13 @@ impl FastRender {
     };
     let page_rules: Vec<crate::css::types::CollectedPageRule<'_>> = owned_page_rules
       .iter()
-      .map(|(rule, layer_order, order)| crate::css::types::CollectedPageRule {
-        rule,
-        layer_order: layer_order.clone(),
-        order: *order,
-      })
+      .map(
+        |(rule, layer_order, order)| crate::css::types::CollectedPageRule {
+          rule,
+          layer_order: layer_order.clone(),
+          order: *order,
+        },
+      )
       .collect();
     let mut page_name_hint = None;
     let mut layout_viewport = fallback_page_size;
@@ -7626,7 +7639,11 @@ impl FastRender {
     config.enable_cache = !toggles.truthy("FASTR_DISABLE_LAYOUT_CACHE");
     config.parallelism = resolved_parallelism;
     let enable_layout_cache = config.enable_cache;
-    self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
+    self.layout_engine = LayoutEngine::with_font_context_and_image_cache(
+      config,
+      self.font_context.clone(),
+      self.image_cache.clone(),
+    );
     intrinsic_cache_clear();
     let report_intrinsic = toggles.truthy("FASTR_INTRINSIC_STATS");
     let report_layout_cache = toggles.truthy("FASTR_LAYOUT_CACHE_STATS");
@@ -8302,7 +8319,8 @@ impl FastRender {
   pub fn set_base_url(&mut self, base_url: impl Into<String>) {
     let base = base_url.into();
     self.base_url = Some(base.clone());
-    self.image_cache.set_base_url(base);
+    self.image_cache.set_base_url(base.clone());
+    self.layout_engine.image_cache_mut().set_base_url(base);
   }
 
   /// Replaces the font context used for layout and painting.
@@ -8315,7 +8333,11 @@ impl FastRender {
     config.initial_containing_block.width = self.default_width as f32;
     config.initial_containing_block.height = self.default_height as f32;
     config.parallelism = self.layout_parallelism;
-    self.layout_engine = LayoutEngine::with_font_context(config, font_context);
+    self.layout_engine = LayoutEngine::with_font_context_and_image_cache(
+      config,
+      font_context,
+      self.image_cache.clone(),
+    );
   }
 
   /// Overrides the device pixel ratio for subsequent renders.
@@ -8330,6 +8352,7 @@ impl FastRender {
   /// Clears any configured base URL, leaving relative resources unresolved.
   pub fn clear_base_url(&mut self) {
     self.image_cache.clear_base_url();
+    self.layout_engine.image_cache_mut().clear_base_url();
     self.base_url = None;
   }
 
@@ -8353,7 +8376,11 @@ impl FastRender {
   /// Attach or clear the diagnostics sink for downstream fetchers.
   fn set_diagnostics_sink(&mut self, sink: Option<Arc<Mutex<RenderDiagnostics>>>) {
     self.diagnostics = sink.clone();
-    self.image_cache.set_diagnostics_sink(sink);
+    self.image_cache.set_diagnostics_sink(sink.clone());
+    self
+      .layout_engine
+      .image_cache_mut()
+      .set_diagnostics_sink(sink);
   }
 
   fn record_fetch_error(&self, kind: ResourceKind, url: &str, message: impl Into<String>) {
@@ -8389,26 +8416,37 @@ impl FastRender {
     Option<ResourceContext>,
     Option<ResourceContext>,
     Option<ResourceContext>,
+    Option<ResourceContext>,
   ) {
     let prev_self = self.resource_context.clone();
     let prev_image = self.image_cache.resource_context();
+    let prev_layout_image = self.layout_engine.image_cache().resource_context();
     let prev_font = self.font_context.resource_context();
 
     self.resource_context = context.clone();
     self.image_cache.set_resource_context(context.clone());
+    self
+      .layout_engine
+      .image_cache_mut()
+      .set_resource_context(context.clone());
     self.font_context.set_resource_context(context);
 
-    (prev_self, prev_image, prev_font)
+    (prev_self, prev_image, prev_layout_image, prev_font)
   }
 
   fn pop_resource_context(
     &mut self,
     prev_self: Option<ResourceContext>,
     prev_image: Option<ResourceContext>,
+    prev_layout_image: Option<ResourceContext>,
     prev_font: Option<ResourceContext>,
   ) {
     self.resource_context = prev_self;
     self.image_cache.set_resource_context(prev_image);
+    self
+      .layout_engine
+      .image_cache_mut()
+      .set_resource_context(prev_layout_image);
     self.font_context.set_resource_context(prev_font);
   }
   /// Gets the default background color
@@ -9946,7 +9984,8 @@ impl FastRender {
     let viewport = Size::new(self.default_width as f32, self.default_height as f32);
     let line_height =
       compute_line_height_with_metrics_viewport(style, metrics_scaled.as_ref(), Some(viewport));
-    let metrics = TextItem::metrics_from_runs(&self.font_context, &runs, line_height, style.font_size);
+    let metrics =
+      TextItem::metrics_from_runs(&self.font_context, &runs, line_height, style.font_size);
     let width: f32 = runs.iter().map(|r| r.advance).sum();
     let height = metrics.height;
 
@@ -11670,7 +11709,11 @@ pub(crate) fn render_html_with_shared_resources(
   });
   let layout_config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32))
     .with_identifier("foreignObject");
-  let layout_engine = LayoutEngine::with_font_context(layout_config, font_ctx.clone());
+  let layout_engine = LayoutEngine::with_font_context_and_image_cache(
+    layout_config,
+    font_ctx.clone(),
+    image_cache.clone(),
+  );
   let mut renderer = FastRender {
     font_context: font_ctx.clone(),
     shaping_pipeline: ShapingPipeline::new(),
@@ -11702,6 +11745,10 @@ pub(crate) fn render_html_with_shared_resources(
 
   renderer
     .image_cache
+    .set_resource_context(resource_context.clone());
+  renderer
+    .layout_engine
+    .image_cache_mut()
     .set_resource_context(resource_context.clone());
   renderer.font_context.set_resource_context(resource_context);
 
@@ -13587,7 +13634,11 @@ mod tests {
     )]));
     let config = FastRenderConfig::new()
       .with_font_sources(FontConfig::bundled_only())
-      .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+      .with_resource_policy(
+        ResourcePolicy::default()
+          .allow_http(false)
+          .allow_https(false),
+      )
       .with_paint_parallelism(PaintParallelism::disabled())
       .with_layout_parallelism(LayoutParallelism::disabled())
       .with_runtime_toggles(toggles);
@@ -13658,11 +13709,11 @@ mod tests {
     let mut renderer = pipeline_test_renderer();
     let pixmap = renderer
       .render_html_with_background(
-      "<div>Test</div>",
-      32,
-      32,
-      Rgba::rgb(255, 0, 0), // Red background
-    )
+        "<div>Test</div>",
+        32,
+        32,
+        Rgba::rgb(255, 0, 0), // Red background
+      )
       .unwrap();
     assert_eq!(pix_rgba(&pixmap, 0, 0), (255, 0, 0, 255));
   }
@@ -14124,7 +14175,11 @@ mod tests {
           stretch,
         )
         .or_else(|| renderer.font_context().get_sans_serif())
-        .and_then(|font| renderer.font_context().get_scaled_metrics(&font, style.font_size))
+        .and_then(|font| {
+          renderer
+            .font_context()
+            .get_scaled_metrics(&font, style.font_size)
+        })
     };
     let viewport = Size::new(
       renderer.default_width as f32,
@@ -14132,7 +14187,8 @@ mod tests {
     );
     let line_height =
       compute_line_height_with_metrics_viewport(&style, scaled.as_ref(), Some(viewport));
-    let metrics = TextItem::metrics_from_runs(renderer.font_context(), &runs, line_height, style.font_size);
+    let metrics =
+      TextItem::metrics_from_runs(renderer.font_context(), &runs, line_height, style.font_size);
     let expected = Size::new(runs.iter().map(|r| r.advance).sum(), metrics.height);
 
     let intrinsic = replaced.intrinsic_size.expect("alt intrinsic size");
@@ -15225,13 +15281,11 @@ mod tests {
     let document_url = "https://good.example/page.html";
     let stylesheet_url = "https://good.example/style.css";
 
-    let fetcher = Arc::new(
-      RecordingRequestFetcher::default().with_entry(
-        stylesheet_url,
-        "body { color: rgb(1, 2, 3); }",
-        "text/css",
-      ),
-    );
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "body { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let toggles = RuntimeToggles::from_map(HashMap::from([(
       "FASTR_FETCH_LINK_CSS".to_string(),
       "1".to_string(),
@@ -15269,13 +15323,11 @@ mod tests {
     let document_url = "https://good.example/page.html";
     let stylesheet_url = "https://good.example/style.css";
 
-    let fetcher = Arc::new(
-      RecordingRequestFetcher::default().with_entry(
-        stylesheet_url,
-        "body { color: rgb(1, 2, 3); }",
-        "text/css",
-      ),
-    );
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "body { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let toggles = RuntimeToggles::from_map(HashMap::from([(
       "FASTR_FETCH_LINK_CSS".to_string(),
       "1".to_string(),
@@ -15314,13 +15366,11 @@ mod tests {
     let document_url = "https://good.example/page.html";
     let stylesheet_url = "https://good.example/style.css";
 
-    let fetcher = Arc::new(
-      RecordingRequestFetcher::default().with_entry(
-        stylesheet_url,
-        "body { color: rgb(1, 2, 3); }",
-        "text/css",
-      ),
-    );
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "body { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let toggles = RuntimeToggles::from_map(HashMap::from([(
       "FASTR_FETCH_LINK_CSS".to_string(),
       "1".to_string(),
@@ -15358,13 +15408,11 @@ mod tests {
     let document_url = "https://good.example/dir/page.html";
     let stylesheet_url = "https://good.example/dir/assets/style.css";
 
-    let fetcher = Arc::new(
-      RecordingRequestFetcher::default().with_entry(
-        stylesheet_url,
-        "body { color: rgb(1, 2, 3); }",
-        "text/css",
-      ),
-    );
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "body { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let toggles = RuntimeToggles::from_map(HashMap::from([(
       "FASTR_FETCH_LINK_CSS".to_string(),
       "1".to_string(),
@@ -15402,13 +15450,11 @@ mod tests {
     let document_url = "file:///tmp/cache/good.example.html";
     let stylesheet_url = "https://good.example/assets/style.css";
 
-    let fetcher = Arc::new(
-      RecordingRequestFetcher::default().with_entry(
-        stylesheet_url,
-        "body { color: rgb(1, 2, 3); }",
-        "text/css",
-      ),
-    );
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "body { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let toggles = RuntimeToggles::from_map(HashMap::from([(
       "FASTR_FETCH_LINK_CSS".to_string(),
       "1".to_string(),
@@ -15449,13 +15495,11 @@ mod tests {
     let document_url = "file:///tmp/cache/good.example.html";
     let stylesheet_url = "https://good.example/app/style.css";
 
-    let fetcher = Arc::new(
-      RecordingRequestFetcher::default().with_entry(
-        stylesheet_url,
-        "body { color: rgb(1, 2, 3); }",
-        "text/css",
-      ),
-    );
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "body { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
     let toggles = RuntimeToggles::from_map(HashMap::from([(
       "FASTR_FETCH_LINK_CSS".to_string(),
       "1".to_string(),
