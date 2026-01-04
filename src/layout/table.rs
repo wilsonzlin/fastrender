@@ -27,7 +27,7 @@
 //! - HTML 5.2 Section 4.9: Tabular data
 
 use crate::debug::runtime;
-use crate::error::{RenderError, RenderStage};
+use crate::error::{Error, RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::layout::absolute_positioning::resolve_positioned_style;
@@ -4470,14 +4470,20 @@ impl TableFormattingContext {
 
   /// Returns the table box to use for layout, avoiding redundant fixup work for
   /// already-normalized trees produced by box generation.
-  fn normalize_table_root<'a>(&self, box_node: &'a BoxNode) -> Cow<'a, BoxNode> {
+  fn normalize_table_root<'a>(
+    &self,
+    box_node: &'a BoxNode,
+  ) -> Result<Cow<'a, BoxNode>, LayoutError> {
     if TableStructureFixer::validate_table_structure(box_node) {
-      Cow::Borrowed(box_node)
-    } else {
-      Cow::Owned(
-        TableStructureFixer::fixup_table_internals(box_node.clone())
-          .unwrap_or_else(|err| panic!("table structure fixup failed: {err}")),
-      )
+      return Ok(Cow::Borrowed(box_node));
+    }
+
+    match TableStructureFixer::fixup_table_internals(box_node.clone()) {
+      Ok(fixed) => Ok(Cow::Owned(fixed)),
+      Err(Error::Render(RenderError::Timeout { elapsed, .. })) => {
+        Err(LayoutError::Timeout { elapsed })
+      }
+      Err(err) => Err(LayoutError::MissingContext(format!("table structure fixup failed: {err}"))),
     }
   }
 
@@ -5015,7 +5021,7 @@ impl FormattingContext for TableFormattingContext {
         return Ok(cached);
       }
     }
-    let normalized_table = self.normalize_table_root(box_node);
+    let normalized_table = self.normalize_table_root(box_node)?;
     let table_box = normalized_table.as_ref();
     let table_root_style: &ComputedStyle = style_override
       .as_deref()
@@ -7176,7 +7182,7 @@ impl FormattingContext for TableFormattingContext {
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
     let style_override = crate::layout::style_override::style_override_for(box_node.id);
-    let normalized_table = self.normalize_table_root(box_node);
+    let normalized_table = self.normalize_table_root(box_node)?;
     let table_box = normalized_table.as_ref();
     let table_root_style: &ComputedStyle = style_override
       .as_deref()
@@ -7371,6 +7377,7 @@ mod tests {
   use crate::tree::box_tree::BoxTree;
   use crate::tree::debug::DebugInfo;
   use std::sync::Arc;
+  use std::time::Duration;
 
   fn create_test_style() -> Arc<ComputedStyle> {
     Arc::new(ComputedStyle::default())
@@ -7765,6 +7772,43 @@ mod tests {
       TableStructureFixer::fixup_internals_call_count(),
       1,
       "layout must invoke the fixup path for malformed tables"
+    );
+  }
+
+  #[test]
+  fn malformed_table_fixup_timeout_is_reported_as_layout_timeout() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    let cell_style = Arc::new(cell_style);
+
+    let mut cells = Vec::new();
+    // TableStructureFixer checks deadlines every 256 fixup iterations.
+    for _ in 0..300 {
+      cells.push(
+        BoxNode::new_block(cell_style.clone(), FormattingContextType::Block, vec![])
+          .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![])),
+      );
+    }
+
+    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, cells)
+      .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]));
+    assert!(
+      !TableStructureFixer::validate_table_structure(&table),
+      "table with loose cells should be considered malformed"
+    );
+
+    let tfc = TableFormattingContext::new();
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    let result = with_deadline(Some(&deadline), || {
+      tfc.layout(&table, &LayoutConstraints::definite_width(200.0))
+    });
+
+    assert!(
+      matches!(result, Err(LayoutError::Timeout { .. })),
+      "expected fixup to surface timeout, got {result:?}"
     );
   }
 

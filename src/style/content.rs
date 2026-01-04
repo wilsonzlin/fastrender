@@ -1446,14 +1446,13 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
       if let Some(comma_pos) = args.find(',') {
         let attr_name = args[..comma_pos].trim();
         let fallback = args[comma_pos + 1..].trim();
-        // Remove quotes from fallback if present
-        let fallback = if (fallback.starts_with('"') && fallback.ends_with('"'))
-          || (fallback.starts_with('\'') && fallback.ends_with('\''))
-        {
-          &fallback[1..fallback.len() - 1]
-        } else {
-          fallback
-        };
+        // Remove quotes from fallback if present. Use `strip_prefix`/`strip_suffix` so malformed
+        // tokens like `"` don't panic when slicing.
+        let fallback = fallback
+          .strip_prefix('"')
+          .and_then(|s| s.strip_suffix('"'))
+          .or_else(|| fallback.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+          .unwrap_or(fallback);
         Some(ContentItem::Attr {
           name: attr_name.to_string(),
           type_or_unit: None,
@@ -1547,14 +1546,13 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
 
     "url" => {
       let args = args.trim();
-      // Remove quotes if present
-      let url = if (args.starts_with('"') && args.ends_with('"'))
-        || (args.starts_with('\'') && args.ends_with('\''))
-      {
-        &args[1..args.len() - 1]
-      } else {
-        args
-      };
+      // Remove quotes if present. Use `strip_prefix`/`strip_suffix` so malformed tokens like `"`
+      // don't panic when slicing.
+      let url = args
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| args.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(args);
       Some(ContentItem::Url(url.to_string()))
     }
     "element" => {
@@ -2133,6 +2131,26 @@ mod tests {
     assert_eq!(
       content,
       ContentValue::Items(vec![ContentItem::Url("image.png".to_string())])
+    );
+  }
+
+  #[test]
+  fn parse_content_does_not_panic_on_lone_quote_in_function_args() {
+    // Regression: avoid slicing panics when stripping quotes from malformed values like `attr(title, ")`.
+    let content = parse_content("attr(title, \")").unwrap();
+    assert_eq!(
+      content,
+      ContentValue::Items(vec![ContentItem::Attr {
+        name: "title".to_string(),
+        type_or_unit: None,
+        fallback: Some("\"".to_string()),
+      }])
+    );
+
+    let content = parse_content("url(\")").unwrap();
+    assert_eq!(
+      content,
+      ContentValue::Items(vec![ContentItem::Url("\"".to_string())])
     );
   }
 
