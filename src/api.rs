@@ -5450,133 +5450,137 @@ impl FastRender {
     mut options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
-    let trace = TraceSession::from_options(Some(&options));
-    let trace_handle = trace.handle();
-    let _root_span = trace_handle.span("render", "pipeline");
+    let toggles = self.resolve_runtime_toggles(&options);
+    let _toggles_guard = RuntimeTogglesSwap::new(&mut self.runtime_toggles, toggles.clone());
+    runtime::with_runtime_toggles(toggles, || {
+      let trace = TraceSession::from_options(Some(&options));
+      let trace_handle = trace.handle();
+      let _root_span = trace_handle.span("render", "pipeline");
 
-    if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
-      let env_level = diagnostics_level_from_env();
-      if !matches!(env_level, DiagnosticsLevel::None) {
-        options.diagnostics_level = env_level;
+      if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
+        let env_level = diagnostics_level_from_env();
+        if !matches!(env_level, DiagnosticsLevel::None) {
+          options.diagnostics_level = env_level;
+        }
       }
-    }
-    let diagnostics_level = options.diagnostics_level;
-    let diagnostics_enabled = !matches!(diagnostics_level, DiagnosticsLevel::None);
-    let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
-      Some(crate::style::cascade::cascade_profile_enabled())
-    } else {
-      None
-    };
-    let _diagnostics_session = diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
-    let mut stats_recorder =
-      diagnostics_enabled.then(|| RenderStatsRecorder::new(diagnostics_level));
-    if let Some(stats) = stats_recorder.as_mut() {
-      crate::resource::enable_resource_cache_diagnostics();
-      crate::image_loader::enable_image_cache_diagnostics();
-      crate::paint::painter::enable_paint_diagnostics();
-      crate::text::pipeline::enable_text_diagnostics();
-      crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
-      crate::dom::enable_dom_parse_diagnostics();
-      intrinsic_cache_reset_counters();
-      crate::layout::formatting_context::layout_cache_reset_counters();
-      if stats.verbose() {
-        crate::style::cascade::set_cascade_profile_enabled(true);
-        crate::style::cascade::reset_cascade_profile();
+      let diagnostics_level = options.diagnostics_level;
+      let diagnostics_enabled = !matches!(diagnostics_level, DiagnosticsLevel::None);
+      let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+        Some(crate::style::cascade::cascade_profile_enabled())
+      } else {
+        None
+      };
+      let _diagnostics_session = diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
+      let mut stats_recorder =
+        diagnostics_enabled.then(|| RenderStatsRecorder::new(diagnostics_level));
+      if let Some(stats) = stats_recorder.as_mut() {
+        crate::resource::enable_resource_cache_diagnostics();
+        crate::image_loader::enable_image_cache_diagnostics();
+        crate::paint::painter::enable_paint_diagnostics();
+        crate::text::pipeline::enable_text_diagnostics();
+        crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
+        crate::dom::enable_dom_parse_diagnostics();
+        intrinsic_cache_reset_counters();
+        crate::layout::formatting_context::layout_cache_reset_counters();
+        if stats.verbose() {
+          crate::style::cascade::set_cascade_profile_enabled(true);
+          crate::style::cascade::reset_cascade_profile();
+        }
+        stats.record_fetch(ResourceKind::Document);
       }
-      stats.record_fetch(ResourceKind::Document);
-    }
 
-    let (width, height) = options
-      .viewport
-      .unwrap_or((self.default_width, self.default_height));
-    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
-    self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
-    let result = (|| -> Result<RenderReport> {
-      let resource = {
-        let _span = trace_handle.span("html_fetch", "network");
-        match self.fetcher.fetch_with_request(FetchRequest::document(url)) {
-          Ok(res) => res,
-          Err(e) => {
-            if let Ok(mut guard) = diagnostics.lock() {
-              guard.record_error(ResourceKind::Document, url, &e);
-              guard.document_error = Some(e.to_string());
-              if let Some(recorder) = stats_recorder.take() {
-                let mut stats = recorder.finish();
-                merge_dom_parse_diagnostics(&mut stats);
-                merge_text_diagnostics(&mut stats);
-                merge_inline_reshape_cache_diagnostics(&mut stats);
-                merge_image_cache_diagnostics(&mut stats);
-                merge_resource_cache_diagnostics(&mut stats);
-                let _ = crate::paint::painter::take_paint_diagnostics();
-                guard.stats = Some(stats);
+      let (width, height) = options
+        .viewport
+        .unwrap_or((self.default_width, self.default_height));
+      let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+      self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+      let result = (|| -> Result<RenderReport> {
+        let resource = {
+          let _span = trace_handle.span("html_fetch", "network");
+          match self.fetcher.fetch_with_request(FetchRequest::document(url)) {
+            Ok(res) => res,
+            Err(e) => {
+              if let Ok(mut guard) = diagnostics.lock() {
+                guard.record_error(ResourceKind::Document, url, &e);
+                guard.document_error = Some(e.to_string());
+                if let Some(recorder) = stats_recorder.take() {
+                  let mut stats = recorder.finish();
+                  merge_dom_parse_diagnostics(&mut stats);
+                  merge_text_diagnostics(&mut stats);
+                  merge_inline_reshape_cache_diagnostics(&mut stats);
+                  merge_image_cache_diagnostics(&mut stats);
+                  merge_resource_cache_diagnostics(&mut stats);
+                  let _ = crate::paint::painter::take_paint_diagnostics();
+                  guard.stats = Some(stats);
+                }
               }
+              if options.allow_partial {
+                let pixmap = self.render_error_overlay(width, height)?;
+                let diagnostics = diagnostics
+                  .lock()
+                  .unwrap_or_else(|poisoned| poisoned.into_inner())
+                  .clone();
+                return Ok(RenderReport {
+                  pixmap,
+                  accessibility: None,
+                  diagnostics,
+                  artifacts: RenderArtifacts::new(artifacts),
+                });
+              }
+              let reason = e.to_string();
+              let source = Arc::new(e);
+              return Err(Error::Navigation(NavigationError::FetchFailed {
+                url: url.to_string(),
+                reason,
+                source: Some(source),
+              }));
             }
-            if options.allow_partial {
-              let pixmap = self.render_error_overlay(width, height)?;
-              let diagnostics = diagnostics
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
-              return Ok(RenderReport {
-                pixmap,
-                accessibility: None,
-                diagnostics,
-                artifacts: RenderArtifacts::new(artifacts),
-              });
-            }
-            let reason = e.to_string();
-            let source = Arc::new(e);
-            return Err(Error::Navigation(NavigationError::FetchFailed {
-              url: url.to_string(),
-              reason,
-              source: Some(source),
-            }));
+          }
+        };
+
+        self.set_document_url(resource.final_url.as_deref().unwrap_or(url));
+        let mut report = self.render_fetched_html_with_options_report_internal(
+          &resource,
+          Some(url),
+          options,
+          artifacts,
+          stats_recorder.as_mut(),
+          trace_handle,
+        )?;
+        if let Some(recorder) = stats_recorder.take() {
+          let mut stats = recorder.finish();
+          merge_dom_parse_diagnostics(&mut stats);
+          merge_text_diagnostics(&mut stats);
+          merge_inline_reshape_cache_diagnostics(&mut stats);
+          merge_image_cache_diagnostics(&mut stats);
+          merge_resource_cache_diagnostics(&mut stats);
+          if let Ok(mut guard) = diagnostics.lock() {
+            guard.stats = Some(stats);
           }
         }
-      };
+        report.diagnostics = diagnostics
+          .lock()
+          .unwrap_or_else(|poisoned| poisoned.into_inner())
+          .clone();
+        Ok(report)
+      })();
 
-      self.set_document_url(resource.final_url.as_deref().unwrap_or(url));
-      let mut report = self.render_fetched_html_with_options_report_internal(
-        &resource,
-        Some(url),
-        options,
-        artifacts,
-        stats_recorder.as_mut(),
-        trace_handle,
-      )?;
-      if let Some(recorder) = stats_recorder.take() {
-        let mut stats = recorder.finish();
-        merge_dom_parse_diagnostics(&mut stats);
-        merge_text_diagnostics(&mut stats);
-        merge_inline_reshape_cache_diagnostics(&mut stats);
-        merge_image_cache_diagnostics(&mut stats);
-        merge_resource_cache_diagnostics(&mut stats);
-        if let Ok(mut guard) = diagnostics.lock() {
-          guard.stats = Some(stats);
-        }
+      self.set_diagnostics_sink(None);
+      if let Some(previous) = restore_cascade_profile {
+        crate::style::cascade::set_cascade_profile_enabled(previous);
       }
-      report.diagnostics = diagnostics
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-      Ok(report)
-    })();
-
-    self.set_diagnostics_sink(None);
-    if let Some(previous) = restore_cascade_profile {
-      crate::style::cascade::set_cascade_profile_enabled(previous);
-    }
-    if result.is_err() && stats_recorder.is_some() {
-      let _ = crate::resource::take_resource_cache_diagnostics();
-      let _ = crate::image_loader::take_image_cache_diagnostics();
-      let _ = crate::paint::painter::take_paint_diagnostics();
-      let _ = crate::text::pipeline::take_text_diagnostics();
-      let _ =
-        crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
-      let _ = crate::dom::take_dom_parse_diagnostics();
-    }
-    drop(_root_span);
-    trace.finalize(result)
+      if result.is_err() && stats_recorder.is_some() {
+        let _ = crate::resource::take_resource_cache_diagnostics();
+        let _ = crate::image_loader::take_image_cache_diagnostics();
+        let _ = crate::paint::painter::take_paint_diagnostics();
+        let _ = crate::text::pipeline::take_text_diagnostics();
+        let _ =
+          crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
+        let _ = crate::dom::take_dom_parse_diagnostics();
+      }
+      drop(_root_span);
+      trace.finalize(result)
+    })
   }
 
   /// Render already-fetched HTML using the renderer's standard stylesheet loading pipeline.
@@ -5605,19 +5609,23 @@ impl FastRender {
     options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
-    let trace = TraceSession::from_options(Some(&options));
-    let trace_handle = trace.handle();
-    let _root_span = trace_handle.span("render", "pipeline");
-    let result = self.render_fetched_html_with_options_report_internal(
-      resource,
-      base_hint,
-      options,
-      artifacts,
-      None,
-      trace_handle,
-    );
-    drop(_root_span);
-    trace.finalize(result)
+    let toggles = self.resolve_runtime_toggles(&options);
+    let _toggles_guard = RuntimeTogglesSwap::new(&mut self.runtime_toggles, toggles.clone());
+    runtime::with_runtime_toggles(toggles, || {
+      let trace = TraceSession::from_options(Some(&options));
+      let trace_handle = trace.handle();
+      let _root_span = trace_handle.span("render", "pipeline");
+      let result = self.render_fetched_html_with_options_report_internal(
+        resource,
+        base_hint,
+        options,
+        artifacts,
+        None,
+        trace_handle,
+      );
+      drop(_root_span);
+      trace.finalize(result)
+    })
   }
 
   fn render_fetched_html_with_options_report_internal(

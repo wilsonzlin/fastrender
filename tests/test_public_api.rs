@@ -12,10 +12,12 @@ use fastrender::api::{FastRender, FastRenderConfig, FastRenderPool, FastRenderPo
 use fastrender::compat::CompatProfile;
 use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::dom::DomCompatibilityMode;
+use fastrender::resource::FetchedResource;
 use fastrender::{
   FontConfig, LayoutParallelism, PaintParallelism, RenderOptions, ResourceKind, ResourcePolicy,
   Rgba,
 };
+use std::collections::HashMap;
 
 fn deterministic_config() -> FastRenderConfig {
   FastRenderConfig::new()
@@ -460,6 +462,49 @@ fn test_resource_policy_blocks_https_stylesheet_fetch() {
     entry.message.contains("fetch blocked by policy"),
     "expected policy-blocked error, got: {:?}",
     entry.message
+  );
+}
+
+#[test]
+fn test_render_fetched_html_respects_runtime_toggle_overrides() {
+  let mut renderer = deterministic_renderer();
+  let html = r#"
+        <html>
+            <head>
+                <link rel="stylesheet" href="https://example.com/blocked.css">
+            </head>
+            <body>
+                <div>OK</div>
+            </body>
+        </html>
+    "#;
+  let resource = FetchedResource::with_final_url(
+    html.as_bytes().to_vec(),
+    Some("text/html".to_string()),
+    Some("file:///test.html".to_string()),
+  );
+
+  // Per-render runtime toggle overrides should apply to render_fetched_html* entry points.
+  // Disabling link-CSS fetching should avoid the blocked stylesheet fetch error entirely.
+  let mut toggles = HashMap::new();
+  toggles.insert("FASTR_FETCH_LINK_CSS".to_string(), "0".to_string());
+
+  let result = renderer
+    .render_fetched_html_with_options(
+      &resource,
+      None,
+      RenderOptions::new()
+        .with_viewport(32, 32)
+        .with_runtime_toggles(RuntimeToggles::from_map(toggles)),
+    )
+    .expect("render fetched HTML");
+
+  assert_eq!(result.pixmap.width(), 32);
+  assert_eq!(result.pixmap.height(), 32);
+  assert!(
+    result.diagnostics.fetch_errors.is_empty(),
+    "expected no fetch errors when FASTR_FETCH_LINK_CSS=0, got: {:?}",
+    result.diagnostics.fetch_errors
   );
 }
 
