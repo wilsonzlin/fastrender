@@ -3128,11 +3128,12 @@ pub fn compute_part_export_map_with_ids(
   Ok(map)
 }
 
-pub(crate) const COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES: [&str; 9] = [
+pub(crate) const COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES: [&str; 10] = [
   "data-gl-src",
   "data-src",
   "data-lazy-src",
   "data-original",
+  "data-original-src",
   "data-url",
   "data-actualsrc",
   "data-img-src",
@@ -3323,8 +3324,8 @@ fn apply_dom_compatibility_mutations(
         // Compatibility mode mirrors this common bootstrap step by copying the first non-empty URL
         // from the following attributes, in priority order:
         //
-        // - `src` ← `data-gl-src`, `data-src`, `data-lazy-src`, `data-original`, `data-url`,
-        //   `data-actualsrc`, `data-img-src`, `data-hires`, `data-src-retina`
+        // - `src` ← `data-gl-src`, `data-src`, `data-lazy-src`, `data-original`, `data-original-src`,
+        //   `data-url`, `data-actualsrc`, `data-img-src`, `data-hires`, `data-src-retina`
         // - `srcset` ← `data-gl-srcset`, `data-srcset`, `data-lazy-srcset`, `data-original-srcset`,
         //   `data-original-set`, `data-actualsrcset`
         // - `sizes` ← `data-sizes`
@@ -9990,6 +9991,17 @@ mod tests {
     .expect("parse");
     let img = find_element_by_id(&dom, "img").expect("img element");
     assert_eq!(img.get_attribute_ref("src"), Some("a.jpg"));
+  }
+
+  #[test]
+  fn parse_html_compat_mode_copies_data_srcset_into_img_attrs() {
+    let dom = parse_html_with_options(
+      "<img id='img' data-srcset='a1.jpg 1x, a2.jpg 2x'>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
+    let img = find_element_by_id(&dom, "img").expect("img element");
+    assert_eq!(img.get_attribute_ref("srcset"), Some("a1.jpg 1x, a2.jpg 2x"));
   }
 
   #[test]
