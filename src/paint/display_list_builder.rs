@@ -644,8 +644,13 @@ impl DisplayListBuilder {
     let Some(transform) = transform else {
       return Some(view);
     };
+    // Descendant fragments are emitted in the *pre-transform* coordinate space and are transformed
+    // later by `PushStackingContext`. If we can't invert the stacking context transform (e.g. 3D /
+    // projective transforms, scale(0), etc), we can't safely map the visible rect back to local
+    // space. Returning `None` disables rect-based culling to avoid false negatives (dropped
+    // content).
     let Some(inverse) = transform.to_2d().and_then(|t| t.inverse()) else {
-      return Some(view);
+      return None;
     };
     Some(inverse.transform_rect(view))
   }
@@ -2155,6 +2160,15 @@ impl DisplayListBuilder {
     {
       child_visibility = child_visibility.intersect(Some(bounds), true);
     }
+    // `child_visibility` is in the post-transform coordinate space (we intersected with
+    // transformed bounds/clips above). If the visible rect is empty, we can early-out before
+    // attempting any mapping back into local space.
+    if child_visibility.rect.is_none() && visibility.rect.is_some() {
+      if pushed_opacity {
+        self.pop_opacity();
+      }
+      return;
+    }
     // `build_fragment_internal` and the stacking tree are expressed in the pre-transform coordinate
     // space of the stacking context. Visibility culling needs to operate in that same space, so
     // map the visible rect back through the stacking context transform before using it to decide
@@ -2163,12 +2177,6 @@ impl DisplayListBuilder {
       rect: Self::visible_in_local_space(child_visibility.rect, transform.as_ref()),
       hard_clip: child_visibility.hard_clip,
     };
-    if child_visibility.rect.is_none() && visibility.rect.is_some() {
-      if pushed_opacity {
-        self.pop_opacity();
-      }
-      return;
-    }
 
     let has_effects = is_isolated
       || transform.is_some()
