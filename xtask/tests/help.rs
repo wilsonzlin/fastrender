@@ -241,8 +241,8 @@ fn diff_renders_help_mentions_ignore_alpha() {
 
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert!(
-    stdout.contains("--ignore-alpha"),
-    "diff-renders help should mention --ignore-alpha; got:\n{stdout}"
+    stdout.contains("--ignore-alpha") && stdout.contains("--fail-on-differences"),
+    "diff-renders help should mention --ignore-alpha and --fail-on-differences; got:\n{stdout}"
   );
 }
 
