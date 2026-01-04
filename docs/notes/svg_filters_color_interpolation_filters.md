@@ -87,25 +87,38 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
 - `feComponentTransfer`
   - Runs in **linearRGB** when requested.
   - Implementation uses `unpack_color()` / `pack_color()` per pixel (with LUTs per channel).
+- `feMorphology`
+  - Runs in **linearRGB** when requested.
+  - Implementation: `reencode_pixmap_to_linear_rgb()` (on a cloned copy of the input) -> unpremultiply
+    -> min/max in that space -> `pack_color()` (which re-encodes back to sRGB when needed).
+- `feComposite` / `feMerge`
+  - Runs in **linearRGB** when requested.
+  - Implementation: clone inputs -> `reencode_pixmap_to_linear_rgb()` -> composite/merge on premultiplied
+    bytes -> `reencode_pixmap_to_srgb()` on the output.
+- `feBlend`
+  - Runs in **linearRGB** when requested via the same “re-encode inputs -> operate -> re-encode output”
+    pattern as `feComposite`.
+- `feConvolveMatrix`
+  - Runs in **linearRGB** when requested.
+  - Implementation: `reencode_pixmap_to_linear_rgb()` on the input -> kernel math -> `reencode_pixmap_to_srgb()`
+    on the output.
 - `feDiffuseLighting` / `feSpecularLighting`
   - Lighting color is converted to the step’s color space (`lighting_color_in_space()`), and the
     output pixel is written via `pack_color()`.
   - Surface normals/heights are derived from **alpha** (color space does not affect alpha).
 - `feDisplacementMap`
-  - `in2` (the displacement map) is interpreted in the step’s color space for channel selection
-    (`sample_to_color_space()`), since `xChannelSelector`/`yChannelSelector` are defined over those
-    channel values.
-  - The displaced `in1` pixels are copied as-is (no color-space math on the sampled colors).
+  - Runs in **linearRGB** when requested.
+  - For `linearRGB`, both `in1` (primary) and `in2` (the displacement map) are cloned and re-encoded
+    to linearRGB. The displacement map sampling (for channel selection) and the displaced primary
+    resampling/interpolation are performed in that space, then the output pixmap is re-encoded back
+    to sRGB.
 
-Primitives that currently **do not explicitly apply sRGB <-> linearRGB conversion** (they operate
-directly on stored premultiplied RGBA8, so behavior is effectively “sRGB” today):
+Primitives/operations that currently **ignore `color-interpolation-filters`** (they do not
+explicitly re-encode between sRGB <-> linearRGB):
 
-- `feComposite` / `feMerge` / `feBlend` (tiny-skia Porter-Duff + blend modes operate on premultiplied
-  bytes)
-- `feOffset` / `feTile` / `feImage` (copy/resample and/or draw via tiny-skia without re-encoding)
-- `feMorphology` (min/max is currently performed on premultiplied channel bytes)
-- `feConvolveMatrix` (kernel math uses unpremultiplied channels, but does not convert sRGB <-> linearRGB)
-- `feTurbulence` / `feFlood` (do not perform color-space-dependent math; outputs are written as RGBA8)
+- `feOffset` (subpixel offsets use bilinear resampling in the stored space)
+- `feTile` / `feImage` (no re-encoding; `feImage` currently draws with nearest sampling)
+- `feTurbulence` / `feFlood` (outputs are generated/written as premultiplied RGBA8)
 
 ## Known limitations / implications
 
@@ -114,5 +127,6 @@ directly on stored premultiplied RGBA8, so behavior is effectively “sRGB” to
 - **Conversions at primitive boundaries:** linearRGB primitives convert in/out of linear for their
   computation instead of keeping a float/linear surface across multiple primitives.
 - **Partial coverage of `color-interpolation-filters`:** some primitives do not yet apply explicit
-  sRGB <-> linearRGB conversion (see list above), so `linearRGB` may not be fully honored for complex
-  filter graphs.
+  sRGB <-> linearRGB conversion for resampling; `linearRGB` may not be fully honored for filter
+  graphs that rely on subpixel `feOffset` or `filterRes` downsampling/upsampling (which uses
+  tiny-skia bilinear resampling in the stored space).
