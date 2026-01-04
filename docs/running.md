@@ -48,7 +48,7 @@ scripts/pageset.sh
 FastRender’s real-page loop is:
 
 1. Fetch pages (network): `cargo run --release --bin fetch_pages`
-2. Render cached pages (no network): `cargo run --release --bin render_pages`
+2. Render cached pages (HTML from cache; subresources fetched/cached as needed): `cargo run --release --bin render_pages`
 3. Inspect outputs under `fetches/renders/` (PNGs + per-page logs + `_summary.log`)
 
 For large runs, both `fetch_pages` and `render_pages` accept `--shard <index>/<total>` to process a deterministic slice of the page list (0-based shard indices).
