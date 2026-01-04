@@ -237,7 +237,7 @@ Notes:
   - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
   - Output defaults to `target/chrome_fixtures/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
 - Core flags:
-  - Selection: `--fixtures <csv>` (alias `--only`) and/or positional fixture names.
+  - Selection: `--fixtures <csv>` (alias `--only`) or positional fixture names.
   - Paths: `--fixture-dir <dir>` (alias `--fixtures-root`), `--out-dir <dir>`.
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--js {on|off}`.
   - Parallelism: `--shard <index>/<total>`.
