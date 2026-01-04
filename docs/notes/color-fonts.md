@@ -23,7 +23,10 @@ limitations.
     are reused across display-list tiles and threads.
   - Display-list text items are built from shaped runs in
     [`DisplayListBuilder`](../../src/paint/display_list_builder.rs) and rendered via
-    `Canvas::draw_text` plus the display-list text-shadow path.
+    `Canvas::draw_text_run`. Text shadows are handled by
+    `DisplayListRenderer::render_text_shadows`, which rasterizes the glyph run into
+    an offscreen pixmap using `TextRasterizer` (with the shared caches) and then
+    blurs/composites it.
 
 ## Supported formats (preference order)
 
@@ -81,20 +84,21 @@ limitations.
 
 ### What the display list backend uses today
 
-- `TextItem` in the display list carries `palette_index` (see
-  [`src/paint/display_list.rs`](../../src/paint/display_list.rs)) and the renderer
-  passes it through when drawing text.
-- Palette overrides are currently *not* recorded in display list text items:
-  - `DisplayListBuilder::emit_shaped_runs` copies `run.palette_index` but drops
-    `run.palette_overrides` / `run.palette_override_hash` (see
-    [`src/paint/display_list_builder.rs`](../../src/paint/display_list_builder.rs)).
-  - `Canvas::draw_text` therefore calls `TextRasterizer::render_glyph_run` with
-    `palette_overrides = &[]` and `palette_override_hash = 0` (see
-    [`src/paint/canvas.rs`](../../src/paint/canvas.rs)).
-- Net effect: base palette selection (`font-palette: normal|light|dark` and
-  `@font-palette-values base-palette`) affects the default renderer, but
-  `@font-palette-values override-colors` is not applied end-to-end via the display
-  list path.
+- `TextItem` and `ListMarkerItem` in the display list carry all palette metadata
+  needed for color-font rendering (see
+  [`src/paint/display_list.rs`](../../src/paint/display_list.rs)):
+  - `palette_index` (selected CPAL palette index)
+  - `palette_overrides` (resolved `@font-palette-values override-colors`)
+  - `palette_override_hash` (stable hash used in cache keys)
+- `DisplayListBuilder` preserves this metadata when emitting display-list entries
+  from shaped runs (see
+  [`DisplayListBuilder::emit_shaped_runs`](../../src/paint/display_list_builder.rs)
+  and the list-marker emission helpers).
+- `DisplayListRenderer::render_text` paints glyph runs via
+  [`Canvas::draw_text_run`](../../src/paint/canvas.rs), passing
+  `palette_index`/`palette_overrides`/`palette_override_hash` through to
+  [`TextRasterizer::render_glyph_run`](../../src/paint/text_rasterize.rs) so COLR/CPAL
+  overrides apply end-to-end through the default display-list path.
 
 ## COLR v1 coverage and variations
 
@@ -129,20 +133,22 @@ Implemented COLRv1 features include:
 
 - `TextRasterizer` applies global text alpha/opacity at draw time (cached rasters
   keep `currentColor` paints opaque), so changing CSS opacity does not require
-  re-rasterizing color glyphs (see `tests/color_glyph_opacity.rs`).
+  re-rasterizing color glyphs. Concretely: cached color glyph rasters strip the
+  alpha channel from the text color and multiply by the combined alpha (`color.a *
+  opacity`) only when drawing (see `tests/color_glyph_opacity.rs`).
 - `Canvas` passes stacking-context transforms, clips, opacity, and blend modes down
   to `TextRasterizer` so both outline and color-glyph rendering participate in
   those effects.
-- Display-list text shadows are rendered by rasterizing the glyph run into an
-  offscreen pixmap (via `TextRasterizer`) and then blurring it. For color fonts,
-  this means palette/gradient layers remain colored in the shadow; the
-  `text-shadow` color primarily affects `currentColor` paints.
+- Display-list text shadows render the glyph run into an offscreen pixmap and then
+  treat that pixmap as an alpha mask: the mask is tinted to the `text-shadow` color
+  (silhouette shadow) and then blurred/composited. Embedded COLR/SVG/bitmap colors
+  are **not** preserved in the shadow (see
+  `tests/paint/display_list_renderer_test.rs::color_glyph_shadow_matches_golden`).
 
 ## Limitations
 
-- Display-list text currently does not carry `palette_overrides`, so
-  `@font-palette-values override-colors` only affect callers rendering `ShapedRun`s
-  directly (or callers that pass overrides explicitly).
+- `text-shadow` is implemented as a silhouette shadow (tinted alpha mask), so
+  embedded palette/gradient colors from color fonts are not preserved.
 - `sbix` supports PNG + JPEG only; other `sbix` tags are skipped (see
   [`bitmap.rs`](../../src/text/color_fonts/bitmap.rs)).
 - SVG glyphs are rendered with `usvg` resources disabled and are rejected if the
