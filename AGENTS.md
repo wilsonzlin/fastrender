@@ -86,7 +86,7 @@ cargo xtask fixture-chrome-diff
 #
 # Cached-pages Chrome loop (best-effort; non-deterministic):
 # Live subresources can change, so treat this as rapid triage only.
-# Shortcut wrapper (writes target/chrome_vs_fastrender/diff_report.html):
+# Shortcut wrapper (writes target/chrome_vs_fastrender/report.html):
 #   scripts/chrome_vs_fastrender.sh --pages example.com
 #
 # Ubuntu one-time setup (python + fonts + chrome/chromium):
@@ -105,8 +105,8 @@ cargo run --release --bin render_pages -- --pages example.com
 cargo run --release --bin diff_renders -- \
   --before fetches/chrome_renders \
   --after fetches/renders \
-  --json target/chrome_vs_fastrender/diff_report.json \
-  --html target/chrome_vs_fastrender/diff_report.html
+  --json target/chrome_vs_fastrender/report.json \
+  --html target/chrome_vs_fastrender/report.html
 ```
 
 ## Hard guardrails (still non‑negotiable)
@@ -218,7 +218,7 @@ when available and rescaled so buckets sum (within rounding error) to `total_ms`
 - **Pageset loop**: `scripts/pageset.sh`, `cargo xtask pageset`
 - **Scoreboard**: `pageset_progress report`
 - **Correct-engine baseline (cached pages; best-effort)**: `scripts/chrome_baseline.sh` (+ Ubuntu deps helper)
-- **Cached-pages Chrome-vs-FastRender report (best-effort)**: `scripts/chrome_vs_fastrender.sh` (writes `target/chrome_vs_fastrender/diff_report.html` by default)
+- **Cached-pages Chrome-vs-FastRender report (best-effort)**: `scripts/chrome_vs_fastrender.sh` (writes `target/chrome_vs_fastrender/report.html` by default)
 - **Render outputs**: `render_pages` (writes `fetches/renders/*.png`)
 - **Diffs**: `diff_renders`
 - **Deterministic fixture evidence**: `render_fixtures`, `cargo xtask chrome-baseline-fixtures`, `cargo xtask fixture-chrome-diff`

@@ -17,8 +17,8 @@ set -euo pipefail
 #   cargo run --release --bin diff_renders -- \
 #     --before fetches/chrome_renders \
 #     --after fetches/renders \
-#     --json target/chrome_vs_fastrender/diff_report.json \
-#     --html target/chrome_vs_fastrender/diff_report.html
+#     --json target/chrome_vs_fastrender/report.json \
+#     --html target/chrome_vs_fastrender/report.html
 #
 # Notes:
 # - This script does NOT make the run fully deterministic (live subresources can change).
