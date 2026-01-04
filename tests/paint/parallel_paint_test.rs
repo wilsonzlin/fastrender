@@ -1010,7 +1010,6 @@ fn mask_viewport_units_match_serial_output() {
       content: bounds,
     },
   };
-
   let mut list = DisplayList::new();
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32),
@@ -1065,6 +1064,125 @@ fn mask_viewport_units_match_serial_output() {
 
   assert!(report.parallel_used, "expected tiling to be used");
   assert_pixmap_eq(&serial, &report.pixmap);
+}
+
+#[test]
+fn stacking_context_filter_radii_match_serial_output_under_tiling() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 128.0, 64.0),
+    color: Rgba::WHITE,
+  }));
+
+  let bounds = Rect::from_xywh(70.0, 10.0, 20.0, 20.0);
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::Brightness(1.0)],
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::uniform(6.0),
+    mask: None,
+  };
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::new(40, 160, 220, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(128, 64, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 32,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(128, 64, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert_eq!(serial.data(), report.pixmap.data());
+}
+
+#[test]
+fn backdrop_filters_trigger_serial_fallback() {
+  let mut list = DisplayList::new();
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
+    plane_rect: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: vec![ResolvedFilter::Blur(3.0)],
+    radii: BorderRadii::ZERO,
+    mask: None,
+  };
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(8.0, 8.0, 40.0, 40.0),
+    color: Rgba::new(0, 200, 120, 0.8),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 24,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(
+    !report.parallel_used,
+    "backdrop filters should disable parallel painting"
+  );
+  assert_eq!(serial.data(), report.pixmap.data());
 }
 
 #[test]
