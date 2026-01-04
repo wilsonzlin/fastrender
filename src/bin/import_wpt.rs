@@ -473,7 +473,7 @@ fn rewrite_html(
   }
 
   let attr_regex = Regex::new(
-    "(?i)(?P<prefix>\\s(?:src|href|xlink:href)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
+    "(?i)(?P<prefix>\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
   )
   .unwrap();
   let url_regex =
@@ -482,12 +482,16 @@ fn rewrite_html(
   let import_regex =
     Regex::new("(?i)(?P<prefix>@import\\s+['\"])(?P<url>[^\"']+)(?P<suffix>['\"])").unwrap();
   let attr_unquoted_regex =
-    Regex::new("(?i)(?P<prefix>\\s(?:src|href|xlink:href)\\s*=\\s*)(?P<url>[^\\s\"'>]+)")
+    Regex::new("(?i)(?P<prefix>\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*)(?P<url>[^\\s\"'>]+)")
       .unwrap();
   let srcset_double =
     Regex::new("(?i)(?P<prefix>\\ssrcset\\s*=\\s*\")(?P<value>[^\"]*)(?P<suffix>\")").unwrap();
   let srcset_single =
     Regex::new("(?i)(?P<prefix>\\ssrcset\\s*=\\s*')(?P<value>[^']*)(?P<suffix>')").unwrap();
+  let imagesrcset_double =
+    Regex::new("(?i)(?P<prefix>\\simagesrcset\\s*=\\s*\")(?P<value>[^\"]*)(?P<suffix>\")").unwrap();
+  let imagesrcset_single =
+    Regex::new("(?i)(?P<prefix>\\simagesrcset\\s*=\\s*')(?P<value>[^']*)(?P<suffix>')").unwrap();
 
   let mut rewritten = apply_rewrite(
     &attr_regex,
@@ -541,6 +545,26 @@ fn rewrite_html(
 
   rewritten = apply_srcset_rewrite(
     &srcset_single,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_srcset_rewrite(
+    &imagesrcset_double,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_srcset_rewrite(
+    &imagesrcset_single,
     &rewritten,
     config,
     src_dir,
@@ -935,15 +959,23 @@ fn find_network_urls(content: &str) -> Vec<String> {
   // This avoids false positives for strings that look like network URLs but are not fetches,
   // such as SVG namespace URIs (`xmlns="http://www.w3.org/2000/svg"`) or text embedded inside
   // `data:` URLs.
-  let attr_regex =
-    Regex::new("(?i)\\s(?:src|href|xlink:href)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']").unwrap();
-  let attr_unquoted_regex =
-    Regex::new("(?i)\\s(?:src|href|xlink:href)\\s*=\\s*(?P<url>[^\\s\"'>]+)").unwrap();
+  let attr_regex = Regex::new(
+    "(?i)\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']",
+  )
+  .unwrap();
+  let attr_unquoted_regex = Regex::new(
+    "(?i)\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*(?P<url>[^\\s\"'>]+)",
+  )
+  .unwrap();
   let url_regex =
     Regex::new("(?i)url\\(\\s*[\"']?(?P<url>[^\"')]+)[\"']?\\s*\\)").unwrap();
   let import_regex = Regex::new("(?i)@import\\s+[\"'](?P<url>[^\"']+)[\"']").unwrap();
   let srcset_double = Regex::new("(?i)\\ssrcset\\s*=\\s*\"(?P<value>[^\"]*)\"").unwrap();
   let srcset_single = Regex::new("(?i)\\ssrcset\\s*=\\s*'(?P<value>[^']*)'").unwrap();
+  let imagesrcset_double =
+    Regex::new("(?i)\\simagesrcset\\s*=\\s*\"(?P<value>[^\"]*)\"").unwrap();
+  let imagesrcset_single =
+    Regex::new("(?i)\\simagesrcset\\s*=\\s*'(?P<value>[^']*)'").unwrap();
 
   let mut urls = Vec::new();
   for regex in [&attr_regex, &attr_unquoted_regex, &url_regex, &import_regex] {
@@ -958,7 +990,7 @@ fn find_network_urls(content: &str) -> Vec<String> {
   }
 
   const MAX_SRCSET_CANDIDATES: usize = 64;
-  for regex in [&srcset_double, &srcset_single] {
+  for regex in [&srcset_double, &srcset_single, &imagesrcset_double, &imagesrcset_single] {
     for caps in regex.captures_iter(content) {
       let Some(raw_srcset) = caps.name("value").map(|m| m.as_str()) else {
         continue;
@@ -1558,6 +1590,81 @@ mod tests {
     match err {
       ImportError::NetworkUrlsRemaining(path, urls) => {
         assert!(path.to_string_lossy().contains("unquoted-external.html"));
+        assert!(urls.contains("example.com"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
+  }
+
+  #[test]
+  fn rewrites_poster_and_object_data_attributes() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec![
+        "html/network/poster.html".to_string(),
+        "html/network/object-data.html".to_string(),
+      ],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+
+    let poster_html = fs::read_to_string(out_dir.path().join("out/html/network/poster.html")).unwrap();
+    assert!(!poster_html.contains("poster=\"/resources/"));
+    assert!(poster_html.contains("green.png"));
+
+    let object_html =
+      fs::read_to_string(out_dir.path().join("out/html/network/object-data.html")).unwrap();
+    assert!(!object_html.contains("data=\"/resources/"));
+    assert!(object_html.contains("green.png"));
+
+    assert!(out_dir.path().join("out/resources/green.png").exists());
+  }
+
+  #[test]
+  fn rewrites_imagesrcset_and_rejects_external_urls() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/imagesrcset.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+
+    let imported =
+      fs::read_to_string(out_dir.path().join("out/html/network/imagesrcset.html")).unwrap();
+    assert!(!imported.contains("web-platform.test"));
+    assert!(imported.contains("imagesrcset=\""));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
+
+    let out_dir2 = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/imagesrcset-external.html".to_string()],
+      out_dir: out_dir2.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    let err = run_import(config).unwrap_err();
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path.to_string_lossy().contains("imagesrcset-external.html"));
         assert!(urls.contains("example.com"));
       }
       other => panic!("unexpected error: {other:?}"),
