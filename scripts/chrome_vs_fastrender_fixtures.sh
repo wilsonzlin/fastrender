@@ -121,37 +121,17 @@ refuse_unsafe_path "fastrender out dir" "${FASTR_OUT_DIR}"
 refuse_unsafe_path "report html path" "${REPORT_HTML}"
 refuse_unsafe_path "report json path" "${REPORT_JSON}"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required." >&2
-  exit 2
-fi
-
 discover_default_fixtures() {
   local out=()
   if [[ -f tests/pages_regression_test.rs ]]; then
     # Extract `html: "name/index.html"` entries from the regression suite.
-    mapfile -t out < <(python3 - <<'PY'
-import re
-from pathlib import Path
-
-src = Path("tests/pages_regression_test.rs")
-try:
-    text = src.read_text(encoding="utf-8")
-except Exception:
-    raise SystemExit(0)
-
-paths = re.findall(r'html:\\s*"([^"]+)"', text)
-seen = set()
-names = []
-for p in paths:
-    name = p.split("/", 1)[0]
-    if name and name not in seen:
-        seen.add(name)
-        names.append(name)
-for n in names:
-    print(n)
-PY
-)
+    mapfile -t out < <(
+      (
+        grep -Eo 'html:[[:space:]]*"[^"]+"' tests/pages_regression_test.rs 2>/dev/null || true
+      ) | sed -E 's/.*"([^"]+)".*/\1/' \
+        | awk -F/ '{print $1}' \
+        | awk '!seen[$0]++'
+    )
   fi
 
   if [[ "${#out[@]}" -eq 0 ]]; then
