@@ -2,6 +2,8 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::css::types::{CollectedPageRule, PageMarginArea};

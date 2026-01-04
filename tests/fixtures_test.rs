@@ -237,6 +237,7 @@ fn test_all_fixture_files_exist() {
     "text_vertical_orientation_mixed",
     "text_vertical_upright_bidi_preserve_order",
     "text_combine_upright_scale",
+    "text_combine_upright_tate_chu_yoko",
     "text_decoration_thickness_auto_vs_from_font",
     "shadow_dom",
     "shadow_dom_selectors",
@@ -565,6 +566,12 @@ fn test_fixture_text_combine_upright_scale() {
 }
 
 #[test]
+fn test_fixture_text_combine_upright_tate_chu_yoko() {
+  test_fixture("text_combine_upright_tate_chu_yoko")
+    .expect("text_combine_upright_tate_chu_yoko fixture should render");
+}
+
+#[test]
 fn test_fixture_text_decoration_thickness_auto_vs_from_font() {
   test_fixture("text_decoration_thickness_auto_vs_from_font")
     .expect("text_decoration_thickness_auto_vs_from_font fixture should render");
@@ -662,6 +669,8 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "text_vertical_orientation_mixed",
     "text_vertical_upright_bidi_preserve_order",
     "text_combine_upright_scale",
+    "text_combine_upright_tate_chu_yoko",
+    "text_decoration_thickness_auto_vs_from_font",
     // Shadow DOM
     "shadow_dom",
     // SVG

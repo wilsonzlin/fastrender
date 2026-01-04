@@ -804,13 +804,24 @@ impl InlineFormattingContext {
             fixed_cb_stack.push(box_id);
           }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
-          let mut child_boundary = CombineBoundary::default();
+          let mut inherited_boundary = CombineBoundary::default();
           if Some(idx) == first_combinable {
-            child_boundary.prev = boundary.prev;
+            inherited_boundary.prev = boundary.prev;
           }
           if Some(idx) == last_combinable {
-            child_boundary.next = boundary.next;
+            inherited_boundary.next = boundary.next;
           }
+          let child_boundary = if is_vertical_typographic_mode(child.style.writing_mode)
+            && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
+          {
+            let mut b =
+              compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+            b.prev |= inherited_boundary.prev;
+            b.next |= inherited_boundary.next;
+            b
+          } else {
+            inherited_boundary
+          };
           let child_items = self.collect_inline_items_internal(
             child,
             available_width,
@@ -1018,13 +1029,24 @@ impl InlineFormattingContext {
             fixed_cb_stack.push(box_id);
           }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
-          let mut child_boundary = CombineBoundary::default();
+          let mut inherited_boundary = CombineBoundary::default();
           if Some(idx) == first_combinable {
-            child_boundary.prev = boundary.prev;
+            inherited_boundary.prev = boundary.prev;
           }
           if Some(idx) == last_combinable {
-            child_boundary.next = boundary.next;
+            inherited_boundary.next = boundary.next;
           }
+          let child_boundary = if is_vertical_typographic_mode(child.style.writing_mode)
+            && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
+          {
+            let mut b =
+              compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+            b.prev |= inherited_boundary.prev;
+            b.next |= inherited_boundary.next;
+            b
+          } else {
+            inherited_boundary
+          };
           let child_items = self.collect_inline_items_internal(
             child,
             available_width,
@@ -3235,6 +3257,12 @@ impl InlineFormattingContext {
         let end_byte = chars.get(end).map(|p| p.0).unwrap_or_else(|| text.len());
         let sub_breaks = slice_breaks(&forced_breaks, byte_offset, end_byte);
         if run_len >= min_len && run_len <= max_len {
+          // Tate-chu-yoko (`text-combine-upright`) shapes the combined substring horizontally,
+          // then packs it into a single 1em vertical cell.
+          //
+          // Important: the stored style must keep the original vertical writing mode so the run
+          // continues to paint/decoration as vertical text. We only override `writing-mode` while
+          // shaping so HarfBuzz produces a horizontal run.
           let combine_style = {
             let mut s = (**style).clone();
             s.text_orientation = crate::style::types::TextOrientation::Upright;
@@ -3244,8 +3272,13 @@ impl InlineFormattingContext {
             s.unicode_bidi = UnicodeBidi::Isolate;
             Arc::new(s)
           };
+          let combine_shape_style = {
+            let mut s = (*combine_style).clone();
+            s.writing_mode = WritingMode::HorizontalTb;
+            Arc::new(s)
+          };
           let mut item = self.create_text_item_from_normalized(
-            &combine_style,
+            &combine_shape_style,
             &text[byte_offset..end_byte],
             sub_breaks,
             false,
@@ -3253,6 +3286,7 @@ impl InlineFormattingContext {
             crate::style::types::Direction::Ltr,
             bidi_stack,
           )?;
+          item.style = combine_style;
           self.compress_text_combine(&mut item, style.font_size);
           item.break_opportunities = vec![crate::text::line_break::BreakOpportunity::mandatory(
             item.text.len(),
@@ -3310,27 +3344,72 @@ impl InlineFormattingContext {
   }
 
   fn compress_text_combine(&self, item: &mut TextItem, em: f32) {
-    if em <= 0.0 || item.advance_for_layout <= 0.0 {
-      return;
-    }
-    let factor = (em / item.advance_for_layout).min(1.0);
-    if factor >= 0.999 {
+    if em <= 0.0 {
       return;
     }
 
+    // `item.advance_for_layout` is the horizontal advance of the shaped substring because we
+    // shape in a horizontal writing-mode context. Use it to decide whether scaling is needed,
+    // but always make the combined item occupy exactly 1em in the paragraph inline axis (vertical).
+    let content_advance = item.advance_for_layout.max(0.0);
+    let factor = if content_advance > em && content_advance > 0.0 {
+      em / content_advance
+    } else {
+      1.0
+    };
+
+    let scaled_ascent = item.metrics.ascent * factor;
+    let scaled_descent = item.metrics.descent * factor;
+    let scaled_height = (scaled_ascent + scaled_descent).max(0.0);
+
+    // Center vertically within the 1em cell by shifting the horizontal baseline down from the
+    // vertical cell start. Note: ShapedRun y offsets use a Y-up coordinate system (later negated
+    // when building the display list), so shifting *down* requires subtracting the offset.
+    let baseline_shift_down = scaled_ascent + (em - scaled_height) * 0.5;
+
+    // Scale-to-fit: only when the combined text is wider than 1em (spec/MDN).
+    if factor < 0.999 {
+      for run in &mut item.runs {
+        for glyph in &mut run.glyphs {
+          glyph.x_offset *= factor;
+          glyph.y_offset *= factor;
+          glyph.x_advance *= factor;
+          glyph.y_advance *= factor;
+        }
+        run.advance *= factor;
+        run.scale *= factor;
+      }
+    }
+
+    // Total width of the combined horizontal substring (after scaling).
+    let mut scaled_width = 0.0;
+    for run in &item.runs {
+      scaled_width += run.advance.max(0.0);
+    }
+
+    // Center horizontally within the 1em cell. For vertical text, `baseline_offset` defines the
+    // cell's block-start edge relative to the baseline.
+    let baseline_offset = item.metrics.baseline_offset;
+    let start_shift_x = -baseline_offset + (em - scaled_width) * 0.5;
+
+    // Map horizontal run advances into the vertical cell's block axis by placing all glyphs at the
+    // same inline position (no stacked y advances) and offsetting them along X.
+    let mut run_offset_x = 0.0;
     for run in &mut item.runs {
       for glyph in &mut run.glyphs {
-        glyph.x_offset *= factor;
-        glyph.y_offset *= factor;
-        glyph.x_advance *= factor;
-        glyph.y_advance *= factor;
+        glyph.x_offset += start_shift_x + run_offset_x;
+        glyph.y_offset -= baseline_shift_down;
+        glyph.y_advance = 0.0;
       }
-      run.advance *= factor;
-      run.scale *= factor;
+      run_offset_x += run.advance.max(0.0);
+      // Prevent the display list builder's vertical run emitter from stacking sub-runs along the
+      // inline axis; we've already placed them horizontally within the cell.
+      run.advance = 0.0;
     }
 
-    item.advance *= factor;
-    item.advance_for_layout = item.advance;
+    // Ensure the combined item participates in layout as a single 1em glyph.
+    item.advance = em;
+    item.advance_for_layout = em;
     item.recompute_cluster_advances();
   }
 
@@ -11543,6 +11622,27 @@ mod tests {
         .break_opportunities
         .iter()
         .all(|b| matches!(b.break_type, BreakType::Mandatory)));
+      let glyphs: Vec<_> = text
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter())
+        .collect();
+      assert!(
+        glyphs.iter().any(|g| g.x_advance.abs() > 0.01),
+        "combined run should advance horizontally within the vertical cell"
+      );
+      assert!(
+        glyphs.iter().all(|g| g.y_advance.abs() <= 0.01),
+        "combined run should not stack glyphs vertically; y_advances={:?}",
+        glyphs.iter().map(|g| g.y_advance).collect::<Vec<_>>()
+      );
+      assert!(
+        text
+          .runs
+          .iter()
+          .all(|run| run.rotation == crate::text::pipeline::RunRotation::None),
+        "combined runs should not be rotated"
+      );
     } else {
       panic!("expected text item");
     }

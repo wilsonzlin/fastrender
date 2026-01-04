@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Text - text-combine-upright tate-chu-yoko</title>
+    <style>
+      @font-face {
+        font-family: "Noto Sans JP Subset";
+        src: url("tests/fixtures/fonts/NotoSansJP-subset.ttf") format("truetype");
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #fff;
+      }
+
+      .vertical {
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+        font-family: "Noto Sans JP Subset";
+        font-size: 64px;
+        line-height: 1;
+        border: 2px solid #000;
+        padding: 16px;
+        height: 520px;
+      }
+
+      .combine2 {
+        text-combine-upright: digits 2;
+        border: 2px solid rgb(200, 0, 0);
+        background: rgba(200, 0, 0, 0.06);
+      }
+
+      .combine4 {
+        text-combine-upright: digits 4;
+        border: 2px solid rgb(0, 120, 0);
+        background: rgba(0, 120, 0, 0.06);
+      }
+
+      .combine-all {
+        text-combine-upright: all;
+        border: 2px solid rgb(0, 0, 200);
+        background: rgba(0, 0, 200, 0.06);
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Tate-chu-yoko: combined characters should render horizontally inside a single 1em vertical cell.
+
+      The colored borders provide a 1em guide box for the combined run.
+    -->
+    <div class="vertical">
+      枠12枠<br />
+      枠<span class="combine2">12</span>枠<br />
+      枠<span class="combine4">1234</span>枠<br />
+      枠<span class="combine-all">AB</span>枠<br />
+      枠<span class="combine-all">W3C</span>枠
+    </div>
+  </body>
+</html>
+
