@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>shape_outside_circle</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <style>
+      body {
+        background: #fff;
+      }
+
+      .page {
+        max-width: 920px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 24px;
+      }
+
+      .float {
+        float: left;
+        width: 240px;
+        height: 240px;
+        margin: 0 28px 18px 0;
+        border-radius: 18px;
+        background: radial-gradient(circle at 30% 30%, #93c5fd 0%, #1d4ed8 62%, #1e3a8a 100%);
+
+        /* Non-rectangular text wrapping (CSS Shapes). */
+        shape-outside: circle(45% at 50% 50%);
+        shape-margin: 14px;
+      }
+
+      p {
+        font-size: 18px;
+        line-height: 1.6;
+        margin: 0 0 16px 0;
+        color: #111827;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>shape-outside: circle()</h1>
+      <div class="float"></div>
+      <p>
+        This fixture exercises CSS Shapes text wrapping. The floated square remains rectangular, but
+        the line boxes should wrap against a circular contour with a small <code>shape-margin</code>.
+        The tell-tale signal is that the first few lines start closer to the float than a pure
+        rectangle would allow, then gradually widen as they flow past the circle.
+      </p>
+      <p>
+        FastRender previously treated floats as strictly rectangular, so the left edge of each line
+        would jump to a constant offset and stay there for the full height of the float. With
+        <code>shape-outside</code> wired into float layout, the available inline width should vary by
+        scanline and more closely match Chrome.
+      </p>
+    </div>
+  </body>
+</html>
+

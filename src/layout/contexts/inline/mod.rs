@@ -55,6 +55,7 @@ use crate::layout::contexts::node_ref::BoxNodeRef;
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::float_context::FloatContext;
+use crate::layout::float_shape::build_float_shape;
 use crate::layout::formatting_context::count_inline_intrinsic_call;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
@@ -7285,6 +7286,7 @@ impl InlineFormattingContext {
     &self,
     floating: &crate::layout::contexts::inline::line_builder::FloatingItem,
     containing_width: f32,
+    containing_block_size: Size,
     float_base_y: f32,
     min_y: f32,
     float_ctx: &mut FloatContext,
@@ -7496,12 +7498,31 @@ impl InlineFormattingContext {
       box_width,
       fragment.bounds.height(),
     );
-    float_ctx.add_float_at(
+    let border_box_height = fragment.bounds.height();
+    let margin_box = Rect::from_xywh(
+      fx,
+      fy,
+      margin_left + box_width + margin_right,
+      margin_top + border_box_height + margin_bottom,
+    );
+    let border_box =
+      Rect::from_xywh(fx + margin_left, fy + margin_top, box_width, border_box_height);
+    let shape = build_float_shape(
+      &float_node.style,
+      margin_box,
+      border_box,
+      containing_block_size,
+      self.viewport_size,
+      &self.font_context,
+      self.factory.image_cache(),
+    );
+    float_ctx.add_float_with_shape(
       side,
       fx,
       fy,
       margin_left + box_width + margin_right,
       float_height,
+      shape,
     );
     let bottom_rel = fy + float_height - float_base_y;
     Ok((fragment, fy, bottom_rel))
@@ -8411,6 +8432,7 @@ impl InlineFormattingContext {
               let (fragment, _, bottom_rel) = self.layout_inline_float_fragment(
                 &floating,
                 available_inline,
+                Size::new(available_inline, available_block),
                 float_base_y,
                 float_min_y,
                 &mut candidate_ctx,

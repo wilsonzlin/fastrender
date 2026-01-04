@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>shape_outside_image</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <style>
+      body {
+        background: #fff;
+      }
+
+      .page {
+        max-width: 920px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 24px;
+      }
+
+      .case {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+        margin: 0 0 22px 0;
+        overflow: auto; /* contain floats */
+      }
+
+      .case:last-child {
+        margin-bottom: 0;
+      }
+
+      .float {
+        float: left;
+        width: 240px;
+        height: 240px;
+        margin: 0 28px 14px 0;
+        background: #e2e8f0;
+        border-radius: 12px;
+        border: 2px solid #94a3b8;
+
+        /* Use the alpha mask of a local SVG image for wrapping. */
+        shape-outside: url("mask.svg");
+        shape-margin: 12px;
+      }
+
+      .case.low .float {
+        /* Lower threshold => more of the gradient is treated as "inside" the shape. */
+        shape-image-threshold: 0.25;
+      }
+
+      .case.high .float {
+        /* Higher threshold => only the opaque core is considered, shrinking the shape. */
+        shape-image-threshold: 0.75;
+      }
+
+      p {
+        font-size: 18px;
+        line-height: 1.6;
+        margin: 0;
+        color: #111827;
+      }
+
+      .label {
+        font-weight: 700;
+        margin-bottom: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>shape-outside: url(...) + shape-image-threshold</h1>
+
+      <div class="case low">
+        <div class="label">threshold 0.25 (larger excluded shape)</div>
+        <div class="float"></div>
+        <p>
+          The float uses <code>shape-outside: url(mask.svg)</code>. The SVG contains a soft radial
+          alpha gradient, so changing <code>shape-image-threshold</code> adjusts how much of the
+          gradient participates in wrapping. With a lower threshold, more pixels are considered
+          opaque, so the text should keep a wider berth around the float.
+        </p>
+      </div>
+
+      <div class="case high">
+        <div class="label">threshold 0.75 (smaller excluded shape)</div>
+        <div class="float"></div>
+        <p>
+          With a higher threshold, only the more opaque center of the gradient counts as the shape.
+          That reduces the excluded area, letting the lines start closer to the float. The resulting
+          non-rectangular edge should match Chrome and helps validate that FastRender is using the
+          sampled image mask spans during inline layout.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
+

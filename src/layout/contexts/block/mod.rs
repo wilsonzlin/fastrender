@@ -41,6 +41,7 @@ use crate::layout::contexts::positioned::PositionedLayout;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::float_context::FloatContext;
 use crate::layout::float_context::FloatSide;
+use crate::layout::float_shape::build_float_shape;
 use crate::layout::formatting_context::count_block_intrinsic_call;
 use crate::layout::formatting_context::intrinsic_cache_lookup;
 use crate::layout::formatting_context::intrinsic_cache_store;
@@ -2184,12 +2185,33 @@ impl BlockFormattingContext {
           box_width,
           fragment.bounds.height(),
         );
-        float_ctx.add_float_at(
+        let border_box_height = fragment.bounds.height();
+        let margin_box = Rect::from_xywh(
+          fx,
+          fy,
+          margin_left + box_width + margin_right,
+          margin_top + border_box_height + margin_bottom,
+        );
+        let border_box =
+          Rect::from_xywh(fx + margin_left, fy + margin_top, box_width, border_box_height);
+        let containing_block_size =
+          Size::new(containing_width, block_space.to_option().unwrap_or(0.0));
+        let shape = build_float_shape(
+          &child.style,
+          margin_box,
+          border_box,
+          containing_block_size,
+          self.viewport_size,
+          &self.font_context,
+          factory.image_cache(),
+        );
+        float_ctx.add_float_with_shape(
           side,
           fx,
           fy,
           margin_left + box_width + margin_right,
           float_height,
+          shape,
         );
         content_height = content_height.max(fy + float_height);
         if child.style.position.is_relative() {

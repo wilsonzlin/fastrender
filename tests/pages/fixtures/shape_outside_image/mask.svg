@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <defs>
+    <!--
+      Soft radial alpha gradient used by shape-outside.
+
+      The rectangle is black everywhere, but fades to transparent near the edge so varying
+      `shape-image-threshold` changes the effective contour.
+    -->
+    <radialGradient id="g" cx="100" cy="100" r="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="black" stop-opacity="1" />
+      <stop offset="62%" stop-color="black" stop-opacity="1" />
+      <stop offset="100%" stop-color="black" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="200" height="200" fill="url(#g)" />
+</svg>
+
