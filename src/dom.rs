@@ -6868,7 +6868,7 @@ mod tests {
     let html = "<div id='host'><template shadowroot='open'><template><slot id='tmpl' name='a'></slot></template><slot id='real' name='a'></slot></template><span id='light' slot='a'></span></div>";
     let dom = parse_html(html).expect("parse html");
     let ids = enumerate_dom_ids(&dom);
-    let assignment = compute_slot_assignment_with_ids(&dom, &ids);
+    let assignment = compute_slot_assignment_with_ids(&dom, &ids).expect("slot assignment");
 
     let light = find_node_by_id(&dom, "light").expect("light node");
     let real_slot = find_node_by_id(&dom, "real").expect("real slot");
@@ -6900,7 +6900,7 @@ mod tests {
     let html = "<div id='host'><template shadowroot='open'><template><div id='tmpl' part='x'></div></template><div id='real' part='x'></div></template></div>";
     let dom = parse_html(html).expect("parse html");
     let ids = enumerate_dom_ids(&dom);
-    let map = compute_part_export_map_with_ids(&dom, &ids);
+    let map = compute_part_export_map_with_ids(&dom, &ids).expect("part export map");
 
     let host = find_node_by_id(&dom, "host").expect("host");
     let real = find_node_by_id(&dom, "real").expect("real part element");
