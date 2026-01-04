@@ -70,7 +70,7 @@ enum Commands {
   PagesetDiff(PagesetDiffArgs),
   /// Compare two render outputs and write visual diffs
   DiffRenders(DiffRendersArgs),
-  /// Render offline fixtures with FastRender + headless Chrome and produce an HTML diff report
+  /// Render offline fixtures in both Chrome and FastRender, then produce a diff report
   FixtureChromeDiff(fixture_chrome_diff::FixtureChromeDiffArgs),
   /// Convert a captured bundle into a pages_regression fixture
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),

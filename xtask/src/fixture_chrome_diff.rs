@@ -1,229 +1,173 @@
 use anyhow::{bail, Context, Result};
-use clap::{Args, ValueEnum};
+use clap::Args;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-pub enum JsMode {
-  On,
-  Off,
-}
-
-impl JsMode {
-  fn as_cli_value(self) -> &'static str {
-    match self {
-      JsMode::On => "on",
-      JsMode::Off => "off",
-    }
-  }
-}
+const DEFAULT_FIXTURES_DIR: &str = "tests/pages/fixtures";
+const DEFAULT_OUT_DIR: &str = "target/fixture_chrome_diff";
+const DEFAULT_VIEWPORT: &str = "1200x800";
+const DEFAULT_DPR: f32 = 1.0;
 
 #[derive(Args, Debug)]
 pub struct FixtureChromeDiffArgs {
-  /// Root directory containing offline fixtures.
-  #[arg(long, default_value = "tests/pages/fixtures", value_name = "DIR")]
-  fixtures_root: PathBuf,
+  /// Root directory containing offline fixture directories.
+  #[arg(long, value_name = "DIR", default_value = DEFAULT_FIXTURES_DIR)]
+  pub fixtures_dir: PathBuf,
 
-  /// Only process listed fixtures (comma-separated).
-  #[arg(long, value_delimiter = ',')]
-  only: Option<Vec<String>>,
+  /// Only render fixtures matching these names (comma-separated stems).
+  #[arg(long, value_delimiter = ',', value_name = "STEM,...")]
+  pub fixtures: Option<Vec<String>>,
 
-  /// Positional fixture filters (equivalent to `--only`)
-  #[arg(value_name = "FIXTURE")]
-  fixtures: Vec<String>,
+  /// Only process a deterministic shard of the fixtures (index/total, 0-based).
+  #[arg(long, value_parser = crate::parse_shard)]
+  pub shard: Option<(usize, usize)>,
 
-  /// Viewport size as WxH (e.g. 1200x800).
-  #[arg(long, value_parser = crate::parse_viewport, default_value = "1200x800")]
-  viewport: (u32, u32),
+  /// Root directory to write output artifacts into.
+  #[arg(long, value_name = "DIR", default_value = DEFAULT_OUT_DIR)]
+  pub out_dir: PathBuf,
 
-  /// Device pixel ratio for media queries/srcset.
-  #[arg(long, default_value_t = 1.0)]
-  dpr: f32,
+  /// Viewport size as WxH (e.g. 1200x800; forwarded to both renderers).
+  #[arg(long, value_parser = crate::parse_viewport, default_value = DEFAULT_VIEWPORT)]
+  pub viewport: (u32, u32),
 
-  /// Per-page hard timeout for Chrome (seconds).
-  #[arg(long, default_value_t = 15)]
-  timeout: u64,
+  /// Device pixel ratio for media queries/srcset (forwarded to both renderers).
+  #[arg(long, default_value_t = DEFAULT_DPR)]
+  pub dpr: f32,
 
-  /// Per-fixture hard timeout for FastRender (seconds).
-  #[arg(long, default_value_t = 5)]
-  render_timeout: u64,
-
-  /// Chrome/Chromium binary path override.
-  #[arg(long)]
-  chrome: Option<PathBuf>,
-
-  /// Enable JavaScript in the Chrome baseline render.
-  #[arg(long, value_enum, default_value_t = JsMode::Off)]
-  js: JsMode,
-
-  /// Per-channel diff tolerance (0 = exact match).
+  /// Per-channel tolerance forwarded to `diff_renders`.
   #[arg(long, default_value_t = 0)]
-  tolerance: u8,
+  pub tolerance: u8,
 
-  /// Maximum percent of pixels allowed to differ (0-100).
+  /// Maximum percent of pixels allowed to differ (0-100) forwarded to `diff_renders`.
   #[arg(long, default_value_t = 0.0)]
-  max_diff_percent: f64,
+  pub max_diff_percent: f64,
 
-  /// Where to write outputs (renders + report).
-  #[arg(long, default_value = "target/fixture_chrome_diff", value_name = "DIR")]
-  out: PathBuf,
+  /// Explicit Chrome/Chromium binary path forwarded to the Chrome baseline step.
+  #[arg(long, value_name = "PATH", conflicts_with = "chrome_dir")]
+  pub chrome: Option<PathBuf>,
 
-  /// Skip Chrome baseline rendering and use this directory as the "before" renders.
-  #[arg(long, value_name = "DIR")]
-  chrome_dir: Option<PathBuf>,
+  /// Directory searched for a Chrome binary before PATH (useful for tests).
+  #[arg(long, value_name = "DIR", conflicts_with = "chrome")]
+  pub chrome_dir: Option<PathBuf>,
 
-  /// Alias for "require --chrome-dir" (useful in CI where Chrome is unavailable).
-  #[arg(long, requires = "chrome_dir")]
-  no_chrome: bool,
+  /// Skip generating Chrome screenshots and only diff against the existing Chrome output dir.
+  #[arg(long)]
+  pub no_chrome: bool,
+
+  /// Print the computed plan (commands + output paths) without executing.
+  #[arg(long, hide = true)]
+  pub dry_run: bool,
 }
 
 pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
-  if !args.dpr.is_finite() || args.dpr <= 0.0 {
-    bail!("--dpr must be a finite number > 0");
-  }
-  if !(0.0..=100.0).contains(&args.max_diff_percent) {
-    bail!("--max-diff-percent must be between 0 and 100");
-  }
+  validate_args(&args)?;
 
   let repo_root = crate::repo_root();
-  let fixtures_root = resolve_repo_path(&repo_root, &args.fixtures_root);
-  let out_dir = resolve_repo_path(&repo_root, &args.out);
-
-  let filter = merge_filters(&args.only, &args.fixtures);
-
+  let fixtures_root = resolve_repo_path(&repo_root, &args.fixtures_dir);
   if !fixtures_root.is_dir() {
     bail!(
-      "--fixtures-root {} is not a directory",
+      "fixtures directory does not exist: {}",
       fixtures_root.display()
     );
   }
 
-  fs::create_dir_all(&out_dir)
-    .with_context(|| format!("create output directory {}", out_dir.display()))?;
+  let out_root = resolve_repo_path(&repo_root, &args.out_dir);
+  let layout = Layout::new(&out_root);
 
-  let viewport = format!("{}x{}", args.viewport.0, args.viewport.1);
-  let fastrender_dir = out_dir.join("fastrender");
+  let render_fixtures = build_render_fixtures_command(&repo_root, &fixtures_root, &args, &layout)?;
+  let chrome_baseline = if args.no_chrome {
+    None
+  } else {
+    Some(build_chrome_baseline_command(
+      &repo_root,
+      &fixtures_root,
+      &args,
+      &layout,
+    )?)
+  };
+  let diff_renders = build_diff_renders_command(&repo_root, &layout, &args)?;
 
-  ensure_clean_dir(&fastrender_dir)?;
+  if args.dry_run {
+    println!("fixture-chrome-diff plan:");
+    println!("  out_dir: {}", layout.root.display());
+    println!("  fastrender: {}", layout.fastrender.display());
+    println!("  chrome: {}", layout.chrome.display());
+    println!("  report: {}", layout.report_html.display());
+    println!("  json: {}", layout.report_json.display());
+    println!();
 
-  // Step A: FastRender renders.
-  let mut render_cmd = Command::new("cargo");
-  // Keep fixture renders deterministic across machines.
-  render_cmd.env("FASTR_USE_BUNDLED_FONTS", "1");
-  render_cmd
-    .arg("run")
-    .args(["--bin", "render_fixtures", "--"])
-    .arg("--fixtures-dir")
-    .arg(&fixtures_root)
-    .arg("--out-dir")
-    .arg(&fastrender_dir)
-    .arg("--viewport")
-    .arg(&viewport)
-    .arg("--dpr")
-    .arg(args.dpr.to_string())
-    .arg("--timeout")
-    .arg(args.render_timeout.to_string());
-  if let Some(filter) = &filter {
-    render_cmd.arg("--fixtures").arg(filter);
+    crate::print_command(&render_fixtures);
+    if let Some(cmd) = chrome_baseline.as_ref() {
+      crate::print_command(cmd);
+    }
+    crate::print_command(&diff_renders);
+    return Ok(());
   }
-  render_cmd.current_dir(&repo_root);
+
+  fs::create_dir_all(&layout.root).with_context(|| {
+    format!(
+      "failed to create fixture-chrome-diff output dir {}",
+      layout.root.display()
+    )
+  })?;
+
+  clear_dir(&layout.fastrender).context("clear FastRender output dir")?;
+  if args.no_chrome {
+    if !layout.chrome.is_dir() {
+      bail!(
+        "--no-chrome was set, but chrome output dir does not exist: {}",
+        layout.chrome.display()
+      );
+    }
+  } else {
+    clear_dir(&layout.chrome).context("clear Chrome output dir")?;
+  }
+  remove_file_if_exists(&layout.report_html).context("clear existing report.html")?;
+  remove_file_if_exists(&layout.report_json).context("clear existing report.json")?;
 
   println!("Rendering fixtures with FastRender...");
-  crate::run_command(render_cmd)?;
+  crate::run_command(render_fixtures).context("render_fixtures failed")?;
 
-  // Step B: Chrome baseline renders.
-  let chrome_before_dir = if let Some(chrome_dir) = &args.chrome_dir {
-    resolve_repo_path(&repo_root, chrome_dir)
-  } else {
-    let chrome_out_dir = out_dir.join("chrome");
-    ensure_clean_dir(&chrome_out_dir)?;
-
-    let mut chrome_cmd = Command::new("cargo");
-    chrome_cmd
-      .arg("xtask")
-      .arg("chrome-baseline-fixtures")
-      .arg("--fixtures-root")
-      .arg(&fixtures_root)
-      .arg("--out-dir")
-      .arg(&chrome_out_dir)
-      .arg("--viewport")
-      .arg(&viewport)
-      .arg("--dpr")
-      .arg(args.dpr.to_string())
-      .arg("--timeout")
-      .arg(args.timeout.to_string())
-      .arg("--js")
-      .arg(args.js.as_cli_value());
-    if let Some(chrome) = &args.chrome {
-      chrome_cmd.arg("--chrome").arg(chrome);
-    }
-    if let Some(filter) = &filter {
-      chrome_cmd.arg("--only").arg(filter);
-    }
-    chrome_cmd.current_dir(&repo_root);
-
-    println!("Rendering fixtures with headless Chrome...");
-    crate::run_command(chrome_cmd)?;
-    chrome_out_dir
-  };
-
-  if !chrome_before_dir.is_dir() {
-    bail!(
-      "--chrome-dir {} is not a directory",
-      chrome_before_dir.display()
-    );
+  if let Some(cmd) = chrome_baseline {
+    println!("Rendering fixtures with Chrome baseline...");
+    crate::run_command(cmd).context("chrome-baseline-fixtures failed")?;
   }
 
-  // Step C: Diff.
-  let report_json = out_dir.join("report.json");
-  let report_html = out_dir.join("report.html");
+  println!("Diffing renders...");
+  run_diff_renders_allowing_differences(diff_renders, &layout)?;
 
-  let mut diff_cmd = Command::new("cargo");
-  diff_cmd
-    .arg("run")
-    .args(["--bin", "diff_renders", "--"])
-    .arg("--before")
-    .arg(&chrome_before_dir)
-    .arg("--after")
-    .arg(&fastrender_dir)
-    .arg("--tolerance")
-    .arg(args.tolerance.to_string())
-    .arg("--max-diff-percent")
-    .arg(args.max_diff_percent.to_string())
-    .arg("--json")
-    .arg(&report_json)
-    .arg("--html")
-    .arg(&report_html);
-  diff_cmd.current_dir(&repo_root);
-
-  println!("Diffing Chrome vs FastRender renders...");
-  crate::print_command(&diff_cmd);
-  let status = diff_cmd
-    .status()
-    .with_context(|| format!("failed to run {:?}", diff_cmd.get_program()))?;
-  println!("Report: {}", report_html.display());
-  if !status.success() {
-    bail!(
-      "diff_renders failed with status {status} (report written to {})",
-      report_html.display()
-    );
-  }
-
+  println!("Report written to {}", layout.report_html.display());
   Ok(())
 }
 
-fn merge_filters(flag: &Option<Vec<String>>, positional: &[String]) -> Option<String> {
-  let mut parts = Vec::new();
-  if let Some(flag) = flag {
-    parts.extend(flag.iter().cloned());
+fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
+  if args.dpr <= 0.0 || !args.dpr.is_finite() {
+    bail!("--dpr must be a positive, finite number");
   }
-  parts.extend(positional.iter().cloned());
+  if !(0.0..=100.0).contains(&args.max_diff_percent) || !args.max_diff_percent.is_finite() {
+    bail!("--max-diff-percent must be between 0 and 100");
+  }
+  Ok(())
+}
 
-  if parts.is_empty() {
-    None
-  } else {
-    Some(parts.join(","))
+struct Layout {
+  root: PathBuf,
+  fastrender: PathBuf,
+  chrome: PathBuf,
+  report_html: PathBuf,
+  report_json: PathBuf,
+}
+
+impl Layout {
+  fn new(root: &Path) -> Self {
+    Self {
+      root: root.to_path_buf(),
+      fastrender: root.join("fastrender"),
+      chrome: root.join("chrome"),
+      report_html: root.join("report.html"),
+      report_json: root.join("report.json"),
+    }
   }
 }
 
@@ -235,14 +179,131 @@ fn resolve_repo_path(repo_root: &Path, path: &Path) -> PathBuf {
   }
 }
 
-fn ensure_clean_dir(path: &Path) -> Result<()> {
-  if path.exists() {
-    if path.is_file() {
-      bail!("expected directory at {}, found a file", path.display());
-    }
-    fs::remove_dir_all(path)
-      .with_context(|| format!("remove existing directory {}", path.display()))?;
+fn build_render_fixtures_command(
+  repo_root: &Path,
+  fixtures_root: &Path,
+  args: &FixtureChromeDiffArgs,
+  layout: &Layout,
+) -> Result<Command> {
+  let mut cmd = Command::new("cargo");
+  cmd.env("FASTR_USE_BUNDLED_FONTS", "1");
+  cmd
+    .arg("run")
+    .arg("--release")
+    .args(["--bin", "render_fixtures", "--"]);
+  cmd.arg("--fixtures-dir").arg(fixtures_root);
+  cmd.arg("--out-dir").arg(&layout.fastrender);
+  cmd
+    .arg("--viewport")
+    .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
+  cmd.arg("--dpr").arg(args.dpr.to_string());
+  if let Some(fixtures) = &args.fixtures {
+    cmd.arg("--fixtures").arg(fixtures.join(","));
   }
-  fs::create_dir_all(path).with_context(|| format!("create directory {}", path.display()))?;
+  if let Some((index, total)) = args.shard {
+    cmd.arg("--shard").arg(format!("{index}/{total}"));
+  }
+  cmd.current_dir(repo_root);
+  Ok(cmd)
+}
+
+fn build_chrome_baseline_command(
+  repo_root: &Path,
+  fixtures_root: &Path,
+  args: &FixtureChromeDiffArgs,
+  layout: &Layout,
+) -> Result<Command> {
+  let xtask = std::env::current_exe().context("resolve current xtask executable path")?;
+  let mut cmd = Command::new(xtask);
+  cmd.arg("chrome-baseline-fixtures");
+  cmd.arg("--fixture-dir").arg(fixtures_root);
+  cmd.arg("--out-dir").arg(&layout.chrome);
+  cmd
+    .arg("--viewport")
+    .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
+  cmd.arg("--dpr").arg(args.dpr.to_string());
+  if let Some(chrome) = &args.chrome {
+    cmd.arg("--chrome").arg(chrome);
+  }
+  if let Some(chrome_dir) = &args.chrome_dir {
+    cmd.arg("--chrome-dir").arg(chrome_dir);
+  }
+  if let Some(fixtures) = &args.fixtures {
+    cmd.arg("--fixtures").arg(fixtures.join(","));
+  }
+  if let Some((index, total)) = args.shard {
+    cmd.arg("--shard").arg(format!("{index}/{total}"));
+  }
+  cmd.current_dir(repo_root);
+  Ok(cmd)
+}
+
+fn build_diff_renders_command(
+  repo_root: &Path,
+  layout: &Layout,
+  args: &FixtureChromeDiffArgs,
+) -> Result<Command> {
+  let mut cmd = Command::new("cargo");
+  cmd
+    .arg("run")
+    .arg("--release")
+    .args(["--bin", "diff_renders", "--"]);
+  cmd.arg("--before").arg(&layout.chrome);
+  cmd.arg("--after").arg(&layout.fastrender);
+  cmd.arg("--html").arg(&layout.report_html);
+  cmd.arg("--json").arg(&layout.report_json);
+  cmd.arg("--tolerance").arg(args.tolerance.to_string());
+  cmd
+    .arg("--max-diff-percent")
+    .arg(args.max_diff_percent.to_string());
+  cmd.current_dir(repo_root);
+  Ok(cmd)
+}
+
+fn clear_dir(path: &Path) -> Result<()> {
+  if path.exists() {
+    fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
+  }
+  fs::create_dir_all(path).with_context(|| format!("create {}", path.display()))?;
   Ok(())
 }
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+  if path.exists() {
+    fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
+  }
+  Ok(())
+}
+
+fn run_diff_renders_allowing_differences(mut cmd: Command, layout: &Layout) -> Result<()> {
+  crate::print_command(&cmd);
+  let output = cmd
+    .output()
+    .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
+
+  if !output.stdout.is_empty() {
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+  }
+  if !output.stderr.is_empty() {
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+  }
+
+  if output.status.success() {
+    return Ok(());
+  }
+
+  if output.status.code() == Some(1) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.trim_start().starts_with("error:") {
+      bail!("diff_renders failed (see output above)");
+    }
+    eprintln!(
+      "diff_renders reported differences; report: {}",
+      layout.report_html.display()
+    );
+    return Ok(());
+  }
+
+  bail!("diff_renders failed with status {}", output.status);
+}
+
