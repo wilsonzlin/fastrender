@@ -1411,6 +1411,66 @@ mod prefetch_assets_support_tests {
   }
 }
 
+#[cfg(test)]
+mod prefetch_assets_args_tests {
+  use super::{extract_prefetch_assets_args, PrefetchAssetsSupport};
+
+  #[test]
+  fn extracts_supported_prefetch_flags() {
+    let extra = vec![
+      "--foo".to_string(),
+      "--prefetch-images".to_string(),
+      "false".to_string(),
+      "--max-images-per-page=10".to_string(),
+      "--prefetch-documents".to_string(),
+      "--bar".to_string(),
+      "--max-image-urls-per-element".to_string(),
+      "3".to_string(),
+    ];
+
+    let (prefetch, pageset) =
+      extract_prefetch_assets_args(&extra, PrefetchAssetsSupport::assume_supported());
+    assert_eq!(
+      prefetch,
+      vec![
+        "--prefetch-images".to_string(),
+        "false".to_string(),
+        "--max-images-per-page=10".to_string(),
+        "--prefetch-documents".to_string(),
+        "--max-image-urls-per-element".to_string(),
+        "3".to_string(),
+      ]
+    );
+    assert_eq!(pageset, vec!["--foo".to_string(), "--bar".to_string()]);
+  }
+
+  #[test]
+  fn leaves_prefetch_flags_in_pageset_args_when_unsupported() {
+    let extra = vec![
+      "--prefetch-images".to_string(),
+      "false".to_string(),
+      "--max-images-per-page".to_string(),
+      "10".to_string(),
+    ];
+
+    let support = PrefetchAssetsSupport {
+      prefetch_fonts: false,
+      prefetch_images: false,
+      prefetch_iframes: false,
+      prefetch_embeds: false,
+      prefetch_icons: false,
+      prefetch_video_posters: false,
+      prefetch_css_url_assets: false,
+      max_discovered_assets_per_page: false,
+      max_images_per_page: false,
+      max_image_urls_per_element: false,
+    };
+    let (prefetch, pageset) = extract_prefetch_assets_args(&extra, support);
+    assert!(prefetch.is_empty());
+    assert_eq!(pageset, extra);
+  }
+}
+
 fn extract_prefetch_assets_args(
   extra: &[String],
   support: PrefetchAssetsSupport,
