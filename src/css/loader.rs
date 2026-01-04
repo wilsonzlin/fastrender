@@ -1842,7 +1842,14 @@ pub(crate) fn extract_embedded_css_urls_with_meta(
       if let Some(colon) = slice.find(':') {
         let after_colon = &slice[colon + 1..];
         if let Some(q_start_rel) = after_colon.find(['"', '\'']) {
-          let quote = after_colon.chars().nth(q_start_rel).unwrap();
+          let quote = match after_colon.as_bytes().get(q_start_rel) {
+            Some(b'"') => '"',
+            Some(b'\'') => '\'',
+            _ => {
+              pos = abs + 6;
+              continue;
+            }
+          };
           let after_quote = &after_colon[q_start_rel + 1..];
           if let Some(q_end_rel) = after_quote.find(quote) {
             let candidate = &after_quote[..q_end_rel];
@@ -2479,6 +2486,12 @@ mod tests {
     let urls = extract_embedded_css_urls(html, "https://example.com/app/").unwrap();
     assert!(urls.contains(&"https://example.com/app/assets/site.css?v=1".to_string()));
     assert!(urls.contains(&"https://example.com/shared/base.css".to_string()));
+  }
+
+  #[test]
+  fn embedded_css_scan_does_not_panic_on_multibyte_prefix_before_quote() {
+    let urls = extract_embedded_css_urls("cssurl:€'", "https://example.com/").unwrap();
+    assert!(urls.is_empty());
   }
 
   #[test]
