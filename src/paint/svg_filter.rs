@@ -4821,14 +4821,19 @@ fn apply_morphology(
   color_interpolation_filters: ColorInterpolationFilters,
 ) -> RenderResult<()> {
   check_active(RenderStage::Paint)?;
-  let rx = radius.0.abs().ceil() as i32;
-  let ry = radius.1.abs().ceil() as i32;
-  if rx <= 0 && ry <= 0 {
-    return Ok(());
-  }
   let width = pixmap.width() as i32;
   let height = pixmap.height() as i32;
   if width <= 0 || height <= 0 {
+    return Ok(());
+  }
+  // Radius values beyond the pixmap extents do not expand the set of sampled pixels because we
+  // clamp samples to the pixmap bounds. Clamp to avoid pathological work (e.g. extremely large
+  // radii from untrusted content).
+  let max_rx = width.saturating_sub(1);
+  let max_ry = height.saturating_sub(1);
+  let rx = (radius.0.abs().ceil() as i32).clamp(0, max_rx);
+  let ry = (radius.1.abs().ceil() as i32).clamp(0, max_ry);
+  if rx <= 0 && ry <= 0 {
     return Ok(());
   }
 
