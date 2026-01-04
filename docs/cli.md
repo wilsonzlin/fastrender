@@ -305,11 +305,11 @@ cargo run --release --bin diff_renders -- \
 - Notes:
   - JavaScript is disabled by default (Chrome baseline uses an injected CSP, matching FastRender's no-JS model).
   - `fixture-chrome-diff` does not currently enable `render_fixtures --write-snapshot`. If you need per-fixture snapshots/diagnostics (for `diff_snapshots`), run `render_fixtures --write-snapshot` separately.
-- Core flags:
+  - Core flags:
   - Selection: `--fixtures <csv>`, `--shard <index>/<total>`
   - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--js {on|off}`
-  - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`
+  - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`, `--fail-on-differences`
   - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`
 
 ## `cargo xtask recapture-page-fixtures`

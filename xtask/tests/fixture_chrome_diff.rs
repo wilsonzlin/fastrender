@@ -444,4 +444,45 @@ exit 0
     out_dir.join("report_files").join("diffs").is_dir(),
     "missing diff artifacts dir"
   );
+
+  let output_fail = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .env("PATH", path)
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .args([
+      "fixture-chrome-diff",
+      "--fail-on-differences",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a,b",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+      "--viewport",
+      "800x600",
+      "--dpr",
+      "1",
+      "--tolerance",
+      "0",
+      "--max-diff-percent",
+      "0",
+      "--chrome-dir",
+      chrome_dir.to_string_lossy().as_ref(),
+    ])
+    .output()
+    .expect("run fixture-chrome-diff with --fail-on-differences");
+
+  assert!(
+    !output_fail.status.success(),
+    "fixture-chrome-diff should exit non-zero when --fail-on-differences is set.\nstdout:\n{}\nstderr:\n{}",
+    String::from_utf8_lossy(&output_fail.stdout),
+    String::from_utf8_lossy(&output_fail.stderr)
+  );
+  let stderr = String::from_utf8_lossy(&output_fail.stderr);
+  assert!(
+    stderr.contains("diff_renders reported differences"),
+    "expected stderr to mention diff_renders differences; got:\n{stderr}"
+  );
+  assert!(out_dir.join("report.html").is_file(), "missing report.html");
+  assert!(out_dir.join("report.json").is_file(), "missing report.json");
 }

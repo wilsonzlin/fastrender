@@ -87,6 +87,7 @@ fn fixture_chrome_diff_help_mentions_flags() {
       && stdout.contains("--max-perceptual-distance")
       && stdout.contains("--sort-by")
       && stdout.contains("--ignore-alpha")
+      && stdout.contains("--fail-on-differences")
       && stdout.contains("--chrome")
       && stdout.contains("--chrome-dir")
       && stdout.contains("--no-chrome"),

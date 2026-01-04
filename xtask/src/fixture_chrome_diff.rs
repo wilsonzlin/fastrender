@@ -117,6 +117,13 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long)]
   pub ignore_alpha: bool,
 
+  /// Exit non-zero when `diff_renders` reports differences.
+  ///
+  /// By default this command exits 0 even when differences are found so it can be used as a local
+  /// inspection loop that always produces a report.
+  #[arg(long)]
+  pub fail_on_differences: bool,
+
   /// Explicit Chrome/Chromium binary path forwarded to the Chrome baseline step.
   #[arg(long, value_name = "PATH", conflicts_with = "chrome_dir")]
   pub chrome: Option<PathBuf>,
@@ -221,7 +228,7 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
   crate::run_command(build_cmd).context("build diff_renders failed")?;
 
   println!("Diffing renders...");
-  run_diff_renders_allowing_differences(diff_renders, &layout)?;
+  run_diff_renders_allowing_differences(diff_renders, &layout, args.fail_on_differences)?;
 
   println!("Report written to {}", layout.report_html.display());
   Ok(())
@@ -377,7 +384,11 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
   Ok(())
 }
 
-fn run_diff_renders_allowing_differences(mut cmd: Command, layout: &Layout) -> Result<()> {
+fn run_diff_renders_allowing_differences(
+  mut cmd: Command,
+  layout: &Layout,
+  fail_on_differences: bool,
+) -> Result<()> {
   crate::print_command(&cmd);
   let output = cmd
     .output()
@@ -398,6 +409,12 @@ fn run_diff_renders_allowing_differences(mut cmd: Command, layout: &Layout) -> R
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stderr.trim_start().starts_with("error:") {
       bail!("diff_renders failed (see output above)");
+    }
+    if fail_on_differences {
+      bail!(
+        "diff_renders reported differences; report: {}",
+        layout.report_html.display()
+      );
     }
     eprintln!(
       "diff_renders reported differences; report: {}",
