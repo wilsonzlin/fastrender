@@ -367,6 +367,12 @@ pub fn snapshot_dom(dom: &DomNode) -> DomSnapshot {
   }
 }
 
+/// Capture a composed DOM snapshot (shadow DOM + slot assignment applied) with stable node IDs.
+pub fn snapshot_composed_dom(dom: &DomNode) -> crate::Result<DomSnapshot> {
+  let composed = crate::dom::composed_dom_snapshot(dom)?;
+  Ok(snapshot_dom(&composed))
+}
+
 fn snapshot_dom_node(node: &DomNode, next: &mut usize) -> DomNodeSnapshot {
   let node_id = *next;
   *next += 1;

@@ -623,6 +623,12 @@ impl TreeJsonExporter {
     self.export_dom_node(node)
   }
 
+  /// Serializes a composed DOM subtree (shadow DOM + slot assignment applied).
+  pub fn export_composed_dom(&self, node: &DomNode) -> crate::Result<Value> {
+    let composed = crate::dom::composed_dom_snapshot(node)?;
+    Ok(self.export_dom(&composed))
+  }
+
   /// Serializes a styled tree.
   pub fn export_styled_tree(&self, node: &StyledNode) -> Value {
     let mut entries = vec![
