@@ -15,6 +15,7 @@ use crate::paint::blur::{
 };
 use crate::paint::canvas::Canvas;
 use crate::paint::canvas::{apply_mask_with_offset, crop_mask};
+use crate::paint::depth_sort;
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BorderImageItem;
 use crate::paint::display_list::BorderImageSourceItem;
@@ -79,8 +80,8 @@ use crate::paint::rasterize::{
   BoxShadowSurfaceClamp,
 };
 use crate::paint::text_rasterize::{
-  shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache, GlyphCache,
-  TextRasterizer, TextRenderState,
+  concat_transforms, shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache,
+  GlyphCache, TextRasterizer, TextRenderState,
 };
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
@@ -2523,17 +2524,17 @@ impl<'a> DisplayItemSource for DisplayListView<'a> {
 }
 
 #[derive(Clone)]
-struct SceneItem {
-  source: SceneItemSource,
+struct Preserve3dSceneItem {
+  source: Preserve3dSceneItemSource,
   transform: Transform3D,
   bounds: Rect,
+  plane_rect: Rect,
   backface_visibility: BackfaceVisibility,
-  transform_style: TransformStyle,
-  order: usize,
+  paint_order: usize,
 }
 
 #[derive(Clone)]
-enum SceneItemSource {
+enum Preserve3dSceneItemSource {
   Segment(Vec<DisplayItem>),
   FlattenedSubtree(StackingNode),
 }
@@ -2618,7 +2619,7 @@ fn collect_scene_items(
   parent_transform: &Transform3D,
   in_preserve_context: bool,
   order_counter: &mut usize,
-) -> Vec<SceneItem> {
+) -> Vec<Preserve3dSceneItem> {
   let local_transform = node.context.transform.unwrap_or_else(Transform3D::identity);
   let combined_transform = parent_transform.multiply(&local_transform);
   let child_transform = node
@@ -2633,13 +2634,13 @@ fn collect_scene_items(
   if !in_preserve_context || !matches!(transform_style, TransformStyle::Preserve3d) {
     let order = *order_counter;
     *order_counter += 1;
-    items.push(SceneItem {
-      source: SceneItemSource::FlattenedSubtree(node.clone()),
+    items.push(Preserve3dSceneItem {
+      source: Preserve3dSceneItemSource::FlattenedSubtree(node.clone()),
       transform: combined_transform,
       bounds: node.context.bounds,
+      plane_rect: node.context.plane_rect,
       backface_visibility: node.context.backface_visibility,
-      transform_style,
-      order,
+      paint_order: order,
     });
     return items;
   }
@@ -2651,15 +2652,29 @@ fn collect_scene_items(
           continue;
         }
         let bounds = compute_items_bounds(list).unwrap_or(node.context.bounds);
+        let plane_rect = {
+          let candidate = node.context.plane_rect;
+          if candidate.width() > 0.0
+            && candidate.height() > 0.0
+            && candidate.x().is_finite()
+            && candidate.y().is_finite()
+            && candidate.width().is_finite()
+            && candidate.height().is_finite()
+          {
+            candidate
+          } else {
+            bounds
+          }
+        };
         let order = *order_counter;
         *order_counter += 1;
-        items.push(SceneItem {
-          source: SceneItemSource::Segment(list.clone()),
+        items.push(Preserve3dSceneItem {
+          source: Preserve3dSceneItemSource::Segment(list.clone()),
           transform: combined_transform,
           bounds,
+          plane_rect,
           backface_visibility: node.context.backface_visibility,
-          transform_style,
-          order,
+          paint_order: order,
         });
       }
       StackingSegment::Child(child) => {
@@ -2674,21 +2689,6 @@ fn collect_scene_items(
   }
 
   items
-}
-
-fn scene_depth(transform: &Transform3D, bounds: Rect) -> f32 {
-  let corners = [
-    (bounds.min_x(), bounds.min_y()),
-    (bounds.max_x(), bounds.min_y()),
-    (bounds.max_x(), bounds.max_y()),
-    (bounds.min_x(), bounds.max_y()),
-  ];
-  let mut total = 0.0;
-  for (x, y) in corners {
-    let (_, _, z, w) = transform.transform_point(x, y, 0.0);
-    total += if w.abs() > 1e-6 { z / w } else { z };
-  }
-  total / 4.0
 }
 
 impl DisplayListRenderer {
@@ -5148,17 +5148,20 @@ impl DisplayListRenderer {
 
   /// Renders the display list and returns timing/parallelism metadata.
   pub fn render_with_report(mut self, list: &DisplayList) -> Result<RenderReport> {
-    let list = crate::paint::preserve_3d::composite_preserve_3d(list);
+    let composed = self
+      .preserve_3d_disabled
+      .then(|| crate::paint::preserve_3d::composite_preserve_3d(list));
+    let list = composed.as_ref().unwrap_or(list);
     check_active(RenderStage::Paint).map_err(Error::Render)?;
     let start = Instant::now();
     let mut fallback_reason = None;
 
     let tile_estimate = self.estimated_tile_count();
     let parallel_supported =
-      self.should_render_parallel(&list, tile_estimate, &mut fallback_reason)?;
+      self.should_render_parallel(list, tile_estimate, &mut fallback_reason)?;
 
     if parallel_supported {
-      let (pixmap, tiles, tasks, threads_used, parallel_duration) = self.render_parallel(&list)?;
+      let (pixmap, tiles, tasks, threads_used, parallel_duration) = self.render_parallel(list)?;
       // Ensure we catch deadlines that expire during the final tile render/blit.
       check_active(RenderStage::Paint).map_err(Error::Render)?;
       let duration = start.elapsed();
@@ -5932,7 +5935,7 @@ impl DisplayListRenderer {
     };
 
     let parent_transform = *self
-      .transform_stack
+      .perspective_stack
       .last()
       .unwrap_or(&Transform3D::identity());
     let local_transform = node.context.transform.unwrap_or_else(Transform3D::identity);
@@ -5950,18 +5953,22 @@ impl DisplayListRenderer {
       !matches!(item.backface_visibility, BackfaceVisibility::Hidden)
         || !backface_is_hidden(&item.transform)
     });
-    scene_items.sort_by(|a, b| {
-      let da = scene_depth(&a.transform, a.bounds);
-      let db = scene_depth(&b.transform, b.bounds);
-      da.partial_cmp(&db)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| a.order.cmp(&b.order))
-    });
+
+    let sort_items: Vec<depth_sort::SceneItem> = scene_items
+      .iter()
+      .map(|item| depth_sort::SceneItem {
+        transform: item.transform,
+        plane_rect: item.plane_rect,
+        paint_order: item.paint_order,
+      })
+      .collect();
+    let paint_order = depth_sort::depth_sort(&sort_items);
 
     let mut deadline_counter = 0usize;
-    for scene_item in scene_items {
+    for idx in paint_order {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
         .map_err(Error::Render)?;
+      let scene_item = &scene_items[idx];
       if let Some(pixmap) = self.render_scene_item(&scene_item)? {
         let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
           scene_item.bounds.x(),
@@ -5975,7 +5982,7 @@ impl DisplayListRenderer {
     Ok(end_idx)
   }
 
-  fn render_scene_item(&mut self, item: &SceneItem) -> Result<Option<Pixmap>> {
+  fn render_scene_item(&mut self, item: &Preserve3dSceneItem) -> Result<Option<Pixmap>> {
     let bounds = item.bounds;
     if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
       return Ok(None);
@@ -5990,7 +5997,7 @@ impl DisplayListRenderer {
       transform: translation,
     }));
     match &item.source {
-      SceneItemSource::Segment(items) => {
+      Preserve3dSceneItemSource::Segment(items) => {
         let mut deadline_counter = 0usize;
         for it in items {
           check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
@@ -5998,7 +6005,7 @@ impl DisplayListRenderer {
           list.push(it.clone());
         }
       }
-      SceneItemSource::FlattenedSubtree(node) => {
+      Preserve3dSceneItemSource::FlattenedSubtree(node) => {
         let mut deadline_counter = 0usize;
         for (i, it) in node.subtree_items.iter().enumerate() {
           check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
@@ -6065,7 +6072,7 @@ impl DisplayListRenderer {
     if homography.is_affine() {
       let clip = self.canvas.clip_mask().cloned();
       let (t, _valid) = self.to_skia_transform_checked(transform);
-      let skia_transform = parent_transform.post_concat(t);
+      let skia_transform = concat_transforms(parent_transform, t);
       self.canvas.pixmap_mut().draw_pixmap(
         0,
         0,
@@ -6135,7 +6142,7 @@ impl DisplayListRenderer {
     // Fall back to the affine approximation when a stable projective warp can't be computed.
     let clip = self.canvas.clip_mask().cloned();
     let (t, _valid) = self.to_skia_transform_checked(transform);
-    let skia_transform = parent_transform.post_concat(t);
+    let skia_transform = concat_transforms(parent_transform, t);
     self.canvas.pixmap_mut().draw_pixmap(
       0,
       0,
