@@ -233,7 +233,7 @@ Notes:
   - These baselines are **local-only** artifacts under `target/` (they are not committed).
   - Defaults match the fixture runner viewport/DPR (1200x800 @ 1.0) unless overridden.
   - JavaScript is disabled by default to match FastRender’s “no JS” model.
-  - Pass `--chrome /path/to/chrome` if auto-detection fails.
+  - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
   - Output defaults to `target/chrome_fixtures/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
 
 ## `cargo xtask fixture-chrome-diff`
@@ -243,6 +243,7 @@ Notes:
   - `cargo xtask fixture-chrome-diff` (writes `target/fixture_chrome_diff/report.html` and prints the path)
   - Reuse a previously generated Chrome render directory: `cargo xtask fixture-chrome-diff --chrome-dir <dir>`
   - For advanced filtering/output control, see `cargo xtask fixture-chrome-diff --help` (supports `--only`, `--viewport`, `--dpr`, and diff tolerances).
+  - Tip: in environments without Chrome installed, you can enforce “diff only” mode with `--no-chrome --chrome-dir <dir>`.
 - Output layout:
   - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`)
   - `<out>/fastrender/<fixture>.png` (rendered by `render_fixtures`)
