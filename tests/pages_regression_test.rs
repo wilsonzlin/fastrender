@@ -418,6 +418,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     html: "font_face_metric_overrides/index.html",
     shots: DEFAULT_SHOTS,
   },
+  PageFixture {
+    name: "logical_border_shorthands",
+    html: "logical_border_shorthands/index.html",
+    shots: DEFAULT_SHOTS,
+  },
 ];
 
 fn fixtures_dir() -> PathBuf {
@@ -639,8 +644,9 @@ fn pageset_failure_fixtures_present() {
 
 #[test]
 fn pageset_timeouts_manifest_is_legacy_guardrails_mirror() {
-  let guardrails: serde_json::Value = serde_json::from_str(include_str!("pages/pageset_guardrails.json"))
-    .expect("failed to parse pageset guardrails manifest");
+  let guardrails: serde_json::Value =
+    serde_json::from_str(include_str!("pages/pageset_guardrails.json"))
+      .expect("failed to parse pageset guardrails manifest");
   let legacy: serde_json::Value = serde_json::from_str(include_str!("pages/pageset_timeouts.json"))
     .expect("failed to parse legacy pageset timeouts manifest");
 

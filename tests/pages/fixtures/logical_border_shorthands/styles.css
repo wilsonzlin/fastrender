@@ -1,0 +1,42 @@
+.shorthand-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.panel h2 {
+  font-size: 16px;
+  margin-bottom: 14px;
+}
+
+.sample {
+  width: 160px;
+  height: 160px;
+  margin: 0 auto;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  line-height: 1;
+  border-inline-start: 10px solid #ff0000;
+  border-inline-end: 10px solid #00ff00;
+  border-block-start: 10px solid #0000ff;
+  border-block-end: 10px solid #ffff00;
+}
+
+.mode-horizontal-ltr {
+  writing-mode: horizontal-tb;
+  direction: ltr;
+}
+
+.mode-horizontal-rtl {
+  writing-mode: horizontal-tb;
+  direction: rtl;
+}
+
+.mode-vertical-rl {
+  writing-mode: vertical-rl;
+  direction: ltr;
+}

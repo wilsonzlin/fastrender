@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Logical border side shorthands</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 18px">
+      <span class="pill">Borders</span>
+      <h1>Logical border side shorthands</h1>
+      <p class="muted">
+        Verifies <code>border-inline-start/end</code> and <code>border-block-start/end</code> map to the correct
+        physical edges across writing modes and directions.
+      </p>
+    </header>
+
+    <section class="shorthand-grid">
+      <div class="panel card">
+        <h2>horizontal-tb / ltr</h2>
+        <div class="sample mode-horizontal-ltr">A</div>
+      </div>
+      <div class="panel card">
+        <h2>horizontal-tb / rtl</h2>
+        <div class="sample mode-horizontal-rtl">א</div>
+      </div>
+      <div class="panel card">
+        <h2>vertical-rl / ltr</h2>
+        <div class="sample mode-vertical-rl">縦</div>
+      </div>
+    </section>
+  </body>
+</html>

@@ -66,6 +66,36 @@ thread_local! {
   static BLUR_SCRATCH: RefCell<BlurScratch> = RefCell::new(BlurScratch::default());
 }
 
+fn with_blur_scratch<R>(f: impl FnOnce(&mut BlurScratch) -> R) -> R {
+  BLUR_SCRATCH.with(|scratch_cell| {
+    // Avoid holding a `RefCell` borrow across rayon work-stealing. Blur routines can be invoked from
+    // rayon worker threads and may themselves execute parallel loops. Rayon can execute other tasks
+    // on the same thread while waiting for nested parallel work, which can re-enter blur code and
+    // attempt to borrow this scratch space again. Holding the borrow across those joins triggers a
+    // `RefCell already borrowed` panic.
+    let mut scratch = {
+      let mut borrowed = scratch_cell.borrow_mut();
+      std::mem::take(&mut *borrowed)
+    };
+
+    let result = f(&mut scratch);
+
+    // Restore the scratch buffers, keeping whichever buffers are larger in case nested blur calls
+    // populated the TLS scratch while this call was executing.
+    {
+      let mut borrowed = scratch_cell.borrow_mut();
+      if scratch.ping.capacity() > borrowed.ping.capacity() {
+        borrowed.ping = scratch.ping;
+      }
+      if scratch.pong.capacity() > borrowed.pong.capacity() {
+        borrowed.pong = scratch.pong;
+      }
+    }
+
+    result
+  })
+}
+
 fn blur_buffer_len(width: usize, height: usize, context: &str) -> Result<usize, RenderError> {
   let pixels = (width as u64)
     .checked_mul(height as u64)
@@ -631,8 +661,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
 
   let len = blur_buffer_len(width, height, "gaussian blur")?;
   let mut error: Option<RenderError> = None;
-  BLUR_SCRATCH.with(|scratch| {
-    let mut scratch = scratch.borrow_mut();
+  with_blur_scratch(|scratch| {
     let (src, buf) = match scratch.split(len, "gaussian blur") {
       Ok(parts) => parts,
       Err(err) => {
@@ -1353,8 +1382,7 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
   let len = blur_buffer_len(width, height, "anisotropic box blur")?;
   let mut error: Option<RenderError> = None;
   let mut blur_applied = false;
-  BLUR_SCRATCH.with(|scratch| {
-    let mut scratch = scratch.borrow_mut();
+  with_blur_scratch(|scratch| {
     let (a, b) = match scratch.split(len, "anisotropic box blur") {
       Ok(parts) => parts,
       Err(err) => {
@@ -1512,8 +1540,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
   let len = blur_buffer_len(width, height, "mixed anisotropic blur")?;
   let mut error: Option<RenderError> = None;
   let mut blur_applied = false;
-  BLUR_SCRATCH.with(|scratch| {
-    let mut scratch = scratch.borrow_mut();
+  with_blur_scratch(|scratch| {
     let (a, b) = match scratch.split(len, "mixed anisotropic blur") {
       Ok(parts) => parts,
       Err(err) => {
@@ -1819,8 +1846,7 @@ fn gaussian_blur_box_approx_with_parallelism(
   let len = blur_buffer_len(width, height, "box blur")?;
   let mut error: Option<RenderError> = None;
   let mut blur_applied = false;
-  BLUR_SCRATCH.with(|scratch| {
-    let mut scratch = scratch.borrow_mut();
+  with_blur_scratch(|scratch| {
     let (a, b) = match scratch.split(len, "box blur") {
       Ok(parts) => parts,
       Err(err) => {
@@ -2020,8 +2046,7 @@ fn blur_anisotropic_body_with_parallelism(
 
   let len = blur_buffer_len(width, height, "anisotropic blur")?;
   let mut error: Option<RenderError> = None;
-  BLUR_SCRATCH.with(|scratch| {
-    let mut scratch = scratch.borrow_mut();
+  with_blur_scratch(|scratch| {
     let (src, tmp) = match scratch.split(len, "anisotropic blur") {
       Ok(parts) => parts,
       Err(err) => {

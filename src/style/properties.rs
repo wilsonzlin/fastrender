@@ -3522,83 +3522,181 @@ fn apply_property_from_source(
       set_border_style_side(styles, side, border_style_for_side(source, side), order);
       set_border_color_side(styles, side, border_color_for_side(source, side), order);
     }
-    "border-inline" => {
+    "border-inline-start" => {
       let start_side = inline_sides.0;
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderWidth {
+          axis: crate::style::LogicalAxis::Inline,
+          start: Some(border_width_for_side(source, start_side)),
+          end: None,
+        },
+        order,
+      );
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderStyle {
+          axis: crate::style::LogicalAxis::Inline,
+          start: Some(border_style_for_side(source, start_side)),
+          end: None,
+        },
+        order,
+      );
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderColor {
+          axis: crate::style::LogicalAxis::Inline,
+          start: Some(border_color_for_side(source, start_side)),
+          end: None,
+        },
+        order,
+      );
+    }
+    "border-inline-end" => {
       let end_side = inline_sides.1;
-      set_border_width_side(
+      push_logical(
         styles,
-        start_side,
-        border_width_for_side(source, start_side),
+        crate::style::LogicalProperty::BorderWidth {
+          axis: crate::style::LogicalAxis::Inline,
+          start: None,
+          end: Some(border_width_for_side(source, end_side)),
+        },
         order,
       );
-      set_border_width_side(
+      push_logical(
         styles,
-        end_side,
-        border_width_for_side(source, end_side),
+        crate::style::LogicalProperty::BorderStyle {
+          axis: crate::style::LogicalAxis::Inline,
+          start: None,
+          end: Some(border_style_for_side(source, end_side)),
+        },
         order,
       );
-      set_border_color_side(
+      push_logical(
         styles,
-        start_side,
-        border_color_for_side(source, start_side),
+        crate::style::LogicalProperty::BorderColor {
+          axis: crate::style::LogicalAxis::Inline,
+          start: None,
+          end: Some(border_color_for_side(source, end_side)),
+        },
         order,
       );
-      set_border_color_side(
+    }
+    "border-block-start" => {
+      let start_side = block_sides.0;
+      push_logical(
         styles,
-        end_side,
-        border_color_for_side(source, end_side),
+        crate::style::LogicalProperty::BorderWidth {
+          axis: crate::style::LogicalAxis::Block,
+          start: Some(border_width_for_side(source, start_side)),
+          end: None,
+        },
         order,
       );
-      set_border_style_side(
+      push_logical(
         styles,
-        start_side,
-        border_style_for_side(source, start_side),
+        crate::style::LogicalProperty::BorderStyle {
+          axis: crate::style::LogicalAxis::Block,
+          start: Some(border_style_for_side(source, start_side)),
+          end: None,
+        },
         order,
       );
-      set_border_style_side(
+      push_logical(
         styles,
-        end_side,
-        border_style_for_side(source, end_side),
+        crate::style::LogicalProperty::BorderColor {
+          axis: crate::style::LogicalAxis::Block,
+          start: Some(border_color_for_side(source, start_side)),
+          end: None,
+        },
+        order,
+      );
+    }
+    "border-block-end" => {
+      let end_side = block_sides.1;
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderWidth {
+          axis: crate::style::LogicalAxis::Block,
+          start: None,
+          end: Some(border_width_for_side(source, end_side)),
+        },
+        order,
+      );
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderStyle {
+          axis: crate::style::LogicalAxis::Block,
+          start: None,
+          end: Some(border_style_for_side(source, end_side)),
+        },
+        order,
+      );
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderColor {
+          axis: crate::style::LogicalAxis::Block,
+          start: None,
+          end: Some(border_color_for_side(source, end_side)),
+        },
+        order,
+      );
+    }
+    "border-inline" => {
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderWidth {
+          axis: crate::style::LogicalAxis::Inline,
+          start: Some(border_width_for_side(source, inline_sides.0)),
+          end: Some(border_width_for_side(source, inline_sides.1)),
+        },
+        order,
+      );
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderStyle {
+          axis: crate::style::LogicalAxis::Inline,
+          start: Some(border_style_for_side(source, inline_sides.0)),
+          end: Some(border_style_for_side(source, inline_sides.1)),
+        },
+        order,
+      );
+      push_logical(
+        styles,
+        crate::style::LogicalProperty::BorderColor {
+          axis: crate::style::LogicalAxis::Inline,
+          start: Some(border_color_for_side(source, inline_sides.0)),
+          end: Some(border_color_for_side(source, inline_sides.1)),
+        },
         order,
       );
     }
     "border-block" => {
-      let start_side = block_sides.0;
-      let end_side = block_sides.1;
-      set_border_width_side(
+      push_logical(
         styles,
-        start_side,
-        border_width_for_side(source, start_side),
+        crate::style::LogicalProperty::BorderWidth {
+          axis: crate::style::LogicalAxis::Block,
+          start: Some(border_width_for_side(source, block_sides.0)),
+          end: Some(border_width_for_side(source, block_sides.1)),
+        },
         order,
       );
-      set_border_width_side(
+      push_logical(
         styles,
-        end_side,
-        border_width_for_side(source, end_side),
+        crate::style::LogicalProperty::BorderStyle {
+          axis: crate::style::LogicalAxis::Block,
+          start: Some(border_style_for_side(source, block_sides.0)),
+          end: Some(border_style_for_side(source, block_sides.1)),
+        },
         order,
       );
-      set_border_color_side(
+      push_logical(
         styles,
-        start_side,
-        border_color_for_side(source, start_side),
-        order,
-      );
-      set_border_color_side(
-        styles,
-        end_side,
-        border_color_for_side(source, end_side),
-        order,
-      );
-      set_border_style_side(
-        styles,
-        start_side,
-        border_style_for_side(source, start_side),
-        order,
-      );
-      set_border_style_side(
-        styles,
-        end_side,
-        border_style_for_side(source, end_side),
+        crate::style::LogicalProperty::BorderColor {
+          axis: crate::style::LogicalAxis::Block,
+          start: Some(border_color_for_side(source, block_sides.0)),
+          end: Some(border_color_for_side(source, block_sides.1)),
+        },
         order,
       );
     }
@@ -6144,63 +6242,55 @@ fn apply_declaration_with_base_internal(
 
     // Border (shorthand)
     "border" => {
-      let current_color = styles.color;
-      let mut apply_shorthand = |values: &[PropertyValue]| {
-        let mut width: Option<Length> = None;
-        let mut style_val: Option<BorderStyle> = None;
-        let mut color: Option<Rgba> = None;
-
-        for val in values {
-          match val {
-            PropertyValue::Length(len) => width = Some(*len),
-            PropertyValue::Number(n) => width = Some(Length::px(*n)),
-            PropertyValue::Keyword(kw) => {
-              if kw.eq_ignore_ascii_case("currentcolor") {
-                color = Some(current_color);
-              } else {
-                style_val = Some(parse_border_style(kw));
-              }
-            }
-            PropertyValue::Color(c) => color = Some(c.to_rgba(current_color)),
-            _ => {}
-          }
-        }
-
-        if let Some(BorderStyle::None | BorderStyle::Hidden) = style_val {
-          width = Some(Length::px(0.0));
-        }
-
-        // Shorthand resets unspecified subproperties to their initial values.
-        if style_val.is_none() {
-          style_val = Some(BorderStyle::None);
-        }
-        if color.is_none() {
-          color = Some(current_color);
-        }
-
-        if let Some(w) = width {
+      let values: &[PropertyValue] = match resolved_value {
+        PropertyValue::Multiple(values) => values,
+        other => std::slice::from_ref(other),
+      };
+      if let Some(parsed) = parse_border_side_shorthand(values, styles.color) {
+        if let Some(w) = parsed.width {
           set_border_width_side(styles, crate::style::PhysicalSide::Top, w, order);
           set_border_width_side(styles, crate::style::PhysicalSide::Right, w, order);
           set_border_width_side(styles, crate::style::PhysicalSide::Bottom, w, order);
           set_border_width_side(styles, crate::style::PhysicalSide::Left, w, order);
         }
-        if let Some(st) = style_val {
-          set_border_style_side(styles, crate::style::PhysicalSide::Top, st, order);
-          set_border_style_side(styles, crate::style::PhysicalSide::Right, st, order);
-          set_border_style_side(styles, crate::style::PhysicalSide::Bottom, st, order);
-          set_border_style_side(styles, crate::style::PhysicalSide::Left, st, order);
-        }
-        if let Some(c) = color {
-          set_border_color_side(styles, crate::style::PhysicalSide::Top, c, order);
-          set_border_color_side(styles, crate::style::PhysicalSide::Right, c, order);
-          set_border_color_side(styles, crate::style::PhysicalSide::Bottom, c, order);
-          set_border_color_side(styles, crate::style::PhysicalSide::Left, c, order);
-        }
-      };
-
-      match resolved_value {
-        PropertyValue::Multiple(values) => apply_shorthand(values),
-        other => apply_shorthand(std::slice::from_ref(other)),
+        set_border_style_side(styles, crate::style::PhysicalSide::Top, parsed.style, order);
+        set_border_style_side(
+          styles,
+          crate::style::PhysicalSide::Right,
+          parsed.style,
+          order,
+        );
+        set_border_style_side(
+          styles,
+          crate::style::PhysicalSide::Bottom,
+          parsed.style,
+          order,
+        );
+        set_border_style_side(
+          styles,
+          crate::style::PhysicalSide::Left,
+          parsed.style,
+          order,
+        );
+        set_border_color_side(styles, crate::style::PhysicalSide::Top, parsed.color, order);
+        set_border_color_side(
+          styles,
+          crate::style::PhysicalSide::Right,
+          parsed.color,
+          order,
+        );
+        set_border_color_side(
+          styles,
+          crate::style::PhysicalSide::Bottom,
+          parsed.color,
+          order,
+        );
+        set_border_color_side(
+          styles,
+          crate::style::PhysicalSide::Left,
+          parsed.color,
+          order,
+        );
       }
     }
     // Border side shorthands (border-top/right/bottom/left)
@@ -6211,73 +6301,69 @@ fn apply_declaration_with_base_internal(
         "border-bottom" => crate::style::PhysicalSide::Bottom,
         _ => crate::style::PhysicalSide::Left,
       };
-      let current_color = styles.color;
-      let mut apply_shorthand = |values: &[PropertyValue]| {
-        let mut width: Option<Length> = None;
-        let mut style_val: Option<BorderStyle> = None;
-        let mut color: Option<Rgba> = None;
-
-        for val in values {
-          match val {
-            PropertyValue::Length(len) => width = Some(*len),
-            PropertyValue::Number(n) => width = Some(Length::px(*n)),
-            PropertyValue::Keyword(kw) => {
-              if kw.eq_ignore_ascii_case("currentcolor") {
-                color = Some(current_color);
-              } else {
-                style_val = Some(parse_border_style(kw));
-              }
-            }
-            PropertyValue::Color(c) => color = Some(c.to_rgba(current_color)),
-            _ => {}
-          }
-        }
-
-        if let Some(BorderStyle::None | BorderStyle::Hidden) = style_val {
-          width = Some(Length::px(0.0));
-        }
-
-        // Shorthand resets unspecified subproperties to their initial values.
-        if style_val.is_none() {
-          style_val = Some(BorderStyle::None);
-        }
-        if color.is_none() {
-          color = Some(current_color);
-        }
-
-        if let Some(w) = width {
+      let values: &[PropertyValue] = match resolved_value {
+        PropertyValue::Multiple(values) => values,
+        other => std::slice::from_ref(other),
+      };
+      if let Some(parsed) = parse_border_side_shorthand(values, styles.color) {
+        if let Some(w) = parsed.width {
           set_border_width_side(styles, side, w, order);
         }
-        if let Some(st) = style_val {
-          set_border_style_side(styles, side, st, order);
-        }
-        if let Some(c) = color {
-          set_border_color_side(styles, side, c, order);
-        }
+        set_border_style_side(styles, side, parsed.style, order);
+        set_border_color_side(styles, side, parsed.color, order);
+      }
+    }
+    // Logical border side shorthands (border-inline-start/end, border-block-start/end)
+    "border-inline-start" | "border-inline-end" | "border-block-start" | "border-block-end" => {
+      let (axis, is_start) = match property {
+        "border-inline-start" => (crate::style::LogicalAxis::Inline, true),
+        "border-inline-end" => (crate::style::LogicalAxis::Inline, false),
+        "border-block-start" => (crate::style::LogicalAxis::Block, true),
+        _ => (crate::style::LogicalAxis::Block, false),
       };
-
-      match resolved_value {
-        PropertyValue::Multiple(values) => apply_shorthand(values),
-        other => apply_shorthand(std::slice::from_ref(other)),
+      let values: &[PropertyValue] = match resolved_value {
+        PropertyValue::Multiple(values) => values,
+        other => std::slice::from_ref(other),
+      };
+      if let Some(parsed) = parse_border_side_shorthand(values, styles.color) {
+        if let Some(w) = parsed.width {
+          push_logical(
+            styles,
+            crate::style::LogicalProperty::BorderWidth {
+              axis,
+              start: if is_start { Some(w) } else { None },
+              end: if is_start { None } else { Some(w) },
+            },
+            order,
+          );
+        }
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::BorderStyle {
+            axis,
+            start: if is_start { Some(parsed.style) } else { None },
+            end: if is_start { None } else { Some(parsed.style) },
+          },
+          order,
+        );
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::BorderColor {
+            axis,
+            start: if is_start { Some(parsed.color) } else { None },
+            end: if is_start { None } else { Some(parsed.color) },
+          },
+          order,
+        );
       }
     }
     "border-inline" => {
-      if let PropertyValue::Multiple(values) = resolved_value {
-        let mut width: Option<Length> = None;
-        let mut style_val: Option<BorderStyle> = None;
-        let mut color: Option<Rgba> = None;
-        for val in values {
-          match val {
-            PropertyValue::Length(len) => width = Some(*len),
-            PropertyValue::Keyword(kw) => style_val = Some(parse_border_style(kw)),
-            _ => {
-              if let Some(c) = resolve_color_value(val) {
-                color = Some(c);
-              }
-            }
-          }
-        }
-        if let Some(w) = width {
+      let values: &[PropertyValue] = match resolved_value {
+        PropertyValue::Multiple(values) => values,
+        other => std::slice::from_ref(other),
+      };
+      if let Some(parsed) = parse_border_side_shorthand(values, styles.color) {
+        if let Some(w) = parsed.width {
           push_logical(
             styles,
             crate::style::LogicalProperty::BorderWidth {
@@ -6288,47 +6374,33 @@ fn apply_declaration_with_base_internal(
             order,
           );
         }
-        if let Some(st) = style_val {
-          push_logical(
-            styles,
-            crate::style::LogicalProperty::BorderStyle {
-              axis: crate::style::LogicalAxis::Inline,
-              start: Some(st),
-              end: Some(st),
-            },
-            order,
-          );
-        }
-        if let Some(c) = color {
-          push_logical(
-            styles,
-            crate::style::LogicalProperty::BorderColor {
-              axis: crate::style::LogicalAxis::Inline,
-              start: Some(c),
-              end: Some(c),
-            },
-            order,
-          );
-        }
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::BorderStyle {
+            axis: crate::style::LogicalAxis::Inline,
+            start: Some(parsed.style),
+            end: Some(parsed.style),
+          },
+          order,
+        );
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::BorderColor {
+            axis: crate::style::LogicalAxis::Inline,
+            start: Some(parsed.color),
+            end: Some(parsed.color),
+          },
+          order,
+        );
       }
     }
     "border-block" => {
-      if let PropertyValue::Multiple(values) = resolved_value {
-        let mut width: Option<Length> = None;
-        let mut style_val: Option<BorderStyle> = None;
-        let mut color: Option<Rgba> = None;
-        for val in values {
-          match val {
-            PropertyValue::Length(len) => width = Some(*len),
-            PropertyValue::Keyword(kw) => style_val = Some(parse_border_style(kw)),
-            _ => {
-              if let Some(c) = resolve_color_value(val) {
-                color = Some(c);
-              }
-            }
-          }
-        }
-        if let Some(w) = width {
+      let values: &[PropertyValue] = match resolved_value {
+        PropertyValue::Multiple(values) => values,
+        other => std::slice::from_ref(other),
+      };
+      if let Some(parsed) = parse_border_side_shorthand(values, styles.color) {
+        if let Some(w) = parsed.width {
           push_logical(
             styles,
             crate::style::LogicalProperty::BorderWidth {
@@ -6339,28 +6411,24 @@ fn apply_declaration_with_base_internal(
             order,
           );
         }
-        if let Some(st) = style_val {
-          push_logical(
-            styles,
-            crate::style::LogicalProperty::BorderStyle {
-              axis: crate::style::LogicalAxis::Block,
-              start: Some(st),
-              end: Some(st),
-            },
-            order,
-          );
-        }
-        if let Some(c) = color {
-          push_logical(
-            styles,
-            crate::style::LogicalProperty::BorderColor {
-              axis: crate::style::LogicalAxis::Block,
-              start: Some(c),
-              end: Some(c),
-            },
-            order,
-          );
-        }
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::BorderStyle {
+            axis: crate::style::LogicalAxis::Block,
+            start: Some(parsed.style),
+            end: Some(parsed.style),
+          },
+          order,
+        );
+        push_logical(
+          styles,
+          crate::style::LogicalProperty::BorderColor {
+            axis: crate::style::LogicalAxis::Block,
+            start: Some(parsed.color),
+            end: Some(parsed.color),
+          },
+          order,
+        );
       }
     }
 
@@ -13905,6 +13973,52 @@ pub fn apply_box_values(
     }
     _ => {}
   }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ParsedBorderSideShorthand {
+  width: Option<Length>,
+  style: BorderStyle,
+  color: Rgba,
+}
+
+fn parse_border_side_shorthand(
+  values: &[PropertyValue],
+  current_color: Rgba,
+) -> Option<ParsedBorderSideShorthand> {
+  if values.is_empty() {
+    return None;
+  }
+
+  let mut width: Option<Length> = None;
+  let mut style_val: Option<BorderStyle> = None;
+  let mut color: Option<Rgba> = None;
+
+  for value in values {
+    match value {
+      PropertyValue::Length(len) => width = Some(*len),
+      PropertyValue::Number(n) => width = Some(Length::px(*n)),
+      PropertyValue::Keyword(kw) => {
+        if kw.eq_ignore_ascii_case("currentcolor") {
+          color = Some(current_color);
+        } else {
+          style_val = Some(parse_border_style(kw));
+        }
+      }
+      PropertyValue::Color(c) => color = Some(c.to_rgba(current_color)),
+      _ => {}
+    }
+  }
+
+  if let Some(BorderStyle::None | BorderStyle::Hidden) = style_val {
+    width = Some(Length::px(0.0));
+  }
+
+  Some(ParsedBorderSideShorthand {
+    width,
+    style: style_val.unwrap_or(BorderStyle::None),
+    color: color.unwrap_or(current_color),
+  })
 }
 
 pub fn parse_border_style(kw: &str) -> BorderStyle {
@@ -23192,6 +23306,93 @@ mod tests {
     };
     apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
     assert!(matches!(style.break_inside, BreakInside::AvoidColumn));
+  }
+
+  fn apply_logical_border_side_shorthands(
+    writing_mode: WritingMode,
+    direction: Direction,
+  ) -> ComputedStyle {
+    let decls = parse_declarations(
+      "\
+border-inline-start: 1px solid #ff0000;\
+border-inline-end: 2px solid #00ff00;\
+border-block-start: 3px solid #0000ff;\
+border-block-end: 4px solid #ffff00;\
+",
+    );
+
+    let mut style = ComputedStyle::default();
+    style.writing_mode = writing_mode;
+    style.direction = direction;
+
+    for decl in &decls {
+      apply_declaration(&mut style, decl, &ComputedStyle::default(), 16.0, 16.0);
+    }
+    resolve_pending_logical_properties(&mut style);
+    style
+  }
+
+  #[test]
+  fn logical_border_side_shorthands_map_horizontal_ltr() {
+    let style = apply_logical_border_side_shorthands(WritingMode::HorizontalTb, Direction::Ltr);
+
+    assert_eq!(style.border_left_width, Length::px(1.0));
+    assert_eq!(style.border_left_style, BorderStyle::Solid);
+    assert_eq!(style.border_left_color, Rgba::rgb(255, 0, 0));
+
+    assert_eq!(style.border_right_width, Length::px(2.0));
+    assert_eq!(style.border_right_style, BorderStyle::Solid);
+    assert_eq!(style.border_right_color, Rgba::rgb(0, 255, 0));
+
+    assert_eq!(style.border_top_width, Length::px(3.0));
+    assert_eq!(style.border_top_style, BorderStyle::Solid);
+    assert_eq!(style.border_top_color, Rgba::rgb(0, 0, 255));
+
+    assert_eq!(style.border_bottom_width, Length::px(4.0));
+    assert_eq!(style.border_bottom_style, BorderStyle::Solid);
+    assert_eq!(style.border_bottom_color, Rgba::rgb(255, 255, 0));
+  }
+
+  #[test]
+  fn logical_border_side_shorthands_map_horizontal_rtl() {
+    let style = apply_logical_border_side_shorthands(WritingMode::HorizontalTb, Direction::Rtl);
+
+    assert_eq!(style.border_right_width, Length::px(1.0));
+    assert_eq!(style.border_right_style, BorderStyle::Solid);
+    assert_eq!(style.border_right_color, Rgba::rgb(255, 0, 0));
+
+    assert_eq!(style.border_left_width, Length::px(2.0));
+    assert_eq!(style.border_left_style, BorderStyle::Solid);
+    assert_eq!(style.border_left_color, Rgba::rgb(0, 255, 0));
+
+    assert_eq!(style.border_top_width, Length::px(3.0));
+    assert_eq!(style.border_top_style, BorderStyle::Solid);
+    assert_eq!(style.border_top_color, Rgba::rgb(0, 0, 255));
+
+    assert_eq!(style.border_bottom_width, Length::px(4.0));
+    assert_eq!(style.border_bottom_style, BorderStyle::Solid);
+    assert_eq!(style.border_bottom_color, Rgba::rgb(255, 255, 0));
+  }
+
+  #[test]
+  fn logical_border_side_shorthands_map_vertical_rl_ltr() {
+    let style = apply_logical_border_side_shorthands(WritingMode::VerticalRl, Direction::Ltr);
+
+    assert_eq!(style.border_top_width, Length::px(1.0));
+    assert_eq!(style.border_top_style, BorderStyle::Solid);
+    assert_eq!(style.border_top_color, Rgba::rgb(255, 0, 0));
+
+    assert_eq!(style.border_bottom_width, Length::px(2.0));
+    assert_eq!(style.border_bottom_style, BorderStyle::Solid);
+    assert_eq!(style.border_bottom_color, Rgba::rgb(0, 255, 0));
+
+    assert_eq!(style.border_right_width, Length::px(3.0));
+    assert_eq!(style.border_right_style, BorderStyle::Solid);
+    assert_eq!(style.border_right_color, Rgba::rgb(0, 0, 255));
+
+    assert_eq!(style.border_left_width, Length::px(4.0));
+    assert_eq!(style.border_left_style, BorderStyle::Solid);
+    assert_eq!(style.border_left_color, Rgba::rgb(255, 255, 0));
   }
 }
 
