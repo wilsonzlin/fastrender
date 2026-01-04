@@ -45,6 +45,23 @@ fn render_fixtures_writes_png_output() {
   assert!(status.success(), "expected render_fixtures to succeed");
   assert!(out_dir.join("basic.png").is_file(), "expected PNG output");
   assert!(out_dir.join("basic.log").is_file(), "expected per-fixture log");
+  assert!(
+    out_dir.join("basic.json").is_file(),
+    "expected per-fixture metadata json"
+  );
+
+  let metadata_bytes = fs::read(out_dir.join("basic.json")).expect("read metadata");
+  let metadata: serde_json::Value =
+    serde_json::from_slice(&metadata_bytes).expect("parse metadata json");
+  assert_eq!(metadata["fixture"], "basic");
+  assert_eq!(metadata["viewport"], serde_json::json!([64, 64]));
+  assert_eq!(metadata["media"], "screen");
+  assert_eq!(metadata["timeout_secs"], 2);
+  assert_eq!(metadata["status"], "ok");
+  assert!(
+    metadata["dpr"].as_f64().unwrap_or_default() > 0.0,
+    "expected dpr to be a positive number"
+  );
 }
 
 #[test]
@@ -199,4 +216,3 @@ fn render_fixtures_writes_snapshot_outputs() {
     "expected diagnostics.json output"
   );
 }
-

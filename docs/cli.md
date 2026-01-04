@@ -24,7 +24,7 @@ These are optional wrappers for the most common loops:
 - Offline fixture Chrome-vs-FastRender diff (deterministic; offline): `scripts/chrome_vs_fastrender_fixtures.sh [fixture_glob...]`
   - Wraps `scripts/chrome_fixture_baseline.sh`, `render_fixtures`, and `diff_renders`.
   - Defaults to `viewport=1040x1240`, `dpr=1.0`, JavaScript disabled, and the fixture set in `tests/pages_regression_test.rs`.
-  - Writes `target/chrome_vs_fastrender_fixtures.html` + `target/chrome_vs_fastrender_fixtures.json` plus PNG/log/metadata artifacts under `target/chrome_fixture_renders/` and PNG/log artifacts under `target/fastrender_fixture_renders/`.
+  - Writes `target/chrome_vs_fastrender_fixtures.html` + `target/chrome_vs_fastrender_fixtures.json` plus PNG/log/metadata artifacts under `target/chrome_fixture_renders/` and PNG/log/metadata artifacts under `target/fastrender_fixture_renders/`.
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--ignore-alpha`, `--sort-by {pixel|percent|perceptual}`, `--fail-on-differences`, `--no-chrome`, `--no-fastrender`, `--diff-only`, `--no-build`, `--no-clean`
   - Supports `--shard <index>/<total>` for deterministic sharding (0-based); forwards `--jobs <n>` and `--write-snapshot` (writes `<fastr-out-dir>/<fixture>/snapshot.json`) to `render_fixtures`.
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
@@ -104,6 +104,8 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 - Chrome-vs-FastRender diff report for offline fixtures (deterministic; offline): `cargo xtask fixture-chrome-diff`
   - Defaults to the curated `pages_regression` fixture set in `tests/pages_regression_test.rs`.
   - Pass `--all-fixtures` to render every fixture under `tests/pages/fixtures/`.
+  - FastRender writes `<out>/fastrender/<fixture>.json` alongside each PNG with render settings + status/timing.
+  - When reusing an existing FastRender output directory (`--no-fastrender` / `--diff-only`), xtask validates the metadata matches the requested `--viewport/--dpr/--media/--timeout` and fails fast on mismatches. Missing metadata warns by default; pass `--require-fastrender-metadata` to fail instead.
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
   - Relative `<bundle>` and `--output-root` paths are resolved relative to the repository root so the command behaves consistently even when invoked from subdirectories (pass absolute paths to override).
 - Recapture and (re)import offline page fixtures from a manifest (pageset guardrails by default): `cargo xtask recapture-page-fixtures [--capture-mode cache|crawl|render] [--only stripe.com] [--overwrite]`

@@ -163,6 +163,14 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long)]
   pub no_fastrender: bool,
 
+  /// When reusing an existing `<out>/fastrender` directory (`--no-fastrender`), require per-fixture
+  /// FastRender metadata files (`<stem>.json`) to be present.
+  ///
+  /// Without this flag, missing metadata produces a warning and the command continues (to remain
+  /// backwards compatible with older output directories).
+  #[arg(long)]
+  pub require_fastrender_metadata: bool,
+
   /// Explicit Chrome/Chromium binary path forwarded to the Chrome baseline step.
   #[arg(long, value_name = "PATH", conflicts_with = "chrome_dir")]
   pub chrome: Option<PathBuf>,
@@ -304,6 +312,8 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
         layout.fastrender.display()
       );
     }
+    validate_fastrender_output_metadata(&fixtures_root, &layout, &args)
+      .context("validate reused FastRender metadata")?;
   } else {
     clear_dir(&layout.fastrender).context("clear FastRender output dir")?;
   }
@@ -356,6 +366,9 @@ fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
   }
   if args.timeout == 0 {
     bail!("--timeout must be > 0");
+  }
+  if args.require_fastrender_metadata && !args.no_fastrender {
+    bail!("--require-fastrender-metadata is only meaningful with --no-fastrender");
   }
   if !(0.0..=100.0).contains(&args.max_diff_percent) || !args.max_diff_percent.is_finite() {
     bail!("--max-diff-percent must be between 0 and 100");
@@ -522,6 +535,97 @@ fn resolve_repo_path(repo_root: &Path, path: &Path) -> PathBuf {
   } else {
     repo_root.join(path)
   }
+}
+
+#[derive(Debug, Deserialize)]
+struct FastRenderFixtureMetadata {
+  viewport: (u32, u32),
+  dpr: f32,
+  media: String,
+  timeout_secs: u64,
+}
+
+fn validate_fastrender_output_metadata(
+  fixtures_root: &Path,
+  layout: &Layout,
+  args: &FixtureChromeDiffArgs,
+) -> Result<()> {
+  let fixtures =
+    discover_selected_fixture_stems(fixtures_root, args.fixtures.as_deref(), args.shard)?;
+
+  let mut missing_metadata = Vec::<String>::new();
+  for stem in fixtures {
+    let metadata_path = layout.fastrender.join(format!("{stem}.json"));
+    if !metadata_path.is_file() {
+      if args.require_fastrender_metadata {
+        bail!(
+          "FastRender metadata is missing for fixture '{stem}'.\n\
+           Expected: {}\n\
+           Rerun without --no-fastrender to regenerate FastRender renders, or point --out-dir at a directory that contains matching metadata.",
+          metadata_path.display()
+        );
+      }
+      missing_metadata.push(stem);
+      continue;
+    }
+
+    let bytes = fs::read(&metadata_path)
+      .with_context(|| format!("read {}", metadata_path.display()))?;
+    let metadata: FastRenderFixtureMetadata = serde_json::from_slice(&bytes)
+      .with_context(|| format!("parse {}", metadata_path.display()))?;
+
+    let wanted_media = args.media.as_cli_value();
+    let mut mismatch = false;
+    mismatch |= metadata.viewport != args.viewport;
+    mismatch |= !metadata.dpr.is_finite() || (metadata.dpr - args.dpr).abs() > 1e-6;
+    mismatch |= metadata.media != wanted_media;
+    mismatch |= metadata.timeout_secs != args.timeout;
+
+    if mismatch {
+      bail!(
+        "FastRender metadata mismatch for fixture '{stem}'. This likely means you are reusing stale FastRender renders.\n\
+         Metadata: {}\n\
+         Wanted: viewport {}x{}, dpr {}, media {}, timeout {}s\n\
+         Found:  viewport {}x{}, dpr {}, media {}, timeout {}s\n\
+         Rerun without --no-fastrender to regenerate FastRender renders, or choose an --out-dir that was rendered with matching settings.",
+        metadata_path.display(),
+        args.viewport.0,
+        args.viewport.1,
+        args.dpr,
+        wanted_media,
+        args.timeout,
+        metadata.viewport.0,
+        metadata.viewport.1,
+        metadata.dpr,
+        metadata.media,
+        metadata.timeout_secs
+      );
+    }
+  }
+
+  if !missing_metadata.is_empty() {
+    let sample = missing_metadata
+      .iter()
+      .take(5)
+      .cloned()
+      .collect::<Vec<_>>()
+      .join(", ");
+    let suffix = if missing_metadata.len() > 5 {
+      format!(", ... (+{} more)", missing_metadata.len() - 5)
+    } else {
+      String::new()
+    };
+    eprintln!(
+      "warning: FastRender metadata is missing for {} fixture(s) ({}{}). \
+       Continuing without validation; rerun without --no-fastrender to regenerate, \
+       or pass --require-fastrender-metadata to fail on missing metadata.",
+      missing_metadata.len(),
+      sample,
+      suffix
+    );
+  }
+
+  Ok(())
 }
 
 fn build_render_fixtures_command(

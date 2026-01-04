@@ -98,6 +98,9 @@ struct RenderShared {
   render_pool: FastRenderPool,
   base_options: RenderOptions,
   hard_timeout: Duration,
+  timeout_secs: u64,
+  media: MediaTypeArg,
+  font_config: FontConfig,
   write_snapshot: bool,
   out_dir: PathBuf,
 }
@@ -120,6 +123,42 @@ struct RenderOutcome {
   png: Vec<u8>,
   diagnostics: fastrender::RenderDiagnostics,
   artifacts: RenderArtifacts,
+}
+
+#[derive(Debug, Serialize)]
+struct RenderMetadataFile {
+  fixture: String,
+  viewport: (u32, u32),
+  dpr: f32,
+  media: MediaMetadata,
+  timeout_secs: u64,
+  bundled_fonts: bool,
+  font_dirs: Vec<PathBuf>,
+  status: &'static str,
+  elapsed_ms: u64,
+  blocked_network_urls: Option<BlockedNetworkUrlsMetadata>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum MediaMetadata {
+  Screen,
+  Print,
+}
+
+impl MediaMetadata {
+  fn from_arg(media: MediaTypeArg) -> Self {
+    match media {
+      MediaTypeArg::Screen => Self::Screen,
+      MediaTypeArg::Print => Self::Print,
+    }
+  }
+}
+
+#[derive(Debug, Serialize)]
+struct BlockedNetworkUrlsMetadata {
+  count: usize,
+  sample: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -222,7 +261,7 @@ fn run(cli: Cli) -> io::Result<()> {
     .with_device_pixel_ratio(cli.dpr)
     .with_meta_viewport(true)
     .with_resource_policy(resource_policy)
-    .with_font_sources(font_config);
+    .with_font_sources(font_config.clone());
 
   let render_pool = FastRenderPool::with_config(
     FastRenderPoolConfig::new()
@@ -248,6 +287,9 @@ fn run(cli: Cli) -> io::Result<()> {
     render_pool,
     base_options,
     hard_timeout,
+    timeout_secs: cli.timeout,
+    media: cli.media,
+    font_config,
     write_snapshot: cli.write_snapshot,
     out_dir: cli.out_dir.clone(),
   };
@@ -357,6 +399,7 @@ fn run(cli: Cli) -> io::Result<()> {
   println!("Summary: {}", summary_path.display());
   println!("Renders:  {}/<fixture>.png", cli.out_dir.display());
   println!("Logs:     {}/<fixture>.log", cli.out_dir.display());
+  println!("Metadata: {}/<fixture>.json", cli.out_dir.display());
   if cli.write_snapshot {
     println!("Snapshots:{}/<fixture>/snapshot.json", cli.out_dir.display());
   }
@@ -394,6 +437,10 @@ fn output_path_for(out_dir: &Path, stem: &str) -> PathBuf {
   out_dir.join(format!("{stem}.png"))
 }
 
+fn metadata_path_for(out_dir: &Path, stem: &str) -> PathBuf {
+  out_dir.join(format!("{stem}.json"))
+}
+
 fn snapshot_dir_for(out_dir: &Path, stem: &str) -> PathBuf {
   out_dir.join(stem)
 }
@@ -426,6 +473,7 @@ fn render_fixture(shared: &RenderShared, entry: &FixtureEntry) -> FixtureResult 
   let stem = entry.stem.clone();
   let log_path = log_path_for(&shared.out_dir, &stem);
   let output_path = output_path_for(&shared.out_dir, &stem);
+  let metadata_path = metadata_path_for(&shared.out_dir, &stem);
   let snapshot_dir = snapshot_dir_for(&shared.out_dir, &stem);
 
   let mut log = format!("=== {stem} ===\n");
@@ -437,10 +485,20 @@ fn render_fixture(shared: &RenderShared, entry: &FixtureEntry) -> FixtureResult 
     Ok(url) => url,
     Err(err) => {
       let _ = writeln!(log, "Base URL error: {err}");
+      let status = Status::Error(format!("base_url: {err}"));
+      let _ = write_render_metadata_file(
+        &metadata_path,
+        &stem,
+        shared,
+        &status,
+        0,
+        None,
+        &mut log,
+      );
       let _ = fs::write(&log_path, log);
       return FixtureResult {
         stem,
-        status: Status::Error(format!("base_url: {err}")),
+        status,
         time_ms: 0,
         size: None,
       };
@@ -452,10 +510,20 @@ fn render_fixture(shared: &RenderShared, entry: &FixtureEntry) -> FixtureResult 
     Ok(html) => html,
     Err(err) => {
       let _ = writeln!(log, "Read error: {err}");
+      let status = Status::Error(format!("read: {err}"));
+      let _ = write_render_metadata_file(
+        &metadata_path,
+        &stem,
+        shared,
+        &status,
+        0,
+        None,
+        &mut log,
+      );
       let _ = fs::write(&log_path, log);
       return FixtureResult {
         stem,
-        status: Status::Error(format!("read: {err}")),
+        status,
         time_ms: 0,
         size: None,
       };
@@ -510,6 +578,7 @@ fn render_fixture(shared: &RenderShared, entry: &FixtureEntry) -> FixtureResult 
 
   let mut captured_artifacts: Option<RenderArtifacts> = None;
   let mut diagnostics = fastrender::RenderDiagnostics::default();
+  let mut blocked_urls: Option<Vec<String>> = None;
 
   let (status, size) = match result {
     Ok(outcome) => {
@@ -520,11 +589,12 @@ fn render_fixture(shared: &RenderShared, entry: &FixtureEntry) -> FixtureResult 
 
       let mut status = Status::Ok;
 
-      let blocked_urls = blocked_network_urls(&diagnostics);
-      if !blocked_urls.is_empty() {
+      let urls = blocked_network_urls(&diagnostics);
+      if !urls.is_empty() {
+        blocked_urls = Some(urls.clone());
         status = Status::Error(format!(
           "blocked http/https resources: {}",
-          blocked_urls.join(", ")
+          urls.join(", ")
         ));
       }
 
@@ -590,6 +660,15 @@ fn render_fixture(shared: &RenderShared, entry: &FixtureEntry) -> FixtureResult 
     diagnostics: diagnostics.clone(),
   };
   let _ = write_diagnostics_file(&snapshot_dir, &diag_report, &mut log, shared.write_snapshot);
+  let _ = write_render_metadata_file(
+    &metadata_path,
+    &stem,
+    shared,
+    &status,
+    time_ms,
+    blocked_urls,
+    &mut log,
+  );
 
   let _ = fs::write(&log_path, &log);
 
@@ -615,6 +694,45 @@ fn render_fixture(shared: &RenderShared, entry: &FixtureEntry) -> FixtureResult 
     time_ms,
     size,
   }
+}
+
+fn write_render_metadata_file(
+  path: &Path,
+  stem: &str,
+  shared: &RenderShared,
+  status: &Status,
+  elapsed_ms: u128,
+  blocked_urls: Option<Vec<String>>,
+  log: &mut String,
+) -> io::Result<()> {
+  let viewport = shared.base_options.viewport.unwrap_or((0, 0));
+  let dpr = shared.base_options.device_pixel_ratio.unwrap_or(1.0);
+  let blocked_network_urls = blocked_urls.map(|urls| {
+    let count = urls.len();
+    let sample = urls.into_iter().take(3).collect::<Vec<_>>();
+    BlockedNetworkUrlsMetadata {
+      count,
+      sample,
+    }
+  });
+  let metadata = RenderMetadataFile {
+    fixture: stem.to_string(),
+    viewport,
+    dpr,
+    media: MediaMetadata::from_arg(shared.media),
+    timeout_secs: shared.timeout_secs,
+    bundled_fonts: shared.font_config.use_bundled_fonts,
+    font_dirs: shared.font_config.font_dirs.clone(),
+    status: status_label(status),
+    elapsed_ms: elapsed_ms.min(u64::MAX as u128) as u64,
+    blocked_network_urls,
+  };
+  let json = serde_json::to_vec(&metadata)
+    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+  fs::write(path, json).map_err(|e| {
+    let _ = writeln!(log, "Failed to write {}: {e}", path.display());
+    e
+  })
 }
 
 fn blocked_network_urls(diagnostics: &fastrender::RenderDiagnostics) -> Vec<String> {
