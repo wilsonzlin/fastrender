@@ -234,6 +234,26 @@ fn pageset_help_mentions_cache_dir() {
 }
 
 #[test]
+fn pageset_diff_help_mentions_accuracy_regression_flags() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["pageset-diff", "--help"])
+    .output()
+    .expect("run cargo xtask pageset-diff --help");
+
+  assert!(
+    output.status.success(),
+    "pageset-diff help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--fail-on-accuracy-regression")
+      && stdout.contains("--accuracy-regression-threshold-percent"),
+    "pageset-diff help should mention accuracy regression gating flags; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn diff_renders_help_mentions_ignore_alpha() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["diff-renders", "--help"])

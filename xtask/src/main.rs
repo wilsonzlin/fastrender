@@ -251,6 +251,14 @@ struct PagesetDiffArgs {
   #[arg(long)]
   fail_on_regression: bool,
 
+  /// Exit non-zero when visual diff accuracy regresses vs the baseline (when `accuracy` metrics are present)
+  #[arg(long)]
+  fail_on_accuracy_regression: bool,
+
+  /// Accuracy regression threshold (percent) for `--fail-on-accuracy-regression`
+  #[arg(long, value_name = "PERCENT", requires = "fail_on_accuracy_regression")]
+  accuracy_regression_threshold_percent: Option<f64>,
+
   /// Exit non-zero when timeout/panic/error pages are missing `failure_stage`/`timeout_stage`
   ///
   /// When `--fail-on-regression` is set, this gate is enabled automatically unless explicitly
@@ -1296,6 +1304,14 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
   if args.fail_on_regression {
     cmd.arg("--fail-on-regression");
   }
+  if args.fail_on_accuracy_regression {
+    cmd.arg("--fail-on-accuracy-regression");
+  }
+  if let Some(percent) = args.accuracy_regression_threshold_percent {
+    cmd
+      .arg("--accuracy-regression-threshold-percent")
+      .arg(percent.to_string());
+  }
   if fail_on_missing_stages {
     cmd.arg("--fail-on-missing-stages");
   }
@@ -1313,13 +1329,18 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
     .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
   if !status.success() {
     if status.code() == Some(2)
-      && (fail_on_missing_stages || fail_on_missing_stage_timings || fail_on_slow_ok_ms.is_some())
+      && (fail_on_missing_stages
+        || fail_on_missing_stage_timings
+        || fail_on_slow_ok_ms.is_some()
+        || args.fail_on_accuracy_regression
+        || args.accuracy_regression_threshold_percent.is_some())
     {
       bail!(
         "pageset_progress report failed with status {status}. \
          If the error above mentions an unexpected argument, ensure pageset_progress includes \
          the report diagnostic gates or re-run with \
-         --no-fail-on-missing-stages/--no-fail-on-missing-stage-timings/--no-fail-on-slow-ok."
+         --no-fail-on-missing-stages/--no-fail-on-missing-stage-timings/--no-fail-on-slow-ok \
+         and/or remove the --fail-on-accuracy-regression flags."
       );
     }
     bail!("command failed with status {status}");
