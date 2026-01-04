@@ -130,24 +130,69 @@ fn parses_animation_range_view_offsets_with_lengths() {
 fn scroll_timeline_progress_tracks_scroll() {
   let timeline = ScrollTimeline::default();
   let range = AnimationRange::default();
-  let progress0 = scroll_timeline_progress(&timeline, 0.0, 200.0, 100.0, &range);
-  let progress_mid = scroll_timeline_progress(&timeline, 50.0, 200.0, 100.0, &range);
-  let progress_end = scroll_timeline_progress(&timeline, 200.0, 200.0, 100.0, &range);
+  let progress0 = scroll_timeline_progress(&timeline, 0.0, 200.0, 100.0, &range).unwrap();
+  let progress_mid = scroll_timeline_progress(&timeline, 50.0, 200.0, 100.0, &range).unwrap();
+  let progress_end =
+    scroll_timeline_progress(&timeline, 200.0, 200.0, 100.0, &range).unwrap();
   assert!((progress0 - 0.0).abs() < 1e-6);
   assert!((progress_mid - 0.25).abs() < 1e-6);
   assert!((progress_end - 1.0).abs() < 1e-6);
 }
 
 #[test]
+fn scroll_timeline_progress_inactive_when_scroll_range_zero() {
+  let timeline = ScrollTimeline::default();
+  let range = AnimationRange::default();
+  assert_eq!(
+    scroll_timeline_progress(&timeline, 0.0, 0.0, 100.0, &range),
+    None
+  );
+}
+
+#[test]
 fn view_timeline_progress_respects_entry_and_exit() {
   let timeline = ViewTimeline::default();
   let range = AnimationRange::default();
-  let progress_start = view_timeline_progress(&timeline, 150.0, 200.0, 100.0, 50.0, &range);
-  let progress_mid = view_timeline_progress(&timeline, 150.0, 200.0, 100.0, 125.0, &range);
-  let progress_end = view_timeline_progress(&timeline, 150.0, 200.0, 100.0, 200.0, &range);
+  let progress_start =
+    view_timeline_progress(&timeline, 150.0, 200.0, 100.0, 50.0, &range).unwrap();
+  let progress_mid =
+    view_timeline_progress(&timeline, 150.0, 200.0, 100.0, 125.0, &range).unwrap();
+  let progress_end =
+    view_timeline_progress(&timeline, 150.0, 200.0, 100.0, 200.0, &range).unwrap();
   assert!((progress_start - 0.0).abs() < 1e-6);
   assert!((progress_mid - 0.5).abs() < 1e-6);
   assert!((progress_end - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn view_timeline_progress_supports_entry_length_offsets() {
+  let timeline = ViewTimeline::default();
+  let range = AnimationRange {
+    start: RangeOffset::View(ViewTimelinePhase::Entry, Length::px(100.0)),
+    end: RangeOffset::View(ViewTimelinePhase::Entry, Length::px(500.0)),
+  };
+
+  let target_start = 150.0;
+  let target_end = 200.0;
+  let view_size = 100.0;
+  let entry = target_start - view_size;
+
+  let progress0 =
+    view_timeline_progress(&timeline, target_start, target_end, view_size, entry + 100.0, &range)
+      .unwrap();
+  let progress_mid =
+    view_timeline_progress(&timeline, target_start, target_end, view_size, entry + 300.0, &range)
+      .unwrap();
+  let progress_end =
+    view_timeline_progress(&timeline, target_start, target_end, view_size, entry + 500.0, &range)
+      .unwrap();
+
+  assert!((progress0 - 0.0).abs() < 1e-6, "progress0={progress0}");
+  assert!(
+    (progress_mid - 0.5).abs() < 1e-6,
+    "progress_mid={progress_mid}"
+  );
+  assert!((progress_end - 1.0).abs() < 1e-6, "progress_end={progress_end}");
 }
 
 #[test]
@@ -352,7 +397,8 @@ fn inline_axis_uses_writing_mode_direction() {
     100.0,
     400.0,
   );
-  let progress = scroll_timeline_progress(&timeline, scroll_pos, scroll_range, view_size, &range);
+  let progress =
+    scroll_timeline_progress(&timeline, scroll_pos, scroll_range, view_size, &range).unwrap();
   assert!((scroll_pos - 30.0).abs() < 1e-6);
   assert!((scroll_range - 200.0).abs() < 1e-6);
   assert!(progress > 0.0 && progress < 1.0);
@@ -391,8 +437,10 @@ fn nested_scroll_timelines_progress_independently() {
     360.0,
   );
 
-  let outer_progress = scroll_timeline_progress(&outer, outer_pos, outer_range, outer_size, &range);
-  let inner_progress = scroll_timeline_progress(&inner, inner_pos, inner_range, inner_size, &range);
+  let outer_progress =
+    scroll_timeline_progress(&outer, outer_pos, outer_range, outer_size, &range).unwrap();
+  let inner_progress =
+    scroll_timeline_progress(&inner, inner_pos, inner_range, inner_size, &range).unwrap();
 
   assert!(
     (outer_progress - 0.3).abs() < 0.05,
@@ -467,7 +515,8 @@ fn scroll_timeline_drives_animation_during_render() {
     range,
     view_size,
     &AnimationRange::default(),
-  );
+  )
+  .unwrap();
   assert!(
     prog > 0.9,
     "expected near-complete progress ({} / {}) -> {prog}",

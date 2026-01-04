@@ -654,7 +654,6 @@ impl DisplayListBuilder {
     };
     Some(inverse.transform_rect(view))
   }
-
   fn clip_bounds(clip: &ClipItem) -> Option<Rect> {
     match &clip.shape {
       ClipShape::Rect { rect, .. } => Some(*rect),

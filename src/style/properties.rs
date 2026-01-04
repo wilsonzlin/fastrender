@@ -1247,18 +1247,18 @@ fn parse_range_offset(tokens: &[String]) -> Option<(RangeOffset, usize)> {
   if tokens.is_empty() {
     return None;
   }
-  let lower = tokens[0].to_ascii_lowercase();
-  if let Some(phase) = parse_view_phase(&lower) {
-    if tokens.len() >= 2 {
-      if let Some(len) = parse_length(&tokens[1]) {
-        return Some((RangeOffset::View(phase, len), 2));
+    let lower = tokens[0].to_ascii_lowercase();
+    if let Some(phase) = parse_view_phase(&lower) {
+      if tokens.len() >= 2 {
+        if let Some(len) = parse_length(&tokens[1]) {
+          return Some((RangeOffset::View(phase, len), 2));
+        }
+        if let Some(progress) = parse_progress_value(&tokens[1]) {
+          return Some((RangeOffset::View(phase, Length::percent(progress * 100.0)), 2));
+        }
       }
-      if let Some(progress) = parse_progress_value(&tokens[1]) {
-        return Some((RangeOffset::View(phase, Length::percent(progress * 100.0)), 2));
-      }
+      return Some((RangeOffset::View(phase, Length::px(0.0)), 1));
     }
-    return Some((RangeOffset::View(phase, Length::px(0.0)), 1));
-  }
   if let Some(progress) = parse_progress_value(&tokens[0]) {
     return Some((RangeOffset::Progress(progress), 1));
   }
@@ -1531,6 +1531,7 @@ fn parse_scroll_function_timeline<'i, 't>(
 fn parse_view_function_timeline<'i, 't>(
   input: &mut Parser<'i, 't>,
 ) -> Result<ViewFunctionTimeline, cssparser::ParseError<'i, ()>> {
+  let mut scroller: Option<ScrollTimelineScroller> = None;
   let mut axis: Option<TimelineAxis> = None;
   let mut inset_values: Vec<Length> = Vec::new();
 
@@ -1538,6 +1539,23 @@ fn parse_view_function_timeline<'i, 't>(
     input.skip_whitespace();
     if input.is_exhausted() {
       break;
+    }
+
+    if scroller.is_none() {
+      if let Ok(found) = input.try_parse(|p| {
+        let ident = p.expect_ident()?;
+        let lower = ident.as_ref().to_ascii_lowercase();
+        let Some(scroller) = parse_scroll_timeline_scroller(&lower) else {
+          return Err(p.new_custom_error::<(), ()>(()));
+        };
+        if matches!(scroller, ScrollTimelineScroller::SelfElement) {
+          return Err(p.new_custom_error::<(), ()>(()));
+        }
+        Ok(scroller)
+      }) {
+        scroller = Some(found);
+        continue;
+      }
     }
 
     if axis.is_none() {
@@ -1581,6 +1599,7 @@ fn parse_view_function_timeline<'i, 't>(
   };
 
   Ok(ViewFunctionTimeline {
+    scroller: scroller.unwrap_or_default(),
     axis: axis.unwrap_or_default(),
     inset,
   })

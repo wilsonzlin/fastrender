@@ -1084,6 +1084,7 @@ pub struct ViewTimelineInset {
 /// An anonymous view timeline produced by `view(...)` in `animation-timeline`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewFunctionTimeline {
+  pub scroller: ScrollTimelineScroller,
   pub axis: TimelineAxis,
   pub inset: Option<ViewTimelineInset>,
 }
@@ -1091,6 +1092,7 @@ pub struct ViewFunctionTimeline {
 impl Default for ViewFunctionTimeline {
   fn default() -> Self {
     Self {
+      scroller: ScrollTimelineScroller::default(),
       axis: TimelineAxis::default(),
       inset: None,
     }
@@ -1098,7 +1100,7 @@ impl Default for ViewFunctionTimeline {
 }
 
 /// A view-driven timeline tied to a target element.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ViewTimeline {
   /// Optional timeline name.
   pub name: Option<String>,
@@ -1106,6 +1108,16 @@ pub struct ViewTimeline {
   pub axis: TimelineAxis,
   /// Optional inset offsets.
   pub inset: Option<ViewTimelineInset>,
+}
+
+impl Default for ViewTimeline {
+  fn default() -> Self {
+    Self {
+      name: None,
+      axis: TimelineAxis::Block,
+      inset: None,
+    }
+  }
 }
 
 /// Reference to a timeline used by an animation.

@@ -35,6 +35,7 @@ use crate::style::types::FilterFunction;
 use crate::style::types::Overflow;
 use crate::style::types::RangeOffset;
 use crate::style::types::ReferenceBox;
+use crate::style::types::ScrollFunctionTimeline;
 use crate::style::types::ScrollTimelineScroller;
 use crate::style::types::ScrollTimeline;
 use crate::style::types::ShapeRadius;
@@ -42,7 +43,9 @@ use crate::style::types::TimelineAxis;
 use crate::style::types::TimelineOffset;
 use crate::style::types::TransitionProperty;
 use crate::style::types::TransitionTimingFunction;
+use crate::style::types::ViewFunctionTimeline;
 use crate::style::types::ViewTimeline;
+use crate::style::types::ViewTimelineInset;
 use crate::style::types::ViewTimelinePhase;
 use crate::style::types::WritingMode;
 use crate::style::values::Length;
@@ -1763,7 +1766,7 @@ fn resolve_progress_offset(
   phases: Option<(f32, f32, f32)>,
 ) -> f32 {
   match offset {
-    RangeOffset::Progress(p) => base_start + (base_end - base_start) * p.clamp(0.0, 1.0),
+    RangeOffset::Progress(p) => base_start + (base_end - base_start) * p,
     RangeOffset::View(phase, adj) => {
       let Some((entry, cross, exit)) = phases else {
         return base_start;
@@ -1793,39 +1796,60 @@ pub fn scroll_timeline_progress(
   scroll_range: f32,
   viewport_size: f32,
   range: &AnimationRange,
-) -> f32 {
+) -> Option<f32> {
+  if scroll_range <= 0.0 {
+    return None;
+  }
   let start_base = resolve_offset_value(&timeline.start, scroll_range, viewport_size, false);
   let end_base = resolve_offset_value(&timeline.end, scroll_range, viewport_size, true);
   let start = resolve_progress_offset(range.start(), start_base, end_base, viewport_size, None);
   let end = resolve_progress_offset(range.end(), start_base, end_base, viewport_size, None);
-  if (end - start).abs() < f32::EPSILON {
-    return 0.0;
+  let denom = end - start;
+  if denom.abs() < f32::EPSILON {
+    return None;
   }
-  clamp_progress((scroll_position - start) / (end - start))
+  Some((scroll_position - start) / denom)
 }
 
 /// Computes view timeline progress using the target position relative to the
 /// containing scroll port.
 pub fn view_timeline_progress(
-  _timeline: &ViewTimeline,
+  timeline: &ViewTimeline,
   target_start: f32,
   target_end: f32,
   view_size: f32,
   scroll_offset: f32,
   range: &AnimationRange,
-) -> f32 {
-  let entry = target_start - view_size;
-  let exit = target_end;
-  let cross = (target_start + target_end) * 0.5 - view_size * 0.5;
+) -> Option<f32> {
+  let view_size = view_size.max(0.0);
+  let inset = timeline.inset.unwrap_or(ViewTimelineInset {
+    start: Length::px(0.0),
+    end: Length::px(0.0),
+  });
+  let inset_start = inset
+    .start
+    .resolve_against(view_size)
+    .unwrap_or_else(|| inset.start.to_px())
+    .clamp(0.0, view_size);
+  let inset_end = inset
+    .end
+    .resolve_against(view_size)
+    .unwrap_or_else(|| inset.end.to_px())
+    .clamp(0.0, view_size);
+
+  let entry = target_start - view_size + inset_end;
+  let exit = target_end - inset_start;
+  let cross = (target_start + target_end) * 0.5 - view_size * 0.5 + (inset_end - inset_start) * 0.5;
   let start_base = entry;
   let end_base = exit;
   let phases = Some((entry, cross, exit));
   let start = resolve_progress_offset(range.start(), start_base, end_base, view_size, phases);
   let end = resolve_progress_offset(range.end(), start_base, end_base, view_size, phases);
-  if (end - start).abs() < f32::EPSILON {
-    return clamp_progress(if scroll_offset >= end { 1.0 } else { 0.0 });
+  let denom = end - start;
+  if denom.abs() < f32::EPSILON {
+    return None;
   }
-  clamp_progress((scroll_offset - start) / (end - start))
+  Some((scroll_offset - start) / denom)
 }
 
 /// Determines the scroll position and range along the requested axis given
@@ -2068,80 +2092,6 @@ fn animation_end_progress(direction: AnimationDirection, iterations: f32) -> f32
   }
 }
 
-fn scroll_driven_animation_progress(style: &ComputedStyle, idx: usize, raw: f32) -> Option<f32> {
-  if !raw.is_finite() {
-    return None;
-  }
-
-  let timing = pick(
-    &style.animation_timing_functions,
-    idx,
-    TransitionTimingFunction::Ease,
-  );
-  let iteration_count = pick(
-    &style.animation_iteration_counts,
-    idx,
-    AnimationIterationCount::default(),
-  );
-  let direction = pick(
-    &style.animation_directions,
-    idx,
-    AnimationDirection::default(),
-  );
-  let play_state = pick(
-    &style.animation_play_states,
-    idx,
-    AnimationPlayState::default(),
-  );
-
-  let raw = match play_state {
-    AnimationPlayState::Running => raw,
-    // Match `time_based_animation_progress` semantics by forcing the timeline progress to 0.
-    AnimationPlayState::Paused => 0.0,
-  };
-  let raw = raw.clamp(0.0, 1.0);
-
-  // Scroll/view timelines produce a finite 0..1 progress. For infinite iteration counts there is
-  // no stable mapping from finite timeline progress to the animation's active duration, so we
-  // choose a deterministic behavior for static rendering: treat infinite as a single iteration.
-  let mut iterations = iteration_count.as_f32();
-  if iterations.is_infinite() {
-    iterations = 1.0;
-  }
-
-  let start_progress = if iteration_reverses(direction, 0) {
-    1.0
-  } else {
-    0.0
-  };
-
-  if iterations <= 0.0 || raw <= 0.0 {
-    return Some(timing.value_at(start_progress));
-  }
-
-  if raw >= 1.0 {
-    let end_progress = animation_end_progress(direction, iterations);
-    return Some(timing.value_at(end_progress));
-  }
-
-  let total = (raw * iterations).max(0.0);
-  if total >= iterations {
-    // Handle rounding in `raw * iterations` when `raw` is very close to 1.0.
-    let end_progress = animation_end_progress(direction, iterations);
-    return Some(timing.value_at(end_progress));
-  }
-
-  let iteration = total.floor() as u64;
-  let iteration_progress = (total - iteration as f32).clamp(0.0, 1.0);
-  let reversed = iteration_reverses(direction, iteration);
-  let directed = if reversed {
-    1.0 - iteration_progress
-  } else {
-    iteration_progress
-  };
-  Some(timing.value_at(directed))
-}
-
 fn time_based_animation_progress_impl(
   style: &ComputedStyle,
   idx: usize,
@@ -2284,54 +2234,271 @@ fn settled_time_based_animation_progress(style: &ComputedStyle, idx: usize) -> O
   time_based_animation_progress_impl(style, idx, sample_time, false)
 }
 
-struct TimelineScrollContext {
+#[derive(Debug, Clone, Copy)]
+struct ScrollContainerContext {
   scroll: Point,
   viewport: Size,
   content: Size,
   origin: Point,
+  writing_mode: WritingMode,
 }
 
-fn timeline_scroll_context(
-  node: &FragmentNode,
-  origin: Point,
-  scroll_state: &ScrollState,
-  root_viewport: Rect,
-  root_content: Rect,
-) -> TimelineScrollContext {
+fn is_scroll_container(node: &FragmentNode, scroll_state: &ScrollState) -> bool {
   let style = node.style.as_deref();
-  let is_scroll_container = style
+  let overflow_scroll = style
     .map(|s| {
       matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto)
         || matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto)
     })
     .unwrap_or(false);
 
-  if let Some(id) = node.box_id() {
-    if is_scroll_container || scroll_state.elements.contains_key(&id) {
-      return TimelineScrollContext {
-        scroll: scroll_state.element_offset(id),
-        viewport: Size::new(node.bounds.width(), node.bounds.height()),
-        content: Size::new(node.scroll_overflow.width(), node.scroll_overflow.height()),
-        origin,
-      };
-    }
+  if overflow_scroll {
+    return true;
   }
+  node
+    .box_id()
+    .is_some_and(|id| scroll_state.elements.contains_key(&id))
+}
 
-  TimelineScrollContext {
+fn root_scroll_container_context(
+  scroll_state: &ScrollState,
+  root_viewport: Rect,
+  root_content: Rect,
+  writing_mode: WritingMode,
+) -> ScrollContainerContext {
+  ScrollContainerContext {
     scroll: scroll_state.viewport,
     viewport: Size::new(root_viewport.width(), root_viewport.height()),
     content: Size::new(root_content.width(), root_content.height()),
     origin: Point::ZERO,
+    writing_mode,
   }
 }
 
-fn collect_timelines(
+fn scroll_container_context_for_node(
   node: &FragmentNode,
   origin: Point,
-  root_viewport: Rect,
-  root_content: Rect,
   scroll_state: &ScrollState,
-  map: &mut HashMap<String, TimelineState>,
+) -> Option<ScrollContainerContext> {
+  if !is_scroll_container(node, scroll_state) {
+    return None;
+  }
+
+  let scroll = node
+    .box_id()
+    .map(|id| scroll_state.element_offset(id))
+    .unwrap_or(Point::ZERO);
+  let writing_mode = node
+    .style
+    .as_deref()
+    .map(|s| s.writing_mode)
+    .unwrap_or(WritingMode::HorizontalTb);
+  Some(ScrollContainerContext {
+    scroll,
+    viewport: Size::new(node.bounds.width(), node.bounds.height()),
+    content: Size::new(node.scroll_overflow.width(), node.scroll_overflow.height()),
+    origin,
+    writing_mode,
+  })
+}
+
+fn timeline_scroll_context(
+  node: &FragmentNode,
+  origin: Point,
+  scroll_state: &ScrollState,
+  root: ScrollContainerContext,
+) -> ScrollContainerContext {
+  scroll_container_context_for_node(node, origin, scroll_state).unwrap_or(root)
+}
+
+type TimelineScope = HashMap<String, Vec<TimelineState>>;
+
+fn timeline_scope_push(
+  scope: &mut TimelineScope,
+  name: String,
+  state: TimelineState,
+) {
+  scope.entry(name).or_default().push(state);
+}
+
+fn timeline_scope_pop(scope: &mut TimelineScope, name: &str) {
+  let Some(stack) = scope.get_mut(name) else { return };
+  stack.pop();
+  if stack.is_empty() {
+    scope.remove(name);
+  }
+}
+
+fn timeline_scope_resolve<'a>(scope: &'a TimelineScope, name: &str) -> Option<&'a TimelineState> {
+  scope.get(name).and_then(|stack| stack.last())
+}
+
+fn scroll_driven_fill_progress(raw: f32, fill: AnimationFillMode) -> Option<f32> {
+  if !raw.is_finite() {
+    return None;
+  }
+  if raw < 0.0 {
+    fill_backwards(fill).then_some(0.0)
+  } else if raw > 1.0 {
+    fill_forwards(fill).then_some(1.0)
+  } else {
+    Some(raw)
+  }
+}
+
+fn scroll_driven_effect_progress(style: &ComputedStyle, idx: usize, overall: f32) -> f32 {
+  let timing = pick(
+    &style.animation_timing_functions,
+    idx,
+    TransitionTimingFunction::Ease,
+  );
+  let iteration_count = pick(
+    &style.animation_iteration_counts,
+    idx,
+    AnimationIterationCount::default(),
+  );
+  let direction = pick(
+    &style.animation_directions,
+    idx,
+    AnimationDirection::default(),
+  );
+
+  let iterations = iteration_count.as_f32();
+  let start_progress = if iteration_reverses(direction, 0) {
+    1.0
+  } else {
+    0.0
+  };
+  let end_progress = animation_end_progress(direction, iterations);
+
+  let overall = overall.clamp(0.0, 1.0);
+  let directed = if overall <= f32::EPSILON {
+    start_progress
+  } else if overall >= 1.0 - f32::EPSILON {
+    end_progress
+  } else {
+    let finite_iterations = if iterations.is_finite() {
+      iterations.max(0.0)
+    } else {
+      1.0
+    };
+    let total = overall * finite_iterations;
+    let iteration = total.floor() as u64;
+    let iteration_progress = (total - iteration as f32).clamp(0.0, 1.0);
+    let reversed = iteration_reverses(direction, iteration);
+    if reversed {
+      1.0 - iteration_progress
+    } else {
+      iteration_progress
+    }
+  };
+
+  timing.value_at(directed)
+}
+
+fn scroll_progress_for_function(
+  func: &ScrollFunctionTimeline,
+  node: &FragmentNode,
+  origin: Point,
+  root: ScrollContainerContext,
+  ancestor_scroll_containers: &[ScrollContainerContext],
+  scroll_state: &ScrollState,
+  range: &AnimationRange,
+) -> Option<f32> {
+  let scroll_container = match func.scroller {
+    ScrollTimelineScroller::Root => root,
+    ScrollTimelineScroller::Nearest => ancestor_scroll_containers.last().copied().unwrap_or(root),
+    ScrollTimelineScroller::SelfElement => scroll_container_context_for_node(node, origin, scroll_state)?,
+  };
+
+  let (scroll_pos, scroll_range, viewport_size) = axis_scroll_state(
+    func.axis,
+    scroll_container.writing_mode,
+    scroll_container.scroll.x,
+    scroll_container.scroll.y,
+    scroll_container.viewport.width,
+    scroll_container.viewport.height,
+    scroll_container.content.width,
+    scroll_container.content.height,
+  );
+
+  let timeline = ScrollTimeline {
+    axis: func.axis,
+    ..ScrollTimeline::default()
+  };
+
+  scroll_timeline_progress(&timeline, scroll_pos, scroll_range, viewport_size, range)
+}
+
+fn view_progress_for_function(
+  func: &ViewFunctionTimeline,
+  node: &FragmentNode,
+  origin: Point,
+  root: ScrollContainerContext,
+  ancestor_scroll_containers: &[ScrollContainerContext],
+  scroll_state: &ScrollState,
+  range: &AnimationRange,
+) -> Option<f32> {
+  let scroll_container = match func.scroller {
+    ScrollTimelineScroller::Root => root,
+    ScrollTimelineScroller::Nearest => ancestor_scroll_containers.last().copied().unwrap_or(root),
+    ScrollTimelineScroller::SelfElement => scroll_container_context_for_node(node, origin, scroll_state)?,
+  };
+
+  let abs = Rect::from_xywh(
+    origin.x,
+    origin.y,
+    node.bounds.width(),
+    node.bounds.height(),
+  );
+  let horizontal = axis_is_horizontal(func.axis, scroll_container.writing_mode);
+  let target_start = if horizontal {
+    abs.x() - scroll_container.origin.x
+  } else {
+    abs.y() - scroll_container.origin.y
+  };
+  let target_end = if horizontal {
+    target_start + abs.width()
+  } else {
+    target_start + abs.height()
+  };
+  let view_size = if horizontal {
+    scroll_container.viewport.width
+  } else {
+    scroll_container.viewport.height
+  };
+  let scroll_offset = if horizontal {
+    scroll_container.scroll.x
+  } else {
+    scroll_container.scroll.y
+  };
+
+  let timeline = ViewTimeline {
+    name: None,
+    axis: func.axis,
+    inset: func.inset,
+  };
+
+  view_timeline_progress(
+    &timeline,
+    target_start,
+    target_end,
+    view_size,
+    scroll_offset,
+    range,
+  )
+}
+
+fn apply_animations_to_node_scoped(
+  node: &mut FragmentNode,
+  origin: Point,
+  viewport: Rect,
+  root_context: ScrollContainerContext,
+  scroll_state: &ScrollState,
+  keyframes: &HashMap<String, KeyframesRule>,
+  animation_time_ms: Option<f32>,
+  scope: &mut TimelineScope,
+  ancestor_scroll_containers: &mut Vec<ScrollContainerContext>,
 ) {
   let abs = Rect::from_xywh(
     origin.x,
@@ -2340,48 +2507,43 @@ fn collect_timelines(
     node.bounds.height(),
   );
 
+  let mut pushed_names: Vec<String> = Vec::new();
   if let Some(style) = node.style.as_ref() {
-    let context = timeline_scroll_context(node, origin, scroll_state, root_viewport, root_content);
+    let scroll_timeline_context = timeline_scroll_context(node, origin, scroll_state, root_context);
     for tl in &style.scroll_timelines {
       if let Some(name) = &tl.name {
-        let horizontal = axis_is_horizontal(tl.axis, style.writing_mode);
-        let scroll_pos = if horizontal {
-          context.scroll.x
-        } else {
-          context.scroll.y
-        }
-        .max(0.0);
-        let viewport_size = if horizontal {
-          context.viewport.width
-        } else {
-          context.viewport.height
-        };
-        let content_size = if horizontal {
-          context.content.width
-        } else {
-          context.content.height
-        };
-        let scroll_range = (content_size - viewport_size).max(0.0);
-        if scroll_range <= f32::EPSILON {
-          continue;
-        }
-        let scroll_pos = scroll_pos.min(scroll_range);
-        map.entry(name.clone()).or_insert(TimelineState::Scroll {
-          timeline: tl.clone(),
-          scroll_pos,
-          scroll_range,
-          viewport_size,
-        });
+        let (scroll_pos, scroll_range, viewport_size) = axis_scroll_state(
+          tl.axis,
+          scroll_timeline_context.writing_mode,
+          scroll_timeline_context.scroll.x,
+          scroll_timeline_context.scroll.y,
+          scroll_timeline_context.viewport.width,
+          scroll_timeline_context.viewport.height,
+          scroll_timeline_context.content.width,
+          scroll_timeline_context.content.height,
+        );
+        timeline_scope_push(
+          scope,
+          name.clone(),
+          TimelineState::Scroll {
+            timeline: tl.clone(),
+            scroll_pos,
+            scroll_range,
+            viewport_size,
+          },
+        );
+        pushed_names.push(name.clone());
       }
     }
 
+    let view_timeline_context = ancestor_scroll_containers.last().copied().unwrap_or(root_context);
     for tl in &style.view_timelines {
       if let Some(name) = &tl.name {
-        let horizontal = axis_is_horizontal(tl.axis, style.writing_mode);
+        let horizontal = axis_is_horizontal(tl.axis, view_timeline_context.writing_mode);
         let target_start = if horizontal {
-          abs.x() - context.origin.x
+          abs.x() - view_timeline_context.origin.x
         } else {
-          abs.y() - context.origin.y
+          abs.y() - view_timeline_context.origin.y
         };
         let target_end = if horizontal {
           target_start + abs.width()
@@ -2389,112 +2551,31 @@ fn collect_timelines(
           target_start + abs.height()
         };
         let view_size = if horizontal {
-          context.viewport.width
+          view_timeline_context.viewport.width
         } else {
-          context.viewport.height
+          view_timeline_context.viewport.height
         };
         let scroll_offset = if horizontal {
-          context.scroll.x
+          view_timeline_context.scroll.x
         } else {
-          context.scroll.y
+          view_timeline_context.scroll.y
         };
-        map.entry(name.clone()).or_insert(TimelineState::View {
-          timeline: tl.clone(),
-          target_start,
-          target_end,
-          view_size,
-          scroll_offset,
-        });
+        timeline_scope_push(
+          scope,
+          name.clone(),
+          TimelineState::View {
+            timeline: tl.clone(),
+            target_start,
+            target_end,
+            view_size,
+            scroll_offset,
+          },
+        );
+        pushed_names.push(name.clone());
       }
     }
   }
 
-  for child in node.children.iter() {
-    let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
-    collect_timelines(
-      child,
-      child_offset,
-      root_viewport,
-      root_content,
-      scroll_state,
-      map,
-    );
-  }
-  if let FragmentContent::RunningAnchor { snapshot, .. } = &node.content {
-    let snapshot_offset = Point::new(
-      origin.x + snapshot.bounds.x(),
-      origin.y + snapshot.bounds.y(),
-    );
-    collect_timelines(
-      snapshot,
-      snapshot_offset,
-      root_viewport,
-      root_content,
-      scroll_state,
-      map,
-    );
-  }
-}
-
-fn scroll_self_timeline_progress(
-  node: &FragmentNode,
-  style: &ComputedStyle,
-  scroll_state: &ScrollState,
-  axis: TimelineAxis,
-  range: &AnimationRange,
-) -> Option<f32> {
-  let is_scroll_container = matches!(style.overflow_x, Overflow::Scroll | Overflow::Auto)
-    || matches!(style.overflow_y, Overflow::Scroll | Overflow::Auto);
-  if !is_scroll_container {
-    return None;
-  }
-
-  let horizontal = axis_is_horizontal(axis, style.writing_mode);
-  let view_size = if horizontal {
-    node.bounds.width()
-  } else {
-    node.bounds.height()
-  };
-  let content_size = if horizontal {
-    node.scroll_overflow.width()
-  } else {
-    node.scroll_overflow.height()
-  };
-
-  let scroll_range = (content_size - view_size).max(0.0);
-  if scroll_range <= f32::EPSILON {
-    return None;
-  }
-
-  let scroll = node
-    .box_id()
-    .map(|id| scroll_state.element_offset(id))
-    .unwrap_or(Point::ZERO);
-  let scroll_pos = if horizontal { scroll.x } else { scroll.y };
-  let scroll_pos = scroll_pos.max(0.0).min(scroll_range);
-
-  let timeline = ScrollTimeline {
-    axis,
-    ..ScrollTimeline::default()
-  };
-  Some(scroll_timeline_progress(
-    &timeline,
-    scroll_pos,
-    scroll_range,
-    view_size,
-    range,
-  ))
-}
-
-fn apply_animations_to_node(
-  node: &mut FragmentNode,
-  origin: Point,
-  viewport: Rect,
-  keyframes: &HashMap<String, KeyframesRule>,
-  timelines: &HashMap<String, TimelineState>,
-  scroll_state: &ScrollState,
-  animation_time_ms: Option<f32>,
-) {
   if let Some(style_arc) = node.style.clone() {
     let names = &style_arc.animation_names;
     if !names.is_empty() {
@@ -2507,6 +2588,7 @@ fn apply_animations_to_node(
       for (idx, name) in names.iter().enumerate() {
         let timeline_ref = pick(timelines_list, idx, AnimationTimeline::Auto);
         let range = pick(ranges_list, idx, AnimationRange::default());
+
         let progress = match timeline_ref {
           AnimationTimeline::Auto => match animation_time_ms {
             Some(time_ms) => time_based_animation_progress(&*style_arc, idx, time_ms),
@@ -2514,7 +2596,7 @@ fn apply_animations_to_node(
           },
           AnimationTimeline::None => None,
           AnimationTimeline::Named(ref timeline_name) => {
-            let raw = timelines.get(timeline_name).map(|state| match state {
+            let raw = timeline_scope_resolve(scope, timeline_name).and_then(|state| match state {
               TimelineState::Scroll {
                 timeline,
                 scroll_pos,
@@ -2542,23 +2624,57 @@ fn apply_animations_to_node(
                 &range,
               ),
             });
-            raw.and_then(|raw| scroll_driven_animation_progress(&*style_arc, idx, raw))
+            let fill = pick(
+              &style_arc.animation_fill_modes,
+              idx,
+              AnimationFillMode::default(),
+            );
+            raw
+              .and_then(|raw| scroll_driven_fill_progress(raw, fill))
+              .map(|overall| scroll_driven_effect_progress(&*style_arc, idx, overall))
           }
-          AnimationTimeline::Scroll(timeline) => match timeline.scroller {
-            ScrollTimelineScroller::SelfElement => scroll_self_timeline_progress(
+          AnimationTimeline::Scroll(ref func) => {
+            let raw = scroll_progress_for_function(
+              func,
               node,
-              &*style_arc,
+              origin,
+              root_context,
+              ancestor_scroll_containers,
               scroll_state,
-              timeline.axis,
               &range,
-            )
-            .and_then(|raw| scroll_driven_animation_progress(&*style_arc, idx, raw)),
-            ScrollTimelineScroller::Root | ScrollTimelineScroller::Nearest => None,
-          },
-          AnimationTimeline::View(_) => None,
+            );
+            let fill = pick(
+              &style_arc.animation_fill_modes,
+              idx,
+              AnimationFillMode::default(),
+            );
+            raw
+              .and_then(|raw| scroll_driven_fill_progress(raw, fill))
+              .map(|overall| scroll_driven_effect_progress(&*style_arc, idx, overall))
+          }
+          AnimationTimeline::View(ref func) => {
+            let raw = view_progress_for_function(
+              func,
+              node,
+              origin,
+              root_context,
+              ancestor_scroll_containers,
+              scroll_state,
+              &range,
+            );
+            let fill = pick(
+              &style_arc.animation_fill_modes,
+              idx,
+              AnimationFillMode::default(),
+            );
+            raw
+              .and_then(|raw| scroll_driven_fill_progress(raw, fill))
+              .map(|overall| scroll_driven_effect_progress(&*style_arc, idx, overall))
+          }
         };
 
-        let Some(progress) = progress else { continue }; // skip if no timeline
+        let Some(progress) = progress else { continue };
+
         if let Some(rule) = keyframes.get(name) {
           let element_size = Size::new(node.bounds.width(), node.bounds.height());
           let viewport_size = Size::new(viewport.width(), viewport.height());
@@ -2576,16 +2692,23 @@ fn apply_animations_to_node(
     }
   }
 
+  let pushed_scroll_container = scroll_container_context_for_node(node, origin, scroll_state);
+  if let Some(ctx) = pushed_scroll_container {
+    ancestor_scroll_containers.push(ctx);
+  }
+
   for child in node.children_mut() {
     let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
-    apply_animations_to_node(
+    apply_animations_to_node_scoped(
       child,
       child_offset,
       viewport,
-      keyframes,
-      timelines,
+      root_context,
       scroll_state,
+      keyframes,
       animation_time_ms,
+      scope,
+      ancestor_scroll_containers,
     );
   }
   if let FragmentContent::RunningAnchor { snapshot, .. } = &mut node.content {
@@ -2593,15 +2716,25 @@ fn apply_animations_to_node(
       origin.x + snapshot.bounds.x(),
       origin.y + snapshot.bounds.y(),
     );
-    apply_animations_to_node(
+    apply_animations_to_node_scoped(
       Arc::make_mut(snapshot),
       snapshot_offset,
       viewport,
-      keyframes,
-      timelines,
+      root_context,
       scroll_state,
+      keyframes,
       animation_time_ms,
+      scope,
+      ancestor_scroll_containers,
     );
+  }
+
+  if pushed_scroll_container.is_some() {
+    ancestor_scroll_containers.pop();
+  }
+
+  for name in pushed_names.iter().rev() {
+    timeline_scope_pop(scope, name);
   }
 }
 
@@ -2629,47 +2762,46 @@ pub fn apply_animations(
     tree.viewport_size().height,
   );
   let content = tree.content_size();
-  let mut timelines: HashMap<String, TimelineState> = HashMap::new();
-  let root_offset = Point::new(tree.root.bounds.x(), tree.root.bounds.y());
-  collect_timelines(
-    &tree.root,
-    root_offset,
-    viewport,
-    content,
-    scroll_state,
-    &mut timelines,
-  );
-  for frag in &tree.additional_fragments {
-    let offset = Point::new(frag.bounds.x(), frag.bounds.y());
-    collect_timelines(
-      frag,
-      offset,
+
+  let root_writing_mode = tree
+    .root
+    .style
+    .as_deref()
+    .map(|s| s.writing_mode)
+    .unwrap_or(WritingMode::HorizontalTb);
+  let root_context = root_scroll_container_context(scroll_state, viewport, content, root_writing_mode);
+
+  {
+    let root_offset = Point::new(tree.root.bounds.x(), tree.root.bounds.y());
+    let mut scope = TimelineScope::new();
+    let mut scroll_containers = Vec::new();
+    apply_animations_to_node_scoped(
+      &mut tree.root,
+      root_offset,
       viewport,
-      content,
+      root_context,
       scroll_state,
-      &mut timelines,
+      &tree.keyframes,
+      animation_time_ms,
+      &mut scope,
+      &mut scroll_containers,
     );
   }
 
-  apply_animations_to_node(
-    &mut tree.root,
-    root_offset,
-    viewport,
-    &tree.keyframes,
-    &timelines,
-    scroll_state,
-    animation_time_ms,
-  );
   for frag in &mut tree.additional_fragments {
     let offset = Point::new(frag.bounds.x(), frag.bounds.y());
-    apply_animations_to_node(
+    let mut scope = TimelineScope::new();
+    let mut scroll_containers = Vec::new();
+    apply_animations_to_node_scoped(
       frag,
       offset,
       viewport,
-      &tree.keyframes,
-      &timelines,
+      root_context,
       scroll_state,
+      &tree.keyframes,
       animation_time_ms,
+      &mut scope,
+      &mut scroll_containers,
     );
   }
 }

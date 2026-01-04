@@ -5,7 +5,9 @@ use fastrender::animation::apply_scroll_driven_animations;
 use fastrender::css::types::{Declaration, Keyframe, KeyframesRule, PropertyValue};
 use fastrender::geometry::{Point, Rect, Size};
 use fastrender::scroll::ScrollState;
-use fastrender::style::types::{AnimationRange, AnimationTimeline, TimelineAxis, ViewTimeline};
+use fastrender::style::types::{
+  AnimationFillMode, AnimationRange, AnimationTimeline, TimelineAxis, ViewTimeline,
+};
 use fastrender::style::ComputedStyle;
 use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
 
@@ -42,11 +44,12 @@ fn animated_style(timeline: &str, animation: &str) -> Arc<ComputedStyle> {
   style.view_timelines = vec![ViewTimeline {
     name: Some(timeline.to_string()),
     axis: TimelineAxis::Block,
-    inset: None,
+    ..ViewTimeline::default()
   }];
   style.animation_timelines = vec![AnimationTimeline::Named(timeline.to_string())];
   style.animation_ranges = vec![AnimationRange::default()];
   style.animation_names = vec![animation.to_string()];
+  style.animation_fill_modes = vec![AnimationFillMode::Both].into();
   Arc::new(style)
 }
 
