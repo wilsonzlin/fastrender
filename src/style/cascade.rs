@@ -6548,7 +6548,15 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   let slot_assignment = if !dom_maps.has_shadow_roots() {
     SlotAssignment::default()
   } else {
-    compute_slot_assignment_with_ids(dom, &dom_maps.id_map)
+    match compute_slot_assignment_with_ids(dom, &dom_maps.id_map) {
+      Ok(map) => map,
+      Err(Error::Render(err)) => return Err(err),
+      Err(err) => {
+        return Err(RenderError::PaintFailed {
+          operation: format!("slot assignment failed: {err}"),
+        })
+      }
+    }
   };
   let slot_maps = build_slot_maps(dom, &slot_assignment, &dom_maps);
 
@@ -7081,7 +7089,15 @@ impl<'a> PreparedCascade<'a> {
     let slot_assignment = if !dom_maps.has_shadow_roots() {
       SlotAssignment::default()
     } else {
-      compute_slot_assignment_with_ids(dom, &dom_maps.id_map)
+      match compute_slot_assignment_with_ids(dom, &dom_maps.id_map) {
+        Ok(map) => map,
+        Err(Error::Render(err)) => return Err(err),
+        Err(err) => {
+          return Err(RenderError::PaintFailed {
+            operation: format!("slot assignment failed: {err}"),
+          })
+        }
+      }
     };
     let slot_maps = build_slot_maps(dom, &slot_assignment, &dom_maps);
 

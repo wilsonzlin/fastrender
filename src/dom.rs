@@ -58,6 +58,7 @@ const RELATIVE_SELECTOR_DEADLINE_STRIDE: usize = 64;
 const NTH_DEADLINE_STRIDE: usize = 64;
 const DOM_PARSE_READ_DEADLINE_STRIDE: usize = 1;
 const DOM_PARSE_NODE_DEADLINE_STRIDE: usize = 1024;
+const SHADOW_MAP_DEADLINE_STRIDE: usize = 1024;
 const DOM_PARSE_READ_MAX_CHUNK_BYTES: usize = 16 * 1024;
 
 #[cfg(test)]
@@ -2545,22 +2546,27 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
   Ok(())
 }
 
-fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
+fn collect_slot_names<'a>(
+  node: &'a DomNode,
+  out: &mut HashSet<&'a str>,
+  deadline_counter: &mut usize,
+) -> Result<()> {
   let root_ptr = node as *const DomNode;
   let mut stack: Vec<&'a DomNode> = Vec::new();
   stack.push(node);
 
   while let Some(current) = stack.pop() {
+    check_active_periodic(
+      deadline_counter,
+      SHADOW_MAP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )
+    .map_err(Error::Render)?;
     if is_inert_html_template(current) {
       continue;
     }
-
     if matches!(current.node_type, DomNodeType::Slot { .. }) {
       out.insert(current.get_attribute_ref("name").unwrap_or(""));
-    }
-
-    if is_inert_html_template(current) {
-      continue;
     }
 
     if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
@@ -2576,15 +2582,25 @@ fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
       stack.push(child);
     }
   }
+  Ok(())
 }
 
 fn take_assignments_for_slot_ptr(
   assignments: &mut Vec<(Option<&str>, *const DomNode)>,
   slot_name: &str,
   available_slots: &HashSet<&str>,
-) -> Vec<*const DomNode> {
+  deadline_counter: &mut usize,
+) -> Result<Vec<*const DomNode>> {
   let mut taken = Vec::new();
-  assignments.retain(|(name, node)| {
+  let mut write = 0usize;
+  for read in 0..assignments.len() {
+    check_active_periodic(
+      deadline_counter,
+      SHADOW_MAP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )
+    .map_err(Error::Render)?;
+    let (name, node) = assignments[read];
     let target = name.unwrap_or("");
     let matches = if slot_name.is_empty() {
       name.is_none() || !available_slots.contains(target)
@@ -2593,13 +2609,14 @@ fn take_assignments_for_slot_ptr(
     };
 
     if matches {
-      taken.push(*node);
-      false
+      taken.push(node);
     } else {
-      true
+      assignments[write] = (name, node);
+      write += 1;
     }
-  });
-  taken
+  }
+  assignments.truncate(write);
+  Ok(taken)
 }
 
 fn fill_slot_assignments(
@@ -2609,12 +2626,19 @@ fn fill_slot_assignments(
   available_slots: &HashSet<&str>,
   ids: &HashMap<*const DomNode, usize>,
   out: &mut SlotAssignment,
-) {
+  deadline_counter: &mut usize,
+) -> Result<()> {
   let root_ptr = node as *const DomNode;
   let mut stack: Vec<&DomNode> = Vec::new();
   stack.push(node);
 
   while let Some(current) = stack.pop() {
+    check_active_periodic(
+      deadline_counter,
+      SHADOW_MAP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )
+    .map_err(Error::Render)?;
     let mut traverse_children = !is_inert_html_template(current);
 
     if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
@@ -2624,13 +2648,22 @@ fn fill_slot_assignments(
 
     if matches!(current.node_type, DomNodeType::Slot { .. }) {
       let slot_name = current.get_attribute_ref("name").unwrap_or("");
-      let assigned = take_assignments_for_slot_ptr(assignments, slot_name, available_slots);
+      let assigned =
+        take_assignments_for_slot_ptr(assignments, slot_name, available_slots, deadline_counter)?;
       if !assigned.is_empty() {
         let slot_id = ids.get(&(current as *const DomNode)).copied().unwrap_or(0);
-        let assigned_ids: Vec<usize> = assigned
-          .iter()
-          .filter_map(|ptr| ids.get(ptr).copied())
-          .collect();
+        let mut assigned_ids: Vec<usize> = Vec::with_capacity(assigned.len());
+        for ptr in assigned.iter() {
+          check_active_periodic(
+            deadline_counter,
+            SHADOW_MAP_DEADLINE_STRIDE,
+            RenderStage::Cascade,
+          )
+          .map_err(Error::Render)?;
+          if let Some(id) = ids.get(ptr).copied() {
+            assigned_ids.push(id);
+          }
+        }
         out
           .shadow_to_slots
           .entry(shadow_root_id)
@@ -2639,6 +2672,12 @@ fn fill_slot_assignments(
           .or_default()
           .extend(assigned_ids.iter().copied());
         for &node_id in &assigned_ids {
+          check_active_periodic(
+            deadline_counter,
+            SHADOW_MAP_DEADLINE_STRIDE,
+            RenderStage::Cascade,
+          )
+          .map_err(Error::Render)?;
           out.node_to_slot.insert(
             node_id,
             AssignedSlot {
@@ -2663,6 +2702,7 @@ fn fill_slot_assignments(
       }
     }
   }
+  Ok(())
 }
 
 fn enumerate_node_ids(node: &DomNode, next: &mut usize, map: &mut HashMap<*const DomNode, usize>) {
@@ -2687,7 +2727,7 @@ pub fn enumerate_dom_ids(root: &DomNode) -> HashMap<*const DomNode, usize> {
 }
 
 /// Compute the slot assignment map for all shadow roots in the DOM.
-pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
+pub fn compute_slot_assignment(root: &DomNode) -> Result<SlotAssignment> {
   let ids = enumerate_dom_ids(root);
   compute_slot_assignment_with_ids(root, &ids)
 }
@@ -2696,29 +2736,43 @@ pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
 pub fn compute_slot_assignment_with_ids(
   root: &DomNode,
   ids: &HashMap<*const DomNode, usize>,
-) -> SlotAssignment {
+) -> Result<SlotAssignment> {
   let mut assignment = SlotAssignment::default();
 
   let mut stack: Vec<(&DomNode, Option<&DomNode>)> = Vec::with_capacity(ids.len().min(1024));
   stack.push((root, None));
+  let mut deadline_counter = 0usize;
 
   while let Some((node, parent)) = stack.pop() {
+    check_active_periodic(
+      &mut deadline_counter,
+      SHADOW_MAP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )
+    .map_err(Error::Render)?;
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       if let Some(host) = parent {
         let mut available_slots: HashSet<&str> = HashSet::new();
-        collect_slot_names(node, &mut available_slots);
-        let mut light_children: Vec<(Option<&str>, *const DomNode)> = host
+        collect_slot_names(node, &mut available_slots, &mut deadline_counter)?;
+        let mut light_children: Vec<(Option<&str>, *const DomNode)> =
+          Vec::with_capacity(host.children.len());
+        for child in host
           .children
           .iter()
           .filter(|c| !matches!(c.node_type, DomNodeType::ShadowRoot { .. }))
-          .map(|child| {
-            let slot_name = child
-              .get_attribute_ref("slot")
-              .map(|v| v.trim())
-              .filter(|v| !v.is_empty());
-            (slot_name, child as *const DomNode)
-          })
-          .collect();
+        {
+          check_active_periodic(
+            &mut deadline_counter,
+            SHADOW_MAP_DEADLINE_STRIDE,
+            RenderStage::Cascade,
+          )
+          .map_err(Error::Render)?;
+          let slot_name = child
+            .get_attribute_ref("slot")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty());
+          light_children.push((slot_name, child as *const DomNode));
+        }
 
         let shadow_root_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
         fill_slot_assignments(
@@ -2728,7 +2782,8 @@ pub fn compute_slot_assignment_with_ids(
           &available_slots,
           ids,
           &mut assignment,
-        );
+          &mut deadline_counter,
+        )?;
       }
     }
 
@@ -2740,7 +2795,7 @@ pub fn compute_slot_assignment_with_ids(
       stack.push((child, Some(node)));
     }
   }
-  assignment
+  Ok(assignment)
 }
 
 /// Create a composed-tree view of the DOM for debugging and tooling.
@@ -2755,7 +2810,7 @@ pub fn composed_dom_snapshot(root: &DomNode) -> Result<DomNode> {
   const COMPOSED_SNAPSHOT_DEADLINE_STRIDE: usize = 1024;
 
   let ids = enumerate_dom_ids(root);
-  let assignment = compute_slot_assignment_with_ids(root, &ids);
+  let assignment = compute_slot_assignment_with_ids(root, &ids)?;
 
   let mut id_to_node: Vec<*const DomNode> = vec![ptr::null(); ids.len() + 1];
   for (ptr, id) in ids.iter() {
@@ -2880,7 +2935,7 @@ fn push_part_export(exports: &mut HashMap<String, Vec<usize>>, name: &str, node_
 ///
 /// Closed shadow roots are still traversed here because declarative snapshots include their
 /// contents, and `exportparts` is an explicit opt-in for styling from the outside.
-pub fn compute_part_export_map(root: &DomNode) -> PartExportMap {
+pub fn compute_part_export_map(root: &DomNode) -> Result<PartExportMap> {
   let ids = enumerate_dom_ids(root);
   compute_part_export_map_with_ids(root, &ids)
 }
@@ -2889,14 +2944,21 @@ pub fn compute_part_export_map(root: &DomNode) -> PartExportMap {
 pub fn compute_part_export_map_with_ids(
   root: &DomNode,
   ids: &HashMap<*const DomNode, usize>,
-) -> PartExportMap {
+) -> Result<PartExportMap> {
   // Collect shadow hosts in pre-order, then compute exports in reverse (leaf-to-root) order so
   // nested shadow host exports are available when processing their ancestors.
   let mut hosts: Vec<&DomNode> = Vec::new();
   let mut traversal_stack: Vec<&DomNode> = Vec::with_capacity(ids.len().min(1024));
   traversal_stack.push(root);
+  let mut deadline_counter = 0usize;
 
   while let Some(node) = traversal_stack.pop() {
+    check_active_periodic(
+      &mut deadline_counter,
+      SHADOW_MAP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )
+    .map_err(Error::Render)?;
     if node.is_shadow_host() {
       hosts.push(node);
     }
@@ -2913,6 +2975,12 @@ pub fn compute_part_export_map_with_ids(
   let mut map = PartExportMap::default();
 
   for host in hosts.into_iter().rev() {
+    check_active_periodic(
+      &mut deadline_counter,
+      SHADOW_MAP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )
+    .map_err(Error::Render)?;
     let host_id = ids.get(&(host as *const DomNode)).copied().unwrap_or(0);
     if map.exports_for_host(host_id).is_some() {
       continue;
@@ -2932,11 +3000,22 @@ pub fn compute_part_export_map_with_ids(
     shadow_stack.push(shadow_root);
 
     while let Some(node) = shadow_stack.pop() {
+      check_active_periodic(
+        &mut deadline_counter,
+        SHADOW_MAP_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      )
+      .map_err(Error::Render)?;
       let skip_children = is_inert_html_template(node);
-
       if let Some(parts) = node.get_attribute_ref("part") {
         let node_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
         for part in parts.split_ascii_whitespace() {
+          check_active_periodic(
+            &mut deadline_counter,
+            SHADOW_MAP_DEADLINE_STRIDE,
+            RenderStage::Cascade,
+          )
+          .map_err(Error::Render)?;
           push_part_export(&mut exports, part, node_id);
         }
       }
@@ -2946,8 +3025,20 @@ pub fn compute_part_export_map_with_ids(
         if let Some(mapping) = node.get_attribute_ref("exportparts") {
           if let Some(nested_exports) = map.exports_for_host(nested_id) {
             for (inner, alias) in parse_exportparts(mapping) {
+              check_active_periodic(
+                &mut deadline_counter,
+                SHADOW_MAP_DEADLINE_STRIDE,
+                RenderStage::Cascade,
+              )
+              .map_err(Error::Render)?;
               if let Some(targets) = nested_exports.get(&inner) {
                 for target in targets {
+                  check_active_periodic(
+                    &mut deadline_counter,
+                    SHADOW_MAP_DEADLINE_STRIDE,
+                    RenderStage::Cascade,
+                  )
+                  .map_err(Error::Render)?;
                   push_part_export(&mut exports, &alias, *target);
                 }
               }
@@ -2971,8 +3062,20 @@ pub fn compute_part_export_map_with_ids(
 
     if let Some(exportparts) = host.get_attribute_ref("exportparts") {
       for (internal, alias) in parse_exportparts(exportparts) {
+        check_active_periodic(
+          &mut deadline_counter,
+          SHADOW_MAP_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        )
+        .map_err(Error::Render)?;
         if let Some(targets) = exports.get(&internal).cloned() {
           for target in targets {
+            check_active_periodic(
+              &mut deadline_counter,
+              SHADOW_MAP_DEADLINE_STRIDE,
+              RenderStage::Cascade,
+            )
+            .map_err(Error::Render)?;
             push_part_export(&mut exports, &alias, target);
           }
         }
@@ -2982,7 +3085,7 @@ pub fn compute_part_export_map_with_ids(
     map.insert_host_exports(host_id, exports);
   }
 
-  map
+  Ok(map)
 }
 
 /// Optional DOM compatibility tweaks applied after HTML parsing.
