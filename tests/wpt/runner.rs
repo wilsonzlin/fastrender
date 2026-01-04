@@ -989,7 +989,7 @@ impl WptRunner {
       }
     }
 
-    Self::apply_expected_outcome(result)
+    Self::apply_expected_outcome(config, result)
   }
 
   /// Runs a reference test
@@ -1410,7 +1410,7 @@ impl WptRunner {
     }
   }
 
-  fn apply_expected_outcome(mut result: TestResult) -> TestResult {
+  fn apply_expected_outcome(config: &HarnessConfig, mut result: TestResult) -> TestResult {
     if let Some(expected) = result.metadata.expected_status {
       if expected == result.status {
         if expected != TestStatus::Pass {
@@ -1418,11 +1418,15 @@ impl WptRunner {
           result.message = Some(format!("Expected {expected:?} matched"));
         }
       } else if expected == TestStatus::Fail && result.status == TestStatus::Pass {
-        return TestResult::fail(
-          result.metadata.clone(),
-          result.duration,
-          "Unexpected pass (expected failure)",
-        );
+        if config.update_expected {
+          result.message = Some("Unexpected pass (expected failure)".to_string());
+        } else {
+          return TestResult::fail(
+            result.metadata.clone(),
+            result.duration,
+            "Unexpected pass (expected failure)",
+          );
+        }
       }
     }
 

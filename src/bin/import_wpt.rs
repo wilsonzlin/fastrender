@@ -82,6 +82,12 @@ struct Args {
   #[arg(long)]
   overwrite: bool,
 
+  /// Fail if rewritten HTML/CSS still contains network URLs (http(s):// or //).
+  ///
+  /// This is the default behaviour; `--allow-network` disables the validation.
+  #[arg(long, conflicts_with = "allow_network")]
+  strict_offline: bool,
+
   /// Allow leaving `http(s)://` and `//` URLs in imported HTML/CSS. By default, the importer
   /// fails if any network URL remains after rewriting.
   #[arg(long, default_value_t = false)]
@@ -129,7 +135,11 @@ impl ImportConfig {
       manifest_path,
       dry_run: args.dry_run,
       overwrite: args.overwrite,
-      allow_network: args.allow_network,
+      allow_network: if args.strict_offline {
+        false
+      } else {
+        args.allow_network
+      },
     })
   }
 }
