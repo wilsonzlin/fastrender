@@ -1,12 +1,17 @@
 use fastrender::error::{Error, RenderError, RenderStage};
 use fastrender::paint::display_list::{
   BlendMode, BoxShadowItem, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem,
-  ResolvedFilter, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, Transform3D,
-  TransformItem,
+  ImageData, MaskReferenceRects, ResolvedFilter, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
+  StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, Transform3D, TransformItem,
 };
 use fastrender::paint::display_list_renderer::{DisplayListRenderer, PaintParallelism};
 use fastrender::render_control::{DeadlineGuard, RenderDeadline};
-use fastrender::style::types::{BackfaceVisibility, TransformStyle};
+use fastrender::style::types::{
+  BackfaceVisibility, BackgroundBox, BackgroundPosition, BackgroundPositionComponent,
+  BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, MaskClip, MaskComposite, MaskMode,
+  TransformStyle,
+};
+use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::{BorderRadii, Point, Rect, Rgba};
 use rayon::ThreadPoolBuilder;
@@ -201,6 +206,103 @@ fn clip_transform_and_stacking_context_match_serial_output() {
   let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
   let report = pool.install(|| {
     DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert_eq!(serial.data(), report.pixmap.data());
+}
+
+#[test]
+fn mask_layers_survive_tiling() {
+  // Place a masked stacking context entirely inside a tile whose renderer will translate the
+  // canvas origin. This exercises `StackingContextItem.mask` / `DisplayListRenderer::render_mask`
+  // under parallel tiling.
+  let mut list = DisplayList::new();
+
+  let element_rect = Rect::from_xywh(80.0, 80.0, 8.0, 8.0);
+
+  let mask = ResolvedMask {
+    layers: vec![ResolvedMaskLayer {
+      // Trivial fully-opaque alpha mask that should preserve visibility.
+      image: ResolvedMaskImage::Raster(ImageData::new_pixels(
+        1,
+        1,
+        vec![0, 0, 0, 255], // RGBA8, alpha=255 => fully opaque in alpha mask mode.
+      )),
+      repeat: BackgroundRepeat::repeat(),
+      position: BackgroundPosition::Position {
+        x: BackgroundPositionComponent {
+          alignment: 0.0,
+          offset: Length::px(0.0),
+        },
+        y: BackgroundPositionComponent {
+          alignment: 0.0,
+          offset: Length::px(0.0),
+        },
+      },
+      size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
+      origin: BackgroundBox::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode: MaskMode::Alpha,
+      composite: MaskComposite::Add,
+    }],
+    color: Rgba::BLACK,
+    font_size: 16.0,
+    root_font_size: 16.0,
+    rects: MaskReferenceRects {
+      border: element_rect,
+      padding: element_rect,
+      content: element_rect,
+    },
+  };
+
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: element_rect,
+    plane_rect: element_rect,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(mask),
+  };
+
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: element_rect,
+    color: Rgba::new(200, 60, 140, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 32,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx)
       .unwrap()
       .with_parallelism(parallelism)
       .render_with_report(&list)

@@ -4532,7 +4532,34 @@ impl DisplayListRenderer {
       self.canvas.width() as f32 / self.scale,
       self.canvas.height() as f32 / self.scale,
     );
-    let rects = mask.rects;
+    // In parallel tiling mode the canvas is translated so tile renderers can reuse global display
+    // list coordinates. `ResolvedMask` reference rectangles are in the same global coordinate
+    // space, so we need to offset them into the translated canvas space before computing clip
+    // intersections and rasterizing mask tiles.
+    //
+    // At the moment `render_mask` assumes the canvas transform is translation-only. This is
+    // sufficient for tiling (which uses `Canvas::translate`) and avoids incorrectly applying an
+    // affine transform to mask-origin computations that currently operate in axis-aligned space.
+    let canvas_transform = self.canvas.transform();
+    let is_translation_only = {
+      const EPS: f32 = 1e-6;
+      (canvas_transform.sx - 1.0).abs() < EPS
+        && (canvas_transform.sy - 1.0).abs() < EPS
+        && canvas_transform.kx.abs() < EPS
+        && canvas_transform.ky.abs() < EPS
+    };
+    let canvas_offset_css = if is_translation_only && self.scale.is_finite() && self.scale != 0.0 {
+      Point::new(canvas_transform.tx / self.scale, canvas_transform.ty / self.scale)
+    } else {
+      Point::ZERO
+    };
+
+    let mut rects = mask.rects;
+    if canvas_offset_css != Point::ZERO {
+      rects.border = rects.border.translate(canvas_offset_css);
+      rects.padding = rects.padding.translate(canvas_offset_css);
+      rects.content = rects.content.translate(canvas_offset_css);
+    }
     let mut combined: Option<CompositeMask> = None;
     let canvas_bounds_css = Rect::from_xywh(0.0, 0.0, viewport.0, viewport.1);
     let canvas_clip_bounds_css = self
