@@ -4630,28 +4630,32 @@ impl TableFormattingContext {
           structure
             .cells
             .par_iter()
-            .map(|cell| {
+            .enumerate()
+            .map(|(idx, cell)| {
               with_deadline(deadline.as_ref(), || {
                 let _stage_guard = StageGuard::install(stage);
                 let Some(row) = source_rows.get(cell.source_row) else {
-                  return Ok(None);
+                  return Ok((idx, None));
                 };
                 let Some(cell_box) = row.children.get(cell.box_index) else {
-                  return Ok(None);
+                  return Ok((idx, None));
                 };
-                Ok(Some(self.measure_cell_intrinsic_widths(
-                  cell_box,
-                  structure.border_collapse,
-                  percent_base,
-                  cell_bfc,
-                  style_overrides,
-                )?))
+                Ok((
+                  idx,
+                  Some(self.measure_cell_intrinsic_widths(
+                    cell_box,
+                    structure.border_collapse,
+                    percent_base,
+                    cell_bfc,
+                    style_overrides,
+                  )?),
+                ))
               })
             })
             .collect::<Result<Vec<_>, LayoutError>>()
         };
 
-        if self.parallelism.is_active() {
+        let indexed_measurements = if self.parallelism.is_active() {
           measure()?
         } else {
           // Table intrinsic sizing can spawn Rayon work even when layout parallelism is not engaged
@@ -4663,7 +4667,15 @@ impl TableFormattingContext {
           } else {
             measure()?
           }
+        };
+
+        let mut measurements = vec![None; structure.cells.len()];
+        for (idx, measurement) in indexed_measurements {
+          if let Some(slot) = measurements.get_mut(idx) {
+            *slot = measurement;
+          }
         }
+        measurements
       } else {
         structure
           .cells
@@ -7590,6 +7602,124 @@ mod tests {
     assert!(
       after > before,
       "expected fixed-layout cell layout to reuse the table factory shaping cache (before={before}, after={after})"
+    );
+  }
+
+  #[test]
+  fn column_constraints_deterministic_under_parallel_intrinsic_measurement() {
+    let _guard = intrinsic_cache_test_lock();
+    let viewport = crate::geometry::Size::new(800.0, 600.0);
+    let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+    let base_factory = FormattingContextFactory::with_font_context_and_viewport(font_ctx, viewport);
+
+    let parallel_factory = base_factory.clone().with_parallelism(
+      LayoutParallelism::enabled(1).with_max_threads(Some(4)),
+    );
+    let sequential_factory = base_factory
+      .with_parallelism(LayoutParallelism::disabled());
+
+    let parallel_tfc = TableFormattingContext::with_factory(parallel_factory);
+    let sequential_tfc = TableFormattingContext::with_factory(sequential_factory);
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+    let table_style = Arc::new(table_style);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+    let row_style = Arc::new(row_style);
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.font_size = 16.0;
+    let cell_style = Arc::new(cell_style);
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+    let text_style = Arc::new(text_style);
+
+    let rows = 33usize;
+    let cols = 8usize;
+    assert!(
+      rows * cols > 256,
+      "test table must exceed the parallel intrinsic measurement threshold"
+    );
+
+    let mut table_rows = Vec::with_capacity(rows);
+    for r in 0..rows {
+      let mut cells = Vec::with_capacity(cols);
+      for c in 0..cols {
+        // Use an unbreakable string so min/max content widths differ per column and exercise
+        // measurement-to-cell indexing. Vary the width slightly per row to encourage work stealing.
+        let len = (c + 1) * 12 + (r % 3);
+        let text = BoxNode::new_text(text_style.clone(), "x".repeat(len));
+        let cell = BoxNode::new_block(
+          cell_style.clone(),
+          FormattingContextType::Block,
+          vec![text],
+        );
+        cells.push(cell);
+      }
+      table_rows.push(BoxNode::new_block(
+        row_style.clone(),
+        FormattingContextType::Block,
+        cells,
+      ));
+    }
+
+    let table_tree = BoxTree::new(BoxNode::new_block(
+      table_style,
+      FormattingContextType::Table,
+      table_rows,
+    ));
+    let table = &table_tree.root;
+    let structure = TableStructure::from_box_tree(table);
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_parallel_table_constraints",
+      table.id,
+      table,
+      &structure,
+      DistributionMode::Auto,
+    );
+
+    let compute = |tfc: &TableFormattingContext| -> Vec<ColumnConstraints> {
+      let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+        .map(|_| ColumnConstraints::new(0.0, 0.0))
+        .collect();
+      tfc
+        .populate_column_constraints(
+          table,
+          &structure,
+          &mut constraints,
+          DistributionMode::Auto,
+          None,
+          &style_overrides,
+        )
+        .expect("populate constraints");
+      constraints
+    };
+
+    let expected_sequential = compute(&sequential_tfc);
+
+    let pool = rayon::ThreadPoolBuilder::new()
+      .num_threads(4)
+      .build()
+      .expect("rayon pool");
+    let parallel_runs =
+      pool.install(|| (0..16usize).map(|_| compute(&parallel_tfc)).collect::<Vec<_>>());
+
+    for (idx, constraints) in parallel_runs.iter().enumerate() {
+      assert_eq!(
+        constraints, &parallel_runs[0],
+        "parallel column constraints differed on iteration {idx}"
+      );
+    }
+    assert_eq!(
+      parallel_runs[0], expected_sequential,
+      "parallel column constraints must match sequential (parallelism disabled)"
     );
   }
 
