@@ -234,6 +234,7 @@ fn test_all_fixture_files_exist() {
     "text_letter_spacing_vertical",
     "text_font_palette_overrides_display_list",
     "text_vertical_orientation_mixed",
+    "text_vertical_upright_bidi_preserve_order",
     "text_combine_upright_scale",
     "shadow_dom",
     "svg_foreign_object",
@@ -543,6 +544,12 @@ fn test_fixture_text_vertical_orientation_mixed() {
 }
 
 #[test]
+fn test_fixture_text_vertical_upright_bidi_preserve_order() {
+  test_fixture("text_vertical_upright_bidi_preserve_order")
+    .expect("text_vertical_upright_bidi_preserve_order fixture should render");
+}
+
+#[test]
 fn test_fixture_text_combine_upright_scale() {
   test_fixture("text_combine_upright_scale")
     .expect("text_combine_upright_scale fixture should render");
@@ -632,6 +639,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "text_letter_spacing_vertical",
     "text_font_palette_overrides_display_list",
     "text_vertical_orientation_mixed",
+    "text_vertical_upright_bidi_preserve_order",
     "text_combine_upright_scale",
     // Shadow DOM
     "shadow_dom",

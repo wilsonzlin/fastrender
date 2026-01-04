@@ -8210,13 +8210,36 @@ impl InlineFormattingContext {
         pending.clear();
         return Ok(None);
       }
-      let paragraph_direction = base_direction;
-      let paragraph_base_level = match style.unicode_bidi {
-        crate::style::types::UnicodeBidi::Plaintext => None,
-        _ => match paragraph_direction {
-          crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
-          crate::style::types::Direction::Ltr => Some(unicode_bidi::Level::ltr()),
-        },
+      // `text-orientation: upright` forces vertical typographic paragraphs to behave as strong
+      // LTR for bidi, regardless of the authored `direction`. The shaping pipeline already
+      // applies this override when `writing-mode` is vertical-rl/lr; inline layout must match so
+      // paragraph-level bidi reordering does not swap RTL scripts.
+      let upright_vertical_bidi_override = is_vertical_typographic_mode(style.writing_mode)
+        && matches!(
+          style.text_orientation,
+          crate::style::types::TextOrientation::Upright
+        );
+
+      let paragraph_direction = if upright_vertical_bidi_override {
+        crate::style::types::Direction::Ltr
+      } else {
+        base_direction
+      };
+
+      let (paragraph_unicode_bidi, paragraph_base_level) = if upright_vertical_bidi_override {
+        (
+          crate::style::types::UnicodeBidi::BidiOverride,
+          Some(unicode_bidi::Level::ltr()),
+        )
+      } else {
+        let paragraph_base_level = match style.unicode_bidi {
+          crate::style::types::UnicodeBidi::Plaintext => None,
+          _ => match paragraph_direction {
+            crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
+            crate::style::types::Direction::Ltr => Some(unicode_bidi::Level::ltr()),
+          },
+        };
+        (style.unicode_bidi, paragraph_base_level)
       };
       let remaining_clamp = active_line_clamp.map(|limit| limit.saturating_sub(lines_out.len()));
       if matches!(remaining_clamp, Some(0)) {
@@ -8242,7 +8265,7 @@ impl InlineFormattingContext {
         &strut_metrics,
         paragraph_base_level,
         paragraph_direction,
-        style.unicode_bidi,
+        paragraph_unicode_bidi,
         ctx_ref,
         float_base_y + *line_offset,
         remaining_clamp,
@@ -10245,6 +10268,7 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
+  use crate::text::font_db::FontDatabase;
   use crate::text::font_loader::FontContext;
   use crate::text::line_break::BreakOpportunity;
   use crate::text::line_break::BreakType;
@@ -10257,6 +10281,7 @@ mod tests {
     reset_fragment_instrumentation_counters, FragmentContent,
   };
   use rayon::ThreadPoolBuilder;
+  use std::path::PathBuf;
   use std::sync::Arc;
 
   fn default_style() -> Arc<ComputedStyle> {
@@ -12556,6 +12581,61 @@ mod tests {
       dir,
       crate::style::types::Direction::Ltr,
       "upright vertical text should use LTR base direction regardless of authored direction"
+    );
+  }
+
+  #[test]
+  fn upright_vertical_suppresses_paragraph_bidi_reordering() {
+    let mut db = FontDatabase::empty();
+    for font in [
+      "tests/fixtures/fonts/NotoSans-subset.ttf",
+      "tests/fixtures/fonts/NotoSansHebrew-subset.ttf",
+    ] {
+      let data = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(font))
+        .expect("fixture font should load");
+      db.load_font_data(data)
+        .expect("fixture font should parse");
+    }
+    db.refresh_generic_fallbacks();
+    let font_ctx = FontContext::with_database(Arc::new(db));
+    let ifc = InlineFormattingContext::with_font_context(font_ctx)
+      .with_parallelism(LayoutParallelism::disabled());
+
+    let mut style = ComputedStyle::default();
+    style.display = Display::Block;
+    style.font_family = vec!["Noto Sans".to_string(), "Noto Sans Hebrew".to_string()].into();
+    style.direction = crate::style::types::Direction::Rtl;
+    style.writing_mode = WritingMode::VerticalRl;
+    style.text_orientation = crate::style::types::TextOrientation::Upright;
+    let root_style = Arc::new(style);
+
+    let mut text_style = (*root_style).clone();
+    text_style.display = Display::Inline;
+    let text_style = Arc::new(text_style);
+
+    let children = vec![
+      BoxNode::new_text(text_style.clone(), "אבג".to_string()),
+      BoxNode::new_text(text_style, "abc".to_string()),
+    ];
+    let root = BoxNode::new_block(root_style, FormattingContextType::Inline, children);
+    let constraints = LayoutConstraints::definite(240.0, 800.0);
+
+    let fragment = ifc.layout(&root, &constraints).unwrap();
+
+    fn collect_text(node: &FragmentNode, out: &mut String) {
+      if let FragmentContent::Text { text, .. } = &node.content {
+        out.push_str(text);
+      }
+      for child in node.children.iter() {
+        collect_text(child, out);
+      }
+    }
+
+    let mut collected = String::new();
+    collect_text(&fragment, &mut collected);
+    assert_eq!(
+      collected, "אבגabc",
+      "vertical upright text should preserve logical order (no paragraph bidi swapping)"
     );
   }
 
