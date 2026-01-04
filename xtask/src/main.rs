@@ -1755,10 +1755,30 @@ fn run_render_page(args: RenderPageArgs) -> Result<()> {
 }
 
 fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
-  fs::create_dir_all(&args.output).context("create diff output directory")?;
+  // Historically `cargo xtask diff-renders` interpreted relative paths relative to the caller's
+  // current directory (because it used `std::fs` directly). Keep that behaviour even though we run
+  // `cargo` from the repo root.
+  let cwd = std::env::current_dir().context("resolve current directory")?;
+  let before = if args.before.is_absolute() {
+    args.before
+  } else {
+    cwd.join(&args.before)
+  };
+  let after = if args.after.is_absolute() {
+    args.after
+  } else {
+    cwd.join(&args.after)
+  };
+  let output_dir = if args.output.is_absolute() {
+    args.output
+  } else {
+    cwd.join(&args.output)
+  };
 
-  let html_path = args.output.join("diff_report.html");
-  let json_path = args.output.join("diff_report.json");
+  fs::create_dir_all(&output_dir).context("create diff output directory")?;
+
+  let html_path = output_dir.join("diff_report.html");
+  let json_path = output_dir.join("diff_report.json");
 
   let mut cmd = Command::new("cargo");
   cmd
@@ -1767,9 +1787,9 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
     .args(["--bin", "diff_renders"])
     .arg("--")
     .arg("--before")
-    .arg(&args.before)
+    .arg(&before)
     .arg("--after")
-    .arg(&args.after)
+    .arg(&after)
     .arg("--tolerance")
     .arg(args.threshold.to_string())
     .arg("--max-diff-percent")
