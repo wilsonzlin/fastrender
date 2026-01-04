@@ -3031,6 +3031,22 @@ fn translate_filter_region_user_space_numbers(
   translate_length_number(&mut region.y, origin_y);
 }
 
+fn translate_primitive_region_override_user_space_numbers(
+  region: &mut SvgFilterPrimitiveRegionOverride,
+  origin_x: f32,
+  origin_y: f32,
+) {
+  if !matches!(region.units, SvgFilterUnits::UserSpaceOnUse) {
+    return;
+  }
+  if let Some(x) = &mut region.x {
+    translate_length_number(x, origin_x);
+  }
+  if let Some(y) = &mut region.y {
+    translate_length_number(y, origin_y);
+  }
+}
+
 fn translate_light_source_user_space_numbers(
   light: &mut LightSource,
   origin_x: f32,
@@ -3073,7 +3089,7 @@ fn translate_filter_user_space_numbers_for_filter_res(
   translate_filter_region_user_space_numbers(&mut def.region, origin_x, origin_y);
   for step in &mut def.steps {
     if let Some(region) = &mut step.region {
-      translate_filter_region_user_space_numbers(region, origin_x, origin_y);
+      translate_primitive_region_override_user_space_numbers(region, origin_x, origin_y);
     }
     match &mut step.primitive {
       FilterPrimitive::DiffuseLighting { light, .. }
