@@ -594,9 +594,6 @@ fn build_chrome_args(
     "--no-sandbox".to_string(),
     "--disable-dev-shm-usage".to_string(),
     "--hide-scrollbars".to_string(),
-    // Avoid background networking / DNS noise so local fixtures stay offline and deterministic.
-    "--disable-background-networking".to_string(),
-    "--dns-prefetch-disable".to_string(),
     viewport_arg,
     dpr_arg,
     // Keep behaviour consistent with scripts/chrome_baseline.sh when loading local fixtures.
@@ -604,6 +601,7 @@ fn build_chrome_args(
     "--allow-file-access-from-files".to_string(),
     // Keep renders deterministic/offline when fixture HTML accidentally references http(s).
     "--disable-background-networking".to_string(),
+    "--dns-prefetch-disable".to_string(),
     "--no-first-run".to_string(),
     "--no-default-browser-check".to_string(),
     "--disable-component-update".to_string(),

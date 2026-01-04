@@ -157,6 +157,7 @@ fn chrome_baseline_fixtures_builds_expected_chrome_command_flags() {
   );
   assert!(
     log.contains("--disable-background-networking")
+      && log.contains("--dns-prefetch-disable")
       && log.contains("--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost"),
     "chrome args should include offline network blocking flags; got:\n{log}"
   );
