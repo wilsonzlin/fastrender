@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Always run relative paths from the repository root, even if the script is invoked from a
+# subdirectory.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
+
 # Determine the effective CPU budget for default `JOBS`/Rayon thread budgeting.
 #
 # We prefer `nproc` when available because it respects cpusets/affinity. On Linux, also honor cgroup
