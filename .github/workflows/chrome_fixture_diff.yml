@@ -238,7 +238,7 @@ jobs:
           test -f "${OUT_DIR}/delta.html"
 
       - name: Regression gate (delta vs main)
-        if: env.BASELINE_FOUND == '1' && env.FAIL_ON_REGRESSION == 'true'
+        if: steps.compare_delta.outcome == 'success' && env.FAIL_ON_REGRESSION == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -285,7 +285,8 @@ PY
           {
             echo "## Fixture vs Chrome diff report"
             echo
-            echo "Download the **${REPORT_ARTIFACT}** artifact from this workflow run."
+            echo "Download the **${REPORT_ARTIFACT}** artifact from this workflow run:"
+            echo "- ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo
             echo "- HTML report: \`${OUT_DIR}/report.html\`"
             echo "- JSON report: \`${OUT_DIR}/report.json\`"
