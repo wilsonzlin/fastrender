@@ -477,6 +477,24 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
 - Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
 - Exit codes: `diff_renders` exits with code 1 when any diff/missing/error entries are present. When running via `cargo run`, Cargo will print a `process didn't exit successfully` wrapper message—this is expected. Use `cargo xtask diff-renders` (or run the built binary directly) if you want cleaner output while still keeping the report; pass `cargo xtask diff-renders --fail-on-differences` to preserve the non-zero exit code while still keeping the report.
 
+## `compare_diff_reports`
+
+- Purpose: compare two `diff_renders` JSON reports (baseline vs new) and summarize deltas (improvements/regressions) by fixture/page name.
+- Entry: `src/bin/compare_diff_reports.rs`
+- Run:
+
+  ```bash
+  cargo run --release --bin compare_diff_reports -- \
+    --baseline target/fixture_chrome_diff_before/report.json \
+    --new target/fixture_chrome_diff_after/report.json \
+    --json target/fixture_chrome_diff_delta/report.json \
+    --html target/fixture_chrome_diff_delta/report.html
+  ```
+
+- Outputs: `diff_report_delta.json` + `diff_report_delta.html` by default.
+- Safety: refuses to compare reports generated with different diff parameters (`tolerance`, `max_diff_percent`, `max_perceptual_distance`, `ignore_alpha`) unless you pass `--allow-config-mismatch` (mismatches are recorded in the delta report).
+- Gating: `--fail-on-regression` (plus `--regression-threshold-percent <PERCENT>`) exits non-zero when any entry regresses.
+
 ## `diff_snapshots`
 
 - Purpose: compare pipeline snapshots (`*.snapshot.json`) and highlight stage-level deltas that explain pixel diffs.

@@ -1,7 +1,7 @@
 mod common;
 
 use clap::Parser;
-use common::report::{ensure_parent_dir, escape_html};
+use common::report::{ensure_parent_dir, escape_html, path_for_report};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -61,6 +61,9 @@ struct DiffReport {
 struct DiffReportEntry {
   name: String,
   status: EntryStatus,
+  before: Option<String>,
+  after: Option<String>,
+  diff: Option<String>,
   metrics: Option<MetricsSummary>,
   error: Option<String>,
 }
@@ -167,6 +170,12 @@ struct DeltaEntry {
 struct EntrySummary {
   status: EntryStatus,
   #[serde(skip_serializing_if = "Option::is_none")]
+  before: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  after: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  diff: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   metrics: Option<MetricsSummary>,
   #[serde(skip_serializing_if = "Option::is_none")]
   error: Option<String>,
@@ -224,8 +233,13 @@ fn run() -> Result<i32, String> {
   let args = Args::parse();
   validate_args(&args)?;
 
-  let baseline_report = read_report(&args.baseline)?;
-  let new_report = read_report(&args.new_report)?;
+  let baseline_path =
+    fs::canonicalize(&args.baseline).map_err(|e| format!("{}: {e}", args.baseline.display()))?;
+  let new_path = fs::canonicalize(&args.new_report)
+    .map_err(|e| format!("{}: {e}", args.new_report.display()))?;
+
+  let baseline_report = read_report(&baseline_path)?;
+  let new_report = read_report(&new_path)?;
 
   let config_mismatches = diff_config(&baseline_report, &new_report);
   if !config_mismatches.is_empty() {
@@ -323,7 +337,18 @@ fn run() -> Result<i32, String> {
   };
 
   write_json_report(&report, &args.json)?;
-  write_html_report(&report, &args.html)?;
+  let baseline_report_dir = baseline_path
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .map(PathBuf::from)
+    .unwrap_or_else(|| PathBuf::from("."));
+  let new_report_dir = new_path
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .map(PathBuf::from)
+    .unwrap_or_else(|| PathBuf::from("."));
+
+  write_html_report(&report, &baseline_report_dir, &new_report_dir, &args.html)?;
 
   if args.fail_on_regression {
     let threshold = args.regression_threshold_percent;
@@ -427,6 +452,9 @@ fn index_entries(entries: Vec<DiffReportEntry>) -> BTreeMap<String, DiffReportEn
 fn to_entry_summary(entry: &DiffReportEntry) -> EntrySummary {
   EntrySummary {
     status: entry.status,
+    before: entry.before.clone(),
+    after: entry.after.clone(),
+    diff: entry.diff.clone(),
     metrics: entry.metrics,
     error: entry.error.clone(),
   }
@@ -575,8 +603,20 @@ fn write_json_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
   fs::write(path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
-fn write_html_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
+fn write_html_report(
+  report: &DeltaReport,
+  baseline_report_dir: &Path,
+  new_report_dir: &Path,
+  path: &Path,
+) -> Result<(), String> {
   ensure_parent_dir(path)?;
+
+  let html_dir = path
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .map(PathBuf::from)
+    .unwrap_or_else(|| PathBuf::from("."));
+  let html_dir = fs::canonicalize(&html_dir).unwrap_or(html_dir);
 
   let mismatch_block = if report.config_mismatches.is_empty() {
     "".to_string()
@@ -624,6 +664,19 @@ fn write_html_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
       .map(|s| s.status.label())
       .unwrap_or("-");
     let new_status = entry.new.as_ref().map(|s| s.status.label()).unwrap_or("-");
+
+    let baseline_diff_image = entry
+      .baseline
+      .as_ref()
+      .and_then(|s| s.diff.as_deref())
+      .map(|diff| format_report_image_cell(&html_dir, baseline_report_dir, "Diff", diff))
+      .unwrap_or_else(|| "-".to_string());
+    let new_diff_image = entry
+      .new
+      .as_ref()
+      .and_then(|s| s.diff.as_deref())
+      .map(|diff| format_report_image_cell(&html_dir, new_report_dir, "Diff", diff))
+      .unwrap_or_else(|| "-".to_string());
 
     let baseline_diff = entry
       .baseline
@@ -681,16 +734,18 @@ fn write_html_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
     };
 
     rows.push_str(&format!(
-      "<tr class=\"{row_class}\"><td>{name}</td><td>{classification}</td><td>{baseline_status}</td><td>{baseline_diff}</td><td>{baseline_perceptual}</td><td>{new_status}</td><td>{new_diff}</td><td>{new_perceptual}</td><td>{diff_delta}</td><td>{perceptual_delta}</td><td class=\"error\">{error}</td></tr>",
+      "<tr class=\"{row_class}\"><td>{name}</td><td>{classification}</td><td>{baseline_status}</td><td>{baseline_diff}</td><td>{baseline_perceptual}</td><td>{baseline_diff_image}</td><td>{new_status}</td><td>{new_diff}</td><td>{new_perceptual}</td><td>{new_diff_image}</td><td>{diff_delta}</td><td>{perceptual_delta}</td><td class=\"error\">{error}</td></tr>",
       row_class = entry.classification.row_class(),
       name = escape_html(&entry.name),
       classification = escape_html(entry.classification.label()),
       baseline_status = escape_html(baseline_status),
       baseline_diff = baseline_diff,
       baseline_perceptual = baseline_perceptual,
+      baseline_diff_image = baseline_diff_image,
       new_status = escape_html(new_status),
       new_diff = new_diff,
       new_perceptual = new_perceptual,
+      new_diff_image = new_diff_image,
       diff_delta = diff_delta,
       perceptual_delta = perceptual_delta,
       error = escape_html(&error_combined),
@@ -715,6 +770,7 @@ fn write_html_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
       .warning {{ color: #b00020; }}
       .error {{ color: #b00020; white-space: pre-wrap; }}
       .top-list table {{ width: auto; }}
+      .thumb img {{ max-width: 240px; max-height: 180px; display: block; }}
     </style>
   </head>
   <body>
@@ -737,9 +793,11 @@ fn write_html_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
           <th>Baseline status</th>
           <th>Baseline diff %</th>
           <th>Baseline perceptual</th>
+          <th>Baseline diff</th>
           <th>New status</th>
           <th>New diff %</th>
           <th>New perceptual</th>
+          <th>New diff</th>
           <th>Δ diff %</th>
           <th>Δ perceptual</th>
           <th>Error</th>
@@ -772,6 +830,35 @@ fn write_html_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
   );
 
   fs::write(path, content).map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
+
+fn format_report_image_cell(
+  delta_html_dir: &Path,
+  report_dir: &Path,
+  label: &str,
+  report_relative_path: &str,
+) -> String {
+  let target_path = resolve_report_path(report_dir, report_relative_path);
+  let rel = path_for_report(delta_html_dir, &target_path);
+  format_linked_image(label, &rel)
+}
+
+fn resolve_report_path(report_dir: &Path, report_relative_path: &str) -> PathBuf {
+  let raw = PathBuf::from(report_relative_path);
+  if raw.is_absolute() {
+    raw
+  } else {
+    report_dir.join(raw)
+  }
+}
+
+fn format_linked_image(label: &str, path: &str) -> String {
+  let escaped = escape_html(path);
+  format!(
+    r#"<div class="thumb"><a href="{p}">{l}</a><br><img src="{p}" loading="lazy"></div>"#,
+    p = escaped,
+    l = escape_html(label),
+  )
 }
 
 fn format_top_list(title: &str, entries: &[DeltaRankedEntry], improvements: bool) -> String {
