@@ -4215,6 +4215,10 @@ fn drop_shadow_pixmap(
   blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
   scale: f32,
 ) -> RenderResult<FilterResult> {
+  let use_linear = matches!(
+    color_interpolation_filters,
+    ColorInterpolationFilters::LinearRGB
+  );
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&input.pixmap) else {
     return Ok(input);
   };
@@ -4258,20 +4262,14 @@ fn drop_shadow_pixmap(
     }
   }
 
+  if use_linear {
+    reencode_pixmap_to_linear_rgb(&mut shadow);
+  }
+
   if stddev.0 != 0.0 || stddev.1 != 0.0 {
-    let use_linear = matches!(
-      color_interpolation_filters,
-      ColorInterpolationFilters::LinearRGB
-    );
-    if use_linear {
-      reencode_pixmap_to_linear_rgb(&mut shadow);
-    }
     with_blur_cache(blur_cache, |cache| {
       apply_gaussian_blur_cached(&mut shadow, stddev.0, stddev.1, cache, scale)
     })?;
-    if use_linear {
-      reencode_pixmap_to_srgb(&mut shadow);
-    }
   }
 
   let mut out = match new_pixmap(input.pixmap.width(), input.pixmap.height()) {
@@ -4289,6 +4287,10 @@ fn drop_shadow_pixmap(
     Transform::from_translate(dx, dy),
     None,
   );
+  let mut input = input;
+  if use_linear {
+    reencode_pixmap_to_linear_rgb(&mut input.pixmap);
+  }
   out.draw_pixmap(
     0,
     0,
@@ -4297,6 +4299,9 @@ fn drop_shadow_pixmap(
     Transform::identity(),
     None,
   );
+  if use_linear {
+    reencode_pixmap_to_srgb(&mut out);
+  }
 
   let base_region = input.region;
   let blur_spread_x = (stddev.0.abs() * 3.0).max(0.0);
@@ -5178,6 +5183,60 @@ mod tests {
     let alpha = a as f32 / 255.0;
     let pm = |v: u8| ((v as f32) * alpha).round().clamp(0.0, 255.0) as u8;
     PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
+  }
+
+  fn assert_u8_near(actual: u8, expected: u8) {
+    let delta = actual.abs_diff(expected);
+    assert!(
+      delta <= 1,
+      "expected {expected}±1, got {actual} (Δ={delta})"
+    );
+  }
+
+  #[test]
+  fn drop_shadow_honors_color_interpolation_filters_for_merge() {
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    pixmap.pixels_mut()[0] = PremultipliedColorU8::from_rgba(128, 128, 128, 128).unwrap();
+    let filter_region = filter_region_for_pixmap(&pixmap);
+    let input = FilterResult::full_region(pixmap, filter_region);
+
+    let out_srgb = drop_shadow_pixmap(
+      input.clone(),
+      0.0,
+      0.0,
+      (0.0, 0.0),
+      &Rgba::BLACK,
+      1.0,
+      ColorInterpolationFilters::SRGB,
+      filter_region,
+      None,
+      1.0,
+    )
+    .unwrap();
+    let px_srgb = out_srgb.pixmap.pixels()[0];
+    assert_u8_near(px_srgb.red(), 128);
+    assert_u8_near(px_srgb.green(), 128);
+    assert_u8_near(px_srgb.blue(), 128);
+    assert_u8_near(px_srgb.alpha(), 191);
+
+    let out_linear = drop_shadow_pixmap(
+      input,
+      0.0,
+      0.0,
+      (0.0, 0.0),
+      &Rgba::BLACK,
+      1.0,
+      ColorInterpolationFilters::LinearRGB,
+      filter_region,
+      None,
+      1.0,
+    )
+    .unwrap();
+    let px_linear = out_linear.pixmap.pixels()[0];
+    assert_u8_near(px_linear.red(), 160);
+    assert_u8_near(px_linear.green(), 160);
+    assert_u8_near(px_linear.blue(), 160);
+    assert_u8_near(px_linear.alpha(), 191);
   }
 
   #[derive(Default)]
