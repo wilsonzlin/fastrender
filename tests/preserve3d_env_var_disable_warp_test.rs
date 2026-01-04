@@ -1,3 +1,4 @@
+use fastrender::debug::runtime::{with_runtime_toggles, RuntimeToggles};
 use fastrender::paint::display_list::{
   BlendMode, BorderRadii, DisplayItem, DisplayList, FillRectItem, StackingContextItem, Transform3D,
 };
@@ -7,6 +8,7 @@ use fastrender::style::types::{BackfaceVisibility, TransformStyle};
 use fastrender::text::font_loader::FontContext;
 use fastrender::Rect;
 use std::ffi::{OsStr, OsString};
+use std::sync::Arc;
 
 struct EnvVarGuard {
   key: &'static str,
@@ -104,6 +106,7 @@ fn preserve3d_disable_warp_env_forces_affine_approximation() {
   // how the CLI/libraries consume FASTR_PRESERVE3D_* via RuntimeToggles sourced from env.
   let _warp_guard = EnvVarGuard::set("FASTR_PRESERVE3D_WARP", "1");
   let _disable_guard = EnvVarGuard::set("FASTR_PRESERVE3D_DISABLE_WARP", "1");
+  let toggles = Arc::new(RuntimeToggles::from_env());
 
   let plane = Rect::from_xywh(10.0, 10.0, 40.0, 40.0);
   let perspective = Transform3D::perspective(50.0);
@@ -156,10 +159,12 @@ fn preserve3d_disable_warp_env_forces_affine_approximation() {
   list.push(DisplayItem::PopStackingContext);
 
   let predicate = |(r, g, b, a): (u8, u8, u8, u8)| a > 0 && r > 200 && g < 250 && b < 250;
-  let pixmap = DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new())
-    .unwrap()
-    .render(&list)
-    .unwrap();
+  let pixmap = with_runtime_toggles(toggles, || {
+    DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .render(&list)
+      .unwrap()
+  });
 
   let variation = scanline_width_variation(&pixmap, predicate);
   assert!(
