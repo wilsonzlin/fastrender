@@ -16317,6 +16317,28 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn registered_custom_property_revert_layer_important_uses_post_normal_layer_base() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer base, theme;
+        @layer base { #target { --len: 10px; --len: revert-layer !important; } }
+        @layer theme { #target { --len: 30px; } }
+        #target { width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(30.0)));
+  }
+
+  #[test]
   fn text_combine_upright_inherits() {
     let mut parent = ComputedStyle::default();
     parent.text_combine_upright = TextCombineUpright::Digits(3);
