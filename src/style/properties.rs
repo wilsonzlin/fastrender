@@ -1313,6 +1313,14 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
       continue;
     }
 
+    if ch == '\\' {
+      current.push(ch);
+      if let Some(next) = chars.next() {
+        current.push(next);
+      }
+      continue;
+    }
+
     match ch {
       '(' => {
         depth += 1;
@@ -1359,6 +1367,14 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
       }
       if ch == quote {
         in_string = None;
+      }
+      continue;
+    }
+
+    if ch == '\\' {
+      current.push(ch);
+      if let Some(next) = chars.next() {
+        current.push(next);
       }
       continue;
     }
@@ -15794,6 +15810,49 @@ mod tests {
     assert_eq!(
       styles.animation_iteration_counts,
       vec![AnimationIterationCount::Infinite].into()
+    );
+  }
+
+  #[test]
+  fn animation_shorthand_parses_comma_list_with_function_entry() {
+    let decls =
+      parse_declarations("animation: spin 2s steps(4,end) infinite, fade 1s linear;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.animation_names,
+      vec!["spin".to_string(), "fade".to_string()]
+    );
+    assert_eq!(styles.animation_durations, vec![2000.0, 1000.0].into());
+    assert_eq!(
+      styles.animation_timing_functions,
+      vec![
+        TransitionTimingFunction::Steps(4, StepPosition::End),
+        TransitionTimingFunction::Linear
+      ]
+      .into()
+    );
+    assert_eq!(
+      styles.animation_iteration_counts,
+      vec![
+        AnimationIterationCount::Infinite,
+        AnimationIterationCount::Count(1.0)
+      ]
+      .into()
     );
   }
 
