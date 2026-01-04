@@ -16339,6 +16339,68 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn registered_custom_property_revert_layer_nested_layer_uses_nearest_layer_base() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer theme {
+          #target { --len: 10px; }
+          @layer accents {
+            #target { --len: 20px; --len: revert-layer; }
+          }
+        }
+        #target { width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(10.0)));
+    let value = styled
+      .styles
+      .custom_properties
+      .get("--len")
+      .expect("registered custom property");
+    assert!(matches!(
+      value.typed,
+      Some(CustomPropertyTypedValue::Length(len)) if len == Length::px(10.0)
+    ));
+  }
+
+  #[test]
+  fn registered_custom_property_syntax_star_honors_revert_layer() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --x {
+          syntax: "*";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer base { #target { --x: 10px; } }
+        @layer theme { #target { --x: 20px; --x: revert-layer; } }
+        #target { width: var(--x); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(10.0)));
+    let value = styled
+      .styles
+      .custom_properties
+      .get("--x")
+      .expect("registered custom property");
+    assert_eq!(value.value.trim(), "10px");
+    assert!(value.typed.is_none());
+  }
+
+  #[test]
   fn text_combine_upright_inherits() {
     let mut parent = ComputedStyle::default();
     parent.text_combine_upright = TextCombineUpright::Digits(3);
