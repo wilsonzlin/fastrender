@@ -116,7 +116,7 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     .args(["--bin", "render_fixtures", "--"])
     .arg("--fixtures-root")
     .arg(&fixtures_root)
-    .arg("--out")
+    .arg("--out-dir")
     .arg(&fastrender_dir)
     .arg("--viewport")
     .arg(&viewport)

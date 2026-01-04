@@ -50,7 +50,7 @@ fn fixture_chrome_diff_skips_chrome_with_chrome_dir() {
     .args([
       "--only",
       fixture_name,
-      "--out",
+      "--out-dir",
       after_dir.to_str().unwrap(),
       "--viewport",
       viewport,
@@ -100,4 +100,3 @@ fn fixture_chrome_diff_skips_chrome_with_chrome_dir() {
   assert!(out_dir.join("report.html").exists(), "missing report.html");
   assert!(out_dir.join("report.json").exists(), "missing report.json");
 }
-
