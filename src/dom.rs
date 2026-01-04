@@ -3109,6 +3109,34 @@ pub fn compute_part_export_map_with_ids(
   Ok(map)
 }
 
+pub(crate) const COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES: [&str; 7] = [
+  "data-gl-src",
+  "data-src",
+  "data-lazy-src",
+  "data-original",
+  "data-url",
+  "data-actualsrc",
+  "data-img-src",
+];
+
+pub(crate) const COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES: [&str; 5] = [
+  "data-gl-srcset",
+  "data-srcset",
+  "data-lazy-srcset",
+  "data-original-srcset",
+  "data-actualsrcset",
+];
+
+pub(crate) const COMPAT_SOURCE_SRCSET_DATA_ATTR_CANDIDATES: [&str; 5] = [
+  "data-srcset",
+  "data-lazy-srcset",
+  "data-gl-srcset",
+  "data-original-srcset",
+  "data-actualsrcset",
+];
+
+pub(crate) const COMPAT_SIZES_DATA_ATTR_CANDIDATES: [&str; 1] = ["data-sizes"];
+
 pub(crate) fn img_src_is_placeholder(value: &str) -> bool {
   let value = value.trim();
   if value.is_empty() {
@@ -3280,22 +3308,6 @@ fn apply_dom_compatibility_mutations(
         //
         // Never override a non-empty authored attribute (except for known `src` placeholders like
         // `about:blank`, `#`, or 1×1 transparent GIF data URLs).
-        const SRC_CANDIDATES: [&str; 7] = [
-          "data-gl-src",
-          "data-src",
-          "data-lazy-src",
-          "data-original",
-          "data-url",
-          "data-actualsrc",
-          "data-img-src",
-        ];
-        const SRCSET_CANDIDATES: [&str; 5] = [
-          "data-gl-srcset",
-          "data-srcset",
-          "data-lazy-srcset",
-          "data-original-srcset",
-          "data-actualsrcset",
-        ];
 
         let src_idx = attributes
           .iter()
@@ -3313,7 +3325,9 @@ fn apply_dom_compatibility_mutations(
         };
 
         if needs_src {
-          if let Some(candidate) = first_non_empty_attr(attributes, &SRC_CANDIDATES) {
+          if let Some(candidate) =
+            first_non_empty_attr(attributes, &COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES)
+          {
             match src_idx {
               Some(idx) => {
                 if img_src_is_placeholder(&attributes[idx].1) {
@@ -3332,7 +3346,9 @@ fn apply_dom_compatibility_mutations(
           None => true,
         };
         if needs_srcset {
-          if let Some(candidate) = first_non_empty_attr(attributes, &SRCSET_CANDIDATES) {
+          if let Some(candidate) =
+            first_non_empty_attr(attributes, &COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES)
+          {
             match srcset_idx {
               Some(idx) => {
                 if attributes[idx].1.trim().is_empty() {
@@ -3351,7 +3367,9 @@ fn apply_dom_compatibility_mutations(
           None => true,
         };
         if needs_sizes {
-          if let Some(candidate) = first_non_empty_attr(attributes, &["data-sizes"]) {
+          if let Some(candidate) =
+            first_non_empty_attr(attributes, &COMPAT_SIZES_DATA_ATTR_CANDIDATES)
+          {
             match sizes_idx {
               Some(idx) => {
                 if attributes[idx].1.trim().is_empty() {
@@ -3367,13 +3385,6 @@ fn apply_dom_compatibility_mutations(
       } else if tag_name.eq_ignore_ascii_case("source") {
         // Lazy-loaded `<picture>` sources often mirror the `<img>` pattern and delay populating
         // `srcset`/`sizes` until JS runs.
-        const SRCSET_CANDIDATES: [&str; 5] = [
-          "data-srcset",
-          "data-lazy-srcset",
-          "data-gl-srcset",
-          "data-original-srcset",
-          "data-actualsrcset",
-        ];
 
         let srcset_idx = attributes
           .iter()
@@ -3387,7 +3398,9 @@ fn apply_dom_compatibility_mutations(
           None => true,
         };
         if needs_srcset {
-          if let Some(candidate) = first_non_empty_attr(attributes, &SRCSET_CANDIDATES) {
+          if let Some(candidate) =
+            first_non_empty_attr(attributes, &COMPAT_SOURCE_SRCSET_DATA_ATTR_CANDIDATES)
+          {
             match srcset_idx {
               Some(idx) => {
                 if attributes[idx].1.trim().is_empty() {
@@ -3406,7 +3419,9 @@ fn apply_dom_compatibility_mutations(
           None => true,
         };
         if needs_sizes {
-          if let Some(candidate) = first_non_empty_attr(attributes, &["data-sizes"]) {
+          if let Some(candidate) =
+            first_non_empty_attr(attributes, &COMPAT_SIZES_DATA_ATTR_CANDIDATES)
+          {
             match sizes_idx {
               Some(idx) => {
                 if attributes[idx].1.trim().is_empty() {

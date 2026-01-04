@@ -7,7 +7,11 @@
 
 use crate::css::loader::resolve_href_with_base;
 use crate::css::parser::tokenize_rel_list;
-use crate::dom::{img_src_is_placeholder, is_inert_html_template, DomNode};
+use crate::dom::{
+  img_src_is_placeholder, is_inert_html_template, DomNode, COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES,
+  COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES, COMPAT_SIZES_DATA_ATTR_CANDIDATES,
+  COMPAT_SOURCE_SRCSET_DATA_ATTR_CANDIDATES,
+};
 use crate::html::image_attrs::{parse_sizes, parse_srcset};
 use crate::html::images::{
   image_sources_with_fallback, select_image_source, ImageSelectionContext,
@@ -49,39 +53,6 @@ pub struct ImagePrefetchDiscovery {
 
 const WIDTH_DESCRIPTOR_SECONDARY_SLOT_SCALE: f32 = 0.75;
 
-// Keep the discovery fallback list aligned with `DomCompatibilityMode::Compatibility`-style remaps
-// so developer tooling prefetches the same image URLs the renderer will actually request.
-//
-// Attribute precedence mirrors the compatibility behavior: keep real `src`/`srcset` if present,
-// otherwise fall back to common lazy-load `data-*` attributes used by production sites.
-const IMG_SRC_ATTR_FALLBACKS: &[&str] = &[
-  "src",
-  "data-gl-src",
-  "data-src",
-  "data-lazy-src",
-  "data-original",
-  "data-url",
-  "data-actualsrc",
-  "data-img-src",
-];
-const IMG_SRCSET_ATTR_FALLBACKS: &[&str] = &[
-  "srcset",
-  "data-gl-srcset",
-  "data-srcset",
-  "data-lazy-srcset",
-  "data-original-srcset",
-  "data-actualsrcset",
-];
-const SOURCE_SRCSET_ATTR_FALLBACKS: &[&str] = &[
-  "srcset",
-  "data-srcset",
-  "data-lazy-srcset",
-  "data-gl-srcset",
-  "data-original-srcset",
-  "data-actualsrcset",
-];
-const SIZES_ATTR_FALLBACKS: &[&str] = &["sizes", "data-sizes"];
-
 fn get_non_empty_attr<'a>(node: &'a DomNode, name: &str) -> Option<&'a str> {
   node
     .get_attribute_ref(name)
@@ -93,16 +64,28 @@ fn get_first_non_empty_attr<'a>(node: &'a DomNode, names: &[&str]) -> Option<&'a
 }
 
 fn get_img_src_attr<'a>(node: &'a DomNode) -> Option<&'a str> {
-  for name in IMG_SRC_ATTR_FALLBACKS {
-    let Some(value) = get_non_empty_attr(node, name) else {
-      continue;
-    };
-    if *name == "src" && img_src_is_placeholder(value) {
-      continue;
+  if let Some(src) = get_non_empty_attr(node, "src") {
+    if !img_src_is_placeholder(src) {
+      return Some(src);
     }
-    return Some(value);
   }
-  None
+
+  get_first_non_empty_attr(node, &COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES)
+}
+
+fn get_img_srcset_attr<'a>(node: &'a DomNode) -> Option<&'a str> {
+  get_non_empty_attr(node, "srcset")
+    .or_else(|| get_first_non_empty_attr(node, &COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES))
+}
+
+fn get_source_srcset_attr<'a>(node: &'a DomNode) -> Option<&'a str> {
+  get_non_empty_attr(node, "srcset")
+    .or_else(|| get_first_non_empty_attr(node, &COMPAT_SOURCE_SRCSET_DATA_ATTR_CANDIDATES))
+}
+
+fn get_sizes_attr<'a>(node: &'a DomNode) -> Option<&'a str> {
+  get_non_empty_attr(node, "sizes")
+    .or_else(|| get_first_non_empty_attr(node, &COMPAT_SIZES_DATA_ATTR_CANDIDATES))
 }
 
 fn normalize_mime_type(value: &str) -> Option<String> {
@@ -228,7 +211,7 @@ fn picture_sources_and_fallback_img<'a>(
     };
 
     if tag.eq_ignore_ascii_case("source") {
-      let Some(srcset_attr) = get_first_non_empty_attr(child, SOURCE_SRCSET_ATTR_FALLBACKS) else {
+      let Some(srcset_attr) = get_source_srcset_attr(child) else {
         continue;
       };
       let parsed_srcset = parse_srcset(srcset_attr);
@@ -236,7 +219,7 @@ fn picture_sources_and_fallback_img<'a>(
         continue;
       }
 
-      let sizes = get_first_non_empty_attr(child, SIZES_ATTR_FALLBACKS).and_then(parse_sizes);
+      let sizes = get_sizes_attr(child).and_then(parse_sizes);
       let media = child
         .get_attribute_ref("media")
         .and_then(|m| MediaQuery::parse_list(m).ok());
@@ -391,10 +374,10 @@ pub fn discover_image_prefetch_urls(
           *image_elements += 1;
 
           let img_src = get_img_src_attr(img).unwrap_or("");
-          let img_srcset = get_first_non_empty_attr(img, IMG_SRCSET_ATTR_FALLBACKS)
+          let img_srcset = get_img_srcset_attr(img)
             .map(parse_srcset)
             .unwrap_or_default();
-          let img_sizes = get_first_non_empty_attr(img, SIZES_ATTR_FALLBACKS).and_then(parse_sizes);
+          let img_sizes = get_sizes_attr(img).and_then(parse_sizes);
 
           push_prefetch_selection(
             ctx,
@@ -419,14 +402,13 @@ pub fn discover_image_prefetch_urls(
         }
         let img_src = get_img_src_attr(node).unwrap_or("");
         let has_src = !img_src.trim().is_empty();
-        let img_srcset_attr = get_first_non_empty_attr(node, IMG_SRCSET_ATTR_FALLBACKS);
+        let img_srcset_attr = get_img_srcset_attr(node);
         let has_srcset = img_srcset_attr.is_some();
         if has_src || has_srcset {
           *image_elements += 1;
 
           let img_srcset = img_srcset_attr.map(parse_srcset).unwrap_or_default();
-          let img_sizes =
-            get_first_non_empty_attr(node, SIZES_ATTR_FALLBACKS).and_then(parse_sizes);
+          let img_sizes = get_sizes_attr(node).and_then(parse_sizes);
 
           push_prefetch_selection(
             ctx,
