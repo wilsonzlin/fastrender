@@ -877,17 +877,21 @@ fn perspective_respects_border_radius_clip() {
 }
 
 #[test]
-fn perspective_blur_is_clipped_by_border_radius() {
+fn perspective_blur_preserves_outsets_with_border_radius() {
   let renderer = DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new()).unwrap();
   let bounds = Rect::from_xywh(30.0, 30.0, 40.0, 40.0);
   let center = bounds.center();
+  let blur_radius = 6.0;
+  let blur_outset = blur_radius * 3.0;
   let transform = Transform3D::perspective(500.0)
     .multiply(&Transform3D::translate(0.0, 0.0, 120.0))
     .multiply(&Transform3D::translate(center.x, center.y, 0.0))
     .multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4))
     .multiply(&Transform3D::translate(-center.x, -center.y, 0.0));
   let quad = project_quad(&transform, bounds).expect("projected quad");
-  let (quad_min_x, quad_min_y, quad_max_x, quad_max_y) = quad_bounds(&quad);
+  let expanded_bounds = bounds.inflate(blur_outset);
+  let expanded_quad = project_quad(&transform, expanded_bounds).expect("projected expanded quad");
+  let (quad_min_x, quad_min_y, quad_max_x, quad_max_y) = quad_bounds(&expanded_quad);
 
   let mut list = DisplayList::new();
   list.push(DisplayItem::PushStackingContext(StackingContextItem {
@@ -901,7 +905,7 @@ fn perspective_blur_is_clipped_by_border_radius() {
     child_perspective: None,
     transform_style: TransformStyle::Flat,
     backface_visibility: BackfaceVisibility::Visible,
-    filters: vec![ResolvedFilter::Blur(6.0)],
+    filters: vec![ResolvedFilter::Blur(blur_radius)],
     backdrop_filters: Vec::new(),
     radii: BorderRadii::uniform(12.0),
     mask: None,
@@ -920,12 +924,26 @@ fn perspective_blur_is_clipped_by_border_radius() {
     panic!("expected blurred content");
   };
 
+  let mut found_outset = false;
   for pt in edge_outside_points(&quad, 3.0) {
+    if let Some(sample) = sample_pixel_at(&pixmap, pt) {
+      if sample.3 > 0 && sample.1 > sample.0 && sample.1 > sample.2 {
+        found_outset = true;
+        break;
+      }
+    }
+  }
+  assert!(
+    found_outset,
+    "expected blur to produce pixels outside the projected bounds (filter outsets)"
+  );
+
+  for pt in edge_outside_points(&expanded_quad, 3.0) {
     if let Some(sample) = sample_pixel_at(&pixmap, pt) {
       assert_eq!(
         sample,
         (255, 255, 255, 255),
-        "blur should not leak past projected clip at {pt:?}"
+        "blur should stay within the projected filter outsets at {pt:?}"
       );
     }
   }
@@ -955,6 +973,39 @@ fn clip_path_warped_with_perspective_transform() {
     .multiply(&Transform3D::translate(center.x, center.y, 0.0))
     .multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4))
     .multiply(&Transform3D::translate(-center.x, -center.y, 0.0));
+
+  let mut unclipped = DisplayList::new();
+  unclipped.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: Some(transform),
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }));
+  unclipped.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::BLUE,
+  }));
+  unclipped.push(DisplayItem::PopStackingContext);
+  let unclipped_pixmap =
+    DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .render(&unclipped)
+      .unwrap();
+  let Some((unclipped_min_x, unclipped_min_y, unclipped_max_x, unclipped_max_y)) =
+    bounding_box_for_color(&unclipped_pixmap, |(r, g, b, a)| a > 0 && b > r && b > g)
+  else {
+    panic!("expected unclipped content");
+  };
 
   let mut list = DisplayList::new();
   list.push(DisplayItem::PushStackingContext(StackingContextItem {
@@ -1022,8 +1073,19 @@ fn clip_path_warped_with_perspective_transform() {
   let width = max_x - min_x + 1;
   let height = max_y - min_y + 1;
   assert!(
-    width < bounds.width() as u32 && height < bounds.height() as u32,
-    "clip-path should tighten the projected bounds, got {width}x{height}"
+    min_x >= unclipped_min_x
+      && min_y >= unclipped_min_y
+      && max_x <= unclipped_max_x
+      && max_y <= unclipped_max_y,
+    "clipped bounds should stay within projected rect bounds: clipped=({min_x},{min_y})-({max_x},{max_y}) unclipped=({unclipped_min_x},{unclipped_min_y})-({unclipped_max_x},{unclipped_max_y})"
+  );
+  let unclipped_width = unclipped_max_x - unclipped_min_x + 1;
+  let unclipped_height = unclipped_max_y - unclipped_min_y + 1;
+  assert!(
+    width <= unclipped_width
+      && height <= unclipped_height
+      && (width < unclipped_width || height < unclipped_height),
+    "clip-path should tighten the projected bounds: clipped={width}x{height} unclipped={unclipped_width}x{unclipped_height}"
   );
 }
 
