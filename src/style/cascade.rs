@@ -4742,7 +4742,22 @@ impl<'a> RuleIndex<'a> {
   }
 
   fn build_part_index(&mut self) {
-    for (pseudo, _) in self.pseudo_buckets.iter() {
+    let mut part_pseudo_keys: Vec<&PseudoElement> = self
+      .pseudo_buckets
+      .keys()
+      .filter(|pseudo| matches!(pseudo, PseudoElement::Part(_)))
+      .collect();
+    part_pseudo_keys.sort_unstable_by(|a, b| {
+      let PseudoElement::Part(a_name) = *a else {
+        unreachable!("build_part_index only sorts ::part pseudos")
+      };
+      let PseudoElement::Part(b_name) = *b else {
+        unreachable!("build_part_index only sorts ::part pseudos")
+      };
+      a_name.as_str().cmp(b_name.as_str())
+    });
+
+    for pseudo in part_pseudo_keys {
       let PseudoElement::Part(required) = pseudo else {
         continue;
       };
@@ -9946,6 +9961,60 @@ mod tests {
     assert!(!set.insert(3));
     set.reset();
     assert!(set.insert(3));
+  }
+
+  #[test]
+  fn part_pseudo_index_is_sorted_deterministically() {
+    let names = [
+      "part07", "part12", "part06", "part28", "part11", "part17", "part24", "part23", "part25",
+      "part04", "part10", "part20", "part15", "part09", "part18", "part27", "part13", "part19",
+      "part29", "part26", "part21", "part01", "part22", "part02", "part16", "part00", "part05",
+      "part03", "part14", "part08",
+    ];
+    let mut css = String::new();
+    for &name in names.iter() {
+      css.push_str(&format!("div::part({}) {{ color: red; }}\n", name));
+    }
+
+    let stylesheet = parse_stylesheet(&css).unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    for _ in 0..8 {
+      let rules: Vec<CascadeRule<'_>> = collected
+        .iter()
+        .enumerate()
+        .map(|(order, rule)| CascadeRule {
+          origin: StyleOrigin::Author,
+          order,
+          rule: rule.rule,
+          layer_order: layer_order_with_tree_scope(
+            rule.layer_order.as_ref(),
+            DOCUMENT_TREE_SCOPE_PREFIX,
+          ),
+          container_conditions: rule.container_conditions.clone(),
+          scopes: rule.scopes.clone(),
+          scope_signature: ScopeSignature::compute(&rule.scopes),
+          scope: RuleScope::Document,
+          starting_style: rule.starting_style,
+        })
+        .collect();
+
+      let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+      let part_names: Vec<&str> = index
+        .part_pseudos
+        .iter()
+        .map(|info| match &info.pseudo {
+          PseudoElement::Part(name) => name.as_str(),
+          other => panic!("unexpected part pseudo info: {other:?}"),
+        })
+        .collect();
+
+      assert_eq!(part_names.len(), names.len());
+      let mut sorted = part_names.clone();
+      sorted.sort_unstable();
+      assert_eq!(part_names, sorted);
+    }
   }
 
   #[test]
