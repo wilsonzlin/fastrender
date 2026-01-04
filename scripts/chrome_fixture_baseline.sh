@@ -12,7 +12,7 @@ set -euo pipefail
 #   - A CSP that disables JS by default (matching FastRender's no-JS model)
 #   - A CSP `default-src file: data:` restriction so http/https subresources cannot load
 #
-# Outputs land in `target/chrome_fixture_renders/` by default.
+# Outputs land in `target/chrome_fixture_renders/` by default (PNG + chrome log + JSON metadata).
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
@@ -41,6 +41,7 @@ Filtering:
 Output:
   <out-dir>/<fixture>.png        Screenshot
   <out-dir>/<fixture>.chrome.log Chrome stdout/stderr for debugging
+  <out-dir>/<fixture>.json       JSON metadata (viewport/DPR/JS/headless mode/etc.)
 
 EOF
 }
