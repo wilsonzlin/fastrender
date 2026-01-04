@@ -436,7 +436,10 @@ impl Display {
       "ruby-text-container" => Ok(Display::RubyTextContainer),
       "inline-block" => Ok(Display::InlineBlock),
       "flex" => Ok(Display::Flex),
+      // Vendor-prefixed flexbox keywords used by Safari/legacy IE.
+      "-webkit-flex" | "-ms-flexbox" => Ok(Display::Flex),
       "inline-flex" => Ok(Display::InlineFlex),
+      "-webkit-inline-flex" => Ok(Display::InlineFlex),
       "grid" => Ok(Display::Grid),
       "inline-grid" => Ok(Display::InlineGrid),
       "table" => Ok(Display::Table),
@@ -452,6 +455,11 @@ impl Display {
       "list-item" => Ok(Display::ListItem),
       "flow-root" => Ok(Display::FlowRoot),
       "contents" => Ok(Display::Contents),
+      // `display: -webkit-box` is commonly used for `-webkit-line-clamp` patterns.
+      // It corresponds to the 2009 flexbox draft, but treating it as a flow container is a
+      // reasonable fallback for our layout engine.
+      "-webkit-box" => Ok(Display::Block),
+      "-webkit-inline-box" => Ok(Display::InlineBlock),
       _ => Err(DisplayParseError::InvalidValue(s.to_string())),
     }
   }
@@ -601,6 +609,22 @@ mod tests {
   #[test]
   fn test_parse_inline_flex() {
     assert_eq!(Display::parse("inline-flex").unwrap(), Display::InlineFlex);
+  }
+
+  #[test]
+  fn test_parse_vendor_prefixed_flex_aliases() {
+    assert_eq!(Display::parse("-webkit-flex").unwrap(), Display::Flex);
+    assert_eq!(Display::parse("-ms-flexbox").unwrap(), Display::Flex);
+    assert_eq!(Display::parse("-webkit-inline-flex").unwrap(), Display::InlineFlex);
+  }
+
+  #[test]
+  fn test_parse_webkit_box_fallbacks() {
+    assert_eq!(Display::parse("-webkit-box").unwrap(), Display::Block);
+    assert_eq!(
+      Display::parse("-webkit-inline-box").unwrap(),
+      Display::InlineBlock
+    );
   }
 
   #[test]

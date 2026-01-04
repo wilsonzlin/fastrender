@@ -454,6 +454,59 @@ fn is_known_page_property(property: &str) -> bool {
   known_page_property_set().contains(property)
 }
 
+/// Maps a small set of widely-used vendor-prefixed property names to the engine's
+/// canonical unprefixed property name.
+///
+/// Many real-world stylesheets ship `-webkit-*` fallbacks for Safari/legacy support and
+/// sometimes omit the unprefixed spelling. Without aliasing, FastRender would drop these
+/// declarations during parsing (unknown property), causing large visual diffs on modern sites.
+///
+/// Safety: Only aliases prefixes where the semantics match the unprefixed property as implemented
+/// by the engine. Unknown prefixed properties remain unsupported and will continue to be ignored.
+pub(crate) fn vendor_prefixed_property_alias(property: &str) -> Option<&'static str> {
+  match property {
+    // Legacy transform prefixes (Safari/old browsers). Semantics match our `transform`.
+    "-webkit-transform" | "-moz-transform" | "-ms-transform" | "-o-transform" => Some("transform"),
+
+    // Safari still emits `-webkit-transition*` alongside or instead of the standard properties.
+    "-webkit-transition" => Some("transition"),
+    "-webkit-transition-property" => Some("transition-property"),
+    "-webkit-transition-duration" => Some("transition-duration"),
+    "-webkit-transition-delay" => Some("transition-delay"),
+    "-webkit-transition-timing-function" => Some("transition-timing-function"),
+
+    // WebKit prefix required for backdrop-filter on some Safari versions; treated as standard.
+    "-webkit-backdrop-filter" => Some("backdrop-filter"),
+    // Older Safari uses the prefixed filter property; treat as standard `filter`.
+    "-webkit-filter" => Some("filter"),
+
+    // Selection + appearance prefixes are common and map cleanly to their standard properties.
+    "-webkit-user-select" | "-moz-user-select" | "-ms-user-select" => Some("user-select"),
+    "-webkit-appearance" | "-moz-appearance" => Some("appearance"),
+
+    // Box model / effects.
+    "-webkit-box-shadow" => Some("box-shadow"),
+    "-webkit-box-sizing" => Some("box-sizing"),
+
+    // Masking properties are widely prefixed in the wild; our implementation accepts the
+    // standard names and (where needed) common WebKit keyword aliases.
+    "-webkit-mask" => Some("mask"),
+    "-webkit-mask-image" => Some("mask-image"),
+    "-webkit-mask-position" => Some("mask-position"),
+    "-webkit-mask-size" => Some("mask-size"),
+    "-webkit-mask-repeat" => Some("mask-repeat"),
+    "-webkit-mask-origin" => Some("mask-origin"),
+    "-webkit-mask-clip" => Some("mask-clip"),
+    "-webkit-mask-composite" => Some("mask-composite"),
+    "-webkit-mask-mode" => Some("mask-mode"),
+
+    // Text sizing on mobile Safari.
+    "-webkit-text-size-adjust" => Some("text-size-adjust"),
+
+    _ => None,
+  }
+}
+
 fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> SmallVec<[&'a str; 8]> {
   #[cfg(test)]
   TOKENIZE_PROPERTY_VALUE_CALLS.with(|calls| calls.set(calls.get() + 1));

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vendor-prefixed CSS aliases</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #101218;
+      }
+
+      .scene {
+        position: relative;
+        width: 520px;
+        height: 360px;
+        margin: 80px auto;
+        border-radius: 18px;
+        overflow: hidden;
+        background: #141a24;
+      }
+
+      .stripe {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 33.333%;
+      }
+
+      .stripe.one {
+        left: 0;
+        background: #2f80ed;
+      }
+
+      .stripe.two {
+        left: 33.333%;
+        background: #27ae60;
+      }
+
+      .stripe.three {
+        left: 66.666%;
+        background: #f2c94c;
+      }
+
+      /* Use prefixed-only flexbox keywords to validate display value aliasing. */
+      .row {
+        position: absolute;
+        inset: 0;
+        display: -webkit-flex;
+        justify-content: space-evenly;
+        align-items: center;
+      }
+
+      .card {
+        width: 160px;
+        height: 160px;
+        border-radius: 18px;
+        background: rgba(20, 26, 36, 0.35);
+      }
+
+      .card.glass {
+        /* Prefixed-only: should alias to backdrop-filter and box-shadow. */
+        -webkit-backdrop-filter: blur(14px) saturate(160%);
+        -webkit-box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+      }
+
+      .card.shadow {
+        /* Prefixed-only: should alias to filter. */
+        -webkit-filter: drop-shadow(0 14px 26px rgba(0, 0, 0, 0.35));
+      }
+
+      .badge {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 140px;
+        height: 80px;
+        margin-left: -70px;
+        margin-top: -40px;
+        border-radius: 20px;
+        background: rgba(255, 90, 90, 0.92);
+
+        /* Prefixed-only: these should alias to the engine's canonical properties. */
+        -webkit-transform: rotate(18deg);
+        -webkit-transition: -webkit-transform 500ms ease;
+
+        /* Prefixed-only masking: clip the badge to a hard 70% vertical split. */
+        -webkit-mask-image: linear-gradient(to right, black 0 70%, transparent 70% 100%);
+        -webkit-mask-repeat: no-repeat;
+        -webkit-mask-size: 100% 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="scene">
+      <div class="stripe one"></div>
+      <div class="stripe two"></div>
+      <div class="stripe three"></div>
+      <div class="row">
+        <div class="card glass"></div>
+        <div class="card shadow"></div>
+      </div>
+      <div class="badge"></div>
+    </div>
+  </body>
+</html>

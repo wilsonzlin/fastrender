@@ -2281,7 +2281,10 @@ fn apply_property_from_source(
   let inline_sides = inline_physical_sides(source);
   let block_sides = block_physical_sides(source);
   match property {
-    "display" => styles.display = source.display,
+    "display" => {
+      styles.display = source.display;
+      styles.display_is_webkit_box = source.display_is_webkit_box;
+    }
     "visibility" => styles.visibility = source.visibility,
     "float" => styles.float = source.float,
     "clear" => styles.clear = source.clear,
@@ -4722,6 +4725,8 @@ fn apply_declaration_with_base_internal(
       if let PropertyValue::Keyword(kw) = resolved_value {
         if let Ok(display) = Display::parse(kw) {
           styles.display = display;
+          styles.display_is_webkit_box = kw.eq_ignore_ascii_case("-webkit-box")
+            || kw.eq_ignore_ascii_case("-webkit-inline-box");
         }
       }
     }

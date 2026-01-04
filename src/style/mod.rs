@@ -427,6 +427,12 @@ impl LogicalState {
 pub struct ComputedStyle {
   // Display and positioning
   pub display: Display,
+  /// Whether the authored `display` value was `-webkit-box` / `-webkit-inline-box`.
+  ///
+  /// These legacy keywords are commonly paired with `-webkit-line-clamp`. We currently map the
+  /// display value to a standard flow layout, but preserve the fact that the legacy spelling was
+  /// used so we can implement line clamping behavior compatibly.
+  pub display_is_webkit_box: bool,
   pub position: Position,
   /// Running element name when authored via `position: running(<ident>)`.
   ///
@@ -801,6 +807,7 @@ impl Default for ComputedStyle {
     let mask_default = MaskLayer::default();
     Self {
       display: Display::Inline,
+      display_is_webkit_box: false,
       position: Position::Static,
       running_position: None,
       appearance: Appearance::Auto,

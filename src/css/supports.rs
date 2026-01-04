@@ -1,6 +1,7 @@
 use super::properties::{
   is_global_keyword_str, is_known_style_property, parse_property_value,
   supports_parsed_declaration_is_valid,
+  vendor_prefixed_property_alias,
 };
 use crate::style::var_resolution::contains_var;
 use std::borrow::Cow;
@@ -49,7 +50,14 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
     other => other,
   };
 
-  if !is_known_style_property(normalized_property) {
+  let canonical_property = if is_known_style_property(normalized_property) {
+    normalized_property
+  } else if let Some(alias) = vendor_prefixed_property_alias(normalized_property) {
+    if !is_known_style_property(alias) {
+      return false;
+    }
+    alias
+  } else {
     return false;
   }
 
@@ -61,10 +69,10 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
     return true;
   }
 
-  let parsed = match parse_property_value(normalized_property, value_without_important) {
+  let parsed = match parse_property_value(canonical_property, value_without_important) {
     Some(v) => v,
     None => return false,
   };
 
-  supports_parsed_declaration_is_valid(normalized_property, value_without_important, &parsed)
+  supports_parsed_declaration_is_valid(canonical_property, value_without_important, &parsed)
 }

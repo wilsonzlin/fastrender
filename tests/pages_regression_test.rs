@@ -91,6 +91,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     shots: DEFAULT_SHOTS,
   },
   PageFixture {
+    name: "vendor_prefixes",
+    html: "vendor_prefixes/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
     name: "svg_embed",
     html: "svg_embed/index.html",
     shots: DEFAULT_SHOTS,
