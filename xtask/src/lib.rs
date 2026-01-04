@@ -1,5 +1,6 @@
 //! Shared helpers for the `xtask` developer workflow binary.
 
+pub mod capture_accuracy_fixtures;
 pub mod capture_missing_failure_fixtures;
 pub mod pageset_failure_fixtures;
 use serde::Deserialize;

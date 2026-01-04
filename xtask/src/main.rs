@@ -30,6 +30,7 @@ fn main() -> Result<()> {
     Commands::FixtureChromeDiff(args) => fixture_chrome_diff::run_fixture_chrome_diff(args),
     Commands::FixtureDeterminism(args) => fixture_determinism::run_fixture_determinism(args),
     Commands::ImportPageFixture(args) => import_page_fixture::run_import_page_fixture(args),
+    Commands::CaptureAccuracyFixtures(args) => run_capture_accuracy_fixtures(args),
     Commands::ChromeBaselineFixtures(args) => {
       chrome_baseline_fixtures::run_chrome_baseline_fixtures(args)
     }
@@ -81,6 +82,8 @@ enum Commands {
   FixtureDeterminism(fixture_determinism::FixtureDeterminismArgs),
   /// Convert a captured bundle into a pages_regression fixture
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
+  /// Capture and import offline page fixtures for ok pages with the worst accuracy diffs.
+  CaptureAccuracyFixtures(CaptureAccuracyFixturesArgs),
   /// Render offline page fixtures in headless Chrome/Chromium (deterministic JS-off baseline).
   ChromeBaselineFixtures(chrome_baseline_fixtures::ChromeBaselineFixturesArgs),
   /// (Re)capture and (re)import offline page fixtures from a manifest
@@ -261,6 +264,40 @@ struct PagesetArgs {
   #[arg(long, requires = "capture_missing_failure_fixtures")]
   capture_missing_failure_fixtures_overwrite: bool,
 
+  /// After the pageset run, auto-capture deterministic offline fixtures for ok pages with the
+  /// worst accuracy diffs whose fixtures are missing.
+  ///
+  /// This scans `progress/pages/*.json`, selects `status=ok` pages with an `accuracy.diff_percent`
+  /// above `--capture-worst-accuracy-fixtures-min-diff-percent` and/or in the top-N worst diffs,
+  /// then captures/imports missing fixtures from the warmed disk cache via `bundle_page cache` and
+  /// `cargo xtask import-page-fixture`.
+  #[arg(long)]
+  capture_worst_accuracy_fixtures: bool,
+
+  /// Where to write intermediate `bundle_page cache` archives when capturing worst accuracy fixtures.
+  #[arg(
+    long,
+    value_name = "DIR",
+    default_value = "target/pageset_accuracy_fixture_bundles"
+  )]
+  capture_worst_accuracy_fixtures_out_dir: PathBuf,
+
+  /// Minimum diff percent threshold (0-100) for selecting ok pages with accuracy metrics.
+  #[arg(long, default_value_t = 0.5)]
+  capture_worst_accuracy_fixtures_min_diff_percent: f64,
+
+  /// Include the top-N worst diff ok pages when selecting accuracy fixtures.
+  #[arg(long, default_value_t = 10)]
+  capture_worst_accuracy_fixtures_top: usize,
+
+  /// Allow missing subresources when capturing/importing worst accuracy fixtures.
+  #[arg(long, requires = "capture_worst_accuracy_fixtures")]
+  capture_worst_accuracy_fixtures_allow_missing_resources: bool,
+
+  /// Allow replacing existing fixture directories when importing worst accuracy fixtures.
+  #[arg(long, requires = "capture_worst_accuracy_fixtures")]
+  capture_worst_accuracy_fixtures_overwrite: bool,
+
   /// Extra arguments forwarded to `pageset_progress run` (use `--` before these).
   ///
   /// Note: when `prefetch_assets` supports prefetch toggles like `--prefetch-fonts` or
@@ -270,6 +307,61 @@ struct PagesetArgs {
   /// forwarded to `prefetch_assets` when possible so the warmed cache matches the render step.
   #[arg(last = true)]
   extra: Vec<String>,
+}
+
+#[derive(Args)]
+struct CaptureAccuracyFixturesArgs {
+  /// Directory containing pageset progress artifacts (`progress/pages/*.json`)
+  #[arg(long, default_value = "progress/pages")]
+  progress_dir: PathBuf,
+
+  /// Root directory for offline page fixtures (defaults to tests/pages/fixtures)
+  #[arg(long, default_value = "tests/pages/fixtures")]
+  fixtures_root: PathBuf,
+
+  /// Disk-backed subresource cache directory to read subresources from (`fetches/assets` by default).
+  #[arg(long, value_name = "DIR", default_value = "fetches/assets")]
+  asset_cache_dir: PathBuf,
+
+  /// Where to write intermediate `bundle_page cache` archives.
+  #[arg(
+    long,
+    value_name = "DIR",
+    default_value = "target/pageset_accuracy_fixture_bundles"
+  )]
+  bundle_out_dir: PathBuf,
+
+  /// Minimum diff percent threshold for selecting ok pages with accuracy metrics (0-100).
+  #[arg(long, default_value_t = 0.5)]
+  min_diff_percent: f64,
+
+  /// Include the top-N worst diff pages (after filtering to ok pages with accuracy metrics).
+  #[arg(long, default_value_t = 10)]
+  top: usize,
+
+  /// Replace missing subresources with empty placeholder assets instead of failing the capture/import.
+  #[arg(long)]
+  allow_missing_resources: bool,
+
+  /// Allow replacing existing fixture directories when importing.
+  #[arg(long)]
+  overwrite: bool,
+
+  /// Override the User-Agent header (propagated to `bundle_page cache`).
+  #[arg(long)]
+  user_agent: Option<String>,
+
+  /// Override the Accept-Language header (propagated to `bundle_page cache`).
+  #[arg(long)]
+  accept_language: Option<String>,
+
+  /// Viewport size as WxH (e.g. 1200x800; propagated to `bundle_page cache`).
+  #[arg(long, value_parser = parse_viewport)]
+  viewport: Option<(u32, u32)>,
+
+  /// Device pixel ratio for media queries/srcset (propagated to `bundle_page cache`).
+  #[arg(long)]
+  dpr: Option<f32>,
 }
 
 fn default_jobs() -> usize {
@@ -1287,6 +1379,201 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
         );
       }
     }
+  }
+
+  if args.capture_worst_accuracy_fixtures {
+    if !disk_cache_enabled {
+      eprintln!(
+        "Warning: --capture-worst-accuracy-fixtures requested, but the pageset disk cache is disabled. \
+         Skipping because `bundle_page cache` requires cached subresources."
+      );
+    } else {
+      println!();
+      println!("Capturing worst accuracy fixtures from the warmed disk cache...");
+
+      let plan_args = xtask::capture_accuracy_fixtures::CaptureAccuracyFixturesArgs {
+        progress_dir: repo_root.join("progress/pages"),
+        fixtures_root: repo_root.join("tests/pages/fixtures"),
+        bundle_out_dir: if args.capture_worst_accuracy_fixtures_out_dir.is_absolute() {
+          args.capture_worst_accuracy_fixtures_out_dir.clone()
+        } else {
+          repo_root.join(&args.capture_worst_accuracy_fixtures_out_dir)
+        },
+        asset_cache_dir: cache_dir.clone(),
+        user_agent: user_agent_arg.clone(),
+        accept_language: accept_language_arg.clone(),
+        viewport: viewport_arg.clone(),
+        dpr: dpr_arg.clone(),
+        allow_missing_resources: args.capture_worst_accuracy_fixtures_allow_missing_resources,
+        overwrite: args.capture_worst_accuracy_fixtures_overwrite,
+        min_diff_percent: args.capture_worst_accuracy_fixtures_min_diff_percent,
+        top: args.capture_worst_accuracy_fixtures_top,
+      };
+
+      capture_accuracy_fixtures_with_plan(
+        "capture-worst-accuracy-fixtures",
+        &repo_root,
+        plan_args,
+      )?;
+    }
+  }
+
+  Ok(())
+}
+
+fn run_capture_accuracy_fixtures(args: CaptureAccuracyFixturesArgs) -> Result<()> {
+  if !(0.0..=100.0).contains(&args.min_diff_percent) || !args.min_diff_percent.is_finite() {
+    bail!("--min-diff-percent must be a finite number between 0 and 100");
+  }
+
+  let repo_root = repo_root();
+
+  let progress_dir = if args.progress_dir.is_absolute() {
+    args.progress_dir
+  } else {
+    repo_root.join(args.progress_dir)
+  };
+  let fixtures_root = if args.fixtures_root.is_absolute() {
+    args.fixtures_root
+  } else {
+    repo_root.join(args.fixtures_root)
+  };
+  let bundle_out_dir = if args.bundle_out_dir.is_absolute() {
+    args.bundle_out_dir
+  } else {
+    repo_root.join(args.bundle_out_dir)
+  };
+  let asset_cache_dir = if args.asset_cache_dir.is_absolute() {
+    args.asset_cache_dir
+  } else {
+    repo_root.join(args.asset_cache_dir)
+  };
+
+  if !asset_cache_dir.is_dir() {
+    bail!(
+      "asset cache directory {} does not exist; run pageset with disk cache enabled \
+       (or pass --asset-cache-dir to point at an existing cache)",
+      asset_cache_dir.display()
+    );
+  }
+
+  let viewport = args.viewport.map(|(w, h)| format!("{w}x{h}"));
+  let dpr = args.dpr.map(|dpr| dpr.to_string());
+
+  let plan_args = xtask::capture_accuracy_fixtures::CaptureAccuracyFixturesArgs {
+    progress_dir,
+    fixtures_root,
+    bundle_out_dir,
+    asset_cache_dir,
+    user_agent: args.user_agent,
+    accept_language: args.accept_language,
+    viewport,
+    dpr,
+    allow_missing_resources: args.allow_missing_resources,
+    overwrite: args.overwrite,
+    min_diff_percent: args.min_diff_percent,
+    top: args.top,
+  };
+
+  capture_accuracy_fixtures_with_plan("capture-accuracy-fixtures", &repo_root, plan_args)
+}
+
+fn capture_accuracy_fixtures_with_plan(
+  label: &str,
+  repo_root: &Path,
+  plan_args: xtask::capture_accuracy_fixtures::CaptureAccuracyFixturesArgs,
+) -> Result<()> {
+  if !(0.0..=100.0).contains(&plan_args.min_diff_percent) || !plan_args.min_diff_percent.is_finite()
+  {
+    bail!("min_diff_percent must be a finite number between 0 and 100");
+  }
+
+  let plan = xtask::capture_accuracy_fixtures::plan_capture_accuracy_fixtures(&plan_args)?;
+  let xtask::capture_accuracy_fixtures::CaptureAccuracyFixturesPlan {
+    ok_accuracy_pages_total,
+    selected_pages_total,
+    fixtures_already_present,
+    captures,
+  } = plan;
+
+  println!("Ok pages with accuracy discovered: {ok_accuracy_pages_total}");
+  println!("Selected pages: {selected_pages_total}");
+  println!("Fixtures already present: {fixtures_already_present}");
+  println!("Selected fixtures to capture: {}", captures.len());
+
+  if !captures.is_empty() {
+    fs::create_dir_all(&plan_args.bundle_out_dir).with_context(|| {
+      format!(
+        "failed to create bundle output directory {}",
+        plan_args.bundle_out_dir.display()
+      )
+    })?;
+  }
+
+  let mut bundles_captured = 0usize;
+  let mut fixtures_imported = 0usize;
+  let mut failures: Vec<(String, String)> = Vec::new();
+
+  for capture in captures {
+    let fixture_summary = format!("diff={:.4}%", capture.diff_percent);
+
+    if capture.bundle_path.exists() {
+      if capture.bundle_path.is_dir() {
+        fs::remove_dir_all(&capture.bundle_path).with_context(|| {
+          format!(
+            "failed to remove existing bundle {}",
+            capture.bundle_path.display()
+          )
+        })?;
+      } else {
+        fs::remove_file(&capture.bundle_path).with_context(|| {
+          format!(
+            "failed to remove existing bundle {}",
+            capture.bundle_path.display()
+          )
+        })?;
+      }
+    }
+
+    println!("Capturing {} ({fixture_summary})...", capture.stem);
+
+    let mut bundle_cmd = capture.bundle_command.to_command();
+    bundle_cmd.current_dir(repo_root);
+    let bundle_result =
+      run_command(bundle_cmd).with_context(|| format!("bundle_page cache {}", capture.stem));
+    if let Err(err) = bundle_result {
+      failures.push((capture.stem.clone(), format!("capture failed: {err}")));
+      continue;
+    }
+    bundles_captured += 1;
+
+    let mut import_cmd = capture.import_command.to_command();
+    import_cmd.current_dir(repo_root);
+    let import_result =
+      run_command(import_cmd).with_context(|| format!("import-page-fixture {}", capture.stem));
+    if let Err(err) = import_result {
+      failures.push((capture.stem.clone(), format!("import failed: {err}")));
+      continue;
+    }
+    fixtures_imported += 1;
+  }
+
+  println!();
+  println!("{label} summary:");
+  println!("  ok pages with accuracy       {ok_accuracy_pages_total}");
+  println!("  selected pages               {selected_pages_total}");
+  println!("  fixtures already present     {fixtures_already_present}");
+  println!("  bundles captured             {bundles_captured}");
+  println!("  fixtures imported            {fixtures_imported}");
+  println!("  failures                     {}", failures.len());
+
+  if !failures.is_empty() {
+    println!();
+    println!("Failures:");
+    for (stem, message) in &failures {
+      println!("  - {stem}: {message}");
+    }
+    bail!("{label} failed for {} page(s)", failures.len());
   }
 
   Ok(())

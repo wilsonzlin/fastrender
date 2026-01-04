@@ -135,6 +135,19 @@ The importer rewrites all HTML/CSS references to hashed files under `assets/` an
 
 Tip: if you already have a warmed pageset disk cache, `cargo xtask pageset --capture-missing-failure-fixtures` can automatically capture/import missing fixtures for pages that currently fail in `progress/pages/*.json` (it uses `bundle_page cache` + `cargo xtask import-page-fixture` under the hood).
 
+Tip: once a pageset run has populated `progress/pages/*.json` with `accuracy` metrics, you can also auto-capture/import fixtures for the most visually incorrect **ok** pages:
+
+```bash
+# Populate progress JSON + per-page accuracy metrics, then capture/import offline fixtures for the
+# worst-diff ok pages (missing fixtures only by default).
+cargo xtask pageset --disk-cache --capture-worst-accuracy-fixtures -- --accuracy
+
+# Iterate locally with deterministic fixture-vs-Chrome diffs:
+cargo xtask fixture-chrome-diff
+```
+
+The standalone workflow (`cargo xtask capture-accuracy-fixtures`) is also available when you want to tune selection thresholds (`--min-diff-percent`, `--top`) or reuse an existing warmed cache directory.
+
 ## WPT harness (local, visual)
 
 There is a self-contained WPT-style runner under `tests/wpt/` for local “render and compare” tests. It does not talk to upstream WPT and never fetches from the network.

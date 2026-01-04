@@ -155,6 +155,12 @@ detect_total_cpus() {
 #   --capture-missing-failure-fixtures-out-dir DIR
 #   --capture-missing-failure-fixtures-allow-missing-resources
 #   --capture-missing-failure-fixtures-overwrite
+#   --capture-worst-accuracy-fixtures
+#   --capture-worst-accuracy-fixtures-out-dir DIR
+#   --capture-worst-accuracy-fixtures-min-diff-percent PERCENT
+#   --capture-worst-accuracy-fixtures-top N
+#   --capture-worst-accuracy-fixtures-allow-missing-resources
+#   --capture-worst-accuracy-fixtures-overwrite
 #
 # Extra arguments are forwarded to `pageset_progress run`. Use `--` to separate them from the
 # wrapper flags, e.g.:
@@ -193,6 +199,12 @@ CAPTURE_MISSING_FAILURE_FIXTURES=0
 CAPTURE_MISSING_FAILURE_FIXTURES_OUT_DIR="target/pageset_failure_fixture_bundles"
 CAPTURE_MISSING_FAILURE_FIXTURES_ALLOW_MISSING_RESOURCES=0
 CAPTURE_MISSING_FAILURE_FIXTURES_OVERWRITE=0
+CAPTURE_WORST_ACCURACY_FIXTURES=0
+CAPTURE_WORST_ACCURACY_FIXTURES_OUT_DIR="target/pageset_accuracy_fixture_bundles"
+CAPTURE_WORST_ACCURACY_FIXTURES_MIN_DIFF_PERCENT="0.5"
+CAPTURE_WORST_ACCURACY_FIXTURES_TOP="10"
+CAPTURE_WORST_ACCURACY_FIXTURES_ALLOW_MISSING_RESOURCES=0
+CAPTURE_WORST_ACCURACY_FIXTURES_OVERWRITE=0
 ACCURACY=0
 ACCURACY_BASELINE="existing"
 ACCURACY_BASELINE_DIR="fetches/chrome_renders"
@@ -421,6 +433,63 @@ while [[ $# -gt 0 ]]; do
     --accuracy-diff-dir=*)
       ACCURACY_DIFF_DIR="${arg#--accuracy-diff-dir=}"
       ACCURACY_DIFF_DIR_SET=1
+      shift
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures)
+      CAPTURE_WORST_ACCURACY_FIXTURES=1
+      shift
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-out-dir)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      CAPTURE_WORST_ACCURACY_FIXTURES_OUT_DIR="$2"
+      shift 2
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-out-dir=*)
+      CAPTURE_WORST_ACCURACY_FIXTURES_OUT_DIR="${arg#--capture-worst-accuracy-fixtures-out-dir=}"
+      shift
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-min-diff-percent)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      CAPTURE_WORST_ACCURACY_FIXTURES_MIN_DIFF_PERCENT="$2"
+      shift 2
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-min-diff-percent=*)
+      CAPTURE_WORST_ACCURACY_FIXTURES_MIN_DIFF_PERCENT="${arg#--capture-worst-accuracy-fixtures-min-diff-percent=}"
+      shift
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-top)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      CAPTURE_WORST_ACCURACY_FIXTURES_TOP="$2"
+      shift 2
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-top=*)
+      CAPTURE_WORST_ACCURACY_FIXTURES_TOP="${arg#--capture-worst-accuracy-fixtures-top=}"
+      shift
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-allow-missing-resources)
+      CAPTURE_WORST_ACCURACY_FIXTURES_ALLOW_MISSING_RESOURCES=1
+      shift
+      continue
+      ;;
+    --capture-worst-accuracy-fixtures-overwrite)
+      CAPTURE_WORST_ACCURACY_FIXTURES_OVERWRITE=1
       shift
       continue
       ;;
@@ -1130,4 +1199,52 @@ PY
     done
     exit 1
   fi
+fi
+
+if [[ "${CAPTURE_WORST_ACCURACY_FIXTURES}" -eq 1 ]]; then
+  if [[ "${USE_DISK_CACHE}" == 0 ]]; then
+    echo "Warning: --capture-worst-accuracy-fixtures requested, but the pageset disk cache is disabled. Skipping because bundle_page cache requires cached subresources." >&2
+    exit 0
+  fi
+
+  echo ""
+  echo "Capturing worst accuracy fixtures from warmed disk cache..."
+
+  if ! [[ -d "progress/pages" ]]; then
+    echo "progress/pages directory is missing; run pageset first" >&2
+    exit 1
+  fi
+
+  mkdir -p "${CAPTURE_WORST_ACCURACY_FIXTURES_OUT_DIR}"
+
+  cmd=(
+    cargo xtask capture-accuracy-fixtures
+    --progress-dir progress/pages
+    --fixtures-root tests/pages/fixtures
+    --asset-cache-dir "${CACHE_DIR}"
+    --bundle-out-dir "${CAPTURE_WORST_ACCURACY_FIXTURES_OUT_DIR}"
+    --min-diff-percent "${CAPTURE_WORST_ACCURACY_FIXTURES_MIN_DIFF_PERCENT}"
+    --top "${CAPTURE_WORST_ACCURACY_FIXTURES_TOP}"
+  )
+
+  if [[ "${CAPTURE_WORST_ACCURACY_FIXTURES_ALLOW_MISSING_RESOURCES}" -eq 1 ]]; then
+    cmd+=(--allow-missing-resources)
+  fi
+  if [[ "${CAPTURE_WORST_ACCURACY_FIXTURES_OVERWRITE}" -eq 1 ]]; then
+    cmd+=(--overwrite)
+  fi
+  if [[ -n "${USER_AGENT_ARG}" ]]; then
+    cmd+=(--user-agent "${USER_AGENT_ARG}")
+  fi
+  if [[ -n "${ACCEPT_LANGUAGE_ARG}" ]]; then
+    cmd+=(--accept-language "${ACCEPT_LANGUAGE_ARG}")
+  fi
+  if [[ -n "${VIEWPORT_ARG}" ]]; then
+    cmd+=(--viewport "${VIEWPORT_ARG}")
+  fi
+  if [[ -n "${DPR_ARG}" ]]; then
+    cmd+=(--dpr "${DPR_ARG}")
+  fi
+
+  "${cmd[@]}"
 fi

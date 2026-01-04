@@ -20,6 +20,7 @@ fn help_lists_commands() {
       && stdout.contains("chrome-baseline-fixtures")
       && stdout.contains("fixture-chrome-diff")
       && stdout.contains("fixture-determinism")
+      && stdout.contains("capture-accuracy-fixtures")
       && stdout.contains("pageset")
       && stdout.contains("pageset-diff")
       && stdout.contains("perf-smoke")
@@ -346,8 +347,14 @@ fn pageset_help_mentions_capture_missing_failure_fixtures() {
     stdout.contains("--capture-missing-failure-fixtures")
       && stdout.contains("--capture-missing-failure-fixtures-out-dir")
       && stdout.contains("--capture-missing-failure-fixtures-allow-missing-resources")
-      && stdout.contains("--capture-missing-failure-fixtures-overwrite"),
-    "pageset help should mention the capture-missing-failure-fixtures flags; got:\n{stdout}"
+      && stdout.contains("--capture-missing-failure-fixtures-overwrite")
+      && stdout.contains("--capture-worst-accuracy-fixtures")
+      && stdout.contains("--capture-worst-accuracy-fixtures-out-dir")
+      && stdout.contains("--capture-worst-accuracy-fixtures-min-diff-percent")
+      && stdout.contains("--capture-worst-accuracy-fixtures-top")
+      && stdout.contains("--capture-worst-accuracy-fixtures-allow-missing-resources")
+      && stdout.contains("--capture-worst-accuracy-fixtures-overwrite"),
+    "pageset help should mention the fixture capture flags; got:\n{stdout}"
   );
 }
 
