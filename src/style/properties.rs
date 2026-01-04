@@ -43,7 +43,6 @@ use crate::style::ComputedStyle;
 use cssparser::BasicParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
-use cssparser::ToCss;
 use cssparser::Token;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1313,7 +1312,24 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
   let mut parts = Vec::new();
   let mut current = String::new();
   let mut depth = 0i32;
-  for ch in raw.chars() {
+  let mut in_string: Option<char> = None;
+  let mut chars = raw.chars();
+
+  while let Some(ch) = chars.next() {
+    if let Some(quote) = in_string {
+      current.push(ch);
+      if ch == '\\' {
+        if let Some(next) = chars.next() {
+          current.push(next);
+        }
+        continue;
+      }
+      if ch == quote {
+        in_string = None;
+      }
+      continue;
+    }
+
     match ch {
       '(' => {
         depth += 1;
@@ -1323,7 +1339,11 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
         depth = (depth - 1).max(0);
         current.push(ch);
       }
-      ch if depth == 0 && ch.is_whitespace() => {
+      '"' | '\'' => {
+        in_string = Some(ch);
+        current.push(ch);
+      }
+      ch if ch.is_ascii_whitespace() && depth == 0 => {
         if !current.trim().is_empty() {
           parts.push(current.trim().to_string());
         }
@@ -1332,9 +1352,11 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
       _ => current.push(ch),
     }
   }
+
   if !current.trim().is_empty() {
     parts.push(current.trim().to_string());
   }
+
   parts
 }
 
@@ -1722,25 +1744,10 @@ fn parse_animation_shorthand(
     let mut fill_mode: Option<AnimationFillMode> = None;
     let mut play_state: Option<AnimationPlayState> = None;
 
-    let mut input = ParserInput::new(part.as_str());
-    let mut parser = Parser::new(&mut input);
     let mut invalid = false;
 
-    while !parser.is_exhausted() {
-      parser.skip_whitespace();
-      if parser.is_exhausted() {
-        break;
-      }
-      let token = match parser.next_including_whitespace() {
-        Ok(token) => token,
-        Err(_) => {
-          invalid = true;
-          break;
-        }
-      };
-      let token_text = token.to_css_string();
-
-      if let Some(ms) = parse_time_ms(&token_text) {
+    for token in split_top_level_whitespace(&part) {
+      if let Some(ms) = parse_time_ms(&token) {
         if duration.is_none() {
           duration = Some(ms.max(0.0));
         } else if delay.is_none() {
@@ -1752,59 +1759,38 @@ fn parse_animation_shorthand(
         continue;
       }
 
-      if timing.is_none() {
-        if let Some(tf) = parse_transition_timing_function(&token_text) {
+      if let Some(tf) = parse_transition_timing_function(&token) {
+        if timing.is_none() {
           timing = Some(tf);
           continue;
         }
-        if let Token::Function(name) = &token {
-          let func_name = name.to_string();
-          if let Some(tf) = parse_transition_timing_function(func_name.as_str()) {
-            timing = Some(tf);
-            continue;
-          }
-          if func_name.eq_ignore_ascii_case("cubic-bezier")
-            || func_name.eq_ignore_ascii_case("steps")
-          {
-            if let Some(tf) = parse_transition_timing_function(&token_text) {
-              timing = Some(tf);
-              continue;
-            }
-          }
-        }
-      } else if parse_transition_timing_function(&token_text).is_some() {
         invalid = true;
         break;
       }
 
       if iteration.is_none() {
-        if let Some(count) = parse_animation_iteration_count(&token_text) {
+        if let Some(count) = parse_animation_iteration_count(&token) {
           iteration = Some(count);
           continue;
         }
-      } else if parse_animation_iteration_count(&token_text).is_some() {
+      } else if parse_animation_iteration_count(&token).is_some() {
         invalid = true;
         break;
       }
 
       if direction.is_none() {
-        if let Some(dir) = parse_animation_direction(&token_text) {
+        if let Some(dir) = parse_animation_direction(&token) {
           direction = Some(dir);
           continue;
         }
-      } else if parse_animation_direction(&token_text).is_some() {
+      } else if parse_animation_direction(&token).is_some() {
         invalid = true;
         break;
       }
 
-      let lower = token_text.to_ascii_lowercase();
-      if lower == "none" {
+      if token.trim().eq_ignore_ascii_case("none") {
         if name.is_none() {
-          name = Some(match token {
-            Token::Ident(id) => id.to_string(),
-            Token::QuotedString(s) => s.to_string(),
-            _ => "none".to_string(),
-          });
+          name = Some(token.trim().to_string());
           continue;
         }
         if fill_mode.is_none() {
@@ -1816,46 +1802,47 @@ fn parse_animation_shorthand(
       }
 
       if fill_mode.is_none() {
-        if let Some(fill) = parse_animation_fill_mode(&token_text) {
+        if let Some(fill) = parse_animation_fill_mode(&token) {
           fill_mode = Some(fill);
           continue;
         }
-      } else if parse_animation_fill_mode(&token_text).is_some() {
+      } else if parse_animation_fill_mode(&token).is_some() {
         invalid = true;
         break;
       }
 
       if play_state.is_none() {
-        if let Some(state) = parse_animation_play_state(&token_text) {
+        if let Some(state) = parse_animation_play_state(&token) {
           play_state = Some(state);
           continue;
         }
-      } else if parse_animation_play_state(&token_text).is_some() {
+      } else if parse_animation_play_state(&token).is_some() {
         invalid = true;
         break;
       }
 
-      match token {
-        Token::Ident(ident) => {
-          if name.is_none() {
-            name = Some(ident.to_string());
-          } else {
-            invalid = true;
-            break;
-          }
-        }
-        Token::QuotedString(s) => {
-          if name.is_none() {
-            name = Some(s.to_string());
-          } else {
-            invalid = true;
-            break;
-          }
-        }
-        _ => {
+      if name.is_none() {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
           invalid = true;
           break;
         }
+        let unquoted = trimmed
+          .strip_prefix('"')
+          .and_then(|s| s.strip_suffix('"'))
+          .or_else(|| trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')));
+        if let Some(unquoted) = unquoted {
+          name = Some(unquoted.to_string());
+        } else {
+          if trimmed.contains('(') || trimmed.contains(')') {
+            invalid = true;
+            break;
+          }
+          name = Some(trimmed.to_string());
+        }
+      } else {
+        invalid = true;
+        break;
       }
     }
 
@@ -1913,51 +1900,23 @@ fn parse_transition_shorthand(
     let mut delay: Option<f32> = None;
     let mut timing: Option<TransitionTimingFunction> = None;
 
-    let mut input = ParserInput::new(part.as_str());
-    let mut parser = Parser::new(&mut input);
-    while !parser.is_exhausted() {
-      parser.skip_whitespace();
-      if parser.is_exhausted() {
-        break;
-      }
-      let token = parser.next_including_whitespace();
-      if token.is_err() {
-        break;
-      }
-      let token = token.unwrap();
-      let token_text = token.to_css_string();
-      if let Some(ms) = parse_time_ms(&token_text) {
+    for token in split_top_level_whitespace(&part) {
+      if let Some(ms) = parse_time_ms(&token) {
         if duration.is_none() {
           duration = Some(ms);
-        } else {
+        } else if delay.is_none() {
           delay = Some(ms);
         }
         continue;
       }
 
-      if let Some(tf) = parse_transition_timing_function(&token_text) {
+      if let Some(tf) = parse_transition_timing_function(&token) {
         timing = Some(tf);
         continue;
       }
 
-      if let Token::Function(name) = &token {
-        let func_name = name.to_string();
-        if let Some(tf) = parse_transition_timing_function(func_name.as_str()) {
-          timing = Some(tf);
-          continue;
-        }
-        if func_name.eq_ignore_ascii_case("cubic-bezier") || func_name.eq_ignore_ascii_case("steps")
-        {
-          // The to_css_string() above preserves the arguments.
-          if let Some(tf) = parse_transition_timing_function(&token_text) {
-            timing = Some(tf);
-            continue;
-          }
-        }
-      }
-
-      let lower = token_text.to_ascii_lowercase();
       if property.is_none() {
+        let lower = token.trim().to_ascii_lowercase();
         property = Some(match lower.as_str() {
           "all" => TransitionProperty::All,
           "none" => TransitionProperty::None,
@@ -15472,6 +15431,79 @@ mod tests {
   }
 
   #[test]
+  fn transition_shorthand_parses_cubic_bezier_function_tokens() {
+    let decls =
+      parse_declarations("transition: opacity 200ms cubic-bezier(.25,1,.5,1) 50ms;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.transition_properties,
+      vec![TransitionProperty::Name("opacity".to_string())].into()
+    );
+    assert_eq!(styles.transition_durations, vec![200.0].into());
+    assert_eq!(styles.transition_delays, vec![50.0].into());
+    assert_eq!(
+      styles.transition_timing_functions,
+      vec![TransitionTimingFunction::CubicBezier(0.25, 1.0, 0.5, 1.0)].into()
+    );
+  }
+
+  #[test]
+  fn transition_shorthand_parses_comma_list_with_mixed_entries() {
+    let decls = parse_declarations(
+      "transition: 200ms cubic-bezier(.25,1,.5,1) 50ms opacity, transform 1s;",
+    );
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.transition_properties,
+      vec![
+        TransitionProperty::Name("opacity".to_string()),
+        TransitionProperty::Name("transform".to_string())
+      ]
+      .into()
+    );
+    assert_eq!(styles.transition_durations, vec![200.0, 1000.0].into());
+    assert_eq!(styles.transition_delays, vec![50.0, 0.0].into());
+    assert_eq!(
+      styles.transition_timing_functions,
+      vec![
+        TransitionTimingFunction::CubicBezier(0.25, 1.0, 0.5, 1.0),
+        TransitionTimingFunction::Ease
+      ]
+      .into()
+    );
+  }
+
+  #[test]
   fn transition_var_resolves_and_applies_from_raw_keyword() {
     let decls = parse_declarations("transition: var(--t);");
     assert_eq!(decls.len(), 1);
@@ -15667,6 +15699,37 @@ mod tests {
     assert_eq!(
       styles.animation_play_states,
       vec![AnimationPlayState::Paused, AnimationPlayState::Running].into()
+    );
+  }
+
+  #[test]
+  fn animation_shorthand_parses_steps_and_infinite() {
+    let decls = parse_declarations("animation: spin 2s steps(4,end) infinite;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(styles.animation_names, vec!["spin".to_string()]);
+    assert_eq!(styles.animation_durations, vec![2000.0].into());
+    assert_eq!(
+      styles.animation_timing_functions,
+      vec![TransitionTimingFunction::Steps(4, StepPosition::End)].into()
+    );
+    assert_eq!(
+      styles.animation_iteration_counts,
+      vec![AnimationIterationCount::Infinite].into()
     );
   }
 
