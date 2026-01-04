@@ -527,7 +527,7 @@ fn png_for_snapshot(path: &Path, stem: &str, html_dir: &Path) -> Option<String> 
   // For pageset_progress dumps, try the common `render.png` convention first.
   if file_name.as_deref() == Some("snapshot.json") {
     let render = parent.join("render.png");
-    if render.exists() {
+    if render.is_file() {
       return Some(path_for_report(html_dir, &render));
     }
 
@@ -535,7 +535,7 @@ fn png_for_snapshot(path: &Path, stem: &str, html_dir: &Path) -> Option<String> 
     // outputs, the PNG lives next to the `<stem>/snapshot.json` directory.
     if let Some(grandparent) = parent.parent() {
       let render = grandparent.join(format!("{stem}.png"));
-      if render.exists() {
+      if render.is_file() {
         return Some(path_for_report(html_dir, &render));
       }
     }
@@ -544,7 +544,7 @@ fn png_for_snapshot(path: &Path, stem: &str, html_dir: &Path) -> Option<String> 
   // Fallback to the legacy `<stem>.png` naming (used by render_pages dumps and sometimes copied
   // into pageset_progress dump directories).
   let png = parent.join(format!("{stem}.png"));
-  png.exists().then(|| path_for_report(html_dir, &png))
+  png.is_file().then(|| path_for_report(html_dir, &png))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
