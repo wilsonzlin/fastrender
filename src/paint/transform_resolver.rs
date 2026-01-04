@@ -653,6 +653,25 @@ mod tests {
   }
 
   #[test]
+  fn resolves_viewport_units_in_transform_origin_when_viewport_provided() {
+    let mut style = ComputedStyle::default();
+    style.transform_origin.x = Length::new(10.0, LengthUnit::Vw);
+    style.transform_origin.y = Length::px(0.0);
+    style.transform.push(Transform::Scale(2.0, 1.0));
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    let matrix = resolve_transform3d(&style, bounds, Some((200.0, 100.0)))
+      .expect("transform")
+      .to_2d()
+      .expect("affine transform");
+    assert!((matrix.a - 2.0).abs() < 1e-4);
+    assert!((matrix.d - 1.0).abs() < 1e-4);
+    // Origin.x = 10vw (20px); scaling around this point translates by (1 - sx) * origin.x = -20px.
+    assert!((matrix.e + 20.0).abs() < 1e-4);
+    assert!(matrix.f.abs() < 1e-4);
+  }
+
+  #[test]
   fn resolves_scale_property() {
     let mut style = ComputedStyle::default();
     style.scale = ScaleValue::Values {
