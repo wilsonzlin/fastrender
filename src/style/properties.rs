@@ -1597,7 +1597,8 @@ fn parse_time_ms(raw: &str) -> Option<f32> {
   if let Some(num) = strip_suffix_ignore_ascii_case(trimmed, "s") {
     return num.trim().parse::<f32>().ok().map(|v| v * 1000.0);
   }
-  if trimmed == "0" {
+  // CSS allows unitless zeros for time values.
+  if trimmed.parse::<f32>().ok().is_some_and(|v| v == 0.0) {
     return Some(0.0);
   }
   None
@@ -15715,6 +15716,37 @@ mod tests {
     assert_eq!(
       styles.transition_timing_functions,
       vec![TransitionTimingFunction::CubicBezier(0.25, 1.0, 0.5, 1.0)].into()
+    );
+  }
+
+  #[test]
+  fn transition_shorthand_parses_unitless_float_zero_time_tokens() {
+    let decls = parse_declarations("transition: 0.0 opacity 200ms linear;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.transition_properties,
+      vec![TransitionProperty::Name("opacity".to_string())].into()
+    );
+    assert_eq!(styles.transition_durations, vec![0.0].into());
+    assert_eq!(styles.transition_delays, vec![200.0].into());
+    assert_eq!(
+      styles.transition_timing_functions,
+      vec![TransitionTimingFunction::Linear].into()
     );
   }
 
