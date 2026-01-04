@@ -854,52 +854,68 @@ impl DisplayListOptimizer {
     items: &[DisplayItem],
     indices: &[usize],
   ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
-    let mut clip_depth = 0i32;
-    let mut opacity_depth = 0i32;
-    let mut transform_depth = 0i32;
-    let mut blend_depth = 0i32;
-    let mut stacking_depth = 0i32;
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    enum StackEntry {
+      Clip,
+      Opacity,
+      Transform,
+      Blend,
+      StackingContext,
+    }
+
+    impl StackEntry {
+      fn pop_item(self) -> DisplayItem {
+        match self {
+          StackEntry::Clip => DisplayItem::PopClip,
+          StackEntry::Opacity => DisplayItem::PopOpacity,
+          StackEntry::Transform => DisplayItem::PopTransform,
+          StackEntry::Blend => DisplayItem::PopBlendMode,
+          StackEntry::StackingContext => DisplayItem::PopStackingContext,
+        }
+      }
+    }
+
+    let mut stack: Vec<StackEntry> = Vec::new();
+
+    let pop_entry = |stack: &mut Vec<StackEntry>, entry: StackEntry| {
+      match stack.last() {
+        Some(top) if *top == entry => {
+          stack.pop();
+        }
+        _ => {
+          // The indices stream should be nesting-correct; however, views can be sliced, and
+          // consumers may pass in index lists that start/end mid-scope. Recover conservatively by
+          // unwinding to the last matching push (treating any inner scopes as already closed).
+          if let Some(pos) = stack.iter().rposition(|e| *e == entry) {
+            stack.truncate(pos);
+          }
+        }
+      }
+    };
 
     let mut counter = 0usize;
     for &idx in indices {
       check_active_periodic(&mut counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       if let Some(item) = items.get(idx) {
         match item {
-          DisplayItem::PushClip(_) => clip_depth += 1,
-          DisplayItem::PopClip => clip_depth -= 1,
-          DisplayItem::PushOpacity(_) => opacity_depth += 1,
-          DisplayItem::PopOpacity => opacity_depth -= 1,
-          DisplayItem::PushTransform(_) => transform_depth += 1,
-          DisplayItem::PopTransform => transform_depth -= 1,
-          DisplayItem::PushBlendMode(_) => blend_depth += 1,
-          DisplayItem::PopBlendMode => blend_depth -= 1,
-          DisplayItem::PushStackingContext(_) => stacking_depth += 1,
-          DisplayItem::PopStackingContext => stacking_depth -= 1,
+          DisplayItem::PushClip(_) => stack.push(StackEntry::Clip),
+          DisplayItem::PopClip => pop_entry(&mut stack, StackEntry::Clip),
+          DisplayItem::PushOpacity(_) => stack.push(StackEntry::Opacity),
+          DisplayItem::PopOpacity => pop_entry(&mut stack, StackEntry::Opacity),
+          DisplayItem::PushTransform(_) => stack.push(StackEntry::Transform),
+          DisplayItem::PopTransform => pop_entry(&mut stack, StackEntry::Transform),
+          DisplayItem::PushBlendMode(_) => stack.push(StackEntry::Blend),
+          DisplayItem::PopBlendMode => pop_entry(&mut stack, StackEntry::Blend),
+          DisplayItem::PushStackingContext(_) => stack.push(StackEntry::StackingContext),
+          DisplayItem::PopStackingContext => pop_entry(&mut stack, StackEntry::StackingContext),
           _ => {}
         }
       }
     }
 
-    let mut tail = Vec::new();
-    while clip_depth > 0 {
-      tail.push(DisplayItem::PopClip);
-      clip_depth -= 1;
-    }
-    while opacity_depth > 0 {
-      tail.push(DisplayItem::PopOpacity);
-      opacity_depth -= 1;
-    }
-    while transform_depth > 0 {
-      tail.push(DisplayItem::PopTransform);
-      transform_depth -= 1;
-    }
-    while blend_depth > 0 {
-      tail.push(DisplayItem::PopBlendMode);
-      blend_depth -= 1;
-    }
-    while stacking_depth > 0 {
-      tail.push(DisplayItem::PopStackingContext);
-      stacking_depth -= 1;
+    let mut tail = Vec::with_capacity(stack.len());
+    while let Some(entry) = stack.pop() {
+      tail.push(entry.pop_item());
     }
 
     Ok(tail)
@@ -1283,6 +1299,99 @@ mod tests {
     assert_eq!(transform, 0);
     assert_eq!(blend, 0);
     assert_eq!(stacking, 0);
+  }
+
+  #[test]
+  fn balance_stack_tail_respects_clip_stacking_context_nesting() {
+    let optimizer = DisplayListOptimizer::new();
+
+    let items = vec![
+      DisplayItem::PushClip(ClipItem {
+        shape: ClipShape::Rect {
+          rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+          radii: None,
+        },
+      }),
+      DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        plane_rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        child_perspective: None,
+        transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+        mask: None,
+      }),
+      make_fill_rect(0.0, 0.0, 5.0, 5.0, Rgba::RED),
+    ];
+    let indices = vec![0, 1, 2];
+
+    let tail = optimizer.balance_stack_tail(&items, &indices).unwrap();
+    assert!(matches!(
+      tail.as_slice(),
+      [DisplayItem::PopStackingContext, DisplayItem::PopClip]
+    ));
+
+    let view = DisplayListView::new(&items, indices, tail);
+    let out: Vec<DisplayItem> = view.iter().cloned().collect();
+    assert_balanced(&out);
+  }
+
+  #[test]
+  fn balance_stack_tail_respects_clip_opacity_nesting() {
+    let optimizer = DisplayListOptimizer::new();
+
+    let items = vec![
+      DisplayItem::PushClip(ClipItem {
+        shape: ClipShape::Rect {
+          rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+          radii: None,
+        },
+      }),
+      DisplayItem::PushOpacity(OpacityItem { opacity: 0.5 }),
+      make_fill_rect(0.0, 0.0, 5.0, 5.0, Rgba::RED),
+    ];
+    let indices = vec![0, 1, 2];
+
+    let tail = optimizer.balance_stack_tail(&items, &indices).unwrap();
+    assert!(matches!(
+      tail.as_slice(),
+      [DisplayItem::PopOpacity, DisplayItem::PopClip]
+    ));
+
+    let view = DisplayListView::new(&items, indices, tail);
+    let out: Vec<DisplayItem> = view.iter().cloned().collect();
+    assert_balanced(&out);
+  }
+
+  #[test]
+  fn balance_stack_tail_empty_for_already_balanced_input() {
+    let optimizer = DisplayListOptimizer::new();
+
+    let items = vec![
+      DisplayItem::PushClip(ClipItem {
+        shape: ClipShape::Rect {
+          rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+          radii: None,
+        },
+      }),
+      make_fill_rect(0.0, 0.0, 5.0, 5.0, Rgba::RED),
+      DisplayItem::PopClip,
+    ];
+    let indices = vec![0, 1, 2];
+
+    let tail = optimizer.balance_stack_tail(&items, &indices).unwrap();
+    assert!(tail.is_empty());
+
+    let view = DisplayListView::new(&items, indices, tail);
+    let out: Vec<DisplayItem> = view.iter().cloned().collect();
+    assert_balanced(&out);
   }
 
   #[test]
