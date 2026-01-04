@@ -232,7 +232,6 @@ fn pageset_help_mentions_refresh_flag() {
 }
 
 #[test]
-#[test]
 fn update_pageset_guardrails_help_mentions_strategy_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["update-pageset-guardrails", "--help"])
