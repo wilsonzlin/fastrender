@@ -81,6 +81,8 @@ cargo xtask chrome-baseline-fixtures
 #
 # 3) Generate a combined Chrome-vs-FastRender diff report:
 # (This re-runs steps 1-2 by default; pass `--no-chrome` to reuse an existing baseline under `<out-dir>/chrome`.)
+# Add `--fail-on-differences` to exit non-zero on diffs, and `--no-build` to reuse an existing
+# `target/release/diff_renders` binary.
 cargo xtask fixture-chrome-diff
 # Report: target/fixture_chrome_diff/report.html
 #
@@ -88,6 +90,8 @@ cargo xtask fixture-chrome-diff
 # Live subresources can change, so treat this as rapid triage only.
 # Shortcut wrapper (writes target/chrome_vs_fastrender/report.html):
 #   scripts/chrome_vs_fastrender.sh --pages example.com
+#   # Pass `--no-build` to reuse an existing `target/release/diff_renders` binary, and
+#   # `--fail-on-differences` to exit non-zero when diffs are found.
 #
 # Ubuntu one-time setup (python + fonts + chrome/chromium):
 scripts/install_chrome_baseline_deps_ubuntu.sh
