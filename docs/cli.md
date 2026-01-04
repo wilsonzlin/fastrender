@@ -348,7 +348,8 @@ cargo run --release --bin diff_renders -- \
 
 - Notes:
   - `--suite` accepts one or more glob(s) relative to the WPT root (e.g. `css/css-text/*`).
-  - The importer is strict/offline by default: it rewrites `web-platform.test` and root-relative URLs to file-relative paths and fails if any `http(s)://` or `//` URL remains (use `--allow-network` to opt out; not recommended).
+  - The importer is strict/offline by default: it rewrites `web-platform.test` and root-relative URLs to file-relative paths and fails if any **fetchable** network URL remains in common contexts (`src=`/`href=`/`srcset=`/CSS `url()`) (use `--allow-network` to opt out; not recommended).
+    - Use `--strict-offline` to additionally scan the rewritten HTML/CSS for any remaining `http(s)://` or protocol-relative (`//`) URL strings anywhere in the file.
   - Sidecar `.ini` metadata files (e.g. `*.html.ini`) are copied alongside tests when present so local expectations/viewport/DPR settings are preserved.
   - Use `--dry-run` to preview, `--overwrite` to update existing files, and `--manifest <path>` / `--no-manifest` to control manifest updates.
 
