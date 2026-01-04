@@ -90,6 +90,7 @@ fn fixture_chrome_diff_help_mentions_flags() {
       && stdout.contains("--sort-by")
       && stdout.contains("--ignore-alpha")
       && stdout.contains("--fail-on-differences")
+      && stdout.contains("--no-build")
       && stdout.contains("--no-fastrender")
       && stdout.contains("--diff-only")
       && stdout.contains("--chrome")

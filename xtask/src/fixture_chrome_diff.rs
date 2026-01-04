@@ -155,6 +155,10 @@ pub struct FixtureChromeDiffArgs {
   /// Alias for `--no-chrome --no-fastrender`.
   #[arg(long)]
   pub diff_only: bool,
+
+  /// Skip building `diff_renders` and reuse an existing release binary under CARGO_TARGET_DIR.
+  #[arg(long)]
+  pub no_build: bool,
 }
 
 pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
@@ -199,6 +203,12 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     )?)
   };
   let diff_renders_exe = crate::diff_renders_executable(&repo_root);
+  if args.no_build && !diff_renders_exe.is_file() {
+    bail!(
+      "--no-build was set, but diff_renders executable does not exist at {}",
+      diff_renders_exe.display()
+    );
+  }
   let diff_renders = build_diff_renders_command(&diff_renders_exe, &layout, &args)?;
 
   if args.dry_run {
@@ -260,16 +270,20 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     crate::run_command(cmd).context("chrome-baseline-fixtures failed")?;
   }
 
-  // Avoid `cargo run` here since `diff_renders` intentionally exits 1 when differences are found,
-  // and `cargo run` would wrap that with a scary `error: process didn't exit successfully` line.
-  let mut build_cmd = Command::new("cargo");
-  build_cmd
-    .arg("build")
-    .arg("--release")
-    .args(["--bin", "diff_renders"])
-    .current_dir(&repo_root);
-  println!("Building diff_renders...");
-  crate::run_command(build_cmd).context("build diff_renders failed")?;
+  if args.no_build {
+    println!("Skipping diff_renders build (--no-build set)...");
+  } else {
+    // Avoid `cargo run` here since `diff_renders` intentionally exits 1 when differences are found,
+    // and `cargo run` would wrap that with a scary `error: process didn't exit successfully` line.
+    let mut build_cmd = Command::new("cargo");
+    build_cmd
+      .arg("build")
+      .arg("--release")
+      .args(["--bin", "diff_renders"])
+      .current_dir(&repo_root);
+    println!("Building diff_renders...");
+    crate::run_command(build_cmd).context("build diff_renders failed")?;
+  }
 
   println!("Diffing renders...");
   run_diff_renders_allowing_differences(diff_renders, &layout, args.fail_on_differences)?;

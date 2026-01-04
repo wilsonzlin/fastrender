@@ -317,6 +317,7 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--jobs/-j <n>`, `--write-snapshot`, `--js {on|off}`
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`, `--fail-on-differences`
   - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--no-fastrender`, `--diff-only`
+  - Build: `--no-build` (skip `cargo build --release --bin diff_renders`; reuse an existing binary)
 
 ## `cargo xtask recapture-page-fixtures`
 
