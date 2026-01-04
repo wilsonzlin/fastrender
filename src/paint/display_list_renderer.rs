@@ -4902,7 +4902,7 @@ impl DisplayListRenderer {
       let mask_tile = match layer.mode {
         MaskMode::Alpha => tile.as_ref(),
         MaskMode::Luminance => {
-          let Some(mask_tile) = mask_tile_from_image(tile.as_ref(), layer.mode) else {
+          let Some(mask_tile) = mask_tile_from_image(tile.as_ref(), layer.mode)? else {
             continue;
           };
           converted_tile = Some(mask_tile);
@@ -9723,14 +9723,22 @@ fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
   (value * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
-fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> Option<Pixmap> {
-  let size = IntSize::from_wh(tile.width(), tile.height())?;
+fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> RenderResult<Option<Pixmap>> {
+  let Some(size) = IntSize::from_wh(tile.width(), tile.height()) else {
+    return Ok(None);
+  };
+
   let mut data = Vec::with_capacity(tile.data().len());
-  for chunk in tile.data().chunks(4) {
-    let v = mask_value_from_pixel(chunk, mode);
-    data.extend_from_slice(&[v, v, v, v]);
+  let mut deadline_counter = 0usize;
+  let chunk_bytes = CLIP_MASK_DEADLINE_STRIDE.saturating_mul(4);
+  for pixel_chunk in tile.data().chunks(chunk_bytes) {
+    check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+    for chunk in pixel_chunk.chunks_exact(4) {
+      let v = mask_value_from_pixel(chunk, mode);
+      data.extend_from_slice(&[v, v, v, v]);
+    }
   }
-  Pixmap::from_vec(data, size)
+  Ok(Pixmap::from_vec(data, size))
 }
 
 #[derive(Debug, Clone)]
@@ -14648,6 +14656,42 @@ mod tests {
         })
       ),
       "expected render_mask composite to abort with a paint timeout, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn mask_tile_from_image_aborts_on_expired_deadline() {
+    // `mask-mode: luminance` converts the painted tile into an alpha-only pixmap. For large tiles
+    // this is an O(pixels) loop and must cooperatively check the active render deadline.
+    let mut pixmap = Pixmap::new(256, 256).expect("pixmap");
+    pixmap.data_mut().fill(200);
+
+    let check_calls = Arc::new(AtomicUsize::new(0));
+    let cancel_calls = check_calls.clone();
+    // Let the first chunk through, then cancel on the next deadline poll so we can assert the
+    // loop checks periodically.
+    let cancel: Arc<CancelCallback> =
+      Arc::new(move || cancel_calls.fetch_add(1, Ordering::Relaxed) >= 1);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+
+    let result = crate::render_control::with_deadline(Some(&deadline), || {
+      mask_tile_from_image(&pixmap, MaskMode::Luminance)
+    });
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(
+      check_calls.load(Ordering::Relaxed) >= 2,
+      "expected cancel callback to be polled more than once, got {}",
+      check_calls.load(Ordering::Relaxed)
     );
   }
 

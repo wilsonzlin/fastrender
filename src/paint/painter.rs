@@ -3334,7 +3334,7 @@ impl Painter {
       let Some(tile) = tile else { continue };
       let mut mask_tile = tile;
       if matches!(layer.mode, MaskMode::Luminance) {
-        let Some(converted) = mask_tile_from_image(&mask_tile, layer.mode) else {
+        let Some(converted) = mask_tile_from_image(&mask_tile, layer.mode)? else {
           continue;
         };
         mask_tile = converted;
@@ -11603,14 +11603,21 @@ fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
   (value * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
-fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> Option<Pixmap> {
-  let size = IntSize::from_wh(tile.width(), tile.height())?;
+fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> RenderResult<Option<Pixmap>> {
+  let Some(size) = IntSize::from_wh(tile.width(), tile.height()) else {
+    return Ok(None);
+  };
   let mut data = Vec::with_capacity(tile.data().len());
-  for chunk in tile.data().chunks(4) {
-    let v = mask_value_from_pixel(chunk, mode);
-    data.extend_from_slice(&[v, v, v, v]);
+  let mut deadline_counter = 0usize;
+  let chunk_bytes = CLIP_MASK_DEADLINE_STRIDE.saturating_mul(4);
+  for pixel_chunk in tile.data().chunks(chunk_bytes) {
+    check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+    for chunk in pixel_chunk.chunks_exact(4) {
+      let v = mask_value_from_pixel(chunk, mode);
+      data.extend_from_slice(&[v, v, v, v]);
+    }
   }
-  Pixmap::from_vec(data, size)
+  Ok(Pixmap::from_vec(data, size))
 }
 
 fn paint_mask_tile(
@@ -17488,7 +17495,9 @@ mod tests {
         BackgroundImage::Url(_) | BackgroundImage::None => None,
       };
       let Some(tile) = tile else { continue };
-      let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
+      let Some(mask_tile) =
+        mask_tile_from_image(&tile, layer.mode).expect("mask_tile_from_image")
+      else {
         continue;
       };
 
