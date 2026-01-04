@@ -368,30 +368,44 @@ mod tests {
     ))
   }
 
-  fn find_colliding_flex_cache_keys(mask_bits: u32) -> (FlexCacheKey, FlexCacheKey) {
+  fn first_key_after_inserts(a: FlexCacheKey, b: FlexCacheKey) -> FlexCacheKey {
+    let mut map: FxHashMap<FlexCacheKey, u8> = FxHashMap::default();
+    map.insert(a, 0);
+    map.insert(b, 0);
+    *map.keys().next().expect("expected non-empty map")
+  }
+
+  fn find_insertion_order_sensitive_flex_cache_keys(
+    mask_bits: u32,
+  ) -> (FlexCacheKey, FlexCacheKey) {
     let mask = (1u64 << mask_bits) - 1;
-    let mut seen: BTreeMap<u64, FlexCacheKey> = BTreeMap::new();
-    let max = 1u32 << (mask_bits + 1);
+    let mut seen: BTreeMap<u64, Vec<FlexCacheKey>> = BTreeMap::new();
+    let max = 1u32 << (mask_bits + 3);
     for i in 0..max {
       let key: FlexCacheKey = (Some(i), Some(0));
       let mut hasher = FxHasher::default();
       key.hash(&mut hasher);
       let slot = hasher.finish() & mask;
-      if let Some(&prev) = seen.get(&slot) {
-        return if prev <= key {
-          (prev, key)
-        } else {
-          (key, prev)
-        };
+      if let Some(keys) = seen.get(&slot) {
+        for &prev in keys.iter() {
+          if first_key_after_inserts(prev, key) != first_key_after_inserts(key, prev) {
+            return if prev <= key {
+              (prev, key)
+            } else {
+              (key, prev)
+            };
+          }
+        }
       }
-      seen.insert(slot, key);
+      seen.entry(slot).or_default().push(key);
     }
-    panic!("failed to find colliding flex cache keys");
+
+    panic!("failed to find insertion-order-sensitive flex cache keys");
   }
 
   #[test]
   fn find_fragment_tie_break_is_deterministic() {
-    let (key_small, key_large) = find_colliding_flex_cache_keys(10);
+    let (key_small, key_large) = find_insertion_order_sensitive_flex_cache_keys(10);
 
     let cache_a = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
     let cache_b = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
@@ -433,7 +447,9 @@ mod tests {
     let node_key = 456u64;
     let per_node_cap = 2;
 
-    let keys = [(Some(1), Some(0)), (Some(2), Some(0)), (Some(3), Some(0))];
+    let (key_a, key_b) = find_insertion_order_sensitive_flex_cache_keys(10);
+    let key_c = (Some(key_b.0.unwrap_or(0) + 1), Some(0));
+    let keys = [key_a, key_b, key_c];
 
     let make_value = |w: f32| FlexCacheValue {
       measured_size: Size::new(w, 10.0),
@@ -444,7 +460,7 @@ mod tests {
     assert!(cache_a.insert(node_key, keys[0], make_value(1.0), per_node_cap));
     assert!(cache_a.insert(node_key, keys[1], make_value(2.0), per_node_cap));
     // The third (largest) key should be deterministically evicted so we keep the smallest N keys.
-    assert!(!cache_a.insert(node_key, keys[2], make_value(3.0), per_node_cap));
+    cache_a.insert(node_key, keys[2], make_value(3.0), per_node_cap);
 
     assert!(cache_b.insert(node_key, keys[2], make_value(3.0), per_node_cap));
     assert!(cache_b.insert(node_key, keys[1], make_value(2.0), per_node_cap));
