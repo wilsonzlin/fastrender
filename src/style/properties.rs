@@ -1296,7 +1296,23 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
   let mut parts = Vec::new();
   let mut current = String::new();
   let mut depth = 0i32;
-  for ch in raw.chars() {
+  let mut in_string: Option<char> = None;
+  let mut chars = raw.chars();
+  while let Some(ch) = chars.next() {
+    if let Some(quote) = in_string {
+      current.push(ch);
+      if ch == '\\' {
+        if let Some(next) = chars.next() {
+          current.push(next);
+        }
+        continue;
+      }
+      if ch == quote {
+        in_string = None;
+      }
+      continue;
+    }
+
     match ch {
       '(' => {
         depth += 1;
@@ -1304,6 +1320,10 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
       }
       ')' => {
         depth = (depth - 1).max(0);
+        current.push(ch);
+      }
+      '"' | '\'' => {
+        in_string = Some(ch);
         current.push(ch);
       }
       ',' if depth == 0 => {
@@ -15735,6 +15755,37 @@ mod tests {
     );
 
     assert_eq!(styles.animation_names, vec!["spin".to_string()]);
+    assert_eq!(styles.animation_durations, vec![2000.0].into());
+    assert_eq!(
+      styles.animation_timing_functions,
+      vec![TransitionTimingFunction::Steps(4, StepPosition::End)].into()
+    );
+    assert_eq!(
+      styles.animation_iteration_counts,
+      vec![AnimationIterationCount::Infinite].into()
+    );
+  }
+
+  #[test]
+  fn animation_shorthand_preserves_comma_in_quoted_name() {
+    let decls = parse_declarations("animation: \"spin,fast\" 2s steps(4,end) infinite;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(styles.animation_names, vec!["spin,fast".to_string()]);
     assert_eq!(styles.animation_durations, vec![2000.0].into());
     assert_eq!(
       styles.animation_timing_functions,
