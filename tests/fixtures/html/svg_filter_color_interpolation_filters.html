@@ -24,6 +24,10 @@
       <rect width="1" height="1" fill="#000" />
       <rect x="1" width="1" height="1" fill="#fff" />
     </pattern>
+    <pattern id="wide-stripes" width="4" height="1" patternUnits="userSpaceOnUse">
+      <rect width="2" height="1" fill="#000" />
+      <rect x="2" width="2" height="1" fill="#fff" />
+    </pattern>
 
     <!-- Default (linearRGB) vs explicit sRGB for each primitive type. -->
     <filter id="cif-composite-linear" x="0" y="0" width="100%" height="100%">
@@ -89,13 +93,13 @@
     </filter>
 
     <filter id="cif-displacement-linear" x="0" y="0" width="100%" height="100%">
-      <feFlood flood-color="rgb(255 0 0)" flood-opacity="0.5" result="map" />
+      <feFlood flood-color="rgb(128 0 0)" flood-opacity="1" result="map" />
       <feDisplacementMap
         in="SourceGraphic"
         in2="map"
-        scale="1"
+        scale="2"
         xChannelSelector="R"
-        yChannelSelector="A"
+        yChannelSelector="R"
       />
     </filter>
     <filter
@@ -106,13 +110,13 @@
       height="100%"
       color-interpolation-filters="sRGB"
     >
-      <feFlood flood-color="rgb(255 0 0)" flood-opacity="0.5" result="map" />
+      <feFlood flood-color="rgb(128 0 0)" flood-opacity="1" result="map" />
       <feDisplacementMap
         in="SourceGraphic"
         in2="map"
-        scale="1"
+        scale="2"
         xChannelSelector="R"
-        yChannelSelector="A"
+        yChannelSelector="R"
       />
     </filter>
   </defs>
@@ -130,7 +134,7 @@
     <rect width="12" height="12" fill="url(#stripes)" />
   </g>
   <g transform="translate(50 2)" filter="url(#cif-displacement-linear)">
-    <rect width="12" height="12" fill="url(#stripes)" />
+    <rect width="12" height="12" fill="url(#wide-stripes)" />
   </g>
 
   <!-- Row 2: explicit sRGB. -->
@@ -144,6 +148,6 @@
     <rect width="12" height="12" fill="url(#stripes)" />
   </g>
   <g transform="translate(50 18)" filter="url(#cif-displacement-srgb)">
-    <rect width="12" height="12" fill="url(#stripes)" />
+    <rect width="12" height="12" fill="url(#wide-stripes)" />
   </g>
 </svg>

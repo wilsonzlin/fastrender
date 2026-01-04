@@ -2751,11 +2751,11 @@ fn parse_fe_turbulence(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 }
 
 fn parse_fe_displacement_map(node: &roxmltree::Node) -> Option<FilterPrimitive> {
-  let in1 = parse_input(node.attribute("in"));
-  let in2 = parse_input(node.attribute("in2"));
-  let scale = parse_number(node.attribute("scale"));
-  let x_channel = parse_channel_selector(node.attribute("xChannelSelector"));
-  let y_channel = parse_channel_selector(node.attribute("yChannelSelector"));
+  let in1 = parse_input(attribute_ci(node, "in"));
+  let in2 = parse_input(attribute_ci(node, "in2"));
+  let scale = parse_number(attribute_ci(node, "scale"));
+  let x_channel = parse_channel_selector(attribute_ci(node, "xChannelSelector"));
+  let y_channel = parse_channel_selector(attribute_ci(node, "yChannelSelector"));
   Some(FilterPrimitive::DisplacementMap {
     in1,
     in2,
