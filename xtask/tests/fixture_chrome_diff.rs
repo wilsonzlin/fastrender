@@ -240,6 +240,8 @@ fn end_to_end_runs_with_stub_cargo_and_fake_chrome() {
     r#"#!/usr/bin/env sh
 set -eu
 
+subcmd="${1:-}"
+
 bin=""
 prev=""
 for arg in "$@"; do
@@ -249,6 +251,40 @@ for arg in "$@"; do
   fi
   prev="$arg"
 done
+
+# The fixture-chrome-diff command now builds `diff_renders` via `cargo build` and then executes the
+# built binary directly. When running under this test we stub `cargo`, so we need to create a fake
+# `target/release/diff_renders` executable during the build step.
+if [ "$subcmd" = "build" ] && [ "$bin" = "diff_renders" ]; then
+  mkdir -p target/release
+  cat > target/release/diff_renders <<'EOF'
+#!/usr/bin/env sh
+set -eu
+
+html=""
+json=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --html) html="$2"; shift 2;;
+    --json) json="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+
+mkdir -p "$(dirname "$html")"
+mkdir -p "$(dirname "$json")"
+echo "<!doctype html><title>stub diff</title>" > "$html"
+echo "{}" > "$json"
+stem="$(basename "$html")"
+stem="${stem%.*}"
+mkdir -p "$(dirname "$html")/${stem}_files/diffs"
+echo "PNG" > "$(dirname "$html")/${stem}_files/diffs/stub.png"
+echo "1 differences over threshold" >&2
+exit 1
+EOF
+  chmod +x target/release/diff_renders
+  exit 0
+fi
 
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--" ]; then
