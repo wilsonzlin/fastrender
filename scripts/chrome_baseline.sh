@@ -15,7 +15,10 @@ set -euo pipefail
 #   scripts/chrome_baseline.sh
 #   cargo run --release --bin render_pages
 #   cargo run --release --bin diff_renders -- \
-#     --before fetches/chrome_renders --after fetches/renders --html target/chrome_vs_fastrender.html
+#     --before fetches/chrome_renders \
+#     --after fetches/renders \
+#     --json target/chrome_vs_fastrender/diff_report.json \
+#     --html target/chrome_vs_fastrender/diff_report.html
 #
 # Notes:
 # - This script does NOT make the run fully deterministic (live subresources can change).
@@ -326,4 +329,3 @@ echo "Logs:  ${OUT_DIR}/*.chrome.log"
 if [[ "${fail}" -gt 0 ]]; then
   exit 1
 fi
-

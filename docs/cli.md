@@ -177,7 +177,8 @@ cargo run --release --bin render_pages
 cargo run --release --bin diff_renders -- \
   --before fetches/chrome_renders \
   --after fetches/renders \
-  --html target/chrome_vs_fastrender.html
+  --json target/chrome_vs_fastrender/diff_report.json \
+  --html target/chrome_vs_fastrender/diff_report.html
 ```
 
 Notes:
