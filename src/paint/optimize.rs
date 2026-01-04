@@ -1434,7 +1434,6 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(0.0, 20.0),
-      cached_bounds: None,
       glyphs,
       color: Rgba::TRANSPARENT,
       shadows: vec![TextShadowItem {

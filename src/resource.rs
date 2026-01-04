@@ -13134,6 +13134,96 @@ mod tests {
   }
 
   #[test]
+  fn resource_cache_diagnostics_record_stale_hit_on_http_error_refresh() {
+    let _lock = resource_cache_diagnostics_test_lock();
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: None,
+        cache_policy: None,
+      },
+      MockResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+    let cache = CachingFetcher::new(fetcher);
+    let url = "http://example.com/diagnostics-http-error";
+    let seed = cache.fetch(url).expect("seed fetch");
+    assert_eq!(seed.bytes, b"cached");
+
+    enable_resource_cache_diagnostics();
+    let second = cache.fetch(url).expect("fallback fetch");
+    assert_eq!(second.bytes, b"cached");
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert_eq!(stats.fresh_hits, 0);
+    assert_eq!(stats.revalidated_hits, 0);
+    assert_eq!(stats.misses, 0);
+    assert_eq!(stats.stale_hits, 1);
+    assert_eq!(stats.resource_cache_bytes, b"cached".len());
+  }
+
+  #[test]
+  #[cfg(feature = "disk_cache")]
+  fn resource_cache_diagnostics_record_stale_hit_on_http_error_refresh_disk_cache() {
+    let _lock = resource_cache_diagnostics_test_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: None,
+        cache_policy: Some(HttpCachePolicy {
+          max_age: Some(3600),
+          ..Default::default()
+        }),
+      },
+      MockResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        // Force stale planning so the second fetch attempts a refresh.
+        max_age: Some(Duration::from_secs(0)),
+        ..DiskCacheConfig::default()
+      },
+    );
+    let url = "https://example.com/diagnostics-http-error";
+    let seed = disk.fetch(url).expect("seed fetch");
+    assert_eq!(seed.bytes, b"cached");
+
+    enable_resource_cache_diagnostics();
+    let second = disk.fetch(url).expect("fallback fetch");
+    assert_eq!(second.bytes, b"cached");
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert_eq!(stats.fresh_hits, 0);
+    assert_eq!(stats.revalidated_hits, 0);
+    assert_eq!(stats.misses, 0);
+    assert_eq!(stats.stale_hits, 1);
+    assert_eq!(stats.resource_cache_bytes, b"cached".len());
+  }
+
+  #[test]
   fn caching_fetcher_fetch_with_request_does_not_poison_successful_entry_on_http_error() {
     #[derive(Clone, Debug)]
     struct RecordedRequestCall {
