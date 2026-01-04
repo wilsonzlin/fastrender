@@ -128,6 +128,15 @@ pub(crate) fn contains_revert_layer_token(haystack: &str) -> bool {
   if bytes.len() < NEEDLE.len() {
     return false;
   }
+
+  // Fast-path: most values do not mention `revert-layer` at all, so do a quick case-insensitive
+  // substring scan first and bail early when it is absent.
+  //
+  // Important: this is only a *prefilter*. The substring may appear inside strings/URLs and does
+  // not necessarily correspond to an identifier token (which is what matters for `revert-layer`
+  // semantics after var() substitution). When the substring is present, fall back to a tokenizer
+  // walk to avoid false positives that would otherwise force expensive cascade layer snapshotting.
+  let mut has_candidate = false;
   for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
     let mut matched = true;
     for (offset, &needle_byte) in NEEDLE.iter().enumerate() {
@@ -137,11 +146,20 @@ pub(crate) fn contains_revert_layer_token(haystack: &str) -> bool {
       }
     }
     if matched {
-      return true;
+      has_candidate = true;
+      break;
     }
   }
-  if !bytes.contains(&b'\\') {
+
+  let has_backslash = bytes.contains(&b'\\');
+  if !has_candidate && !has_backslash {
     return false;
+  }
+
+  // Extremely common case: the value *is* the keyword (possibly with surrounding whitespace).
+  // Avoid the tokenizer walk for this hot path.
+  if !has_backslash && haystack.trim().eq_ignore_ascii_case("revert-layer") {
+    return true;
   }
 
   fn contains_revert_layer_in_parser<'i, 't>(parser: &mut Parser<'i, 't>) -> bool {
@@ -170,4 +188,24 @@ pub(crate) fn contains_revert_layer_token(haystack: &str) -> bool {
   let mut input = ParserInput::new(haystack);
   let mut parser = Parser::new(&mut input);
   contains_revert_layer_in_parser(&mut parser)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::contains_revert_layer_token;
+
+  #[test]
+  fn contains_revert_layer_token_requires_ident_token() {
+    assert!(contains_revert_layer_token("revert-layer"));
+    assert!(contains_revert_layer_token("revert\\-layer"));
+    assert!(contains_revert_layer_token("revert-layer/*comment*/"));
+    assert!(contains_revert_layer_token("foo revert-layer bar"));
+
+    // Must not match the substring inside a larger identifier.
+    assert!(!contains_revert_layer_token("revert-layerx"));
+
+    // Must not match inside string/url tokens (they can't become the CSS-wide keyword).
+    assert!(!contains_revert_layer_token("\"revert-layer\""));
+    assert!(!contains_revert_layer_token("url(revert-layer.png)"));
+  }
 }
