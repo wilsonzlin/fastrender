@@ -7486,6 +7486,7 @@ mod tests {
   use crate::style::types::OffsetPath;
   use crate::style::types::Overflow;
   use crate::style::types::TextDecorationLine;
+  use crate::style::types::TextDecorationThickness;
   use crate::style::types::TransformBox;
   use crate::style::values::CalcLength;
   use crate::style::values::Length;
@@ -7523,6 +7524,27 @@ mod tests {
       "data:image/png;base64,{}",
       general_purpose::STANDARD.encode(buf)
     )
+  }
+
+  #[test]
+  fn text_decoration_thickness_auto_resolves_to_ua_default() {
+    let builder = DisplayListBuilder::new();
+    let mut style = ComputedStyle::default();
+    style.font_size = 10.0;
+    let auto_small = builder
+      .resolve_text_decoration_thickness_override(TextDecorationThickness::Auto, &style)
+      .unwrap();
+    assert!((auto_small - 1.0).abs() < 0.0001);
+
+    style.font_size = 200.0;
+    let auto_large = builder
+      .resolve_text_decoration_thickness_override(TextDecorationThickness::Auto, &style)
+      .unwrap();
+    assert!((auto_large - 10.0).abs() < 0.0001);
+
+    assert!(builder
+      .resolve_text_decoration_thickness_override(TextDecorationThickness::FromFont, &style)
+      .is_none());
   }
 
   fn create_image_fragment(x: f32, y: f32, width: f32, height: f32, src: &str) -> FragmentNode {
