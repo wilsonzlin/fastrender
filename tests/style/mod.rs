@@ -66,4 +66,5 @@ mod text_orientation_inheritance_top_test;
 mod text_orientation_properties;
 mod user_agent_test;
 mod var_resolution_test;
+mod vendor_prefixed_properties_test;
 mod writing_mode_inheritance_top_test;

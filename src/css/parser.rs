@@ -4686,6 +4686,67 @@ mod tests {
   }
 
   #[test]
+  fn vendor_prefixed_unknown_properties_are_ignored() {
+    let css = "div { -webkit-not-a-property: 1; color: red; }";
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    let CssRule::Style(rule) = &sheet.rules[0] else {
+      panic!("expected style rule");
+    };
+    assert_eq!(
+      rule.declarations.len(),
+      1,
+      "unknown vendor-prefixed properties should be ignored"
+    );
+    assert_eq!(rule.declarations[0].property.as_str(), "color");
+  }
+
+  #[test]
+  fn vendor_prefixed_known_properties_are_canonicalized() {
+    let css = "div { -webkit-transform: rotate(10deg); }";
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    let CssRule::Style(rule) = &sheet.rules[0] else {
+      panic!("expected style rule");
+    };
+    assert_eq!(rule.declarations.len(), 1);
+    assert_eq!(rule.declarations[0].property.as_str(), "transform");
+    let PropertyValue::Transform(transforms) = &rule.declarations[0].value else {
+      panic!("expected parsed transform list");
+    };
+    assert_eq!(transforms.len(), 1);
+    assert!(
+      matches!(transforms[0], crate::css::types::Transform::Rotate(angle) if (angle - 10.0).abs() < 1e-6),
+      "expected rotate(10deg), got {:?}",
+      transforms[0]
+    );
+  }
+
+  #[test]
+  fn vendor_prefixed_properties_share_parsed_value_cache_entries() {
+    crate::css::value_cache::reset_for_tests();
+    let css = "div { transform: rotate(10deg); -webkit-transform: rotate(10deg); }";
+    let _ = parse_stylesheet(css).expect("parse stylesheet");
+    let (hits, misses) = crate::css::value_cache::stats_for_tests();
+    assert_eq!(
+      (hits, misses),
+      (1, 1),
+      "expected prefixed aliases to reuse the parsed-value cache"
+    );
+  }
+
+  #[test]
+  fn ms_grid_properties_are_not_canonicalized() {
+    let css = "div { -ms-grid-row: 2; }";
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    let CssRule::Style(rule) = &sheet.rules[0] else {
+      panic!("expected style rule");
+    };
+    assert!(
+      rule.declarations.is_empty(),
+      "legacy -ms-grid-* properties should not be treated as modern grid properties"
+    );
+  }
+
+  #[test]
   fn parses_scope_rule_with_nested_style_rules() {
     let css = r"
         * { color: blue; }

@@ -508,12 +508,42 @@ pub(crate) fn is_known_style_property(property: &str) -> bool {
   known_style_property_set().contains(property)
 }
 
+fn strip_vendor_prefix(property: &str) -> Option<&str> {
+  // Vendor-prefixed property names are common in real-world stylesheets. We canonicalize them to
+  // their unprefixed spelling (e.g. `-webkit-transform` -> `transform`) so the rest of the engine
+  // sees a single canonical property name.
+  //
+  // Callers are expected to normalize the property name to ASCII lowercase already; our known
+  // property tables are stored in lowercase form.
+  if let Some(unprefixed) = property.strip_prefix("-webkit-") {
+    return Some(unprefixed);
+  }
+  if let Some(unprefixed) = property.strip_prefix("-moz-") {
+    return Some(unprefixed);
+  }
+  if let Some(unprefixed) = property.strip_prefix("-o-") {
+    return Some(unprefixed);
+  }
+  if let Some(unprefixed) = property.strip_prefix("-ms-") {
+    // Some old IE `-ms-*` properties collide with modern CSS property names but have incompatible
+    // syntax/semantics. Don't alias those; treat them as unknown so they're ignored consistently.
+    //
+    // Examples:
+    // - `-ms-grid-row` / `-ms-grid-column` are part of the legacy MS Grid spec.
+    // - `-ms-filter` is an old IE filter syntax unrelated to modern `filter`.
+    if unprefixed.starts_with("grid-") || unprefixed == "filter" {
+      return None;
+    }
+    return Some(unprefixed);
+  }
+  None
+}
+
 fn is_known_page_property(property: &str) -> bool {
   known_page_property_set().contains(property)
 }
 
-/// Maps a small set of widely-used vendor-prefixed property names to the engine's
-/// canonical unprefixed property name.
+/// Maps vendor-prefixed property names to the engine's canonical unprefixed property name.
 ///
 /// Many real-world stylesheets ship `-webkit-*` fallbacks for Safari/legacy support and
 /// sometimes omit the unprefixed spelling. Without aliasing, FastRender would drop these
@@ -522,20 +552,8 @@ fn is_known_page_property(property: &str) -> bool {
 /// Safety: Only aliases prefixes where the semantics match the unprefixed property as implemented
 /// by the engine. Unknown prefixed properties remain unsupported and will continue to be ignored.
 pub(crate) fn vendor_prefixed_property_alias(property: &str) -> Option<&'static str> {
-  // Avoid blanket `-ms-` stripping: old IE Grid properties like `-ms-grid-row` share prefixes but
-  // do not match standard Grid semantics and can conflict with authored `grid-row-start/end`.
-  match property {
-    "-ms-transform" => Some("transform"),
-    "-ms-user-select" => Some("user-select"),
-    "-ms-text-size-adjust" => Some("text-size-adjust"),
-    _ => {
-      let stripped = property
-        .strip_prefix("-webkit-")
-        .or_else(|| property.strip_prefix("-moz-"))
-        .or_else(|| property.strip_prefix("-o-"))?;
-      known_style_property_set().get(stripped).copied()
-    }
-  }
+  let stripped = strip_vendor_prefix(property)?;
+  known_style_property_set().get(stripped).copied()
 }
 
 fn tokenize_property_value<'a>(value_str: &'a str, allow_commas: bool) -> SmallVec<[&'a str; 8]> {

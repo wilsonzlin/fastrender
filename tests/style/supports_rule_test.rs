@@ -53,3 +53,15 @@ fn supports_and_inside_url_is_treated_as_value() {
   let css = r"@supports (background: url(and.png)) { div { display: inline; } }";
   assert_eq!(render_div_display(css), "inline");
 }
+
+#[test]
+fn supports_vendor_prefixed_properties_match_when_unprefixed_supported() {
+  let css = r"@supports (-webkit-transform: rotate(10deg)) { div { display: inline; } }";
+  assert_eq!(render_div_display(css), "inline");
+}
+
+#[test]
+fn supports_vendor_prefixed_unknown_properties_are_unsupported() {
+  let css = r"@supports (-webkit-not-a-property: 1) { div { display: inline; } }";
+  assert_eq!(render_div_display(css), "block");
+}
