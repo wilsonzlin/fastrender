@@ -5222,8 +5222,6 @@ mod tests {
           content_encoding: None,
           etag: None,
           last_modified: None,
-          access_control_allow_origin: None,
-          timing_allow_origin: None,
           final_url: Some(url.to_string()),
           stored_at: 0,
           len: 0,
