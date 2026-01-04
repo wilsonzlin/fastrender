@@ -480,6 +480,8 @@ fn rewrite_html(
       .unwrap();
   let import_regex =
     Regex::new("(?i)(?P<prefix>@import\\s+['\"])(?P<url>[^\"']+)(?P<suffix>['\"])").unwrap();
+  let attr_unquoted_regex =
+    Regex::new("(?i)(?P<prefix>(?:src|href)\\s*=\\s*)(?P<url>[^\\s\"'>]+)").unwrap();
   let srcset_double =
     Regex::new("(?i)(?P<prefix>\\bsrcset\\s*=\\s*\")(?P<value>[^\"]*)(?P<suffix>\")").unwrap();
   let srcset_single =
@@ -507,6 +509,16 @@ fn rewrite_html(
 
   rewritten = apply_rewrite(
     &import_regex,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_rewrite_no_suffix(
+    &attr_unquoted_regex,
     &rewritten,
     config,
     src_dir,
@@ -602,6 +614,41 @@ fn apply_rewrite(
       seen,
     ) {
       Ok(Some(new_value)) => format!("{}{}{}", &caps["prefix"], new_value, &caps["suffix"]),
+      Ok(None) => caps[0].to_string(),
+      Err(err) => {
+        error = Some(err);
+        caps[0].to_string()
+      }
+    })
+    .to_string();
+
+  if let Some(err) = error {
+    return Err(err);
+  }
+
+  Ok(rewritten)
+}
+
+fn apply_rewrite_no_suffix(
+  regex: &Regex,
+  input: &str,
+  config: &ImportConfig,
+  src_dir: &Path,
+  dest_dir: &Path,
+  references: &mut Vec<Reference>,
+  seen: &mut HashSet<PathBuf>,
+) -> Result<String> {
+  let mut error: Option<ImportError> = None;
+  let rewritten = regex
+    .replace_all(input, |caps: &regex::Captures<'_>| match rewrite_reference(
+      config,
+      src_dir,
+      dest_dir,
+      &caps["url"],
+      references,
+      seen,
+    ) {
+      Ok(Some(new_value)) => format!("{}{}", &caps["prefix"], new_value),
       Ok(None) => caps[0].to_string(),
       Err(err) => {
         error = Some(err);
@@ -880,6 +927,8 @@ fn find_network_urls(content: &str) -> Vec<String> {
   // `data:` URLs.
   let attr_regex =
     Regex::new("(?i)(?:src|href)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']").unwrap();
+  let attr_unquoted_regex =
+    Regex::new("(?i)(?:src|href)\\s*=\\s*(?P<url>[^\\s\"'>]+)").unwrap();
   let url_regex =
     Regex::new("(?i)url\\(\\s*[\"']?(?P<url>[^\"')]+)[\"']?\\s*\\)").unwrap();
   let import_regex = Regex::new("(?i)@import\\s+[\"'](?P<url>[^\"']+)[\"']").unwrap();
@@ -887,7 +936,7 @@ fn find_network_urls(content: &str) -> Vec<String> {
   let srcset_single = Regex::new("(?i)\\bsrcset\\s*=\\s*'(?P<value>[^']*)'").unwrap();
 
   let mut urls = Vec::new();
-  for regex in [&attr_regex, &url_regex, &import_regex] {
+  for regex in [&attr_regex, &attr_unquoted_regex, &url_regex, &import_regex] {
     for caps in regex.captures_iter(content) {
       let Some(url) = caps.name("url").map(|m| m.as_str()) else {
         continue;
@@ -1475,6 +1524,30 @@ mod tests {
     match err {
       ImportError::NetworkUrlsRemaining(path, urls) => {
         assert!(path.to_string_lossy().contains("srcset-external.html"));
+        assert!(urls.contains("example.com"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
+  }
+
+  #[test]
+  fn offline_validation_rejects_unquoted_network_src_urls() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/unquoted-external.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    let err = run_import(config).unwrap_err();
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path.to_string_lossy().contains("unquoted-external.html"));
         assert!(urls.contains("example.com"));
       }
       other => panic!("unexpected error: {other:?}"),
