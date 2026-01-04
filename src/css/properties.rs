@@ -893,42 +893,42 @@ fn parse_translate_3d(parser: &mut Parser) -> Result<Transform, ()> {
 }
 
 fn parse_scale(parser: &mut Parser) -> Result<Transform, ()> {
-  let sx = parse_number_component(parser)?;
+  let sx = parse_scale_factor_component(parser)?;
   parser.skip_whitespace();
   let _ = parser.try_parse(|p| p.expect_comma());
   let sy = if parser.is_exhausted() {
     sx
   } else {
     parser.skip_whitespace();
-    parse_number_component(parser)?
+    parse_scale_factor_component(parser)?
   };
   Ok(Transform::Scale(sx, sy))
 }
 
 fn parse_scale_x(parser: &mut Parser) -> Result<Transform, ()> {
-  let s = parse_number_component(parser)?;
+  let s = parse_scale_factor_component(parser)?;
   Ok(Transform::ScaleX(s))
 }
 
 fn parse_scale_y(parser: &mut Parser) -> Result<Transform, ()> {
-  let s = parse_number_component(parser)?;
+  let s = parse_scale_factor_component(parser)?;
   Ok(Transform::ScaleY(s))
 }
 
 fn parse_scale_z(parser: &mut Parser) -> Result<Transform, ()> {
-  let s = parse_number_component(parser)?;
+  let s = parse_scale_factor_component(parser)?;
   Ok(Transform::ScaleZ(s))
 }
 
 fn parse_scale_3d(parser: &mut Parser) -> Result<Transform, ()> {
-  let sx = parse_number_component(parser)?;
+  let sx = parse_scale_factor_component(parser)?;
   parser.skip_whitespace();
   let _ = parser.try_parse(|p| p.expect_comma());
   let sy = if parser.is_exhausted() {
     sx
   } else {
     parser.skip_whitespace();
-    parse_number_component(parser)?
+    parse_scale_factor_component(parser)?
   };
   parser.skip_whitespace();
   let _ = parser.try_parse(|p| p.expect_comma());
@@ -936,7 +936,7 @@ fn parse_scale_3d(parser: &mut Parser) -> Result<Transform, ()> {
     sx
   } else {
     parser.skip_whitespace();
-    parse_number_component(parser)?
+    parse_scale_factor_component(parser)?
   };
   Ok(Transform::Scale3d(sx, sy, sz))
 }
@@ -1045,6 +1045,39 @@ fn parse_perspective(parser: &mut Parser) -> Result<Transform, ()> {
 fn parse_number_component(parser: &mut Parser) -> Result<f32, ()> {
   let component = parse_calc_sum(parser).map_err(|_| ())?;
   calc_component_to_number(component).ok_or(())
+}
+
+fn parse_scale_factor_component(parser: &mut Parser) -> Result<f32, ()> {
+  if let Ok(value) = parser.try_parse(|p| {
+    let token = p.next()?;
+    match token {
+      Token::Number { value, .. } => Ok(*value),
+      Token::Percentage { unit_value, .. } => Ok(*unit_value),
+      _ => Err(p.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid)),
+    }
+  }) {
+    return Ok(value);
+  }
+
+  let component = parse_calc_sum(parser).map_err(|_| ())?;
+  match component {
+    CalcComponent::Number(n) => Ok(n),
+    CalcComponent::Length(calc) => {
+      let terms = calc.terms();
+      if terms.is_empty() {
+        return Err(());
+      }
+      let mut total = 0.0;
+      for term in terms {
+        if term.unit != LengthUnit::Percent {
+          return Err(());
+        }
+        total += term.value;
+      }
+      Ok(total / 100.0)
+    }
+    _ => Err(()),
+  }
 }
 
 pub(crate) fn is_global_keyword_str(value: &str) -> bool {
@@ -4530,6 +4563,28 @@ mod tests {
     assert!(matches!(transforms[6], Transform::Rotate3d(x, y, z, deg)
             if (x.abs() < 0.001) && (y.abs() < 0.001) && (z - 1.0).abs() < 0.001 && (deg - 45.0).abs() < 0.001));
     assert!(matches!(transforms[7], Transform::Perspective(len) if len == Length::px(500.0)));
+  }
+
+  #[test]
+  fn parses_transform_scale_percentages() {
+    let transforms = parse_transform_list(
+      "scale(75%) scaleX(50%) scaleY(110%) scaleZ(25%) scale3d(10%, 20%, 30%)",
+    )
+    .expect("parsed percent scales");
+
+    assert!(
+      matches!(transforms[0], Transform::Scale(sx, sy) if (sx - 0.75).abs() < 1e-6 && (sy - 0.75).abs() < 1e-6)
+    );
+    assert!(matches!(transforms[1], Transform::ScaleX(sx) if (sx - 0.5).abs() < 1e-6));
+    assert!(matches!(transforms[2], Transform::ScaleY(sy) if (sy - 1.1).abs() < 1e-6));
+    assert!(matches!(transforms[3], Transform::ScaleZ(sz) if (sz - 0.25).abs() < 1e-6));
+    assert!(
+      matches!(transforms[4], Transform::Scale3d(sx, sy, sz) if (sx - 0.1).abs() < 1e-6 && (sy - 0.2).abs() < 1e-6 && (sz - 0.3).abs() < 1e-6)
+    );
+
+    assert!(parse_transform_list("scale(calc(75%))").is_some());
+    assert!(parse_transform_list("scale(10px)").is_none());
+    assert!(parse_transform_list("scale(0px)").is_none());
   }
 
   #[test]
