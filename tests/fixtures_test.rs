@@ -244,6 +244,24 @@ fn test_all_fixture_files_exist() {
 }
 
 #[test]
+fn test_required_text_goldens_exist() {
+  for name in [
+    "text_bidi",
+    "text_bidi_mirror",
+    "text_line_break",
+    "text_overflow_vertical",
+  ] {
+    let path = golden_path(name);
+    assert!(
+      path.exists(),
+      "Missing required golden image for fixture {} (expected at {})",
+      name,
+      path.display()
+    );
+  }
+}
+
+#[test]
 fn test_fixture_files_are_valid_html() {
   let html_path = html_dir();
   if !html_path.exists() {
@@ -268,16 +286,6 @@ fn test_fixture_files_are_valid_html() {
       );
     }
   }
-}
-
-#[test]
-fn fixture_text_overflow_vertical() {
-  test_fixture("text_overflow_vertical").unwrap();
-}
-
-#[test]
-fn fixture_text_font_variant_emoji() {
-  test_fixture("text_font_variant_emoji").unwrap();
 }
 
 //
@@ -483,9 +491,20 @@ fn test_fixture_text_line_break() {
 }
 
 #[test]
+fn test_fixture_text_overflow_vertical() {
+  test_fixture("text_overflow_vertical").expect("text_overflow_vertical fixture should render");
+}
+
+#[test]
 fn test_fixture_text_letter_spacing_vertical() {
   test_fixture("text_letter_spacing_vertical")
     .expect("text_letter_spacing_vertical fixture should render");
+}
+
+#[test]
+fn test_fixture_text_font_variant_emoji() {
+  test_fixture("text_font_variant_emoji")
+    .expect("text_font_variant_emoji fixture should render");
 }
 
 //

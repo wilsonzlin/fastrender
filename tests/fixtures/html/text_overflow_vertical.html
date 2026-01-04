@@ -5,6 +5,8 @@
     body {
       writing-mode: vertical-rl;
       width: 200px;
+      /* Keep fixtures deterministic under FASTR_USE_BUNDLED_FONTS=1 by preferring bundled family names. */
+      font-family: "Noto Sans", sans-serif;
     }
     .ellipsis-end {
       white-space: nowrap;

@@ -7,7 +7,8 @@
         body {
             margin: 0;
             padding: 20px;
-            font-family: sans-serif;
+            /* Keep fixtures deterministic under FASTR_USE_BUNDLED_FONTS=1 by preferring bundled family names. */
+            font-family: "Noto Sans", "Noto Sans SC", sans-serif;
             font-size: 14px;
             line-height: 1.5;
         }
