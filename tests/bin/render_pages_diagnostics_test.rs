@@ -85,3 +85,30 @@ fn render_pages_skips_full_dump_on_success_when_only_failures() {
     "full dump should be skipped for successful renders when only_failures is set"
   );
 }
+
+#[test]
+fn render_pages_writes_composed_dom_dump() {
+  let temp = TempDir::new().expect("tempdir");
+  let html_dir = temp.path().join("fetches/html");
+  fs::create_dir_all(&html_dir).expect("create html dir");
+  fs::write(
+    html_dir.join("example.com.html"),
+    "<!doctype html><title>Example</title>",
+  )
+  .expect("write html");
+
+  let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
+    .current_dir(temp.path())
+    .args(["--dump-intermediate", "full"])
+    .status()
+    .expect("run render_pages");
+
+  assert!(status.success(), "render_pages should succeed");
+  let composed_path = temp
+    .path()
+    .join("fetches/renders/example.com.composed_dom.json");
+  assert!(composed_path.is_file(), "composed DOM JSON should be written");
+
+  let contents = fs::read_to_string(composed_path).expect("read composed dom dump");
+  serde_json::from_str::<Value>(&contents).expect("parse composed dom dump");
+}

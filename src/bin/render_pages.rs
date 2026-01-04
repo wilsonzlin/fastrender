@@ -1565,6 +1565,24 @@ fn write_full_artifacts(base: &Path, name: &str, artifacts: &RenderArtifacts, lo
   if let Some(dom) = &artifacts.dom {
     let serializable = serialize_dom(dom);
     write_stage_json(base.join(format!("{}.dom.json", name)), &serializable, log);
+    match fastrender::dom::composed_dom_snapshot(dom) {
+      Ok(composed) => {
+        let serializable = serialize_dom(&composed);
+        write_stage_json(
+          base.join(format!("{}.composed_dom.json", name)),
+          &serializable,
+          log,
+        );
+      }
+      Err(err) => {
+        let _ = writeln!(
+          log,
+          "Failed to compose DOM snapshot for {}: {}",
+          name,
+          format_error_with_chain(&err, false)
+        );
+      }
+    }
   } else {
     let _ = writeln!(log, "Missing DOM artifact for {}", name);
   }
