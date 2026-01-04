@@ -15,13 +15,17 @@ fn collect_text_with_x(
   fragment: &fastrender::tree::fragment_tree::FragmentNode,
 ) -> Vec<(String, f32)> {
   let mut out = Vec::new();
-  let mut stack = vec![fragment];
-  while let Some(node) = stack.pop() {
+  // Fragment bounds are stored relative to their parent fragment. Accumulate offsets while walking
+  // the tree so comparisons happen in a shared (root) coordinate space.
+  let mut stack = vec![(fragment, 0.0f32, 0.0f32)];
+  while let Some((node, parent_x, parent_y)) = stack.pop() {
+    let abs_x = parent_x + node.bounds.x();
+    let abs_y = parent_y + node.bounds.y();
     if let fastrender::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
-      out.push((text.to_string(), node.bounds.x()));
+      out.push((text.to_string(), abs_x));
     }
     for child in node.children.iter() {
-      stack.push(child);
+      stack.push((child, abs_x, abs_y));
     }
   }
   out
