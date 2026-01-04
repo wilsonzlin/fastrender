@@ -97,7 +97,8 @@ fn fixture_chrome_diff_help_mentions_flags() {
       && stdout.contains("--diff-only")
       && stdout.contains("--chrome")
       && stdout.contains("--chrome-dir")
-      && stdout.contains("--no-chrome"),
+      && stdout.contains("--no-chrome")
+      && stdout.contains("--require-chrome-metadata"),
     "help output should mention key flags; got:\n{stdout}"
   );
 }

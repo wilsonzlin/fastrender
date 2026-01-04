@@ -7,7 +7,9 @@ use tempfile::tempdir;
 #[cfg(unix)]
 fn make_executable(path: &Path) {
   use std::os::unix::fs::PermissionsExt;
-  let mut perms = fs::metadata(path).expect("stat stub executable").permissions();
+  let mut perms = fs::metadata(path)
+    .expect("stat stub executable")
+    .permissions();
   perms.set_mode(0o755);
   fs::set_permissions(path, perms).expect("chmod stub executable");
 }
@@ -25,8 +27,25 @@ fn repo_root() -> PathBuf {
 fn write_fixture(root: &Path, name: &str) {
   let dir = root.join(name);
   fs::create_dir_all(&dir).expect("create fixture dir");
-  fs::write(dir.join("index.html"), "<!doctype html><title>fixture</title>")
-    .expect("write fixture html");
+  fs::write(
+    dir.join("index.html"),
+    "<!doctype html><title>fixture</title>",
+  )
+  .expect("write fixture html");
+}
+
+fn write_stub_diff_renders(target_dir: &Path) -> PathBuf {
+  let bin = target_dir
+    .join("release")
+    .join(format!("diff_renders{}", std::env::consts::EXE_SUFFIX));
+  fs::create_dir_all(bin.parent().expect("release dir")).expect("create diff_renders release dir");
+  fs::write(
+    &bin,
+    "#!/usr/bin/env sh\necho 'error: diff_renders executed unexpectedly' >&2\nexit 1\n",
+  )
+  .expect("write stub diff_renders");
+  make_executable(&bin);
+  bin
 }
 
 #[test]
@@ -101,7 +120,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     "plan should mention out_dir; got:\n{stdout}"
   );
   assert!(
-    stdout.contains(&format!("fastrender: {}", out_dir.join("fastrender").display())),
+    stdout.contains(&format!(
+      "fastrender: {}",
+      out_dir.join("fastrender").display()
+    )),
     "plan should mention fastrender dir; got:\n{stdout}"
   );
   assert!(
@@ -109,7 +131,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     "plan should mention chrome dir; got:\n{stdout}"
   );
   assert!(
-    stdout.contains(&format!("report: {}", out_dir.join("report.html").display())),
+    stdout.contains(&format!(
+      "report: {}",
+      out_dir.join("report.html").display()
+    )),
     "plan should mention report.html path; got:\n{stdout}"
   );
   assert!(
@@ -146,7 +171,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     "render_fixtures should receive fixtures-dir; got:\n{stdout}"
   );
   assert!(
-    stdout.contains(&format!("--out-dir {}", out_dir.join("fastrender").display())),
+    stdout.contains(&format!(
+      "--out-dir {}",
+      out_dir.join("fastrender").display()
+    )),
     "render_fixtures should receive out-dir; got:\n{stdout}"
   );
   assert!(
@@ -191,10 +219,9 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     "chrome-baseline-fixtures should receive fixtures filter and shard; got:\n{stdout}"
   );
 
-  let diff_renders_bin = target_dir.join("release").join(format!(
-    "diff_renders{}",
-    std::env::consts::EXE_SUFFIX
-  ));
+  let diff_renders_bin = target_dir
+    .join("release")
+    .join(format!("diff_renders{}", std::env::consts::EXE_SUFFIX));
   assert!(
     stdout.contains(&diff_renders_bin.display().to_string()),
     "plan should include diff_renders invocation; got:\n{stdout}"
@@ -257,10 +284,9 @@ fn dry_run_respects_no_chrome() {
     !stdout.contains("chrome-baseline-fixtures"),
     "plan should skip chrome-baseline-fixtures when --no-chrome is set; got:\n{stdout}"
   );
-  let diff_renders_bin = target_dir.join("release").join(format!(
-    "diff_renders{}",
-    std::env::consts::EXE_SUFFIX
-  ));
+  let diff_renders_bin = target_dir
+    .join("release")
+    .join(format!("diff_renders{}", std::env::consts::EXE_SUFFIX));
   assert!(
     stdout.contains(&diff_renders_bin.display().to_string()),
     "plan should still include diff_renders; got:\n{stdout}"
@@ -348,6 +374,115 @@ fn dry_run_respects_diff_only_alias() {
   assert!(
     stdout.contains("diff_renders") && stdout.contains("--before"),
     "plan should still include diff_renders; got:\n{stdout}"
+  );
+}
+
+#[test]
+fn no_chrome_fails_on_baseline_metadata_mismatch() {
+  let temp = tempdir().expect("tempdir");
+  let fixtures_root = temp.path().join("fixtures");
+  write_fixture(&fixtures_root, "a");
+
+  let out_dir = temp.path().join("out");
+  let chrome_dir = out_dir.join("chrome");
+  let fastrender_dir = out_dir.join("fastrender");
+  fs::create_dir_all(&chrome_dir).expect("create chrome dir");
+  fs::create_dir_all(&fastrender_dir).expect("create fastrender dir");
+
+  fs::write(chrome_dir.join("a.png"), b"PNG").expect("write chrome png");
+  fs::write(fastrender_dir.join("a.png"), b"PNG").expect("write fastrender png");
+  fs::write(
+    chrome_dir.join("a.json"),
+    r#"{"viewport":[1040,1240],"dpr":2.0,"js":"on"}"#,
+  )
+  .expect("write chrome metadata");
+
+  let target_dir = temp.path().join("target");
+  write_stub_diff_renders(&target_dir);
+
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .args([
+      "fixture-chrome-diff",
+      "--no-chrome",
+      "--no-fastrender",
+      "--no-build",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+      "--viewport",
+      "800x600",
+      "--dpr",
+      "1",
+    ])
+    .output()
+    .expect("run fixture-chrome-diff with mismatched metadata");
+
+  assert!(
+    !output.status.success(),
+    "expected fixture-chrome-diff to fail on baseline mismatch; stdout:\n{}\nstderr:\n{}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr)
+  );
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    stderr.contains("chrome baseline mismatch") && stderr.contains("Rerun without --no-chrome"),
+    "expected stderr to mention baseline mismatch and remediation; got:\n{stderr}"
+  );
+}
+
+#[test]
+fn require_chrome_metadata_errors_when_missing() {
+  let temp = tempdir().expect("tempdir");
+  let fixtures_root = temp.path().join("fixtures");
+  write_fixture(&fixtures_root, "a");
+
+  let out_dir = temp.path().join("out");
+  let chrome_dir = out_dir.join("chrome");
+  let fastrender_dir = out_dir.join("fastrender");
+  fs::create_dir_all(&chrome_dir).expect("create chrome dir");
+  fs::create_dir_all(&fastrender_dir).expect("create fastrender dir");
+  fs::write(chrome_dir.join("a.png"), b"PNG").expect("write chrome png");
+  fs::write(fastrender_dir.join("a.png"), b"PNG").expect("write fastrender png");
+
+  let target_dir = temp.path().join("target");
+  write_stub_diff_renders(&target_dir);
+
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .args([
+      "fixture-chrome-diff",
+      "--no-chrome",
+      "--no-fastrender",
+      "--no-build",
+      "--require-chrome-metadata",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+    ])
+    .output()
+    .expect("run fixture-chrome-diff with missing metadata");
+
+  assert!(
+    !output.status.success(),
+    "expected fixture-chrome-diff to fail when metadata is required but missing; stdout:\n{}\nstderr:\n{}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr)
+  );
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    stderr.contains("missing chrome baseline metadata"),
+    "expected stderr to mention missing chrome baseline metadata; got:\n{stderr}"
   );
 }
 

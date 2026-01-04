@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use regex::Regex;
+use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -46,8 +48,9 @@ impl MediaMode {
   }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Deserialize)]
 #[clap(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 enum JsMode {
   On,
   Off,
@@ -60,6 +63,13 @@ impl JsMode {
       Self::Off => "off",
     }
   }
+}
+
+#[derive(Debug, Deserialize)]
+struct ChromeFixtureMetadata {
+  viewport: (u32, u32),
+  dpr: f32,
+  js: JsMode,
 }
 
 #[derive(Args, Debug)]
@@ -158,6 +168,14 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long)]
   pub no_chrome: bool,
 
+  /// When `--no-chrome` is set, require per-fixture Chrome metadata JSON to exist.
+  ///
+  /// Older output directories may not contain `<out>/chrome/<fixture>.json`. By default this
+  /// command will warn and continue when metadata is missing to keep older dirs usable; set this
+  /// flag to treat missing metadata as an error.
+  #[arg(long)]
+  pub require_chrome_metadata: bool,
+
   /// Print the computed plan (commands + output paths) without executing.
   #[arg(long, hide = true)]
   pub dry_run: bool,
@@ -242,6 +260,16 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     return Ok(());
   }
 
+  let selected_fixture_stems = if args.no_chrome {
+    Some(discover_selected_fixture_stems(
+      &fixtures_root,
+      args.fixtures.as_deref(),
+      args.shard,
+    )?)
+  } else {
+    None
+  };
+
   fs::create_dir_all(&layout.root).with_context(|| {
     format!(
       "failed to create fixture-chrome-diff output dir {}",
@@ -249,6 +277,19 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     )
   })?;
 
+  if args.no_chrome {
+    if !layout.chrome.is_dir() {
+      bail!(
+        "--no-chrome was set, but chrome output dir does not exist: {}",
+        layout.chrome.display()
+      );
+    }
+    if let Some(stems) = selected_fixture_stems.as_deref() {
+      validate_chrome_baseline_metadata(&layout.chrome, stems, &args)?;
+    }
+  } else {
+    clear_dir(&layout.chrome).context("clear Chrome output dir")?;
+  }
   if args.no_fastrender {
     if !layout.fastrender.is_dir() {
       bail!(
@@ -258,16 +299,6 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     }
   } else {
     clear_dir(&layout.fastrender).context("clear FastRender output dir")?;
-  }
-  if args.no_chrome {
-    if !layout.chrome.is_dir() {
-      bail!(
-        "--no-chrome was set, but chrome output dir does not exist: {}",
-        layout.chrome.display()
-      );
-    }
-  } else {
-    clear_dir(&layout.chrome).context("clear Chrome output dir")?;
   }
   remove_file_if_exists(&layout.report_html).context("clear existing report.html")?;
   remove_file_if_exists(&layout.report_json).context("clear existing report.json")?;
@@ -305,6 +336,9 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
 }
 
 fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
+  if args.require_chrome_metadata && !args.no_chrome {
+    bail!("--require-chrome-metadata requires --no-chrome");
+  }
   if args.dpr <= 0.0 || !args.dpr.is_finite() {
     bail!("--dpr must be a positive, finite number");
   }
@@ -324,6 +358,134 @@ fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
       bail!("--max-perceptual-distance must be a finite number between 0 and 1");
     }
   }
+  Ok(())
+}
+
+fn discover_selected_fixture_stems(
+  fixtures_root: &Path,
+  requested: Option<&[String]>,
+  shard: Option<(usize, usize)>,
+) -> Result<Vec<String>> {
+  let mut stems = Vec::new();
+  for entry in fs::read_dir(fixtures_root)
+    .with_context(|| format!("read fixture directory {}", fixtures_root.display()))?
+  {
+    let entry = entry.context("read fixture dir entry")?;
+    let file_type = entry.file_type().context("read fixture entry type")?;
+    if !file_type.is_dir() {
+      continue;
+    }
+    let dir = entry.path();
+    if !dir.join("index.html").is_file() {
+      continue;
+    }
+    stems.push(entry.file_name().to_string_lossy().to_string());
+  }
+
+  stems.sort();
+  if stems.is_empty() {
+    bail!(
+      "no fixtures found under {} (expected <fixture>/index.html)",
+      fixtures_root.display()
+    );
+  }
+
+  if let Some(requested) = requested {
+    let mut normalized = requested
+      .iter()
+      .map(|s| s.trim())
+      .filter(|s| !s.is_empty())
+      .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+
+    let want: HashSet<&str> = normalized.iter().copied().collect();
+    let mut found = HashSet::<String>::new();
+    stems.retain(|stem| {
+      if want.contains(stem.as_str()) {
+        found.insert(stem.clone());
+        true
+      } else {
+        false
+      }
+    });
+
+    let mut missing = normalized
+      .iter()
+      .filter(|stem| !found.contains::<str>(*stem))
+      .map(|stem| stem.to_string())
+      .collect::<Vec<_>>();
+    missing.sort();
+    missing.dedup();
+    if !missing.is_empty() {
+      bail!("unknown fixture stem(s): {}", missing.join(", "));
+    }
+  }
+
+  if let Some((index, total)) = shard {
+    stems = stems
+      .into_iter()
+      .enumerate()
+      .filter(|(i, _)| i % total == index)
+      .map(|(_, stem)| stem)
+      .collect();
+  }
+
+  if stems.is_empty() {
+    bail!("no fixtures selected");
+  }
+
+  Ok(stems)
+}
+
+fn validate_chrome_baseline_metadata(
+  chrome_dir: &Path,
+  stems: &[String],
+  args: &FixtureChromeDiffArgs,
+) -> Result<()> {
+  for stem in stems {
+    let metadata_path = chrome_dir.join(format!("{stem}.json"));
+    if !metadata_path.exists() {
+      if args.require_chrome_metadata {
+        bail!(
+          "missing chrome baseline metadata for fixture '{stem}' at {}.\n\
+           This output directory may be stale; rerun without --no-chrome (or regenerate baselines).",
+          metadata_path.display()
+        );
+      }
+      eprintln!(
+        "warning: missing chrome baseline metadata for fixture '{stem}' at {}; skipping baseline validation",
+        metadata_path.display()
+      );
+      continue;
+    }
+
+    let bytes = fs::read(&metadata_path)
+      .with_context(|| format!("read chrome fixture metadata {}", metadata_path.display()))?;
+    let metadata: ChromeFixtureMetadata = serde_json::from_slice(&bytes)
+      .with_context(|| format!("parse chrome fixture metadata {}", metadata_path.display()))?;
+
+    let mismatch =
+      metadata.viewport != args.viewport || metadata.dpr != args.dpr || metadata.js != args.js;
+    if mismatch {
+      bail!(
+        "chrome baseline mismatch for fixture '{stem}'.\n\
+         Baseline ({}): viewport {}x{}, dpr {}, js {}.\n\
+         Current invocation: viewport {}x{}, dpr {}, js {}.\n\
+         Rerun without --no-chrome (or regenerate baselines) so diffs are meaningful.",
+        metadata_path.display(),
+        metadata.viewport.0,
+        metadata.viewport.1,
+        metadata.dpr,
+        metadata.js.as_cli_value(),
+        args.viewport.0,
+        args.viewport.1,
+        args.dpr,
+        args.js.as_cli_value(),
+      );
+    }
+  }
+
   Ok(())
 }
 
@@ -439,9 +601,7 @@ fn build_diff_renders_command(
     .arg("--max-diff-percent")
     .arg(args.max_diff_percent.to_string());
   if let Some(dist) = args.max_perceptual_distance {
-    cmd
-      .arg("--max-perceptual-distance")
-      .arg(dist.to_string());
+    cmd.arg("--max-perceptual-distance").arg(dist.to_string());
   }
   cmd.arg("--sort-by").arg(args.sort_by.as_cli_value());
   if args.ignore_alpha {

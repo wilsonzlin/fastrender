@@ -324,13 +324,14 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
   - `<out>/report.html`, `<out>/report.json`
 - Notes:
   - JavaScript is disabled by default (Chrome baseline uses an injected CSP, matching FastRender's no-JS model).
+  - When `--no-chrome` is set, existing Chrome baseline metadata (`<out>/chrome/<fixture>.json`) is validated against the current `--viewport`, `--dpr`, and `--js` values when present. Missing metadata emits a warning; use `--require-chrome-metadata` to fail fast.
   - Pass `--write-snapshot` to also write per-fixture snapshots/diagnostics for later `diff_snapshots` (equivalent to `render_fixtures --write-snapshot`).
 - Core flags:
   - Selection: `--fixtures <csv>`, `--shard <index>/<total>`
   - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--jobs/-j <n>`, `--write-snapshot`, `--js {on|off}`
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`, `--fail-on-differences`
-  - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--no-fastrender`, `--diff-only`
+  - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--require-chrome-metadata`, `--no-fastrender`, `--diff-only`
   - Build: `--no-build` (skip `cargo build --release --bin diff_renders`; reuse an existing binary)
 
 ## `cargo xtask recapture-page-fixtures`
