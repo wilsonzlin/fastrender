@@ -896,6 +896,44 @@ mod tests {
   }
 
   #[test]
+  fn iframe_src_allows_cross_origin_documents_when_same_origin_subresources_enabled() {
+    let font_ctx = FontContext::new();
+    let url = "https://other.test/iframe-cross-origin-policy-113.html";
+    let html = r#"
+      <style>html, body { margin: 0; padding: 0; background: rgb(10, 20, 30); }</style>
+      <div data-fastr-test="iframe-cross-origin-policy-113"></div>
+    "#;
+    let fetcher = Arc::new(HtmlFetcher {
+      expected_url: url.to_string(),
+      body: html.as_bytes().to_vec(),
+      calls: AtomicUsize::new(0),
+    });
+    let mut image_cache = ImageCache::with_fetcher(fetcher.clone());
+    image_cache.set_resource_context(Some(ResourceContext {
+      document_url: Some("https://example.test/".to_string()),
+      policy: ResourceAccessPolicy {
+        document_origin: origin_from_url("https://example.test/"),
+        same_origin_only: true,
+        ..ResourceAccessPolicy::default()
+      },
+      diagnostics: None,
+      iframe_depth_remaining: None,
+    }));
+    let rect = Rect::from_xywh(0.0, 0.0, 16.0, 16.0);
+
+    let result = render_iframe_src(url, rect, None, &image_cache, &font_ctx, 1.0, 3);
+    assert!(
+      result.is_some(),
+      "expected cross-origin iframe document to render even when same-origin subresource policy is enabled"
+    );
+    assert_eq!(
+      fetcher.calls.load(Ordering::SeqCst),
+      1,
+      "expected iframe HTML fetch to occur (not be blocked by same-origin subresource policy)"
+    );
+  }
+
+  #[test]
   fn iframe_src_uses_final_url_for_relative_resolution() {
     let font_ctx = FontContext::new();
     let requested_url = "https://example.com/original/iframe-redirect-113.html";
