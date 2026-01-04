@@ -4,7 +4,7 @@
 //! real sites. It intentionally ignores unknown keys and malformed values to
 //! avoid derailing layout when authors provide non-standard tokens.
 
-use crate::dom::{is_inert_html_template, DomNode, DomNodeType};
+use crate::dom::{DomNode, DomNodeType};
 use crate::error::{Error, RenderStage, Result};
 use crate::render_control::check_active_periodic;
 
@@ -159,7 +159,7 @@ fn extract_viewport_impl(
       continue;
     }
 
-    if is_inert_html_template(node) {
+    if node.is_template_element() {
       continue;
     }
 
@@ -170,7 +170,7 @@ fn extract_viewport_impl(
       }
     }
 
-    for child in node.children.iter().rev() {
+    for child in node.traversal_children().iter().rev() {
       stack.push(child);
     }
   }
@@ -206,12 +206,12 @@ fn extract_viewport_impl(
     }
 
     let skip_children =
-      matches!(node.node_type, DomNodeType::ShadowRoot { .. }) || is_inert_html_template(node);
+      matches!(node.node_type, DomNodeType::ShadowRoot { .. }) || node.is_template_element();
     if skip_children {
       continue;
     }
 
-    for child in node.children.iter().rev() {
+    for child in node.traversal_children().iter().rev() {
       stack.push(child);
     }
   }

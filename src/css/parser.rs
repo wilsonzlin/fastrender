@@ -4258,10 +4258,7 @@ pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
 /// `<template shadowroot=...>` siblings) are inert and must be ignored by traversal helpers such
 /// as CSS extraction.
 fn is_inert_template(node: &DomNode) -> bool {
-  node
-    .tag_name()
-    .map(|tag| tag.eq_ignore_ascii_case("template"))
-    .unwrap_or(false)
+  node.is_template_element()
 }
 
 /// Extract inline `<style>` blocks and external `<link>` entries from a DOM.
@@ -5371,6 +5368,58 @@ mod tests {
     match &shadow_sources[0] {
       StylesheetSource::Inline(inline) => assert!(inline.css.contains(".x")),
       other => panic!("expected inline shadow stylesheet, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn style_inside_unused_declarative_shadow_template_is_ignored() {
+    use cssparser::ToCss;
+    let html = r#"
+      <html>
+        <head>
+          <style>#doc { color: black; }</style>
+        </head>
+        <body>
+          <div id="host">
+            <template shadowroot="open">
+              <style>#ok { color: red; }</style>
+              <slot></slot>
+            </template>
+            <template shadowroot="closed">
+              <style>#bad { color: blue; }</style>
+            </template>
+          </div>
+        </body>
+      </html>
+    "#;
+    let dom = crate::dom::parse_html(html).unwrap();
+
+    let sources = extract_scoped_css_sources(&dom);
+    assert_eq!(sources.document.len(), 1);
+    match &sources.document[0] {
+      StylesheetSource::Inline(inline) => {
+        assert!(inline.css.contains("#doc"));
+        assert!(!inline.css.contains("#bad"));
+      }
+      other => panic!("expected inline stylesheet, got {:?}", other),
+    }
+
+    assert_eq!(sources.shadows.len(), 1);
+    let shadow_sources = sources.shadows.values().next().unwrap();
+    assert_eq!(shadow_sources.len(), 1);
+    match &shadow_sources[0] {
+      StylesheetSource::Inline(inline) => {
+        assert!(inline.css.contains("#ok"));
+        assert!(!inline.css.contains("#bad"));
+      }
+      other => panic!("expected inline shadow stylesheet, got {:?}", other),
+    }
+
+    let stylesheet = extract_css(&dom).unwrap();
+    assert_eq!(stylesheet.rules.len(), 1);
+    match &stylesheet.rules[0] {
+      CssRule::Style(rule) => assert!(rule.selectors.to_css_string().contains("#doc")),
+      other => panic!("expected document style rule, got {:?}", other),
     }
   }
 

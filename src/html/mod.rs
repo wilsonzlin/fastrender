@@ -9,7 +9,7 @@ pub mod meta_refresh;
 pub mod viewport;
 
 use crate::css::loader::resolve_href;
-use crate::dom::{is_inert_html_template, DomNode, DomNodeType};
+use crate::dom::{DomNode, DomNodeType};
 use url::Url;
 
 /// Find the first `<base href>` value within the document `<head>`.
@@ -21,7 +21,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return None;
     }
-    if is_inert_html_template(node) {
+    if node.is_template_element() {
       return None;
     }
     if let Some(tag) = node.tag_name() {
@@ -29,7 +29,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
         return Some(node);
       }
     }
-    for child in node.children.iter() {
+    for child in node.traversal_children() {
       if let Some(head) = find_head(child) {
         return Some(head);
       }
@@ -41,7 +41,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return None;
     }
-    if is_inert_html_template(node) {
+    if node.is_template_element() {
       return None;
     }
     if let Some(tag) = node.tag_name() {
@@ -54,7 +54,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
         }
       }
     }
-    for child in node.children.iter() {
+    for child in node.traversal_children() {
       if let Some(found) = find_base(child) {
         return Some(found);
       }

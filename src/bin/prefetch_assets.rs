@@ -334,10 +334,7 @@ mod disk_cache_main {
   }
 
   fn is_inert_template(node: &DomNode) -> bool {
-    node
-      .tag_name()
-      .map(|tag| tag.eq_ignore_ascii_case("template"))
-      .unwrap_or(false)
+    node.is_template_element()
   }
 
   fn looks_like_css_url(url: &str) -> bool {

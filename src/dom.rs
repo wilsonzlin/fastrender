@@ -797,8 +797,9 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
   });
 
   while let Some(mut frame) = stack.pop() {
-    if frame.next_child < frame.node.children.len() {
-      let child = &frame.node.children[frame.next_child];
+    let children = frame.node.traversal_children();
+    if frame.next_child < children.len() {
+      let child = &children[frame.next_child];
       frame.next_child += 1;
       stack.push(frame);
 
@@ -2806,11 +2807,7 @@ pub fn compute_slot_assignment_with_ids(
       }
     }
 
-    if is_inert_html_template(node) {
-      continue;
-    }
-
-    for child in node.children.iter().rev() {
+    for child in node.traversal_children().iter().rev() {
       stack.push((child, Some(node)));
     }
   }
@@ -3015,11 +3012,7 @@ pub fn compute_part_export_map_with_ids(
       hosts.push(node);
     }
 
-    if is_inert_html_template(node) {
-      continue;
-    }
-
-    for child in node.children.iter().rev() {
+    for child in node.traversal_children().iter().rev() {
       traversal_stack.push(child);
     }
   }
@@ -3058,7 +3051,6 @@ pub fn compute_part_export_map_with_ids(
         RenderStage::Cascade,
       )
       .map_err(Error::Render)?;
-      let skip_children = is_inert_html_template(node);
       if let Some(parts) = node.get_attribute_ref("part") {
         let node_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
         for part in parts.split_ascii_whitespace() {
@@ -3099,11 +3091,7 @@ pub fn compute_part_export_map_with_ids(
         }
       }
 
-      if skip_children {
-        continue;
-      }
-
-      for child in node.children.iter().rev() {
+      for child in node.traversal_children().iter().rev() {
         if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
           // Nested shadow contents are only exposed via exportparts on the host.
           continue;
@@ -3734,6 +3722,21 @@ impl DomNode {
     }
   }
 
+  pub fn is_template_element(&self) -> bool {
+    matches!(
+      self.tag_name(),
+      Some(tag) if tag.eq_ignore_ascii_case("template")
+    )
+  }
+
+  pub(crate) fn traversal_children(&self) -> &[DomNode] {
+    if self.is_template_element() {
+      &[]
+    } else {
+      &self.children
+    }
+  }
+
   pub fn namespace(&self) -> Option<&str> {
     match &self.node_type {
       DomNodeType::Element { namespace, .. } => Some(namespace),
@@ -4159,7 +4162,7 @@ impl<'a> ElementRef<'a> {
         Self::push_assigned_slot_nodes(current, slot_map, visited.as_ref(), &mut stack);
 
       if !assigned_children_pushed {
-        for child in current.children.iter().rev() {
+        for child in current.traversal_children().iter().rev() {
           stack.push(child);
         }
       }
@@ -5329,7 +5332,7 @@ impl<'a> Element for ElementRef<'a> {
   fn prev_sibling_element(&self) -> Option<Self> {
     let parent = self.parent?;
     let mut prev: Option<&DomNode> = None;
-    for child in parent.children.iter() {
+    for child in parent.traversal_children().iter() {
       if !child.is_element() {
         continue;
       }
@@ -5351,7 +5354,7 @@ impl<'a> Element for ElementRef<'a> {
   fn next_sibling_element(&self) -> Option<Self> {
     let parent = self.parent?;
     let mut seen_self = false;
-    for child in parent.children.iter() {
+    for child in parent.traversal_children().iter() {
       if !child.is_element() {
         continue;
       }
@@ -5823,6 +5826,9 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn is_empty(&self) -> bool {
+    if self.node.is_template_element() {
+      return true;
+    }
     !self.node.children.iter().any(Self::subtree_has_content)
   }
 
@@ -5831,7 +5837,7 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn first_element_child(&self) -> Option<Self> {
-    for child in &self.node.children {
+    for child in self.node.traversal_children() {
       if child.is_element() {
         return Some(ElementRef {
           node: child,
@@ -6164,20 +6170,24 @@ fn for_each_assigned_slot_child<'a, F: FnMut(&'a DomNode)>(node: &'a DomNode, f:
   // Avoid recursion for degenerate trees (can be reached when traversing shadow roots that contain
   // nested slots).
   let mut stack: Vec<&'a DomNode> = Vec::new();
-  for child in node.children.iter().rev() {
+  for child in node.traversal_children().iter().rev() {
     stack.push(child);
   }
 
   while let Some(node) = stack.pop() {
     match &node.node_type {
       DomNodeType::Slot { assigned: true, .. } => {
-        for assigned_child in node.children.iter().filter(|c| c.is_element()) {
+        for assigned_child in node
+          .traversal_children()
+          .iter()
+          .filter(|c| c.is_element())
+        {
           f(assigned_child);
         }
       }
       DomNodeType::ShadowRoot { .. } => {}
       _ => {
-        for child in node.children.iter().rev() {
+        for child in node.traversal_children().iter().rev() {
           stack.push(child);
         }
       }
@@ -6191,7 +6201,7 @@ fn for_each_selector_child<'a, F: FnMut(&'a DomNode)>(
   mut f: F,
 ) {
   let within_shadow_tree = in_shadow_tree(ancestors);
-  for child in &anchor.children {
+  for child in anchor.traversal_children() {
     match &child.node_type {
       DomNodeType::ShadowRoot { .. } => {
         if within_shadow_tree {
@@ -6227,47 +6237,47 @@ fn match_relative_selector_descendants<'a>(
       }
     }
     let mut found = false;
-    // HTML templates are inert and their contents are not DOM children.
-    // Keep the `<template>` element itself matchable, but do not traverse into its contents.
-    if !node_is_html_template_element(anchor) {
-      for child in anchor.children.iter().filter(|c| c.is_element()) {
-        if let Err(err) = check_active_periodic(
+    for child in anchor
+      .traversal_children()
+      .iter()
+      .filter(|c| c.is_element())
+    {
+      if let Err(err) = check_active_periodic(
+        deadline_counter,
+        RELATIVE_SELECTOR_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      ) {
+        context.extra_data.record_deadline_error(err);
+        found = false;
+        break;
+      }
+      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
+        .with_slot_map(context.extra_data.slot_map)
+        .with_attr_cache(context.extra_data.element_attr_cache);
+      let mut matched = if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter)
+      {
+        false
+      } else {
+        matches_selector(&selector.selector, 0, None, &child_ref, context)
+      };
+      if context.extra_data.deadline_error.is_some() {
+        found = false;
+        break;
+      }
+      if !matched && selector.match_hint.is_subtree() {
+        matched = match_relative_selector_subtree(
+          selector,
+          child,
+          ancestors,
+          bloom_filter,
+          use_ancestor_bloom,
+          context,
           deadline_counter,
-          RELATIVE_SELECTOR_DEADLINE_STRIDE,
-          RenderStage::Cascade,
-        ) {
-          context.extra_data.record_deadline_error(err);
-          found = false;
-          break;
-        }
-        let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
-          .with_slot_map(context.extra_data.slot_map)
-          .with_attr_cache(context.extra_data.element_attr_cache);
-        let mut matched =
-          if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter) {
-            false
-          } else {
-            matches_selector(&selector.selector, 0, None, &child_ref, context)
-          };
-        if context.extra_data.deadline_error.is_some() {
-          found = false;
-          break;
-        }
-        if !matched && selector.match_hint.is_subtree() {
-          matched = match_relative_selector_subtree(
-            selector,
-            child,
-            ancestors,
-            bloom_filter,
-            use_ancestor_bloom,
-            context,
-            deadline_counter,
-          );
-        }
-        if matched {
-          found = true;
-          break;
-        }
+        );
+      }
+      if matched {
+        found = true;
+        break;
       }
     }
     if use_ancestor_bloom {
@@ -6297,7 +6307,11 @@ fn match_relative_selector_siblings<'a>(
   };
 
   let mut seen_anchor = false;
-  for sibling in parent.children.iter().filter(|c| c.is_element()) {
+  for sibling in parent
+    .traversal_children()
+    .iter()
+    .filter(|c| c.is_element())
+  {
     if let Err(err) = check_active_periodic(
       deadline_counter,
       RELATIVE_SELECTOR_DEADLINE_STRIDE,
@@ -6429,13 +6443,12 @@ fn match_relative_selector_subtree<'a>(
       None => break,
     };
 
-    while frame.next_child < frame.node.children.len()
-      && !frame.node.children[frame.next_child].is_element()
-    {
+    let children = frame.node.traversal_children();
+    while frame.next_child < children.len() && !children[frame.next_child].is_element() {
       frame.next_child += 1;
     }
 
-    if frame.next_child >= frame.node.children.len() {
+    if frame.next_child >= children.len() {
       let finished = stack.pop().expect("frame exists");
       if finished.bloomed {
         pop_bloom(
@@ -6450,7 +6463,7 @@ fn match_relative_selector_subtree<'a>(
       continue;
     }
 
-    let child = &frame.node.children[frame.next_child];
+    let child = &children[frame.next_child];
     frame.next_child += 1;
 
     if let Err(err) = check_active_periodic(

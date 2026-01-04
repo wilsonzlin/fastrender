@@ -8,7 +8,7 @@
 use crate::css::loader::resolve_href_with_base;
 use crate::css::parser::tokenize_rel_list;
 use crate::dom::{
-  img_src_is_placeholder, is_inert_html_template, DomNode, COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES,
+  img_src_is_placeholder, DomNode, COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES,
   COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES, COMPAT_SIZES_DATA_ATTR_CANDIDATES,
   COMPAT_SOURCE_SRCSET_DATA_ATTR_CANDIDATES,
 };
@@ -108,6 +108,10 @@ fn normalize_mime_type(value: &str) -> Option<String> {
   } else {
     Some(base.to_ascii_lowercase())
   }
+}
+
+fn is_inert_template(node: &DomNode) -> bool {
+  node.is_template_element()
 }
 
 fn resolve_prefetch_url(ctx: ImageSelectionContext<'_>, raw: &str) -> Option<String> {
@@ -373,7 +377,7 @@ pub fn discover_image_prefetch_urls(
       return false;
     }
 
-    if is_inert_html_template(node) {
+    if is_inert_template(node) {
       return true;
     }
 
@@ -517,7 +521,7 @@ pub fn discover_image_prefetch_urls(
       }
     }
 
-    for child in &node.children {
+    for child in node.traversal_children() {
       if !walk(child, ctx, limits, image_elements, limited, seen_urls, urls) {
         return false;
       }
@@ -627,6 +631,33 @@ mod tests {
     assert_eq!(out.image_elements, 1);
     assert!(out.limited);
     assert_eq!(out.urls, vec!["https://example.com/a.jpg".to_string()]);
+  }
+
+  #[test]
+  fn ignores_images_inside_unused_declarative_shadow_templates() {
+    let html = r#"
+      <div id="host">
+        <template shadowroot="open"><slot></slot></template>
+        <template shadowroot="closed"><img src="bad.jpg"></template>
+      </div>
+      <img src="good.jpg">
+    "#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/good.jpg".to_string()]);
   }
 
   #[test]
