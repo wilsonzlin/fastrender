@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Individual transform properties (translate/scale/rotate)</title>
+    <style>
+      body {
+        margin: 0;
+        font: 16px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: #fff;
+        color: #111;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, 360px);
+        gap: 32px;
+        padding: 32px;
+      }
+
+      .demo {
+        position: relative;
+        width: 360px;
+        height: 220px;
+        border: 2px solid #d6d6d6;
+        background: #f7f7f7;
+        box-sizing: border-box;
+      }
+
+      .label {
+        position: absolute;
+        top: 10px;
+        left: 12px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #333;
+      }
+
+      .origin {
+        position: absolute;
+        left: 120px;
+        top: 90px;
+        width: 0;
+        height: 0;
+      }
+
+      .origin::before,
+      .origin::after {
+        content: "";
+        position: absolute;
+        background: #bbb;
+      }
+
+      .origin::before {
+        left: -50px;
+        top: 0px;
+        width: 100px;
+        height: 1px;
+      }
+
+      .origin::after {
+        left: 0px;
+        top: -50px;
+        width: 1px;
+        height: 100px;
+      }
+
+      /* 1) translate-only */
+      .translate .outline {
+        position: absolute;
+        left: 120px;
+        top: 90px;
+        width: 22px;
+        height: 22px;
+        border: 2px dashed #888;
+        box-sizing: border-box;
+      }
+      .translate .moved {
+        position: absolute;
+        left: 120px;
+        top: 90px;
+        width: 22px;
+        height: 22px;
+        background: #e53935;
+        translate: 36px 18px;
+      }
+
+      /* 2) scale-only (+ transform-origin interaction) */
+      .scale .outline {
+        position: absolute;
+        left: 90px;
+        top: 80px;
+        width: 32px;
+        height: 32px;
+        border: 2px dashed #888;
+        box-sizing: border-box;
+      }
+      .scale .scaled {
+        position: absolute;
+        left: 90px;
+        top: 80px;
+        width: 32px;
+        height: 32px;
+        background: #1e88e5;
+        transform-origin: 0 0;
+        scale: 2 1.5;
+      }
+
+      /* 3) rotate-only (+ transform-origin interaction) */
+      .rotate .needle {
+        position: absolute;
+        left: 110px;
+        top: 110px;
+        width: 90px;
+        height: 12px;
+        background: #43a047;
+        transform-origin: 0 0;
+        rotate: 45deg;
+      }
+
+      /* 4) combination with transform + transform-origin
+         The order is important: translate → rotate → scale → transform. */
+      .combo .bar {
+        position: absolute;
+        left: 70px;
+        top: 70px;
+        width: 90px;
+        height: 14px;
+        background: #111;
+        transform-origin: 0 0;
+        translate: 36px 0;
+        transform: rotate(90deg);
+      }
+
+      /* Fixed containing block regression (transform-like properties).
+         Derived from Stripe's usage of `translate:` for caret/indicator positioning: a non-none
+         individual transform property must establish a containing block for `position: fixed`. */
+      .fixed-container {
+        position: relative;
+        margin: 120px 0 0 420px;
+        width: 240px;
+        height: 140px;
+        border: 3px solid #666;
+        background: #fafafa;
+        translate: 40px 24px;
+      }
+      .fixed-child {
+        position: fixed;
+        left: 8px;
+        top: 8px;
+        width: 28px;
+        height: 28px;
+        background: #8e24aa;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="grid">
+      <div class="demo translate">
+        <div class="label">translate:</div>
+        <div class="origin"></div>
+        <div class="outline"></div>
+        <div class="moved"></div>
+      </div>
+
+      <div class="demo scale">
+        <div class="label">scale:</div>
+        <div class="origin"></div>
+        <div class="outline"></div>
+        <div class="scaled"></div>
+      </div>
+
+      <div class="demo rotate">
+        <div class="label">rotate:</div>
+        <div class="origin"></div>
+        <div class="needle"></div>
+      </div>
+
+      <div class="demo combo">
+        <div class="label">translate + transform + origin</div>
+        <div class="origin"></div>
+        <div class="bar"></div>
+      </div>
+    </div>
+
+    <div class="fixed-container">
+      <div class="label">fixed CB (translate)</div>
+      <div class="fixed-child"></div>
+    </div>
+  </body>
+</html>
+

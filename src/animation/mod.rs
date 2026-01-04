@@ -1430,14 +1430,15 @@ fn compose_transform_list(list: &[crate::css::types::Transform]) -> Transform3D 
           let (s, c) = angle.sin_cos();
           let t = 1.0 - c;
 
+          // Rodrigues rotation formula (right-handed, column vectors) to match `Transform3D::rotate_*`.
           let m00 = t * ax * ax + c;
-          let m01 = t * ax * ay + s * az;
-          let m02 = t * ax * az - s * ay;
-          let m10 = t * ax * ay - s * az;
+          let m01 = t * ax * ay - s * az;
+          let m02 = t * ax * az + s * ay;
+          let m10 = t * ax * ay + s * az;
           let m11 = t * ay * ay + c;
-          let m12 = t * ay * az + s * ax;
-          let m20 = t * ax * az + s * ay;
-          let m21 = t * ay * az - s * ax;
+          let m12 = t * ay * az - s * ax;
+          let m20 = t * ax * az - s * ay;
+          let m21 = t * ay * az + s * ax;
           let m22 = t * az * az + c;
 
           Transform3D {

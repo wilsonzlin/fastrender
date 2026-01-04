@@ -146,6 +146,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     shots: DEFAULT_SHOTS,
   },
   PageFixture {
+    name: "individual_transforms",
+    html: "individual_transforms/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
     name: "selector_heavy_document",
     html: "selector_heavy_document/index.html",
     shots: DEFAULT_SHOTS,

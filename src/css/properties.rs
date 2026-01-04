@@ -1490,83 +1490,90 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
   }
 
   // Individual transform properties (CSS Transforms Level 2).
-  if property == "translate" {
-    if value_str.eq_ignore_ascii_case("none") {
-      return Some(PropertyValue::Translate(TranslateValue::None));
+  if matches!(property, "translate" | "rotate" | "scale") {
+    // Preserve CSS-wide keywords for the cascade logic.
+    if is_global_keyword_str(value_str) {
+      return Some(PropertyValue::Keyword(value_str.to_string()));
     }
 
-    fn parse_length_percentage_component(parser: &mut Parser) -> Result<Length, ()> {
-      let component = parse_calc_sum(parser).map_err(|_| ())?;
-      calc_component_to_length(component).ok_or(())
-    }
+    if property == "translate" {
+      if value_str.eq_ignore_ascii_case("none") {
+        return Some(PropertyValue::Translate(TranslateValue::None));
+      }
 
-    let mut input = ParserInput::new(value_str);
-    let mut parser = Parser::new(&mut input);
-    let x = parse_length_percentage_component(&mut parser).ok()?;
-    parser.skip_whitespace();
-    let y = if parser.is_exhausted() {
-      Length::px(0.0)
-    } else {
-      parse_length_percentage_component(&mut parser).ok()?
-    };
-    parser.skip_whitespace();
-    let z = if parser.is_exhausted() {
-      Length::px(0.0)
-    } else {
-      let z = parse_length_percentage_component(&mut parser).ok()?;
-      if z.unit.is_percentage() {
+      fn parse_length_percentage_component(parser: &mut Parser) -> Result<Length, ()> {
+        let component = parse_calc_sum(parser).map_err(|_| ())?;
+        calc_component_to_length(component).ok_or(())
+      }
+
+      let mut input = ParserInput::new(value_str);
+      let mut parser = Parser::new(&mut input);
+      let x = parse_length_percentage_component(&mut parser).ok()?;
+      parser.skip_whitespace();
+      let y = if parser.is_exhausted() {
+        Length::px(0.0)
+      } else {
+        parse_length_percentage_component(&mut parser).ok()?
+      };
+      parser.skip_whitespace();
+      let z = if parser.is_exhausted() {
+        Length::px(0.0)
+      } else {
+        let z = parse_length_percentage_component(&mut parser).ok()?;
+        if z.has_percentage() {
+          return None;
+        }
+        z
+      };
+      parser.skip_whitespace();
+      if !parser.is_exhausted() {
         return None;
       }
-      z
-    };
-    parser.skip_whitespace();
-    if !parser.is_exhausted() {
-      return None;
+
+      return Some(PropertyValue::Translate(TranslateValue::Values { x, y, z }));
     }
 
-    return Some(PropertyValue::Translate(TranslateValue::Values { x, y, z }));
-  }
+    if property == "rotate" {
+      if value_str.eq_ignore_ascii_case("none") {
+        return Some(PropertyValue::Rotate(RotateValue::None));
+      }
 
-  if property == "rotate" {
-    if value_str.eq_ignore_ascii_case("none") {
-      return Some(PropertyValue::Rotate(RotateValue::None));
+      let mut input = ParserInput::new(value_str);
+      let mut parser = Parser::new(&mut input);
+      let angle = parse_angle_component(&mut parser).ok()?;
+      parser.skip_whitespace();
+      if !parser.is_exhausted() {
+        return None;
+      }
+      return Some(PropertyValue::Rotate(RotateValue::Angle(angle)));
     }
 
-    let mut input = ParserInput::new(value_str);
-    let mut parser = Parser::new(&mut input);
-    let angle = parse_angle_component(&mut parser).ok()?;
-    parser.skip_whitespace();
-    if !parser.is_exhausted() {
-      return None;
-    }
-    return Some(PropertyValue::Rotate(RotateValue::Angle(angle)));
-  }
+    if property == "scale" {
+      if value_str.eq_ignore_ascii_case("none") {
+        return Some(PropertyValue::Scale(ScaleValue::None));
+      }
 
-  if property == "scale" {
-    if value_str.eq_ignore_ascii_case("none") {
-      return Some(PropertyValue::Scale(ScaleValue::None));
+      let mut input = ParserInput::new(value_str);
+      let mut parser = Parser::new(&mut input);
+      let x = parse_number_component(&mut parser).ok()?;
+      parser.skip_whitespace();
+      let y = if parser.is_exhausted() {
+        x
+      } else {
+        parse_number_component(&mut parser).ok()?
+      };
+      parser.skip_whitespace();
+      let z = if parser.is_exhausted() {
+        1.0
+      } else {
+        parse_number_component(&mut parser).ok()?
+      };
+      parser.skip_whitespace();
+      if !parser.is_exhausted() {
+        return None;
+      }
+      return Some(PropertyValue::Scale(ScaleValue::Values { x, y, z }));
     }
-
-    let mut input = ParserInput::new(value_str);
-    let mut parser = Parser::new(&mut input);
-    let x = parse_number_component(&mut parser).ok()?;
-    parser.skip_whitespace();
-    let y = if parser.is_exhausted() {
-      x
-    } else {
-      parse_number_component(&mut parser).ok()?
-    };
-    parser.skip_whitespace();
-    let z = if parser.is_exhausted() {
-      1.0
-    } else {
-      parse_number_component(&mut parser).ok()?
-    };
-    parser.skip_whitespace();
-    if !parser.is_exhausted() {
-      return None;
-    }
-    return Some(PropertyValue::Scale(ScaleValue::Values { x, y, z }));
   }
 
   if let Some(num) = parse_function_number(value_str) {
@@ -4062,6 +4069,56 @@ mod tests {
       Transform::Rotate(deg) => assert!((*deg - 15.0).abs() < 0.01),
       other => panic!("unexpected transform {other:?}"),
     }
+  }
+
+  #[test]
+  fn parses_individual_translate_scale_rotate_properties() {
+    assert!(matches!(
+      parse_property_value("translate", "none").expect("parsed"),
+      PropertyValue::Translate(TranslateValue::None)
+    ));
+
+    let PropertyValue::Translate(TranslateValue::Values { x, y, z }) =
+      parse_property_value("translate", "10px 20%").expect("parsed")
+    else {
+      panic!("expected Translate value");
+    };
+    assert_eq!(x, Length::px(10.0));
+    assert_eq!(y, Length::percent(20.0));
+    assert_eq!(z, Length::px(0.0));
+
+    assert!(parse_property_value("translate", "10px 20px 30%").is_none());
+    assert!(parse_property_value("translate", "10px 20px calc(1px + 30%)").is_none());
+
+    assert!(matches!(
+      parse_property_value("scale", "none").expect("parsed"),
+      PropertyValue::Scale(ScaleValue::None)
+    ));
+    let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
+      parse_property_value("scale", "2 3").expect("parsed")
+    else {
+      panic!("expected Scale value");
+    };
+    assert!((x - 2.0).abs() < 1e-6);
+    assert!((y - 3.0).abs() < 1e-6);
+    assert!((z - 1.0).abs() < 1e-6);
+    assert!(parse_property_value("scale", "2px").is_none());
+
+    assert!(matches!(
+      parse_property_value("rotate", "none").expect("parsed"),
+      PropertyValue::Rotate(RotateValue::None)
+    ));
+    let PropertyValue::Rotate(RotateValue::Angle(angle)) =
+      parse_property_value("rotate", "90deg").expect("parsed")
+    else {
+      panic!("expected Rotate value");
+    };
+    assert!((angle - 90.0).abs() < 1e-6);
+
+    // Unitless nonzero angles are invalid.
+    assert!(parse_property_value("rotate", "10").is_none());
+    // Unitless 0 is accepted for angles.
+    assert!(parse_property_value("rotate", "0").is_some());
   }
 
   #[test]

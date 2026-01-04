@@ -15215,6 +15215,71 @@ mod tests {
   }
 
   #[test]
+  fn parses_individual_transform_properties_and_inherit() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "translate".into(),
+        value: PropertyValue::Translate(crate::css::types::TranslateValue::Values {
+          x: Length::px(10.0),
+          y: Length::px(5.0),
+          z: Length::px(0.0),
+        }),
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(
+      style.translate,
+      crate::css::types::TranslateValue::Values {
+        x: Length::px(10.0),
+        y: Length::px(5.0),
+        z: Length::px(0.0),
+      }
+    );
+
+    let parent = ComputedStyle {
+      rotate: crate::css::types::RotateValue::Angle(45.0),
+      scale: crate::css::types::ScaleValue::Values { x: 2.0, y: 3.0, z: 1.0 },
+      ..ComputedStyle::default()
+    };
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "rotate".into(),
+        value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.rotate, parent.rotate);
+
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "scale".into(),
+        value: PropertyValue::Keyword("inherit".to_string()),
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.scale, parent.scale);
+  }
+
+  #[test]
   fn parses_transform_style_and_backface_visibility() {
     let mut style = ComputedStyle::default();
     let parent = ComputedStyle {

@@ -58,6 +58,12 @@ pub fn resolve_transforms(
     let mut ts = Transform3D::identity();
     const EPS: f32 = 1e-6;
 
+    // CSS Transforms Level 2: the individual transform properties are combined with the `transform`
+    // list in the following order:
+    //   translate → rotate → scale → transform
+    //
+    // The final matrix is then computed using standard transform-list semantics (the rightmost
+    // transform applies first).
     if let TranslateValue::Values { x, y, z } = style.translate {
       let tx = resolve_transform_length(&x, style.font_size, style.root_font_size, percentage_width);
       let ty =
@@ -129,14 +135,15 @@ pub fn resolve_transforms(
             let (s, c) = angle.sin_cos();
             let t = 1.0 - c;
 
+            // Rodrigues rotation formula (right-handed, column vectors) to match `Transform3D::rotate_*`.
             let m00 = t * ax * ax + c;
-            let m01 = t * ax * ay + s * az;
-            let m02 = t * ax * az - s * ay;
-            let m10 = t * ax * ay - s * az;
+            let m01 = t * ax * ay - s * az;
+            let m02 = t * ax * az + s * ay;
+            let m10 = t * ax * ay + s * az;
             let m11 = t * ay * ay + c;
-            let m12 = t * ay * az + s * ax;
-            let m20 = t * ax * az + s * ay;
-            let m21 = t * ay * az - s * ax;
+            let m12 = t * ay * az - s * ax;
+            let m20 = t * ax * az - s * ay;
+            let m21 = t * ay * az + s * ax;
             let m22 = t * az * az + c;
 
             Transform3D {
@@ -468,6 +475,23 @@ mod tests {
   }
 
   #[test]
+  fn rotate3d_z_matches_rotate() {
+    let mut style = ComputedStyle::default();
+    style.transform_origin.x = Length::px(0.0);
+    style.transform_origin.y = Length::px(0.0);
+    style.transform.push(Transform::Rotate3d(0.0, 0.0, 1.0, 90.0));
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    let matrix = resolve_transform3d(&style, bounds, None)
+      .expect("rotate3d")
+      .to_2d()
+      .expect("affine transform");
+    assert!(matrix.a.abs() < 1e-4);
+    assert!((matrix.b - 1.0).abs() < 1e-4);
+    assert!((matrix.c + 1.0).abs() < 1e-4);
+    assert!(matrix.d.abs() < 1e-4);
+  }
+
+  #[test]
   fn resolves_rotate_property() {
     let mut style = ComputedStyle::default();
     style.rotate = RotateValue::Angle(45.0);
@@ -502,6 +526,28 @@ mod tests {
       .to_2d()
       .expect("affine transform");
     assert!((matrix.e + 100.0).abs() < 1e-4);
+    assert!((matrix.f + 50.0).abs() < 1e-4);
+  }
+
+  #[test]
+  fn resolves_scale_property() {
+    let mut style = ComputedStyle::default();
+    style.scale = ScaleValue::Values {
+      x: 2.0,
+      y: 3.0,
+      z: 1.0,
+    };
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    let matrix = resolve_transform3d(&style, bounds, None)
+      .expect("scale")
+      .to_2d()
+      .expect("affine transform");
+    assert!((matrix.a - 2.0).abs() < 1e-4);
+    assert!((matrix.d - 3.0).abs() < 1e-4);
+    // Default transform-origin is center (50% 50%) so scaling translates the element to keep the
+    // origin point fixed.
+    assert!((matrix.e + 50.0).abs() < 1e-4);
     assert!((matrix.f + 50.0).abs() < 1e-4);
   }
 
@@ -564,6 +610,34 @@ mod tests {
     assert!(matrix.d.abs() < 1e-4);
     assert!((matrix.e + 100.0).abs() < 1e-4);
     assert!((matrix.f + 50.0).abs() < 1e-4);
+  }
+
+  #[test]
+  fn individual_transform_properties_precede_transform_list() {
+    // The combined list order is: translate → rotate → scale → transform.
+    // With normal transform-list semantics (rightmost applies first), this means `transform`
+    // components are applied first.
+    let mut style = ComputedStyle::default();
+    style.transform_origin.x = Length::px(0.0);
+    style.transform_origin.y = Length::px(0.0);
+    style.translate = TranslateValue::Values {
+      x: Length::px(10.0),
+      y: Length::px(0.0),
+      z: Length::px(0.0),
+    };
+    style.transform.push(Transform::Rotate(90.0));
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    let matrix = resolve_transform3d(&style, bounds, None)
+      .expect("transform")
+      .to_2d()
+      .expect("affine transform");
+    assert!(matrix.a.abs() < 1e-4);
+    assert!((matrix.b - 1.0).abs() < 1e-4);
+    assert!((matrix.c + 1.0).abs() < 1e-4);
+    assert!(matrix.d.abs() < 1e-4);
+    assert!((matrix.e - 10.0).abs() < 1e-4);
+    assert!(matrix.f.abs() < 1e-4);
   }
 
   #[test]
