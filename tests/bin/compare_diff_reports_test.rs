@@ -143,6 +143,54 @@ fn compare_diff_reports_pairs_and_classifies_entries() {
   assert!(out_html.exists(), "missing delta html");
 
   let report: Value = serde_json::from_str(&fs::read_to_string(&out_json).unwrap()).unwrap();
+  assert_eq!(report["schema_version"], 2);
+
+  let aggregate = &report["aggregate"];
+  assert_eq!(aggregate["paired_with_metrics"], 2);
+  assert_eq!(aggregate["baseline"]["total_pixels"], 200);
+  assert_eq!(aggregate["baseline"]["pixel_diff"], 10);
+  assert_eq!(aggregate["new"]["total_pixels"], 200);
+  assert_eq!(aggregate["new"]["pixel_diff"], 6);
+
+  let baseline_weighted = aggregate["baseline"]["weighted_diff_percentage"]
+    .as_f64()
+    .expect("baseline weighted_diff_percentage");
+  let new_weighted = aggregate["new"]["weighted_diff_percentage"]
+    .as_f64()
+    .expect("new weighted_diff_percentage");
+  let delta_weighted = aggregate["delta"]["weighted_diff_percentage"]
+    .as_f64()
+    .expect("delta weighted_diff_percentage");
+  assert!((baseline_weighted - 5.0).abs() < 1e-9);
+  assert!((new_weighted - 3.0).abs() < 1e-9);
+  assert!((delta_weighted + 2.0).abs() < 1e-9);
+
+  let baseline_mean = aggregate["baseline"]["mean_diff_percentage"]
+    .as_f64()
+    .expect("baseline mean_diff_percentage");
+  let new_mean = aggregate["new"]["mean_diff_percentage"]
+    .as_f64()
+    .expect("new mean_diff_percentage");
+  let delta_mean = aggregate["delta"]["mean_diff_percentage"]
+    .as_f64()
+    .expect("delta mean_diff_percentage");
+  assert!((baseline_mean - 5.0).abs() < 1e-9);
+  assert!((new_mean - 3.0).abs() < 1e-9);
+  assert!((delta_mean + 2.0).abs() < 1e-9);
+
+  let baseline_perceptual = aggregate["baseline"]["mean_perceptual_distance"]
+    .as_f64()
+    .expect("baseline mean_perceptual_distance");
+  let new_perceptual = aggregate["new"]["mean_perceptual_distance"]
+    .as_f64()
+    .expect("new mean_perceptual_distance");
+  let delta_perceptual = aggregate["delta"]["mean_perceptual_distance"]
+    .as_f64()
+    .expect("delta mean_perceptual_distance");
+  assert!((baseline_perceptual - 0.25).abs() < 1e-9);
+  assert!((new_perceptual - 0.175).abs() < 1e-9);
+  assert!((delta_perceptual + 0.075).abs() < 1e-9);
+
   let results = report["results"].as_array().expect("results array");
 
   let find = |name: &str| {

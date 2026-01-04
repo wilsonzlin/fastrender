@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const METRIC_EPS: f64 = 1e-9;
 const TOP_N: usize = 20;
 
@@ -117,6 +117,7 @@ struct DeltaReport {
   new: ReportMeta,
   config_mismatches: Vec<ConfigMismatch>,
   totals: DeltaTotals,
+  aggregate: AggregateMetrics,
   top_improvements: Vec<DeltaRankedEntry>,
   top_regressions: Vec<DeltaRankedEntry>,
   results: Vec<DeltaEntry>,
@@ -219,6 +220,36 @@ struct DeltaRankedEntry {
   perceptual_distance_delta: f64,
 }
 
+#[derive(Serialize, Default)]
+struct AggregateMetrics {
+  paired_with_metrics: usize,
+  baseline: AggregateSideMetrics,
+  new: AggregateSideMetrics,
+  delta: AggregateDeltaMetrics,
+}
+
+#[derive(Serialize, Default)]
+struct AggregateSideMetrics {
+  total_pixels: u64,
+  pixel_diff: u64,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  weighted_diff_percentage: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  mean_diff_percentage: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  mean_perceptual_distance: Option<f64>,
+}
+
+#[derive(Serialize, Default)]
+struct AggregateDeltaMetrics {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  weighted_diff_percentage: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  mean_diff_percentage: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  mean_perceptual_distance: Option<f64>,
+}
+
 fn main() {
   match run() {
     Ok(exit_code) => std::process::exit(exit_code),
@@ -261,6 +292,7 @@ fn run() -> Result<i32, String> {
         new: new_meta,
         config_mismatches,
         totals,
+        aggregate: AggregateMetrics::default(),
         top_improvements: Vec::new(),
         top_regressions: Vec::new(),
         results: Vec::new(),
@@ -339,12 +371,14 @@ fn run() -> Result<i32, String> {
   top_improvements.truncate(TOP_N);
   top_regressions.truncate(TOP_N);
 
+  let aggregate = compute_aggregate_metrics(&results);
   let report = DeltaReport {
     schema_version: SCHEMA_VERSION,
     baseline: baseline_meta,
     new: new_meta,
     config_mismatches,
     totals,
+    aggregate,
     top_improvements,
     top_regressions,
     results,
@@ -374,6 +408,108 @@ fn validate_args(args: &Args) -> Result<(), String> {
     return Err("--regression-threshold-percent must be a finite, non-negative number".to_string());
   }
   Ok(())
+}
+
+fn compute_aggregate_metrics(entries: &[DeltaEntry]) -> AggregateMetrics {
+  let mut paired = 0usize;
+
+  let mut baseline_total_pixels = 0u64;
+  let mut baseline_pixel_diff = 0u64;
+  let mut baseline_diff_sum = 0.0;
+  let mut baseline_perceptual_sum = 0.0;
+
+  let mut new_total_pixels = 0u64;
+  let mut new_pixel_diff = 0u64;
+  let mut new_diff_sum = 0.0;
+  let mut new_perceptual_sum = 0.0;
+
+  for entry in entries {
+    let Some(bm) = entry.baseline.as_ref().and_then(|s| s.metrics) else {
+      continue;
+    };
+    let Some(nm) = entry.new.as_ref().and_then(|s| s.metrics) else {
+      continue;
+    };
+
+    paired += 1;
+
+    baseline_total_pixels = baseline_total_pixels.saturating_add(bm.total_pixels);
+    baseline_pixel_diff = baseline_pixel_diff.saturating_add(bm.pixel_diff);
+    baseline_diff_sum += bm.diff_percentage;
+    baseline_perceptual_sum += bm.perceptual_distance;
+
+    new_total_pixels = new_total_pixels.saturating_add(nm.total_pixels);
+    new_pixel_diff = new_pixel_diff.saturating_add(nm.pixel_diff);
+    new_diff_sum += nm.diff_percentage;
+    new_perceptual_sum += nm.perceptual_distance;
+  }
+
+  let paired_f64 = paired as f64;
+
+  let baseline_weighted_diff = if baseline_total_pixels > 0 {
+    Some(baseline_pixel_diff as f64 / baseline_total_pixels as f64 * 100.0)
+  } else {
+    None
+  };
+  let new_weighted_diff = if new_total_pixels > 0 {
+    Some(new_pixel_diff as f64 / new_total_pixels as f64 * 100.0)
+  } else {
+    None
+  };
+
+  let baseline_mean_diff = if paired > 0 {
+    Some(baseline_diff_sum / paired_f64)
+  } else {
+    None
+  };
+  let new_mean_diff = if paired > 0 {
+    Some(new_diff_sum / paired_f64)
+  } else {
+    None
+  };
+
+  let baseline_mean_perceptual = if paired > 0 {
+    Some(baseline_perceptual_sum / paired_f64)
+  } else {
+    None
+  };
+  let new_mean_perceptual = if paired > 0 {
+    Some(new_perceptual_sum / paired_f64)
+  } else {
+    None
+  };
+
+  AggregateMetrics {
+    paired_with_metrics: paired,
+    baseline: AggregateSideMetrics {
+      total_pixels: baseline_total_pixels,
+      pixel_diff: baseline_pixel_diff,
+      weighted_diff_percentage: baseline_weighted_diff,
+      mean_diff_percentage: baseline_mean_diff,
+      mean_perceptual_distance: baseline_mean_perceptual,
+    },
+    new: AggregateSideMetrics {
+      total_pixels: new_total_pixels,
+      pixel_diff: new_pixel_diff,
+      weighted_diff_percentage: new_weighted_diff,
+      mean_diff_percentage: new_mean_diff,
+      mean_perceptual_distance: new_mean_perceptual,
+    },
+    delta: AggregateDeltaMetrics {
+      weighted_diff_percentage: match (baseline_weighted_diff, new_weighted_diff) {
+        (Some(baseline), Some(new)) => Some(new - baseline),
+        _ => None,
+      },
+      mean_diff_percentage: match (baseline_mean_diff, new_mean_diff) {
+        (Some(baseline), Some(new)) => Some(new - baseline),
+        _ => None,
+      },
+      mean_perceptual_distance: match (baseline_mean_perceptual, new_mean_perceptual) {
+        (Some(baseline), Some(new)) => Some(new - baseline),
+        _ => None,
+      },
+    },
+  }
 }
 
 fn compute_totals_without_deltas(baseline: &DiffReport, new_report: &DiffReport) -> DeltaTotals {
@@ -710,6 +846,8 @@ fn write_html_report(
     report.totals.new_missing
   );
 
+  let aggregate_block = format_aggregate_block(&report.aggregate);
+
   let top_improvements = format_top_list("Top improvements", &report.top_improvements, true);
   let top_regressions = format_top_list("Top regressions", &report.top_regressions, false);
 
@@ -854,6 +992,7 @@ fn write_html_report(
     <p><strong>New report:</strong> {new_report_link}</p>
     <p><strong>Config:</strong> tolerance={tolerance}, max_diff_percent={max_diff_percent:.4}, max_perceptual_distance={max_perceptual}, ignore_alpha={ignore_alpha}</p>
     <p><strong>Summary:</strong> {summary}</p>
+    {aggregate_block}
     {mismatch_block}
     <div class="top-list">
       {top_regressions}
@@ -900,6 +1039,7 @@ fn write_html_report(
       .unwrap_or_else(|| "-".to_string()),
     ignore_alpha = if report.new.ignore_alpha { "yes" } else { "no" },
     summary = escape_html(&summary),
+    aggregate_block = aggregate_block,
     mismatch_block = mismatch_block,
     top_regressions = top_regressions,
     top_improvements = top_improvements,
@@ -966,6 +1106,86 @@ fn guess_report_html_path(json_path: &Path) -> Option<PathBuf> {
   }
 
   None
+}
+
+fn format_aggregate_block(metrics: &AggregateMetrics) -> String {
+  if metrics.paired_with_metrics == 0 {
+    return "<p><strong>Aggregate:</strong> -</p>".to_string();
+  }
+
+  let weighted_delta = metrics
+    .delta
+    .weighted_diff_percentage
+    .map(|v| format!("{:+.4}%", v))
+    .unwrap_or_else(|| "-".to_string());
+  let mean_delta = metrics
+    .delta
+    .mean_diff_percentage
+    .map(|v| format!("{:+.4}%", v))
+    .unwrap_or_else(|| "-".to_string());
+  let perceptual_delta = metrics
+    .delta
+    .mean_perceptual_distance
+    .map(|v| format!("{:+.4}", v))
+    .unwrap_or_else(|| "-".to_string());
+
+  let baseline_weighted = metrics
+    .baseline
+    .weighted_diff_percentage
+    .map(|v| format!("{v:.4}%"))
+    .unwrap_or_else(|| "-".to_string());
+  let new_weighted = metrics
+    .new
+    .weighted_diff_percentage
+    .map(|v| format!("{v:.4}%"))
+    .unwrap_or_else(|| "-".to_string());
+
+  let baseline_mean = metrics
+    .baseline
+    .mean_diff_percentage
+    .map(|v| format!("{v:.4}%"))
+    .unwrap_or_else(|| "-".to_string());
+  let new_mean = metrics
+    .new
+    .mean_diff_percentage
+    .map(|v| format!("{v:.4}%"))
+    .unwrap_or_else(|| "-".to_string());
+
+  let baseline_perceptual = metrics
+    .baseline
+    .mean_perceptual_distance
+    .map(|v| format!("{v:.4}"))
+    .unwrap_or_else(|| "-".to_string());
+  let new_perceptual = metrics
+    .new
+    .mean_perceptual_distance
+    .map(|v| format!("{v:.4}"))
+    .unwrap_or_else(|| "-".to_string());
+
+  format!(
+    r#"<h2>Aggregate</h2>
+<p>Computed over {paired} paired entries with metrics.</p>
+<table>
+  <thead>
+    <tr><th>Metric</th><th>Baseline</th><th>New</th><th>Δ</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Weighted diff %</td><td>{baseline_weighted}</td><td>{new_weighted}</td><td>{weighted_delta}</td></tr>
+    <tr><td>Mean diff %</td><td>{baseline_mean}</td><td>{new_mean}</td><td>{mean_delta}</td></tr>
+    <tr><td>Mean perceptual</td><td>{baseline_perceptual}</td><td>{new_perceptual}</td><td>{perceptual_delta}</td></tr>
+  </tbody>
+</table>"#,
+    paired = metrics.paired_with_metrics,
+    baseline_weighted = baseline_weighted,
+    new_weighted = new_weighted,
+    weighted_delta = weighted_delta,
+    baseline_mean = baseline_mean,
+    new_mean = new_mean,
+    mean_delta = mean_delta,
+    baseline_perceptual = baseline_perceptual,
+    new_perceptual = new_perceptual,
+    perceptual_delta = perceptual_delta,
+  )
 }
 
 fn format_top_list(title: &str, entries: &[DeltaRankedEntry], improvements: bool) -> String {
