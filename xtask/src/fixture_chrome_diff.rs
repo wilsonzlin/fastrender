@@ -12,6 +12,24 @@ const DEFAULT_TIMEOUT: u64 = 15;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "lowercase")]
+enum SortBy {
+  Pixel,
+  Percent,
+  Perceptual,
+}
+
+impl SortBy {
+  fn as_cli_value(self) -> &'static str {
+    match self {
+      Self::Pixel => "pixel",
+      Self::Percent => "percent",
+      Self::Perceptual => "perceptual",
+    }
+  }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
 enum MediaMode {
   Screen,
   Print,
@@ -87,6 +105,14 @@ pub struct FixtureChromeDiffArgs {
   /// Maximum percent of pixels allowed to differ (0-100) forwarded to `diff_renders`.
   #[arg(long, default_value_t = 0.0)]
   pub max_diff_percent: f64,
+
+  /// Maximum allowed perceptual distance (0.0 = identical) forwarded to `diff_renders`.
+  #[arg(long)]
+  pub max_perceptual_distance: Option<f64>,
+
+  /// Sort report entries by metric within each status group (forwarded to `diff_renders`).
+  #[arg(long, value_enum, default_value_t = SortBy::Percent)]
+  pub sort_by: SortBy,
 
   /// Ignore alpha differences forwarded to `diff_renders --ignore-alpha`.
   #[arg(long)]
@@ -209,6 +235,11 @@ fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
   if args.timeout == 0 {
     bail!("--timeout must be > 0");
   }
+  if let Some(dist) = args.max_perceptual_distance {
+    if dist < 0.0 || !dist.is_finite() {
+      bail!("--max-perceptual-distance must be >= 0 and finite");
+    }
+  }
   if !(0.0..=100.0).contains(&args.max_diff_percent) || !args.max_diff_percent.is_finite() {
     bail!("--max-diff-percent must be between 0 and 100");
   }
@@ -320,6 +351,12 @@ fn build_diff_renders_command(
   cmd
     .arg("--max-diff-percent")
     .arg(args.max_diff_percent.to_string());
+  if let Some(dist) = args.max_perceptual_distance {
+    cmd
+      .arg("--max-perceptual-distance")
+      .arg(dist.to_string());
+  }
+  cmd.arg("--sort-by").arg(args.sort_by.as_cli_value());
   if args.ignore_alpha {
     cmd.arg("--ignore-alpha");
   }

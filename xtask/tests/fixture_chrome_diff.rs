@@ -74,6 +74,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
       "5",
       "--max-diff-percent",
       "1.5",
+      "--max-perceptual-distance",
+      "0.4",
+      "--sort-by",
+      "perceptual",
       "--chrome-dir",
       chrome_dir.to_string_lossy().as_ref(),
     ])
@@ -196,6 +200,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
   assert!(
     stdout.contains("--tolerance 5") && stdout.contains("--max-diff-percent 1.5"),
     "diff_renders should receive tolerance + max-diff-percent; got:\n{stdout}"
+  );
+  assert!(
+    stdout.contains("--max-perceptual-distance 0.4") && stdout.contains("--sort-by perceptual"),
+    "diff_renders should receive max-perceptual-distance + sort-by; got:\n{stdout}"
   );
 }
 

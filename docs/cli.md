@@ -306,7 +306,7 @@ cargo run --release --bin diff_renders -- \
   - Selection: `--fixtures <csv>`, `--shard <index>/<total>`
   - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--js {on|off}`
-  - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--ignore-alpha`
+  - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`
   - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`
 
 ## `cargo xtask recapture-page-fixtures`
