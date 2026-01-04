@@ -569,7 +569,7 @@ fn process_entry(
       after: after_rel,
       diff: None,
       metrics: None,
-      error: Some(format!("Missing in before input: {name}")),
+      error: Some(format!("Missing in before input: {name}.png")),
     },
     (Some(_), None) => DiffReportEntry {
       name: name.to_string(),
@@ -578,7 +578,7 @@ fn process_entry(
       after: None,
       diff: None,
       metrics: None,
-      error: Some(format!("Missing in after input: {name}")),
+      error: Some(format!("Missing in after input: {name}.png")),
     },
     (Some(before), Some(after)) => {
       totals.processed += 1;
@@ -691,7 +691,7 @@ fn collect_pngs(root: &Path) -> Result<HashMap<String, PathBuf>, String> {
     return Err(format!("{} is not a directory", root.display()));
   }
   let mut map = HashMap::new();
-  for entry in WalkDir::new(root) {
+  for entry in WalkDir::new(root).sort_by_file_name() {
     let entry = entry.map_err(|e| format!("failed to walk {}: {e}", root.display()))?;
     if !entry.file_type().is_file() {
       continue;
