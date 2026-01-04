@@ -15,6 +15,7 @@ mod import_page_fixture;
 mod recapture_page_fixtures;
 mod update_pageset_guardrails;
 mod update_pageset_guardrails_budgets;
+mod validate_page_fixtures;
 
 fn main() -> Result<()> {
   let cli = Cli::parse();
@@ -39,6 +40,9 @@ fn main() -> Result<()> {
     }
     Commands::UpdatePagesetGuardrailsBudgets(args) => {
       update_pageset_guardrails_budgets::run_update_pageset_guardrails_budgets(args)
+    }
+    Commands::ValidatePageFixtures(args) => {
+      validate_page_fixtures::run_validate_page_fixtures(args)
     }
     Commands::PerfSmoke(args) => run_perf_smoke(args),
   }
@@ -90,6 +94,8 @@ enum Commands {
   ),
   /// Run the offline perf smoke harness (`perf_smoke` binary) over curated fixtures
   PerfSmoke(PerfSmokeArgs),
+  /// Ensure checked-in page fixtures do not reference network resources (offline invariant)
+  ValidatePageFixtures(validate_page_fixtures::ValidatePageFixturesArgs),
 }
 
 #[derive(Args)]

@@ -372,6 +372,42 @@ impl AssetCatalog {
     }
   }
 
+  /// Like `path_for`, but always returns a deterministic placeholder path for missing resources.
+  ///
+  /// This is intended for URLs that are fetchable in browsers (e.g. preloads, media sources) but
+  /// are not required for FastRender output correctness.
+  fn path_for_optional(&mut self, url: &str, ctx: ReferenceContext) -> String {
+    if let Some(filename) = self.url_to_filename.get(url) {
+      return match ctx {
+        ReferenceContext::Html => format!("{ASSETS_DIR}/{filename}"),
+        ReferenceContext::Css => filename.clone(),
+      };
+    }
+
+    let ext = extension_from_path(url);
+    let filename = format!("missing_{}.{}", hash_bytes(url.as_bytes()), ext);
+    if !self.assets.contains_key(&filename) {
+      self.assets.insert(
+        filename.clone(),
+        AssetData {
+          filename: filename.clone(),
+          bytes: Vec::new(),
+          content_type: None,
+          source_url: url.to_string(),
+        },
+      );
+    }
+    self
+      .url_to_filename
+      .entry(url.to_string())
+      .or_insert_with(|| filename.clone());
+
+    match ctx {
+      ReferenceContext::Html => format!("{ASSETS_DIR}/{filename}"),
+      ReferenceContext::Css => filename,
+    }
+  }
+
   fn fail_if_missing(&self) -> Result<()> {
     if self.allow_missing || self.missing_urls.is_empty() {
       return Ok(());
@@ -678,6 +714,45 @@ fn rewrite_reference(
   Ok(Some(path))
 }
 
+fn rewrite_reference_optional(
+  raw: &str,
+  base_url: &Url,
+  ctx: ReferenceContext,
+  catalog: &mut AssetCatalog,
+) -> Result<Option<String>> {
+  let decoded = decode_html_entities_if_needed(raw.trim());
+  let trimmed = decoded.trim();
+  if trimmed.is_empty()
+    || trimmed.starts_with('#')
+    || trimmed.to_ascii_lowercase().starts_with("javascript:")
+    || is_data_url(trimmed)
+    || trimmed.to_ascii_lowercase().starts_with("about:")
+    || trimmed.to_ascii_lowercase().starts_with("mailto:")
+    || trimmed.to_ascii_lowercase().starts_with("tel:")
+    || trimmed.contains("data:")
+  {
+    return Ok(None);
+  }
+
+  let Some(resolved) = resolve_href(base_url.as_str(), trimmed) else {
+    return Ok(None);
+  };
+
+  if is_data_url(&resolved) {
+    return Ok(None);
+  }
+
+  let (without_fragment, fragment) = split_fragment(&resolved);
+  let mut path = catalog.path_for_optional(&without_fragment, ctx);
+
+  if let Some(fragment) = fragment {
+    path.push('#');
+    path.push_str(&fragment);
+  }
+
+  Ok(Some(path))
+}
+
 fn split_fragment(url: &str) -> (String, Option<String>) {
   match url.find('#') {
     Some(idx) => (url[..idx].to_string(), Some(url[idx + 1..].to_string())),
@@ -764,6 +839,99 @@ fn hash_bytes(bytes: &[u8]) -> String {
     .collect::<String>()
 }
 
+fn rewrite_and_strip_link_tags(
+  input: &str,
+  base_url: &Url,
+  ctx: ReferenceContext,
+  catalog: &mut AssetCatalog,
+  screen_stylesheets: &HashSet<String>,
+) -> Result<String> {
+  fn capture_first_match<'t>(
+    caps: &'t regex::Captures<'t>,
+    groups: &[usize],
+  ) -> Option<regex::Match<'t>> {
+    groups.iter().find_map(|idx| caps.get(*idx))
+  }
+
+  let link_tag = Regex::new("(?is)<link\\b[^>]*>").expect("link tag regex must compile");
+  let attr_rel = Regex::new("(?is)(?:^|\\s)rel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .expect("link rel regex must compile");
+  let attr_href =
+    Regex::new("(?is)(?:^|\\s)href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+      .expect("link href regex must compile");
+
+  let mut out = String::with_capacity(input.len());
+  let mut last = 0usize;
+  for tag_match in link_tag.find_iter(input) {
+    let tag = &input[tag_match.start()..tag_match.end()];
+
+    let rel_value = attr_rel
+      .captures(tag)
+      .and_then(|c| capture_first_match(&c, &[1, 2, 3]).map(|m| m.as_str().to_string()))
+      .unwrap_or_default();
+
+    let mut has_stylesheet = false;
+    let mut is_strippable_fetchable = false;
+    for token in rel_value.split_ascii_whitespace() {
+      if token.eq_ignore_ascii_case("stylesheet") {
+        has_stylesheet = true;
+      } else if token.eq_ignore_ascii_case("preload")
+        || token.eq_ignore_ascii_case("prefetch")
+        || token.eq_ignore_ascii_case("icon")
+        || token.eq_ignore_ascii_case("apple-touch-icon")
+        || token.eq_ignore_ascii_case("apple-touch-icon-precomposed")
+        || token.eq_ignore_ascii_case("manifest")
+        || token.eq_ignore_ascii_case("mask-icon")
+        || token.eq_ignore_ascii_case("preconnect")
+        || token.eq_ignore_ascii_case("dns-prefetch")
+      {
+        is_strippable_fetchable = true;
+      }
+    }
+
+    // Strip link tags that would trigger network loads in browsers but are not needed for
+    // FastRender output correctness (preloads, icons, preconnect/dns-prefetch, etc).
+    if !has_stylesheet && is_strippable_fetchable {
+      out.push_str(&input[last..tag_match.start()]);
+      last = tag_match.end();
+      continue;
+    }
+
+    let mut rewritten_tag = tag.to_string();
+    if has_stylesheet {
+      if let Some(href_caps) = attr_href.captures(tag) {
+        if let Some(href_match) = capture_first_match(&href_caps, &[1, 2, 3]) {
+          let decoded = decode_html_entities_if_needed(href_match.as_str());
+          let resolved =
+            resolve_href(base_url.as_str(), decoded.trim()).unwrap_or_else(|| "".to_string());
+          let required = !resolved.is_empty() && screen_stylesheets.contains(&resolved);
+          let rewritten_href = if required {
+            rewrite_reference(href_match.as_str(), base_url, ctx, catalog)?
+          } else {
+            rewrite_reference_optional(href_match.as_str(), base_url, ctx, catalog)?
+          };
+          if let Some(new_value) = rewritten_href {
+            let start = href_match.start();
+            let end = href_match.end();
+            rewritten_tag = format!(
+              "{}{}{}",
+              &rewritten_tag[..start],
+              new_value,
+              &rewritten_tag[end..]
+            );
+          }
+        }
+      }
+    }
+
+    out.push_str(&input[last..tag_match.start()]);
+    out.push_str(&rewritten_tag);
+    last = tag_match.end();
+  }
+  out.push_str(&input[last..]);
+  Ok(out)
+}
+
 fn rewrite_html_resource_attrs(
   input: &str,
   base_url: &Url,
@@ -779,19 +947,8 @@ fn rewrite_html_resource_attrs(
   .into_iter()
   .collect();
 
-  let link_href =
-    Regex::new("(?is)<link[^>]*\\shref\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
-      .expect("link href regex must compile");
-  let mut rewritten = replace_attr_values_with(&link_href, input, &[1, 2, 3], |raw| {
-    let decoded = decode_html_entities_if_needed(raw);
-    let Some(resolved) = resolve_href(base_url.as_str(), decoded.trim()) else {
-      return Ok(None);
-    };
-    if !stylesheet_urls.contains(&resolved) {
-      return Ok(None);
-    }
-    rewrite_reference(raw, base_url, ctx, catalog)
-  })?;
+  let mut rewritten =
+    rewrite_and_strip_link_tags(input, base_url, ctx, catalog, &stylesheet_urls)?;
 
   let img_src = Regex::new("(?is)<img[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
     .expect("img src regex must compile");
@@ -825,6 +982,37 @@ fn rewrite_html_resource_attrs(
       .expect("video poster regex must compile");
   rewritten = replace_attr_values_with(&video_poster, &rewritten, &[1, 2, 3], |raw| {
     rewrite_reference(raw, base_url, ctx, catalog)
+  })?;
+
+  // Media sources are fetchable in browsers but generally not required for FastRender's output. Use
+  // deterministic placeholders so imported fixtures remain offline even if the bundle didn't
+  // capture the media.
+  let video_src =
+    Regex::new("(?is)<video[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+      .expect("video src regex must compile");
+  rewritten = replace_attr_values_with(&video_src, &rewritten, &[1, 2, 3], |raw| {
+    rewrite_reference_optional(raw, base_url, ctx, catalog)
+  })?;
+
+  let audio_src =
+    Regex::new("(?is)<audio[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+      .expect("audio src regex must compile");
+  rewritten = replace_attr_values_with(&audio_src, &rewritten, &[1, 2, 3], |raw| {
+    rewrite_reference_optional(raw, base_url, ctx, catalog)
+  })?;
+
+  let track_src =
+    Regex::new("(?is)<track[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+      .expect("track src regex must compile");
+  rewritten = replace_attr_values_with(&track_src, &rewritten, &[1, 2, 3], |raw| {
+    rewrite_reference_optional(raw, base_url, ctx, catalog)
+  })?;
+
+  let source_src =
+    Regex::new("(?is)<source[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+      .expect("source src regex must compile");
+  rewritten = replace_attr_values_with(&source_src, &rewritten, &[1, 2, 3], |raw| {
+    rewrite_reference_optional(raw, base_url, ctx, catalog)
   })?;
 
   // The bundler only captures a limited number of srcset candidates (to avoid pathological pages
@@ -885,35 +1073,72 @@ where
 fn validate_no_remote_fetchable_subresources_in_html(label: &str, html: &str) -> Result<()> {
   let mut remote: BTreeSet<String> = BTreeSet::new();
 
-  // Stylesheet discovery: use the real FastRender extractor so rel/as logic matches rendering,
-  // but validate the *authored* href strings so scheme-relative URLs (`//example.com/style.css`)
-  // don't get masked when resolved against a file:// base.
-  let css_links = fastrender::css::loader::extract_css_links(
-    html,
-    "file:///index.html",
-    fastrender::style::media::MediaType::Screen,
-  )
-  .unwrap_or_default();
-  let css_links_set: HashSet<String> = css_links.into_iter().collect();
-  let link_href =
-    Regex::new("(?is)<link[^>]*\\shref\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
-      .expect("link href validation regex");
-  for caps in link_href.captures_iter(html) {
-    let Some(m) = [1usize, 2, 3].iter().find_map(|idx| caps.get(*idx)) else {
-      continue;
-    };
-    let decoded = decode_html_entities_if_needed(m.as_str());
-    let raw_href = decoded.trim();
-    let Some(resolved) = resolve_href("file:///index.html", raw_href) else {
-      continue;
-    };
-    if !css_links_set.contains(&resolved) {
+  fn capture_first_match<'t>(
+    caps: &'t regex::Captures<'t>,
+    groups: &[usize],
+  ) -> Option<regex::Match<'t>> {
+    groups.iter().find_map(|idx| caps.get(*idx))
+  }
+
+  // Fetchable <link> resources (stylesheets, icons, preloads, prefetch, preconnect, etc.).
+  // We intentionally validate the authored href/srcset strings to catch scheme-relative URLs.
+  let link_tag = Regex::new("(?is)<link\\b[^>]*>").expect("link tag validation regex");
+  let attr_rel = Regex::new("(?is)(?:^|\\s)rel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .expect("link rel validation regex");
+  let attr_href = Regex::new("(?is)(?:^|\\s)href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .expect("link href validation regex");
+  let attr_imagesrcset =
+    Regex::new("(?is)(?:^|\\s)imagesrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
+      .expect("link imagesrcset validation regex");
+
+  for tag_match in link_tag.find_iter(html) {
+    let tag = tag_match.as_str();
+    let rel_value = attr_rel
+      .captures(tag)
+      .and_then(|c| capture_first_match(&c, &[1, 2, 3]).map(|m| m.as_str().to_string()))
+      .unwrap_or_default();
+
+    let mut is_fetchable = false;
+    for token in rel_value.split_ascii_whitespace() {
+      if token.eq_ignore_ascii_case("stylesheet")
+        || token.eq_ignore_ascii_case("preload")
+        || token.eq_ignore_ascii_case("prefetch")
+        || token.eq_ignore_ascii_case("icon")
+        || token.eq_ignore_ascii_case("apple-touch-icon")
+        || token.eq_ignore_ascii_case("apple-touch-icon-precomposed")
+        || token.eq_ignore_ascii_case("manifest")
+        || token.eq_ignore_ascii_case("mask-icon")
+        || token.eq_ignore_ascii_case("preconnect")
+        || token.eq_ignore_ascii_case("dns-prefetch")
+      {
+        is_fetchable = true;
+        break;
+      }
+    }
+    if !is_fetchable {
       continue;
     }
-    if is_remote_fetch_url(raw_href) {
-      remote.insert(raw_href.to_string());
-    } else if is_remote_fetch_url(&resolved) {
-      remote.insert(resolved);
+
+    if let Some(href_caps) = attr_href.captures(tag) {
+      if let Some(m) = capture_first_match(&href_caps, &[1, 2, 3]) {
+        let decoded = decode_html_entities_if_needed(m.as_str());
+        let trimmed = decoded.trim();
+        if is_remote_fetch_url(trimmed) {
+          remote.insert(trimmed.to_string());
+        }
+      }
+    }
+
+    if let Some(srcset_caps) = attr_imagesrcset.captures(tag) {
+      if let Some(m) = capture_first_match(&srcset_caps, &[1, 2]) {
+        for candidate in parse_srcset_urls(m.as_str(), 32) {
+          let decoded = decode_html_entities_if_needed(candidate.trim());
+          let trimmed = decoded.trim();
+          if is_remote_fetch_url(trimmed) {
+            remote.insert(trimmed.to_string());
+          }
+        }
+      }
     }
   }
 
@@ -940,6 +1165,22 @@ fn validate_no_remote_fetchable_subresources_in_html(label: &str, html: &str) ->
     Regex::new("(?is)<video[^>]*\\sposter\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
       .expect("video poster validation regex");
   collect_remote_attr_values(&video_poster, html, &[1, 2, 3], &mut remote);
+
+  let video_src = Regex::new("(?is)<video[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .expect("video src validation regex");
+  collect_remote_attr_values(&video_src, html, &[1, 2, 3], &mut remote);
+
+  let audio_src = Regex::new("(?is)<audio[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .expect("audio src validation regex");
+  collect_remote_attr_values(&audio_src, html, &[1, 2, 3], &mut remote);
+
+  let track_src = Regex::new("(?is)<track[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .expect("track src validation regex");
+  collect_remote_attr_values(&track_src, html, &[1, 2, 3], &mut remote);
+
+  let source_src = Regex::new("(?is)<source[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .expect("source src validation regex");
+  collect_remote_attr_values(&source_src, html, &[1, 2, 3], &mut remote);
 
   let img_srcset = Regex::new("(?is)<img[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     .expect("img srcset validation regex");
@@ -1261,6 +1502,12 @@ mod tests {
 
     let document_html = r#"<!doctype html>
 <html>
+  <head>
+    <link rel="preconnect" href="https://cdn.example.test">
+    <link rel="preload" href="https://example.test/preload.png" as="image">
+    <link rel="icon" href="https://example.test/favicon.ico">
+    <link rel="stylesheet" href="https://example.test/print.css" media="print">
+  </head>
   <body>
     <iframe src="https://example.test/frame.html"></iframe>
   </body>
@@ -1275,6 +1522,7 @@ mod tests {
   </head>
   <body>
     <img src="https://example.test/img.png">
+    <video controls><source src="https://example.test/movie.mp4" type="video/mp4"></video>
   </body>
 </html>
 "#;
@@ -1368,6 +1616,14 @@ mod tests {
       !lower.contains("src=\"//") && !lower.contains("src='//"),
       "unexpected scheme-relative src= reference: {content}"
     );
+    assert!(
+      !lower.contains("href=\"//") && !lower.contains("href='//"),
+      "unexpected scheme-relative href= reference: {content}"
+    );
+    assert!(
+      !lower.contains("srcset=\"//") && !lower.contains("srcset='//"),
+      "unexpected scheme-relative srcset= reference: {content}"
+    );
   }
 
   #[test]
@@ -1393,6 +1649,12 @@ mod tests {
     let fixture_dir = output_root.join(fixture_name);
     let index_html = fs::read_to_string(fixture_dir.join("index.html"))?;
     assert_no_remote_url_strings(&index_html);
+    assert!(
+      !index_html.contains("rel=\"preconnect\"")
+        && !index_html.contains("rel=\"preload\"")
+        && !index_html.contains("rel=\"icon\""),
+      "expected preconnect/preload/icon link tags to be stripped from output HTML"
+    );
 
     let assets_dir = fixture_dir.join(ASSETS_DIR);
     let mut html_assets = Vec::new();
@@ -1422,6 +1684,28 @@ mod tests {
 
     let frame_html = fs::read_to_string(assets_dir.join(frame_asset))?;
     assert_no_remote_url_strings(&frame_html);
+
+    let optional_css_url = "https://example.test/print.css";
+    let optional_css_asset = format!("missing_{}.css", hash_bytes(optional_css_url.as_bytes()));
+    assert!(
+      index_html.contains(&format!("{ASSETS_DIR}/{optional_css_asset}")),
+      "expected optional stylesheet href to be rewritten"
+    );
+    assert!(
+      assets_dir.join(&optional_css_asset).exists(),
+      "expected optional stylesheet placeholder asset to be created"
+    );
+
+    let optional_video_url = "https://example.test/movie.mp4";
+    let optional_video_asset = format!("missing_{}.mp4", hash_bytes(optional_video_url.as_bytes()));
+    assert!(
+      frame_html.contains(&optional_video_asset),
+      "expected nested HTML asset to reference optional media placeholder {optional_video_asset}"
+    );
+    assert!(
+      assets_dir.join(&optional_video_asset).exists(),
+      "expected optional media placeholder asset to be created"
+    );
 
     let png_asset = png_asset.expect("missing png asset");
     let woff2_asset = woff2_asset.expect("missing woff2 asset");
