@@ -136,6 +136,14 @@ fn diff_snapshots_links_render_fixtures_layout_pngs() {
     "expected after.png HTML link"
   );
   assert!(
+    html.contains(r#"<a href="before/foo/snapshot.json">before/foo/snapshot.json</a>"#),
+    "expected before snapshot link"
+  );
+  assert!(
+    html.contains(r#"<a href="after/foo/snapshot.json">after/foo/snapshot.json</a>"#),
+    "expected after snapshot link"
+  );
+  assert!(
     html.contains(r#"<img src="before/foo.png""#),
     "expected before.png thumbnail"
   );

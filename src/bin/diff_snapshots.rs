@@ -1310,15 +1310,17 @@ fn write_html_report(report: &SnapshotDiffReport, path: &Path) -> Result<(), Str
 
     entries_html.push_str("<div class=\"paths\">");
     if let Some(path) = &entry.before_snapshot {
+      let escaped = escape_html(path);
       entries_html.push_str(&format!(
-        "<div><strong>Before snapshot:</strong> {}</div>",
-        escape_html(path)
+        "<div><strong>Before snapshot:</strong> <a href=\"{p}\">{p}</a></div>",
+        p = escaped
       ));
     }
     if let Some(path) = &entry.after_snapshot {
+      let escaped = escape_html(path);
       entries_html.push_str(&format!(
-        "<div><strong>After snapshot:</strong> {}</div>",
-        escape_html(path)
+        "<div><strong>After snapshot:</strong> <a href=\"{p}\">{p}</a></div>",
+        p = escaped
       ));
     }
     entries_html.push_str("</div>");
