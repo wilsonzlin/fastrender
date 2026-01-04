@@ -498,11 +498,58 @@ fn render_page(renderer: &mut FastRender, html: &str, shot: &PageShot) -> Result
 
 fn run_fixture(fixture: &PageFixture, compare_config: &CompareConfig) -> Result<(), String> {
   let mut compare_config = compare_config.clone();
+  // Explicit per-fixture overrides.
+  //
+  // Most fixtures run fully strict comparisons. A few scenes are still prone to minor
+  // nondeterminism (e.g. hash-seed-dependent ordering) or backend/platform drift and need
+  // targeted tolerances so the suite remains stable.
+  if fixture.name == "form_controls" || fixture.name.starts_with("form_controls_") {
+    // Form controls can have small AA / box-shadow drift across platforms and SIMD backends.
+    compare_config.max_different_percent = compare_config.max_different_percent.max(0.5);
+  }
+
+  const MIN_MAX_DIFFERENT_PERCENT_OVERRIDES: &[(&str, f64)] = &[
+    // This scene exercises mask + filter compositing where tiny edge AA differences can show up.
+    ("mask_filter_showcase", 0.1),
+    // Some vendor-prefix rendering differences are noisy at the single-pixel level across runs.
+    ("vendor_prefixes", 0.01),
+    // SVG presentation attributes can still differ slightly based on internal ordering.
+    ("svg_css_presentation", 1.0),
+    // Transform AA can drift by a handful of pixels across runs/backends.
+    ("individual_transforms", 0.1),
+    // Selector-heavy fixture has a tiny amount of raster drift in text AA.
+    ("selector_has_dashboard", 0.1),
+    // Table layout fixture has occasional 1px border drift (likely rounding).
+    ("table_colgroup_matrix", 0.1),
+    // Filter compositing still has some nondeterministic edge drift.
+    ("filter_composite_lab", 1.0),
+    // Srcset selection can still vary slightly across runs; keep this fixture permissive for now.
+    ("image_grid_responsive_srcset", 6.0),
+    // Line clamping is still evolving; the expected output can drift substantially.
+    ("line_clamp", 15.0),
+  ];
+  if let Some((_, min_percent)) = MIN_MAX_DIFFERENT_PERCENT_OVERRIDES
+    .iter()
+    .find(|(name, _)| *name == fixture.name)
+  {
+    compare_config.max_different_percent = compare_config.max_different_percent.max(*min_percent);
+  }
+
   // Filter/backdrop fixtures exercise blur-heavy effects where small per-channel rounding
   // differences can accumulate across platforms and SIMD backends. Allow a modest tolerance
   // there so the suite remains stable while still catching large regressions.
   if fixture.name.starts_with("filter_backdrop_") {
     compare_config.channel_tolerance = compare_config.channel_tolerance.max(12);
+    // These fixtures are also prone to nondeterministic ordering drift (e.g. backdrop + filter
+    // stacking), which can change large regions of the output. Keep a higher pixel-diff cap here
+    // until the underlying determinism issues are fully resolved.
+    compare_config.max_different_percent = compare_config.max_different_percent.max(40.0);
+  }
+
+  if fixture.name.starts_with("preserve_3d_") {
+    // Preserve-3d scenes can still exhibit nondeterministic z-ordering across hash seeds; keep a
+    // higher pixel-diff cap so the rest of the suite can remain strict.
+    compare_config.max_different_percent = compare_config.max_different_percent.max(40.0);
   }
 
   let html_path = fixtures_dir().join(fixture.html);
@@ -565,11 +612,8 @@ fn run_fixture(fixture: &PageFixture, compare_config: &CompareConfig) -> Result<
 
 #[test]
 fn pages_regression_suite() {
-  let mut compare_config =
+  let compare_config =
     compare_config_from_env(CompareEnvVars::pages()).expect("invalid comparison configuration");
-  // Allow modest per-pixel drift between runs to keep the expanded suite stable across hash seeds
-  // and 3D/backdrop ordering differences.
-  compare_config.max_different_percent = compare_config.max_different_percent.max(40.0);
   let filter = fixture_filter();
   thread::Builder::new()
     .stack_size(64 * 1024 * 1024)
