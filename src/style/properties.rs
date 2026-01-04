@@ -14222,6 +14222,86 @@ mod tests {
   }
 
   #[test]
+  fn translate_var_concatenation_resolves_and_applies() {
+    let parent_styles = ComputedStyle::default();
+    let decls = parse_declarations("translate: var(--x)var(--y);");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    assert!(decl.contains_var);
+    match &decl.value {
+      PropertyValue::Keyword(raw) => assert_eq!(raw, "var(--x)var(--y)"),
+      other => panic!("expected keyword, got {:?}", other),
+    }
+
+    let mut styles = ComputedStyle::default();
+    styles
+      .custom_properties
+      .insert("--x".into(), CustomPropertyValue::new("1rem", None));
+    styles
+      .custom_properties
+      .insert("--y".into(), CustomPropertyValue::new("2rem", None));
+
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.translate,
+      crate::css::types::TranslateValue::Values {
+        x: Length::rem(1.0),
+        y: Length::rem(2.0),
+        z: Length::px(0.0),
+      }
+    );
+    assert!(styles.has_transform());
+  }
+
+  #[test]
+  fn scale_var_concatenation_resolves_and_applies() {
+    let parent_styles = ComputedStyle::default();
+    let decls = parse_declarations("scale: var(--x)var(--y);");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    assert!(decl.contains_var);
+    match &decl.value {
+      PropertyValue::Keyword(raw) => assert_eq!(raw, "var(--x)var(--y)"),
+      other => panic!("expected keyword, got {:?}", other),
+    }
+
+    let mut styles = ComputedStyle::default();
+    styles
+      .custom_properties
+      .insert("--x".into(), CustomPropertyValue::new("1", None));
+    styles
+      .custom_properties
+      .insert("--y".into(), CustomPropertyValue::new("2", None));
+
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.scale,
+      crate::css::types::ScaleValue::Values { x: 1.0, y: 2.0, z: 1.0 }
+    );
+    assert!(styles.has_transform());
+  }
+
+  #[test]
   fn transition_declaration_is_raw_keyword_and_applies() {
     let decls = parse_declarations("transition: opacity 1s linear 2s;");
     assert_eq!(decls.len(), 1);
