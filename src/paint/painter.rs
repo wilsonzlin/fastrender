@@ -2884,7 +2884,7 @@ impl Painter {
             context_rect,
             bounds,
             (base_painter.pixmap.width(), base_painter.pixmap.height()),
-          ) {
+          )? {
             apply_mask_with_dirty_bounds_rgba(
               &mut base_painter.pixmap,
               rendered.mask(),
@@ -3177,7 +3177,7 @@ impl Painter {
     css_bounds: Rect,
     layer_bounds: Rect,
     device_size: (u32, u32),
-  ) -> Option<RenderedMask> {
+  ) -> RenderResult<Option<RenderedMask>> {
     let viewport = (self.css_width, self.css_height);
     let rects = background_rects(
       css_bounds.x(),
@@ -3191,21 +3191,39 @@ impl Painter {
     let mut combined_bounds: Option<ClipMaskDirtyRect> = None;
     let canvas_clip = layer_bounds;
 
-    let CssMaskScratch {
-      mask: mut reusable_mask,
-      last_dirty: mut reusable_dirty,
-    } = CSS_MASK_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
-    if let Some(existing) = reusable_mask.as_ref() {
-      if existing.width() != device_size.0 || existing.height() != device_size.1 {
-        reusable_mask = None;
-        reusable_dirty = None;
+    struct CssMaskScratchGuard {
+      scratch: CssMaskScratch,
+    }
+
+    impl CssMaskScratchGuard {
+      fn take() -> Self {
+        let scratch = CSS_MASK_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+        Self { scratch }
       }
     }
-    if let Some(prev_dirty) = reusable_dirty {
-      if let Some(mask) = reusable_mask.as_mut() {
+
+    impl Drop for CssMaskScratchGuard {
+      fn drop(&mut self) {
+        let scratch = std::mem::take(&mut self.scratch);
+        CSS_MASK_SCRATCH.with(|cell| {
+          *cell.borrow_mut() = scratch;
+        });
+      }
+    }
+
+    let mut css_mask_scratch = CssMaskScratchGuard::take();
+
+    if let Some(existing) = css_mask_scratch.scratch.mask.as_ref() {
+      if existing.width() != device_size.0 || existing.height() != device_size.1 {
+        css_mask_scratch.scratch.mask = None;
+        css_mask_scratch.scratch.last_dirty = None;
+      }
+    }
+    if let Some(prev_dirty) = css_mask_scratch.scratch.last_dirty {
+      if let Some(mask) = css_mask_scratch.scratch.mask.as_mut() {
         clear_mask_rect(mask, prev_dirty);
       }
-      reusable_dirty = None;
+      css_mask_scratch.scratch.last_dirty = None;
     }
 
     for layer in style.mask_layers.iter().rev() {
@@ -3325,7 +3343,7 @@ impl Painter {
       let device_clip = self.device_rect(clip_rect_css);
       let dirty = clip_mask_dirty_bounds(device_clip, device_size.0, device_size.1);
 
-      MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      let layer_result = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| -> RenderResult<Option<()>> {
         let mut scratch = cell.borrow_mut();
 
         let replace = match scratch.pixmap.as_ref() {
@@ -3340,7 +3358,7 @@ impl Painter {
         let prev_dirty = scratch.last_dirty;
 
         let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
-          return None;
+          return Ok(None);
         };
 
         // The scratch pixmap is reused between layers/calls, so ensure the pixels that might
@@ -3361,11 +3379,13 @@ impl Painter {
             y1: device_size.1,
           },
         };
-        clear_pixmap_rect_rgba(mask_pixmap, clear);
+        clear_pixmap_rect_rgba(mask_pixmap, clear)?;
 
         if dirty.is_some() {
+          let mut deadline_counter = 0usize;
           for ty in positions_y.iter().copied() {
             for tx in positions_x.iter().copied() {
+              check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
               paint_mask_tile(
                 mask_pixmap,
                 &mask_tile,
@@ -3382,15 +3402,17 @@ impl Painter {
         }
 
         if combined.is_none() {
-          let mut mask = if let Some(mask) = reusable_mask.take() {
+          let mut mask = if let Some(mask) = css_mask_scratch.scratch.mask.take() {
             mask
           } else {
-            let mut mask = Mask::new(device_size.0, device_size.1)?;
+            let Some(mut mask) = Mask::new(device_size.0, device_size.1) else {
+              return Ok(None);
+            };
             mask.data_mut().fill(0);
             mask
           };
           if let Some(dirty) = dirty {
-            copy_pixmap_alpha_to_mask(&mut mask, mask_pixmap, dirty);
+            copy_pixmap_alpha_to_mask(&mut mask, mask_pixmap, dirty)?;
           }
           combined_bounds = dirty;
           combined = Some(mask);
@@ -3420,7 +3442,7 @@ impl Painter {
                 _ => Some(dirty),
               };
               if let Some(process) = process {
-                apply_mask_composite_from_pixmap_alpha(dest, mask_pixmap, process, op);
+                apply_mask_composite_from_pixmap_alpha(dest, mask_pixmap, process, op)?;
               }
 
               combined_bounds = match op {
@@ -3438,24 +3460,20 @@ impl Painter {
         }
 
         scratch.last_dirty = dirty;
-        Some(())
+        Ok(Some(()))
       })?;
+      if layer_result.is_none() {
+        return Ok(None);
+      }
     }
 
-    match combined {
+    Ok(match combined {
       Some(mask) => Some(RenderedMask {
         mask: Some(mask),
         dirty: combined_bounds,
       }),
-      None => {
-        CSS_MASK_SCRATCH.with(|cell| {
-          let mut scratch = cell.borrow_mut();
-          scratch.mask = reusable_mask;
-          scratch.last_dirty = reusable_dirty;
-        });
-        None
-      }
-    }
+      None => None,
+    })
   }
 
   /// Paints the background of a fragment
@@ -10990,12 +11008,16 @@ fn div_255(value: u16) -> u16 {
   (value + 1 + (value >> 8)) >> 8
 }
 
-fn copy_pixmap_alpha_to_mask(mask: &mut Mask, pixmap: &Pixmap, rect: ClipMaskDirtyRect) {
+fn copy_pixmap_alpha_to_mask(
+  mask: &mut Mask,
+  pixmap: &Pixmap,
+  rect: ClipMaskDirtyRect,
+) -> RenderResult<()> {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
-    return;
+    return Ok(());
   }
   if mask.width() != pixmap.width() || mask.height() != pixmap.height() {
-    return;
+    return Ok(());
   }
 
   let width = mask.width() as usize;
@@ -11006,16 +11028,24 @@ fn copy_pixmap_alpha_to_mask(mask: &mut Mask, pixmap: &Pixmap, rect: ClipMaskDir
 
   let x0 = rect.x0 as usize;
   let x1 = rect.x1 as usize;
+  let mut deadline_counter = 0usize;
   for y in rect.y0 as usize..rect.y1 as usize {
     let dst_start = y * mask_stride + x0;
     let dst_end = y * mask_stride + x1;
     let dst = &mut mask_data[dst_start..dst_end];
     let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
-    for px in dst.iter_mut() {
-      *px = pixmap_data[src_idx];
-      src_idx += 4;
+    let mut x = 0usize;
+    while x < dst.len() {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(dst.len());
+      for px in dst[x..x_end].iter_mut() {
+        *px = pixmap_data[src_idx];
+        src_idx += 4;
+      }
+      x = x_end;
     }
   }
+  Ok(())
 }
 
 fn apply_mask_composite_from_pixmap_alpha(
@@ -11023,12 +11053,12 @@ fn apply_mask_composite_from_pixmap_alpha(
   src: &Pixmap,
   rect: ClipMaskDirtyRect,
   op: MaskComposite,
-) {
+) -> RenderResult<()> {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
-    return;
+    return Ok(());
   }
   if dest.width() != src.width() || dest.height() != src.height() {
-    return;
+    return Ok(());
   }
 
   let width = dest.width() as usize;
@@ -11039,6 +11069,7 @@ fn apply_mask_composite_from_pixmap_alpha(
 
   let x0 = rect.x0 as usize;
   let x1 = rect.x1 as usize;
+  let mut deadline_counter = 0usize;
   match op {
     MaskComposite::Add => {
       for y in rect.y0 as usize..rect.y1 as usize {
@@ -11046,12 +11077,18 @@ fn apply_mask_composite_from_pixmap_alpha(
         let dst_end = y * mask_stride + x1;
         let dst = &mut dest_data[dst_start..dst_end];
         let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
-        for px in dst.iter_mut() {
-          let s = src_data[src_idx] as u16;
-          let d = *px as u16;
-          let out = s + div_255(d * (255 - s));
-          *px = out.min(255) as u8;
-          src_idx += 4;
+        let mut x = 0usize;
+        while x < dst.len() {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(dst.len());
+          for px in dst[x..x_end].iter_mut() {
+            let s = src_data[src_idx] as u16;
+            let d = *px as u16;
+            let out = s + div_255(d * (255 - s));
+            *px = out.min(255) as u8;
+            src_idx += 4;
+          }
+          x = x_end;
         }
       }
     }
@@ -11061,11 +11098,17 @@ fn apply_mask_composite_from_pixmap_alpha(
         let dst_end = y * mask_stride + x1;
         let dst = &mut dest_data[dst_start..dst_end];
         let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
-        for px in dst.iter_mut() {
-          let s = src_data[src_idx] as u16;
-          let d = *px as u16;
-          *px = div_255(s * (255 - d)) as u8;
-          src_idx += 4;
+        let mut x = 0usize;
+        while x < dst.len() {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(dst.len());
+          for px in dst[x..x_end].iter_mut() {
+            let s = src_data[src_idx] as u16;
+            let d = *px as u16;
+            *px = div_255(s * (255 - d)) as u8;
+            src_idx += 4;
+          }
+          x = x_end;
         }
       }
     }
@@ -11075,11 +11118,17 @@ fn apply_mask_composite_from_pixmap_alpha(
         let dst_end = y * mask_stride + x1;
         let dst = &mut dest_data[dst_start..dst_end];
         let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
-        for px in dst.iter_mut() {
-          let s = src_data[src_idx] as u16;
-          let d = *px as u16;
-          *px = div_255(s * d) as u8;
-          src_idx += 4;
+        let mut x = 0usize;
+        while x < dst.len() {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(dst.len());
+          for px in dst[x..x_end].iter_mut() {
+            let s = src_data[src_idx] as u16;
+            let d = *px as u16;
+            *px = div_255(s * d) as u8;
+            src_idx += 4;
+          }
+          x = x_end;
         }
       }
     }
@@ -11089,22 +11138,29 @@ fn apply_mask_composite_from_pixmap_alpha(
         let dst_end = y * mask_stride + x1;
         let dst = &mut dest_data[dst_start..dst_end];
         let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
-        for px in dst.iter_mut() {
-          let s = src_data[src_idx] as u16;
-          let d = *px as u16;
-          let src_out = div_255(s * (255 - d));
-          let dst_out = div_255(d * (255 - s));
-          *px = (src_out + dst_out).min(255) as u8;
-          src_idx += 4;
+        let mut x = 0usize;
+        while x < dst.len() {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(dst.len());
+          for px in dst[x..x_end].iter_mut() {
+            let s = src_data[src_idx] as u16;
+            let d = *px as u16;
+            let src_out = div_255(s * (255 - d));
+            let dst_out = div_255(d * (255 - s));
+            *px = (src_out + dst_out).min(255) as u8;
+            src_idx += 4;
+          }
+          x = x_end;
         }
       }
     }
   }
+  Ok(())
 }
 
-fn clear_pixmap_rect_rgba(pixmap: &mut Pixmap, rect: ClipMaskDirtyRect) {
+fn clear_pixmap_rect_rgba(pixmap: &mut Pixmap, rect: ClipMaskDirtyRect) -> RenderResult<()> {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
-    return;
+    return Ok(());
   }
 
   let width = pixmap.width() as usize;
@@ -11114,16 +11170,25 @@ fn clear_pixmap_rect_rgba(pixmap: &mut Pixmap, rect: ClipMaskDirtyRect) {
   let x1 = rect.x1 as usize * 4;
   let y0 = rect.y0 as usize;
   let y1 = rect.y1 as usize;
+  let chunk_bytes = CLIP_MASK_DEADLINE_STRIDE.saturating_mul(4);
+  let mut deadline_counter = 0usize;
 
   if x0 == 0 && x1 == stride {
-    data[y0 * stride..y1 * stride].fill(0);
-    return;
+    for chunk in data[y0 * stride..y1 * stride].chunks_mut(chunk_bytes) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      chunk.fill(0);
+    }
+    return Ok(());
   }
 
   for row in y0..y1 {
     let offset = row * stride;
-    data[offset + x0..offset + x1].fill(0);
+    for chunk in data[offset + x0..offset + x1].chunks_mut(chunk_bytes) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      chunk.fill(0);
+    }
   }
+  Ok(())
 }
 
 #[inline]
@@ -17543,6 +17608,7 @@ mod tests {
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
     let optimized = optimized_painter
       .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("render_mask")
       .expect("mask");
 
     let mut reference_painter =
@@ -17579,6 +17645,7 @@ mod tests {
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
     let optimized = optimized_painter
       .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("render_mask")
       .expect("mask");
 
     let mut reference_painter =
@@ -17631,6 +17698,7 @@ mod tests {
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
     let optimized = optimized_painter
       .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("render_mask")
       .expect("mask");
 
     let mut reference_painter =
@@ -17685,6 +17753,7 @@ mod tests {
       let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
       let rendered = painter
         .render_mask(&style, css_bounds, layer_bounds, device_size)
+        .expect("render_mask")
         .expect("mask");
       rendered.mask().data().as_ptr()
     };
@@ -17693,6 +17762,7 @@ mod tests {
       let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
       let rendered = painter
         .render_mask(&style, css_bounds, layer_bounds, device_size)
+        .expect("render_mask")
         .expect("mask");
       rendered.mask().data().as_ptr()
     };
@@ -17737,6 +17807,7 @@ mod tests {
       let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
       let _mask = painter
         .render_mask(&border_style, css_bounds, layer_bounds, device_size)
+        .expect("render_mask")
         .expect("mask");
     }
 
@@ -17744,6 +17815,7 @@ mod tests {
       Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
     let optimized = optimized_painter
       .render_mask(&content_style, css_bounds, layer_bounds, device_size)
+      .expect("render_mask")
       .expect("mask");
 
     let mut reference_painter =
@@ -17780,6 +17852,7 @@ mod tests {
     let recorder = NewPixmapAllocRecorder::start();
     let _mask = painter
       .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("render_mask")
       .expect("mask");
 
     let allocs = recorder.take();
@@ -17790,6 +17863,54 @@ mod tests {
     assert_eq!(
       scratch_allocs, 1,
       "expected render_mask to allocate its layer scratch pixmap once, got {scratch_allocs} allocations: {allocs:?}"
+    );
+  }
+
+  #[test]
+  fn legacy_render_mask_composite_times_out_via_cancel_callback() {
+    CSS_MASK_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = CssMaskScratch::default();
+    });
+    MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = MaskLayerPixmapScratch::default();
+    });
+
+    let mut style = ComputedStyle::default();
+    style.mask_layers = smallvec::smallvec![
+      make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
+      make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 1.0, 0.0),
+    ];
+
+    let device_size = (64, 64);
+    let css_bounds = Rect::from_xywh(0.0, 0.0, device_size.0 as f32, device_size.1 as f32);
+    let layer_bounds = css_bounds;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_cb = Arc::clone(&calls);
+    // Allow enough deadline checks to reach the second layer's composite step, then cancel.
+    let cancel_after = 110usize;
+    let cancel = Arc::new(move || calls_cb.fetch_add(1, Ordering::SeqCst) >= cancel_after);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+
+    let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let result = with_deadline(Some(&deadline), || {
+      painter.render_mask(&style, css_bounds, layer_bounds, device_size)
+    });
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(
+      calls.load(Ordering::SeqCst) > cancel_after,
+      "expected cancel callback to be polled more than {cancel_after} times, got {}",
+      calls.load(Ordering::SeqCst)
     );
   }
 
