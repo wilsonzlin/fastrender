@@ -24,6 +24,11 @@ set -euo pipefail
 # - This script does NOT make the run fully deterministic (live subresources can change).
 # - It tries to be robust in container/CI-like environments by passing common headless flags.
 
+# Always run relative paths from the repository root, even if the script is invoked from a
+# subdirectory.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_ROOT}"
+
 usage() {
   cat <<'EOF'
 usage: scripts/chrome_baseline.sh [options] [--] [page_stem...]

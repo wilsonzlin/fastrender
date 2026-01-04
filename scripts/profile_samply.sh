@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Always run relative paths from the repository root, even if the script is invoked from a
+# subdirectory.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_ROOT}"
+
 if [[ "$#" -eq 0 ]]; then
   echo "usage: $0 <page-stem> [pageset_progress args...]"
   echo "   or: $0 --from-progress progress/pages --only-failures [pageset_progress args...]"
