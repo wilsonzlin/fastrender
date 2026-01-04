@@ -349,6 +349,18 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
   - Fixtures root: `--fixtures-root <dir>` (default `tests/pages/fixtures`)
   - Selection: `--only <csv>` (comma-separated fixture names)
 
+## `css_coverage`
+
+- Purpose: scan fixture HTML/CSS (and optional cached pages) for CSS property usage and classify coverage gaps (unknown and vendor-prefixed properties, plus sampled rejected values for known properties).
+- Run: `cargo run --release --bin css_coverage -- --help`
+- Typical usage:
+  - Scan pageset fixtures: `cargo run --release --bin css_coverage`
+  - Include cached HTML pages too: `cargo run --release --bin css_coverage -- --fetches-html fetches/html`
+  - Emit JSON: `cargo run --release --bin css_coverage -- --json > target/css_coverage.json`
+- Core flags:
+  - Roots: `--fixtures <dir>` (default `tests/pages/fixtures`), optional `--fetches-html <dir>`
+  - Report knobs: `--top <n>`, `--sample-values <n>`, `--json`
+
 ## `fetch_and_render`
 
 - Purpose: fetch one URL (or read one `file://` target) and render to a PNG.
