@@ -978,7 +978,7 @@ fn find_network_urls(content: &str) -> Vec<String> {
     Regex::new("(?i)\\simagesrcset\\s*=\\s*'(?P<value>[^']*)'").unwrap();
 
   let mut urls = Vec::new();
-  for regex in [&attr_regex, &attr_unquoted_regex, &url_regex, &import_regex] {
+  for regex in [&attr_regex, &attr_unquoted_regex, &import_regex] {
     for caps in regex.captures_iter(content) {
       let Some(url) = caps.name("url").map(|m| m.as_str()) else {
         continue;
@@ -986,6 +986,32 @@ fn find_network_urls(content: &str) -> Vec<String> {
       if is_network_url(url) {
         urls.push(url.to_string());
       }
+    }
+  }
+
+  fn is_css_namespace_rule_prefix(content: &str, at: usize) -> bool {
+    let bytes = content.as_bytes();
+    let mut start = at;
+    while start > 0 {
+      match bytes[start - 1] {
+        b';' | b'{' | b'}' => break,
+        _ => start -= 1,
+      }
+    }
+    content[start..at].to_ascii_lowercase().contains("@namespace")
+  }
+
+  for caps in url_regex.captures_iter(content) {
+    let Some(url_match) = caps.name("url") else {
+      continue;
+    };
+    // `@namespace url("http://www.w3.org/...")` is not a fetchable resource URL.
+    if is_css_namespace_rule_prefix(content, url_match.start()) {
+      continue;
+    }
+    let url = url_match.as_str();
+    if is_network_url(url) {
+      urls.push(url.to_string());
     }
   }
 
@@ -1473,6 +1499,31 @@ mod tests {
     assert!(!imported.contains("srcset=\"/resources/"));
     assert!(imported.contains("resources/green.png 1x"));
     assert!(imported.contains("resources/green.png 2x"));
+  }
+
+  #[test]
+  fn css_namespace_urls_do_not_trigger_offline_validation() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["css/simple/namespace.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+
+    let css =
+      fs::read_to_string(out_dir.path().join("out/css/simple/support/namespace.css")).unwrap();
+    assert!(css.contains("@namespace"));
+    assert!(css.contains("http://www.w3.org/2000/svg"));
+    assert!(!css.contains("url(\"/resources/"));
+    assert!(css.contains("resources/green.png"));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
   }
 
   #[test]

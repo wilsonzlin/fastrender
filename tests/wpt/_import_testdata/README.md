@@ -5,12 +5,14 @@ The layout mirrors a tiny subset of upstream WPT with:
 - a mismatch reftest under `css/simple/` with `.html.ini` sidecars (and whitespace-separated `rel` tokens)
 - absolute-origin resource URL fixtures under `css/simple/` (`http(s)://web-platform.test/...`)
 - a `srcset` rewriter fixture under `css/simple/`
+- a CSS `@namespace url("http://www.w3.org/...")` fixture under `css/simple/` (namespace URIs should not trip offline validation)
 - a visual test under `html/standalone/` that pulls in nested CSS with `@import`
 - a set of network/url validation fixtures under `html/network/`:
   - `external-url.html`: simple `src="https://example.com/..."` rejection
   - `srcset-external.html`: `srcset="https://example.com/..."` rejection
   - `unquoted-external.html`: unquoted `src=https://example.com/...` rejection
   - `text-url.html`: strict-offline rejection of network-looking strings outside fetch contexts
+  - `imagesrcset.html`: `imagesrcset="...web-platform.test..."` rewrite
   - `imagesrcset-external.html`: `imagesrcset="https://example.com/..."` rejection
   - `data-url.html`: data: URLs containing `http://...` substrings in payloads (should not trigger validation)
   - `data-attrs.html`: `data-src`/`data-srcset` containing network URLs (should not trigger non-strict validation)
