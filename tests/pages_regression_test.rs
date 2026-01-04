@@ -502,8 +502,16 @@ fn run_fixture(fixture: &PageFixture, compare_config: &CompareConfig) -> Result<
     .map_err(|e| format!("Failed to read {}: {}", html_path.display(), e))?;
   let base_url = base_url_for(&html_path)?;
 
+  let policy = ResourcePolicy::default()
+    .allow_http(false)
+    .allow_https(false)
+    .allow_file(true)
+    .allow_data(true);
+
   let mut renderer = FastRender::builder()
     .base_url(base_url)
+    .font_sources(FontConfig::bundled_only())
+    .resource_policy(policy)
     .build()
     .map_err(|e| format!("Failed to create renderer: {:?}", e))?;
 
