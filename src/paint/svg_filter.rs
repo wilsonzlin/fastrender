@@ -3013,6 +3013,7 @@ fn apply_primitive(
       resolve_input(input1, source, results, current, filter_region),
       resolve_input(input2, source, results, current, filter_region),
       *operator,
+      color_interpolation_filters,
       filter_region,
     ),
     FilterPrimitive::Merge { inputs } => Some(merge_inputs(
@@ -3020,6 +3021,7 @@ fn apply_primitive(
       source,
       results,
       current,
+      color_interpolation_filters,
       filter_region,
     )),
     FilterPrimitive::DropShadow {
@@ -3874,6 +3876,7 @@ fn composite_pixmaps(
   input1: Option<FilterResult>,
   input2: Option<FilterResult>,
   op: CompositeOperator,
+  color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
 ) -> Option<FilterResult> {
   let a = input1?;
@@ -3882,22 +3885,54 @@ fn composite_pixmaps(
     return None;
   }
 
-  let pixmap = match op {
-    CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
-      arithmetic_composite(&a.pixmap, &b.pixmap, k1, k2, k3, k4)?
-    }
-    CompositeOperator::Over => {
-      composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, _| (1.0, 1.0 - a_a))?
-    }
-    CompositeOperator::In => composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (b_a, 0.0))?,
-    CompositeOperator::Out => {
-      composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (1.0 - b_a, 0.0))?
-    }
-    CompositeOperator::Atop => {
-      composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (b_a, 1.0 - a_a))?
-    }
-    CompositeOperator::Xor => {
-      composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))?
+  let pixmap = match color_interpolation_filters {
+    ColorInterpolationFilters::SRGB => match op {
+      CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
+        arithmetic_composite(&a.pixmap, &b.pixmap, k1, k2, k3, k4)?
+      }
+      CompositeOperator::Over => {
+        composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, _| (1.0, 1.0 - a_a))?
+      }
+      CompositeOperator::In => {
+        composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (b_a, 0.0))?
+      }
+      CompositeOperator::Out => {
+        composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (1.0 - b_a, 0.0))?
+      }
+      CompositeOperator::Atop => {
+        composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (b_a, 1.0 - a_a))?
+      }
+      CompositeOperator::Xor => {
+        composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))?
+      }
+    },
+    ColorInterpolationFilters::LinearRGB => {
+      let mut a_linear = a.pixmap.clone();
+      let mut b_linear = b.pixmap.clone();
+      reencode_pixmap_to_linear_rgb(&mut a_linear);
+      reencode_pixmap_to_linear_rgb(&mut b_linear);
+      let mut out = match op {
+        CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
+          arithmetic_composite(&a_linear, &b_linear, k1, k2, k3, k4)?
+        }
+        CompositeOperator::Over => {
+          composite_porter_duff(&a_linear, &b_linear, |a_a, _| (1.0, 1.0 - a_a))?
+        }
+        CompositeOperator::In => {
+          composite_porter_duff(&a_linear, &b_linear, |_, b_a| (b_a, 0.0))?
+        }
+        CompositeOperator::Out => {
+          composite_porter_duff(&a_linear, &b_linear, |_, b_a| (1.0 - b_a, 0.0))?
+        }
+        CompositeOperator::Atop => {
+          composite_porter_duff(&a_linear, &b_linear, |a_a, b_a| (b_a, 1.0 - a_a))?
+        }
+        CompositeOperator::Xor => {
+          composite_porter_duff(&a_linear, &b_linear, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))?
+        }
+      };
+      reencode_pixmap_to_srgb(&mut out);
+      out
     }
   };
 
@@ -3942,6 +3977,7 @@ fn merge_inputs(
   source: &FilterResult,
   results: &HashMap<String, FilterResult>,
   current: &FilterResult,
+  color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
 ) -> FilterResult {
   let mut out = new_pixmap(source.pixmap.width(), source.pixmap.height()).unwrap();
@@ -3952,14 +3988,23 @@ fn merge_inputs(
 
   for input in inputs {
     if let Some(img) = resolve_input(input, source, results, current, filter_region) {
-      out.draw_pixmap(
-        0,
-        0,
-        img.pixmap.as_ref(),
-        &paint,
-        Transform::identity(),
-        None,
-      );
+      match color_interpolation_filters {
+        ColorInterpolationFilters::SRGB => {
+          out.draw_pixmap(
+            0,
+            0,
+            img.pixmap.as_ref(),
+            &paint,
+            Transform::identity(),
+            None,
+          );
+        }
+        ColorInterpolationFilters::LinearRGB => {
+          let mut linear = img.pixmap.clone();
+          reencode_pixmap_to_linear_rgb(&mut linear);
+          out.draw_pixmap(0, 0, linear.as_ref(), &paint, Transform::identity(), None);
+        }
+      }
       region = if seen_any {
         region.union(img.region)
       } else {
@@ -3967,6 +4012,10 @@ fn merge_inputs(
       };
       seen_any = true;
     }
+  }
+
+  if matches!(color_interpolation_filters, ColorInterpolationFilters::LinearRGB) {
+    reencode_pixmap_to_srgb(&mut out);
   }
 
   FilterResult {
@@ -6526,6 +6575,105 @@ mod blend_pixmaps_tests {
     let actual_tuple = (actual.red(), actual.green(), actual.blue(), actual.alpha());
     let expected_tuple = expected;
     let diff_ok = |a: u8, b: u8| (a as i16 - b as i16).abs() <= 1;
+    assert!(
+      diff_ok(actual_tuple.0, expected_tuple.0)
+        && diff_ok(actual_tuple.1, expected_tuple.1)
+        && diff_ok(actual_tuple.2, expected_tuple.2)
+        && diff_ok(actual_tuple.3, expected_tuple.3),
+      "expected {:?}, got {:?}",
+      expected_tuple,
+      actual_tuple
+    );
+  }
+}
+
+#[cfg(test)]
+mod color_interpolation_filters_compositing_tests {
+  use super::*;
+
+  #[test]
+  fn fe_composite_over_honors_color_interpolation_filters() {
+    let in1 = solid_pixmap((128, 128, 128, 128));
+    let in2 = solid_pixmap((0, 0, 0, 255));
+    let filter_region = filter_region_for_pixmap(&in1.pixmap);
+
+    let srgb = composite_pixmaps(
+      Some(in1.clone()),
+      Some(in2.clone()),
+      CompositeOperator::Over,
+      ColorInterpolationFilters::SRGB,
+      filter_region,
+    )
+    .unwrap();
+    assert_pixel_exact(srgb.pixmap.pixel(0, 0).unwrap(), (128, 128, 128, 255));
+
+    let linear = composite_pixmaps(
+      Some(in1),
+      Some(in2),
+      CompositeOperator::Over,
+      ColorInterpolationFilters::LinearRGB,
+      filter_region,
+    )
+    .unwrap();
+    assert_pixel_close(linear.pixmap.pixel(0, 0).unwrap(), (188, 188, 188, 255), 1);
+  }
+
+  #[test]
+  fn fe_merge_honors_color_interpolation_filters() {
+    let source = solid_pixmap((0, 0, 0, 0));
+    let filter_region = filter_region_for_pixmap(&source.pixmap);
+    let current = source.clone();
+
+    let mut results = HashMap::new();
+    results.insert("bottom".to_string(), solid_pixmap((0, 0, 0, 255)));
+    results.insert("top".to_string(), solid_pixmap((128, 128, 128, 128)));
+    let inputs = vec![
+      FilterInput::Reference("bottom".to_string()),
+      FilterInput::Reference("top".to_string()),
+    ];
+
+    let srgb = merge_inputs(
+      &inputs,
+      &source,
+      &results,
+      &current,
+      ColorInterpolationFilters::SRGB,
+      filter_region,
+    );
+    assert_pixel_exact(srgb.pixmap.pixel(0, 0).unwrap(), (128, 128, 128, 255));
+
+    let linear = merge_inputs(
+      &inputs,
+      &source,
+      &results,
+      &current,
+      ColorInterpolationFilters::LinearRGB,
+      filter_region,
+    );
+    assert_pixel_close(linear.pixmap.pixel(0, 0).unwrap(), (188, 188, 188, 255), 1);
+  }
+
+  fn solid_pixmap(color: (u8, u8, u8, u8)) -> FilterResult {
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    pixmap.pixels_mut()[0] =
+      PremultipliedColorU8::from_rgba(color.0, color.1, color.2, color.3).unwrap();
+    let filter_region = filter_region_for_pixmap(&pixmap);
+    FilterResult::full_region(pixmap, filter_region)
+  }
+
+  fn assert_pixel_exact(actual: PremultipliedColorU8, expected: (u8, u8, u8, u8)) {
+    let actual_tuple = (actual.red(), actual.green(), actual.blue(), actual.alpha());
+    assert_eq!(actual_tuple, expected);
+  }
+
+  fn assert_pixel_close(
+    actual: PremultipliedColorU8,
+    expected: (u8, u8, u8, u8),
+    tolerance: u8,
+  ) {
+    let actual_tuple = (actual.red(), actual.green(), actual.blue(), actual.alpha());
+    let expected_tuple = expected;
+    let diff_ok = |a: u8, b: u8| (a as i16 - b as i16).abs() <= tolerance as i16;
     assert!(
       diff_ok(actual_tuple.0, expected_tuple.0)
         && diff_ok(actual_tuple.1, expected_tuple.1)
