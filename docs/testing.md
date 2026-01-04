@@ -86,11 +86,12 @@ Use `bundle_page` to capture a page once, then convert that bundle into a determ
 
 1. Capture a bundle:
    - Online (network): `cargo run --release --bin bundle_page -- fetch <url> --out /tmp/capture.tar` (or a directory path)
-     - If a page crashes or times out during capture, add `--no-render` to crawl HTML + CSS for subresources without doing a full render.
+      - If a page crashes or times out during capture, add `--no-render` to crawl HTML + CSS for subresources without doing a full render.
    - Offline (from warmed pageset caches): `cargo run --release --features disk_cache --bin bundle_page -- cache <stem> --out /tmp/capture.tar`
-     - Reads HTML from `fetches/html/<stem>.html` and subresources from the disk-backed cache under `fetches/assets/` (override with `--asset-cache-dir` / `--cache-dir`).
+      - Reads HTML from `fetches/html/<stem>.html` and subresources from the disk-backed cache under `fetches/assets/` (override with `--asset-cache-dir` / `--cache-dir`).
 2. Import: `cargo xtask import-page-fixture /tmp/capture.tar <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
-3. Add the new fixture to `tests/pages_regression_test.rs` and generate a golden if you want it covered by the suite.
+3. Validate the imported fixture is fully offline (no fetchable `http(s)` URLs left behind): `cargo xtask validate-page-fixtures --only <fixture_name>`
+4. Add the new fixture to `tests/pages_regression_test.rs` and generate a golden if you want it covered by the suite.
 
 The importer rewrites all HTML/CSS references to hashed files under `assets/` and refuses to leave `http(s)` URLs behind, so the resulting directory is fully offline. A synthetic bundle for testing lives under `tests/fixtures/bundle_page/simple`, and `tests/pages/fixtures/bundle_import_example/` shows the expected output produced by the importer.
 
