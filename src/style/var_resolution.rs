@@ -20,9 +20,101 @@ use std::cell::Cell;
 /// Maximum depth for recursive var() resolution to prevent infinite loops
 const MAX_RECURSION_DEPTH: usize = 10;
 
+/// Separator inserted when serializing token-spliced values via string concatenation.
+///
+/// CSS `var()` substitution operates on token streams; adjacent substitutions can create token
+/// sequences that are not representable by naïvely concatenating the source text (e.g.
+/// `0` + `calc(...)` would become `0calc(...)` which tokenizes as a dimension).
+///
+/// We model token splicing by inserting a minimal whitespace separator only when required to avoid
+/// token merging during a later re-tokenization pass.
+const TOKEN_SPLICE_SEPARATOR: &str = " ";
+
 #[cfg(test)]
 std::thread_local! {
   static TOKEN_RESOLVER_ENTRY_COUNT: Cell<usize> = Cell::new(0);
+}
+
+#[inline]
+fn is_ident_byte(b: u8) -> bool {
+  b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_') || b >= 0x80
+}
+
+#[inline]
+fn is_css_whitespace_byte(b: u8) -> bool {
+  matches!(b, b' ' | b'\n' | b'\t' | b'\r' | b'\x0C')
+}
+
+#[inline]
+fn needs_token_splice_separator(prev: u8, next: u8, next_next: Option<u8>) -> bool {
+  if is_css_whitespace_byte(prev) || is_css_whitespace_byte(next) {
+    return false;
+  }
+
+  // Starting a comment across a splice boundary (`/*`) would drastically change the token stream.
+  if prev == b'/' && next == b'*' {
+    return true;
+  }
+
+  // `@foo` and `#foo` are single tokens. If the splice boundary would otherwise create them,
+  // separate the tokens.
+  if (prev == b'@' || prev == b'#') && is_ident_byte(next) {
+    return true;
+  }
+
+  // Identifier / number adjacency is where most token-merging bugs happen:
+  // - `0` + `calc(...)` => dimension token `0calc`
+  // - `0` + `0` => number token `00`
+  // - `px` + `calc(...)` => ident `pxcalc` (unit merging)
+  if is_ident_byte(prev) && is_ident_byte(next) {
+    return true;
+  }
+
+  // A bare identifier immediately followed by `(` becomes a function token. Token-stream splicing
+  // can create `Ident` + `ParenthesisBlock` sequences that must not be re-tokenized as a function.
+  if is_ident_byte(prev) && next == b'(' {
+    return true;
+  }
+
+  // `+` / `-` / `.` can start a number token. If a splice boundary would cause them to be
+  // re-tokenized as part of the following number, insert a separator.
+  if (prev == b'+' || prev == b'-') && (next.is_ascii_digit() || next == b'.') {
+    // For the `+.` / `-.` cases, only treat it as a number if there is a digit afterwards.
+    if next != b'.' || next_next.is_some_and(|b| b.is_ascii_digit()) {
+      return true;
+    }
+  }
+
+  if prev == b'.' && next.is_ascii_digit() {
+    return true;
+  }
+
+  false
+}
+
+#[inline]
+fn push_css_with_token_splice_boundary(out: &mut String, chunk: &str) {
+  if chunk.is_empty() {
+    return;
+  }
+
+  if out.is_empty() {
+    out.push_str(chunk);
+    return;
+  }
+
+  let prev = *out
+    .as_bytes()
+    .last()
+    .expect("non-empty string must have last byte");
+  let next_bytes = chunk.as_bytes();
+  let next = next_bytes[0];
+  let next_next = next_bytes.get(1).copied();
+
+  if needs_token_splice_separator(prev, next, next_next) {
+    out.push_str(TOKEN_SPLICE_SEPARATOR);
+  }
+  out.push_str(chunk);
 }
 
 #[inline]
@@ -78,9 +170,6 @@ fn parse_simple_var_call<'a>(raw: &'a str) -> Option<(&'a str, Option<&'a str>)>
 
   let fallback = fallback_chunk.map(str::trim);
   if let Some(fallback) = fallback {
-    if fallback.is_empty() {
-      return Some((name, None));
-    }
     // Only support a single comma here; multiple commas require tokenization to disambiguate.
     if fallback_chunk.is_some_and(|rest| rest.contains(',')) {
       return None;
@@ -110,11 +199,6 @@ fn try_resolve_var_calls_without_tokenizer<'a>(
   // Cheap check: most values don't contain var() at all.
   if !contains_ascii_case_insensitive_var_call(raw) {
     return None;
-  }
-
-  #[inline]
-  fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_') || b >= 0x80
   }
 
   let bytes = raw.as_bytes();
@@ -203,7 +287,7 @@ fn try_resolve_var_calls_without_tokenizer<'a>(
       if !any {
         output.reserve(raw.len());
       }
-      output.push_str(raw.get(last..i)?);
+      push_css_with_token_splice_boundary(&mut output, raw.get(last..i)?);
 
       stack.clear();
       match resolve_variable_reference(
@@ -213,7 +297,7 @@ fn try_resolve_var_calls_without_tokenizer<'a>(
         &mut stack,
         depth,
       ) {
-        Ok(resolved) => output.push_str(resolved.as_ref()),
+        Ok(resolved) => push_css_with_token_splice_boundary(&mut output, resolved.as_ref()),
         Err(err) => return Some(Err(err)),
       }
 
@@ -230,7 +314,7 @@ fn try_resolve_var_calls_without_tokenizer<'a>(
     return None;
   }
 
-  output.push_str(raw.get(last..)?);
+  push_css_with_token_splice_boundary(&mut output, raw.get(last..)?);
   Some(Ok(output))
 }
 
@@ -495,10 +579,10 @@ where
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "var")?;
-        output.push_str(resolved.as_ref());
+        push_css_with_token_splice_boundary(&mut output, resolved.as_ref());
       }
       Token::Function(name) => {
-        output.push_str(name.as_ref());
+        push_css_with_token_splice_boundary(&mut output, name.as_ref());
         output.push('(');
         let nested = parser.parse_nested_block(|nested| {
           resolve_tokens_from_parser(nested, custom_properties, stack, depth)
@@ -516,7 +600,7 @@ where
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "()")?;
-        output.push('(');
+        push_css_with_token_splice_boundary(&mut output, "(");
         output.push_str(&resolved);
         output.push(')');
       }
@@ -526,7 +610,7 @@ where
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "[]")?;
-        output.push('[');
+        push_css_with_token_splice_boundary(&mut output, "[");
         output.push_str(&resolved);
         output.push(']');
       }
@@ -536,7 +620,7 @@ where
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "{}")?;
-        output.push('{');
+        push_css_with_token_splice_boundary(&mut output, "{");
         output.push_str(&resolved);
         output.push('}');
       }
@@ -719,6 +803,62 @@ fn parse_untyped_value(value: &str) -> PropertyValue {
 
 #[inline]
 fn push_token_to_css(out: &mut String, token: &Token) {
+  let needs_boundary = match token {
+    Token::WhiteSpace(_) | Token::Comment(_) => false,
+    _ => true,
+  };
+
+  if needs_boundary && !out.is_empty() {
+    // Compute the first byte of the serialized token so we can decide whether a token-splice
+    // boundary separator is required.
+    let (first, second) = match token {
+      Token::Ident(ident) => (
+        ident.as_bytes()[0],
+        ident.as_bytes().get(1).copied(),
+      ),
+      Token::AtKeyword(_) => (b'@', None),
+      Token::Hash(_) | Token::IDHash(_) => (b'#', None),
+      Token::QuotedString(_) => (b'"', None),
+      Token::UnquotedUrl(_) | Token::BadUrl(_) => (b'u', Some(b'r')),
+      Token::Number { has_sign, value, .. }
+      | Token::Percentage {
+        has_sign,
+        unit_value: value,
+        ..
+      }
+      | Token::Dimension { has_sign, value, .. } => {
+        if value.is_sign_negative() {
+          (b'-', None)
+        } else if *has_sign {
+          (b'+', None)
+        } else {
+          (b'0', None)
+        }
+      }
+      Token::Delim(ch) => (*ch as u8, None),
+      Token::Colon => (b':', None),
+      Token::Semicolon => (b';', None),
+      Token::Comma => (b',', None),
+      Token::IncludeMatch => (b'~', Some(b'=')),
+      Token::DashMatch => (b'|', Some(b'=')),
+      Token::PrefixMatch => (b'^', Some(b'=')),
+      Token::SuffixMatch => (b'$', Some(b'=')),
+      Token::SubstringMatch => (b'*', Some(b'=')),
+      Token::CDO => (b'<', Some(b'!')),
+      Token::CDC => (b'-', Some(b'-')),
+      // Fallback: this token kind isn't important for our splice-boundary heuristic.
+      _ => (b'?', None),
+    };
+
+    let prev = *out
+      .as_bytes()
+      .last()
+      .expect("non-empty string must have last byte");
+    if needs_token_splice_separator(prev, first, second) {
+      out.push_str(TOKEN_SPLICE_SEPARATOR);
+    }
+  }
+
   match token {
     Token::WhiteSpace(ws) => out.push_str(ws.as_ref()),
     Token::Comment(text) => {
@@ -1363,6 +1503,60 @@ mod tests {
     ));
 
     assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
+  }
+
+  #[test]
+  fn test_simple_var_call_with_empty_fallback_resolves_to_empty() {
+    let props = CustomPropertyStore::default();
+    let value = PropertyValue::Keyword("var(--missing,)".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
+    let resolved = resolve_var_for_property(&value, &props, "");
+
+    let VarResolutionResult::Resolved { css_text, .. } = resolved else {
+      panic!("expected empty-fallback var() resolution to succeed, got {resolved:?}");
+    };
+
+    assert_eq!(css_text.as_ref(), "");
+    assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
+  }
+
+  #[test]
+  fn token_splice_preserves_boundaries_between_adjacent_vars() {
+    let props = make_props(&[("--x", "0"), ("--y", "calc(1px)")]);
+    let value = PropertyValue::Keyword("var(--x)var(--y)".to_string());
+
+    let VarResolutionResult::Resolved { css_text, .. } = resolve_var_for_property(&value, &props, "")
+    else {
+      panic!("expected var() resolution to succeed");
+    };
+
+    let mut input = ParserInput::new(css_text.as_ref());
+    let mut parser = Parser::new(&mut input);
+
+    let mut seen_number = false;
+    let mut seen_calc = false;
+    while let Ok(token) = parser.next_including_whitespace_and_comments() {
+      match token {
+        Token::WhiteSpace(_) | Token::Comment(_) => continue,
+        Token::Number { int_value, .. } if !seen_number => {
+          assert_eq!(int_value, &Some(0));
+          seen_number = true;
+        }
+        Token::Function(name) if seen_number && !seen_calc => {
+          assert!(
+            name.eq_ignore_ascii_case("calc"),
+            "expected `calc()` function token after number, got {name:?}"
+          );
+          seen_calc = true;
+          break;
+        }
+        other => panic!("unexpected token after var() splice: {other:?}"),
+      }
+    }
+
+    assert!(seen_number, "expected a number token at start of spliced result");
+    assert!(seen_calc, "expected a calc() function token after number");
   }
 
   #[test]
