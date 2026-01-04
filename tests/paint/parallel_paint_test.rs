@@ -243,7 +243,6 @@ fn mask_parallel_paint_matches_serial_output() {
     radii: BorderRadii::ZERO,
     mask: Some(mask),
   };
-
   list.push(DisplayItem::PushStackingContext(stacking));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: bounds,
@@ -297,6 +296,103 @@ fn mask_parallel_paint_matches_serial_output() {
       "parallel output differs from serial: diff_bytes={diff} first_mismatch={first:?}"
     );
   }
+}
+
+#[test]
+fn viewport_unit_masks_match_serial_output() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 256.0, 256.0),
+    color: Rgba::WHITE,
+  }));
+
+  let bounds = Rect::from_xywh(96.0, 96.0, 128.0, 128.0);
+  let layer = ResolvedMaskLayer {
+    image: ResolvedMaskImage::Raster(ImageData::new_pixels(1, 1, vec![0, 0, 0, 255])),
+    repeat: BackgroundRepeat::no_repeat(),
+    position: BackgroundPosition::Position {
+      x: BackgroundPositionComponent {
+        alignment: 0.0,
+        offset: Length::percent(0.0),
+      },
+      y: BackgroundPositionComponent {
+        alignment: 0.0,
+        offset: Length::percent(0.0),
+      },
+    },
+    size: BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::new(50.0, LengthUnit::Vw)),
+      BackgroundSizeComponent::Length(Length::new(50.0, LengthUnit::Vh)),
+    ),
+    origin: MaskOrigin::BorderBox,
+    clip: MaskClip::BorderBox,
+    mode: MaskMode::Alpha,
+    composite: MaskComposite::Add,
+  };
+  let mask = ResolvedMask {
+    layers: vec![layer],
+    color: Rgba::BLACK,
+    font_size: 16.0,
+    root_font_size: 16.0,
+    viewport: Some((256.0, 256.0)),
+    rects: MaskReferenceRects {
+      border: bounds,
+      padding: bounds,
+      content: bounds,
+    },
+  };
+
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(mask),
+  };
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::new(30, 160, 220, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+
+  let serial = DisplayListRenderer::new(256, 256, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 64,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(256, 256, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]
