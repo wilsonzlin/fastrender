@@ -13514,29 +13514,46 @@ mod tests {
     assert_eq!(image.height(), 240);
   }
 
-  // ===  // Rendering Tests (may fail if pipeline not fully integrated)
-  // These are marked with ignore to match the integration_test.rs pattern
+  fn pipeline_test_renderer() -> FastRender {
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_DISPLAY_LIST_PARALLEL".to_string(),
+      "0".to_string(),
+    )]));
+    let config = FastRenderConfig::new()
+      .with_font_sources(FontConfig::bundled_only())
+      .with_resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+      .with_paint_parallelism(PaintParallelism::disabled())
+      .with_layout_parallelism(LayoutParallelism::disabled())
+      .with_runtime_toggles(toggles);
+    FastRender::with_config(config).expect("pipeline test renderer")
+  }
+
+  fn pix_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+    let px = pixmap.pixel(x, y).expect("pixel in bounds");
+    (px.red(), px.green(), px.blue(), px.alpha())
+  }
+
+  // ===
+  // Rendering Tests (full pipeline)
   // ===
   #[test]
-  #[ignore = "Full rendering pipeline integration pending"]
   fn test_render_simple_html() {
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_html("<div>Hello, World!</div>", 100, 100);
-    assert!(result.is_ok());
-
-    let pixmap = result.unwrap();
-    assert_eq!(pixmap.width(), 100);
-    assert_eq!(pixmap.height(), 100);
+    let mut renderer = pipeline_test_renderer();
+    let pixmap = renderer
+      .render_html("<div>Hello, World!</div>", 64, 64)
+      .expect("render");
+    assert_eq!(pixmap.width(), 64);
+    assert_eq!(pixmap.height(), 64);
   }
 
   #[test]
-  #[ignore = "Full rendering pipeline integration pending"]
   fn test_render_with_style() {
-    let mut renderer = FastRender::new().unwrap();
+    let mut renderer = pipeline_test_renderer();
     let html = r#"
             <html>
                 <head>
                     <style>
+                        html, body { margin: 0; }
                         body { background: white; }
                         .box { width: 50px; height: 50px; background: red; }
                     </style>
@@ -13547,43 +13564,41 @@ mod tests {
             </html>
         "#;
 
-    let result = renderer.render_html(html, 200, 200);
-    assert!(result.is_ok());
+    let pixmap = renderer.render_html(html, 64, 64).expect("render");
+    assert_eq!(pix_rgba(&pixmap, 10, 10), (255, 0, 0, 255));
+    assert_eq!(pix_rgba(&pixmap, 60, 60), (255, 255, 255, 255));
   }
 
   #[test]
-  #[ignore = "Full rendering pipeline integration pending"]
   fn test_layout_document() {
-    let mut renderer = FastRender::new().unwrap();
+    let mut renderer = pipeline_test_renderer();
     let dom = renderer.parse_html("<div>Content</div>").unwrap();
-    let result = renderer.layout_document(&dom, 800, 600);
-    assert!(result.is_ok());
-
-    let fragment_tree = result.unwrap();
+    let fragment_tree = renderer.layout_document(&dom, 64, 64).unwrap();
     assert!(fragment_tree.fragment_count() > 0);
   }
 
   #[test]
-  #[ignore = "Full rendering pipeline integration pending"]
   fn test_paint() {
-    let mut renderer = FastRender::new().unwrap();
+    let mut renderer = pipeline_test_renderer();
     let dom = renderer.parse_html("<div>Content</div>").unwrap();
-    let fragment_tree = renderer.layout_document(&dom, 800, 600).unwrap();
-    let result = renderer.paint(&fragment_tree, 800, 600);
-    assert!(result.is_ok());
+    let fragment_tree = renderer.layout_document(&dom, 64, 64).unwrap();
+    let pixmap = renderer.paint(&fragment_tree, 64, 64).unwrap();
+    assert_eq!(pixmap.width(), 64);
+    assert_eq!(pixmap.height(), 64);
   }
 
   #[test]
-  #[ignore = "Full rendering pipeline integration pending"]
   fn test_render_html_with_background() {
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_html_with_background(
+    let mut renderer = pipeline_test_renderer();
+    let pixmap = renderer
+      .render_html_with_background(
       "<div>Test</div>",
-      100,
-      100,
+      32,
+      32,
       Rgba::rgb(255, 0, 0), // Red background
-    );
-    assert!(result.is_ok());
+    )
+      .unwrap();
+    assert_eq!(pix_rgba(&pixmap, 0, 0), (255, 0, 0, 255));
   }
 
   #[test]
