@@ -94,9 +94,10 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
 - `filterRes` (filter-level resampling)
   - When `filterRes` is specified, FastRender downsamples the input pixmap before running the
     filter graph, then upsamples the final output back to the target size.
+  - Implementation: `resize_pixmap(...)` resamples with tiny-skia bilinear.
   - Resampling honors the filter’s `color-interpolation-filters`: for `linearRGB`, the source is
-    re-encoded to linearRGB before tiny-skia bilinear resampling, then the resized result is
-    re-encoded back to sRGB.
+    re-encoded via `reencode_pixmap_to_linear_rgb()` before resampling, then the resized result is
+    re-encoded back to sRGB via `reencode_pixmap_to_srgb()`.
 - `feColorMatrix`
   - Runs in **linearRGB** when requested.
   - Implementation uses `unpack_color()` / `pack_color()` per pixel.
