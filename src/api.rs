@@ -2911,7 +2911,9 @@ impl FastRenderConfig {
     self
   }
 
-  /// Restrict subresource loads to the document origin unless allowlisted.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin unless allowlisted.
+  ///
+  /// Note: this does not block cross-origin iframe/embed document navigation.
   pub fn with_same_origin_subresources(mut self, enabled: bool) -> Self {
     self.same_origin_subresources = enabled;
     self
