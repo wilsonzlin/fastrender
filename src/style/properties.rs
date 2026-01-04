@@ -19480,6 +19480,36 @@ mod tests {
   }
 
   #[test]
+  fn grid_template_areas_synthesized_column_line_names_are_deterministic() {
+    const ROWS: usize = 20;
+    let mut names: Vec<String> = (0..ROWS).map(|i| format!("area{i:02}")).collect();
+    names.reverse(); // intentionally unsorted
+
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    let expected_start: Vec<String> = sorted.iter().map(|n| format!("{n}-start")).collect();
+    let expected_end: Vec<String> = sorted.iter().map(|n| format!("{n}-end")).collect();
+
+    for _ in 0..8 {
+      let mut style = ComputedStyle::default();
+      style.grid_template_columns = vec![GridTrack::Auto];
+      style.grid_template_rows = vec![GridTrack::Auto; ROWS];
+      style.grid_template_areas = names.iter().map(|n| vec![Some(n.clone())]).collect();
+
+      assert!(style.grid_column_line_names.is_empty());
+      assert!(style.grid_row_line_names.is_empty());
+      assert!(style.grid_column_names.is_empty());
+      assert!(style.grid_row_names.is_empty());
+
+      synthesize_area_line_names(&mut style);
+
+      assert_eq!(style.grid_column_line_names.len(), 2);
+      assert_eq!(style.grid_column_line_names[0], expected_start);
+      assert_eq!(style.grid_column_line_names[1], expected_end);
+    }
+  }
+
+  #[test]
   fn gap_shorthand_parses_two_values_and_percent() {
     let mut style = ComputedStyle::default();
     apply_declaration(
