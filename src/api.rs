@@ -6362,22 +6362,42 @@ impl FastRender {
       Url::parse(&guess).ok().map(|url| url.to_string())
     }
 
+    fn file_url_prefers_local_base(doc_url: &str) -> bool {
+      let Ok(url) = Url::parse(doc_url) else {
+        return false;
+      };
+      if url.scheme() != "file" {
+        return false;
+      }
+      url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_some_and(|seg| seg.eq_ignore_ascii_case("index.html") || seg.eq_ignore_ascii_case("index.htm"))
+    }
+
     let file_http_base = match document_url {
       Some(doc_url) if doc_url.starts_with("file://") => {
-        let head = find_head(dom, false);
-        let inferred_base = infer_http_base_from_file_url(doc_url);
-        let canonical = head
-          .and_then(|head| find_first_canonical_href(head, false, false))
-          .or_else(|| find_first_canonical_href(dom, false, false))
-          .and_then(|href| resolve_http_hint(doc_url, inferred_base.as_deref(), &href));
-        if canonical.is_some() {
-          canonical
+        // Directory-style bundles (e.g. `.../fixture/index.html`) should resolve relative URLs
+        // against the local filesystem path so bundled subresources under `assets/` load offline.
+        // Only apply the "file -> https" canonical/og:url inference for cache-style documents.
+        if file_url_prefers_local_base(doc_url) {
+          None
         } else {
-          head
-            .and_then(|head| find_first_og_url(head, false, false))
-            .or_else(|| find_first_og_url(dom, false, false))
-            .and_then(|content| resolve_http_hint(doc_url, inferred_base.as_deref(), &content))
-            .or_else(|| inferred_base)
+          let head = find_head(dom, false);
+          let inferred_base = infer_http_base_from_file_url(doc_url);
+          let canonical = head
+            .and_then(|head| find_first_canonical_href(head, false, false))
+            .or_else(|| find_first_canonical_href(dom, false, false))
+            .and_then(|href| resolve_http_hint(doc_url, inferred_base.as_deref(), &href));
+          if canonical.is_some() {
+            canonical
+          } else {
+            head
+              .and_then(|head| find_first_og_url(head, false, false))
+              .or_else(|| find_first_og_url(dom, false, false))
+              .and_then(|content| resolve_http_hint(doc_url, inferred_base.as_deref(), &content))
+              .or_else(|| inferred_base)
+          }
         }
       }
       _ => None,
@@ -15788,6 +15808,48 @@ mod tests {
       </head><body></body></html>"#;
     let document_url = "file:///tmp/cache/good.example.html";
     let stylesheet_url = "https://good.example/assets/style.css";
+
+    let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+      stylesheet_url,
+      "body { color: rgb(1, 2, 3); }",
+      "text/css",
+    ));
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+  }
+
+  #[test]
+  fn file_index_html_preserves_local_base_url_over_canonical() {
+    let html = r#"<!doctype html><html><head>
+        <link rel="canonical" href="https://good.example/app/">
+        <link rel="stylesheet" href="assets/style.css">
+      </head><body></body></html>"#;
+    let document_url = "file:///tmp/bundle/index.html";
+    let stylesheet_url = "file:///tmp/bundle/assets/style.css";
 
     let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
       stylesheet_url,
