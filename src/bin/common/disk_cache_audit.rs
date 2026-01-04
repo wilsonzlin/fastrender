@@ -384,14 +384,17 @@ mod tests {
     let del_opts = DiskCacheAuditOptions {
       delete_http_errors: true,
       delete_html_subresources: true,
-      delete_error_entries: false,
+      delete_error_entries: true,
       top_n: 0,
     };
     let deleted = audit_disk_cache_dir(dir, &del_opts).unwrap();
-    assert_eq!(deleted.deleted_entry_count, 2);
-    assert!(deleted.deleted_bin_files >= 2);
-    assert!(deleted.deleted_meta_files >= 2);
-    assert!(deleted.deleted_alias_files >= 2);
+    assert_eq!(deleted.deleted_entry_count, 3);
+    assert_eq!(deleted.deleted_http_error_entries, 1);
+    assert_eq!(deleted.deleted_html_subresource_entries, 1);
+    assert_eq!(deleted.deleted_error_entries, 1);
+    assert!(deleted.deleted_bin_files >= 3);
+    assert!(deleted.deleted_meta_files >= 3);
+    assert!(deleted.deleted_alias_files >= 3);
 
     assert!(!dir.join("a.bin").exists());
     assert!(!dir.join("a.bin.meta").exists());
@@ -404,19 +407,6 @@ mod tests {
       "expected alias files pointing at deleted entries to be removed"
     );
 
-    assert!(dir.join("c.bin").exists());
-    assert!(dir.join("c.bin.meta").exists());
-    assert!(dir.join("c.alias").exists());
-
-    let del_errors = DiskCacheAuditOptions {
-      delete_http_errors: false,
-      delete_html_subresources: false,
-      delete_error_entries: true,
-      top_n: 0,
-    };
-    let deleted_errors = audit_disk_cache_dir(dir, &del_errors).unwrap();
-    assert_eq!(deleted_errors.deleted_entry_count, 1);
-    assert_eq!(deleted_errors.deleted_error_entries, 1);
     assert!(!dir.join("c.bin").exists());
     assert!(!dir.join("c.bin.meta").exists());
     assert!(!dir.join("c.alias").exists());
