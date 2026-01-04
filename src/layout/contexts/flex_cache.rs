@@ -478,6 +478,82 @@ mod tests {
   }
 
   #[test]
+  fn find_fragment_prefers_smaller_dw_on_score_tie() {
+    let (key_small, key_large) = find_insertion_order_sensitive_flex_cache_keys(10);
+
+    let cache_a = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let cache_b = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let node_key = 1001u64;
+
+    let target_size = Size::new(100.0, 100.0);
+    // Score tie (dw+dh == 1) but different dw; must prefer smaller dw (0) even if that is stored
+    // under the larger key.
+    let value_dw1 = FlexCacheValue {
+      measured_size: Size::new(99.0, 100.0),
+      border_size: Size::new(99.0, 100.0),
+      fragment: make_test_fragment(Rect::from_xywh(0.0, 0.0, 99.0, 100.0)),
+    };
+    let value_dw0 = FlexCacheValue {
+      measured_size: Size::new(100.0, 99.0),
+      border_size: Size::new(100.0, 99.0),
+      fragment: make_test_fragment(Rect::from_xywh(0.0, 0.0, 100.0, 99.0)),
+    };
+
+    assert!(cache_a.insert(node_key, key_small, value_dw1.clone(), 16));
+    assert!(cache_a.insert(node_key, key_large, value_dw0.clone(), 16));
+
+    assert!(cache_b.insert(node_key, key_large, value_dw0, 16));
+    assert!(cache_b.insert(node_key, key_small, value_dw1, 16));
+
+    let found_a = cache_a
+      .find_fragment(node_key, target_size)
+      .expect("expected cache hit");
+    let found_b = cache_b
+      .find_fragment(node_key, target_size)
+      .expect("expected cache hit");
+
+    assert_eq!(found_a.measured_size, found_b.measured_size);
+    assert_eq!(found_a.measured_size, Size::new(100.0, 99.0));
+  }
+
+  #[test]
+  fn find_fragment_by_border_size_prefers_smaller_dw_on_score_tie() {
+    let (key_small, key_large) = find_insertion_order_sensitive_flex_cache_keys(10);
+
+    let cache_a = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let cache_b = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let node_key = 1002u64;
+
+    let target_size = Size::new(100.0, 100.0);
+    let value_dw1 = FlexCacheValue {
+      measured_size: Size::new(0.0, 0.0),
+      border_size: Size::new(99.0, 100.0),
+      fragment: make_test_fragment(Rect::from_xywh(0.0, 0.0, 99.0, 100.0)),
+    };
+    let value_dw0 = FlexCacheValue {
+      measured_size: Size::new(0.0, 0.0),
+      border_size: Size::new(100.0, 99.0),
+      fragment: make_test_fragment(Rect::from_xywh(0.0, 0.0, 100.0, 99.0)),
+    };
+
+    assert!(cache_a.insert(node_key, key_small, value_dw1.clone(), 16));
+    assert!(cache_a.insert(node_key, key_large, value_dw0.clone(), 16));
+
+    assert!(cache_b.insert(node_key, key_large, value_dw0, 16));
+    assert!(cache_b.insert(node_key, key_small, value_dw1, 16));
+
+    let found_a = cache_a
+      .find_fragment_by_border_size(node_key, target_size)
+      .expect("expected cache hit");
+    let found_b = cache_b
+      .find_fragment_by_border_size(node_key, target_size)
+      .expect("expected cache hit");
+
+    assert_eq!(found_a.border_size, found_b.border_size);
+    assert_eq!(found_a.border_size, Size::new(100.0, 99.0));
+  }
+
+  #[test]
   fn insert_eviction_is_deterministic() {
     let cache_a = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
     let cache_b = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
