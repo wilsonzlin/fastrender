@@ -79,6 +79,10 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
   - Runs in **linearRGB** when `color-interpolation-filters: linearRGB`.
   - Implementation: `reencode_pixmap_to_linear_rgb()` -> `apply_gaussian_blur_cached()` ->
     `reencode_pixmap_to_srgb()`.
+- `feDropShadow`
+  - The blur portion follows the same policy as `feGaussianBlur` using the same re-encode helpers.
+  - Note: the final “shadow over source” merge is currently done via tiny-skia `SourceOver` on the
+    stored pixmap bytes (no re-encoding), so `linearRGB` is not fully honored for that step.
 - `feOffset`
   - Runs in **linearRGB** when requested *and* the offset requires interpolation (fractional
     `dx`/`dy`).
@@ -86,10 +90,6 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     `reencode_pixmap_to_srgb()`.
   - Integer offsets (no interpolation) are effectively just a copy/shift, so no color-space
     conversion is needed.
-- `feDropShadow`
-  - The blur portion follows the same policy as `feGaussianBlur` using the same re-encode helpers.
-  - Note: the final “shadow over source” merge is currently done via tiny-skia `SourceOver` on the
-    stored pixmap bytes (no re-encoding), so `linearRGB` is not fully honored for that step.
 - `feColorMatrix`
   - Runs in **linearRGB** when requested.
   - Implementation uses `unpack_color()` / `pack_color()` per pixel.
@@ -122,12 +122,13 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     resampling/interpolation are performed in that space, then the output pixmap is re-encoded back
     to sRGB.
 
-Primitives/operations that currently **ignore `color-interpolation-filters`** (they do not
-explicitly re-encode between sRGB <-> linearRGB):
+Primitives/operations that currently **do not fully honor `color-interpolation-filters`**
+(they still operate directly on stored sRGB bytes in places where linearRGB would require
+conversion):
 
 - `filterRes` downsampling/upsampling (uses tiny-skia bilinear resampling in the stored space)
-- `feTile` / `feImage` (no re-encoding; `feImage` currently draws with nearest sampling)
-- `feTurbulence` / `feFlood` (outputs are generated/written as premultiplied RGBA8)
+- `feTurbulence` (outputs are generated/written as premultiplied RGBA8 with no CIF-aware encoding)
+- `feDropShadow` (CIF is applied to the blur, but not to the final shadow+source compositing step)
 
 ## Known limitations / implications
 
