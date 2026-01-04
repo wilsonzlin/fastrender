@@ -2170,6 +2170,27 @@ impl DisplayListBuilder {
       return;
     }
 
+    // `child_visibility` is currently in the *post-transform* coordinate space (we intersected with
+    // transformed bounds above). Descendant fragments are emitted in the *pre-transform* space and
+    // then transformed by the renderer via `PushStackingContext`. Map the visibility rect back into
+    // local space so per-fragment culling doesn't accidentally drop content that is visible only
+    // after applying the stacking context transform (e.g. translate animations).
+    let child_visibility = match (child_visibility.rect, transform.as_ref()) {
+      (Some(rect), Some(transform)) => match transform.to_2d().and_then(|t| t.inverse()) {
+        Some(inverse) => Visibility {
+          rect: Some(inverse.transform_rect(rect)),
+          hard_clip: child_visibility.hard_clip,
+        },
+        // If the transform can't be inverted (e.g. 3D / projective), disable rect-based culling for
+        // descendants rather than risk false negatives.
+        None => Visibility {
+          rect: None,
+          hard_clip: false,
+        },
+      },
+      _ => child_visibility,
+    };
+
     let has_effects = is_isolated
       || transform.is_some()
       || child_perspective.is_some()
