@@ -34,12 +34,62 @@ fn blurred_box_fixture(left: i32, top: i32, size: i32) -> String {
   )
 }
 
+fn blurred_box_object_bounding_box_numbers_fixture(left: i32, top: i32, size: i32) -> String {
+  format!(
+    r#"
+    <style>
+      body {{ margin: 0; background: rgb(0, 0, 0); }}
+      #target {{
+        position: absolute;
+        left: {left}px;
+        top: {top}px;
+        width: {size}px;
+        height: {size}px;
+        background: rgb(255, 0, 0);
+        filter: url(#blur);
+      }}
+      svg {{ position: absolute; width: 0; height: 0; }}
+    </style>
+    <svg width="0" height="0" aria-hidden="true">
+      <defs>
+        <filter id="blur" filterUnits="objectBoundingBox" x="-0.5" y="-0.5" width="2" height="2">
+          <feGaussianBlur stdDeviation="4" />
+        </filter>
+      </defs>
+    </svg>
+    <div id="target"></div>
+    "#
+  )
+}
+
 #[test]
 fn svg_filter_blur_bleeds_outside_bounds() {
   let html = blurred_box_fixture(20, 20, 40);
 
   let mut renderer = FastRender::new().expect("renderer");
   let pixmap = renderer.render_html(&html, 120, 120).expect("render");
+
+  let outside = color_at(&pixmap, 15, 40);
+  assert!(
+    outside[0] > outside[1] && outside[0] > outside[2] && outside[0] > 0,
+    "expected blur bleed outside the border box, got {:?}",
+    outside
+  );
+}
+
+#[test]
+fn svg_filter_default_primitive_region_inherits_filter_region_with_object_bbox_numbers() {
+  let html = blurred_box_object_bounding_box_numbers_fixture(20, 20, 40);
+
+  let mut renderer = FastRender::new().expect("renderer");
+  let pixmap = renderer.render_html(&html, 120, 120).expect("render");
+
+  let center = color_at(&pixmap, 40, 40);
+  assert!(
+    center[0] > center[1] && center[0] > center[2] && center[0] > 0,
+    "expected red content at the center of the square, got {:?}",
+    center
+  );
 
   let outside = color_at(&pixmap, 15, 40);
   assert!(

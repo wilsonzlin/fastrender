@@ -61,8 +61,9 @@ use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::TransformItem;
-use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
+#[cfg(test)]
+use crate::paint::filter_outset::filter_outset;
 use crate::paint::gradient::{
   gradient_bucket, rasterize_conic_gradient_cached, rasterize_conic_gradient_scaled_cached,
   rasterize_linear_gradient_cached, GradientLutCache, GradientPixmapCache, GradientPixmapCacheKey,

@@ -2918,7 +2918,7 @@ fn apply_svg_filter_scaled(
     y: def.region.y,
     width: def.region.width,
     height: def.region.height,
-    units: def.primitive_units,
+    units: def.region.units,
   };
 
   let source_region = clip_region(filter_region_for_pixmap(pixmap), filter_region);
