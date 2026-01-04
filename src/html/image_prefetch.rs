@@ -14,7 +14,7 @@ use crate::dom::{
 };
 use crate::html::image_attrs::{parse_sizes, parse_srcset};
 use crate::html::images::{
-  image_sources_with_fallback, select_image_source, ImageSelectionContext,
+  image_sources_with_fallback, is_supported_image_mime, select_image_source, ImageSelectionContext,
 };
 use crate::resource::is_data_url;
 use crate::style::media::MediaContext;
@@ -130,24 +130,6 @@ fn push_unique_url(
   if seen.insert(resolved.clone()) {
     out.push(resolved);
   }
-}
-
-fn normalized_image_mime(mime: &str) -> String {
-  mime
-    .split(';')
-    .next()
-    .unwrap_or("")
-    .trim()
-    .to_ascii_lowercase()
-}
-
-fn is_supported_image_mime(mime: &str) -> bool {
-  let normalized = normalized_image_mime(mime);
-  if normalized == "image/svg+xml" {
-    return true;
-  }
-
-  image::ImageFormat::from_mime_type(&normalized).is_some()
 }
 
 fn picture_source_matches(source: &PictureSource, ctx: ImageSelectionContext<'_>) -> bool {

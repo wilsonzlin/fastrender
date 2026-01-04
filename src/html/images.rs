@@ -70,13 +70,23 @@ fn normalized_image_mime(mime: &str) -> String {
     .to_ascii_lowercase()
 }
 
-fn is_supported_image_mime(mime: &str) -> bool {
+pub(crate) fn is_supported_image_mime(mime: &str) -> bool {
   let normalized = normalized_image_mime(mime);
-  if normalized == "image/svg+xml" {
+  let canonical = match normalized.as_str() {
+    // Common real-world aliases used in `<source type="...">`.
+    "image/jpg" | "image/pjpeg" => "image/jpeg",
+    "image/x-png" | "image/apng" => "image/png",
+    // `image` crate MIME parsing does not cover all icon aliases; treat them as supported for
+    // `<picture>` selection (Chrome does).
+    "image/x-icon" | "image/vnd.microsoft.icon" => return true,
+    _ => normalized.as_str(),
+  };
+
+  if canonical == "image/svg+xml" {
     return true;
   }
 
-  image::ImageFormat::from_mime_type(&normalized).is_some()
+  image::ImageFormat::from_mime_type(canonical).is_some()
 }
 
 fn picture_source_matches(source: &PictureSource, ctx: ImageSelectionContext<'_>) -> bool {

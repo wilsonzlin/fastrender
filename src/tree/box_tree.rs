@@ -1671,6 +1671,50 @@ mod tests {
   }
 
   #[test]
+  fn picture_source_accepts_common_mime_aliases() {
+    let img = ReplacedType::Image {
+      src: "fallback".to_string(),
+      alt: None,
+      srcset: vec![],
+      sizes: None,
+      picture_sources: vec![
+        PictureSource {
+          srcset: vec![SrcsetCandidate {
+            url: "jpg-source".to_string(),
+            descriptor: SrcsetDescriptor::Density(1.0),
+          }],
+          sizes: None,
+          media: None,
+          mime_type: Some("image/jpg".to_string()),
+        },
+        PictureSource {
+          srcset: vec![SrcsetCandidate {
+            url: "png-source".to_string(),
+            descriptor: SrcsetDescriptor::Density(1.0),
+          }],
+          sizes: None,
+          media: None,
+          mime_type: Some("image/png".to_string()),
+        },
+      ],
+    };
+
+    let viewport = Size::new(800.0, 600.0);
+    let media_ctx =
+      MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+    let chosen = img.image_source_for_context(ImageSelectionContext {
+      device_pixel_ratio: 1.0,
+      slot_width: None,
+      viewport: Some(viewport),
+      media_context: Some(&media_ctx),
+      font_size: Some(16.0),
+      base_url: None,
+    });
+
+    assert_eq!(chosen, "jpg-source");
+  }
+
+  #[test]
   fn picture_source_uses_sizes_with_width_descriptors() {
     let img = ReplacedType::Image {
       src: "fallback".to_string(),
