@@ -102,7 +102,13 @@ fn run_render_fixtures(fixtures: &[&str], out_dir: &Path, viewport: &str, timeou
   );
 }
 
-fn run_render_fixture_with_snapshot(stem: &str, out_dir: &Path) {
+fn run_render_fixture_with_snapshot(
+  stem: &str,
+  out_dir: &Path,
+  viewport: &str,
+  timeout_secs: u64,
+) -> Result<(), String> {
+  let timeout_arg = timeout_secs.to_string();
   let status = Command::new(env!("CARGO_BIN_EXE_render_fixtures"))
     .current_dir(manifest_dir())
     .args([
@@ -113,22 +119,25 @@ fn run_render_fixture_with_snapshot(stem: &str, out_dir: &Path) {
       "--out-dir",
       out_dir.to_str().expect("out-dir utf8"),
       "--timeout",
-      "10",
+      &timeout_arg,
       "--viewport",
-      "600x600",
+      viewport,
       "--write-snapshot",
     ])
     .status()
-    .expect("spawn render_fixtures --write-snapshot");
+    .map_err(|e| format!("failed to spawn render_fixtures --write-snapshot: {e}"))?;
 
-  assert!(
-    status.success(),
-    "render_fixtures --write-snapshot failed for fixture {stem} (out_dir={})",
-    out_dir.display()
-  );
+  if status.success() {
+    Ok(())
+  } else {
+    Err(format!(
+      "render_fixtures --write-snapshot failed for fixture {stem} (viewport={viewport}, timeout={timeout_secs}s, out_dir={})",
+      out_dir.display()
+    ))
+  }
 }
 
-fn run_diff_snapshots(before_dir: &Path, after_dir: &Path, out_dir: &Path) {
+fn run_diff_snapshots(before_dir: &Path, after_dir: &Path, out_dir: &Path) -> Result<(), String> {
   let json_path = out_dir.join("diff_snapshots.json");
   let html_path = out_dir.join("diff_snapshots.html");
   let status = Command::new(env!("CARGO_BIN_EXE_diff_snapshots"))
@@ -144,17 +153,26 @@ fn run_diff_snapshots(before_dir: &Path, after_dir: &Path, out_dir: &Path) {
       html_path.to_str().expect("html path utf8"),
     ])
     .status()
-    .expect("spawn diff_snapshots");
+    .map_err(|e| format!("failed to spawn diff_snapshots: {e}"))?;
 
-  assert!(
-    status.success(),
-    "diff_snapshots failed (before={}, after={})",
-    before_dir.display(),
-    after_dir.display()
-  );
+  if status.success() {
+    Ok(())
+  } else {
+    Err(format!(
+      "diff_snapshots failed (before={}, after={})",
+      before_dir.display(),
+      after_dir.display()
+    ))
+  }
 }
 
-fn compare_fixture_png(stem: &str, run1_dir: &Path, run2_dir: &Path) {
+fn compare_fixture_png(
+  stem: &str,
+  run1_dir: &Path,
+  run2_dir: &Path,
+  viewport: &str,
+  timeout_secs: u64,
+) {
   let png1_path = run1_dir.join(format!("{stem}.png"));
   let png2_path = run2_dir.join(format!("{stem}.png"));
   let png1 = fs::read(&png1_path)
@@ -200,41 +218,44 @@ fn compare_fixture_png(stem: &str, run1_dir: &Path, run2_dir: &Path) {
   fs::create_dir_all(&snapshot_run1_out).expect("create snapshot run1 dir");
   fs::create_dir_all(&snapshot_run2_out).expect("create snapshot run2 dir");
 
-  run_render_fixture_with_snapshot(stem, &snapshot_run1_out);
-  run_render_fixture_with_snapshot(stem, &snapshot_run2_out);
-
   let snapshot_before_dir = snapshot_run1_out.join(stem);
   let snapshot_after_dir = snapshot_run2_out.join(stem);
-  assert!(
-    snapshot_before_dir.join("snapshot.json").is_file(),
-    "missing snapshot.json in {}",
-    snapshot_before_dir.display()
-  );
-  assert!(
-    snapshot_after_dir.join("snapshot.json").is_file(),
-    "missing snapshot.json in {}",
-    snapshot_after_dir.display()
-  );
-  assert!(
-    snapshot_before_dir.join("diagnostics.json").is_file(),
-    "missing diagnostics.json in {}",
-    snapshot_before_dir.display()
-  );
-  assert!(
-    snapshot_after_dir.join("diagnostics.json").is_file(),
-    "missing diagnostics.json in {}",
-    snapshot_after_dir.display()
-  );
+  let mut snapshot_error = None::<String>;
 
-  // Make diff_snapshots link the exact pixel diff artifacts.
-  fs::copy(&expected_out, snapshot_before_dir.join("render.png"))
-    .expect("copy expected render.png");
-  fs::copy(&actual_out, snapshot_after_dir.join("render.png")).expect("copy actual render.png");
+  if let Err(err) = run_render_fixture_with_snapshot(stem, &snapshot_run1_out, viewport, timeout_secs) {
+    snapshot_error = Some(format!("run1 snapshot capture failed: {err}"));
+  } else if let Err(err) =
+    run_render_fixture_with_snapshot(stem, &snapshot_run2_out, viewport, timeout_secs)
+  {
+    snapshot_error = Some(format!("run2 snapshot capture failed: {err}"));
+  } else {
+    for (label, dir) in [("run1", &snapshot_before_dir), ("run2", &snapshot_after_dir)] {
+      for required in ["snapshot.json", "diagnostics.json"] {
+        let path = dir.join(required);
+        if !path.is_file() {
+          snapshot_error = Some(format!("missing {required} in {label} snapshot dir {}", dir.display()));
+          break;
+        }
+      }
+      if snapshot_error.is_some() {
+        break;
+      }
+    }
+  }
 
-  run_diff_snapshots(&snapshot_before_dir, &snapshot_after_dir, &artifact_dir);
+  if snapshot_error.is_none() {
+    // Make diff_snapshots link the exact pixel diff artifacts.
+    if let Err(err) = fs::copy(&expected_out, snapshot_before_dir.join("render.png")) {
+      snapshot_error = Some(format!("failed to copy expected render.png: {err}"));
+    } else if let Err(err) = fs::copy(&actual_out, snapshot_after_dir.join("render.png")) {
+      snapshot_error = Some(format!("failed to copy actual render.png: {err}"));
+    } else if let Err(err) = run_diff_snapshots(&snapshot_before_dir, &snapshot_after_dir, &artifact_dir) {
+      snapshot_error = Some(err);
+    }
+  }
 
   eprintln!(
-    "Process-level nondeterminism detected for fixture '{stem}': {:.4}% pixels differ.\n  expected: {}\n  actual:   {}\n  diff:     {}\n  snapshot run1: {}\n  snapshot run2: {}\n  diff_snapshots: {}\n  {}",
+    "Process-level nondeterminism detected for fixture '{stem}': {:.4}% pixels differ.\n  expected: {}\n  actual:   {}\n  diff:     {}\n  snapshot run1: {}\n  snapshot run2: {}\n  diff_snapshots: {}\n  snapshot error: {}\n  {}",
     diff.statistics.different_percent,
     expected_out.display(),
     actual_out.display(),
@@ -242,6 +263,7 @@ fn compare_fixture_png(stem: &str, run1_dir: &Path, run2_dir: &Path) {
     snapshot_before_dir.display(),
     snapshot_after_dir.display(),
     artifact_dir.join("diff_snapshots.html").display(),
+    snapshot_error.as_deref().unwrap_or("(none)"),
     diff.summary(),
   );
 
@@ -262,6 +284,6 @@ fn pages_fixture_process_determinism_test() {
   run_render_fixtures(&fixtures, run2.path(), &viewport, timeout_secs);
 
   for stem in fixtures {
-    compare_fixture_png(stem, run1.path(), run2.path());
+    compare_fixture_png(stem, run1.path(), run2.path(), &viewport, timeout_secs);
   }
 }
