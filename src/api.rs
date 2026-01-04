@@ -77,7 +77,7 @@ use crate::debug::inspect::{InspectQuery, InspectionSnapshot};
 use crate::debug::runtime::{self, RuntimeToggles};
 use crate::debug::trace::TraceHandle;
 use crate::dom::DomNode;
-use crate::dom::{self, capture_has_counters, DomCompatibilityMode, DomParseOptions};
+use crate::dom::{self, capture_has_counters, DomCompatibilityMode, DomNodeType, DomParseOptions};
 use crate::error::Error;
 use crate::error::NavigationError;
 use crate::error::RenderError;
@@ -5673,11 +5673,7 @@ impl FastRender {
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.html_decode_ms, decode_start);
     }
-    let base_url = if hint.starts_with("file://") {
-      infer_base_url(&html, hint).into_owned()
-    } else {
-      hint.to_string()
-    };
+    let base_url = hint.to_string();
     self.set_base_url(base_url.clone());
     let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
     let mut captured = RenderArtifacts::new(artifacts);
@@ -5798,11 +5794,7 @@ impl FastRender {
         diag
       };
       self.set_document_url(base_hint);
-      let base_url = if base_hint.starts_with("file://") {
-        infer_base_url(html, base_hint).into_owned()
-      } else {
-        base_hint.to_string()
-      };
+      let base_url = base_hint.to_string();
       self.set_base_url(base_url.clone());
       let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
       let mut result = (|| -> Result<RenderReport> {
@@ -5880,11 +5872,7 @@ impl FastRender {
       .unwrap_or((self.default_width, self.default_height));
 
     self.set_document_url(base_hint);
-    let base_url = if base_hint.starts_with("file://") {
-      infer_base_url(html, base_hint).into_owned()
-    } else {
-      base_hint.to_string()
-    };
+    let base_url = base_hint.to_string();
     self.set_base_url(base_url.clone());
 
     let requested_viewport = Size::new(width as f32, height as f32);
@@ -6013,37 +6001,159 @@ impl FastRender {
 
   fn update_base_url_from_dom(&mut self, dom: &DomNode) {
     let document_url = self.document_url();
-    let inferred_base_url = self.base_url.as_deref();
+    let current_base_url = self.base_url.as_deref();
     let base_href = crate::html::find_base_href(dom);
 
     let is_http_base = |url: &str| url.starts_with("http://") || url.starts_with("https://");
 
+    fn find_head(node: &DomNode) -> Option<&DomNode> {
+      if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+        return None;
+      }
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("head") {
+          return Some(node);
+        }
+        if tag.eq_ignore_ascii_case("template") {
+          return None;
+        }
+      }
+      for child in node.children.iter() {
+        if let Some(found) = find_head(child) {
+          return Some(found);
+        }
+      }
+      None
+    }
+
+    fn find_first_canonical_href(node: &DomNode) -> Option<String> {
+      if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+        return None;
+      }
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("template") {
+          return None;
+        }
+        if tag.eq_ignore_ascii_case("link") {
+          if let Some(rel) = node.get_attribute_ref("rel") {
+            if rel
+              .split_whitespace()
+              .any(|token| token.eq_ignore_ascii_case("canonical"))
+            {
+              if let Some(href) = node.get_attribute_ref("href") {
+                let trimmed = href.trim();
+                if !trimmed.is_empty() {
+                  return Some(trimmed.to_string());
+                }
+              }
+            }
+          }
+        }
+      }
+      for child in node.children.iter() {
+        if let Some(found) = find_first_canonical_href(child) {
+          return Some(found);
+        }
+      }
+      None
+    }
+
+    fn find_first_og_url(node: &DomNode) -> Option<String> {
+      if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+        return None;
+      }
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("template") {
+          return None;
+        }
+        if tag.eq_ignore_ascii_case("meta") {
+          if node
+            .get_attribute_ref("property")
+            .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))
+          {
+            if let Some(content) = node.get_attribute_ref("content") {
+              let trimmed = content.trim();
+              if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+              }
+            }
+          }
+        }
+      }
+      for child in node.children.iter() {
+        if let Some(found) = find_first_og_url(child) {
+          return Some(found);
+        }
+      }
+      None
+    }
+
+    fn infer_http_base_from_file_url(doc_url: &str) -> Option<String> {
+      let Ok(url) = Url::parse(doc_url) else {
+        return None;
+      };
+      if url.scheme() != "file" {
+        return None;
+      }
+      let Some(seg) = url.path_segments().and_then(|mut s| s.next_back()) else {
+        return None;
+      };
+      let Some(host) = seg.strip_suffix(".html") else {
+        return None;
+      };
+      // Heuristic: cached pages typically use a `{host}.html` filename. Avoid applying this to
+      // local files like `page.html` by requiring the host portion to look like a domain.
+      if !host.contains('.') {
+        return None;
+      }
+      let guess = format!("https://{host}/");
+      Url::parse(&guess).ok().map(|url| url.to_string())
+    }
+
+    let file_http_base = match document_url {
+      Some(doc_url) if doc_url.starts_with("file://") => {
+        let head = find_head(dom);
+        let canonical = head
+          .and_then(find_first_canonical_href)
+          .and_then(|href| resolve_href(doc_url, &href))
+          .filter(|resolved| is_http_base(resolved));
+        if canonical.is_some() {
+          canonical
+        } else {
+          head
+            .and_then(find_first_og_url)
+            .and_then(|content| resolve_href(doc_url, &content))
+            .filter(|resolved| is_http_base(resolved))
+            .or_else(|| infer_http_base_from_file_url(doc_url))
+        }
+      }
+      _ => None,
+    };
+
     match base_href {
       Some(href) => {
         let resolution_base = match document_url {
-          Some(doc_url) if doc_url.starts_with("file://") => inferred_base_url
-            .filter(|candidate| is_http_base(candidate))
-            .unwrap_or(doc_url),
+          Some(doc_url) if doc_url.starts_with("file://") => {
+            file_http_base.as_deref().unwrap_or(doc_url)
+          }
           Some(doc_url) => doc_url,
-          None => inferred_base_url.unwrap_or(""),
+          None => current_base_url.unwrap_or(""),
         };
         if let Some(resolved) = resolve_href(resolution_base, &href) {
-          if inferred_base_url != Some(resolved.as_str()) {
+          if current_base_url != Some(resolved.as_str()) {
             self.set_base_url(resolved);
           }
         }
       }
       None => {
         let Some(doc_url) = document_url else { return };
-        // For offline `file://` documents rendered as a remote origin, preserve the inferred
-        // http(s) base instead of resetting to the local path.
-        if doc_url.starts_with("file://")
-          && inferred_base_url.is_some_and(|candidate| is_http_base(candidate))
-        {
-          return;
-        }
-        if inferred_base_url != Some(doc_url) {
-          self.set_base_url(doc_url.to_string());
+        let next_base = if doc_url.starts_with("file://") {
+          file_http_base.as_deref().unwrap_or(doc_url)
+        } else {
+          doc_url
+        };
+        if current_base_url != Some(next_base) {
+          self.set_base_url(next_base.to_string());
         }
       }
     }
