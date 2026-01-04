@@ -23,6 +23,7 @@ Options:
   --dpr <float>             Device pixel ratio (default: 1.0)
   --media <screen|print>    Media type for FastRender (default: screen)
   --jobs <n>                Parallelism forwarded to render_fixtures
+  --write-snapshot          Also write render_fixtures snapshots/diagnostics (for diff_snapshots)
   --timeout <secs>          Per-fixture timeout (Chrome + FastRender) (default: 15)
   --chrome <path>           Chrome/Chromium binary (default: auto-detect)
   --js <on|off>             Enable JavaScript in Chrome (default: off)
@@ -57,6 +58,7 @@ VIEWPORT="${VIEWPORT:-1040x1240}"
 DPR="${DPR:-1.0}"
 MEDIA="${MEDIA:-screen}"
 JOBS=""
+WRITE_SNAPSHOT=0
 TIMEOUT="${TIMEOUT:-15}"
 CHROME_BIN="${CHROME_BIN:-}"
 JS="${JS:-off}"
@@ -99,6 +101,8 @@ while [[ $# -gt 0 ]]; do
         MEDIA="${2:-}"; shift 2 ;;
       --jobs)
         JOBS="${2:-}"; shift 2 ;;
+      --write-snapshot)
+        WRITE_SNAPSHOT=1; shift ;;
       --timeout)
         TIMEOUT="${2:-}"; shift 2 ;;
       --chrome)
@@ -316,6 +320,9 @@ else
   )
   if [[ -n "${JOBS}" ]]; then
     render_args+=(--jobs "${JOBS}")
+  fi
+  if [[ "${WRITE_SNAPSHOT}" -eq 1 ]]; then
+    render_args+=(--write-snapshot)
   fi
   if cargo run --release --bin render_fixtures -- "${render_args[@]}"; then
     :

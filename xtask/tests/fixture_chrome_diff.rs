@@ -66,6 +66,7 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
       "2",
       "--jobs",
       "3",
+      "--write-snapshot",
       "--media",
       "print",
       "--timeout",
@@ -131,6 +132,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
   assert!(
     render_line.contains("--jobs 3"),
     "render_fixtures should receive jobs; got:\n{render_line}"
+  );
+  assert!(
+    render_line.contains("--write-snapshot"),
+    "render_fixtures should receive write-snapshot; got:\n{render_line}"
   );
   assert!(
     render_line.contains("--media print"),

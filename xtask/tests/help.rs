@@ -78,6 +78,7 @@ fn fixture_chrome_diff_help_mentions_flags() {
       && stdout.contains("--fixtures")
       && stdout.contains("--shard")
       && stdout.contains("--jobs")
+      && stdout.contains("--write-snapshot")
       && stdout.contains("--viewport")
       && stdout.contains("--dpr")
       && stdout.contains("--media")

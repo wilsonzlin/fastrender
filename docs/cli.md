@@ -23,7 +23,7 @@ These are optional wrappers for the most common loops:
   - Defaults to `viewport=1040x1240`, `dpr=1.0`, JavaScript disabled, and the fixture set in `tests/pages_regression_test.rs`.
   - Writes `target/chrome_vs_fastrender_fixtures.html` + `target/chrome_vs_fastrender_fixtures.json` plus PNG/log/metadata artifacts under `target/chrome_fixture_renders/` and PNG/log artifacts under `target/fastrender_fixture_renders/`.
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--ignore-alpha`, `--sort-by {pixel|percent|perceptual}`, `--fail-on-differences`, `--no-chrome`, `--no-fastrender`, `--diff-only`, `--no-build`
-  - Supports `--shard <index>/<total>` for deterministic sharding (0-based); forwards `--jobs <n>` to `render_fixtures`.
+  - Supports `--shard <index>/<total>` for deterministic sharding (0-based); forwards `--jobs <n>` and `--write-snapshot` to `render_fixtures`.
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
@@ -310,11 +310,11 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
   - `<out>/report.html`, `<out>/report.json`
 - Notes:
   - JavaScript is disabled by default (Chrome baseline uses an injected CSP, matching FastRender's no-JS model).
-  - `fixture-chrome-diff` does not currently enable `render_fixtures --write-snapshot`. If you need per-fixture snapshots/diagnostics (for `diff_snapshots`), run `render_fixtures --write-snapshot` separately.
+  - Pass `--write-snapshot` to also write per-fixture snapshots/diagnostics for later `diff_snapshots` (equivalent to `render_fixtures --write-snapshot`).
 - Core flags:
   - Selection: `--fixtures <csv>`, `--shard <index>/<total>`
   - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
-  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--jobs/-j <n>`, `--js {on|off}`
+  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--jobs/-j <n>`, `--write-snapshot`, `--js {on|off}`
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`, `--fail-on-differences`
   - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--no-fastrender`, `--diff-only`
 

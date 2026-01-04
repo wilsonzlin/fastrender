@@ -78,6 +78,10 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long, short, value_name = "N")]
   pub jobs: Option<usize>,
 
+  /// Also write per-fixture snapshots/diagnostics (forwarded to `render_fixtures --write-snapshot`).
+  #[arg(long)]
+  pub write_snapshot: bool,
+
   /// Root directory to write output artifacts into.
   #[arg(long, value_name = "DIR", default_value = DEFAULT_OUT_DIR)]
   pub out_dir: PathBuf,
@@ -347,6 +351,9 @@ fn build_render_fixtures_command(
   cmd.arg("--timeout").arg(args.timeout.to_string());
   if let Some(jobs) = args.jobs {
     cmd.arg("--jobs").arg(jobs.to_string());
+  }
+  if args.write_snapshot {
+    cmd.arg("--write-snapshot");
   }
   if let Some(fixtures) = &args.fixtures {
     cmd.arg("--fixtures").arg(fixtures.join(","));
