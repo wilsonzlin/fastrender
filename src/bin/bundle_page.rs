@@ -1940,8 +1940,13 @@ mod tests {
             Some(req.url.to_string()),
           )),
           "https://frame.test/frame.css" => Ok(FetchedResource::with_final_url(
-            b"body { background: black; }".to_vec(),
+            b"body { background: url('/bg.png'); }".to_vec(),
             Some("text/css".to_string()),
+            Some(req.url.to_string()),
+          )),
+          "https://frame.test/bg.png" => Ok(FetchedResource::with_final_url(
+            vec![0u8, 1, 2, 3],
+            Some("image/png".to_string()),
             Some(req.url.to_string()),
           )),
           other => Err(fastrender::Error::Other(format!(
@@ -1979,6 +1984,12 @@ mod tests {
     assert!(calls.iter().any(|(url, dest, referrer)| {
       url == "https://frame.test/frame.css"
         && *dest == FetchDestination::Style
+        && referrer.as_deref() == Some("https://frame.test/frame.html")
+    }));
+
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://frame.test/bg.png"
+        && *dest == FetchDestination::Image
         && referrer.as_deref() == Some("https://frame.test/frame.html")
     }));
 
