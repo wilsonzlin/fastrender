@@ -84,7 +84,13 @@ struct Args {
 
   /// Fail if rewritten HTML/CSS still contains network URLs (http(s):// or //).
   ///
-  /// This is the default behaviour; `--allow-network` disables the validation.
+  /// This runs an additional strict scan over rewritten HTML/CSS for any remaining
+  /// `http(s)://` or protocol-relative (`//`) URLs (excluding `data:` URLs).
+  ///
+  /// The importer already refuses to leave fetchable network URLs in common URL-bearing
+  /// contexts (e.g. `src=`, `href=`, CSS `url(...)`, and `@import`) unless `--allow-network`
+  /// is set. `--strict-offline` is a stronger check intended to catch any remaining
+  /// network-looking strings after rewrite.
   #[arg(long, conflicts_with = "allow_network")]
   strict_offline: bool,
 
@@ -102,6 +108,7 @@ struct ImportConfig {
   manifest_path: Option<PathBuf>,
   dry_run: bool,
   overwrite: bool,
+  strict_offline: bool,
   allow_network: bool,
 }
 
@@ -135,11 +142,8 @@ impl ImportConfig {
       manifest_path,
       dry_run: args.dry_run,
       overwrite: args.overwrite,
-      allow_network: if args.strict_offline {
-        false
-      } else {
-        args.allow_network
-      },
+      strict_offline: args.strict_offline,
+      allow_network: args.allow_network,
     })
   }
 }
@@ -419,6 +423,9 @@ fn rewrite_and_copy(
 
       if !config.allow_network {
         validate_offline(dest_path, &rewritten)?;
+        if config.strict_offline {
+          validate_strict_offline(dest_path, &rewritten)?;
+        }
       }
 
       write_file(dest_path, rewritten.as_bytes(), config, summary)?;
@@ -811,6 +818,90 @@ fn find_network_urls(content: &str) -> Vec<String> {
   urls
 }
 
+fn validate_strict_offline(dest_path: &Path, content: &str) -> Result<()> {
+  let mut found = find_network_urls_strict(content);
+  if found.is_empty() {
+    return Ok(());
+  }
+  found.truncate(5);
+  Err(ImportError::NetworkUrlsRemaining(
+    dest_path.to_path_buf(),
+    found.join(", "),
+  ))
+}
+
+fn find_network_urls_strict(content: &str) -> Vec<String> {
+  fn data_url_spans(content: &str) -> Vec<std::ops::Range<usize>> {
+    // Best-effort: treat any quoted string starting with `data:` as a data URL span, plus
+    // common CSS `url(data:...)` forms. This avoids false positives from strict scanning when
+    // the *payload* of a data URL contains `http://` (e.g. SVG namespaces).
+    //
+    // Note that we intentionally keep this separate from the more targeted `find_network_urls`
+    // logic so strict mode can scan broadly without being tripped up by `data:` payloads.
+    let mut spans = Vec::new();
+
+    let double_quoted = Regex::new(r#"(?is)"(?P<url>data:[^"]*)""#).unwrap();
+    let single_quoted = Regex::new(r#"(?is)'(?P<url>data:[^']*)'"#).unwrap();
+    let css_url_unquoted = Regex::new(r#"(?is)url\(\s*(?P<url>data:[^)]*)\)"#).unwrap();
+
+    for caps in double_quoted.captures_iter(content) {
+      if let Some(m) = caps.name("url") {
+        spans.push(m.start()..m.end());
+      }
+    }
+    for caps in single_quoted.captures_iter(content) {
+      if let Some(m) = caps.name("url") {
+        spans.push(m.start()..m.end());
+      }
+    }
+    for caps in css_url_unquoted.captures_iter(content) {
+      if let Some(m) = caps.name("url") {
+        spans.push(m.start()..m.end());
+      }
+    }
+
+    spans.sort_by_key(|span| span.start);
+    spans
+  }
+
+  fn is_within_data_url(data_spans: &[std::ops::Range<usize>], idx: usize) -> bool {
+    // Small N; linear scan is fine.
+    data_spans
+      .iter()
+      .any(|span| idx >= span.start && idx < span.end)
+  }
+
+  let mut urls = Vec::new();
+  let http_re = Regex::new(r#"(?i)https?://[^\s"'<>)]{1,200}"#).unwrap();
+  let scheme_re = Regex::new(r#"(?i)//[^\s"'<>)]{1,200}"#).unwrap();
+
+  let data_spans = data_url_spans(content);
+  let content_bytes = content.as_bytes();
+
+  for m in http_re.find_iter(content) {
+    let idx = m.start();
+    if is_within_data_url(&data_spans, idx) {
+      continue;
+    }
+    urls.push(m.as_str().to_string());
+  }
+
+  for m in scheme_re.find_iter(content) {
+    if m.start() > 0 && content_bytes[m.start() - 1] == b':' {
+      continue;
+    }
+    let idx = m.start();
+    if is_within_data_url(&data_spans, idx) {
+      continue;
+    }
+    urls.push(m.as_str().to_string());
+  }
+
+  urls.sort();
+  urls.dedup();
+  urls
+}
+
 fn copy_ini_sidecar(
   config: &ImportConfig,
   src_path: &Path,
@@ -1074,6 +1165,7 @@ mod tests {
       manifest_path: Some(manifest_path.clone()),
       dry_run: false,
       overwrite: false,
+      strict_offline: false,
       allow_network: false,
     };
 
@@ -1109,6 +1201,7 @@ mod tests {
       manifest_path: Some(manifest_path),
       dry_run: false,
       overwrite: false,
+      strict_offline: false,
       allow_network: false,
     };
 
@@ -1133,6 +1226,7 @@ mod tests {
       manifest_path: Some(manifest_path.clone()),
       dry_run: true,
       overwrite: false,
+      strict_offline: false,
       allow_network: false,
     };
 
@@ -1153,6 +1247,7 @@ mod tests {
       manifest_path: Some(manifest_path),
       dry_run: false,
       overwrite: false,
+      strict_offline: false,
       allow_network: false,
     };
 
@@ -1177,6 +1272,7 @@ mod tests {
       manifest_path: Some(manifest_path),
       dry_run: false,
       overwrite: false,
+      strict_offline: false,
       allow_network: false,
     };
 
@@ -1202,6 +1298,7 @@ mod tests {
       manifest_path: Some(manifest_path.clone()),
       dry_run: false,
       overwrite: false,
+      strict_offline: false,
       allow_network: false,
     };
 
@@ -1223,6 +1320,7 @@ mod tests {
       manifest_path: Some(manifest_path),
       dry_run: false,
       overwrite: false,
+      strict_offline: false,
       allow_network: false,
     };
 
@@ -1239,19 +1337,60 @@ mod tests {
   #[test]
   fn offline_validation_ignores_network_strings_inside_data_urls() {
     let out_dir = TempDir::new().unwrap();
-    let config = ImportConfig {
+    for (strict, subdir) in [(false, "non-strict"), (true, "strict")] {
+      let config = ImportConfig {
+        wpt_root: fixture_root(),
+        suites: vec!["html/network/data-url.html".to_string()],
+        out_dir: out_dir.path().join(subdir),
+        manifest_path: None,
+        dry_run: false,
+        overwrite: false,
+        strict_offline: strict,
+        allow_network: false,
+      };
+
+      run_import(config).expect("import should succeed");
+      let imported =
+        fs::read_to_string(out_dir.path().join(subdir).join("html/network/data-url.html")).unwrap();
+      assert!(imported.contains("data:image/svg+xml"));
+      assert!(imported.contains("http://www.w3.org/2000/svg"));
+    }
+  }
+
+  #[test]
+  fn strict_offline_scans_for_network_urls_outside_fetch_contexts() {
+    let out_dir = TempDir::new().unwrap();
+
+    let non_strict = ImportConfig {
       wpt_root: fixture_root(),
-      suites: vec!["html/network/data-url.html".to_string()],
-      out_dir: out_dir.path().join("out"),
+      suites: vec!["html/network/text-url.html".to_string()],
+      out_dir: out_dir.path().join("non-strict"),
       manifest_path: None,
       dry_run: false,
       overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+    run_import(non_strict).expect("non-strict import should succeed");
+
+    let strict = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/text-url.html".to_string()],
+      out_dir: out_dir.path().join("strict"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: true,
       allow_network: false,
     };
 
-    run_import(config).expect("import should succeed");
-    let imported = fs::read_to_string(out_dir.path().join("out/html/network/data-url.html")).unwrap();
-    assert!(imported.contains("data:image/svg+xml"));
-    assert!(imported.contains("http://www.w3.org/2000/svg"));
+    let err = run_import(strict).expect_err("strict-offline import should fail");
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path.to_string_lossy().contains("text-url.html"));
+        assert!(urls.contains("https://example.com/"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
   }
 }
