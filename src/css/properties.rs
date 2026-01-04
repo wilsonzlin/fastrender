@@ -1036,11 +1036,44 @@ fn parse_number_component(parser: &mut Parser) -> Result<f32, ()> {
 }
 
 pub(crate) fn is_global_keyword_str(value: &str) -> bool {
-  value.eq_ignore_ascii_case("inherit")
-    || value.eq_ignore_ascii_case("initial")
-    || value.eq_ignore_ascii_case("unset")
-    || value.eq_ignore_ascii_case("revert")
-    || value.eq_ignore_ascii_case("revert-layer")
+  #[inline]
+  fn match_ident(value: &str) -> bool {
+    value.eq_ignore_ascii_case("inherit")
+      || value.eq_ignore_ascii_case("initial")
+      || value.eq_ignore_ascii_case("unset")
+      || value.eq_ignore_ascii_case("revert")
+      || value.eq_ignore_ascii_case("revert-layer")
+  }
+
+  let value = value.trim();
+  let bytes = value.as_bytes();
+  if !bytes.contains(&b'\\')
+    && (!bytes.contains(&b'/') || !bytes.windows(2).any(|pair| pair == b"/*"))
+  {
+    return match_ident(value);
+  }
+
+  let mut input = ParserInput::new(value);
+  let mut parser = Parser::new(&mut input);
+  let mut matched = false;
+
+  while let Ok(token) = parser.next_including_whitespace_and_comments() {
+    match token {
+      Token::WhiteSpace(_) | Token::Comment(_) => continue,
+      Token::Ident(ident) => {
+        if matched {
+          return false;
+        }
+        matched = match_ident(ident.as_ref());
+        if !matched {
+          return false;
+        }
+      }
+      _ => return false,
+    }
+  }
+
+  matched
 }
 
 fn parse_font_family_list(value_str: &str) -> Option<Vec<String>> {
@@ -2971,6 +3004,29 @@ mod tests {
   use crate::style::color::Color;
   use crate::style::properties::supported_properties;
   use std::collections::BTreeSet;
+
+  #[test]
+  fn global_keyword_str_recognizes_trailing_comment() {
+    assert!(is_global_keyword_str("revert-layer/*comment*/"));
+    assert!(is_global_keyword_str("inherit/**/"));
+  }
+
+  #[test]
+  fn global_keyword_str_recognizes_escape_sequence() {
+    assert!(is_global_keyword_str("revert\\-layer"));
+  }
+
+  #[test]
+  fn font_family_parses_global_keyword_with_trailing_comment() {
+    let parsed = parse_property_value("font-family", "revert-layer/*comment*/").expect("parsed");
+    assert!(matches!(parsed, PropertyValue::Keyword(_)));
+  }
+
+  #[test]
+  fn font_family_parses_global_keyword_with_escape_sequence() {
+    let parsed = parse_property_value("font-family", "revert\\-layer").expect("parsed");
+    assert!(matches!(parsed, PropertyValue::Keyword(_)));
+  }
 
   fn tokenize_property_value_allocating(value_str: &str, allow_commas: bool) -> Vec<String> {
     let mut tokens = Vec::new();

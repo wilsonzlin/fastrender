@@ -2395,8 +2395,9 @@ fn global_keyword_text(value: &str) -> Option<GlobalKeyword> {
   }
 
   let value = value.trim();
-  if !value.as_bytes().contains(&b'\\')
-    && !value.as_bytes().windows(2).any(|pair| pair == b"/*")
+  let bytes = value.as_bytes();
+  if !bytes.contains(&b'\\')
+    && (!bytes.contains(&b'/') || !bytes.windows(2).any(|pair| pair == b"/*"))
   {
     return match_ident(value);
   }
@@ -2406,21 +2407,24 @@ fn global_keyword_text(value: &str) -> Option<GlobalKeyword> {
   // `cssparser` so `revert\-layer` and `revert-layer/*comment*/` are recognized.
   let mut input = ParserInput::new(value);
   let mut parser = Parser::new(&mut input);
-  let mut ident: Option<String> = None;
+  let mut keyword: Option<GlobalKeyword> = None;
   while let Ok(token) = parser.next_including_whitespace_and_comments() {
     match token {
       Token::WhiteSpace(_) | Token::Comment(_) => continue,
-      Token::Ident(name) => {
-        if ident.is_some() {
-          return None;
+      Token::Ident(name) => match keyword {
+        Some(_) => return None,
+        None => {
+          keyword = match_ident(name.as_ref());
+          if keyword.is_none() {
+            return None;
+          }
         }
-        ident = Some(name.as_ref().to_string());
-      }
+      },
       _ => return None,
     }
   }
 
-  match_ident(ident?.as_str())
+  keyword
 }
 
 fn global_keyword(value: &PropertyValue) -> Option<GlobalKeyword> {
