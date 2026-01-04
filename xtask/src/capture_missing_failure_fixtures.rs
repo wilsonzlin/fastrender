@@ -1,6 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
-use serde::Deserialize;
-use std::fs;
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -46,85 +44,30 @@ pub struct CaptureMissingFailureFixturesPlan {
   pub captures: Vec<CaptureMissingFailureFixturePlan>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ProgressStatus {
-  status: String,
-}
-
 pub fn plan_capture_missing_failure_fixtures(
   args: &CaptureMissingFailureFixturesArgs,
 ) -> Result<CaptureMissingFailureFixturesPlan> {
-  if !args.progress_dir.is_dir() {
-    bail!(
-      "progress directory {} does not exist",
-      args.progress_dir.display()
-    );
-  }
-
-  let mut failing_stems = Vec::new();
-  for entry in fs::read_dir(&args.progress_dir)
-    .with_context(|| format!("read {}", args.progress_dir.display()))?
-  {
-    let entry = entry.context("read progress directory entry")?;
-    if !entry
-      .file_type()
-      .with_context(|| format!("read file type {}", entry.path().display()))?
-      .is_file()
-    {
-      continue;
-    }
-
-    let path = entry.path();
-    if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-      continue;
-    }
-
-    let stem = path
-      .file_stem()
-      .and_then(|stem| stem.to_str())
-      .ok_or_else(|| anyhow!("progress file name is not valid UTF-8: {}", path.display()))?
-      .to_string();
-
-    let raw =
-      fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let parsed: ProgressStatus =
-      serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-    if parsed.status != "ok" {
-      failing_stems.push(stem);
-    }
-  }
-
-  failing_stems.sort();
-
-  let failing_pages_total = failing_stems.len();
-  let mut fixtures_already_present = 0usize;
   let mut captures = Vec::new();
 
-  for stem in failing_stems {
-    let index_path = fixture_index_path(&args.fixtures_root, &stem);
-    if index_path.is_file() {
-      fixtures_already_present += 1;
-      continue;
-    }
-
-    let bundle_path = args.bundle_out_dir.join(format!("{stem}.tar"));
+  let plan = crate::pageset_failure_fixtures::plan_missing_failure_fixtures(
+    &args.progress_dir,
+    &args.fixtures_root,
+  )?;
+  for page in &plan.missing_fixtures {
+    let bundle_path = args.bundle_out_dir.join(format!("{}.tar", page.stem));
     captures.push(CaptureMissingFailureFixturePlan {
-      stem: stem.clone(),
+      stem: page.stem.clone(),
       bundle_path: bundle_path.clone(),
-      bundle_command: build_bundle_page_cache_command(&stem, &bundle_path, args),
-      import_command: build_import_page_fixture_command(&stem, &bundle_path, args),
+      bundle_command: build_bundle_page_cache_command(&page.stem, &bundle_path, args),
+      import_command: build_import_page_fixture_command(&page.stem, &bundle_path, args),
     });
   }
 
   Ok(CaptureMissingFailureFixturesPlan {
-    failing_pages_total,
-    fixtures_already_present,
+    failing_pages_total: plan.failing_pages.len(),
+    fixtures_already_present: plan.existing_fixtures.len(),
     captures,
   })
-}
-
-fn fixture_index_path(fixtures_root: &Path, stem: &str) -> PathBuf {
-  fixtures_root.join(stem).join("index.html")
 }
 
 fn build_bundle_page_cache_command(
@@ -206,4 +149,3 @@ fn build_import_page_fixture_command(
     args: cmd,
   }
 }
-
