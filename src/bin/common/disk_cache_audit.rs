@@ -3,9 +3,14 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const META_SUFFIX: &str = ".bin.meta";
+/// Cached metadata blobs are expected to be tiny; cap reads so a corrupt file can't OOM the audit.
+const MAX_META_BYTES: usize = 256 * 1024;
+/// Alias files are even smaller (`{"target":"..."}`); cap reads defensively.
+const MAX_ALIAS_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Default)]
 pub struct DiskCacheAuditOptions {
@@ -59,6 +64,23 @@ struct StoredMetadataLite {
 #[derive(Debug, Deserialize)]
 struct StoredAliasLite {
   target: String,
+}
+
+fn read_file_capped(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
+  let file = fs::File::open(path)?;
+  let reader = io::BufReader::new(file);
+  let mut buf = Vec::new();
+  reader.take((max_bytes as u64).saturating_add(1)).read_to_end(&mut buf)?;
+  if buf.len() > max_bytes {
+    return Err(io::Error::new(
+      io::ErrorKind::InvalidData,
+      format!(
+        "file too large ({} bytes, max {max_bytes})",
+        buf.len()
+      ),
+    ));
+  }
+  Ok(buf)
 }
 
 fn normalized_mime(content_type: &str) -> String {
@@ -204,7 +226,7 @@ pub fn audit_disk_cache_dir(
   for meta_path in meta_paths {
     report.entries_scanned += 1;
 
-    let Ok(bytes) = fs::read(&meta_path) else {
+    let Ok(bytes) = read_file_capped(&meta_path, MAX_META_BYTES) else {
       report.invalid_meta_count += 1;
       continue;
     };
@@ -277,7 +299,7 @@ pub fn audit_disk_cache_dir(
   // contents. This scan is still a single-level, deterministic iteration.
   if !deleted_entry_urls.is_empty() {
     for alias_path in alias_paths {
-      let Ok(bytes) = fs::read(&alias_path) else {
+      let Ok(bytes) = read_file_capped(&alias_path, MAX_ALIAS_BYTES) else {
         continue;
       };
       let Ok(alias) = serde_json::from_slice::<StoredAliasLite>(&bytes) else {
@@ -375,5 +397,24 @@ mod tests {
     assert!(dir.join("c.bin").exists());
     assert!(dir.join("c.bin.meta").exists());
     assert!(dir.join("c.alias").exists());
+  }
+
+  #[test]
+  fn skips_oversized_meta_files_without_panicking() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    fs::write(dir.join("big.bin"), b"payload").unwrap();
+    fs::write(dir.join("big.bin.meta"), vec![b'x'; MAX_META_BYTES + 1]).unwrap();
+
+    let opts = DiskCacheAuditOptions {
+      delete_http_errors: false,
+      delete_html_subresources: false,
+      top_n: 0,
+    };
+    let report = audit_disk_cache_dir(dir, &opts).unwrap();
+    assert_eq!(report.entries_scanned, 1);
+    assert_eq!(report.entries_parsed, 0);
+    assert_eq!(report.invalid_meta_count, 1);
   }
 }
