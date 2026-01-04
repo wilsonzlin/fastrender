@@ -529,6 +529,15 @@ fn png_for_snapshot(path: &Path, stem: &str, html_dir: &Path) -> Option<String> 
     if render.exists() {
       return Some(path_for_report(html_dir, &render));
     }
+
+    // For `render_fixtures --write-snapshot` (and `cargo xtask fixture-chrome-diff --write-snapshot`)
+    // outputs, the PNG lives next to the `<stem>/snapshot.json` directory.
+    if let Some(grandparent) = parent.parent() {
+      let render = grandparent.join(format!("{stem}.png"));
+      if render.exists() {
+        return Some(path_for_report(html_dir, &render));
+      }
+    }
   }
 
   // Fallback to the legacy `<stem>.png` naming (used by render_pages dumps and sometimes copied

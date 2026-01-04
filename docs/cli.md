@@ -478,8 +478,8 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
 - Entry: `src/bin/diff_snapshots.rs`
 - Run: `cargo run --release --bin diff_snapshots -- --before <dir|file> --after <dir|file>`
 - Matching:
-  - Directory inputs support both the render-pages layout (`<stem>.snapshot.json`) and the pageset dump layout (`<stem>/snapshot.json` produced by `pageset_progress --dump-*`).
-  - Entries are paired by stem (the `<stem>` part of the filename/directory). For pageset dumps, `render.png` is linked when present.
+  - Directory inputs support both the render-pages layout (`<stem>.snapshot.json`) and directory-based snapshots (`<stem>/snapshot.json` produced by `pageset_progress --dump-*` and `render_fixtures --write-snapshot` / `cargo xtask fixture-chrome-diff --write-snapshot`).
+  - Entries are paired by stem (the `<stem>` part of the filename/directory). For directory snapshots, `render.png` is linked when present; otherwise the tool looks for `<stem>.png` next to the `<stem>/` directory (fixture outputs) and finally `<stem>/<stem>.png` (legacy).
 - Outputs: `diff_snapshots.json` and `diff_snapshots.html` summarizing schema versions, per-stage counts, DOM/box/fragment/display list changes, and links to sibling `*.png` renders when present.
 
 ## `dump_a11y`
