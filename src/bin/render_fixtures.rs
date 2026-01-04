@@ -136,6 +136,7 @@ struct RenderMetadataFile {
   font_dirs: Vec<PathBuf>,
   status: &'static str,
   elapsed_ms: u64,
+  #[serde(skip_serializing_if = "Option::is_none")]
   blocked_network_urls: Option<BlockedNetworkUrlsMetadata>,
 }
 
