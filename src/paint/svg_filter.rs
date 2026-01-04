@@ -491,13 +491,18 @@ fn record_filter_cache_miss() {
 }
 
 fn svg_filter_weight_bytes(filter: &SvgFilter, fetched_svg_bytes: usize) -> usize {
-  let mut weight = fetched_svg_bytes;
+  let mut weight = fetched_svg_bytes.saturating_add(std::mem::size_of::<SvgFilter>());
 
   // Account for the filter graph itself.
-  weight = weight.saturating_add(filter.steps.len().saturating_mul(std::mem::size_of::<FilterStep>()));
+  weight = weight.saturating_add(
+    filter
+      .steps
+      .capacity()
+      .saturating_mul(std::mem::size_of::<FilterStep>()),
+  );
   for step in &filter.steps {
     if let Some(result) = &step.result {
-      weight = weight.saturating_add(result.len());
+      weight = weight.saturating_add(result.capacity());
     }
     weight = weight.saturating_add(filter_primitive_weight_bytes(&step.primitive));
   }
@@ -515,8 +520,9 @@ fn filter_primitive_weight_bytes(primitive: &FilterPrimitive) -> usize {
       input1, input2, ..
     } => filter_input_weight_bytes(input1).saturating_add(filter_input_weight_bytes(input2)),
     FilterPrimitive::Merge { inputs } => {
-      let mut weight =
-        inputs.len().saturating_mul(std::mem::size_of::<FilterInput>());
+      let mut weight = inputs
+        .capacity()
+        .saturating_mul(std::mem::size_of::<FilterInput>());
       for input in inputs {
         weight = weight.saturating_add(filter_input_weight_bytes(input));
       }
@@ -544,13 +550,13 @@ fn filter_primitive_weight_bytes(primitive: &FilterPrimitive) -> usize {
       filter_input_weight_bytes(in1).saturating_add(filter_input_weight_bytes(in2))
     }
     FilterPrimitive::ConvolveMatrix { input, kernel, .. } => filter_input_weight_bytes(input)
-      .saturating_add(kernel.len().saturating_mul(std::mem::size_of::<f32>())),
+      .saturating_add(kernel.capacity().saturating_mul(std::mem::size_of::<f32>())),
   }
 }
 
 fn filter_input_weight_bytes(input: &FilterInput) -> usize {
   match input {
-    FilterInput::Reference(name) => name.len(),
+    FilterInput::Reference(name) => name.capacity(),
     _ => 0,
   }
 }
@@ -558,7 +564,9 @@ fn filter_input_weight_bytes(input: &FilterInput) -> usize {
 fn transfer_fn_weight_bytes(tf: &TransferFn) -> usize {
   match tf {
     TransferFn::Table { values } | TransferFn::Discrete { values } => {
-      values.len().saturating_mul(std::mem::size_of::<f32>())
+      values
+        .capacity()
+        .saturating_mul(std::mem::size_of::<f32>())
     }
     _ => 0,
   }
@@ -7284,6 +7292,49 @@ mod filter_cache_tests {
     assert_eq!(filter_cache_len(), 2);
     // Keep variables used
     let _ = (second, third);
+  }
+
+  #[test]
+  fn evicts_filters_based_on_embedded_fe_image_pixmap_bytes() {
+    let _guard = svg_filter_test_guard();
+
+    let image_href = png_data_url(512, 512);
+    let svg = format!(
+      r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="f"><feImage href="{url}"/></filter></svg>"#,
+      url = image_href
+    );
+    let resource_size = svg.as_bytes().len();
+    let pixmap_bytes = 512usize * 512usize * 4;
+    let max_bytes = resource_size
+      .saturating_add(pixmap_bytes)
+      .saturating_add(64 * 1024)
+      .max(resource_size.saturating_mul(2).saturating_add(1));
+
+    reset_filter_cache_for_tests(FilterCacheConfig {
+      max_items: 8,
+      max_bytes,
+    });
+
+    let fetcher = Arc::new(TestFilterFetcher::new([
+      ("test://filters/one.svg".to_string(), svg.clone()),
+      ("test://filters/two.svg".to_string(), svg),
+    ]));
+    let cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
+
+    let first = load_svg_filter("test://filters/one.svg#f", &cache).expect("load first filter");
+    let _second = load_svg_filter("test://filters/two.svg#f", &cache).expect("load second filter");
+
+    assert_eq!(
+      filter_cache_len(),
+      1,
+      "cache should evict based on embedded pixmap bytes"
+    );
+    assert_eq!(fetcher.fetches(), 2);
+
+    let first_again =
+      load_svg_filter("test://filters/one.svg#f", &cache).expect("reload first filter");
+    assert_eq!(fetcher.fetches(), 3, "evicted filters should be refetched");
+    assert!(!Arc::ptr_eq(&first, &first_again));
   }
 
   #[test]
