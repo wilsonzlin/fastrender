@@ -4,7 +4,7 @@ use clap::Parser;
 use common::args::{parse_viewport, CompatArgs, MediaPreferenceArgs};
 use common::media_prefs::MediaPreferences;
 use fastrender::api::FastRender;
-use fastrender::css::loader::infer_base_url;
+use fastrender::css::loader::{infer_document_url_guess, resolve_href};
 use fastrender::debug::runtime::{self, RuntimeToggles};
 use fastrender::dom::DomNodeType;
 use fastrender::dom::{self};
@@ -489,7 +489,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   let html = fs::read_to_string(&path)?;
-  let resource_base = infer_base_url(&html, &input_url).into_owned();
+  let mut resource_base = infer_document_url_guess(&html, &input_url).into_owned();
+  let dom = dom::parse_html(&html)?;
+  if let Some(base_href) = fastrender::html::find_base_href(&dom) {
+    if let Some(resolved) = resolve_href(&resource_base, &base_href) {
+      resource_base = resolved;
+    }
+  }
 
   media_prefs.apply_env();
   let runtime_toggles = RuntimeToggles::from_env();

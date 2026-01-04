@@ -2006,12 +2006,19 @@ fn find_tag_case_insensitive_from(
 
 /// Infer a reasonable base URL for the document.
 ///
-/// Prefers an explicit `<base href>` when present, otherwise uses the document
-/// URL itself. For `file://` inputs without a `<base>` hint, falls back to
-/// `<link rel="canonical">`/`<meta property="og:url">` if present and, as a last
-/// resort, an `https://{filename}/` origin so relative resources resolve against
-/// the original site instead of the local filesystem.
-pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
+/// Infer a reasonable document URL for the current HTML input.
+///
+/// This is primarily intended for pageset-style cached HTML where the "true" document URL is not
+/// known at render time (the input is often a `file://...` URL). In those cases, we try to guess
+/// the original URL using:
+/// - `<link rel="canonical" href="...">`
+/// - `<meta property="og:url" content="...">`
+/// - as a last resort: `https://{filename}/` when the cached filename looks like a domain.
+///
+/// Note: This function intentionally does **not** consider `<base href>`; base URL resolution is
+/// handled after DOM parsing so `<base>` inside inert contexts (e.g. `<template>`, declarative
+/// shadow DOM templates) cannot poison the result.
+pub fn infer_document_url_guess<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
   // Canonicalize file:// inputs so relative cached paths become absolute.
   let mut input = Cow::Borrowed(input_url);
   let mut is_file_input = false;
@@ -2036,17 +2043,17 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
   }
 
   enum BaseUrlHintFilter {
-    Any,
     RelCanonical,
     PropertyOgUrl,
   }
 
-  for (tag, attr, filter, allow_for_http_inputs) in [
-    ("base", "href", BaseUrlHintFilter::Any, true),
-    ("link", "href", BaseUrlHintFilter::RelCanonical, false),
-    ("meta", "content", BaseUrlHintFilter::PropertyOgUrl, false),
+  // For cached file inputs, prefer an explicit canonical URL in the metadata so subsequent URL
+  // resolution (including `<base href>`) uses the original site instead of the local filesystem.
+  for (tag, attr, filter) in [
+    ("link", "href", BaseUrlHintFilter::RelCanonical),
+    ("meta", "content", BaseUrlHintFilter::PropertyOgUrl),
   ] {
-    if !allow_for_http_inputs && !is_file_input {
+    if !is_file_input {
       continue;
     }
     let mut pos = 0;
@@ -2057,7 +2064,6 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
       let tag_slice = &html[start..=start + end];
 
       let matches_filter = match filter {
-        BaseUrlHintFilter::Any => true,
         BaseUrlHintFilter::RelCanonical => extract_attr_value(tag_slice, "rel").is_some_and(|rel| {
           rel
             .split_whitespace()
@@ -2098,6 +2104,25 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
   }
 
   input
+}
+
+/// Infer a reasonable base URL for the document.
+///
+/// This computes the best-effort document URL first (see [`infer_document_url_guess`]), then
+/// parses the HTML and resolves the first valid `<base href>` against that document URL. This
+/// avoids base URL poisoning from string scanning (e.g., `<base>` inside `<template>` or
+/// declarative shadow DOM templates).
+pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
+  let document_url_guess = infer_document_url_guess(html, input_url);
+  let Ok(dom) = crate::dom::parse_html(html) else {
+    return document_url_guess;
+  };
+  if let Some(base_href) = crate::html::find_base_href(&dom) {
+    if let Some(resolved) = resolve_href(document_url_guess.as_ref(), &base_href) {
+      return Cow::Owned(resolved);
+    }
+  }
+  document_url_guess
 }
 
 #[cfg(test)]
@@ -2921,6 +2946,27 @@ mod tests {
         "#;
     let base = infer_base_url(html, "file:///tmp/cache/example.org.unquoted.html");
     assert_eq!(base, "https://example.org/unquoted-og/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_base_inside_template() {
+    let html = "<html><head><template><base href='https://bad/'></template><base href='https://good/'></head></html>";
+    let base = infer_base_url(html, "https://example.com/").into_owned();
+    assert_eq!(base, "https://good/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_base_inside_declarative_shadow_dom_template() {
+    let html = "<div><template shadowroot='open'><base href='https://bad/'></template></div><base href='https://good/'>";
+    let base = infer_base_url(html, "https://example.com/").into_owned();
+    assert_eq!(base, "https://good/");
+  }
+
+  #[test]
+  fn infer_base_url_resolves_relative_base_against_canonical_for_file_input() {
+    let html = "<link rel=canonical href='https://example.com/app/'><base href='assets/'>";
+    let base = infer_base_url(html, "file:///tmp/cache/example.com.html").into_owned();
+    assert_eq!(base, "https://example.com/app/assets/");
   }
 
   #[test]
