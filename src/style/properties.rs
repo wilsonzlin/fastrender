@@ -4381,6 +4381,66 @@ fn apply_global_keyword(
   keyword: GlobalKeyword,
   order: i32,
 ) -> bool {
+  // `ComputedStyle` stores SVG presentation properties as `Option<T>` so we can avoid eagerly
+  // injecting SVG initial values (which would defeat our SVG root `fill: currentColor` hack).
+  //
+  // Unfortunately, that means using the default computed style as the source for `initial` would
+  // produce `None`, which then incorrectly inherits from the parent instead of resetting to the SVG
+  // initial value. Special-case the SVG presentation properties here.
+  if matches!(keyword, GlobalKeyword::Initial) {
+    match property {
+      "fill" => {
+        styles.svg_fill = Some(ColorOrNone::Color(Rgba::BLACK));
+        return true;
+      }
+      "stroke" => {
+        styles.svg_stroke = Some(ColorOrNone::None);
+        return true;
+      }
+      "stroke-width" => {
+        styles.svg_stroke_width = Some(LengthOrNumber::Number(1.0));
+        return true;
+      }
+      "fill-rule" => {
+        styles.svg_fill_rule = Some(FillRule::NonZero);
+        return true;
+      }
+      "clip-rule" => {
+        styles.svg_clip_rule = Some(FillRule::NonZero);
+        return true;
+      }
+      "stroke-linecap" => {
+        styles.svg_stroke_linecap = Some(StrokeLinecap::Butt);
+        return true;
+      }
+      "stroke-linejoin" => {
+        styles.svg_stroke_linejoin = Some(StrokeLinejoin::Miter);
+        return true;
+      }
+      "stroke-miterlimit" => {
+        styles.svg_stroke_miterlimit = Some(4.0);
+        return true;
+      }
+      "stroke-dasharray" => {
+        styles.svg_stroke_dasharray = Some(StrokeDasharray::None);
+        return true;
+      }
+      "stroke-dashoffset" => {
+        styles.svg_stroke_dashoffset = Some(LengthOrNumber::Number(0.0));
+        return true;
+      }
+      "fill-opacity" => {
+        styles.svg_fill_opacity = Some(1.0);
+        return true;
+      }
+      "stroke-opacity" => {
+        styles.svg_stroke_opacity = Some(1.0);
+        return true;
+      }
+      _ => {}
+    }
+  }
+
   let Some(source) = global_keyword_source(
     keyword,
     property,
@@ -15068,6 +15128,72 @@ mod tests {
       16.0,
     );
     assert_eq!(style.svg_stroke_miterlimit, prev);
+  }
+
+  #[test]
+  fn svg_presentation_properties_initial_keyword_resets_to_svg_initial_values() {
+    let mut parent = ComputedStyle::default();
+    parent.svg_fill = Some(ColorOrNone::Color(Rgba::RED));
+    parent.svg_stroke = Some(ColorOrNone::Color(Rgba::GREEN));
+    parent.svg_stroke_width = Some(LengthOrNumber::Number(5.0));
+    parent.svg_fill_rule = Some(FillRule::EvenOdd);
+    parent.svg_clip_rule = Some(FillRule::EvenOdd);
+    parent.svg_stroke_linecap = Some(StrokeLinecap::Round);
+    parent.svg_stroke_linejoin = Some(StrokeLinejoin::Bevel);
+    parent.svg_stroke_miterlimit = Some(10.0);
+    parent.svg_stroke_dasharray = Some(StrokeDasharray::Values(
+      vec![LengthOrNumber::Number(2.0), LengthOrNumber::Number(3.0)].into(),
+    ));
+    parent.svg_stroke_dashoffset = Some(LengthOrNumber::Number(7.0));
+    parent.svg_fill_opacity = Some(0.25);
+    parent.svg_stroke_opacity = Some(0.75);
+
+    let mut style = ComputedStyle::default();
+    inherit_styles(&mut style, &parent);
+
+    let apply_initial = |styles: &mut ComputedStyle, property: &'static str| {
+      apply_declaration(
+        styles,
+        &Declaration {
+          property: property.into(),
+          value: PropertyValue::Keyword("initial".to_string()),
+          contains_var: false,
+          raw_value: String::new(),
+          important: false,
+        },
+        &parent,
+        16.0,
+        16.0,
+      );
+    };
+
+    apply_initial(&mut style, "fill");
+    assert_eq!(style.svg_fill, Some(ColorOrNone::Color(Rgba::BLACK)));
+    apply_initial(&mut style, "stroke");
+    assert_eq!(style.svg_stroke, Some(ColorOrNone::None));
+    apply_initial(&mut style, "stroke-width");
+    assert_eq!(style.svg_stroke_width, Some(LengthOrNumber::Number(1.0)));
+    apply_initial(&mut style, "fill-rule");
+    assert_eq!(style.svg_fill_rule, Some(FillRule::NonZero));
+    apply_initial(&mut style, "clip-rule");
+    assert_eq!(style.svg_clip_rule, Some(FillRule::NonZero));
+    apply_initial(&mut style, "stroke-linecap");
+    assert_eq!(style.svg_stroke_linecap, Some(StrokeLinecap::Butt));
+    apply_initial(&mut style, "stroke-linejoin");
+    assert_eq!(style.svg_stroke_linejoin, Some(StrokeLinejoin::Miter));
+    apply_initial(&mut style, "stroke-miterlimit");
+    assert_eq!(style.svg_stroke_miterlimit, Some(4.0));
+    apply_initial(&mut style, "stroke-dasharray");
+    assert_eq!(style.svg_stroke_dasharray, Some(StrokeDasharray::None));
+    apply_initial(&mut style, "stroke-dashoffset");
+    assert_eq!(
+      style.svg_stroke_dashoffset,
+      Some(LengthOrNumber::Number(0.0))
+    );
+    apply_initial(&mut style, "fill-opacity");
+    assert_eq!(style.svg_fill_opacity, Some(1.0));
+    apply_initial(&mut style, "stroke-opacity");
+    assert_eq!(style.svg_stroke_opacity, Some(1.0));
   }
 
   #[test]
