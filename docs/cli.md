@@ -23,7 +23,7 @@ These are optional wrappers for the most common loops:
   - Defaults to `viewport=1040x1240`, `dpr=1.0`, JavaScript disabled, and the fixture set in `tests/pages_regression_test.rs`.
   - Writes `target/chrome_vs_fastrender_fixtures.html` + `target/chrome_vs_fastrender_fixtures.json` plus PNG/log/metadata artifacts under `target/chrome_fixture_renders/` and PNG/log artifacts under `target/fastrender_fixture_renders/`.
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--ignore-alpha`, `--sort-by {pixel|percent|perceptual}`, `--fail-on-differences`, `--no-chrome`, `--no-fastrender`, `--diff-only`, `--no-build`
-  - Supports `--shard <index>/<total>` for deterministic sharding (0-based); forwards `--jobs <n>` and `--write-snapshot` to `render_fixtures`.
+  - Supports `--shard <index>/<total>` for deterministic sharding (0-based); forwards `--jobs <n>` and `--write-snapshot` (writes `<fastr-out-dir>/<fixture>/snapshot.json`) to `render_fixtures`.
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
@@ -210,6 +210,7 @@ scripts/chrome_vs_fastrender.sh [--] [stem...]
 Notes:
 - This is not fully deterministic (live subresources can change); it’s still excellent for rapid “why is our render different from Chrome on the same HTML?” debugging.
 - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
+- `scripts/chrome_baseline.sh` prefers Chrome's `--headless=new` mode but automatically retries with legacy `--headless` on older Chrome versions.
 - `scripts/chrome_baseline.sh` supports `--shard <index>/<total>` (0-based) for deterministic sharding of the baseline capture set.
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
@@ -287,6 +288,7 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
   - These baselines are **local-only** artifacts under `target/` (they are not committed).
   - Defaults match the fixture runner viewport/DPR (1040x1240 @ 1.0) unless overridden.
   - JavaScript is disabled by default to match FastRender’s “no JS” model (enforced via injected CSP).
+  - Prefers Chrome's `--headless=new` mode but automatically retries with legacy `--headless` on older Chrome versions (the chosen mode is recorded in `<fixture>.json` metadata).
   - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
   - Output defaults to `target/chrome_fixture_renders/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
 - Core flags:
