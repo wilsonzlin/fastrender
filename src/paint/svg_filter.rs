@@ -7909,3 +7909,80 @@ mod color_interpolation_filters_compositing_tests {
     );
   }
 }
+
+#[cfg(test)]
+mod svg_filter_recursion_limit_tests {
+  use super::*;
+
+  fn with_svg_filter_depth<R, F: FnOnce() -> R>(depth: usize, f: F) -> R {
+    if depth == 0 {
+      return f();
+    }
+    let _guard = svg_filter_depth_guard().expect("depth guard should be available");
+    with_svg_filter_depth(depth - 1, f)
+  }
+
+  fn seeded_pixmap() -> Pixmap {
+    let mut pixmap = new_pixmap(12, 12).unwrap();
+    pixmap.pixels_mut()[6 * 12 + 6] =
+      PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+    pixmap
+  }
+
+  #[test]
+  fn recursion_limit_overflow_is_identity_for_cyclic_filter() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'>\
+      <filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='12' height='12'>\
+        <feComposite in='a' in2='SourceGraphic' operator='over' result='a'/>\
+        <feGaussianBlur in='a' stdDeviation='2'/>\
+      </filter>\
+    </svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 12.0, 12.0);
+    let original_bytes = seeded_pixmap().data().to_vec();
+
+    let mut normal = seeded_pixmap();
+    apply_svg_filter(filter.as_ref(), &mut normal, 1.0, bbox).unwrap();
+    assert_ne!(
+      normal.data(),
+      original_bytes.as_slice(),
+      "sanity check: filter should change pixels when evaluated normally"
+    );
+
+    let mut overflowed = seeded_pixmap();
+    with_svg_filter_depth(MAX_SVG_FILTER_DEPTH, || {
+      apply_svg_filter(filter.as_ref(), &mut overflowed, 1.0, bbox).unwrap();
+    });
+    assert_eq!(
+      overflowed.data(),
+      original_bytes.as_slice(),
+      "recursion overflow should treat the SVG filter as identity"
+    );
+  }
+
+  #[test]
+  fn recursion_limit_allows_deep_but_acyclic_nesting() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'>\
+      <filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='12' height='12'>\
+        <feGaussianBlur stdDeviation='2'/>\
+      </filter>\
+    </svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 12.0, 12.0);
+    let original_bytes = seeded_pixmap().data().to_vec();
+
+    let mut pixmap = seeded_pixmap();
+    with_svg_filter_depth(MAX_SVG_FILTER_DEPTH - 1, || {
+      apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+    });
+    assert_ne!(
+      pixmap.data(),
+      original_bytes.as_slice(),
+      "expected filter evaluation to proceed just below the recursion limit"
+    );
+  }
+}
