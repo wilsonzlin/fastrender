@@ -617,6 +617,10 @@ fn run_update_goldens(args: UpdateGoldensArgs) -> Result<()> {
 }
 
 fn run_pageset(args: PagesetArgs) -> Result<()> {
+  // Always run pageset tooling from the repository root so progress files, caches, and fixtures
+  // land in the expected locations regardless of the caller's current working directory.
+  let repo_root = repo_root();
+
   let mut jobs = args.jobs;
   let mut fetch_timeout = args.fetch_timeout;
   let mut render_timeout = args.render_timeout;
@@ -883,6 +887,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
     }
     apply_disk_cache_env(&mut cmd);
+    cmd.current_dir(&repo_root);
     println!(
       "Updating cached pages (jobs={}, timeout={}s, disk_cache={})...",
       jobs, fetch_timeout, disk_cache_status
@@ -929,6 +934,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
     }
     apply_disk_cache_env(&mut cmd);
+    cmd.current_dir(&repo_root);
     println!(
       "Prefetching subresources into {} (jobs={}, timeout={}s)...",
       cache_dir.display(),
@@ -984,6 +990,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
   }
   apply_disk_cache_env(&mut cmd);
+  cmd.current_dir(&repo_root);
   println!(
     "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={}, cache_dir={})...",
     jobs,
@@ -1004,9 +1011,16 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       println!("Capturing missing failure fixtures from the warmed disk cache...");
 
       let plan_args = xtask::capture_missing_failure_fixtures::CaptureMissingFailureFixturesArgs {
-        progress_dir: PathBuf::from("progress/pages"),
-        fixtures_root: PathBuf::from("tests/pages/fixtures"),
-        bundle_out_dir: args.capture_missing_failure_fixtures_out_dir.clone(),
+        progress_dir: repo_root.join("progress/pages"),
+        fixtures_root: repo_root.join("tests/pages/fixtures"),
+        bundle_out_dir: if args
+          .capture_missing_failure_fixtures_out_dir
+          .is_absolute()
+        {
+          args.capture_missing_failure_fixtures_out_dir.clone()
+        } else {
+          repo_root.join(&args.capture_missing_failure_fixtures_out_dir)
+        },
         asset_cache_dir: cache_dir.clone(),
         user_agent: user_agent_arg.clone(),
         accept_language: accept_language_arg.clone(),
@@ -1054,7 +1068,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
           }
         }
 
-        let bundle_result = run_command(capture.bundle_command.to_command())
+        let mut bundle_cmd = capture.bundle_command.to_command();
+        bundle_cmd.current_dir(&repo_root);
+        let bundle_result = run_command(bundle_cmd)
           .with_context(|| format!("bundle_page cache {}", capture.stem));
         if let Err(err) = bundle_result {
           failures.push((capture.stem.clone(), format!("capture failed: {err}")));
@@ -1062,7 +1078,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
         }
         bundles_captured += 1;
 
-        let import_result = run_command(capture.import_command.to_command())
+        let mut import_cmd = capture.import_command.to_command();
+        import_cmd.current_dir(&repo_root);
+        let import_result = run_command(import_cmd)
           .with_context(|| format!("import-page-fixture {}", capture.stem));
         if let Err(err) = import_result {
           failures.push((capture.stem.clone(), format!("import failed: {err}")));
