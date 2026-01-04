@@ -431,7 +431,11 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
 
 - Notes:
   - `--suite` accepts one or more glob(s) relative to the WPT root (e.g. `css/css-text/*`).
-  - The importer is strict/offline by default: it rewrites `web-platform.test` and root-relative URLs to file-relative paths and fails if any **fetchable** network URL remains in common contexts (`src=`/`href=`/`srcset=`/CSS `url()`) (use `--allow-network` to opt out; not recommended).
+  - The importer is strict/offline by default: it rewrites `web-platform.test` and root-relative URLs to file-relative paths and fails if any **fetchable** network URL remains in common contexts:
+    - HTML: `src`, `srcset`, and fetchable `href` contexts like `<link href=...>` (navigation links like `<a href=...>` are ignored)
+    - SVG: fetchable `href`/`xlink:href` on elements like `<image>`, `<use>`, `<feImage>` (navigation links like `<a xlink:href>` are ignored)
+    - CSS: `url(...)` and `@import`
+    Use `--allow-network` to opt out (not recommended).
     - Use `--strict-offline` to additionally scan the rewritten HTML/CSS for any remaining `http(s)://` or protocol-relative (`//`) URL strings anywhere in the file.
   - Sidecar `.ini` metadata files (e.g. `*.html.ini`) are copied alongside tests when present so local expectations/viewport/DPR settings are preserved.
   - Use `--dry-run` to preview, `--overwrite` to update existing files, and `--manifest <path>` / `--no-manifest` to control manifest updates.
