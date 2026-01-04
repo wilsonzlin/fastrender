@@ -2954,21 +2954,50 @@ impl FormattingContext for FlexFormattingContext {
     let contributions = if self.parallelism.should_parallelize(box_node.children.len()) {
       let deadline = active_deadline();
       let stage = active_stage();
-      box_node
+      let mut child_results = box_node
         .children
         .par_iter()
+        .enumerate()
         .map_init(
           || 0usize,
-          |deadline_counter, child| {
+          |deadline_counter, (idx, child)| {
             with_deadline(deadline.as_ref(), || {
               let _stage_guard = StageGuard::install(stage);
               crate::layout::engine::debug_record_parallel_work();
               check_layout_deadline(deadline_counter)?;
-              compute_child_contribution(child)
+              compute_child_contribution(child).map(|value| (idx, value))
             })
           },
         )
-        .collect::<Result<Vec<_>, _>>()?
+        .collect::<Result<Vec<_>, _>>()?;
+
+      // `par_iter().enumerate()` is indexed, but collecting through `Result` does not guarantee
+      // stable ordering. Ensure that the intrinsic inline-size summation uses DOM order so float
+      // rounding stays deterministic under Rayon parallelism.
+      let mut ordered = true;
+      let mut prev_idx: Option<usize> = None;
+      for (idx, _) in &child_results {
+        if let Some(prev) = prev_idx {
+          if *idx <= prev {
+            ordered = false;
+            break;
+          }
+        }
+        prev_idx = Some(*idx);
+      }
+
+      if !ordered {
+        child_results.sort_unstable_by_key(|(idx, _)| *idx);
+      }
+
+      child_results
+        .into_iter()
+        .enumerate()
+        .map(|(expected_idx, (idx, value))| {
+          debug_assert_eq!(idx, expected_idx, "parallel flex intrinsic index mismatch");
+          value
+        })
+        .collect()
     } else {
       box_node
         .children
@@ -8275,6 +8304,80 @@ mod tests {
 
     // Max-content width should be sum of children widths (row direction)
     assert_eq!(width, 250.0);
+  }
+
+  #[test]
+  fn flex_intrinsic_inline_size_is_deterministic_under_parallelism() {
+    use rayon::ThreadPoolBuilder;
+
+    // Use values that are sensitive to summation order:
+    // - Large widths (2^26) make the f32 ULP 8+ so small contributions can be rounded away.
+    // - Small widths + fractional margins are lost when added after the large values, but would
+    //   affect the result if their summation order changes.
+    let large_width = 67_108_864.0; // 2^26
+    let large_count = 8usize;
+    let small_count = 1024usize;
+
+    let mut children = Vec::with_capacity(large_count + small_count);
+    for _ in 0..large_count {
+      let mut style = ComputedStyle::default();
+      style.width = Some(Length::px(large_width));
+      style.height = Some(Length::px(10.0));
+      children.push(BoxNode::new_block(
+        Arc::new(style),
+        FormattingContextType::Block,
+        vec![],
+      ));
+    }
+    for _ in 0..small_count {
+      let mut style = ComputedStyle::default();
+      style.width = Some(Length::px(1.0));
+      style.height = Some(Length::px(10.0));
+      style.margin_left = Some(Length::px(0.25));
+      style.margin_right = Some(Length::px(0.25));
+      children.push(BoxNode::new_block(
+        Arc::new(style),
+        FormattingContextType::Block,
+        vec![],
+      ));
+    }
+
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, children);
+
+    let sequential_fc = FlexFormattingContext::new().with_parallelism(LayoutParallelism::disabled());
+    let expected_bits = sequential_fc
+      .compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MaxContent)
+      .expect("sequential intrinsic sizing")
+      .to_bits();
+
+    let parallel_fc = FlexFormattingContext::new().with_parallelism(
+      LayoutParallelism::enabled(1).with_max_threads(Some(4)),
+    );
+    assert!(
+      parallel_fc
+        .parallelism
+        .should_parallelize(container.children.len()),
+      "expected the test container to trigger the parallel intrinsic sizing path"
+    );
+
+    let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    let results = pool.install(|| {
+      (0..64usize)
+        .map(|_| {
+          parallel_fc
+            .compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MaxContent)
+            .expect("parallel intrinsic sizing")
+            .to_bits()
+        })
+        .collect::<Vec<_>>()
+    });
+
+    for (run, bits) in results.into_iter().enumerate() {
+      assert_eq!(
+        bits, expected_bits,
+        "parallel intrinsic inline size differed on run {run}"
+      );
+    }
   }
 
   #[test]
