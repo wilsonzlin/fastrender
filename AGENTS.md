@@ -203,6 +203,7 @@ when available and rescaled so buckets sum (within rounding error) to `total_ms`
 - **Pageset loop**: `scripts/pageset.sh`, `cargo xtask pageset`
 - **Scoreboard**: `pageset_progress report`
 - **Correct-engine baseline (cached pages; best-effort)**: `scripts/chrome_baseline.sh` (+ Ubuntu deps helper)
+- **Cached-pages Chrome-vs-FastRender report (best-effort)**: `scripts/chrome_vs_fastrender.sh` (writes `target/chrome_vs_fastrender/diff_report.html` by default)
 - **Render outputs**: `render_pages` (writes `fetches/renders/*.png`)
 - **Diffs**: `diff_renders`
 - **Deterministic fixture evidence**: `render_fixtures`, `cargo xtask chrome-baseline-fixtures`, `cargo xtask fixture-chrome-diff`
