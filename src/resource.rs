@@ -12961,14 +12961,20 @@ mod tests {
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
         last_modified: Some("lm1".to_string()),
-        cache_policy: None,
+        cache_policy: Some(HttpCachePolicy {
+          max_age: Some(3600),
+          ..Default::default()
+        }),
       },
       MockResponse {
         status: 403,
         body: b"forbidden".to_vec(),
         etag: Some("etag_forbidden".to_string()),
         last_modified: Some("lm_forbidden".to_string()),
-        cache_policy: None,
+        cache_policy: Some(HttpCachePolicy {
+          no_store: true,
+          ..Default::default()
+        }),
       },
       MockResponse {
         status: 200,
@@ -13010,6 +13016,19 @@ mod tests {
       cached.last_modified.as_deref(),
       Some("lm1"),
       "cache entry validators must not be overwritten by HTTP error response"
+    );
+    let cache_meta = cached
+      .http_cache
+      .as_ref()
+      .expect("seed response should have cache metadata");
+    assert_eq!(
+      cache_meta.max_age,
+      Some(Duration::from_secs(3600)),
+      "HTTP error refresh must not overwrite cache metadata"
+    );
+    assert!(
+      !cache_meta.no_store,
+      "HTTP error refresh must not overwrite cache metadata"
     );
 
     let third = cache.fetch(url).expect("fresh fetch should update cache");
@@ -13403,6 +13422,7 @@ mod tests {
       body: Vec<u8>,
       etag: Option<String>,
       last_modified: Option<String>,
+      cache_policy: Option<HttpCachePolicy>,
     }
 
     #[derive(Clone)]
@@ -13429,6 +13449,7 @@ mod tests {
         resource.final_url = Some(url.to_string());
         resource.etag = resp.etag;
         resource.last_modified = resp.last_modified;
+        resource.cache_policy = resp.cache_policy;
         Ok(resource)
       }
 
@@ -13470,18 +13491,27 @@ mod tests {
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
         last_modified: Some("lm1".to_string()),
+        cache_policy: Some(HttpCachePolicy {
+          max_age: Some(3600),
+          ..Default::default()
+        }),
       },
       RequestResponse {
         status: 403,
         body: b"forbidden".to_vec(),
         etag: Some("etag_forbidden".to_string()),
         last_modified: Some("lm_forbidden".to_string()),
+        cache_policy: Some(HttpCachePolicy {
+          no_store: true,
+          ..Default::default()
+        }),
       },
       RequestResponse {
         status: 200,
         body: b"fresh".to_vec(),
         etag: Some("etag2".to_string()),
         last_modified: None,
+        cache_policy: None,
       },
     ]);
 
@@ -13515,6 +13545,19 @@ mod tests {
       cached.last_modified.as_deref(),
       Some("lm1"),
       "cache entry validators must not be overwritten by HTTP error response"
+    );
+    let cache_meta = cached
+      .http_cache
+      .as_ref()
+      .expect("seed response should have cache metadata");
+    assert_eq!(
+      cache_meta.max_age,
+      Some(Duration::from_secs(3600)),
+      "HTTP error refresh must not overwrite cache metadata"
+    );
+    assert!(
+      !cache_meta.no_store,
+      "HTTP error refresh must not overwrite cache metadata"
     );
 
     let third = cache.fetch_with_request(req).expect("fresh fetch");

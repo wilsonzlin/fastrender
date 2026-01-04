@@ -3673,7 +3673,10 @@ mod tests {
         body: b"forbidden".to_vec(),
         etag: Some("etag_forbidden".to_string()),
         last_modified: Some("lm_forbidden".to_string()),
-        cache_policy: None,
+        cache_policy: Some(HttpCachePolicy {
+          no_store: true,
+          ..Default::default()
+        }),
       },
     ]);
 
@@ -3722,6 +3725,19 @@ mod tests {
     assert_eq!(meta.status, Some(200));
     assert_eq!(meta.etag.as_deref(), Some("etag1"));
     assert_eq!(meta.last_modified.as_deref(), Some("lm1"));
+    assert_eq!(
+      meta.cache.as_ref().and_then(|cache| cache.max_age),
+      Some(3600),
+      "HTTP error refresh must not overwrite cache metadata"
+    );
+    assert!(
+      !meta
+        .cache
+        .as_ref()
+        .expect("seed response should have cache metadata")
+        .no_store,
+      "HTTP error refresh must not overwrite cache metadata"
+    );
     assert!(
       meta.error.is_none(),
       "unexpected cached error metadata after fallback"
@@ -3734,6 +3750,11 @@ mod tests {
     assert_eq!(cached.bytes, b"cached");
     assert_eq!(cached.status, Some(200));
     assert_eq!(cached.last_modified.as_deref(), Some("lm1"));
+    assert_eq!(
+      cached.cache_policy.as_ref().and_then(|policy| policy.max_age),
+      Some(3600),
+      "HTTP error refresh must not overwrite cache metadata"
+    );
   }
 
   #[test]
