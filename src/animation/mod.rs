@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::css::types::{Keyframe, KeyframesRule};
+use crate::css::types::{Keyframe, KeyframesRule, RotateValue, ScaleValue, TranslateValue};
 use crate::debug::runtime;
 use crate::geometry::{Point, Rect, Size};
 use crate::paint::display_list::{Transform2D, Transform3D};
@@ -60,6 +60,9 @@ pub enum AnimatedValue {
   Opacity(f32),
   Color(Rgba),
   Transform(Vec<crate::css::types::Transform>),
+  Translate(TranslateValue),
+  Rotate(RotateValue),
+  Scale(ScaleValue),
   Filter(Vec<FilterFunction>),
   BackdropFilter(Vec<FilterFunction>),
   ClipPath(ClipPath),
@@ -1034,6 +1037,121 @@ fn apply_transform(style: &mut ComputedStyle, value: &AnimatedValue) {
   }
 }
 
+fn extract_translate(
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> Option<AnimatedValue> {
+  let width = ctx.element_size.width;
+  let height = ctx.element_size.height;
+  let resolved = match style.translate {
+    TranslateValue::None => TranslateValue::None,
+    TranslateValue::Values { x, y, z } => TranslateValue::Values {
+      x: Length::px(resolve_length_px(&x, Some(width), style, ctx)),
+      y: Length::px(resolve_length_px(&y, Some(height), style, ctx)),
+      // translate Z disallows percentages.
+      z: Length::px(resolve_length_px(&z, None, style, ctx)),
+    },
+  };
+  Some(AnimatedValue::Translate(resolved))
+}
+
+fn interpolate_translate_value(
+  a: &AnimatedValue,
+  b: &AnimatedValue,
+  t: f32,
+) -> Option<AnimatedValue> {
+  let (AnimatedValue::Translate(ta), AnimatedValue::Translate(tb)) = (a, b) else {
+    return None;
+  };
+  if matches!(ta, TranslateValue::None) && matches!(tb, TranslateValue::None) {
+    return Some(AnimatedValue::Translate(TranslateValue::None));
+  }
+
+  let (ax, ay, az) = match ta {
+    TranslateValue::None => (0.0, 0.0, 0.0),
+    TranslateValue::Values { x, y, z } => (x.to_px(), y.to_px(), z.to_px()),
+  };
+  let (bx, by, bz) = match tb {
+    TranslateValue::None => (0.0, 0.0, 0.0),
+    TranslateValue::Values { x, y, z } => (x.to_px(), y.to_px(), z.to_px()),
+  };
+  Some(AnimatedValue::Translate(TranslateValue::Values {
+    x: Length::px(lerp(ax, bx, t)),
+    y: Length::px(lerp(ay, by, t)),
+    z: Length::px(lerp(az, bz, t)),
+  }))
+}
+
+fn apply_translate(style: &mut ComputedStyle, value: &AnimatedValue) {
+  if let AnimatedValue::Translate(v) = value {
+    style.translate = *v;
+  }
+}
+
+fn extract_rotate(style: &ComputedStyle, _ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
+  Some(AnimatedValue::Rotate(style.rotate))
+}
+
+fn interpolate_rotate_value(a: &AnimatedValue, b: &AnimatedValue, t: f32) -> Option<AnimatedValue> {
+  let (AnimatedValue::Rotate(ra), AnimatedValue::Rotate(rb)) = (a, b) else {
+    return None;
+  };
+  if matches!(ra, RotateValue::None) && matches!(rb, RotateValue::None) {
+    return Some(AnimatedValue::Rotate(RotateValue::None));
+  }
+
+  let a_deg = match ra {
+    RotateValue::None => 0.0,
+    RotateValue::Angle(deg) => *deg,
+  };
+  let b_deg = match rb {
+    RotateValue::None => 0.0,
+    RotateValue::Angle(deg) => *deg,
+  };
+  Some(AnimatedValue::Rotate(RotateValue::Angle(lerp(
+    a_deg, b_deg, t,
+  ))))
+}
+
+fn apply_rotate(style: &mut ComputedStyle, value: &AnimatedValue) {
+  if let AnimatedValue::Rotate(v) = value {
+    style.rotate = *v;
+  }
+}
+
+fn extract_scale(style: &ComputedStyle, _ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
+  Some(AnimatedValue::Scale(style.scale))
+}
+
+fn interpolate_scale_value(a: &AnimatedValue, b: &AnimatedValue, t: f32) -> Option<AnimatedValue> {
+  let (AnimatedValue::Scale(sa), AnimatedValue::Scale(sb)) = (a, b) else {
+    return None;
+  };
+  if matches!(sa, ScaleValue::None) && matches!(sb, ScaleValue::None) {
+    return Some(AnimatedValue::Scale(ScaleValue::None));
+  }
+
+  let (ax, ay, az) = match sa {
+    ScaleValue::None => (1.0, 1.0, 1.0),
+    ScaleValue::Values { x, y, z } => (*x, *y, *z),
+  };
+  let (bx, by, bz) = match sb {
+    ScaleValue::None => (1.0, 1.0, 1.0),
+    ScaleValue::Values { x, y, z } => (*x, *y, *z),
+  };
+  Some(AnimatedValue::Scale(ScaleValue::Values {
+    x: lerp(ax, bx, t),
+    y: lerp(ay, by, t),
+    z: lerp(az, bz, t),
+  }))
+}
+
+fn apply_scale(style: &mut ComputedStyle, value: &AnimatedValue) {
+  if let AnimatedValue::Scale(v) = value {
+    style.scale = *v;
+  }
+}
+
 fn extract_filter(style: &ComputedStyle, ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
   let resolved = resolve_filter_list(&style.filter, style, ctx);
   Some(AnimatedValue::Filter(resolved_filters_to_functions(
@@ -1250,6 +1368,24 @@ fn property_interpolators() -> &'static [PropertyInterpolator] {
       extract: extract_transform,
       interpolate: interpolate_transform_value,
       apply: apply_transform,
+    },
+    PropertyInterpolator {
+      name: "translate",
+      extract: extract_translate,
+      interpolate: interpolate_translate_value,
+      apply: apply_translate,
+    },
+    PropertyInterpolator {
+      name: "rotate",
+      extract: extract_rotate,
+      interpolate: interpolate_rotate_value,
+      apply: apply_rotate,
+    },
+    PropertyInterpolator {
+      name: "scale",
+      extract: extract_scale,
+      interpolate: interpolate_scale_value,
+      apply: apply_scale,
     },
     PropertyInterpolator {
       name: "filter",
@@ -2480,6 +2616,48 @@ mod tests {
     }
   }
 
+  fn sampled_translate(rule: &KeyframesRule, progress: f32, element_size: Size) -> TranslateValue {
+    let values = sample_keyframes(
+      rule,
+      progress,
+      &ComputedStyle::default(),
+      Size::new(800.0, 600.0),
+      element_size,
+    );
+    match values.get("translate") {
+      Some(AnimatedValue::Translate(v)) => *v,
+      other => panic!("expected translate, got {other:?}"),
+    }
+  }
+
+  fn sampled_rotate(rule: &KeyframesRule, progress: f32) -> RotateValue {
+    let values = sample_keyframes(
+      rule,
+      progress,
+      &ComputedStyle::default(),
+      Size::new(800.0, 600.0),
+      Size::new(100.0, 100.0),
+    );
+    match values.get("rotate") {
+      Some(AnimatedValue::Rotate(v)) => *v,
+      other => panic!("expected rotate, got {other:?}"),
+    }
+  }
+
+  fn sampled_scale(rule: &KeyframesRule, progress: f32) -> ScaleValue {
+    let values = sample_keyframes(
+      rule,
+      progress,
+      &ComputedStyle::default(),
+      Size::new(800.0, 600.0),
+      Size::new(100.0, 100.0),
+    );
+    match values.get("scale") {
+      Some(AnimatedValue::Scale(v)) => *v,
+      other => panic!("expected scale, got {other:?}"),
+    }
+  }
+
   #[test]
   fn time_based_animation_fill_forwards_applies_after_end() {
     let rule = fade_rule();
@@ -2541,6 +2719,59 @@ mod tests {
     let progress = time_based_animation_progress(&style, 0, 500.0).expect("active");
     assert!((progress - 0.0).abs() < 1e-6, "progress={progress}");
     assert!((sampled_opacity(&rule, progress) - 0.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn sample_keyframes_translate_interpolates_percentages() {
+    let sheet = parse_stylesheet(
+      "@keyframes move { from { translate: 0 -100%; } to { translate: 0 0; } }",
+    )
+    .unwrap();
+    let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+    let rule = &keyframes[0];
+
+    let translate = sampled_translate(rule, 0.5, Size::new(80.0, 80.0));
+    match translate {
+      TranslateValue::Values { x, y, z } => {
+        assert!((x.to_px() - 0.0).abs() < 1e-6, "x={x:?}");
+        assert!((y.to_px() - -40.0).abs() < 1e-6, "y={y:?}");
+        assert!((z.to_px() - 0.0).abs() < 1e-6, "z={z:?}");
+      }
+      TranslateValue::None => panic!("expected translate values"),
+    }
+  }
+
+  #[test]
+  fn sample_keyframes_rotate_interpolates_angle() {
+    let sheet =
+      parse_stylesheet("@keyframes spin { from { rotate: 0deg; } to { rotate: 90deg; } }")
+        .unwrap();
+    let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+    let rule = &keyframes[0];
+
+    let rotate = sampled_rotate(rule, 0.5);
+    match rotate {
+      RotateValue::Angle(deg) => assert!((deg - 45.0).abs() < 1e-6, "deg={deg}"),
+      RotateValue::None => panic!("expected rotate angle"),
+    }
+  }
+
+  #[test]
+  fn sample_keyframes_scale_interpolates_numbers() {
+    let sheet = parse_stylesheet("@keyframes zoom { from { scale: 1; } to { scale: 2 3; } }")
+      .unwrap();
+    let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+    let rule = &keyframes[0];
+
+    let scale = sampled_scale(rule, 0.5);
+    match scale {
+      ScaleValue::Values { x, y, z } => {
+        assert!((x - 1.5).abs() < 1e-6, "x={x}");
+        assert!((y - 2.0).abs() < 1e-6, "y={y}");
+        assert!((z - 1.0).abs() < 1e-6, "z={z}");
+      }
+      ScaleValue::None => panic!("expected scale values"),
+    }
   }
 
   fn decode_png(bytes: &[u8]) -> image::RgbaImage {
