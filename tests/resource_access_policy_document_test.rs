@@ -48,3 +48,44 @@ fn iframe_documents_ignore_same_origin_subresource_policy() {
     );
   }
 }
+
+#[test]
+fn document_loads_still_apply_mixed_content_and_file_restrictions() {
+  let origin = origin_from_url("https://example.test/").expect("origin");
+
+  let ctx = ResourceContext {
+    policy: ResourceAccessPolicy {
+      document_origin: Some(origin.clone()),
+      block_mixed_content: true,
+      same_origin_only: true,
+      ..ResourceAccessPolicy::default()
+    },
+    document_url: None,
+    diagnostics: None,
+    iframe_depth_remaining: None,
+  };
+  assert!(
+    ctx
+      .check_allowed(ResourceKind::Document, "http://other.test/frame.html")
+      .is_err(),
+    "expected mixed-content iframe document load to be blocked for HTTPS documents when block_mixed_content is enabled"
+  );
+
+  let ctx = ResourceContext {
+    policy: ResourceAccessPolicy {
+      document_origin: Some(origin),
+      allow_file_from_http: false,
+      same_origin_only: true,
+      ..ResourceAccessPolicy::default()
+    },
+    document_url: None,
+    diagnostics: None,
+    iframe_depth_remaining: None,
+  };
+  assert!(
+    ctx
+      .check_allowed(ResourceKind::Document, "file:///etc/passwd")
+      .is_err(),
+    "expected file:// iframe document load to be blocked for HTTP(S) documents when allow_file_from_http is disabled"
+  );
+}
