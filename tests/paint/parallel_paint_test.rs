@@ -826,11 +826,11 @@ fn clip_path_polygon_matches_serial_output_under_tiling() {
   // small tile size. This exercises the per-tile canvas translation in the parallel renderer.
   let polygon = ResolvedClipPath::Polygon {
     points: vec![
-      Point::new(28.0, 30.0),
-      Point::new(42.0, 30.0),
-      Point::new(44.0, 40.0),
-      Point::new(36.0, 46.0),
-      Point::new(28.0, 38.0),
+      Point::new(33.0, 29.0),
+      Point::new(72.0, 33.0),
+      Point::new(80.0, 56.0),
+      Point::new(60.0, 78.0),
+      Point::new(34.0, 60.0),
     ],
     fill_rule: tiny_skia::FillRule::Winding,
   };
@@ -839,7 +839,7 @@ fn clip_path_polygon_matches_serial_output_under_tiling() {
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     // Deliberately larger than the polygon bounds so the clip-path mask controls the output.
-    rect: Rect::from_xywh(26.0, 27.0, 21.0, 20.0),
+    rect: Rect::from_xywh(24.0, 24.0, 64.0, 64.0),
     color: Rgba::new(40, 160, 220, 1.0),
   }));
   list.push(DisplayItem::PopClip);
@@ -870,7 +870,7 @@ fn clip_path_polygon_matches_serial_output_under_tiling() {
   });
 
   assert!(report.parallel_used, "expected tiling to be used");
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]
@@ -968,7 +968,7 @@ fn mask_layers_survive_tiling() {
   });
 
   assert!(report.parallel_used, "expected tiling to be used");
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]
@@ -1064,7 +1064,7 @@ fn mask_viewport_units_match_serial_output() {
   });
 
   assert!(report.parallel_used, "expected tiling to be used");
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]
@@ -1153,7 +1153,7 @@ fn preserve_3d_stacking_contexts_trigger_serial_fallback() {
     reason.contains("preserve"),
     "expected preserve-3d fallback reason, got {reason:?}"
   );
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]

@@ -694,6 +694,17 @@ impl Canvas {
 
   /// Sets an arbitrary clip path (basic shapes)
   pub fn set_clip_path(&mut self, path: &ResolvedClipPath, scale: f32) -> Result<()> {
+    // Parallel tiling renders each tile into a smaller pixmap with a translated canvas transform.
+    // When a clip path extends beyond the tile's pixmap bounds, tiny-skia clips the path to the
+    // mask extents during rasterization. That clipping can introduce subtle numerical differences
+    // compared to rasterizing the same path on the full surface, showing up as tile seams near
+    // anti-aliased clip edges (notably for `clip-path: polygon(...)`).
+    //
+    // To keep serial and tiled output pixel-identical, rasterize clip-path masks into a padded
+    // scratch mask and then crop back down to the target pixmap size. This keeps the clip path's
+    // geometry well away from mask boundaries so the clipped intermediate is stable.
+    const CLIP_PATH_MASK_PADDING_PX: u32 = 32;
+
     let bounds = path.bounds();
     let scaled_bounds = Rect::from_xywh(
       bounds.x() * scale,
@@ -713,8 +724,43 @@ impl Canvas {
     };
     self.current_state.clip_rect = Some(base_clip);
 
-    let new_mask = IntSize::from_wh(self.pixmap.width(), self.pixmap.height())
-      .and_then(|size| path.mask(scale, size, self.current_state.transform));
+    let pixmap_w = self.pixmap.width();
+    let pixmap_h = self.pixmap.height();
+    let new_mask = if let Some(size) = IntSize::from_wh(pixmap_w, pixmap_h) {
+      let pad_needed = clip_bounds.min_x() < 0.0
+        || clip_bounds.min_y() < 0.0
+        || clip_bounds.max_x() > pixmap_w as f32
+        || clip_bounds.max_y() > pixmap_h as f32;
+
+      if !pad_needed || CLIP_PATH_MASK_PADDING_PX == 0 {
+        path.mask(scale, size, self.current_state.transform)
+      } else {
+        let pad = CLIP_PATH_MASK_PADDING_PX;
+        let fallback = || path.mask(scale, size, self.current_state.transform);
+        let padded = (|| -> RenderResult<Option<Mask>> {
+          let Some(padded_w) = pixmap_w.checked_add(pad.saturating_mul(2)) else {
+            return Ok(fallback());
+          };
+          let Some(padded_h) = pixmap_h.checked_add(pad.saturating_mul(2)) else {
+            return Ok(fallback());
+          };
+          let Some(padded_size) = IntSize::from_wh(padded_w, padded_h) else {
+            return Ok(fallback());
+          };
+          let padded_transform = self
+            .current_state
+            .transform
+            .post_translate(pad as f32, pad as f32);
+          let Some(padded_mask) = path.mask(scale, padded_size, padded_transform) else {
+            return Ok(fallback());
+          };
+          crop_mask(&padded_mask, pad, pad, pixmap_w, pixmap_h)
+        })();
+        padded?
+      }
+    } else {
+      None
+    };
     self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
       (Some(mut next), Some(existing)) => {
         combine_masks(&mut next, existing.as_ref())?;
