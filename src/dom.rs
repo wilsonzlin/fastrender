@@ -2560,6 +2560,11 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
   Ok(())
 }
 
+fn is_slot_assignment_inert_template(node: &DomNode) -> bool {
+  matches!(node.tag_name(), Some(tag) if tag.eq_ignore_ascii_case("template"))
+    && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+}
+
 fn collect_slot_names<'a>(
   node: &'a DomNode,
   out: &mut HashSet<&'a str>,
@@ -2576,7 +2581,7 @@ fn collect_slot_names<'a>(
       RenderStage::Cascade,
     )
     .map_err(Error::Render)?;
-    if is_inert_html_template(current) {
+    if is_slot_assignment_inert_template(current) {
       continue;
     }
     if matches!(current.node_type, DomNodeType::Slot { .. }) {
@@ -2590,7 +2595,9 @@ fn collect_slot_names<'a>(
     }
 
     for child in current.children.iter().rev() {
-      if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+      if matches!(child.node_type, DomNodeType::ShadowRoot { .. })
+        || is_slot_assignment_inert_template(child)
+      {
         continue;
       }
       stack.push(child);
@@ -2653,7 +2660,7 @@ fn fill_slot_assignments(
       RenderStage::Cascade,
     )
     .map_err(Error::Render)?;
-    let mut traverse_children = !is_inert_html_template(current);
+    let mut traverse_children = !is_slot_assignment_inert_template(current);
 
     if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
       // Shadow tree boundaries block assignment of this host's light DOM into nested shadow roots.
@@ -2709,7 +2716,9 @@ fn fill_slot_assignments(
 
     if traverse_children {
       for child in current.children.iter().rev() {
-        if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+        if matches!(child.node_type, DomNodeType::ShadowRoot { .. })
+          || is_slot_assignment_inert_template(child)
+        {
           continue;
         }
         stack.push(child);

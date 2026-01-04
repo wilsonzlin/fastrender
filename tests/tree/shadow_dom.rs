@@ -359,7 +359,7 @@ fn nested_shadow_root_slots_do_not_capture_outer_light_dom() {
   "#;
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids).expect("slot assignment");
   let mut lookup = HashMap::new();
   build_id_lookup(&dom, &ids, &mut lookup);
 
@@ -404,6 +404,50 @@ fn nested_shadow_root_slots_do_not_capture_outer_light_dom() {
 }
 
 #[test]
+fn nested_shadow_root_slot_names_do_not_affect_outer_default_slot() {
+  let html = r#"
+    <div id='host'>
+      <template shadowroot='open'>
+        <slot id='outer-default'></slot>
+        <x-inner id='inner-host'>
+          <template shadowroot='open'>
+            <slot name='foo' id='inner-slot'></slot>
+          </template>
+        </x-inner>
+      </template>
+      <span slot='foo' id='light'>Light</span>
+    </div>
+  "#;
+  let dom = parse_html(html).expect("parse html");
+  let ids = enumerate_dom_ids(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids).expect("slot assignment");
+  let mut lookup = HashMap::new();
+  build_id_lookup(&dom, &ids, &mut lookup);
+
+  let outer_slot = find_by_id(&dom, "outer-default").expect("outer default slot");
+  let outer_slot_id = *ids.get(&(outer_slot as *const DomNode)).expect("outer slot id");
+  let assigned = assignments
+    .slot_to_nodes
+    .get(&outer_slot_id)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(assigned.len(), 1);
+  assert_eq!(
+    lookup
+      .get(&assigned[0])
+      .and_then(|n| n.get_attribute_ref("id")),
+    Some("light")
+  );
+
+  let inner_slot = find_by_id(&dom, "inner-slot").expect("inner slot");
+  let inner_slot_id = *ids.get(&(inner_slot as *const DomNode)).expect("inner slot id");
+  assert!(
+    !assignments.slot_to_nodes.contains_key(&inner_slot_id),
+    "slots inside nested shadow roots must never receive outer host assignments"
+  );
+}
+
+#[test]
 fn slots_inside_inert_template_are_ignored_for_assignment() {
   let html = r#"
     <div id='host'>
@@ -418,7 +462,7 @@ fn slots_inside_inert_template_are_ignored_for_assignment() {
   "#;
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids).expect("slot assignment");
   let mut lookup = HashMap::new();
   build_id_lookup(&dom, &ids, &mut lookup);
 
@@ -444,5 +488,51 @@ fn slots_inside_inert_template_are_ignored_for_assignment() {
   assert!(
     !assignments.slot_to_nodes.contains_key(&slot_in_template_id),
     "slots inside inert template contents should not be considered for assignment"
+  );
+}
+
+#[test]
+fn slot_names_inside_inert_templates_do_not_affect_distribution() {
+  let html = r#"
+    <div id='host'>
+      <template shadowroot='open'>
+        <template>
+          <slot name='foo' id='template-slot'></slot>
+        </template>
+        <slot id='default-slot'></slot>
+      </template>
+      <span slot='foo' id='light'>Light</span>
+    </div>
+  "#;
+  let dom = parse_html(html).expect("parse html");
+  let ids = enumerate_dom_ids(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids).expect("slot assignment");
+  let mut lookup = HashMap::new();
+  build_id_lookup(&dom, &ids, &mut lookup);
+
+  let default_slot = find_by_id(&dom, "default-slot").expect("default slot");
+  let default_slot_id = *ids
+    .get(&(default_slot as *const DomNode))
+    .expect("default slot id");
+  let assigned = assignments
+    .slot_to_nodes
+    .get(&default_slot_id)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(assigned.len(), 1);
+  assert_eq!(
+    lookup
+      .get(&assigned[0])
+      .and_then(|n| n.get_attribute_ref("id")),
+    Some("light")
+  );
+
+  let template_slot = find_by_id(&dom, "template-slot").expect("slot in inert template");
+  let template_slot_id = *ids
+    .get(&(template_slot as *const DomNode))
+    .expect("slot in inert template id");
+  assert!(
+    !assignments.slot_to_nodes.contains_key(&template_slot_id),
+    "slot elements inside inert templates must never receive assignments"
   );
 }
