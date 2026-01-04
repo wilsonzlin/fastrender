@@ -81,9 +81,10 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     `reencode_pixmap_to_srgb()`.
 - `feDropShadow`
   - Runs in **linearRGB** when requested.
-  - Implementation: the shadow pixmap is re-encoded to linearRGB before blurring and compositing,
-    and `SourceGraphic` is also re-encoded to linearRGB before the final `SourceOver` merge. Output
-    is then re-encoded back to sRGB.
+  - Implementation: for `linearRGB`, the shadow pixmap is re-encoded to linearRGB before the blur
+    stage and kept in linearRGB for the `dx`/`dy` offset draw (which can resample/interpolate).
+    `SourceGraphic` is also re-encoded to linearRGB before the final `SourceOver` merge. Output is
+    then re-encoded back to sRGB.
 - `feOffset`
   - Runs in **linearRGB** when requested *and* the offset requires interpolation (fractional
     `dx`/`dy`).
