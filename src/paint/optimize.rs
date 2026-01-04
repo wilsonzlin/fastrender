@@ -379,25 +379,6 @@ impl DisplayListOptimizer {
       }
     };
 
-    let disable_clip_culling =
-      |clip_stack: &mut [ClipRecord], active_cull_clips: &mut usize| -> bool {
-        if *active_cull_clips == 0 {
-          return false;
-        }
-        let mut disabled = 0usize;
-        for clip in clip_stack {
-          if clip.can_cull {
-            clip.can_cull = false;
-            disabled += 1;
-          }
-        }
-        if disabled > 0 {
-          *active_cull_clips = active_cull_clips.saturating_sub(disabled);
-          return true;
-        }
-        false
-      };
-
     for (index, item) in iter {
       check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       let mut include_item = false;
@@ -407,12 +388,6 @@ impl DisplayListOptimizer {
       match item {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
-          if !clip_stack.is_empty()
-            && disable_clip_culling(&mut clip_stack, &mut active_cull_clips)
-          {
-            clips_can_cull_any = active_cull_clips > 0;
-            refresh_context_clipping(&mut context_stack, clips_can_cull_any);
-          }
           transform_state.current_3d = transform_state.current_3d.multiply(&t.transform);
           include_item = true;
         }
@@ -433,12 +408,6 @@ impl DisplayListOptimizer {
           }
           if pushed_transform {
             transform_stack.push(transform_state.clone());
-            if !clip_stack.is_empty()
-              && disable_clip_culling(&mut clip_stack, &mut active_cull_clips)
-            {
-              clips_can_cull_any = active_cull_clips > 0;
-              refresh_context_clipping(&mut context_stack, clips_can_cull_any);
-            }
             transform_state.current_3d = context_transform;
           }
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
