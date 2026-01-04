@@ -588,6 +588,36 @@ fn test_layout_complex_document() {
 }
 
 #[test]
+fn test_layout_document_respects_runtime_toggle_media_overrides() {
+  let mut toggles = HashMap::new();
+  toggles.insert("FASTR_DISPLAY_LIST_PARALLEL".to_string(), "0".to_string());
+  // Force media type to print regardless of the explicit API media type so we can validate that
+  // layout runs under the renderer-configured runtime toggles (and does not consult process env).
+  toggles.insert("FASTR_MEDIA_TYPE".to_string(), "print".to_string());
+
+  let config = deterministic_config().with_runtime_toggles(RuntimeToggles::from_map(toggles));
+  let mut renderer = FastRender::with_config(config).expect("renderer with media overrides");
+
+  let html = r#"
+        <!doctype html>
+        <html>
+            <head>
+                <style>
+                    html, body { margin: 0; }
+                    @media print { body { background: rgb(255, 0, 0); } }
+                    @media screen { body { background: rgb(0, 0, 255); } }
+                </style>
+            </head>
+            <body>Media override</body>
+        </html>
+    "#;
+  let dom = renderer.parse_html(html).unwrap();
+  let fragment_tree = renderer.layout_document(&dom, 64, 64).unwrap();
+  let pixmap = renderer.paint(&fragment_tree, 64, 64).unwrap();
+  assert_eq!(pix_rgba(&pixmap, 0, 0), (255, 0, 0, 255));
+}
+
+#[test]
 fn test_paint() {
   let mut renderer = deterministic_renderer();
   let dom = renderer.parse_html("<div>Content</div>").unwrap();

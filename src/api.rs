@@ -7035,27 +7035,33 @@ impl FastRender {
     layout_parallelism: LayoutParallelism,
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<LayoutArtifacts> {
-    let inherited_deadline = crate::render_control::active_deadline();
-    let deadline = deadline.or(inherited_deadline.as_ref());
-    let _deadline_guard = DeadlineGuard::install(deadline);
-    let clone_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let (dom_with_state, needs_top_layer_state) =
-      dom::clone_dom_with_deadline_and_top_layer_hint(dom, RenderStage::DomParse)?;
-    if let Some(rec) = stats.as_deref_mut() {
-      RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_clone_ms, clone_timer);
-    }
-    self.layout_document_for_media_with_artifacts_owned(
-      dom_with_state,
-      needs_top_layer_state,
-      width,
-      height,
-      media_type,
-      options,
-      deadline,
-      trace,
-      layout_parallelism,
-      stats,
-    )
+    // Layout can consult runtime toggles (e.g. media preference overrides). Ensure the renderer's
+    // configured toggles are active so library users can override env-derived behavior without
+    // mutating process environment variables.
+    let runtime_toggles = Arc::clone(&self.runtime_toggles);
+    runtime::with_runtime_toggles(runtime_toggles, || {
+      let inherited_deadline = crate::render_control::active_deadline();
+      let deadline = deadline.or(inherited_deadline.as_ref());
+      let _deadline_guard = DeadlineGuard::install(deadline);
+      let clone_timer = stats.as_deref().and_then(|rec| rec.timer());
+      let (dom_with_state, needs_top_layer_state) =
+        dom::clone_dom_with_deadline_and_top_layer_hint(dom, RenderStage::DomParse)?;
+      if let Some(rec) = stats.as_deref_mut() {
+        RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_clone_ms, clone_timer);
+      }
+      self.layout_document_for_media_with_artifacts_owned(
+        dom_with_state,
+        needs_top_layer_state,
+        width,
+        height,
+        media_type,
+        options,
+        deadline,
+        trace,
+        layout_parallelism,
+        stats,
+      )
+    })
   }
 
   #[allow(clippy::cognitive_complexity)]
