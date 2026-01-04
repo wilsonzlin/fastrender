@@ -1,0 +1,195 @@
+name: Fixture Chrome diff (artifacts)
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixtures:
+        description: "Comma-separated fixture stems (default: fixtures referenced by tests/pages_regression_test.rs)"
+        required: false
+        type: string
+      shard:
+        description: "Optional deterministic shard (index/total, 0-based, e.g. 0/4)"
+        required: false
+        type: string
+  schedule:
+    # Weekly report so maintainers have fresh evidence artifacts without running Chrome locally.
+    - cron: "0 7 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  OUT_DIR: target/fixture_chrome_diff_ci
+
+jobs:
+  fixture-chrome-diff:
+    name: Fixture vs Chrome diff report
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: fixture-chrome-diff-${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: fixture-chrome-diff-${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: fixture-chrome-diff-${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Chrome
+        id: setup_chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Export CHROME_BIN
+        shell: bash
+        run: |
+          set -euo pipefail
+          chrome_path="${{ steps.setup_chrome.outputs.chrome-path }}"
+          if [[ -n "${chrome_path}" && -x "${chrome_path}" ]]; then
+            echo "CHROME_BIN=${chrome_path}" >> "$GITHUB_ENV"
+            "${chrome_path}" --version
+            exit 0
+          fi
+
+          chrome="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          echo "CHROME_BIN=${chrome}" >> "$GITHUB_ENV"
+          "${chrome}" --version
+
+      - name: Install font packages
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            fonts-dejavu-core \
+            fonts-noto-core \
+            fonts-noto-color-emoji
+
+      - name: Resolve fixture list
+        id: fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          raw_fixtures="${{ github.event.inputs.fixtures }}"
+          raw_fixtures="${raw_fixtures// /}"
+
+          if [[ -n "${raw_fixtures}" ]]; then
+            fixtures_csv="${raw_fixtures}"
+          else
+            mapfile -t fixtures < <(
+              (
+                grep -Eo 'html:[[:space:]]*"[^"]+"' tests/pages_regression_test.rs 2>/dev/null || true
+              ) | sed -E 's/.*"([^"]+)".*/\1/' \
+                | awk -F/ '{print $1}' \
+                | awk '!seen[$0]++'
+            )
+
+            if [[ "${#fixtures[@]}" -eq 0 ]]; then
+              mapfile -t fixtures < <(
+                find tests/pages/fixtures -mindepth 2 -maxdepth 2 -type f -name index.html -print \
+                  | sed -E 's#/index\\.html$##' \
+                  | xargs -n1 basename \
+                  | sort -u
+              )
+            fi
+
+            fixtures_csv="$(IFS=,; echo "${fixtures[*]}")"
+          fi
+
+          if [[ -z "${fixtures_csv}" ]]; then
+            echo "no fixtures selected" >&2
+            exit 1
+          fi
+
+          echo "FIXTURES=${fixtures_csv}" >> "$GITHUB_ENV"
+          echo "fixtures=${fixtures_csv}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate report (fixture vs Chrome)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf "${OUT_DIR}"
+
+          args=(
+            --out-dir "${OUT_DIR}"
+            --fixtures "${FIXTURES}"
+            --timeout 30
+          )
+
+          shard="${{ github.event.inputs.shard }}"
+          shard="${shard// /}"
+          if [[ -n "${shard}" ]]; then
+            args+=(--shard "${shard}")
+          fi
+
+          cargo xtask fixture-chrome-diff "${args[@]}"
+
+          test -f "${OUT_DIR}/report.html"
+          test -f "${OUT_DIR}/report.json"
+
+      - name: Upload report directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixture_chrome_diff_ci
+          path: target/fixture_chrome_diff_ci/
+          if-no-files-found: error
+
+      - name: Upload report.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixture_chrome_diff_ci_report_json
+          path: target/fixture_chrome_diff_ci/report.json
+          if-no-files-found: error
+
+      - name: Step summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Fixture vs Chrome diff report"
+            echo
+            echo "Download the **fixture_chrome_diff_ci** artifact from this workflow run."
+            echo
+            echo "- HTML report: \`${OUT_DIR}/report.html\`"
+            echo "- JSON report: \`${OUT_DIR}/report.json\`"
+            echo "- Fixtures: \`${{ steps.fixtures.outputs.fixtures }}\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -f "${OUT_DIR}/report.json" ]]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+import json
+from pathlib import Path
+
+report = json.loads(Path("target/fixture_chrome_diff_ci/report.json").read_text())
+totals = report.get("totals", {})
+
+def fmt(key):
+  value = totals.get(key)
+  return "?" if value is None else str(value)
+
+print("### Report totals")
+print()
+print(f"- Discovered: {fmt('discovered')}")
+print(f"- Processed: {fmt('processed')}")
+print(f"- Differences: {fmt('differences')}")
+print(f"- Missing: {fmt('missing')}")
+print(f"- Errors: {fmt('errors')}")
+PY
+          fi
+

@@ -84,6 +84,16 @@ Artifacts and PR guidance:
 - **Do not commit** Chrome baseline PNGs or diff reports; they are local artifacts. Attach the generated report directory (or at least `report.html` + the referenced PNGs) to your PR description instead.
 - **Do commit** new/updated fixtures under `tests/pages/fixtures/<fixture>/` when they are part of the regression story.
 
+#### CI option (no local Chrome required)
+
+If you can’t install Chrome/Chromium locally, the repository provides an **optional** GitHub Actions workflow that generates the same deterministic fixture-vs-Chrome diff report and uploads it as an artifact:
+
+- Workflow: `.github/workflows/chrome_fixture_diff.yml`
+- Artifact: `fixture_chrome_diff_ci`
+- Report path inside the artifact: `target/fixture_chrome_diff_ci/report.html`
+
+This is intended as a convenient way to attach evidence to PRs without requiring every contributor to have Chrome installed locally.
+
 ### Importing new offline page fixtures
 
 Use `bundle_page` to capture a page once, then convert that bundle into a deterministic fixture consumable by `pages_regression`:
