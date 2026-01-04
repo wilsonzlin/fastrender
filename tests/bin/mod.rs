@@ -6,6 +6,7 @@ mod bundle_page_cache_offline_test;
 mod bundle_page_same_origin_policy_test;
 mod bundle_page_test;
 mod bundled_font_coverage_test;
+mod css_coverage_test;
 mod diff_renders_test;
 mod diff_snapshots_pageset_dump_layout_test;
 mod diff_snapshots_pageset_progress_layout_test;
