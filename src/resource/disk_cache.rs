@@ -1076,6 +1076,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     resource.status = meta.status;
     resource.etag = meta.etag.clone();
     resource.last_modified = meta.last_modified.clone();
+    resource.access_control_allow_origin = meta.access_control_allow_origin.clone();
+    resource.timing_allow_origin = meta.timing_allow_origin.clone();
 
     let stored_time = secs_to_system_time(meta.stored_at).unwrap_or(SystemTime::now());
     let http_cache = meta.cache.as_ref().and_then(|c| c.to_http()).or_else(|| {
@@ -1186,6 +1188,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     resource.status = meta.status;
     resource.etag = meta.etag.clone();
     resource.last_modified = meta.last_modified.clone();
+    resource.access_control_allow_origin = meta.access_control_allow_origin.clone();
+    resource.timing_allow_origin = meta.timing_allow_origin.clone();
     resource.cache_policy = meta.cache.as_ref().map(|c| c.to_policy()).or_else(|| {
       self.disk_config.max_age.map(|max_age| HttpCachePolicy {
         max_age: Some(max_age.as_secs()),
@@ -1334,6 +1338,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         .map(|s| s.to_string())
         .or_else(|| resource.last_modified.clone()),
       final_url: resource.final_url.clone().or_else(|| Some(url.to_string())),
+      access_control_allow_origin: resource.access_control_allow_origin.clone(),
+      timing_allow_origin: resource.timing_allow_origin.clone(),
       stored_at,
       len: resource.bytes.len(),
       cache: cache_metadata
@@ -1465,6 +1471,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       etag: error.etag.clone(),
       last_modified: error.last_modified.clone(),
       final_url: error.final_url.clone(),
+      access_control_allow_origin: None,
+      timing_allow_origin: None,
       stored_at,
       len: 0,
       cache: StoredCacheMetadata::from_http(&cache_metadata),
@@ -1679,6 +1687,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       resource.last_modified = source.last_modified.clone();
       resource.final_url = source.final_url.clone();
       resource.cache_policy = source.cache_policy.clone();
+      resource.access_control_allow_origin = source.access_control_allow_origin.clone();
+      resource.timing_allow_origin = source.timing_allow_origin.clone();
     }
 
     let canonical = self.canonical_url(url, resource.final_url.as_deref());
@@ -1747,6 +1757,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       // URL here as well so callers consuming the cached artifact can still enforce final-URL
       // policies without hitting the network.
       final_url: Some(canonical.clone()),
+      access_control_allow_origin: resource.access_control_allow_origin.clone(),
+      timing_allow_origin: resource.timing_allow_origin.clone(),
       stored_at,
       len: resource.bytes.len(),
       cache: cache_metadata
@@ -2239,6 +2251,10 @@ pub(super) struct StoredMetadata {
   etag: Option<String>,
   last_modified: Option<String>,
   final_url: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  access_control_allow_origin: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  timing_allow_origin: Option<String>,
   stored_at: u64,
   len: usize,
   cache: Option<StoredCacheMetadata>,
@@ -3202,6 +3218,8 @@ mod tests {
       etag: None,
       last_modified: None,
       final_url: Some(url.to_string()),
+      access_control_allow_origin: None,
+      timing_allow_origin: None,
       stored_at: now_seconds().saturating_sub(60),
       len: cached_bytes.len(),
       cache: None,
@@ -3255,6 +3273,8 @@ mod tests {
       etag: None,
       last_modified: None,
       final_url: Some(url.to_string()),
+      access_control_allow_origin: None,
+      timing_allow_origin: None,
       stored_at: now_seconds().saturating_sub(60),
       len: cached_bytes.len(),
       cache: None,
@@ -4578,6 +4598,8 @@ mod tests {
       etag: None,
       last_modified: None,
       final_url: Some(url.to_string()),
+      access_control_allow_origin: None,
+      timing_allow_origin: None,
       stored_at: now_seconds(),
       len: bytes.len(),
       cache: None,

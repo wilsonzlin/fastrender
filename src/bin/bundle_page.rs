@@ -793,6 +793,8 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
   doc_resource.status = doc_meta.status;
   doc_resource.etag = doc_meta.etag.clone();
   doc_resource.last_modified = doc_meta.last_modified.clone();
+  doc_resource.access_control_allow_origin = doc_meta.access_control_allow_origin.clone();
+  doc_resource.timing_allow_origin = doc_meta.timing_allow_origin.clone();
   let prepared = decode_html_resource(&doc_resource, &base_hint);
   let result = render_document(&mut renderer, prepared, &options)?;
   let png = encode_image(&result.pixmap, OutputFormat::Png)?;
@@ -830,6 +832,8 @@ fn build_manifest(
     status: document_resource.status,
     etag: document_resource.etag.clone(),
     last_modified: document_resource.last_modified.clone(),
+    access_control_allow_origin: document_resource.access_control_allow_origin.clone(),
+    timing_allow_origin: document_resource.timing_allow_origin.clone(),
   };
 
   let mut resources: Vec<ResourceEntry> = Vec::new();
@@ -848,6 +852,8 @@ fn build_manifest(
       final_url: Some(res.final_url.clone().unwrap_or_else(|| url.clone())),
       etag: res.etag.clone(),
       last_modified: res.last_modified.clone(),
+      access_control_allow_origin: res.access_control_allow_origin.clone(),
+      timing_allow_origin: res.timing_allow_origin.clone(),
     };
     manifest_resources.insert(url.clone(), info.clone());
     resources.push(ResourceEntry {

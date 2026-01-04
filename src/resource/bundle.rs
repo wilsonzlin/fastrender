@@ -47,6 +47,10 @@ pub struct BundledDocument {
   pub status: Option<u16>,
   pub etag: Option<String>,
   pub last_modified: Option<String>,
+  #[serde(default)]
+  pub access_control_allow_origin: Option<String>,
+  #[serde(default)]
+  pub timing_allow_origin: Option<String>,
 }
 
 /// Metadata describing a bundled resource.
@@ -58,6 +62,10 @@ pub struct BundledResourceInfo {
   pub final_url: Option<String>,
   pub etag: Option<String>,
   pub last_modified: Option<String>,
+  #[serde(default)]
+  pub access_control_allow_origin: Option<String>,
+  #[serde(default)]
+  pub timing_allow_origin: Option<String>,
 }
 
 /// Manifest describing all resources contained in a bundle.
@@ -93,6 +101,8 @@ impl BundledResource {
     res.status = self.info.status;
     res.etag = self.info.etag.clone();
     res.last_modified = self.info.last_modified.clone();
+    res.access_control_allow_origin = self.info.access_control_allow_origin.clone();
+    res.timing_allow_origin = self.info.timing_allow_origin.clone();
     res
   }
 }
@@ -283,6 +293,8 @@ impl ResourceFetcher for BundledFetcher {
       res.status = doc_meta.status;
       res.etag = doc_meta.etag.clone();
       res.last_modified = doc_meta.last_modified.clone();
+      res.access_control_allow_origin = doc_meta.access_control_allow_origin.clone();
+      res.timing_allow_origin = doc_meta.timing_allow_origin.clone();
       return Ok(res);
     }
 
@@ -337,6 +349,8 @@ mod tests {
         status: Some(200),
         etag: None,
         last_modified: None,
+        access_control_allow_origin: None,
+        timing_allow_origin: None,
       },
       render: BundleRenderConfig {
         viewport: (1200, 800),

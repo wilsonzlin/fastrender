@@ -37,8 +37,9 @@ use crate::error::RenderStage;
 use crate::error::Result;
 use crate::render_control;
 use crate::resource::{
-  ensure_font_mime_sane, ensure_http_success, FetchDestination, FetchRequest, FetchedResource,
-  HttpFetcher, HttpRetryPolicy, ResourceFetcher,
+  cors_enforcement_enabled, ensure_font_mime_sane, ensure_http_success, validate_cors_allow_origin,
+  CorsMode, FetchDestination, FetchRequest, FetchedResource, HttpFetcher, HttpRetryPolicy,
+  ResourceFetcher,
 };
 use crate::text::face_cache;
 use crate::text::font_db::FontCacheConfig;
@@ -1538,6 +1539,22 @@ impl FontContext {
       self.record_font_error(resolved_url, &err);
       return Err(err);
     }
+    if cors_enforcement_enabled() {
+      if let Some(ctx) = &self.resource_context {
+        if let Some(origin) = ctx.policy.document_origin.as_ref() {
+          if let Err(message) =
+            validate_cors_allow_origin(&resource, resolved_url, origin, CorsMode::Anonymous)
+          {
+            let blocked = Error::Font(FontError::LoadFailed {
+              family: family.to_string(),
+              reason: message,
+            });
+            self.record_font_error(resolved_url, &blocked);
+            return Err(blocked);
+          }
+        }
+      }
+    }
     let body_len = resource.bytes.len();
     let status = resource.status;
     let content_type = resource.content_type.clone();
@@ -2891,6 +2908,7 @@ pub struct TextMeasurement {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::debug::runtime::{set_runtime_toggles, RuntimeToggles};
   use crate::style::media::MediaContext;
   use crate::ComputedStyle;
   use std::collections::HashMap;
@@ -3066,6 +3084,134 @@ mod tests {
             reason: "missing response".into(),
           })
         })
+    }
+  }
+
+  struct CorsStubFetcher {
+    data: Vec<u8>,
+    access_control_allow_origin: Option<String>,
+  }
+
+  impl FontFetcher for CorsStubFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      let mut res = FetchedResource::with_final_url(
+        self.data.clone(),
+        Some("font/ttf".to_string()),
+        Some(url.to_string()),
+      );
+      res.status = Some(200);
+      res.access_control_allow_origin = self.access_control_allow_origin.clone();
+      Ok(res)
+    }
+  }
+
+  #[test]
+  fn cors_enforcement_blocks_cross_origin_fonts_without_acao() {
+    let font_bytes = include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf").to_vec();
+
+    let make_context = |acao: Option<&str>, doc_url: &str| {
+      let fetcher: Arc<dyn FontFetcher> = Arc::new(CorsStubFetcher {
+        data: font_bytes.clone(),
+        access_control_allow_origin: acao.map(|v| v.to_string()),
+      });
+      let mut ctx = FontContext::with_database_and_fetcher(Arc::new(FontDatabase::empty()), fetcher);
+      let mut resource_ctx = ResourceContext::default();
+      resource_ctx.document_url = Some(doc_url.to_string());
+      resource_ctx.policy.document_origin = crate::resource::origin_from_url(doc_url);
+      ctx.set_resource_context(Some(resource_ctx));
+      ctx
+    };
+
+    let font_url = "https://cdn.example/font.ttf";
+    let face = FontFaceRule {
+      family: Some("CorsFont".to_string()),
+      sources: vec![FontFaceSource::url(font_url)],
+      display: FontDisplay::Swap,
+      ..Default::default()
+    };
+
+    // Toggle disabled: behavior should be unchanged.
+    {
+      let toggles =
+        HashMap::from([("FASTR_FETCH_ENFORCE_CORS".to_string(), "0".to_string())]);
+      let _guard = set_runtime_toggles(Arc::new(RuntimeToggles::from_map(toggles)));
+
+      let ctx = make_context(None, "https://example.com/");
+      assert!(
+        matches!(
+          ctx.load_remote_face("CorsFont", font_url, &face, 0, Instant::now()),
+          Ok(LoadOutcome::Loaded)
+        ),
+        "expected cross-origin font to load when CORS enforcement is disabled"
+      );
+    }
+
+    // Toggle enabled: enforce Access-Control-Allow-Origin for cross-origin fonts.
+    {
+      let toggles =
+        HashMap::from([("FASTR_FETCH_ENFORCE_CORS".to_string(), "1".to_string())]);
+      let _guard = set_runtime_toggles(Arc::new(RuntimeToggles::from_map(toggles)));
+
+      let ctx = make_context(None, "https://example.com/");
+      let err = ctx
+        .load_remote_face("CorsFont", font_url, &face, 0, Instant::now())
+        .expect_err("expected missing ACAO to block cross-origin font");
+      match err {
+        Error::Font(FontError::LoadFailed { reason, .. }) => assert_eq!(
+          reason,
+          "blocked by CORS: missing Access-Control-Allow-Origin"
+        ),
+        other => panic!("expected FontError::LoadFailed, got {other:?}"),
+      }
+
+      let ctx = make_context(Some("*"), "https://example.com/");
+      assert!(
+        matches!(
+          ctx.load_remote_face("CorsFont", font_url, &face, 0, Instant::now()),
+          Ok(LoadOutcome::Loaded)
+        ),
+        "expected ACAO=* to allow anonymous cross-origin font loads"
+      );
+
+      let ctx = make_context(Some("https://example.com"), "https://example.com/");
+      assert!(
+        matches!(
+          ctx.load_remote_face("CorsFont", font_url, &face, 0, Instant::now()),
+          Ok(LoadOutcome::Loaded)
+        ),
+        "expected matching ACAO to allow cross-origin font loads"
+      );
+
+      let doc_origin = crate::resource::origin_from_url("https://example.com/").unwrap();
+      let other_origin = crate::resource::origin_from_url("https://evil.com").unwrap();
+      let expected_reason = format!(
+        "blocked by CORS: Access-Control-Allow-Origin {other_origin} does not match document origin {doc_origin}"
+      );
+
+      let ctx = make_context(Some("https://evil.com"), "https://example.com/");
+      let err = ctx
+        .load_remote_face("CorsFont", font_url, &face, 0, Instant::now())
+        .expect_err("expected mismatched ACAO to block cross-origin font");
+      match err {
+        Error::Font(FontError::LoadFailed { reason, .. }) => assert_eq!(reason, expected_reason),
+        other => panic!("expected FontError::LoadFailed, got {other:?}"),
+      }
+
+      // Same-origin resources must continue to load even when ACAO is missing.
+      let ctx = make_context(None, "https://example.com/");
+      assert!(
+        matches!(
+          ctx.load_remote_face(
+            "CorsFont",
+            "https://example.com/font.ttf",
+            &face,
+            0,
+            Instant::now()
+          ),
+          Ok(LoadOutcome::Loaded)
+        ),
+        "expected same-origin font to load even without ACAO"
+      );
     }
   }
 

@@ -54,12 +54,14 @@ use ureq::ResponseExt;
 use url::Url;
 
 pub mod bundle;
+mod cors;
 mod curl_backend;
 mod data_url;
 #[cfg(feature = "disk_cache")]
 pub mod disk_cache;
 #[cfg(feature = "disk_cache")]
 pub use disk_cache::{DiskCacheConfig, DiskCachingFetcher};
+pub use cors::{cors_enforcement_enabled, validate_cors_allow_origin, CorsMode};
 
 // ============================================================================
 // Origin and resource policy
@@ -1855,6 +1857,12 @@ pub struct FetchedResource {
   pub final_url: Option<String>,
   /// Parsed HTTP caching policy when fetched over HTTP(S).
   pub cache_policy: Option<HttpCachePolicy>,
+  /// Access-Control-Allow-Origin response header value when fetched over HTTP(S).
+  ///
+  /// Stored for downstream CORS enforcement (e.g. web fonts).
+  pub access_control_allow_origin: Option<String>,
+  /// Timing-Allow-Origin response header value when fetched over HTTP(S).
+  pub timing_allow_origin: Option<String>,
 }
 
 /// Parsed metadata stored alongside cached HTML documents.
@@ -1877,6 +1885,8 @@ impl FetchedResource {
       last_modified: None,
       final_url: None,
       cache_policy: None,
+      access_control_allow_origin: None,
+      timing_allow_origin: None,
     }
   }
 
@@ -1895,6 +1905,8 @@ impl FetchedResource {
       last_modified: None,
       final_url,
       cache_policy: None,
+      access_control_allow_origin: None,
+      timing_allow_origin: None,
     }
   }
 
@@ -3322,6 +3334,9 @@ impl HttpFetcher {
           .get("last-modified")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
+        let access_control_allow_origin =
+          header_values_joined(response.headers(), "access-control-allow-origin");
+        let timing_allow_origin = header_values_joined(response.headers(), "timing-allow-origin");
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.get_uri().to_string();
         let allows_empty_body =
@@ -3502,6 +3517,8 @@ impl HttpFetcher {
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
+            resource.access_control_allow_origin = access_control_allow_origin;
+            resource.timing_allow_origin = timing_allow_origin;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -3787,6 +3804,9 @@ impl HttpFetcher {
           .get("last-modified")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
+        let access_control_allow_origin =
+          header_values_joined(response.headers(), "access-control-allow-origin");
+        let timing_allow_origin = header_values_joined(response.headers(), "timing-allow-origin");
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.url().to_string();
         let allows_empty_body =
@@ -3966,6 +3986,8 @@ impl HttpFetcher {
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
+            resource.access_control_allow_origin = access_control_allow_origin;
+            resource.timing_allow_origin = timing_allow_origin;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -4258,6 +4280,9 @@ impl HttpFetcher {
           .get("last-modified")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
+        let access_control_allow_origin =
+          header_values_joined(response.headers(), "access-control-allow-origin");
+        let timing_allow_origin = header_values_joined(response.headers(), "timing-allow-origin");
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.get_uri().to_string();
         let allows_empty_body =
@@ -4505,6 +4530,8 @@ impl HttpFetcher {
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
+            resource.access_control_allow_origin = access_control_allow_origin;
+            resource.timing_allow_origin = timing_allow_origin;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -4784,6 +4811,9 @@ impl HttpFetcher {
           .get("last-modified")
           .and_then(|h| h.to_str().ok())
           .map(|s| s.to_string());
+        let access_control_allow_origin =
+          header_values_joined(response.headers(), "access-control-allow-origin");
+        let timing_allow_origin = header_values_joined(response.headers(), "timing-allow-origin");
         let cache_policy = parse_http_cache_policy(response.headers());
         let final_url = response.url().to_string();
         let allows_empty_body =
@@ -5056,6 +5086,8 @@ impl HttpFetcher {
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
+            resource.access_control_allow_origin = access_control_allow_origin;
+            resource.timing_allow_origin = timing_allow_origin;
             render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
@@ -7225,6 +7257,21 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
     }
 
     self.inner.fetch_partial_with_context(kind, url, max_bytes)
+  }
+}
+
+fn header_values_joined(headers: &HeaderMap, name: &str) -> Option<String> {
+  let values: Vec<&str> = headers
+    .get_all(name)
+    .iter()
+    .filter_map(|value| value.to_str().ok())
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .collect();
+  match values.as_slice() {
+    [] => None,
+    [value] => Some((*value).to_string()),
+    _ => Some(values.join(", ")),
   }
 }
 
