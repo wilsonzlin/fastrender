@@ -79,8 +79,6 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
   - Runs in **linearRGB** when `color-interpolation-filters: linearRGB`.
   - Implementation: `reencode_pixmap_to_linear_rgb()` -> `apply_gaussian_blur_cached()` ->
     `reencode_pixmap_to_srgb()`.
-- `feDropShadow`
-  - The blur portion follows the same policy as `feGaussianBlur` using the same re-encode helpers.
 - `feOffset`
   - Runs in **linearRGB** when requested *and* the offset requires interpolation (fractional
     `dx`/`dy`).
@@ -88,6 +86,10 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     `reencode_pixmap_to_srgb()`.
   - Integer offsets (no interpolation) are effectively just a copy/shift, so no color-space
     conversion is needed.
+- `feDropShadow`
+  - The blur portion follows the same policy as `feGaussianBlur` using the same re-encode helpers.
+  - Note: the final “shadow over source” merge is currently done via tiny-skia `SourceOver` on the
+    stored pixmap bytes (no re-encoding), so `linearRGB` is not fully honored for that step.
 - `feColorMatrix`
   - Runs in **linearRGB** when requested.
   - Implementation uses `unpack_color()` / `pack_color()` per pixel.
@@ -134,7 +136,7 @@ explicitly re-encode between sRGB <-> linearRGB):
 - **Conversions at primitive boundaries:** linearRGB primitives convert in/out of linear for their
   computation instead of keeping a float/linear surface across multiple primitives.
 - **Partial coverage of `color-interpolation-filters`:** some primitives do not yet apply explicit
-  sRGB <-> linearRGB conversion for resampling; `linearRGB` may not be fully honored for filter
-  graphs that rely on `filterRes` downsampling/upsampling (which uses tiny-skia bilinear resampling
-  in the stored space), or on primitives like `feTurbulence` that currently generate channel values
-  without CIF-aware encoding.
+  sRGB <-> linearRGB conversion for resampling/compositing; `linearRGB` may not be fully honored for
+  filter graphs that rely on `filterRes` downsampling/upsampling (which uses tiny-skia bilinear
+  resampling in the stored space), `feDropShadow`’s final “shadow over source” merge, or on
+  primitives like `feTurbulence` that currently generate channel values without CIF-aware encoding.
