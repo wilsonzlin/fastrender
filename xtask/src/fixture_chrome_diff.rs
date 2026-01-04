@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,6 +9,38 @@ const DEFAULT_OUT_DIR: &str = "target/fixture_chrome_diff";
 const DEFAULT_VIEWPORT: &str = "1040x1240";
 const DEFAULT_DPR: f32 = 1.0;
 const DEFAULT_TIMEOUT: u64 = 15;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum MediaMode {
+  Screen,
+  Print,
+}
+
+impl MediaMode {
+  fn as_cli_value(self) -> &'static str {
+    match self {
+      Self::Screen => "screen",
+      Self::Print => "print",
+    }
+  }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum JsMode {
+  On,
+  Off,
+}
+
+impl JsMode {
+  fn as_cli_value(self) -> &'static str {
+    match self {
+      Self::On => "on",
+      Self::Off => "off",
+    }
+  }
+}
 
 #[derive(Args, Debug)]
 pub struct FixtureChromeDiffArgs {
@@ -36,9 +68,17 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long, default_value_t = DEFAULT_DPR)]
   pub dpr: f32,
 
+  /// Media type for evaluating media queries in the FastRender fixture step.
+  #[arg(long, value_enum, default_value_t = MediaMode::Screen)]
+  pub media: MediaMode,
+
   /// Per-fixture hard timeout in seconds (forwarded to both Chrome and FastRender steps).
   #[arg(long, default_value_t = DEFAULT_TIMEOUT, value_name = "SECS")]
   pub timeout: u64,
+
+  /// Enable or disable JavaScript in the Chrome baseline step.
+  #[arg(long, value_enum, default_value_t = JsMode::Off)]
+  pub js: JsMode,
 
   /// Per-channel tolerance forwarded to `diff_renders`.
   #[arg(long, default_value_t = 0)]
@@ -221,6 +261,7 @@ fn build_render_fixtures_command(
     .arg("--viewport")
     .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
   cmd.arg("--dpr").arg(args.dpr.to_string());
+  cmd.arg("--media").arg(args.media.as_cli_value());
   cmd.arg("--timeout").arg(args.timeout.to_string());
   if let Some(fixtures) = &args.fixtures {
     cmd.arg("--fixtures").arg(fixtures.join(","));
@@ -248,6 +289,7 @@ fn build_chrome_baseline_command(
     .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
   cmd.arg("--dpr").arg(args.dpr.to_string());
   cmd.arg("--timeout").arg(args.timeout.to_string());
+  cmd.arg("--js").arg(args.js.as_cli_value());
   if let Some(chrome) = &args.chrome {
     cmd.arg("--chrome").arg(chrome);
   }

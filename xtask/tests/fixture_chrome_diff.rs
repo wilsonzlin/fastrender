@@ -62,8 +62,12 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
       "800x600",
       "--dpr",
       "2",
+      "--media",
+      "print",
       "--timeout",
       "12",
+      "--js",
+      "on",
       "--tolerance",
       "5",
       "--max-diff-percent",
@@ -116,6 +120,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     "render_fixtures should receive timeout; got:\n{render_line}"
   );
   assert!(
+    render_line.contains("--media print"),
+    "render_fixtures should receive media; got:\n{render_line}"
+  );
+  assert!(
     stdout.contains(&format!("--fixtures-dir {}", fixtures_root.display())),
     "render_fixtures should receive fixtures-dir; got:\n{stdout}"
   );
@@ -143,6 +151,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
   assert!(
     chrome_line.contains("--timeout 12"),
     "chrome-baseline-fixtures should receive timeout; got:\n{chrome_line}"
+  );
+  assert!(
+    chrome_line.contains("--js on"),
+    "chrome-baseline-fixtures should receive js mode; got:\n{chrome_line}"
   );
   assert!(
     stdout.contains(&format!("--out-dir {}", out_dir.join("chrome").display())),

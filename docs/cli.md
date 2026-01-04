@@ -305,7 +305,7 @@ cargo run --release --bin diff_renders -- \
 - Core flags:
   - Selection: `--fixtures <csv>`, `--shard <index>/<total>`
   - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
-  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`
+  - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--js {on|off}`
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--ignore-alpha`
   - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`
 
