@@ -241,6 +241,9 @@ fn run() -> Result<i32, String> {
   let baseline_report = read_report(&baseline_path)?;
   let new_report = read_report(&new_path)?;
 
+  let baseline_meta = ReportMeta::from_report(&baseline_report);
+  let new_meta = ReportMeta::from_report(&new_report);
+
   let config_mismatches = diff_config(&baseline_report, &new_report);
   if !config_mismatches.is_empty() {
     eprintln!("warning: diff report config mismatch (pass --allow-config-mismatch to proceed):");
@@ -251,12 +254,23 @@ fn run() -> Result<i32, String> {
       );
     }
     if !args.allow_config_mismatch {
-      return Err("diff report config mismatch".to_string());
+      let totals = compute_totals_without_deltas(&baseline_report, &new_report);
+      let report = DeltaReport {
+        schema_version: SCHEMA_VERSION,
+        baseline: baseline_meta,
+        new: new_meta,
+        config_mismatches,
+        totals,
+        top_improvements: Vec::new(),
+        top_regressions: Vec::new(),
+        results: Vec::new(),
+      };
+
+      write_json_report(&report, &args.json)?;
+      write_html_report(&report, &baseline_path, &new_path, &args.html)?;
+      return Ok(1);
     }
   }
-
-  let baseline_meta = ReportMeta::from_report(&baseline_report);
-  let new_meta = ReportMeta::from_report(&new_report);
 
   let baseline_by_name = index_entries(baseline_report.results);
   let new_by_name = index_entries(new_report.results);
@@ -337,18 +351,7 @@ fn run() -> Result<i32, String> {
   };
 
   write_json_report(&report, &args.json)?;
-  let baseline_report_dir = baseline_path
-    .parent()
-    .filter(|p| !p.as_os_str().is_empty())
-    .map(PathBuf::from)
-    .unwrap_or_else(|| PathBuf::from("."));
-  let new_report_dir = new_path
-    .parent()
-    .filter(|p| !p.as_os_str().is_empty())
-    .map(PathBuf::from)
-    .unwrap_or_else(|| PathBuf::from("."));
-
-  write_html_report(&report, &baseline_report_dir, &new_report_dir, &args.html)?;
+  write_html_report(&report, &baseline_path, &new_path, &args.html)?;
 
   if args.fail_on_regression {
     let threshold = args.regression_threshold_percent;
@@ -371,6 +374,60 @@ fn validate_args(args: &Args) -> Result<(), String> {
     return Err("--regression-threshold-percent must be a finite, non-negative number".to_string());
   }
   Ok(())
+}
+
+fn compute_totals_without_deltas(baseline: &DiffReport, new_report: &DiffReport) -> DeltaTotals {
+  let baseline_names: BTreeSet<String> = baseline.results.iter().map(|e| e.name.clone()).collect();
+  let new_names: BTreeSet<String> = new_report.results.iter().map(|e| e.name.clone()).collect();
+
+  let entries = baseline_names.union(&new_names).count();
+  let paired = baseline_names.intersection(&new_names).count();
+  let missing_in_baseline = new_names.difference(&baseline_names).count();
+  let missing_in_new = baseline_names.difference(&new_names).count();
+
+  let baseline_errors = baseline
+    .results
+    .iter()
+    .filter(|entry| matches!(entry.status, EntryStatus::Error))
+    .count();
+  let new_errors = new_report
+    .results
+    .iter()
+    .filter(|entry| matches!(entry.status, EntryStatus::Error))
+    .count();
+
+  let baseline_missing = baseline
+    .results
+    .iter()
+    .filter(|entry| {
+      matches!(
+        entry.status,
+        EntryStatus::MissingBefore | EntryStatus::MissingAfter
+      )
+    })
+    .count();
+  let new_missing = new_report
+    .results
+    .iter()
+    .filter(|entry| {
+      matches!(
+        entry.status,
+        EntryStatus::MissingBefore | EntryStatus::MissingAfter
+      )
+    })
+    .count();
+
+  DeltaTotals {
+    entries,
+    paired,
+    missing_in_baseline,
+    missing_in_new,
+    baseline_errors,
+    new_errors,
+    baseline_missing,
+    new_missing,
+    ..DeltaTotals::default()
+  }
 }
 
 fn read_report(path: &Path) -> Result<DiffReport, String> {
@@ -605,8 +662,8 @@ fn write_json_report(report: &DeltaReport, path: &Path) -> Result<(), String> {
 
 fn write_html_report(
   report: &DeltaReport,
-  baseline_report_dir: &Path,
-  new_report_dir: &Path,
+  baseline_report_json: &Path,
+  new_report_json: &Path,
   path: &Path,
 ) -> Result<(), String> {
   ensure_parent_dir(path)?;
@@ -655,6 +712,22 @@ fn write_html_report(
 
   let top_improvements = format_top_list("Top improvements", &report.top_improvements, true);
   let top_regressions = format_top_list("Top regressions", &report.top_regressions, false);
+
+  let baseline_report_dir = baseline_report_json
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .unwrap_or_else(|| Path::new("."));
+  let new_report_dir = new_report_json
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .unwrap_or_else(|| Path::new("."));
+
+  let baseline_html_link = guess_report_html_path(baseline_report_json)
+    .map(|path| path_for_report(&html_dir, &path))
+    .unwrap_or_else(|| "-".to_string());
+  let new_html_link = guess_report_html_path(new_report_json)
+    .map(|path| path_for_report(&html_dir, &path))
+    .unwrap_or_else(|| "-".to_string());
 
   let mut rows = String::new();
   for entry in &report.results {
@@ -776,7 +849,9 @@ fn write_html_report(
   <body>
     <h1>Diff report delta</h1>
     <p><strong>Baseline:</strong> {baseline_before} → {baseline_after}</p>
+    <p><strong>Baseline report:</strong> {baseline_report_link}</p>
     <p><strong>New:</strong> {new_before} → {new_after}</p>
+    <p><strong>New report:</strong> {new_report_link}</p>
     <p><strong>Config:</strong> tolerance={tolerance}, max_diff_percent={max_diff_percent:.4}, max_perceptual_distance={max_perceptual}, ignore_alpha={ignore_alpha}</p>
     <p><strong>Summary:</strong> {summary}</p>
     {mismatch_block}
@@ -814,6 +889,8 @@ fn write_html_report(
     baseline_after = escape_html(&report.baseline.after_dir),
     new_before = escape_html(&report.new.before_dir),
     new_after = escape_html(&report.new.after_dir),
+    baseline_report_link = format_report_link(&baseline_html_link),
+    new_report_link = format_report_link(&new_html_link),
     tolerance = report.new.tolerance,
     max_diff_percent = report.new.max_diff_percent,
     max_perceptual = report
@@ -859,6 +936,36 @@ fn format_linked_image(label: &str, path: &str) -> String {
     p = escaped,
     l = escape_html(label),
   )
+}
+
+fn format_report_link(href: &str) -> String {
+  if href == "-" {
+    return "-".to_string();
+  }
+  let escaped = escape_html(href);
+  format!(r#"<a href="{p}">{p}</a>"#, p = escaped)
+}
+
+fn guess_report_html_path(json_path: &Path) -> Option<PathBuf> {
+  let dir = json_path.parent()?;
+  let stem = json_path.file_stem()?.to_str()?;
+
+  let stem_candidate = dir.join(format!("{stem}.html"));
+  if stem_candidate.is_file() {
+    return Some(stem_candidate);
+  }
+
+  let report_candidate = dir.join("report.html");
+  if report_candidate.is_file() {
+    return Some(report_candidate);
+  }
+
+  let diff_candidate = dir.join("diff_report.html");
+  if diff_candidate.is_file() {
+    return Some(diff_candidate);
+  }
+
+  None
 }
 
 fn format_top_list(title: &str, entries: &[DeltaRankedEntry], improvements: bool) -> String {

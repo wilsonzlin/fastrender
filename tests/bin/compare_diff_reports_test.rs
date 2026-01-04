@@ -250,8 +250,10 @@ fn compare_diff_reports_requires_matching_config_by_default() {
   let tmp = tempfile::TempDir::new().expect("tempdir");
   let baseline_path = tmp.path().join("baseline.json");
   let new_path = tmp.path().join("new.json");
-  let out_json = tmp.path().join("delta.json");
-  let out_html = tmp.path().join("delta.html");
+  let out_json_fail = tmp.path().join("delta_fail.json");
+  let out_html_fail = tmp.path().join("delta_fail.html");
+  let out_json_ok = tmp.path().join("delta_ok.json");
+  let out_html_ok = tmp.path().join("delta_ok.html");
 
   let mut baseline = basic_report(vec![]);
   baseline["tolerance"] = json!(0);
@@ -268,9 +270,9 @@ fn compare_diff_reports_requires_matching_config_by_default() {
       "--new",
       new_path.to_str().unwrap(),
       "--json",
-      out_json.to_str().unwrap(),
+      out_json_fail.to_str().unwrap(),
       "--html",
-      out_html.to_str().unwrap(),
+      out_html_fail.to_str().unwrap(),
     ])
     .status()
     .expect("run compare_diff_reports");
@@ -280,6 +282,13 @@ fn compare_diff_reports_requires_matching_config_by_default() {
     "expected non-zero exit for config mismatch"
   );
 
+  assert!(out_json_fail.exists(), "delta json should still be written");
+  assert!(out_html_fail.exists(), "delta html should still be written");
+  let report: Value =
+    serde_json::from_str(&fs::read_to_string(&out_json_fail).expect("read delta json")).unwrap();
+  assert_eq!(report["config_mismatches"].as_array().unwrap().len(), 1);
+  assert_eq!(report["config_mismatches"][0]["field"], "tolerance");
+
   let status = compare_cmd(tmp.path())
     .args([
       "--baseline",
@@ -287,9 +296,9 @@ fn compare_diff_reports_requires_matching_config_by_default() {
       "--new",
       new_path.to_str().unwrap(),
       "--json",
-      out_json.to_str().unwrap(),
+      out_json_ok.to_str().unwrap(),
       "--html",
-      out_html.to_str().unwrap(),
+      out_html_ok.to_str().unwrap(),
       "--allow-config-mismatch",
     ])
     .status()
@@ -297,7 +306,7 @@ fn compare_diff_reports_requires_matching_config_by_default() {
 
   assert!(status.success(), "expected success when mismatch allowed");
 
-  let report: Value = serde_json::from_str(&fs::read_to_string(&out_json).unwrap()).unwrap();
+  let report: Value = serde_json::from_str(&fs::read_to_string(&out_json_ok).unwrap()).unwrap();
   assert_eq!(report["config_mismatches"].as_array().unwrap().len(), 1);
   assert_eq!(report["config_mismatches"][0]["field"], "tolerance");
 }
