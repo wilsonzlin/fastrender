@@ -1199,11 +1199,11 @@ fn format_top_list(title: &str, entries: &[DeltaRankedEntry], improvements: bool
   for entry in entries {
     let anchor_id = entry_anchor_id(&entry.name);
     rows.push_str(&format!(
-      "<tr><td><a href=\"#{anchor_id}\">{name}</a></td><td>{:+.4}%</td><td>{:+.4}</td></tr>",
+      "<tr><td><a href=\"#{anchor_id}\">{name}</a></td><td>{diff:+.4}%</td><td>{perceptual:+.4}</td></tr>",
       anchor_id = escape_html(&anchor_id),
       name = escape_html(&entry.name),
-      entry.diff_percentage_delta,
-      entry.perceptual_distance_delta
+      diff = entry.diff_percentage_delta,
+      perceptual = entry.perceptual_distance_delta,
     ));
   }
 

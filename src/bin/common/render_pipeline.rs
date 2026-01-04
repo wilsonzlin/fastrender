@@ -615,8 +615,6 @@ mod tests {
         last_modified: None,
         final_url: Some(url.to_string()),
         cache_policy: None,
-        access_control_allow_origin: None,
-        timing_allow_origin: None,
       })
     }
   }

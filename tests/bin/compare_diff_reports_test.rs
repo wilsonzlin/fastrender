@@ -294,6 +294,57 @@ fn compare_diff_reports_can_gate_on_regressions() {
 }
 
 #[test]
+fn compare_diff_reports_gating_fails_on_missing_entries_in_new_report() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let baseline_path = tmp.path().join("baseline.json");
+  let new_path = tmp.path().join("new.json");
+  let out_json = tmp.path().join("delta.json");
+  let out_html = tmp.path().join("delta.html");
+
+  let baseline = basic_report(vec![json!({
+    "name": "a",
+    "status": "diff",
+    "metrics": {
+      "pixel_diff": 1,
+      "total_pixels": 100,
+      "diff_percentage": 1.0,
+      "perceptual_distance": 0.1
+    }
+  })]);
+  let new_report = basic_report(vec![]);
+
+  write_json(&baseline_path, &baseline);
+  write_json(&new_path, &new_report);
+
+  let status = compare_cmd(tmp.path())
+    .args([
+      "--baseline",
+      baseline_path.to_str().unwrap(),
+      "--new",
+      new_path.to_str().unwrap(),
+      "--json",
+      out_json.to_str().unwrap(),
+      "--html",
+      out_html.to_str().unwrap(),
+      "--fail-on-regression",
+    ])
+    .status()
+    .expect("run compare_diff_reports");
+
+  assert!(!status.success(), "expected failure exit code");
+  assert!(out_json.exists(), "delta json should still be written");
+  assert!(out_html.exists(), "delta html should still be written");
+
+  let report: Value = serde_json::from_str(&fs::read_to_string(&out_json).unwrap()).unwrap();
+  let results = report["results"].as_array().expect("results array");
+  let entry = results
+    .iter()
+    .find(|e| e["name"] == "a")
+    .expect("missing entry a");
+  assert_eq!(entry["classification"], "missing_in_new");
+}
+
+#[test]
 fn compare_diff_reports_requires_matching_config_by_default() {
   let tmp = tempfile::TempDir::new().expect("tempdir");
   let baseline_path = tmp.path().join("baseline.json");
