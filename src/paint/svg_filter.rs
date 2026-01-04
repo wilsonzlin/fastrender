@@ -6778,8 +6778,8 @@ mod tests {
 
     let filter_region = filter_region_for_pixmap(&pixmap);
     let tiled = tile_pixmap(eroded, filter_region)
-      .unwrap()
-      .expect("tile result");
+      .expect("tile result")
+      .expect("tiled output");
     assert_eq!(pixels_to_vec(&tiled.pixmap), vec![(255, 0, 0, 255), (255, 0, 0, 255)]);
   }
 

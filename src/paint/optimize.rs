@@ -1425,8 +1425,11 @@ mod tests {
   fn transparent_text_with_shadow_not_removed() {
     let glyphs = vec![GlyphInstance {
       glyph_id: 1,
-      offset: Point::new(0.0, 0.0),
-      advance: 10.0,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 10.0,
+      y_advance: 0.0,
     }];
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
@@ -1434,7 +1437,6 @@ mod tests {
       cached_bounds: None,
       glyphs,
       color: Rgba::TRANSPARENT,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(4.0, 4.0),
         blur_radius: 0.0,
@@ -1442,13 +1444,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 10.0,
-      font: None,
-      font_id: None,
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
+      ..Default::default()
     }));
 
     let viewport = Rect::from_xywh(0.0, 0.0, 200.0, 200.0);
