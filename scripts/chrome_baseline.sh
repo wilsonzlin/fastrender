@@ -67,6 +67,7 @@ TIMEOUT="${TIMEOUT:-15}"
 SHARD="${SHARD:-}"
 CHROME_BIN="${CHROME_BIN:-}"
 JS="${JS:-off}"
+HEADLESS_FLAG="--headless=new"
 
 FILTERS=()
 PARSE_FLAGS=1
@@ -377,7 +378,7 @@ PY
   mkdir -p "${profile_dir}"
 
   chrome_args=(
-    --headless=new
+    "${HEADLESS_FLAG}"
     --no-sandbox
     --disable-dev-shm-usage
     --disable-gpu
@@ -410,6 +411,35 @@ PY
   else
     if "${CHROME}" "${chrome_args[@]}" "${url}" >"${chrome_log}" 2>&1; then
       ran_ok=1
+    fi
+  fi
+
+  if [[ "${ran_ok}" -ne 1 || ! -s "${tmp_png_path}" ]]; then
+    if [[ "${HEADLESS_FLAG}" == "--headless=new" ]]; then
+      log="$(cat "${chrome_log}" 2>/dev/null || true)"
+      log_lower="${log,,}"
+      headless_new_unsupported=0
+      if [[ "${log_lower}" == *"--headless=new"* ]]; then
+        if [[ "${log_lower}" == *"unknown flag"* || "${log_lower}" == *"unrecognized option"* || "${log_lower}" == *"unknown option"* ]]; then
+          headless_new_unsupported=1
+        fi
+      fi
+      if [[ "${headless_new_unsupported}" -eq 1 ]]; then
+        HEADLESS_FLAG="--headless"
+        chrome_args[0]="${HEADLESS_FLAG}"
+        rm -f "${tmp_png_path}"
+        printf "\n\n# Retrying with --headless\n" >>"${chrome_log}" 2>/dev/null || true
+        ran_ok=0
+        if command -v timeout >/dev/null 2>&1; then
+          if timeout "${TIMEOUT}s" "${CHROME}" "${chrome_args[@]}" "${url}" >>"${chrome_log}" 2>&1; then
+            ran_ok=1
+          fi
+        else
+          if "${CHROME}" "${chrome_args[@]}" "${url}" >>"${chrome_log}" 2>&1; then
+            ran_ok=1
+          fi
+        fi
+      fi
     fi
   fi
 
