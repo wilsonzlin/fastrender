@@ -2533,12 +2533,57 @@ struct Preserve3dSceneItem {
   plane_rect: Rect,
   backface_visibility: BackfaceVisibility,
   paint_order: usize,
+  effects: Vec<SceneEffect>,
 }
 
 #[derive(Clone)]
 enum Preserve3dSceneItemSource {
   Segment(Vec<DisplayItem>),
   FlattenedSubtree(StackingNode),
+}
+
+#[derive(Clone, Debug)]
+enum SceneEffect {
+  Clip(ClipItem),
+  Opacity(f32),
+}
+
+impl SceneEffect {
+  fn push_item(&self) -> DisplayItem {
+    match self {
+      SceneEffect::Clip(clip) => DisplayItem::PushClip(clip.clone()),
+      SceneEffect::Opacity(opacity) => DisplayItem::PushOpacity(OpacityItem { opacity: *opacity }),
+    }
+  }
+
+  fn pop_item(&self) -> DisplayItem {
+    match self {
+      SceneEffect::Clip(_) => DisplayItem::PopClip,
+      SceneEffect::Opacity(_) => DisplayItem::PopOpacity,
+    }
+  }
+}
+
+fn update_scene_effect_stack(stack: &mut Vec<SceneEffect>, item: &DisplayItem) {
+  match item {
+    DisplayItem::PushClip(clip) => {
+      stack.push(SceneEffect::Clip(clip.clone()));
+    }
+    DisplayItem::PopClip => {
+      if let Some(pos) = stack.iter().rposition(|eff| matches!(eff, SceneEffect::Clip(_))) {
+        stack.remove(pos);
+      }
+    }
+    DisplayItem::PushOpacity(OpacityItem { opacity }) => {
+      stack.push(SceneEffect::Opacity(*opacity));
+    }
+    DisplayItem::PopOpacity => {
+      if let Some(pos) = stack.iter().rposition(|eff| matches!(eff, SceneEffect::Opacity(_))) {
+        stack.remove(pos);
+      }
+    }
+    _ => {}
+  }
 }
 
 fn parse_stacking_node<T>(items: &T, start: usize) -> Option<(StackingNode, usize)>
@@ -2621,6 +2666,7 @@ fn collect_scene_items(
   parent_transform: &Transform3D,
   in_preserve_context: bool,
   order_counter: &mut usize,
+  inherited_effects: &[SceneEffect],
 ) -> Vec<Preserve3dSceneItem> {
   let local_transform = node.context.transform.unwrap_or_else(Transform3D::identity);
   let combined_transform = parent_transform.multiply(&local_transform);
@@ -2643,16 +2689,24 @@ fn collect_scene_items(
       plane_rect: node.context.plane_rect,
       backface_visibility: node.context.backface_visibility,
       paint_order: order,
+      effects: inherited_effects.to_vec(),
     });
     return items;
   }
 
+  let mut effects = inherited_effects.to_vec();
   for segment in &node.segments {
     match segment {
       StackingSegment::Items(list) => {
-        if list.is_empty() {
+        let prefix_effects = effects.clone();
+        for it in list {
+          update_scene_effect_stack(&mut effects, it);
+        }
+
+        if list.is_empty() || !list.iter().any(|it| !it.is_stack_operation()) {
           continue;
         }
+
         let bounds = compute_items_bounds(list).unwrap_or(node.context.bounds);
         let plane_rect = {
           let candidate = node.context.plane_rect;
@@ -2677,6 +2731,7 @@ fn collect_scene_items(
           plane_rect,
           backface_visibility: node.context.backface_visibility,
           paint_order: order,
+          effects: prefix_effects,
         });
       }
       StackingSegment::Child(child) => {
@@ -2685,6 +2740,7 @@ fn collect_scene_items(
           &child_transform,
           true,
           order_counter,
+          &effects,
         ));
       }
     }
@@ -5982,7 +6038,7 @@ impl DisplayListRenderer {
     }
 
     let mut order = 0;
-    let mut scene_items = collect_scene_items(&node, &parent_transform, true, &mut order);
+    let mut scene_items = collect_scene_items(&node, &parent_transform, true, &mut order, &[]);
     scene_items.retain(|item| {
       !matches!(item.backface_visibility, BackfaceVisibility::Hidden)
         || !backface_is_hidden(&item.transform)
@@ -6030,12 +6086,18 @@ impl DisplayListRenderer {
     list.push(DisplayItem::PushTransform(TransformItem {
       transform: translation,
     }));
+    for effect in &item.effects {
+      list.push(effect.push_item());
+    }
+
+    let mut effects_after = item.effects.clone();
     match &item.source {
       Preserve3dSceneItemSource::Segment(items) => {
         let mut deadline_counter = 0usize;
         for it in items {
           check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
             .map_err(Error::Render)?;
+          update_scene_effect_stack(&mut effects_after, it);
           list.push(it.clone());
         }
       }
@@ -6048,13 +6110,20 @@ impl DisplayListRenderer {
             if let DisplayItem::PushStackingContext(sc) = it {
               let mut adjusted = sc.clone();
               adjusted.transform = None;
-              list.push(DisplayItem::PushStackingContext(adjusted));
+              let display_item = DisplayItem::PushStackingContext(adjusted);
+              update_scene_effect_stack(&mut effects_after, &display_item);
+              list.push(display_item);
               continue;
             }
           }
+          update_scene_effect_stack(&mut effects_after, it);
           list.push(it.clone());
         }
       }
+    }
+
+    for effect in effects_after.iter().rev() {
+      list.push(effect.pop_item());
     }
     list.push(DisplayItem::PopTransform);
 
