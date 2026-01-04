@@ -447,33 +447,25 @@ thread_local! {
   static SVG_FILTER_DEPTH: Cell<usize> = Cell::new(0);
 }
 
-struct DepthGuard {
-  cell: &'static Cell<usize>,
-}
-
-impl DepthGuard {
-  fn try_new(cell: &'static Cell<usize>) -> Option<Self> {
-    let depth = cell.get();
-    if depth >= MAX_SVG_FILTER_DEPTH {
-      return None;
-    }
-    cell.set(depth + 1);
-    Some(Self { cell })
-  }
-}
+struct DepthGuard;
 
 impl Drop for DepthGuard {
   fn drop(&mut self) {
-    let depth = self.cell.get();
-    self.cell.set(depth.saturating_sub(1));
+    SVG_FILTER_DEPTH.with(|cell| {
+      let depth = cell.get();
+      cell.set(depth.saturating_sub(1));
+    });
   }
 }
 
 fn svg_filter_depth_guard() -> Option<DepthGuard> {
   SVG_FILTER_DEPTH.with(|cell| {
-    // SAFETY: thread local Cell lives for the duration of the thread.
-    let static_cell: &'static Cell<usize> = unsafe { std::mem::transmute(cell) };
-    DepthGuard::try_new(static_cell)
+    let depth = cell.get();
+    if depth >= MAX_SVG_FILTER_DEPTH {
+      return None;
+    }
+    cell.set(depth + 1);
+    Some(DepthGuard)
   })
 }
 
