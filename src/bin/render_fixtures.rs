@@ -67,6 +67,13 @@ struct Cli {
   #[arg(long, value_enum, default_value_t = MediaTypeArg::Screen)]
   media: MediaTypeArg,
 
+  /// Expand the paint canvas to fit the laid-out content bounds.
+  ///
+  /// This is particularly useful for paginated print fixtures, where pages are stacked in the
+  /// fragment tree and would otherwise be clipped by the viewport-sized output canvas.
+  #[arg(long)]
+  fit_canvas_to_content: bool,
+
   /// Hard per-fixture timeout in seconds.
   #[arg(long, default_value_t = 10)]
   timeout: u64,
@@ -228,6 +235,9 @@ fn run(cli: Cli) -> io::Result<()> {
     .with_viewport(cli.viewport.0, cli.viewport.1)
     .with_device_pixel_ratio(cli.dpr)
     .with_media_type(cli.media.as_media_type());
+  if cli.fit_canvas_to_content {
+    base_options = base_options.with_fit_canvas_to_content(true);
+  }
   if let Some(ms) = soft_timeout_ms {
     if ms > 0 {
       base_options.timeout = Some(Duration::from_millis(ms));
@@ -252,11 +262,12 @@ fn run(cli: Cli) -> io::Result<()> {
     println!("Shard: {idx}/{total}");
   }
   println!(
-    "Viewport: {}x{} dpr={} media={:?} timeout={}s",
+    "Viewport: {}x{} dpr={} media={:?} fit_canvas_to_content={} timeout={}s",
     cli.viewport.0,
     cli.viewport.1,
     cli.dpr,
     cli.media.as_media_type(),
+    cli.fit_canvas_to_content,
     cli.timeout
   );
   println!();

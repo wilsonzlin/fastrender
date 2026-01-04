@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Side break blank page</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <section class="card first">
+      <h1>Page break side constraint</h1>
+      <p class="muted">
+        The next section has <span class="pill">break-before: right</span> so it must start on a right/recto page.
+      </p>
+      <p style="margin-top: 12px">
+        Because page 2 would normally be a left page, the engine should insert a blank page between these sections.
+      </p>
+    </section>
+    <section class="card second">
+      <h2>Second section</h2>
+      <p class="muted">
+        This content should land on page 3 (right) with a blank page 2 in between.
+      </p>
+    </section>
+  </body>
+</html>
+

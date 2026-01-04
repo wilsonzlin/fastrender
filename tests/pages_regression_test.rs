@@ -94,6 +94,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     shots: PRINT_SHOTS,
   },
   PageFixture {
+    name: "page_break_sides_blank_page",
+    html: "page_break_sides_blank_page/index.html",
+    shots: PRINT_SHOTS,
+  },
+  PageFixture {
     name: "fragmentation_showcase",
     html: "fragmentation_showcase/index.html",
     shots: PRINT_SHOTS,
@@ -486,6 +491,11 @@ fn render_page(renderer: &mut FastRender, html: &str, shot: &PageShot) -> Result
     .with_viewport(shot.viewport.0, shot.viewport.1)
     .with_device_pixel_ratio(shot.dpr)
     .with_media_type(shot.media);
+  if matches!(shot.media, MediaType::Print) {
+    // Print renders are paginated into multiple page fragments; expand the paint canvas so the
+    // stacked pages are visible in the regression PNG output.
+    options = options.with_fit_canvas_to_content(true);
+  }
   if shot.force_parallel_tiling {
     options = options.with_paint_parallelism(PaintParallelism::enabled());
   }

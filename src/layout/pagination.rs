@@ -92,8 +92,13 @@ fn dedup_forced_boundaries(mut boundaries: Vec<ForcedBoundary>) -> Vec<ForcedBou
   for boundary in boundaries.drain(..) {
     if let Some(last) = deduped.last_mut() {
       if (last.position - boundary.position).abs() < EPSILON {
-        if last.page_side.is_none() {
-          last.page_side = boundary.page_side;
+        match (last.page_side, boundary.page_side) {
+          (None, side) => last.page_side = side,
+          (side, None) => last.page_side = side,
+          (Some(a), Some(b)) if a == b => last.page_side = Some(a),
+          // Conflicting side constraints at the same boundary are unsatisfiable; drop the side
+          // requirement and treat it as a generic forced break.
+          (Some(_), Some(_)) => last.page_side = None,
         }
         continue;
       }
@@ -101,6 +106,36 @@ fn dedup_forced_boundaries(mut boundaries: Vec<ForcedBoundary>) -> Vec<ForcedBou
     deduped.push(boundary);
   }
   deduped
+}
+
+fn split_atomic_ranges_at_forced_boundaries(
+  atomic_ranges: &mut Vec<AtomicRange>,
+  boundaries: &[ForcedBoundary],
+) {
+  if atomic_ranges.is_empty() || boundaries.is_empty() {
+    return;
+  }
+
+  let mut points: Vec<f32> = boundaries.iter().map(|b| b.position).collect();
+  points.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+  points.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
+
+  let mut split: Vec<AtomicRange> = Vec::with_capacity(atomic_ranges.len());
+  for range in atomic_ranges.iter().copied() {
+    let mut start = range.start;
+    for pos in points.iter().copied() {
+      if pos <= start + EPSILON || pos >= range.end - EPSILON {
+        continue;
+      }
+      split.push(AtomicRange { start, end: pos });
+      start = pos;
+    }
+    split.push(AtomicRange { start, end: range.end });
+  }
+
+  atomic_ranges.clear();
+  atomic_ranges.extend(split);
+  normalize_atomic_ranges(atomic_ranges);
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +197,9 @@ impl CachedLayout {
       page_side: None,
     });
     forced = dedup_forced_boundaries(forced);
+    // Forced breaks override `break-inside: avoid-*` semantics; ensure atomic ranges don't span
+    // over forced boundaries so pagination doesn't incorrectly skip mandated breaks.
+    split_atomic_ranges_at_forced_boundaries(&mut atomic_ranges, &forced);
 
     Self {
       root,
@@ -1106,7 +1144,12 @@ fn layout_for_style<'a>(
     let mut config = LayoutConfig::for_viewport(style.content_size);
     config.enable_cache = enable_layout_cache;
     let engine = LayoutEngine::with_font_context(config, font_ctx.clone());
-    let _hint = set_fragmentainer_block_size_hint(Some(style.content_size.height));
+    let block_size_hint = if block_axis_is_horizontal(style.page_style.writing_mode) {
+      style.content_size.width
+    } else {
+      style.content_size.height
+    };
+    let _hint = set_fragmentainer_block_size_hint(Some(block_size_hint));
     let layout_tree = engine.layout_tree(box_tree)?;
     let layout = CachedLayout::from_root(layout_tree.root, style, fallback_page_name);
     cache.insert(key, layout);

@@ -55,6 +55,7 @@ fn chrome_baseline_fixtures_help_mentions_flags() {
       && stdout.contains("--chrome-dir")
       && stdout.contains("--viewport")
       && stdout.contains("--dpr")
+      && stdout.contains("--media")
       && stdout.contains("--timeout")
       && stdout.contains("--js"),
     "help output should mention key flags; got:\n{stdout}"

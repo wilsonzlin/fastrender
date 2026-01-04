@@ -1,0 +1,60 @@
+@page {
+  size: 420px 300px;
+  margin: 34px 38px;
+  @bottom-right {
+    content: counter(page) " / " counter(pages);
+    font-size: 12px;
+    color: #334155;
+  }
+}
+
+@page :left {
+  @top-center {
+    content: "LEFT PAGE";
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: #0f172a;
+  }
+}
+
+@page :right {
+  @top-center {
+    content: "RIGHT PAGE";
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: #0f172a;
+  }
+}
+
+@page :blank {
+  @top-center {
+    content: "BLANK PAGE (INSERTED)";
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: #c2410c;
+  }
+}
+
+body {
+  padding: 0;
+  background: #ffffff;
+}
+
+.card {
+  border-radius: 0;
+  box-shadow: none;
+  border: 3px solid #0f172a;
+}
+
+.first {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.second {
+  background: rgba(22, 163, 74, 0.12);
+  break-before: right;
+}
+

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use image::{ImageBuffer, Rgba};
 use tempfile::tempdir;
 
 fn repo_root() -> PathBuf {
@@ -139,6 +140,95 @@ exit 0
       .permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&path, perms).expect("chmod headless fallback chrome");
+  }
+
+  path
+}
+
+#[cfg(unix)]
+fn write_print_stub_chrome(dir: &std::path::Path) -> PathBuf {
+  let path = dir.join("chrome");
+  fs::write(
+    &path,
+    r#"#!/usr/bin/env sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo "Chromium 123.0.0.0"
+  exit 0
+fi
+
+pdf=""
+for arg in "$@"; do
+  case "$arg" in
+    --print-to-pdf=*) pdf="${arg#--print-to-pdf=}";;
+  esac
+done
+
+if [ -z "$pdf" ]; then
+  echo "missing --print-to-pdf" >&2
+  exit 2
+fi
+
+mkdir -p "$(dirname "$pdf")"
+echo "%PDF-stub" > "$pdf"
+exit 0
+"#,
+  )
+  .expect("write print stub chrome");
+
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&path).expect("stat chrome").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).expect("chmod chrome");
+  }
+
+  path
+}
+
+#[cfg(unix)]
+fn write_stub_pdftoppm(
+  dir: &std::path::Path,
+  red_png: &std::path::Path,
+  green_png: &std::path::Path,
+  blue_png: &std::path::Path,
+) -> PathBuf {
+  let path = dir.join("pdftoppm");
+  fs::write(
+    &path,
+    format!(
+      r#"#!/usr/bin/env sh
+set -eu
+
+prefix=""
+for arg in "$@"; do
+  prefix="$arg"
+done
+
+if [ -z "$prefix" ]; then
+  echo "missing output prefix" >&2
+  exit 2
+fi
+
+cp "{}" "${{prefix}}-1.png"
+cp "{}" "${{prefix}}-2.png"
+cp "{}" "${{prefix}}-10.png"
+exit 0
+"#,
+      red_png.display(),
+      green_png.display(),
+      blue_png.display()
+    ),
+  )
+  .expect("write stub pdftoppm");
+
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&path).expect("stat pdftoppm").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).expect("chmod pdftoppm");
   }
 
   path
@@ -398,4 +488,68 @@ fn chrome_baseline_fixtures_falls_back_to_legacy_headless() {
     Some("legacy"),
     "metadata should record legacy headless mode; got:\n{meta}"
   );
+}
+
+#[test]
+#[cfg(unix)]
+fn chrome_baseline_fixtures_print_mode_stacks_pdf_pages() {
+  let repo_root = repo_root();
+  let temp = tempdir().expect("temp dir");
+  let fixture_root = temp.path().join("fixtures");
+  let out_dir = temp.path().join("out");
+
+  let chrome_dir = temp.path().join("chrome");
+  fs::create_dir_all(&chrome_dir).expect("create chrome dir");
+  write_print_stub_chrome(&chrome_dir);
+
+  let bin_dir = temp.path().join("bin");
+  fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+  let red_png = bin_dir.join("red.png");
+  let green_png = bin_dir.join("green.png");
+  let blue_png = bin_dir.join("blue.png");
+  image::DynamicImage::ImageRgba8(ImageBuffer::from_pixel(1, 1, Rgba([255, 0, 0, 255])))
+    .save_with_format(&red_png, image::ImageFormat::Png)
+    .expect("write red png");
+  image::DynamicImage::ImageRgba8(ImageBuffer::from_pixel(1, 1, Rgba([0, 255, 0, 255])))
+    .save_with_format(&green_png, image::ImageFormat::Png)
+    .expect("write green png");
+  image::DynamicImage::ImageRgba8(ImageBuffer::from_pixel(1, 1, Rgba([0, 0, 255, 255])))
+    .save_with_format(&blue_png, image::ImageFormat::Png)
+    .expect("write blue png");
+
+  write_stub_pdftoppm(&bin_dir, &red_png, &green_png, &blue_png);
+
+  write_fixture(&fixture_root, "hello");
+
+  let path_var = std::env::var_os("PATH").unwrap_or_default();
+  let mut paths = vec![bin_dir.clone()];
+  paths.extend(std::env::split_paths(&path_var));
+  let path = std::env::join_paths(paths).expect("join PATH");
+
+  let status = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(&repo_root)
+    .env("PATH", &path)
+    .arg("chrome-baseline-fixtures")
+    .arg("--fixture-dir")
+    .arg(&fixture_root)
+    .arg("--out-dir")
+    .arg(&out_dir)
+    .arg("--chrome-dir")
+    .arg(&chrome_dir)
+    .arg("--fixtures")
+    .arg("hello")
+    .arg("--media")
+    .arg("print")
+    .status()
+    .expect("run chrome-baseline-fixtures --media print");
+  assert!(status.success(), "command exited with {status}");
+
+  let stacked = image::open(out_dir.join("hello.png")).expect("decode stacked png");
+  assert_eq!(stacked.width(), 1);
+  assert_eq!(stacked.height(), 3);
+  let pixels = stacked.to_rgba8();
+  assert_eq!(pixels.get_pixel(0, 0).0, [255, 0, 0, 255]);
+  assert_eq!(pixels.get_pixel(0, 1).0, [0, 255, 0, 255]);
+  assert_eq!(pixels.get_pixel(0, 2).0, [0, 0, 255, 255]);
 }

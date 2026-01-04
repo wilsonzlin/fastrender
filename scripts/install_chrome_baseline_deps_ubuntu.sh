@@ -6,6 +6,7 @@ set -euo pipefail
 # Installs:
 # - python3 (used to inject <base href=...> into cached HTML)
 # - fonts (to reduce missing glyphs / weird fallbacks)
+# - poppler-utils (pdftoppm, used for print-to-PNG conversion when diffing paginated output)
 # - a Chrome/Chromium binary (headless screenshots)
 #
 # Usage:
@@ -25,6 +26,7 @@ This script installs the Ubuntu dependencies needed to run:
 It installs:
   - python3
   - fonts-dejavu-core, fonts-noto-core, fonts-noto-color-emoji
+  - poppler-utils (pdftoppm)
   - chromium (or uses an existing google-chrome / chromium install)
 
 Environment:
@@ -67,7 +69,8 @@ ${SUDO} apt-get install -y \
   python3 \
   fonts-dejavu-core \
   fonts-noto-core \
-  fonts-noto-color-emoji
+  fonts-noto-color-emoji \
+  poppler-utils
 
 have_browser() {
   command -v google-chrome-stable >/dev/null 2>&1 \
@@ -121,4 +124,3 @@ else
   echo "Then run: scripts/chrome_baseline.sh" >&2
   exit 1
 fi
-

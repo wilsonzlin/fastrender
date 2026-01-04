@@ -118,6 +118,13 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long, value_enum, default_value_t = MediaMode::Screen)]
   pub media: MediaMode,
 
+  /// Expand the FastRender paint canvas to fit the laid-out content bounds (forwarded to `render_fixtures --fit-canvas-to-content`).
+  ///
+  /// This is useful for paginated print fixtures, where pages are stacked in the fragment tree and
+  /// would otherwise be clipped to the viewport-sized output canvas.
+  #[arg(long)]
+  pub fit_canvas_to_content: bool,
+
   /// Per-fixture hard timeout in seconds (forwarded to both Chrome and FastRender steps).
   #[arg(long, default_value_t = DEFAULT_TIMEOUT, value_name = "SECS")]
   pub timeout: u64,
@@ -537,6 +544,9 @@ fn build_render_fixtures_command(
   cmd.arg("--dpr").arg(args.dpr.to_string());
   cmd.arg("--media").arg(args.media.as_cli_value());
   cmd.arg("--timeout").arg(args.timeout.to_string());
+  if args.fit_canvas_to_content {
+    cmd.arg("--fit-canvas-to-content");
+  }
   if let Some(jobs) = args.jobs {
     cmd.arg("--jobs").arg(jobs.to_string());
   }
@@ -568,6 +578,7 @@ fn build_chrome_baseline_command(
     .arg("--viewport")
     .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
   cmd.arg("--dpr").arg(args.dpr.to_string());
+  cmd.arg("--media").arg(args.media.as_cli_value());
   cmd.arg("--timeout").arg(args.timeout.to_string());
   cmd.arg("--js").arg(args.js.as_cli_value());
   if let Some(chrome) = &args.chrome {

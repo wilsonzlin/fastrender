@@ -26,9 +26,11 @@ Options:
   --out-dir <dir>       Directory to write PNGs/logs (default: target/chrome_fixture_renders)
   --viewport <WxH>      Viewport size (default: 1040x1240)
   --dpr <float>         Device pixel ratio (default: 1.0)
+  --media <screen|print>
+                        Media type for the baseline render (default: screen)
   --timeout <secs>      Per-fixture hard timeout (default: 15)
   --shard <index>/<total>
-                       Only process a deterministic shard of selected fixtures (0-based)
+                        Only process a deterministic shard of selected fixtures (0-based)
   --chrome <path>       Chrome/Chromium binary (default: auto-detect)
   --js <on|off>         Enable JavaScript (default: off)
   -h, --help            Show help
@@ -52,6 +54,7 @@ FIXTURES_DIR="${FIXTURES_DIR:-tests/pages/fixtures}"
 OUT_DIR="${OUT_DIR:-target/chrome_fixture_renders}"
 VIEWPORT="${VIEWPORT:-1040x1240}"
 DPR="${DPR:-1.0}"
+MEDIA="${MEDIA:-screen}"
 TIMEOUT="${TIMEOUT:-15}"
 CHROME_BIN="${CHROME_BIN:-}"
 JS="${JS:-off}"
@@ -74,6 +77,8 @@ while [[ $# -gt 0 ]]; do
         VIEWPORT="${2:-}"; shift 2 ;;
       --dpr)
         DPR="${2:-}"; shift 2 ;;
+      --media)
+        MEDIA="${2:-}"; shift 2 ;;
       --timeout)
         TIMEOUT="${2:-}"; shift 2 ;;
       --shard)
@@ -103,6 +108,14 @@ case "${JS,,}" in
   on|off) ;;
   *)
     echo "invalid --js: ${JS} (expected on|off)" >&2
+    exit 2
+    ;;
+esac
+
+case "${MEDIA,,}" in
+  screen|print) ;;
+  *)
+    echo "invalid --media: ${MEDIA} (expected screen|print)" >&2
     exit 2
     ;;
 esac
@@ -207,7 +220,7 @@ fi
 
 echo "Fixtures: ${FIXTURES_DIR}"
 echo "Output:   ${OUT_DIR}"
-echo "Viewport: ${VIEWPORT}  DPR: ${DPR}  JS: ${JS,,}  Timeout: ${TIMEOUT}s"
+echo "Viewport: ${VIEWPORT}  DPR: ${DPR}  Media: ${MEDIA,,}  JS: ${JS,,}  Timeout: ${TIMEOUT}s"
 echo
 
 xtask_args=(
@@ -216,6 +229,7 @@ xtask_args=(
   --out-dir "${OUT_DIR}"
   --viewport "${VIEWPORT}"
   --dpr "${DPR}"
+  --media "${MEDIA,,}"
   --timeout "${TIMEOUT}"
   --js "${JS,,}"
 )

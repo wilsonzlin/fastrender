@@ -19,7 +19,7 @@ use crate::style::page::PageSide;
 use crate::style::types::{BreakBetween, BreakInside, Direction, WritingMode};
 use crate::style::{block_axis_is_horizontal, block_axis_positive, ComputedStyle};
 use crate::tree::fragment_tree::{
-  FragmentChildren, FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath,
+  FragmentChildren, FragmentContent, FragmentNode, FragmentSliceInfo,
 };
 
 /// The fragmentation context determines how break hints are interpreted.
@@ -761,11 +761,12 @@ pub fn fragment_tree(
 }
 
 pub(crate) fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usize) {
-  let path = FragmentainerPath::new(index);
   node.fragment_index = index;
   node.fragment_count = count.max(1);
-  node.fragmentainer = path;
-  node.fragmentainer_index = path.flattened_index();
+  // Update the page index while preserving any nested column metadata already attached by earlier
+  // fragmentation passes (e.g. multi-column layout inside a paginated page).
+  node.fragmentainer = node.fragmentainer.with_page_index(index);
+  node.fragmentainer_index = node.fragmentainer.flattened_index();
   for child in node.children_mut() {
     propagate_fragment_metadata(child, index, count);
   }

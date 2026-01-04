@@ -21,7 +21,7 @@ Options:
   --report-json <path>      JSON diff report output (default: target/chrome_vs_fastrender_fixtures.json)
   --viewport <WxH>          Viewport size (default: 1040x1240)
   --dpr <float>             Device pixel ratio (default: 1.0)
-  --media <screen|print>    Media type for FastRender (default: screen)
+  --media <screen|print>    Media type for both Chrome + FastRender (default: screen)
   --jobs <n>                Parallelism forwarded to render_fixtures
   --write-snapshot          Also write render_fixtures snapshots/diagnostics (for diff_snapshots)
   --timeout <secs>          Per-fixture timeout (Chrome + FastRender) (default: 15)
@@ -290,6 +290,7 @@ else
     --out-dir "${CHROME_OUT_DIR}"
     --viewport "${VIEWPORT}"
     --dpr "${DPR}"
+    --media "${MEDIA}"
     --timeout "${TIMEOUT}"
   )
   if [[ -n "${CHROME_BIN}" ]]; then
@@ -318,6 +319,9 @@ else
     --media "${MEDIA}"
     --timeout "${TIMEOUT}"
   )
+  if [[ "${MEDIA,,}" == "print" ]]; then
+    render_args+=(--fit-canvas-to-content)
+  fi
   if [[ -n "${JOBS}" ]]; then
     render_args+=(--jobs "${JOBS}")
   fi

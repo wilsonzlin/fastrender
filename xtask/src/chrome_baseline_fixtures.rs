@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, ValueEnum};
+use image::{GenericImage, ImageBuffer, Rgba};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -55,6 +56,14 @@ pub struct ChromeBaselineFixturesArgs {
   #[arg(long, default_value_t = 1.0)]
   dpr: f32,
 
+  /// Media type for the baseline render.
+  ///
+  /// `screen` uses a viewport screenshot (like typical web rendering), while `print` uses Chrome's
+  /// print-to-PDF pipeline and converts the resulting PDF into a stacked PNG so pagination can be
+  /// diffed against FastRender.
+  #[arg(long, value_enum, default_value_t = MediaMode::Screen)]
+  media: MediaMode,
+
   /// Per-fixture hard timeout in seconds (0 = no timeout).
   #[arg(long, default_value_t = 15, value_name = "SECS")]
   timeout: u64,
@@ -68,6 +77,22 @@ pub struct ChromeBaselineFixturesArgs {
 enum JsMode {
   On,
   Off,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum MediaMode {
+  Screen,
+  Print,
+}
+
+impl MediaMode {
+  fn as_str(self) -> &'static str {
+    match self {
+      Self::Screen => "screen",
+      Self::Print => "print",
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +113,7 @@ struct FixtureMetadata {
   fixture_dir: PathBuf,
   viewport: (u32, u32),
   dpr: f32,
+  media: &'static str,
   js: JsModeMetadata,
   headless: &'static str,
   chrome_version: Option<String>,
@@ -136,10 +162,11 @@ pub fn run_chrome_baseline_fixtures(args: ChromeBaselineFixturesArgs) -> Result<
   println!("Input:  {}", fixture_root.display());
   println!("Output: {}", out_dir.display());
   println!(
-    "Viewport: {}x{}  DPR: {}  JS: {}  Timeout: {}s",
+    "Viewport: {}x{}  DPR: {}  Media: {}  JS: {}  Timeout: {}s",
     args.viewport.0,
     args.viewport.1,
     args.dpr,
+    args.media.as_str(),
     match args.js {
       JsMode::On => "on",
       JsMode::Off => "off",
@@ -212,10 +239,6 @@ fn render_fixture(
   fs::create_dir_all(&profile_dir)
     .with_context(|| format!("create chrome profile dir {}", profile_dir.display()))?;
 
-  let tmp_png_dir = temp_root.join("screenshots");
-  fs::create_dir_all(&tmp_png_dir).context("create temp screenshot directory")?;
-  let tmp_png_path = tmp_png_dir.join(format!("{}.png", fixture.stem));
-
   let base_url = Url::from_directory_path(&fixture.dir)
     .map(|u| u.to_string())
     .map_err(|_| {
@@ -230,10 +253,6 @@ fn render_fixture(
   write_patched_html(&index_path, &patched_html, Some(&base_url), matches!(args.js, JsMode::Off))?;
   let url = file_url(&patched_html)?;
 
-  if tmp_png_path.exists() {
-    let _ = fs::remove_file(&tmp_png_path);
-  }
-
   let timeout = if args.timeout == 0 {
     None
   } else {
@@ -241,49 +260,98 @@ fn render_fixture(
   };
 
   let start = Instant::now();
-  let headless_used = run_chrome_screenshot(
-    chrome,
-    &url,
-    &profile_dir,
-    args.viewport,
-    args.dpr,
-    &tmp_png_path,
-    &chrome_log,
-    timeout,
-  )?;
+  let headless_used = match args.media {
+    MediaMode::Screen => {
+      let tmp_png_dir = temp_root.join("screenshots");
+      fs::create_dir_all(&tmp_png_dir).context("create temp screenshot directory")?;
+      let tmp_png_path = tmp_png_dir.join(format!("{}.png", fixture.stem));
+
+      if tmp_png_path.exists() {
+        let _ = fs::remove_file(&tmp_png_path);
+      }
+
+      let headless_used = run_chrome_screenshot(
+        chrome,
+        &url,
+        &profile_dir,
+        args.viewport,
+        args.dpr,
+        &tmp_png_path,
+        &chrome_log,
+        timeout,
+      )?;
+
+      let screenshot_len = fs::metadata(&tmp_png_path)
+        .with_context(|| {
+          format!(
+            "chrome did not produce a screenshot for {} (see {})",
+            fixture.stem,
+            chrome_log.display()
+          )
+        })?
+        .len();
+      if screenshot_len == 0 {
+        bail!(
+          "chrome produced an empty screenshot for {} (see {})",
+          fixture.stem,
+          chrome_log.display()
+        );
+      }
+
+      fs::copy(&tmp_png_path, &output_png).with_context(|| {
+        format!(
+          "copy screenshot from {} to {}",
+          tmp_png_path.display(),
+          output_png.display()
+        )
+      })?;
+
+      headless_used
+    }
+    MediaMode::Print => {
+      let print_dir = temp_root.join("print").join(&fixture.stem);
+      if print_dir.exists() {
+        let _ = fs::remove_dir_all(&print_dir);
+      }
+      fs::create_dir_all(&print_dir)
+        .with_context(|| format!("create print scratch dir {}", print_dir.display()))?;
+
+      let tmp_pdf_path = print_dir.join(format!("{}.pdf", fixture.stem));
+      if tmp_pdf_path.exists() {
+        let _ = fs::remove_file(&tmp_pdf_path);
+      }
+
+      let headless_used = run_chrome_print_to_pdf(
+        chrome,
+        &url,
+        &profile_dir,
+        args.viewport,
+        args.dpr,
+        &tmp_pdf_path,
+        &chrome_log,
+        timeout,
+      )?;
+
+      convert_pdf_to_stacked_png(
+        &tmp_pdf_path,
+        &output_png,
+        args.dpr,
+        &print_dir,
+        &chrome_log,
+      )?;
+
+      headless_used
+    }
+  };
 
   let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-
-  let screenshot_len = fs::metadata(&tmp_png_path)
-    .with_context(|| {
-      format!(
-        "chrome did not produce a screenshot for {} (see {})",
-        fixture.stem,
-        chrome_log.display()
-      )
-    })?
-    .len();
-  if screenshot_len == 0 {
-    bail!(
-      "chrome produced an empty screenshot for {} (see {})",
-      fixture.stem,
-      chrome_log.display()
-    );
-  }
-
-  fs::copy(&tmp_png_path, &output_png).with_context(|| {
-    format!(
-      "copy screenshot from {} to {}",
-      tmp_png_path.display(),
-      output_png.display()
-    )
-  })?;
 
   let metadata = FixtureMetadata {
     fixture: fixture.stem.clone(),
     fixture_dir: fixture.dir.clone(),
     viewport: args.viewport,
     dpr: args.dpr,
+    media: args.media.as_str(),
     js: match args.js {
       JsMode::On => JsModeMetadata::On,
       JsMode::Off => JsModeMetadata::Off,
@@ -299,6 +367,192 @@ fn render_fixture(
   fs::write(&metadata_path, json).with_context(|| format!("write {}", metadata_path.display()))?;
 
   Ok(())
+}
+
+fn convert_pdf_to_stacked_png(
+  pdf_path: &Path,
+  output_png: &Path,
+  dpr: f32,
+  scratch_dir: &Path,
+  log_path: &Path,
+) -> Result<()> {
+  if !pdf_path.is_file() {
+    bail!("missing PDF output at {}", pdf_path.display());
+  }
+
+  let pdftoppm = find_in_path("pdftoppm").ok_or_else(|| {
+    anyhow!(
+      "pdftoppm not found in PATH.\n\
+       Install poppler-utils (Ubuntu: `sudo apt-get install poppler-utils`) to enable --media print baselines."
+    )
+  })?;
+
+  let dpi = (96.0 * dpr).round().max(1.0) as u32;
+  let prefix = scratch_dir.join("pages");
+  let prefix_str = prefix.to_string_lossy();
+
+  let output = Command::new(&pdftoppm)
+    .args(["-png", "-r"])
+    .arg(dpi.to_string())
+    .arg(pdf_path)
+    .arg(prefix_str.as_ref())
+    .output()
+    .with_context(|| format!("run {}", pdftoppm.display()))?;
+
+  if let Some(parent) = log_path.parent() {
+    let _ = fs::create_dir_all(parent);
+  }
+  let mut log = OpenOptions::new()
+    .create(true)
+    .append(true)
+    .open(log_path)
+    .with_context(|| format!("open log file {}", log_path.display()))?;
+  writeln!(log, "\n\n# pdf->png: {} -png -r {} {} {}", pdftoppm.display(), dpi, pdf_path.display(), prefix.display()).ok();
+  if !output.stdout.is_empty() {
+    let _ = log.write_all(&output.stdout);
+  }
+  if !output.stderr.is_empty() {
+    let _ = log.write_all(&output.stderr);
+  }
+
+  if !output.status.success() {
+    bail!("pdftoppm failed with status {}", output.status);
+  }
+
+  let mut pages: Vec<PathBuf> = fs::read_dir(scratch_dir)
+    .with_context(|| format!("read {}", scratch_dir.display()))?
+    .filter_map(|entry| entry.ok())
+    .map(|entry| entry.path())
+    .filter(|path| {
+      path.extension().is_some_and(|ext| ext == "png")
+        && path
+          .file_name()
+          .and_then(|name| name.to_str())
+          .is_some_and(|name| name.starts_with("pages-"))
+    })
+    .collect();
+  pages.sort_by_key(|path| {
+    path
+      .file_stem()
+      .and_then(|stem| stem.to_str())
+      .and_then(|stem| stem.rsplit('-').next())
+      .and_then(|n| n.parse::<u32>().ok())
+      .unwrap_or(u32::MAX)
+  });
+  if pages.is_empty() {
+    bail!(
+      "pdftoppm produced no PNG pages for {} (see {})",
+      pdf_path.display(),
+      log_path.display()
+    );
+  }
+
+  let mut decoded = Vec::with_capacity(pages.len());
+  let mut total_width: u32 = 0;
+  let mut total_height: u32 = 0;
+  for path in &pages {
+    let image = image::open(path).with_context(|| format!("decode {}", path.display()))?;
+    let rgba = image.to_rgba8();
+    total_width = total_width.max(rgba.width());
+    total_height = total_height.saturating_add(rgba.height());
+    decoded.push(rgba);
+  }
+
+  let mut stacked: ImageBuffer<Rgba<u8>, Vec<u8>> =
+    ImageBuffer::from_pixel(total_width, total_height, Rgba([255, 255, 255, 255]));
+  let mut y: i64 = 0;
+  for page in decoded {
+    stacked
+      .copy_from(&page, 0, y as u32)
+      .context("stack PDF pages")?;
+    y += page.height() as i64;
+  }
+
+  image::DynamicImage::ImageRgba8(stacked)
+    .save_with_format(output_png, image::ImageFormat::Png)
+    .with_context(|| format!("write {}", output_png.display()))?;
+
+  Ok(())
+}
+
+fn run_chrome_print_to_pdf(
+  chrome: &Path,
+  url: &str,
+  profile_dir: &Path,
+  viewport: (u32, u32),
+  dpr: f32,
+  pdf_path: &Path,
+  log_path: &Path,
+  timeout: Option<Duration>,
+) -> Result<HeadlessMode> {
+  let mut args = build_chrome_print_args(
+    HeadlessMode::New,
+    profile_dir,
+    viewport,
+    dpr,
+    pdf_path,
+  )?;
+
+  let mut last_status = run_chrome_with_timeout(chrome, &args, url, log_path, timeout, false)?;
+  if last_status.success() && pdf_path.is_file() {
+    return Ok(HeadlessMode::New);
+  }
+
+  let log = fs::read_to_string(log_path).unwrap_or_default();
+  let log_lower = log.to_ascii_lowercase();
+  let headless_new_unsupported = log_lower.contains("--headless=new")
+    && (log_lower.contains("unknown flag")
+      || log_lower.contains("unrecognized option")
+      || log_lower.contains("unknown option"));
+  if headless_new_unsupported {
+    args = build_chrome_print_args(
+      HeadlessMode::Legacy,
+      profile_dir,
+      viewport,
+      dpr,
+      pdf_path,
+    )?;
+    if pdf_path.exists() {
+      let _ = fs::remove_file(pdf_path);
+    }
+    let mut file = OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(log_path)
+      .with_context(|| format!("open log file {}", log_path.display()))?;
+    writeln!(file, "\n\n# Retrying with --headless\n").ok();
+    last_status = run_chrome_with_timeout(chrome, &args, url, log_path, timeout, true)?;
+    if last_status.success() && pdf_path.is_file() {
+      return Ok(HeadlessMode::Legacy);
+    }
+  }
+
+  if !last_status.success() {
+    bail!(
+      "chrome exited with {}; see {}",
+      last_status,
+      log_path.display()
+    );
+  }
+
+  bail!(
+    "chrome did not produce a PDF; see {}",
+    log_path.display()
+  );
+}
+
+fn build_chrome_print_args(
+  headless: HeadlessMode,
+  profile_dir: &Path,
+  viewport: (u32, u32),
+  dpr: f32,
+  pdf_path: &Path,
+) -> Result<Vec<String>> {
+  let mut args = build_chrome_common_args(headless, profile_dir, viewport, dpr)?;
+  args.push(format!("--print-to-pdf={}", pdf_path.display()));
+  // Prefer the CSS @page header/footer content and keep PDF output deterministic.
+  args.push("--print-to-pdf-no-header".to_string());
+  Ok(args)
 }
 
 fn discover_fixtures(fixture_root: &Path) -> Result<Vec<Fixture>> {
@@ -635,6 +889,17 @@ fn build_chrome_args(
   dpr: f32,
   screenshot_path: &Path,
 ) -> Result<Vec<String>> {
+  let mut args = build_chrome_common_args(headless, profile_dir, viewport, dpr)?;
+  args.push(format!("--screenshot={}", screenshot_path.display()));
+  Ok(args)
+}
+
+fn build_chrome_common_args(
+  headless: HeadlessMode,
+  profile_dir: &Path,
+  viewport: (u32, u32),
+  dpr: f32,
+) -> Result<Vec<String>> {
   let headless_flag = match headless {
     HeadlessMode::New => "--headless=new",
     HeadlessMode::Legacy => "--headless",
@@ -643,7 +908,6 @@ fn build_chrome_args(
   let viewport_arg = format!("--window-size={},{}", viewport.0, viewport.1);
   let dpr_arg = format!("--force-device-scale-factor={}", dpr);
   let profile_arg = format!("--user-data-dir={}", profile_dir.display());
-  let screenshot_arg = format!("--screenshot={}", screenshot_path.display());
 
   Ok(vec![
     headless_flag.to_string(),
@@ -666,7 +930,6 @@ fn build_chrome_args(
     "--disable-sync".to_string(),
     "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost".to_string(),
     profile_arg,
-    screenshot_arg,
   ])
 }
 

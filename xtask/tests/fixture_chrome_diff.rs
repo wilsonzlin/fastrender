@@ -88,6 +88,7 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
       "--write-snapshot",
       "--media",
       "print",
+      "--fit-canvas-to-content",
       "--timeout",
       "12",
       "--js",
@@ -167,6 +168,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     "render_fixtures should receive media; got:\n{render_line}"
   );
   assert!(
+    render_line.contains("--fit-canvas-to-content"),
+    "render_fixtures should receive fit-canvas-to-content; got:\n{render_line}"
+  );
+  assert!(
     stdout.contains(&format!("--fixtures-dir {}", fixtures_root.display())),
     "render_fixtures should receive fixtures-dir; got:\n{stdout}"
   );
@@ -197,6 +202,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
   assert!(
     chrome_line.contains("--timeout 12"),
     "chrome-baseline-fixtures should receive timeout; got:\n{chrome_line}"
+  );
+  assert!(
+    chrome_line.contains("--media print"),
+    "chrome-baseline-fixtures should receive media; got:\n{chrome_line}"
   );
   assert!(
     chrome_line.contains("--js on"),
