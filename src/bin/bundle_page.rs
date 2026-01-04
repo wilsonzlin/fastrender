@@ -19,6 +19,7 @@ use fastrender::resource::bundle::{
   BUNDLE_MANIFEST, BUNDLE_VERSION,
 };
 use fastrender::resource::{
+  ensure_font_mime_sane, ensure_http_success, ensure_image_mime_sane, ensure_stylesheet_mime_sane,
   origin_from_url, FetchContextKind, FetchDestination, FetchRequest, FetchedResource,
   ResourceAccessPolicy, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
@@ -26,7 +27,11 @@ use fastrender::resource::{
 use fastrender::resource::{
   parse_cached_html_meta, CachingFetcherConfig, DiskCacheConfig, DiskCachingFetcher, ResourcePolicy,
 };
-use fastrender::style::media::MediaType;
+use fastrender::dom::{parse_html_with_options, DomParseOptions};
+use fastrender::geometry::Size;
+use fastrender::html::image_prefetch::{discover_image_prefetch_urls, ImagePrefetchLimits};
+use fastrender::html::images::ImageSelectionContext;
+use fastrender::style::media::{MediaContext, MediaType};
 use fastrender::{OutputFormat, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -1132,6 +1137,73 @@ fn crawl_document(
     }
   }
 
+  fn document_response_looks_like_html(res: &FetchedResource, requested_url: &str) -> bool {
+    res
+      .content_type
+      .as_deref()
+      .map(|ct| {
+        let ct = ct.to_ascii_lowercase();
+        ct.starts_with("text/html")
+          || ct.starts_with("application/xhtml+xml")
+          || ct.starts_with("application/html")
+          || ct.contains("+html")
+      })
+      .unwrap_or_else(|| {
+        let lower = requested_url.to_ascii_lowercase();
+        lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
+      })
+  }
+
+  fn discover_html_images(
+    html: &str,
+    base_url: &str,
+    render: &BundleRenderConfig,
+  ) -> Result<Vec<String>> {
+    let dom = parse_html_with_options(
+      html,
+      DomParseOptions {
+        compatibility_mode: render.dom_compat_mode,
+      },
+    )?;
+    let viewport = Size::new(render.viewport.0 as f32, render.viewport.1 as f32);
+    let media_ctx = MediaContext::screen(viewport.width, viewport.height)
+      .with_device_pixel_ratio(render.device_pixel_ratio)
+      .with_env_overrides();
+    let ctx = ImageSelectionContext {
+      device_pixel_ratio: render.device_pixel_ratio,
+      slot_width: None,
+      viewport: Some(viewport),
+      media_context: Some(&media_ctx),
+      font_size: None,
+      base_url: Some(base_url),
+    };
+    Ok(discover_image_prefetch_urls(&dom, ctx, ImagePrefetchLimits::default()).urls)
+  }
+
+  fn handle_crawl_failure(
+    fetcher: &RecordingFetcher,
+    fetch_errors: &mut Vec<(String, String)>,
+    url: &str,
+    err: &fastrender::Error,
+    mode: CrawlMode,
+  ) {
+    match mode {
+      CrawlMode::BestEffort => {
+        eprintln!("Warning: failed to crawl {url}: {err}");
+      }
+      CrawlMode::Strict => {
+        fetch_errors.push((url.to_string(), err.to_string()));
+      }
+      CrawlMode::AllowMissing => {
+        eprintln!("Warning: missing resource; inserting placeholder: {url}: {err}");
+        fetcher.record_override(
+          url,
+          FetchedResource::with_final_url(Vec::new(), None, Some(url.to_string())),
+        );
+      }
+    }
+  }
+
   let allowed_origins = render
     .allowed_subresource_origins
     .iter()
@@ -1185,33 +1257,13 @@ fn crawl_document(
     }
   }
 
-  // Avoid exploding crawl time/bundle size on pages with large responsive image srcsets.
-  //
-  // For network documents we keep the crawl bounded aggressively because a single `<img srcset>`
-  // can reference dozens of large images. For local `file://` fixtures, however, we want more
-  // complete bundles (and the resources are on-disk anyway), so allow the HTML discovery helper's
-  // full cap (currently 16).
-  const MAX_HTML_SRCSET_CANDIDATES_NETWORK: usize = 1;
-  const MAX_HTML_SRCSET_CANDIDATES_LOCAL: usize = 16;
-  let srcset_candidate_limit = |base_url: &str| {
-    if base_url.trim_start().to_ascii_lowercase().starts_with("file://") {
-      MAX_HTML_SRCSET_CANDIDATES_LOCAL
-    } else {
-      MAX_HTML_SRCSET_CANDIDATES_NETWORK
-    }
-  };
-  let max_srcset_candidates = srcset_candidate_limit(&document.base_url);
-  let html_assets = fastrender::html::asset_discovery::discover_html_asset_urls_with_srcset_limit(
-    &document.html,
-    &document.base_url,
-    max_srcset_candidates,
-  );
-  for url in html_assets.images {
+  let html_assets =
+    fastrender::html::asset_discovery::discover_html_asset_urls(&document.html, &document.base_url);
+  for url in discover_html_images(&document.html, &document.base_url, render)? {
     enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
   }
   for url in html_assets.documents {
-    let destination = destination_from_url_extension(&url);
-    enqueue_unique(&mut queue, &mut seen, url, destination);
+    enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Document);
   }
 
   const MAX_CRAWL_URLS: usize = 10_000;
@@ -1228,7 +1280,11 @@ fn crawl_document(
       break;
     }
 
-    if let Err(err) = policy.allows(&url) {
+    let allowed = match destination {
+      FetchDestination::Document => policy.allows_document(&url),
+      _ => policy.allows(&url),
+    };
+    if let Err(err) = allowed {
       eprintln!("Skipping blocked subresource {url}: {}", err.reason);
       continue;
     }
@@ -1256,13 +1312,47 @@ fn crawl_document(
       }
     };
 
-    if let Err(err) = policy.allows_with_final(&url, res.final_url.as_deref()) {
+    let allowed = match destination {
+      FetchDestination::Document => policy.allows_document_with_final(&url, res.final_url.as_deref()),
+      _ => policy.allows_with_final(&url, res.final_url.as_deref()),
+    };
+    if let Err(err) = allowed {
       eprintln!(
         "Skipping blocked subresource {url} (final {}): {}",
         res.final_url.as_deref().unwrap_or("<none>"),
         err.reason
       );
       fetcher.discard(&url);
+      continue;
+    }
+
+    let validation = match destination {
+      FetchDestination::Style => ensure_http_success(&res, &url).and_then(|_| {
+        ensure_stylesheet_mime_sane(&res, &url)
+      }),
+      FetchDestination::Font => ensure_http_success(&res, &url).and_then(|_| ensure_font_mime_sane(&res, &url)),
+      FetchDestination::Image => ensure_http_success(&res, &url).and_then(|_| ensure_image_mime_sane(&res, &url)),
+      FetchDestination::Document => {
+        ensure_http_success(&res, &url).and_then(|_| {
+          if document_response_looks_like_html(&res, &url) {
+            Ok(())
+          } else {
+            let content_type = res.content_type.as_deref().unwrap_or("<missing>");
+            let status = res
+              .status
+              .map(|s| s.to_string())
+              .unwrap_or_else(|| "<missing>".to_string());
+            let final_url = res.final_url.as_deref().unwrap_or(&url);
+            Err(fastrender::Error::Other(format!(
+              "unexpected content-type {content_type} (status {status}, final_url {final_url})"
+            )))
+          }
+        })
+      }
+      FetchDestination::Other => Ok(()),
+    };
+    if let Err(err) = validation {
+      handle_crawl_failure(fetcher, &mut fetch_errors, &url, &err, mode);
       continue;
     }
 
@@ -1277,58 +1367,59 @@ fn crawl_document(
       continue;
     }
 
-    if is_css_resource(&res, &url) {
-      let css_base = res.final_url.as_deref().unwrap_or(&url);
-      let css = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-      for (dep, destination) in discover_css_urls_with_destination(&css, css_base) {
-        enqueue_unique(&mut queue, &mut seen, dep, destination);
+    match destination {
+      FetchDestination::Style => {
+        let css_base = res.final_url.as_deref().unwrap_or(&url);
+        let css = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+        for (dep, destination) in discover_css_urls_with_destination(&css, css_base) {
+          enqueue_unique(&mut queue, &mut seen, dep, destination);
+        }
       }
-    } else if is_html_resource(&res, &url) {
-      // Iframes/objects/embeds are rendered as nested documents, so crawl their HTML for the
-      // same kinds of subresources we discover in the root document (CSS links, inline `url()`,
-      // and common HTML asset tags).
-      let base_hint = res.final_url.as_deref().unwrap_or(&url);
-      let doc = decode_html_resource(&res, base_hint);
+      FetchDestination::Document => {
+        // Iframes/objects/embeds are rendered as nested documents, so crawl their HTML for the
+        // same kinds of subresources we discover in the root document (CSS links, inline `url()`,
+        // and responsive image candidates aligned with the renderer).
+        let base_hint = res.final_url.as_deref().unwrap_or(&url);
+        let doc = decode_html_resource(&res, base_hint);
 
-      let css_links = fastrender::css::loader::extract_css_links(
-        &doc.html,
-        &doc.base_url,
-        MediaType::Screen,
-      )
-      .unwrap_or_default();
-      let has_link_stylesheets = !css_links.is_empty();
-      for css_url in css_links {
-        enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
-      }
-
-      let has_style_tag = html_has_style_tag(&doc.html);
-      if !has_link_stylesheets && !has_style_tag {
-        for css_url in
-          fastrender::css::loader::extract_embedded_css_urls(&doc.html, &doc.base_url)
-            .unwrap_or_default()
-        {
+        let css_links = fastrender::css::loader::extract_css_links(
+          &doc.html,
+          &doc.base_url,
+          MediaType::Screen,
+        )
+        .unwrap_or_default();
+        let has_link_stylesheets = !css_links.is_empty();
+        for css_url in css_links {
           enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
         }
-      }
 
-      for css_chunk in extract_inline_css_chunks(&doc.html) {
-        for (url, destination) in discover_css_urls_with_destination(&css_chunk, &doc.base_url) {
-          enqueue_unique(&mut queue, &mut seen, url, destination);
+        let has_style_tag = html_has_style_tag(&doc.html);
+        if !has_link_stylesheets && !has_style_tag {
+          for css_url in
+            fastrender::css::loader::extract_embedded_css_urls(&doc.html, &doc.base_url)
+              .unwrap_or_default()
+          {
+            enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+          }
+        }
+
+        for css_chunk in extract_inline_css_chunks(&doc.html) {
+          for (url, destination) in discover_css_urls_with_destination(&css_chunk, &doc.base_url) {
+            enqueue_unique(&mut queue, &mut seen, url, destination);
+          }
+        }
+
+        for url in discover_html_images(&doc.html, &doc.base_url, render)? {
+          enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
+        }
+
+        let html_assets =
+          fastrender::html::asset_discovery::discover_html_asset_urls(&doc.html, &doc.base_url);
+        for url in html_assets.documents {
+          enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Document);
         }
       }
-
-      let html_assets = fastrender::html::asset_discovery::discover_html_asset_urls_with_srcset_limit(
-        &doc.html,
-        &doc.base_url,
-        srcset_candidate_limit(&doc.base_url),
-      );
-      for url in html_assets.images {
-        enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
-      }
-      for url in html_assets.documents {
-        let destination = destination_from_url_extension(&url);
-        enqueue_unique(&mut queue, &mut seen, url, destination);
-      }
+      _ => {}
     }
   }
 
@@ -1499,45 +1590,6 @@ fn discover_css_urls_with_destination(css: &str, base_url: &str) -> Vec<(String,
   out
 }
 
-fn is_css_resource(res: &FetchedResource, url: &str) -> bool {
-  if res
-    .content_type
-    .as_deref()
-    .map(|ct| ct.to_ascii_lowercase().contains("css"))
-    .unwrap_or(false)
-  {
-    return true;
-  }
-  if let Ok(parsed) = url::Url::parse(url) {
-    return parsed.path().to_ascii_lowercase().ends_with(".css");
-  }
-  false
-}
-
-fn is_html_resource(res: &FetchedResource, url: &str) -> bool {
-  let is_html = res
-    .content_type
-    .as_deref()
-    .map(|ct| {
-      let ct = ct.to_ascii_lowercase();
-      ct.starts_with("text/html")
-        || ct.starts_with("application/xhtml+xml")
-        || ct.starts_with("application/html")
-        || ct.contains("+html")
-    })
-    .unwrap_or(false);
-  if is_html {
-    return true;
-  }
-
-  let candidate = res.final_url.as_deref().unwrap_or(url);
-  let Ok(parsed) = url::Url::parse(candidate) else {
-    return false;
-  };
-  let lower = parsed.path().to_ascii_lowercase();
-  lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
-}
-
 fn is_image_resource(res: &FetchedResource, url: &str) -> bool {
   if res
     .content_type
@@ -1657,6 +1709,166 @@ mod tests {
         && *dest == FetchDestination::Image
         && referrer.as_deref() == Some(base_hint.as_str())
     }));
+
+    Ok(())
+  }
+
+  #[test]
+  fn crawl_rejects_stylesheet_http_errors_without_discovering_deps() -> Result<()> {
+    #[derive(Default)]
+    struct CssErrorFetcher {
+      calls: Mutex<Vec<(String, FetchDestination, Option<String>)>>,
+    }
+
+    impl CssErrorFetcher {
+      fn calls(&self) -> Vec<(String, FetchDestination, Option<String>)> {
+        self
+          .calls
+          .lock()
+          .map(|calls| calls.clone())
+          .unwrap_or_default()
+      }
+    }
+
+    impl ResourceFetcher for CssErrorFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.fetch_with_request(FetchRequest::new(url, FetchDestination::Other))
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push((
+          req.url.to_string(),
+          req.destination,
+          req.referrer.map(|r| r.to_string()),
+        ));
+
+        match req.url {
+          "https://example.com/" => Ok(FetchedResource::with_final_url(
+            br#"<html><head><link rel="stylesheet" href="/style.css"></head><body></body></html>"#
+              .to_vec(),
+            Some("text/html".to_string()),
+            Some(req.url.to_string()),
+          )),
+          "https://example.com/style.css" => {
+            let mut res = FetchedResource::with_final_url(
+              br#"<html><body>body { background: url('/bg.png'); }</body></html>"#.to_vec(),
+              Some("text/html".to_string()),
+              Some(req.url.to_string()),
+            );
+            res.status = Some(403);
+            Ok(res)
+          }
+          other => Err(fastrender::Error::Other(format!(
+            "unexpected fetch: {other}"
+          ))),
+        }
+      }
+    }
+
+    let inner = Arc::new(CssErrorFetcher::default());
+    let recording = RecordingFetcher::new(inner.clone());
+    let (doc, _) = fetch_document(&recording, "https://example.com/")?;
+
+    let render = BundleRenderConfig {
+      viewport: (1200, 800),
+      device_pixel_ratio: 1.0,
+      scroll_x: 0.0,
+      scroll_y: 0.0,
+      full_page: false,
+      same_origin_subresources: false,
+      allowed_subresource_origins: Vec::new(),
+      compat_profile: fastrender::compat::CompatProfile::default(),
+      dom_compat_mode: fastrender::dom::DomCompatibilityMode::default(),
+    };
+
+    let err = crawl_document(&recording, &doc, &render, CrawlMode::Strict)
+      .expect_err("crawl should fail in strict mode for HTTP error pages");
+    let msg = err.to_string();
+    assert!(msg.contains("https://example.com/style.css"));
+
+    let calls = inner.calls();
+    assert!(
+      !calls.iter().any(|(url, _, _)| url == "https://example.com/bg.png"),
+      "should not crawl dependencies from stylesheet error body"
+    );
+
+    Ok(())
+  }
+
+  #[test]
+  fn crawl_selects_responsive_srcset_candidate_matching_dpr() -> Result<()> {
+    #[derive(Default)]
+    struct ResponsiveImageFetcher {
+      calls: Mutex<Vec<(String, FetchDestination, Option<String>)>>,
+    }
+
+    impl ResponsiveImageFetcher {
+      fn calls(&self) -> Vec<(String, FetchDestination, Option<String>)> {
+        self
+          .calls
+          .lock()
+          .map(|calls| calls.clone())
+          .unwrap_or_default()
+      }
+    }
+
+    impl ResourceFetcher for ResponsiveImageFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.fetch_with_request(FetchRequest::new(url, FetchDestination::Other))
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push((
+          req.url.to_string(),
+          req.destination,
+          req.referrer.map(|r| r.to_string()),
+        ));
+
+        match req.url {
+          "https://example.com/" => Ok(FetchedResource::with_final_url(
+            br#"<html><body><img srcset="/1x.png 1x, /2x.png 2x" sizes="100vw" src="/fallback.png"></body></html>"#
+              .to_vec(),
+            Some("text/html".to_string()),
+            Some(req.url.to_string()),
+          )),
+          "https://example.com/2x.png" | "https://example.com/fallback.png" => Ok(
+            FetchedResource::with_final_url(
+              vec![0u8, 1, 2, 3],
+              Some("image/png".to_string()),
+              Some(req.url.to_string()),
+            ),
+          ),
+          other => Err(fastrender::Error::Other(format!(
+            "unexpected fetch: {other}"
+          ))),
+        }
+      }
+    }
+
+    let inner = Arc::new(ResponsiveImageFetcher::default());
+    let recording = RecordingFetcher::new(inner.clone());
+    let (doc, _) = fetch_document(&recording, "https://example.com/")?;
+
+    let render = BundleRenderConfig {
+      viewport: (1200, 800),
+      device_pixel_ratio: 2.0,
+      scroll_x: 0.0,
+      scroll_y: 0.0,
+      full_page: false,
+      same_origin_subresources: false,
+      allowed_subresource_origins: Vec::new(),
+      compat_profile: fastrender::compat::CompatProfile::default(),
+      dom_compat_mode: fastrender::dom::DomCompatibilityMode::default(),
+    };
+
+    crawl_document(&recording, &doc, &render, CrawlMode::Strict)?;
+
+    let calls = inner.calls();
+    assert!(calls.iter().any(|(url, _, _)| url == "https://example.com/2x.png"));
+    assert!(
+      !calls.iter().any(|(url, _, _)| url == "https://example.com/1x.png"),
+      "should not fetch lower-density srcset candidate when dpr=2"
+    );
 
     Ok(())
   }
