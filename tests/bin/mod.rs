@@ -3,6 +3,7 @@
 mod bundle_page_cache_offline_test;
 mod bundle_page_cache_alias_test;
 mod bundle_page_cache_help_test;
+mod bundle_page_same_origin_policy_test;
 mod bundle_page_test;
 mod bundled_font_coverage_test;
 mod diff_renders_test;
