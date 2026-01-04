@@ -14,6 +14,8 @@ use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 use url::Url;
 
+use fastrender::html::image_attrs::parse_srcset_with_limit;
+
 type Result<T> = std::result::Result<T, ImportError>;
 
 fn main() {
@@ -478,6 +480,10 @@ fn rewrite_html(
       .unwrap();
   let import_regex =
     Regex::new("(?i)(?P<prefix>@import\\s+['\"])(?P<url>[^\"']+)(?P<suffix>['\"])").unwrap();
+  let srcset_double =
+    Regex::new("(?i)(?P<prefix>\\bsrcset\\s*=\\s*\")(?P<value>[^\"]*)(?P<suffix>\")").unwrap();
+  let srcset_single =
+    Regex::new("(?i)(?P<prefix>\\bsrcset\\s*=\\s*')(?P<value>[^']*)(?P<suffix>')").unwrap();
 
   let mut rewritten = apply_rewrite(
     &attr_regex,
@@ -501,6 +507,26 @@ fn rewrite_html(
 
   rewritten = apply_rewrite(
     &import_regex,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_srcset_rewrite(
+    &srcset_double,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_srcset_rewrite(
+    &srcset_single,
     &rewritten,
     config,
     src_dir,
@@ -589,6 +615,62 @@ fn apply_rewrite(
   }
 
   Ok(rewritten)
+}
+
+fn apply_srcset_rewrite(
+  regex: &Regex,
+  input: &str,
+  config: &ImportConfig,
+  src_dir: &Path,
+  dest_dir: &Path,
+  references: &mut Vec<Reference>,
+  seen: &mut HashSet<PathBuf>,
+) -> Result<String> {
+  let mut error: Option<ImportError> = None;
+  let rewritten = regex
+    .replace_all(input, |caps: &regex::Captures<'_>| {
+      let raw = caps.name("value").map(|m| m.as_str()).unwrap_or("");
+      match rewrite_srcset_value(config, src_dir, dest_dir, raw, references, seen) {
+        Ok(new_value) => format!("{}{}{}", &caps["prefix"], new_value, &caps["suffix"]),
+        Err(err) => {
+          error = Some(err);
+          caps[0].to_string()
+        }
+      }
+    })
+    .to_string();
+
+  if let Some(err) = error {
+    return Err(err);
+  }
+
+  Ok(rewritten)
+}
+
+fn rewrite_srcset_value(
+  config: &ImportConfig,
+  src_dir: &Path,
+  dest_dir: &Path,
+  value: &str,
+  references: &mut Vec<Reference>,
+  seen: &mut HashSet<PathBuf>,
+) -> Result<String> {
+  const MAX_CANDIDATES: usize = 64;
+  let candidates = parse_srcset_with_limit(value, MAX_CANDIDATES);
+  if candidates.is_empty() {
+    return Ok(value.to_string());
+  }
+
+  let mut out = Vec::with_capacity(candidates.len());
+  for candidate in candidates {
+    let rewritten_url = match rewrite_reference(config, src_dir, dest_dir, &candidate.url, references, seen)? {
+      Some(new_value) => new_value,
+      None => candidate.url,
+    };
+    out.push(format!("{} {}", rewritten_url, candidate.descriptor));
+  }
+
+  Ok(out.join(", "))
 }
 
 fn rewrite_reference(
@@ -789,6 +871,7 @@ fn find_network_urls(content: &str) -> Vec<String> {
 
   // Only validate URL-like substrings that can actually be fetched by the renderer:
   // - `src=` / `href=` attributes
+  // - `srcset=` attributes
   // - CSS `url(...)`
   // - CSS `@import "..."`
   //
@@ -800,6 +883,8 @@ fn find_network_urls(content: &str) -> Vec<String> {
   let url_regex =
     Regex::new("(?i)url\\(\\s*[\"']?(?P<url>[^\"')]+)[\"']?\\s*\\)").unwrap();
   let import_regex = Regex::new("(?i)@import\\s+[\"'](?P<url>[^\"']+)[\"']").unwrap();
+  let srcset_double = Regex::new("(?i)\\bsrcset\\s*=\\s*\"(?P<value>[^\"]*)\"").unwrap();
+  let srcset_single = Regex::new("(?i)\\bsrcset\\s*=\\s*'(?P<value>[^']*)'").unwrap();
 
   let mut urls = Vec::new();
   for regex in [&attr_regex, &url_regex, &import_regex] {
@@ -809,6 +894,20 @@ fn find_network_urls(content: &str) -> Vec<String> {
       };
       if is_network_url(url) {
         urls.push(url.to_string());
+      }
+    }
+  }
+
+  const MAX_SRCSET_CANDIDATES: usize = 64;
+  for regex in [&srcset_double, &srcset_single] {
+    for caps in regex.captures_iter(content) {
+      let Some(raw_srcset) = caps.name("value").map(|m| m.as_str()) else {
+        continue;
+      };
+      for candidate in parse_srcset_with_limit(raw_srcset, MAX_SRCSET_CANDIDATES) {
+        if is_network_url(&candidate.url) {
+          urls.push(candidate.url);
+        }
       }
     }
   }
@@ -1262,6 +1361,30 @@ mod tests {
   }
 
   #[test]
+  fn rewrites_srcset_urls() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["css/simple/srcset.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).unwrap();
+
+    let imported = fs::read_to_string(out_dir.path().join("out/css/simple/srcset.html")).unwrap();
+    assert!(!imported.contains("web-platform.test"));
+    assert!(!imported.contains("https://"));
+    assert!(!imported.contains("srcset=\"/resources/"));
+    assert!(imported.contains("resources/green.png 1x"));
+    assert!(imported.contains("resources/green.png 2x"));
+  }
+
+  #[test]
   fn copies_ini_sidecars_for_tests_and_references() {
     let out_dir = TempDir::new().unwrap();
     let manifest_path = out_dir.path().join("manifest.toml");
@@ -1328,6 +1451,30 @@ mod tests {
     match err {
       ImportError::NetworkUrlsRemaining(path, urls) => {
         assert!(path.to_string_lossy().contains("external-url.html"));
+        assert!(urls.contains("example.com"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
+  }
+
+  #[test]
+  fn offline_validation_rejects_network_urls_in_srcset() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/srcset-external.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    let err = run_import(config).unwrap_err();
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path.to_string_lossy().contains("srcset-external.html"));
         assert!(urls.contains("example.com"));
       }
       other => panic!("unexpected error: {other:?}"),
