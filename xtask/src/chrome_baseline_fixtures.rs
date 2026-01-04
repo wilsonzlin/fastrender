@@ -1310,6 +1310,7 @@ mod tests {
       chrome_dir: None,
       viewport: (1040, 1240),
       dpr: 1.0,
+      media: super::MediaMode::Screen,
       timeout: 15,
       js: super::JsMode::Off,
     };
