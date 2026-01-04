@@ -20,6 +20,7 @@ use crate::style::display::Display;
 use crate::style::float::Clear;
 use crate::style::float::Float;
 use crate::style::position::Position;
+use crate::style::types::BackgroundBox;
 use crate::style::values::CalcLength;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
@@ -1790,6 +1791,56 @@ fn keyword_parse<T>(value: &PropertyValue, parse: impl Fn(&str) -> Option<T>) ->
   }
 }
 
+fn parse_background_box_keyword(kw: &str, allow_text: bool) -> Option<BackgroundBox> {
+  match kw {
+    "border-box" => Some(BackgroundBox::BorderBox),
+    "padding-box" => Some(BackgroundBox::PaddingBox),
+    "content-box" => Some(BackgroundBox::ContentBox),
+    "text" if allow_text => Some(BackgroundBox::Text),
+    _ => None,
+  }
+}
+
+fn background_box_list_is_valid(value: &PropertyValue, allow_text: bool) -> bool {
+  fn layer_is_valid(layer: &[&PropertyValue], allow_text: bool) -> bool {
+    if layer.len() != 1 {
+      return false;
+    }
+    match layer[0] {
+      PropertyValue::Keyword(kw) => parse_background_box_keyword(kw, allow_text).is_some(),
+      _ => false,
+    }
+  }
+
+  match value {
+    PropertyValue::Keyword(kw) => parse_background_box_keyword(kw, allow_text).is_some(),
+    PropertyValue::Multiple(values) => {
+      if values.is_empty() {
+        return false;
+      }
+      let mut layer: Vec<&PropertyValue> = Vec::new();
+      for part in values {
+        if matches!(part, PropertyValue::Keyword(kw) if kw == ",") {
+          if layer.is_empty() {
+            return false;
+          }
+          if !layer_is_valid(&layer, allow_text) {
+            return false;
+          }
+          layer.clear();
+          continue;
+        }
+        layer.push(part);
+      }
+      if layer.is_empty() {
+        return false;
+      }
+      layer_is_valid(&layer, allow_text)
+    }
+    _ => false,
+  }
+}
+
 pub(crate) fn supports_parsed_declaration_is_valid(
   property: &str,
   raw_value: &str,
@@ -1943,6 +1994,8 @@ pub(crate) fn supports_parsed_declaration_is_valid(
     "z-index" => {
       return matches!(parsed, PropertyValue::Number(_)) || keyword_in_list(parsed, &["auto"])
     }
+    "background-origin" => return background_box_list_is_valid(parsed, false),
+    "background-clip" => return background_box_list_is_valid(parsed, true),
     _ => {}
   }
 

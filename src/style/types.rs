@@ -2983,6 +2983,7 @@ pub enum BackgroundBox {
   BorderBox,
   PaddingBox,
   ContentBox,
+  Text,
 }
 
 /// Reference box for clip-path shapes

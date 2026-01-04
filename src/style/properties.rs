@@ -9485,7 +9485,7 @@ fn apply_declaration_with_base_internal(
       }
     }
     "background-clip" => {
-      if let Some(clips) = parse_layer_list(resolved_value, parse_background_box) {
+      if let Some(clips) = parse_layer_list(resolved_value, parse_background_clip) {
         styles.background_clips = clips.into();
         styles.rebuild_background_layers();
       }
@@ -9634,7 +9634,10 @@ fn apply_declaration_with_base_internal(
       let mut layers = Vec::new();
       for parsed in parsed_layers {
         let mut layer = BackgroundLayer::default();
-        layer.image = parsed.image;
+        layer.image = match parsed.image {
+          Some(BackgroundImage::None) => None,
+          other => other,
+        };
         if let Some(rep) = parsed.repeat {
           layer.repeat = rep;
         }
@@ -12687,6 +12690,19 @@ fn parse_background_box(value: &PropertyValue) -> Option<BackgroundBox> {
       "border-box" => Some(BackgroundBox::BorderBox),
       "padding-box" => Some(BackgroundBox::PaddingBox),
       "content-box" => Some(BackgroundBox::ContentBox),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
+fn parse_background_clip(value: &PropertyValue) -> Option<BackgroundBox> {
+  match value {
+    PropertyValue::Keyword(kw) => match kw.as_str() {
+      "border-box" => Some(BackgroundBox::BorderBox),
+      "padding-box" => Some(BackgroundBox::PaddingBox),
+      "content-box" => Some(BackgroundBox::ContentBox),
+      "text" => Some(BackgroundBox::Text),
       _ => None,
     },
     _ => None,
@@ -22010,6 +22026,22 @@ mod tests {
       16.0,
     );
     assert_eq!(style.background_layers[0].clip, BackgroundBox::PaddingBox);
+
+    let text_decl = Declaration {
+      property: "background-clip".into(),
+      value: PropertyValue::Keyword("text".to_string()),
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(
+      &mut style,
+      &text_decl,
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.background_layers[0].clip, BackgroundBox::Text);
   }
 
   #[test]
@@ -24433,10 +24465,7 @@ fn parse_background_shorthand(
     // Image
     if shorthand.image.is_none() {
       if let Some(img) = parse_background_image_value(token) {
-        shorthand.image = match img {
-          BackgroundImage::None => None,
-          other => Some(other),
-        };
+        shorthand.image = Some(img);
         idx += 1;
         continue;
       }
@@ -24479,8 +24508,8 @@ fn parse_background_shorthand(
       }
     }
 
-    // Background boxes
-    if let Some(b) = parse_background_box(token) {
+    // Background boxes (origin + clip)
+    if let Some(b) = parse_background_clip(token) {
       boxes.push(b);
       idx += 1;
       continue;
@@ -24498,7 +24527,10 @@ fn parse_background_shorthand(
     idx += 1;
   }
 
-  if boxes.len() == 1 {
+  if boxes.iter().any(|b| *b == BackgroundBox::Text) {
+    shorthand.clip = Some(BackgroundBox::Text);
+    shorthand.origin = boxes.iter().copied().find(|b| *b != BackgroundBox::Text);
+  } else if boxes.len() == 1 {
     shorthand.origin = Some(boxes[0]);
     shorthand.clip = Some(boxes[0]);
   } else if boxes.len() >= 2 {

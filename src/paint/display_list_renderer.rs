@@ -4683,7 +4683,7 @@ impl DisplayListRenderer {
       let origin_rect_css = match layer.origin {
         MaskOrigin::BorderBox => rects.border,
         MaskOrigin::PaddingBox => rects.padding,
-        MaskOrigin::ContentBox => rects.content,
+        MaskOrigin::ContentBox | MaskOrigin::Text => rects.content,
       };
       let clip_rect_css = match layer.clip {
         MaskClip::BorderBox => rects.border,

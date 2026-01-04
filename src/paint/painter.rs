@@ -3232,7 +3232,7 @@ impl Painter {
       let origin_rect_css = match layer.origin {
         MaskOrigin::BorderBox => rects.border,
         MaskOrigin::PaddingBox => rects.padding,
-        MaskOrigin::ContentBox => rects.content,
+        MaskOrigin::ContentBox | MaskOrigin::Text => rects.content,
       };
       let clip_rect_css = match layer.clip {
         MaskClip::BorderBox => rects.border,
@@ -3493,7 +3493,9 @@ impl Painter {
     let color_clip_rect = match color_clip_layer.clip {
       crate::style::types::BackgroundBox::BorderBox => scaled_rects.border,
       crate::style::types::BackgroundBox::PaddingBox => scaled_rects.padding,
-      crate::style::types::BackgroundBox::ContentBox => scaled_rects.content,
+      crate::style::types::BackgroundBox::ContentBox | crate::style::types::BackgroundBox::Text => {
+        scaled_rects.content
+      }
     };
 
     if color_clip_rect.width() <= 0.0 || color_clip_rect.height() <= 0.0 {
@@ -3556,7 +3558,7 @@ impl Painter {
     let is_local = layer.attachment == BackgroundAttachment::Local;
     let clip_box = if is_local {
       match layer.clip {
-        crate::style::types::BackgroundBox::ContentBox => {
+        crate::style::types::BackgroundBox::ContentBox | crate::style::types::BackgroundBox::Text => {
           crate::style::types::BackgroundBox::ContentBox
         }
         _ => crate::style::types::BackgroundBox::PaddingBox,
@@ -3567,7 +3569,9 @@ impl Painter {
     let clip_rect_css = match clip_box {
       crate::style::types::BackgroundBox::BorderBox => rects.border,
       crate::style::types::BackgroundBox::PaddingBox => rects.padding,
-      crate::style::types::BackgroundBox::ContentBox => rects.content,
+      crate::style::types::BackgroundBox::ContentBox | crate::style::types::BackgroundBox::Text => {
+        rects.content
+      }
     };
     let clip_radii = resolve_clip_radii(
       style,
@@ -3579,14 +3583,18 @@ impl Painter {
       Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
     } else if is_local {
       match layer.origin {
-        crate::style::types::BackgroundBox::ContentBox => rects.content,
+        crate::style::types::BackgroundBox::ContentBox | crate::style::types::BackgroundBox::Text => {
+          rects.content
+        }
         _ => rects.padding,
       }
     } else {
       match layer.origin {
         crate::style::types::BackgroundBox::BorderBox => rects.border,
         crate::style::types::BackgroundBox::PaddingBox => rects.padding,
-        crate::style::types::BackgroundBox::ContentBox => rects.content,
+        crate::style::types::BackgroundBox::ContentBox | crate::style::types::BackgroundBox::Text => {
+          rects.content
+        }
       }
     };
 
@@ -10666,7 +10674,7 @@ fn resolve_clip_radii(
       };
       shrunk.clamped(rects.padding.width(), rects.padding.height())
     }
-    crate::style::types::BackgroundBox::ContentBox => {
+    crate::style::types::BackgroundBox::ContentBox | crate::style::types::BackgroundBox::Text => {
       let shrink_left = border_left + padding_left;
       let shrink_right = border_right + padding_right;
       let shrink_top = border_top + padding_top;
@@ -17395,7 +17403,7 @@ mod tests {
       let origin_rect_css = match layer.origin {
         MaskOrigin::BorderBox => rects.border,
         MaskOrigin::PaddingBox => rects.padding,
-        MaskOrigin::ContentBox => rects.content,
+        MaskOrigin::ContentBox | MaskOrigin::Text => rects.content,
       };
       let clip_rect_css = match layer.clip {
         MaskClip::BorderBox => rects.border,

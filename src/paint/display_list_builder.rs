@@ -2891,7 +2891,7 @@ impl DisplayListBuilder {
         };
         shrunk.clamped(rects.padding.width(), rects.padding.height())
       }
-      BackgroundBox::ContentBox => {
+      BackgroundBox::ContentBox | BackgroundBox::Text => {
         let shrink_left = border_left + padding_left;
         let shrink_right = border_right + padding_right;
         let shrink_top = border_top + padding_top;
@@ -4369,7 +4369,7 @@ impl DisplayListBuilder {
     let color_clip_rect = match color_layer.clip {
       BackgroundBox::BorderBox => rects.border,
       BackgroundBox::PaddingBox => rects.padding,
-      BackgroundBox::ContentBox => rects.content,
+      BackgroundBox::ContentBox | BackgroundBox::Text => rects.content,
     };
     if style.background_color.alpha_u8() > 0
       && color_clip_rect.width() > 0.0
@@ -4420,7 +4420,7 @@ impl DisplayListBuilder {
     let is_local = layer.attachment == BackgroundAttachment::Local;
     let clip_box = if is_local {
       match layer.clip {
-        BackgroundBox::ContentBox => BackgroundBox::ContentBox,
+        BackgroundBox::ContentBox | BackgroundBox::Text => BackgroundBox::ContentBox,
         _ => BackgroundBox::PaddingBox,
       }
     } else {
@@ -4429,7 +4429,7 @@ impl DisplayListBuilder {
     let clip_rect = match clip_box {
       BackgroundBox::BorderBox => rects.border,
       BackgroundBox::PaddingBox => rects.padding,
-      BackgroundBox::ContentBox => rects.content,
+      BackgroundBox::ContentBox | BackgroundBox::Text => rects.content,
     };
     let origin_rect = if layer.attachment == BackgroundAttachment::Fixed {
       if let Some((w, h)) = self.viewport {
@@ -4439,14 +4439,14 @@ impl DisplayListBuilder {
       }
     } else if is_local {
       match layer.origin {
-        BackgroundBox::ContentBox => rects.content,
+        BackgroundBox::ContentBox | BackgroundBox::Text => rects.content,
         _ => rects.padding,
       }
     } else {
       match layer.origin {
         BackgroundBox::BorderBox => rects.border,
         BackgroundBox::PaddingBox => rects.padding,
-        BackgroundBox::ContentBox => rects.content,
+        BackgroundBox::ContentBox | BackgroundBox::Text => rects.content,
       }
     };
 
