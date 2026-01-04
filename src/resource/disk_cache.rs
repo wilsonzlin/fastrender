@@ -16,6 +16,10 @@ use super::HttpCachePolicy;
 use super::ResourceFetcher;
 use super::ResourcePolicy;
 use super::MAX_ALIAS_HOPS;
+use super::{
+  ensure_font_mime_sane, ensure_http_success, ensure_image_mime_sane, ensure_stylesheet_mime_sane,
+};
+use crate::debug::runtime;
 use crate::error::{Error, RenderError, RenderStage, ResourceError};
 use crate::render_control;
 use crate::Result;
@@ -123,6 +127,9 @@ const DISK_READ_MIN_CHUNK_SIZE: usize = 4 * 1024;
 /// data reads; once it grows for larger resources it is intentionally retained for reuse.)
 const DISK_META_READ_CHUNK_SIZE: usize = 8 * 1024;
 const DISK_META_READ_STAGE: RenderStage = RenderStage::Paint;
+
+const DEFAULT_ERROR_ENTRY_TTL: Duration = Duration::from_secs(60 * 60);
+const ERROR_ENTRY_TTL_ENV: &str = "FASTR_DISK_CACHE_ERROR_TTL_SECS";
 
 const IMAGE_PROBE_METADATA_ARTIFACT_SUFFIX: &str = "imgprobe_meta_v1";
 const IMAGE_PROBE_METADATA_CONTENT_TYPE: &str = "application/x-fastrender-image-probe+json";
@@ -462,6 +469,19 @@ fn jitter_duration(max: Duration, seed: u64) -> Duration {
   let nanos = (jitter_ns % 1_000_000_000) as u32;
   Duration::new(secs, nanos)
 }
+
+fn error_entry_ttl() -> Duration {
+  runtime::runtime_toggles()
+    .u64(ERROR_ENTRY_TTL_ENV)
+    .filter(|secs| *secs > 0)
+    .map(Duration::from_secs)
+    .unwrap_or(DEFAULT_ERROR_ENTRY_TTL)
+}
+
+fn error_entry_is_expired(stored_at: u64) -> bool {
+  let ttl = error_entry_ttl();
+  now_seconds().saturating_sub(stored_at) > ttl.as_secs()
+}
 impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   pub fn new(inner: F, cache_dir: impl Into<PathBuf>) -> Self {
     let memory_config = CachingFetcherConfig {
@@ -634,11 +654,13 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let writeback_disabled = self.disk_writeback_disabled();
     match fs::metadata(&lock_path) {
       Ok(meta) => {
-        let meta_age = lock_age_from_metadata(&meta);
-        if meta_age
-          .map(|age| age > self.disk_config.lock_stale_after)
-          .unwrap_or(false)
-        {
+        let contents = fs::read(&lock_path)
+          .ok()
+          .and_then(|bytes| serde_json::from_slice::<LockFileContents>(&bytes).ok());
+        let pid_alive = contents
+          .as_ref()
+          .and_then(|contents| pid_is_alive(contents.pid));
+        if let Some(false) = pid_alive {
           return if writeback_disabled {
             false
           } else {
@@ -646,29 +668,22 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           };
         }
 
-        let contents = fs::read(&lock_path)
-          .ok()
-          .and_then(|bytes| serde_json::from_slice::<LockFileContents>(&bytes).ok());
-        if let Some(contents) = contents {
-          if let Some(false) = pid_is_alive(contents.pid) {
-            return if writeback_disabled {
-              false
-            } else {
-              !clear_lock_file(&lock_path)
-            };
-          }
+        let lock_age = lock_age_from_metadata(&meta).or_else(|| {
           // On platforms/filesystems where we can't rely on mtime/ctime, fall back to the stored
           // timestamp in the lockfile itself.
-          if meta_age.is_none() {
-            let lock_age = Duration::from_secs(now_seconds().saturating_sub(contents.started_at));
-            if lock_age > self.disk_config.lock_stale_after {
-              return if writeback_disabled {
-                false
-              } else {
-                !clear_lock_file(&lock_path)
-              };
-            }
-          }
+          contents
+            .map(|contents| Duration::from_secs(now_seconds().saturating_sub(contents.started_at)))
+        });
+        if pid_alive != Some(true)
+          && lock_age
+            .map(|age| age > self.disk_config.lock_stale_after)
+            .unwrap_or(false)
+        {
+          return if writeback_disabled {
+            false
+          } else {
+            !clear_lock_file(&lock_path)
+          };
         }
         true
       }
@@ -753,14 +768,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         Ok(meta) => {
           let meta_age = lock_age_from_metadata(&meta);
           if let Some(age) = meta_age {
-            if age > self.disk_config.lock_stale_after {
-              if self.disk_writeback_disabled() {
-                return true;
-              }
-              if clear_lock_file(&lock_path) {
-                return true;
-              }
-            } else if let Some(prev) = last_age {
+            if let Some(prev) = last_age {
               if age < prev {
                 // Lockfile likely re-created (pid changed); fall back to the full check so we can
                 // clear dead PID locks promptly.
@@ -768,6 +776,16 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
                   return true;
                 }
               }
+            }
+            if age > self.disk_config.lock_stale_after
+              && last_age
+                .map(|prev| prev <= self.disk_config.lock_stale_after)
+                .unwrap_or(true)
+              && !self.lock_is_active(data_path)
+            {
+              // Lock has outlived the soft staleness window; re-check PID liveness (and clear if
+              // safe) before continuing to wait.
+              return true;
             }
             last_age = Some(age);
           } else if !self.lock_is_active(data_path) {
@@ -805,6 +823,35 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
     if !self.lock_is_active(data_path) {
       let _ = self.remove_entry(key, data_path, meta_path);
+    }
+  }
+
+  fn remove_entry_files_best_effort(&self, key: &str, data_path: &Path, meta_path: &Path) {
+    if self.disk_writeback_disabled() {
+      // When disk writeback is disabled under a render deadline, we still want expired error entries
+      // to self-heal (so we don't keep serving stale errors). Removing the files without updating
+      // the on-disk index is best-effort; the journal will eventually be rebuilt/backfilled.
+      let _ = fs::remove_file(tmp_path(data_path));
+      let _ = fs::remove_file(tmp_path(meta_path));
+      let _ = fs::remove_file(data_path);
+      let _ = fs::remove_file(meta_path);
+      let mut alias_path = data_path.to_path_buf();
+      alias_path.set_extension("alias");
+      let _ = fs::remove_file(tmp_path(&alias_path));
+      let _ = fs::remove_file(&alias_path);
+      return;
+    }
+    let _ = self.remove_entry(key, data_path, meta_path);
+  }
+
+  fn remove_entry_files_best_effort_if_unlocked(
+    &self,
+    key: &str,
+    data_path: &Path,
+    meta_path: &Path,
+  ) {
+    if !self.lock_is_active(data_path) {
+      self.remove_entry_files_best_effort(key, data_path, meta_path);
     }
   }
 
@@ -1007,6 +1054,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     };
 
     if let Some(message) = meta.error.clone() {
+      if error_entry_is_expired(meta.stored_at) {
+        self.remove_entry_files_best_effort_if_unlocked(key, data_path, meta_path);
+        return SnapshotRead::Miss;
+      }
       let data_len_ok = fs::metadata(data_path)
         .ok()
         .and_then(|m| usize::try_from(m.len()).ok())
@@ -1145,6 +1196,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
 
     if let Some(message) = meta.error.clone() {
+      if error_entry_is_expired(meta.stored_at) {
+        self.remove_entry_files_best_effort_if_unlocked(key, data_path, meta_path);
+        return SnapshotPrefixRead::Miss;
+      }
       self
         .index
         .backfill_if_missing(key, meta.stored_at, meta.len as u64, data_path, meta_path);
@@ -2055,46 +2110,78 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
             (Ok(res), false)
           }
         } else {
-          let stored_at = SystemTime::now();
-          if let Some(entry) = self.memory.build_cache_entry(&res, stored_at) {
-            let canonical = self
-              .memory
-              .cache_entry(&key, entry, res.final_url.as_deref());
-            if let Some(snapshot) = self.memory.cached_snapshot(kind, &canonical.url) {
-              self.persist_snapshot(kind, &canonical.url, &snapshot);
+          let sanity_check = match kind {
+            FetchContextKind::Stylesheet => {
+              ensure_http_success(&res, url).and_then(|_| ensure_stylesheet_mime_sane(&res, url))
+            }
+            FetchContextKind::Font => {
+              ensure_http_success(&res, url).and_then(|_| ensure_font_mime_sane(&res, url))
+            }
+            FetchContextKind::Image => {
+              ensure_http_success(&res, url).and_then(|_| ensure_image_mime_sane(&res, url))
+            }
+            FetchContextKind::Other | FetchContextKind::Document => Ok(()),
+          };
+
+          if let Err(err) = sanity_check {
+            if let Some(snapshot) = plan
+              .cached
+              .as_ref()
+              .filter(|snapshot| snapshot.is_successful_http_response())
+            {
+              super::record_cache_stale_hit();
+              let fallback = snapshot.value.as_result();
+              if let Ok(ref ok) = fallback {
+                super::record_resource_cache_bytes(ok.bytes.len());
+              }
+              let is_ok = fallback.is_ok();
+              (fallback, is_ok)
             } else {
-              let http_cache = res
-                .cache_policy
-                .as_ref()
-                .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
-              self.persist_resource(
-                kind,
-                &canonical.url,
-                &res,
-                res.etag.as_deref(),
-                res.last_modified.as_deref(),
-                http_cache.as_ref(),
-              );
+              super::record_cache_miss();
+              (Err(err), false)
             }
-            if canonical.url != url {
-              self.persist_alias(kind, url, &canonical.url);
+          } else {
+            let stored_at = SystemTime::now();
+            if let Some(entry) = self.memory.build_cache_entry(&res, stored_at) {
+              let canonical = self
+                .memory
+                .cache_entry(&key, entry, res.final_url.as_deref());
+              if let Some(snapshot) = self.memory.cached_snapshot(kind, &canonical.url) {
+                self.persist_snapshot(kind, &canonical.url, &snapshot);
+              } else {
+                let http_cache = res
+                  .cache_policy
+                  .as_ref()
+                  .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
+                self.persist_resource(
+                  kind,
+                  &canonical.url,
+                  &res,
+                  res.etag.as_deref(),
+                  res.last_modified.as_deref(),
+                  http_cache.as_ref(),
+                );
+              }
+              if canonical.url != url {
+                self.persist_alias(kind, url, &canonical.url);
+              }
+            } else if res
+              .cache_policy
+              .as_ref()
+              .map(|p| p.no_store)
+              .unwrap_or(false)
+              && !self.memory.config.allow_no_store
+            {
+              self.memory.remove_cached(&key);
+              let canonical = self.canonical_url(url, res.final_url.as_deref());
+              self.remove_entry_for_url(kind, &canonical);
+              if canonical != url {
+                self.remove_alias_for(kind, url);
+              }
             }
-          } else if res
-            .cache_policy
-            .as_ref()
-            .map(|p| p.no_store)
-            .unwrap_or(false)
-            && !self.memory.config.allow_no_store
-          {
-            self.memory.remove_cached(&key);
-            let canonical = self.canonical_url(url, res.final_url.as_deref());
-            self.remove_entry_for_url(kind, &canonical);
-            if canonical != url {
-              self.remove_alias_for(kind, url);
-            }
+            super::record_cache_miss();
+            (Ok(res), false)
           }
-          super::record_cache_miss();
-          (Ok(res), false)
         }
       }
       Err(err) => {
@@ -2334,7 +2421,7 @@ mod tests {
   };
   use super::*;
   use filetime::FileTime;
-  use std::collections::VecDeque;
+  use std::collections::{HashMap, VecDeque};
   use std::fs;
   use std::io;
   use std::io::{Read, Write};
@@ -3740,7 +3827,10 @@ mod tests {
       "fallback should return cached status/metadata, not the HTTP error response"
     );
     assert_eq!(
-      second.cache_policy.as_ref().and_then(|policy| policy.max_age),
+      second
+        .cache_policy
+        .as_ref()
+        .and_then(|policy| policy.max_age),
       Some(3600),
       "fallback should return cached status/metadata, not the HTTP error response"
     );
@@ -3798,7 +3888,10 @@ mod tests {
     assert_eq!(cached.status, Some(200));
     assert_eq!(cached.last_modified.as_deref(), Some("lm1"));
     assert_eq!(
-      cached.cache_policy.as_ref().and_then(|policy| policy.max_age),
+      cached
+        .cache_policy
+        .as_ref()
+        .and_then(|policy| policy.max_age),
       Some(3600),
       "HTTP error refresh must not overwrite cache metadata"
     );
@@ -4703,5 +4796,206 @@ mod tests {
     let res = disk.fetch(url).expect("fetch");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(res.bytes, b"network");
+  }
+
+  #[test]
+  fn disk_cache_does_not_poison_stylesheet_entry_on_html_refresh() {
+    crate::debug::runtime::with_thread_runtime_toggles(
+      Arc::new(crate::debug::runtime::RuntimeToggles::from_map(
+        HashMap::new(),
+      )),
+      || {
+        #[derive(Clone, Debug)]
+        struct Response {
+          status: u16,
+          body: Vec<u8>,
+          content_type: &'static str,
+        }
+
+        #[derive(Clone)]
+        struct ScriptedContentTypeFetcher {
+          calls: Arc<AtomicUsize>,
+          responses: Arc<Mutex<VecDeque<Response>>>,
+        }
+
+        impl ResourceFetcher for ScriptedContentTypeFetcher {
+          fn fetch(&self, url: &str) -> Result<FetchedResource> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let resp = self
+              .responses
+              .lock()
+              .unwrap()
+              .pop_front()
+              .expect("scripted fetcher ran out of responses");
+            let mut resource = FetchedResource::new(resp.body, Some(resp.content_type.to_string()));
+            resource.status = Some(resp.status);
+            resource.final_url = Some(url.to_string());
+            Ok(resource)
+          }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = ScriptedContentTypeFetcher {
+          calls: Arc::clone(&calls),
+          responses: Arc::new(Mutex::new(VecDeque::from(vec![
+            Response {
+              status: 200,
+              body: b"body{}".to_vec(),
+              content_type: "text/css",
+            },
+            Response {
+              status: 200,
+              body: b"<html>bot mitigation</html>".to_vec(),
+              content_type: "text/html",
+            },
+          ]))),
+        };
+
+        // Force stale planning so the second fetch attempts a refresh.
+        let disk = DiskCachingFetcher::with_configs(
+          fetcher.clone(),
+          tmp.path(),
+          CachingFetcherConfig {
+            honor_http_cache_freshness: true,
+            ..CachingFetcherConfig::default()
+          },
+          DiskCacheConfig {
+            max_bytes: 0,
+            max_age: Some(Duration::from_secs(0)),
+            ..DiskCacheConfig::default()
+          },
+        );
+
+        let url = "https://example.com/style.css";
+        let first = disk
+          .fetch_with_request(FetchRequest::new(url, FetchDestination::Style))
+          .expect("seed fetch");
+        assert_eq!(first.bytes, b"body{}");
+
+        // Use a new cache instance so the response is read from disk (which synthesizes a max-age
+        // freshness window for responses without HTTP cache metadata), forcing a refresh fetch.
+        let disk2 = DiskCachingFetcher::with_configs(
+          fetcher,
+          tmp.path(),
+          CachingFetcherConfig {
+            honor_http_cache_freshness: true,
+            ..CachingFetcherConfig::default()
+          },
+          DiskCacheConfig {
+            max_bytes: 0,
+            max_age: Some(Duration::from_secs(0)),
+            ..DiskCacheConfig::default()
+          },
+        );
+
+        let second = disk2
+          .fetch_with_request(FetchRequest::new(url, FetchDestination::Style))
+          .expect("refresh fetch");
+        assert_eq!(
+          second.bytes, b"body{}",
+          "expected cached bytes to be served instead of HTML markup"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let data_path = disk2.data_path(FetchContextKind::Stylesheet, url);
+        let meta_path = disk2.meta_path_for_data(&data_path);
+        assert_eq!(fs::read(&data_path).expect("data present"), b"body{}");
+        let meta: StoredMetadata =
+          serde_json::from_slice(&fs::read(meta_path).expect("meta present")).expect("valid meta");
+        assert_eq!(meta.content_type.as_deref(), Some("text/css"));
+      },
+    );
+  }
+
+  #[test]
+  fn disk_cache_error_entries_expire_and_are_removed() {
+    crate::debug::runtime::with_thread_runtime_toggles(
+      Arc::new(crate::debug::runtime::RuntimeToggles::from_map(
+        HashMap::new(),
+      )),
+      || {
+        let tmp = tempfile::tempdir().unwrap();
+        let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+        let url = "https://example.com/error";
+        let kind = FetchContextKind::Other;
+        let data_path = disk.data_path(kind, url);
+        let meta_path = disk.meta_path_for_data(&data_path);
+        fs::write(&data_path, b"").expect("write data");
+
+        let meta = StoredMetadata {
+          url: url.to_string(),
+          status: Some(503),
+          content_type: Some("text/plain".to_string()),
+          content_encoding: None,
+          etag: None,
+          last_modified: None,
+          final_url: Some(url.to_string()),
+          stored_at: 0,
+          len: 0,
+          cache: Some(StoredCacheMetadata {
+            stored_at: 0,
+            max_age: None,
+            expires: None,
+            no_cache: false,
+            no_store: true,
+            must_revalidate: false,
+          }),
+          error: Some("boom".to_string()),
+        };
+        fs::write(
+          &meta_path,
+          serde_json::to_vec(&meta).expect("serialize meta"),
+        )
+        .expect("write meta");
+
+        assert!(
+          disk
+            .read_disk_entry(kind, url)
+            .expect("read disk")
+            .is_none(),
+          "expected stale error entry to be treated as cache miss"
+        );
+        assert!(
+          !data_path.exists() && !meta_path.exists(),
+          "expected expired error entry to be removed"
+        );
+      },
+    );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn lock_is_not_cleared_just_because_it_is_old_when_pid_is_alive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let disk = DiskCachingFetcher::with_configs(
+      PanicFetcher,
+      tmp.path(),
+      CachingFetcherConfig::default(),
+      DiskCacheConfig {
+        lock_stale_after: Duration::from_secs(1),
+        ..DiskCacheConfig::default()
+      },
+    );
+
+    let url = "https://example.com/lock";
+    let data_path = disk.data_path(TEST_KIND, url);
+    let lock_path = lock_path_for(&data_path);
+    let contents = LockFileContents {
+      pid: std::process::id(),
+      started_at: now_seconds(),
+    };
+    fs::write(
+      &lock_path,
+      serde_json::to_vec(&contents).expect("serialize lock"),
+    )
+    .unwrap();
+    let old_mtime = FileTime::from_unix_time(now_seconds().saturating_sub(10) as i64, 0);
+    filetime::set_file_mtime(&lock_path, old_mtime).expect("set mtime");
+
+    assert!(
+      disk.lock_is_active(&data_path),
+      "lock should remain active while the owning PID is alive"
+    );
   }
 }
