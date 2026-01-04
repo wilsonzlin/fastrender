@@ -148,6 +148,25 @@ mod tests {
   }
 
   #[test]
+  fn find_base_href_ignores_base_like_text_in_scripts() {
+    let dom = parse_html(
+      "<html><head><script>var s='<base href=\"https://bad.example/\">'</script></head></html>",
+    )
+    .unwrap();
+
+    assert_eq!(find_base_href(&dom), None);
+  }
+
+  #[test]
+  fn find_base_href_ignores_template_only_base() {
+    let dom =
+      parse_html("<html><head><template><base href=\"https://bad.example/\"></template></head></html>")
+        .unwrap();
+
+    assert_eq!(find_base_href(&dom), None);
+  }
+
+  #[test]
   fn find_base_href_ignores_shadow_roots_in_head() {
     let dom = parse_html(
       "<html><head>
@@ -161,6 +180,16 @@ mod tests {
       find_base_href(&dom),
       Some("https://good.example/".to_string())
     );
+  }
+
+  #[test]
+  fn find_base_href_ignores_shadow_root_only_base() {
+    let dom = parse_html(
+      "<html><head></head><body><div id=\"host\"><template shadowroot=\"open\"><base href=\"https://bad.example/\"></template></div></body></html>",
+    )
+    .unwrap();
+
+    assert_eq!(find_base_href(&dom), None);
   }
 
   #[test]

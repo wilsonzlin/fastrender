@@ -64,7 +64,8 @@ use crate::css::encoding::{decode_css_bytes, decode_css_bytes_cow};
 use crate::css::loader::{
   absolutize_css_urls_cow, extract_css_links, extract_embedded_css_urls_with_meta, infer_base_url,
   inject_css_into_html, inline_imports_with_diagnostics, link_rel_is_stylesheet_candidate,
-  resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
+  resolve_href, resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState,
+  StylesheetInlineBudget,
 };
 use crate::css::parser::{
   extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_media, CssTreeScope,
@@ -4577,6 +4578,7 @@ impl FastRender {
       let _span = trace.span("dom_parse", "parse");
       self.parse_html(html)?
     };
+    self.update_base_url_from_dom(&dom);
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.dom_parse_ms, parse_timer);
       rec.stats.counts.dom_nodes = Some(count_dom_nodes_api_with_deadline(&dom)?);
@@ -5119,6 +5121,7 @@ impl FastRender {
     let mut stage_start = timings_enabled.then(Instant::now);
 
     let dom = self.parse_html(html)?;
+    self.update_base_url_from_dom(&dom);
 
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
@@ -5668,7 +5671,11 @@ impl FastRender {
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.html_decode_ms, decode_start);
     }
-    let base_url = infer_base_url(&html, hint).into_owned();
+    let base_url = if hint.starts_with("file://") {
+      infer_base_url(&html, hint).into_owned()
+    } else {
+      hint.to_string()
+    };
     self.set_base_url(base_url.clone());
     let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
     let mut captured = RenderArtifacts::new(artifacts);
@@ -5789,7 +5796,11 @@ impl FastRender {
         diag
       };
       self.set_document_url(base_hint);
-      let base_url = infer_base_url(html, base_hint).into_owned();
+      let base_url = if base_hint.starts_with("file://") {
+        infer_base_url(html, base_hint).into_owned()
+      } else {
+        base_hint.to_string()
+      };
       self.set_base_url(base_url.clone());
       let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
       let mut result = (|| -> Result<RenderReport> {
@@ -5867,11 +5878,16 @@ impl FastRender {
       .unwrap_or((self.default_width, self.default_height));
 
     self.set_document_url(base_hint);
-    let base_url = infer_base_url(html, base_hint).into_owned();
+    let base_url = if base_hint.starts_with("file://") {
+      infer_base_url(html, base_hint).into_owned()
+    } else {
+      base_hint.to_string()
+    };
     self.set_base_url(base_url.clone());
 
     let requested_viewport = Size::new(width as f32, height as f32);
     let dom = self.parse_html(html)?;
+    self.update_base_url_from_dom(&dom);
     let meta_viewport = if self.apply_meta_viewport {
       crate::html::viewport::extract_viewport_with_deadline(&dom)?
     } else {
@@ -5991,6 +6007,44 @@ impl FastRender {
         compatibility_mode: self.dom_compat_mode,
       },
     )
+  }
+
+  fn update_base_url_from_dom(&mut self, dom: &DomNode) {
+    let document_url = self.document_url();
+    let inferred_base_url = self.base_url.as_deref();
+    let base_href = crate::html::find_base_href(dom);
+
+    let is_http_base = |url: &str| url.starts_with("http://") || url.starts_with("https://");
+
+    match base_href {
+      Some(href) => {
+        let resolution_base = match document_url {
+          Some(doc_url) if doc_url.starts_with("file://") => inferred_base_url
+            .filter(|candidate| is_http_base(candidate))
+            .unwrap_or(doc_url),
+          Some(doc_url) => doc_url,
+          None => inferred_base_url.unwrap_or(""),
+        };
+        if let Some(resolved) = resolve_href(resolution_base, &href) {
+          if inferred_base_url != Some(resolved.as_str()) {
+            self.set_base_url(resolved);
+          }
+        }
+      }
+      None => {
+        let Some(doc_url) = document_url else { return };
+        // For offline `file://` documents rendered as a remote origin, preserve the inferred
+        // http(s) base instead of resetting to the local path.
+        if doc_url.starts_with("file://")
+          && inferred_base_url.is_some_and(|candidate| is_http_base(candidate))
+        {
+          return;
+        }
+        if inferred_base_url != Some(doc_url) {
+          self.set_base_url(doc_url.to_string());
+        }
+      }
+    }
   }
 
   pub fn collect_document_style_set(
@@ -6544,11 +6598,16 @@ impl FastRender {
     let _deadline_guard = DeadlineGuard::install(Some(&deadline));
 
     let base_hint = self.base_url.clone().unwrap_or_default();
-    let base_url = infer_base_url(html, &base_hint).into_owned();
+    let base_url = if base_hint.starts_with("file://") {
+      infer_base_url(html, &base_hint).into_owned()
+    } else {
+      base_hint.clone()
+    };
     if !base_url.is_empty() {
       self.set_base_url(base_url);
     }
     let dom = self.parse_html(html)?;
+    self.update_base_url_from_dom(&dom);
     self.accessibility_tree_with_options_for_dom(&dom, options)
   }
 
@@ -14875,6 +14934,227 @@ mod tests {
         .is_ok(),
       "expected document navigations to remain allowed even when redirected cross-origin",
     );
+  }
+
+  #[test]
+  fn base_href_like_text_in_script_does_not_override_base_url() {
+    let html = r#"<!doctype html><html><head>
+        <script>var s='<base href="https://bad.example/">';</script>
+        <link rel="stylesheet" href="style.css">
+      </head><body></body></html>"#;
+    let document_url = "https://good.example/page.html";
+    let stylesheet_url = "https://good.example/style.css";
+
+    let fetcher = Arc::new(
+      RecordingRequestFetcher::default().with_entry(
+        stylesheet_url,
+        "body { color: rgb(1, 2, 3); }",
+        "text/css",
+      ),
+    );
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+  }
+
+  #[test]
+  fn base_href_inside_template_does_not_override_base_url() {
+    let html = r#"<!doctype html><html><head>
+        <template><base href="https://bad.example/"></template>
+        <link rel="stylesheet" href="style.css">
+      </head><body></body></html>"#;
+    let document_url = "https://good.example/page.html";
+    let stylesheet_url = "https://good.example/style.css";
+
+    let fetcher = Arc::new(
+      RecordingRequestFetcher::default().with_entry(
+        stylesheet_url,
+        "body { color: rgb(1, 2, 3); }",
+        "text/css",
+      ),
+    );
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+  }
+
+  #[test]
+  fn base_href_inside_shadow_root_does_not_override_base_url() {
+    let html = r#"<!doctype html><html><head>
+        <link rel="stylesheet" href="style.css">
+      </head><body>
+        <div><template shadowroot="open"><base href="https://bad.example/"></template></div>
+      </body></html>"#;
+    let document_url = "https://good.example/page.html";
+    let stylesheet_url = "https://good.example/style.css";
+
+    let fetcher = Arc::new(
+      RecordingRequestFetcher::default().with_entry(
+        stylesheet_url,
+        "body { color: rgb(1, 2, 3); }",
+        "text/css",
+      ),
+    );
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+  }
+
+  #[test]
+  fn base_href_relative_resolves_against_document_url() {
+    let html = r#"<!doctype html><html><head>
+        <base href="assets/">
+        <link rel="stylesheet" href="style.css">
+      </head><body></body></html>"#;
+    let document_url = "https://good.example/dir/page.html";
+    let stylesheet_url = "https://good.example/dir/assets/style.css";
+
+    let fetcher = Arc::new(
+      RecordingRequestFetcher::default().with_entry(
+        stylesheet_url,
+        "body { color: rgb(1, 2, 3); }",
+        "text/css",
+      ),
+    );
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+  }
+
+  #[test]
+  fn base_href_relative_in_file_document_resolves_against_inferred_http_base() {
+    let html = r#"<!doctype html><html><head>
+        <base href="assets/">
+        <link rel="stylesheet" href="style.css">
+      </head><body></body></html>"#;
+    let document_url = "file:///tmp/cache/good.example.html";
+    let stylesheet_url = "https://good.example/assets/style.css";
+
+    let fetcher = Arc::new(
+      RecordingRequestFetcher::default().with_entry(
+        stylesheet_url,
+        "body { color: rgb(1, 2, 3); }",
+        "text/css",
+      ),
+    );
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
   }
 
   #[test]
