@@ -7,7 +7,7 @@
 
 use crate::css::parser::{rel_list_contains_stylesheet, tokenize_rel_list};
 use crate::debug::runtime;
-use crate::dom::{DomNode, DomNodeType};
+use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::error::{RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic, RenderDeadline};
 use cssparser::{Parser, ParserInput, Token};
@@ -2123,7 +2123,7 @@ fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a
       return None;
     }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("head") {
+      if tag.eq_ignore_ascii_case("head") && node.namespace() == Some(HTML_NAMESPACE) {
         return Some(node);
       }
     }
@@ -2142,7 +2142,9 @@ fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a
     if node.is_template_element() {
       return None;
     }
-    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link")) {
+    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+      && node.namespace() == Some(HTML_NAMESPACE)
+    {
       if let Some(rel) = node.get_attribute_ref("rel") {
         if rel
           .split_whitespace()
@@ -2176,7 +2178,9 @@ fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a
     if node.is_template_element() {
       return None;
     }
-    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta")) {
+    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+      && node.namespace() == Some(HTML_NAMESPACE)
+    {
       if node
         .get_attribute_ref("property")
         .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))
@@ -3110,6 +3114,20 @@ mod tests {
   }
 
   #[test]
+  fn infer_base_url_ignores_canonical_inside_svg_for_file_inputs() {
+    let html = r#"
+            <head>
+              <svg>
+                <link rel="canonical" href="https://bad.example/poison/"></link>
+              </svg>
+              <link rel="canonical" href="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
+  }
+
+  #[test]
   fn infer_base_url_ignores_og_url_like_text_in_scripts_for_file_inputs() {
     let html = r#"
             <head>
@@ -3162,6 +3180,20 @@ mod tests {
         "#;
     let base = infer_base_url(html, "file:///tmp/cache/example.org.html").into_owned();
     assert_eq!(base, "https://example.org/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_og_url_inside_svg_for_file_inputs() {
+    let html = r#"
+            <head>
+              <svg>
+                <meta property="og:url" content="https://bad.example/poison/"></meta>
+              </svg>
+              <meta property="og:url" content="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
   }
 
   #[test]

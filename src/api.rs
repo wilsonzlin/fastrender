@@ -6030,7 +6030,7 @@ impl FastRender {
         return None;
       }
       if let Some(tag) = node.tag_name() {
-        if tag.eq_ignore_ascii_case("head") {
+        if tag.eq_ignore_ascii_case("head") && node.namespace() == Some(crate::dom::HTML_NAMESPACE) {
           return Some(node);
         }
         if tag.eq_ignore_ascii_case("template") {
@@ -6054,6 +6054,9 @@ impl FastRender {
           return None;
         }
         if tag.eq_ignore_ascii_case("link") {
+          if node.namespace() != Some(crate::dom::HTML_NAMESPACE) {
+            return None;
+          }
           if let Some(rel) = node.get_attribute_ref("rel") {
             if rel
               .split_whitespace()
@@ -6086,6 +6089,9 @@ impl FastRender {
           return None;
         }
         if tag.eq_ignore_ascii_case("meta") {
+          if node.namespace() != Some(crate::dom::HTML_NAMESPACE) {
+            return None;
+          }
           if node
             .get_attribute_ref("property")
             .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))

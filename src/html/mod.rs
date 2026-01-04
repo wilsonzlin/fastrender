@@ -9,7 +9,7 @@ pub mod meta_refresh;
 pub mod viewport;
 
 use crate::css::loader::resolve_href;
-use crate::dom::{DomNode, DomNodeType};
+use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use url::Url;
 
 /// Find the first `<base href>` value within the document `<head>`.
@@ -25,7 +25,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
       return None;
     }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("head") {
+      if tag.eq_ignore_ascii_case("head") && node.namespace() == Some(HTML_NAMESPACE) {
         return Some(node);
       }
     }
@@ -45,7 +45,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
       return None;
     }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("base") {
+      if tag.eq_ignore_ascii_case("base") && node.namespace() == Some(HTML_NAMESPACE) {
         if let Some(href) = node.get_attribute_ref("href") {
           let trimmed = href.trim();
           if !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -190,6 +190,19 @@ mod tests {
     .unwrap();
 
     assert_eq!(find_base_href(&dom), None);
+  }
+
+  #[test]
+  fn find_base_href_ignores_base_inside_svg() {
+    let dom = parse_html(
+      "<html><head><svg><base href=\"https://bad.example/\"></base></svg><base href=\"https://good.example/\"></head></html>",
+    )
+    .unwrap();
+
+    assert_eq!(
+      find_base_href(&dom),
+      Some("https://good.example/".to_string())
+    );
   }
 
   #[test]
