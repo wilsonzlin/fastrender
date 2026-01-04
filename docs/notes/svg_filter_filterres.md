@@ -74,6 +74,7 @@ Headless screenshot command (Snap confinement requires copying the fixture into
 `/root/snap/chromium/current/` first):
 
 ```bash
+# Note: older Chrome/Chromium builds may not support `--headless=new`; use `--headless` instead.
 /snap/bin/chromium --no-sandbox --headless=new --disable-gpu --hide-scrollbars \
   --run-all-compositor-stages-before-draw \
   --user-data-dir=/root/snap/chromium/current/tmp-profile \
