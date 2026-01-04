@@ -1323,6 +1323,10 @@ impl CustomPropertySyntax {
             .parse::<f32>()
             .ok()
             .map(CustomPropertyTypedValue::Percentage)
+        } else if trimmed.parse::<f32>().ok().is_some_and(|value| value == 0.0) {
+          // Mirror CSS' general "unitless zero" allowance so that registrations like
+          // `@property --switch-position { syntax: "<percentage>"; initial-value: 0 }` are kept.
+          Some(CustomPropertyTypedValue::Percentage(0.0))
         } else {
           None
         }

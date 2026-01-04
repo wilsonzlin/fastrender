@@ -5789,4 +5789,34 @@ mod tests {
       Some(CustomPropertyTypedValue::Length(Length::px(0.0)))
     );
   }
+
+  #[test]
+  fn property_rule_percentage_accepts_unitless_zero_initial_value() {
+    let css = r#"@property --switch-position { syntax:"<percentage>"; inherits:false; initial-value:0 }"#;
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let collected = sheet.collect_property_rules(&media_ctx);
+    assert_eq!(collected.len(), 1);
+
+    let mut registry = CustomPropertyRegistry::new();
+    for rule in collected {
+      registry.register(RegisteredPropertyRule {
+        name: rule.rule.name.clone(),
+        syntax: rule.rule.syntax,
+        inherits: rule.rule.inherits,
+        initial_value: rule.rule.initial_value.clone(),
+      });
+    }
+
+    let rule = registry
+      .get("--switch-position")
+      .expect("expected property to be registered");
+    assert_eq!(rule.syntax, CustomPropertySyntax::Percentage);
+    let initial = rule.initial_value.as_ref().expect("expected initial-value");
+    assert_eq!(initial.value, "0");
+    assert_eq!(
+      initial.typed,
+      Some(CustomPropertyTypedValue::Percentage(0.0))
+    );
+  }
 }
