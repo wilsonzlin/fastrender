@@ -14,6 +14,7 @@ mod css_nesting_test;
 mod css_numeric_functions;
 mod custom_property_inheritance_test;
 mod custom_property_registration_test;
+mod custom_property_wide_keywords_test;
 mod defaults_test;
 mod extract_print;
 mod flex_property_test;
