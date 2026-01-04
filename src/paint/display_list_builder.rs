@@ -59,6 +59,7 @@ use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;
 use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::EmphasisText;
+use crate::paint::display_list::EmphasisTextRun;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FillRoundedRectItem;
 use crate::paint::display_list::FontId;
@@ -6416,9 +6417,8 @@ impl DisplayListBuilder {
         }
         match shaped {
           Ok(mark_runs) if !mark_runs.is_empty() => {
-            let mark_font_id = self.font_id_from_run(&mark_runs[0]);
-            let mut glyphs = Vec::new();
-            let mut width = 0.0;
+            let mut runs = Vec::with_capacity(mark_runs.len());
+            let mut width = 0.0_f32;
             let mut ascent: f32 = 0.0;
             let mut descent: f32 = 0.0;
             for r in &mark_runs {
@@ -6433,41 +6433,49 @@ impl DisplayListBuilder {
               descent = mark_style.font_size * 0.2;
             }
             for r in &mark_runs {
-              let mark_origin = if r.direction.is_rtl() {
-                width + r.advance
-              } else {
-                width
-              };
-              for g in &r.glyphs {
-                let x = match r.direction {
-                  crate::text::pipeline::Direction::RightToLeft => mark_origin - g.x_offset,
-                  crate::text::pipeline::Direction::LeftToRight => mark_origin + g.x_offset,
-                };
-                glyphs.push(GlyphInstance {
-                  glyph_id: g.glyph_id,
-                  cluster: g.cluster,
-                  x_offset: x,
-                  y_offset: -g.y_offset,
-                  x_advance: g.x_advance,
-                  y_advance: 0.0,
-                });
-              }
-              width += r.advance;
+              let run_advance = r.advance;
+              let glyphs = r
+                .glyphs
+                .iter()
+                .map(|g| {
+                  let x_offset = match r.direction {
+                    crate::text::pipeline::Direction::RightToLeft => run_advance - g.x_offset,
+                    crate::text::pipeline::Direction::LeftToRight => g.x_offset,
+                  };
+                  GlyphInstance {
+                    glyph_id: g.glyph_id,
+                    cluster: g.cluster,
+                    x_offset,
+                    y_offset: -g.y_offset,
+                    x_advance: g.x_advance,
+                    y_advance: g.y_advance,
+                  }
+                })
+                .collect();
+              runs.push(EmphasisTextRun {
+                glyphs,
+                font: Some(r.font.clone()),
+                font_id: self.font_id_from_run(r),
+                font_size: r.font_size,
+                advance_width: run_advance,
+                variations: r
+                  .variations
+                  .iter()
+                  .map(|v| FontVariation::new(v.tag, v.value))
+                  .collect(),
+                palette_index: r.palette_index,
+                palette_overrides: Arc::clone(&r.palette_overrides),
+                palette_override_hash: r.palette_override_hash,
+                synthetic_bold: r.synthetic_bold,
+                synthetic_oblique: r.synthetic_oblique,
+              });
+              width += run_advance;
             }
             Some(EmphasisText {
-              glyphs,
-              font: Some(mark_runs[0].font.clone()),
-              font_id: mark_font_id,
-              font_size: mark_style.font_size,
+              runs,
               width,
               height: ascent + descent,
               baseline_offset: ascent,
-              variations: mark_runs[0]
-                .variations
-                .iter()
-                .map(|v| FontVariation::new(v.tag, v.value))
-                .collect(),
-              palette_index: mark_runs[0].palette_index,
             })
           }
           _ => None,

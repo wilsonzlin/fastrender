@@ -521,6 +521,8 @@ fn test_draw_text_empty() {
       0.0,
       0,
       &[],
+      0,
+      &[],
     )
     .unwrap();
 
@@ -566,6 +568,8 @@ fn canvas_draw_text_respects_deadline_timeout() {
       Rgba::BLACK,
       0.0,
       0.0,
+      0,
+      &[],
       0,
       &[],
     )
@@ -628,6 +632,8 @@ fn test_draw_text_with_glyphs() {
       run.synthetic_bold,
       run.synthetic_oblique,
       run.palette_index,
+      run.palette_overrides.as_slice(),
+      run.palette_override_hash,
       &variations,
     )
     .unwrap();
@@ -672,6 +678,8 @@ fn test_draw_text_colored() {
       run.synthetic_bold,
       run.synthetic_oblique,
       run.palette_index,
+      run.palette_overrides.as_slice(),
+      run.palette_override_hash,
       &variations,
     )
     .unwrap();
@@ -718,6 +726,8 @@ fn test_draw_text_with_opacity() {
       run.synthetic_bold,
       run.synthetic_oblique,
       run.palette_index,
+      run.palette_overrides.as_slice(),
+      run.palette_override_hash,
       &variations,
     )
     .unwrap();
@@ -763,6 +773,8 @@ fn canvas_renders_color_fonts() {
       run.synthetic_bold,
       run.synthetic_oblique,
       run.palette_index,
+      run.palette_overrides.as_slice(),
+      run.palette_override_hash,
       &variations,
     )
     .unwrap();

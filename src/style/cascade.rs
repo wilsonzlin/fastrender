@@ -9779,6 +9779,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.list_style_position = parent.list_style_position;
   styles.list_style_image = parent.list_style_image.clone();
   styles.counter_styles = parent.counter_styles.clone();
+  styles.font_palettes = parent.font_palettes.clone();
   styles.image_orientation = parent.image_orientation;
   styles.quotes = parent.quotes.clone();
   styles.cursor = parent.cursor;

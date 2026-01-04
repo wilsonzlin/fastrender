@@ -1109,6 +1109,8 @@ impl Canvas {
   ///   run.synthetic_bold,
   ///   run.synthetic_oblique,
   ///   run.palette_index,
+  ///   run.palette_overrides.as_slice(),
+  ///   run.palette_override_hash,
   ///   &[],
   /// )?;
   /// ```
@@ -1122,6 +1124,8 @@ impl Canvas {
     synthetic_bold: f32,
     synthetic_oblique: f32,
     palette_index: u16,
+    palette_overrides: &[(u16, Rgba)],
+    palette_override_hash: u64,
     variations: &[FontVariation],
   ) -> Result<()> {
     self.draw_text_run(
@@ -1135,8 +1139,8 @@ impl Canvas {
       synthetic_bold,
       synthetic_oblique,
       palette_index,
-      &[],
-      0,
+      palette_overrides,
+      palette_override_hash,
       variations,
     )
   }

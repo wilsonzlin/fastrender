@@ -767,18 +767,29 @@ pub struct EmphasisMark {
   pub center: Point,
 }
 
-/// Shaped emphasis string glyphs (for string emphasis styles).
+/// Shaped emphasis string run (for string emphasis styles).
 #[derive(Debug, Clone)]
-pub struct EmphasisText {
+pub struct EmphasisTextRun {
   pub glyphs: Vec<GlyphInstance>,
   pub font: Option<Arc<LoadedFont>>,
   pub font_id: Option<FontId>,
   pub font_size: f32,
+  pub advance_width: f32,
+  pub variations: Vec<FontVariation>,
+  pub palette_index: u16,
+  pub palette_overrides: Arc<Vec<(u16, Rgba)>>,
+  pub palette_override_hash: u64,
+  pub synthetic_bold: f32,
+  pub synthetic_oblique: f32,
+}
+
+/// Shaped emphasis string (for string emphasis styles).
+#[derive(Debug, Clone)]
+pub struct EmphasisText {
+  pub runs: Vec<EmphasisTextRun>,
   pub width: f32,
   pub height: f32,
   pub baseline_offset: f32,
-  pub variations: Vec<FontVariation>,
-  pub palette_index: u16,
 }
 
 /// Resolved emphasis data for a text run.

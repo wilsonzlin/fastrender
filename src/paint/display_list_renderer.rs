@@ -3134,17 +3134,35 @@ impl DisplayListRenderer {
         .collect();
       if let Some(text) = &e.text {
         let mut t = text.clone();
-        t.font_size = self.ds_len(t.font_size);
-        t.glyphs = t
-          .glyphs
+        t.width = self.ds_len(t.width);
+        t.height = self.ds_len(t.height);
+        t.baseline_offset = self.ds_len(t.baseline_offset);
+        t.runs = t
+          .runs
           .into_iter()
-          .map(|g| GlyphInstance {
-            glyph_id: g.glyph_id,
-            cluster: g.cluster,
-            x_offset: self.ds_len(g.x_offset),
-            y_offset: self.ds_len(g.y_offset),
-            x_advance: self.ds_len(g.x_advance),
-            y_advance: self.ds_len(g.y_advance),
+          .map(|run| crate::paint::display_list::EmphasisTextRun {
+            glyphs: run
+              .glyphs
+              .into_iter()
+              .map(|g| GlyphInstance {
+                glyph_id: g.glyph_id,
+                cluster: g.cluster,
+                x_offset: self.ds_len(g.x_offset),
+                y_offset: self.ds_len(g.y_offset),
+                x_advance: self.ds_len(g.x_advance),
+                y_advance: self.ds_len(g.y_advance),
+              })
+              .collect(),
+            font: run.font,
+            font_id: run.font_id,
+            font_size: self.ds_len(run.font_size),
+            advance_width: self.ds_len(run.advance_width),
+            variations: run.variations,
+            palette_index: run.palette_index,
+            palette_overrides: run.palette_overrides,
+            palette_override_hash: run.palette_override_hash,
+            synthetic_bold: self.ds_len(run.synthetic_bold),
+            synthetic_oblique: run.synthetic_oblique,
           })
           .collect();
         e.text = Some(t);
@@ -8053,11 +8071,15 @@ impl DisplayListRenderer {
     let inline_vertical = emphasis.inline_vertical;
     if let TextEmphasisStyle::String(_) = emphasis.style {
       if let Some(text) = &emphasis.text {
-        let font = self
-          .resolve_font(text.font_id.as_ref(), text.font.as_ref())
-          .ok_or_else(|| RenderError::RasterizationFailed {
-            reason: "Unable to resolve font for emphasis string".into(),
-          })?;
+        let mut fonts = Vec::with_capacity(text.runs.len());
+        for run in &text.runs {
+          let font = self
+            .resolve_font(run.font_id.as_ref(), run.font.as_ref())
+            .ok_or_else(|| RenderError::RasterizationFailed {
+              reason: "Unable to resolve font for emphasis string".into(),
+            })?;
+          fonts.push(font);
+        }
         for mark in &emphasis.marks {
           let mark_origin = if inline_vertical {
             Point::new(
@@ -8070,17 +8092,30 @@ impl DisplayListRenderer {
               mark.center.y - text.height * 0.5 + text.baseline_offset,
             )
           };
-          self.canvas.draw_text(
-            mark_origin,
-            &text.glyphs,
-            &font,
-            text.font_size,
-            emphasis.color,
-            0.0,
-            0.0,
-            text.palette_index,
-            &text.variations,
-          )?;
+          let mut pen = 0.0_f32;
+          for (run, font) in text.runs.iter().zip(fonts.iter()) {
+            let run_origin = if inline_vertical {
+              Point::new(mark_origin.x, mark_origin.y + pen)
+            } else {
+              Point::new(mark_origin.x + pen, mark_origin.y)
+            };
+            self.canvas.draw_text_run(
+              run_origin,
+              &run.glyphs,
+              &font,
+              run.font_size,
+              1.0,
+              crate::text::pipeline::RunRotation::None,
+              emphasis.color,
+              run.synthetic_bold,
+              run.synthetic_oblique,
+              run.palette_index,
+              run.palette_overrides.as_slice(),
+              run.palette_override_hash,
+              &run.variations,
+            )?;
+            pen += run.advance_width;
+          }
         }
         return Ok(());
       }

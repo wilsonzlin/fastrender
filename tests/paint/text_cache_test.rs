@@ -65,6 +65,8 @@ fn caches_glyph_outlines_between_draws() {
       0.0,
       0.0,
       0,
+      &[],
+      0,
       &variations,
     )
     .unwrap();
@@ -81,6 +83,8 @@ fn caches_glyph_outlines_between_draws() {
       Rgba::BLACK,
       0.0,
       0.0,
+      0,
+      &[],
       0,
       &variations,
     )
@@ -121,6 +125,8 @@ fn respects_clip_mask_for_text() {
       Rgba::BLACK,
       0.0,
       0.0,
+      0,
+      &[],
       0,
       &variations,
     )

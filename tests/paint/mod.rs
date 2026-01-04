@@ -59,6 +59,7 @@ mod projective_mapping;
 mod rasterize_test;
 mod responsive_srcset_golden;
 mod responsive_width_srcset_golden;
+mod text_emphasis_string_color_font;
 mod text_shadow_color_emoji_golden;
 mod scene_tree_test;
 mod shadow_dom_slotted_paint;
