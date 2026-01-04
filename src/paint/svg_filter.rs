@@ -6249,6 +6249,23 @@ mod tests {
   }
 
   #[test]
+  fn morphology_erode_operates_on_unpremultiplied_channels() {
+    let mut pixmap = new_pixmap(2, 1).unwrap();
+    pixmap.pixels_mut()[0] = premul(255, 0, 0, 64);
+    pixmap.pixels_mut()[1] = premul(100, 0, 0, 255);
+
+    apply_morphology(
+      &mut pixmap,
+      (1.0, 0.0),
+      MorphologyOp::Erode,
+      ColorInterpolationFilters::SRGB,
+    )
+    .unwrap();
+
+    assert_eq!(pixels_to_vec(&pixmap), vec![(25, 0, 0, 64), (25, 0, 0, 64)]);
+  }
+
+  #[test]
   fn turbulence_base_frequency_parses_pair() {
     let doc =
       roxmltree::Document::parse("<filter><feTurbulence baseFrequency=\"0.1 0.2\"/></filter>")
