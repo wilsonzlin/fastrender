@@ -103,6 +103,7 @@ use crate::paint::painter::{
 };
 use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
+use crate::paint::text_decoration::{resolve_underline_side, UnderlineSide};
 use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::transform3d::backface_is_hidden;
@@ -5846,13 +5847,20 @@ impl DisplayListBuilder {
         .contains(TextDecorationLine::UNDERLINE)
       {
         let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
-        let center = block_baseline
-          - self.underline_position(
-            &metrics,
-            deco.underline_position,
-            underline_offset,
-            thickness,
-          );
+        let pos = self.underline_position(
+          &metrics,
+          deco.underline_position,
+          underline_offset,
+          thickness,
+        );
+        let center = if inline_vertical {
+          match resolve_underline_side(style.writing_mode, deco.underline_position) {
+            UnderlineSide::Right => block_baseline - pos,
+            UnderlineSide::Left => block_baseline + pos,
+          }
+        } else {
+          block_baseline - pos
+        };
         let segments = if matches!(
           deco.skip_ink,
           TextDecorationSkipInk::Auto | TextDecorationSkipInk::All

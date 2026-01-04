@@ -112,6 +112,7 @@ pub mod rasterize;
 pub mod scene_tree;
 pub mod stacking;
 pub mod svg_filter;
+mod text_decoration;
 pub mod text_rasterize;
 pub mod text_shadow;
 pub mod transform3d;

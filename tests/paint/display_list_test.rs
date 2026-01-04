@@ -984,6 +984,93 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
 }
 
 #[test]
+fn vertical_text_underline_position_respects_left_right() {
+  let font = Arc::new(super::color_font_helpers::load_fixture_font(
+    "DejaVuSans-subset.ttf",
+  ));
+  let Ok(metrics) = font.metrics() else {
+    return;
+  };
+  // The assertions below assume the underline position is below the baseline.
+  if metrics.underline_position >= 0 {
+    return;
+  }
+
+  let font_size = 16.0;
+  let run = ShapedRun {
+    text: "A".to_string(),
+    start: 0,
+    end: 1,
+    glyphs: Vec::new(),
+    direction: Direction::LeftToRight,
+    level: 0,
+    advance: 0.0,
+    font: Arc::clone(&font),
+    font_size,
+    baseline_shift: 0.0,
+    language: None,
+    synthetic_bold: 0.0,
+    synthetic_oblique: 0.0,
+    rotation: RunRotation::None,
+    palette_index: 0,
+    palette_overrides: Arc::new(Vec::new()),
+    palette_override_hash: 0,
+    variations: Vec::new(),
+    scale: 1.0,
+  };
+
+  let baseline_offset = 50.0;
+  let underline_center = |writing_mode: WritingMode, underline_position: TextUnderlinePosition| {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = writing_mode;
+    style.font_size = font_size;
+    style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+    style.text_decoration_skip_ink = TextDecorationSkipInk::None;
+    style.text_underline_position = underline_position;
+
+    let fragment = FragmentNode::new_text_shaped(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      "A".to_string(),
+      baseline_offset,
+      vec![run.clone()],
+      Arc::new(style),
+    );
+    let list = DisplayListBuilder::new().build(&fragment);
+    let deco = list
+      .items()
+      .iter()
+      .find_map(|i| match i {
+        DisplayItem::TextDecoration(d) => Some(d),
+        _ => None,
+      })
+      .expect("text decoration item");
+    deco
+      .decorations
+      .first()
+      .and_then(|d| d.underline.as_ref())
+      .expect("underline stroke")
+      .center
+  };
+
+  assert!(
+    underline_center(WritingMode::VerticalRl, TextUnderlinePosition::Auto) > baseline_offset,
+    "vertical-rl underlines default to the right side"
+  );
+  assert!(
+    underline_center(WritingMode::VerticalLr, TextUnderlinePosition::Auto) < baseline_offset,
+    "vertical-lr underlines default to the left side"
+  );
+  assert!(
+    underline_center(WritingMode::VerticalRl, TextUnderlinePosition::Left) < baseline_offset,
+    "explicit left keyword should place the underline on the left side"
+  );
+  assert!(
+    underline_center(WritingMode::VerticalLr, TextUnderlinePosition::Right) > baseline_offset,
+    "explicit right keyword should place the underline on the right side"
+  );
+}
+
+#[test]
 fn builder_skip_ink_carves_segments() {
   let mut base_style = ComputedStyle::default();
   base_style.text_decoration.lines = TextDecorationLine::UNDERLINE;

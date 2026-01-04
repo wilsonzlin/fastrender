@@ -65,6 +65,7 @@ use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::paint::svg_filter::SvgFilterResolver;
+use crate::paint::text_decoration::{resolve_underline_side, UnderlineSide};
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
@@ -8500,7 +8501,14 @@ impl Painter {
           underline_offset,
           thickness,
         );
-        let center = block_baseline - adjusted_pos;
+        let center = if inline_vertical {
+          match resolve_underline_side(style.writing_mode, deco.underline_position) {
+            UnderlineSide::Right => block_baseline - adjusted_pos,
+            UnderlineSide::Left => block_baseline + adjusted_pos,
+          }
+        } else {
+          block_baseline - adjusted_pos
+        };
         if inline_vertical {
           render_line(&mut self.pixmap, center, thickness);
         } else if matches!(
