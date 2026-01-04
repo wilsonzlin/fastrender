@@ -19,6 +19,14 @@ This directory contains the **committed pageset scoreboard**: one tiny JSON file
 - These are auto-generated; don't hand-edit them except for durable human fields like `notes`/`last_*` when needed.
 - `notes` is intended for durable human explanations; `auto_notes` is machine-generated last-run diagnostics and is rewritten on each run.
 - Successful pages can still report non-fatal problems under `auto_notes` (for example: `ok with failures: ...` when a render completes but records `failure_stage=<...>` and/or subresource `fetch_errors`).
+- When `pageset_progress run --accuracy --baseline-dir <dir>` is used, successful pages may include an `accuracy` section with visual diff telemetry against baseline PNGs (typically Chrome screenshots in `fetches/chrome_renders`).
+  - `baseline`: baseline renderer label (currently `chrome`).
+  - `diff_pixels`: number of pixels that differ (after applying `tolerance`).
+  - `diff_percent`: percent of pixels that differ (0-100, after applying `tolerance`).
+  - `perceptual`: SSIM-derived perceptual distance (0.0 = identical, 1.0 = maximally different).
+  - `tolerance`: per-channel tolerance used for pixel comparisons (0-255).
+  - `max_diff_percent`: threshold used to classify diffs as acceptable/unacceptable (0-100).
+  - `computed_at_commit`: git SHA captured when the metrics were computed (omitted when unknown).
 - Renderer-provided `failure_stage`/`timeout_stage` fields stay `null` on placeholders and are populated directly from diagnostics during runs for programmatic triage.
 - `stages_ms` buckets are a coarse **wall-time** attribution (mutually exclusive buckets; `fetch`,
   `css`, `cascade`, `box_tree`, `layout`, `paint`) derived

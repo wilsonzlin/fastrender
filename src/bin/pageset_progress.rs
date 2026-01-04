@@ -32,6 +32,7 @@ use fastrender::api::{
 };
 use fastrender::debug::snapshot;
 use fastrender::error::{RenderError, RenderStage};
+use fastrender::image_compare::{self, CompareConfig};
 use fastrender::pageset::{
   pageset_entries, pageset_stem, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
@@ -49,6 +50,7 @@ use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::text::font_db::FontConfig;
+use image::RgbaImage;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use stage_buckets::StageBuckets;
@@ -60,6 +62,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
+use tiny_skia::Pixmap;
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -71,6 +74,7 @@ const DEFAULT_TRACE_DIR: &str = "target/pageset/traces";
 const DEFAULT_TRACE_PROGRESS_DIR: &str = "target/pageset/trace-progress";
 const DEFAULT_CASCADE_PROGRESS_DIR: &str = "target/pageset/cascade-progress";
 const DEFAULT_DUMP_DIR: &str = "target/pageset/dumps";
+const DEFAULT_CHROME_BASELINE_DIR: &str = "fetches/chrome_renders";
 // Treat traces smaller than this as likely incomplete/partial.
 const MIN_TRACE_BYTES: u64 = 4096;
 // Keep progress notes compact; the full error chain lives in the per-page log file.
@@ -124,6 +128,25 @@ enum DiagnosticsArg {
 enum DumpLevel {
   Summary,
   Full,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum AccuracyBaselineArg {
+  Chrome,
+}
+
+impl AccuracyBaselineArg {
+  fn as_str(&self) -> &'static str {
+    match self {
+      AccuracyBaselineArg::Chrome => "chrome",
+    }
+  }
+
+  fn default_dir(&self) -> &'static str {
+    match self {
+      AccuracyBaselineArg::Chrome => DEFAULT_CHROME_BASELINE_DIR,
+    }
+  }
 }
 
 impl DumpLevel {
@@ -470,6 +493,34 @@ struct RunArgs {
   #[arg(long, value_enum, default_value_t = DiagnosticsArg::Basic)]
   diagnostics: DiagnosticsArg,
 
+  /// Capture pixel-diff accuracy metrics against baseline renders (stored in progress JSON)
+  #[arg(long)]
+  accuracy: bool,
+
+  /// Directory containing baseline PNGs (e.g. `fetches/chrome_renders/<stem>.png`)
+  #[arg(long, value_name = "DIR", requires = "accuracy")]
+  baseline_dir: Option<PathBuf>,
+
+  /// Baseline renderer to compare against (chrome).
+  ///
+  /// When set, missing baseline PNGs are generated via `scripts/chrome_baseline.sh`.
+  #[arg(long, value_enum, requires = "accuracy")]
+  baseline: Option<AccuracyBaselineArg>,
+
+  /// Per-channel tolerance for pixel diffs (0-255)
+  #[arg(long, default_value_t = 0, requires = "accuracy")]
+  tolerance: u8,
+
+  /// Maximum percent of pixels allowed to differ (0-100)
+  #[arg(long, default_value_t = 0.0, requires = "accuracy")]
+  max_diff_percent: f64,
+
+  /// Directory to write diff PNGs into (not committed).
+  ///
+  /// When set, diff images are saved as `<diff-dir>/<stem>.diff.png`.
+  #[arg(long, value_name = "DIR", requires = "accuracy")]
+  diff_dir: Option<PathBuf>,
+
   /// Print full error chains in logs and progress files
   #[arg(long)]
   verbose: bool,
@@ -488,6 +539,18 @@ struct ReportArgs {
   /// Number of slowest pages to list
   #[arg(long, default_value_t = 10)]
   top: usize,
+
+  /// Rank ok pages by visual diff accuracy (worst first) when `accuracy` metrics are present
+  #[arg(long)]
+  rank_accuracy: bool,
+
+  /// Only show pages whose diff exceeds the stored `accuracy.max_diff_percent` threshold
+  #[arg(long)]
+  only_diff: bool,
+
+  /// Only show pages whose diff percentage is at least this value (0-100)
+  #[arg(long, value_name = "PERCENT")]
+  min_diff_percent: Option<f64>,
 
   /// Compare against another progress directory
   #[arg(long, value_name = "DIR")]
@@ -686,6 +749,28 @@ struct WorkerArgs {
   /// Cooperative timeout in milliseconds for dump reruns (0 disables; defaults based on dump-timeout)
   #[arg(long)]
   dump_soft_timeout_ms: Option<u64>,
+
+  /// Capture pixel-diff accuracy metrics against baseline renders (stored in progress JSON)
+  #[arg(long)]
+  accuracy: bool,
+
+  /// Directory containing baseline PNGs (e.g. `fetches/chrome_renders/<stem>.png`)
+  #[arg(long, value_name = "DIR", requires = "accuracy")]
+  baseline_dir: Option<PathBuf>,
+
+  /// Per-channel tolerance for pixel diffs (0-255)
+  #[arg(long, default_value_t = 0, requires = "accuracy")]
+  tolerance: u8,
+
+  /// Maximum percent of pixels allowed to differ (0-100)
+  #[arg(long, default_value_t = 0.0, requires = "accuracy")]
+  max_diff_percent: f64,
+
+  /// Directory to write diff PNGs into (not committed).
+  ///
+  /// When set, diff images are saved as `<diff-dir>/<stem>.diff.png`.
+  #[arg(long, value_name = "DIR", requires = "accuracy")]
+  diff_dir: Option<PathBuf>,
 }
 
 fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
@@ -1216,6 +1301,163 @@ fn ensure_disk_cache_feature_available() {
   }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProgressAccuracy {
+  baseline: String,
+  diff_pixels: u64,
+  diff_percent: f64,
+  perceptual: f64,
+  tolerance: u8,
+  max_diff_percent: f64,
+  #[serde(default, skip_serializing_if = "String::is_empty")]
+  computed_at_commit: String,
+}
+
+fn round_accuracy_metric(value: f64, places: u32) -> f64 {
+  if !value.is_finite() {
+    return value;
+  }
+  let factor = 10f64.powi(places as i32);
+  (value * factor).round() / factor
+}
+
+impl ProgressAccuracy {
+  fn from_diff(diff: &image_compare::ImageDiff, baseline: &str, computed_at_commit: Option<&str>) -> Self {
+    Self {
+      baseline: baseline.to_string(),
+      diff_pixels: diff.statistics.different_pixels,
+      diff_percent: round_accuracy_metric(diff.statistics.different_percent, 4),
+      perceptual: round_accuracy_metric(diff.statistics.perceptual_distance, 4),
+      tolerance: diff.config.channel_tolerance,
+      max_diff_percent: diff.config.max_different_percent,
+      computed_at_commit: computed_at_commit.unwrap_or_default().to_string(),
+    }
+  }
+}
+
+fn rgba_image_from_pixmap(pixmap: &Pixmap) -> Result<RgbaImage, String> {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  let pixels = pixmap.data();
+
+  // tiny-skia stores premultiplied RGBA pixels in RGBA byte order. Convert to straight RGBA.
+  let mut rgba_data = Vec::with_capacity(pixels.len());
+  for chunk in pixels.chunks_exact(4) {
+    let r = chunk[0];
+    let g = chunk[1];
+    let b = chunk[2];
+    let a = chunk[3];
+
+    // Unpremultiply alpha.
+    let (r, g, b) = if a > 0 {
+      let alpha = a as f32 / 255.0;
+      (
+        ((r as f32 / alpha).min(255.0)) as u8,
+        ((g as f32 / alpha).min(255.0)) as u8,
+        ((b as f32 / alpha).min(255.0)) as u8,
+      )
+    } else {
+      (0, 0, 0)
+    };
+
+    rgba_data.push(r);
+    rgba_data.push(g);
+    rgba_data.push(b);
+    rgba_data.push(a);
+  }
+
+  RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| "failed to create RGBA image".to_string())
+}
+
+fn compute_accuracy_for_pixmap(
+  stem: &str,
+  pixmap: &Pixmap,
+  baseline_dir: &Path,
+  tolerance: u8,
+  max_diff_percent: f64,
+  diff_dir: Option<&Path>,
+  computed_at_commit: Option<&str>,
+  log: &mut String,
+) -> Option<ProgressAccuracy> {
+  let baseline_path = baseline_dir.join(format!("{stem}.png"));
+  let baseline_bytes = match fs::read(&baseline_path) {
+    Ok(bytes) => bytes,
+    Err(err) => {
+      log.push_str(&format!(
+        "Accuracy: baseline missing at {} ({err})\n",
+        baseline_path.display()
+      ));
+      return None;
+    }
+  };
+  let baseline_img = match image_compare::decode_png(&baseline_bytes) {
+    Ok(img) => img,
+    Err(err) => {
+      log.push_str(&format!(
+        "Accuracy: failed to decode baseline PNG {} ({err})\n",
+        baseline_path.display()
+      ));
+      return None;
+    }
+  };
+  let rendered_img = match rgba_image_from_pixmap(pixmap) {
+    Ok(img) => img,
+    Err(err) => {
+      log.push_str(&format!("Accuracy: failed to convert pixmap ({err})\n"));
+      return None;
+    }
+  };
+
+  let config = CompareConfig::strict()
+    .with_channel_tolerance(tolerance)
+    .with_max_different_percent(max_diff_percent)
+    .with_generate_diff_image(diff_dir.is_some());
+  let diff = image_compare::compare_images(&rendered_img, &baseline_img, &config);
+
+  let accuracy = if diff.dimensions_match {
+    ProgressAccuracy::from_diff(&diff, "chrome", computed_at_commit)
+  } else {
+    // Treat a dimension mismatch as a total failure (we can't meaningfully diff pixels).
+    let expected_total_pixels = baseline_img.width() as u64 * baseline_img.height() as u64;
+    ProgressAccuracy {
+      baseline: "chrome".to_string(),
+      diff_pixels: expected_total_pixels,
+      diff_percent: 100.0,
+      perceptual: 1.0,
+      tolerance,
+      max_diff_percent,
+      computed_at_commit: computed_at_commit.unwrap_or_default().to_string(),
+    }
+  };
+
+  if let Some(diff_dir) = diff_dir {
+    if diff.dimensions_match && diff.statistics.different_pixels > 0 {
+      if let Err(err) = fs::create_dir_all(diff_dir) {
+        log.push_str(&format!(
+          "Accuracy: failed to create diff dir {} ({err})\n",
+          diff_dir.display()
+        ));
+      } else {
+        match diff.diff_png() {
+          Ok(Some(bytes)) => {
+            let diff_path = diff_dir.join(format!("{stem}.diff.png"));
+            if let Err(err) = atomic_write_fast(&diff_path, &bytes) {
+              log.push_str(&format!(
+                "Accuracy: failed to write diff image {} ({err})\n",
+                diff_path.display()
+              ));
+            }
+          }
+          Ok(None) => {}
+          Err(err) => log.push_str(&format!("Accuracy: failed to encode diff PNG ({err})\n")),
+        }
+      }
+    }
+  }
+
+  Some(accuracy)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct PageProgress {
   url: String,
@@ -1227,6 +1469,8 @@ pub(crate) struct PageProgress {
   notes: String,
   #[serde(default, skip_serializing_if = "String::is_empty")]
   auto_notes: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  accuracy: Option<ProgressAccuracy>,
   hotspot: String,
   failure_stage: Option<ProgressStage>,
   timeout_stage: Option<ProgressStage>,
@@ -1246,6 +1490,7 @@ impl PageProgress {
       stages_ms: StageBuckets::default(),
       notes: String::new(),
       auto_notes: String::new(),
+      accuracy: None,
       hotspot: String::new(),
       failure_stage: None,
       timeout_stage: None,
@@ -2638,9 +2883,13 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let mut progress = PageProgress::new(url);
   progress.config = Some(progress_config.clone());
   progress.total_ms = Some(elapsed_ms);
+  let mut rendered_pixmap: Option<Pixmap> = None;
 
   match render_result {
     Ok(Ok(result)) => {
+      let pixmap = result.pixmap;
+      let diagnostics = result.diagnostics;
+      rendered_pixmap = Some(pixmap);
       progress.status = ProgressStatus::Ok;
       let total_ms = progress.total_ms.unwrap_or(0.0);
       let timeline_buckets = args
@@ -2649,37 +2898,35 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         .and_then(|path| stage_buckets_from_timeline(path, timeline_elapsed_ms));
       let used_timeline = timeline_buckets.is_some();
       progress.stages_ms =
-        timeline_buckets.unwrap_or_else(|| buckets_from_diagnostics(&result.diagnostics));
+        timeline_buckets.unwrap_or_else(|| buckets_from_diagnostics(&diagnostics));
       progress.stages_ms.rescale_to_total(total_ms);
-      apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
+      apply_diagnostics_to_progress(&mut progress, &diagnostics);
       let fetch_error_summary =
-        build_fetch_error_summary(result.diagnostics.fetch_errors.iter().filter(|err| {
+        build_fetch_error_summary(diagnostics.fetch_errors.iter().filter(|err| {
           !is_bot_mitigation_fetch_error(err) && !is_external_network_failure_fetch_error(err)
         }));
       let bot_mitigation_summary = build_fetch_error_summary(
-        result.diagnostics.blocked_fetch_errors.iter().chain(
-          result
-            .diagnostics
+        diagnostics.blocked_fetch_errors.iter().chain(
+          diagnostics
             .fetch_errors
             .iter()
             .filter(|err| is_bot_mitigation_fetch_error(err)),
         ),
       );
       let external_network_failure_summary = build_fetch_error_summary(
-        result
-          .diagnostics
+        diagnostics
           .fetch_errors
           .iter()
           .filter(|err| is_external_network_failure_fetch_error(err)),
       );
-      let invalid_image_summary = build_url_summary(&result.diagnostics.invalid_images);
-      if !used_timeline && result.diagnostics.stats.is_none() {
+      let invalid_image_summary = build_url_summary(&diagnostics.invalid_images);
+      if !used_timeline && diagnostics.stats.is_none() {
         log.push_str(
           "Stage timings unavailable (no timeline or render stats); stages_ms left at 0ms.\n",
         );
       }
       progress.hotspot =
-        infer_hotspot(result.diagnostics.stats.as_ref(), &progress.stages_ms).to_string();
+        infer_hotspot(diagnostics.stats.as_ref(), &progress.stages_ms).to_string();
       let format_summary = |label: &str, summary: &ProgressFetchErrorSummary| {
         let mut kind_parts = Vec::new();
         for (kind, count) in &summary.by_kind {
@@ -2713,14 +2960,14 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
           format_summary("bot_mitigation", summary)
         );
       }
-      progress.diagnostics = if result.diagnostics.stats.is_some()
+      progress.diagnostics = if diagnostics.stats.is_some()
         || fetch_error_summary.is_some()
         || invalid_image_summary.is_some()
         || bot_mitigation_summary.is_some()
         || external_network_failure_summary.is_some()
       {
         Some(ProgressDiagnostics {
-          stats: result.diagnostics.stats.clone(),
+          stats: diagnostics.stats.clone(),
           fetch_error_summary,
           invalid_image_summary,
           bot_mitigation_summary,
@@ -2730,9 +2977,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         None
       };
       log.push_str("Status: OK\n");
-      append_fetch_error_summary(&mut log, &result.diagnostics);
-      append_stage_summary(&mut log, &result.diagnostics);
-      log_layout_parallelism(&result.diagnostics, |line| {
+      append_fetch_error_summary(&mut log, &diagnostics);
+      append_stage_summary(&mut log, &diagnostics);
+      log_layout_parallelism(&diagnostics, |line| {
         log.push_str(line);
         log.push('\n');
       });
@@ -2822,7 +3069,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     progress.hotspot = infer_hotspot(stats, &progress.stages_ms).to_string();
   }
 
-  let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
+  let mut progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
   let wrote_progress =
     write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
   if let Err(err) = wrote_progress {
@@ -2833,6 +3080,30 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     flush_log(&log, &args.log_path);
     record_stage(StageHeartbeat::Done);
     std::process::exit(0);
+  }
+
+  if args.accuracy && progress.status == ProgressStatus::Ok {
+    if let (Some(baseline_dir), Some(pixmap)) =
+      (args.baseline_dir.as_deref(), rendered_pixmap.as_ref())
+    {
+      if let Some(accuracy) = compute_accuracy_for_pixmap(
+        &args.stem,
+        pixmap,
+        baseline_dir,
+        args.tolerance,
+        args.max_diff_percent,
+        args.diff_dir.as_deref(),
+        current_sha.as_deref(),
+        &mut log,
+      ) {
+        progress.accuracy = Some(accuracy);
+        if let Err(err) = write_progress_fast(&args.progress_path, &progress) {
+          log.push_str(&format!(
+            "Accuracy: progress rewrite failed ({err})\n"
+          ));
+        }
+      }
+    }
   }
 
   if let Some(level) = dump_level_for_progress(&args, &progress) {
@@ -4660,6 +4931,22 @@ fn print_note_block(label: &str, note: &str, indent: &str) {
   }
 }
 
+fn print_accuracy_block(acc: &ProgressAccuracy, indent: &str) {
+  let mut line = format!(
+    "{indent}accuracy: baseline={} diff_pixels={} diff_percent={:.4}% perceptual={:.4} tolerance={} max_diff_percent={}",
+    acc.baseline,
+    acc.diff_pixels,
+    acc.diff_percent,
+    acc.perceptual,
+    acc.tolerance,
+    acc.max_diff_percent
+  );
+  if !acc.computed_at_commit.trim().is_empty() {
+    line.push_str(&format!(" computed_at_commit={}", acc.computed_at_commit));
+  }
+  println!("{line}");
+}
+
 const REPORT_OFFENDING_STEMS_LIMIT: usize = 25;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4878,6 +5165,12 @@ fn report(args: ReportArgs) -> io::Result<()> {
   if let Some(ms) = args.fail_on_slow_ok_ms {
     if ms < 0.0 {
       eprintln!("--fail-on-slow-ok-ms must be >= 0");
+      std::process::exit(2);
+    }
+  }
+  if let Some(min) = args.min_diff_percent {
+    if min < 0.0 || min > 100.0 {
+      eprintln!("--min-diff-percent must be in the range 0..=100");
       std::process::exit(2);
     }
   }
@@ -5352,10 +5645,67 @@ fn report(args: ReportArgs) -> io::Result<()> {
           entry.progress.auto_notes.clone()
         };
         print_note_block("last run", &auto_notes, "      ");
+        if let Some(acc) = entry.progress.accuracy.as_ref() {
+          print_accuracy_block(acc, "      ");
+        }
       }
     }
   }
   println!();
+
+  let wants_accuracy_ranking = args.rank_accuracy || args.only_diff || args.min_diff_percent.is_some();
+  if wants_accuracy_ranking {
+    let mut accuracy_pages: Vec<(&LoadedProgress, &ProgressAccuracy)> = progresses
+      .iter()
+      .filter(|entry| entry.progress.status == ProgressStatus::Ok)
+      .filter_map(|entry| entry.progress.accuracy.as_ref().map(|acc| (entry, acc)))
+      .collect();
+    if args.only_diff {
+      accuracy_pages.retain(|(_, acc)| acc.diff_percent > acc.max_diff_percent + f64::EPSILON);
+    }
+    if let Some(min) = args.min_diff_percent {
+      accuracy_pages.retain(|(_, acc)| acc.diff_percent + f64::EPSILON >= min);
+    }
+    accuracy_pages.sort_by(|(a_entry, a_acc), (b_entry, b_acc)| {
+      b_acc
+        .diff_percent
+        .total_cmp(&a_acc.diff_percent)
+        .then_with(|| b_acc.perceptual.total_cmp(&a_acc.perceptual))
+        .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+    });
+
+    let total_with_accuracy = accuracy_pages.len();
+    let top_n = args.top.min(total_with_accuracy);
+    println!("Worst accuracy pages (top {top_n} of {total_with_accuracy} with accuracy):");
+    if top_n == 0 {
+      println!("  (none)");
+    } else {
+      for (idx, (entry, acc)) in accuracy_pages.iter().take(top_n).enumerate() {
+        let total_desc = entry
+          .progress
+          .total_ms
+          .map(|ms| format!("{ms:.2}ms"))
+          .unwrap_or_else(|| "-".to_string());
+        let commit = if args.verbose && !acc.computed_at_commit.trim().is_empty() {
+          format!(" commit={}", acc.computed_at_commit)
+        } else {
+          String::new()
+        };
+        println!(
+          "  {}. {} diff={:.4}% pixels={} perceptual={:.4} tol={} max_diff_percent={} total={total_desc}{commit} url={}",
+          idx + 1,
+          entry.stem,
+          acc.diff_percent,
+          acc.diff_pixels,
+          acc.perceptual,
+          acc.tolerance,
+          acc.max_diff_percent,
+          entry.progress.url
+        );
+      }
+    }
+    println!();
+  }
 
   let mut failure_hotspots: BTreeMap<String, usize> = BTreeMap::new();
   for entry in progresses.iter().filter(|p| {
@@ -6446,6 +6796,75 @@ fn work_item_from_cache(
   }
 }
 
+fn generate_missing_chrome_baselines(
+  baseline_dir: &Path,
+  items: &[WorkItem],
+  viewport: (u32, u32),
+  dpr: f32,
+) {
+  let mut missing: Vec<String> = items
+    .iter()
+    .filter(|item| {
+      let path = baseline_dir.join(format!("{}.png", item.cache_stem));
+      !path.exists()
+    })
+    .map(|item| item.cache_stem.clone())
+    .collect();
+  missing.sort();
+  missing.dedup();
+  if missing.is_empty() {
+    return;
+  }
+
+  if let Err(err) = fs::create_dir_all(baseline_dir) {
+    eprintln!(
+      "Warning: failed to create baseline dir {}: {err}",
+      baseline_dir.display()
+    );
+    return;
+  }
+
+  let script = Path::new("scripts/chrome_baseline.sh");
+  if !script.exists() {
+    eprintln!(
+      "Warning: {} not found; skipping chrome baseline generation",
+      script.display()
+    );
+    return;
+  }
+
+  println!(
+    "Generating {} missing chrome baseline PNG(s) into {}...",
+    missing.len(),
+    baseline_dir.display()
+  );
+
+  let viewport_arg = format!("{}x{}", viewport.0, viewport.1);
+  let status = Command::new(script)
+    .arg("--html-dir")
+    .arg(CACHE_HTML_DIR)
+    .arg("--out-dir")
+    .arg(baseline_dir)
+    .arg("--viewport")
+    .arg(&viewport_arg)
+    .arg("--dpr")
+    .arg(format!("{dpr}"))
+    .arg("--")
+    .args(&missing)
+    .status();
+
+  match status {
+    Ok(status) if status.success() => {}
+    Ok(status) => eprintln!(
+      "Warning: chrome baseline generation exited with status {status:?}; accuracy metrics will be missing for pages without baselines"
+    ),
+    Err(err) => eprintln!(
+      "Warning: failed to run {}: {err} (accuracy metrics will be missing for pages without baselines)",
+      script.display()
+    ),
+  }
+}
+
 #[derive(Debug)]
 struct RunningChild {
   item: WorkItem,
@@ -6636,6 +7055,20 @@ fn push_worker_args(
   }
   if let Some(path) = &item.trace_out {
     cmd.arg("--trace-out").arg(path);
+  }
+  if args.accuracy {
+    cmd.arg("--accuracy");
+    if let Some(dir) = &args.baseline_dir {
+      cmd.arg("--baseline-dir").arg(dir);
+    }
+    cmd
+      .arg("--tolerance")
+      .arg(args.tolerance.to_string())
+      .arg("--max-diff-percent")
+      .arg(format!("{}", args.max_diff_percent));
+    if let Some(dir) = &args.diff_dir {
+      cmd.arg("--diff-dir").arg(dir);
+    }
   }
   if let Some(dump_settings) = dump {
     if let Some(level) = dump_settings.failures {
@@ -7155,7 +7588,7 @@ fn merge_cascade_stats_into_progress(progress: &mut PageProgress, rerun_stats: &
   merge_cascade_diagnostics(&mut stats.cascade, &rerun_stats.cascade);
 }
 
-fn run(args: RunArgs) -> io::Result<()> {
+fn run(mut args: RunArgs) -> io::Result<()> {
   ensure_disk_cache_feature_available();
   if args.jobs == 0 {
     eprintln!("jobs must be > 0");
@@ -7176,6 +7609,23 @@ fn run(args: RunArgs) -> io::Result<()> {
   if matches!(args.dump_timeout, Some(0)) {
     eprintln!("dump-timeout must be > 0 when set");
     std::process::exit(2);
+  }
+
+  if args.accuracy {
+    if args.max_diff_percent < 0.0 || args.max_diff_percent > 100.0 {
+      eprintln!("--max-diff-percent must be in the range 0..=100");
+      std::process::exit(2);
+    }
+
+    let resolved_baseline_dir = match (args.baseline_dir.clone(), args.baseline) {
+      (Some(dir), _) => dir,
+      (None, Some(baseline)) => PathBuf::from(baseline.default_dir()),
+      (None, None) => {
+        eprintln!("--accuracy requires --baseline-dir <dir> or --baseline=chrome");
+        std::process::exit(2);
+      }
+    };
+    args.baseline_dir = Some(resolved_baseline_dir);
   }
 
   let hard_timeout = Duration::from_secs(args.timeout);
@@ -7208,6 +7658,11 @@ fn run(args: RunArgs) -> io::Result<()> {
   }
   if dumps_enabled {
     fs::create_dir_all(&args.dump_dir)?;
+  }
+  if args.accuracy {
+    if let Some(dir) = &args.diff_dir {
+      fs::create_dir_all(dir)?;
+    }
   }
 
   let page_filter = args
@@ -7517,7 +7972,32 @@ fn run(args: RunArgs) -> io::Result<()> {
   }
   println!("{}", args.fonts.describe());
   println!("Progress dir: {}", args.progress_dir.display());
+  if args.accuracy {
+    let baseline_dir = args
+      .baseline_dir
+      .as_ref()
+      .expect("baseline_dir should be resolved when accuracy is enabled");
+    println!(
+      "Accuracy: baseline_dir={} tolerance={} max_diff_percent={}",
+      baseline_dir.display(),
+      args.tolerance,
+      args.max_diff_percent
+    );
+    if let Some(dir) = &args.diff_dir {
+      println!("Accuracy diffs: {}", dir.display());
+    }
+  }
   println!();
+
+  if args.accuracy {
+    if args.baseline == Some(AccuracyBaselineArg::Chrome) {
+      let baseline_dir = args
+        .baseline_dir
+        .as_ref()
+        .expect("baseline_dir should be resolved when accuracy is enabled");
+      generate_missing_chrome_baselines(baseline_dir, &items, args.viewport, args.dpr);
+    }
+  }
 
   let overall_start = Instant::now();
   let queue = std::collections::VecDeque::from(items.clone());
@@ -8041,6 +8521,9 @@ mod tests {
       progress_dir: PathBuf::new(),
       pages: None,
       top: 10,
+      rank_accuracy: false,
+      only_diff: false,
+      min_diff_percent: None,
       compare: None,
       fail_on_regression: false,
       regression_threshold_percent: 10.0,
@@ -8363,6 +8846,12 @@ mod tests {
       dump_timeout: None,
       dump_soft_timeout_ms: None,
       diagnostics: DiagnosticsArg::None,
+      accuracy: false,
+      baseline_dir: None,
+      baseline: None,
+      tolerance: 0,
+      max_diff_percent: 0.0,
+      diff_dir: None,
       verbose: false,
     }
   }
@@ -9913,6 +10402,100 @@ mod tests {
       log_contents.contains("Panic after progress was written"),
       "expected panic to be recorded in the per-page log, got:\n{log_contents}"
     );
+  }
+
+  #[test]
+  fn page_progress_deserializes_without_accuracy_section() {
+    let raw = serde_json::json!({
+      "url": "https://example.com/",
+      "status": "ok",
+      "total_ms": 1.0,
+      "stages_ms": { "fetch": 1.0 },
+      "notes": "",
+      "hotspot": "",
+      "last_good_commit": "",
+      "last_regression_commit": ""
+    })
+    .to_string();
+    let parsed: PageProgress = serde_json::from_str(&raw).expect("deserialize PageProgress");
+    assert!(parsed.accuracy.is_none(), "expected accuracy to be optional");
+  }
+
+  #[test]
+  fn page_progress_roundtrips_with_accuracy_section() {
+    let mut progress = PageProgress::new("https://example.com/".to_string());
+    progress.status = ProgressStatus::Ok;
+    progress.total_ms = Some(1.0);
+    progress.stages_ms.fetch = 1.0;
+    progress.accuracy = Some(ProgressAccuracy {
+      baseline: "chrome".to_string(),
+      diff_pixels: 123,
+      diff_percent: 1.2345,
+      perceptual: 0.042,
+      tolerance: 0,
+      max_diff_percent: 0.0,
+      computed_at_commit: "deadbeef".to_string(),
+    });
+
+    let json = serialize_progress(&progress).expect("serialize");
+    let parsed: PageProgress = serde_json::from_str(&json).expect("deserialize");
+    let acc = parsed.accuracy.expect("accuracy present");
+    assert_eq!(acc.baseline, "chrome");
+    assert_eq!(acc.diff_pixels, 123);
+    assert_eq!(acc.tolerance, 0);
+    assert_eq!(acc.max_diff_percent, 0.0);
+    assert_eq!(acc.computed_at_commit, "deadbeef");
+  }
+
+  #[test]
+  fn compute_accuracy_for_pixmap_matches_expected_metrics() {
+    let baseline_fixture = Path::new("tests/fixtures/accuracy_png/baseline.png");
+    let rendered_fixture = Path::new("tests/fixtures/accuracy_png/one_pixel_diff.png");
+    assert!(baseline_fixture.exists(), "missing baseline fixture PNG");
+    assert!(rendered_fixture.exists(), "missing rendered fixture PNG");
+
+    let baseline_bytes = fs::read(baseline_fixture).expect("read baseline fixture");
+    let rendered_bytes = fs::read(rendered_fixture).expect("read rendered fixture");
+    let rendered_img =
+      image_compare::decode_png(&rendered_bytes).expect("decode rendered fixture PNG");
+
+    let mut pixmap =
+      Pixmap::new(rendered_img.width(), rendered_img.height()).expect("pixmap");
+    pixmap
+      .data_mut()
+      .copy_from_slice(rendered_img.as_raw().as_slice());
+
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("test.png"), baseline_bytes).expect("write baseline");
+
+    let diff_dir = dir.path().join("diffs");
+    let mut log = String::new();
+    let acc = compute_accuracy_for_pixmap(
+      "test",
+      &pixmap,
+      dir.path(),
+      0,
+      0.0,
+      Some(&diff_dir),
+      Some("deadbeef"),
+      &mut log,
+    )
+    .expect("expected accuracy metrics");
+    assert_eq!(acc.baseline, "chrome");
+    assert_eq!(acc.diff_pixels, 1);
+    assert_eq!(acc.diff_percent, 25.0);
+    assert!(acc.perceptual > 0.0, "perceptual={}", acc.perceptual);
+    assert_eq!(acc.tolerance, 0);
+    assert_eq!(acc.max_diff_percent, 0.0);
+    assert_eq!(acc.computed_at_commit, "deadbeef");
+
+    let diff_path = diff_dir.join("test.diff.png");
+    assert!(
+      diff_path.exists(),
+      "expected diff image to be written when --diff-dir is set (log={log})"
+    );
+    let diff_size = fs::metadata(&diff_path).expect("diff metadata").len();
+    assert!(diff_size > 0, "diff image is empty");
   }
 }
 

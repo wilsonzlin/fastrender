@@ -10025,11 +10025,6 @@ impl CssImportLoader for CssImportFetcher {
       Ok(res) => res,
       Err(err) => {
         if should_suppress_stylesheet_network_error(&resolved, &err) {
-          if let Some(ctx) = &self.resource_context {
-            if let Some(diag) = &ctx.diagnostics {
-              diag.record_error(ResourceKind::Stylesheet, resolved.as_str(), &err);
-            }
-          }
           return Ok(String::new());
         }
         if let Some(ctx) = &self.resource_context {

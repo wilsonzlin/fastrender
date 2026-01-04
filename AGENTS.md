@@ -187,6 +187,15 @@ Minimal documented shape (source of truth is code):
   "stages_ms": { "fetch": 0.0, "css": 0.0, "cascade": 0.0, "box_tree": 0.0, "layout": 0.0, "paint": 0.0 },
   "notes": "short, durable explanation of current blocker",
   "auto_notes": "machine-generated last-run diagnostics (overwritten each run)",
+  "accuracy": {
+    "baseline": "chrome",
+    "diff_pixels": 12345,
+    "diff_percent": 1.23,
+    "perceptual": 0.42,
+    "tolerance": 0,
+    "max_diff_percent": 0.0,
+    "computed_at_commit": "abcdef0"
+  },
   "hotspot": "fetch|css|cascade|box_tree|layout|paint|unknown",
   "failure_stage": "dom_parse|css|cascade|box_tree|layout|paint|null",
   "timeout_stage": "dom_parse|css|cascade|box_tree|layout|paint|null",
