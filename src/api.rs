@@ -1579,6 +1579,9 @@ impl ResourceContext {
   }
 
   /// Evaluate whether a URL (and final URL after redirects) is allowed by policy.
+  ///
+  /// Note: `ResourceKind::Document` uses [`ResourceAccessPolicy::allows_document_with_final`]
+  /// and therefore does not enforce `same_origin_subresources`.
   pub fn check_allowed_with_final(
     &self,
     kind: ResourceKind,
