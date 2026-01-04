@@ -17672,6 +17672,79 @@ mod tests {
   }
 
   #[test]
+  fn hyphen_break_requires_hyphen_to_fit_on_line() {
+    let ifc = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.white_space = WhiteSpace::Normal;
+    style.hyphens = HyphensMode::Manual;
+    let text = "a hy\u{00AD}phen";
+
+    let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
+    let item = ifc.create_text_item(&node, text).unwrap();
+    let hyphen_break = item
+      .break_opportunities
+      .iter()
+      .find(|b| b.adds_hyphen)
+      .copied()
+      .expect("expected hyphen break");
+
+    let before = item.advance_at_offset(hyphen_break.byte_offset);
+    let hyphen_width = ifc.hyphen_advance(&item.style);
+    let available_width = if item.advance <= before + hyphen_width {
+      // Ensure the full text still overflows while remaining in the window that fits pre-hyphen.
+      (before + item.advance) / 2.0
+    } else {
+      before + hyphen_width * 0.5
+    };
+
+    assert!(
+      before <= available_width && available_width < before + hyphen_width,
+      "test width should fit pre-hyphen but overflow post-hyphen (before={before}, hyphen={hyphen_width}, w={available_width})"
+    );
+    assert!(
+      available_width < item.advance,
+      "test assumes wrapping occurs (w={available_width}, advance={})",
+      item.advance
+    );
+
+    let strut = ifc.compute_strut_metrics(&style);
+    let lines = ifc
+      .layout_segment_lines(
+        vec![InlineItem::Text(item)],
+        true,
+        available_width,
+        available_width,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+        None,
+      )
+      .unwrap()
+      .lines;
+
+    assert!(!lines.is_empty(), "expected at least one line");
+    assert!(
+      lines[0].width <= available_width + 0.01,
+      "line width should not exceed available width after hyphen insertion (line_width={}, available_width={available_width})",
+      lines[0].width
+    );
+
+    let texts = line_texts(&lines);
+    assert!(
+      !texts[0].contains('\u{2010}'),
+      "expected no inserted hyphen on first line when it would overflow: {:?}",
+      texts[0]
+    );
+  }
+
+  #[test]
   fn max_content_respects_mandatory_breaks() {
     let ifc = InlineFormattingContext::new();
     let mut style = ComputedStyle::default();

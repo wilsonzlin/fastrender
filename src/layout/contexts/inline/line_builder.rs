@@ -53,6 +53,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::justify::InlineAxis;
 use crate::text::line_break::BreakOpportunity;
+use crate::text::line_break::BreakOpportunityKind;
 use crate::text::line_break::BreakType;
 use crate::text::pipeline::shaping_style_hash;
 use crate::text::pipeline::ExplicitBidiContext;
@@ -404,6 +405,16 @@ struct ReshapeCacheKey {
   text_id: u64,
   range_start: usize,
   range_end: usize,
+  base_direction_rtl: bool,
+  explicit_bidi: Option<(u8, bool)>,
+  letter_spacing_bits: u32,
+  word_spacing_bits: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct HyphenAdvanceCacheKey {
+  style_hash: u64,
+  font_generation: u64,
   base_direction_rtl: bool,
   explicit_bidi: Option<(u8, bool)>,
   letter_spacing_bits: u32,
@@ -2166,6 +2177,9 @@ pub struct LineBuilder<'a> {
   /// Cache for reshaping repeated substrings within this layout.
   reshape_cache: ReshapeCache,
 
+  /// Cache of shaped hyphen advances used for validating hyphenation break opportunities.
+  hyphen_advance_cache: FxHashMap<HyphenAdvanceCacheKey, f32>,
+
   /// Base paragraph level for bidi ordering (None = auto/first strong)
   base_level: Option<Level>,
 
@@ -2182,6 +2196,81 @@ pub struct LineBuilder<'a> {
 }
 
 impl<'a> LineBuilder<'a> {
+  fn hyphen_advance(
+    &mut self,
+    style: &ComputedStyle,
+    base_direction: Direction,
+    explicit_bidi: Option<ExplicitBidiContext>,
+  ) -> f32 {
+    const INSERTED_HYPHEN: &str = "\u{2010}";
+    let key = HyphenAdvanceCacheKey {
+      style_hash: shaping_style_hash(style),
+      font_generation: self.font_context.font_generation(),
+      base_direction_rtl: matches!(base_direction, Direction::Rtl),
+      explicit_bidi: explicit_bidi.map(|ctx| (ctx.level.number(), ctx.override_all)),
+      letter_spacing_bits: style.letter_spacing.to_bits(),
+      word_spacing_bits: style.word_spacing.to_bits(),
+    };
+
+    if let Some(cached) = self.hyphen_advance_cache.get(&key) {
+      return *cached;
+    }
+
+    let advance = match self.shaper.shape_with_context(
+      INSERTED_HYPHEN,
+      style,
+      &self.font_context,
+      pipeline_dir_from_style(base_direction),
+      explicit_bidi,
+    ) {
+      Ok(mut runs) => {
+        TextItem::apply_spacing_to_runs(
+          &mut runs,
+          INSERTED_HYPHEN,
+          style.letter_spacing,
+          style.word_spacing,
+        );
+        runs.iter().map(|r| r.advance).sum()
+      }
+      Err(_) => style.font_size * 0.5,
+    };
+
+    self.hyphen_advance_cache.insert(key, advance);
+    advance
+  }
+
+  fn break_fits_with_hyphen(
+    &mut self,
+    item: &TextItem,
+    brk: &BreakOpportunity,
+    max_width: f32,
+  ) -> bool {
+    let mut advance = item.advance_at_offset(brk.byte_offset);
+    if brk.adds_hyphen {
+      advance += self.hyphen_advance(item.style.as_ref(), item.base_direction, item.explicit_bidi);
+    }
+    advance <= max_width
+  }
+
+  fn find_fitting_break_at_or_before(
+    &mut self,
+    item: &TextItem,
+    kind: BreakOpportunityKind,
+    max_width: f32,
+  ) -> Option<BreakOpportunity> {
+    let mut offset = item.offset_for_width(max_width)?;
+    loop {
+      let brk = item.allowed_break_at_or_before_with_kind(offset, kind)?;
+      if self.break_fits_with_hyphen(item, &brk, max_width) {
+        return Some(brk);
+      }
+      if brk.byte_offset == 0 {
+        return None;
+      }
+      offset = brk.byte_offset.saturating_sub(1);
+    }
+  }
+
   fn compute_indent_for_line(&self, is_para_start: bool, is_first_line: bool) -> f32 {
     if self.indent == 0.0 {
       return 0.0;
@@ -2283,6 +2372,7 @@ impl<'a> LineBuilder<'a> {
       shaper,
       font_context,
       reshape_cache: ReshapeCache::default(),
+      hyphen_advance_cache: FxHashMap::default(),
       base_level,
       root_unicode_bidi,
       root_direction,
@@ -2391,6 +2481,33 @@ impl<'a> LineBuilder<'a> {
         }
       }
 
+      if let Some(mut candidate) = break_opportunity {
+        if candidate.adds_hyphen
+          && !self.break_fits_with_hyphen(&text_item, &candidate, remaining_width)
+        {
+          // The break was selected based on the pre-split advance, but inserting a hyphen
+          // increases the "before" width. Walk backwards to earlier breaks that still fit
+          // after accounting for the inserted hyphen width.
+          if let Some(fitting) = self
+            .find_fitting_break_at_or_before(
+              &text_item,
+              BreakOpportunityKind::Normal,
+              remaining_width,
+            )
+            .or_else(|| {
+              self.find_fitting_break_at_or_before(
+                &text_item,
+                BreakOpportunityKind::Emergency,
+                remaining_width,
+              )
+            })
+          {
+            candidate = fitting;
+          }
+        }
+        break_opportunity = Some(candidate);
+      }
+
       if let Some(break_opportunity) = break_opportunity {
         // Split at break point
         if let Some((before, after)) = text_item.split_at(
@@ -2401,10 +2518,10 @@ impl<'a> LineBuilder<'a> {
           &mut self.reshape_cache,
         ) {
           // Place the part that fits
-        if before.advance_for_layout > 0.0 {
-          let width = before.advance_for_layout;
-          self.place_item_with_width(InlineItem::Text(before), width);
-        }
+          if before.advance_for_layout > 0.0 {
+            let width = before.advance_for_layout;
+            self.place_item_with_width(InlineItem::Text(before), width);
+          }
 
           // Start new line for the rest
           if matches!(break_opportunity.break_type, BreakType::Mandatory) {
@@ -3315,8 +3432,12 @@ fn slice_text_item(
     item.style.word_spacing,
   );
 
-  let metrics =
-    TextItem::metrics_from_runs(font_context, &runs, item.metrics.line_height, item.font_size);
+  let metrics = TextItem::metrics_from_runs(
+    font_context,
+    &runs,
+    item.metrics.line_height,
+    item.font_size,
+  );
   let breaks = item
     .break_opportunities
     .iter()
