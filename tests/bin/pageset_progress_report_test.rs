@@ -19,6 +19,7 @@ fn write_progress(
   total_ms: Option<f64>,
   stages: (f64, f64, f64, f64, f64),
   failure_stage: Option<&str>,
+  accuracy: Option<serde_json::Value>,
 ) {
   let mut progress = json!({
     "url": format!("https://{stem}.example.com/"),
@@ -41,6 +42,12 @@ fn write_progress(
       .as_object_mut()
       .expect("progress is object")
       .insert("failure_stage".to_string(), json!(stage));
+  }
+  if let Some(accuracy) = accuracy {
+    progress
+      .as_object_mut()
+      .expect("progress is object")
+      .insert("accuracy".to_string(), accuracy);
   }
   let path = dir.join(format!("{stem}.json"));
   fs::write(&path, serde_json::to_string_pretty(&progress).unwrap())
@@ -78,9 +85,9 @@ fn pageset_progress_report_outputs_summary() {
   assert!(stdout.contains("Top-slow hotspots (top 4):"));
   assert!(stdout.contains("layout: 3"));
   assert!(stdout.contains("Stage timings (ok pages with timings: 2):"));
-  assert!(
-    stdout.contains("totals_ms: fetch=55.00 css=110.00 cascade=220.00 box_tree=0.00 layout=3040.00 paint=545.00")
-  );
+  assert!(stdout.contains(
+    "totals_ms: fetch=55.00 css=110.00 cascade=220.00 box_tree=0.00 layout=3040.00 paint=545.00"
+  ));
 }
 
 #[test]
@@ -485,6 +492,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     Some(100.0),
     (10.0, 10.0, 20.0, 40.0, 20.0),
     None,
+    None,
   );
   write_progress(
     baseline.path(),
@@ -492,6 +500,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(80.0),
     (10.0, 10.0, 20.0, 20.0, 20.0),
+    None,
     None,
   );
   write_progress(
@@ -501,6 +510,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     Some(300.0),
     (50.0, 50.0, 70.0, 80.0, 50.0),
     None,
+    None,
   );
   write_progress(
     baseline.path(),
@@ -508,6 +518,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(120.0),
     (20.0, 20.0, 20.0, 40.0, 20.0),
+    None,
     None,
   );
 
@@ -518,6 +529,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     Some(160.0),
     (10.0, 20.0, 40.0, 60.0, 30.0),
     None,
+    None,
   );
   write_progress(
     current.path(),
@@ -525,6 +537,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "timeout",
     Some(5000.0),
     (1000.0, 1000.0, 1000.0, 1000.0, 1000.0),
+    None,
     None,
   );
   write_progress(
@@ -534,6 +547,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     Some(150.0),
     (20.0, 30.0, 30.0, 40.0, 30.0),
     None,
+    None,
   );
   write_progress(
     current.path(),
@@ -541,6 +555,7 @@ fn pageset_progress_report_compares_and_detects_regressions() {
     "ok",
     Some(70.0),
     (20.0, 10.0, 10.0, 20.0, 10.0),
+    None,
     None,
   );
 
@@ -704,6 +719,7 @@ fn pageset_progress_report_surfaces_ok_pages_with_failure_stage_and_can_gate() {
     Some(123.0),
     (10.0, 20.0, 30.0, 40.0, 23.0),
     Some("paint"),
+    None,
   );
 
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
@@ -806,7 +822,13 @@ fn pageset_progress_report_surfaces_bot_mitigation_blocked_subresources() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .env("DISK_CACHE", "0")
     .env("NO_DISK_CACHE", "1")
-    .args(["report", "--progress-dir", dir.path().to_str().unwrap(), "--top", "0"])
+    .args([
+      "report",
+      "--progress-dir",
+      dir.path().to_str().unwrap(),
+      "--top",
+      "0",
+    ])
     .output()
     .expect("run pageset_progress report");
   assert!(output.status.success(), "expected report to succeed");
@@ -824,5 +846,140 @@ fn pageset_progress_report_surfaces_bot_mitigation_blocked_subresources() {
   assert!(
     stdout.contains("blocked status=ok blocks=1"),
     "expected report to list the blocked stem"
+  );
+}
+
+#[test]
+fn pageset_progress_report_compares_accuracy_and_can_gate() {
+  let baseline = tempdir().expect("baseline dir");
+  let current = tempdir().expect("current dir");
+
+  write_progress(
+    baseline.path(),
+    "acc_regress",
+    "ok",
+    Some(10.0),
+    (1.0, 1.0, 1.0, 6.0, 1.0),
+    None,
+    Some(json!({
+      "baseline": "chrome",
+      "diff_pixels": 10,
+      "diff_percent": 1.0,
+      "perceptual": 0.1,
+      "tolerance": 0,
+      "max_diff_percent": 0.0
+    })),
+  );
+  write_progress(
+    baseline.path(),
+    "acc_improve",
+    "ok",
+    Some(10.0),
+    (1.0, 1.0, 1.0, 6.0, 1.0),
+    None,
+    Some(json!({
+      "baseline": "chrome",
+      "diff_pixels": 10,
+      "diff_percent": 3.0,
+      "perceptual": 0.3,
+      "tolerance": 0,
+      "max_diff_percent": 0.0
+    })),
+  );
+
+  write_progress(
+    current.path(),
+    "acc_regress",
+    "ok",
+    Some(10.0),
+    (1.0, 1.0, 1.0, 6.0, 1.0),
+    None,
+    Some(json!({
+      "baseline": "chrome",
+      "diff_pixels": 10,
+      "diff_percent": 1.5,
+      "perceptual": 0.2,
+      "tolerance": 0,
+      "max_diff_percent": 0.0
+    })),
+  );
+  write_progress(
+    current.path(),
+    "acc_improve",
+    "ok",
+    Some(10.0),
+    (1.0, 1.0, 1.0, 6.0, 1.0),
+    None,
+    Some(json!({
+      "baseline": "chrome",
+      "diff_pixels": 10,
+      "diff_percent": 2.0,
+      "perceptual": 0.1,
+      "tolerance": 0,
+      "max_diff_percent": 0.0
+    })),
+  );
+
+  let comparison = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
+    .args([
+      "report",
+      "--progress-dir",
+      current.path().to_str().unwrap(),
+      "--compare",
+      baseline.path().to_str().unwrap(),
+      "--top",
+      "5",
+    ])
+    .output()
+    .expect("run pageset_progress report with accuracy compare");
+  assert!(
+    comparison.status.success(),
+    "expected success comparing progress dirs with accuracy"
+  );
+  let stdout = String::from_utf8(comparison.stdout).expect("stdout is utf-8");
+  assert!(
+    stdout.contains("Accuracy regressions vs baseline"),
+    "missing accuracy regressions section"
+  );
+  assert!(
+    stdout.contains("Accuracy improvements vs baseline"),
+    "missing accuracy improvements section"
+  );
+  assert!(
+    stdout
+      .contains("acc_regress diff_percent=1.0000 -> 1.5000 Δ=+0.5000 perceptual=0.1000 -> 0.2000"),
+    "missing accuracy regression line"
+  );
+  assert!(
+    stdout
+      .contains("acc_improve diff_percent=3.0000 -> 2.0000 Δ=-1.0000 perceptual=0.3000 -> 0.1000"),
+    "missing accuracy improvement line"
+  );
+
+  let failure = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .env("DISK_CACHE", "0")
+    .env("NO_DISK_CACHE", "1")
+    .args([
+      "report",
+      "--progress-dir",
+      current.path().to_str().unwrap(),
+      "--compare",
+      baseline.path().to_str().unwrap(),
+      "--fail-on-accuracy-regression",
+      "--accuracy-regression-threshold-percent",
+      "0.4",
+    ])
+    .output()
+    .expect("run pageset_progress report --fail-on-accuracy-regression");
+  assert!(
+    !failure.status.success(),
+    "expected non-zero exit for accuracy regressions"
+  );
+  let stderr = String::from_utf8(failure.stderr).expect("stderr is utf-8");
+  assert!(
+    stderr.contains("acc_regress: diff_percent=1.0000 -> 1.5000 Δ=+0.5000"),
+    "missing accuracy regression stem/delta in stderr"
   );
 }

@@ -586,6 +586,19 @@ struct ReportArgs {
   )]
   regression_threshold_percent: f64,
 
+  /// Exit non-zero when pages become more visually different vs `--compare`
+  #[arg(long, requires = "compare")]
+  fail_on_accuracy_regression: bool,
+
+  /// Visual diff threshold (percent points) for `--fail-on-accuracy-regression`
+  #[arg(
+    long,
+    default_value_t = 0.0,
+    requires = "fail_on_accuracy_regression",
+    value_name = "PERCENT"
+  )]
+  accuracy_regression_threshold_percent: f64,
+
   /// Exit non-zero when any page timed out or panicked
   #[arg(long)]
   fail_on_bad: bool,
@@ -5174,12 +5187,20 @@ fn report(args: ReportArgs) -> io::Result<()> {
     eprintln!("--fail-on-regression requires --compare");
     std::process::exit(2);
   }
+  if args.fail_on_accuracy_regression && args.compare.is_none() {
+    eprintln!("--fail-on-accuracy-regression requires --compare");
+    std::process::exit(2);
+  }
   if args.fail_on_new_ok_failures && args.compare.is_none() {
     eprintln!("--fail-on-new-ok-failures requires --compare");
     std::process::exit(2);
   }
   if args.regression_threshold_percent < 0.0 {
     eprintln!("regression threshold must be >= 0");
+    std::process::exit(2);
+  }
+  if args.accuracy_regression_threshold_percent < 0.0 {
+    eprintln!("--accuracy-regression-threshold-percent must be >= 0");
     std::process::exit(2);
   }
   if args.stage_sum_tolerance_percent < 0.0 {
@@ -6538,19 +6559,204 @@ fn report(args: ReportArgs) -> io::Result<()> {
     }
     println!();
 
+    let current_by_stem: HashMap<&str, &LoadedProgress> = progresses
+      .iter()
+      .map(|entry| (entry.stem.as_str(), entry))
+      .collect();
+    let baseline_by_stem: HashMap<&str, &LoadedProgress> = baseline
+      .iter()
+      .map(|entry| (entry.stem.as_str(), entry))
+      .collect();
+
+    #[derive(Debug, Clone)]
+    struct AccuracyDelta {
+      stem: String,
+      url: String,
+      baseline_diff_percent: f64,
+      current_diff_percent: f64,
+      delta_diff_percent: f64,
+      baseline_perceptual: f64,
+      current_perceptual: f64,
+      delta_perceptual: f64,
+    }
+
+    #[derive(Debug, Clone)]
+    struct AccuracyConfigMismatch {
+      stem: String,
+      url: String,
+      baseline: ProgressAccuracy,
+      current: ProgressAccuracy,
+    }
+
+    let mut accuracy_deltas: Vec<AccuracyDelta> = Vec::new();
+    let mut accuracy_mismatched_configs: Vec<AccuracyConfigMismatch> = Vec::new();
+
+    let mut accuracy_candidates: Vec<&str> = baseline_by_stem
+      .keys()
+      .copied()
+      .filter(|stem| current_by_stem.contains_key(stem))
+      .collect();
+    accuracy_candidates.sort();
+
+    for stem in accuracy_candidates {
+      let baseline_entry = baseline_by_stem
+        .get(stem)
+        .copied()
+        .expect("baseline entry should exist");
+      let current_entry = current_by_stem
+        .get(stem)
+        .copied()
+        .expect("current entry should exist");
+
+      if baseline_entry.progress.status != ProgressStatus::Ok
+        || current_entry.progress.status != ProgressStatus::Ok
+      {
+        continue;
+      }
+
+      let Some(baseline_acc) = baseline_entry.progress.accuracy.as_ref() else {
+        continue;
+      };
+      let Some(current_acc) = current_entry.progress.accuracy.as_ref() else {
+        continue;
+      };
+
+      let config_matches = baseline_acc.baseline == current_acc.baseline
+        && baseline_acc.tolerance == current_acc.tolerance
+        && baseline_acc.max_diff_percent == current_acc.max_diff_percent;
+      if !config_matches {
+        eprintln!(
+          "Warning: accuracy config mismatch for {stem}; skipping accuracy regression gating \
+           (baseline={} tol={} max_diff_percent={} current={} tol={} max_diff_percent={})",
+          baseline_acc.baseline,
+          baseline_acc.tolerance,
+          baseline_acc.max_diff_percent,
+          current_acc.baseline,
+          current_acc.tolerance,
+          current_acc.max_diff_percent
+        );
+        accuracy_mismatched_configs.push(AccuracyConfigMismatch {
+          stem: stem.to_string(),
+          url: current_entry.progress.url.clone(),
+          baseline: baseline_acc.clone(),
+          current: current_acc.clone(),
+        });
+        continue;
+      }
+
+      accuracy_deltas.push(AccuracyDelta {
+        stem: stem.to_string(),
+        url: current_entry.progress.url.clone(),
+        baseline_diff_percent: baseline_acc.diff_percent,
+        current_diff_percent: current_acc.diff_percent,
+        delta_diff_percent: current_acc.diff_percent - baseline_acc.diff_percent,
+        baseline_perceptual: baseline_acc.perceptual,
+        current_perceptual: current_acc.perceptual,
+        delta_perceptual: current_acc.perceptual - baseline_acc.perceptual,
+      });
+    }
+
+    if !accuracy_deltas.is_empty() {
+      let mut accuracy_regressions: Vec<&AccuracyDelta> = accuracy_deltas
+        .iter()
+        .filter(|d| d.delta_diff_percent > 0.0)
+        .collect();
+      accuracy_regressions.sort_by(|a, b| {
+        b.delta_diff_percent
+          .total_cmp(&a.delta_diff_percent)
+          .then_with(|| b.delta_perceptual.total_cmp(&a.delta_perceptual))
+          .then_with(|| a.stem.cmp(&b.stem))
+      });
+      let regress_top = args.top.min(accuracy_regressions.len());
+      println!(
+        "Accuracy regressions vs baseline (top {regress_top} of {} with accuracy):",
+        accuracy_regressions.len()
+      );
+      if regress_top == 0 {
+        println!("  (none)");
+      } else {
+        for delta in accuracy_regressions.iter().take(regress_top) {
+          println!(
+            "  {} diff_percent={:.4} -> {:.4} Δ={:+.4} perceptual={:.4} -> {:.4} url={}",
+            delta.stem,
+            delta.baseline_diff_percent,
+            delta.current_diff_percent,
+            delta.delta_diff_percent,
+            delta.baseline_perceptual,
+            delta.current_perceptual,
+            delta.url
+          );
+        }
+      }
+      println!();
+
+      let mut accuracy_improvements: Vec<&AccuracyDelta> = accuracy_deltas
+        .iter()
+        .filter(|d| d.delta_diff_percent < 0.0)
+        .collect();
+      accuracy_improvements.sort_by(|a, b| {
+        a.delta_diff_percent
+          .total_cmp(&b.delta_diff_percent)
+          .then_with(|| a.delta_perceptual.total_cmp(&b.delta_perceptual))
+          .then_with(|| a.stem.cmp(&b.stem))
+      });
+      let improvements_top = args.top.min(accuracy_improvements.len());
+      println!(
+        "Accuracy improvements vs baseline (top {improvements_top} of {} with accuracy):",
+        accuracy_improvements.len()
+      );
+      if improvements_top == 0 {
+        println!("  (none)");
+      } else {
+        for delta in accuracy_improvements.iter().take(improvements_top) {
+          println!(
+            "  {} diff_percent={:.4} -> {:.4} Δ={:+.4} perceptual={:.4} -> {:.4} url={}",
+            delta.stem,
+            delta.baseline_diff_percent,
+            delta.current_diff_percent,
+            delta.delta_diff_percent,
+            delta.baseline_perceptual,
+            delta.current_perceptual,
+            delta.url
+          );
+        }
+      }
+      println!();
+    }
+
+    if !accuracy_mismatched_configs.is_empty() {
+      let mut mismatched = accuracy_mismatched_configs;
+      mismatched.sort_by(|a, b| a.stem.cmp(&b.stem));
+      println!(
+        "Accuracy config mismatches vs baseline ({}):",
+        mismatched.len()
+      );
+      for mismatch in mismatched {
+        let delta_diff_percent = mismatch.current.diff_percent - mismatch.baseline.diff_percent;
+        println!(
+          "  {} diff_percent={:.4} -> {:.4} Δ={:+.4} perceptual={:.4} -> {:.4} baseline={} tol={} max_diff_percent={} current={} tol={} max_diff_percent={} url={}",
+          mismatch.stem,
+          mismatch.baseline.diff_percent,
+          mismatch.current.diff_percent,
+          delta_diff_percent,
+          mismatch.baseline.perceptual,
+          mismatch.current.perceptual,
+          mismatch.baseline.baseline,
+          mismatch.baseline.tolerance,
+          mismatch.baseline.max_diff_percent,
+          mismatch.current.baseline,
+          mismatch.current.tolerance,
+          mismatch.current.max_diff_percent,
+          mismatch.url
+        );
+      }
+      println!();
+    }
+
     let mut new_ok_failures: Vec<String> = Vec::new();
     if args.fail_on_new_ok_failures {
-      let current_map: HashMap<&str, &LoadedProgress> = progresses
-        .iter()
-        .map(|entry| (entry.stem.as_str(), entry))
-        .collect();
-      let baseline_map: HashMap<&str, &LoadedProgress> = baseline
-        .iter()
-        .map(|entry| (entry.stem.as_str(), entry))
-        .collect();
-
-      for (stem, baseline_entry) in baseline_map {
-        let Some(current_entry) = current_map.get(stem) else {
+      for (&stem, &baseline_entry) in baseline_by_stem.iter() {
+        let Some(&current_entry) = current_by_stem.get(stem) else {
           continue;
         };
         if baseline_entry.progress.status != ProgressStatus::Ok {
@@ -6603,7 +6809,27 @@ fn report(args: ReportArgs) -> io::Result<()> {
       }
     }
 
-    if !new_ok_failures.is_empty() || !regression_reasons.is_empty() {
+    let mut accuracy_regression_reasons: Vec<String> = Vec::new();
+    if args.fail_on_accuracy_regression {
+      let threshold = args.accuracy_regression_threshold_percent;
+      for delta in &accuracy_deltas {
+        if delta.delta_diff_percent > threshold + f64::EPSILON {
+          accuracy_regression_reasons.push(format!(
+            "{}: diff_percent={:.4} -> {:.4} Δ={:+.4}",
+            delta.stem,
+            delta.baseline_diff_percent,
+            delta.current_diff_percent,
+            delta.delta_diff_percent
+          ));
+        }
+      }
+      accuracy_regression_reasons.sort();
+    }
+
+    if !new_ok_failures.is_empty()
+      || !regression_reasons.is_empty()
+      || !accuracy_regression_reasons.is_empty()
+    {
       let mut printed_any = false;
       if !new_ok_failures.is_empty() {
         eprintln!(
@@ -6620,6 +6846,20 @@ fn report(args: ReportArgs) -> io::Result<()> {
         }
         eprintln!("Failing due to regressions vs {}:", compare_dir.display());
         for reason in regression_reasons {
+          eprintln!("  {reason}");
+        }
+        printed_any = true;
+      }
+      if !accuracy_regression_reasons.is_empty() {
+        if printed_any {
+          eprintln!();
+        }
+        let threshold = args.accuracy_regression_threshold_percent;
+        eprintln!(
+          "Failing due to accuracy regressions vs {} (threshold {threshold:.4}%):",
+          compare_dir.display()
+        );
+        for reason in accuracy_regression_reasons {
           eprintln!("  {reason}");
         }
       }
@@ -8768,6 +9008,8 @@ mod tests {
       compare: None,
       fail_on_regression: false,
       regression_threshold_percent: 10.0,
+      fail_on_accuracy_regression: false,
+      accuracy_regression_threshold_percent: 0.0,
       fail_on_bad: false,
       include_trace: false,
       trace_progress_dir: PathBuf::new(),
