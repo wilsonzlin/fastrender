@@ -3092,6 +3092,17 @@ fn write_pipeline_dumps(
   if should_write_parts {
     if let Some(dom) = dom {
       write_json_file(&base_dir.join("dom.json"), &snapshot::snapshot_dom(dom))?;
+      match snapshot::snapshot_composed_dom(dom) {
+        Ok(composed) => {
+          write_json_file(&base_dir.join("composed_dom.json"), &composed)?;
+        }
+        Err(err) => {
+          log.push_str(&format!(
+            "Dump skipped: composed DOM snapshot failed: {}\n",
+            format_error_with_chain(&err, false)
+          ));
+        }
+      }
       wrote_any = true;
     } else {
       log.push_str("Dump skipped: missing DOM artifact\n");

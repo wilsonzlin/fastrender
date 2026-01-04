@@ -74,6 +74,7 @@ fn worker_writes_full_dumps_for_failures() {
   for name in [
     "snapshot.json",
     "dom.json",
+    "composed_dom.json",
     "styled.json",
     "box_tree.json",
     "fragment_tree.json",
