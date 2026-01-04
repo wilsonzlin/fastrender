@@ -424,9 +424,25 @@ fn scan_css_for_remote_fetches(css: &str) -> Vec<UrlSpan> {
       .expect("quoted url in image-set regex must compile")
   });
 
+  fn is_css_namespace_rule_prefix(content: &str, at: usize) -> bool {
+    let bytes = content.as_bytes();
+    let mut start = at;
+    while start > 0 {
+      match bytes[start - 1] {
+        b';' | b'{' | b'}' => break,
+        _ => start -= 1,
+      }
+    }
+    content[start..at].to_ascii_lowercase().contains("@namespace")
+  }
+
   let mut out = Vec::new();
   for caps in url_regex.captures_iter(css) {
     if let Some(m) = caps.name("url") {
+      // `@namespace url("http://www.w3.org/...")` is not a fetchable resource URL.
+      if is_css_namespace_rule_prefix(css, m.start()) {
+        continue;
+      }
       push_match_if_remote(&mut out, m);
     }
   }

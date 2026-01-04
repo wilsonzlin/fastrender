@@ -103,3 +103,25 @@ fn validate_page_fixtures_passes_for_clean_fixture() {
   );
 }
 
+#[test]
+fn validate_page_fixtures_ignores_css_namespace_urls() {
+  let dir = tempdir().expect("tempdir");
+  let fixtures_root = dir.path();
+  let fixture_dir = fixtures_root.join("example");
+  fs::create_dir_all(&fixture_dir).expect("create fixture dir");
+
+  fs::write(fixture_dir.join("index.html"), r#"<!doctype html>"#).expect("write index.html");
+  fs::write(
+    fixture_dir.join("namespace.css"),
+    r#"@namespace svg url("http://www.w3.org/2000/svg");"#,
+  )
+  .expect("write css");
+
+  let output = run_validate(fixtures_root);
+  assert!(
+    output.status.success(),
+    "expected validator to succeed, got: {:?}\n{}",
+    output.status,
+    combined_output(&output)
+  );
+}
