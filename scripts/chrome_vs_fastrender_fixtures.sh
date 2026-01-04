@@ -37,6 +37,7 @@ Options:
   --no-fastrender           Skip generating FastRender renders (reuse existing --fastr-out-dir)
   --diff-only               Alias for --no-chrome --no-fastrender
   --fail-on-differences     Exit non-zero when diff_renders reports differences (default: keep report and exit 0)
+  --no-build                Skip `cargo build --release --bin diff_renders` (reuse an existing binary)
   --no-clean                Do not delete previous output dirs under target/
   -h, --help                Show help
 
@@ -68,6 +69,7 @@ SORT_BY=""
 FAIL_ON_DIFFERENCES=0
 NO_CHROME=0
 NO_FASTRENDER=0
+NO_BUILD=0
 CLEAN=1
 
 FILTERS=()
@@ -123,6 +125,8 @@ while [[ $# -gt 0 ]]; do
         NO_CHROME=1; NO_FASTRENDER=1; shift ;;
       --fail-on-differences)
         FAIL_ON_DIFFERENCES=1; shift ;;
+      --no-build)
+        NO_BUILD=1; shift ;;
       --no-clean)
         CLEAN=0; shift ;;
       --)
@@ -353,11 +357,24 @@ if [[ -f "${DIFF_BIN}.exe" ]]; then
   DIFF_BIN="${DIFF_BIN}.exe"
 fi
 
-if cargo build --release --bin diff_renders && "${DIFF_BIN}" "${diff_args[@]}"; then
-  :
+set +e
+if [[ "${NO_BUILD}" -eq 1 && ! -f "${DIFF_BIN}" ]]; then
+  echo "--no-build was set, but diff_renders binary does not exist: ${DIFF_BIN}" >&2
+  diff_status=1
 else
-  diff_status=$?
+  build_status=0
+  if [[ "${NO_BUILD}" -eq 0 ]]; then
+    cargo build --release --bin diff_renders
+    build_status=$?
+  fi
+  if [[ "${build_status}" -eq 0 ]]; then
+    "${DIFF_BIN}" "${diff_args[@]}"
+    diff_status=$?
+  else
+    diff_status="${build_status}"
+  fi
 fi
+set -e
 
 if [[ "${diff_status}" -eq 1 && "${FAIL_ON_DIFFERENCES}" -eq 0 ]]; then
   if [[ -f "${REPORT_JSON}" ]]; then

@@ -40,6 +40,7 @@ Compatibility / extras:
   --sort-by <mode>     Forwarded to diff_renders (pixel|percent|perceptual)
   --fail-on-differences
                         Exit non-zero when diff_renders reports differences (default: keep report and exit 0)
+  --no-build           Skip `cargo build --release --bin diff_renders` (reuse an existing binary)
 
 Output layout:
   <out>/chrome/        Chrome PNGs/logs
@@ -70,6 +71,7 @@ MAX_PERCEPTUAL_DISTANCE=""
 IGNORE_ALPHA=0
 SORT_BY=""
 FAIL_ON_DIFFERENCES=0
+NO_BUILD=0
 SHARD=""
 PAGES_CSV=""
 
@@ -118,6 +120,8 @@ while [[ $# -gt 0 ]]; do
         SORT_BY="${2:-}"; shift 2; continue ;;
       --fail-on-differences)
         FAIL_ON_DIFFERENCES=1; shift; continue ;;
+      --no-build)
+        NO_BUILD=1; shift; continue ;;
       --pages)
         PAGES_CSV="${2:-}"; shift 2; continue ;;
       --shard)
@@ -445,7 +449,15 @@ if [[ -f "${DIFF_BIN}.exe" ]]; then
 fi
 
 set +e
-cargo build --release --bin diff_renders
+if [[ "${NO_BUILD}" -eq 1 && ! -f "${DIFF_BIN}" ]]; then
+  echo "--no-build was set, but diff_renders binary does not exist: ${DIFF_BIN}" >&2
+  diff_status=1
+  set -e
+  exit 1
+fi
+if [[ "${NO_BUILD}" -eq 0 ]]; then
+  cargo build --release --bin diff_renders
+fi
 "${DIFF_BIN}" "${diff_args[@]}"
 diff_status=$?
 set -e
