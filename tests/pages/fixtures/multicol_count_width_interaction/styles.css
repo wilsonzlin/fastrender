@@ -1,0 +1,45 @@
+.wrapper {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.note {
+  margin-top: 10px;
+  line-height: 1.4;
+}
+
+.multicol {
+  width: 600px;
+  margin: 18px auto 0;
+  padding: 16px;
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+
+  column-count: 3;
+  column-width: 250px;
+  column-gap: 40px;
+  column-rule: 12px solid var(--accent-2);
+}
+
+.tile {
+  break-inside: avoid-column;
+  height: 110px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.08), rgba(217, 70, 239, 0.06));
+}
+
+.tile strong {
+  display: block;
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+
+.tile span {
+  display: block;
+  color: var(--subtle);
+}
+

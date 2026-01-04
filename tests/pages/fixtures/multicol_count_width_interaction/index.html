@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Multicol column-count + column-width interaction</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <section class="card wrapper">
+      <h2>column-count + column-width interaction</h2>
+      <p class="muted note">
+        The container is 600px wide with <code>column-count: 3</code>, <code>column-width: 250px</code>, and a visible
+        <code>column-gap: 40px</code>. Only two columns fit, so the used column count should drop to 2.
+      </p>
+      <div class="multicol">
+        <div class="tile"><strong>Tile 1</strong><span>Fixed height block</span></div>
+        <div class="tile"><strong>Tile 2</strong><span>Fixed height block</span></div>
+        <div class="tile"><strong>Tile 3</strong><span>Fixed height block</span></div>
+        <div class="tile"><strong>Tile 4</strong><span>Fixed height block</span></div>
+        <div class="tile"><strong>Tile 5</strong><span>Fixed height block</span></div>
+        <div class="tile"><strong>Tile 6</strong><span>Fixed height block</span></div>
+      </div>
+    </section>
+  </body>
+</html>
+

@@ -2405,6 +2405,7 @@ impl BlockFormattingContext {
     style: &ComputedStyle,
     available_inline: f32,
   ) -> (usize, f32, f32) {
+    let available_inline = available_inline.max(0.0);
     let gap = resolve_length_for_width(
       style.column_gap,
       available_inline,
@@ -2414,41 +2415,50 @@ impl BlockFormattingContext {
     )
     .max(0.0);
 
-    let specified_width = style.column_width.as_ref().map(|l| {
-      resolve_length_for_width(
+    let specified_width = style.column_width.as_ref().and_then(|l| {
+      let resolved = resolve_length_for_width(
         *l,
         available_inline,
         style,
         &self.font_context,
         self.viewport_size,
-      )
+      );
+      (resolved.is_finite() && resolved > 0.0).then_some(resolved)
     });
-    let specified_count = style.column_count.unwrap_or(0).max(0);
+    let specified_count = style.column_count.unwrap_or(0) as usize;
+
+    let compute_width = |count: usize| {
+      let count = count.max(1) as f32;
+      ((available_inline - gap * (count - 1.0)) / count).max(0.0)
+    };
 
     if specified_count > 0 {
-      let count = specified_count as usize;
-      let width =
-        ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
-      let used_width = specified_width.map(|w| w.min(width)).unwrap_or(width);
-      return (count.max(1), used_width, gap);
+      if let Some(spec_width) = specified_width {
+        let denom = spec_width + gap;
+        let max_fit = if denom > 0.0 {
+          ((available_inline + gap) / denom).floor() as usize
+        } else {
+          1
+        };
+        let count = specified_count.min(max_fit.max(1)).max(1);
+        return (count, compute_width(count), gap);
+      }
+
+      let count = specified_count.max(1);
+      return (count, compute_width(count), gap);
     }
 
-    if let Some(spec_width) = specified_width.filter(|w| *w > 0.0) {
+    if let Some(spec_width) = specified_width {
       let denom = spec_width + gap;
-      let mut count = if denom > 0.0 {
-        ((available_inline + gap) / denom).floor() as usize
+      let count = if denom > 0.0 {
+        ((available_inline + gap) / denom).floor().max(1.0) as usize
       } else {
         1
       };
-      if count == 0 {
-        count = 1;
-      }
-      let used_width =
-        ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
-      return (count, used_width, gap);
+      return (count, compute_width(count), gap);
     }
 
-    (1, available_inline.max(0.0), gap)
+    (1, available_inline, gap)
   }
 
   fn set_logical_from_bounds(fragment: &mut FragmentNode) {
@@ -2559,9 +2569,9 @@ impl BlockFormattingContext {
     let flow_extent = analyzer.content_extent();
 
     let balanced_height = if column_count > 0 {
-      (flow_height / column_count as f32).ceil()
+      flow_extent / column_count as f32
     } else {
-      flow_height
+      flow_extent
     };
     let fragmentainer_hint = crate::layout::formatting_context::fragmentainer_block_size_hint()
       .filter(|h| h.is_finite() && *h > 0.0);
@@ -2578,39 +2588,53 @@ impl BlockFormattingContext {
       }
     }
     if matches!(parent.style.column_fill, ColumnFill::Balance)
-      && matches!(available_height, AvailableSpace::Indefinite)
       && fragmentainer_hint.is_none()
       && column_height.is_finite()
       && column_height > 0.0
-      && flow_height.is_finite()
-      && flow_height > column_height
+      && flow_extent.is_finite()
+      && flow_extent > 0.0
       && column_count > 1
     {
-      let mut low = column_height;
-      let mut high = flow_height;
-      let count_at_low = analyzer
-        .boundaries(low, flow_extent.max(low))?
-        .len()
-        .saturating_sub(1);
-      if count_at_low > column_count {
-        let count_at_high = analyzer
-          .boundaries(high, flow_extent.max(high))?
-          .len()
-          .saturating_sub(1);
-        if count_at_high <= column_count {
-          for _ in 0..12 {
-            let mid = (low + high) / 2.0;
-            let count_at_mid = analyzer
-              .boundaries(mid, flow_extent.max(mid))?
+      let max_height = match available_height {
+        AvailableSpace::Definite(h) if h.is_finite() && h > 0.0 => h,
+        _ => flow_extent,
+      };
+      let max_height = max_height.max(0.0);
+      let min_height = column_height.min(max_height);
+      if max_height > 0.0 && min_height > 0.0 {
+        let mut fragment_count_for = |height: f32| -> Result<usize, LayoutError> {
+          Ok(
+            analyzer
+              .boundaries(height, flow_extent.max(height))?
               .len()
-              .saturating_sub(1);
-            if count_at_mid <= column_count {
-              high = mid;
-            } else {
-              low = mid;
+              .saturating_sub(1),
+          )
+        };
+
+        let count_at_max = fragment_count_for(max_height)?;
+        if count_at_max > column_count {
+          column_height = max_height;
+        } else {
+          let count_at_min = fragment_count_for(min_height)?;
+          if count_at_min > column_count {
+            let mut low = min_height;
+            let mut high = max_height;
+            for _ in 0..16 {
+              let mid = (low + high) / 2.0;
+              let count_at_mid = fragment_count_for(mid)?;
+              if count_at_mid <= column_count {
+                high = mid;
+              } else {
+                low = mid;
+              }
             }
+            column_height = high;
+            if fragment_count_for(column_height)? > column_count {
+              column_height = max_height;
+            }
+          } else {
+            column_height = min_height;
           }
-          column_height = high.ceil();
         }
       }
     }
@@ -2620,7 +2644,7 @@ impl BlockFormattingContext {
       }
     }
     if !column_height.is_finite() || column_height <= 0.0 {
-      column_height = flow_height.max(0.0);
+      column_height = flow_extent.max(0.0);
     }
     if column_height <= 0.0 {
       return Ok((
@@ -4856,6 +4880,22 @@ mod tests {
         frag.bounds.height()
       );
     }
+  }
+
+  #[test]
+  fn multicol_column_count_width_resolves_used_count() {
+    let fc = BlockFormattingContext::new();
+
+    let mut multicol_style = ComputedStyle::default();
+    multicol_style.display = Display::Block;
+    multicol_style.column_count = Some(3);
+    multicol_style.column_width = Some(Length::px(250.0));
+    multicol_style.column_gap = Length::px(40.0);
+
+    let (count, width, gap) = fc.compute_column_geometry(&multicol_style, 600.0);
+    assert_eq!(count, 2);
+    assert!((gap - 40.0).abs() < 0.1);
+    assert!((width - 280.0).abs() < 0.1);
   }
 
   #[test]
