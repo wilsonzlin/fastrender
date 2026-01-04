@@ -228,14 +228,6 @@ fn ensure_box_id(node: &BoxNode) -> usize {
   EPHEMERAL_ID_BASE | (node as *const BoxNode as usize)
 }
 
-fn establishes_abs_cb(style: &ComputedStyle) -> bool {
-  style.position.is_positioned() || style.has_transform() || style.perspective.is_some()
-}
-
-fn establishes_fixed_cb(style: &ComputedStyle) -> bool {
-  style.has_transform() || style.perspective.is_some()
-}
-
 impl InlineFormattingContext {
   /// Creates a new InlineFormattingContext
   pub fn new() -> Self {
@@ -796,8 +788,8 @@ impl InlineFormattingContext {
           let content_offset_y = padding_top + border_top;
 
           let box_id = ensure_box_id(child);
-          let establishes_abs_cb = establishes_abs_cb(&child.style);
-          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          let establishes_abs_cb = child.style.establishes_abs_containing_block();
+          let establishes_fixed_cb = child.style.establishes_fixed_containing_block();
           if establishes_abs_cb {
             abs_cb_stack.push(box_id);
           }
@@ -1021,8 +1013,8 @@ impl InlineFormattingContext {
           let content_offset_y = padding_top + border_top;
 
           let box_id = ensure_box_id(child);
-          let establishes_abs_cb = establishes_abs_cb(&child.style);
-          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          let establishes_abs_cb = child.style.establishes_abs_containing_block();
+          let establishes_fixed_cb = child.style.establishes_fixed_containing_block();
           if establishes_abs_cb {
             abs_cb_stack.push(box_id);
           }
@@ -1580,8 +1572,8 @@ impl InlineFormattingContext {
 
           // Recursively collect children first
           let box_id = ensure_box_id(child);
-          let establishes_abs_cb = establishes_abs_cb(&child.style);
-          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          let establishes_abs_cb = child.style.establishes_abs_containing_block();
+          let establishes_fixed_cb = child.style.establishes_fixed_containing_block();
           if establishes_abs_cb {
             abs_cb_stack.push(box_id);
           }
@@ -1783,8 +1775,8 @@ impl InlineFormattingContext {
           let content_offset_y = padding_top + border_top;
 
           let box_id = ensure_box_id(child);
-          let establishes_abs_cb = establishes_abs_cb(&child.style);
-          let establishes_fixed_cb = establishes_fixed_cb(&child.style);
+          let establishes_abs_cb = child.style.establishes_abs_containing_block();
+          let establishes_fixed_cb = child.style.establishes_fixed_containing_block();
           if establishes_abs_cb {
             abs_cb_stack.push(box_id);
           }
@@ -4912,7 +4904,7 @@ impl InlineFormattingContext {
                                        positioned_containing_blocks: &mut Option<
           &mut HashMap<usize, ContainingBlock>,
         >| {
-          if box_item.box_id == 0 || !establishes_abs_cb(&box_item.style) {
+          if box_item.box_id == 0 || !box_item.style.establishes_abs_containing_block() {
             return;
           }
           let Some(map) = positioned_containing_blocks.as_deref_mut() else {
@@ -8890,7 +8882,7 @@ impl InlineFormattingContext {
       } else {
         None
       };
-      let cb = if style.position.is_positioned() {
+      let cb = if style.establishes_abs_containing_block() {
         ContainingBlock::with_viewport_and_bases(
           padding_rect,
           self.viewport_size,
@@ -8900,7 +8892,7 @@ impl InlineFormattingContext {
       } else {
         self.nearest_positioned_cb
       };
-      let default_static_position = if lines_empty && style.position.is_positioned() {
+      let default_static_position = if lines_empty && style.establishes_abs_containing_block() {
         // Static position starts at the containing block origin; AbsoluteLayout adds
         // padding/border offsets, so use the content origin when no lines were laid out.
         Point::ZERO
@@ -8959,6 +8951,8 @@ impl InlineFormattingContext {
         ) {
           if let Some(cb) = custom_cb {
             (cb, true)
+          } else if style.establishes_fixed_containing_block() {
+            (cb, false)
           } else {
             (ContainingBlock::viewport(viewport_size), false)
           }

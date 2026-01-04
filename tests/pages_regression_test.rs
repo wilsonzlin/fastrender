@@ -179,6 +179,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     shots: DEFAULT_SHOTS,
   },
   PageFixture {
+    name: "positioned_containing_block_filter",
+    html: "positioned_containing_block_filter/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
     name: "individual_transforms",
     html: "individual_transforms/index.html",
     shots: DEFAULT_SHOTS,

@@ -663,11 +663,11 @@ impl BlockFormattingContext {
     }
 
     // If this block establishes a new containing block for absolute/fixed descendants (via
-    // positioning, transforms, or perspective), propagate that updated containing block into the
+    // positioning, transforms, filters, containment, etc.), propagate that updated containing
+    // block into the
     // descendant layout call. Otherwise absolutely-positioned descendants inside inline content can
     // incorrectly resolve percentages against an ancestor CB (e.g. the viewport).
-    let establishes_positioned_cb =
-      style.position.is_positioned() || style.has_transform() || style.perspective.is_some();
+    let establishes_positioned_cb = style.establishes_abs_containing_block();
     let padding_origin = Point::new(
       computed_width.border_left + computed_width.padding_left,
       border_top + padding_top,
@@ -1546,11 +1546,8 @@ impl BlockFormattingContext {
     let mut inline_buffer: Vec<BoxNode> = Vec::new();
     let mut positioned_children: Vec<PositionedCandidate> = Vec::new();
     let collapse_with_parent_top = should_collapse_with_first_child(&parent.style);
-    let establishes_absolute_cb = parent.style.position.is_positioned()
-      || parent.style.has_transform()
-      || parent.style.perspective.is_some();
-    let establishes_fixed_cb =
-      parent.style.has_transform() || parent.style.perspective.is_some();
+    let establishes_absolute_cb = parent.style.establishes_abs_containing_block();
+    let establishes_fixed_cb = parent.style.establishes_fixed_containing_block();
     if !collapse_with_parent_top {
       margin_ctx.mark_content_encountered();
     }
@@ -3611,8 +3608,7 @@ impl FormattingContext for BlockFormattingContext {
       content_height_base + padding_top + padding_bottom,
     );
     let cb_block_base = resolved_height.map(|h| h.max(0.0) + padding_top + padding_bottom);
-    let establishes_positioned_cb =
-      style.position.is_positioned() || style.has_transform() || style.perspective.is_some();
+    let establishes_positioned_cb = style.establishes_abs_containing_block();
     let nearest_cb = if establishes_positioned_cb {
       ContainingBlock::with_viewport_and_bases(
         Rect::new(padding_origin, padding_size),

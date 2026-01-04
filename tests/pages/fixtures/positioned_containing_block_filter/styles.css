@@ -1,0 +1,91 @@
+:root {
+  --abs: #d92d20;
+  --fixed: #175cd3;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #ffffff;
+}
+
+.wrapper {
+  position: absolute;
+  width: 420px;
+  height: 240px;
+}
+
+.w-filter {
+  left: 40px;
+  top: 40px;
+  background: #fff1f2;
+}
+
+.w-will-change {
+  left: 540px;
+  top: 40px;
+  background: #eff6ff;
+}
+
+.w-contain {
+  left: 40px;
+  top: 340px;
+  background: #ecfdf3;
+}
+
+.w-backdrop {
+  left: 540px;
+  top: 340px;
+  background: #f5f3ff;
+}
+
+.cb {
+  width: 180px;
+  height: 160px;
+  margin-left: 20px;
+  margin-top: 20px;
+  background: #e5e7eb;
+}
+
+.marker {
+  width: 24px;
+  height: 24px;
+}
+
+.abs {
+  position: absolute;
+  left: 50%;
+  top: 25%;
+  margin-left: -12px;
+  margin-top: -12px;
+  background: var(--abs);
+}
+
+.fixed {
+  position: fixed;
+  left: 50%;
+  top: 75%;
+  margin-left: -12px;
+  margin-top: -12px;
+  background: var(--fixed);
+}
+
+.cb-filter {
+  filter: blur(0px);
+}
+
+.cb-will-change {
+  will-change: filter;
+}
+
+.cb-contain {
+  contain: paint;
+}
+
+.cb-backdrop {
+  backdrop-filter: blur(0px);
+}

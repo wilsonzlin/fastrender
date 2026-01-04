@@ -1210,6 +1210,40 @@ impl ComputedStyle {
       || !matches!(self.scale, ScaleValue::None)
   }
 
+  pub fn establishes_abs_containing_block(&self) -> bool {
+    self.position.is_positioned() || self.establishes_fixed_containing_block()
+  }
+
+  pub fn establishes_fixed_containing_block(&self) -> bool {
+    self.has_transform()
+      || self.perspective.is_some()
+      || !self.filter.is_empty()
+      || !self.backdrop_filter.is_empty()
+      || self.containment.layout
+      || self.containment.paint
+      || self.will_change_establishes_containing_block()
+  }
+
+  fn will_change_establishes_containing_block(&self) -> bool {
+    match &self.will_change {
+      WillChange::Auto => false,
+      WillChange::Hints(hints) => hints.iter().any(|hint| match hint {
+        types::WillChangeHint::Property(name) => matches!(
+          name.as_str(),
+          "transform"
+            | "translate"
+            | "rotate"
+            | "scale"
+            | "perspective"
+            | "filter"
+            | "backdrop-filter"
+            | "contain"
+        ),
+        _ => false,
+      }),
+    }
+  }
+
   fn ensure_background_lists(&mut self) {
     let defaults = BackgroundLayer::default();
     if self.background_images.is_empty() {

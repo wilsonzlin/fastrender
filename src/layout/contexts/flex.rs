@@ -2536,15 +2536,8 @@ impl FormattingContext for FlexFormattingContext {
       } else {
         None
       };
-      let establishes_abs_cb = box_node.style.position.is_positioned()
-        || box_node.style.has_transform()
-        || box_node.style.perspective.is_some()
-        || box_node.style.containment.layout
-        || box_node.style.containment.paint;
-      let establishes_fixed_cb = box_node.style.has_transform()
-        || box_node.style.perspective.is_some()
-        || box_node.style.containment.layout
-        || box_node.style.containment.paint;
+      let establishes_abs_cb = box_node.style.establishes_abs_containing_block();
+      let establishes_fixed_cb = box_node.style.establishes_fixed_containing_block();
       let padding_cb = ContainingBlock::with_viewport_and_bases(
         padding_rect,
         self.viewport_size,

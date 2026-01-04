@@ -5676,15 +5676,8 @@ impl FormattingContext for TableFormattingContext {
           block_base,
         );
         let viewport_cb = ContainingBlock::viewport(self.viewport_size);
-        let establishes_abs_cb = table_root_style.position.is_positioned()
-          || table_root_style.has_transform()
-          || table_root_style.perspective.is_some()
-          || table_root_style.containment.layout
-          || table_root_style.containment.paint;
-        let establishes_fixed_cb = table_root_style.has_transform()
-          || table_root_style.perspective.is_some()
-          || table_root_style.containment.layout
-          || table_root_style.containment.paint;
+        let establishes_abs_cb = table_root_style.establishes_abs_containing_block();
+        let establishes_fixed_cb = table_root_style.establishes_fixed_containing_block();
         let cb_for_absolute = if establishes_abs_cb {
           padding_cb
         } else {
@@ -7151,15 +7144,8 @@ impl FormattingContext for TableFormattingContext {
         block_base,
       );
       let viewport_cb = ContainingBlock::viewport(self.viewport_size);
-      let establishes_abs_cb = table_root_style.position.is_positioned()
-        || table_root_style.has_transform()
-        || table_root_style.perspective.is_some()
-        || table_root_style.containment.layout
-        || table_root_style.containment.paint;
-      let establishes_fixed_cb = table_root_style.has_transform()
-        || table_root_style.perspective.is_some()
-        || table_root_style.containment.layout
-        || table_root_style.containment.paint;
+      let establishes_abs_cb = table_root_style.establishes_abs_containing_block();
+      let establishes_fixed_cb = table_root_style.establishes_fixed_containing_block();
       let cb_for_absolute = if establishes_abs_cb {
         padding_cb
       } else {
