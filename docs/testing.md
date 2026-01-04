@@ -71,7 +71,7 @@ cargo xtask chrome-baseline-fixtures
 cargo xtask fixture-chrome-diff
 ```
 
-Defaults are aligned with the pageset workflow (`viewport=1200x800`, `dpr=1.0`) unless you override them.
+Defaults are aligned with the pages_regression suite (`viewport=1040x1240`, `dpr=1.0`) unless you override them.
 
 Artifacts and PR guidance:
 

@@ -71,7 +71,7 @@ cargo run --release --bin pageset_progress -- report --pages example.com
 # - Renders are offline/repeatable (no network).
 # - Uses bundled fonts so output is stable across machines.
 # - Chrome baselines are local-only artifacts (not committed).
-# - Defaults match the pageset viewport/DPR (1200x800 @ 1.0) unless you override them.
+# - Defaults match the pages_regression viewport/DPR (1040x1240 @ 1.0) unless you override them.
 #
 # 1) Render the fixture(s) with FastRender:
 cargo run --release --bin render_fixtures
