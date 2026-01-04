@@ -3039,7 +3039,6 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) -> RenderResult<()> {
     row[..min_x_bytes].fill(0);
     row[max_x_bytes..].fill(0);
   }
-
   Ok(())
 }
 
@@ -5006,9 +5005,7 @@ fn apply_color_matrix(
   color_interpolation_filters: ColorInterpolationFilters,
 ) -> RenderResult<()> {
   match kind {
-    ColorMatrixKind::Matrix(values) => {
-      apply_color_matrix_values(pixmap, values, color_interpolation_filters)
-    }
+    ColorMatrixKind::Matrix(values) => apply_color_matrix_values(pixmap, values, color_interpolation_filters),
     ColorMatrixKind::LuminanceToAlpha => {
       check_active(RenderStage::Paint)?;
       let pixels = pixmap.pixels_mut();
