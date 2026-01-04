@@ -30,6 +30,7 @@ env:
   OUT_DIR: target/fixture_chrome_diff_ci
   REPORT_ARTIFACT: fixture_chrome_diff_ci
   REPORT_JSON_ARTIFACT: fixture_chrome_diff_report_json
+  LEGACY_REPORT_JSON_ARTIFACT: fixture_chrome_diff_ci_report_json
   DELTA_ARTIFACT: fixture_chrome_diff_delta
 
 jobs:
@@ -192,8 +193,21 @@ jobs:
           name: ${{ env.REPORT_JSON_ARTIFACT }}
           path: baseline
 
+      - name: Download legacy main baseline report.json artifact (last successful)
+        if: steps.download_baseline.outcome != 'success'
+        id: download_baseline_legacy
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: chrome_fixture_diff.yml
+          workflow_conclusion: success
+          branch: main
+          name: ${{ env.LEGACY_REPORT_JSON_ARTIFACT }}
+          path: baseline_legacy
+
       - name: Locate baseline report.json
-        if: steps.download_baseline.outcome == 'success'
+        if: steps.download_baseline.outcome == 'success' || steps.download_baseline_legacy.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -203,12 +217,13 @@ jobs:
             exit 0
           fi
 
-          match=$(find baseline -type f -name report.json | head -n 1 || true)
+          match=$( (find baseline baseline_legacy -type f -name report.json 2>/dev/null || true) | head -n 1 )
           if [[ -z "${match}" ]]; then
             echo "baseline artifact downloaded, but report.json was not found; skipping delta compare" >&2
             exit 0
           fi
 
+          mkdir -p baseline
           cp "${match}" baseline/report.json
           echo "BASELINE_FOUND=1" >> "$GITHUB_ENV"
 
