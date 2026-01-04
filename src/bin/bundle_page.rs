@@ -20,7 +20,7 @@ use fastrender::resource::bundle::{
 };
 use fastrender::resource::{
   ensure_font_mime_sane, ensure_http_success, ensure_image_mime_sane, ensure_stylesheet_mime_sane,
-  origin_from_url, FetchContextKind, FetchDestination, FetchRequest, FetchedResource,
+  origin_from_url, DocumentOrigin, FetchContextKind, FetchDestination, FetchRequest, FetchedResource,
   ResourceAccessPolicy, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 #[cfg(feature = "disk_cache")]
@@ -1131,7 +1131,8 @@ fn crawl_document(
 
   fn enqueue_unique(
     queue: &mut VecDeque<(String, FetchDestination, String)>,
-    seen: &mut HashSet<String>,
+    seen_urls: &mut HashSet<String>,
+    queued: &mut HashSet<(String, Option<DocumentOrigin>)>,
     url: String,
     destination: FetchDestination,
     referrer: &str,
@@ -1139,7 +1140,13 @@ fn crawl_document(
     if url.is_empty() {
       return;
     }
-    if seen.insert(url.clone()) {
+    // Track unique URLs separately from per-document queue entries so that the same URL can be
+    // retried when discovered under a different document origin. This matches renderer behavior
+    // under `--same-origin-subresources` (a URL may be blocked for one document but allowed for
+    // another).
+    seen_urls.insert(url.clone());
+
+    if queued.insert((url.clone(), origin_from_url(referrer))) {
       queue.push_back((url, destination, referrer.to_string()));
     }
   }
@@ -1232,7 +1239,10 @@ fn crawl_document(
   };
 
   let mut queue: VecDeque<(String, FetchDestination, String)> = VecDeque::new();
-  let mut seen: HashSet<String> = HashSet::new();
+  // Cap recursion based on distinct URLs discovered, not on per-document referrer contexts.
+  let mut seen_urls: HashSet<String> = HashSet::new();
+  let mut queued: HashSet<(String, Option<DocumentOrigin>)> = HashSet::new();
+  let mut fetched_urls: HashSet<String> = HashSet::new();
   let mut fetch_errors: Vec<(String, String)> = Vec::new();
   let root_referrer = document.base_hint.as_str();
 
@@ -1246,7 +1256,8 @@ fn crawl_document(
   for css_url in css_links {
     enqueue_unique(
       &mut queue,
-      &mut seen,
+      &mut seen_urls,
+      &mut queued,
       css_url,
       FetchDestination::Style,
       root_referrer,
@@ -1261,7 +1272,8 @@ fn crawl_document(
     {
       enqueue_unique(
         &mut queue,
-        &mut seen,
+        &mut seen_urls,
+        &mut queued,
         css_url,
         FetchDestination::Style,
         root_referrer,
@@ -1271,7 +1283,14 @@ fn crawl_document(
 
   for css_chunk in extract_inline_css_chunks(&document.html) {
     for (url, destination) in discover_css_urls_with_destination(&css_chunk, &document.base_url) {
-      enqueue_unique(&mut queue, &mut seen, url, destination, root_referrer);
+      enqueue_unique(
+        &mut queue,
+        &mut seen_urls,
+        &mut queued,
+        url,
+        destination,
+        root_referrer,
+      );
     }
   }
 
@@ -1280,7 +1299,8 @@ fn crawl_document(
   for url in discover_html_images(&document.html, &document.base_url, render)? {
     enqueue_unique(
       &mut queue,
-      &mut seen,
+      &mut seen_urls,
+      &mut queued,
       url,
       FetchDestination::Image,
       root_referrer,
@@ -1289,7 +1309,8 @@ fn crawl_document(
   for url in html_assets.documents {
     enqueue_unique(
       &mut queue,
-      &mut seen,
+      &mut seen_urls,
+      &mut queued,
       url,
       FetchDestination::Document,
       root_referrer,
@@ -1302,12 +1323,16 @@ fn crawl_document(
   // URLs, but the stored bytes are replaced with an empty placeholder.
   const MAX_CRAWL_IMAGE_BYTES: usize = 1_000_000;
   while let Some((url, destination, referrer)) = queue.pop_front() {
-    if seen.len() > MAX_CRAWL_URLS {
+    if seen_urls.len() > MAX_CRAWL_URLS {
       eprintln!(
         "Warning: crawl URL limit exceeded ({}); skipping remaining discoveries",
         MAX_CRAWL_URLS
       );
       break;
+    }
+
+    if fetched_urls.contains(&url) {
+      continue;
     }
 
     let policy_for_request = policy.for_origin(origin_from_url(&referrer));
@@ -1337,6 +1362,7 @@ fn crawl_document(
               &url,
               FetchedResource::with_final_url(Vec::new(), None, Some(url.clone())),
             );
+            fetched_urls.insert(url.clone());
           }
         }
         continue;
@@ -1358,6 +1384,8 @@ fn crawl_document(
       fetcher.discard(&url);
       continue;
     }
+
+    fetched_urls.insert(url.clone());
 
     let validation = match destination {
       FetchDestination::Style => {
@@ -1407,7 +1435,14 @@ fn crawl_document(
         let css_base = res.final_url.as_deref().unwrap_or(&url);
         let css = decode_css_bytes(&res.bytes, res.content_type.as_deref());
         for (dep, destination) in discover_css_urls_with_destination(&css, css_base) {
-          enqueue_unique(&mut queue, &mut seen, dep, destination, &referrer);
+          enqueue_unique(
+            &mut queue,
+            &mut seen_urls,
+            &mut queued,
+            dep,
+            destination,
+            &referrer,
+          );
         }
       }
       FetchDestination::Document => {
@@ -1424,7 +1459,8 @@ fn crawl_document(
         for css_url in css_links {
           enqueue_unique(
             &mut queue,
-            &mut seen,
+            &mut seen_urls,
+            &mut queued,
             css_url,
             FetchDestination::Style,
             doc.base_hint.as_str(),
@@ -1439,7 +1475,8 @@ fn crawl_document(
           {
             enqueue_unique(
               &mut queue,
-              &mut seen,
+              &mut seen_urls,
+              &mut queued,
               css_url,
               FetchDestination::Style,
               doc.base_hint.as_str(),
@@ -1451,7 +1488,8 @@ fn crawl_document(
           for (url, destination) in discover_css_urls_with_destination(&css_chunk, &doc.base_url) {
             enqueue_unique(
               &mut queue,
-              &mut seen,
+              &mut seen_urls,
+              &mut queued,
               url,
               destination,
               doc.base_hint.as_str(),
@@ -1462,7 +1500,8 @@ fn crawl_document(
         for url in discover_html_images(&doc.html, &doc.base_url, render)? {
           enqueue_unique(
             &mut queue,
-            &mut seen,
+            &mut seen_urls,
+            &mut queued,
             url,
             FetchDestination::Image,
             doc.base_hint.as_str(),
@@ -1474,7 +1513,8 @@ fn crawl_document(
         for url in html_assets.documents {
           enqueue_unique(
             &mut queue,
-            &mut seen,
+            &mut seen_urls,
+            &mut queued,
             url,
             FetchDestination::Document,
             doc.base_hint.as_str(),
@@ -1936,6 +1976,101 @@ mod tests {
         && referrer.as_deref() == Some("https://root.test/")
     }));
 
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://frame.test/frame.css"
+        && *dest == FetchDestination::Style
+        && referrer.as_deref() == Some("https://frame.test/frame.html")
+    }));
+
+    Ok(())
+  }
+
+  #[test]
+  fn crawl_retries_blocked_subresource_for_nested_document_origin() -> Result<()> {
+    #[derive(Default)]
+    struct BlockedThenAllowedFetcher {
+      calls: Mutex<Vec<(String, FetchDestination, Option<String>)>>,
+    }
+
+    impl BlockedThenAllowedFetcher {
+      fn calls(&self) -> Vec<(String, FetchDestination, Option<String>)> {
+        self
+          .calls
+          .lock()
+          .map(|calls| calls.clone())
+          .unwrap_or_default()
+      }
+    }
+
+    impl ResourceFetcher for BlockedThenAllowedFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.fetch_with_request(FetchRequest::new(url, FetchDestination::Other))
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push((
+          req.url.to_string(),
+          req.destination,
+          req.referrer.map(|r| r.to_string()),
+        ));
+
+        match req.url {
+          "https://root.test/" => Ok(FetchedResource::with_final_url(
+            br#"<html><head><link rel="stylesheet" href="https://frame.test/frame.css"></head><body><iframe src="https://frame.test/frame.html"></iframe></body></html>"#
+              .to_vec(),
+            Some("text/html".to_string()),
+            Some(req.url.to_string()),
+          )),
+          "https://frame.test/frame.html" => Ok(FetchedResource::with_final_url(
+            br#"<html><head><link rel="stylesheet" href="/frame.css"></head><body></body></html>"#
+              .to_vec(),
+            Some("text/html".to_string()),
+            Some(req.url.to_string()),
+          )),
+          "https://frame.test/frame.css" => Ok(FetchedResource::with_final_url(
+            b"body { color: black; }".to_vec(),
+            Some("text/css".to_string()),
+            Some(req.url.to_string()),
+          )),
+          other => Err(fastrender::Error::Other(format!(
+            "unexpected fetch: {other}"
+          ))),
+        }
+      }
+    }
+
+    let inner = Arc::new(BlockedThenAllowedFetcher::default());
+    let recording = RecordingFetcher::new(inner.clone());
+    let (doc, _) = fetch_document(&recording, "https://root.test/")?;
+
+    let render = BundleRenderConfig {
+      viewport: (1200, 800),
+      device_pixel_ratio: 1.0,
+      scroll_x: 0.0,
+      scroll_y: 0.0,
+      full_page: false,
+      same_origin_subresources: true,
+      allowed_subresource_origins: Vec::new(),
+      compat_profile: fastrender::compat::CompatProfile::default(),
+      dom_compat_mode: fastrender::dom::DomCompatibilityMode::default(),
+    };
+
+    crawl_document(&recording, &doc, &render, CrawlMode::Strict)?;
+
+    let calls = inner.calls();
+    assert!(
+      !calls.iter().any(|(url, dest, referrer)| {
+        url == "https://frame.test/frame.css"
+          && *dest == FetchDestination::Style
+          && referrer.as_deref() == Some("https://root.test/")
+      }),
+      "should not fetch frame.css as a root document subresource under same-origin-only mode"
+    );
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://frame.test/frame.html"
+        && *dest == FetchDestination::Document
+        && referrer.as_deref() == Some("https://root.test/")
+    }));
     assert!(calls.iter().any(|(url, dest, referrer)| {
       url == "https://frame.test/frame.css"
         && *dest == FetchDestination::Style
