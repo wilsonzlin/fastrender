@@ -30,6 +30,7 @@ Options:
   --max-perceptual-distance <f64>
                             Allowed perceptual distance (passed to diff_renders)
   --ignore-alpha            Ignore alpha differences (passed to diff_renders)
+  --sort-by <mode>          Sort report entries (pixel|percent|perceptual) (passed to diff_renders)
   --no-clean                Do not delete previous output dirs under target/
   -h, --help                Show help
 
@@ -55,6 +56,7 @@ TOLERANCE=""
 MAX_DIFF_PERCENT=""
 MAX_PERCEPTUAL_DISTANCE=""
 IGNORE_ALPHA=0
+SORT_BY=""
 CLEAN=1
 
 FILTERS=()
@@ -96,6 +98,8 @@ while [[ $# -gt 0 ]]; do
         MAX_PERCEPTUAL_DISTANCE="${2:-}"; shift 2 ;;
       --ignore-alpha)
         IGNORE_ALPHA=1; shift ;;
+      --sort-by)
+        SORT_BY="${2:-}"; shift 2 ;;
       --no-clean)
         CLEAN=0; shift ;;
       --)
@@ -249,6 +253,9 @@ if [[ -n "${MAX_PERCEPTUAL_DISTANCE}" ]]; then
 fi
 if [[ "${IGNORE_ALPHA}" -eq 1 ]]; then
   diff_args+=(--ignore-alpha)
+fi
+if [[ -n "${SORT_BY}" ]]; then
+  diff_args+=(--sort-by "${SORT_BY}")
 fi
 
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
