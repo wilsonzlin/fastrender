@@ -2,7 +2,7 @@ mod common;
 
 use clap::Parser;
 use common::report::{display_path, ensure_parent_dir, escape_html, path_for_report};
-use fastrender::image_output::{diff_png, DiffMetrics};
+use fastrender::image_output::{diff_png_with_alpha, DiffMetrics};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -52,6 +52,10 @@ struct Args {
   /// Maximum allowed perceptual distance (0.0 = identical). Defaults to env compat vars when set.
   #[arg(long)]
   max_perceptual_distance: Option<f64>,
+
+  /// Ignore alpha differences (equivalent to setting FIXTURE_IGNORE_ALPHA=1).
+  #[arg(long)]
+  ignore_alpha: bool,
 
   /// Sort report entries by metric within each status group.
   #[arg(long, value_enum, default_value_t = SortBy::Percent)]
@@ -193,6 +197,7 @@ fn run() -> Result<i32, String> {
   let tolerance = resolve_tolerance(args.tolerance)?;
   let max_diff_percent = resolve_max_diff_percent(args.max_diff_percent)?;
   let max_perceptual_distance = resolve_max_perceptual_distance(args.max_perceptual_distance)?;
+  let compare_alpha = resolve_compare_alpha(args.ignore_alpha);
 
   let before_meta =
     fs::metadata(&args.before).map_err(|e| format!("{}: {e}", args.before.display()))?;
@@ -244,6 +249,7 @@ fn run() -> Result<i32, String> {
           &after_dir,
           &html_dir,
           &diff_dir,
+          compare_alpha,
           tolerance,
           max_diff_percent,
           max_perceptual_distance,
@@ -259,6 +265,7 @@ fn run() -> Result<i32, String> {
           &after_file,
           &html_dir,
           &diff_dir,
+          compare_alpha,
           tolerance,
           max_diff_percent,
           max_perceptual_distance,
@@ -406,11 +413,25 @@ fn validate_perceptual_distance(value: f64) -> Result<(), String> {
   }
 }
 
+fn resolve_compare_alpha(ignore_alpha_flag: bool) -> bool {
+  if ignore_alpha_flag {
+    return false;
+  }
+  if std::env::var("FIXTURE_IGNORE_ALPHA").is_ok() {
+    return false;
+  }
+  if std::env::var("FIXTURE_FUZZY").is_ok() {
+    return false;
+  }
+  true
+}
+
 fn process_directory(
   before_dir: &Path,
   after_dir: &Path,
   html_dir: &Path,
   diff_dir: &Path,
+  compare_alpha: bool,
   tolerance: u8,
   max_diff_percent: f64,
   max_perceptual_distance: Option<f64>,
@@ -447,6 +468,7 @@ fn process_directory(
       Some(after_dir),
       html_dir,
       diff_dir,
+      compare_alpha,
       tolerance,
       max_diff_percent,
       max_perceptual_distance,
@@ -516,6 +538,7 @@ fn process_files(
   after: &Path,
   html_dir: &Path,
   diff_dir: &Path,
+  compare_alpha: bool,
   tolerance: u8,
   max_diff_percent: f64,
   max_perceptual_distance: Option<f64>,
@@ -543,6 +566,7 @@ fn process_files(
     None,
     html_dir,
     diff_dir,
+    compare_alpha,
     tolerance,
     max_diff_percent,
     max_perceptual_distance,
@@ -561,6 +585,7 @@ fn process_entry(
   after_root: Option<&Path>,
   html_dir: &Path,
   diff_dir: &Path,
+  compare_alpha: bool,
   tolerance: u8,
   max_diff_percent: f64,
   max_perceptual_distance: Option<f64>,
@@ -622,7 +647,12 @@ fn process_entry(
             metrics: None,
             error: Some(format!("Failed to read {}: {e}", after.display())),
           },
-          Ok(after_png) => match diff_png(&after_png, &before_png, tolerance) {
+          Ok(after_png) => match diff_png_with_alpha(
+            &after_png,
+            &before_png,
+            tolerance,
+            compare_alpha,
+          ) {
             Err(e) => DiffReportEntry {
               name: name.to_string(),
               status: EntryStatus::Error,

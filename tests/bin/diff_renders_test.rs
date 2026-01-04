@@ -276,6 +276,43 @@ fn diff_renders_supports_file_to_file_diffs() {
 }
 
 #[test]
+fn diff_renders_can_ignore_alpha_differences() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  write_color_png(&before.join("page.png"), [10, 20, 30, 0]);
+  write_color_png(&after.join("page.png"), [10, 20, 30, 255]);
+
+  let status = diff_renders_cmd(tmp.path())
+    .env("FIXTURE_IGNORE_ALPHA", "1")
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--max-diff-percent",
+      "0",
+    ])
+    .status()
+    .expect("run diff_renders");
+
+  assert!(
+    status.success(),
+    "expected success when ignoring alpha differences"
+  );
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+  assert_eq!(report["totals"]["differences"].as_u64(), Some(0));
+  assert_eq!(report["results"][0]["status"], "match");
+}
+
+#[test]
 fn diff_renders_avoids_name_collisions_for_nested_paths() {
   let tmp = tempfile::TempDir::new().expect("tempdir");
   let before = tmp.path().join("before");

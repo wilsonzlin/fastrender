@@ -130,7 +130,19 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
 ///
 /// Returns the diff metrics along with a PNG highlighting differing pixels.
 pub fn diff_png(rendered: &[u8], expected: &[u8], tolerance: u8) -> Result<(DiffMetrics, Vec<u8>)> {
-  let mut config = CompareConfig::strict().with_channel_tolerance(tolerance);
+  diff_png_with_alpha(rendered, expected, tolerance, true)
+}
+
+/// Like [`diff_png`], but allows controlling whether alpha differences are considered.
+pub fn diff_png_with_alpha(
+  rendered: &[u8],
+  expected: &[u8],
+  tolerance: u8,
+  compare_alpha: bool,
+) -> Result<(DiffMetrics, Vec<u8>)> {
+  let mut config = CompareConfig::strict()
+    .with_channel_tolerance(tolerance)
+    .with_compare_alpha(compare_alpha);
   config.max_different_percent = 100.0;
 
   let diff = image_compare::compare_png(rendered, expected, &config)?;
@@ -179,11 +191,18 @@ pub fn diff_png(rendered: &[u8], expected: &[u8], tolerance: u8) -> Result<(Diff
           let diff_r = rendered_px[0].abs_diff(expected_px[0]);
           let diff_g = rendered_px[1].abs_diff(expected_px[1]);
           let diff_b = rendered_px[2].abs_diff(expected_px[2]);
-          let diff_a = rendered_px[3].abs_diff(expected_px[3]);
+          let diff_a = if compare_alpha {
+            rendered_px[3].abs_diff(expected_px[3])
+          } else {
+            0
+          };
           let max_diff = diff_r.max(diff_g).max(diff_b).max(diff_a);
 
-          let is_different =
-            diff_r > tolerance || diff_g > tolerance || diff_b > tolerance || diff_a > tolerance;
+          let is_different = if compare_alpha {
+            diff_r > tolerance || diff_g > tolerance || diff_b > tolerance || diff_a > tolerance
+          } else {
+            diff_r > tolerance || diff_g > tolerance || diff_b > tolerance
+          };
           if is_different {
             different_pixels += 1;
             let alpha = max_diff.saturating_mul(2).min(255);
