@@ -209,6 +209,7 @@ scripts/chrome_vs_fastrender.sh [--] [stem...]
 Notes:
 - This is not fully deterministic (live subresources can change); it’s still excellent for rapid “why is our render different from Chrome on the same HTML?” debugging.
 - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
+- `scripts/chrome_baseline.sh` supports `--shard <index>/<total>` (0-based) for deterministic sharding of the baseline capture set.
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
 - HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
@@ -258,6 +259,8 @@ cargo run --release --bin diff_renders -- \
   --json target/chrome_vs_fastrender_fixtures.json \
   --html target/chrome_vs_fastrender_fixtures.html
 ```
+
+Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard <index>/<total>` (0-based) for deterministic parallelism.
 
 ## `render_fixtures`
 
