@@ -5203,10 +5203,15 @@ impl DisplayListRenderer {
         let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
           return Ok(None);
         };
-        mask_pixmap.data_mut().fill(0);
-        let mut deadline_counter = 0usize;
+        let mut clear_deadline_counter = 0usize;
+        let clear_chunk_bytes = CLIP_MASK_DEADLINE_STRIDE.saturating_mul(4);
+        for chunk in mask_pixmap.data_mut().chunks_mut(clear_chunk_bytes) {
+          check_active_periodic(&mut clear_deadline_counter, 1, RenderStage::Paint)?;
+          chunk.fill(0);
+        }
+        let mut tile_deadline_counter = 0usize;
         if let Some((tx, ty, tile_w, tile_h)) = generated_tile_override {
-          check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+          check_active_periodic(&mut tile_deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
           paint_mask_tile(
             mask_pixmap,
             mask_tile,
@@ -5221,7 +5226,7 @@ impl DisplayListRenderer {
         } else {
           for ty in positions_y.iter() {
             for tx in positions_x.iter() {
-              check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+              check_active_periodic(&mut tile_deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
               paint_mask_tile(
                 mask_pixmap,
                 mask_tile,
@@ -5237,11 +5242,15 @@ impl DisplayListRenderer {
           }
         }
 
+        let mut alpha_deadline_counter = 0usize;
         let mut src_idx = 3usize;
         let src = mask_pixmap.data();
-        for dst in layer_mask.data_mut().iter_mut() {
-          *dst = src[src_idx];
-          src_idx += 4;
+        for dst_chunk in layer_mask.data_mut().chunks_mut(CLIP_MASK_DEADLINE_STRIDE) {
+          check_active_periodic(&mut alpha_deadline_counter, 1, RenderStage::Paint)?;
+          for dst in dst_chunk.iter_mut() {
+            *dst = src[src_idx];
+            src_idx += 4;
+          }
         }
         Ok(Some(()))
       });
@@ -14895,6 +14904,66 @@ mod tests {
         })
       ),
       "expected render_mask composite to abort with a paint timeout, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn render_mask_alpha_copy_aborts_on_expired_deadline() {
+    // The fast-path for a single alpha mask layer still has to copy the rendered RGBA scratch
+    // pixmap's alpha channel into a `Mask`. That copy is O(pixels) and must check the active
+    // deadline so cancellations don't stall until later stages.
+    let mut renderer = DisplayListRenderer::new(128, 128, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 128.0, 128.0);
+    let mut layer = MaskLayer::default();
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+
+    let image = ImageData::new_premultiplied(1, 1, 1.0, 1.0, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Raster(image),
+        repeat: layer.repeat,
+        position: layer.position,
+        size: layer.size,
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      viewport: None,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let check_calls = Arc::new(AtomicUsize::new(0));
+    let cancel_calls = Arc::clone(&check_calls);
+    // Allow the initial stage check + the scratch pixmap clear, then cancel during alpha copy.
+    let cancel_after = 2usize;
+    let cancel: Arc<CancelCallback> =
+      Arc::new(move || cancel_calls.fetch_add(1, Ordering::Relaxed) >= cancel_after);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let result = crate::render_control::with_deadline(Some(&deadline), || renderer.render_mask(&mask));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected render_mask alpha copy to abort with a paint timeout, got {result:?}"
+    );
+    assert!(
+      check_calls.load(Ordering::Relaxed) >= cancel_after + 1,
+      "expected cancel callback to be polled more than {cancel_after} times, got {}",
+      check_calls.load(Ordering::Relaxed)
     );
   }
 
