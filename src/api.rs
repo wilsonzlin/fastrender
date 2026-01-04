@@ -6053,6 +6053,9 @@ impl FastRender {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
+      if node.is_template_element() {
+        return None;
+      }
       if let Some(tag) = node.tag_name() {
         if tag.eq_ignore_ascii_case("head")
           && matches!(
@@ -6062,11 +6065,8 @@ impl FastRender {
         {
           return Some(node);
         }
-        if tag.eq_ignore_ascii_case("template") {
-          return None;
-        }
       }
-      for child in node.children.iter() {
+      for child in node.traversal_children() {
         if let Some(found) = find_head(child) {
           return Some(found);
         }
@@ -6078,33 +6078,30 @@ impl FastRender {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
-      if let Some(tag) = node.tag_name() {
-        if tag.eq_ignore_ascii_case("template") {
-          return None;
-        }
-        if tag.eq_ignore_ascii_case("link") {
-          if !matches!(
-            node.namespace(),
-            Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
-          ) {
-            return None;
-          }
-          if let Some(rel) = node.get_attribute_ref("rel") {
-            if rel
-              .split_whitespace()
-              .any(|token| token.eq_ignore_ascii_case("canonical"))
-            {
-              if let Some(href) = node.get_attribute_ref("href") {
-                let trimmed = href.trim();
-                if !trimmed.is_empty() {
-                  return Some(trimmed.to_string());
-                }
+      if node.is_template_element() {
+        return None;
+      }
+      if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+        && matches!(
+          node.namespace(),
+          Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
+        )
+      {
+        if let Some(rel) = node.get_attribute_ref("rel") {
+          if rel
+            .split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("canonical"))
+          {
+            if let Some(href) = node.get_attribute_ref("href") {
+              let trimmed = href.trim();
+              if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
               }
             }
           }
         }
       }
-      for child in node.children.iter() {
+      for child in node.traversal_children() {
         if let Some(found) = find_first_canonical_href(child) {
           return Some(found);
         }
@@ -6116,31 +6113,28 @@ impl FastRender {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
-      if let Some(tag) = node.tag_name() {
-        if tag.eq_ignore_ascii_case("template") {
-          return None;
-        }
-        if tag.eq_ignore_ascii_case("meta") {
-          if !matches!(
-            node.namespace(),
-            Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
-          ) {
-            return None;
-          }
-          if node
-            .get_attribute_ref("property")
-            .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))
-          {
-            if let Some(content) = node.get_attribute_ref("content") {
-              let trimmed = content.trim();
-              if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-              }
+      if node.is_template_element() {
+        return None;
+      }
+      if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+        && matches!(
+          node.namespace(),
+          Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
+        )
+      {
+        if node
+          .get_attribute_ref("property")
+          .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))
+        {
+          if let Some(content) = node.get_attribute_ref("content") {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+              return Some(trimmed.to_string());
             }
           }
         }
       }
-      for child in node.children.iter() {
+      for child in node.traversal_children() {
         if let Some(found) = find_first_og_url(child) {
           return Some(found);
         }

@@ -2264,25 +2264,92 @@ fn infer_document_url_guess_from_dom_with_input<'a>(
     None
   }
 
+  fn node_is_html(node: &DomNode) -> bool {
+    matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+  }
+
+  fn node_is_foreign_element(node: &DomNode) -> bool {
+    node.is_element() && !node_is_html(node)
+  }
+
   fn find_first_http_canonical(node: &DomNode, base_url: &str) -> Option<String> {
-    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
-      return None;
+    fn inner(node: &DomNode, base_url: &str, prev_sibling_foreign: bool) -> Option<String> {
+      if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+        return None;
+      }
+      if node.is_template_element() {
+        return None;
+      }
+
+      let is_html = node_is_html(node);
+      if node.is_element() && !is_html {
+        return None;
+      }
+
+      // Some invalid SVG content (e.g. `<meta>` inside `<svg>`) can be relocated by the HTML parser
+      // so it appears as an HTML sibling immediately following the foreign element. When scanning
+      // for document-level hints, ignore matches that follow a foreign sibling so those relocated
+      // tokens cannot poison the inferred URL.
+      if !prev_sibling_foreign
+        && node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+        && is_html
+      {
+        if let Some(rel) = node.get_attribute_ref("rel") {
+          if rel
+            .split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("canonical"))
+          {
+            if let Some(href) = node.get_attribute_ref("href") {
+              let trimmed = href.trim();
+              if !trimmed.is_empty() {
+                if let Some(resolved) = resolve_href(base_url, trimmed) {
+                  if resolved.starts_with("http://") || resolved.starts_with("https://") {
+                    return Some(resolved);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      let children = node.traversal_children();
+      for (idx, child) in children.iter().enumerate() {
+        let prev_foreign = idx > 0 && node_is_foreign_element(&children[idx - 1]);
+        if let Some(found) = inner(child, base_url, prev_foreign) {
+          return Some(found);
+        }
+      }
+      None
     }
-    if node.is_template_element() {
-      return None;
-    }
-    if node
-      .tag_name()
-      .is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
-      && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
-    {
-      if let Some(rel) = node.get_attribute_ref("rel") {
-        if rel
-          .split_whitespace()
-          .any(|token| token.eq_ignore_ascii_case("canonical"))
+
+    inner(node, base_url, false)
+  }
+
+  fn find_first_http_og_url(node: &DomNode, base_url: &str) -> Option<String> {
+    fn inner(node: &DomNode, base_url: &str, prev_sibling_foreign: bool) -> Option<String> {
+      if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+        return None;
+      }
+      if node.is_template_element() {
+        return None;
+      }
+
+      let is_html = node_is_html(node);
+      if node.is_element() && !is_html {
+        return None;
+      }
+
+      if !prev_sibling_foreign
+        && node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+        && is_html
+      {
+        if node
+          .get_attribute_ref("property")
+          .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))
         {
-          if let Some(href) = node.get_attribute_ref("href") {
-            let trimmed = href.trim();
+          if let Some(content) = node.get_attribute_ref("content") {
+            let trimmed = content.trim();
             if !trimmed.is_empty() {
               if let Some(resolved) = resolve_href(base_url, trimmed) {
                 if resolved.starts_with("http://") || resolved.starts_with("https://") {
@@ -2293,70 +2360,62 @@ fn infer_document_url_guess_from_dom_with_input<'a>(
           }
         }
       }
-    }
-    for child in node.traversal_children() {
-      if let Some(found) = find_first_http_canonical(child, base_url) {
-        return Some(found);
-      }
-    }
-    None
-  }
 
-  fn find_first_http_og_url(node: &DomNode, base_url: &str) -> Option<String> {
-    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
-      return None;
-    }
-    if node.is_template_element() {
-      return None;
-    }
-    if node
-      .tag_name()
-      .is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
-      && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
-    {
-      if node
-        .get_attribute_ref("property")
-        .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))
-      {
-        if let Some(content) = node.get_attribute_ref("content") {
-          let trimmed = content.trim();
-          if !trimmed.is_empty() {
-            if let Some(resolved) = resolve_href(base_url, trimmed) {
-              if resolved.starts_with("http://") || resolved.starts_with("https://") {
-                return Some(resolved);
-              }
-            }
-          }
+      let children = node.traversal_children();
+      for (idx, child) in children.iter().enumerate() {
+        let prev_foreign = idx > 0 && node_is_foreign_element(&children[idx - 1]);
+        if let Some(found) = inner(child, base_url, prev_foreign) {
+          return Some(found);
         }
       }
+      None
     }
-    for child in node.traversal_children() {
-      if let Some(found) = find_first_http_og_url(child, base_url) {
-        return Some(found);
-      }
-    }
-    None
+
+    inner(node, base_url, false)
   }
 
-  let scope = find_head(dom).unwrap_or(dom);
-  if let Some(canonical) = find_first_http_canonical(scope, input.as_ref()) {
+  let head = find_head(dom);
+
+  if let Some(head) = head {
+    if let Some(canonical) = find_first_http_canonical(head, input.as_ref()) {
+      return Cow::Owned(canonical);
+    }
+    if let Some(og_url) = find_first_http_og_url(head, input.as_ref()) {
+      return Cow::Owned(og_url);
+    }
+  }
+
+  // Some malformed inputs (e.g. non-metadata elements placed in `<head>`) may cause the HTML parser
+  // to relocate subsequent `<link>`/`<meta>` tokens outside the head element. Fall back to scanning
+  // the full document so cached pages still pick up canonical/OG URL hints.
+  if let Some(canonical) = find_first_http_canonical(dom, input.as_ref()) {
     return Cow::Owned(canonical);
   }
-  if let Some(og_url) = find_first_http_og_url(scope, input.as_ref()) {
+  if let Some(og_url) = find_first_http_og_url(dom, input.as_ref()) {
     return Cow::Owned(og_url);
   }
+
   // Some cached pages use a relative canonical/og:url hint (e.g. `href="/path/page"`), which
   // would resolve to a `file://` URL when joined against the cached file path. When we can infer
   // the original host from the cache filename (e.g. `{host}.html`), retry resolution against that
   // inferred http(s) base so relative hints still influence `<base href>` resolution.
   if let Some(http_base) = infer_http_base_from_file_url(input.as_ref()) {
-    if let Some(canonical) = find_first_http_canonical(scope, &http_base) {
+    if let Some(head) = head {
+      if let Some(canonical) = find_first_http_canonical(head, &http_base) {
+        return Cow::Owned(canonical);
+      }
+      if let Some(og_url) = find_first_http_og_url(head, &http_base) {
+        return Cow::Owned(og_url);
+      }
+    }
+    if let Some(canonical) = find_first_http_canonical(dom, &http_base) {
       return Cow::Owned(canonical);
     }
-    if let Some(og_url) = find_first_http_og_url(scope, &http_base) {
+    if let Some(og_url) = find_first_http_og_url(dom, &http_base) {
       return Cow::Owned(og_url);
     }
   }
+
   infer_document_url_guess_without_dom(input)
 }
 
