@@ -104,7 +104,9 @@ struct FetchArgs {
   #[arg(long, action = ArgAction::SetTrue)]
   full_page: bool,
 
-  /// Restrict subresource loads to the document origin unless allowlisted.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin unless allowlisted.
+  ///
+  /// Note: this does not block cross-origin iframe/embed document navigation (document loads).
   #[arg(long)]
   same_origin_subresources: bool,
 
@@ -177,7 +179,9 @@ struct CacheArgs {
   #[arg(long, action = ArgAction::SetTrue)]
   full_page: bool,
 
-  /// Restrict subresource loads to the document origin unless allowlisted.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin unless allowlisted.
+  ///
+  /// Note: this does not block cross-origin iframe/embed document navigation (document loads).
   #[arg(long)]
   same_origin_subresources: bool,
 
@@ -222,7 +226,9 @@ struct RenderArgs {
   #[arg(long, action = ArgAction::SetTrue)]
   no_full_page: bool,
 
-  /// Restrict subresource loads to the document origin unless allowlisted.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin unless allowlisted.
+  ///
+  /// Note: this does not block cross-origin iframe/embed document navigation (document loads).
   #[arg(long)]
   same_origin_subresources: bool,
 

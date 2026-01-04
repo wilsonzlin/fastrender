@@ -70,7 +70,9 @@ pub struct RecapturePageFixturesArgs {
   #[arg(long)]
   pub bundle_fetch_timeout_secs: Option<u64>,
 
-  /// Restrict subresource loads to the document origin unless allowlisted.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin unless allowlisted.
+  ///
+  /// Note: this does not block cross-origin iframe/embed document navigation (document loads).
   #[arg(long)]
   pub same_origin_subresources: bool,
 
