@@ -6,7 +6,7 @@ use fastrender::image_output::{diff_png, DiffMetrics};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Serialize)]
@@ -455,6 +455,58 @@ fn process_directory(
   Ok((results, totals))
 }
 
+fn derive_file_pair_name(before: &Path, after: &Path) -> String {
+  if let Some(common_suffix) = common_suffix_path(before, after) {
+    let mut key_path = common_suffix;
+    key_path.set_extension("");
+    let key = path_to_forward_slashes(&key_path);
+    if !key.is_empty() {
+      return key;
+    }
+  }
+
+  before
+    .file_stem()
+    .or_else(|| after.file_stem())
+    .map(|s| s.to_string_lossy().to_string())
+    .unwrap_or_else(|| "render".to_string())
+}
+
+fn common_suffix_path(before: &Path, after: &Path) -> Option<PathBuf> {
+  let before_components: Vec<_> = before.components().collect();
+  let after_components: Vec<_> = after.components().collect();
+
+  let mut common_components = Vec::new();
+  let mut i = before_components.len();
+  let mut j = after_components.len();
+
+  while i > 0 && j > 0 {
+    let a = before_components[i - 1];
+    let b = after_components[j - 1];
+    if a != b {
+      break;
+    }
+    if let Component::Normal(os) = a {
+      common_components.push(os.to_os_string());
+    } else {
+      break;
+    }
+    i -= 1;
+    j -= 1;
+  }
+
+  if common_components.is_empty() {
+    return None;
+  }
+  common_components.reverse();
+
+  let mut suffix = PathBuf::new();
+  for component in common_components {
+    suffix.push(component);
+  }
+  Some(suffix)
+}
+
 fn process_files(
   before: &Path,
   after: &Path,
@@ -465,11 +517,7 @@ fn process_files(
   max_perceptual_distance: Option<f64>,
   shard: Option<(usize, usize)>,
 ) -> Result<(Vec<DiffReportEntry>, DiffReportTotals), String> {
-  let name = before
-    .file_stem()
-    .or_else(|| after.file_stem())
-    .map(|s| s.to_string_lossy().to_string())
-    .unwrap_or_else(|| "render".to_string());
+  let name = derive_file_pair_name(before, after);
 
   let mut totals = DiffReportTotals {
     discovered: 1,
@@ -521,7 +569,7 @@ fn process_entry(
       after: after_rel,
       diff: None,
       metrics: None,
-      error: Some("Missing in before input".to_string()),
+      error: Some(format!("Missing in before input: {name}")),
     },
     (Some(_), None) => DiffReportEntry {
       name: name.to_string(),
@@ -530,7 +578,7 @@ fn process_entry(
       after: None,
       diff: None,
       metrics: None,
-      error: Some("Missing in after input".to_string()),
+      error: Some(format!("Missing in after input: {name}")),
     },
     (Some(before), Some(after)) => {
       totals.processed += 1;

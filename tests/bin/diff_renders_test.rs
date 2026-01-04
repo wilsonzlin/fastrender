@@ -171,8 +171,8 @@ fn diff_renders_supports_recursive_directories() {
   fs::create_dir_all(before.join("a")).unwrap();
   fs::create_dir_all(after.join("a")).unwrap();
 
-  write_color_png(&before.join("a").join("x.png"), [255, 0, 0, 255]);
-  write_color_png(&after.join("a").join("x.png"), [0, 0, 255, 255]);
+  write_color_png(&before.join("a").join("page.png"), [255, 0, 0, 255]);
+  write_color_png(&after.join("a").join("page.png"), [0, 0, 255, 255]);
 
   let status = diff_renders_cmd(tmp.path())
     .args([
@@ -197,8 +197,8 @@ fn diff_renders_supports_recursive_directories() {
     .as_array()
     .expect("results array")
     .iter()
-    .find(|e| e["name"] == "a/x")
-    .expect("expected recursive entry name a/x");
+    .find(|e| e["name"] == "a/page")
+    .expect("expected recursive entry name a/page");
 
   let diff_path = entry["diff"].as_str().expect("diff path missing");
   assert!(
@@ -212,9 +212,9 @@ fn diff_renders_supports_recursive_directories() {
       .join("diff_report_files")
       .join("diffs")
       .join("a")
-      .join("x.png")
+      .join("page.png")
       .exists(),
-    "expected diff image at diff_report_files/diffs/a/x.png"
+    "expected diff image at diff_report_files/diffs/a/page.png"
   );
 }
 
@@ -223,11 +223,11 @@ fn diff_renders_supports_file_to_file_diffs() {
   let tmp = tempfile::TempDir::new().expect("tempdir");
   let before_dir = tmp.path().join("before");
   let after_dir = tmp.path().join("after");
-  fs::create_dir_all(&before_dir).unwrap();
-  fs::create_dir_all(&after_dir).unwrap();
+  fs::create_dir_all(before_dir.join("a")).unwrap();
+  fs::create_dir_all(after_dir.join("a")).unwrap();
 
-  let before = before_dir.join("page.png");
-  let after = after_dir.join("page.png");
+  let before = before_dir.join("a").join("page.png");
+  let after = after_dir.join("a").join("page.png");
   write_color_png(&before, [0, 255, 0, 255]);
   write_color_png(&after, [0, 0, 0, 255]);
 
@@ -252,7 +252,7 @@ fn diff_renders_supports_file_to_file_diffs() {
   .unwrap();
 
   assert_eq!(report["totals"]["discovered"].as_u64(), Some(1));
-  assert_eq!(report["results"][0]["name"], "page");
+  assert_eq!(report["results"][0]["name"], "a/page");
   assert_eq!(report["results"][0]["status"], "diff");
 
   let diff_path = report["results"][0]["diff"]
@@ -263,6 +263,52 @@ fn diff_renders_supports_file_to_file_diffs() {
     "diff image missing at {}",
     diff_path
   );
+  assert!(
+    tmp
+      .path()
+      .join("diff_report_files")
+      .join("diffs")
+      .join("a")
+      .join("page.png")
+      .exists(),
+    "expected diff image at diff_report_files/diffs/a/page.png"
+  );
+}
+
+#[test]
+fn diff_renders_avoids_name_collisions_for_nested_paths() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(before.join("a")).unwrap();
+  fs::create_dir_all(before.join("b")).unwrap();
+  fs::create_dir_all(after.join("a")).unwrap();
+  fs::create_dir_all(after.join("b")).unwrap();
+
+  write_color_png(&before.join("a").join("x.png"), [10, 20, 30, 255]);
+  write_color_png(&after.join("a").join("x.png"), [10, 20, 30, 255]);
+  write_color_png(&before.join("b").join("x.png"), [1, 2, 3, 255]);
+  write_color_png(&after.join("b").join("x.png"), [1, 2, 3, 255]);
+
+  let status = diff_renders_cmd(tmp.path())
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+    ])
+    .status()
+    .expect("run diff_renders");
+
+  assert!(status.success(), "expected success, got {:?}", status.code());
+
+  let report: Value = serde_json::from_str(
+    &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
+  )
+  .unwrap();
+  assert_eq!(report["results"].as_array().unwrap().len(), 2);
+  assert_eq!(report["results"][0]["name"], "a/x");
+  assert_eq!(report["results"][1]["name"], "b/x");
 }
 
 #[test]
