@@ -12235,6 +12235,7 @@ mod tests {
 
   #[test]
   fn svg_filter_data_url_applies() {
+    let _guard = crate::paint::svg_filter::svg_filter_test_guard();
     use base64::{engine::general_purpose, Engine as _};
 
     let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><filter id='f'><feFlood flood-color='rgb(255,0,0)' flood-opacity='1' result='f'/><feComposite in='f' in2='SourceAlpha' operator='in'/></filter></svg>";
@@ -12288,6 +12289,7 @@ mod tests {
 
   #[test]
   fn svg_filter_default_region_extends_bounds() {
+    let _guard = crate::paint::svg_filter::svg_filter_test_guard();
     use base64::{engine::general_purpose, Engine as _};
 
     let svg =
@@ -12336,6 +12338,7 @@ mod tests {
 
   #[test]
   fn svg_filter_explicit_region_clips_to_bounds() {
+    let _guard = crate::paint::svg_filter::svg_filter_test_guard();
     use base64::{engine::general_purpose, Engine as _};
 
     let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' x='0' y='0' width='100%' height='100%'><feGaussianBlur stdDeviation='2'/></filter></svg>";

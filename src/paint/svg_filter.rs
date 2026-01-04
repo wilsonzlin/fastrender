@@ -163,6 +163,15 @@ fn filter_cache_len() -> usize {
 }
 
 #[cfg(test)]
+pub(crate) fn svg_filter_test_guard() -> std::sync::MutexGuard<'static, ()> {
+  static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+  LOCK
+    .get_or_init(|| Mutex::new(()))
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
 fn reset_filter_result_cache_for_tests(config: FilterCacheConfig) {
   filter_result_cache_config_state().store(config);
   *filter_result_cache()
@@ -5155,6 +5164,7 @@ mod tests {
 
   #[test]
   fn svg_filter_fetch_uses_image_destination_and_referrer() {
+    let _guard = svg_filter_test_guard();
     let doc_url = "https://example.com/doc.html";
     let fetcher = Arc::new(RecordingFetcher::default());
     let mut cache = ImageCache::with_base_url_and_fetcher(doc_url.to_string(), fetcher.clone());
@@ -6241,6 +6251,7 @@ mod filter_res_tests {
 
   #[test]
   fn filter_res_downsamples_filter_graph() {
+    let _guard = svg_filter_test_guard();
     let cache = ImageCache::new();
     let svg_full = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='12' height='12'><feGaussianBlur stdDeviation='2'/></filter></svg>";
     let svg_low = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='12' height='12' filterRes='4 4'><feGaussianBlur stdDeviation='2'/></filter></svg>";
@@ -6275,6 +6286,7 @@ mod filter_res_tests {
 
   #[test]
   fn filter_res_identity_does_not_resample_offset_region() {
+    let _guard = svg_filter_test_guard();
     let cache = ImageCache::new();
     let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='2' y='2' width='4' height='4' filterRes='4 4'><feOffset dx='0' dy='0'/></filter></svg>";
     let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
@@ -6312,6 +6324,7 @@ mod filter_res_tests {
 
   #[test]
   fn filter_res_respects_filter_region_bounds() {
+    let _guard = svg_filter_test_guard();
     let cache = ImageCache::new();
     let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' filterRes='2 2'><feOffset dx='0' dy='0'/></filter></svg>";
     let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
@@ -6600,12 +6613,7 @@ mod filter_cache_tests {
   use image::ImageEncoder;
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicUsize, Ordering};
-  use std::sync::{Arc, Mutex, OnceLock};
-
-  fn test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-  }
+  use std::sync::{Arc, Mutex};
 
   #[derive(Clone)]
   struct TestFilterFetcher {
@@ -6696,7 +6704,7 @@ mod filter_cache_tests {
 
   #[test]
   fn evicts_least_recently_used_filter_when_over_capacity() {
-    let _guard = test_lock().lock().unwrap();
+    let _guard = svg_filter_test_guard();
     reset_filter_cache_for_tests(FilterCacheConfig {
       max_items: 2,
       max_bytes: 1024 * 1024,
@@ -6731,7 +6739,7 @@ mod filter_cache_tests {
 
   #[test]
   fn reuses_cache_for_resolved_urls() {
-    let _guard = test_lock().lock().unwrap();
+    let _guard = svg_filter_test_guard();
     reset_filter_cache_for_tests(FilterCacheConfig {
       max_items: 4,
       max_bytes: 1024 * 1024,
@@ -6762,7 +6770,7 @@ mod filter_cache_tests {
 
   #[test]
   fn load_svg_filter_fetches_with_image_destination_and_document_referrer() {
-    let _guard = test_lock().lock().unwrap();
+    let _guard = svg_filter_test_guard();
     let fetcher = Arc::new(RecordingRequestFetcher::default());
     let mut cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
 
@@ -6782,7 +6790,7 @@ mod filter_cache_tests {
 
   #[test]
   fn filter_cache_recovers_from_poisoned_lock() {
-    let _guard = test_lock().lock().unwrap();
+    let _guard = svg_filter_test_guard();
     reset_filter_cache_for_tests(FilterCacheConfig {
       max_items: 4,
       max_bytes: 1024 * 1024,
@@ -6818,7 +6826,7 @@ mod filter_cache_tests {
 
   #[test]
   fn filter_cache_skips_when_entry_exceeds_byte_budget_due_to_embedded_pixmap() {
-    let _guard = test_lock().lock().unwrap();
+    let _guard = svg_filter_test_guard();
     reset_filter_cache_for_tests(FilterCacheConfig {
       max_items: 64,
       max_bytes: 1024,
@@ -6903,6 +6911,7 @@ mod load_svg_filter_diagnostics_tests {
 
   #[test]
   fn svg_filter_fetch_network_error_records_diagnostics() {
+    let _guard = svg_filter_test_guard();
     let diagnostics = SharedRenderDiagnostics::new();
     let fetcher = Arc::new(MockFetcher::new(|url| {
       Err(Error::Resource(ResourceError::new(
@@ -6927,6 +6936,7 @@ mod load_svg_filter_diagnostics_tests {
 
   #[test]
   fn svg_filter_http_error_status_records_diagnostics() {
+    let _guard = svg_filter_test_guard();
     let diagnostics = SharedRenderDiagnostics::new();
     let fetcher = Arc::new(MockFetcher::new(|_url| {
       let mut resource = FetchedResource::new(
