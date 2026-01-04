@@ -1299,7 +1299,7 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
   let mut bracket = 0i32;
   let mut brace = 0i32;
   let mut in_string: Option<char> = None;
-  let mut chars = raw.chars();
+  let mut chars = raw.chars().peekable();
   while let Some(ch) = chars.next() {
     if let Some(quote) = in_string {
       current.push(ch);
@@ -1320,6 +1320,20 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
       if let Some(next) = chars.next() {
         current.push(next);
       }
+      continue;
+    }
+
+    if ch == '/' && chars.peek() == Some(&'*') {
+      chars.next();
+      let mut saw_star = false;
+      while let Some(inner) = chars.next() {
+        if saw_star && inner == '/' {
+          break;
+        }
+        saw_star = inner == '*';
+      }
+      // Comments behave like whitespace in CSS.
+      current.push(' ');
       continue;
     }
 
@@ -1374,7 +1388,7 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
   let mut bracket = 0i32;
   let mut brace = 0i32;
   let mut in_string: Option<char> = None;
-  let mut chars = raw.chars();
+  let mut chars = raw.chars().peekable();
 
   while let Some(ch) = chars.next() {
     if let Some(quote) = in_string {
@@ -1395,6 +1409,26 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
       current.push(ch);
       if let Some(next) = chars.next() {
         current.push(next);
+      }
+      continue;
+    }
+
+    if ch == '/' && chars.peek() == Some(&'*') {
+      chars.next();
+      let mut saw_star = false;
+      while let Some(inner) = chars.next() {
+        if saw_star && inner == '/' {
+          break;
+        }
+        saw_star = inner == '*';
+      }
+      if depth == 0 && bracket == 0 && brace == 0 {
+        if !current.trim().is_empty() {
+          parts.push(current.trim().to_string());
+        }
+        current.clear();
+      } else {
+        current.push(' ');
       }
       continue;
     }
@@ -15623,6 +15657,39 @@ mod tests {
   fn transition_shorthand_parses_cubic_bezier_function_tokens() {
     let decls =
       parse_declarations("transition: opacity 200ms cubic-bezier(.25,1,.5,1) 50ms;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.transition_properties,
+      vec![TransitionProperty::Name("opacity".to_string())].into()
+    );
+    assert_eq!(styles.transition_durations, vec![200.0].into());
+    assert_eq!(styles.transition_delays, vec![50.0].into());
+    assert_eq!(
+      styles.transition_timing_functions,
+      vec![TransitionTimingFunction::CubicBezier(0.25, 1.0, 0.5, 1.0)].into()
+    );
+  }
+
+  #[test]
+  fn transition_shorthand_treats_css_comments_as_whitespace() {
+    let decls = parse_declarations(
+      "transition: opacity 200ms/*comment*/cubic-bezier(.25,1,.5,1) 50ms;",
+    );
     assert_eq!(decls.len(), 1);
     let decl = &decls[0];
 
