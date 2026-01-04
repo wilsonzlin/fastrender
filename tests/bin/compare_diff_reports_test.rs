@@ -3,6 +3,10 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+fn output_text(bytes: &[u8]) -> String {
+  String::from_utf8_lossy(bytes).to_string()
+}
+
 fn write_json(path: &Path, value: &Value) {
   fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
 }
@@ -120,7 +124,7 @@ fn compare_diff_reports_pairs_and_classifies_entries() {
   write_json(&baseline_path, &baseline);
   write_json(&new_path, &new_report);
 
-  let status = compare_cmd(tmp.path())
+  let output = compare_cmd(tmp.path())
     .args([
       "--baseline",
       baseline_path.to_str().unwrap(),
@@ -131,13 +135,15 @@ fn compare_diff_reports_pairs_and_classifies_entries() {
       "--html",
       out_html.to_str().unwrap(),
     ])
-    .status()
+    .output()
     .expect("run compare_diff_reports");
 
   assert!(
-    status.success(),
-    "expected success, got {:?}",
-    status.code()
+    output.status.success(),
+    "expected success, got {:?}\nstdout:\n{}\nstderr:\n{}",
+    output.status.code(),
+    output_text(&output.stdout),
+    output_text(&output.stderr),
   );
   assert!(out_json.exists(), "missing delta json");
   assert!(out_html.exists(), "missing delta html");
@@ -251,7 +257,7 @@ fn compare_diff_reports_can_gate_on_regressions() {
 
   let out_json_fail = tmp.path().join("delta_fail.json");
   let out_html_fail = tmp.path().join("delta_fail.html");
-  let status = compare_cmd(tmp.path())
+  let output = compare_cmd(tmp.path())
     .args([
       "--baseline",
       baseline_path.to_str().unwrap(),
@@ -265,15 +271,20 @@ fn compare_diff_reports_can_gate_on_regressions() {
       "--regression-threshold-percent",
       "0",
     ])
-    .status()
+    .output()
     .expect("run compare_diff_reports");
 
-  assert!(!status.success(), "expected failure exit code");
+  assert!(
+    !output.status.success(),
+    "expected failure exit code\nstdout:\n{}\nstderr:\n{}",
+    output_text(&output.stdout),
+    output_text(&output.stderr)
+  );
   assert!(out_json_fail.exists(), "delta json should still be written");
 
   let out_json_pass = tmp.path().join("delta_pass.json");
   let out_html_pass = tmp.path().join("delta_pass.html");
-  let status = compare_cmd(tmp.path())
+  let output = compare_cmd(tmp.path())
     .args([
       "--baseline",
       baseline_path.to_str().unwrap(),
@@ -287,10 +298,15 @@ fn compare_diff_reports_can_gate_on_regressions() {
       "--regression-threshold-percent",
       "1",
     ])
-    .status()
+    .output()
     .expect("run compare_diff_reports");
 
-  assert!(status.success(), "expected success with threshold");
+  assert!(
+    output.status.success(),
+    "expected success with threshold\nstdout:\n{}\nstderr:\n{}",
+    output_text(&output.stdout),
+    output_text(&output.stderr)
+  );
 }
 
 #[test]
@@ -316,7 +332,7 @@ fn compare_diff_reports_gating_fails_on_missing_entries_in_new_report() {
   write_json(&baseline_path, &baseline);
   write_json(&new_path, &new_report);
 
-  let status = compare_cmd(tmp.path())
+  let output = compare_cmd(tmp.path())
     .args([
       "--baseline",
       baseline_path.to_str().unwrap(),
@@ -328,10 +344,15 @@ fn compare_diff_reports_gating_fails_on_missing_entries_in_new_report() {
       out_html.to_str().unwrap(),
       "--fail-on-regression",
     ])
-    .status()
+    .output()
     .expect("run compare_diff_reports");
 
-  assert!(!status.success(), "expected failure exit code");
+  assert!(
+    !output.status.success(),
+    "expected failure exit code\nstdout:\n{}\nstderr:\n{}",
+    output_text(&output.stdout),
+    output_text(&output.stderr)
+  );
   assert!(out_json.exists(), "delta json should still be written");
   assert!(out_html.exists(), "delta html should still be written");
 
@@ -362,7 +383,7 @@ fn compare_diff_reports_requires_matching_config_by_default() {
   write_json(&baseline_path, &baseline);
   write_json(&new_path, &new_report);
 
-  let status = compare_cmd(tmp.path())
+  let output = compare_cmd(tmp.path())
     .args([
       "--baseline",
       baseline_path.to_str().unwrap(),
@@ -373,12 +394,14 @@ fn compare_diff_reports_requires_matching_config_by_default() {
       "--html",
       out_html_fail.to_str().unwrap(),
     ])
-    .status()
+    .output()
     .expect("run compare_diff_reports");
 
   assert!(
-    !status.success(),
-    "expected non-zero exit for config mismatch"
+    !output.status.success(),
+    "expected non-zero exit for config mismatch\nstdout:\n{}\nstderr:\n{}",
+    output_text(&output.stdout),
+    output_text(&output.stderr),
   );
 
   assert!(out_json_fail.exists(), "delta json should still be written");
@@ -388,7 +411,7 @@ fn compare_diff_reports_requires_matching_config_by_default() {
   assert_eq!(report["config_mismatches"].as_array().unwrap().len(), 1);
   assert_eq!(report["config_mismatches"][0]["field"], "tolerance");
 
-  let status = compare_cmd(tmp.path())
+  let output = compare_cmd(tmp.path())
     .args([
       "--baseline",
       baseline_path.to_str().unwrap(),
@@ -400,10 +423,15 @@ fn compare_diff_reports_requires_matching_config_by_default() {
       out_html_ok.to_str().unwrap(),
       "--allow-config-mismatch",
     ])
-    .status()
+    .output()
     .expect("run compare_diff_reports");
 
-  assert!(status.success(), "expected success when mismatch allowed");
+  assert!(
+    output.status.success(),
+    "expected success when mismatch allowed\nstdout:\n{}\nstderr:\n{}",
+    output_text(&output.stdout),
+    output_text(&output.stderr)
+  );
 
   let report: Value = serde_json::from_str(&fs::read_to_string(&out_json_ok).unwrap()).unwrap();
   assert_eq!(report["config_mismatches"].as_array().unwrap().len(), 1);

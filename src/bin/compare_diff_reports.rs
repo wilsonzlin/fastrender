@@ -277,7 +277,11 @@ fn run() -> Result<i32, String> {
 
   let config_mismatches = diff_config(&baseline_report, &new_report);
   if !config_mismatches.is_empty() {
-    eprintln!("warning: diff report config mismatch (pass --allow-config-mismatch to proceed):");
+    if args.allow_config_mismatch {
+      eprintln!("warning: diff report config mismatch (--allow-config-mismatch set; continuing):");
+    } else {
+      eprintln!("warning: diff report config mismatch (pass --allow-config-mismatch to proceed):");
+    }
     for mismatch in &config_mismatches {
       eprintln!(
         "  - {}: baseline={} new={}",
@@ -300,6 +304,11 @@ fn run() -> Result<i32, String> {
 
       write_json_report(&report, &args.json)?;
       write_html_report(&report, &baseline_path, &new_path, &args.html)?;
+      println!(
+        "Refusing to compare reports with mismatched diff config; wrote delta report to {} and {}.",
+        args.json.display(),
+        args.html.display()
+      );
       return Ok(1);
     }
   }
@@ -386,16 +395,22 @@ fn run() -> Result<i32, String> {
 
   write_json_report(&report, &args.json)?;
   write_html_report(&report, &baseline_path, &new_path, &args.html)?;
+  print_summary(&report, &args);
 
   if args.fail_on_regression {
     let threshold = args.regression_threshold_percent;
-    let failing = report
+    let failing: Vec<&DeltaEntry> = report
       .results
       .iter()
       .filter(|entry| is_failing_regression(entry, threshold))
-      .count();
-    if failing > 0 {
-      eprintln!("{failing} regressions over threshold");
+      .collect();
+    if !failing.is_empty() {
+      eprintln!(
+        "{} failing regressions (diff threshold {:.4}%)",
+        failing.len(),
+        threshold
+      );
+      print_failing_regressions(&failing, threshold);
       return Ok(1);
     }
   }
@@ -408,6 +423,129 @@ fn validate_args(args: &Args) -> Result<(), String> {
     return Err("--regression-threshold-percent must be a finite, non-negative number".to_string());
   }
   Ok(())
+}
+
+fn print_summary(report: &DeltaReport, args: &Args) {
+  println!(
+    "Report delta: paired={} improved={} regressed={} unchanged={} missing_in_baseline={} missing_in_new={} baseline_errors={} new_errors={} baseline_missing={} new_missing={}",
+    report.totals.paired,
+    report.totals.improved,
+    report.totals.regressed,
+    report.totals.unchanged,
+    report.totals.missing_in_baseline,
+    report.totals.missing_in_new,
+    report.totals.baseline_errors,
+    report.totals.new_errors,
+    report.totals.baseline_missing,
+    report.totals.new_missing,
+  );
+
+  if report.aggregate.paired_with_metrics > 0 {
+    let weighted = report
+      .aggregate
+      .delta
+      .weighted_diff_percentage
+      .map(|v| format!("{:+.4}%", v))
+      .unwrap_or_else(|| "-".to_string());
+    let mean = report
+      .aggregate
+      .delta
+      .mean_diff_percentage
+      .map(|v| format!("{:+.4}%", v))
+      .unwrap_or_else(|| "-".to_string());
+    let perceptual = report
+      .aggregate
+      .delta
+      .mean_perceptual_distance
+      .map(|v| format!("{:+.4}", v))
+      .unwrap_or_else(|| "-".to_string());
+
+    println!(
+      "Aggregate delta ({} paired with metrics): weighted_diff={} mean_diff={} mean_perceptual={}",
+      report.aggregate.paired_with_metrics, weighted, mean, perceptual
+    );
+  }
+
+  println!(
+    "Wrote delta reports: json={} html={}",
+    args.json.display(),
+    args.html.display()
+  );
+}
+
+fn print_failing_regressions(failing: &[&DeltaEntry], threshold: f64) {
+  const LIMIT: usize = 20;
+
+  let mut missing_in_new = Vec::new();
+  let mut missing_metrics = Vec::new();
+  let mut metric_regressions = Vec::new();
+
+  for entry in failing {
+    match entry.classification {
+      DeltaClassification::MissingInNew => missing_in_new.push(entry),
+      DeltaClassification::Regressed => {
+        if entry.diff_percentage_delta.is_none() {
+          missing_metrics.push(entry);
+        } else {
+          metric_regressions.push(entry);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  if !missing_in_new.is_empty() {
+    eprintln!("Missing in new report:");
+    for entry in missing_in_new.iter().take(LIMIT) {
+      eprintln!("  - {}", entry.name);
+    }
+    if missing_in_new.len() > LIMIT {
+      eprintln!("  ... ({} more)", missing_in_new.len() - LIMIT);
+    }
+  }
+
+  if !missing_metrics.is_empty() {
+    eprintln!("Regressed without comparable metrics:");
+    for entry in missing_metrics.iter().take(LIMIT) {
+      let baseline = entry
+        .baseline
+        .as_ref()
+        .map(|s| s.status.label())
+        .unwrap_or("-");
+      let new_status = entry.new.as_ref().map(|s| s.status.label()).unwrap_or("-");
+      eprintln!("  - {} (baseline={}, new={})", entry.name, baseline, new_status);
+    }
+    if missing_metrics.len() > LIMIT {
+      eprintln!("  ... ({} more)", missing_metrics.len() - LIMIT);
+    }
+  }
+
+  if !metric_regressions.is_empty() {
+    metric_regressions.sort_by(|a, b| {
+      let a_delta = a.diff_percentage_delta.unwrap_or(0.0);
+      let b_delta = b.diff_percentage_delta.unwrap_or(0.0);
+      b_delta
+        .partial_cmp(&a_delta)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.name.cmp(&b.name))
+    });
+
+    eprintln!("Failing regressions with metrics (diff threshold {:.4}%):", threshold);
+    for entry in metric_regressions.iter().take(LIMIT) {
+      let diff = entry
+        .diff_percentage_delta
+        .map(|d| format!("{:+.4}%", d))
+        .unwrap_or_else(|| "-".to_string());
+      let perceptual = entry
+        .perceptual_distance_delta
+        .map(|d| format!("{:+.4}", d))
+        .unwrap_or_else(|| "-".to_string());
+      eprintln!("  - {}: Δdiff={} Δperceptual={}", entry.name, diff, perceptual);
+    }
+    if metric_regressions.len() > LIMIT {
+      eprintln!("  ... ({} more)", metric_regressions.len() - LIMIT);
+    }
+  }
 }
 
 fn compute_aggregate_metrics(entries: &[DeltaEntry]) -> AggregateMetrics {
