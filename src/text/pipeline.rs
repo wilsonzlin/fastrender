@@ -4271,7 +4271,19 @@ fn resolve_font_for_char_with_preferences(
         if let Some(font) =
           font_context.match_web_font_for_char(family, weight, style, stretch, oblique_angle, ch)
         {
-          return Some(Arc::new(font));
+          let font = Arc::new(font);
+          if picker.prefer_emoji || picker.avoid_emoji {
+            let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
+            let idx = picker.bump_order();
+            picker.record_any(&font, is_emoji_font, idx);
+            if font_supports_all_chars(font.as_ref(), &[ch]) {
+              if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                return Some(font);
+              }
+            }
+          } else {
+            return Some(font);
+          }
         }
         if let Some(font) =
           font_context.match_web_font_for_family(family, weight, style, stretch, oblique_angle)
@@ -4315,7 +4327,19 @@ fn resolve_font_for_char_with_preferences(
       if let Some(font) =
         font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, ch)
       {
-        return Some(Arc::new(font));
+        let font = Arc::new(font);
+        if picker.prefer_emoji || picker.avoid_emoji {
+          let is_emoji_font = font_is_emoji_font(db, None, font.as_ref());
+          let idx = picker.bump_order();
+          picker.record_any(&font, is_emoji_font, idx);
+          if font_supports_all_chars(font.as_ref(), &[ch]) {
+            if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+              return Some(font);
+            }
+          }
+        } else {
+          return Some(font);
+        }
       }
       if let Some(font) =
         font_context.match_web_font_for_family(name, weight, style, stretch, oblique_angle)
