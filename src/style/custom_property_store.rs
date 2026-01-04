@@ -31,7 +31,7 @@ pub(crate) fn test_hamt_inserts() -> u64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CustomPropertyStore {
   map: CustomPropertyMap,
-  /// Count of custom property values containing the keyword `revert-layer`.
+  /// Count of custom property values that are the CSS-wide keyword `revert-layer`.
   ///
   /// This is an optimization for `apply_cascaded_declarations`, which otherwise would scan every
   /// custom-property value for the token on every element. Large real-world pages often define
@@ -129,65 +129,55 @@ pub(crate) fn contains_revert_layer_token(haystack: &str) -> bool {
     return false;
   }
 
-  // Fast-path: most values do not mention `revert-layer` at all, so do a quick case-insensitive
-  // substring scan first and bail early when it is absent.
-  //
-  // Important: this is only a *prefilter*. The substring may appear inside strings/URLs and does
-  // not necessarily correspond to an identifier token (which is what matters for `revert-layer`
-  // semantics after var() substitution). When the substring is present, fall back to a tokenizer
-  // walk to avoid false positives that would otherwise force expensive cascade layer snapshotting.
-  let mut has_candidate = false;
-  for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
-    let mut matched = true;
-    for (offset, &needle_byte) in NEEDLE.iter().enumerate() {
-      if bytes[start + offset].to_ascii_lowercase() != needle_byte {
-        matched = false;
-        break;
-      }
-    }
-    if matched {
-      has_candidate = true;
-      break;
-    }
-  }
-
   let has_backslash = bytes.contains(&b'\\');
-  if !has_candidate && !has_backslash {
-    return false;
-  }
-
   // Extremely common case: the value *is* the keyword (possibly with surrounding whitespace).
   // Avoid the tokenizer walk for this hot path.
   if !has_backslash && haystack.trim().eq_ignore_ascii_case("revert-layer") {
     return true;
   }
 
-  fn contains_revert_layer_in_parser<'i, 't>(parser: &mut Parser<'i, 't>) -> bool {
-    while let Ok(token) = parser.next_including_whitespace_and_comments() {
-      match token {
-        Token::Ident(ident) if ident.eq_ignore_ascii_case("revert-layer") => return true,
-        Token::Function(_)
-        | Token::ParenthesisBlock
-        | Token::SquareBracketBlock
-        | Token::CurlyBracketBlock => {
-          if let Ok(nested_found) = parser.parse_nested_block(|nested| {
-            Ok::<_, cssparser::ParseError<'i, ()>>(contains_revert_layer_in_parser(nested))
-          }) {
-            if nested_found {
-              return true;
-            }
-          }
+  // Fast-path: if there are no escapes and the literal substring isn't present, the value can't be
+  // the keyword.
+  if !has_backslash {
+    let mut has_candidate = false;
+    for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
+      let mut matched = true;
+      for (offset, &needle_byte) in NEEDLE.iter().enumerate() {
+        if bytes[start + offset].to_ascii_lowercase() != needle_byte {
+          matched = false;
+          break;
         }
-        _ => {}
+      }
+      if matched {
+        has_candidate = true;
+        break;
       }
     }
-
-    false
+    if !has_candidate {
+      return false;
+    }
   }
 
   let mut input = ParserInput::new(haystack);
   let mut parser = Parser::new(&mut input);
-  contains_revert_layer_in_parser(&mut parser)
+  let mut matched = false;
+  while let Ok(token) = parser.next_including_whitespace_and_comments() {
+    match token {
+      Token::WhiteSpace(_) | Token::Comment(_) => continue,
+      Token::Ident(ident) => {
+        if matched {
+          return false;
+        }
+        matched = ident.eq_ignore_ascii_case("revert-layer");
+        if !matched {
+          return false;
+        }
+      }
+      _ => return false,
+    }
+  }
+
+  matched
 }
 
 #[cfg(test)]
@@ -199,7 +189,7 @@ mod tests {
     assert!(contains_revert_layer_token("revert-layer"));
     assert!(contains_revert_layer_token("revert\\-layer"));
     assert!(contains_revert_layer_token("revert-layer/*comment*/"));
-    assert!(contains_revert_layer_token("foo revert-layer bar"));
+    assert!(!contains_revert_layer_token("foo revert-layer bar"));
 
     // Must not match the substring inside a larger identifier.
     assert!(!contains_revert_layer_token("revert-layerx"));
