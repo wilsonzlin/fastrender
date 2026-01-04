@@ -53,6 +53,17 @@ pub struct ImagePrefetchDiscovery {
 
 const WIDTH_DESCRIPTOR_SECONDARY_SLOT_SCALE: f32 = 0.75;
 
+const IMG_SRC_DATA_ATTR_FALLBACKS: [&str; 5] = [
+  "data-src",
+  "data-lazy-src",
+  "data-original",
+  "data-original-src",
+  "data-gl-src",
+];
+
+const IMG_SRCSET_DATA_ATTR_FALLBACKS: [&str; 3] =
+  ["data-srcset", "data-lazy-srcset", "data-gl-srcset"];
+
 fn get_non_empty_attr<'a>(node: &'a DomNode, name: &str) -> Option<&'a str> {
   node
     .get_attribute_ref(name)
@@ -70,11 +81,13 @@ fn get_img_src_attr<'a>(node: &'a DomNode) -> Option<&'a str> {
     }
   }
 
-  get_first_non_empty_attr(node, &COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES)
+  get_first_non_empty_attr(node, &IMG_SRC_DATA_ATTR_FALLBACKS)
+    .or_else(|| get_first_non_empty_attr(node, &COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES))
 }
 
 fn get_img_srcset_attr<'a>(node: &'a DomNode) -> Option<&'a str> {
   get_non_empty_attr(node, "srcset")
+    .or_else(|| get_first_non_empty_attr(node, &IMG_SRCSET_DATA_ATTR_FALLBACKS))
     .or_else(|| get_first_non_empty_attr(node, &COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES))
 }
 
@@ -734,6 +747,27 @@ mod tests {
   #[test]
   fn discovers_img_srcset_from_data_gl_srcset() {
     let html = r#"<img data-gl-srcset="a1.jpg 1x, a2.jpg 2x">"#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 2.0);
+    let ctx = ctx_for((800.0, 600.0), 2.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 1,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/a2.jpg".to_string()]);
+  }
+
+  #[test]
+  fn discovers_img_srcset_from_data_srcset() {
+    let html = r#"<img data-srcset="a1.jpg 1x, a2.jpg 2x">"#;
     let dom = parse_html(html).unwrap();
 
     let media_ctx = media_ctx_for((800.0, 600.0), 2.0);
