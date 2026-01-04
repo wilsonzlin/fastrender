@@ -125,6 +125,9 @@ Use `import_wpt` to bring small slices of upstream WPT into `tests/wpt/tests/` w
 - Update existing files/manifest entries: add `--overwrite`
 - Control metadata: `--manifest <path>` overrides the default `tests/wpt/manifest.toml`; `--no-manifest` skips updates
 - Allow leaving network URLs in imported HTML/CSS (not recommended; disables offline validation): `--allow-network`
+- Enable extra strict offline validation (optional): `--strict-offline`
+  - In addition to the default “no fetchable network URLs” checks, this scans the rewritten HTML/CSS for any remaining `http(s)://` or protocol-relative (`//`) URL strings (excluding `data:` URLs) and fails the import if any are found.
+  - Useful for catching unusual leftover references that the targeted validators may miss (for example, network-looking strings outside typical `src=`/`href=`/`srcset=`/CSS `url()` contexts).
 - Offline behavior (important for deterministic tests):
   - Root-relative URLs (e.g. `/resources/foo.png`) and `web-platform.test` URLs are rewritten to file-relative paths inside the imported tree.
   - Sidecar metadata files (e.g. `.html.ini`) are copied alongside tests when present so the local WPT harness can apply expectations/viewport/DPR.
