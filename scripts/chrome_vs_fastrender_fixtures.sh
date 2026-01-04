@@ -22,6 +22,7 @@ Options:
   --viewport <WxH>          Viewport size (default: 1040x1240)
   --dpr <float>             Device pixel ratio (default: 1.0)
   --media <screen|print>    Media type for FastRender (default: screen)
+  --jobs <n>                Parallelism forwarded to render_fixtures
   --timeout <secs>          Per-fixture timeout (Chrome + FastRender) (default: 15)
   --chrome <path>           Chrome/Chromium binary (default: auto-detect)
   --js <on|off>             Enable JavaScript in Chrome (default: off)
@@ -54,6 +55,7 @@ REPORT_JSON="${REPORT_JSON:-target/chrome_vs_fastrender_fixtures.json}"
 VIEWPORT="${VIEWPORT:-1040x1240}"
 DPR="${DPR:-1.0}"
 MEDIA="${MEDIA:-screen}"
+JOBS=""
 TIMEOUT="${TIMEOUT:-15}"
 CHROME_BIN="${CHROME_BIN:-}"
 JS="${JS:-off}"
@@ -93,6 +95,8 @@ while [[ $# -gt 0 ]]; do
         DPR="${2:-}"; shift 2 ;;
       --media)
         MEDIA="${2:-}"; shift 2 ;;
+      --jobs)
+        JOBS="${2:-}"; shift 2 ;;
       --timeout)
         TIMEOUT="${2:-}"; shift 2 ;;
       --chrome)
@@ -147,6 +151,13 @@ refuse_unsafe_path "chrome out dir" "${CHROME_OUT_DIR}"
 refuse_unsafe_path "fastrender out dir" "${FASTR_OUT_DIR}"
 refuse_unsafe_path "report html path" "${REPORT_HTML}"
 refuse_unsafe_path "report json path" "${REPORT_JSON}"
+
+if [[ -n "${JOBS}" ]]; then
+  if ! [[ "${JOBS}" =~ ^[0-9]+$ ]] || [[ "${JOBS}" -lt 1 ]]; then
+    echo "invalid --jobs: ${JOBS} (expected integer >= 1)" >&2
+    exit 2
+  fi
+fi
 
 discover_default_fixtures() {
   local out=()
@@ -290,14 +301,19 @@ echo "== FastRender fixtures =="
 if [[ "${NO_FASTRENDER}" -eq 1 ]]; then
   echo "(skipping render_fixtures; reusing ${FASTR_OUT_DIR})"
 else
-  if cargo run --release --bin render_fixtures -- \
-    --fixtures-dir "${FIXTURES_DIR}" \
-    --out-dir "${FASTR_OUT_DIR}" \
-    --fixtures "$(IFS=,; echo "${FIXTURES[*]}")" \
-    --viewport "${VIEWPORT}" \
-    --dpr "${DPR}" \
-    --media "${MEDIA}" \
-    --timeout "${TIMEOUT}"; then
+  render_args=(
+    --fixtures-dir "${FIXTURES_DIR}"
+    --out-dir "${FASTR_OUT_DIR}"
+    --fixtures "$(IFS=,; echo "${FIXTURES[*]}")"
+    --viewport "${VIEWPORT}"
+    --dpr "${DPR}"
+    --media "${MEDIA}"
+    --timeout "${TIMEOUT}"
+  )
+  if [[ -n "${JOBS}" ]]; then
+    render_args+=(--jobs "${JOBS}")
+  fi
+  if cargo run --release --bin render_fixtures -- "${render_args[@]}"; then
     :
   else
     fastr_status=$?

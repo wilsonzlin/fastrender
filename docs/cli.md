@@ -23,7 +23,7 @@ These are optional wrappers for the most common loops:
   - Defaults to `viewport=1040x1240`, `dpr=1.0`, JavaScript disabled, and the fixture set in `tests/pages_regression_test.rs`.
   - Writes `target/chrome_vs_fastrender_fixtures.html` + `target/chrome_vs_fastrender_fixtures.json` plus PNG/log/metadata artifacts under `target/chrome_fixture_renders/` and PNG/log artifacts under `target/fastrender_fixture_renders/`.
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--ignore-alpha`, `--sort-by {pixel|percent|perceptual}`, `--fail-on-differences`, `--no-chrome`, `--no-fastrender`, `--diff-only`
-  - Supports `--shard <index>/<total>` for deterministic sharding (0-based)
+  - Supports `--shard <index>/<total>` for deterministic sharding (0-based); forwards `--jobs <n>` to `render_fixtures`.
 - Run any command under a hard memory cap (uses `prlimit` when available): `scripts/run_limited.sh --as 8G -- <command...>`
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
