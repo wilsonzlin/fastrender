@@ -690,9 +690,14 @@ fn run_chrome_with_timeout(
   } else {
     options.truncate(true);
   }
-  let log_file = options
+  let mut log_file = options
     .open(log_path)
     .with_context(|| format!("open log file {}", log_path.display()))?;
+  // Persist the command line used so logs are actionable even when Chrome itself produces no output.
+  writeln!(log_file, "# chrome: {}", chrome.display()).ok();
+  writeln!(log_file, "# url: {url}").ok();
+  writeln!(log_file, "# args: {}", args.join(" ")).ok();
+  writeln!(log_file).ok();
   let stderr = log_file
     .try_clone()
     .with_context(|| format!("clone log file handle for {}", log_path.display()))?;
