@@ -52,6 +52,7 @@ use crate::render_control::check_active_periodic;
 use crate::render_control::RenderDeadline;
 use crate::style::color::{Color, Rgba};
 use crate::style::custom_properties::CustomPropertyRegistry;
+use crate::style::custom_property_store::CustomPropertyStore;
 use crate::style::defaults::get_default_styles_for_element;
 use crate::style::defaults::parse_color_attribute;
 use crate::style::defaults::parse_dimension_attribute;
@@ -62,6 +63,7 @@ use crate::style::media::MediaContext;
 use crate::style::media::MediaQueryCache;
 use crate::style::normalize_language_tag;
 use crate::style::properties::apply_declaration_with_base;
+use crate::style::properties::apply_declaration_with_base_and_custom_properties;
 use crate::style::properties::resolve_pending_logical_properties;
 use crate::style::properties::with_image_set_dpr;
 use crate::style::style_set::StyleSet;
@@ -4700,10 +4702,7 @@ impl<'a> RuleIndex<'a> {
     sort_bucket(self.root.as_mut_slice(), selectors);
     sort_bucket(self.universal.as_mut_slice(), selectors);
 
-    fn sort_slotted_bucket(
-      list: &mut [SelectorIndex],
-      selectors: &[IndexedSlottedSelector<'_>],
-    ) {
+    fn sort_slotted_bucket(list: &mut [SelectorIndex], selectors: &[IndexedSlottedSelector<'_>]) {
       list.sort_unstable_by(|a, b| {
         let a_sel = &selectors[*a as usize];
         let b_sel = &selectors[*b as usize];
@@ -4727,7 +4726,10 @@ impl<'a> RuleIndex<'a> {
     for list in self.slotted_buckets.by_attr.values_mut() {
       sort_slotted_bucket(list.as_mut_slice(), slotted_selectors);
     }
-    sort_slotted_bucket(self.slotted_buckets.universal.as_mut_slice(), slotted_selectors);
+    sort_slotted_bucket(
+      self.slotted_buckets.universal.as_mut_slice(),
+      slotted_selectors,
+    );
   }
 
   fn has_pseudo_content(&self, pseudo: &PseudoElement) -> bool {
@@ -9095,70 +9097,68 @@ fn compute_pseudo_styles(
     include_starting_style,
   )
   .map(Arc::new);
-  let before_styles =
-    if scope_has_pseudo_content(
+  let before_styles = if scope_has_pseudo_content(
+    rule_scopes,
+    scope_host,
+    node_id,
+    dom_maps,
+    &PseudoElement::Before,
+  ) {
+    compute_pseudo_element_styles(
+      node,
       rule_scopes,
       scope_host,
+      selector_caches,
+      scratch,
+      ancestors,
+      ancestor_bloom,
       node_id,
       dom_maps,
+      sibling_cache,
+      element_attr_cache,
+      styles,
+      ua_styles,
+      root_font_size,
+      ua_root_font_size,
+      viewport,
       &PseudoElement::Before,
-    ) {
-      compute_pseudo_element_styles(
-        node,
-        rule_scopes,
-        scope_host,
-        selector_caches,
-        scratch,
-        ancestors,
-        ancestor_bloom,
-        node_id,
-        dom_maps,
-        sibling_cache,
-        element_attr_cache,
-        styles,
-        ua_styles,
-        root_font_size,
-        ua_root_font_size,
-        viewport,
-        &PseudoElement::Before,
-        include_starting_style,
-      )
-      .map(Arc::new)
-    } else {
-      None
-    };
-  let after_styles =
-    if scope_has_pseudo_content(
+      include_starting_style,
+    )
+    .map(Arc::new)
+  } else {
+    None
+  };
+  let after_styles = if scope_has_pseudo_content(
+    rule_scopes,
+    scope_host,
+    node_id,
+    dom_maps,
+    &PseudoElement::After,
+  ) {
+    compute_pseudo_element_styles(
+      node,
       rule_scopes,
       scope_host,
+      selector_caches,
+      scratch,
+      ancestors,
+      ancestor_bloom,
       node_id,
       dom_maps,
+      sibling_cache,
+      element_attr_cache,
+      styles,
+      ua_styles,
+      root_font_size,
+      ua_root_font_size,
+      viewport,
       &PseudoElement::After,
-    ) {
-      compute_pseudo_element_styles(
-        node,
-        rule_scopes,
-        scope_host,
-        selector_caches,
-        scratch,
-        ancestors,
-        ancestor_bloom,
-        node_id,
-        dom_maps,
-        sibling_cache,
-        element_attr_cache,
-        styles,
-        ua_styles,
-        root_font_size,
-        ua_root_font_size,
-        viewport,
-        &PseudoElement::After,
-        include_starting_style,
-      )
-      .map(Arc::new)
-    } else {
-      None
-    };
+      include_starting_style,
+    )
+    .map(Arc::new)
+  } else {
+    None
+  };
   let marker_styles = compute_marker_styles(
     node,
     rule_scopes,
@@ -11617,10 +11617,8 @@ mod tests {
 
   #[test]
   fn selector_candidates_heap_merge_dedupes_adjacent_duplicates() {
-    let stylesheet = parse_stylesheet(
-      ":is(div, .a, .b, .c, .d, .e, .f, .g, .h, .i) { color: red; }",
-    )
-    .unwrap();
+    let stylesheet =
+      parse_stylesheet(":is(div, .a, .b, .c, .d, .e, .f, .g, .h, .i) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
     let collected = stylesheet.collect_style_rules(&media_ctx);
     let rules: Vec<CascadeRule<'_>> = collected
@@ -11695,10 +11693,9 @@ mod tests {
 
   #[test]
   fn slotted_candidates_heap_merge_dedupes_adjacent_duplicates() {
-    let stylesheet = parse_stylesheet(
-      "::slotted(:is(div, .a, .b, .c, .d, .e, .f, .g, .h, .i)) { color: red; }",
-    )
-    .unwrap();
+    let stylesheet =
+      parse_stylesheet("::slotted(:is(div, .a, .b, .c, .d, .e, .f, .g, .h, .i)) { color: red; }")
+        .unwrap();
     let media_ctx = MediaContext::default();
     let collected = stylesheet.collect_style_rules(&media_ctx);
     let rules: Vec<CascadeRule<'_>> = collected
@@ -16014,6 +16011,79 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let styled = apply_styles(&dom, &stylesheet);
     let child = styled.children.first().expect("child");
     assert_eq!(child.styles.width, Some(Length::px(5.0)));
+  }
+
+  #[test]
+  fn registered_custom_property_revert_layer_rolls_back_to_layer_base() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "html".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "t".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer base { :root { --len: 10px; } }
+        @layer theme {
+          :root { --len: 20px; }
+          :root { --len: revert-layer; }
+        }
+        #t { width: var(--len); }
+      "#,
+    )
+    .unwrap();
+    let styled = apply_styles(&dom, &stylesheet);
+    let target = styled.children.first().expect("target");
+    assert_eq!(target.styles.width, Some(Length::px(10.0)));
+  }
+
+  #[test]
+  fn registered_custom_property_revert_restores_revert_base_value() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "html".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "t".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer base { :root { --len: 10px; } }
+        @layer theme { :root { --len: 20px; --len: revert; } }
+        #t { width: var(--len); }
+      "#,
+    )
+    .unwrap();
+    let styled = apply_styles(&dom, &stylesheet);
+    let target = styled.children.first().expect("target");
+    assert_eq!(target.styles.width, Some(Length::px(5.0)));
   }
 
   #[test]
@@ -21176,18 +21246,20 @@ fn find_matching_rules<'a>(
 
   if !slotted_candidates.is_empty() {
     let slot_shadow_host = assigned_slot.and_then(|slot| {
-      dom_maps.shadow_host_for_root(slot.shadow_root_id).and_then(|host_id| {
-        dom_maps
-          .id_to_node
-          .get(host_id)
-          .copied()
-          .filter(|ptr| !ptr.is_null())
-          .map(|ptr| {
-            let host_node = unsafe { &*ptr };
-            let host_ancestors = dom_maps.ancestors_for(host_id);
-            (host_node, host_ancestors)
-          })
-      })
+      dom_maps
+        .shadow_host_for_root(slot.shadow_root_id)
+        .and_then(|host_id| {
+          dom_maps
+            .id_to_node
+            .get(host_id)
+            .copied()
+            .filter(|ptr| !ptr.is_null())
+            .map(|ptr| {
+              let host_node = unsafe { &*ptr };
+              let host_ancestors = dom_maps.ancestors_for(host_id);
+              (host_node, host_ancestors)
+            })
+        })
     });
     let shadow_host_for_slotted = slot_shadow_host
       .as_ref()
@@ -21862,6 +21934,8 @@ fn apply_cascaded_declarations<'a, F>(
   let mut any_custom_important = false;
   let mut any_other_normal = false;
   let mut any_other_important = false;
+  let mut any_custom_revert_layer = false;
+  let mut any_registered_custom_var = false;
   let mut any_non_custom_revert_layer = false;
   for rule in matched_rules.iter() {
     let important_custom_start = important_custom_decl_orders.len();
@@ -21875,6 +21949,24 @@ fn apply_cascaded_declarations<'a, F>(
           important_custom_decl_orders.push(decl_order);
         } else {
           mask |= HAS_CUSTOM_NORMAL;
+        }
+        if !any_custom_revert_layer {
+          match &declaration.value {
+            PropertyValue::Keyword(raw) | PropertyValue::Custom(raw) => {
+              any_custom_revert_layer =
+                crate::style::custom_property_store::contains_revert_layer_token(raw);
+            }
+            _ => {}
+          }
+        }
+        if !any_registered_custom_var
+          && declaration.contains_var
+          && styles
+            .custom_property_registry
+            .get(declaration.property.as_str())
+            .is_some()
+        {
+          any_registered_custom_var = true;
         }
       } else {
         if declaration.important {
@@ -21899,6 +21991,15 @@ fn apply_cascaded_declarations<'a, F>(
     important_custom_ranges.push((important_custom_start, important_custom_decl_orders.len()));
     important_other_ranges.push((important_other_start, important_other_decl_orders.len()));
   }
+
+  // Track `revert-layer` bases for registered custom properties without cloning full `ComputedStyle`
+  // snapshots. If any custom property declaration contains `revert-layer` (or a registered custom
+  // property resolves var() at computed-value time), capture the custom-property store at each
+  // layer boundary so `--foo: revert-layer` can roll back to the layer base.
+  let track_custom_revert_layer = any_custom_revert_layer
+    || (styles.custom_properties.has_revert_layer_token() && any_registered_custom_var);
+  let mut custom_layer_snapshots: FxHashMap<Arc<[u32]>, CustomPropertyStore> = FxHashMap::default();
+  let mut custom_layer_snapshot_stratum: Option<(u8, bool)> = None;
 
   let need_important_order = any_custom_important || any_other_important;
 
@@ -21970,6 +22071,24 @@ fn apply_cascaded_declarations<'a, F>(
         continue;
       }
       let rule = &matched_rules[rule_idx];
+      let revert_base = match rule.origin {
+        StyleOrigin::UserAgent => defaults,
+        StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
+      };
+      let revert_layer_base_custom_properties = if track_custom_revert_layer {
+        let stratum = (rule.origin.rank(), false);
+        if custom_layer_snapshot_stratum != Some(stratum) {
+          custom_layer_snapshots.clear();
+          custom_layer_snapshot_stratum = Some(stratum);
+        }
+        let layer_order = &rule.layer_order;
+        if !custom_layer_snapshots.contains_key(layer_order.as_ref()) {
+          custom_layer_snapshots.insert(Arc::clone(layer_order), styles.custom_properties.clone());
+        }
+        custom_layer_snapshots.get(layer_order.as_ref())
+      } else {
+        None
+      };
       for declaration in rule.declarations.iter() {
         if declaration.important || !declaration.property.is_custom() {
           continue;
@@ -21977,14 +22096,13 @@ fn apply_cascaded_declarations<'a, F>(
         if !filter(declaration) {
           continue;
         }
-        // Custom properties are handled via a fast-path in `apply_declaration_with_base` and do not
-        // participate in `revert-layer`, so we can skip all snapshot bookkeeping here.
-        apply_declaration_with_base(
+        apply_declaration_with_base_and_custom_properties(
           styles,
           declaration,
           parent_styles,
-          defaults,
+          revert_base,
           None,
+          revert_layer_base_custom_properties,
           parent_font_size,
           root_font_size,
           viewport,
@@ -21998,6 +22116,24 @@ fn apply_cascaded_declarations<'a, F>(
         continue;
       }
       let rule = &matched_rules[rule_idx];
+      let revert_base = match rule.origin {
+        StyleOrigin::UserAgent => defaults,
+        StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
+      };
+      let revert_layer_base_custom_properties = if track_custom_revert_layer {
+        let stratum = (rule.origin.rank(), true);
+        if custom_layer_snapshot_stratum != Some(stratum) {
+          custom_layer_snapshots.clear();
+          custom_layer_snapshot_stratum = Some(stratum);
+        }
+        let layer_order = &rule.layer_order;
+        if !custom_layer_snapshots.contains_key(layer_order.as_ref()) {
+          custom_layer_snapshots.insert(Arc::clone(layer_order), styles.custom_properties.clone());
+        }
+        custom_layer_snapshots.get(layer_order.as_ref())
+      } else {
+        None
+      };
       let (start, end) = important_custom_ranges[rule_idx];
       let decls = rule.declarations.as_ref();
       for &decl_order in important_custom_decl_orders[start..end].iter() {
@@ -22007,12 +22143,13 @@ fn apply_cascaded_declarations<'a, F>(
         if !filter(declaration) {
           continue;
         }
-        apply_declaration_with_base(
+        apply_declaration_with_base_and_custom_properties(
           styles,
           declaration,
           parent_styles,
-          defaults,
+          revert_base,
           None,
+          revert_layer_base_custom_properties,
           parent_font_size,
           root_font_size,
           viewport,
@@ -23433,31 +23570,30 @@ fn compute_marker_styles(
     return None;
   }
 
-  let matching_rules =
-    if scope_has_pseudo_rules(
+  let matching_rules = if scope_has_pseudo_rules(
+    rule_scopes,
+    scope_host,
+    node_id,
+    dom_maps,
+    &PseudoElement::Marker,
+  ) {
+    collect_pseudo_matching_rules(
+      node,
       rule_scopes,
       scope_host,
+      selector_caches,
+      scratch,
+      ancestors,
+      ancestor_bloom,
       node_id,
       dom_maps,
+      sibling_cache,
+      element_attr_cache,
       &PseudoElement::Marker,
-    ) {
-      collect_pseudo_matching_rules(
-        node,
-        rule_scopes,
-        scope_host,
-        selector_caches,
-        scratch,
-        ancestors,
-        ancestor_bloom,
-        node_id,
-        dom_maps,
-        sibling_cache,
-        element_attr_cache,
-        &PseudoElement::Marker,
-      )
-    } else {
-      Vec::new()
-    };
+    )
+  } else {
+    Vec::new()
+  };
   let mut matching_rules = matching_rules;
   if include_starting_style {
     prioritize_starting_style_rules(&mut matching_rules);

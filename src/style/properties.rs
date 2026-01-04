@@ -17,6 +17,7 @@ use crate::style::color::Rgba;
 use crate::style::content::parse_content;
 use crate::style::content::ContentValue;
 use crate::style::counters::CounterSet;
+use crate::style::custom_property_store::CustomPropertyStore;
 use crate::style::display::Display;
 use crate::style::float::Clear;
 use crate::style::float::Float;
@@ -1985,23 +1986,29 @@ enum GlobalKeyword {
   RevertLayer,
 }
 
+fn global_keyword_text(value: &str) -> Option<GlobalKeyword> {
+  let value = value.trim();
+  if value.eq_ignore_ascii_case("inherit") {
+    return Some(GlobalKeyword::Inherit);
+  }
+  if value.eq_ignore_ascii_case("initial") {
+    return Some(GlobalKeyword::Initial);
+  }
+  if value.eq_ignore_ascii_case("unset") {
+    return Some(GlobalKeyword::Unset);
+  }
+  if value.eq_ignore_ascii_case("revert-layer") {
+    return Some(GlobalKeyword::RevertLayer);
+  }
+  if value.eq_ignore_ascii_case("revert") {
+    return Some(GlobalKeyword::Revert);
+  }
+  None
+}
+
 fn global_keyword(value: &PropertyValue) -> Option<GlobalKeyword> {
   if let PropertyValue::Keyword(kw) = value {
-    if kw.eq_ignore_ascii_case("inherit") {
-      return Some(GlobalKeyword::Inherit);
-    }
-    if kw.eq_ignore_ascii_case("initial") {
-      return Some(GlobalKeyword::Initial);
-    }
-    if kw.eq_ignore_ascii_case("unset") {
-      return Some(GlobalKeyword::Unset);
-    }
-    if kw.eq_ignore_ascii_case("revert-layer") {
-      return Some(GlobalKeyword::RevertLayer);
-    }
-    if kw.eq_ignore_ascii_case("revert") {
-      return Some(GlobalKeyword::Revert);
-    }
+    return global_keyword_text(kw);
   }
   None
 }
@@ -3755,6 +3762,81 @@ fn apply_global_keyword(
   apply_property_from_source(styles, source, property, order)
 }
 
+fn apply_registered_custom_property_global_keyword(
+  custom_properties: &mut CustomPropertyStore,
+  parent_custom_properties: &CustomPropertyStore,
+  revert_base_custom_properties: &CustomPropertyStore,
+  revert_layer_custom_properties: Option<&CustomPropertyStore>,
+  name: &Arc<str>,
+  rule: &crate::style::custom_properties::PropertyRule,
+  keyword: GlobalKeyword,
+) {
+  fn set_initial(
+    custom_properties: &mut CustomPropertyStore,
+    name: &Arc<str>,
+    rule: &crate::style::custom_properties::PropertyRule,
+  ) {
+    if let Some(initial) = rule.initial_value.as_ref() {
+      custom_properties.insert(Arc::clone(name), initial.clone());
+    } else {
+      custom_properties.remove(name.as_ref());
+    }
+  }
+
+  fn set_from_store(
+    custom_properties: &mut CustomPropertyStore,
+    name: &Arc<str>,
+    store: &CustomPropertyStore,
+    fallback_to_initial: bool,
+    rule: &crate::style::custom_properties::PropertyRule,
+  ) {
+    if let Some(value) = store.get(name.as_ref()) {
+      custom_properties.insert(Arc::clone(name), value.clone());
+    } else if fallback_to_initial {
+      set_initial(custom_properties, name, rule);
+    } else {
+      custom_properties.remove(name.as_ref());
+    }
+  }
+
+  match keyword {
+    GlobalKeyword::Inherit => {
+      set_from_store(
+        custom_properties,
+        name,
+        parent_custom_properties,
+        false,
+        rule,
+      );
+    }
+    GlobalKeyword::Initial => set_initial(custom_properties, name, rule),
+    GlobalKeyword::Unset => {
+      if rule.inherits {
+        set_from_store(
+          custom_properties,
+          name,
+          parent_custom_properties,
+          false,
+          rule,
+        );
+      } else {
+        set_initial(custom_properties, name, rule);
+      }
+    }
+    GlobalKeyword::Revert => set_from_store(
+      custom_properties,
+      name,
+      revert_base_custom_properties,
+      true,
+      rule,
+    ),
+    GlobalKeyword::RevertLayer => {
+      let base = revert_layer_custom_properties.unwrap_or(revert_base_custom_properties);
+      set_from_store(custom_properties, name, base, true, rule);
+    }
+  }
+}
+
 fn parse_font_variant_caps_tokens(
   tokens: &[&str],
   base_variant: FontVariant,
@@ -4285,6 +4367,54 @@ pub fn apply_declaration_with_base(
   root_font_size: f32,
   viewport: crate::geometry::Size,
 ) {
+  apply_declaration_with_base_internal(
+    styles,
+    decl,
+    parent_styles,
+    revert_base,
+    revert_layer_base,
+    None,
+    parent_font_size,
+    root_font_size,
+    viewport,
+  );
+}
+
+pub(crate) fn apply_declaration_with_base_and_custom_properties(
+  styles: &mut ComputedStyle,
+  decl: &Declaration,
+  parent_styles: &ComputedStyle,
+  revert_base: &ComputedStyle,
+  revert_layer_base: Option<&ComputedStyle>,
+  revert_layer_custom_properties: Option<&CustomPropertyStore>,
+  parent_font_size: f32,
+  root_font_size: f32,
+  viewport: crate::geometry::Size,
+) {
+  apply_declaration_with_base_internal(
+    styles,
+    decl,
+    parent_styles,
+    revert_base,
+    revert_layer_base,
+    revert_layer_custom_properties,
+    parent_font_size,
+    root_font_size,
+    viewport,
+  );
+}
+
+fn apply_declaration_with_base_internal(
+  styles: &mut ComputedStyle,
+  decl: &Declaration,
+  parent_styles: &ComputedStyle,
+  revert_base: &ComputedStyle,
+  revert_layer_base: Option<&ComputedStyle>,
+  revert_layer_custom_properties: Option<&CustomPropertyStore>,
+  parent_font_size: f32,
+  root_font_size: f32,
+  viewport: crate::geometry::Size,
+) {
   // Handle CSS Custom Properties (--*)
   if decl.property.is_custom() {
     let crate::css::types::PropertyName::Custom(custom_name) = &decl.property else {
@@ -4294,14 +4424,39 @@ pub fn apply_declaration_with_base(
     let raw_trimmed = raw_text.trim();
     let registration = styles.custom_property_registry.get(decl.property.as_str());
 
-    // Unregistered custom properties (or those registered with `syntax: *`) behave like token
-    // streams: keep the authored value verbatim and do not perform eager var() substitution.
-    if registration.is_none()
-      || matches!(
-        registration.unwrap().syntax,
-        CustomPropertySyntax::Universal
-      )
-    {
+    // Unregistered custom properties behave like token streams: keep the authored value verbatim and
+    // do not interpret CSS-wide keywords at computed-value time.
+    let Some(rule) = registration else {
+      if styles
+        .custom_properties
+        .get(custom_name.as_ref())
+        .is_some_and(|existing| existing.typed.is_none() && existing.value == raw_text)
+      {
+        return;
+      }
+      styles.custom_properties.insert(
+        Arc::clone(custom_name),
+        CustomPropertyValue::new(raw_text, None),
+      );
+      return;
+    };
+
+    if let Some(global) = global_keyword_text(raw_trimmed) {
+      apply_registered_custom_property_global_keyword(
+        &mut styles.custom_properties,
+        &parent_styles.custom_properties,
+        &revert_base.custom_properties,
+        revert_layer_custom_properties,
+        custom_name,
+        rule,
+        global,
+      );
+      return;
+    }
+
+    // Registered custom properties with `syntax: *` still behave like token streams, but they do
+    // participate in CSS-wide keywords (handled above).
+    if matches!(rule.syntax, CustomPropertySyntax::Universal) {
       if styles
         .custom_properties
         .get(custom_name.as_ref())
@@ -4315,8 +4470,6 @@ pub fn apply_declaration_with_base(
       );
       return;
     }
-
-    let rule = registration.expect("checked above");
 
     // Registered custom properties with typed syntaxes parse at computed-value time. That means we
     // must perform var() substitution before attempting to parse the typed grammar. If resolution
@@ -4335,6 +4488,18 @@ pub fn apply_declaration_with_base(
       } else {
         resolved.into_owned()
       };
+      if let Some(global) = global_keyword_text(&resolved) {
+        apply_registered_custom_property_global_keyword(
+          &mut styles.custom_properties,
+          &parent_styles.custom_properties,
+          &revert_base.custom_properties,
+          revert_layer_custom_properties,
+          custom_name,
+          rule,
+          global,
+        );
+        return;
+      }
       let Some(typed) = rule.syntax.parse_value(&resolved) else {
         return;
       };
@@ -13144,8 +13309,8 @@ mod tests {
   use crate::style::types::BackgroundPosition;
   use crate::style::types::BackgroundRepeatKeyword;
   use crate::style::types::BasicShape;
-  use crate::style::types::BorderImageSource;
   use crate::style::types::BorderCornerRadius;
+  use crate::style::types::BorderImageSource;
   use crate::style::types::BoxSizing;
   use crate::style::types::CaseTransform;
   use crate::style::types::FlexDirection;
@@ -18996,7 +19161,10 @@ mod tests {
 
     assert_eq!(style.background_color, Rgba::RED);
     assert!(style.background_layers[0].image.is_none());
-    assert_eq!(style.background_layers[0].repeat, BackgroundRepeat::no_repeat());
+    assert_eq!(
+      style.background_layers[0].repeat,
+      BackgroundRepeat::no_repeat()
+    );
   }
 
   #[test]
@@ -19111,8 +19279,9 @@ mod tests {
 
   #[test]
   fn background_shorthand_empty_url_treated_as_none() {
-    let parsed = parse_background_shorthand(&[PropertyValue::Url(String::new())], Rgba::BLACK, true)
-      .expect("background shorthand parsed");
+    let parsed =
+      parse_background_shorthand(&[PropertyValue::Url(String::new())], Rgba::BLACK, true)
+        .expect("background shorthand parsed");
     assert!(matches!(parsed.image, Some(BackgroundImage::None)));
   }
 
