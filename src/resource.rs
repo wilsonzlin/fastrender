@@ -12960,14 +12960,14 @@ mod tests {
         status: 200,
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
-        last_modified: None,
+        last_modified: Some("lm1".to_string()),
         cache_policy: None,
       },
       MockResponse {
         status: 403,
         body: b"forbidden".to_vec(),
-        etag: None,
-        last_modified: None,
+        etag: Some("etag_forbidden".to_string()),
+        last_modified: Some("lm_forbidden".to_string()),
         cache_policy: None,
       },
       MockResponse {
@@ -13006,6 +13006,11 @@ mod tests {
       Some("etag1"),
       "cache entry validators must not be overwritten by HTTP error response"
     );
+    assert_eq!(
+      cached.last_modified.as_deref(),
+      Some("lm1"),
+      "cache entry validators must not be overwritten by HTTP error response"
+    );
 
     let third = cache.fetch(url).expect("fresh fetch should update cache");
     assert_eq!(third.bytes, b"fresh");
@@ -13013,9 +13018,15 @@ mod tests {
     let calls = fetcher.calls();
     assert_eq!(calls.len(), 3, "expected three network attempts");
     assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(calls[1].last_modified.as_deref(), Some("lm1"));
     assert_eq!(
       calls[2].etag.as_deref(),
       Some("etag1"),
+      "403 refresh should not overwrite cached validators"
+    );
+    assert_eq!(
+      calls[2].last_modified.as_deref(),
+      Some("lm1"),
       "403 refresh should not overwrite cached validators"
     );
   }
@@ -13458,13 +13469,13 @@ mod tests {
         status: 200,
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
-        last_modified: None,
+        last_modified: Some("lm1".to_string()),
       },
       RequestResponse {
         status: 403,
         body: b"forbidden".to_vec(),
-        etag: None,
-        last_modified: None,
+        etag: Some("etag_forbidden".to_string()),
+        last_modified: Some("lm_forbidden".to_string()),
       },
       RequestResponse {
         status: 200,
@@ -13500,6 +13511,11 @@ mod tests {
       Some("etag1"),
       "cache entry validators must not be overwritten by HTTP error response"
     );
+    assert_eq!(
+      cached.last_modified.as_deref(),
+      Some("lm1"),
+      "cache entry validators must not be overwritten by HTTP error response"
+    );
 
     let third = cache.fetch_with_request(req).expect("fresh fetch");
     assert_eq!(third.bytes, b"fresh");
@@ -13507,9 +13523,15 @@ mod tests {
     let calls = fetcher.calls();
     assert_eq!(calls.len(), 3);
     assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(calls[1].last_modified.as_deref(), Some("lm1"));
     assert_eq!(
       calls[2].etag.as_deref(),
       Some("etag1"),
+      "403 refresh should not overwrite cached validators"
+    );
+    assert_eq!(
+      calls[2].last_modified.as_deref(),
+      Some("lm1"),
       "403 refresh should not overwrite cached validators"
     );
   }

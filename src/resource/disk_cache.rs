@@ -3662,7 +3662,7 @@ mod tests {
         status: 200,
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
-        last_modified: None,
+        last_modified: Some("lm1".to_string()),
         cache_policy: Some(HttpCachePolicy {
           max_age: Some(3600),
           ..Default::default()
@@ -3671,8 +3671,8 @@ mod tests {
       MockResponse {
         status: 403,
         body: b"forbidden".to_vec(),
-        etag: None,
-        last_modified: None,
+        etag: Some("etag_forbidden".to_string()),
+        last_modified: Some("lm_forbidden".to_string()),
         cache_policy: None,
       },
     ]);
@@ -3713,6 +3713,7 @@ mod tests {
       Some("etag1"),
       "refresh should attempt conditional revalidation"
     );
+    assert_eq!(calls[1].last_modified.as_deref(), Some("lm1"));
 
     let data_path = disk.data_path(TEST_KIND, url);
     let meta_path = disk.meta_path_for_data(&data_path);
@@ -3720,6 +3721,7 @@ mod tests {
     let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).expect("valid meta");
     assert_eq!(meta.status, Some(200));
     assert_eq!(meta.etag.as_deref(), Some("etag1"));
+    assert_eq!(meta.last_modified.as_deref(), Some("lm1"));
     assert!(
       meta.error.is_none(),
       "unexpected cached error metadata after fallback"
@@ -3731,6 +3733,7 @@ mod tests {
     let cached = offline.fetch(url).expect("disk cache hit");
     assert_eq!(cached.bytes, b"cached");
     assert_eq!(cached.status, Some(200));
+    assert_eq!(cached.last_modified.as_deref(), Some("lm1"));
   }
 
   #[test]
