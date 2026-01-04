@@ -1416,11 +1416,14 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
     bail!("provide at most one of --baseline and --baseline-ref");
   }
 
+  let repo_root = repo_root();
+  let cwd = std::env::current_dir().context("resolve current directory")?;
+
   if !args.no_run {
     run_pageset(args.pageset)?;
   }
 
-  let progress_dir = PathBuf::from("progress/pages");
+  let progress_dir = repo_root.join("progress/pages");
   if !progress_dir.is_dir() {
     bail!(
       "progress directory {} is missing; run pageset first or point to the correct directory",
@@ -1430,10 +1433,11 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
 
   let mut baseline_temp: Option<TempDir> = None;
   let baseline_dir = if let Some(dir) = args.baseline {
-    if !dir.is_dir() {
-      bail!("baseline directory {} does not exist", dir.display());
+    let absolute = if dir.is_absolute() { dir } else { cwd.join(&dir) };
+    if !absolute.is_dir() {
+      bail!("baseline directory {} does not exist", absolute.display());
     }
-    dir
+    absolute
   } else {
     let baseline_ref = args.baseline_ref.unwrap_or_else(|| "HEAD".to_string());
     let (tempdir, dir) = extract_progress_from_ref(&baseline_ref)?;
@@ -1490,6 +1494,7 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
     cmd.arg("--fail-on-slow-ok-ms").arg(ms.to_string());
   }
 
+  cmd.current_dir(&repo_root);
   print_command(&cmd);
   let status = cmd
     .status()
