@@ -50,9 +50,13 @@ cargo run --release --bin bundled_font_coverage -- --pageset --include-css-conte
   > tmp/bundled_font_coverage_with_css.json
 ```
 
-### Summary (current `main`)
+### Example snapshot (will drift)
 
-The audit currently scans **136** cached pages (13 cached HTML files are missing:
+The exact numbers will vary with the cached pageset HTML in your local `fetches/html/` directory and
+the current bundled font set; rerun the commands above for current results. The list below is kept
+as an example of the kinds of issues this audit surfaces.
+
+One snapshot scanned **136** cached pages (13 cached HTML files were missing:
 `bloomberg.com`, `britannica.com`, `economist.com`, `etsy.com`, `medium.com`, `npmjs.com`,
 `openai.com`, `quora.com`, `reddit.com`, `reuters.com`, `tripadvisor.com`, `wsj.com`, `yelp.com`).
 
@@ -94,8 +98,8 @@ updated as the pageset changes.
 ### Follow-ups (keep pageset-driven)
 
 If pageset diffs show that the remaining missing DOM-text emoji are significant, extend
-`FastRenderEmoji.ttf`/its generator to cover them (currently: `🍌`, `⚾`, `💎`, `💜`, `💩`, `🔴`,
-`🙏`, `🤣`, `🤮`, `🥳`, `🧵`, `🪬`). Note that the remaining non-emoji uncovered codepoints are
+`FastRenderEmoji.ttf`/its generator to cover them (at the time of writing: `🍌`, `⚾`, `💎`, `💜`,
+`💩`, `🔴`, `🙏`, `🤣`, `🤮`, `🥳`, `🧵`, `🪬`). Note that the remaining non-emoji uncovered codepoints are
 emoji-related marks (`U+20E3`, `U+FE0F`) which are not meaningful standalone glyphs.
 
 For `--include-css-content`, large runs of PUA codepoints typically imply an icon font; they should
