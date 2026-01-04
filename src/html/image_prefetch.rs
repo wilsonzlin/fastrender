@@ -129,17 +129,16 @@ fn img_src_is_placeholder(value: &str) -> bool {
   }
 
   use base64::Engine;
-  let decoded = {
-    let mut cleaned: Option<Vec<u8>> = None;
-    let input = if payload.bytes().any(|b| b.is_ascii_whitespace()) {
-      let mut buf = Vec::with_capacity(payload.len());
-      buf.extend(payload.bytes().filter(|b| !b.is_ascii_whitespace()));
-      cleaned = Some(buf);
-      cleaned.as_ref().unwrap().as_slice()
-    } else {
-      payload.as_bytes()
-    };
-    base64::engine::general_purpose::STANDARD.decode(input).ok()
+  let decoded = if payload.bytes().any(|b| b.is_ascii_whitespace()) {
+    let mut cleaned = Vec::with_capacity(payload.len());
+    cleaned.extend(payload.bytes().filter(|b| !b.is_ascii_whitespace()));
+    base64::engine::general_purpose::STANDARD
+      .decode(cleaned.as_slice())
+      .ok()
+  } else {
+    base64::engine::general_purpose::STANDARD
+      .decode(payload.as_bytes())
+      .ok()
   };
   let Some(decoded) = decoded else {
     return false;
