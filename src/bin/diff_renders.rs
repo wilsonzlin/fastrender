@@ -169,6 +169,7 @@ struct MetricsSummary {
   total_pixels: u64,
   diff_percentage: f64,
   perceptual_distance: f64,
+  max_channel_diff: u8,
 }
 
 impl From<DiffMetrics> for MetricsSummary {
@@ -178,6 +179,7 @@ impl From<DiffMetrics> for MetricsSummary {
       total_pixels: metrics.total_pixels,
       diff_percentage: metrics.diff_percentage,
       perceptual_distance: metrics.perceptual_distance,
+      max_channel_diff: metrics.max_channel_diff,
     }
   }
 }
@@ -819,6 +821,10 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
       .metrics
       .map(|m| m.pixel_diff.to_string())
       .unwrap_or_else(|| "-".to_string());
+    let max_channel_diff = entry
+      .metrics
+      .map(|m| m.max_channel_diff.to_string())
+      .unwrap_or_else(|| "-".to_string());
     let total_pixels = entry
       .metrics
       .map(|m| m.total_pixels.to_string())
@@ -847,13 +853,14 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
 
     let error = entry.error.as_deref().unwrap_or_default();
     rows.push_str(&format!(
-      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
+      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
       entry.status.label(),
       escape_html(&entry.name),
       escape_html(entry.status.label()),
       diff_percent,
       perceptual,
       pixel_diff,
+      max_channel_diff,
       total_pixels,
       before_cell,
       after_and_diff,
@@ -905,6 +912,7 @@ fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
           <th>Diff %</th>
           <th>Perceptual</th>
           <th>Pixel diff</th>
+          <th>Max Δ</th>
           <th>Total pixels</th>
           <th>Before</th>
           <th>After | Diff</th>

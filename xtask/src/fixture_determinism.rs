@@ -77,7 +77,9 @@ pub struct FixtureDeterminismArgs {
   #[arg(long)]
   pub ignore_alpha: bool,
 
-  /// Allow differences (exit 0 even when nondeterministic fixtures are found).
+  /// Allow nondeterministic pixel diffs (exit 0 when fixtures differ).
+  ///
+  /// Render failures and missing/error outputs still fail the command.
   #[arg(long)]
   pub allow_differences: bool,
 
@@ -190,6 +192,8 @@ struct MetricsSummary {
   total_pixels: u64,
   diff_percentage: f64,
   perceptual_distance: f64,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  max_channel_diff: Option<u8>,
 }
 
 #[derive(Serialize)]
@@ -557,11 +561,17 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
         .metrics
         .map(|m| format!("{:.4}", m.perceptual_distance))
         .unwrap_or_else(|| "-".to_string());
+      let max_channel_diff = worst
+        .metrics
+        .and_then(|m| m.max_channel_diff)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".to_string());
       println!(
-        "- {} ({before_run}->{after_run}) status={} diff={} perceptual={} before={} after={} diff={}",
+        "- {} ({before_run}->{after_run}) status={} diff={} max_delta={} perceptual={} before={} after={} diff={}",
         fixture.name,
         worst.status.label(),
         diff_percent,
+        max_channel_diff,
         perceptual,
         worst.before.as_deref().unwrap_or("-"),
         worst.after.as_deref().unwrap_or("-"),
@@ -583,15 +593,54 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
     }
   }
 
-  let should_fail = (report.totals.nondeterministic > 0
-    || report.totals.render_failures > 0
-    || report.totals.artifact_failures > 0)
-    && !args.allow_differences;
-  if should_fail {
-    let mut message = format!(
-      "fixture determinism audit found differences; report: {}",
+  if report.totals.render_failures > 0 {
+    bail!(
+      "{} render run(s) failed; report: {}",
+      report.totals.render_failures,
       layout.report_html.display()
     );
+  }
+
+  let has_hard_failures = report.nondeterministic.iter().any(|fixture| {
+    fixture.occurrences.iter().any(|occurrence| {
+      matches!(
+        occurrence.status,
+        EntryStatus::MissingBefore | EntryStatus::MissingAfter | EntryStatus::Error
+      )
+    })
+  });
+
+  let has_diffs = report.nondeterministic.iter().any(|fixture| {
+    fixture
+      .occurrences
+      .iter()
+      .any(|occurrence| occurrence.status == EntryStatus::Diff)
+  });
+
+  // `--allow-differences` only suppresses exit failure for pixel diffs. Missing/error entries are
+  // always fatal because they imply the audit couldn't reliably compare runs.
+  let should_fail = has_hard_failures
+    || (!args.allow_differences && (has_diffs || report.totals.artifact_failures > 0));
+  if should_fail {
+    let mut message = if has_hard_failures {
+      format!(
+        "fixture determinism audit encountered missing/error outputs; report: {}",
+        layout.report_html.display()
+      )
+    } else {
+      format!(
+        "fixture determinism audit found nondeterministic diffs; report: {}",
+        layout.report_html.display()
+      )
+    };
+
+    if report.totals.artifact_failures > 0 {
+      message.push_str("\n\nArtifact capture failures:");
+      for err in &artifact_failures {
+        message.push_str(&format!("\n- {err}"));
+      }
+    }
+
     if report.totals.nondeterministic > 0 {
       message.push_str("\n\nPer-fixture determinism artifacts:");
       for fixture in &report.nondeterministic {
@@ -916,6 +965,11 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
       .metrics
       .map(|m| m.pixel_diff.to_string())
       .unwrap_or_else(|| "-".to_string());
+    let max_channel_diff = worst
+      .metrics
+      .and_then(|m| m.max_channel_diff)
+      .map(|v| v.to_string())
+      .unwrap_or_else(|| "-".to_string());
     let total_pixels = worst
       .metrics
       .map(|m| m.total_pixels.to_string())
@@ -949,7 +1003,7 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
 
     let error = worst.error.as_deref().unwrap_or_default();
     rows.push_str(&format!(
-      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
+      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
       worst.status.label(),
       escape_html(&fixture.name),
       escape_html(worst.status.label()),
@@ -957,6 +1011,7 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
       diff_percent,
       perceptual,
       pixel_diff,
+      max_channel_diff,
       total_pixels,
       before_cell,
       after_and_diff,
@@ -1019,6 +1074,7 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
           <th>Diff %</th>
           <th>Perceptual</th>
           <th>Pixel diff</th>
+          <th>Max Δ</th>
           <th>Total pixels</th>
           <th>Before</th>
           <th>After | Diff</th>

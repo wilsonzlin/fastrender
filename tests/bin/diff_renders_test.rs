@@ -66,6 +66,11 @@ fn diff_renders_reports_matches() {
     report["results"][0]["status"], "match",
     "expected match status in report"
   );
+  assert_eq!(
+    report["results"][0]["metrics"]["max_channel_diff"].as_u64(),
+    Some(0),
+    "expected max_channel_diff=0 for identical images"
+  );
 
   assert!(
     tmp.path().join("diff_report.html").exists(),
@@ -109,6 +114,11 @@ fn diff_renders_exits_non_zero_on_diff() {
     "expected one failing diff"
   );
   assert_eq!(report["results"][0]["status"], "diff");
+  assert_eq!(
+    report["results"][0]["metrics"]["max_channel_diff"].as_u64(),
+    Some(255),
+    "expected max_channel_diff=255 for red vs blue pixels"
+  );
 
   let html_path = tmp.path().join("diff_report.html");
   assert!(html_path.exists(), "html report missing");

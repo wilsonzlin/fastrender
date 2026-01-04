@@ -17,6 +17,10 @@ pub struct DiffMetrics {
   pub diff_percentage: f64,
   /// SSIM-derived perceptual distance (0.0 = identical, higher = more different).
   pub perceptual_distance: f64,
+  /// Maximum per-channel delta across all compared pixels (0-255).
+  ///
+  /// When `compare_alpha` is false, alpha deltas are ignored for this metric.
+  pub max_channel_diff: u8,
   /// Dimensions of the rendered/actual image.
   pub rendered_dimensions: (u32, u32),
   /// Dimensions of the expected/baseline image.
@@ -154,6 +158,7 @@ pub fn diff_png_with_alpha(
       total_pixels: diff.statistics.total_pixels,
       diff_percentage: diff.statistics.different_percent,
       perceptual_distance: diff.statistics.perceptual_distance,
+      max_channel_diff: diff.statistics.max_channel_diff(compare_alpha),
       rendered_dimensions: diff.actual_dimensions,
       expected_dimensions: diff.expected_dimensions,
     };
@@ -172,6 +177,7 @@ pub fn diff_png_with_alpha(
 
   let mut diff_image = RgbaImage::new(max_width, max_height);
   let mut different_pixels = 0u64;
+  let mut max_channel_diff = 0u8;
 
   for y in 0..max_height {
     for x in 0..max_width {
@@ -197,6 +203,7 @@ pub fn diff_png_with_alpha(
             0
           };
           let max_diff = diff_r.max(diff_g).max(diff_b).max(diff_a);
+          max_channel_diff = max_channel_diff.max(max_diff);
 
           let is_different = if compare_alpha {
             diff_r > tolerance || diff_g > tolerance || diff_b > tolerance || diff_a > tolerance
@@ -213,6 +220,7 @@ pub fn diff_png_with_alpha(
         }
         (Some(_), None) | (None, Some(_)) => {
           different_pixels += 1;
+          max_channel_diff = 255;
           diff_image.put_pixel(x, y, Rgba([255, 0, 255, 255]));
         }
         (None, None) => unreachable!("loop bounds ensure at least one pixel is present"),
@@ -234,6 +242,7 @@ pub fn diff_png_with_alpha(
     // Perceptual distance is ill-defined when dimensions don't match; treat this as maximally
     // different for now.
     perceptual_distance: 1.0,
+    max_channel_diff,
     rendered_dimensions: (rendered_img.width(), rendered_img.height()),
     expected_dimensions: (expected_img.width(), expected_img.height()),
   };
