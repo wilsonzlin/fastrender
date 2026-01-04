@@ -70,6 +70,7 @@ mod svg_filter_gaussian_blur;
 mod svg_filter_layer_bounds;
 mod svg_filter_lighting;
 mod svg_filter_lighting_golden;
+mod svg_filter_filterres_offset_clip_golden;
 mod svg_filter_offset_test;
 mod svg_filter_painter_test;
 mod svg_filter_test;

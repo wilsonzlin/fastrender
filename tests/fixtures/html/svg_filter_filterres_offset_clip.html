@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+  body {
+    margin: 0;
+    background: rgb(0, 128, 0);
+  }
+
+  /* Position at (0,0) so the filter region extends outside the raster surface. */
+  #target {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 40px;
+    height: 40px;
+
+    /*
+      High-frequency source pattern so filterRes down/up-sampling artifacts are
+      easy to see.
+    */
+    /* Note: gradient parser currently only supports number/% stops (not px). */
+    background-image: repeating-linear-gradient(90deg, #000 0% 2.5%, #fff 2.5% 5%);
+
+    /* Use an external SVG filter document so we exercise the `load_svg_filter()` path. */
+    filter: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjxmaWx0ZXIgaWQ9J2YnIGZpbHRlclVuaXRzPSd1c2VyU3BhY2VPblVzZScgeD0nLTIwJyB5PScxMCcgd2lkdGg9JzYwJyBoZWlnaHQ9JzQwJyBmaWx0ZXJSZXM9JzMxIDIzJz48ZmVPZmZzZXQgaW49J1NvdXJjZUdyYXBoaWMnIGR4PScwJyBkeT0nNScvPjwvZmlsdGVyPjwvc3ZnPg==#f");
+  }
+</style>
+
+<div id="target"></div>

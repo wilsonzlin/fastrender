@@ -7225,6 +7225,36 @@ mod filter_res_tests {
   }
 
   #[test]
+  fn filter_res_region_outside_pixmap_is_transparent() {
+    let _guard = svg_filter_test_guard();
+    let cache = ImageCache::new();
+    // The filter region is wider than the pixmap and extends into negative X. The portion
+    // outside the pixmap should be treated as transparent when mapping through filterRes
+    // (i.e. the filterRes scale is based on the full filter region, not the clipped raster
+    // surface).
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='-7' y='0' width='15' height='8' filterRes='8 8'><feOffset dx='0' dy='0'/></filter></svg>";
+    let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(8, 8).unwrap();
+    pixmap.fill(Color::from_rgba8(0, 0, 255, 255));
+    let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    let left = pixel(&pixmap, 0, 4);
+    let right = pixel(&pixmap, 7, 4);
+    assert!(
+      left.3 < 250,
+      "expected left edge to blend with transparency from outside filter region, got alpha {}",
+      left.3
+    );
+    assert!(
+      right.3 > 250,
+      "expected right edge to stay opaque (filter region ends at pixmap edge), got alpha {}",
+      right.3
+    );
+  }
+
+  #[test]
   fn filter_res_resampling_honors_color_interpolation_filters() {
     let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
 
