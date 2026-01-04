@@ -18,6 +18,7 @@ These are optional wrappers for the most common loops:
   - Defaults to `viewport=1200x800`, `dpr=1.0`, JavaScript disabled (to match FastRender’s “no JS” model).
   - Writes a report at `<out>/report.html` (default: `target/chrome_vs_fastrender/report.html`).
   - Core flags: `--pages <csv>`, `--shard <index>/<total>`, `--viewport <WxH>`, `--dpr <float>`, `--jobs <n>`, `--timeout <secs>`, `--out-dir <dir>`, `--chrome <path>`, `--js {on|off}`, `--no-chrome`, `--no-fastrender`, `--diff-only`, `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--ignore-alpha`, `--sort-by {pixel|percent|perceptual}`, `--fail-on-differences`, `--no-build`.
+  - Per-step timeouts: `--chrome-timeout <secs>` / `--render-timeout <secs>` override `--timeout`.
   - Passing page stems that are not present under `fetches/html/*.html` is an error (run `fetch_pages` first).
 - Offline fixture Chrome-vs-FastRender diff (deterministic; offline): `scripts/chrome_vs_fastrender_fixtures.sh [fixture_glob...]`
   - Wraps `scripts/chrome_fixture_baseline.sh`, `render_fixtures`, and `diff_renders`.
