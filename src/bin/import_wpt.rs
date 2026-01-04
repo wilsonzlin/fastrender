@@ -758,6 +758,14 @@ fn resolve_reference(
       .unwrap_or(false)
     || trimmed.starts_with("about:")
     || trimmed.starts_with("javascript:")
+    || trimmed
+      .get(..7)
+      .map(|prefix| prefix.eq_ignore_ascii_case("mailto:"))
+      .unwrap_or(false)
+    || trimmed
+      .get(..4)
+      .map(|prefix| prefix.eq_ignore_ascii_case("tel:"))
+      .unwrap_or(false)
   {
     return Ok(None);
   }
@@ -1577,6 +1585,25 @@ mod tests {
     assert!(imported.contains("data-srcset=\"https://example.com/image.png 1x, /resources/green.png 2x\""));
     assert!(!imported.contains("src=\"/resources/"));
     assert!(out_dir.path().join("out/resources/green.png").exists());
+  }
+
+  #[test]
+  fn ignores_mailto_links() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/mailto.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+    let imported = fs::read_to_string(out_dir.path().join("out/html/network/mailto.html")).unwrap();
+    assert!(imported.contains("mailto:example@example.com"));
   }
 
   #[test]
