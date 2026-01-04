@@ -1042,6 +1042,61 @@ pub struct ScrollTimeline {
   pub end: TimelineOffset,
 }
 
+/// Scroller selection for the `scroll()` functional timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTimelineScroller {
+  Root,
+  Nearest,
+  SelfElement,
+}
+
+impl Default for ScrollTimelineScroller {
+  fn default() -> Self {
+    ScrollTimelineScroller::Nearest
+  }
+}
+
+/// An anonymous scroll timeline produced by `scroll(...)` in `animation-timeline`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollFunctionTimeline {
+  pub scroller: ScrollTimelineScroller,
+  pub axis: TimelineAxis,
+}
+
+impl Default for ScrollFunctionTimeline {
+  fn default() -> Self {
+    Self {
+      scroller: ScrollTimelineScroller::default(),
+      axis: TimelineAxis::default(),
+    }
+  }
+}
+
+/// Optional inset offsets for view timelines.
+///
+/// The inset values are stored as length-percentage values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewTimelineInset {
+  pub start: Length,
+  pub end: Length,
+}
+
+/// An anonymous view timeline produced by `view(...)` in `animation-timeline`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewFunctionTimeline {
+  pub axis: TimelineAxis,
+  pub inset: Option<ViewTimelineInset>,
+}
+
+impl Default for ViewFunctionTimeline {
+  fn default() -> Self {
+    Self {
+      axis: TimelineAxis::default(),
+      inset: None,
+    }
+  }
+}
+
 /// A view-driven timeline tied to a target element.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ViewTimeline {
@@ -1049,6 +1104,8 @@ pub struct ViewTimeline {
   pub name: Option<String>,
   /// Axis used for visibility tracking.
   pub axis: TimelineAxis,
+  /// Optional inset offsets.
+  pub inset: Option<ViewTimelineInset>,
 }
 
 /// Reference to a timeline used by an animation.
@@ -1060,6 +1117,10 @@ pub enum AnimationTimeline {
   None,
   /// Named timeline reference.
   Named(String),
+  /// Anonymous scroll timeline (`scroll(...)`).
+  Scroll(ScrollFunctionTimeline),
+  /// Anonymous view timeline (`view(...)`).
+  View(ViewFunctionTimeline),
 }
 
 impl Default for AnimationTimeline {
@@ -1072,7 +1133,8 @@ impl Default for AnimationTimeline {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewTimelinePhase {
   Entry,
-  Cross,
+  Contain,
+  Cover,
   Exit,
 }
 
@@ -1082,7 +1144,7 @@ pub enum RangeOffset {
   /// Position expressed as normalized progress (0-1) on the timeline.
   Progress(f32),
   /// Position based on a view-timeline phase plus optional adjustment.
-  View(ViewTimelinePhase, f32),
+  View(ViewTimelinePhase, Length),
 }
 
 impl Default for RangeOffset {

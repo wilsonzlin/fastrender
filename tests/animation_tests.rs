@@ -13,11 +13,12 @@ use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::media::MediaContext;
 use fastrender::style::types::{
-  AnimationRange, BasicShape, FilterFunction, ScrollTimeline, TimelineAxis, TimelineOffset,
-  ViewTimeline, WritingMode,
+  AnimationRange, AnimationTimeline, BasicShape, FilterFunction, RangeOffset, ScrollFunctionTimeline,
+  ScrollTimeline, ScrollTimelineScroller, TimelineAxis, TimelineOffset, ViewTimeline, ViewTimelinePhase,
+  WritingMode,
 };
 use fastrender::Rgba;
-use fastrender::{ComputedStyle, Size};
+use fastrender::{ComputedStyle, Length, Size};
 
 fn find_by_tag<'a>(node: &'a StyledNode, tag: &str) -> Option<&'a StyledNode> {
   if let Some(name) = node.node.tag_name() {
@@ -69,6 +70,60 @@ fn parses_timelines_and_keyframes() {
   assert_eq!(keyframes.len(), 1);
   assert_eq!(keyframes[0].name, "fade");
   assert_eq!(keyframes[0].keyframes.len(), 2);
+}
+
+#[test]
+fn parses_animation_timeline_functions() {
+  let css = r#"
+    #box {
+      animation-timeline: scroll(self), --foo, auto, none;
+    }
+  "#;
+  let html = r#"<div id="box"></div>"#;
+  let dom = dom::parse_html(html).unwrap();
+  let sheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &sheet, &MediaContext::screen(800.0, 600.0));
+  let div = find_by_tag(&styled, "div").expect("div present");
+
+  assert_eq!(div.styles.animation_timelines.len(), 4);
+  assert_eq!(
+    div.styles.animation_timelines[0],
+    AnimationTimeline::Scroll(ScrollFunctionTimeline {
+      scroller: ScrollTimelineScroller::SelfElement,
+      axis: TimelineAxis::Block,
+    })
+  );
+  assert!(matches!(
+    div.styles.animation_timelines[1],
+    AnimationTimeline::Named(ref name) if name == "--foo"
+  ));
+  assert!(matches!(div.styles.animation_timelines[2], AnimationTimeline::Auto));
+  assert!(matches!(div.styles.animation_timelines[3], AnimationTimeline::None));
+}
+
+#[test]
+fn parses_animation_range_view_offsets_with_lengths() {
+  let css = r#"
+    #box {
+      animation-range: entry 100px entry 500px;
+    }
+  "#;
+  let html = r#"<div id="box"></div>"#;
+  let dom = dom::parse_html(html).unwrap();
+  let sheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &sheet, &MediaContext::screen(800.0, 600.0));
+  let div = find_by_tag(&styled, "div").expect("div present");
+
+  assert_eq!(div.styles.animation_ranges.len(), 1);
+  let range = &div.styles.animation_ranges[0];
+  assert_eq!(
+    range.start,
+    RangeOffset::View(ViewTimelinePhase::Entry, Length::px(100.0))
+  );
+  assert_eq!(
+    range.end,
+    RangeOffset::View(ViewTimelinePhase::Entry, Length::px(500.0))
+  );
 }
 
 #[test]

@@ -1037,8 +1037,19 @@ fn parse_progress_value(token: &str) -> Option<f32> {
 fn parse_view_phase(token: &str) -> Option<ViewTimelinePhase> {
   match token {
     "entry" => Some(ViewTimelinePhase::Entry),
+    "contain" => Some(ViewTimelinePhase::Contain),
+    "cover" => Some(ViewTimelinePhase::Cover),
+    "cross" => Some(ViewTimelinePhase::Contain),
     "exit" => Some(ViewTimelinePhase::Exit),
-    "cross" => Some(ViewTimelinePhase::Cross),
+    _ => None,
+  }
+}
+
+fn parse_scroll_timeline_scroller(token: &str) -> Option<ScrollTimelineScroller> {
+  match token {
+    "root" => Some(ScrollTimelineScroller::Root),
+    "nearest" => Some(ScrollTimelineScroller::Nearest),
+    "self" => Some(ScrollTimelineScroller::SelfElement),
     _ => None,
   }
 }
@@ -1058,8 +1069,8 @@ fn parse_timeline_offset_token(token: &str) -> Option<TimelineOffset> {
 
 fn parse_scroll_timeline_list(raw: &str) -> Vec<ScrollTimeline> {
   let mut timelines = Vec::new();
-  for part in raw.split(',') {
-    let tokens: Vec<&str> = part.split_whitespace().collect();
+  for part in split_top_level_commas(raw) {
+    let tokens = split_top_level_whitespace(&part);
     if tokens.is_empty() {
       continue;
     }
@@ -1075,7 +1086,7 @@ fn parse_scroll_timeline_list(raw: &str) -> Vec<ScrollTimeline> {
         axis = ax;
         continue;
       }
-      if let Some(offset) = parse_timeline_offset_token(token) {
+      if let Some(offset) = parse_timeline_offset_token(&token) {
         offsets.push(offset);
         continue;
       }
@@ -1097,8 +1108,8 @@ fn parse_scroll_timeline_list(raw: &str) -> Vec<ScrollTimeline> {
 
 fn parse_view_timeline_list(raw: &str) -> Vec<ViewTimeline> {
   let mut timelines = Vec::new();
-  for part in raw.split(',') {
-    let tokens: Vec<&str> = part.split_whitespace().collect();
+  for part in split_top_level_commas(raw) {
+    let tokens = split_top_level_whitespace(&part);
     if tokens.is_empty() {
       continue;
     }
@@ -1107,44 +1118,87 @@ fn parse_view_timeline_list(raw: &str) -> Vec<ViewTimeline> {
     }
     let mut name: Option<String> = None;
     let mut axis = TimelineAxis::Block;
+    let mut inset_values: Vec<Length> = Vec::new();
     for token in tokens {
       let lower = token.to_ascii_lowercase();
       if let Some(ax) = parse_timeline_axis(&lower) {
         axis = ax;
         continue;
       }
+      if inset_values.len() < 2 {
+        if let Some(len) = parse_length(&token) {
+          inset_values.push(len);
+          continue;
+        }
+        if token.eq_ignore_ascii_case("auto") {
+          continue;
+        }
+      }
       if name.is_none() {
         name = Some(token.to_string());
       }
     }
-    timelines.push(ViewTimeline { name, axis });
+    let inset = match inset_values.len() {
+      0 => None,
+      1 => Some(ViewTimelineInset {
+        start: inset_values[0],
+        end: inset_values[0],
+      }),
+      _ => Some(ViewTimelineInset {
+        start: inset_values[0],
+        end: inset_values[1],
+      }),
+    };
+    timelines.push(ViewTimeline { name, axis, inset });
   }
   timelines
 }
 
 fn parse_animation_timeline_list(raw: &str) -> Vec<AnimationTimeline> {
   let mut timelines = Vec::new();
-  for part in raw.split(',') {
-    let trimmed = part.trim();
-    if trimmed.is_empty() {
+  for part in split_top_level_commas(raw) {
+    let mut input = ParserInput::new(part.trim());
+    let mut parser = Parser::new(&mut input);
+    parser.skip_whitespace();
+    let token = match parser.next() {
+      Ok(token) => token,
+      Err(_) => continue,
+    };
+
+    let timeline = match token {
+      Token::Ident(ident) => {
+        let lower = ident.as_ref().to_ascii_lowercase();
+        match lower.as_str() {
+          "auto" => Some(AnimationTimeline::Auto),
+          "none" => Some(AnimationTimeline::None),
+          _ => Some(AnimationTimeline::Named(ident.to_string())),
+        }
+      }
+      Token::Function(name) => {
+        let func = name.as_ref().to_ascii_lowercase();
+        match func.as_str() {
+          "scroll" => parser
+            .parse_nested_block(parse_scroll_function_timeline)
+            .ok()
+            .map(AnimationTimeline::Scroll),
+          "view" => parser
+            .parse_nested_block(parse_view_function_timeline)
+            .ok()
+            .map(AnimationTimeline::View),
+          _ => None,
+        }
+      }
+      _ => None,
+    };
+
+    let Some(timeline) = timeline else {
+      continue;
+    };
+    parser.skip_whitespace();
+    if !parser.is_exhausted() {
       continue;
     }
-    let lower = trimmed.to_ascii_lowercase();
-    let timeline = match lower.as_str() {
-      "auto" => AnimationTimeline::Auto,
-      "none" => AnimationTimeline::None,
-      _ => AnimationTimeline::Named(trimmed.to_string()),
-    };
     timelines.push(timeline);
-  }
-  if timelines
-    .iter()
-    .any(|t| matches!(t, AnimationTimeline::None))
-  {
-    return timelines
-      .into_iter()
-      .filter(|t| !matches!(t, AnimationTimeline::None))
-      .collect();
   }
   timelines
 }
@@ -1177,20 +1231,23 @@ fn parse_animation_names(raw: &str) -> Vec<String> {
   }
 }
 
-fn parse_range_offset(tokens: &[&str]) -> Option<(RangeOffset, usize)> {
+fn parse_range_offset(tokens: &[String]) -> Option<(RangeOffset, usize)> {
   if tokens.is_empty() {
     return None;
   }
   let lower = tokens[0].to_ascii_lowercase();
   if let Some(phase) = parse_view_phase(&lower) {
     if tokens.len() >= 2 {
-      if let Some(progress) = parse_progress_value(tokens[1]) {
-        return Some((RangeOffset::View(phase, progress), 2));
+      if let Some(len) = parse_length(&tokens[1]) {
+        return Some((RangeOffset::View(phase, len), 2));
+      }
+      if let Some(progress) = parse_progress_value(&tokens[1]) {
+        return Some((RangeOffset::View(phase, Length::percent(progress * 100.0)), 2));
       }
     }
-    return Some((RangeOffset::View(phase, 0.0), 1));
+    return Some((RangeOffset::View(phase, Length::px(0.0)), 1));
   }
-  if let Some(progress) = parse_progress_value(tokens[0]) {
+  if let Some(progress) = parse_progress_value(&tokens[0]) {
     return Some((RangeOffset::Progress(progress), 1));
   }
   None
@@ -1198,18 +1255,26 @@ fn parse_range_offset(tokens: &[&str]) -> Option<(RangeOffset, usize)> {
 
 fn parse_animation_range_list(raw: &str) -> Vec<AnimationRange> {
   let mut ranges = Vec::new();
-  for part in raw.split(',') {
-    let tokens: Vec<&str> = part.split_whitespace().collect();
+  for part in split_top_level_commas(raw) {
+    let tokens = split_top_level_whitespace(&part);
     if tokens.is_empty() {
       continue;
     }
     if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("none") {
       return Vec::new();
     }
+    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("normal") {
+      ranges.push(AnimationRange::default());
+      continue;
+    }
     let (start, consumed_start) =
       parse_range_offset(&tokens).unwrap_or((RangeOffset::Progress(0.0), 0));
-    let (end, _) =
+    let (end, consumed_end) =
       parse_range_offset(&tokens[consumed_start..]).unwrap_or((RangeOffset::Progress(1.0), 0));
+    let consumed_total = consumed_start + consumed_end;
+    if consumed_total == 0 || consumed_total < tokens.len() {
+      continue;
+    }
     ranges.push(AnimationRange { start, end });
   }
   ranges
@@ -1242,6 +1307,142 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
     parts.push(current.trim().to_string());
   }
   parts
+}
+
+fn split_top_level_whitespace(raw: &str) -> Vec<String> {
+  let mut parts = Vec::new();
+  let mut current = String::new();
+  let mut depth = 0i32;
+  for ch in raw.chars() {
+    match ch {
+      '(' => {
+        depth += 1;
+        current.push(ch);
+      }
+      ')' => {
+        depth = (depth - 1).max(0);
+        current.push(ch);
+      }
+      ch if depth == 0 && ch.is_whitespace() => {
+        if !current.trim().is_empty() {
+          parts.push(current.trim().to_string());
+        }
+        current.clear();
+      }
+      _ => current.push(ch),
+    }
+  }
+  if !current.trim().is_empty() {
+    parts.push(current.trim().to_string());
+  }
+  parts
+}
+
+fn parse_scroll_function_timeline<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<ScrollFunctionTimeline, cssparser::ParseError<'i, ()>> {
+  let mut scroller: Option<ScrollTimelineScroller> = None;
+  let mut axis: Option<TimelineAxis> = None;
+
+  while !input.is_exhausted() {
+    input.skip_whitespace();
+    if input.is_exhausted() {
+      break;
+    }
+
+    if scroller.is_none() {
+      if let Ok(found) = input.try_parse(|p| {
+        let ident = p.expect_ident()?;
+        let lower = ident.as_ref().to_ascii_lowercase();
+        let Some(scroller) = parse_scroll_timeline_scroller(&lower) else {
+          return Err(p.new_custom_error::<(), ()>(()));
+        };
+        Ok(scroller)
+      }) {
+        scroller = Some(found);
+        continue;
+      }
+    }
+
+    if axis.is_none() {
+      if let Ok(found) = input.try_parse(|p| {
+        let ident = p.expect_ident()?;
+        let lower = ident.as_ref().to_ascii_lowercase();
+        let Some(axis) = parse_timeline_axis(&lower) else {
+          return Err(p.new_custom_error::<(), ()>(()));
+        };
+        Ok(axis)
+      }) {
+        axis = Some(found);
+        continue;
+      }
+    }
+
+    return Err(input.new_custom_error(()));
+  }
+
+  Ok(ScrollFunctionTimeline {
+    scroller: scroller.unwrap_or_default(),
+    axis: axis.unwrap_or_default(),
+  })
+}
+
+fn parse_view_function_timeline<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<ViewFunctionTimeline, cssparser::ParseError<'i, ()>> {
+  let mut axis: Option<TimelineAxis> = None;
+  let mut inset_values: Vec<Length> = Vec::new();
+
+  while !input.is_exhausted() {
+    input.skip_whitespace();
+    if input.is_exhausted() {
+      break;
+    }
+
+    if axis.is_none() {
+      if let Ok(found) = input.try_parse(|p| {
+        let ident = p.expect_ident()?;
+        let lower = ident.as_ref().to_ascii_lowercase();
+        let Some(axis) = parse_timeline_axis(&lower) else {
+          return Err(p.new_custom_error::<(), ()>(()));
+        };
+        Ok(axis)
+      }) {
+        axis = Some(found);
+        continue;
+      }
+    }
+
+    if inset_values.len() < 2 {
+      if let Ok(len) = input.try_parse(parse_length_component) {
+        inset_values.push(len);
+        continue;
+      }
+    }
+
+    if input.try_parse(|p| p.expect_ident_matching("auto")).is_ok() {
+      continue;
+    }
+
+    return Err(input.new_custom_error(()));
+  }
+
+  let inset = match inset_values.len() {
+    0 => None,
+    1 => Some(ViewTimelineInset {
+      start: inset_values[0],
+      end: inset_values[0],
+    }),
+    _ => Some(ViewTimelineInset {
+      start: inset_values[0],
+      end: inset_values[1],
+    }),
+  };
+
+  Ok(ViewFunctionTimeline {
+    axis: axis.unwrap_or_default(),
+    inset,
+  })
 }
 
 fn parse_time_ms(raw: &str) -> Option<f32> {

@@ -42,6 +42,7 @@ fn animated_style(timeline: &str, animation: &str) -> Arc<ComputedStyle> {
   style.view_timelines = vec![ViewTimeline {
     name: Some(timeline.to_string()),
     axis: TimelineAxis::Block,
+    inset: None,
   }];
   style.animation_timelines = vec![AnimationTimeline::Named(timeline.to_string())];
   style.animation_ranges = vec![AnimationRange::default()];

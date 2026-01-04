@@ -1769,10 +1769,13 @@ fn resolve_progress_offset(
       };
       let base = match phase {
         ViewTimelinePhase::Entry => entry,
-        ViewTimelinePhase::Cross => cross,
+        ViewTimelinePhase::Contain | ViewTimelinePhase::Cover => cross,
         ViewTimelinePhase::Exit => exit,
       };
-      base + view_size * adj
+      let adjustment = adj
+        .resolve_against(view_size)
+        .unwrap_or_else(|| adj.to_px());
+      base + adjustment
     }
   }
 }
@@ -2402,6 +2405,7 @@ fn apply_animations_to_node(
               ),
             })
           }
+          AnimationTimeline::Scroll(_) | AnimationTimeline::View(_) => None,
         };
 
         let Some(progress) = progress else { continue }; // skip if no timeline
