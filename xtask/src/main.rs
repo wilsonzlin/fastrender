@@ -559,6 +559,10 @@ impl PerfSmokeSuite {
 }
 
 fn run_tests(args: TestArgs) -> Result<()> {
+  // Always run from the repository root so any relative fixture paths used by tests behave
+  // consistently even when `cargo xtask` is invoked from a subdirectory.
+  let repo_root = repo_root();
+
   let suites = match args.suite {
     TestSuite::All => vec![
       TestSuite::Core,
@@ -599,6 +603,7 @@ fn run_tests(args: TestArgs) -> Result<()> {
     cmd.args(&args.extra);
 
     println!("Running {suite:?} tests...");
+    cmd.current_dir(&repo_root);
     run_command(cmd)?;
   }
 
@@ -606,6 +611,10 @@ fn run_tests(args: TestArgs) -> Result<()> {
 }
 
 fn run_update_goldens(args: UpdateGoldensArgs) -> Result<()> {
+  // Like `run_tests`, ensure the invoked `cargo test` runs from the repo root so relative paths are
+  // stable.
+  let repo_root = repo_root();
+
   let suites = match args.suite {
     GoldenSuite::All => vec![
       GoldenSuite::Fixtures,
@@ -647,6 +656,7 @@ fn run_update_goldens(args: UpdateGoldensArgs) -> Result<()> {
     }
 
     println!("Updating {suite:?} goldens...");
+    cmd.current_dir(&repo_root);
     run_command(cmd)?;
   }
 
@@ -1472,9 +1482,25 @@ fn repo_root() -> PathBuf {
 fn run_render_page(args: RenderPageArgs) -> Result<()> {
   let url = match (args.url, args.file) {
     (Some(url), None) => url,
-    (None, Some(path)) => file_to_url(&path)?,
+    (None, Some(path)) => {
+      // Treat relative `--file` paths as repo-root relative so the command behaves the same when
+      // invoked from subdirectories (consistent with other xtask workflows like pageset).
+      let repo_root = repo_root();
+      let absolute = if path.is_absolute() {
+        path
+      } else {
+        repo_root.join(path)
+      };
+      Url::from_file_path(&absolute)
+        .map(|u| u.to_string())
+        .map_err(|_| anyhow!("could not convert {} to a file:// URL", absolute.display()))?
+    }
     _ => bail!("provide exactly one of --url or --file"),
   };
+
+  // Like pageset, run the underlying render binary from the repo root so default cache/asset paths
+  // (`fetches/assets`, `fetches/html`, etc.) are stable.
+  let repo_root = repo_root();
 
   let mut cmd = Command::new("cargo");
   cmd.arg("run");
@@ -1501,11 +1527,17 @@ fn run_render_page(args: RenderPageArgs) -> Result<()> {
   cmd.args(&args.extra);
 
   cmd.arg(&url);
-  if let Some(output) = &args.output {
+  if let Some(output) = args.output {
+    let output = if output.is_absolute() {
+      output
+    } else {
+      repo_root.join(output)
+    };
     cmd.arg(output);
   }
 
   println!("Rendering page with fetch_and_render...");
+  cmd.current_dir(&repo_root);
   run_command(cmd)
 }
 
@@ -1662,20 +1694,6 @@ fn print_command(cmd: &Command) {
     print!(" {}", arg.to_string_lossy());
   }
   println!();
-}
-
-fn file_to_url(path: &Path) -> Result<String> {
-  let absolute = if path.is_absolute() {
-    path.to_path_buf()
-  } else {
-    std::env::current_dir()
-      .context("resolve current directory")?
-      .join(path)
-  };
-
-  Url::from_file_path(&absolute)
-    .map(|u| u.to_string())
-    .map_err(|_| anyhow!("could not convert {} to a file:// URL", absolute.display()))
 }
 
 fn parse_viewport(raw: &str) -> Result<(u32, u32)> {
