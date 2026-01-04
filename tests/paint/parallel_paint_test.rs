@@ -16,6 +16,7 @@ use fastrender::text::font_loader::FontContext;
 use fastrender::{BorderRadii, Length, LengthUnit, Point, Rect, Rgba};
 use rayon::ThreadPoolBuilder;
 use std::time::Duration;
+use tiny_skia::Pixmap;
 
 struct EnvGuard(&'static str);
 
@@ -54,6 +55,103 @@ fn basic_list() -> DisplayList {
   list
 }
 
+fn top_left_position() -> BackgroundPosition {
+  BackgroundPosition::Position {
+    x: BackgroundPositionComponent {
+      alignment: 0.0,
+      offset: Length::percent(0.0),
+    },
+    y: BackgroundPositionComponent {
+      alignment: 0.0,
+      offset: Length::percent(0.0),
+    },
+  }
+}
+
+fn patterned_mask(bounds: Rect) -> ResolvedMask {
+  const SIZE: u32 = 8;
+  let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+  for y in 0..SIZE {
+    for x in 0..SIZE {
+      let base = x * 32 + y * 4;
+      let alpha = if base < 24 {
+        0
+      } else if base > 224 {
+        255
+      } else {
+        base as u8
+      };
+      pixels.extend_from_slice(&[0, 0, 0, alpha]);
+    }
+  }
+
+  ResolvedMask {
+    layers: vec![ResolvedMaskLayer {
+      image: ResolvedMaskImage::Raster(ImageData::new_pixels(SIZE, SIZE, pixels)),
+      repeat: BackgroundRepeat::repeat(),
+      position: top_left_position(),
+      size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode: MaskMode::Alpha,
+      composite: MaskComposite::Add,
+    }],
+    color: Rgba::BLACK,
+    font_size: 16.0,
+    root_font_size: 16.0,
+    viewport: None,
+    rects: MaskReferenceRects {
+      border: bounds,
+      padding: bounds,
+      content: bounds,
+    },
+  }
+}
+
+fn assert_pixmap_eq(serial: &Pixmap, parallel: &Pixmap) {
+  assert_eq!(serial.width(), parallel.width(), "pixmap width mismatch");
+  assert_eq!(serial.height(), parallel.height(), "pixmap height mismatch");
+  let serial_data = serial.data();
+  let parallel_data = parallel.data();
+  if serial_data == parallel_data {
+    return;
+  }
+
+  let width = serial.width() as usize;
+  let height = serial.height() as usize;
+  let mut first_mismatch: Option<(usize, usize, [u8; 4], [u8; 4])> = None;
+  let mut diff_min_x = u32::MAX;
+  let mut diff_min_y = u32::MAX;
+  let mut diff_max_x = 0u32;
+  let mut diff_max_y = 0u32;
+
+  for y in 0..height {
+    for x in 0..width {
+      let base = (y * width + x) * 4;
+      let sa = &serial_data[base..base + 4];
+      let pa = &parallel_data[base..base + 4];
+      if sa == pa {
+        continue;
+      }
+      if first_mismatch.is_none() {
+        first_mismatch = Some((x, y, sa.try_into().unwrap(), pa.try_into().unwrap()));
+      }
+      diff_min_x = diff_min_x.min(x as u32);
+      diff_min_y = diff_min_y.min(y as u32);
+      diff_max_x = diff_max_x.max(x as u32);
+      diff_max_y = diff_max_y.max(y as u32);
+    }
+  }
+
+  if let Some((x, y, sa, pa)) = first_mismatch {
+    panic!(
+      "pixmaps differ at ({x},{y}): serial={sa:?} parallel={pa:?}; diff_bbox=({diff_min_x},{diff_min_y})-({diff_max_x},{diff_max_y})"
+    );
+  }
+
+  panic!("pixmaps differ, but could not locate mismatch");
+}
+
 #[test]
 fn parallel_paint_matches_serial_output() {
   let list = basic_list();
@@ -84,7 +182,7 @@ fn parallel_paint_matches_serial_output() {
   });
 
   assert!(report.parallel_used, "expected tiling to be used");
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]
@@ -134,7 +232,7 @@ fn thick_strokes_survive_tiling() {
   });
 
   assert!(report.parallel_used, "expected tiling to be used");
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]
@@ -213,7 +311,142 @@ fn clip_transform_and_stacking_context_match_serial_output() {
   });
 
   assert!(report.parallel_used, "expected tiling to be used");
-  assert_eq!(serial.data(), report.pixmap.data());
+  assert_pixmap_eq(&serial, &report.pixmap);
+}
+
+#[test]
+fn stacking_context_mask_matches_serial_output() {
+  let canvas_rect = Rect::from_xywh(0.0, 0.0, 96.0, 96.0);
+  let masked_bounds = Rect::from_xywh(40.0, 40.0, 44.0, 44.0);
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: canvas_rect,
+    color: Rgba::WHITE,
+  }));
+
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: masked_bounds,
+    plane_rect: masked_bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(patterned_mask(masked_bounds)),
+  }));
+  // Fill the masked bounds with a solid color so the mask alpha pattern is visible.
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: masked_bounds,
+    color: Rgba::new(220, 40, 60, 1.0),
+  }));
+  // Add a second rect so the mask has to affect multiple overlapping primitives.
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(
+      masked_bounds.x() + 10.0,
+      masked_bounds.y() + 6.0,
+      masked_bounds.width() - 14.0,
+      masked_bounds.height() - 18.0,
+    ),
+    color: Rgba::new(40, 140, 220, 0.9),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 24,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert_pixmap_eq(&serial, &report.pixmap);
+}
+
+#[test]
+fn stacking_context_isolated_layer_matches_serial_output() {
+  let canvas_rect = Rect::from_xywh(0.0, 0.0, 96.0, 96.0);
+  let bounds = Rect::from_xywh(40.0, 40.0, 44.0, 44.0);
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: canvas_rect,
+    color: Rgba::WHITE,
+  }));
+
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::new(220, 40, 60, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 24,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert_pixmap_eq(&serial, &report.pixmap);
 }
 
 #[test]

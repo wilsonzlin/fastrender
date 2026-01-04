@@ -4619,10 +4619,10 @@ impl DisplayListRenderer {
       self.canvas.height() as f32 / self.scale,
     ));
 
-    // In parallel tiling mode the canvas is translated so tile renderers can reuse global display
-    // list coordinates. `ResolvedMask` reference rectangles are in the same global coordinate
-    // space, so we need to offset them into the translated canvas space before computing clip
-    // intersections and rasterizing mask tiles.
+    // `ResolvedMask::rects` are expressed in the CSS coordinate space of the overall scene. When
+    // rendering into a translated canvas (e.g. per-tile parallel painting or bounded layers),
+    // offset those rects into the local canvas coordinate system so mask tiling/positioning stays
+    // stable even when the underlying pixmap origin changes.
     //
     // At the moment `render_mask` assumes the canvas transform is translation-only. This is
     // sufficient for tiling (which uses `Canvas::translate`) and avoids incorrectly applying an
@@ -4647,7 +4647,6 @@ impl DisplayListRenderer {
       rects.padding = rects.padding.translate(canvas_offset_css);
       rects.content = rects.content.translate(canvas_offset_css);
     }
-
     let mut combined: Option<CompositeMask> = None;
     let canvas_bounds_device = self.canvas.bounds();
     let canvas_bounds_css = Rect::from_xywh(

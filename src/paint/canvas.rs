@@ -588,9 +588,11 @@ impl Canvas {
     paint.opacity = opacity;
     paint.blend_mode = composite_blend.unwrap_or(self.current_state.blend_mode);
     let clip = self.current_state.clip_mask.as_deref();
-    // The layer contents are already rendered in the destination (parent) device space. Applying
-    // the current transform again would double-transform the layer when the canvas transform is
-    // non-identity at the time the layer was pushed.
+    // Layer contents are rasterized in destination (parent) device space: the current canvas
+    // transform is applied while painting into the offscreen pixmap. When compositing back onto
+    // the parent pixmap we must *not* re-apply the transform, otherwise non-identity transforms
+    // (e.g. translated tile painters / bounded layers) would double-transform the already
+    // rasterized content.
     let transform = Transform::identity();
 
     if paint.blend_mode == SkiaBlendMode::Plus {
