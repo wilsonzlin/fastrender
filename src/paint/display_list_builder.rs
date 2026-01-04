@@ -5829,21 +5829,7 @@ impl DisplayListBuilder {
         continue;
       }
 
-      let used_thickness = match deco.decoration.thickness {
-        TextDecorationThickness::Auto => None,
-        TextDecorationThickness::FromFont => None,
-        TextDecorationThickness::Length(l) => {
-          if l.unit == LengthUnit::Percent {
-            l.resolve_against(style.font_size)
-          } else if l.unit.is_viewport_relative() {
-            self
-              .viewport
-              .and_then(|(vw, vh)| l.resolve_with_viewport(vw, vh))
-          } else {
-            Some(resolve_font_relative_length(l, style, &self.font_ctx))
-          }
-        }
-      };
+      let used_thickness = self.resolve_text_decoration_thickness_override(deco.decoration.thickness, style);
 
       let underline_offset = self.resolve_underline_offset_value(deco.underline_offset, style);
       let mut paint = DecorationPaint {
@@ -5947,6 +5933,35 @@ impl DisplayListBuilder {
         inline_vertical,
         decorations: paints,
       }));
+  }
+
+  fn resolve_text_decoration_thickness_override(
+    &self,
+    thickness: TextDecorationThickness,
+    style: &ComputedStyle,
+  ) -> Option<f32> {
+    match thickness {
+      // `auto` uses the UA default thickness, which is derived from font size rather than the
+      // font-provided underline metrics. (See CSS Text Decoration Level 4.)
+      //
+      // We intentionally match the heuristic used by our metric fallback path so behavior stays
+      // stable even when font metrics cannot be obtained.
+      TextDecorationThickness::Auto => Some((style.font_size * 0.05).max(1.0)),
+      // `from-font` uses per-font underline/strikeout thickness, so let the caller fall back to
+      // `DecorationMetrics::{underline_thickness,strike_thickness}`.
+      TextDecorationThickness::FromFont => None,
+      TextDecorationThickness::Length(l) => {
+        if l.unit == LengthUnit::Percent {
+          l.resolve_against(style.font_size)
+        } else if l.unit.is_viewport_relative() {
+          self
+            .viewport
+            .and_then(|(vw, vh)| l.resolve_with_viewport(vw, vh))
+        } else {
+          Some(resolve_font_relative_length(l, style, &self.font_ctx))
+        }
+      }
+    }
   }
 
   fn stroke_half_extent(style: TextDecorationStyle, thickness: f32) -> f32 {

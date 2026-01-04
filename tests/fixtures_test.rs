@@ -237,6 +237,7 @@ fn test_all_fixture_files_exist() {
     "text_vertical_orientation_mixed",
     "text_vertical_upright_bidi_preserve_order",
     "text_combine_upright_scale",
+    "text_decoration_thickness_auto_vs_from_font",
     "shadow_dom",
     "svg_foreign_object",
   ];
@@ -560,6 +561,12 @@ fn test_fixture_text_vertical_upright_bidi_preserve_order() {
 fn test_fixture_text_combine_upright_scale() {
   test_fixture("text_combine_upright_scale")
     .expect("text_combine_upright_scale fixture should render");
+}
+
+#[test]
+fn test_fixture_text_decoration_thickness_auto_vs_from_font() {
+  test_fixture("text_decoration_thickness_auto_vs_from_font")
+    .expect("text_decoration_thickness_auto_vs_from_font fixture should render");
 }
 
 //
