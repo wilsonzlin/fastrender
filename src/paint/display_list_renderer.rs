@@ -4642,10 +4642,9 @@ impl DisplayListRenderer {
       rects.padding = rects.padding.translate(canvas_offset_css);
       rects.content = rects.content.translate(canvas_offset_css);
     }
+
     let mut combined: Option<CompositeMask> = None;
-    let transform = self.canvas.transform();
-    let inv_transform = invert_transform(transform).unwrap_or(Transform::identity());
-    let canvas_bounds_device = transform_rect(self.canvas.bounds(), &inv_transform);
+    let canvas_bounds_device = self.canvas.bounds();
     let canvas_bounds_css = Rect::from_xywh(
       canvas_bounds_device.x() / self.scale,
       canvas_bounds_device.y() / self.scale,
@@ -4656,7 +4655,6 @@ impl DisplayListRenderer {
       .canvas
       .clip_bounds()
       .map(|rect| {
-        let rect = transform_rect(rect, &inv_transform);
         Rect::from_xywh(
           rect.x() / self.scale,
           rect.y() / self.scale,
