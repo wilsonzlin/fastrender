@@ -203,3 +203,26 @@ fn chrome_baseline_fixtures_errors_when_chrome_missing() {
     "error should mention missing chrome; got:\n{stderr}"
   );
 }
+
+#[test]
+fn chrome_baseline_fixtures_errors_on_non_finite_dpr() {
+  let repo_root = repo_root();
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(&repo_root)
+    .arg("chrome-baseline-fixtures")
+    .arg("--dpr")
+    .arg("NaN")
+    .output()
+    .expect("run chrome-baseline-fixtures");
+
+  assert!(
+    !output.status.success(),
+    "command should fail with invalid dpr"
+  );
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    stderr.contains("--dpr must be a positive, finite number"),
+    "error should mention invalid dpr; got:\n{stderr}"
+  );
+}

@@ -102,8 +102,8 @@ enum JsModeMetadata {
 }
 
 pub fn run_chrome_baseline_fixtures(args: ChromeBaselineFixturesArgs) -> Result<()> {
-  if args.dpr <= 0.0 {
-    bail!("--dpr must be > 0");
+  if args.dpr <= 0.0 || !args.dpr.is_finite() {
+    bail!("--dpr must be a positive, finite number");
   }
 
   let repo_root = crate::repo_root();
