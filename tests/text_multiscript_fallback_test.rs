@@ -1,7 +1,9 @@
 use fastrender::text::pipeline::ShapedRun;
 use fastrender::{ComputedStyle, FontConfig, FontContext, FontDatabase, ShapingPipeline};
 
-const MULTISCRIPT_SAMPLE: &str = "Hello العربية עברית हिन्दी বাংলা ไทย 中文 日本語 かな カナ 한국어";
+const MULTISCRIPT_SAMPLE: &str =
+  "Hello العربية עברית हिन्दी বাংলা ไทย 中文 日本語 かな カナ 한국어 \
+   ਗ ગ ଓ ಕ മ ස Ա ა አ ກ ཀ ក Ꭰ ᐁ ᥐ ᱚ Ⰰ ⴰ ꠅ ꯀ 𐌰";
 
 /// Representative characters for the scripts we expect bundled fonts to cover.
 ///
@@ -18,6 +20,27 @@ const REPRESENTATIVE_CHARS: &[(&str, char)] = &[
   ("Hiragana", 'か'),
   ("Katakana", 'カ'),
   ("Hangul", '한'),
+  ("Gurmukhi", 'ਗ'),
+  ("Gujarati", 'ગ'),
+  ("Oriya", 'ଓ'),
+  ("Kannada", 'ಕ'),
+  ("Malayalam", 'മ'),
+  ("Sinhala", 'ස'),
+  ("Armenian", 'Ա'),
+  ("Georgian", 'ა'),
+  ("Ethiopic", 'አ'),
+  ("Lao", 'ກ'),
+  ("Tibetan", 'ཀ'),
+  ("Khmer", 'ក'),
+  ("Cherokee", 'Ꭰ'),
+  ("CanadianAboriginal", 'ᐁ'),
+  ("TaiLe", 'ᥐ'),
+  ("OlChiki", 'ᱚ'),
+  ("Glagolitic", 'Ⰰ'),
+  ("Tifinagh", 'ⴰ'),
+  ("SylotiNagri", 'ꠅ'),
+  ("MeeteiMayek", 'ꯀ'),
+  ("Gothic", '𐌰'),
 ];
 
 fn is_bidi_control_char(ch: char) -> bool {

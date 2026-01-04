@@ -2510,8 +2510,8 @@ mod tests {
       .with_face_data(face.id, |data, index| {
         parse_face_with_counter(data, index).ok().map(|f| {
           (
-            f.glyph_index('A').is_some(),
-            f.glyph_index(char::MAX).is_some(),
+            f.glyph_index('A').is_some_and(|gid| gid.0 != 0),
+            f.glyph_index(char::MAX).is_some_and(|gid| gid.0 != 0),
           )
         })
       })

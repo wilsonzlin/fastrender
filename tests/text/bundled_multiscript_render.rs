@@ -143,6 +143,7 @@ fn bundled_fonts_cover_javanese_punctuation_cluster() {
   let font_ctx = FontContext::with_config(FontConfig::bundled_only());
   let db = font_ctx.database();
   let base = '\u{A9DF}'; // ꧟ JAVANESE PADA ISEN-ISEN
+  let mark = '\u{0333}'; // COMBINING DOUBLE LOW LINE
 
   assert!(
     db.faces().any(|face| db.has_glyph(face.id, base)),
@@ -161,9 +162,39 @@ fn bundled_fonts_cover_javanese_punctuation_cluster() {
 
   let glyphs: Vec<_> = runs.iter().flat_map(|run| run.glyphs.iter()).collect();
   assert!(!glyphs.is_empty(), "javanese cluster should produce glyphs");
+
+  let notdef_glyphs: Vec<String> = runs
+    .iter()
+    .flat_map(|run| {
+      run
+        .glyphs
+        .iter()
+        .filter(|glyph| glyph.glyph_id == 0)
+        .map(|glyph| {
+          let cluster = glyph.cluster as usize;
+          let ch = run
+            .text
+            .get(cluster..)
+            .and_then(|s| s.chars().next())
+            .unwrap_or('\u{FFFD}');
+          let font_id = run.font.id.map(|id| id.inner());
+          let base_supported = font_id.is_some_and(|id| db.has_glyph(id, base));
+          let mark_supported = font_id.is_some_and(|id| db.has_glyph(id, mark));
+          format!(
+            "font={} id={:?} base_supported={base_supported} mark_supported={mark_supported} cluster={} ch=U+{:04X} text={:?}",
+            run.font.family, font_id,
+            glyph.cluster,
+            ch as u32,
+            run.text
+          )
+        })
+        .collect::<Vec<_>>()
+    })
+    .collect();
   assert!(
-    glyphs.iter().all(|glyph| glyph.glyph_id != 0),
-    "javanese cluster should not shape with .notdef glyphs"
+    notdef_glyphs.is_empty(),
+    "javanese cluster should not shape with .notdef glyphs; saw:\n{}",
+    notdef_glyphs.join("\n")
   );
 }
 

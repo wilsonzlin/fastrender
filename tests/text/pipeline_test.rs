@@ -222,7 +222,146 @@ fn last_resort_font_fallback_shapes_missing_scripts() {
     runs
       .iter()
       .any(|run| run.glyphs.iter().any(|glyph| glyph.glyph_id == 0)),
-    "fallback glyphs should use .notdef when coverage is missing"
+   "fallback glyphs should use .notdef when coverage is missing"
+  );
+}
+
+#[test]
+fn bundled_only_sans_serif_prefers_additional_script_fonts() {
+  let pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()].into();
+  style.font_size = 32.0;
+
+  for (label, sample, expected_family) in [
+    ("Gurmukhi", 'ਗ', "Noto Sans Gurmukhi"),
+    ("Gujarati", 'ગ', "Noto Sans Gujarati"),
+    ("Oriya", 'ଓ', "Noto Sans Oriya"),
+    ("Kannada", 'ಕ', "Noto Sans Kannada"),
+    ("Malayalam", 'മ', "Noto Sans Malayalam"),
+    ("Sinhala", 'ස', "Noto Sans Sinhala"),
+    ("Armenian", 'Ա', "Noto Sans Armenian"),
+    ("Georgian", 'ა', "Noto Sans Georgian"),
+    ("Ethiopic", 'አ', "Noto Sans Ethiopic"),
+    ("Lao", 'ກ', "Noto Sans Lao"),
+    ("Tibetan", 'ཀ', "Noto Serif Tibetan"),
+    ("Khmer", 'ក', "Noto Sans Khmer"),
+    ("Cherokee", 'Ꭰ', "Noto Sans Cherokee"),
+    ("CanadianAboriginal", 'ᐁ', "Noto Sans Canadian Aboriginal"),
+    ("TaiLe", 'ᥐ', "Noto Sans Tai Le"),
+    ("OlChiki", 'ᱚ', "Noto Sans Ol Chiki"),
+    ("Glagolitic", 'Ⰰ', "Noto Sans Glagolitic"),
+    ("Tifinagh", 'ⴰ', "Noto Sans Tifinagh"),
+    ("SylotiNagri", 'ꠅ', "Noto Sans Syloti Nagri"),
+    ("MeeteiMayek", 'ꯀ', "Noto Sans Meetei Mayek"),
+    ("Gothic", '𐌰', "Noto Sans Gothic"),
+  ] {
+    let text = sample.to_string();
+    let runs = pipeline
+      .shape(&text, &style, &font_ctx)
+      .unwrap_or_else(|_| panic!("shape bundled-only sample for {label}"));
+    let run = runs
+      .iter()
+      .find(|run| run.text.contains(sample))
+      .unwrap_or_else(|| panic!("no shaped run contained {label} sample"));
+    assert_eq!(
+      run.font.family, expected_family,
+      "{label} sample should use bundled {expected_family} fallback font"
+    );
+    assert!(
+      run.glyphs.iter().all(|glyph| glyph.glyph_id != 0),
+      "{label} sample should not contain .notdef glyphs"
+    );
+  }
+}
+
+#[test]
+fn bundled_only_indic_scripts_shape_conjunct_clusters() {
+  let pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()].into();
+  style.font_size = 32.0;
+
+  for (label, text, expected_family) in [
+    ("Gujarati", "ક્ષ", "Noto Sans Gujarati"),
+    ("Oriya", "କ୍ଷ", "Noto Sans Oriya"),
+    ("Kannada", "ಕ್ಷ", "Noto Sans Kannada"),
+    ("Malayalam", "ക്ഷ", "Noto Sans Malayalam"),
+    ("Sinhala", "ක්ෂ", "Noto Sans Sinhala"),
+  ] {
+    let runs = pipeline
+      .shape(text, &style, &font_ctx)
+      .unwrap_or_else(|_| panic!("shape {label} conjunct sample"));
+    assert!(!runs.is_empty(), "{label} conjunct sample should produce runs");
+
+    let run = runs
+      .iter()
+      .find(|run| run.font.family == expected_family)
+      .unwrap_or_else(|| panic!("{label} conjunct sample should use {expected_family}"));
+    assert!(
+      run.glyphs.iter().all(|glyph| glyph.glyph_id != 0),
+      "{label} conjunct sample should not contain .notdef glyphs"
+    );
+
+    let char_count = run.text.chars().count();
+    assert_ne!(
+      run.glyphs.len(),
+      char_count,
+      "{label} conjunct shaping should not be 1:1 glyphs-per-character (got {} glyphs for {} chars)",
+      run.glyphs.len(),
+      char_count
+    );
+  }
+}
+
+#[test]
+fn bundled_only_gurmukhi_shapes_prebase_matra() {
+  let pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()].into();
+  style.font_size = 32.0;
+
+  // GURMUKHI LETTER KA + GURMUKHI VOWEL SIGN I (pre-base matra).
+  let base_runs = pipeline
+    .shape("ਕ", &style, &font_ctx)
+    .expect("shape Gurmukhi base glyph");
+  let base_run = base_runs
+    .iter()
+    .find(|run| run.text.contains('ਕ'))
+    .expect("expected run containing base glyph");
+  assert_eq!(
+    base_run.font.family, "Noto Sans Gurmukhi",
+    "Gurmukhi shaping should use Noto Sans Gurmukhi"
+  );
+  let base_glyph_id = base_run.glyphs[0].glyph_id;
+
+  let runs = pipeline
+    .shape("ਕਿ", &style, &font_ctx)
+    .expect("shape Gurmukhi matra cluster");
+  let run = runs
+    .iter()
+    .find(|run| run.text.contains('ਕ'))
+    .expect("expected run containing matra cluster");
+  assert_eq!(
+    run.font.family, "Noto Sans Gurmukhi",
+    "Gurmukhi matra cluster should use Noto Sans Gurmukhi"
+  );
+  assert!(
+    run.glyphs.iter().all(|glyph| glyph.glyph_id != 0),
+    "Gurmukhi matra cluster should not contain .notdef glyphs"
+  );
+
+  let base_index = run
+    .glyphs
+    .iter()
+    .position(|glyph| glyph.glyph_id == base_glyph_id)
+    .expect("expected matra cluster to contain base glyph");
+  assert!(
+    base_index > 0,
+    "expected pre-base matra shaping to reorder glyphs (base glyph index {base_index})"
   );
 }
 
@@ -379,6 +518,34 @@ fn test_script_detect_devanagari() {
 }
 
 #[test]
+fn test_script_detect_additional_bundled_scripts() {
+  // Indic scripts
+  assert_eq!(Script::detect('ਗ'), Script::Gurmukhi);
+  assert_eq!(Script::detect('ગ'), Script::Gujarati);
+  assert_eq!(Script::detect('ଓ'), Script::Oriya);
+  assert_eq!(Script::detect('ಕ'), Script::Kannada);
+  assert_eq!(Script::detect('മ'), Script::Malayalam);
+  assert_eq!(Script::detect('ස'), Script::Sinhala);
+
+  // Other bundled scripts
+  assert_eq!(Script::detect('Ա'), Script::Armenian);
+  assert_eq!(Script::detect('ა'), Script::Georgian);
+  assert_eq!(Script::detect('አ'), Script::Ethiopic);
+  assert_eq!(Script::detect('ກ'), Script::Lao);
+  assert_eq!(Script::detect('ཀ'), Script::Tibetan);
+  assert_eq!(Script::detect('ក'), Script::Khmer);
+  assert_eq!(Script::detect('Ꭰ'), Script::Cherokee);
+  assert_eq!(Script::detect('ᐁ'), Script::CanadianAboriginal);
+  assert_eq!(Script::detect('ᥐ'), Script::TaiLe);
+  assert_eq!(Script::detect('ᱚ'), Script::OlChiki);
+  assert_eq!(Script::detect('Ⰰ'), Script::Glagolitic);
+  assert_eq!(Script::detect('ⴰ'), Script::Tifinagh);
+  assert_eq!(Script::detect('ꠅ'), Script::SylotiNagri);
+  assert_eq!(Script::detect('ꯀ'), Script::MeeteiMayek);
+  assert_eq!(Script::detect('𐌰'), Script::Gothic);
+}
+
+#[test]
 fn test_script_detect_cjk() {
   // Chinese characters (Han)
   assert_eq!(Script::detect('中'), Script::Han);
@@ -423,6 +590,7 @@ fn test_script_to_harfbuzz() {
   assert!(Script::Hebrew.to_harfbuzz().is_some());
   assert!(Script::Greek.to_harfbuzz().is_some());
   assert!(Script::Cyrillic.to_harfbuzz().is_some());
+  assert!(Script::Gujarati.to_harfbuzz().is_some());
   // Common/neutral scripts should return None (auto-detect)
   assert!(Script::Common.to_harfbuzz().is_none());
 }

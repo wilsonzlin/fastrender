@@ -69,7 +69,13 @@ impl CachedFace {
 
   #[inline]
   pub fn has_glyph(&self, c: char) -> bool {
-    self.face.glyph_index(c).is_some()
+    // Some bundled subset fonts include a cmap entry that maps to glyph 0
+    // (`.notdef`). Treat that as missing so font fallback can continue to a
+    // face that renders the character.
+    self
+      .face
+      .glyph_index(c)
+      .is_some_and(|glyph_id| glyph_id.0 != 0)
   }
 }
 

@@ -570,6 +570,27 @@ fn script_from_u8(value: u8) -> Option<Script> {
     v if v == Script::Hiragana as u8 => Script::Hiragana,
     v if v == Script::Katakana as u8 => Script::Katakana,
     v if v == Script::Hangul as u8 => Script::Hangul,
+    v if v == Script::Gurmukhi as u8 => Script::Gurmukhi,
+    v if v == Script::Gujarati as u8 => Script::Gujarati,
+    v if v == Script::Oriya as u8 => Script::Oriya,
+    v if v == Script::Kannada as u8 => Script::Kannada,
+    v if v == Script::Malayalam as u8 => Script::Malayalam,
+    v if v == Script::Sinhala as u8 => Script::Sinhala,
+    v if v == Script::Armenian as u8 => Script::Armenian,
+    v if v == Script::Georgian as u8 => Script::Georgian,
+    v if v == Script::Ethiopic as u8 => Script::Ethiopic,
+    v if v == Script::Lao as u8 => Script::Lao,
+    v if v == Script::Tibetan as u8 => Script::Tibetan,
+    v if v == Script::Khmer as u8 => Script::Khmer,
+    v if v == Script::Cherokee as u8 => Script::Cherokee,
+    v if v == Script::CanadianAboriginal as u8 => Script::CanadianAboriginal,
+    v if v == Script::TaiLe as u8 => Script::TaiLe,
+    v if v == Script::OlChiki as u8 => Script::OlChiki,
+    v if v == Script::Glagolitic as u8 => Script::Glagolitic,
+    v if v == Script::Tifinagh as u8 => Script::Tifinagh,
+    v if v == Script::SylotiNagri as u8 => Script::SylotiNagri,
+    v if v == Script::MeeteiMayek as u8 => Script::MeeteiMayek,
+    v if v == Script::Gothic as u8 => Script::Gothic,
     _ => return None,
   })
 }
@@ -954,6 +975,48 @@ pub enum Script {
   Katakana,
   /// Hangul script (Korean)
   Hangul,
+  /// Gurmukhi script
+  Gurmukhi,
+  /// Gujarati script
+  Gujarati,
+  /// Oriya/Odia script
+  Oriya,
+  /// Kannada script
+  Kannada,
+  /// Malayalam script
+  Malayalam,
+  /// Sinhala script
+  Sinhala,
+  /// Armenian script
+  Armenian,
+  /// Georgian script
+  Georgian,
+  /// Ethiopic script
+  Ethiopic,
+  /// Lao script
+  Lao,
+  /// Tibetan script
+  Tibetan,
+  /// Khmer script
+  Khmer,
+  /// Cherokee script
+  Cherokee,
+  /// Canadian Aboriginal Syllabics script
+  CanadianAboriginal,
+  /// Tai Le script
+  TaiLe,
+  /// Ol Chiki script
+  OlChiki,
+  /// Glagolitic script
+  Glagolitic,
+  /// Tifinagh script
+  Tifinagh,
+  /// Syloti Nagri script
+  SylotiNagri,
+  /// Meetei Mayek script
+  MeeteiMayek,
+  /// Gothic script
+  Gothic,
 }
 
 impl Script {
@@ -1003,6 +1066,11 @@ impl Script {
       return Self::Cyrillic;
     }
 
+    // Armenian
+    if (0x0530..=0x058f).contains(&cp) || (0xfb13..=0xfb17).contains(&cp) {
+      return Self::Armenian;
+    }
+
     // Hebrew
     if (0x0590..=0x05ff).contains(&cp) || (0xfb1d..=0xfb4f).contains(&cp) {
       return Self::Hebrew;
@@ -1043,6 +1111,21 @@ impl Script {
       return Self::Bengali;
     }
 
+    // Gurmukhi
+    if (0x0a00..=0x0a7f).contains(&cp) || (0xa830..=0xa83f).contains(&cp) {
+      return Self::Gurmukhi;
+    }
+
+    // Gujarati
+    if (0x0a80..=0x0aff).contains(&cp) {
+      return Self::Gujarati;
+    }
+
+    // Oriya/Odia
+    if (0x0b00..=0x0b7f).contains(&cp) {
+      return Self::Oriya;
+    }
+
     // Tamil
     if (0x0b80..=0x0bff).contains(&cp) {
       return Self::Tamil;
@@ -1053,9 +1136,34 @@ impl Script {
       return Self::Telugu;
     }
 
+    // Kannada
+    if (0x0c80..=0x0cff).contains(&cp) {
+      return Self::Kannada;
+    }
+
+    // Malayalam
+    if (0x0d00..=0x0d7f).contains(&cp) {
+      return Self::Malayalam;
+    }
+
+    // Sinhala
+    if (0x0d80..=0x0dff).contains(&cp) {
+      return Self::Sinhala;
+    }
+
     // Thai
     if (0x0e00..=0x0e7f).contains(&cp) {
       return Self::Thai;
+    }
+
+    // Lao
+    if (0x0e80..=0x0eff).contains(&cp) {
+      return Self::Lao;
+    }
+
+    // Tibetan
+    if (0x0f00..=0x0fff).contains(&cp) {
+      return Self::Tibetan;
     }
 
     // Myanmar
@@ -1066,9 +1174,61 @@ impl Script {
       return Self::Myanmar;
     }
 
+    // Georgian
+    if (0x10a0..=0x10ff).contains(&cp)
+      || (0x1c90..=0x1cbf).contains(&cp)
+      || (0x2d00..=0x2d2f).contains(&cp)
+    {
+      return Self::Georgian;
+    }
+
+    // Ethiopic
+    if (0x1200..=0x137f).contains(&cp)
+      || (0x1380..=0x139f).contains(&cp)
+      || (0x2d80..=0x2ddf).contains(&cp)
+      || (0xab00..=0xab2f).contains(&cp)
+    {
+      return Self::Ethiopic;
+    }
+
+    // Cherokee
+    if (0x13a0..=0x13ff).contains(&cp) || (0xab70..=0xabbf).contains(&cp) {
+      return Self::Cherokee;
+    }
+
+    // Canadian Aboriginal Syllabics
+    if (0x1400..=0x167f).contains(&cp) || (0x18b0..=0x18ff).contains(&cp) {
+      return Self::CanadianAboriginal;
+    }
+
+    // Khmer
+    if (0x1780..=0x17ff).contains(&cp) || (0x19e0..=0x19ff).contains(&cp) {
+      return Self::Khmer;
+    }
+
+    // Tai Le
+    if (0x1950..=0x197f).contains(&cp) {
+      return Self::TaiLe;
+    }
+
+    // Ol Chiki
+    if (0x1c50..=0x1c7f).contains(&cp) {
+      return Self::OlChiki;
+    }
+
     // Javanese
     if (0xa980..=0xa9df).contains(&cp) {
       return Self::Javanese;
+    }
+
+    // Syloti Nagri
+    if (0xa800..=0xa82f).contains(&cp) {
+      return Self::SylotiNagri;
+    }
+
+    // Meetei Mayek
+    if (0xaae0..=0xaaff).contains(&cp) || (0xabc0..=0xabff).contains(&cp) {
+      return Self::MeeteiMayek;
     }
 
     // Hangul (Korean)
@@ -1091,6 +1251,16 @@ impl Script {
       return Self::Katakana;
     }
 
+    // Glagolitic
+    if (0x2c00..=0x2c5f).contains(&cp) {
+      return Self::Glagolitic;
+    }
+
+    // Tifinagh
+    if (0x2d30..=0x2d7f).contains(&cp) {
+      return Self::Tifinagh;
+    }
+
     // CJK (Han)
     if (0x4e00..=0x9fff).contains(&cp)
       || (0x3400..=0x4dbf).contains(&cp)
@@ -1104,6 +1274,11 @@ impl Script {
       || (0x2f800..=0x2fa1f).contains(&cp)
     {
       return Self::Han;
+    }
+
+    // Gothic
+    if (0x10330..=0x1034f).contains(&cp) {
+      return Self::Gothic;
     }
 
     // General punctuation, symbols, numbers
@@ -1174,6 +1349,27 @@ impl Script {
       Self::Hiragana => Some(*b"Hira"),
       Self::Katakana => Some(*b"Kana"),
       Self::Hangul => Some(*b"Hang"),
+      Self::Gurmukhi => Some(*b"Guru"),
+      Self::Gujarati => Some(*b"Gujr"),
+      Self::Oriya => Some(*b"Orya"),
+      Self::Kannada => Some(*b"Knda"),
+      Self::Malayalam => Some(*b"Mlym"),
+      Self::Sinhala => Some(*b"Sinh"),
+      Self::Armenian => Some(*b"Armn"),
+      Self::Georgian => Some(*b"Geor"),
+      Self::Ethiopic => Some(*b"Ethi"),
+      Self::Lao => Some(*b"Laoo"),
+      Self::Tibetan => Some(*b"Tibt"),
+      Self::Khmer => Some(*b"Khmr"),
+      Self::Cherokee => Some(*b"Cher"),
+      Self::CanadianAboriginal => Some(*b"Cans"),
+      Self::TaiLe => Some(*b"Tale"),
+      Self::OlChiki => Some(*b"Olck"),
+      Self::Glagolitic => Some(*b"Glag"),
+      Self::Tifinagh => Some(*b"Tfng"),
+      Self::SylotiNagri => Some(*b"Sylo"),
+      Self::MeeteiMayek => Some(*b"Mtei"),
+      Self::Gothic => Some(*b"Goth"),
       Self::Common | Self::Inherited | Self::Unknown => None,
     };
 
@@ -3138,6 +3334,16 @@ fn assign_fonts_internal(
               // Marks are optional in mixed clusters (Task 72), so when the only required codepoint
               // is the base glyph we can reuse the glyph fallback cache rather than running the
               // full cluster resolver a second time.
+              if let Some(font) = resolved.as_ref() {
+                let mut face = None;
+                if !font_supports_all_chars_fast(db, font.as_ref(), &mut face, coverage_chars_required)
+                {
+                  // The cluster resolver can return a best-effort font that doesn't cover the base
+                  // glyph when no single face covers the entire cluster (including marks). Ensure
+                  // we still resolve the required (non-mark) codepoints.
+                  resolved = None;
+                }
+              }
               let char_cache_key = descriptor.map(|descriptor| GlyphFallbackCacheKey {
                 descriptor,
                 ch: base_char,
@@ -3146,7 +3352,13 @@ fn assign_fonts_internal(
               if let (Some(cache), Some(key)) = (font_cache, char_cache_key.as_ref()) {
                 let cached = cache.get_glyph(key);
                 match cached {
-                  Some(Some(font)) => resolved = Some(font),
+                  Some(Some(font)) => {
+                    let mut face = None;
+                    if font_supports_all_chars_fast(db, font.as_ref(), &mut face, coverage_chars_required)
+                    {
+                      resolved = Some(font);
+                    }
+                  }
                   Some(None) => glyph_cached_none = true,
                   None => {}
                 }
@@ -6263,6 +6475,31 @@ mod tests {
   }
 
   #[test]
+  fn test_script_detection_additional_bundled_scripts() {
+    assert_eq!(Script::detect('ਗ'), Script::Gurmukhi);
+    assert_eq!(Script::detect('ગ'), Script::Gujarati);
+    assert_eq!(Script::detect('ଓ'), Script::Oriya);
+    assert_eq!(Script::detect('ಕ'), Script::Kannada);
+    assert_eq!(Script::detect('മ'), Script::Malayalam);
+    assert_eq!(Script::detect('ස'), Script::Sinhala);
+    assert_eq!(Script::detect('Ա'), Script::Armenian);
+    assert_eq!(Script::detect('ა'), Script::Georgian);
+    assert_eq!(Script::detect('አ'), Script::Ethiopic);
+    assert_eq!(Script::detect('ກ'), Script::Lao);
+    assert_eq!(Script::detect('ཀ'), Script::Tibetan);
+    assert_eq!(Script::detect('ក'), Script::Khmer);
+    assert_eq!(Script::detect('Ꭰ'), Script::Cherokee);
+    assert_eq!(Script::detect('ᐁ'), Script::CanadianAboriginal);
+    assert_eq!(Script::detect('ᥐ'), Script::TaiLe);
+    assert_eq!(Script::detect('ᱚ'), Script::OlChiki);
+    assert_eq!(Script::detect('Ⰰ'), Script::Glagolitic);
+    assert_eq!(Script::detect('ⴰ'), Script::Tifinagh);
+    assert_eq!(Script::detect('ꠅ'), Script::SylotiNagri);
+    assert_eq!(Script::detect('ꯀ'), Script::MeeteiMayek);
+    assert_eq!(Script::detect('𐌰'), Script::Gothic);
+  }
+
+  #[test]
   fn test_script_detection_hebrew() {
     assert_eq!(Script::detect('ש'), Script::Hebrew);
     assert_eq!(Script::detect('ל'), Script::Hebrew);
@@ -7166,6 +7403,7 @@ mod tests {
     assert!(Script::Javanese.to_harfbuzz().is_some());
     assert!(Script::Myanmar.to_harfbuzz().is_some());
     assert!(Script::Telugu.to_harfbuzz().is_some());
+    assert!(Script::Gujarati.to_harfbuzz().is_some());
     // Common/neutral scripts should return None (auto-detect)
     assert!(Script::Common.to_harfbuzz().is_none());
     assert!(Script::Inherited.to_harfbuzz().is_none());

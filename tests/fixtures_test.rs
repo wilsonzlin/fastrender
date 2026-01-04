@@ -223,6 +223,7 @@ fn test_all_fixture_files_exist() {
     "form_controls",
     // Text
     "text_complex_scripts",
+    "text_additional_scripts",
     "text_bidi",
     "text_bidi_mirror",
     "text_line_break",
@@ -477,6 +478,11 @@ fn test_fixture_text_complex_scripts() {
 }
 
 #[test]
+fn test_fixture_text_additional_scripts() {
+  test_fixture("text_additional_scripts").expect("text_additional_scripts fixture should render");
+}
+
+#[test]
 fn test_fixture_text_bidi() {
   test_fixture("text_bidi").expect("text_bidi fixture should render");
 }
@@ -587,6 +593,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "form_controls",
     // Text
     "text_complex_scripts",
+    "text_additional_scripts",
     "text_bidi",
     "text_bidi_mirror",
     "text_line_break",
@@ -714,6 +721,11 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "text_complex_scripts",
       "Text",
       "Various scripts (Arabic, Hebrew, CJK, etc.)",
+    ),
+    (
+      "text_additional_scripts",
+      "Text",
+      "Bundled script fallbacks (Indic, Armenian, Tibetan, etc.)",
     ),
     (
       "text_bidi",
