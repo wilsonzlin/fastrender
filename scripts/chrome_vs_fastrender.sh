@@ -271,6 +271,30 @@ if [[ "${#HTML_FILES[@]}" -eq 0 ]]; then
   exit 1
 fi
 
+AVAILABLE_STEMS=()
+declare -A AVAILABLE=()
+for html in "${HTML_FILES[@]}"; do
+  stem="$(basename "${html}" .html)"
+  AVAILABLE_STEMS+=("${stem}")
+  AVAILABLE["${stem}"]=1
+done
+
+if [[ "${#FILTERS[@]}" -gt 0 ]]; then
+  missing=()
+  declare -A missing_seen=()
+  for stem in "${FILTERS[@]}"; do
+    if [[ -z "${AVAILABLE[${stem}]:-}" && -z "${missing_seen[${stem}]:-}" ]]; then
+      missing_seen["${stem}"]=1
+      missing+=("${stem}")
+    fi
+  done
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "No cached HTML found for requested page stem(s): ${missing[*]}" >&2
+    echo "Run: cargo run --release --bin fetch_pages (or pass --refresh/--pages to fetch_pages) to populate fetches/html." >&2
+    exit 1
+  fi
+fi
+
 if [[ -n "${SHARD}" ]]; then
   if ! [[ "${SHARD}" =~ ^[0-9]+/[0-9]+$ ]]; then
     echo "invalid --shard: ${SHARD} (expected index/total like 0/4)" >&2
@@ -287,27 +311,12 @@ if [[ -n "${SHARD}" ]]; then
     exit 2
   fi
 
-  AVAILABLE_STEMS=()
-  for html in "${HTML_FILES[@]}"; do
-    AVAILABLE_STEMS+=("$(basename "${html}" .html)")
-  done
-
-  MATCHED=()
   if [[ "${#FILTERS[@]}" -gt 0 ]]; then
-    declare -A AVAILABLE=()
-    for stem in "${AVAILABLE_STEMS[@]}"; do
-      AVAILABLE["${stem}"]=1
-    done
-    for stem in "${FILTERS[@]}"; do
-      if [[ -n "${AVAILABLE[${stem}]:-}" ]]; then
-        MATCHED+=("${stem}")
-      fi
-    done
+    mapfile -t MATCHED_SORTED < <(printf '%s\n' "${FILTERS[@]}" | sort -u)
   else
-    MATCHED=("${AVAILABLE_STEMS[@]}")
+    mapfile -t MATCHED_SORTED < <(printf '%s\n' "${AVAILABLE_STEMS[@]}" | sort -u)
   fi
 
-  mapfile -t MATCHED_SORTED < <(printf '%s\n' "${MATCHED[@]}" | sort -u)
   MATCHED_COUNT="${#MATCHED_SORTED[@]}"
 
   SHARDED=()
