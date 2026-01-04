@@ -759,7 +759,7 @@ fn resolve_chrome_binary(args: &ChromeBaselineFixturesArgs) -> Result<PathBuf> {
 
   for name in CANDIDATES {
     if let Some(path) = find_in_path(name) {
-      return Ok(path);
+      return Ok(maybe_unwrap_snap_chromium(path));
     }
   }
 
@@ -767,6 +767,27 @@ fn resolve_chrome_binary(args: &ChromeBaselineFixturesArgs) -> Result<PathBuf> {
     "No Chrome/Chromium binary found.\n\
      Install one (e.g. google-chrome or chromium), pass --chrome /path/to/chrome, or set CHROME_BIN."
   );
+}
+
+fn maybe_unwrap_snap_chromium(chrome: PathBuf) -> PathBuf {
+  // In some container environments the snap wrapper fails with systemd/DBus errors like:
+  //
+  //   cannot create transient scope: DBus error "org.freedesktop.DBus.Error.UnixProcessIdUnknown"
+  //
+  // The snap payload includes the real Chromium binary, which can be invoked directly without the
+  // wrapper. Prefer that binary when the wrapper cannot even run `--version`.
+  if !is_snap_chromium(&chrome) {
+    return chrome;
+  }
+  if chrome_version(&chrome).is_ok() {
+    return chrome;
+  }
+
+  let direct = PathBuf::from("/snap/chromium/current/usr/lib/chromium-browser/chrome");
+  if direct.is_file() {
+    return direct;
+  }
+  chrome
 }
 
 fn resolve_program_path(program: &Path) -> Result<PathBuf> {
