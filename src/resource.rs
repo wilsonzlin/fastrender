@@ -13134,6 +13134,161 @@ mod tests {
   }
 
   #[test]
+  fn caching_fetcher_fetch_with_request_does_not_update_aliases_on_http_error() {
+    #[derive(Clone, Debug)]
+    struct AliasingResponse {
+      status: u16,
+      body: Vec<u8>,
+      etag: Option<String>,
+      final_url: Option<String>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RecordedCall {
+      url: String,
+      destination: FetchDestination,
+      etag: Option<String>,
+      last_modified: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct AliasingFetcher {
+      responses: Arc<Mutex<VecDeque<AliasingResponse>>>,
+      calls: Arc<Mutex<Vec<RecordedCall>>>,
+    }
+
+    impl AliasingFetcher {
+      fn new(responses: Vec<AliasingResponse>) -> Self {
+        Self {
+          responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+          calls: Arc::new(Mutex::new(Vec::new())),
+        }
+      }
+
+      fn record_call(
+        &self,
+        url: &str,
+        destination: FetchDestination,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+      ) {
+        self.calls.lock().unwrap().push(RecordedCall {
+          url: url.to_string(),
+          destination,
+          etag: etag.map(|s| s.to_string()),
+          last_modified: last_modified.map(|s| s.to_string()),
+        });
+      }
+
+      fn next_response(&self, url: &str) -> Result<FetchedResource> {
+        let mut responses = self.responses.lock().unwrap();
+        let resp = responses
+          .pop_front()
+          .expect("scripted fetcher ran out of responses");
+        let mut resource = FetchedResource::new(resp.body, Some("text/plain".to_string()));
+        resource.status = Some(resp.status);
+        resource.etag = resp.etag;
+        resource.final_url = resp.final_url.or_else(|| Some(url.to_string()));
+        Ok(resource)
+      }
+
+      fn calls(&self) -> Vec<RecordedCall> {
+        self.calls.lock().unwrap().clone()
+      }
+    }
+
+    impl ResourceFetcher for AliasingFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("fetch() should not be called by fetch_with_request alias tests");
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+        self.record_call(req.url, req.destination, None, None);
+        self.next_response(req.url)
+      }
+
+      fn fetch_with_request_and_validation(
+        &self,
+        req: FetchRequest<'_>,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+      ) -> Result<FetchedResource> {
+        self.record_call(req.url, req.destination, etag, last_modified);
+        self.next_response(req.url)
+      }
+    }
+
+    let start_url = "http://example.com/start.css";
+    let canonical_url = "http://example.com/canonical.css";
+    let error_final_url = "http://example.com/error.css";
+
+    let fetcher = AliasingFetcher::new(vec![
+      AliasingResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        final_url: Some(canonical_url.to_string()),
+      },
+      AliasingResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        final_url: Some(error_final_url.to_string()),
+      },
+      AliasingResponse {
+        status: 200,
+        body: b"network".to_vec(),
+        etag: None,
+        final_url: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::new(fetcher.clone());
+    let req = FetchRequest::new(start_url, FetchDestination::Style);
+
+    let first = cache.fetch_with_request(req).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    assert_eq!(first.final_url.as_deref(), Some(canonical_url));
+
+    let start_key = CacheKey::new(FetchContextKind::Stylesheet, start_url.to_string());
+    let canonical_key = CacheKey::new(FetchContextKind::Stylesheet, canonical_url.to_string());
+    {
+      let state = cache.state.lock().unwrap();
+      assert_eq!(
+        state.aliases.get(&start_key),
+        Some(&canonical_key),
+        "expected alias to be created from the initial redirect"
+      );
+    }
+
+    let second = cache.fetch_with_request(req).expect("fallback fetch");
+    assert_eq!(second.bytes, b"cached");
+    {
+      let state = cache.state.lock().unwrap();
+      assert_eq!(
+        state.aliases.get(&start_key),
+        Some(&canonical_key),
+        "HTTP error refresh should not overwrite redirect aliases"
+      );
+    }
+
+    let third = cache
+      .fetch_with_request(FetchRequest::new(error_final_url, FetchDestination::Style))
+      .expect("error final url should not be aliased/cached");
+    assert_eq!(third.bytes, b"network");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].url, start_url);
+    assert_eq!(calls[0].destination, FetchDestination::Style);
+    assert_eq!(calls[1].url, start_url);
+    assert_eq!(calls[1].destination, FetchDestination::Style);
+    assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(calls[2].url, error_final_url);
+    assert_eq!(calls[2].destination, FetchDestination::Style);
+  }
+
+  #[test]
   fn resource_cache_diagnostics_record_stale_hit_on_http_error_refresh() {
     let _lock = resource_cache_diagnostics_test_lock();
     let fetcher = ScriptedFetcher::new(vec![

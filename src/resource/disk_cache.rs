@@ -3861,6 +3861,151 @@ mod tests {
   }
 
   #[test]
+  fn disk_cache_fetch_with_request_does_not_update_aliases_on_http_error_refresh() {
+    #[derive(Clone, Debug)]
+    struct AliasingResponse {
+      status: u16,
+      body: Vec<u8>,
+      etag: Option<String>,
+      final_url: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct AliasingFetcher {
+      responses: Arc<Mutex<VecDeque<AliasingResponse>>>,
+      calls: Arc<Mutex<Vec<MockCall>>>,
+    }
+
+    impl AliasingFetcher {
+      fn new(responses: Vec<AliasingResponse>) -> Self {
+        Self {
+          responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+          calls: Arc::new(Mutex::new(Vec::new())),
+        }
+      }
+
+      fn record_call(&self, url: &str, etag: Option<&str>, last_modified: Option<&str>) {
+        self.calls.lock().unwrap().push(MockCall {
+          url: url.to_string(),
+          etag: etag.map(|s| s.to_string()),
+          last_modified: last_modified.map(|s| s.to_string()),
+        });
+      }
+
+      fn next_response(&self, url: &str) -> Result<FetchedResource> {
+        let mut responses = self.responses.lock().unwrap();
+        let resp = responses
+          .pop_front()
+          .expect("scripted fetcher ran out of responses");
+        let mut resource = FetchedResource::new(resp.body, Some("text/plain".to_string()));
+        resource.status = Some(resp.status);
+        resource.etag = resp.etag;
+        resource.final_url = resp.final_url.or_else(|| Some(url.to_string()));
+        Ok(resource)
+      }
+
+      fn calls(&self) -> Vec<MockCall> {
+        self.calls.lock().unwrap().clone()
+      }
+    }
+
+    impl ResourceFetcher for AliasingFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("fetch() should not be called by DiskCachingFetcher::fetch_with_request");
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+        self.record_call(req.url, None, None);
+        self.next_response(req.url)
+      }
+
+      fn fetch_with_request_and_validation(
+        &self,
+        req: FetchRequest<'_>,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+      ) -> Result<FetchedResource> {
+        self.record_call(req.url, etag, last_modified);
+        self.next_response(req.url)
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let start_url = "https://example.com/start.css";
+    let canonical_url = "https://example.com/canonical.css";
+    let error_final_url = "https://example.com/error.css";
+
+    let fetcher = AliasingFetcher::new(vec![
+      AliasingResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        final_url: Some(canonical_url.to_string()),
+      },
+      AliasingResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        final_url: Some(error_final_url.to_string()),
+      },
+      AliasingResponse {
+        status: 200,
+        body: b"network".to_vec(),
+        etag: None,
+        final_url: None,
+      },
+    ]);
+
+    // Force stale planning so the second fetch attempts a refresh.
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher.clone(),
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(0)),
+        ..DiskCacheConfig::default()
+      },
+    );
+
+    let req = FetchRequest::new(start_url, FetchDestination::Style);
+    let first = disk.fetch_with_request(req).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    assert_eq!(first.final_url.as_deref(), Some(canonical_url));
+
+    let alias_path = disk.alias_path(FetchContextKind::Stylesheet, start_url);
+    let alias_bytes = fs::read(&alias_path).expect("alias should be written");
+    let alias: StoredAlias = serde_json::from_slice(&alias_bytes).expect("valid alias json");
+    assert_eq!(alias.target, canonical_url);
+
+    let second = disk.fetch_with_request(req).expect("fallback fetch");
+    assert_eq!(second.bytes, b"cached");
+
+    let alias_bytes = fs::read(&alias_path).expect("alias should remain after fallback");
+    let alias: StoredAlias = serde_json::from_slice(&alias_bytes).expect("valid alias json");
+    assert_eq!(
+      alias.target, canonical_url,
+      "HTTP error refresh should not overwrite alias target"
+    );
+
+    let disk_again = DiskCachingFetcher::new(fetcher.clone(), tmp.path());
+    let third = disk_again
+      .fetch_with_request(FetchRequest::new(error_final_url, FetchDestination::Style))
+      .expect("error final url should not be cached");
+    assert_eq!(third.bytes, b"network");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].url, start_url);
+    assert_eq!(calls[1].url, start_url);
+    assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(calls[2].url, error_final_url);
+  }
+
+  #[test]
   fn evicts_without_full_scans_per_write() {
     let tmp = tempfile::tempdir().unwrap();
     let counter = Arc::new(AtomicUsize::new(0));
