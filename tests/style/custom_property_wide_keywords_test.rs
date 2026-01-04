@@ -143,3 +143,65 @@ fn registered_custom_property_unset_behaves_like_initial_when_not_inheritable() 
   assert_eq!(styled.styles.padding_left.unit, LengthUnit::Px);
 }
 
+#[test]
+fn registered_custom_property_revert_layer_reverts_to_previous_layer_value() {
+  let css = r#"
+    @property --x {
+      syntax: "<length>";
+      inherits: true;
+      initial-value: 5px;
+    }
+    @layer base { #box { --x: 10px; } }
+    @layer theme { #box { --x: 20px; --x: revert-layer; padding-left: var(--x); } }
+  "#;
+
+  let sheet = parse_stylesheet(css).unwrap();
+  let dom = simple_div_with_id("box");
+  let styled = apply_styles(&dom, &sheet);
+
+  assert_eq!(styled.styles.padding_left.value, 10.0);
+  assert_eq!(styled.styles.padding_left.unit, LengthUnit::Px);
+}
+
+#[test]
+fn registered_custom_property_revert_with_important_restores_revert_base_value() {
+  let css = r#"
+    @property --x {
+      syntax: "<length>";
+      inherits: true;
+      initial-value: 5px;
+    }
+    #box {
+      --x: 10px;
+      --x: revert !important;
+      padding-left: var(--x);
+    }
+  "#;
+
+  let sheet = parse_stylesheet(css).unwrap();
+  let dom = simple_div_with_id("box");
+  let styled = apply_styles(&dom, &sheet);
+
+  assert_eq!(styled.styles.padding_left.value, 5.0);
+  assert_eq!(styled.styles.padding_left.unit, LengthUnit::Px);
+}
+
+#[test]
+fn registered_custom_property_revert_layer_without_initial_value_allows_var_fallback() {
+  let css = r#"
+    @property --x {
+      syntax: "*";
+      inherits: true;
+    }
+    @layer theme { #box { --x: 20px; --x: revert-layer; } }
+    #box { padding-left: var(--x, 12px); }
+  "#;
+
+  let sheet = parse_stylesheet(css).unwrap();
+  let dom = simple_div_with_id("box");
+  let styled = apply_styles(&dom, &sheet);
+
+  assert_eq!(styled.styles.padding_left.value, 12.0);
+  assert_eq!(styled.styles.padding_left.unit, LengthUnit::Px);
+  assert!(styled.styles.custom_properties.get("--x").is_none());
+}
