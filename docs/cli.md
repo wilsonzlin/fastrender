@@ -17,7 +17,7 @@ These are optional wrappers for the most common loops:
   - Wraps `scripts/chrome_baseline.sh`, `render_pages`, and `diff_renders` into one command.
   - Defaults to `viewport=1200x800`, `dpr=1.0`, JavaScript disabled (to match FastRender’s “no JS” model).
   - Writes a report at `<out>/report.html` (default: `target/chrome_vs_fastrender/report.html`).
-  - Core flags: `--pages <csv>`, `--viewport <WxH>`, `--dpr <float>`, `--jobs <n>`, `--timeout <secs>`, `--out-dir <dir>`, `--chrome <path>`, `--js {on|off}`, `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`.
+  - Core flags: `--pages <csv>`, `--viewport <WxH>`, `--dpr <float>`, `--jobs <n>`, `--timeout <secs>`, `--out-dir <dir>`, `--chrome <path>`, `--js {on|off}`, `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--ignore-alpha`.
 - Offline fixture Chrome-vs-FastRender diff (deterministic; offline): `scripts/chrome_vs_fastrender_fixtures.sh [fixture_glob...]`
   - Wraps `scripts/chrome_fixture_baseline.sh`, `render_fixtures`, and `diff_renders`.
   - Defaults to `viewport=1040x1240`, `dpr=1.0`, JavaScript disabled, and the fixture set in `tests/pages_regression_test.rs`.
