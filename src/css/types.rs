@@ -21,7 +21,7 @@ use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
 use cssparser::Token;
-use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
 use selectors::parser::SelectorList;
 use std::cell::RefCell;
 use std::fmt;
@@ -720,8 +720,9 @@ impl StyleSheet {
   ) -> std::result::Result<Self, RenderError> {
     check_active(RenderStage::Css)?;
     let mut resolved = Vec::new();
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-    seen.reserve(32);
+    let mut state = ImportResolveState::default();
+    state.cache.reserve(32);
+    state.stack.reserve(16);
     let mut deadline_counter = 0usize;
     resolve_rules_owned(
       self.rules,
@@ -729,7 +730,7 @@ impl StyleSheet {
       base_url,
       media_ctx,
       cache,
-      &mut seen,
+      &mut state,
       &mut resolved,
       &mut deadline_counter,
     )?;
@@ -1884,8 +1885,41 @@ mod tests {
   use crate::css::parser::parse_stylesheet;
   use crate::css::parser::parse_stylesheet_with_media;
   use cssparser::ToCss;
+  use std::cell::RefCell;
+  use std::collections::HashMap;
 
   const TAILWIND_V4_PROPERTIES_SUPPORTS: &str = "(((-webkit-hyphens:none)) and (not (margin-trim:inline))) or ((-moz-orient:inline) and (not (color:rgb(from red r g b))))";
+
+  struct RecordingLoader {
+    responses: HashMap<String, String>,
+    requests: RefCell<Vec<String>>,
+  }
+
+  impl RecordingLoader {
+    fn new(responses: impl IntoIterator<Item = (String, String)>) -> Self {
+      Self {
+        responses: responses.into_iter().collect(),
+        requests: RefCell::new(Vec::new()),
+      }
+    }
+
+    fn request_count(&self) -> usize {
+      self.requests.borrow().len()
+    }
+  }
+
+  impl CssImportLoader for RecordingLoader {
+    fn load(&self, url: &str) -> crate::error::Result<String> {
+      self.requests.borrow_mut().push(url.to_string());
+      Ok(
+        self
+          .responses
+          .get(url)
+          .unwrap_or_else(|| panic!("unexpected import url: {url}"))
+          .clone(),
+      )
+    }
+  }
 
   #[test]
   fn supports_selector_matches_for_basic_selector() {
@@ -2098,6 +2132,192 @@ mod tests {
       print_rules.len(),
       1,
       "@page rules should apply for print media"
+    );
+  }
+
+  #[test]
+  fn resolve_imports_does_not_dedupe_duplicate_imports() {
+    let loader = RecordingLoader::new([(
+      "https://example.com/dup/a.css".to_string(),
+      "body { color: red; }".to_string(),
+    )]);
+
+    let stylesheet =
+      parse_stylesheet(r#"@import "a.css"; @import "a.css";"#).expect("stylesheet parses");
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+
+    let resolved = stylesheet
+      .resolve_imports(&loader, Some("https://example.com/dup/root.css"), &media_ctx)
+      .expect("imports resolve");
+
+    let style_rule_count = resolved
+      .rules
+      .iter()
+      .filter(|rule| matches!(rule, CssRule::Style(_)))
+      .count();
+    assert_eq!(
+      style_rule_count, 2,
+      "expected duplicate @import occurrences to inline multiple times"
+    );
+    assert_eq!(
+      loader.request_count(),
+      1,
+      "expected duplicate imports to reuse cached load results"
+    );
+  }
+
+  #[test]
+  fn resolve_imports_allows_same_url_in_multiple_layers() {
+    let loader = RecordingLoader::new([(
+      "https://example.com/layer/a.css".to_string(),
+      "body { color: red; }".to_string(),
+    )]);
+
+    let stylesheet = parse_stylesheet(
+      r#"
+        @import "a.css" layer(foo);
+        @import "a.css" layer(bar);
+      "#,
+    )
+    .expect("stylesheet parses");
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+
+    let resolved = stylesheet
+      .resolve_imports(&loader, Some("https://example.com/layer/root.css"), &media_ctx)
+      .expect("imports resolve");
+
+    let layers: Vec<&LayerRule> = resolved
+      .rules
+      .iter()
+      .filter_map(|rule| match rule {
+        CssRule::Layer(layer) => Some(layer),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(layers.len(), 2, "expected two layer-wrapped imports");
+    assert_eq!(layers[0].names, vec![vec!["foo".to_string()]]);
+    assert_eq!(layers[1].names, vec![vec!["bar".to_string()]]);
+    for layer in layers {
+      let count = layer
+        .rules
+        .iter()
+        .filter(|rule| matches!(rule, CssRule::Style(_)))
+        .count();
+      assert_eq!(count, 1, "each layer should include imported rules");
+    }
+    assert_eq!(
+      loader.request_count(),
+      1,
+      "expected layered duplicate imports to reuse cached load results"
+    );
+  }
+
+  #[test]
+  fn resolve_imports_allows_shared_sub_imports() {
+    let loader = RecordingLoader::new([
+      (
+        "https://example.com/shared/a.css".to_string(),
+        r#"
+          @import "c.css";
+          .a { color: red; }
+        "#
+        .to_string(),
+      ),
+      (
+        "https://example.com/shared/b.css".to_string(),
+        r#"
+          @import "c.css";
+          .b { color: blue; }
+        "#
+        .to_string(),
+      ),
+      (
+        "https://example.com/shared/c.css".to_string(),
+        ".c { color: green; }".to_string(),
+      ),
+    ]);
+
+    let stylesheet =
+      parse_stylesheet(r#"@import "a.css"; @import "b.css";"#).expect("stylesheet parses");
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let resolved = stylesheet
+      .resolve_imports(&loader, Some("https://example.com/shared/root.css"), &media_ctx)
+      .expect("imports resolve");
+
+    let selectors: Vec<String> = resolved
+      .rules
+      .iter()
+      .filter_map(|rule| match rule {
+        CssRule::Style(style) => style
+          .selectors
+          .slice()
+          .first()
+          .map(|sel| sel.to_css_string()),
+        _ => None,
+      })
+      .collect();
+
+    assert_eq!(
+      selectors,
+      vec![".c", ".a", ".c", ".b"],
+      "expected shared sub-imported rules to inline once per parent import"
+    );
+    assert_eq!(
+      loader.request_count(),
+      3,
+      "expected shared sub-imports to reuse cached load results"
+    );
+  }
+
+  #[test]
+  fn resolve_imports_cycle_does_not_infinite_loop() {
+    let loader = RecordingLoader::new([
+      (
+        "https://example.com/cycle/a.css".to_string(),
+        r#"
+          @import "b.css";
+          .a { color: red; }
+        "#
+        .to_string(),
+      ),
+      (
+        "https://example.com/cycle/b.css".to_string(),
+        r#"
+          @import "a.css";
+          .b { color: blue; }
+        "#
+        .to_string(),
+      ),
+    ]);
+
+    let stylesheet = parse_stylesheet(r#"@import "a.css";"#).expect("stylesheet parses");
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let resolved = stylesheet
+      .resolve_imports(&loader, Some("https://example.com/cycle/root.css"), &media_ctx)
+      .expect("imports resolve");
+
+    let selectors: Vec<String> = resolved
+      .rules
+      .iter()
+      .filter_map(|rule| match rule {
+        CssRule::Style(style) => style
+          .selectors
+          .slice()
+          .first()
+          .map(|sel| sel.to_css_string()),
+        _ => None,
+      })
+      .collect();
+
+    assert_eq!(
+      selectors,
+      vec![".b", ".a"],
+      "expected cycle to be broken by ignoring the recursive import"
+    );
+    assert_eq!(
+      loader.request_count(),
+      2,
+      "expected cycle imports to avoid re-fetching already resolving stylesheets"
     );
   }
 }
@@ -2579,7 +2799,7 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
   base_url: Option<&str>,
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
-  seen: &mut FxHashSet<String>,
+  state: &mut ImportResolveState,
   out: &mut Vec<CssRule>,
   deadline_counter: &mut usize,
 ) -> std::result::Result<(), RenderError> {
@@ -2613,7 +2833,7 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
           base_url,
           media_ctx,
           cache.as_deref_mut(),
-          seen,
+          state,
           &mut resolved_children,
           deadline_counter,
         )?;
@@ -2632,7 +2852,7 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
           base_url,
           media_ctx,
           cache.as_deref_mut(),
-          seen,
+          state,
           &mut resolved_children,
           deadline_counter,
         )?;
@@ -2650,7 +2870,7 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
           base_url,
           media_ctx,
           cache.as_deref_mut(),
-          seen,
+          state,
           &mut resolved_children,
           deadline_counter,
         )?;
@@ -2673,7 +2893,7 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
           base_url,
           media_ctx,
           cache.as_deref_mut(),
-          seen,
+          state,
           &mut resolved_children,
           deadline_counter,
         )?;
@@ -2692,7 +2912,7 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
           base_url,
           media_ctx,
           cache.as_deref_mut(),
-          seen,
+          state,
           &mut resolved_children,
           deadline_counter,
         )?;
@@ -2725,71 +2945,134 @@ fn resolve_rules_owned<L: CssImportLoader + ?Sized>(
           continue;
         };
 
-        if seen.len() >= MAX_RESOLVED_IMPORTS {
+        if state.stack.iter().any(|url| url == &resolved_href) {
           continue;
         }
 
-        if seen.contains(&resolved_href) {
-          continue;
-        }
+        let resolved_children = if let Some(entry) = state.cache.get(&resolved_href) {
+          match entry {
+            CachedImport::Ok(rules) => {
+              let mut cloned = Vec::with_capacity(rules.len());
+              for rule in rules {
+                check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Css)?;
+                cloned.push(rule.clone());
+              }
+              Some(cloned)
+            }
+            CachedImport::Failed => None,
+          }
+        } else {
+          if state.cache.len() >= MAX_RESOLVED_IMPORTS {
+            continue;
+          }
 
-        match loader.load(&resolved_href) {
-          Ok(css_text) => {
-            seen.insert(resolved_href.clone());
-            let sheet = match crate::css::parser::parse_stylesheet_with_media_cached_by_url_shared(
-              &css_text,
-              &resolved_href,
-              media_ctx,
-              cache.as_deref_mut(),
-            ) {
-              Ok(sheet) => sheet,
-              Err(Error::Render(err)) => return Err(err),
-              Err(_) => continue,
-            };
-            let resolved_children = if sheet.contains_imports() {
-              let mut resolved_children = Vec::new();
-              resolve_rules_owned(
-                sheet.rules.clone(),
-                loader,
-                Some(&resolved_href),
+          state.stack.push(resolved_href.clone());
+
+          let resolved_children = match loader.load(&resolved_href) {
+            Ok(css_text) => {
+              let sheet = match crate::css::parser::parse_stylesheet_with_media_cached_by_url_shared(
+                &css_text,
+                &resolved_href,
                 media_ctx,
                 cache.as_deref_mut(),
-                seen,
-                &mut resolved_children,
-                deadline_counter,
-              )?;
-              resolved_children
-            } else {
-              sheet.rules.clone()
-            };
-
-            if let Some(layer) = layer {
-              let layer_rule = match layer {
-                ImportLayer::Anonymous => LayerRule {
-                  names: Vec::new(),
-                  rules: resolved_children,
-                  anonymous: true,
-                },
-                ImportLayer::Named(path) => LayerRule {
-                  names: vec![path],
-                  rules: resolved_children,
-                  anonymous: false,
-                },
+              ) {
+                Ok(sheet) => sheet,
+                Err(Error::Render(err)) => {
+                  state.stack.pop();
+                  return Err(err);
+                }
+                Err(_) => {
+                  state.stack.pop();
+                  state
+                    .cache
+                    .insert(resolved_href.clone(), CachedImport::Failed);
+                  continue;
+                }
               };
-              out.push(CssRule::Layer(layer_rule));
-            } else {
-              out.extend(resolved_children);
+
+              let resolved_children = if sheet.contains_imports() {
+                let mut resolved_children = Vec::new();
+                resolve_rules_owned(
+                  sheet.rules.clone(),
+                  loader,
+                  Some(&resolved_href),
+                  media_ctx,
+                  cache.as_deref_mut(),
+                  state,
+                  &mut resolved_children,
+                  deadline_counter,
+                )?;
+                resolved_children
+              } else {
+                sheet.rules.clone()
+              };
+
+              // Cache the fully-resolved rules so duplicate imports don't re-fetch or re-parse.
+              // Cloning is required because each @import occurrence contributes its own owned rule
+              // list to the output tree.
+              let mut cached_clone = Vec::with_capacity(resolved_children.len());
+              for rule in &resolved_children {
+                check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Css)?;
+                cached_clone.push(rule.clone());
+              }
+              state
+                .cache
+                .insert(resolved_href.clone(), CachedImport::Ok(cached_clone));
+
+              state.stack.pop();
+              Some(resolved_children)
             }
-          }
-          Err(_) => {
-            // Per spec, failed imports are ignored.
-          }
+            Err(_) => {
+              // Per spec, failed imports are ignored.
+              state.stack.pop();
+              state
+                .cache
+                .insert(resolved_href.clone(), CachedImport::Failed);
+              None
+            }
+          };
+
+          resolved_children
+        };
+
+        let Some(resolved_children) = resolved_children else {
+          continue;
+        };
+
+        if let Some(layer) = layer {
+          let layer_rule = match layer {
+            ImportLayer::Anonymous => LayerRule {
+              names: Vec::new(),
+              rules: resolved_children,
+              anonymous: true,
+            },
+            ImportLayer::Named(path) => LayerRule {
+              names: vec![path],
+              rules: resolved_children,
+              anonymous: false,
+            },
+          };
+          out.push(CssRule::Layer(layer_rule));
+        } else {
+          out.extend(resolved_children);
         }
       }
     }
   }
 
   Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum CachedImport {
+  Ok(Vec<CssRule>),
+  Failed,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ImportResolveState {
+  stack: Vec<String>,
+  cache: FxHashMap<String, CachedImport>,
 }
 
 #[derive(Debug, Default, Clone)]
