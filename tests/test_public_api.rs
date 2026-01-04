@@ -19,10 +19,17 @@ use fastrender::{
 };
 use std::collections::HashMap;
 
+fn deterministic_toggles() -> RuntimeToggles {
+  let mut toggles = HashMap::new();
+  // Avoid any display-list builder rayon fan-out so the suite stays fast and deterministic.
+  toggles.insert("FASTR_DISPLAY_LIST_PARALLEL".to_string(), "0".to_string());
+  RuntimeToggles::from_map(toggles)
+}
+
 fn deterministic_config() -> FastRenderConfig {
   FastRenderConfig::new()
     // Ensure deterministic behavior regardless of any FASTR_* env vars in the test runner.
-    .with_runtime_toggles(RuntimeToggles::default())
+    .with_runtime_toggles(deterministic_toggles())
     // Keep defaults small so accidental default rendering stays fast.
     .with_default_viewport(128, 128)
     // Avoid scanning system fonts (and keep font metrics stable).
