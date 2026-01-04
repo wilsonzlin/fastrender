@@ -429,6 +429,18 @@ impl Display {
       "none" => Ok(Display::None),
       "block" => Ok(Display::Block),
       "inline" => Ok(Display::Inline),
+      // Legacy -webkit-box values from the 2009 flexbox draft.
+      //
+      // These values are heavily used as a compatibility fallback (notably for
+      // multi-line clamps alongside `-webkit-line-clamp`). FastRender does not
+      // implement legacy flexbox, so map them to a safe flow layout equivalent
+      // that preserves text layout.
+      //
+      // Semantics:
+      // - `-webkit-box`: outer block, inner flow  -> `display: block`
+      // - `-webkit-inline-box`: outer inline, inner flow-root -> `display: inline-block`
+      "-webkit-box" => Ok(Display::Block),
+      "-webkit-inline-box" => Ok(Display::InlineBlock),
       "ruby" => Ok(Display::Ruby),
       "ruby-base" => Ok(Display::RubyBase),
       "ruby-text" => Ok(Display::RubyText),
@@ -673,6 +685,15 @@ mod tests {
   #[test]
   fn test_parse_contents() {
     assert_eq!(Display::parse("contents").unwrap(), Display::Contents);
+  }
+
+  #[test]
+  fn test_parse_webkit_box_aliases() {
+    assert_eq!(Display::parse("-webkit-box").unwrap(), Display::Block);
+    assert_eq!(
+      Display::parse("-webkit-inline-box").unwrap(),
+      Display::InlineBlock
+    );
   }
 
   #[test]
