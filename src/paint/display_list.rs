@@ -901,6 +901,19 @@ pub struct ListMarkerItem {
   /// Selected CPAL palette index for color fonts.
   pub palette_index: u16,
 
+  /// Palette overrides for color glyph rendering (resolved from CSS `font-palette`).
+  pub palette_overrides: Arc<Vec<(u16, Rgba)>>,
+
+  /// Stable hash of palette overrides for cache keys.
+  pub palette_override_hash: u64,
+
+  /// Optional rotation to apply when painting (e.g. vertical writing mode rotated runs).
+  pub rotation: RunRotation,
+
+  /// Optional additional scale factor (1.0 = none). Used for `@font-face size-adjust` and
+  /// `text-combine-upright` compression.
+  pub scale: f32,
+
   /// Text shadows applied to the marker
   pub shadows: Vec<TextShadowItem>,
 
@@ -941,6 +954,10 @@ impl Default for ListMarkerItem {
       glyphs: Vec::new(),
       color: Rgba::default(),
       palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
+      rotation: RunRotation::None,
+      scale: 1.0,
       shadows: Vec::new(),
       font_size: 0.0,
       advance_width: 0.0,

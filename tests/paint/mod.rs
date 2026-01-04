@@ -33,6 +33,7 @@ mod marker_paint_order;
 mod marker_shadow_bidi;
 mod marker_shadow_opacity;
 mod marker_shadow_order;
+mod list_marker_fidelity;
 mod marker_text_shadow_vertical;
 mod marker_underline_order;
 mod mask_parallel_translation_golden;
