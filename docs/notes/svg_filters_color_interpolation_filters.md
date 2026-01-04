@@ -155,3 +155,9 @@ primitives.
   computation instead of keeping a float/linear surface across multiple primitives.
 - **`color-interpolation-filters` coverage:** all currently-supported primitives apply explicit
   sRGB <-> linearRGB conversion for color-space-dependent operations.
+
+## Regression tests
+
+- `tests/paint/svg_filter_color_interpolation_golden.rs` renders
+  `tests/fixtures/html/svg_filter_color_interpolation_filters.html` and compares it against
+  `tests/fixtures/golden/svg_filter_color_interpolation_filters.png`.
