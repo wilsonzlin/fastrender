@@ -2185,6 +2185,95 @@ mod disk_cache_main {
     }
 
     #[test]
+    fn font_face_svg_sources_are_not_fetched_via_css_url_asset_prefetch() {
+      use std::sync::Mutex;
+
+      #[derive(Default)]
+      struct RecordingFetcher {
+        calls: Mutex<Vec<(String, FetchDestination)>>,
+      }
+
+      impl ResourceFetcher for RecordingFetcher {
+        fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
+          panic!("prefetch should use fetch_with_request");
+        }
+
+        fn fetch_with_request(&self, req: FetchRequest<'_>) -> fastrender::Result<FetchedResource> {
+          self
+            .calls
+            .lock()
+            .unwrap()
+            .push((req.url.to_string(), req.destination));
+
+          let (status, content_type, body) = match req.destination {
+            FetchDestination::Font => (200, "font/woff2", b"font".to_vec()),
+            FetchDestination::Image => (200, "image/png", b"img".to_vec()),
+            _ => (200, "application/octet-stream", b"other".to_vec()),
+          };
+
+          let mut res = FetchedResource::with_final_url(
+            body,
+            Some(content_type.to_string()),
+            Some(req.url.to_string()),
+          );
+          res.status = Some(status);
+          Ok(res)
+        }
+      }
+
+      let html = r#"<!doctype html><html><head><style>
+@font-face { font-family: X; src: url(/font.svg) format('svg'), url(/font.woff2) format('woff2'); }
+body { background-image: url(/bg.png); }
+</style></head><body></body></html>"#;
+
+      let document_url = "https://example.com/page";
+      let base_url = "https://example.com/";
+      let media_ctx = MediaContext::screen(800.0, 600.0);
+      let opts = PrefetchOptions {
+        prefetch_fonts: true,
+        prefetch_images: false,
+        prefetch_icons: false,
+        prefetch_video_posters: false,
+        prefetch_iframes: false,
+        prefetch_embeds: false,
+        prefetch_css_url_assets: true,
+        max_discovered_assets_per_page: 2000,
+        image_limits: ImagePrefetchLimits {
+          max_image_elements: 150,
+          max_urls_per_element: 2,
+        },
+      };
+
+      let fetcher_impl = Arc::new(RecordingFetcher::default());
+      let fetcher: Arc<dyn ResourceFetcher> = fetcher_impl.clone();
+      let summary = prefetch_assets_for_html(
+        "test",
+        document_url,
+        html,
+        document_url,
+        base_url,
+        &fetcher,
+        &media_ctx,
+        opts,
+      );
+
+      let calls = fetcher_impl.calls.lock().unwrap().clone();
+      assert_eq!(
+        calls,
+        vec![
+          ("https://example.com/font.woff2".to_string(), FetchDestination::Font),
+          ("https://example.com/bg.png".to_string(), FetchDestination::Image),
+        ],
+        "expected SVG font source to be ignored (handled neither as a supported font nor as a generic CSS url asset)"
+      );
+
+      assert_eq!(summary.fetched_fonts, 1);
+      assert_eq!(summary.failed_fonts, 0);
+      assert_eq!(summary.fetched_css_assets, 1);
+      assert_eq!(summary.failed_css_assets, 0);
+    }
+
+    #[test]
     fn font_face_prefetch_falls_back_on_failure() {
       use std::sync::Mutex;
 

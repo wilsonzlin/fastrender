@@ -128,6 +128,14 @@ pub fn discover_css_urls(css: &str, base_url: &str) -> Vec<String> {
   }
 
   fn scan<'i, 't>(parser: &mut Parser<'i, 't>, base_url: &str, out: &mut Vec<String>) {
+    // `prefetch_assets` uses this helper to discover non-font subresources referenced from CSS
+    // (background images, etc). Font loading is handled separately by parsing `@font-face` rules,
+    // so avoid reporting any `url(...)` tokens that live inside an `@font-face { ... }` block.
+    //
+    // This prevents legacy sources such as `.svg` fonts from being treated as generic URL assets
+    // (and fetched under the Image destination), which would waste bandwidth and not warm the font
+    // cache anyway.
+    let mut skip_next_font_face_block = false;
     while !parser.is_exhausted() {
       let token = match parser.next_including_whitespace_and_comments() {
         Ok(t) => t,
@@ -135,6 +143,7 @@ pub fn discover_css_urls(css: &str, base_url: &str) -> Vec<String> {
       };
 
       match token {
+        Token::Semicolon => skip_next_font_face_block = false,
         Token::UnquotedUrl(url) => record(out, base_url, url.as_ref()),
         Token::Function(name) if name.eq_ignore_ascii_case("url") => {
           let parse_result = parser.parse_nested_block(|nested| {
@@ -160,6 +169,9 @@ pub fn discover_css_urls(css: &str, base_url: &str) -> Vec<String> {
           if let Ok(Some(arg)) = parse_result {
             record(out, base_url, &arg);
           }
+        }
+        Token::AtKeyword(name) if name.eq_ignore_ascii_case("font-face") => {
+          skip_next_font_face_block = true;
         }
         Token::AtKeyword(name) if name.eq_ignore_ascii_case("import") => {
           let mut target: Option<String> = None;
@@ -209,10 +221,18 @@ pub fn discover_css_urls(css: &str, base_url: &str) -> Vec<String> {
             record(out, base_url, &target);
           }
         }
-        Token::Function(_)
-        | Token::ParenthesisBlock
-        | Token::SquareBracketBlock
-        | Token::CurlyBracketBlock => {
+        Token::CurlyBracketBlock => {
+          if skip_next_font_face_block {
+            let _ = parser.parse_nested_block(|_| Ok::<_, cssparser::ParseError<'i, ()>>(()));
+          } else {
+            let _ = parser.parse_nested_block(|nested| {
+              scan(nested, base_url, out);
+              Ok::<_, cssparser::ParseError<'i, ()>>(())
+            });
+          }
+          skip_next_font_face_block = false;
+        }
+        Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock => {
           let _ = parser.parse_nested_block(|nested| {
             scan(nested, base_url, out);
             Ok::<_, cssparser::ParseError<'i, ()>>(())
@@ -306,5 +326,18 @@ mod tests {
         "https://example.com/styles/other.css",
       ]
     );
+  }
+
+  #[test]
+  fn discovers_css_urls_skipping_font_face_blocks() {
+    let base = "https://example.com/styles/main.css";
+    let css = r#"
+      @font-face { font-family: X; src: url("font.svg") format("svg"), url("font.woff2") format("woff2"); }
+      body { background-image: url("bg.png"); }
+    "#;
+
+    let mut urls = discover_css_urls(css, base);
+    urls.sort();
+    assert_eq!(urls, vec!["https://example.com/styles/bg.png"]);
   }
 }
