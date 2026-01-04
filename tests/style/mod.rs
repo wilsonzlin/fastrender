@@ -42,6 +42,7 @@ mod scope_pseudo_root_test;
 mod scope_rule_test;
 mod selector_indexing_test;
 mod shadow_dom_scoping_test;
+mod shadow_dom_slot_inheritance_test;
 mod shadow_host_cascade_order_test;
 mod shadow_host_selector_test;
 mod shadow_host_selectors_test;

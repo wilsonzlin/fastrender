@@ -9281,7 +9281,16 @@ fn apply_styles_internal_with_ancestors<'a>(
     entered_shadow_bloom_scope: bool,
   }
 
+  #[derive(Clone)]
+  struct FlatTreeInheritanceParent {
+    styles: Arc<ComputedStyle>,
+    ua_styles: Arc<ComputedStyle>,
+    starting_styles: Option<Arc<ComputedStyle>>,
+  }
+
   let mut reuse_counter = reuse_counter;
+  let mut flat_tree_inheritance_cache: FxHashMap<usize, FlatTreeInheritanceParent> =
+    FxHashMap::default();
 
   record_node_visit(node);
 
@@ -9448,6 +9457,22 @@ fn apply_styles_internal_with_ancestors<'a>(
           .last()
           .expect("parent frame should still be on the stack");
 
+        let mut inheritance_parent_styles: &ComputedStyle = &parent.base.styles;
+        let mut inheritance_parent_ua_styles: &ComputedStyle = &parent.base.ua_styles;
+        let mut inheritance_root_font_size: f32 = parent.base.current_root_font_size;
+        let mut inheritance_ua_root_font_size: f32 = parent.base.current_ua_root_font_size;
+
+        // In Shadow DOM, light-DOM nodes assigned to a <slot> inherit along the flattened tree.
+        // Selector matching remains based on DOM ancestry; only the inheritance parent changes.
+        if let Some(assigned_slot) = slot_assignment.node_to_slot.get(&child_id) {
+          if let Some(slot_styles) = flat_tree_inheritance_cache.get(&assigned_slot.slot_node_id) {
+            inheritance_parent_styles = slot_styles.styles.as_ref();
+            inheritance_parent_ua_styles = slot_styles.ua_styles.as_ref();
+            inheritance_root_font_size = slot_styles.styles.root_font_size;
+            inheritance_ua_root_font_size = slot_styles.ua_styles.root_font_size;
+          }
+        }
+
         let base = compute_base_styles(
           child,
           rule_scopes,
@@ -9455,10 +9480,10 @@ fn apply_styles_internal_with_ancestors<'a>(
           selector_caches,
           scratch,
           inline_style_decls,
-          &parent.base.styles,
-          &parent.base.ua_styles,
-          parent.base.current_root_font_size,
-          parent.base.current_ua_root_font_size,
+          inheritance_parent_styles,
+          inheritance_parent_ua_styles,
+          inheritance_root_font_size,
+          inheritance_ua_root_font_size,
           viewport,
           color_scheme_pref,
           ancestors.as_slice(),
@@ -9474,11 +9499,26 @@ fn apply_styles_internal_with_ancestors<'a>(
         )?;
 
         let starting_base = if has_starting_styles {
-          let parent_start = parent.starting_base.as_ref().map(|b| &b.styles);
-          let start_parent_styles = parent_start.unwrap_or(&parent.base.styles);
-          let start_root_font_size = parent_start
-            .map(|s| s.root_font_size)
-            .unwrap_or(parent.base.current_root_font_size);
+          let mut start_parent_styles: &ComputedStyle = parent
+            .starting_base
+            .as_ref()
+            .map(|b| &b.styles)
+            .unwrap_or(&parent.base.styles);
+          let mut start_parent_root_font_size: f32 = start_parent_styles.root_font_size;
+
+          // When computing starting styles for slotted nodes, inherit from the slot's starting
+          // base styles when available (else fall back to the slot's normal base styles).
+          if let Some(assigned_slot) = slot_assignment.node_to_slot.get(&child_id) {
+            if let Some(slot_styles) =
+              flat_tree_inheritance_cache.get(&assigned_slot.slot_node_id)
+            {
+              start_parent_styles = slot_styles
+                .starting_styles
+                .as_deref()
+                .unwrap_or_else(|| slot_styles.styles.as_ref());
+              start_parent_root_font_size = start_parent_styles.root_font_size;
+            }
+          }
           Some(compute_base_styles(
             child,
             rule_scopes,
@@ -9487,9 +9527,9 @@ fn apply_styles_internal_with_ancestors<'a>(
             scratch,
             inline_style_decls,
             start_parent_styles,
-            &parent.base.ua_styles,
-            start_root_font_size,
-            parent.base.current_ua_root_font_size,
+            inheritance_parent_ua_styles,
+            start_parent_root_font_size,
+            inheritance_ua_root_font_size,
             viewport,
             color_scheme_pref,
             ancestors.as_slice(),
@@ -9569,6 +9609,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     }
 
     let mut base = frame.base;
+    let node_id = frame.node_id;
     let (before_styles, after_styles, marker_styles, first_line_styles, first_letter_styles) =
       compute_pseudo_styles(
         frame.node,
@@ -9621,18 +9662,34 @@ fn apply_styles_internal_with_ancestors<'a>(
       };
     }
 
+    let cache_flat_inheritance_parent = slot_assignment.slot_to_nodes.contains_key(&node_id);
+    let cached_starting_styles = cache_flat_inheritance_parent
+      .then(|| starting_styles.base.clone())
+      .flatten();
+
     let NodeBaseStyles {
       styles,
-      ua_styles: _,
+      ua_styles,
       current_root_font_size: _,
       current_ua_root_font_size: _,
     } = base;
 
-    let node_id = frame.node_id;
+    let styles = Arc::new(styles);
+    if cache_flat_inheritance_parent {
+      flat_tree_inheritance_cache.insert(
+        node_id,
+        FlatTreeInheritanceParent {
+          styles: styles.clone(),
+          ua_styles: Arc::new(ua_styles),
+          starting_styles: cached_starting_styles,
+        },
+      );
+    }
+
     let styled = StyledNode {
       node_id,
       node: frame.node.clone_without_children(),
-      styles: Arc::new(styles),
+      styles,
       starting_styles,
       before_styles,
       after_styles,
