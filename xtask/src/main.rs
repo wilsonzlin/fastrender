@@ -402,6 +402,44 @@ struct DiffRendersArgs {
   /// Per-channel tolerance (0 = exact match, 5-10 to ignore tiny AA differences)
   #[arg(long, default_value_t = 0)]
   threshold: u8,
+
+  /// Maximum percent of pixels allowed to differ (0-100).
+  ///
+  /// Defaults to 0 so any differences are flagged, matching the historical `cargo xtask diff-renders`
+  /// behavior.
+  #[arg(long, default_value_t = 0.0)]
+  max_diff_percent: f64,
+
+  /// Maximum allowed perceptual distance (0.0 = identical).
+  ///
+  /// When unset, only pixel-based thresholds are enforced.
+  #[arg(long)]
+  max_perceptual_distance: Option<f64>,
+
+  /// Sort report entries by metric within each status group.
+  #[arg(long, value_enum, default_value_t = DiffRendersSortBy::Percent)]
+  sort_by: DiffRendersSortBy,
+
+  /// Only diff a deterministic shard of the inputs (index/total, 0-based)
+  #[arg(long, value_parser = parse_shard)]
+  shard: Option<(usize, usize)>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DiffRendersSortBy {
+  Pixel,
+  Percent,
+  Perceptual,
+}
+
+impl DiffRendersSortBy {
+  fn as_cli_value(self) -> &'static str {
+    match self {
+      Self::Pixel => "pixel",
+      Self::Percent => "percent",
+      Self::Perceptual => "perceptual",
+    }
+  }
 }
 
 #[derive(Args)]
@@ -1523,7 +1561,18 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
     .arg("--tolerance")
     .arg(args.threshold.to_string())
     .arg("--max-diff-percent")
-    .arg("0")
+    .arg(args.max_diff_percent.to_string())
+    .arg("--sort-by")
+    .arg(args.sort_by.as_cli_value());
+  if let Some(max) = args.max_perceptual_distance {
+    cmd
+      .arg("--max-perceptual-distance")
+      .arg(max.to_string());
+  }
+  if let Some((index, total)) = args.shard {
+    cmd.arg("--shard").arg(format!("{index}/{total}"));
+  }
+  cmd
     .arg("--json")
     .arg(&json_path)
     .arg("--html")
