@@ -3843,7 +3843,7 @@ mod tests {
       "expected vertical shaping to populate y_advance"
     );
 
-    let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&font_ctx, &runs, style.font_size, style.font_size);
     let item = TextItem::new(
       runs.clone(),
       text.to_string(),
@@ -3938,8 +3938,9 @@ mod tests {
     let before_text = &text[..split_offset];
     let after_text = &text[split_offset..];
     let before_metrics =
-      TextItem::metrics_from_runs(&before_runs, style.font_size, style.font_size);
-    let after_metrics = TextItem::metrics_from_runs(&after_runs, style.font_size, style.font_size);
+      TextItem::metrics_from_runs(&font_ctx, &before_runs, style.font_size, style.font_size);
+    let after_metrics =
+      TextItem::metrics_from_runs(&font_ctx, &after_runs, style.font_size, style.font_size);
     let before_item = TextItem::new(
       before_runs,
       before_text.to_string(),
