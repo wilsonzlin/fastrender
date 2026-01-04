@@ -235,13 +235,27 @@ fi
 echo
 
 echo "== Diff =="
-cargo run --release --bin diff_renders -- \
-  --before "${OUT_DIR}/chrome" \
+DIFF_STATUS=0
+# `diff_renders` exits 1 when diffs are found; keep going so we can always print the report path,
+# then propagate the exit code at the end for scripting/CI.
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIFF_BIN="${REPO_ROOT}/target/release/diff_renders"
+
+# Build the binary explicitly so cargo doesn't print a scary "process didn't exit successfully"
+# message when exit code 1 indicates diffs (not an execution failure).
+(
+  cd "${REPO_ROOT}"
+  cargo build --release --bin diff_renders
+)
+
+"${DIFF_BIN}" --before "${OUT_DIR}/chrome" \
   --after "${OUT_DIR}/fastrender" \
   --tolerance "${TOLERANCE}" \
   --max-diff-percent "${MAX_DIFF_PERCENT}" \
   --json "${OUT_DIR}/diff_report.json" \
-  --html "${OUT_DIR}/diff_report.html"
+  --html "${OUT_DIR}/diff_report.html" || DIFF_STATUS=$?
 
 echo
 echo "Report: ${OUT_DIR}/diff_report.html"
+exit "${DIFF_STATUS}"
