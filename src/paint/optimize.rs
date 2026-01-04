@@ -691,7 +691,20 @@ impl DisplayListOptimizer {
       DisplayItem::StrokeRect(item) => item.color.a == 0.0,
       DisplayItem::FillRoundedRect(item) => item.color.a == 0.0,
       DisplayItem::StrokeRoundedRect(item) => item.color.a == 0.0,
-      DisplayItem::Text(item) => item.color.a == 0.0,
+      DisplayItem::Text(item) => {
+        // Text can still paint shadows/emphasis even when the fill is fully transparent.
+        // Treat the item as transparent only when *all* contributions are invisible.
+        if item.color.a > 0.0 {
+          return false;
+        }
+        if item.shadows.iter().any(|shadow| shadow.color.a > 0.0) {
+          return false;
+        }
+        if item.emphasis.as_ref().is_some_and(|emphasis| emphasis.color.a > 0.0) {
+          return false;
+        }
+        true
+      }
       DisplayItem::Outline(item) => {
         item.width <= 0.0
           || matches!(
@@ -1250,7 +1263,7 @@ mod tests {
   use crate::paint::display_list::{
     text_bounds, BorderRadii, ClipItem, ClipShape, GlyphInstance, ImageData, MaskReferenceRects,
     OpacityItem, ResolvedFilter, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
-    StackingContextItem, TextItem, Transform3D, TransformItem,
+    StackingContextItem, TextItem, TextShadowItem, Transform3D, TransformItem,
   };
   use crate::paint::filter_outset::filter_outset;
   use crate::style::color::Rgba;
@@ -1419,6 +1432,43 @@ mod tests {
 
     assert_eq!(stats.transparent_removed, 1);
     assert_eq!(optimized.len(), 2);
+  }
+
+  #[test]
+  fn transparent_text_with_shadow_not_removed() {
+    let glyphs = vec![GlyphInstance {
+      glyph_id: 1,
+      offset: Point::new(0.0, 0.0),
+      advance: 10.0,
+    }];
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::Text(TextItem {
+      origin: Point::new(0.0, 20.0),
+      cached_bounds: None,
+      glyphs,
+      color: Rgba::TRANSPARENT,
+      palette_index: 0,
+      shadows: vec![TextShadowItem {
+        offset: Point::new(4.0, 4.0),
+        blur_radius: 0.0,
+        color: Rgba::RED,
+      }],
+      font_size: 20.0,
+      advance_width: 10.0,
+      font: None,
+      font_id: None,
+      variations: Vec::new(),
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      emphasis: None,
+      decorations: Vec::new(),
+    }));
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 200.0, 200.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(stats.transparent_removed, 0);
+    assert!(matches!(optimized.items(), [DisplayItem::Text(_)]));
   }
 
   #[test]

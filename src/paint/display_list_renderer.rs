@@ -7302,10 +7302,16 @@ impl DisplayListRenderer {
     let face = crate::text::face_cache::get_ttf_face(font).map(|cached| cached.clone_face());
     let face = face.as_ref();
 
+    let is_color_font = face.is_some_and(crate::text::font_db::face_has_color_tables);
     let (scale, has_bbox) = if let Some(face) = face {
       let units_per_em = face.units_per_em() as f32;
       if units_per_em > 0.0 && units_per_em.is_finite() {
-        (item.font_size / units_per_em, !face.is_variable())
+        // COLR/bitmap/SVG color glyphs frequently have an empty "base" glyph bounding box (the
+        // actual painted bounds come from color layers). Using those bboxes can drastically
+        // under-estimate the shadow surface size, which in turn causes color glyph rasterization
+        // to be rejected by safety limits (yielding empty shadows). Fall back to conservative
+        // advance/ascent bounds for color fonts.
+        (item.font_size / units_per_em, !face.is_variable() && !is_color_font)
       } else {
         (0.0, false)
       }
@@ -7391,6 +7397,30 @@ impl DisplayListRenderer {
     }
 
     bounds
+  }
+
+  fn tint_shadow_pixmap(pixmap: &mut Pixmap, color: Rgba) -> RenderResult<()> {
+    let mut deadline_counter = 0usize;
+    let r = color.r as u16;
+    let g = color.g as u16;
+    let b = color.b as u16;
+
+    for px in pixmap.pixels_mut() {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+      let a = px.alpha();
+      if a == 0 {
+        *px = PremultipliedColorU8::TRANSPARENT;
+        continue;
+      }
+      let a16 = a as u16;
+      let rp = mul_div_255_round_u16(r, a16) as u8;
+      let gp = mul_div_255_round_u16(g, a16) as u8;
+      let bp = mul_div_255_round_u16(b, a16) as u8;
+      *px = PremultipliedColorU8::from_rgba(rp, gp, bp, a)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+
+    Ok(())
   }
 
   fn render_text_shadows(&mut self, font: &LoadedFont, item: &TextItem) -> Result<()> {
@@ -7486,6 +7516,8 @@ impl DisplayListRenderer {
         Err(err @ Error::Render(RenderError::Timeout { .. })) => return Err(err),
         Err(_) => continue,
       }
+
+      Self::tint_shadow_pixmap(&mut shadow_pixmap, shadow.color)?;
 
       if shadow.blur_radius > 0.0 {
         apply_gaussian_blur_cached(

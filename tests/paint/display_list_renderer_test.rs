@@ -1744,10 +1744,21 @@ fn color_glyph_shadow_matches_golden() {
 
   let golden_path =
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden/color_glyph_shadow.png");
+  let actual = pixmap_to_rgba(&pixmap);
+  if std::env::var("UPDATE_GOLDEN").is_ok() {
+    let mut buf = Vec::new();
+    PngEncoder::new(&mut buf)
+      .write_image(actual.as_raw(), actual.width(), actual.height(), ExtendedColorType::Rgba8)
+      .expect("encode golden image");
+    fs::write(&golden_path, &buf).expect("write golden image");
+    return;
+  }
   if !golden_path.exists() {
-    pixmap
-      .save_png(&golden_path)
-      .expect("write missing golden image");
+    let mut buf = Vec::new();
+    PngEncoder::new(&mut buf)
+      .write_image(actual.as_raw(), actual.width(), actual.height(), ExtendedColorType::Rgba8)
+      .expect("encode missing golden image");
+    fs::write(&golden_path, &buf).expect("write missing golden image");
     panic!(
       "Golden image missing, created at {}. Re-run tests.",
       golden_path.display()
@@ -1756,7 +1767,6 @@ fn color_glyph_shadow_matches_golden() {
 
   let golden_bytes = fs::read(&golden_path).expect("read golden image");
   let golden = decode_png(&golden_bytes).expect("decode golden image");
-  let actual = pixmap_to_rgba(&pixmap);
   let diff = compare_rgba_images(&actual, &golden, &CompareConfig::strict());
   assert!(
     diff.is_match(),
