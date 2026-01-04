@@ -1,9 +1,11 @@
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
+use std::collections::HashMap;
 
 #[test]
 fn default_paint_backend_uses_display_list_pipeline() {
-  // Ensure we exercise the default selection logic.
-  std::env::remove_var("FASTR_PAINT_BACKEND");
+  // Ensure we exercise the default selection logic without depending on process-global env state.
+  let toggles = RuntimeToggles::from_map(HashMap::new());
 
   let mut renderer = FastRender::new().expect("renderer should construct");
   let html = r#"
@@ -15,7 +17,8 @@ fn default_paint_backend_uses_display_list_pipeline() {
   "#;
   let options = RenderOptions::new()
     .with_viewport(20, 20)
-    .with_diagnostics_level(DiagnosticsLevel::Basic);
+    .with_diagnostics_level(DiagnosticsLevel::Basic)
+    .with_runtime_toggles(toggles);
 
   let result = renderer
     .render_html_with_diagnostics(html, options)
@@ -33,4 +36,3 @@ fn default_paint_backend_uses_display_list_pipeline() {
     stats.paint.optimized_items
   );
 }
-

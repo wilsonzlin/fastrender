@@ -1,31 +1,16 @@
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::{FastRender, FastRenderConfig};
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashMap;
 use tempfile::tempdir;
 use url::Url;
 
-fn backend_lock() -> std::sync::MutexGuard<'static, ()> {
-  static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-  LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-}
-
-fn set_display_list_backend() -> Option<std::ffi::OsString> {
-  let prev = std::env::var_os("FASTR_PAINT_BACKEND");
-  std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
-  prev
-}
-
-fn restore_backend(prev: Option<std::ffi::OsString>) {
-  if let Some(value) = prev {
-    std::env::set_var("FASTR_PAINT_BACKEND", value);
-  } else {
-    std::env::remove_var("FASTR_PAINT_BACKEND");
-  }
-}
-
 #[test]
 fn display_list_iframe_srcdoc_renders_content() {
-  let _guard = backend_lock();
-  let prev_backend = set_display_list_backend();
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "display_list".to_string(),
+  )]));
+  let config = FastRenderConfig::new().with_runtime_toggles(toggles);
 
   let inner = "<!doctype html><style>html, body { margin: 0; background: rgb(255, 0, 0); }</style>";
   let outer = format!(
@@ -34,7 +19,7 @@ fn display_list_iframe_srcdoc_renders_content() {
      <iframe srcdoc='{inner}' style='width: 16px; height: 16px; border: 0; display: block;'></iframe>"
   );
 
-  let mut inner_renderer = FastRender::new().expect("create inner renderer");
+  let mut inner_renderer = FastRender::with_config(config.clone()).expect("create inner renderer");
   let inner_pixmap = inner_renderer
     .render_html(inner, 16, 16)
     .expect("render inner srcdoc");
@@ -51,12 +36,10 @@ fn display_list_iframe_srcdoc_renders_content() {
       .map(|p| (p.red(), p.green(), p.blue(), p.alpha()))
   );
 
-  let mut renderer = FastRender::new().expect("create renderer");
+  let mut renderer = FastRender::with_config(config).expect("create renderer");
   let pixmap = renderer
     .render_html(&outer, 32, 32)
     .expect("render display-list iframe");
-
-  restore_backend(prev_backend);
 
   let red_pixels = pixmap
     .data()
@@ -91,8 +74,10 @@ fn display_list_iframe_srcdoc_renders_content() {
 
 #[test]
 fn display_list_iframe_depth_limit_blocks_nested() {
-  let _guard = backend_lock();
-  let prev_backend = set_display_list_backend();
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "display_list".to_string(),
+  )]));
 
   let temp = tempdir().expect("tempdir");
   let inner_path = temp.path().join("inner.html");
@@ -120,14 +105,13 @@ fn display_list_iframe_depth_limit_blocks_nested() {
     middle = middle_url
   );
 
-  let mut config = FastRenderConfig::new();
-  config.max_iframe_depth = 1;
+  let config = FastRenderConfig::new()
+    .with_max_iframe_depth(1)
+    .with_runtime_toggles(toggles);
   let mut renderer = FastRender::with_config(config).expect("renderer with depth");
   let pixmap = renderer
     .render_html(&outer_html, 24, 24)
     .expect("render nested iframe with depth limit");
-
-  restore_backend(prev_backend);
 
   let inner_pixel = pixmap.pixel(5, 5).unwrap();
   assert_eq!(

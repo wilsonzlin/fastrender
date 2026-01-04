@@ -1,11 +1,24 @@
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::{DiagnosticsLevel, DisplayItem, FastRender, RenderArtifactRequest, RenderOptions};
+use std::collections::HashMap;
 
 #[test]
 fn display_list_box_shadow_uses_blur_cache() {
-  std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
-  std::env::set_var("FASTR_SVG_FILTER_CACHE_ITEMS", "256");
-  std::env::set_var("FASTR_SVG_FILTER_CACHE_BYTES", "4194304");
+  let toggles = RuntimeToggles::from_map(HashMap::from([
+    (
+      "FASTR_PAINT_BACKEND".to_string(),
+      "display_list".to_string(),
+    ),
+    (
+      "FASTR_SVG_FILTER_CACHE_ITEMS".to_string(),
+      "256".to_string(),
+    ),
+    (
+      "FASTR_SVG_FILTER_CACHE_BYTES".to_string(),
+      "4194304".to_string(),
+    ),
+  ]));
 
   let mut boxes = String::new();
   for _ in 0..100 {
@@ -42,7 +55,8 @@ fn display_list_box_shadow_uses_blur_cache() {
   let options = RenderOptions::new()
     .with_viewport(320, 320)
     .with_diagnostics_level(DiagnosticsLevel::Basic)
-    .with_paint_parallelism(PaintParallelism::disabled());
+    .with_paint_parallelism(PaintParallelism::disabled())
+    .with_runtime_toggles(toggles);
   let report = renderer
     .render_html_with_stylesheets_report(
       &html,

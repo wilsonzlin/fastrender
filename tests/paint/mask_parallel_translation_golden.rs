@@ -1,11 +1,12 @@
 #[path = "../ref/mod.rs"]
 mod r#ref;
 
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::image_output::{encode_image, OutputFormat};
 use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
 use r#ref::image_compare::{compare_config_from_env, compare_pngs, CompareEnvVars};
-use std::ffi::{OsStr, OsString};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,39 +15,21 @@ const GOLDEN_PATH: &str = "tests/fixtures/golden/mask_parallel_translation.png";
 const DIFF_DIR: &str = "target/mask_parallel_translation_diffs";
 const VIEWPORT: (u32, u32) = (128, 128);
 
-struct EnvVarGuard {
-  key: &'static str,
-  previous: Option<OsString>,
-}
-
-impl EnvVarGuard {
-  fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-    let previous = std::env::var_os(key);
-    std::env::set_var(key, value);
-    Self { key, previous }
-  }
-}
-
-impl Drop for EnvVarGuard {
-  fn drop(&mut self) {
-    match self.previous.take() {
-      Some(value) => std::env::set_var(self.key, value),
-      None => std::env::remove_var(self.key),
-    }
-  }
-}
-
 fn render_fixture() -> Vec<u8> {
   // This regression specifically targets the display-list renderer's parallel tiled rasterization
   // path. The per-tile renderers translate their canvases, so mask rendering must respect that
   // translation or the masked content disappears in non-origin tiles.
-  let _backend_guard = EnvVarGuard::set("FASTR_PAINT_BACKEND", "display_list");
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "display_list".to_string(),
+  )]));
 
   let html = fs::read_to_string(HTML_PATH).expect("read fixture html");
   let mut renderer = FastRender::new().expect("renderer");
   let options = RenderOptions::new()
     .with_viewport(VIEWPORT.0, VIEWPORT.1)
     .with_diagnostics_level(DiagnosticsLevel::Basic)
+    .with_runtime_toggles(toggles)
     .with_paint_parallelism(PaintParallelism {
       tile_size: 32,
       min_tiles: 1,

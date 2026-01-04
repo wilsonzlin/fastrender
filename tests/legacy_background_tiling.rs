@@ -1,29 +1,11 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
 use image::codecs::png::PngEncoder;
 use image::ColorType;
 use image::ImageEncoder;
-use std::sync::{Mutex, OnceLock};
-
-fn backend_lock() -> std::sync::MutexGuard<'static, ()> {
-  static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-  LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-}
-
-fn set_legacy_backend() -> Option<std::ffi::OsString> {
-  let prev = std::env::var_os("FASTR_PAINT_BACKEND");
-  std::env::set_var("FASTR_PAINT_BACKEND", "legacy");
-  prev
-}
-
-fn restore_backend(prev: Option<std::ffi::OsString>) {
-  if let Some(value) = prev {
-    std::env::set_var("FASTR_PAINT_BACKEND", value);
-  } else {
-    std::env::remove_var("FASTR_PAINT_BACKEND");
-  }
-}
+use std::collections::HashMap;
 
 fn make_test_png_data_url() -> String {
   let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
@@ -41,8 +23,10 @@ fn make_test_png_data_url() -> String {
 
 #[test]
 fn legacy_background_tiling_clamped_to_canvas_and_uses_pattern_fast_path() {
-  let _guard = backend_lock();
-  let prev_backend = set_legacy_backend();
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "legacy".to_string(),
+  )]));
 
   let img_data_url = make_test_png_data_url();
 
@@ -65,12 +49,12 @@ fn legacy_background_tiling_clamped_to_canvas_and_uses_pattern_fast_path() {
   let mut renderer = FastRender::new().expect("renderer");
   let options = RenderOptions::new()
     .with_viewport(800, 600)
-    .with_diagnostics_level(DiagnosticsLevel::Basic);
+    .with_diagnostics_level(DiagnosticsLevel::Basic)
+    .with_runtime_toggles(toggles);
   let result = renderer
     .render_html_with_diagnostics(&html, options)
     .expect("render should succeed");
 
-  restore_backend(prev_backend);
   assert!(
     result.diagnostics.fetch_errors.is_empty(),
     "expected data URL image to decode successfully (errors={:?})",

@@ -1,9 +1,11 @@
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
+use std::collections::HashMap;
 
 const DATA_URL_1X1_PNG: &str =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAwMB/6XWZ90AAAAASUVORK5CYII=";
 
-fn render_display_items(renderer: &mut FastRender, height: u32) -> usize {
+fn render_display_items(renderer: &mut FastRender, height: u32, toggles: &RuntimeToggles) -> usize {
   let html = format!(
     r#"<!doctype html>
       <style>
@@ -22,7 +24,8 @@ fn render_display_items(renderer: &mut FastRender, height: u32) -> usize {
 
   let options = RenderOptions::new()
     .with_viewport(200, 200)
-    .with_diagnostics_level(DiagnosticsLevel::Basic);
+    .with_diagnostics_level(DiagnosticsLevel::Basic)
+    .with_runtime_toggles(toggles.clone());
   let result = renderer
     .render_html_with_diagnostics(&html, options)
     .expect("render should succeed");
@@ -39,12 +42,15 @@ fn render_display_items(renderer: &mut FastRender, height: u32) -> usize {
 
 #[test]
 fn display_list_background_tiling_is_clamped_to_viewport() {
-  std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "display_list".to_string(),
+  )]));
 
   let mut renderer = FastRender::new().expect("renderer should construct");
 
-  let small = render_display_items(&mut renderer, 2_000);
-  let large = render_display_items(&mut renderer, 20_000);
+  let small = render_display_items(&mut renderer, 2_000, &toggles);
+  let large = render_display_items(&mut renderer, 20_000, &toggles);
 
   assert!(
     small < 1_000,
@@ -59,4 +65,3 @@ fn display_list_background_tiling_is_clamped_to_viewport() {
     "expected display list size not to scale with page height (small={small}, large={large})"
   );
 }
-

@@ -1,5 +1,7 @@
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
+use std::collections::HashMap;
 
 const PNG_1X1_BASE64: &str =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNoaGj4DwAFhAKAjM1mJgAAAABJRU5ErkJggg==";
@@ -8,8 +10,13 @@ const PNG_1X1_BASE64: &str =
 fn display_list_parallel_aggregates_paint_and_image_diagnostics_across_threads() {
   // Ensure paint work runs on a dedicated rayon pool so diagnostics collectors must aggregate
   // across worker threads (thread-local collectors would undercount).
-  std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
-  std::env::set_var("FASTR_PAINT_THREADS", "4");
+  let toggles = RuntimeToggles::from_map(HashMap::from([
+    (
+      "FASTR_PAINT_BACKEND".to_string(),
+      "display_list".to_string(),
+    ),
+    ("FASTR_PAINT_THREADS".to_string(), "4".to_string()),
+  ]));
 
   let data_url = format!("data:image/png;base64,{}", PNG_1X1_BASE64);
 
@@ -51,7 +58,8 @@ fn display_list_parallel_aggregates_paint_and_image_diagnostics_across_threads()
       min_build_fragments: 1,
       build_chunk_size: 1,
       ..PaintParallelism::enabled()
-    });
+    })
+    .with_runtime_toggles(toggles);
 
   let result = renderer
     .render_html_with_diagnostics(&html, options)

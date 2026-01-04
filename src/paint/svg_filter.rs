@@ -1,4 +1,5 @@
 use crate::api::{ResourceContext, ResourceKind};
+use crate::debug::runtime;
 use crate::error::{Error, RenderError, RenderStage};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
@@ -18,7 +19,6 @@ use roxmltree::Document;
 use rustc_hash::FxHasher;
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::env;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -85,7 +85,7 @@ impl FilterCacheConfig {
 }
 
 pub(crate) fn env_usize(name: &str) -> Option<usize> {
-  env::var(name).ok()?.parse::<usize>().ok()
+  runtime::runtime_toggles().usize(name)
 }
 
 struct CachedFilter {

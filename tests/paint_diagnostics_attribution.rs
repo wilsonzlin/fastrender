@@ -1,7 +1,9 @@
 use base64::{engine::general_purpose, Engine as _};
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
 use image::codecs::png::PngEncoder;
 use image::{ColorType, ImageEncoder};
+use std::collections::HashMap;
 
 fn solid_png_data_url(width: u32, height: u32, rgba: [u8; 4]) -> String {
   let mut pixels = vec![0u8; (width * height * 4) as usize];
@@ -16,17 +18,16 @@ fn solid_png_data_url(width: u32, height: u32, rgba: [u8; 4]) -> String {
   format!("data:image/png;base64,{b64}")
 }
 
-fn restore_backend(prev: Option<std::ffi::OsString>) {
-  if let Some(value) = prev {
-    std::env::set_var("FASTR_PAINT_BACKEND", value);
-  } else {
-    std::env::remove_var("FASTR_PAINT_BACKEND");
-  }
-}
-
 #[test]
 fn paint_diagnostics_include_attribution_counters() {
-  let prev_backend = std::env::var_os("FASTR_PAINT_BACKEND");
+  let legacy_toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "legacy".to_string(),
+  )]));
+  let display_list_toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "display_list".to_string(),
+  )]));
 
   let data_url = solid_png_data_url(32, 32, [255, 0, 0, 255]);
   let html = format!(
@@ -73,10 +74,14 @@ fn paint_diagnostics_include_attribution_counters() {
     .with_viewport(140, 300)
     .with_diagnostics_level(DiagnosticsLevel::Basic);
 
-  std::env::set_var("FASTR_PAINT_BACKEND", "legacy");
   let mut legacy = FastRender::new().expect("renderer");
   let legacy_report = legacy
-    .render_html_with_diagnostics(&html, options.clone())
+    .render_html_with_diagnostics(
+      &html,
+      options
+        .clone()
+        .with_runtime_toggles(legacy_toggles.clone()),
+    )
     .expect("legacy render");
   let legacy_stats = legacy_report
     .diagnostics
@@ -129,10 +134,9 @@ fn paint_diagnostics_include_attribution_counters() {
     "expected layer allocation bytes"
   );
 
-  std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
   let mut display_list = FastRender::new().expect("renderer");
   let dl_report = display_list
-    .render_html_with_diagnostics(&html, options)
+    .render_html_with_diagnostics(&html, options.with_runtime_toggles(display_list_toggles))
     .expect("display list render");
   let dl_stats = dl_report
     .diagnostics
@@ -184,6 +188,4 @@ fn paint_diagnostics_include_attribution_counters() {
     dl_paint.layer_alloc_bytes.unwrap_or(0) > 0,
     "expected layer allocation bytes in display list renderer"
   );
-
-  restore_backend(prev_backend);
 }

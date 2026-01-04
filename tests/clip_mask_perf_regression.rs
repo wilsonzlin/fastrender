@@ -1,10 +1,15 @@
 use fastrender::api::DiagnosticsLevel;
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::RenderOptions;
 use fastrender::{FastRender, Rgba};
+use std::collections::HashMap;
 
 #[test]
 fn clip_mask_diagnostics_are_reported() {
-  std::env::set_var("FASTR_PAINT_BACKEND", "legacy");
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_PAINT_BACKEND".to_string(),
+    "legacy".to_string(),
+  )]));
   let html = r#"
     <style>
       html, body { margin: 0; padding: 0; background: white; }
@@ -32,7 +37,8 @@ fn clip_mask_diagnostics_are_reported() {
 
   let options = RenderOptions::default()
     .with_viewport(64, 64)
-    .with_diagnostics_level(DiagnosticsLevel::Basic);
+    .with_diagnostics_level(DiagnosticsLevel::Basic)
+    .with_runtime_toggles(toggles);
 
   let result = renderer
     .render_html_with_diagnostics(html, options)

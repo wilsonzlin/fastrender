@@ -1,7 +1,8 @@
 use base64::{engine::general_purpose, Engine as _};
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashMap;
 
 fn run_with_large_stack(f: impl FnOnce() + Send + 'static) {
   std::thread::Builder::new()
@@ -12,18 +13,13 @@ fn run_with_large_stack(f: impl FnOnce() + Send + 'static) {
     .expect("join thread");
 }
 
-fn run_display_list_test(f: impl FnOnce() + Send + 'static) {
-  // Many of these tests depend on process-global state (e.g. `FASTR_PAINT_BACKEND`), so force
-  // serialization even when the Rust test harness runs tests in parallel.
-  static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-  let _guard = LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock");
-  run_with_large_stack(f);
-}
-
 #[test]
 fn display_list_parallel_reports_text_metrics() {
-  run_display_list_test(|| {
-    std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
+  run_with_large_stack(|| {
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_PAINT_BACKEND".to_string(),
+      "display_list".to_string(),
+    )]));
 
     let mut renderer = FastRender::new().expect("renderer should construct");
     let options = RenderOptions::new()
@@ -37,7 +33,8 @@ fn display_list_parallel_reports_text_metrics() {
         min_build_fragments: 1,
         build_chunk_size: 1,
         ..PaintParallelism::enabled()
-      });
+      })
+      .with_runtime_toggles(toggles);
     let warmed_options = options.clone();
     let third_options = options.clone();
 
@@ -110,8 +107,11 @@ fn display_list_parallel_reports_text_metrics() {
 
 #[test]
 fn display_list_outline_cache_reused_across_font_sizes() {
-  run_display_list_test(|| {
-    std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
+  run_with_large_stack(|| {
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_PAINT_BACKEND".to_string(),
+      "display_list".to_string(),
+    )]));
 
     // Use a test-only web font so the outline cache starts cold even when other tests ran first.
     // The document draws the same glyph at two different font sizes, which should reuse the same
@@ -131,7 +131,8 @@ fn display_list_outline_cache_reused_across_font_sizes() {
     let mut renderer = FastRender::new().expect("renderer should construct");
     let options = RenderOptions::new()
       .with_viewport(160, 120)
-      .with_diagnostics_level(DiagnosticsLevel::Basic);
+      .with_diagnostics_level(DiagnosticsLevel::Basic)
+      .with_runtime_toggles(toggles);
     let result = renderer
       .render_html_with_diagnostics(&html, options)
       .expect("render should succeed");
@@ -155,8 +156,11 @@ fn display_list_outline_cache_reused_across_font_sizes() {
 
 #[test]
 fn display_list_reports_color_glyph_rasters() {
-  run_display_list_test(|| {
-    std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
+  run_with_large_stack(|| {
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_PAINT_BACKEND".to_string(),
+      "display_list".to_string(),
+    )]));
 
     let font_base64 = general_purpose::STANDARD.encode(include_bytes!("fonts/ColorBitmapTest.ttf"));
     let html = format!(
@@ -178,7 +182,8 @@ fn display_list_reports_color_glyph_rasters() {
     let mut renderer = FastRender::new().expect("renderer should construct");
     let options = RenderOptions::new()
       .with_viewport(128, 96)
-      .with_diagnostics_level(DiagnosticsLevel::Basic);
+      .with_diagnostics_level(DiagnosticsLevel::Basic)
+      .with_runtime_toggles(toggles);
     let result = renderer
       .render_html_with_diagnostics(&html, options)
       .expect("render should succeed");

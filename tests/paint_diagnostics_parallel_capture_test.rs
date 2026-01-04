@@ -1,38 +1,22 @@
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::{DiagnosticsLevel, FastRender, FontConfig, RenderOptions};
-use std::ffi::{OsStr, OsString};
-
-struct EnvVarGuard {
-  key: &'static str,
-  previous: Option<OsString>,
-}
-
-impl EnvVarGuard {
-  fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-    let previous = std::env::var_os(key);
-    std::env::set_var(key, value);
-    Self { key, previous }
-  }
-}
-
-impl Drop for EnvVarGuard {
-  fn drop(&mut self) {
-    match self.previous.take() {
-      Some(value) => std::env::set_var(self.key, value),
-      None => std::env::remove_var(self.key),
-    }
-  }
-}
+use std::collections::HashMap;
 
 #[test]
 fn paint_diagnostics_capture_blur_from_parallel_tiles() {
   // Force the display-list renderer and a dedicated paint rayon pool. The point of this test is to
   // ensure paint diagnostics are attributed correctly when raster work executes on worker threads.
-  let _backend_guard = EnvVarGuard::set("FASTR_PAINT_BACKEND", "display_list");
-  let _paint_threads_guard = EnvVarGuard::set("FASTR_PAINT_THREADS", "2");
-  // Avoid display list parallelism (builder stage) so `parallel_tasks/threads` attribution is
-  // dominated by the parallel tiling raster stage that this test is targeting.
-  let _display_list_parallel_guard = EnvVarGuard::set("FASTR_DISPLAY_LIST_PARALLEL", "0");
+  let toggles = RuntimeToggles::from_map(HashMap::from([
+    (
+      "FASTR_PAINT_BACKEND".to_string(),
+      "display_list".to_string(),
+    ),
+    ("FASTR_PAINT_THREADS".to_string(), "2".to_string()),
+    // Avoid display list parallelism (builder stage) so `parallel_tasks/threads` attribution is
+    // dominated by the parallel tiling raster stage that this test is targeting.
+    ("FASTR_DISPLAY_LIST_PARALLEL".to_string(), "0".to_string()),
+  ]));
 
   let mut renderer = FastRender::builder()
     .font_sources(FontConfig::bundled_only())
@@ -42,6 +26,7 @@ fn paint_diagnostics_capture_blur_from_parallel_tiles() {
   let options = RenderOptions::new()
     .with_viewport(512, 512)
     .with_diagnostics_level(DiagnosticsLevel::Basic)
+    .with_runtime_toggles(toggles)
     .with_paint_parallelism(PaintParallelism {
       tile_size: 64,
       max_threads: Some(2),
@@ -96,4 +81,3 @@ fn paint_diagnostics_capture_blur_from_parallel_tiles() {
     "expected blur timing to be non-zero from parallel tile workers, got {blur_ms}"
   );
 }
-

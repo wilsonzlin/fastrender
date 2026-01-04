@@ -1,6 +1,7 @@
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::borrow::Cow;
-use std::sync::{LazyLock, OnceLock};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 const PAINT_THREADS_ENV: &str = "FASTR_PAINT_THREADS";
 
@@ -16,7 +17,24 @@ enum PaintThreadPoolState {
   Error(String),
 }
 
-static PAINT_THREAD_POOL: LazyLock<OnceLock<PaintThreadPoolState>> = LazyLock::new(OnceLock::new);
+static PAINT_THREAD_POOLS: LazyLock<Mutex<HashMap<usize, &'static PaintThreadPoolState>>> =
+  LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn paint_thread_pool_state(threads: usize) -> &'static PaintThreadPoolState {
+  let mut guard = PAINT_THREAD_POOLS
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  if let Some(existing) = guard.get(&threads) {
+    return *existing;
+  }
+  let state = match ThreadPoolBuilder::new().num_threads(threads).build() {
+    Ok(pool) => PaintThreadPoolState::Ready(PaintThreadPool { pool, threads }),
+    Err(err) => PaintThreadPoolState::Error(err.to_string()),
+  };
+  let leaked = Box::leak(Box::new(state));
+  guard.insert(threads, leaked);
+  leaked
+}
 
 #[derive(Debug)]
 pub(crate) struct PaintPoolSelection<'a> {
@@ -31,8 +49,11 @@ pub(crate) struct PaintPoolSelection<'a> {
 }
 
 fn parse_paint_threads_env() -> Result<Option<usize>, String> {
-  match std::env::var(PAINT_THREADS_ENV) {
-    Ok(raw) => {
+  // Prefer runtime toggles so library callers/tests can override `FASTR_PAINT_THREADS` without
+  // mutating the process environment.
+  let toggles = crate::debug::runtime::runtime_toggles();
+  match toggles.get(PAINT_THREADS_ENV) {
+    Some(raw) => {
       let raw = raw.trim();
       if raw.is_empty() {
         return Err(format!("{PAINT_THREADS_ENV} is set but empty"));
@@ -41,8 +62,7 @@ fn parse_paint_threads_env() -> Result<Option<usize>, String> {
         .map(Some)
         .map_err(|_| format!("{PAINT_THREADS_ENV}={raw:?} is not a valid positive integer"))
     }
-    Err(std::env::VarError::NotPresent) => Ok(None),
-    Err(err) => Err(format!("failed to read {PAINT_THREADS_ENV}: {err}")),
+    None => Ok(None),
   }
 }
 
@@ -72,14 +92,7 @@ pub(crate) fn paint_pool() -> PaintPoolSelection<'static> {
       ))),
     },
     Ok(Some(threads)) => {
-      let state = PAINT_THREAD_POOL.get_or_init(|| match ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()
-      {
-        Ok(pool) => PaintThreadPoolState::Ready(PaintThreadPool { pool, threads }),
-        Err(err) => PaintThreadPoolState::Error(err.to_string()),
-      });
-
+      let state = paint_thread_pool_state(threads);
       match state {
         PaintThreadPoolState::Ready(pool) => PaintPoolSelection {
           pool: Some(&pool.pool),

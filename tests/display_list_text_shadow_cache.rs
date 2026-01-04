@@ -1,5 +1,7 @@
 use fastrender::api::FastRenderConfig;
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::{DiagnosticsLevel, FastRender, RenderOptions, Rgba};
+use std::collections::HashMap;
 
 fn run_with_large_stack(f: impl FnOnce() + Send + 'static) {
   std::thread::Builder::new()
@@ -30,9 +32,14 @@ fn pixmap_has_strong_red_pixels(pixmap: &tiny_skia::Pixmap) -> bool {
 #[test]
 fn display_list_text_shadow_populates_glyph_cache() {
   run_with_large_stack(|| {
-    std::env::set_var("FASTR_PAINT_BACKEND", "display_list");
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_PAINT_BACKEND".to_string(),
+      "display_list".to_string(),
+    )]));
 
-    let config = FastRenderConfig::new().with_default_background(Rgba::TRANSPARENT);
+    let config = FastRenderConfig::new()
+      .with_default_background(Rgba::TRANSPARENT)
+      .with_runtime_toggles(toggles);
     let mut renderer = FastRender::with_config(config).expect("renderer should construct");
     let options = RenderOptions::new()
       .with_viewport(400, 120)

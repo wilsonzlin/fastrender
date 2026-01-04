@@ -10634,29 +10634,6 @@ mod tests {
   use std::sync::Arc;
   use std::time::Duration;
 
-  struct EnvGuard {
-    key: &'static str,
-    previous: Option<String>,
-  }
-
-  impl EnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-      let previous = std::env::var(key).ok();
-      std::env::set_var(key, value);
-      Self { key, previous }
-    }
-  }
-
-  impl Drop for EnvGuard {
-    fn drop(&mut self) {
-      if let Some(prev) = &self.previous {
-        std::env::set_var(self.key, prev);
-      } else {
-        std::env::remove_var(self.key);
-      }
-    }
-  }
-
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let idx = ((y * pixmap.width() + x) * 4) as usize;
     let data = pixmap.data();
@@ -11465,8 +11442,6 @@ mod tests {
 
   #[test]
   fn parallel_tiling_uses_dedicated_pool_when_current_pool_is_single_threaded() {
-    let _guard = EnvGuard::set("FASTR_PAINT_THREADS", "4");
-
     let mut list = DisplayList::new();
     for i in 0..256 {
       let shade = (i % 255) as u8;
@@ -11481,14 +11456,23 @@ mod tests {
       .build()
       .expect("single-thread rayon pool");
 
+    let toggles = Arc::new(crate::debug::runtime::RuntimeToggles::from_map(
+      std::collections::HashMap::from([(
+        "FASTR_PAINT_THREADS".to_string(),
+        "4".to_string(),
+      )]),
+    ));
+
     let report = one_thread.install(|| {
-      let mut parallelism = PaintParallelism::adaptive();
-      parallelism.tile_size = 128;
-      DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new())
-        .unwrap()
-        .with_parallelism(parallelism)
-        .render_with_report(&list)
-        .unwrap()
+      crate::debug::runtime::with_thread_runtime_toggles(Arc::clone(&toggles), || {
+        let mut parallelism = PaintParallelism::adaptive();
+        parallelism.tile_size = 128;
+        DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new())
+          .unwrap()
+          .with_parallelism(parallelism)
+          .render_with_report(&list)
+          .unwrap()
+      })
     });
 
     assert!(
@@ -11509,8 +11493,6 @@ mod tests {
 
   #[test]
   fn parallel_tiling_propagates_active_stage_into_rayon_workers() {
-    let _guard = EnvGuard::set("FASTR_PAINT_THREADS", "4");
-
     let mut list = DisplayList::new();
     for i in 0..256 {
       let shade = (i % 255) as u8;
@@ -11531,15 +11513,24 @@ mod tests {
       .build()
       .expect("single-thread rayon pool");
 
+    let toggles = Arc::new(crate::debug::runtime::RuntimeToggles::from_map(
+      std::collections::HashMap::from([(
+        "FASTR_PAINT_THREADS".to_string(),
+        "4".to_string(),
+      )]),
+    ));
+
     let report = one_thread.install(|| {
-      let _stage_guard = StageGuard::install(Some(RenderStage::Paint));
-      with_deadline(Some(&deadline), || {
-        let mut parallelism = PaintParallelism::adaptive();
-        parallelism.tile_size = 128;
-        DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new())
-          .unwrap()
-          .with_parallelism(parallelism)
-          .render_with_report(&list)
+      crate::debug::runtime::with_thread_runtime_toggles(Arc::clone(&toggles), || {
+        let _stage_guard = StageGuard::install(Some(RenderStage::Paint));
+        with_deadline(Some(&deadline), || {
+          let mut parallelism = PaintParallelism::adaptive();
+          parallelism.tile_size = 128;
+          DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .with_parallelism(parallelism)
+            .render_with_report(&list)
+        })
       })
     });
 
