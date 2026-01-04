@@ -447,7 +447,7 @@ thread_local! {
   static SVG_FILTER_DEPTH: Cell<usize> = Cell::new(0);
 }
 
-struct DepthGuard;
+struct DepthGuard(std::marker::PhantomData<std::rc::Rc<()>>);
 
 impl Drop for DepthGuard {
   fn drop(&mut self) {
@@ -465,7 +465,7 @@ fn svg_filter_depth_guard() -> Option<DepthGuard> {
       return None;
     }
     cell.set(depth + 1);
-    Some(DepthGuard)
+    Some(DepthGuard(std::marker::PhantomData))
   })
 }
 
