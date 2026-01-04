@@ -586,7 +586,10 @@ impl Canvas {
     paint.opacity = opacity;
     paint.blend_mode = composite_blend.unwrap_or(self.current_state.blend_mode);
     let clip = self.current_state.clip_mask.as_deref();
-    let transform = self.current_state.transform;
+    // The layer contents are already rendered in the destination (parent) device space. Applying
+    // the current transform again would double-transform the layer when the canvas transform is
+    // non-identity at the time the layer was pushed.
+    let transform = Transform::identity();
 
     if paint.blend_mode == SkiaBlendMode::Plus {
       draw_pixmap_with_plus_blend(
@@ -2098,6 +2101,81 @@ mod tests {
     assert_eq!(pixel(&pixmap, 4, 3), (255, 0, 0, 255));
     // Inside the draw rect but outside the clip bounds
     assert_eq!(pixel(&pixmap, 2, 2), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn translation_before_push_layer_matches_direct_drawing() {
+    let rect = Rect::from_xywh(4.0, 5.0, 5.0, 4.0);
+    let (dx, dy) = (3.0, 2.0);
+
+    let mut direct = Canvas::new(16, 16, Rgba::WHITE).unwrap();
+    direct.translate(dx, dy);
+    direct.draw_rect(rect, Rgba::RED);
+    let direct_pixmap = direct.into_pixmap();
+
+    let mut layered = Canvas::new(16, 16, Rgba::WHITE).unwrap();
+    layered.translate(dx, dy);
+    layered.push_layer(1.0).unwrap();
+    layered.draw_rect(rect, Rgba::RED);
+    layered.pop_layer().unwrap();
+    let layered_pixmap = layered.into_pixmap();
+
+    assert_eq!(
+      layered_pixmap.data(),
+      direct_pixmap.data(),
+      "push_layer/pop_layer should behave like direct drawing when a translation exists before push"
+    );
+  }
+
+  #[test]
+  fn translation_before_push_layer_bounded_matches_direct_drawing() {
+    let rect = Rect::from_xywh(4.0, 5.0, 5.0, 4.0);
+    let (dx, dy) = (3.0, 2.0);
+    let bounds_in_device_space =
+      Rect::from_xywh(rect.x() + dx, rect.y() + dy, rect.width(), rect.height());
+
+    let mut direct = Canvas::new(16, 16, Rgba::WHITE).unwrap();
+    direct.translate(dx, dy);
+    direct.draw_rect(rect, Rgba::RED);
+    let direct_pixmap = direct.into_pixmap();
+
+    let mut layered = Canvas::new(16, 16, Rgba::WHITE).unwrap();
+    layered.translate(dx, dy);
+    layered
+      .push_layer_bounded(1.0, None, bounds_in_device_space)
+      .unwrap();
+    layered.draw_rect(rect, Rgba::RED);
+    layered.pop_layer().unwrap();
+    let layered_pixmap = layered.into_pixmap();
+
+    assert_eq!(
+      layered_pixmap.data(),
+      direct_pixmap.data(),
+      "push_layer_bounded/pop_layer should behave like direct drawing when a translation exists before push"
+    );
+  }
+
+  #[test]
+  fn scale_before_push_layer_matches_direct_drawing() {
+    let rect = Rect::from_xywh(1.0, 1.0, 3.0, 2.0);
+
+    let mut direct = Canvas::new(16, 16, Rgba::WHITE).unwrap();
+    direct.scale(2.0, 2.0);
+    direct.draw_rect(rect, Rgba::RED);
+    let direct_pixmap = direct.into_pixmap();
+
+    let mut layered = Canvas::new(16, 16, Rgba::WHITE).unwrap();
+    layered.scale(2.0, 2.0);
+    layered.push_layer(1.0).unwrap();
+    layered.draw_rect(rect, Rgba::RED);
+    layered.pop_layer().unwrap();
+    let layered_pixmap = layered.into_pixmap();
+
+    assert_eq!(
+      layered_pixmap.data(),
+      direct_pixmap.data(),
+      "push_layer/pop_layer should behave like direct drawing when a scale exists before push"
+    );
   }
 
   #[test]
