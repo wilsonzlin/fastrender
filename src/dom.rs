@@ -1735,7 +1735,7 @@ pub fn modal_dialog_present(node: &DomNode) -> bool {
     }
   }
 
-  node.children.iter().any(modal_dialog_present)
+  node.traversal_children().iter().any(modal_dialog_present)
 }
 
 fn set_attr(attrs: &mut Vec<(String, String)>, name: &str, value: &str) {
@@ -1803,6 +1803,9 @@ fn apply_top_layer_open_state_with_deadline(node: &mut DomNode) -> Result<bool> 
       }
     }
 
+    if current.is_template_element() {
+      continue;
+    }
     for child in current.children.iter_mut().rev() {
       stack.push(child as *mut DomNode);
     }
@@ -1852,6 +1855,9 @@ fn apply_top_layer_open_state(node: &mut DomNode) -> bool {
       }
     }
 
+    if current.is_template_element() {
+      continue;
+    }
     for child in current.children.iter_mut().rev() {
       stack.push(child as *mut DomNode);
     }
@@ -1902,9 +1908,11 @@ fn apply_top_layer_state_inner(node: &mut DomNode, modal_open: bool, inside_moda
   }
 
   let child_modal = within_modal;
-  for child in node.children.iter_mut() {
-    let child_contains_modal = apply_top_layer_state_inner(child, modal_open, child_modal);
-    subtree_has_modal |= child_contains_modal;
+  if !node.is_template_element() {
+    for child in node.children.iter_mut() {
+      let child_contains_modal = apply_top_layer_state_inner(child, modal_open, child_modal);
+      subtree_has_modal |= child_contains_modal;
+    }
   }
 
   if modal_open {
@@ -1989,7 +1997,12 @@ fn apply_top_layer_inert_state_with_deadline(node: &mut DomNode) -> Result<()> {
       }
     }
 
-    if frame.next_child < current.children.len() {
+    let child_len = if current.is_template_element() {
+      0
+    } else {
+      current.children.len()
+    };
+    if frame.next_child < child_len {
       let child_ptr = &mut current.children[frame.next_child] as *mut DomNode;
       frame.next_child += 1;
       let child_inside_modal = frame.within_modal;
@@ -2058,7 +2071,12 @@ fn apply_top_layer_inert_state(node: &mut DomNode) {
       }
     }
 
-    if frame.next_child < current.children.len() {
+    let child_len = if current.is_template_element() {
+      0
+    } else {
+      current.children.len()
+    };
+    if frame.next_child < child_len {
       let child_ptr = &mut current.children[frame.next_child] as *mut DomNode;
       frame.next_child += 1;
       let child_inside_modal = frame.within_modal;
@@ -10263,6 +10281,30 @@ mod tests {
     assert!(
       dialog.get_attribute_ref("open").is_some(),
       "open dialogs should remain open"
+    );
+  }
+
+  #[test]
+  fn top_layer_state_ignores_modal_dialogs_inside_templates() {
+    let mut dom = document(vec![
+      element_with_attrs("div", vec![("id", "outside")], vec![]),
+      element_with_attrs(
+        "template",
+        vec![("id", "tpl")],
+        vec![element_with_attrs(
+          "dialog",
+          vec![("id", "modal"), ("data-fastr-open", "modal")],
+          vec![],
+        )],
+      ),
+    ]);
+
+    apply_top_layer_state_with_deadline(&mut dom).expect("apply top-layer state");
+
+    let outside = find_element_by_id(&dom, "outside").expect("outside");
+    assert!(
+      outside.get_attribute_ref("data-fastr-inert").is_none(),
+      "modal dialogs inside inert <template> contents must not inert the document"
     );
   }
 }
