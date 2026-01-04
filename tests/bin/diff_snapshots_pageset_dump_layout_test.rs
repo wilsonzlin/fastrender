@@ -3,6 +3,12 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+const ONE_BY_ONE_PNG: &[u8] = &[
+  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+  8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0,
+  3, 3, 1, 255, 165, 231, 224, 169, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
 fn minimal_style() -> Value {
   json!({
     "display": "block",
@@ -93,6 +99,11 @@ fn write_snapshot(path: &Path) {
   fs::write(path, format!("{json}\n")).expect("write snapshot");
 }
 
+fn write_png(path: &Path) {
+  fs::create_dir_all(path.parent().unwrap()).expect("create png dir");
+  fs::write(path, ONE_BY_ONE_PNG).expect("write png");
+}
+
 fn read_report(tmp: &tempfile::TempDir) -> Value {
   let report_path = tmp.path().join("diff_snapshots.json");
   assert!(report_path.exists(), "diff_snapshots.json missing");
@@ -135,6 +146,103 @@ fn diff_snapshots_supports_pageset_dump_layout() {
 }
 
 #[test]
+fn diff_snapshots_links_pageset_dump_render_png() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  write_snapshot(&before.join("a").join("snapshot.json"));
+  write_snapshot(&after.join("a").join("snapshot.json"));
+
+  write_png(&before.join("a").join("render.png"));
+  write_png(&after.join("a").join("render.png"));
+
+  // Ensure `render.png` is preferred even when `<stem>.png` exists next to `<stem>/snapshot.json`.
+  write_png(&before.join("a.png"));
+  write_png(&after.join("a.png"));
+
+  let report_json = tmp.path().join("report.json");
+  let report_html = tmp.path().join("report.html");
+  let status = Command::new(env!("CARGO_BIN_EXE_diff_snapshots"))
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--json",
+      report_json.to_str().unwrap(),
+      "--html",
+      report_html.to_str().unwrap(),
+    ])
+    .status()
+    .expect("run diff_snapshots");
+  assert!(status.success(), "expected success, got {:?}", status.code());
+
+  let report: Value =
+    serde_json::from_str(&fs::read_to_string(&report_json).expect("read report"))
+      .expect("parse report json");
+  let entry = report["entries"]
+    .as_array()
+    .and_then(|entries| {
+      entries
+        .iter()
+        .find(|e| e.get("name").and_then(|v| v.as_str()) == Some("a"))
+    })
+    .expect("missing entry for a");
+
+  assert_eq!(entry["before_png"].as_str(), Some("before/a/render.png"));
+  assert_eq!(entry["after_png"].as_str(), Some("after/a/render.png"));
+}
+
+#[test]
+fn diff_snapshots_links_pageset_dump_legacy_stem_png() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  write_snapshot(&before.join("a").join("snapshot.json"));
+  write_snapshot(&after.join("a").join("snapshot.json"));
+  write_png(&before.join("a").join("a.png"));
+  write_png(&after.join("a").join("a.png"));
+
+  let report_json = tmp.path().join("report.json");
+  let report_html = tmp.path().join("report.html");
+  let status = Command::new(env!("CARGO_BIN_EXE_diff_snapshots"))
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--json",
+      report_json.to_str().unwrap(),
+      "--html",
+      report_html.to_str().unwrap(),
+    ])
+    .status()
+    .expect("run diff_snapshots");
+  assert!(status.success(), "expected success, got {:?}", status.code());
+
+  let report: Value =
+    serde_json::from_str(&fs::read_to_string(&report_json).expect("read report"))
+      .expect("parse report json");
+  let entry = report["entries"]
+    .as_array()
+    .and_then(|entries| {
+      entries
+        .iter()
+        .find(|e| e.get("name").and_then(|v| v.as_str()) == Some("a"))
+    })
+    .expect("missing entry for a");
+
+  assert_eq!(entry["before_png"].as_str(), Some("before/a/a.png"));
+  assert_eq!(entry["after_png"].as_str(), Some("after/a/a.png"));
+}
+
+#[test]
 fn diff_snapshots_supports_pageset_dump_layout_missing_entries() {
   let tmp = tempfile::TempDir::new().expect("tempdir");
   let before = tmp.path().join("before");
@@ -170,4 +278,3 @@ fn diff_snapshots_supports_pageset_dump_layout_missing_entries() {
   assert_eq!(status_for("only_before"), "missing_after");
   assert_eq!(status_for("only_after"), "missing_before");
 }
-
