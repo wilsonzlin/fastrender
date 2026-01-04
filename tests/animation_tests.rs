@@ -7,7 +7,7 @@ use fastrender::animation::{
 };
 use fastrender::api::FastRender;
 use fastrender::css::parser::parse_stylesheet;
-use fastrender::css::types::Transform as CssTransform;
+use fastrender::css::types::{Transform as CssTransform, TranslateValue};
 use fastrender::dom;
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::cascade::StyledNode;
@@ -168,6 +168,56 @@ fn keyframes_sample_interpolates_opacity() {
     other => panic!("unexpected value {other:?}"),
   };
   assert!((opacity - 0.25).abs() < 1e-6);
+}
+
+#[test]
+fn keyframes_sample_inserts_implicit_boundaries_for_opacity() {
+  let sheet = parse_stylesheet("@keyframes k { 50% { opacity: 0.5; } }").unwrap();
+  let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+  let rule = &keyframes[0];
+  let base = ComputedStyle::default();
+  let viewport = Size::new(800.0, 600.0);
+  let element_size = Size::new(100.0, 100.0);
+  let sample = |progress: f32| -> f32 {
+    let sampled = sample_keyframes(rule, progress, &base, viewport, element_size);
+    match sampled.get("opacity") {
+      Some(AnimatedValue::Opacity(n)) => *n,
+      other => panic!("unexpected value {other:?}"),
+    }
+  };
+
+  assert!((sample(0.25) - 0.75).abs() < 1e-6);
+  assert!((sample(0.5) - 0.5).abs() < 1e-6);
+  assert!((sample(0.75) - 0.75).abs() < 1e-6);
+}
+
+#[test]
+fn keyframes_sample_inserts_implicit_boundaries_for_translate() {
+  let sheet = parse_stylesheet("@keyframes move { 50% { translate: 100px 0; } }").unwrap();
+  let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+  let rule = &keyframes[0];
+  let base = ComputedStyle::default();
+  let viewport = Size::new(800.0, 600.0);
+  let element_size = Size::new(100.0, 100.0);
+
+  let sample = |progress: f32| -> TranslateValue {
+    let sampled = sample_keyframes(rule, progress, &base, viewport, element_size);
+    match sampled.get("translate") {
+      Some(AnimatedValue::Translate(v)) => *v,
+      other => panic!("unexpected value {other:?}"),
+    }
+  };
+
+  for (progress, expected_x) in [(0.25, 50.0), (0.5, 100.0), (0.75, 50.0)] {
+    match sample(progress) {
+      TranslateValue::Values { x, y, z } => {
+        assert!((x.to_px() - expected_x).abs() < 1e-3, "progress={progress}");
+        assert!((y.to_px() - 0.0).abs() < 1e-3, "progress={progress}");
+        assert!((z.to_px() - 0.0).abs() < 1e-3, "progress={progress}");
+      }
+      TranslateValue::None => panic!("expected translate values"),
+    }
+  }
 }
 
 #[test]
