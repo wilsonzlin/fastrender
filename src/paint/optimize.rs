@@ -39,6 +39,7 @@ use crate::paint::display_list::Transform3D;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::homography::Homography;
 use crate::render_control::{check_active, check_active_periodic};
+use crate::style::types::TransformStyle;
 
 const DEADLINE_STRIDE: usize = 256;
 
@@ -851,6 +852,10 @@ impl DisplayListOptimizer {
   }
 
   fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
+    if item.transform_style == TransformStyle::Preserve3d {
+      return false;
+    }
+
     item.child_perspective.is_none()
       && item.transform.is_none()
       && item.filters.is_empty()
@@ -1646,6 +1651,49 @@ mod tests {
     assert_eq!(stats.noop_removed, 2);
     assert_eq!(optimized.len(), 1);
     assert!(matches!(optimized.items()[0], DisplayItem::FillRect(_)));
+    assert_balanced(optimized.items());
+  }
+
+  #[test]
+  fn preserve_3d_stacking_context_not_removed_as_noop() {
+    let mut list = DisplayList::new();
+    let stacking_context = StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      child_perspective: None,
+      transform_style: TransformStyle::Preserve3d,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: vec![],
+      backdrop_filters: vec![],
+      radii: BorderRadii::ZERO,
+      mask: None,
+    };
+
+    list.push(DisplayItem::PushStackingContext(stacking_context));
+    list.push(make_fill_rect(10.0, 10.0, 20.0, 20.0, Rgba::BLUE));
+    list.push(DisplayItem::PopStackingContext);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(stats.noop_removed, 0);
+    assert_eq!(optimized.len(), 3);
+    assert!(
+      matches!(
+        optimized.items(),
+        [
+          DisplayItem::PushStackingContext(_),
+          DisplayItem::FillRect(_),
+          DisplayItem::PopStackingContext
+        ]
+      ),
+      "preserve-3d stacking context should be retained"
+    );
     assert_balanced(optimized.items());
   }
 
