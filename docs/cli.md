@@ -233,7 +233,7 @@ scripts/chrome_vs_fastrender_fixtures.sh
 
 Outputs (all under `target/` by default):
 
-- Chrome: `target/chrome_fixture_renders/<fixture>.png` + `*.chrome.log`
+- Chrome: `target/chrome_fixture_renders/<fixture>.png` + `*.chrome.log` + `*.json` metadata
 - FastRender: `target/fastrender_fixture_renders/<fixture>.png` + `*.log`
 - Diff report: `target/chrome_vs_fastrender_fixtures.html` (plus JSON and embedded images under `*_files/`)
 
