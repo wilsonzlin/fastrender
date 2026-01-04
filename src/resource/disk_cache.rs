@@ -4970,6 +4970,8 @@ mod tests {
           access_control_allow_origin: None,
           timing_allow_origin: None,
           final_url: Some(url.to_string()),
+          access_control_allow_origin: None,
+          timing_allow_origin: None,
           stored_at: 0,
           len: 0,
           cache: Some(StoredCacheMetadata {
