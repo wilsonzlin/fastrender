@@ -458,7 +458,7 @@ pub struct FastRenderConfig {
 
   /// Block mixed HTTP subresources when the document is HTTPS.
   pub block_mixed_content: bool,
-  /// Restrict subresource loads to the document origin (plus allowlist) when true.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin (plus allowlist) when true.
   ///
   /// Note: this does not block cross-origin iframe/embed document navigation.
   pub same_origin_subresources: bool,
@@ -630,7 +630,7 @@ impl FastRenderBuilder {
     self
   }
 
-  /// Restrict subresource loads to the document origin (plus any allowlisted origins).
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin (plus any allowlisted origins).
   ///
   /// Note: this does not block cross-origin iframe/embed document navigation.
   pub fn same_origin_subresources(mut self, enabled: bool) -> Self {
@@ -644,7 +644,7 @@ impl FastRenderBuilder {
     self
   }
 
-  /// Restrict subresource loads to the document origin when true.
+  /// Restrict subresource loads (CSS/images/fonts/etc.) to the document origin when true.
   ///
   /// Note: this does not block cross-origin iframe/embed document navigation.
   pub fn with_same_origin_subresources(mut self, enabled: bool) -> Self {
