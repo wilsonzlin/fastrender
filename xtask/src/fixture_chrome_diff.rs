@@ -114,7 +114,7 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
   render_cmd
     .arg("run")
     .args(["--bin", "render_fixtures", "--"])
-    .arg("--fixtures-root")
+    .arg("--fixtures-dir")
     .arg(&fixtures_root)
     .arg("--out-dir")
     .arg(&fastrender_dir)
@@ -125,7 +125,7 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     .arg("--timeout")
     .arg(args.render_timeout.to_string());
   if let Some(filter) = &filter {
-    render_cmd.arg("--only").arg(filter);
+    render_cmd.arg("--fixtures").arg(filter);
   }
   render_cmd.current_dir(&repo_root);
 

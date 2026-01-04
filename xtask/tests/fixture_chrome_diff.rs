@@ -47,11 +47,11 @@ fn fixture_chrome_diff_skips_chrome_with_chrome_dir() {
       "--bin",
       "render_fixtures",
       "--",
-      "--fixtures-root",
+      "--fixtures-dir",
     ])
     .arg(&fixtures_root)
     .args([
-      "--only",
+      "--fixtures",
       fixture_name,
       "--out-dir",
       after_dir.to_str().unwrap(),
