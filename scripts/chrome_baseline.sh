@@ -386,6 +386,15 @@ PY
     --force-device-scale-factor="${DPR}"
     --disable-web-security
     --allow-file-access-from-files
+    # Reduce background network noise (update checks, DNS prefetch, etc). This should not affect
+    # normal page subresource loads.
+    --disable-background-networking
+    --dns-prefetch-disable
+    --no-first-run
+    --no-default-browser-check
+    --disable-component-update
+    --disable-default-apps
+    --disable-sync
     --user-data-dir="${profile_dir}"
     # Snap-packaged Chromium can be sandboxed from writing to arbitrary repo paths.
     # Always write the screenshot to a temp directory and then copy it into OUT_DIR.
