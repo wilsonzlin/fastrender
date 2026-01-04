@@ -5201,6 +5201,230 @@ mod tests {
   }
 
   #[test]
+  fn disk_cache_does_not_poison_font_entry_on_html_refresh() {
+    crate::debug::runtime::with_thread_runtime_toggles(
+      Arc::new(crate::debug::runtime::RuntimeToggles::from_map(
+        HashMap::new(),
+      )),
+      || {
+        #[derive(Clone, Debug)]
+        struct Response {
+          status: u16,
+          body: Vec<u8>,
+          content_type: &'static str,
+        }
+
+        #[derive(Clone)]
+        struct ScriptedContentTypeFetcher {
+          calls: Arc<AtomicUsize>,
+          responses: Arc<Mutex<VecDeque<Response>>>,
+        }
+
+        impl ResourceFetcher for ScriptedContentTypeFetcher {
+          fn fetch(&self, url: &str) -> Result<FetchedResource> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let resp = self
+              .responses
+              .lock()
+              .unwrap()
+              .pop_front()
+              .expect("scripted fetcher ran out of responses");
+            let mut resource = FetchedResource::new(resp.body, Some(resp.content_type.to_string()));
+            resource.status = Some(resp.status);
+            resource.final_url = Some(url.to_string());
+            Ok(resource)
+          }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = ScriptedContentTypeFetcher {
+          calls: Arc::clone(&calls),
+          responses: Arc::new(Mutex::new(VecDeque::from(vec![
+            Response {
+              status: 200,
+              body: b"fontbytes".to_vec(),
+              content_type: "font/woff2",
+            },
+            Response {
+              status: 200,
+              body: b"<html>bot mitigation</html>".to_vec(),
+              content_type: "text/html",
+            },
+          ]))),
+        };
+
+        // Force stale planning so the second fetch attempts a refresh.
+        let disk = DiskCachingFetcher::with_configs(
+          fetcher.clone(),
+          tmp.path(),
+          CachingFetcherConfig {
+            honor_http_cache_freshness: true,
+            ..CachingFetcherConfig::default()
+          },
+          DiskCacheConfig {
+            max_bytes: 0,
+            max_age: Some(Duration::from_secs(0)),
+            ..DiskCacheConfig::default()
+          },
+        );
+
+        let url = "https://example.com/font.woff2";
+        let first = disk
+          .fetch_with_request(FetchRequest::new(url, FetchDestination::Font))
+          .expect("seed fetch");
+        assert_eq!(first.bytes, b"fontbytes");
+
+        // Use a new cache instance so the response is read from disk (which synthesizes a max-age
+        // freshness window for responses without HTTP cache metadata), forcing a refresh fetch.
+        let disk2 = DiskCachingFetcher::with_configs(
+          fetcher,
+          tmp.path(),
+          CachingFetcherConfig {
+            honor_http_cache_freshness: true,
+            ..CachingFetcherConfig::default()
+          },
+          DiskCacheConfig {
+            max_bytes: 0,
+            max_age: Some(Duration::from_secs(0)),
+            ..DiskCacheConfig::default()
+          },
+        );
+
+        let second = disk2
+          .fetch_with_request(FetchRequest::new(url, FetchDestination::Font))
+          .expect("refresh fetch");
+        assert_eq!(
+          second.bytes, b"fontbytes",
+          "expected cached bytes to be served instead of HTML markup"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let data_path = disk2.data_path(FetchContextKind::Font, url);
+        let meta_path = disk2.meta_path_for_data(&data_path);
+        assert_eq!(fs::read(&data_path).expect("data present"), b"fontbytes");
+        let meta: StoredMetadata =
+          serde_json::from_slice(&fs::read(meta_path).expect("meta present")).expect("valid meta");
+        assert_eq!(meta.content_type.as_deref(), Some("font/woff2"));
+      },
+    );
+  }
+
+  #[test]
+  fn disk_cache_does_not_poison_image_entry_on_html_refresh() {
+    crate::debug::runtime::with_thread_runtime_toggles(
+      Arc::new(crate::debug::runtime::RuntimeToggles::from_map(
+        HashMap::new(),
+      )),
+      || {
+        #[derive(Clone, Debug)]
+        struct Response {
+          status: u16,
+          body: Vec<u8>,
+          content_type: &'static str,
+        }
+
+        #[derive(Clone)]
+        struct ScriptedContentTypeFetcher {
+          calls: Arc<AtomicUsize>,
+          responses: Arc<Mutex<VecDeque<Response>>>,
+        }
+
+        impl ResourceFetcher for ScriptedContentTypeFetcher {
+          fn fetch(&self, url: &str) -> Result<FetchedResource> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let resp = self
+              .responses
+              .lock()
+              .unwrap()
+              .pop_front()
+              .expect("scripted fetcher ran out of responses");
+            let mut resource = FetchedResource::new(resp.body, Some(resp.content_type.to_string()));
+            resource.status = Some(resp.status);
+            resource.final_url = Some(url.to_string());
+            Ok(resource)
+          }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = ScriptedContentTypeFetcher {
+          calls: Arc::clone(&calls),
+          responses: Arc::new(Mutex::new(VecDeque::from(vec![
+            Response {
+              status: 200,
+              body: b"\x89PNG\r\n\x1a\n".to_vec(),
+              content_type: "image/png",
+            },
+            Response {
+              status: 200,
+              body: b"<html>bot mitigation</html>".to_vec(),
+              content_type: "text/html",
+            },
+          ]))),
+        };
+
+        // Force stale planning so the second fetch attempts a refresh.
+        let disk = DiskCachingFetcher::with_configs(
+          fetcher.clone(),
+          tmp.path(),
+          CachingFetcherConfig {
+            honor_http_cache_freshness: true,
+            ..CachingFetcherConfig::default()
+          },
+          DiskCacheConfig {
+            max_bytes: 0,
+            max_age: Some(Duration::from_secs(0)),
+            ..DiskCacheConfig::default()
+          },
+        );
+
+        let url = "https://example.com/image.png";
+        let first = disk
+          .fetch_with_request(FetchRequest::new(url, FetchDestination::Image))
+          .expect("seed fetch");
+        assert_eq!(first.bytes, b"\x89PNG\r\n\x1a\n");
+
+        // Use a new cache instance so the response is read from disk (which synthesizes a max-age
+        // freshness window for responses without HTTP cache metadata), forcing a refresh fetch.
+        let disk2 = DiskCachingFetcher::with_configs(
+          fetcher,
+          tmp.path(),
+          CachingFetcherConfig {
+            honor_http_cache_freshness: true,
+            ..CachingFetcherConfig::default()
+          },
+          DiskCacheConfig {
+            max_bytes: 0,
+            max_age: Some(Duration::from_secs(0)),
+            ..DiskCacheConfig::default()
+          },
+        );
+
+        let second = disk2
+          .fetch_with_request(FetchRequest::new(url, FetchDestination::Image))
+          .expect("refresh fetch");
+        assert_eq!(
+          second.bytes,
+          b"\x89PNG\r\n\x1a\n",
+          "expected cached bytes to be served instead of HTML markup"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let data_path = disk2.data_path(FetchContextKind::Image, url);
+        let meta_path = disk2.meta_path_for_data(&data_path);
+        assert_eq!(
+          fs::read(&data_path).expect("data present"),
+          b"\x89PNG\r\n\x1a\n"
+        );
+        let meta: StoredMetadata =
+          serde_json::from_slice(&fs::read(meta_path).expect("meta present")).expect("valid meta");
+        assert_eq!(meta.content_type.as_deref(), Some("image/png"));
+      },
+    );
+  }
+
+  #[test]
   fn disk_cache_error_entries_expire_and_are_removed() {
     crate::debug::runtime::with_thread_runtime_toggles(
       Arc::new(crate::debug::runtime::RuntimeToggles::from_map(
