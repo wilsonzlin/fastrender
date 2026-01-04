@@ -1419,6 +1419,9 @@ pub struct ResolvedMask {
   /// Root font size for rem units.
   pub root_font_size: f32,
 
+  /// Viewport used to resolve viewport-relative units.
+  pub viewport: Option<(f32, f32)>,
+
   /// Precomputed reference rectangles for mask-origin/clip.
   pub rects: MaskReferenceRects,
 }

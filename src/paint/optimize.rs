@@ -1751,6 +1751,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects: MaskReferenceRects {
         border: bounds,
         padding: bounds,

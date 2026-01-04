@@ -4594,10 +4594,11 @@ impl DisplayListRenderer {
     check_active(RenderStage::Paint)?;
     let mut reusable_mask = MASK_RENDER_SCRATCH.with(|cell| cell.borrow_mut().take());
 
-    let viewport = (
+    let viewport = mask.viewport.unwrap_or((
       self.canvas.width() as f32 / self.scale,
       self.canvas.height() as f32 / self.scale,
-    );
+    ));
+
     // In parallel tiling mode the canvas is translated so tile renderers can reuse global display
     // list coordinates. `ResolvedMask` reference rectangles are in the same global coordinate
     // space, so we need to offset them into the translated canvas space before computing clip
@@ -13590,6 +13591,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects: mask_rects(bounds, (1.0, 1.0, 1.0, 1.0)),
     };
 
@@ -13712,6 +13714,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects: mask_rects(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), (0.0, 0.0, 0.0, 0.0)),
     };
 
@@ -13787,6 +13790,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects: mask_rects(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), (0.0, 0.0, 0.0, 0.0)),
     };
 
@@ -13845,6 +13849,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
     };
 
@@ -13891,6 +13896,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects,
     };
 
@@ -13949,6 +13955,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects,
     };
 
@@ -14024,6 +14031,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects,
     };
 
@@ -14086,6 +14094,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
     };
 
@@ -14144,6 +14153,7 @@ mod tests {
       color: Rgba::BLACK,
       font_size: 16.0,
       root_font_size: 16.0,
+      viewport: None,
       rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
     };
 

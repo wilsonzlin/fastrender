@@ -1168,6 +1168,7 @@ fn simple_mask(image: ResolvedMaskImage, mode: MaskMode, bounds: Rect) -> Resolv
     color: Rgba::BLACK,
     font_size: 16.0,
     root_font_size: 16.0,
+    viewport: None,
     rects: MaskReferenceRects {
       border: bounds,
       padding: bounds,

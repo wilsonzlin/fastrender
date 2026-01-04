@@ -133,7 +133,7 @@ struct Args {
   #[arg(long)]
   in_process: bool,
 
-  /// Output directory for PNG renders and logs
+  /// Output directory for renders/logs/diagnostics (PNGs + *.log, etc.)
   #[arg(long, default_value = DEFAULT_RENDER_DIR)]
   out_dir: PathBuf,
 

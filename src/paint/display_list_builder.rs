@@ -2734,6 +2734,7 @@ impl DisplayListBuilder {
       color: style.color,
       font_size: style.font_size,
       root_font_size: style.root_font_size,
+      viewport: self.viewport,
       rects,
     })
   }
