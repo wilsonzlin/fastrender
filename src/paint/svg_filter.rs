@@ -39,6 +39,7 @@ type RenderResult<T> = std::result::Result<T, RenderError>;
 const MAX_FILTER_RES: u32 = 4096;
 const MAX_TURBULENCE_OCTAVES: u32 = 8;
 const FILTER_DEADLINE_STRIDE: usize = 256;
+const MAX_SVG_FILTER_RECURSION_DEPTH: usize = 32;
 
 static FILTER_CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
 
@@ -442,14 +443,13 @@ struct DepthGuard {
 }
 
 impl DepthGuard {
-  fn new(cell: &'static Cell<usize>) -> Self {
-    let depth = cell.get().saturating_add(1);
-    cell.set(depth);
-    debug_assert!(
-      depth < 128,
-      "svg filter recursion depth unexpectedly high: {depth}"
-    );
-    Self { cell }
+  fn try_new(cell: &'static Cell<usize>) -> Option<Self> {
+    let depth = cell.get();
+    if depth >= MAX_SVG_FILTER_RECURSION_DEPTH {
+      return None;
+    }
+    cell.set(depth + 1);
+    Some(Self { cell })
   }
 }
 
@@ -460,11 +460,11 @@ impl Drop for DepthGuard {
   }
 }
 
-fn svg_filter_depth_guard() -> DepthGuard {
+fn svg_filter_depth_guard() -> Option<DepthGuard> {
   SVG_FILTER_DEPTH.with(|cell| {
     // SAFETY: thread local Cell lives for the duration of the thread.
     let static_cell: &'static Cell<usize> = unsafe { std::mem::transmute(cell) };
-    DepthGuard::new(static_cell)
+    DepthGuard::try_new(static_cell)
   })
 }
 
@@ -2611,7 +2611,9 @@ pub(crate) fn apply_svg_filter_with_cache(
   bbox: Rect,
   mut blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
-  let _depth = svg_filter_depth_guard();
+  let Some(_depth) = svg_filter_depth_guard() else {
+    return Ok(());
+  };
   let scale = if scale.is_finite() && scale > 0.0 {
     scale
   } else {
@@ -4938,6 +4940,50 @@ mod tests {
     );
     assert_eq!(recorded.1, FetchDestination::Image);
     assert_eq!(recorded.2.as_deref(), Some(doc_url));
+  }
+
+  #[test]
+  fn svg_filter_recursion_limit_is_noop() {
+    let prev_depth =
+      SVG_FILTER_DEPTH.with(|cell| cell.replace(MAX_SVG_FILTER_RECURSION_DEPTH));
+    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::from_rgba(10, 20, 30, 255)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+    let before = pixmap.data().to_vec();
+
+    let mut filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: vec![FilterStep {
+        result: None,
+        color_interpolation_filters: None,
+        primitive: FilterPrimitive::Flood {
+          color: Rgba::RED,
+          opacity: 1.0,
+        },
+        region: None,
+      }],
+      region: SvgFilterRegion::default_for_units(SvgFilterUnits::ObjectBoundingBox),
+      filter_res: None,
+      primitive_units: SvgFilterUnits::ObjectBoundingBox,
+      fingerprint: 0,
+    };
+    filter.refresh_fingerprint();
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 2.0);
+    let result = apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, None);
+    assert!(
+      matches!(result, Ok(())),
+      "expected recursion limit to noop, got {result:?}"
+    );
+    assert_eq!(pixmap.data(), before.as_slice());
+    assert_eq!(
+      SVG_FILTER_DEPTH.with(|cell| cell.get()),
+      MAX_SVG_FILTER_RECURSION_DEPTH
+    );
+
+    SVG_FILTER_DEPTH.with(|cell| cell.set(prev_depth));
   }
 
   fn apply_primitive_for_test(
