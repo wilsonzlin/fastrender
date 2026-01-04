@@ -3157,9 +3157,13 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let agent = &self.agent;
     let timeout_budget = self.timeout_budget(deadline);
-    let max_attempts = match deadline.as_ref() {
-      Some(deadline) if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() => 1,
-      _ => self.retry_policy.max_attempts.max(1),
+    let deadline_retries_disabled = deadline
+      .as_ref()
+      .is_some_and(|deadline| deadline.timeout_limit().is_some() && !deadline.http_retries_enabled());
+    let max_attempts = if deadline_retries_disabled {
+      1
+    } else {
+      self.retry_policy.max_attempts.max(1)
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
@@ -3518,7 +3522,7 @@ impl HttpFetcher {
               // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
               // responses). Still surface a hard error when retries are aborted early due to a
               // render deadline; callers can decide whether to fall back to cached bytes.
-              if status_code != 202 && attempt < max_attempts {
+              if status_code != 202 && (deadline_retries_disabled || attempt < max_attempts) {
                 let mut message =
                   "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
@@ -3634,9 +3638,13 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let client = &self.reqwest_client;
     let timeout_budget = self.timeout_budget(deadline);
-    let max_attempts = match deadline.as_ref() {
-      Some(deadline) if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() => 1,
-      _ => self.retry_policy.max_attempts.max(1),
+    let deadline_retries_disabled = deadline
+      .as_ref()
+      .is_some_and(|deadline| deadline.timeout_limit().is_some() && !deadline.http_retries_enabled());
+    let max_attempts = if deadline_retries_disabled {
+      1
+    } else {
+      self.retry_policy.max_attempts.max(1)
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
@@ -3987,7 +3995,7 @@ impl HttpFetcher {
               // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
               // responses). Still surface a hard error when retries are aborted early due to a
               // render deadline; callers can decide whether to fall back to cached bytes.
-              if status_code != 202 && attempt < max_attempts {
+              if status_code != 202 && (deadline_retries_disabled || attempt < max_attempts) {
                 let mut message =
                   "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
@@ -4107,9 +4115,13 @@ impl HttpFetcher {
     let mut validators = validators;
     let agent = &self.agent;
     let timeout_budget = self.timeout_budget(deadline);
-    let max_attempts = match deadline.as_ref() {
-      Some(deadline) if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() => 1,
-      _ => self.retry_policy.max_attempts.max(1),
+    let deadline_retries_disabled = deadline
+      .as_ref()
+      .is_some_and(|deadline| deadline.timeout_limit().is_some() && !deadline.http_retries_enabled());
+    let max_attempts = if deadline_retries_disabled {
+      1
+    } else {
+      self.retry_policy.max_attempts.max(1)
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
@@ -4500,7 +4512,7 @@ impl HttpFetcher {
               // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
               // responses). Still surface a hard error when retries are aborted early due to a
               // render deadline; callers can decide whether to fall back to cached bytes.
-              if status_code != 202 && attempt < max_attempts {
+              if status_code != 202 && (deadline_retries_disabled || attempt < max_attempts) {
                 let mut message =
                   "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
@@ -4651,17 +4663,15 @@ impl HttpFetcher {
     let mut validators = validators;
     let client = &self.reqwest_client;
     let timeout_budget = self.timeout_budget(deadline);
+    let deadline_retries_disabled = deadline
+      .as_ref()
+      .is_some_and(|deadline| deadline.timeout_limit().is_some() && !deadline.http_retries_enabled());
     let max_attempts = if auto_fallback && timeout_budget.is_some() {
       1
+    } else if deadline_retries_disabled {
+      1
     } else {
-      match deadline.as_ref() {
-        Some(deadline)
-          if deadline.timeout_limit().is_some() && !deadline.http_retries_enabled() =>
-        {
-          1
-        }
-        _ => self.retry_policy.max_attempts.max(1),
-      }
+      self.retry_policy.max_attempts.max(1)
     };
 
     let budget_exhausted_error = |current_url: &str, attempt: usize| -> Error {
@@ -5056,7 +5066,7 @@ impl HttpFetcher {
               // warm-cache runs that want to avoid repeated network fetches for persistent 429/5xx
               // responses). Still surface a hard error when retries are aborted early due to a
               // render deadline; callers can decide whether to fall back to cached bytes.
-              if status_code != 202 && attempt < max_attempts {
+              if status_code != 202 && (deadline_retries_disabled || attempt < max_attempts) {
                 let mut message =
                   "retryable HTTP status (retry aborted: render deadline exceeded)".to_string();
                 message.push_str(&format_attempt_suffix(attempt, max_attempts));
@@ -11130,9 +11140,13 @@ mod tests {
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
+    let barrier = Arc::new(Barrier::new(2));
+    let barrier_server = Arc::clone(&barrier);
+
     let captured = Arc::new(Mutex::new(Vec::<String>::new()));
     let captured_req = Arc::clone(&captured);
     let handle = thread::spawn(move || {
+      barrier_server.wait();
       let start = Instant::now();
       let mut handled = 0usize;
       while handled < 2 && start.elapsed() < Duration::from_secs(3) {
@@ -11170,6 +11184,7 @@ mod tests {
     let doc_url = format!("http://{}/font.woff2", addr);
     let font_url = format!("http://{}/index.html", addr);
 
+    barrier.wait();
     let doc = fetcher
       .fetch_with_context(FetchContextKind::Document, &doc_url)
       .expect("document fetch");
@@ -11333,7 +11348,11 @@ mod tests {
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
+    let barrier = Arc::new(Barrier::new(2));
+    let barrier_server = Arc::clone(&barrier);
+
     let handle = thread::spawn(move || {
+      barrier_server.wait();
       let start = Instant::now();
       while start.elapsed() < Duration::from_secs(2) {
         match listener.accept() {
@@ -11370,8 +11389,9 @@ mod tests {
 
     let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(5));
     let url = format!("http://{}/", addr);
-    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
 
+    barrier.wait();
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
     let start = Instant::now();
     let res = render_control::with_deadline(Some(&deadline), || fetcher.fetch(&url));
     let elapsed = start.elapsed();
@@ -11405,7 +11425,11 @@ mod tests {
     let request_count = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&request_count);
 
+    let barrier = Arc::new(Barrier::new(2));
+    let barrier_server = Arc::clone(&barrier);
+
     let handle = thread::spawn(move || {
+      barrier_server.wait();
       let start = Instant::now();
       let mut last_request = None::<Instant>;
 
@@ -11451,8 +11475,9 @@ mod tests {
       .with_timeout(Duration::from_secs(5))
       .with_retry_policy(retry_policy);
     let url = format!("http://{}/", addr);
-    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(200)), None);
 
+    barrier.wait();
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(200)), None);
     let res = render_control::with_deadline(Some(&deadline), || fetcher.fetch(&url));
     assert!(
       res.is_err(),
