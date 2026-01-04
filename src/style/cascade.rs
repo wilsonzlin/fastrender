@@ -16151,6 +16151,114 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn registered_custom_property_syntax_star_initial_keyword_uses_initial_value_when_provided() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "html".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "t".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --x { syntax: "*"; inherits: false; initial-value: 5px; }
+        #t { --x: initial; width: var(--x, 10px); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let target = styled.children.first().expect("target");
+    assert_eq!(target.styles.width, Some(Length::px(5.0)));
+    assert_eq!(
+      target
+        .styles
+        .custom_properties
+        .get("--x")
+        .map(|value| value.value.trim()),
+      Some("5px")
+    );
+  }
+
+  #[test]
+  fn registered_custom_property_unset_keyword_uses_guaranteed_invalid_when_inherits_false() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "html".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "t".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --x { syntax: "*"; inherits: false; }
+        #t { --x: unset; width: var(--x, 10px); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let target = styled.children.first().expect("target");
+    assert_eq!(target.styles.width, Some(Length::px(10.0)));
+    assert!(target.styles.custom_properties.get("--x").is_none());
+  }
+
+  #[test]
+  fn registered_custom_property_unset_keyword_inherits_from_parent_when_inherits_true() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "parent".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "child".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --x { syntax: "*"; inherits: true; }
+        #parent { --x: 5px; }
+        #child { --x: unset; width: var(--x, 10px); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let child = styled.children.first().expect("child");
+    assert_eq!(child.styles.width, Some(Length::px(5.0)));
+    assert_eq!(
+      child
+        .styles
+        .custom_properties
+        .get("--x")
+        .map(|value| value.value.trim()),
+      Some("5px")
+    );
+  }
+
+  #[test]
   fn registered_custom_property_inherit_keyword_overrides_inherits_false() {
     let dom = DomNode {
       node_type: DomNodeType::Element {
