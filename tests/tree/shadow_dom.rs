@@ -2,7 +2,10 @@ use fastrender::dom::{
   compute_slot_assignment_with_ids, enumerate_dom_ids, parse_html, DomNode, DomNodeType,
   ShadowRootMode,
 };
+use fastrender::error::{Error, RenderError, RenderStage};
+use fastrender::render_control::{with_deadline, RenderDeadline};
 use std::collections::HashMap;
+use std::time::Duration;
 
 fn find_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {
   if node.get_attribute_ref("id") == Some(id) {
@@ -541,4 +544,30 @@ fn slot_names_inside_inert_templates_do_not_affect_distribution() {
     !assignments.slot_to_nodes.contains_key(&template_slot_id),
     "slot elements inside inert templates must never receive assignments"
   );
+}
+
+#[test]
+fn slot_assignment_times_out_under_expired_deadline() {
+  let depth = 4096usize;
+  let mut html = String::new();
+  html.push_str("<div id='host'><template shadowroot='open'>");
+  for _ in 0..depth {
+    html.push_str("<div>");
+  }
+  html.push_str("<slot></slot>");
+  for _ in 0..depth {
+    html.push_str("</div>");
+  }
+  html.push_str("</template><span id='light'>Light</span></div>");
+
+  let dom = parse_html(&html).expect("parse html");
+  let ids = enumerate_dom_ids(&dom);
+
+  let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
+  let result = with_deadline(Some(&deadline), || compute_slot_assignment_with_ids(&dom, &ids));
+  let err = result.expect_err("expected slot assignment timeout");
+  match err {
+    Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Cascade),
+    other => panic!("expected timeout error, got {other:?}"),
+  }
 }
