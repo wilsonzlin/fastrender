@@ -227,6 +227,7 @@ fn test_all_fixture_files_exist() {
     "text_bidi_mirror",
     "text_line_break",
     "text_font_variant_emoji",
+    "text_font_variant_emoji_webfont",
     "text_overflow_vertical",
     "text_letter_spacing_vertical",
     "shadow_dom",
@@ -507,6 +508,12 @@ fn test_fixture_text_font_variant_emoji() {
     .expect("text_font_variant_emoji fixture should render");
 }
 
+#[test]
+fn test_fixture_text_font_variant_emoji_webfont() {
+  test_fixture("text_font_variant_emoji_webfont")
+    .expect("text_font_variant_emoji_webfont fixture should render");
+}
+
 //
 // Shadow DOM Tests
 //
@@ -584,6 +591,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "text_bidi_mirror",
     "text_line_break",
     "text_font_variant_emoji",
+    "text_font_variant_emoji_webfont",
     "text_overflow_vertical",
     "text_letter_spacing_vertical",
     // Shadow DOM

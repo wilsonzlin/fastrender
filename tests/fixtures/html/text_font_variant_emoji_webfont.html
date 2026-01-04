@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Text - font-variant-emoji (web font classification)</title>
+    <style>
+      /* Load the bundled fixture emoji font with a neutral family name so heuristics can't identify it. */
+      @font-face {
+        font-family: "CustomFont";
+        src: url("tests/fixtures/fonts/FastRenderEmoji.ttf");
+      }
+
+      /* Deterministic text symbol fallback (monochrome). */
+      @font-face {
+        font-family: "TextSymbols";
+        src: url("tests/fixtures/fonts/NotoSansSymbols2-subset.ttf");
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        background: #ffffff;
+        font-family: "Noto Sans", sans-serif;
+      }
+
+      table {
+        width: 600px;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      col.label {
+        width: 240px;
+      }
+
+      col.variant {
+        width: 180px;
+      }
+
+      th,
+      td {
+        border: 1px solid #dee2e6;
+      }
+
+      th {
+        background: #f8f9fa;
+        font-weight: 600;
+        font-size: 12px;
+        padding: 6px 4px;
+        color: #343a40;
+      }
+
+      td {
+        text-align: center;
+        vertical-align: middle;
+      }
+
+      td.label {
+        text-align: left;
+        font-size: 11px;
+        padding: 4px 6px;
+        color: #495057;
+        white-space: nowrap;
+      }
+
+      td.cell {
+        font-size: 44px;
+        line-height: 1;
+        padding: 10px 0;
+        font-family: "CustomFont", "TextSymbols", "Noto Sans Symbols 2", "Noto Sans Symbols",
+          "Noto Sans", "FastRender Emoji";
+      }
+
+      .fv-emoji {
+        font-variant-emoji: emoji;
+      }
+      .fv-text {
+        font-variant-emoji: text;
+      }
+    </style>
+  </head>
+  <body>
+    <table>
+      <colgroup>
+        <col class="label" />
+        <col class="variant" />
+        <col class="variant" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>sequence</th>
+          <th>emoji</th>
+          <th>text</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="label">U+2764</td>
+          <td class="cell fv-emoji">&#x2764;</td>
+          <td class="cell fv-text">&#x2764;</td>
+        </tr>
+        <tr>
+          <td class="label">U+2602</td>
+          <td class="cell fv-emoji">&#x2602;</td>
+          <td class="cell fv-text">&#x2602;</td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+</html>
+
