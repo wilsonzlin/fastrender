@@ -18,7 +18,15 @@ fn render_pages_respects_out_dir_flag() {
 
   let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
     .current_dir(temp.path())
-    .args(["--pages", "example.com", "--jobs", "1"])
+    .args([
+      "--pages",
+      "example.com",
+      "--jobs",
+      "1",
+      "--diagnostics-json",
+      "--dump-intermediate",
+      "full",
+    ])
     .arg("--out-dir")
     .arg(&out_dir)
     .status()
@@ -27,6 +35,11 @@ fn render_pages_respects_out_dir_flag() {
   assert!(status.success(), "expected render_pages to succeed");
   assert!(out_dir.join("example.com.png").is_file());
   assert!(out_dir.join("example.com.log").is_file());
+  assert!(out_dir.join("example.com.stderr.log").is_file());
+  assert!(out_dir.join("example.com.result.json").is_file());
+  assert!(out_dir.join("example.com.diagnostics.json").is_file());
+  assert!(out_dir.join("example.com.intermediate.json").is_file());
+  assert!(out_dir.join("example.com.snapshot.json").is_file());
   assert!(out_dir.join("_summary.log").is_file());
 
   assert!(

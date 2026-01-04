@@ -141,7 +141,7 @@ struct Args {
   #[arg(long, default_value = "1.0")]
   dpr: f32,
 
-  /// Directory to write renders/logs (PNGs + *.log)
+  /// Output directory for renders/logs/diagnostics (PNGs + *.log, etc.)
   #[arg(long, default_value = DEFAULT_RENDER_DIR)]
   out_dir: PathBuf,
 
@@ -1112,7 +1112,6 @@ fn spawn_worker(
       compat: &args.compat,
     },
   );
-  cmd.arg("--out-dir").arg(&args.out_dir);
   cmd.arg("--cache-dir").arg(&args.cache_dir);
   cmd.arg("--out-dir").arg(&args.out_dir);
   cmd
