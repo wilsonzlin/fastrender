@@ -136,7 +136,8 @@ Use `import_wpt` to bring small slices of upstream WPT into `tests/wpt/tests/` w
 - Offline behavior (important for deterministic tests):
   - Root-relative URLs (e.g. `/resources/foo.png`) and `web-platform.test` URLs are rewritten to file-relative paths inside the imported tree.
   - Rewrites cover common fetchable HTML/CSS URL contexts, including:
-    - HTML: `src`, SVG `href` / `xlink:href`, `poster`, `object[data]`, `srcset`, and `imagesrcset`.
+    - HTML: `src`, fetchable `href` contexts such as `<link href=...>` (navigation links like `<a href=...>` are ignored), `poster`, `object[data]`, `srcset`, and `imagesrcset`.
+    - SVG: `href` / `xlink:href` on fetchable elements (e.g. `<image>`, `<use>`, `<feImage>`); navigation links like `<a xlink:href>` are ignored.
     - CSS: `url(...)` and `@import`.
   - Sidecar metadata files (e.g. `.html.ini`) are copied alongside tests when present so the local WPT harness can apply expectations/viewport/DPR.
   - The importer is strict: missing referenced files fail the import rather than silently leaving network URLs behind.

@@ -18,6 +18,7 @@ These are optional wrappers for the most common loops:
   - Defaults to `viewport=1200x800`, `dpr=1.0`, JavaScript disabled (to match FastRender’s “no JS” model).
   - Writes a report at `<out>/report.html` (default: `target/chrome_vs_fastrender/report.html`).
   - Core flags: `--pages <csv>`, `--shard <index>/<total>`, `--viewport <WxH>`, `--dpr <float>`, `--jobs <n>`, `--timeout <secs>`, `--out-dir <dir>`, `--chrome <path>`, `--js {on|off}`, `--no-chrome`, `--no-fastrender`, `--diff-only`, `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--ignore-alpha`, `--sort-by {pixel|percent|perceptual}`, `--fail-on-differences`, `--no-build`.
+  - Passing page stems that are not present under `fetches/html/*.html` is an error (run `fetch_pages` first).
 - Offline fixture Chrome-vs-FastRender diff (deterministic; offline): `scripts/chrome_vs_fastrender_fixtures.sh [fixture_glob...]`
   - Wraps `scripts/chrome_fixture_baseline.sh`, `render_fixtures`, and `diff_renders`.
   - Defaults to `viewport=1040x1240`, `dpr=1.0`, JavaScript disabled, and the fixture set in `tests/pages_regression_test.rs`.
@@ -211,6 +212,7 @@ Notes:
 - This is not fully deterministic (live subresources can change); it’s still excellent for rapid “why is our render different from Chrome on the same HTML?” debugging.
 - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
 - `scripts/chrome_baseline.sh` prefers Chrome's `--headless=new` mode but automatically retries with legacy `--headless` on older Chrome versions.
+- Passing page stems that are not present under `fetches/html/*.html` is an error (run `fetch_pages` first).
 - `scripts/chrome_baseline.sh` supports `--shard <index>/<total>` (0-based) for deterministic sharding of the baseline capture set.
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
@@ -362,6 +364,28 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
 - Core flags:
   - Roots: `--fixtures <dir>` (default `tests/pages/fixtures`), optional `--fetches-html <dir>`
   - Report knobs: `--top <n>`, `--sample-values <n>`, `--json`
+
+## `font_coverage`
+
+- Purpose: audit which Unicode codepoints in some input text have no glyph in the selected font set.
+- Run: `cargo run --release --bin font_coverage -- --help`
+- Inputs:
+  - Direct text: `--text "..."`
+  - HTML file (extracts visible text nodes): `--html-file <path>`
+- Font sources:
+  - `--bundled-fonts` / `--system-fonts`
+  - `--font-dir <dir>` (repeatable)
+  - Default is deterministic: bundled fonts only unless you explicitly opt into other sources.
+
+## `bundled_font_coverage`
+
+- Purpose: scan cached pageset HTML (`fetches/html/*.html`) and report which Unicode codepoints are not covered by the bundled font set.
+- Run: `cargo run --release --bin bundled_font_coverage -- --pageset`
+- Useful for data-driven bundled font subset decisions; see [`docs/notes/bundled-fonts.md`](notes/bundled-fonts.md).
+- Core flags:
+  - Page selection: `--pageset`, `--pages <csv>` (URLs or cache stems)
+  - Inputs: `--html-dir <dir>`, `--include-css-content`
+  - Output: `--json`, `--top <n>`, `--examples <n>`
 
 ## `fetch_and_render`
 
