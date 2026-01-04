@@ -79,10 +79,16 @@ Bundles are deterministic directories or `.tar` archives containing:
 
 ## Responsive captures and `<meta name="viewport">`
 
-`<meta name="viewport">` is ignored by default so renders stay deterministic. When
-building custom harnesses, enable it via `FastRenderConfig::with_meta_viewport(true)`
-to respect author-provided `width`/`height` and zoom directives. The resolved zoom
-is clamped to the 0.1–10 range and scales the effective device pixel ratio along
+The core library API defaults to **ignoring** `<meta name="viewport">` (`FastRenderConfig::new()` sets
+`apply_meta_viewport=false`). When building custom harnesses, enable it via
+`FastRenderConfig::with_meta_viewport(true)` to respect author-provided `width`/`height` and zoom
+directives.
+
+The shipped CLI tools (`fetch_and_render`, `render_pages`, `pageset_progress`, `render_fixtures`, and
+`bundle_page`) **do honor** `<meta name="viewport">` by default, so they match modern browser
+behavior out of the box.
+
+The resolved zoom is clamped to the 0.1–10 range and scales the effective device pixel ratio along
 with the visual viewport used for `device-*` media features.
 
 ## Inspect layout/paint artifacts
