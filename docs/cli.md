@@ -229,8 +229,9 @@ Notes:
   - For advanced filtering/output control, see `cargo xtask fixture-chrome-diff --help` (supports `--only`, `--viewport`, `--dpr`, and diff tolerances).
 - Output layout:
   - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`)
-  - `<out>/fastrender/<fixture>.png` (+ optional `<fixture>.diagnostics.json` when `render_fixtures --diagnostics-json` is enabled)
+  - `<out>/fastrender/<fixture>.png` (rendered by `render_fixtures`)
   - `<out>/report.html`, `<out>/report.json`
+  - Note: `fixture-chrome-diff` does not currently enable `render_fixtures --diagnostics-json`. If you need per-fixture diagnostics, run `render_fixtures --diagnostics-json` separately.
 
 ## `fetch_and_render`
 
