@@ -213,6 +213,65 @@ fn first_template_wins_for_multiple_declarative_shadow_roots() {
 }
 
 #[test]
+fn nested_shadow_root_inside_unused_declarative_template_is_not_attached() {
+  let html = "<div id='host'>\n  <template shadowroot='open'>\n    <div id='shadow-ok'></div>\n  </template>\n  <template shadowroot='closed'>\n    <div id='inner-host'>\n      <template shadowroot='open'>\n        <div id='should-not-attach'></div>\n      </template>\n    </div>\n  </template>\n</div>";
+  let dom = parse_html(html).expect("parse html");
+
+  let host = find_by_id(&dom, "host").expect("host element");
+  let shadow_roots: Vec<&DomNode> = host
+    .children
+    .iter()
+    .filter(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+    .collect();
+  assert_eq!(
+    shadow_roots.len(),
+    1,
+    "only the first declarative shadow template should attach"
+  );
+
+  let inner_host = find_by_id(&dom, "inner-host").expect("inner-host element");
+  assert!(
+    inner_host
+      .children
+      .iter()
+      .all(|child| !matches!(child.node_type, DomNodeType::ShadowRoot { .. })),
+    "nested shadow roots should not attach inside inert declarative template contents"
+  );
+
+  let unused_template = host
+    .children
+    .iter()
+    .find(|child| {
+      child
+        .tag_name()
+        .map(|name| name.eq_ignore_ascii_case("template"))
+        .unwrap_or(false)
+    })
+    .expect("unused declarative template should remain in light DOM");
+  assert!(
+    find_shadow_root(unused_template).is_none(),
+    "unused declarative templates must remain inert for shadow root attachment"
+  );
+}
+
+#[test]
+fn nested_shadow_root_inside_first_declarative_template_is_attached() {
+  let html = "<div id='host'>\n  <template shadowroot='open'>\n    <div id='inner-host'>\n      <template shadowroot='open'>\n        <div id='nested-shadow'></div>\n      </template>\n    </div>\n  </template>\n</div>";
+  let dom = parse_html(html).expect("parse html");
+
+  let inner_host = find_by_id(&dom, "inner-host").expect("inner host");
+  let nested_shadow = inner_host
+    .children
+    .iter()
+    .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+    .expect("nested shadow root should attach inside promoted template contents");
+  assert!(
+    find_by_id(nested_shadow, "nested-shadow").is_some(),
+    "nested shadow root should be populated from the inner declarative template"
+  );
+}
+
+#[test]
 fn nested_default_slot_in_fallback_prefers_outer_slot() {
   let html = "<div id='host'><template shadowroot='open'><slot id='outer'><div><slot id='inner'></slot></div></slot></template><span id='light'>X</span></div>";
   let dom = parse_html(html).expect("parse html");

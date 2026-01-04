@@ -2492,12 +2492,26 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
 
       stack.push((ptr, true));
 
+      let first_declarative_shadow_template = if node.is_element() {
+        node
+          .children
+          .iter()
+          .position(|child| parse_shadow_root_definition(child).is_some())
+      } else {
+        None
+      };
       let len = node.children.len();
       let children_ptr = node.children.as_mut_ptr();
       for idx in (0..len).rev() {
         let child_ptr = unsafe { children_ptr.add(idx) };
         let child = unsafe { &*child_ptr };
         if is_inert_html_template(child) {
+          continue;
+        }
+
+        if matches!(child.tag_name(), Some(tag) if tag.eq_ignore_ascii_case("template"))
+          && first_declarative_shadow_template != Some(idx)
+        {
           continue;
         }
 
