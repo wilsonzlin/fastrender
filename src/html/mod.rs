@@ -114,7 +114,8 @@ fn find_raw_text_element_end(bytes: &[u8], start: usize, tag: &'static [u8]) -> 
 /// This is used by best-effort HTML scanners (meta refresh / asset discovery) to ensure the inert
 /// template subtrees cannot influence behavior such as subresource prefetching or redirect
 /// inference.
-pub(crate) fn strip_template_contents(html: &str) -> Cow<'_, str> {
+#[doc(hidden)]
+pub fn strip_template_contents(html: &str) -> Cow<'_, str> {
   let bytes = html.as_bytes();
   let mut template_depth: usize = 0;
   let mut copy_from: usize = 0;

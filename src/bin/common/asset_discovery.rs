@@ -13,6 +13,9 @@ use regex::Regex;
 /// - `style="..."` attributes
 /// - `style='...'` attributes
 pub fn extract_inline_css_chunks(html: &str) -> Vec<String> {
+  let html = fastrender::html::strip_template_contents(html);
+  let html = html.as_ref();
+
   fn capture_group(regex: &Regex, input: &str) -> Vec<String> {
     regex
       .captures_iter(input)
@@ -44,6 +47,9 @@ pub fn extract_inline_css_chunks(html: &str) -> Vec<String> {
 ///
 /// URLs are resolved against `base_url` using [`resolve_href`].
 pub fn discover_html_image_urls(html: &str, base_url: &str) -> Vec<String> {
+  let html = fastrender::html::strip_template_contents(html);
+  let html = html.as_ref();
+
   let img_src = Regex::new("(?is)<img[^>]*\\ssrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
     .expect("img src regex");
   let img_srcset = Regex::new("(?is)<img[^>]*\\ssrcset\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
