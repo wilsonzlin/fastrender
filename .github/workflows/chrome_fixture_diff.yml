@@ -264,15 +264,15 @@ jobs:
           set -euo pipefail
 
           mismatch_count="$(python3 - <<'PY'
-import json
-from pathlib import Path
+          import json
+          from pathlib import Path
 
-delta = json.loads(Path("target/fixture_chrome_diff_ci/delta.json").read_text())
-mismatches = delta.get("config_mismatches")
-if not isinstance(mismatches, list):
-  mismatches = []
-print(len(mismatches))
-PY
+          delta = json.loads(Path("target/fixture_chrome_diff_ci/delta.json").read_text())
+          mismatches = delta.get("config_mismatches")
+          if not isinstance(mismatches, list):
+            mismatches = []
+          print(len(mismatches))
+          PY
           )"
 
           if [[ "${mismatch_count}" != "0" ]]; then
@@ -318,24 +318,24 @@ PY
 
           if [[ -f "${OUT_DIR}/report.json" ]]; then
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-import json
-from pathlib import Path
+          import json
+          from pathlib import Path
 
-report = json.loads(Path("target/fixture_chrome_diff_ci/report.json").read_text())
-totals = report.get("totals", {})
+          report = json.loads(Path("target/fixture_chrome_diff_ci/report.json").read_text())
+          totals = report.get("totals", {})
 
-def fmt(key):
-  value = totals.get(key)
-  return "?" if value is None else str(value)
+          def fmt(key):
+            value = totals.get(key)
+            return "?" if value is None else str(value)
 
-print("### Report totals")
-print()
-print(f"- Discovered: {fmt('discovered')}")
-print(f"- Processed: {fmt('processed')}")
-print(f"- Differences: {fmt('differences')}")
-print(f"- Missing: {fmt('missing')}")
-print(f"- Errors: {fmt('errors')}")
-PY
+          print("### Report totals")
+          print()
+          print(f"- Discovered: {fmt('discovered')}")
+          print(f"- Processed: {fmt('processed')}")
+          print(f"- Differences: {fmt('differences')}")
+          print(f"- Missing: {fmt('missing')}")
+          print(f"- Errors: {fmt('errors')}")
+          PY
           fi
 
           if [[ "${BASELINE_FOUND}" != "1" ]]; then
@@ -362,80 +362,84 @@ PY
 
           if [[ -f "${OUT_DIR}/delta.json" ]]; then
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-import json
-import os
-from pathlib import Path
+          import json
+          import os
+          from pathlib import Path
 
-delta = json.loads(Path("target/fixture_chrome_diff_ci/delta.json").read_text())
-totals = delta.get("totals", {})
-mismatches = delta.get("config_mismatches")
-if not isinstance(mismatches, list):
-  mismatches = []
-top_regressions = delta.get("top_regressions")
-top_improvements = delta.get("top_improvements")
-if not isinstance(top_regressions, list):
-  top_regressions = []
-if not isinstance(top_improvements, list):
-  top_improvements = []
+          delta = json.loads(Path("target/fixture_chrome_diff_ci/delta.json").read_text())
+          totals = delta.get("totals", {})
+          mismatches = delta.get("config_mismatches")
+          if not isinstance(mismatches, list):
+            mismatches = []
+          top_regressions = delta.get("top_regressions")
+          top_improvements = delta.get("top_improvements")
+          if not isinstance(top_regressions, list):
+            top_regressions = []
+          if not isinstance(top_improvements, list):
+            top_improvements = []
 
-def fmt(key: str) -> str:
-  value = totals.get(key)
-  return "?" if value is None else str(value)
+          def fmt(key: str) -> str:
+            value = totals.get(key)
+            return "?" if value is None else str(value)
 
-print("| Change | Count |")
-print("| --- | ---: |")
-print(f"| Improved | {fmt('improved')} |")
-print(f"| Regressed | {fmt('regressed')} |")
-print(f"| Unchanged | {fmt('unchanged')} |")
+          print("| Change | Count |")
+          print("| --- | ---: |")
+          print(f"| Improved | {fmt('improved')} |")
+          print(f"| Regressed | {fmt('regressed')} |")
+          print(f"| Unchanged | {fmt('unchanged')} |")
 
-if mismatches:
-  print()
-  print(f"Config mismatches vs baseline: {len(mismatches)} (see delta.html for details).")
+          if mismatches:
+            print()
+            print(
+              f"Config mismatches vs baseline: {len(mismatches)} (see delta.html for details)."
+            )
 
-def format_top(entries, label):
-  if not entries:
-    return
-  print()
-  print(f"**{label}**")
-  for entry in entries[:5]:
-    if not isinstance(entry, dict):
-      continue
-    name = entry.get("name")
-    diff_delta = entry.get("diff_percentage_delta")
-    perceptual_delta = entry.get("perceptual_distance_delta")
-    if not isinstance(name, str):
-      continue
-    try:
-      diff_delta = float(diff_delta)
-    except Exception:
-      diff_delta = None
-    try:
-      perceptual_delta = float(perceptual_delta)
-    except Exception:
-      perceptual_delta = None
-    if diff_delta is None and perceptual_delta is None:
-      print(f"- `{name}`")
-    elif perceptual_delta is None:
-      print(f"- `{name}`: {diff_delta:+.4f}%")
-    elif diff_delta is None:
-      print(f"- `{name}`: perceptual {perceptual_delta:+.4f}")
-    else:
-      print(f"- `{name}`: {diff_delta:+.4f}% (perceptual {perceptual_delta:+.4f})")
+          def format_top(entries, label):
+            if not entries:
+              return
+            print()
+            print(f"**{label}**")
+            for entry in entries[:5]:
+              if not isinstance(entry, dict):
+                continue
+              name = entry.get("name")
+              diff_delta = entry.get("diff_percentage_delta")
+              perceptual_delta = entry.get("perceptual_distance_delta")
+              if not isinstance(name, str):
+                continue
+              try:
+                diff_delta = float(diff_delta)
+              except Exception:
+                diff_delta = None
+              try:
+                perceptual_delta = float(perceptual_delta)
+              except Exception:
+                perceptual_delta = None
+              if diff_delta is None and perceptual_delta is None:
+                print(f"- `{name}`")
+              elif perceptual_delta is None:
+                print(f"- `{name}`: {diff_delta:+.4f}%")
+              elif diff_delta is None:
+                print(f"- `{name}`: perceptual {perceptual_delta:+.4f}")
+              else:
+                print(f"- `{name}`: {diff_delta:+.4f}% (perceptual {perceptual_delta:+.4f})")
 
-format_top(top_regressions, "Top regressions")
-format_top(top_improvements, "Top improvements")
+          format_top(top_regressions, "Top regressions")
+          format_top(top_improvements, "Top improvements")
 
-fail_on_regression = (os.getenv("FAIL_ON_REGRESSION") or "").lower() == "true"
-threshold = os.getenv("REGRESSION_THRESHOLD_PERCENT") or "0"
+          fail_on_regression = (os.getenv("FAIL_ON_REGRESSION") or "").lower() == "true"
+          threshold = os.getenv("REGRESSION_THRESHOLD_PERCENT") or "0"
 
-print()
-if not fail_on_regression:
-  print("Regression gate: disabled (set `fail_on_regression=true` on workflow_dispatch to enable)")
-elif mismatches:
-  print("Regression gate: skipped (baseline/new diff config mismatch)")
-else:
-  print(f"Regression gate: enabled (`--fail-on-regression`), threshold: {threshold}%")
-PY
+          print()
+          if not fail_on_regression:
+            print(
+              "Regression gate: disabled (set `fail_on_regression=true` on workflow_dispatch to enable)"
+            )
+          elif mismatches:
+            print("Regression gate: skipped (baseline/new diff config mismatch)")
+          else:
+            print(f"Regression gate: enabled (`--fail-on-regression`), threshold: {threshold}%")
+          PY
           else
             {
               if [[ "${FAIL_ON_REGRESSION}" == "true" ]]; then
