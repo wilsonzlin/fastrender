@@ -309,16 +309,19 @@ fn discover_fixtures(fixture_root: &Path) -> Result<Vec<Fixture>> {
     }
 
     let stem = entry.file_name().to_string_lossy().to_string();
-    fixtures.push(Fixture {
-      stem,
-      dir: entry.path(),
-    });
+    let dir = entry.path();
+    // The fixture root also contains shared support assets (e.g. `tests/pages/fixtures/assets`).
+    // Only treat directories containing an `index.html` as renderable fixtures.
+    if !dir.join("index.html").is_file() {
+      continue;
+    }
+    fixtures.push(Fixture { stem, dir });
   }
 
   fixtures.sort_by(|a, b| a.stem.cmp(&b.stem));
   if fixtures.is_empty() {
     bail!(
-      "no fixture directories found under {}",
+      "no fixtures found under {} (expected <fixture>/index.html)",
       fixture_root.display()
     );
   }

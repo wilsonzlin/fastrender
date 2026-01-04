@@ -22,6 +22,12 @@ fn write_fixture(root: &std::path::Path, stem: &str) {
   .expect("write index.html");
 }
 
+fn write_shared_assets(root: &std::path::Path) {
+  let styles_dir = root.join("assets").join("styles");
+  fs::create_dir_all(&styles_dir).expect("create shared assets dir");
+  fs::write(styles_dir.join("base.css"), "body { background: white; }").expect("write shared css");
+}
+
 fn write_stub_chrome(dir: &std::path::Path) -> PathBuf {
   let path = dir.join("chrome");
   fs::write(
@@ -73,6 +79,7 @@ fn chrome_baseline_fixtures_respects_sharding_and_writes_outputs() {
   for stem in ["a", "b", "c", "d"] {
     write_fixture(&fixture_root, stem);
   }
+  write_shared_assets(&fixture_root);
 
   let status = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .current_dir(&repo_root)
