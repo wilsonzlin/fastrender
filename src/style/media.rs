@@ -2883,9 +2883,13 @@ impl<'a> MediaQueryParser<'a> {
     self.advance();
     self.skip_whitespace();
 
-    // Look ahead to the closing ')' so we can (1) attempt level-4 range syntax without consuming
+    // Look ahead to the matching ')' so we can (1) attempt level-4 range syntax without consuming
     // input and (2) avoid re-scanning the same slice again when grabbing the value.
-    let feature_end = self.input[self.pos..].find(')').map(|idx| self.pos + idx);
+    //
+    // Note: Media feature values can include functions like `calc()` which contain their own
+    // parentheses, so we must find the matching close paren for this feature instead of the first
+    // ')' byte.
+    let feature_end = self.find_matching_close_paren();
     if let Some(feature_end) = feature_end {
       let inner = &self.input[self.pos..feature_end];
       let has_range_op = inner
@@ -2959,10 +2963,51 @@ impl<'a> MediaQueryParser<'a> {
 
     let mut tokens = Vec::new();
     let mut atom_start: Option<usize> = None;
+    let mut paren_depth: u32 = 0;
+    let mut bracket_depth: u32 = 0;
+    let mut brace_depth: u32 = 0;
+
     let mut chars = input.char_indices().peekable();
     while let Some((idx, c)) = chars.next() {
+      let nested = paren_depth > 0 || bracket_depth > 0 || brace_depth > 0;
       match c {
-        '<' | '>' => {
+        '(' => {
+          paren_depth = paren_depth.saturating_add(1);
+          if atom_start.is_none() {
+            atom_start = Some(idx);
+          }
+        }
+        ')' => {
+          paren_depth = paren_depth.saturating_sub(1);
+          if atom_start.is_none() {
+            atom_start = Some(idx);
+          }
+        }
+        '[' => {
+          bracket_depth = bracket_depth.saturating_add(1);
+          if atom_start.is_none() {
+            atom_start = Some(idx);
+          }
+        }
+        ']' => {
+          bracket_depth = bracket_depth.saturating_sub(1);
+          if atom_start.is_none() {
+            atom_start = Some(idx);
+          }
+        }
+        '{' => {
+          brace_depth = brace_depth.saturating_add(1);
+          if atom_start.is_none() {
+            atom_start = Some(idx);
+          }
+        }
+        '}' => {
+          brace_depth = brace_depth.saturating_sub(1);
+          if atom_start.is_none() {
+            atom_start = Some(idx);
+          }
+        }
+        '<' | '>' if !nested => {
           if let Some(start) = atom_start.take() {
             let atom = input[start..idx].trim();
             if !atom.is_empty() {
@@ -2983,7 +3028,7 @@ impl<'a> MediaQueryParser<'a> {
           };
           tokens.push(RangeToken::Op(op));
         }
-        '=' => {
+        '=' if !nested => {
           if let Some(start) = atom_start.take() {
             let atom = input[start..idx].trim();
             if !atom.is_empty() {
@@ -2992,7 +3037,7 @@ impl<'a> MediaQueryParser<'a> {
           }
           tokens.push(RangeToken::Op(ComparisonOp::Equal));
         }
-        other if other.is_whitespace() => {
+        other if other.is_whitespace() && !nested => {
           if let Some(start) = atom_start.take() {
             let atom = input[start..idx].trim();
             if !atom.is_empty() {
@@ -3177,6 +3222,23 @@ impl<'a> MediaQueryParser<'a> {
     let ident = self.peek_ident()?;
     self.pos += ident.len();
     Some(ident)
+  }
+
+  fn find_matching_close_paren(&self) -> Option<usize> {
+    let mut depth: u32 = 0;
+    for (offset, ch) in self.input[self.pos..].char_indices() {
+      match ch {
+        '(' => depth = depth.saturating_add(1),
+        ')' => {
+          if depth == 0 {
+            return Some(self.pos + offset);
+          }
+          depth = depth.saturating_sub(1);
+        }
+        _ => {}
+      }
+    }
+    None
   }
 }
 
@@ -3400,51 +3462,25 @@ fn ascii_lowercase_cow(s: &str) -> Cow<'_, str> {
 
 /// Parse a CSS length value
 fn parse_length(s: &str) -> Option<Length> {
-  use crate::style::values::LengthUnit;
+  let length = crate::css::properties::parse_length(s)?;
 
-  let s = s.trim();
-
-  // Handle zero without unit
-  if s == "0" {
-    return Some(Length::px(0.0));
+  // MQ4 size features use `<length>` values, which must not be percentages.
+  if length.unit.is_percentage() {
+    return None;
   }
-
-  // Try various units (longer suffixes first to avoid matching substrings)
-  let units: &[(&str, fn(f32) -> Length)] = &[
-    ("rem", |v| Length::rem(v)),
-    ("vmin", |v| Length::new(v, LengthUnit::Vmin)),
-    ("vmax", |v| Length::new(v, LengthUnit::Vmax)),
-    ("dvmin", |v| Length::new(v, LengthUnit::Dvmin)),
-    ("dvmax", |v| Length::new(v, LengthUnit::Dvmax)),
-    ("px", |v| Length::px(v)),
-    ("em", |v| Length::em(v)),
-    ("%", |v| Length::percent(v)),
-    ("vw", |v| Length::new(v, LengthUnit::Vw)),
-    ("vh", |v| Length::new(v, LengthUnit::Vh)),
-    ("dvw", |v| Length::new(v, LengthUnit::Dvw)),
-    ("dvh", |v| Length::new(v, LengthUnit::Dvh)),
-    ("pt", |v| Length::pt(v)),
-    ("cm", |v| Length::cm(v)),
-    ("mm", |v| Length::mm(v)),
-    ("in", |v| Length::inches(v)),
-    ("pc", |v| Length::pc(v)),
-    ("ex", |v| Length::ex(v)),
-    ("ch", |v| Length::ch(v)),
-  ];
-
-  for (suffix, constructor) in units {
-    if let Some(value_str) = s.strip_suffix(suffix) {
-      if let Ok(value) = value_str.trim().parse::<f32>() {
-        let length = constructor(value);
-        if !length.value.is_finite() || length.value < 0.0 || length.unit.is_percentage() {
-          return None;
-        }
-        return Some(length);
-      }
+  if let Some(calc) = length.calc {
+    if calc.has_percentage() {
+      return None;
     }
   }
 
-  None
+  // Negative `<length>` values are invalid in media queries (even though they're accepted in
+  // general CSS property contexts).
+  if !length.value.is_finite() || length.value < 0.0 {
+    return None;
+  }
+
+  Some(length)
 }
 
 #[cfg(test)]
@@ -3832,6 +3868,49 @@ mod tests {
     );
   }
 
+  #[test]
+  fn media_query_parses_calc_length_values() {
+    MediaQuery::parse("(max-width: calc(768px - 1px))").expect("parse calc() length");
+  }
+
+  #[test]
+  fn media_query_parses_range_syntax_calc_with_whitespace() {
+    let query = MediaQuery::parse(
+      "(width >= calc(1rem * 2 + (14rem + 2rem) * 2 + 31rem))",
+    )
+    .expect("parse range syntax with calc");
+    assert!(
+      matches!(
+        query.features.as_slice(),
+        [MediaFeature::Range {
+          feature: RangeFeature::Width,
+          op: ComparisonOp::GreaterThanEqual,
+          value: RangeValue::Length(_),
+        }]
+      ),
+      "expected a single width range feature, got {query:?}"
+    );
+  }
+
+  #[test]
+  fn media_query_parses_double_sided_range_with_calc_atoms() {
+    let query = MediaQuery::parse(
+      "(calc(400px + 1px) <= width <= calc(800px - 1px))",
+    )
+    .expect("parse double-sided range with calc atoms");
+    assert_eq!(query.features.len(), 2);
+  }
+
+  #[test]
+  fn media_query_rejects_percentage_lengths() {
+    assert!(MediaQuery::parse("(min-width: 10%)").is_err());
+  }
+
+  #[test]
+  fn media_query_rejects_calc_with_percentage_terms() {
+    assert!(MediaQuery::parse("(min-width: calc(10% + 1px))").is_err());
+  }
+
   // ============================================================================
   // MediaContext Evaluation Tests
   // ============================================================================
@@ -3856,6 +3935,20 @@ mod tests {
 
     let query = MediaQuery::parse("(max-width: 800px)").unwrap();
     assert!(!ctx.evaluate(&query));
+  }
+
+  #[test]
+  fn evaluate_max_width_calc_length() {
+    let query = MediaQuery::parse("(max-width: calc(768px - 1px))").unwrap();
+    assert!(MediaContext::screen(767.0, 100.0).evaluate(&query));
+    assert!(!MediaContext::screen(768.0, 100.0).evaluate(&query));
+  }
+
+  #[test]
+  fn evaluate_range_syntax_calc_length() {
+    let query = MediaQuery::parse("(width >= calc(1rem * 2))").unwrap();
+    assert!(MediaContext::screen(32.0, 100.0).evaluate(&query));
+    assert!(!MediaContext::screen(31.0, 100.0).evaluate(&query));
   }
 
   #[test]
