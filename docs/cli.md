@@ -203,13 +203,14 @@ Notes:
 - Offline policy: fixtures are rendered **without network access**; only `file://` and `data:` subresources are allowed.
 - Fixture completeness: any subresource fetch failures (including blocked `http(s)://` URLs) are treated as fixture failures so offline captures stay self-contained.
 - Fonts: uses bundled fonts (`FontConfig::bundled_only`) so outputs are stable across machines.
-- Output: by default writes `<fixture>.png` into `target/fixture_renders/` (override with `--out-dir`).
-- Optional diagnostics: `--diagnostics-json` writes `<fixture>.diagnostics.json` next to each PNG (uses `DiagnosticsLevel::Basic`).
+- Output: by default writes `<fixture>.png` into `target/fixture_renders/` (override with `--out-dir`), plus `<fixture>.log` and `_summary.log`.
+- Optional snapshot: `--write-snapshot` writes `<out-dir>/<fixture>/snapshot.json` and `<out-dir>/<fixture>/diagnostics.json` (for later `diff_snapshots`).
 - Core flags:
-  - Selection: `--only <csv>` and/or positional fixture names.
-  - Paths: `--fixtures-root <dir>`, `--out-dir <dir>`.
+  - Selection: `--fixtures <csv>` (comma-separated stems).
+  - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`.
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--media {screen|print}`, `--timeout <secs>`.
-  - Parallelism: `--jobs/-j <n>`.
+  - Parallelism: `--jobs/-j <n>`, `--shard <index>/<total>`.
+  - Fonts: `--font-dir <dir>` (repeatable).
 
 ## `cargo xtask chrome-baseline-fixtures`
 
@@ -219,7 +220,7 @@ Notes:
   - Defaults match the fixture runner viewport/DPR (1200x800 @ 1.0) unless overridden.
   - JavaScript is disabled by default to match FastRender’s “no JS” model.
   - Pass `--chrome /path/to/chrome` if auto-detection fails.
-  - Output defaults to `target/chrome_fixture_renders/<fixture>.png` plus `*.chrome.log` alongside.
+  - Output defaults to `target/chrome_fixtures/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
 
 ## `cargo xtask fixture-chrome-diff`
 
@@ -232,7 +233,7 @@ Notes:
   - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`)
   - `<out>/fastrender/<fixture>.png` (rendered by `render_fixtures`)
   - `<out>/report.html`, `<out>/report.json`
-  - Note: `fixture-chrome-diff` does not currently enable `render_fixtures --diagnostics-json`. If you need per-fixture diagnostics, run `render_fixtures --diagnostics-json` separately.
+  - Note: `fixture-chrome-diff` does not currently enable `render_fixtures --write-snapshot`. If you need per-fixture snapshots/diagnostics, run `render_fixtures --write-snapshot` separately.
 
 ## `fetch_and_render`
 
