@@ -297,7 +297,7 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
   - JavaScript is disabled by default to match FastRender’s “no JS” model (enforced via injected CSP).
   - Prefers Chrome's `--headless=new` mode but automatically retries with legacy `--headless` on older Chrome versions (the chosen mode is recorded in `<fixture>.json` metadata).
   - Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
-  - Output defaults to `target/chrome_fixture_renders/<fixture>.png` plus `<fixture>.chrome.log` and `<fixture>.json` metadata alongside.
+  - Output defaults to `target/chrome_fixture_renders/<fixture>.png` plus `<fixture>.chrome.log` (includes the Chrome command line) and `<fixture>.json` metadata alongside.
 - Core flags:
   - Selection: `--fixtures <csv>` (alias `--only`) or positional fixture names.
   - Paths: `--fixture-dir <dir>` (aliases `--fixtures-dir`, `--fixtures-root`), `--out-dir <dir>`.
