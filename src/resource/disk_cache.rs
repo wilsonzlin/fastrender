@@ -3704,6 +3704,33 @@ mod tests {
       second.bytes, b"cached",
       "expected cached bytes to be served instead of 403 body"
     );
+    assert_eq!(
+      second.status,
+      Some(200),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.etag.as_deref(),
+      Some("etag1"),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.last_modified.as_deref(),
+      Some("lm1"),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.cache_policy.as_ref().and_then(|policy| policy.max_age),
+      Some(3600),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert!(
+      !second
+        .cache_policy
+        .as_ref()
+        .is_some_and(|policy| policy.no_store),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
 
     let calls = fetcher.calls();
     assert_eq!(
@@ -3862,6 +3889,11 @@ mod tests {
 
     let second = disk.fetch(start_url).expect("fallback fetch");
     assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      second.final_url.as_deref(),
+      Some(canonical_url),
+      "fallback should not expose HTTP error response final_url"
+    );
 
     let alias_bytes = fs::read(&alias_path).expect("alias should remain after fallback");
     let alias: StoredAlias = serde_json::from_slice(&alias_bytes).expect("valid alias json");
@@ -4007,6 +4039,11 @@ mod tests {
 
     let second = disk.fetch_with_request(req).expect("fallback fetch");
     assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      second.final_url.as_deref(),
+      Some(canonical_url),
+      "fallback should not expose HTTP error response final_url"
+    );
 
     let alias_bytes = fs::read(&alias_path).expect("alias should remain after fallback");
     let alias: StoredAlias = serde_json::from_slice(&alias_bytes).expect("valid alias json");

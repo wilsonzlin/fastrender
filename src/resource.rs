@@ -12998,6 +12998,33 @@ mod tests {
       second.bytes, b"cached",
       "expected cached bytes to be served instead of 403 body"
     );
+    assert_eq!(
+      second.status,
+      Some(200),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.etag.as_deref(),
+      Some("etag1"),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.last_modified.as_deref(),
+      Some("lm1"),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.cache_policy.as_ref().and_then(|policy| policy.max_age),
+      Some(3600),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert!(
+      !second
+        .cache_policy
+        .as_ref()
+        .is_some_and(|policy| policy.no_store),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
 
     let cached = cache
       .cached_entry(&CacheKey::new(FetchContextKind::Other, url.to_string()))
@@ -13149,6 +13176,11 @@ mod tests {
 
     let second = cache.fetch(start_url).expect("fallback fetch");
     assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      second.final_url.as_deref(),
+      Some(canonical_url),
+      "fallback should not expose HTTP error response final_url"
+    );
 
     let third = cache
       .fetch(error_final_url)
@@ -13293,6 +13325,11 @@ mod tests {
 
     let second = cache.fetch_with_request(req).expect("fallback fetch");
     assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      second.final_url.as_deref(),
+      Some(canonical_url),
+      "fallback should not expose HTTP error response final_url"
+    );
     {
       let state = cache.state.lock().unwrap();
       assert_eq!(
@@ -13524,6 +13561,33 @@ mod tests {
 
     let second = cache.fetch_with_request(req).expect("fallback fetch");
     assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      second.status,
+      Some(200),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.etag.as_deref(),
+      Some("etag1"),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.last_modified.as_deref(),
+      Some("lm1"),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert_eq!(
+      second.cache_policy.as_ref().and_then(|policy| policy.max_age),
+      Some(3600),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
+    assert!(
+      !second
+        .cache_policy
+        .as_ref()
+        .is_some_and(|policy| policy.no_store),
+      "fallback should return cached status/metadata, not the HTTP error response"
+    );
 
     let cached = cache
       .cached_entry(&CacheKey::new(
