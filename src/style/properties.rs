@@ -1296,6 +1296,8 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
   let mut parts = Vec::new();
   let mut current = String::new();
   let mut depth = 0i32;
+  let mut bracket = 0i32;
+  let mut brace = 0i32;
   let mut in_string: Option<char> = None;
   let mut chars = raw.chars();
   while let Some(ch) = chars.next() {
@@ -1330,11 +1332,27 @@ fn split_top_level_commas(raw: &str) -> Vec<String> {
         depth = (depth - 1).max(0);
         current.push(ch);
       }
+      '[' => {
+        bracket += 1;
+        current.push(ch);
+      }
+      ']' => {
+        bracket = (bracket - 1).max(0);
+        current.push(ch);
+      }
+      '{' => {
+        brace += 1;
+        current.push(ch);
+      }
+      '}' => {
+        brace = (brace - 1).max(0);
+        current.push(ch);
+      }
       '"' | '\'' => {
         in_string = Some(ch);
         current.push(ch);
       }
-      ',' if depth == 0 => {
+      ',' if depth == 0 && bracket == 0 && brace == 0 => {
         if !current.trim().is_empty() {
           parts.push(current.trim().to_string());
         }
@@ -1353,6 +1371,8 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
   let mut parts = Vec::new();
   let mut current = String::new();
   let mut depth = 0i32;
+  let mut bracket = 0i32;
+  let mut brace = 0i32;
   let mut in_string: Option<char> = None;
   let mut chars = raw.chars();
 
@@ -1388,11 +1408,27 @@ fn split_top_level_whitespace(raw: &str) -> Vec<String> {
         depth = (depth - 1).max(0);
         current.push(ch);
       }
+      '[' => {
+        bracket += 1;
+        current.push(ch);
+      }
+      ']' => {
+        bracket = (bracket - 1).max(0);
+        current.push(ch);
+      }
+      '{' => {
+        brace += 1;
+        current.push(ch);
+      }
+      '}' => {
+        brace = (brace - 1).max(0);
+        current.push(ch);
+      }
       '"' | '\'' => {
         in_string = Some(ch);
         current.push(ch);
       }
-      ch if ch.is_ascii_whitespace() && depth == 0 => {
+      ch if ch.is_ascii_whitespace() && depth == 0 && bracket == 0 && brace == 0 => {
         if !current.trim().is_empty() {
           parts.push(current.trim().to_string());
         }
