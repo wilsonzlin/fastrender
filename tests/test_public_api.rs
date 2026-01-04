@@ -509,6 +509,31 @@ fn test_render_fetched_html_respects_runtime_toggle_overrides() {
 }
 
 #[test]
+fn test_render_html_with_diagnostics_respects_runtime_toggle_overrides() {
+  let mut renderer = deterministic_renderer();
+
+  // Enable diagnostics via the runtime toggles override (instead of mutating process env vars).
+  let mut toggles = HashMap::new();
+  toggles.insert("FASTR_DIAGNOSTICS_LEVEL".to_string(), "basic".to_string());
+
+  let result = renderer
+    .render_html_with_diagnostics(
+      "<div>OK</div>",
+      RenderOptions::new()
+        .with_viewport(32, 32)
+        .with_runtime_toggles(RuntimeToggles::from_map(toggles)),
+    )
+    .expect("render");
+
+  assert_eq!(result.pixmap.width(), 32);
+  assert_eq!(result.pixmap.height(), 32);
+  assert!(
+    result.diagnostics.stats.is_some(),
+    "expected stats when FASTR_DIAGNOSTICS_LEVEL is set via RuntimeToggles"
+  );
+}
+
+#[test]
 fn test_layout_document() {
   let mut renderer = deterministic_renderer();
   let dom = renderer.parse_html("<div>Content</div>").unwrap();

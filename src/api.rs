@@ -2403,13 +2403,14 @@ pub struct RenderStats {
 }
 
 fn diagnostics_level_from_env() -> DiagnosticsLevel {
-  match std::env::var("FASTR_DIAGNOSTICS_LEVEL")
-    .or_else(|_| std::env::var("FASTR_DIAGNOSTICS"))
-    .map(|v| v.to_ascii_lowercase())
-  {
-    Ok(v) if v == "verbose" || v == "2" => DiagnosticsLevel::Verbose,
-    Ok(v) if v == "basic" || v == "1" => DiagnosticsLevel::Basic,
-    Ok(v) if v == "none" || v == "0" => DiagnosticsLevel::None,
+  let toggles = runtime::runtime_toggles();
+  let value = toggles
+    .get("FASTR_DIAGNOSTICS_LEVEL")
+    .or_else(|| toggles.get("FASTR_DIAGNOSTICS"));
+  match value.map(|v| v.to_ascii_lowercase()) {
+    Some(v) if v == "verbose" || v == "2" => DiagnosticsLevel::Verbose,
+    Some(v) if v == "basic" || v == "1" => DiagnosticsLevel::Basic,
+    Some(v) if v == "none" || v == "0" => DiagnosticsLevel::None,
     _ => DiagnosticsLevel::None,
   }
 }
@@ -4299,88 +4300,92 @@ impl FastRender {
     html: &str,
     mut options: RenderOptions,
   ) -> Result<RenderResult> {
-    if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
-      let env_level = diagnostics_level_from_env();
-      if !matches!(env_level, DiagnosticsLevel::None) {
-        options.diagnostics_level = env_level;
-      }
-    }
-    let diagnostics_level = options.diagnostics_level;
-    let diagnostics_enabled = !matches!(diagnostics_level, DiagnosticsLevel::None);
-    let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
-      Some(crate::style::cascade::cascade_profile_enabled())
-    } else {
-      None
-    };
-    // Acquire the session lock before enabling any diagnostics modules. These diagnostics counters
-    // are global (process-wide) and will otherwise clobber each other if multiple renders begin
-    // collecting at the same time.
-    let _diagnostics_session = diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
-    let mut stats_recorder =
-      diagnostics_enabled.then(|| RenderStatsRecorder::new(diagnostics_level));
-    if diagnostics_enabled {
-      crate::resource::enable_resource_cache_diagnostics();
-      crate::image_loader::enable_image_cache_diagnostics();
-      crate::paint::painter::enable_paint_diagnostics();
-      crate::text::pipeline::enable_text_diagnostics();
-      crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
-      crate::dom::enable_dom_parse_diagnostics();
-      intrinsic_cache_reset_counters();
-      crate::layout::formatting_context::layout_cache_reset_counters();
-      if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
-        crate::style::cascade::set_cascade_profile_enabled(true);
-        crate::style::cascade::reset_cascade_profile();
-      }
-    }
-
-    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
-    let previous_sink = self.diagnostics.take();
-    self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
-    let outputs =
-      self.render_html_with_options_internal(html, options, None, stats_recorder.as_mut());
-    self.set_diagnostics_sink(previous_sink);
-    let outputs = match outputs {
-      Ok(outputs) => outputs,
-      Err(err) => {
-        if stats_recorder.is_some() {
-          let _ = crate::resource::take_resource_cache_diagnostics();
-          let _ = crate::image_loader::take_image_cache_diagnostics();
-          let _ = crate::paint::painter::take_paint_diagnostics();
-          let _ = crate::text::pipeline::take_text_diagnostics();
-          let _ =
-            crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
-          let _ = crate::dom::take_dom_parse_diagnostics();
+    let toggles = self.resolve_runtime_toggles(&options);
+    let _toggles_guard = RuntimeTogglesSwap::new(&mut self.runtime_toggles, toggles.clone());
+    runtime::with_runtime_toggles(toggles, || {
+      if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
+        let env_level = diagnostics_level_from_env();
+        if !matches!(env_level, DiagnosticsLevel::None) {
+          options.diagnostics_level = env_level;
         }
-        if let Some(previous) = restore_cascade_profile {
-          crate::style::cascade::set_cascade_profile_enabled(previous);
+      }
+      let diagnostics_level = options.diagnostics_level;
+      let diagnostics_enabled = !matches!(diagnostics_level, DiagnosticsLevel::None);
+      let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+        Some(crate::style::cascade::cascade_profile_enabled())
+      } else {
+        None
+      };
+      // Acquire the session lock before enabling any diagnostics modules. These diagnostics counters
+      // are global (process-wide) and will otherwise clobber each other if multiple renders begin
+      // collecting at the same time.
+      let _diagnostics_session = diagnostics_enabled.then(DiagnosticsSessionGuard::acquire);
+      let mut stats_recorder =
+        diagnostics_enabled.then(|| RenderStatsRecorder::new(diagnostics_level));
+      if diagnostics_enabled {
+        crate::resource::enable_resource_cache_diagnostics();
+        crate::image_loader::enable_image_cache_diagnostics();
+        crate::paint::painter::enable_paint_diagnostics();
+        crate::text::pipeline::enable_text_diagnostics();
+        crate::layout::contexts::inline::line_builder::enable_inline_reshape_cache_diagnostics();
+        crate::dom::enable_dom_parse_diagnostics();
+        intrinsic_cache_reset_counters();
+        crate::layout::formatting_context::layout_cache_reset_counters();
+        if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+          crate::style::cascade::set_cascade_profile_enabled(true);
+          crate::style::cascade::reset_cascade_profile();
         }
-        return Err(err);
       }
-    };
 
-    if let Some(recorder) = stats_recorder {
-      let mut stats = recorder.finish();
-      merge_dom_parse_diagnostics(&mut stats);
-      merge_text_diagnostics(&mut stats);
-      merge_inline_reshape_cache_diagnostics(&mut stats);
-      merge_image_cache_diagnostics(&mut stats);
-      merge_resource_cache_diagnostics(&mut stats);
-      if let Ok(mut guard) = diagnostics.lock() {
-        guard.stats = Some(stats);
+      let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+      let previous_sink = self.diagnostics.take();
+      self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+      let outputs =
+        self.render_html_with_options_internal(html, options, None, stats_recorder.as_mut());
+      self.set_diagnostics_sink(previous_sink);
+      let outputs = match outputs {
+        Ok(outputs) => outputs,
+        Err(err) => {
+          if stats_recorder.is_some() {
+            let _ = crate::resource::take_resource_cache_diagnostics();
+            let _ = crate::image_loader::take_image_cache_diagnostics();
+            let _ = crate::paint::painter::take_paint_diagnostics();
+            let _ = crate::text::pipeline::take_text_diagnostics();
+            let _ =
+              crate::layout::contexts::inline::line_builder::take_inline_reshape_cache_diagnostics();
+            let _ = crate::dom::take_dom_parse_diagnostics();
+          }
+          if let Some(previous) = restore_cascade_profile {
+            crate::style::cascade::set_cascade_profile_enabled(previous);
+          }
+          return Err(err);
+        }
+      };
+
+      if let Some(recorder) = stats_recorder {
+        let mut stats = recorder.finish();
+        merge_dom_parse_diagnostics(&mut stats);
+        merge_text_diagnostics(&mut stats);
+        merge_inline_reshape_cache_diagnostics(&mut stats);
+        merge_image_cache_diagnostics(&mut stats);
+        merge_resource_cache_diagnostics(&mut stats);
+        if let Ok(mut guard) = diagnostics.lock() {
+          guard.stats = Some(stats);
+        }
       }
-    }
-    if let Some(previous) = restore_cascade_profile {
-      crate::style::cascade::set_cascade_profile_enabled(previous);
-    }
-    let diagnostics = diagnostics
-      .lock()
-      .unwrap_or_else(|poisoned| poisoned.into_inner())
-      .clone();
+      if let Some(previous) = restore_cascade_profile {
+        crate::style::cascade::set_cascade_profile_enabled(previous);
+      }
+      let diagnostics = diagnostics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
 
-    Ok(RenderResult {
-      pixmap: outputs.pixmap,
-      accessibility: outputs.accessibility,
-      diagnostics,
+      Ok(RenderResult {
+        pixmap: outputs.pixmap,
+        accessibility: outputs.accessibility,
+        diagnostics,
+      })
     })
   }
 
