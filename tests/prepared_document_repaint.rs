@@ -72,7 +72,15 @@ fn repaint_with_different_animation_times_changes_pixels() -> Result<()> {
   let html = r#"
     <style>
       body { margin: 0; }
-      .box { width: 100px; height: 100px; animation-name: fade; }
+      /* Note: `animation-duration` defaults to 0s, so we must set a non-zero duration
+         to ensure time-based sampling affects the painted output. */
+      .box {
+        width: 100px;
+        height: 100px;
+        animation-name: fade;
+        animation-duration: 1000ms;
+        animation-timing-function: linear;
+      }
       @keyframes fade {
         from { background-color: rgb(255, 0, 0); }
         to { background-color: rgb(0, 255, 0); }
@@ -89,6 +97,54 @@ fn repaint_with_different_animation_times_changes_pixels() -> Result<()> {
 
   assert_ne!(pixel(&early, 50, 50), pixel(&later, 50, 50));
   assert_eq!(early.data(), repeat.data());
+  Ok(())
+}
+
+#[test]
+fn repaint_with_animation_delay_and_fill_mode_changes_pixels() -> Result<()> {
+  let mut renderer = FastRender::new()?;
+  let html = r#"
+    <style>
+      body { margin: 0; }
+      /* Note: `animation-duration` defaults to 0s; set a non-zero duration so that
+         the animation timeline meaningfully affects sampled pixels. */
+      .box {
+        width: 100px;
+        height: 100px;
+        background-color: rgb(0, 0, 255);
+        animation-name: fade;
+        animation-duration: 1000ms;
+        animation-delay: 500ms;
+        animation-fill-mode: forwards;
+        animation-timing-function: linear;
+      }
+      @keyframes fade {
+        from { background-color: rgb(255, 0, 0); }
+        to { background-color: rgb(0, 255, 0); }
+      }
+    </style>
+    <div class="box"></div>
+  "#;
+  let prepared = renderer.prepare_html(html, RenderOptions::new().with_viewport(100, 100))?;
+
+  // With a positive delay and no backwards fill-mode, the animation has no effect
+  // before the delay elapses.
+  let before_delay =
+    prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(0.0))?;
+  // With `fill-mode: forwards`, once the active duration elapses the end keyframe
+  // should keep applying even after the animation ends.
+  let after_end =
+    prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(1600.0))?;
+  let before_delay_repeat =
+    prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(0.0))?;
+  let after_end_repeat =
+    prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(1600.0))?;
+
+  assert_eq!(pixel(&before_delay, 50, 50), (0, 0, 255, 255));
+  assert_eq!(pixel(&after_end, 50, 50), (0, 255, 0, 255));
+  assert_ne!(pixel(&before_delay, 50, 50), pixel(&after_end, 50, 50));
+  assert_eq!(before_delay.data(), before_delay_repeat.data());
+  assert_eq!(after_end.data(), after_end_repeat.data());
   Ok(())
 }
 
