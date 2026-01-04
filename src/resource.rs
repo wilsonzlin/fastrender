@@ -291,7 +291,7 @@ impl ResourceAccessPolicy {
 
     Err(PolicyError {
       reason: format!(
-        "Blocked cross-origin resource: document origin {} does not match {} ({})",
+        "Blocked cross-origin subresource: document origin {} does not match {} ({})",
         origin, target_origin, effective_url
       ),
     })
