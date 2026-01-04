@@ -308,6 +308,7 @@ fn diff_renders_can_ignore_alpha_differences() {
     &fs::read_to_string(tmp.path().join("diff_report.json")).expect("read json"),
   )
   .unwrap();
+  assert_eq!(report["ignore_alpha"], true);
   assert_eq!(report["totals"]["differences"].as_u64(), Some(0));
   assert_eq!(report["results"][0]["status"], "match");
 }
