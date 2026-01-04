@@ -139,3 +139,25 @@ fn composed_snapshot_respects_nested_shadow_root_boundaries() {
     "inner slot should use fallback when it has no light DOM assigned"
   );
 }
+
+#[test]
+fn composed_snapshot_skips_inert_template_contents() {
+  let html = r#"<div id="root"><template id="t"><span id="inert">X</span></template><span id="other">Y</span></div>"#;
+  let dom = dom::parse_html(html).expect("parse html");
+  let snapshot = dom::composed_dom_snapshot(&dom).expect("compose snapshot");
+
+  let template = find_by_id(&snapshot, "t").expect("template element should remain in tree");
+  assert!(
+    find_by_id(&snapshot, "inert").is_none(),
+    "template contents should be skipped in composed snapshots"
+  );
+  assert_eq!(
+    template.children.len(),
+    0,
+    "template element should have no composed children"
+  );
+  assert!(
+    find_by_id(&snapshot, "other").is_some(),
+    "non-template siblings should still be traversed"
+  );
+}
