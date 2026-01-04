@@ -60,7 +60,7 @@ immediate cleanup when the process is no longer alive).
 
 Fetches blocked by policy (disallowed scheme/host, over budget, etc.) are recorded in `RenderDiagnostics.fetch_errors` when rendering URLs.
 
-`FastRenderConfig` also carries a `ResourceAccessPolicy` for subresource access. By default it mirrors browser defaults (block `file://` from HTTP(S) documents, allow cross-origin loads). Set `with_block_mixed_content(true)` to forbid HTTP under HTTPS; `with_same_origin_subresources(true)` to reject cross-origin CSS/images/fonts when the document origin is known; and `with_allowed_subresource_origins(...)` to permit an explicit allowlist alongside the document origin.
+`FastRenderConfig` also carries a `ResourceAccessPolicy` for subresource access. By default it mirrors browser defaults (block `file://` from HTTP(S) documents, allow cross-origin loads). Set `with_block_mixed_content(true)` to forbid HTTP under HTTPS; `with_same_origin_subresources(true)` to reject cross-origin CSS/images/fonts when the document origin is known (this does not block cross-origin iframe/embed document navigation); and `with_allowed_subresource_origins(...)` to permit an explicit allowlist alongside the document origin.
 
 ## Per-request render options
 
