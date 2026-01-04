@@ -6049,6 +6049,14 @@ impl FastRender {
           })
       };
 
+    fn node_is_foreign_element(node: &DomNode) -> bool {
+      node.is_element()
+        && matches!(
+          node.namespace(),
+          Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
+        )
+    }
+
     fn find_head(node: &DomNode, in_foreign_namespace: bool) -> Option<&DomNode> {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
@@ -6080,7 +6088,11 @@ impl FastRender {
       None
     }
 
-    fn find_first_canonical_href(node: &DomNode, in_foreign_namespace: bool) -> Option<String> {
+    fn find_first_canonical_href(
+      node: &DomNode,
+      in_foreign_namespace: bool,
+      prev_sibling_foreign: bool,
+    ) -> Option<String> {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
@@ -6093,6 +6105,7 @@ impl FastRender {
           Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
         );
       if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+        && !prev_sibling_foreign
         && !in_foreign_namespace
         && matches!(
           node.namespace(),
@@ -6113,15 +6126,23 @@ impl FastRender {
           }
         }
       }
-      for child in node.traversal_children() {
-        if let Some(found) = find_first_canonical_href(child, next_in_foreign_namespace) {
+      let children = node.traversal_children();
+      for (idx, child) in children.iter().enumerate() {
+        let prev_foreign = idx > 0 && node_is_foreign_element(&children[idx - 1]);
+        if let Some(found) =
+          find_first_canonical_href(child, next_in_foreign_namespace, prev_foreign)
+        {
           return Some(found);
         }
       }
       None
     }
 
-    fn find_first_og_url(node: &DomNode, in_foreign_namespace: bool) -> Option<String> {
+    fn find_first_og_url(
+      node: &DomNode,
+      in_foreign_namespace: bool,
+      prev_sibling_foreign: bool,
+    ) -> Option<String> {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
@@ -6134,6 +6155,7 @@ impl FastRender {
           Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
         );
       if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+        && !prev_sibling_foreign
         && !in_foreign_namespace
         && matches!(
           node.namespace(),
@@ -6152,8 +6174,10 @@ impl FastRender {
           }
         }
       }
-      for child in node.traversal_children() {
-        if let Some(found) = find_first_og_url(child, next_in_foreign_namespace) {
+      let children = node.traversal_children();
+      for (idx, child) in children.iter().enumerate() {
+        let prev_foreign = idx > 0 && node_is_foreign_element(&children[idx - 1]);
+        if let Some(found) = find_first_og_url(child, next_in_foreign_namespace, prev_foreign) {
           return Some(found);
         }
       }
@@ -6187,15 +6211,15 @@ impl FastRender {
         let head = find_head(dom, false);
         let inferred_base = infer_http_base_from_file_url(doc_url);
         let canonical = head
-          .and_then(|head| find_first_canonical_href(head, false))
-          .or_else(|| find_first_canonical_href(dom, false))
+          .and_then(|head| find_first_canonical_href(head, false, false))
+          .or_else(|| find_first_canonical_href(dom, false, false))
           .and_then(|href| resolve_http_hint(doc_url, inferred_base.as_deref(), &href));
         if canonical.is_some() {
           canonical
         } else {
           head
-            .and_then(|head| find_first_og_url(head, false))
-            .or_else(|| find_first_og_url(dom, false))
+            .and_then(|head| find_first_og_url(head, false, false))
+            .or_else(|| find_first_og_url(dom, false, false))
             .and_then(|content| resolve_http_hint(doc_url, inferred_base.as_deref(), &content))
             .or_else(|| inferred_base)
         }
@@ -15375,6 +15399,53 @@ mod tests {
       </head><body></body></html>"#;
     let document_url = "file:///tmp/cache/good.example.html";
     let stylesheet_url = "https://good.example/assets/style.css";
+
+    let fetcher = Arc::new(
+      RecordingRequestFetcher::default().with_entry(
+        stylesheet_url,
+        "body { color: rgb(1, 2, 3); }",
+        "text/css",
+      ),
+    );
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "1".to_string(),
+    )]));
+    let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+    let mut renderer = FastRender::with_config_and_fetcher(
+      config,
+      Some(fetcher.clone() as Arc<dyn ResourceFetcher>),
+    )
+    .unwrap();
+
+    renderer
+      .render_html_with_stylesheets(
+        html,
+        document_url,
+        RenderOptions::new().with_viewport(64, 64),
+      )
+      .unwrap();
+
+    let requests = fetcher.requests();
+    let stylesheet_request = requests
+      .iter()
+      .find(|request| request.destination == FetchDestination::Style)
+      .expect("stylesheet request");
+    assert_eq!(stylesheet_request.url, stylesheet_url);
+    assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+  }
+
+  #[test]
+  fn file_document_ignores_og_url_hoisted_from_svg_in_head() {
+    let html = r#"<!doctype html><html><head>
+        <svg>
+          <meta property="og:url" content="https://bad.example/poison/"></meta>
+        </svg>
+        <meta property="og:url" content="https://good.example/app/">
+        <link rel="stylesheet" href="style.css">
+      </head><body></body></html>"#;
+    let document_url = "file:///tmp/cache/good.example.html";
+    let stylesheet_url = "https://good.example/app/style.css";
 
     let fetcher = Arc::new(
       RecordingRequestFetcher::default().with_entry(
