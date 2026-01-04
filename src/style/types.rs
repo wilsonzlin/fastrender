@@ -67,6 +67,22 @@ pub enum BoxDecorationBreak {
   Clone,
 }
 
+/// Legacy axis orientation used by the 2009 flexbox draft (`display: -webkit-box`).
+///
+/// This is primarily encountered alongside `-webkit-line-clamp` patterns, where WebKit requires
+/// `-webkit-box-orient: vertical` for multi-line clamping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebkitBoxOrient {
+  Horizontal,
+  Vertical,
+}
+
+impl Default for WebkitBoxOrient {
+  fn default() -> Self {
+    Self::Horizontal
+  }
+}
+
 /// Container type for container queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerType {

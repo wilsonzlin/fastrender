@@ -2665,6 +2665,8 @@ fn apply_property_from_source(
       styles.display = source.display;
       styles.display_is_webkit_box = source.display_is_webkit_box;
     }
+    "box-orient" => styles.webkit_box_orient = source.webkit_box_orient,
+    "line-clamp" => styles.line_clamp = source.line_clamp,
     "visibility" => styles.visibility = source.visibility,
     "float" => styles.float = source.float,
     "clear" => styles.clear = source.clear,
@@ -5249,6 +5251,29 @@ fn apply_declaration_with_base_internal(
         }
       }
     }
+    "box-orient" => {
+      if let PropertyValue::Keyword(kw) = resolved_value {
+        match kw.as_str() {
+          "horizontal" => styles.webkit_box_orient = WebkitBoxOrient::Horizontal,
+          "vertical" => styles.webkit_box_orient = WebkitBoxOrient::Vertical,
+          _ => {}
+        }
+      }
+    }
+    "line-clamp" => match resolved_value {
+      PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => styles.line_clamp = None,
+      PropertyValue::Number(n) if n.is_finite() && n.fract() == 0.0 && *n > 0.0 => {
+        styles.line_clamp = Some(*n as u32);
+      }
+      PropertyValue::Keyword(kw) => {
+        if let Ok(n) = kw.parse::<u32>() {
+          if n > 0 {
+            styles.line_clamp = Some(n);
+          }
+        }
+      }
+      _ => {}
+    },
     "visibility" => {
       if let PropertyValue::Keyword(kw) = resolved_value {
         styles.visibility = match kw.as_str() {

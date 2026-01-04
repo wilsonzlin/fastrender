@@ -183,6 +183,7 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "border-width",
   "bottom",
   "box-decoration-break",
+  "box-orient",
   "box-shadow",
   "box-sizing",
   "break-after",
@@ -303,6 +304,7 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "left",
   "letter-spacing",
   "line-break",
+  "line-clamp",
   "line-height",
   "list-style",
   "list-style-image",
@@ -531,6 +533,9 @@ pub(crate) fn vendor_prefixed_property_alias(property: &str) -> Option<&'static 
     // Box model / effects.
     "-webkit-box-shadow" => Some("box-shadow"),
     "-webkit-box-sizing" => Some("box-sizing"),
+    // Legacy 2009 flexbox draft properties, commonly used to implement `-webkit-line-clamp`.
+    "-webkit-box-orient" | "-moz-box-orient" => Some("box-orient"),
+    "-webkit-line-clamp" => Some("line-clamp"),
 
     // Masking properties are widely prefixed in the wild; our implementation accepts the
     // standard names and (where needed) common WebKit keyword aliases.

@@ -7436,6 +7436,117 @@ impl InlineFormattingContext {
     Ok(out)
   }
 
+  fn apply_line_clamp(
+    &self,
+    mut lines: Vec<Line>,
+    flow_order: &mut Vec<FlowChunk>,
+    style: &Arc<ComputedStyle>,
+    strut_metrics: &BaselineMetrics,
+    _inline_vertical: bool,
+  ) -> Result<Vec<Line>, LayoutError> {
+    let Some(max_lines) = style.line_clamp else {
+      return Ok(lines);
+    };
+    if max_lines == 0 {
+      return Ok(lines);
+    }
+    if !style.display_is_webkit_box {
+      return Ok(lines);
+    }
+    if style.webkit_box_orient != crate::style::types::WebkitBoxOrient::Vertical {
+      return Ok(lines);
+    }
+
+    // WebKit line clamping requires a non-visible overflow so truncated lines are clipped.
+    // Most real-world patterns use `overflow: hidden`.
+    let overflow_clips = |overflow: crate::style::types::Overflow| {
+      matches!(
+        overflow,
+        crate::style::types::Overflow::Hidden
+          | crate::style::types::Overflow::Scroll
+          | crate::style::types::Overflow::Auto
+          | crate::style::types::Overflow::Clip
+      )
+    };
+    if !(overflow_clips(style.overflow_x) && overflow_clips(style.overflow_y)) {
+      return Ok(lines);
+    }
+
+    let max_lines = max_lines as usize;
+    if lines.len() <= max_lines {
+      return Ok(lines);
+    }
+
+    lines.truncate(max_lines);
+    let mut new_flow = Vec::new();
+    let mut reached_limit = false;
+    for chunk in flow_order.iter() {
+      if reached_limit {
+        break;
+      }
+      match chunk {
+        FlowChunk::Inline { start, end } => {
+          if *start >= max_lines {
+            reached_limit = true;
+            break;
+          }
+          let clamped_end = (*end).min(max_lines);
+          if *start < clamped_end {
+            new_flow.push(FlowChunk::Inline {
+              start: *start,
+              end: clamped_end,
+            });
+          }
+          if clamped_end >= max_lines {
+            reached_limit = true;
+          }
+        }
+        FlowChunk::Float { .. } | FlowChunk::Block { .. } => {
+          new_flow.push(chunk.clone());
+        }
+      }
+    }
+    *flow_order = new_flow;
+
+    // Append an ellipsis marker to the final visible line.
+    if let Some(last) = lines.last().cloned() {
+      let limit = last.available_width;
+      let inline_indent_cut = match last.resolved_direction {
+        crate::style::types::Direction::Rtl => (-last.indent).max(0.0),
+        crate::style::types::Direction::Ltr => last.indent.max(0.0),
+      };
+      let usable_limit = if limit.is_finite() {
+        (limit - inline_indent_cut).max(0.0)
+      } else {
+        limit
+      };
+
+      if usable_limit.is_finite() && usable_limit > 0.0 {
+        let clamp_overflow = crate::style::types::TextOverflow {
+          inline_start: crate::style::types::TextOverflowSide::Clip,
+          inline_end: crate::style::types::TextOverflowSide::Ellipsis,
+        };
+        let start_side = clamp_overflow.start_for_direction(last.resolved_direction);
+        let end_side = clamp_overflow.end_for_direction(last.resolved_direction);
+        let adjusted = self.apply_text_overflow_to_line(
+          &last,
+          start_side,
+          end_side,
+          style,
+          strut_metrics,
+          usable_limit,
+        )?;
+        if let Some(adjusted) = adjusted {
+          if let Some(slot) = lines.last_mut() {
+            *slot = adjusted;
+          }
+        }
+      }
+    }
+
+    Ok(lines)
+  }
+
   fn apply_text_overflow_to_line(
     &self,
     line: &Line,
@@ -8246,6 +8357,8 @@ impl InlineFormattingContext {
     )?;
 
     let lines = self.apply_text_overflow(lines, style, &strut_metrics, inline_vertical)?;
+    let lines =
+      self.apply_line_clamp(lines, &mut flow_order, style, &strut_metrics, inline_vertical)?;
 
     // Calculate total height
     let total_height_lines: f32 = lines
@@ -10029,6 +10142,7 @@ mod tests {
   use crate::style::types::ListStylePosition;
   use crate::style::types::Overflow;
   use crate::style::types::OverflowWrap;
+  use crate::style::types::WebkitBoxOrient;
   use crate::style::types::TextAlign;
   use crate::style::types::TextAlignLast;
   use crate::style::types::TextCombineUpright;
@@ -13421,6 +13535,44 @@ mod tests {
     assert!(
       line_fragment.bounds.width() <= 60.1,
       "line width should clamp to the available inline size when clipped"
+    );
+  }
+
+  #[test]
+  fn webkit_line_clamp_truncates_to_max_lines_and_appends_ellipsis() {
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Block;
+    container_style.display_is_webkit_box = true;
+    container_style.webkit_box_orient = WebkitBoxOrient::Vertical;
+    container_style.line_clamp = Some(2);
+    container_style.overflow_x = Overflow::Hidden;
+    container_style.overflow_y = Overflow::Hidden;
+
+    let root = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        default_style(),
+        "clamping should limit the number of rendered line boxes ".repeat(8),
+      )],
+    );
+
+    let constraints = LayoutConstraints::definite_width(80.0);
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    let line_count = fragment
+      .children
+      .iter()
+      .filter(|child| matches!(child.content, FragmentContent::Line { .. }))
+      .count();
+    assert_eq!(line_count, 2, "expected line boxes to clamp to two lines");
+
+    let mut texts = Vec::new();
+    collect_text_fragments(&fragment, &mut texts);
+    assert!(
+      texts.iter().any(|t| t.contains('…')),
+      "expected ellipsis fragment when truncating due to line-clamp"
     );
   }
 

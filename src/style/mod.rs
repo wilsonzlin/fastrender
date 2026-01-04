@@ -72,6 +72,7 @@ use types::BorderImage;
 use types::BorderStyle;
 use types::BoxDecorationBreak;
 use types::BoxSizing;
+use types::WebkitBoxOrient;
 use types::BreakBetween;
 use types::BreakInside;
 use types::CaptionSide;
@@ -440,6 +441,15 @@ pub struct ComputedStyle {
   /// display value to a standard flow layout, but preserve the fact that the legacy spelling was
   /// used so we can implement line clamping behavior compatibly.
   pub display_is_webkit_box: bool,
+  /// Legacy axis orientation for `display: -webkit-box` (2009 flexbox draft).
+  ///
+  /// The `-webkit-line-clamp` pattern relies on `-webkit-box-orient: vertical` to enable clamping.
+  pub webkit_box_orient: WebkitBoxOrient,
+  /// Maximum number of line boxes to lay out for the `-webkit-line-clamp` / `line-clamp` pattern.
+  ///
+  /// When set, the inline formatting context truncates after this many lines and appends an
+  /// ellipsis to the last visible line.
+  pub line_clamp: Option<u32>,
   pub position: Position,
   /// Running element name when authored via `position: running(<ident>)`.
   ///
@@ -832,6 +842,8 @@ impl Default for ComputedStyle {
     Self {
       display: Display::Inline,
       display_is_webkit_box: false,
+      webkit_box_orient: WebkitBoxOrient::default(),
+      line_clamp: None,
       position: Position::Static,
       running_position: None,
       appearance: Appearance::Auto,
