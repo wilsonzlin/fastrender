@@ -31,6 +31,7 @@ Compatibility / extras:
                         Forwarded to diff_renders
   --max-perceptual-distance <f64>
                         Forwarded to diff_renders
+  --ignore-alpha       Forwarded to diff_renders (ignore alpha differences)
 
 Output layout:
   <out>/chrome/        Chrome PNGs/logs
@@ -56,6 +57,7 @@ JS="off"
 TOLERANCE=""
 MAX_DIFF_PERCENT=""
 MAX_PERCEPTUAL_DISTANCE=""
+IGNORE_ALPHA=0
 PAGES_CSV=""
 
 FILTERS=()
@@ -91,6 +93,8 @@ while [[ $# -gt 0 ]]; do
         MAX_DIFF_PERCENT="${2:-}"; shift 2; continue ;;
       --max-perceptual-distance)
         MAX_PERCEPTUAL_DISTANCE="${2:-}"; shift 2; continue ;;
+      --ignore-alpha)
+        IGNORE_ALPHA=1; shift; continue ;;
       --pages)
         PAGES_CSV="${2:-}"; shift 2; continue ;;
       --)
@@ -282,6 +286,9 @@ if [[ -n "${MAX_DIFF_PERCENT}" ]]; then
 fi
 if [[ -n "${MAX_PERCEPTUAL_DISTANCE}" ]]; then
   diff_args+=(--max-perceptual-distance "${MAX_PERCEPTUAL_DISTANCE}")
+fi
+if [[ "${IGNORE_ALPHA}" -eq 1 ]]; then
+  diff_args+=(--ignore-alpha)
 fi
 
 echo "Output: ${OUT_DIR}"

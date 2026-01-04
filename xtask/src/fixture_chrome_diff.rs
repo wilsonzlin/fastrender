@@ -48,6 +48,10 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long, default_value_t = 0.0)]
   pub max_diff_percent: f64,
 
+  /// Ignore alpha differences forwarded to `diff_renders --ignore-alpha`.
+  #[arg(long)]
+  pub ignore_alpha: bool,
+
   /// Explicit Chrome/Chromium binary path forwarded to the Chrome baseline step.
   #[arg(long, value_name = "PATH", conflicts_with = "chrome_dir")]
   pub chrome: Option<PathBuf>,
@@ -274,6 +278,9 @@ fn build_diff_renders_command(
   cmd
     .arg("--max-diff-percent")
     .arg(args.max_diff_percent.to_string());
+  if args.ignore_alpha {
+    cmd.arg("--ignore-alpha");
+  }
   Ok(cmd)
 }
 
