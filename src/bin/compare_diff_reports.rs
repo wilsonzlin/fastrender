@@ -869,6 +869,7 @@ fn write_html_report(
 
   let mut rows = String::new();
   for entry in &report.results {
+    let anchor_id = entry_anchor_id(&entry.name);
     let baseline_status = entry
       .baseline
       .as_ref()
@@ -945,7 +946,8 @@ fn write_html_report(
     };
 
     rows.push_str(&format!(
-      "<tr class=\"{row_class}\"><td>{name}</td><td>{classification}</td><td>{baseline_status}</td><td>{baseline_diff}</td><td>{baseline_perceptual}</td><td>{baseline_diff_image}</td><td>{new_status}</td><td>{new_diff}</td><td>{new_perceptual}</td><td>{new_diff_image}</td><td>{diff_delta}</td><td>{perceptual_delta}</td><td class=\"error\">{error}</td></tr>",
+      "<tr id=\"{anchor_id}\" class=\"{row_class}\"><td>{name}</td><td>{classification}</td><td>{baseline_status}</td><td>{baseline_diff}</td><td>{baseline_perceptual}</td><td>{baseline_diff_image}</td><td>{new_status}</td><td>{new_diff}</td><td>{new_perceptual}</td><td>{new_diff_image}</td><td>{diff_delta}</td><td>{perceptual_delta}</td><td class=\"error\">{error}</td></tr>",
+      anchor_id = escape_html(&anchor_id),
       row_class = entry.classification.row_class(),
       name = escape_html(&entry.name),
       classification = escape_html(entry.classification.label()),
@@ -1195,9 +1197,11 @@ fn format_top_list(title: &str, entries: &[DeltaRankedEntry], improvements: bool
 
   let mut rows = String::new();
   for entry in entries {
+    let anchor_id = entry_anchor_id(&entry.name);
     rows.push_str(&format!(
-      "<tr><td>{}</td><td>{:+.4}%</td><td>{:+.4}</td></tr>",
-      escape_html(&entry.name),
+      "<tr><td><a href=\"#{anchor_id}\">{name}</a></td><td>{:+.4}%</td><td>{:+.4}</td></tr>",
+      anchor_id = escape_html(&anchor_id),
+      name = escape_html(&entry.name),
       entry.diff_percentage_delta,
       entry.perceptual_distance_delta
     ));
@@ -1220,4 +1224,16 @@ fn format_top_list(title: &str, entries: &[DeltaRankedEntry], improvements: bool
     note = escape_html(note),
     rows = rows
   )
+}
+
+fn entry_anchor_id(name: &str) -> String {
+  // Deterministic, stable, HTML-id-safe anchor for per-entry navigation.
+  // We avoid using `DefaultHasher` here since its output isn't guaranteed stable
+  // across Rust versions/platforms.
+  let mut hash: u64 = 14695981039346656037;
+  for byte in name.as_bytes() {
+    hash ^= u64::from(*byte);
+    hash = hash.wrapping_mul(1099511628211);
+  }
+  format!("entry-{hash:016x}")
 }
