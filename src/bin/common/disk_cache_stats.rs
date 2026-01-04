@@ -88,6 +88,12 @@ pub fn scan_disk_cache_dir(
       continue;
     }
 
+    if name == "index.jsonl.lock" {
+      // Legacy journal advisory lock file (DiskCacheIndex); ignore so we only count per-entry
+      // `*.bin.lock` files when reporting cache health.
+      continue;
+    }
+
     if name.ends_with(".tmp") {
       stats.tmp_count += 1;
       continue;

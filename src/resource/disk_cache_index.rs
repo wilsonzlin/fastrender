@@ -97,7 +97,10 @@ impl Drop for JournalLock {
 impl DiskCacheIndex {
   pub(super) fn new(cache_dir: PathBuf) -> Self {
     let journal_path = cache_dir.join("index.jsonl");
-    let journal_lock_path = cache_dir.join("index.jsonl.lock");
+    // This lock file is only used for advisory cross-process synchronization. Avoid a `.lock`
+    // suffix so tooling that scans for stale per-entry lock files (`*.bin.lock`) does not treat
+    // this as an orphaned cache entry.
+    let journal_lock_path = cache_dir.join("index.jsonl.journal_lock");
     Self {
       cache_dir,
       journal_path,
