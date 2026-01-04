@@ -1071,9 +1071,12 @@ impl MediaFeature {
         Ok(MediaFeature::PrefersColorScheme(scheme))
       }
       "prefers-reduced-motion" => {
-        let value =
-          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
-        let motion = ReducedMotion::parse(value)?;
+        // Common authoring pattern: `(prefers-reduced-motion)` is treated as the boolean form
+        // equivalent to `(prefers-reduced-motion: reduce)`.
+        let motion = match value {
+          Some(value) => ReducedMotion::parse(value)?,
+          None => ReducedMotion::Reduce,
+        };
         Ok(MediaFeature::PrefersReducedMotion(motion))
       }
       "prefers-contrast" => {
@@ -1083,15 +1086,21 @@ impl MediaFeature {
         Ok(MediaFeature::PrefersContrast(contrast))
       }
       "prefers-reduced-transparency" => {
-        let value =
-          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
-        let transparency = ReducedTransparency::parse(value)?;
+        // Like prefers-reduced-motion, browsers accept a value-less boolean form that maps to
+        // `reduce`.
+        let transparency = match value {
+          Some(value) => ReducedTransparency::parse(value)?,
+          None => ReducedTransparency::Reduce,
+        };
         Ok(MediaFeature::PrefersReducedTransparency(transparency))
       }
       "prefers-reduced-data" => {
-        let value =
-          value.ok_or_else(|| MediaParseError::MissingValue(name.as_ref().to_string()))?;
-        let data = ReducedData::parse(value)?;
+        // Like prefers-reduced-motion, browsers accept a value-less boolean form that maps to
+        // `reduce`.
+        let data = match value {
+          Some(value) => ReducedData::parse(value)?,
+          None => ReducedData::Reduce,
+        };
         Ok(MediaFeature::PrefersReducedData(data))
       }
       "color-gamut" => {
@@ -4046,6 +4055,28 @@ mod tests {
 
     let query = MediaQuery::parse("(prefers-reduced-motion: no-preference)").unwrap();
     assert!(!ctx.evaluate(&query));
+  }
+
+  #[test]
+  fn test_evaluate_prefers_reduced_motion_boolean() {
+    let query = MediaQuery::parse("(prefers-reduced-motion)").unwrap();
+
+    let reduced = MediaContext::screen(1024.0, 768.0).with_reduced_motion(true);
+    assert!(reduced.evaluate(&query));
+
+    let no_preference = MediaContext::screen(1024.0, 768.0);
+    assert!(!no_preference.evaluate(&query));
+  }
+
+  #[test]
+  fn test_evaluate_not_prefers_reduced_motion_boolean() {
+    let query = MediaQuery::parse("not (prefers-reduced-motion)").unwrap();
+
+    let reduced = MediaContext::screen(1024.0, 768.0).with_reduced_motion(true);
+    assert!(!reduced.evaluate(&query));
+
+    let no_preference = MediaContext::screen(1024.0, 768.0);
+    assert!(no_preference.evaluate(&query));
   }
 
   #[test]
