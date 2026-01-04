@@ -666,7 +666,7 @@ impl BlockFormattingContext {
     // descendant layout call. Otherwise absolutely-positioned descendants inside inline content can
     // incorrectly resolve percentages against an ancestor CB (e.g. the viewport).
     let establishes_positioned_cb =
-      style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some();
+      style.position.is_positioned() || style.has_transform() || style.perspective.is_some();
     let padding_origin = Point::new(
       computed_width.border_left + computed_width.padding_left,
       border_top + padding_top,
@@ -1546,10 +1546,10 @@ impl BlockFormattingContext {
     let mut positioned_children: Vec<PositionedCandidate> = Vec::new();
     let collapse_with_parent_top = should_collapse_with_first_child(&parent.style);
     let establishes_absolute_cb = parent.style.position.is_positioned()
-      || !parent.style.transform.is_empty()
+      || parent.style.has_transform()
       || parent.style.perspective.is_some();
     let establishes_fixed_cb =
-      !parent.style.transform.is_empty() || parent.style.perspective.is_some();
+      parent.style.has_transform() || parent.style.perspective.is_some();
     if !collapse_with_parent_top {
       margin_ctx.mark_content_encountered();
     }
@@ -3566,7 +3566,7 @@ impl FormattingContext for BlockFormattingContext {
     );
     let cb_block_base = resolved_height.map(|h| h.max(0.0) + padding_top + padding_bottom);
     let establishes_positioned_cb =
-      style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some();
+      style.position.is_positioned() || style.has_transform() || style.perspective.is_some();
     let nearest_cb = if establishes_positioned_cb {
       ContainingBlock::with_viewport_and_bases(
         Rect::new(padding_origin, padding_size),

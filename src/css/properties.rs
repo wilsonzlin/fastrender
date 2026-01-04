@@ -8,8 +8,11 @@ use super::types::GradientPositionComponent;
 use super::types::PropertyValue;
 use super::types::RadialGradientShape;
 use super::types::RadialGradientSize;
+use super::types::RotateValue;
+use super::types::ScaleValue;
 use super::types::TextShadow;
 use super::types::Transform;
+use super::types::TranslateValue;
 use super::value_cache;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -392,6 +395,9 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "shape-image-threshold",
   "shape-margin",
   "shape-outside",
+  "translate",
+  "rotate",
+  "scale",
   "transform",
   "transform-box",
   "transform-style",
@@ -1405,6 +1411,86 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         _ => Some(PropertyValue::Color(color)),
       };
     }
+  }
+
+  // Individual transform properties (CSS Transforms Level 2).
+  if property == "translate" {
+    if value_str.eq_ignore_ascii_case("none") {
+      return Some(PropertyValue::Translate(TranslateValue::None));
+    }
+
+    fn parse_length_percentage_component(parser: &mut Parser) -> Result<Length, ()> {
+      let component = parse_calc_sum(parser).map_err(|_| ())?;
+      calc_component_to_length(component).ok_or(())
+    }
+
+    let mut input = ParserInput::new(value_str);
+    let mut parser = Parser::new(&mut input);
+    let x = parse_length_percentage_component(&mut parser).ok()?;
+    parser.skip_whitespace();
+    let y = if parser.is_exhausted() {
+      Length::px(0.0)
+    } else {
+      parse_length_percentage_component(&mut parser).ok()?
+    };
+    parser.skip_whitespace();
+    let z = if parser.is_exhausted() {
+      Length::px(0.0)
+    } else {
+      let z = parse_length_percentage_component(&mut parser).ok()?;
+      if z.unit.is_percentage() {
+        return None;
+      }
+      z
+    };
+    parser.skip_whitespace();
+    if !parser.is_exhausted() {
+      return None;
+    }
+
+    return Some(PropertyValue::Translate(TranslateValue::Values { x, y, z }));
+  }
+
+  if property == "rotate" {
+    if value_str.eq_ignore_ascii_case("none") {
+      return Some(PropertyValue::Rotate(RotateValue::None));
+    }
+
+    let mut input = ParserInput::new(value_str);
+    let mut parser = Parser::new(&mut input);
+    let angle = parse_angle_component(&mut parser).ok()?;
+    parser.skip_whitespace();
+    if !parser.is_exhausted() {
+      return None;
+    }
+    return Some(PropertyValue::Rotate(RotateValue::Angle(angle)));
+  }
+
+  if property == "scale" {
+    if value_str.eq_ignore_ascii_case("none") {
+      return Some(PropertyValue::Scale(ScaleValue::None));
+    }
+
+    let mut input = ParserInput::new(value_str);
+    let mut parser = Parser::new(&mut input);
+    let x = parse_number_component(&mut parser).ok()?;
+    parser.skip_whitespace();
+    let y = if parser.is_exhausted() {
+      x
+    } else {
+      parse_number_component(&mut parser).ok()?
+    };
+    parser.skip_whitespace();
+    let z = if parser.is_exhausted() {
+      1.0
+    } else {
+      parse_number_component(&mut parser).ok()?
+    };
+    parser.skip_whitespace();
+    if !parser.is_exhausted() {
+      return None;
+    }
+    return Some(PropertyValue::Scale(ScaleValue::Values { x, y, z }));
   }
 
   if let Some(num) = parse_function_number(value_str) {

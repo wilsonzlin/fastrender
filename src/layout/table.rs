@@ -5659,11 +5659,11 @@ impl FormattingContext for TableFormattingContext {
         );
         let viewport_cb = ContainingBlock::viewport(self.viewport_size);
         let establishes_abs_cb = table_root_style.position.is_positioned()
-          || !table_root_style.transform.is_empty()
+          || table_root_style.has_transform()
           || table_root_style.perspective.is_some()
           || table_root_style.containment.layout
           || table_root_style.containment.paint;
-        let establishes_fixed_cb = !table_root_style.transform.is_empty()
+        let establishes_fixed_cb = table_root_style.has_transform()
           || table_root_style.perspective.is_some()
           || table_root_style.containment.layout
           || table_root_style.containment.paint;
@@ -7134,11 +7134,11 @@ impl FormattingContext for TableFormattingContext {
       );
       let viewport_cb = ContainingBlock::viewport(self.viewport_size);
       let establishes_abs_cb = table_root_style.position.is_positioned()
-        || !table_root_style.transform.is_empty()
+        || table_root_style.has_transform()
         || table_root_style.perspective.is_some()
         || table_root_style.containment.layout
         || table_root_style.containment.paint;
-      let establishes_fixed_cb = !table_root_style.transform.is_empty()
+      let establishes_fixed_cb = table_root_style.has_transform()
         || table_root_style.perspective.is_some()
         || table_root_style.containment.layout
         || table_root_style.containment.paint;

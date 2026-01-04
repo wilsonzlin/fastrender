@@ -2951,6 +2951,12 @@ pub enum PropertyValue {
   FontFamily(Vec<String>),
   BoxShadow(Vec<BoxShadow>),
   TextShadow(Vec<TextShadow>),
+  /// CSS Transforms Level 2: individual translate property.
+  Translate(TranslateValue),
+  /// CSS Transforms Level 2: individual rotate property.
+  Rotate(RotateValue),
+  /// CSS Transforms Level 2: individual scale property.
+  Scale(ScaleValue),
   Transform(Vec<Transform>),
   LinearGradient {
     angle: f32,
@@ -3007,6 +3013,28 @@ pub struct TextShadow {
   pub blur_radius: Length,
   /// None represents currentColor.
   pub color: Option<Rgba>,
+}
+
+/// Computed value for the CSS `translate` property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TranslateValue {
+  None,
+  Values { x: Length, y: Length, z: Length },
+}
+
+/// Computed value for the CSS `rotate` property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RotateValue {
+  None,
+  /// Rotation angle in degrees around the z axis.
+  Angle(f32),
+}
+
+/// Computed value for the CSS `scale` property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScaleValue {
+  None,
+  Values { x: f32, y: f32, z: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

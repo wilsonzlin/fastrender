@@ -979,7 +979,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .push((*abs, *frag, *root_idx));
     }
     if let Some(style) = frag.style.as_deref() {
-      if !style.transform.is_empty() {
+      if style.has_transform() {
         let matrix = DisplayListBuilder::debug_resolve_transform(
           style,
           Rect::from_xywh(abs.x(), abs.y(), abs.width(), abs.height()),

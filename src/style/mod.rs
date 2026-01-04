@@ -28,8 +28,11 @@ pub mod var_resolution;
 
 // Internal imports used by ComputedStyle
 use crate::css::types::BoxShadow;
+use crate::css::types::RotateValue;
+use crate::css::types::ScaleValue;
 use crate::css::types::TextShadow;
 use crate::css::types::Transform;
+use crate::css::types::TranslateValue;
 use crate::style::computed::Visibility;
 use crate::style::custom_properties::CustomPropertyRegistry;
 use crate::style::custom_property_store::CustomPropertyStore;
@@ -765,6 +768,9 @@ pub struct ComputedStyle {
   pub opacity: f32,
   pub box_shadow: Vec<BoxShadow>,
   pub text_shadow: Arc<[TextShadow]>,
+  pub translate: TranslateValue,
+  pub rotate: RotateValue,
+  pub scale: ScaleValue,
   pub transform: Vec<Transform>,
   pub offset_path: OffsetPath,
   pub offset_distance: Length,
@@ -1073,6 +1079,9 @@ impl Default for ComputedStyle {
       opacity: 1.0,
       box_shadow: Vec::new(),
       text_shadow: Arc::from(Vec::new()),
+      translate: TranslateValue::None,
+      rotate: RotateValue::None,
+      scale: ScaleValue::None,
       transform: Vec::new(),
       offset_path: OffsetPath::None,
       offset_distance: Length::px(0.0),
@@ -1117,6 +1126,13 @@ impl Default for ComputedStyle {
 impl ComputedStyle {
   pub fn has_motion_path(&self) -> bool {
     !matches!(self.offset_path, OffsetPath::None)
+  }
+
+  pub fn has_transform(&self) -> bool {
+    !self.transform.is_empty()
+      || !matches!(self.translate, TranslateValue::None)
+      || !matches!(self.rotate, RotateValue::None)
+      || !matches!(self.scale, ScaleValue::None)
   }
 
   fn ensure_background_lists(&mut self) {

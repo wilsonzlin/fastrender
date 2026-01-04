@@ -505,8 +505,8 @@ pub fn creates_stacking_context(
     return true;
   }
 
-  // 6. Has CSS transform (transform list is non-empty)
-  if !style.transform.is_empty() {
+  // 6. Has CSS transform (including individual transform properties)
+  if style.has_transform() {
     return true;
   }
 
@@ -634,7 +634,7 @@ pub fn get_stacking_context_reason(
     return Some(StackingContextReason::Mask);
   }
 
-  if !style.transform.is_empty() {
+  if style.has_transform() {
     return Some(StackingContextReason::Transform);
   }
 

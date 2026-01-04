@@ -2,6 +2,7 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
+use crate::css::types::{RotateValue, ScaleValue, TranslateValue};
 use crate::style::types::TransformBox;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -51,11 +52,28 @@ pub fn resolve_transforms(
       .filter(|v| *v > 0.0)
   });
 
-  let mut transform_from_list: Option<Transform3D> = None;
+  let mut transform_from_style: Option<Transform3D> = None;
 
-  if !style.transform.is_empty() {
+  if style.has_transform() {
     let mut ts = Transform3D::identity();
     const EPS: f32 = 1e-6;
+
+    if let TranslateValue::Values { x, y, z } = style.translate {
+      let tx = resolve_transform_length(&x, style.font_size, style.root_font_size, percentage_width);
+      let ty =
+        resolve_transform_length(&y, style.font_size, style.root_font_size, percentage_height);
+      let tz = resolve_transform_length(&z, style.font_size, style.root_font_size, percentage_width);
+      ts = ts.multiply(&Transform3D::translate(tx, ty, tz));
+    }
+
+    if let RotateValue::Angle(deg) = style.rotate {
+      ts = ts.multiply(&Transform3D::rotate_z(deg.to_radians()));
+    }
+
+    if let ScaleValue::Values { x, y, z } = style.scale {
+      ts = ts.multiply(&Transform3D::scale(x, y, z));
+    }
+
     for component in &style.transform {
       let next = match component {
         crate::css::types::Transform::Translate(x, y) => {
@@ -172,7 +190,7 @@ pub fn resolve_transforms(
       .multiply(&ts)
       .multiply(&Transform3D::translate(-origin.x, -origin.y, 0.0));
 
-    transform_from_list = Some(matrix);
+    transform_from_style = Some(matrix);
   }
 
   let motion = crate::paint::motion_path::compute_motion_transform(style, bounds, viewport)
@@ -201,7 +219,7 @@ pub fn resolve_transforms(
       ))
   });
 
-  let self_transform = match (motion, transform_from_list) {
+  let self_transform = match (motion, transform_from_style) {
     (None, None) => None,
     (Some(motion), None) => Some(motion),
     (None, Some(matrix)) => Some(matrix),
@@ -408,7 +426,10 @@ fn resolve_transform_length(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::properties::parse_property_value;
+  use crate::css::types::Declaration;
   use crate::css::types::Transform;
+  use crate::style::properties::{apply_declaration_with_base, DEFAULT_VIEWPORT};
   use crate::style::types::{MotionPathCommand, MotionPosition, OffsetAnchor, OffsetPath};
 
   #[test]
@@ -444,6 +465,105 @@ mod tests {
       .expect("affine transform");
     assert!((matrix.c - 1.0).abs() < 1e-4);
     assert!((matrix.b - 10.0_f32.to_radians().tan()).abs() < 1e-4);
+  }
+
+  #[test]
+  fn resolves_rotate_property() {
+    let mut style = ComputedStyle::default();
+    style.rotate = RotateValue::Angle(45.0);
+    style.transform_origin.x = Length::px(0.0);
+    style.transform_origin.y = Length::px(0.0);
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    let matrix = resolve_transform3d(&style, bounds, None)
+      .expect("rotate")
+      .to_2d()
+      .expect("affine transform");
+
+    let (sin, cos) = 45.0_f32.to_radians().sin_cos();
+    assert!((matrix.a - cos).abs() < 1e-4);
+    assert!((matrix.b - sin).abs() < 1e-4);
+    assert!((matrix.c + sin).abs() < 1e-4);
+    assert!((matrix.d - cos).abs() < 1e-4);
+  }
+
+  #[test]
+  fn resolves_translate_property_percentages() {
+    let mut style = ComputedStyle::default();
+    style.translate = TranslateValue::Values {
+      x: Length::percent(-50.0),
+      y: Length::percent(-50.0),
+      z: Length::px(0.0),
+    };
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+    let matrix = resolve_transform3d(&style, bounds, None)
+      .expect("translate")
+      .to_2d()
+      .expect("affine transform");
+    assert!((matrix.e + 100.0).abs() < 1e-4);
+    assert!((matrix.f + 50.0).abs() < 1e-4);
+  }
+
+  #[test]
+  fn cascade_translate_and_rotate_properties_compose() {
+    let parent = ComputedStyle::default();
+    let revert_base = ComputedStyle::default();
+    let mut style = ComputedStyle::default();
+    style.transform_origin.x = Length::px(0.0);
+    style.transform_origin.y = Length::px(0.0);
+
+    let translate_value = parse_property_value("translate", "-50% -50%").expect("translate");
+    let rotate_value = parse_property_value("rotate", "90deg").expect("rotate");
+
+    let translate_decl = Declaration {
+      property: "translate".into(),
+      value: translate_value,
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    let rotate_decl = Declaration {
+      property: "rotate".into(),
+      value: rotate_value,
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+
+    apply_declaration_with_base(
+      &mut style,
+      &translate_decl,
+      &parent,
+      &revert_base,
+      None,
+      parent.font_size,
+      parent.root_font_size,
+      DEFAULT_VIEWPORT,
+    );
+    apply_declaration_with_base(
+      &mut style,
+      &rotate_decl,
+      &parent,
+      &revert_base,
+      None,
+      parent.font_size,
+      parent.root_font_size,
+      DEFAULT_VIEWPORT,
+    );
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+    let matrix = resolve_transform3d(&style, bounds, None)
+      .expect("transform")
+      .to_2d()
+      .expect("affine transform");
+
+    assert!(matrix.a.abs() < 1e-4);
+    assert!((matrix.b - 1.0).abs() < 1e-4);
+    assert!((matrix.c + 1.0).abs() < 1e-4);
+    assert!(matrix.d.abs() < 1e-4);
+    assert!((matrix.e + 100.0).abs() < 1e-4);
+    assert!((matrix.f + 50.0).abs() < 1e-4);
   }
 
   #[test]
@@ -517,6 +637,8 @@ mod tests {
   #[test]
   fn motion_path_composes_with_transform_list() {
     let mut style = ComputedStyle::default();
+    style.transform_origin.x = Length::px(0.0);
+    style.transform_origin.y = Length::px(0.0);
     style.transform.push(Transform::Scale(2.0, 1.0));
     style.offset_path = OffsetPath::Path(vec![
       MotionPathCommand::MoveTo(MotionPosition {

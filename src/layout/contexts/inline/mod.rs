@@ -226,11 +226,11 @@ fn ensure_box_id(node: &BoxNode) -> usize {
 }
 
 fn establishes_abs_cb(style: &ComputedStyle) -> bool {
-  style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some()
+  style.position.is_positioned() || style.has_transform() || style.perspective.is_some()
 }
 
 fn establishes_fixed_cb(style: &ComputedStyle) -> bool {
-  !style.transform.is_empty() || style.perspective.is_some()
+  style.has_transform() || style.perspective.is_some()
 }
 
 impl InlineFormattingContext {

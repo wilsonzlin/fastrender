@@ -2289,10 +2289,10 @@ impl GridFormattingContext {
       None
     };
     let establishes_abs_cb = box_node.style.position.is_positioned()
-      || !box_node.style.transform.is_empty()
+      || box_node.style.has_transform()
       || box_node.style.perspective.is_some();
     let establishes_fixed_cb =
-      !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
+      box_node.style.has_transform() || box_node.style.perspective.is_some();
     let padding_cb = crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
       padding_rect,
       self.viewport_size,
@@ -4312,11 +4312,11 @@ impl FormattingContext for GridFormattingContext {
         None
       };
       let establishes_abs_cb = box_node.style.position.is_positioned()
-        || !box_node.style.transform.is_empty()
+        || box_node.style.has_transform()
         || box_node.style.perspective.is_some()
         || box_node.style.containment.layout
         || box_node.style.containment.paint;
-      let establishes_fixed_cb = !box_node.style.transform.is_empty()
+      let establishes_fixed_cb = box_node.style.has_transform()
         || box_node.style.perspective.is_some()
         || box_node.style.containment.layout
         || box_node.style.containment.paint;

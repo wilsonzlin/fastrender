@@ -1369,7 +1369,7 @@ impl WillChangeHint {
       WillChangeHint::Property(name) => matches!(
         name.as_str(),
         // Properties that create stacking contexts when non-initial
-        "transform"
+        "transform" | "translate" | "rotate" | "scale"
           | "opacity"
           | "filter"
           | "backdrop-filter"

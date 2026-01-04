@@ -1485,7 +1485,7 @@ impl DisplayListBuilder {
 
     if let Some(style) = style_opt {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
-        && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
+        && (style.has_transform() || style.perspective.is_some() || style.has_motion_path())
       {
         let transforms = Self::build_transform(style, absolute_rect, self.viewport);
         if let Some(transform) = transforms.self_transform.as_ref() {

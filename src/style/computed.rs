@@ -23,7 +23,7 @@
 //! assert_eq!(style.font_size, 16.0); // Default font size
 //! ```
 
-use crate::css::types::Transform;
+use crate::css::types::{RotateValue, ScaleValue, Transform, TranslateValue};
 use crate::geometry::EdgeOffsets;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -259,7 +259,18 @@ pub struct PositionedStyle {
   /// Initial: none
   pub containment: Containment,
 
-  /// Transforms
+  /// Individual transforms
+  ///
+  /// CSS: `translate`
+  /// Initial: none
+  pub translate: TranslateValue,
+  /// CSS: `rotate`
+  /// Initial: none
+  pub rotate: RotateValue,
+  /// CSS: `scale`
+  /// Initial: none
+  pub scale: ScaleValue,
+  /// Transform list
   ///
   /// CSS: `transform`
   /// Initial: none
@@ -581,6 +592,9 @@ impl Default for PositionedStyle {
       isolation: Isolation::Auto,
       will_change: WillChange::default(),
       containment: Containment::none(),
+      translate: TranslateValue::None,
+      rotate: RotateValue::None,
+      scale: ScaleValue::None,
       transform: Vec::new(),
       overflow_x: Overflow::Visible,
       overflow_y: Overflow::Visible,
@@ -698,7 +712,11 @@ impl PositionedStyle {
       return true;
     }
 
-    if !self.transform.is_empty() {
+    if !self.transform.is_empty()
+      || !matches!(self.translate, TranslateValue::None)
+      || !matches!(self.rotate, RotateValue::None)
+      || !matches!(self.scale, ScaleValue::None)
+    {
       return true;
     }
 

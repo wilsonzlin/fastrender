@@ -2537,11 +2537,11 @@ impl FormattingContext for FlexFormattingContext {
         None
       };
       let establishes_abs_cb = box_node.style.position.is_positioned()
-        || !box_node.style.transform.is_empty()
+        || box_node.style.has_transform()
         || box_node.style.perspective.is_some()
         || box_node.style.containment.layout
         || box_node.style.containment.paint;
-      let establishes_fixed_cb = !box_node.style.transform.is_empty()
+      let establishes_fixed_cb = box_node.style.has_transform()
         || box_node.style.perspective.is_some()
         || box_node.style.containment.layout
         || box_node.style.containment.paint;

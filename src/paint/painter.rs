@@ -1736,7 +1736,7 @@ impl Painter {
 
     if let Some(style) = fragment.style.as_deref() {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
-        && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
+        && (style.has_transform() || style.perspective.is_some() || style.has_motion_path())
       {
         if let Some(transform) = resolve_transform3d(style, abs_bounds, Some(viewport)) {
           if backface_is_hidden(&transform) {

@@ -3749,6 +3749,9 @@ fn apply_property_from_source(
     "opacity" => styles.opacity = source.opacity,
     "box-shadow" => styles.box_shadow = source.box_shadow.clone(),
     "text-shadow" => styles.text_shadow = source.text_shadow.clone(),
+    "translate" => styles.translate = source.translate,
+    "rotate" => styles.rotate = source.rotate,
+    "scale" => styles.scale = source.scale,
     "transform" => styles.transform = source.transform.clone(),
     "transform-box" => styles.transform_box = source.transform_box,
     "transform-style" => styles.transform_style = source.transform_style,
@@ -8735,6 +8738,21 @@ fn apply_declaration_with_base_internal(
         styles.text_shadow = default_computed_style().text_shadow.clone();
       }
       _ => {}
+    },
+    "translate" => {
+      if let PropertyValue::Translate(value) = resolved_value {
+        styles.translate = *value;
+      }
+    },
+    "rotate" => {
+      if let PropertyValue::Rotate(value) = resolved_value {
+        styles.rotate = *value;
+      }
+    },
+    "scale" => {
+      if let PropertyValue::Scale(value) = resolved_value {
+        styles.scale = *value;
+      }
     },
     "transform" => {
       if let PropertyValue::Transform(transforms) = resolved_value {
