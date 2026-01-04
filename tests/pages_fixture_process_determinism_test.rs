@@ -65,11 +65,10 @@ fn parse_viewport_arg_from_env() -> String {
       format!("{w}x{h}")
     }
     Err(env::VarError::NotPresent) => {
-      if cfg!(windows) {
-        "600x480".to_string()
-      } else {
-        "600x600".to_string()
-      }
+      // Keep this test conservative by default: the determinism signal comes from rendering a
+      // blur-heavy fixture twice across processes, so total runtime scales with pixel area.
+      // Developers can opt into a larger viewport via `FASTR_DETERMINISM_VIEWPORT`.
+      "600x480".to_string()
     }
     Err(e) => panic!("failed to read {ENV_VIEWPORT}: {e}"),
   }
