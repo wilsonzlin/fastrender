@@ -5299,12 +5299,19 @@ mod tests {
 
   #[test]
   fn svg_filter_recursion_limit_is_noop() {
-    let prev_depth =
-      SVG_FILTER_DEPTH.with(|cell| cell.replace(MAX_SVG_FILTER_DEPTH));
-    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    let prev_depth = SVG_FILTER_DEPTH.with(|cell| cell.replace(MAX_SVG_FILTER_DEPTH));
+
+    struct ResetDepth(usize);
+    impl Drop for ResetDepth {
+      fn drop(&mut self) {
+        SVG_FILTER_DEPTH.with(|cell| cell.set(self.0));
+      }
+    }
+    let _reset = ResetDepth(prev_depth);
+
+    let mut pixmap = new_pixmap(2, 2).unwrap();
     for px in pixmap.pixels_mut() {
-      *px = PremultipliedColorU8::from_rgba(10, 20, 30, 255)
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      *px = premul(10, 20, 30, 255);
     }
     let before = pixmap.data().to_vec();
 
@@ -5337,8 +5344,6 @@ mod tests {
       SVG_FILTER_DEPTH.with(|cell| cell.get()),
       MAX_SVG_FILTER_DEPTH
     );
-
-    SVG_FILTER_DEPTH.with(|cell| cell.set(prev_depth));
   }
 
   fn apply_primitive_for_test(
