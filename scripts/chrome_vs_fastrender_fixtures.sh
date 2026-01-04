@@ -32,6 +32,8 @@ Options:
                             Allowed perceptual distance (passed to diff_renders)
   --ignore-alpha            Ignore alpha differences (passed to diff_renders)
   --sort-by <mode>          Sort report entries (pixel|percent|perceptual) (passed to diff_renders)
+  --no-chrome               Skip generating Chrome baseline renders (reuse existing --chrome-out-dir)
+  --no-fastrender           Skip generating FastRender renders (reuse existing --fastr-out-dir)
   --fail-on-differences     Exit non-zero when diff_renders reports differences (default: keep report and exit 0)
   --no-clean                Do not delete previous output dirs under target/
   -h, --help                Show help
@@ -61,6 +63,8 @@ MAX_PERCEPTUAL_DISTANCE=""
 IGNORE_ALPHA=0
 SORT_BY=""
 FAIL_ON_DIFFERENCES=0
+NO_CHROME=0
+NO_FASTRENDER=0
 CLEAN=1
 
 FILTERS=()
@@ -106,6 +110,10 @@ while [[ $# -gt 0 ]]; do
         IGNORE_ALPHA=1; shift ;;
       --sort-by)
         SORT_BY="${2:-}"; shift 2 ;;
+      --no-chrome)
+        NO_CHROME=1; shift ;;
+      --no-fastrender)
+        NO_FASTRENDER=1; shift ;;
       --fail-on-differences)
         FAIL_ON_DIFFERENCES=1; shift ;;
       --no-clean)
@@ -229,7 +237,21 @@ if [[ -n "${SHARD}" ]]; then
 fi
 
 if [[ "${CLEAN}" -eq 1 ]]; then
-  rm -rf "${CHROME_OUT_DIR}" "${FASTR_OUT_DIR}"
+  if [[ "${NO_CHROME}" -eq 0 ]]; then
+    rm -rf "${CHROME_OUT_DIR}"
+  fi
+  if [[ "${NO_FASTRENDER}" -eq 0 ]]; then
+    rm -rf "${FASTR_OUT_DIR}"
+  fi
+fi
+
+if [[ "${NO_CHROME}" -eq 1 && ! -d "${CHROME_OUT_DIR}" ]]; then
+  echo "--no-chrome was set, but chrome out dir does not exist: ${CHROME_OUT_DIR}" >&2
+  exit 1
+fi
+if [[ "${NO_FASTRENDER}" -eq 1 && ! -d "${FASTR_OUT_DIR}" ]]; then
+  echo "--no-fastrender was set, but fastrender out dir does not exist: ${FASTR_OUT_DIR}" >&2
+  exit 1
 fi
 
 chrome_status=0
@@ -237,38 +259,46 @@ fastr_status=0
 diff_status=0
 
 echo "== Chrome baseline =="
-chrome_args=(
-  scripts/chrome_fixture_baseline.sh
-  --fixtures-dir "${FIXTURES_DIR}"
-  --out-dir "${CHROME_OUT_DIR}"
-  --viewport "${VIEWPORT}"
-  --dpr "${DPR}"
-  --timeout "${TIMEOUT}"
-)
-if [[ -n "${CHROME_BIN}" ]]; then
-  chrome_args+=(--chrome "${CHROME_BIN}")
-fi
-chrome_args+=(--js "${JS}" -- "${FIXTURES[@]}")
-
-if "${chrome_args[@]}"; then
-  :
+if [[ "${NO_CHROME}" -eq 1 ]]; then
+  echo "(skipping chrome_fixture_baseline.sh; reusing ${CHROME_OUT_DIR})"
 else
-  chrome_status=$?
+  chrome_args=(
+    scripts/chrome_fixture_baseline.sh
+    --fixtures-dir "${FIXTURES_DIR}"
+    --out-dir "${CHROME_OUT_DIR}"
+    --viewport "${VIEWPORT}"
+    --dpr "${DPR}"
+    --timeout "${TIMEOUT}"
+  )
+  if [[ -n "${CHROME_BIN}" ]]; then
+    chrome_args+=(--chrome "${CHROME_BIN}")
+  fi
+  chrome_args+=(--js "${JS}" -- "${FIXTURES[@]}")
+
+  if "${chrome_args[@]}"; then
+    :
+  else
+    chrome_status=$?
+  fi
 fi
 
 echo
 echo "== FastRender fixtures =="
-if cargo run --release --bin render_fixtures -- \
-  --fixtures-dir "${FIXTURES_DIR}" \
-  --out-dir "${FASTR_OUT_DIR}" \
-  --fixtures "$(IFS=,; echo "${FIXTURES[*]}")" \
-  --viewport "${VIEWPORT}" \
-  --dpr "${DPR}" \
-  --media "${MEDIA}" \
-  --timeout "${TIMEOUT}"; then
-  :
+if [[ "${NO_FASTRENDER}" -eq 1 ]]; then
+  echo "(skipping render_fixtures; reusing ${FASTR_OUT_DIR})"
 else
-  fastr_status=$?
+  if cargo run --release --bin render_fixtures -- \
+    --fixtures-dir "${FIXTURES_DIR}" \
+    --out-dir "${FASTR_OUT_DIR}" \
+    --fixtures "$(IFS=,; echo "${FIXTURES[*]}")" \
+    --viewport "${VIEWPORT}" \
+    --dpr "${DPR}" \
+    --media "${MEDIA}" \
+    --timeout "${TIMEOUT}"; then
+    :
+  else
+    fastr_status=$?
+  fi
 fi
 
 echo
