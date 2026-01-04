@@ -2,6 +2,7 @@
 // eviction can be performed without rescanning the entire cache directory on every write. Falls
 // back to rebuilding from the actual files when the journal is missing or corrupt.
 use super::StoredMetadata;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
@@ -14,6 +15,7 @@ use std::sync::{Arc, Mutex};
 pub(super) struct DiskCacheIndex {
   cache_dir: PathBuf,
   journal_path: PathBuf,
+  journal_lock_path: PathBuf,
   state: Arc<Mutex<IndexState>>,
   loaded: Arc<AtomicBool>,
 }
@@ -82,12 +84,24 @@ pub(super) struct DebugStats {
   pub journal_replays: usize,
 }
 
+struct JournalLock {
+  _file: File,
+}
+
+impl Drop for JournalLock {
+  fn drop(&mut self) {
+    let _ = self._file.unlock();
+  }
+}
+
 impl DiskCacheIndex {
   pub(super) fn new(cache_dir: PathBuf) -> Self {
     let journal_path = cache_dir.join("index.jsonl");
+    let journal_lock_path = cache_dir.join("index.jsonl.lock");
     Self {
       cache_dir,
       journal_path,
+      journal_lock_path,
       state: Arc::new(Mutex::new(IndexState::default())),
       loaded: Arc::new(AtomicBool::new(false)),
     }
@@ -268,6 +282,7 @@ impl DiskCacheIndex {
   }
 
   fn refresh_locked(&self, state: &mut IndexState) -> std::io::Result<()> {
+    let _journal_lock = self.lock_journal()?;
     if !state.loaded {
       match self.replay_from_offset(state, 0) {
         Ok(()) => {
@@ -318,9 +333,10 @@ impl DiskCacheIndex {
       buf.push(b'\n');
     }
 
+    let _journal_lock = self.lock_journal()?;
     let end_offset = {
       let file = self.append_file_locked(state)?;
-      file.write_all(&buf)?;
+      self.write_journal_bytes(file, &buf)?;
       file.flush()?;
       file.stream_position()?
     };
@@ -600,6 +616,7 @@ impl DiskCacheIndex {
   }
 
   fn rebuild_from_disk(&self, state: &mut IndexState) -> std::io::Result<()> {
+    let _journal_lock = self.lock_journal()?;
     state.entries.clear();
     state.order.clear();
     state.total_bytes = 0;
@@ -701,7 +718,7 @@ impl DiskCacheIndex {
         buf.clear();
         serde_json::to_writer(&mut buf, &record)?;
         buf.push(b'\n');
-        file.write_all(&buf)?;
+        self.write_journal_bytes(&mut file, &buf)?;
         written = written.saturating_add(buf.len() as u64);
       }
     }
@@ -726,9 +743,10 @@ impl DiskCacheIndex {
     serde_json::to_writer(&mut buf, &record)?;
     buf.push(b'\n');
 
+    let _journal_lock = self.lock_journal()?;
     let end_offset = {
       let file = self.append_file_locked(state)?;
-      file.write_all(&buf)?;
+      self.write_journal_bytes(file, &buf)?;
       file.flush()?;
       file.stream_position()?
     };
@@ -804,6 +822,31 @@ impl DiskCacheIndex {
     Ok(state.journal_append.as_mut().expect("just set"))
   }
 
+  fn lock_journal(&self) -> std::io::Result<JournalLock> {
+    let file = OpenOptions::new()
+      .create(true)
+      .read(true)
+      .write(true)
+      .open(&self.journal_lock_path)?;
+    file.lock_exclusive()?;
+    Ok(JournalLock { _file: file })
+  }
+
+  fn write_journal_bytes(&self, file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Ok(chunk_size) = std::env::var("FASTR_DISK_CACHE_INDEX_WRITE_CHUNK_SIZE") {
+      if let Ok(chunk_size) = chunk_size.parse::<usize>() {
+        if chunk_size > 0 && bytes.len() > chunk_size {
+          for chunk in bytes.chunks(chunk_size) {
+            file.write_all(chunk)?;
+          }
+          return Ok(());
+        }
+      }
+    }
+    file.write_all(bytes)
+  }
+
   fn reset_for_replay(&self, state: &mut IndexState) {
     state.entries.clear();
     state.order.clear();
@@ -819,7 +862,9 @@ impl DiskCacheIndex {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::collections::HashSet;
   use std::fs;
+  use std::process::Command;
   use std::sync::Arc;
   use std::sync::Barrier;
   use std::thread;
@@ -1105,12 +1150,132 @@ mod tests {
       panic!("poison disk cache index mutex");
     });
     assert!(result.is_err(), "expected panic to be caught");
-    assert!(index.state.is_poisoned(), "expected index mutex to be poisoned");
+    assert!(
+      index.state.is_poisoned(),
+      "expected index mutex to be poisoned"
+    );
 
     index.refresh();
 
     let data_path = tmp.path().join("example.bin");
     let meta_path = tmp.path().join("example.bin.meta");
     index.record_insert("example", 1_700_000_000, 0, &data_path, &meta_path);
+  }
+
+  #[test]
+  fn multiprocess_journal_appends_remain_parseable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let journal_path = tmp.path().join("index.jsonl");
+    fs::write(&journal_path, b"").expect("seed empty journal");
+
+    let processes = 8usize;
+    let flushes_per_process = 16usize;
+    let backfills_per_flush = 16usize;
+    let key_size = 2048usize;
+    let write_chunk_size = 1024usize;
+
+    let mut children = Vec::new();
+    let exe = std::env::current_exe().expect("resolve current exe");
+    for id in 0..processes {
+      let mut cmd = Command::new(&exe);
+      cmd
+        .arg("--ignored")
+        .arg("--nocapture")
+        .arg("disk_cache_index_multiprocess_child_writer")
+        .env("FASTR_DISK_CACHE_INDEX_CACHE_DIR", tmp.path().as_os_str())
+        .env("FASTR_DISK_CACHE_INDEX_CHILD_ID", id.to_string())
+        .env(
+          "FASTR_DISK_CACHE_INDEX_FLUSHES",
+          flushes_per_process.to_string(),
+        )
+        .env(
+          "FASTR_DISK_CACHE_INDEX_BACKFILLS",
+          backfills_per_flush.to_string(),
+        )
+        .env("FASTR_DISK_CACHE_INDEX_KEY_SIZE", key_size.to_string())
+        .env(
+          "FASTR_DISK_CACHE_INDEX_WRITE_CHUNK_SIZE",
+          write_chunk_size.to_string(),
+        );
+      children.push(cmd.spawn().expect("spawn child writer"));
+    }
+
+    for mut child in children {
+      let status = child.wait().expect("wait child writer");
+      assert!(status.success(), "child writer exited with {status}");
+    }
+
+    let journal = fs::read_to_string(&journal_path).expect("read journal");
+    let expected_inserts = processes * flushes_per_process * (backfills_per_flush + 1);
+    let mut insert_keys = HashSet::new();
+    let mut inserts_seen = 0usize;
+    for (idx, line) in journal.lines().enumerate() {
+      if line.trim().is_empty() {
+        continue;
+      }
+      let record = serde_json::from_str::<JournalRecord>(line)
+        .unwrap_or_else(|err| panic!("invalid journal line {idx}: {err} (raw={line:?})"));
+      match record {
+        JournalRecord::Insert { key, .. } => {
+          inserts_seen += 1;
+          assert!(
+            insert_keys.insert(key.clone()),
+            "duplicate insert key encountered: {key}"
+          );
+        }
+        JournalRecord::Remove { .. } => {}
+      }
+    }
+
+    assert_eq!(
+      inserts_seen, expected_inserts,
+      "expected {expected_inserts} inserts, saw {inserts_seen}"
+    );
+    assert_eq!(
+      insert_keys.len(),
+      expected_inserts,
+      "expected unique insert keys for every record"
+    );
+  }
+
+  #[test]
+  #[ignore]
+  fn disk_cache_index_multiprocess_child_writer() {
+    let cache_dir =
+      PathBuf::from(std::env::var_os("FASTR_DISK_CACHE_INDEX_CACHE_DIR").expect("cache dir env"));
+    let id = std::env::var("FASTR_DISK_CACHE_INDEX_CHILD_ID")
+      .expect("child id env")
+      .parse::<usize>()
+      .expect("child id parse");
+    let flushes = std::env::var("FASTR_DISK_CACHE_INDEX_FLUSHES")
+      .expect("flush count env")
+      .parse::<usize>()
+      .expect("flush count parse");
+    let backfills = std::env::var("FASTR_DISK_CACHE_INDEX_BACKFILLS")
+      .expect("backfills env")
+      .parse::<usize>()
+      .expect("backfills parse");
+    let key_size = std::env::var("FASTR_DISK_CACHE_INDEX_KEY_SIZE")
+      .expect("key size env")
+      .parse::<usize>()
+      .expect("key size parse");
+
+    let padding = "x".repeat(key_size);
+    let index = DiskCacheIndex::new(cache_dir.clone());
+    index.refresh();
+
+    for flush in 0..flushes {
+      for idx in 0..backfills {
+        let key = format!("p{id}_f{flush}_bf{idx}_{padding}");
+        let data_path = cache_dir.join(format!("{key}.bin"));
+        let meta_path = cache_dir.join(format!("{key}.bin.meta"));
+        index.backfill_if_missing(&key, 1_700_000_000, 1, &data_path, &meta_path);
+      }
+
+      let key = format!("p{id}_f{flush}_main_{padding}");
+      let data_path = cache_dir.join(format!("{key}.bin"));
+      let meta_path = cache_dir.join(format!("{key}.bin.meta"));
+      index.record_insert(&key, 1_700_000_000, 1, &data_path, &meta_path);
+    }
   }
 }

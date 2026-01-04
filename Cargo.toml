@@ -13,7 +13,7 @@ resolver = "2"
 [features]
 default = ["preserve3d_warp"]
 box_generation_demo = []
-disk_cache = ["libc"]
+disk_cache = ["libc", "fs2"]
 preserve3d_warp = []
 
 [dependencies]
@@ -27,6 +27,7 @@ csscolorparser = "0.6"
 cssparser = "0.35"
 flate2 = "1"
 encoding_rs = "0.8"
+fs2 = { version = "0.4", optional = true }
 fontdb = "0.23"
 html5ever = "0.35"
 hyphenation = { version = "0.8", features = ["embed_en-us"] }
