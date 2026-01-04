@@ -1,5 +1,6 @@
 //! Shared helpers for the `xtask` developer workflow binary.
 
+pub mod capture_missing_failure_fixtures;
 pub mod pageset_failure_fixtures;
 
 /// Extract `--disk-cache-*` flags from an argument vector while preserving ordering.
