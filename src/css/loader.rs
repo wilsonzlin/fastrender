@@ -5,7 +5,9 @@
 //! fetched CSS into an HTML document. They are shared by the developer
 //! tooling binaries so cached pages can be rendered with their real styles.
 
-use crate::css::parser::{rel_list_contains_stylesheet, tokenize_rel_list};
+use crate::css::parser::{
+  extract_scoped_css_sources, rel_list_contains_stylesheet, tokenize_rel_list, StylesheetSource,
+};
 use crate::debug::runtime;
 use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::error::{RenderError, RenderStage, Result};
@@ -1436,6 +1438,85 @@ pub fn extract_css_links(
   base_url: &str,
   media_type: crate::style::media::MediaType,
 ) -> std::result::Result<Vec<String>, RenderError> {
+  let Ok(dom) = crate::dom::parse_html(html) else {
+    return extract_css_links_without_dom(html, base_url, media_type);
+  };
+
+  let mut css_urls = Vec::new();
+  let toggles = runtime::runtime_toggles();
+  let debug = toggles.truthy("FASTR_LOG_CSS_LINKS");
+  let preload_stylesheets_enabled =
+    toggles.truthy_with_default("FASTR_FETCH_PRELOAD_STYLESHEETS", true);
+  let modulepreload_stylesheets_enabled =
+    toggles.truthy_with_default("FASTR_FETCH_MODULEPRELOAD_STYLESHEETS", false);
+  let alternate_stylesheets_enabled =
+    toggles.truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
+  let scoped_sources = extract_scoped_css_sources(&dom);
+
+  let mut consider_source = |source: &StylesheetSource| {
+    let StylesheetSource::External(link) = source else {
+      return;
+    };
+    if link.disabled {
+      return;
+    }
+    if link.href.trim().is_empty() {
+      return;
+    }
+
+    if !link_rel_is_stylesheet_candidate(
+      &link.rel,
+      link.as_attr.as_deref(),
+      preload_stylesheets_enabled,
+      modulepreload_stylesheets_enabled,
+      alternate_stylesheets_enabled,
+    ) {
+      return;
+    }
+
+    let allowed = link
+      .media
+      .as_deref()
+      .map(|media| media_attr_allows_target(media, media_type))
+      .unwrap_or(true);
+    if !allowed {
+      return;
+    }
+
+    let href = normalize_scheme_slashes(link.href.trim());
+    if debug {
+      eprintln!(
+        "[css] found <link>: href={href} rel={:?} media={:?}",
+        link.rel, link.media
+      );
+    }
+    if let Some(full_url) = resolve_href(base_url, &href) {
+      css_urls.push(full_url);
+    }
+  };
+
+  for source in scoped_sources.document.iter() {
+    consider_source(source);
+  }
+
+  let mut shadow_hosts: Vec<usize> = scoped_sources.shadows.keys().copied().collect();
+  shadow_hosts.sort_unstable();
+  for host in shadow_hosts {
+    if let Some(sources) = scoped_sources.shadows.get(&host) {
+      for source in sources {
+        consider_source(source);
+      }
+    }
+  }
+
+  Ok(dedupe_links_preserving_order(css_urls))
+}
+
+fn extract_css_links_without_dom(
+  html: &str,
+  base_url: &str,
+  media_type: crate::style::media::MediaType,
+) -> std::result::Result<Vec<String>, RenderError> {
   let mut css_urls = Vec::new();
   let toggles = runtime::runtime_toggles();
   let debug = toggles.truthy("FASTR_LOG_CSS_LINKS");
@@ -1537,29 +1618,72 @@ fn media_attr_allows_target(value: &str, target: crate::style::media::MediaType)
 
   let mut allowed = false;
   for token in value.split(',') {
-    let t = token.trim().to_ascii_lowercase();
-    allowed |= match t.as_str() {
-      "all" => return true,
-      "screen" => {
-        matches!(
-          target,
-          crate::style::media::MediaType::Screen | crate::style::media::MediaType::All
-        )
+    let query = token.trim();
+    if query.is_empty() {
+      allowed = true;
+      continue;
+    }
+
+    let lowered = query.to_ascii_lowercase();
+    let mut tokens = lowered.split_whitespace();
+    let Some(first) = tokens.next() else {
+      continue;
+    };
+
+    let mut negated = false;
+    let media_token = match first {
+      "only" => tokens.next(),
+      "not" => {
+        negated = true;
+        tokens.next()
       }
-      "print" => {
-        matches!(
-          target,
-          crate::style::media::MediaType::Print | crate::style::media::MediaType::All
-        )
-      }
-      "speech" => {
-        matches!(
-          target,
-          crate::style::media::MediaType::Speech | crate::style::media::MediaType::All
-        )
-      }
+      other => Some(other),
+    };
+
+    let Some(media_type) = media_token else {
+      // Malformed media query list entry; keep behavior permissive so we don't drop stylesheets.
+      allowed = true;
+      continue;
+    };
+
+    if media_type.starts_with('(') {
+      // Media type omitted (e.g. `(min-width: 600px)`); this defaults to `all`.
+      allowed = true;
+      continue;
+    }
+
+    let matches_type = match media_type {
+      "all" => true,
+      "screen" => matches!(
+        target,
+        crate::style::media::MediaType::Screen | crate::style::media::MediaType::All
+      ),
+      "print" => matches!(
+        target,
+        crate::style::media::MediaType::Print | crate::style::media::MediaType::All
+      ),
+      "speech" => matches!(
+        target,
+        crate::style::media::MediaType::Speech | crate::style::media::MediaType::All
+      ),
       _ => false,
     };
+
+    if negated {
+      // We cannot evaluate feature expressions like `not screen and (min-width: ...)` without a
+      // full MediaContext; treat those as allowed so offline tooling doesn't drop resources.
+      if lowered.contains('(') || lowered.contains(" and ") {
+        allowed = true;
+      } else {
+        allowed |= !matches_type;
+      }
+    } else {
+      allowed |= matches_type;
+    }
+
+    if !negated && media_type == "all" {
+      return true;
+    }
   }
 
   allowed
@@ -2594,6 +2718,57 @@ mod tests {
     let urls =
       extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen).unwrap();
     assert!(urls.is_empty());
+  }
+
+  #[test]
+  fn extract_css_links_ignores_stylesheets_inside_template() {
+    let html = r#"
+            <head>
+              <template><link rel="stylesheet" href="/bad.css"></template>
+              <link rel="stylesheet" href="/good.css">
+            </head>
+        "#;
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
+    assert_eq!(urls, vec!["https://example.com/good.css".to_string()]);
+  }
+
+  #[test]
+  fn extract_css_links_ignores_stylesheets_inside_svg() {
+    let html = r#"
+            <head>
+              <svg>
+                <link rel="stylesheet" href="/bad.css"></link>
+              </svg>
+              <link rel="stylesheet" href="/good.css">
+            </head>
+        "#;
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
+    assert_eq!(urls, vec!["https://example.com/good.css".to_string()]);
+  }
+
+  #[test]
+  fn extract_css_links_includes_declarative_shadow_dom_stylesheets() {
+    let html = r#"
+            <div id="host">
+              <template shadowroot="open">
+                <link rel="stylesheet" href="/shadow.css">
+              </template>
+            </div>
+        "#;
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
+    assert_eq!(urls, vec!["https://example.com/shadow.css".to_string()]);
+  }
+
+  #[test]
+  fn extract_css_links_allows_screen_media_queries() {
+    let html = r#"
+            <link rel="stylesheet" media="screen and (min-width: 600px)" href="/a.css">
+        "#;
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
+    assert_eq!(urls, vec!["https://example.com/a.css".to_string()]);
+
+    let print_urls = extract_css_links(html, "https://example.com/", MediaType::Print).unwrap();
+    assert!(print_urls.is_empty());
   }
 
   #[test]

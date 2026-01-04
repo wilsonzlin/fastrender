@@ -49,7 +49,7 @@ use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use crate::dom::{DomNode, DomNodeType};
+use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Color;
@@ -4345,7 +4345,10 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
             disabled: node.get_attribute_ref("disabled").is_some(),
           }),
         });
-      } else if tag.eq_ignore_ascii_case("link") && matches!(scope, CssTreeScope::Document) {
+      } else if tag.eq_ignore_ascii_case("link")
+        && matches!(scope, CssTreeScope::Document)
+        && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+      {
         let rel_attr = node.get_attribute("rel");
         let href_attr = node.get_attribute("href");
         if let (Some(rel), Some(href)) = (rel_attr, href_attr) {
@@ -4428,7 +4431,9 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
           type_attr: node.get_attribute("type"),
           disabled: node.get_attribute_ref("disabled").is_some(),
         }));
-      } else if tag.eq_ignore_ascii_case("link") {
+      } else if tag.eq_ignore_ascii_case("link")
+        && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+      {
         let rel_attr = node.get_attribute("rel");
         let href_attr = node.get_attribute("href");
         if let (Some(rel), Some(href)) = (rel_attr, href_attr) {
@@ -5424,6 +5429,45 @@ mod tests {
   }
 
   #[test]
+  fn link_inside_svg_is_ignored_for_stylesheet_sources() {
+    let html = r#"
+      <html>
+        <head>
+          <svg>
+            <link rel="stylesheet" href="https://bad.example/poison.css"></link>
+          </svg>
+          <link rel="stylesheet" href="https://good.example/app.css">
+        </head>
+      </html>
+    "#;
+    let dom = crate::dom::parse_html(html).unwrap();
+
+    let scoped = extract_scoped_css_sources(&dom);
+    let externals: Vec<String> = scoped
+      .document
+      .iter()
+      .filter_map(|source| match source {
+        StylesheetSource::External(link) => Some(link.href.clone()),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(externals, vec!["https://good.example/app.css".to_string()]);
+
+    let flat = extract_css_sources(&dom);
+    let flat_externals: Vec<String> = flat
+      .iter()
+      .filter_map(|source| match &source.source {
+        StylesheetSource::External(link) => Some(link.href.clone()),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(
+      flat_externals,
+      vec!["https://good.example/app.css".to_string()]
+    );
+  }
+
+  #[test]
   fn style_inside_inert_template_is_ignored() {
     let html = "<head><template><style>body{color:red}</style></template><style>body{color:green}</style></head>";
     let dom = crate::dom::parse_html(html).unwrap();
@@ -5560,7 +5604,10 @@ mod tests {
       "styles inside unpromoted declarative shadow templates should be ignored"
     );
     assert!(
-      sources.shadows.values().all(|shadow_sources| shadow_sources.is_empty()),
+      sources
+        .shadows
+        .values()
+        .all(|shadow_sources| shadow_sources.is_empty()),
       "expected no styles extracted from shadow roots"
     );
   }
@@ -5639,7 +5686,9 @@ mod tests {
       });
     }
 
-    let rule = registry.get("--p").expect("expected property to be registered");
+    let rule = registry
+      .get("--p")
+      .expect("expected property to be registered");
     assert_eq!(rule.syntax, CustomPropertySyntax::LengthPercentage);
     assert!(!rule.inherits);
     let initial = rule.initial_value.as_ref().expect("expected initial-value");
@@ -5668,7 +5717,9 @@ mod tests {
       });
     }
 
-    let rule = registry.get("--p0").expect("expected property to be registered");
+    let rule = registry
+      .get("--p0")
+      .expect("expected property to be registered");
     assert_eq!(rule.syntax, CustomPropertySyntax::LengthPercentage);
     let initial = rule.initial_value.as_ref().expect("expected initial-value");
     assert_eq!(initial.value, "0");
