@@ -63,6 +63,7 @@ use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::text::font_db::LoadedFont;
 pub use crate::text::font_fallback::FontId;
+use crate::text::pipeline::RunRotation;
 use crate::tree::fragment_tree::TableCollapsedBorders;
 use std::fmt;
 use std::sync::Arc;
@@ -663,6 +664,18 @@ pub struct TextItem {
   /// Selected CPAL palette index for color fonts.
   pub palette_index: u16,
 
+  /// Palette overrides for color glyph rendering (resolved from CSS `font-palette`).
+  pub palette_overrides: Arc<Vec<(u16, Rgba)>>,
+
+  /// Stable hash of palette overrides for cache keys.
+  pub palette_override_hash: u64,
+
+  /// Optional rotation to apply when painting (e.g. `text-orientation: mixed` sideways runs).
+  pub rotation: RunRotation,
+
+  /// Optional additional scale factor (1.0 = none). Used for `text-combine-upright` compression.
+  pub scale: f32,
+
   /// Shadows to paint before the fill
   pub shadows: Vec<TextShadowItem>,
 
@@ -708,6 +721,10 @@ impl Default for TextItem {
       glyphs: Vec::new(),
       color: Rgba::default(),
       palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
+      rotation: RunRotation::None,
+      scale: 1.0,
       shadows: Vec::new(),
       font_size: 0.0,
       advance_width: 0.0,
@@ -723,16 +740,25 @@ impl Default for TextItem {
 }
 
 /// A single glyph instance for rendering
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct GlyphInstance {
   /// Glyph index in the font
   pub glyph_id: u32,
 
-  /// Position offset from text origin
-  pub offset: Point,
+  /// Cluster index (maps to character position in original text).
+  pub cluster: u32,
 
-  /// Advance width to next glyph
-  pub advance: f32,
+  /// X position relative to run start.
+  pub x_offset: f32,
+
+  /// Y position relative to the baseline.
+  pub y_offset: f32,
+
+  /// Horizontal advance (distance to next glyph).
+  pub x_advance: f32,
+
+  /// Vertical advance (usually 0 for horizontal text).
+  pub y_advance: f32,
 }
 
 /// Emphasis mark to render relative to the text run.
@@ -818,9 +844,9 @@ fn conservative_glyph_run_bounds(
   let mut min_x = origin.x;
   let mut max_x = origin.x + advance_width;
   for glyph in glyphs {
-    let gx = origin.x + glyph.offset.x;
+    let gx = origin.x + glyph.x_offset;
     min_x = min_x.min(gx);
-    max_x = max_x.max(gx + glyph.advance);
+    max_x = max_x.max(gx + glyph.x_advance);
   }
   // Assume glyph outlines extend roughly one font-size above the baseline and a quarter below.
   let ascent = font_size;
@@ -2666,27 +2692,25 @@ mod tests {
       glyphs: vec![
         GlyphInstance {
           glyph_id: 1,
-          offset: Point::new(-2.0, 0.0),
-          advance: 4.0,
+          cluster: 0,
+          x_offset: -2.0,
+          y_offset: 0.0,
+          x_advance: 4.0,
+          y_advance: 0.0,
         },
         GlyphInstance {
           glyph_id: 2,
-          offset: Point::new(2.0, 0.0),
-          advance: 6.0,
+          cluster: 0,
+          x_offset: 2.0,
+          y_offset: 0.0,
+          x_advance: 6.0,
+          y_advance: 0.0,
         },
       ],
       color: Rgba::BLACK,
-      palette_index: 0,
-      shadows: Vec::new(),
       font_size: 12.0,
       advance_width: 20.0,
-      font: None,
-      font_id: None,
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
+      ..Default::default()
     };
     let expected = text_bounds(&uncached);
     let mut cached = uncached.clone();

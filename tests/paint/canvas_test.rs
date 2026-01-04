@@ -36,8 +36,11 @@ fn to_glyph_instances(run: &ShapedRun) -> Vec<GlyphInstance> {
     .iter()
     .map(|g| GlyphInstance {
       glyph_id: g.glyph_id,
-      offset: Point::new(g.x_offset, g.y_offset),
-      advance: g.x_advance,
+      cluster: g.cluster,
+      x_offset: g.x_offset,
+      y_offset: -g.y_offset,
+      x_advance: g.x_advance,
+      y_advance: g.y_advance,
     })
     .collect()
 }
@@ -538,8 +541,11 @@ fn canvas_draw_text_respects_deadline_timeout() {
 
   let glyphs = [GlyphInstance {
     glyph_id,
-    offset: Point::new(0.0, 0.0),
-    advance: 0.0,
+    cluster: 0,
+    x_offset: 0.0,
+    y_offset: 0.0,
+    x_advance: 0.0,
+    y_advance: 0.0,
   }];
 
   let checks = Arc::new(AtomicUsize::new(0));

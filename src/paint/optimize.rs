@@ -1492,8 +1492,11 @@ mod tests {
     let glyphs: Vec<GlyphInstance> = (0..200)
       .map(|i| GlyphInstance {
         glyph_id: i as u32,
-        offset: Point::new(-70.0 + i as f32 * 2.0, 0.0),
-        advance: 2.0,
+        cluster: 0,
+        x_offset: -70.0 + i as f32 * 2.0,
+        y_offset: 0.0,
+        x_advance: 2.0,
+        y_advance: 0.0,
       })
       .collect();
     let mut text = TextItem {
@@ -1501,17 +1504,9 @@ mod tests {
       cached_bounds: None,
       glyphs,
       color: Rgba::BLACK,
-      palette_index: 0,
-      shadows: Vec::new(),
       font_size: 20.0,
       advance_width: 400.0,
-      font: None,
-      font_id: None,
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
+      ..Default::default()
     };
     let bounds = text_bounds(&text);
     text.cached_bounds = Some(bounds);

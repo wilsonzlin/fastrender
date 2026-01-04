@@ -2888,8 +2888,11 @@ impl DisplayListRenderer {
       .iter()
       .map(|g| GlyphInstance {
         glyph_id: g.glyph_id,
-        offset: self.ds_point(g.offset),
-        advance: self.ds_len(g.advance),
+        cluster: g.cluster,
+        x_offset: self.ds_len(g.x_offset),
+        y_offset: self.ds_len(g.y_offset),
+        x_advance: self.ds_len(g.x_advance),
+        y_advance: self.ds_len(g.y_advance),
       })
       .collect();
     scaled.shadows = item
@@ -2920,8 +2923,11 @@ impl DisplayListRenderer {
           .into_iter()
           .map(|g| GlyphInstance {
             glyph_id: g.glyph_id,
-            offset: self.ds_point(g.offset),
-            advance: self.ds_len(g.advance),
+            cluster: g.cluster,
+            x_offset: self.ds_len(g.x_offset),
+            y_offset: self.ds_len(g.y_offset),
+            x_advance: self.ds_len(g.x_advance),
+            y_advance: self.ds_len(g.y_advance),
           })
           .collect();
         e.text = Some(t);
@@ -2949,6 +2955,7 @@ impl DisplayListRenderer {
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
+      ..Default::default()
     };
     let scaled = self.scale_text_item(&text_equiv);
     ListMarkerItem {
@@ -7080,15 +7087,19 @@ impl DisplayListRenderer {
       self.render_text_shadows(&font, item)?;
     }
 
-    self.canvas.draw_text(
+    self.canvas.draw_text_run(
       item.origin,
       &item.glyphs,
       &font,
       item.font_size,
+      item.scale,
+      item.rotation,
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
       item.palette_index,
+      item.palette_overrides.as_slice(),
+      item.palette_override_hash,
       &item.variations,
     )?;
     if let Some(emphasis) = &item.emphasis {
@@ -7119,6 +7130,7 @@ impl DisplayListRenderer {
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
+      ..Default::default()
     };
     self.render_text(&text)
   }
@@ -7372,8 +7384,9 @@ impl DisplayListRenderer {
       return bounds;
     }
 
-    let ascent = item.font_size;
-    let descent = item.font_size * 0.25;
+    let effective_font_size = item.font_size * item.scale;
+    let ascent = effective_font_size;
+    let descent = effective_font_size * 0.25;
 
     // Prefer per-glyph bounding boxes from the parsed face; unlike outline extraction, this does
     // not require walking the glyph outline for each glyph.
@@ -7389,7 +7402,10 @@ impl DisplayListRenderer {
         // under-estimate the shadow surface size, which in turn causes color glyph rasterization
         // to be rejected by safety limits (yielding empty shadows). Fall back to conservative
         // advance/ascent bounds for color fonts.
-        (item.font_size / units_per_em, !face.is_variable() && !is_color_font)
+        (
+          effective_font_size / units_per_em,
+          !face.is_variable() && !is_color_font,
+        )
       } else {
         (0.0, false)
       }
@@ -7405,9 +7421,15 @@ impl DisplayListRenderer {
       0.0
     };
 
+    let rotation = crate::paint::text_rasterize::rotation_transform(
+      item.rotation,
+      item.origin.x,
+      item.origin.y,
+    );
+
     for glyph in &item.glyphs {
-      let glyph_x = cursor_x + glyph.offset.x;
-      let glyph_y = item.origin.y + cursor_y + glyph.offset.y;
+      let glyph_x = cursor_x + glyph.x_offset;
+      let glyph_y = item.origin.y + cursor_y + glyph.y_offset;
 
       if has_bbox {
         if let (Some(face), Ok(glyph_id)) =
@@ -7421,33 +7443,61 @@ impl DisplayListRenderer {
               (bbox.x_max as f32, bbox.y_max as f32),
             ];
             for (px, py) in corners {
-              let x = glyph_x + (px + skew * py) * scale;
-              let y = glyph_y - py * scale;
+              let mut x = glyph_x + (px + skew * py) * scale;
+              let mut y = glyph_y - py * scale;
+              if let Some(t) = rotation {
+                let rx = x * t.sx + y * t.kx + t.tx;
+                let ry = x * t.ky + y * t.sy + t.ty;
+                x = rx;
+                y = ry;
+              }
               bounds.min_x = bounds.min_x.min(x);
               bounds.max_x = bounds.max_x.max(x);
               bounds.min_y = bounds.min_y.min(y);
               bounds.max_y = bounds.max_y.max(y);
             }
           } else {
-            let x0 = glyph_x.min(glyph_x + glyph.advance);
-            let x1 = glyph_x.max(glyph_x + glyph.advance);
-            bounds.min_x = bounds.min_x.min(x0);
-            bounds.max_x = bounds.max_x.max(x1);
-            bounds.min_y = bounds.min_y.min(glyph_y - ascent);
-            bounds.max_y = bounds.max_y.max(glyph_y + descent);
+            let x0 = glyph_x.min(glyph_x + glyph.x_advance);
+            let x1 = glyph_x.max(glyph_x + glyph.x_advance);
+            let y0 = glyph_y - ascent;
+            let y1 = glyph_y + descent;
+            let corners = [(x0, y0), (x0, y1), (x1, y0), (x1, y1)];
+            for (mut x, mut y) in corners {
+              if let Some(t) = rotation {
+                let rx = x * t.sx + y * t.kx + t.tx;
+                let ry = x * t.ky + y * t.sy + t.ty;
+                x = rx;
+                y = ry;
+              }
+              bounds.min_x = bounds.min_x.min(x);
+              bounds.max_x = bounds.max_x.max(x);
+              bounds.min_y = bounds.min_y.min(y);
+              bounds.max_y = bounds.max_y.max(y);
+            }
           }
         }
       } else {
-        let x0 = glyph_x.min(glyph_x + glyph.advance);
-        let x1 = glyph_x.max(glyph_x + glyph.advance);
-        bounds.min_x = bounds.min_x.min(x0);
-        bounds.max_x = bounds.max_x.max(x1);
-        bounds.min_y = bounds.min_y.min(glyph_y - ascent);
-        bounds.max_y = bounds.max_y.max(glyph_y + descent);
+        let x0 = glyph_x.min(glyph_x + glyph.x_advance);
+        let x1 = glyph_x.max(glyph_x + glyph.x_advance);
+        let y0 = glyph_y - ascent;
+        let y1 = glyph_y + descent;
+        let corners = [(x0, y0), (x0, y1), (x1, y0), (x1, y1)];
+        for (mut x, mut y) in corners {
+          if let Some(t) = rotation {
+            let rx = x * t.sx + y * t.kx + t.tx;
+            let ry = x * t.ky + y * t.sy + t.ty;
+            x = rx;
+            y = ry;
+          }
+          bounds.min_x = bounds.min_x.min(x);
+          bounds.max_x = bounds.max_x.max(x);
+          bounds.min_y = bounds.min_y.min(y);
+          bounds.max_y = bounds.max_y.max(y);
+        }
       }
 
-      cursor_x += glyph.advance;
-      cursor_y += 0.0;
+      cursor_x += glyph.x_advance;
+      cursor_y += glyph.y_advance;
     }
 
     if !bounds.is_valid() {
@@ -7521,11 +7571,11 @@ impl DisplayListRenderer {
       .iter()
       .map(|g| GlyphPosition {
         glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
+        cluster: g.cluster,
+        x_offset: g.x_offset,
+        y_offset: g.y_offset,
+        x_advance: g.x_advance,
+        y_advance: g.y_advance,
       })
       .collect();
     let variations: Vec<Variation> = item
@@ -7536,6 +7586,8 @@ impl DisplayListRenderer {
         value: v.value(),
       })
       .collect();
+    let rotation =
+      crate::paint::text_rasterize::rotation_transform(item.rotation, item.origin.x, item.origin.y);
 
     let mut rasterizer = TextRasterizer::with_caches(
       self.glyph_cache.clone(),
@@ -7576,14 +7628,14 @@ impl DisplayListRenderer {
       match rasterizer.render_glyph_run(
         &glyph_positions,
         font,
-        item.font_size,
+        item.font_size * item.scale,
         item.synthetic_bold,
         item.synthetic_oblique,
         item.palette_index,
-        &[],
-        0,
+        item.palette_overrides.as_slice(),
+        item.palette_override_hash,
         &variations,
-        None,
+        rotation,
         item.origin.x,
         item.origin.y,
         shadow.color,
@@ -12850,14 +12902,15 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(10.0, 24.0),
-      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
-        offset: Point::new(0.0, 0.0),
-        advance: 14.0,
+        cluster: 0,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 14.0,
+        y_advance: 0.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(4.0, 0.0),
         blur_radius: 0.0,
@@ -12867,11 +12920,7 @@ mod tests {
       advance_width: 14.0,
       font_id: font.id,
       font: Some(Arc::new(font.clone())),
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
+      ..Default::default()
     }));
 
     let renderer = DisplayListRenderer::new(80, 40, Rgba::WHITE, font_ctx).expect("renderer");
@@ -12913,14 +12962,15 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(10.0, 24.0),
-      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
-        offset: Point::new(0.0, 0.0),
-        advance: 14.0,
+        cluster: 0,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 14.0,
+        y_advance: 0.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(2.0, 0.0),
         blur_radius: 0.0,
@@ -12930,11 +12980,7 @@ mod tests {
       advance_width: 14.0,
       font_id: font.id,
       font: Some(Arc::new(font.clone())),
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
+      ..Default::default()
     }));
 
     let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0)
@@ -13004,14 +13050,15 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(10.0, 24.0),
-      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
-        offset: Point::new(0.0, 0.0),
-        advance: 14.0,
+        cluster: 0,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 14.0,
+        y_advance: 0.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(0.0, 0.0),
         blur_radius: 4.0,
@@ -13021,11 +13068,7 @@ mod tests {
       advance_width: 14.0,
       font_id: font.id,
       font: Some(Arc::new(font.clone())),
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
+      ..Default::default()
     }));
 
     let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0)
@@ -13075,14 +13118,15 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(0.0, 20.0),
-      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
-        offset: Point::new(0.0, 0.0),
-        advance: 14.0,
+        cluster: 0,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 14.0,
+        y_advance: 0.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(10.0, 20.0), // percent(50%) + em(1.0) resolved against font size 20px
         blur_radius: 0.0,
@@ -13092,11 +13136,7 @@ mod tests {
       advance_width: 14.0,
       font_id: font.id,
       font: Some(Arc::new(font.clone())),
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
+      ..Default::default()
     }));
 
     let renderer = DisplayListRenderer::new(120, 100, Rgba::WHITE, font_ctx).expect("renderer");
@@ -13128,18 +13168,10 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(20.0, 30.0),
-      cached_bounds: None,
       glyphs: Vec::new(),
       color: Rgba::BLACK,
-      palette_index: 0,
-      shadows: vec![],
       font_size: 16.0,
       advance_width: 0.0,
-      font_id: None,
-      font: None,
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
       emphasis: Some(TextEmphasis {
         style: TextEmphasisStyle::Mark {
           fill: TextEmphasisFill::Filled,
@@ -13154,7 +13186,7 @@ mod tests {
         inline_vertical: false,
         text: None,
       }),
-      decorations: Vec::new(),
+      ..Default::default()
     }));
 
     let renderer =

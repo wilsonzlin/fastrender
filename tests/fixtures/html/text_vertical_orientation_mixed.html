@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Text - vertical writing + text-orientation:mixed</title>
+    <style>
+      @font-face {
+        font-family: "Noto Sans JP Subset";
+        src: url("tests/fixtures/fonts/NotoSansJP-subset.ttf") format("truetype");
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #fff;
+      }
+
+      .vertical {
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+        font-family: "Noto Sans JP Subset";
+        font-size: 64px;
+        line-height: 1;
+        border: 2px solid #000;
+        padding: 16px;
+        height: 360px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- CJK should remain upright, Latin should rotate sideways under mixed orientation. -->
+    <div class="vertical">漢A字B</div>
+  </body>
+</html>

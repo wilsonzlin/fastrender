@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Text - font-palette override-colors (display list)</title>
+    <style>
+      @font-face {
+        font-family: "PaletteTestCOLRv1";
+        src: url("tests/fixtures/fonts/PaletteTestCOLRv1.ttf") format("truetype");
+      }
+
+      /* Override one palette entry to a fixed green and another to currentColor. */
+      @font-palette-values --override-current-color {
+        font-family: "PaletteTestCOLRv1";
+        base-palette: 0;
+        override-colors: 0 rgb(0, 200, 0), 1 currentColor;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #fff;
+      }
+
+      .row {
+        display: flex;
+        gap: 40px;
+        align-items: flex-start;
+      }
+
+      .sample {
+        font-family: "PaletteTestCOLRv1";
+        font-palette: --override-current-color;
+        font-size: 96px;
+        line-height: 1;
+      }
+
+      .a {
+        color: rgb(40, 180, 200);
+      }
+
+      .b {
+        color: rgb(220, 80, 60);
+      }
+
+      .label {
+        margin-top: 8px;
+        font-family: "Noto Sans", sans-serif;
+        font-size: 14px;
+        color: #222;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <div>
+        <div class="sample a">A</div>
+        <div class="label">currentColor = cyan</div>
+      </div>
+      <div>
+        <div class="sample b">A</div>
+        <div class="label">currentColor = red</div>
+      </div>
+    </div>
+  </body>
+</html>

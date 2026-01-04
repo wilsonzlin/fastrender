@@ -56,14 +56,14 @@ use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::pixmap::{new_pixmap, new_pixmap_with_context};
 use crate::paint::text_rasterize::{
-  concat_transforms, GlyphCacheStats, TextRasterizer, TextRenderState,
+  concat_transforms, rotation_transform, GlyphCacheStats, TextRasterizer, TextRenderState,
 };
 use crate::paint::text_shadow::PathBounds;
 use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Rgba;
 use crate::text::color_fonts::ColorGlyphRaster;
 use crate::text::font_db::LoadedFont;
-use crate::text::pipeline::{GlyphPosition, ShapedRun};
+use crate::text::pipeline::{GlyphPosition, RunRotation, ShapedRun};
 use rustybuzz::Variation as HbVariation;
 use std::rc::Rc;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -1095,6 +1095,40 @@ impl Canvas {
     palette_index: u16,
     variations: &[FontVariation],
   ) -> Result<()> {
+    self.draw_text_run(
+      position,
+      glyphs,
+      font,
+      font_size,
+      1.0,
+      RunRotation::None,
+      color,
+      synthetic_bold,
+      synthetic_oblique,
+      palette_index,
+      &[],
+      0,
+      variations,
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn draw_text_run(
+    &mut self,
+    position: Point,
+    glyphs: &[GlyphInstance],
+    font: &LoadedFont,
+    font_size: f32,
+    run_scale: f32,
+    rotation: RunRotation,
+    color: Rgba,
+    synthetic_bold: f32,
+    synthetic_oblique: f32,
+    palette_index: u16,
+    palette_overrides: &[(u16, Rgba)],
+    palette_override_hash: u64,
+    variations: &[FontVariation],
+  ) -> Result<()> {
     if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
       return Ok(());
     }
@@ -1106,25 +1140,26 @@ impl Canvas {
       .iter()
       .map(|g| GlyphPosition {
         glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
+        cluster: g.cluster,
+        x_offset: g.x_offset,
+        y_offset: g.y_offset,
+        x_advance: g.x_advance,
+        y_advance: g.y_advance,
       })
       .collect();
 
+    let rotation = rotation_transform(rotation, position.x, position.y);
     self.text_rasterizer.render_glyph_run(
       &positions,
       font,
-      font_size,
+      font_size * run_scale,
       synthetic_bold,
       synthetic_oblique,
       palette_index,
-      &[],
-      0,
+      palette_overrides,
+      palette_override_hash,
       &hb_variations,
-      None,
+      rotation,
       position.x,
       position.y,
       color,

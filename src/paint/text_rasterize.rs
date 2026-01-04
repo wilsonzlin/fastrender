@@ -650,7 +650,7 @@ fn estimate_glyph_size(metrics: &GlyphOutlineMetrics) -> usize {
   point_bytes.saturating_add(verb_bytes)
 }
 
-fn rotation_transform(
+pub(crate) fn rotation_transform(
   rotation: crate::text::pipeline::RunRotation,
   origin_x: f32,
   origin_y: f32,

@@ -46,8 +46,11 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
       let y = origin.y - glyph.y_offset;
       GlyphInstance {
         glyph_id: glyph.glyph_id,
-        offset: Point::new(x - origin.x, y - origin.y),
-        advance: glyph.x_advance,
+        cluster: glyph.cluster,
+        x_offset: x - origin.x,
+        y_offset: y - origin.y,
+        x_advance: glyph.x_advance,
+        y_advance: glyph.y_advance,
       }
     })
     .collect();
@@ -65,6 +68,10 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
     glyphs,
     color: text_color,
     palette_index: run.palette_index,
+    palette_overrides: run.palette_overrides.clone(),
+    palette_override_hash: run.palette_override_hash,
+    rotation: run.rotation,
+    scale: run.scale,
     shadows: Vec::new(),
     font_size: run.font_size,
     advance_width: run.advance,

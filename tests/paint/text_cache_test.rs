@@ -43,8 +43,11 @@ fn caches_glyph_outlines_between_draws() {
     .iter()
     .map(|g| GlyphInstance {
       glyph_id: g.glyph_id,
-      offset: Point::new(g.x_offset, g.y_offset),
-      advance: g.x_advance,
+      cluster: g.cluster,
+      x_offset: g.x_offset,
+      y_offset: g.y_offset,
+      x_advance: g.x_advance,
+      y_advance: g.y_advance,
     })
     .collect();
   let variations: Vec<DlFontVariation> = Vec::new();
@@ -98,8 +101,11 @@ fn respects_clip_mask_for_text() {
     .iter()
     .map(|g| GlyphInstance {
       glyph_id: g.glyph_id,
-      offset: Point::new(g.x_offset, g.y_offset),
-      advance: g.x_advance,
+      cluster: g.cluster,
+      x_offset: g.x_offset,
+      y_offset: g.y_offset,
+      x_advance: g.x_advance,
+      y_advance: g.y_advance,
     })
     .collect();
   let variations: Vec<DlFontVariation> = Vec::new();

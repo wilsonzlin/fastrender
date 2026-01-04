@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Text - text-combine-upright scale</title>
+    <style>
+      @font-face {
+        font-family: "Noto Sans JP Subset";
+        src: url("tests/fixtures/fonts/NotoSansJP-subset.ttf") format("truetype");
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #fff;
+      }
+
+      .vertical {
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+        font-family: "Noto Sans JP Subset";
+        font-size: 64px;
+        line-height: 1;
+        border: 2px solid #000;
+        padding: 16px;
+        height: 360px;
+      }
+
+      .combine {
+        text-combine-upright: digits 2;
+        border: 1px solid rgb(200, 0, 0);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The combined digits should be compressed to fit within a single vertical cell. -->
+    <div class="vertical">縦<span class="combine">12</span>書</div>
+  </body>
+</html>

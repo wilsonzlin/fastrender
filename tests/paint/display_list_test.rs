@@ -870,27 +870,25 @@ fn test_text_item() {
     glyphs: vec![
       GlyphInstance {
         glyph_id: 72, // 'H'
-        offset: Point::new(0.0, 0.0),
-        advance: 12.0,
+        cluster: 0,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 12.0,
+        y_advance: 0.0,
       },
       GlyphInstance {
         glyph_id: 101, // 'e'
-        offset: Point::new(12.0, 0.0),
-        advance: 10.0,
+        cluster: 0,
+        x_offset: 12.0,
+        y_offset: 0.0,
+        x_advance: 10.0,
+        y_advance: 0.0,
       },
     ],
     color: Rgba::BLACK,
-    palette_index: 0,
-    shadows: Vec::new(),
     font_size: 16.0,
     advance_width: 22.0,
-    font: None,
-    font_id: None,
-    variations: Vec::new(),
-    synthetic_bold: 0.0,
-    synthetic_oblique: 0.0,
-    emphasis: None,
-    decorations: Vec::new(),
+    ..Default::default()
   }));
 
   if let DisplayItem::Text(item) = &list.items()[0] {
@@ -966,8 +964,8 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
   assert_eq!(text_item.glyphs.len(), 1);
   assert_eq!(text_item.palette_index, 1);
   let glyph = &text_item.glyphs[0];
-  assert_eq!(glyph.offset.x, 0.0);
-  assert_eq!(glyph.offset.y, 5.0);
+  assert_eq!(glyph.x_offset, 0.0);
+  assert_eq!(glyph.y_offset, 5.0);
 
   let decoration = list
     .items()
@@ -1680,20 +1678,11 @@ fn test_complex_display_list() {
   // Text
   list.push(DisplayItem::Text(TextItem {
     origin: Point::new(120.0, 150.0),
-    cached_bounds: None,
     glyphs: vec![],
     color: Rgba::BLACK,
-    palette_index: 0,
-    shadows: Vec::new(),
     font_size: 16.0,
     advance_width: 100.0,
-    font: None,
-    font_id: None,
-    variations: Vec::new(),
-    synthetic_bold: 0.0,
-    synthetic_oblique: 0.0,
-    emphasis: None,
-    decorations: Vec::new(),
+    ..Default::default()
   }));
 
   // Border

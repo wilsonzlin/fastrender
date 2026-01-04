@@ -4020,8 +4020,11 @@ impl DisplayListBuilder {
             bounds.include_glyph(offset.x, advance);
             glyphs.push(GlyphInstance {
               glyph_id: i as u32,
-              offset,
-              advance,
+              cluster: i as u32,
+              x_offset: offset.x,
+              y_offset: offset.y,
+              x_advance: advance,
+              y_advance: 0.0,
             });
           }
           let cached_bounds = bounds.finish(font_size);
@@ -5585,6 +5588,10 @@ impl DisplayListBuilder {
         glyphs,
         color,
         palette_index: run.palette_index,
+        palette_overrides: Arc::clone(&run.palette_overrides),
+        palette_override_hash: run.palette_override_hash,
+        rotation: run.rotation,
+        scale: run.scale,
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
@@ -5624,7 +5631,7 @@ impl DisplayListBuilder {
         pen_inline
       };
       let (glyphs, cached_bounds) =
-        self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+        self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline);
       let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
@@ -5635,11 +5642,15 @@ impl DisplayListBuilder {
         .collect();
 
       let item = TextItem {
-        origin: Point::new(block_baseline, inline_start),
+        origin: Point::new(block_baseline, run_origin_inline),
         cached_bounds: Some(cached_bounds),
         glyphs,
         color,
         palette_index: run.palette_index,
+        palette_overrides: Arc::clone(&run.palette_overrides),
+        palette_override_hash: run.palette_override_hash,
+        rotation: run.rotation,
+        scale: run.scale,
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
@@ -5733,7 +5744,7 @@ impl DisplayListBuilder {
         pen_inline
       };
       let (glyphs, cached_bounds) =
-        self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+        self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline);
       let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
@@ -5743,7 +5754,7 @@ impl DisplayListBuilder {
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
       let item = ListMarkerItem {
-        origin: Point::new(block_baseline, inline_start),
+        origin: Point::new(block_baseline, run_origin_inline),
         cached_bounds: Some(cached_bounds),
         glyphs,
         font_size: run.font_size,
@@ -6146,23 +6157,31 @@ impl DisplayListBuilder {
     match run.direction {
       crate::text::pipeline::Direction::LeftToRight => {
         for glyph in &run.glyphs {
-          let offset = Point::new(glyph.x_offset, -glyph.y_offset);
-          bounds.include_glyph(offset.x, glyph.x_advance);
+          let x_offset = glyph.x_offset;
+          let y_offset = -glyph.y_offset;
+          bounds.include_glyph(x_offset, glyph.x_advance);
           glyphs.push(GlyphInstance {
             glyph_id: glyph.glyph_id,
-            offset,
-            advance: glyph.x_advance,
+            cluster: glyph.cluster,
+            x_offset,
+            y_offset,
+            x_advance: glyph.x_advance,
+            y_advance: 0.0,
           });
         }
       }
       crate::text::pipeline::Direction::RightToLeft => {
         for glyph in &run.glyphs {
-          let offset = Point::new(-glyph.x_offset, -glyph.y_offset);
-          bounds.include_glyph(offset.x, glyph.x_advance);
+          let x_offset = -glyph.x_offset;
+          let y_offset = -glyph.y_offset;
+          bounds.include_glyph(x_offset, glyph.x_advance);
           glyphs.push(GlyphInstance {
             glyph_id: glyph.glyph_id,
-            offset,
-            advance: glyph.x_advance,
+            cluster: glyph.cluster,
+            x_offset,
+            y_offset,
+            x_advance: glyph.x_advance,
+            y_advance: 0.0,
           });
         }
       }
@@ -6176,40 +6195,30 @@ impl DisplayListBuilder {
     run: &ShapedRun,
     block_baseline: f32,
     inline_origin: f32,
-    inline_start: f32,
   ) -> (Vec<GlyphInstance>, Rect) {
-    let mut glyphs = Vec::with_capacity(run.glyphs.len());
-    let origin = Point::new(block_baseline, inline_start);
-    let mut bounds = ConservativeGlyphRunBoundsBuilder::new(origin, run.advance);
+    let glyphs = run
+      .glyphs
+      .iter()
+      .map(|glyph| GlyphInstance {
+        glyph_id: glyph.glyph_id,
+        cluster: glyph.cluster,
+        x_offset: glyph.x_offset,
+        y_offset: -glyph.y_offset,
+        x_advance: glyph.x_advance,
+        y_advance: glyph.y_advance,
+      })
+      .collect::<Vec<_>>();
 
-    match run.direction {
-      crate::text::pipeline::Direction::LeftToRight => {
-        let inline_base = inline_origin - inline_start;
-        for glyph in &run.glyphs {
-          let offset = Point::new(-glyph.y_offset, inline_base + glyph.x_offset);
-          bounds.include_glyph(offset.x, 0.0);
-          glyphs.push(GlyphInstance {
-            glyph_id: glyph.glyph_id,
-            offset,
-            advance: 0.0,
-          });
-        }
-      }
-      crate::text::pipeline::Direction::RightToLeft => {
-        let inline_base = inline_origin - inline_start;
-        for glyph in &run.glyphs {
-          let offset = Point::new(-glyph.y_offset, inline_base - glyph.x_offset);
-          bounds.include_glyph(offset.x, 0.0);
-          glyphs.push(GlyphInstance {
-            glyph_id: glyph.glyph_id,
-            offset,
-            advance: 0.0,
-          });
-        }
-      }
-    }
+    // Conservative bounds for vertical runs: expand along the inline axis using `run.advance`
+    // and assume glyph outlines are roughly one font-size wide on the block axis.
+    let ascent = run.font_size;
+    let descent = run.font_size * 0.25;
+    let width = (ascent + descent).max(0.0);
+    let height = (run.advance + ascent + descent).max(0.0);
+    let origin = Point::new(block_baseline, inline_origin);
+    let bounds = Rect::from_xywh(origin.x - ascent, origin.y - ascent, width, height);
 
-    (glyphs, bounds.finish(run.font_size))
+    (glyphs, bounds)
   }
 
   fn build_emphasis(
@@ -6336,8 +6345,11 @@ impl DisplayListBuilder {
                 };
                 glyphs.push(GlyphInstance {
                   glyph_id: g.glyph_id,
-                  offset: Point::new(x, -g.y_offset),
-                  advance: g.x_advance,
+                  cluster: g.cluster,
+                  x_offset: x,
+                  y_offset: -g.y_offset,
+                  x_advance: g.x_advance,
+                  y_advance: 0.0,
                 });
               }
               width += r.advance;
@@ -6849,8 +6861,11 @@ impl DisplayListBuilder {
       bounds.include_glyph(offset.x, char_width);
       glyphs.push(GlyphInstance {
         glyph_id: 0,
-        offset,
-        advance: char_width,
+        cluster: i as u32,
+        x_offset: offset.x,
+        y_offset: offset.y,
+        x_advance: char_width,
+        y_advance: 0.0,
       });
     }
     let cached_bounds = bounds.finish(font_size);

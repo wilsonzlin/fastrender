@@ -65,17 +65,9 @@ fn make_text(x: f32, y: f32, color: Rgba) -> DisplayItem {
     cached_bounds: None,
     glyphs: vec![],
     color,
-    palette_index: 0,
-    shadows: Vec::new(),
     font_size: 16.0,
     advance_width: 100.0,
-    font: None,
-    font_id: None,
-    variations: Vec::new(),
-    synthetic_bold: 0.0,
-    synthetic_oblique: 0.0,
-    emphasis: None,
-    decorations: Vec::new(),
+    ..Default::default()
   })
 }
 
