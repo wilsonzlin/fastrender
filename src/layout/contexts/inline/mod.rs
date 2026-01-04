@@ -75,6 +75,7 @@ use crate::style::types::Direction;
 use crate::style::types::FontStyle;
 use crate::style::types::HyphensMode;
 use crate::style::types::LineBreak;
+use crate::style::types::LineClampSource;
 use crate::style::types::ListStylePosition;
 use crate::style::types::OverflowWrap;
 use crate::style::types::RubyAlign;
@@ -87,6 +88,7 @@ use crate::style::types::TextJustify;
 use crate::style::types::TextTransform;
 use crate::style::types::TextWrap;
 use crate::style::types::UnicodeBidi;
+use crate::style::types::WebkitBoxOrient;
 use crate::style::types::WhiteSpace;
 use crate::style::types::WordBreak;
 use crate::style::types::WritingMode;
@@ -3715,7 +3717,8 @@ impl InlineFormattingContext {
     root_unicode_bidi: UnicodeBidi,
     float_ctx: Option<&'a FloatContext>,
     float_base_y: f32,
-  ) -> Result<Vec<Line>, LayoutError> {
+    line_clamp: Option<usize>,
+  ) -> Result<line_builder::LineBuildResult, LayoutError> {
     let mut subsequent_line_width = subsequent_line_width;
 
     let fallback_width = self.viewport_size.width.max(0.0);
@@ -3758,9 +3761,14 @@ impl InlineFormattingContext {
       root_direction,
       float_integration,
       float_base_y,
+      line_clamp,
     );
 
     for item in items {
+      if builder.is_line_clamp_reached() {
+        builder.mark_truncated();
+        break;
+      }
       // Check for mandatory breaks in text
       if let InlineItem::Text(ref text_item) = item {
         let has_mandatory = text_item.break_opportunities.iter().any(|b| {
@@ -4224,6 +4232,10 @@ impl InlineFormattingContext {
     let mut remaining = text_item;
 
     loop {
+      if builder.is_line_clamp_reached() {
+        builder.mark_truncated();
+        break;
+      }
       // Find next mandatory break
       let mandatory_pos = remaining
         .break_opportunities
@@ -6922,7 +6934,8 @@ impl InlineFormattingContext {
     root_unicode_bidi: UnicodeBidi,
     float_ctx: Option<&FloatContext>,
     float_base_y: f32,
-  ) -> Result<Vec<Line>, LayoutError> {
+    line_clamp: Option<usize>,
+  ) -> Result<line_builder::LineBuildResult, LayoutError> {
     let first_width = if matches!(
       text_wrap,
       TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
@@ -6956,6 +6969,7 @@ impl InlineFormattingContext {
         root_unicode_bidi,
         float_ctx,
         float_base_y,
+        line_clamp,
       );
     }
 
@@ -6977,6 +6991,7 @@ impl InlineFormattingContext {
           root_unicode_bidi,
           float_ctx,
           float_base_y,
+          line_clamp,
         );
       }
     }
@@ -6984,7 +6999,7 @@ impl InlineFormattingContext {
     // Balance/pretty/stable may need additional candidate line builds. Preserve an immutable copy
     // of the original items and build the greedy baseline from a clone.
     let original_items = items;
-    let mut lines = self.build_lines(
+    let mut build = self.build_lines(
       original_items.clone(),
       first_width,
       subsequent_line_width,
@@ -6999,10 +7014,11 @@ impl InlineFormattingContext {
       root_unicode_bidi,
       float_ctx,
       float_base_y,
+      line_clamp,
     )?;
 
-    if lines.len() <= 1 {
-      return Ok(lines);
+    if build.lines.len() <= 1 {
+      return Ok(build);
     }
 
     if matches!(text_wrap, TextWrap::Stable) {
@@ -7024,11 +7040,12 @@ impl InlineFormattingContext {
         root_unicode_bidi,
         float_ctx,
         float_base_y,
+        line_clamp,
       );
     }
 
-    lines = self.rebalance_text_wrap(
-      lines,
+    build = self.rebalance_text_wrap(
+      build,
       &original_items,
       first_width,
       subsequent_line_width,
@@ -7042,14 +7059,15 @@ impl InlineFormattingContext {
       root_unicode_bidi,
       float_ctx,
       float_base_y,
+      line_clamp,
     )?;
 
-    Ok(lines)
+    Ok(build)
   }
 
   fn rebalance_text_wrap(
     &self,
-    base_lines: Vec<Line>,
+    base: line_builder::LineBuildResult,
     items: &[InlineItem],
     first_line_width: f32,
     subsequent_line_width: f32,
@@ -7063,21 +7081,22 @@ impl InlineFormattingContext {
     root_unicode_bidi: UnicodeBidi,
     float_ctx: Option<&FloatContext>,
     float_base_y: f32,
-  ) -> Result<Vec<Line>, LayoutError> {
-    if base_lines.len() <= 1 {
-      return Ok(base_lines);
+    line_clamp: Option<usize>,
+  ) -> Result<line_builder::LineBuildResult, LayoutError> {
+    if base.lines.len() <= 1 {
+      return Ok(base);
     }
 
     if let Some(ctx) = float_ctx {
       if !ctx.is_empty() {
         // Float-shortened lines vary in width per line; keep greedy results to avoid instability.
-        return Ok(base_lines);
+        return Ok(base);
       }
     }
 
-    let mut best_lines = base_lines;
-    let mut best_score = balance_score(&best_lines, 1.5, 1.0);
-    let target_line_count = best_lines.len();
+    let mut best_lines = base;
+    let mut best_score = balance_score(&best_lines.lines, 1.5, 1.0);
+    let target_line_count = best_lines.lines.len();
 
     // Stable prefers keeping breaks consistent even when the container grows slightly.
     if matches!(text_wrap, TextWrap::Stable) {
@@ -7106,6 +7125,7 @@ impl InlineFormattingContext {
         root_unicode_bidi,
         float_ctx,
         float_base_y,
+        line_clamp,
       );
     }
 
@@ -7116,7 +7136,7 @@ impl InlineFormattingContext {
     };
 
     let base_width = subsequent_line_width.max(1.0);
-    let average_width = mean_line_width(&best_lines).max(1.0);
+    let average_width = mean_line_width(&best_lines.lines).max(1.0);
     let mut factors: Vec<f32> = Vec::new();
     let ideal_factor = (average_width / base_width).clamp(min_factor, 1.0);
     if ideal_factor < 0.999 {
@@ -7161,16 +7181,17 @@ impl InlineFormattingContext {
         root_unicode_bidi,
         float_ctx,
         float_base_y,
+        line_clamp,
       )?;
 
-      if candidate_lines.len() != target_line_count {
-        if candidate_lines.len() > target_line_count {
+      if candidate_lines.lines.len() != target_line_count {
+        if candidate_lines.lines.len() > target_line_count {
           break;
         }
         continue;
       }
 
-      let candidate_score = balance_score(&candidate_lines, hyphen_weight, short_last_weight);
+      let candidate_score = balance_score(&candidate_lines.lines, hyphen_weight, short_last_weight);
       if candidate_score + 0.01 < best_score {
         best_score = candidate_score;
         best_lines = candidate_lines;
@@ -7488,114 +7509,78 @@ impl InlineFormattingContext {
     Ok(out)
   }
 
-  fn apply_line_clamp(
+  fn apply_line_clamp_ellipsis(
     &self,
     mut lines: Vec<Line>,
-    flow_order: &mut Vec<FlowChunk>,
     style: &Arc<ComputedStyle>,
     strut_metrics: &BaselineMetrics,
-    _inline_vertical: bool,
+    line_clamp_truncated: bool,
   ) -> Result<Vec<Line>, LayoutError> {
-    let Some(max_lines) = style.line_clamp else {
+    if !line_clamp_truncated {
+      return Ok(lines);
+    }
+    let Some(last_line) = lines.last_mut() else {
       return Ok(lines);
     };
-    if max_lines == 0 {
-      return Ok(lines);
-    }
-    if !style.display_is_webkit_box {
-      return Ok(lines);
-    }
-    if style.webkit_box_orient != crate::style::types::WebkitBoxOrient::Vertical {
-      return Ok(lines);
-    }
 
-    // WebKit line clamping requires a non-visible overflow so truncated lines are clipped.
-    // Most real-world patterns use `overflow: hidden`.
-    let overflow_clips = |overflow: crate::style::types::Overflow| {
-      matches!(
-        overflow,
-        crate::style::types::Overflow::Hidden
-          | crate::style::types::Overflow::Scroll
-          | crate::style::types::Overflow::Auto
-          | crate::style::types::Overflow::Clip
-      )
+    // If text-overflow already inserted an ellipsis marker at the clamped edge, avoid emitting a
+    // duplicate marker.
+    let has_existing_ellipsis = {
+      let mut iter = last_line
+        .items
+        .iter()
+        .filter(|pos| !matches!(pos.item, InlineItem::Floating(_)));
+      let edge_item = match last_line.resolved_direction {
+        Direction::Ltr => iter.next_back(),
+        Direction::Rtl => iter.next(),
+      };
+      matches!(edge_item, Some(pos) if matches!(&pos.item, InlineItem::Text(t) if t.text == "…"))
     };
-    if !(overflow_clips(style.overflow_x) && overflow_clips(style.overflow_y)) {
+    if has_existing_ellipsis {
       return Ok(lines);
     }
 
-    let max_lines = max_lines as usize;
-    if lines.len() <= max_lines {
+    let inline_indent_cut = match last_line.resolved_direction {
+      Direction::Rtl => (-last_line.indent).max(0.0),
+      Direction::Ltr => last_line.indent.max(0.0),
+    };
+    let usable_limit = if last_line.available_width.is_finite() {
+      (last_line.available_width - inline_indent_cut).max(0.0)
+    } else {
+      last_line.available_width
+    };
+
+    let clip = crate::style::types::TextOverflowSide::Clip;
+    let ellipsis = crate::style::types::TextOverflowSide::Ellipsis;
+    let (start_side, end_side) = match last_line.resolved_direction {
+      Direction::Ltr => (&clip, &ellipsis),
+      Direction::Rtl => (&ellipsis, &clip),
+    };
+
+    if usable_limit.is_finite() && usable_limit > 0.0 {
+      if let Some(rebuilt) = self.apply_text_overflow_to_line(
+        last_line,
+        start_side,
+        end_side,
+        style,
+        strut_metrics,
+        usable_limit,
+      )? {
+        *last_line = rebuilt;
+      }
       return Ok(lines);
     }
 
-    lines.truncate(max_lines);
-    let mut new_flow = Vec::new();
-    let mut reached_limit = false;
-    for chunk in flow_order.iter() {
-      if reached_limit {
-        break;
-      }
-      match chunk {
-        FlowChunk::Inline { start, end } => {
-          if *start >= max_lines {
-            reached_limit = true;
-            break;
-          }
-          let clamped_end = (*end).min(max_lines);
-          if *start < clamped_end {
-            new_flow.push(FlowChunk::Inline {
-              start: *start,
-              end: clamped_end,
-            });
-          }
-          if clamped_end >= max_lines {
-            reached_limit = true;
-          }
-        }
-        FlowChunk::Float { .. } | FlowChunk::Block { .. } => {
-          new_flow.push(chunk.clone());
-        }
-      }
+    let Some(marker) = self.build_overflow_marker_item(&ellipsis, style, last_line.resolved_direction)? else {
+      return Ok(lines);
+    };
+    let mut items: Vec<InlineItem> = last_line.items.iter().map(|p| p.item.clone()).collect();
+    match last_line.resolved_direction {
+      Direction::Ltr => items.push(marker),
+      Direction::Rtl => items.insert(0, marker),
     }
-    *flow_order = new_flow;
-
-    // Append an ellipsis marker to the final visible line.
-    if let Some(last) = lines.last().cloned() {
-      let limit = last.available_width;
-      let inline_indent_cut = match last.resolved_direction {
-        crate::style::types::Direction::Rtl => (-last.indent).max(0.0),
-        crate::style::types::Direction::Ltr => last.indent.max(0.0),
-      };
-      let usable_limit = if limit.is_finite() {
-        (limit - inline_indent_cut).max(0.0)
-      } else {
-        limit
-      };
-
-      if usable_limit.is_finite() && usable_limit > 0.0 {
-        let clamp_overflow = crate::style::types::TextOverflow {
-          inline_start: crate::style::types::TextOverflowSide::Clip,
-          inline_end: crate::style::types::TextOverflowSide::Ellipsis,
-        };
-        let start_side = clamp_overflow.start_for_direction(last.resolved_direction);
-        let end_side = clamp_overflow.end_for_direction(last.resolved_direction);
-        let adjusted = self.apply_text_overflow_to_line(
-          &last,
-          start_side,
-          end_side,
-          style,
-          strut_metrics,
-          usable_limit,
-        )?;
-        if let Some(adjusted) = adjusted {
-          if let Some(slot) = lines.last_mut() {
-            *slot = adjusted;
-          }
-        }
-      }
-    }
-
+    let rebuilt = self.rebuild_line_with_items(items, last_line, strut_metrics);
+    *last_line = rebuilt;
     Ok(lines)
   }
 
@@ -8172,6 +8157,25 @@ impl InlineFormattingContext {
     let indent_each_line = style.text_indent.each_line;
     let first_line_width = available_inline;
     let subsequent_line_width = available_inline;
+    let active_line_clamp = style.line_clamp.and_then(|value| {
+      let value = value as usize;
+      if value == 0 {
+        return None;
+      }
+        match style.line_clamp_source {
+          LineClampSource::Standard => Some(value),
+          LineClampSource::Webkit => {
+          if style.display_is_webkit_box
+            && matches!(style.webkit_box_orient, WebkitBoxOrient::Vertical)
+          {
+            Some(value)
+          } else {
+            None
+          }
+        }
+      }
+    });
+    let mut line_clamp_truncated = false;
 
     // Build lines, interleaving float placement
     let mut lines = Vec::new();
@@ -8191,7 +8195,8 @@ impl InlineFormattingContext {
                          line_offset: &mut f32,
                          lines_out: &mut Vec<Line>,
                          ctx_ref: Option<&FloatContext>,
-                         order: &mut Vec<FlowChunk>|
+                         order: &mut Vec<FlowChunk>,
+                         line_clamp_truncated: &mut bool|
      -> Result<Option<(f32, f32, f32)>, LayoutError> {
       if pending.is_empty() {
         return Ok(None);
@@ -8213,8 +8218,19 @@ impl InlineFormattingContext {
           crate::style::types::Direction::Ltr => Some(unicode_bidi::Level::ltr()),
         },
       };
+      let remaining_clamp = active_line_clamp.map(|limit| limit.saturating_sub(lines_out.len()));
+      if matches!(remaining_clamp, Some(0)) {
+        // There's in-flow content remaining but we've already produced the maximum number of
+        // visible line boxes.
+        *line_clamp_truncated = true;
+        pending.clear();
+        return Ok(None);
+      }
       let start_idx = lines_out.len();
-      let seg_lines = self.layout_segment_lines(
+      let line_builder::LineBuildResult {
+        lines: seg_lines,
+        truncated,
+      } = self.layout_segment_lines(
         std::mem::take(pending),
         *use_first_line_width,
         first_line_width,
@@ -8229,7 +8245,11 @@ impl InlineFormattingContext {
         style.unicode_bidi,
         ctx_ref,
         float_base_y + *line_offset,
+        remaining_clamp,
       )?;
+      if truncated {
+        *line_clamp_truncated = true;
+      }
       let seg_height = seg_lines
         .iter()
         .map(|l| l.y_offset + l.height)
@@ -8241,16 +8261,26 @@ impl InlineFormattingContext {
         lines_out.push(line);
       }
       let end_idx = lines_out.len();
-      order.push(FlowChunk::Inline {
-        start: start_idx,
-        end: end_idx,
-      });
+      if end_idx > start_idx {
+        order.push(FlowChunk::Inline {
+          start: start_idx,
+          end: end_idx,
+        });
+      }
       *line_offset += seg_height;
       *use_first_line_width = false;
       Ok(Some((seg_height, last_top, last_height)))
     };
 
     for segment in segments {
+      if let Some(limit) = active_line_clamp {
+        if lines.len() >= limit {
+          // There is more content to process but the maximum number of visible line boxes has
+          // already been produced.
+          line_clamp_truncated = true;
+          break;
+        }
+      }
       if let Err(RenderError::Timeout { elapsed, .. }) =
         check_active_periodic(&mut deadline_counter, 16, RenderStage::Layout)
       {
@@ -8372,7 +8402,14 @@ impl InlineFormattingContext {
             &mut lines,
             float_ctx.as_deref().or(local_float_ctx.as_ref()),
             &mut flow_order,
+            &mut line_clamp_truncated,
           )?;
+          if let Some(limit) = active_line_clamp {
+            if lines.len() >= limit {
+              line_clamp_truncated = true;
+              break;
+            }
+          }
 
           let fc_type = block_node
             .formatting_context()
@@ -8406,11 +8443,11 @@ impl InlineFormattingContext {
       &mut lines,
       final_ctx,
       &mut flow_order,
+      &mut line_clamp_truncated,
     )?;
 
-    let lines = self.apply_text_overflow(lines, style, &strut_metrics, inline_vertical)?;
-    let lines =
-      self.apply_line_clamp(lines, &mut flow_order, style, &strut_metrics, inline_vertical)?;
+    let mut lines = self.apply_text_overflow(lines, style, &strut_metrics, inline_vertical)?;
+    lines = self.apply_line_clamp_ellipsis(lines, style, &strut_metrics, line_clamp_truncated)?;
 
     // Calculate total height
     let total_height_lines: f32 = lines
@@ -10189,6 +10226,7 @@ mod tests {
   use crate::style::types::CaseTransform;
   use crate::style::types::FontSizeAdjust;
   use crate::style::types::HyphensMode;
+  use crate::style::types::LineClampSource;
   use crate::style::types::ListStylePosition;
   use crate::style::types::Overflow;
   use crate::style::types::OverflowWrap;
@@ -12682,8 +12720,10 @@ mod tests {
         root.style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::InterCharacter);
@@ -12754,8 +12794,10 @@ mod tests {
         root.style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::Distribute);
@@ -12822,8 +12864,10 @@ mod tests {
         root.style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::InterWord);
@@ -12876,8 +12920,10 @@ mod tests {
         root.style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let first_line = lines.first().expect("line");
     eprintln!("items len={}", first_line.items.len());
     let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
@@ -13999,6 +14045,153 @@ mod tests {
     );
   }
 
+  fn count_line_fragments(fragment: &FragmentNode) -> usize {
+    let mut count = 0usize;
+    let mut stack = vec![fragment];
+    while let Some(node) = stack.pop() {
+      if matches!(node.content, FragmentContent::Line { .. }) {
+        count += 1;
+      }
+      for child in node.children.iter() {
+        stack.push(child);
+      }
+    }
+    count
+  }
+
+  #[test]
+  fn line_clamp_truncates_wrapped_text_and_forces_ellipsis_even_with_clip_text_overflow() {
+    let mut container_style = ComputedStyle::default();
+    container_style.line_clamp = Some(2);
+    container_style.line_clamp_source = LineClampSource::Standard;
+    container_style.text_overflow = TextOverflow::clip();
+    // Keep overflow visible to ensure the ellipsis comes from line-clamp rather than the usual
+    // text-overflow path.
+    container_style.overflow_x = Overflow::Visible;
+
+    let root = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        default_style(),
+        "line clamp should truncate overflowing inline content across multiple wrapped lines"
+          .repeat(2),
+      )],
+    );
+    let constraints = LayoutConstraints::definite_width(90.0);
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    assert_eq!(count_line_fragments(&fragment), 2);
+
+    let mut texts = Vec::new();
+    collect_text_fragments(&fragment, &mut texts);
+    assert!(
+      texts.iter().any(|t| t.contains('…')),
+      "line-clamp should emit an ellipsis when truncating"
+    );
+  }
+
+  #[test]
+  fn webkit_line_clamp_truncates_when_webkit_box_is_vertical() {
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Block;
+    container_style.display_is_webkit_box = true;
+    container_style.webkit_box_orient = WebkitBoxOrient::Vertical;
+    container_style.line_clamp = Some(1);
+    container_style.line_clamp_source = LineClampSource::Webkit;
+
+    let root = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Block,
+      vec![make_text_box(
+        "legacy webkit clamp should collapse to a single visible line with an ellipsis",
+      )],
+    );
+    let constraints = LayoutConstraints::definite_width(60.0);
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    assert_eq!(count_line_fragments(&fragment), 1);
+
+    let mut texts = Vec::new();
+    collect_text_fragments(&fragment, &mut texts);
+    assert!(
+      texts.iter().any(|t| t.contains('…')),
+      "webkit line-clamp should emit an ellipsis when truncating"
+    );
+  }
+
+  #[test]
+  fn line_clamp_applies_in_vertical_writing_mode() {
+    let mut container_style = ComputedStyle::default();
+    container_style.writing_mode = WritingMode::VerticalRl;
+    container_style.line_clamp = Some(1);
+    container_style.line_clamp_source = LineClampSource::Standard;
+    container_style.overflow_y = Overflow::Visible;
+
+    let mut text_style = ComputedStyle::default();
+    text_style.writing_mode = container_style.writing_mode;
+
+    let root = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "vertical writing mode should still clamp multiple columns of wrapped text".repeat(2),
+      )],
+    );
+
+    // Inline axis is the available height in vertical writing; keep it small to force multiple
+    // line boxes (columns) so clamping triggers.
+    let constraints = LayoutConstraints::new(
+      AvailableSpace::Definite(200.0),
+      AvailableSpace::Definite(40.0),
+    );
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    assert_eq!(count_line_fragments(&fragment), 1);
+
+    let mut texts = Vec::new();
+    collect_text_fragments(&fragment, &mut texts);
+    assert!(
+      texts.iter().any(|t| t.contains('…')),
+      "line-clamp should emit an ellipsis in vertical writing mode"
+    );
+  }
+
+  #[test]
+  fn line_clamp_does_not_duplicate_text_overflow_ellipsis() {
+    let mut container_style = ComputedStyle::default();
+    container_style.line_clamp = Some(2);
+    container_style.line_clamp_source = LineClampSource::Standard;
+    container_style.overflow_x = Overflow::Hidden;
+    container_style.text_overflow = TextOverflow {
+      inline_start: TextOverflowSide::Clip,
+      inline_end: TextOverflowSide::Ellipsis,
+    };
+
+    let long_word = "supercalifragilisticexpialidocioussupercalifragilistic";
+    let text = format!("short {long_word} tail tail tail tail");
+    let root = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Block,
+      vec![make_text_box(&text)],
+    );
+    let constraints = LayoutConstraints::definite_width(90.0);
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    let mut texts = Vec::new();
+    collect_text_fragments(&fragment, &mut texts);
+    let ellipsis_count: usize = texts.iter().map(|t| t.matches('…').count()).sum();
+    assert_eq!(
+      ellipsis_count, 1,
+      "expected a single ellipsis even when text-overflow and line-clamp both apply"
+    );
+  }
+
   #[test]
   fn unicode_bidi_plaintext_uses_per_paragraph_base_direction() {
     let mut container_style = ComputedStyle::default();
@@ -14054,24 +14247,25 @@ mod tests {
         );
 
     let strut = ifc.compute_strut_metrics(&container_style);
-    let lines = ifc
-      .layout_segment_lines(
-        inline_items,
-        true,
-        200.0,
-        200.0,
-        ComputedStyle::default().text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        None,
-        crate::style::types::Direction::Ltr,
-        crate::style::types::UnicodeBidi::Plaintext,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let lines = ifc.layout_segment_lines(
+      inline_items,
+      true,
+      200.0,
+      200.0,
+      ComputedStyle::default().text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      None,
+      crate::style::types::Direction::Ltr,
+      crate::style::types::UnicodeBidi::Plaintext,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
     assert_eq!(lines.len(), 2, "mandatory breaks should split lines");
     assert_eq!(
       lines[0].resolved_direction,
@@ -14910,8 +15104,10 @@ mod tests {
         node.style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let line = &lines[0];
     assert_eq!(line.items.len(), 3);
 
@@ -14964,8 +15160,10 @@ mod tests {
         node.style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let line = &lines[0];
     assert_eq!(line.items.len(), 3);
 
@@ -15024,8 +15222,10 @@ mod tests {
         container.style.unicode_bidi,
         Some(&float_ctx),
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
 
     let first = lines.first().expect("line");
     assert!(
@@ -15066,8 +15266,10 @@ mod tests {
         style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
 
     assert_eq!(lines.first().unwrap().box_width, 100.0);
   }
@@ -15084,45 +15286,47 @@ mod tests {
       .expect("inline items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let balanced = ifc
-      .layout_segment_lines(
-        items.clone(),
-        true,
-        200.0,
-        200.0,
-        style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        style.direction,
-        style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let balanced = ifc.layout_segment_lines(
+      items.clone(),
+      true,
+      200.0,
+      200.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
-    let auto = ifc
-      .layout_segment_lines(
-        items,
-        true,
-        200.0,
-        200.0,
-        auto_style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        auto_style.direction,
-        auto_style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let auto = ifc.layout_segment_lines(
+      items,
+      true,
+      200.0,
+      200.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     assert_eq!(balanced.len(), auto.len());
     let balanced_score = balance_score(&balanced, 1.5, 1.0);
@@ -15149,24 +15353,25 @@ mod tests {
       .expect("cjk items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let balanced = ifc
-      .layout_segment_lines(
-        items,
-        true,
-        120.0,
-        120.0,
-        style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        style.direction,
-        style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let balanced = ifc.layout_segment_lines(
+      items,
+      true,
+      120.0,
+      120.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
     assert!(balanced.len() > 1, "should wrap CJK text");
     let texts = line_texts(&balanced);
     let min_len = texts.iter().map(|t| t.chars().count()).min().unwrap();
@@ -15208,8 +15413,10 @@ mod tests {
         style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let prefix_width_with_hyphen = prefix_line.first().unwrap().width + ifc.hyphen_advance(&style);
 
     let word_node = BoxNode::new_text(Arc::new(style.clone()), "hy\u{00AD}phenation".to_string());
@@ -15232,32 +15439,35 @@ mod tests {
         style.unicode_bidi,
         None,
         0.0,
+        None,
       )
-      .unwrap();
+      .unwrap()
+      .lines;
     let full_word_width = word_line.first().unwrap().width;
     let width = (prefix_width_with_hyphen + full_word_width) / 2.0;
     let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
     let items = ifc
       .create_inline_items_for_text(&node, text, false)
       .expect("hyphen items");
-    let lines = ifc
-      .layout_segment_lines(
-        items,
-        true,
-        width,
-        width,
-        style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        style.direction,
-        style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let lines = ifc.layout_segment_lines(
+      items,
+      true,
+      width,
+      width,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     assert!(
       lines.iter().any(|line| {
@@ -15275,24 +15485,25 @@ mod tests {
     let manual_items = ifc
       .create_inline_items_for_text(&manual_node, text, false)
       .expect("manual items");
-    let manual_lines = ifc
-      .layout_segment_lines(
-        manual_items,
-        true,
-        width,
-        width,
-        manual.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        manual.direction,
-        manual.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let manual_lines = ifc.layout_segment_lines(
+      manual_items,
+      true,
+      width,
+      width,
+      manual.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      manual.direction,
+      manual.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     assert!(
       !manual_lines.iter().any(|line| {
@@ -15317,45 +15528,47 @@ mod tests {
       .expect("pretty items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let pretty = ifc
-      .layout_segment_lines(
-        items.clone(),
-        true,
-        180.0,
-        180.0,
-        style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        style.direction,
-        style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let pretty = ifc.layout_segment_lines(
+      items.clone(),
+      true,
+      180.0,
+      180.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
-    let auto = ifc
-      .layout_segment_lines(
-        items,
-        true,
-        180.0,
-        180.0,
-        auto_style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        auto_style.direction,
-        auto_style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let auto = ifc.layout_segment_lines(
+      items,
+      true,
+      180.0,
+      180.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     assert_eq!(pretty.len(), auto.len());
     let pretty_penalty = paragraph_short_last_penalty(&pretty);
@@ -15378,42 +15591,44 @@ mod tests {
       .expect("stable items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let narrow = ifc
-      .layout_segment_lines(
-        items.clone(),
-        true,
-        150.0,
-        150.0,
-        style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        style.direction,
-        style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
-    let wider = ifc
-      .layout_segment_lines(
-        items.clone(),
-        true,
-        170.0,
-        170.0,
-        style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        style.direction,
-        style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let narrow = ifc.layout_segment_lines(
+      items.clone(),
+      true,
+      150.0,
+      150.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
+    let wider = ifc.layout_segment_lines(
+      items.clone(),
+      true,
+      170.0,
+      170.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     let narrow_texts = line_texts(&narrow);
     let wider_texts = line_texts(&wider);
@@ -15421,42 +15636,44 @@ mod tests {
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
-    let auto_narrow = ifc
-      .layout_segment_lines(
-        items.clone(),
-        true,
-        150.0,
-        150.0,
-        auto_style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        auto_style.direction,
-        auto_style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
-    let auto_wide = ifc
-      .layout_segment_lines(
-        items,
-        true,
-        170.0,
-        170.0,
-        auto_style.text_wrap,
-        0.0,
-        false,
-        false,
-        &strut,
-        Some(unicode_bidi::Level::ltr()),
-        auto_style.direction,
-        auto_style.unicode_bidi,
-        None,
-        0.0,
-      )
-      .unwrap();
+    let auto_narrow = ifc.layout_segment_lines(
+      items.clone(),
+      true,
+      150.0,
+      150.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
+    let auto_wide = ifc.layout_segment_lines(
+      items,
+      true,
+      170.0,
+      170.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+      None,
+    )
+    .unwrap()
+    .lines;
 
     assert_ne!(line_texts(&auto_narrow), line_texts(&auto_wide));
   }

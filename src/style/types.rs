@@ -2436,6 +2436,18 @@ impl Default for TextIndent {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineClampSource {
+  Standard,
+  Webkit,
+}
+
+impl Default for LineClampSource {
+  fn default() -> Self {
+    Self::Standard
+  }
+}
+
 /// CSS `text-overflow`
 ///
 /// Reference: CSS Overflow Module Level 3 / Text Overflow

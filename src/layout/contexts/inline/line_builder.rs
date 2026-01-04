@@ -2107,6 +2107,12 @@ impl Default for Line {
   }
 }
 
+#[derive(Debug, Clone)]
+pub struct LineBuildResult {
+  pub lines: Vec<Line>,
+  pub truncated: bool,
+}
+
 /// Builder for constructing lines from inline items
 ///
 /// Handles line breaking and item positioning.
@@ -2163,6 +2169,10 @@ pub struct LineBuilder<'a> {
   root_unicode_bidi: UnicodeBidi,
   /// Root direction on the paragraph container.
   root_direction: Direction,
+
+  line_clamp: Option<usize>,
+  line_clamp_reached: bool,
+  truncated: bool,
 
   deadline_counter: usize,
 }
@@ -2235,7 +2245,9 @@ impl<'a> LineBuilder<'a> {
     root_direction: Direction,
     float_integration: Option<InlineFloatIntegration<'a>>,
     float_base_y: f32,
+    line_clamp: Option<usize>,
   ) -> Self {
+    let line_clamp = line_clamp.filter(|value| *value > 0);
     let initial_direction = if let Some(level) = base_level {
       if level.is_rtl() {
         Direction::Rtl
@@ -2270,6 +2282,9 @@ impl<'a> LineBuilder<'a> {
       base_level,
       root_unicode_bidi,
       root_direction,
+      line_clamp,
+      line_clamp_reached: false,
+      truncated: false,
       deadline_counter: 0,
     };
 
@@ -2284,6 +2299,10 @@ impl<'a> LineBuilder<'a> {
 
   /// Adds an inline item to the builder
   pub fn add_item(&mut self, item: InlineItem) -> Result<(), LayoutError> {
+    if self.line_clamp_reached {
+      self.truncated = true;
+      return Ok(());
+    }
     check_layout_deadline(&mut self.deadline_counter)?;
     let (item, item_width) = item.resolve_width_at(self.current_x);
     let line_width = self.current_line_width();
@@ -2378,10 +2397,10 @@ impl<'a> LineBuilder<'a> {
           &mut self.reshape_cache,
         ) {
           // Place the part that fits
-          if before.advance_for_layout > 0.0 {
-            let width = before.advance_for_layout;
-            self.place_item_with_width(InlineItem::Text(before), width);
-          }
+        if before.advance_for_layout > 0.0 {
+          let width = before.advance_for_layout;
+          self.place_item_with_width(InlineItem::Text(before), width);
+        }
 
           // Start new line for the rest
           if matches!(break_opportunity.break_type, BreakType::Mandatory) {
@@ -2431,6 +2450,10 @@ impl<'a> LineBuilder<'a> {
         self.current_x += inline_box.start_edge;
       }
       for child in inline_box.children {
+        if self.line_clamp_reached {
+          self.truncated = true;
+          break;
+        }
         self.add_item(child)?;
       }
       if inline_box.end_edge > 0.0 {
@@ -2487,6 +2510,10 @@ impl<'a> LineBuilder<'a> {
 
   /// Forces a line break (e.g., from mandatory break)
   pub fn force_break(&mut self) -> Result<(), LayoutError> {
+    if self.line_clamp_reached {
+      self.truncated = true;
+      return Ok(());
+    }
     check_layout_deadline(&mut self.deadline_counter)?;
     self.current_line.ends_with_hard_break = true;
     self.finish_line()
@@ -2536,6 +2563,12 @@ impl<'a> LineBuilder<'a> {
       self.lines.push(std::mem::take(&mut self.current_line));
       self.current_y += finished_height;
       self.next_line_is_para_start = ended_hard;
+
+      if let Some(limit) = self.line_clamp {
+        if self.lines.len() >= limit {
+          self.line_clamp_reached = true;
+        }
+      }
     }
 
     // Reset for new line
@@ -2668,11 +2701,14 @@ impl<'a> LineBuilder<'a> {
   }
 
   /// Finishes building and returns all lines
-  pub fn finish(mut self) -> Result<Vec<Line>, LayoutError> {
+  pub fn finish(mut self) -> Result<LineBuildResult, LayoutError> {
     // Finish any remaining line
     self.finish_line()?;
     self.reorder_lines_for_bidi()?;
-    Ok(self.lines)
+    Ok(LineBuildResult {
+      lines: self.lines,
+      truncated: self.truncated,
+    })
   }
 
   /// Returns the current line width
@@ -2683,6 +2719,14 @@ impl<'a> LineBuilder<'a> {
   /// Returns true if current line is empty
   pub fn is_current_line_empty(&self) -> bool {
     self.current_line.is_empty()
+  }
+
+  pub fn is_line_clamp_reached(&self) -> bool {
+    self.line_clamp_reached
+  }
+
+  pub fn mark_truncated(&mut self) {
+    self.truncated = true;
   }
 }
 
@@ -3429,6 +3473,7 @@ mod tests {
       Direction::Ltr,
       None,
       0.0,
+      None,
     )
   }
 
@@ -3476,6 +3521,7 @@ mod tests {
       Direction::Ltr,
       None,
       0.0,
+      None,
     )
   }
 
@@ -4142,7 +4188,7 @@ mod tests {
     let item = make_text_item("Hello", 50.0);
     builder.add_item(InlineItem::Text(item)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items.len(), 1);
     assert!(lines[0].width <= 100.0);
@@ -4162,7 +4208,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("World", 50.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items.len(), 3);
   }
@@ -4178,7 +4224,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("World", 50.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     // Second item should go to new line
     assert_eq!(lines.len(), 2);
   }
@@ -4195,7 +4241,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("World", 50.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
     assert!(lines[0].ends_with_hard_break);
   }
@@ -4204,7 +4250,7 @@ mod tests {
   fn test_line_builder_empty_result() {
     let builder = make_builder(100.0);
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert!(lines.is_empty());
   }
 
@@ -4216,7 +4262,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("Hello", 50.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     assert!(lines[0].baseline > 0.0);
     assert!(lines[0].height > 0.0);
@@ -4241,7 +4287,7 @@ mod tests {
     );
     builder.add_item(InlineItem::Replaced(replaced)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items[0].item.width(), 100.0);
   }
@@ -4263,7 +4309,7 @@ mod tests {
       .add_item(InlineItem::InlineBlock(inline_block))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].items[0].item.width(), 80.0);
   }
@@ -4366,7 +4412,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("VeryLongWord", 100.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     assert!(lines[0].width > 30.0); // Overflow allowed
   }
@@ -4385,7 +4431,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("World", 50.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines[0].items[0].x, 0.0);
     assert_eq!(lines[0].items[1].x, 50.0);
     assert_eq!(lines[0].items[2].x, 55.0);
@@ -4413,7 +4459,7 @@ mod tests {
 
     let mut builder = make_builder(200.0);
     builder.add_item(InlineItem::Text(item)).unwrap();
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
 
     // With parent x-height 6, middle shift = 12 - 8 + 3 = 7.
     let first = &lines[0].items[0];
@@ -4442,7 +4488,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("b", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4467,7 +4513,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("abc אבג", 70.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4492,7 +4538,7 @@ mod tests {
       )))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4521,7 +4567,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" xyz", 30.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].resolved_direction, Direction::Ltr);
     let texts: Vec<String> = lines[0]
@@ -4597,7 +4643,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" DEF", 40.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4648,7 +4694,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" R", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4702,7 +4748,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" C", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4884,7 +4930,7 @@ mod tests {
     inline_box.add_child(InlineItem::Text(make_text_item("abc אבג", 70.0)));
     builder.add_item(InlineItem::InlineBox(inline_box)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4944,7 +4990,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" R", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -4997,7 +5043,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" C", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -5025,7 +5071,7 @@ mod tests {
       )))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let texts: Vec<String> = lines[0]
       .items
@@ -5061,7 +5107,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("אבג", 30.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
 
     let para1: Vec<String> = lines[0]
@@ -5129,7 +5175,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" R", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
 
     let texts: Vec<String> = lines[0]
@@ -5217,7 +5263,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" R", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
 
     let actual: String = lines[0]
@@ -5272,7 +5318,7 @@ mod tests {
 
     builder.add_item(InlineItem::InlineBox(outer)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let mut visual = String::new();
     for positioned in &lines[0].items {
@@ -5324,7 +5370,7 @@ mod tests {
 
     builder.add_item(InlineItem::InlineBox(outer)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let mut visual = String::new();
     for positioned in &lines[0].items {
@@ -5387,7 +5433,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("R", 10.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
 
     let actual: String = lines[0]
@@ -5442,7 +5488,7 @@ mod tests {
     para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
     builder.add_item(InlineItem::InlineBox(para2)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
 
     let actual_para1: String = lines[0]
@@ -5495,7 +5541,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("DEF", 30.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -5551,7 +5597,7 @@ mod tests {
     para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
     builder.add_item(InlineItem::InlineBox(para2)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -5617,7 +5663,7 @@ mod tests {
     para2.add_child(InlineItem::Text(make_text_item("EF", 20.0)));
     builder.add_item(InlineItem::InlineBox(para2)).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -5671,7 +5717,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("DEF", 30.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
 
     let para1_text: String = lines[0]
@@ -5729,7 +5775,7 @@ mod tests {
     );
     builder.add_item(deep).unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let mut collected = String::new();
     for positioned in &lines[0].items {
@@ -5821,7 +5867,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" Z", 20.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let actual: String = lines[0]
       .items
@@ -5861,7 +5907,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item(" Z", 20.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 1);
     let actual: String = lines[0]
       .items
@@ -5884,7 +5930,7 @@ mod tests {
       .add_item(InlineItem::Text(make_text_item("DEF", 30.0)))
       .unwrap();
 
-    let lines = builder.finish().unwrap();
+    let lines = builder.finish().unwrap().lines;
     assert_eq!(lines.len(), 2);
 
     let logical = format!("{}{}", first, "DEF");

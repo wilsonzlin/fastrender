@@ -2677,8 +2677,7 @@ fn apply_property_from_source(
       styles.display = source.display;
       styles.display_is_webkit_box = source.display_is_webkit_box;
     }
-    "box-orient" => styles.webkit_box_orient = source.webkit_box_orient,
-    "line-clamp" => styles.line_clamp = source.line_clamp,
+    "-webkit-box-orient" | "box-orient" => styles.webkit_box_orient = source.webkit_box_orient,
     "visibility" => styles.visibility = source.visibility,
     "float" => styles.float = source.float,
     "clear" => styles.clear = source.clear,
@@ -2691,6 +2690,14 @@ fn apply_property_from_source(
     "position" => {
       styles.position = source.position;
       styles.running_position = source.running_position.clone();
+    }
+    "line-clamp" => {
+      styles.line_clamp = source.line_clamp;
+      styles.line_clamp_source = LineClampSource::Standard;
+    }
+    "-webkit-line-clamp" => {
+      styles.line_clamp = source.line_clamp;
+      styles.line_clamp_source = LineClampSource::Webkit;
     }
     "appearance" => styles.appearance = source.appearance.clone(),
     "resize" => styles.resize = source.resize,
@@ -5443,10 +5450,24 @@ fn apply_declaration_with_base_internal(
     // Display
     "display" => {
       if let PropertyValue::Keyword(kw) = resolved_value {
-        if let Ok(display) = Display::parse(kw) {
+        if kw.eq_ignore_ascii_case("-webkit-box") {
+          styles.display = Display::Block;
+          styles.display_is_webkit_box = true;
+        } else if kw.eq_ignore_ascii_case("-webkit-inline-box") {
+          styles.display = Display::InlineBlock;
+          styles.display_is_webkit_box = true;
+        } else if let Ok(display) = Display::parse(kw) {
           styles.display = display;
-          styles.display_is_webkit_box = kw.eq_ignore_ascii_case("-webkit-box")
-            || kw.eq_ignore_ascii_case("-webkit-inline-box");
+          styles.display_is_webkit_box = false;
+        }
+      }
+    }
+    "-webkit-box-orient" => {
+      if let PropertyValue::Keyword(kw) = resolved_value {
+        if kw.eq_ignore_ascii_case("vertical") {
+          styles.webkit_box_orient = WebkitBoxOrient::Vertical;
+        } else if kw.eq_ignore_ascii_case("horizontal") {
+          styles.webkit_box_orient = WebkitBoxOrient::Horizontal;
         }
       }
     }
@@ -5459,20 +5480,6 @@ fn apply_declaration_with_base_internal(
         }
       }
     }
-    "line-clamp" => match resolved_value {
-      PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => styles.line_clamp = None,
-      PropertyValue::Number(n) if n.is_finite() && n.fract() == 0.0 && *n > 0.0 => {
-        styles.line_clamp = Some(*n as u32);
-      }
-      PropertyValue::Keyword(kw) => {
-        if let Ok(n) = kw.parse::<u32>() {
-          if n > 0 {
-            styles.line_clamp = Some(n);
-          }
-        }
-      }
-      _ => {}
-    },
     "visibility" => {
       if let PropertyValue::Keyword(kw) = resolved_value {
         styles.visibility = match kw.as_str() {
@@ -8565,6 +8572,29 @@ fn apply_declaration_with_base_internal(
         } else {
           styles.appearance = Appearance::Keyword(kw.to_ascii_lowercase());
         }
+      }
+    }
+    "line-clamp" | "-webkit-line-clamp" => {
+      let parsed: Option<Option<u32>> = match resolved_value {
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => Some(None),
+        PropertyValue::Number(n) if n.is_finite() && n.fract() == 0.0 && *n > 0.0 => {
+          Some(Some(*n as u32))
+        }
+        PropertyValue::Keyword(kw) => kw
+          .parse::<i64>()
+          .ok()
+          .and_then(|n| u32::try_from(n).ok())
+          .and_then(|n| (n > 0).then_some(Some(n))),
+        _ => None,
+      };
+
+      if let Some(lines) = parsed {
+        styles.line_clamp = lines;
+        styles.line_clamp_source = if property == "line-clamp" {
+          LineClampSource::Standard
+        } else {
+          LineClampSource::Webkit
+        };
       }
     }
     "text-overflow" => {
@@ -14550,6 +14580,109 @@ mod tests {
     let out = extract_margin_values(&calc_len).expect("calc(0) should be accepted");
     assert_eq!(out.len(), 1);
     assert!(out[0].unwrap().is_zero());
+  }
+
+  #[test]
+  fn line_clamp_parses_none_and_positive_integers() {
+    let mut styles = ComputedStyle::default();
+    let parent = ComputedStyle::default();
+
+    let decl = Declaration {
+      property: "line-clamp".into(),
+      value: PropertyValue::Keyword("none".into()),
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
+    assert_eq!(styles.line_clamp, None);
+    assert_eq!(styles.line_clamp_source, LineClampSource::Standard);
+
+    let decl = Declaration {
+      property: "line-clamp".into(),
+      value: PropertyValue::Number(2.0),
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
+    assert_eq!(styles.line_clamp, Some(2));
+    assert_eq!(styles.line_clamp_source, LineClampSource::Standard);
+
+    // Variables resolve to `PropertyValue::Keyword`; accept keyword integers as well.
+    let decl = Declaration {
+      property: "line-clamp".into(),
+      value: PropertyValue::Keyword("3".into()),
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
+    assert_eq!(styles.line_clamp, Some(3));
+    assert_eq!(styles.line_clamp_source, LineClampSource::Standard);
+  }
+
+  #[test]
+  fn line_clamp_ignores_invalid_values() {
+    let mut styles = ComputedStyle::default();
+    styles.line_clamp = Some(2);
+    let parent = ComputedStyle::default();
+
+    for value in [PropertyValue::Number(0.0), PropertyValue::Number(-1.0)] {
+      let decl = Declaration {
+        property: "line-clamp".into(),
+        value,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      };
+      apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
+      assert_eq!(styles.line_clamp, Some(2));
+    }
+  }
+
+  #[test]
+  fn webkit_line_clamp_sets_source_flag() {
+    let mut styles = ComputedStyle::default();
+    let parent = ComputedStyle::default();
+
+    let decl = Declaration {
+      property: "-webkit-line-clamp".into(),
+      value: PropertyValue::Number(4.0),
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
+    assert_eq!(styles.line_clamp, Some(4));
+    assert_eq!(styles.line_clamp_source, LineClampSource::Webkit);
+  }
+
+  #[test]
+  fn display_webkit_box_sets_flag_and_box_orient_parses() {
+    let mut styles = ComputedStyle::default();
+    let parent = ComputedStyle::default();
+
+    let decl = Declaration {
+      property: "display".into(),
+      value: PropertyValue::Keyword("-webkit-box".into()),
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
+    assert_eq!(styles.display, Display::Block);
+    assert!(styles.display_is_webkit_box);
+
+    let decl = Declaration {
+      property: "-webkit-box-orient".into(),
+      value: PropertyValue::Keyword("vertical".into()),
+      contains_var: false,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
+    assert_eq!(styles.webkit_box_orient, WebkitBoxOrient::Vertical);
   }
 
   #[test]

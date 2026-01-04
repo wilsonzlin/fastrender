@@ -433,6 +433,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     html: "logical_border_shorthands/index.html",
     shots: DEFAULT_SHOTS,
   },
+  PageFixture {
+    name: "line_clamp",
+    html: "line_clamp/index.html",
+    shots: DEFAULT_SHOTS,
+  },
 ];
 
 fn fixtures_dir() -> PathBuf {
@@ -456,16 +461,15 @@ fn should_update_goldens() -> bool {
 }
 
 fn fixture_filter() -> Option<Vec<String>> {
-  std::env::var("PAGES_FIXTURE_FILTER")
+  let raw = std::env::var("PAGES_FIXTURE_FILTER")
     .ok()
-    .map(|value| {
-      value
-        .split(',')
-        .map(|part| part.trim().to_string())
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-    })
-    .filter(|parts| !parts.is_empty())
+    .or_else(|| std::env::var("PAGES_FIXTURE").ok())?;
+  let parts = raw
+    .split(',')
+    .map(|part| part.trim().to_string())
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>();
+  (!parts.is_empty()).then_some(parts)
 }
 
 fn base_url_for(html_path: &Path) -> Result<String, String> {
@@ -550,7 +554,6 @@ fn pages_regression_suite() {
   // Allow modest per-pixel drift between runs to keep the expanded suite stable across hash seeds
   // and 3D/backdrop ordering differences.
   compare_config.max_different_percent = compare_config.max_different_percent.max(40.0);
-
   let filter = fixture_filter();
   thread::Builder::new()
     .stack_size(64 * 1024 * 1024)

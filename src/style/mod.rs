@@ -125,6 +125,7 @@ use types::Isolation;
 use types::JustifyContent;
 use types::LengthOrNumber;
 use types::LineBreak;
+use types::LineClampSource;
 use types::LineHeight;
 use types::ListStyleImage;
 use types::ListStylePosition;
@@ -441,9 +442,9 @@ impl LogicalState {
 pub struct ComputedStyle {
   // Display and positioning
   pub display: Display,
-  /// Whether the authored `display` value was `-webkit-box` / `-webkit-inline-box`.
+  /// Whether `display` was specified as the legacy `-webkit-box` value.
   ///
-  /// These legacy keywords are commonly paired with `-webkit-line-clamp`. We currently map the
+  /// This legacy keyword is commonly paired with `-webkit-line-clamp`. We currently map the
   /// display value to a standard flow layout, but preserve the fact that the legacy spelling was
   /// used so we can implement line clamping behavior compatibly.
   pub display_is_webkit_box: bool,
@@ -456,6 +457,9 @@ pub struct ComputedStyle {
   /// When set, the inline formatting context truncates after this many lines and appends an
   /// ellipsis to the last visible line.
   pub line_clamp: Option<u32>,
+  /// Records whether `line_clamp` was set by the standardized `line-clamp` property or the legacy
+  /// `-webkit-line-clamp` alias.
+  pub line_clamp_source: LineClampSource,
   pub position: Position,
   /// Running element name when authored via `position: running(<ident>)`.
   ///
@@ -865,6 +869,7 @@ impl Default for ComputedStyle {
       display_is_webkit_box: false,
       webkit_box_orient: WebkitBoxOrient::default(),
       line_clamp: None,
+      line_clamp_source: LineClampSource::Standard,
       position: Position::Static,
       running_position: None,
       appearance: Appearance::Auto,

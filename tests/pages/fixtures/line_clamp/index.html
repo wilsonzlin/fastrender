@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Line clamp fixture</title>
+    <style>
+      body {
+        margin: 32px;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 18px;
+        line-height: 1.25;
+        color: #111;
+        background: #fff;
+      }
+
+      h1 {
+        font-size: 22px;
+        margin: 0 0 16px 0;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        align-items: start;
+      }
+
+      .case {
+        border: 2px solid #111;
+        padding: 12px;
+        background: #fafafa;
+      }
+
+      .label {
+        font-weight: 700;
+        font-size: 16px;
+        margin-bottom: 10px;
+      }
+
+      .content {
+        border: 1px solid #999;
+        padding: 10px;
+        background: #fff;
+        width: 360px;
+      }
+
+      .webkit-clamp {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+        overflow: hidden;
+      }
+
+      .standard-clamp {
+        line-clamp: 2;
+        overflow: hidden;
+      }
+
+      .clip-overflow {
+        text-overflow: clip;
+      }
+
+      .ellipsis-overflow {
+        text-overflow: ellipsis;
+      }
+
+      .vertical-case {
+        width: 360px;
+      }
+
+      .vertical {
+        writing-mode: vertical-rl;
+        height: 170px; /* inline axis in vertical writing */
+        width: 360px; /* block axis */
+        border: 1px solid #999;
+        padding: 10px;
+        background: #fff;
+        line-clamp: 2;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Line clamp fixture</h1>
+
+    <div class="grid">
+      <div class="case">
+        <div class="label">Legacy -webkit-line-clamp pattern (3 lines)</div>
+        <div class="content webkit-clamp">
+          This is a long multi-line headline that should be clamped after three lines with an
+          ellipsis to match Chrome’s legacy -webkit-line-clamp behaviour. The hidden text should
+          not paint beyond the clamp.
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="label">Standard line-clamp (2 lines) + text-overflow: clip</div>
+        <div class="content standard-clamp clip-overflow">
+          This paragraph uses the standardized line-clamp property without the legacy -webkit-box
+          display. Even when text-overflow is clip, clamping should still produce an ellipsis on
+          the last visible line.
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="label">Standard line-clamp (2 lines) + text-overflow: ellipsis</div>
+        <div class="content standard-clamp ellipsis-overflow">
+          This paragraph combines line-clamp with text-overflow: ellipsis. Rendering should show a
+          single ellipsis at the truncation edge and stop laying out additional line boxes once the
+          clamp is reached.
+        </div>
+      </div>
+
+      <div class="case vertical-case">
+        <div class="label">Vertical writing-mode clamp (2 columns)</div>
+        <div class="vertical">
+          Vertical writing mode should also clamp line boxes (columns) and place the ellipsis on
+          the inline end of the last visible column.
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+

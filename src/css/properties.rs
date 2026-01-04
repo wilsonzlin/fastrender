@@ -478,6 +478,8 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "widows",
   "writing-mode",
   "z-index",
+  "-webkit-box-orient",
+  "-webkit-line-clamp",
 ];
 
 /// Properties accepted in @page declaration blocks.
