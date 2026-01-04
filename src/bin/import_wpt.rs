@@ -960,11 +960,11 @@ fn find_network_urls(content: &str) -> Vec<String> {
   // such as SVG namespace URIs (`xmlns="http://www.w3.org/2000/svg"`) or text embedded inside
   // `data:` URLs.
   let attr_regex = Regex::new(
-    "(?i)\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']",
+    "(?i)\\s(?:src|xlink:href|poster|data)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']",
   )
   .unwrap();
   let attr_unquoted_regex = Regex::new(
-    "(?i)\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*(?P<url>[^\\s\"'>]+)",
+    "(?i)\\s(?:src|xlink:href|poster|data)\\s*=\\s*(?P<url>[^\\s\"'>]+)",
   )
   .unwrap();
   let url_regex =
@@ -986,6 +986,57 @@ fn find_network_urls(content: &str) -> Vec<String> {
       if is_network_url(url) {
         urls.push(url.to_string());
       }
+    }
+  }
+
+  fn link_rel_requires_fetch(rel: &str) -> bool {
+    rel.split_whitespace().any(|token| {
+      token.eq_ignore_ascii_case("stylesheet")
+        || token.eq_ignore_ascii_case("preload")
+        || token.eq_ignore_ascii_case("modulepreload")
+        || token.eq_ignore_ascii_case("match")
+        || token.eq_ignore_ascii_case("mismatch")
+        || token.eq_ignore_ascii_case("icon")
+        || token.eq_ignore_ascii_case("mask-icon")
+        || token.eq_ignore_ascii_case("manifest")
+    })
+  }
+
+  // `href` is only fetchable in a subset of contexts (notably `<link>`). Avoid flagging common
+  // WPT metadata like `<link rel=help href="https://...">` by only validating the `href` value
+  // when the `<link rel>` indicates a fetchable relation.
+  let link_tag = Regex::new("(?is)<link\\b[^>]*>").unwrap();
+  let rel_attr = Regex::new("(?is)(?:^|\\s)rel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .unwrap();
+  let href_attr = Regex::new("(?is)(?:^|\\s)href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .unwrap();
+
+  for m in link_tag.find_iter(content) {
+    let tag = m.as_str();
+    let Some(rel_caps) = rel_attr.captures(tag) else {
+      continue;
+    };
+    let rel_value = rel_caps
+      .get(1)
+      .or_else(|| rel_caps.get(2))
+      .or_else(|| rel_caps.get(3))
+      .map(|m| m.as_str())
+      .unwrap_or("");
+    if !link_rel_requires_fetch(rel_value) {
+      continue;
+    }
+
+    let Some(href_caps) = href_attr.captures(tag) else {
+      continue;
+    };
+    let href_value = href_caps
+      .get(1)
+      .or_else(|| href_caps.get(2))
+      .or_else(|| href_caps.get(3))
+      .map(|m| m.as_str())
+      .unwrap_or("");
+    if is_network_url(href_value) {
+      urls.push(href_value.to_string());
     }
   }
 
@@ -1743,6 +1794,48 @@ mod tests {
     assert!(imported.contains("data-srcset=\"https://example.com/image.png 1x, /resources/green.png 2x\""));
     assert!(!imported.contains("src=\"/resources/"));
     assert!(out_dir.path().join("out/resources/green.png").exists());
+  }
+
+  #[test]
+  fn non_strict_offline_validation_allows_help_links() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/help-link.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+    let imported =
+      fs::read_to_string(out_dir.path().join("out/html/network/help-link.html")).unwrap();
+    assert!(imported.contains("https://example.com/spec"));
+
+    // Strict-offline should still catch network-looking strings in HTML.
+    let out_dir2 = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/help-link.html".to_string()],
+      out_dir: out_dir2.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: true,
+      allow_network: false,
+    };
+
+    let err = run_import(config).expect_err("strict offline should fail");
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path.to_string_lossy().contains("help-link.html"));
+        assert!(urls.contains("https://example.com/spec"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
   }
 
   #[test]

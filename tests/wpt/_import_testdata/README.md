@@ -9,6 +9,7 @@ The layout mirrors a tiny subset of upstream WPT with:
 - a visual test under `html/standalone/` that pulls in nested CSS with `@import`
 - a set of network/url validation fixtures under `html/network/`:
   - `external-url.html`: simple `src="https://example.com/..."` rejection
+  - `help-link.html`: `rel=help` links are allowed in non-strict mode (strict-offline still rejects)
   - `srcset-external.html`: `srcset="https://example.com/..."` rejection
   - `unquoted-external.html`: unquoted `src=https://example.com/...` rejection
   - `text-url.html`: strict-offline rejection of network-looking strings outside fetch contexts
