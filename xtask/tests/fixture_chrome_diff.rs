@@ -257,6 +257,46 @@ fn dry_run_respects_no_chrome() {
 }
 
 #[test]
+fn dry_run_respects_no_fastrender() {
+  let temp = tempdir().expect("tempdir");
+  let fixtures_root = temp.path().join("fixtures");
+  write_fixture(&fixtures_root, "a");
+  let out_dir = temp.path().join("out");
+
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .args([
+      "fixture-chrome-diff",
+      "--dry-run",
+      "--no-fastrender",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+    ])
+    .output()
+    .expect("run fixture-chrome-diff --dry-run --no-fastrender");
+
+  assert!(
+    output.status.success(),
+    "expected dry-run to succeed; stderr:\n{}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    !stdout.contains("--bin render_fixtures"),
+    "plan should skip render_fixtures when --no-fastrender is set; got:\n{stdout}"
+  );
+  assert!(
+    stdout.contains("diff_renders") && stdout.contains("--before"),
+    "plan should still include diff_renders; got:\n{stdout}"
+  );
+}
+
+#[test]
 #[cfg(unix)]
 fn end_to_end_runs_with_stub_cargo_and_fake_chrome() {
   let temp = tempdir().expect("tempdir");
@@ -399,7 +439,7 @@ exit 0
 
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .current_dir(repo_root())
-    .env("PATH", path)
+    .env("PATH", &path)
     .env("CARGO_TARGET_DIR", &target_dir)
     .args([
       "fixture-chrome-diff",
@@ -445,9 +485,42 @@ exit 0
     "missing diff artifacts dir"
   );
 
+  let output_reuse = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .env("PATH", &path)
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .args([
+      "fixture-chrome-diff",
+      "--no-chrome",
+      "--no-fastrender",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a,b",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+      "--viewport",
+      "800x600",
+      "--dpr",
+      "1",
+      "--tolerance",
+      "0",
+      "--max-diff-percent",
+      "0",
+    ])
+    .output()
+    .expect("run fixture-chrome-diff with --no-chrome --no-fastrender");
+
+  assert!(
+    output_reuse.status.success(),
+    "fixture-chrome-diff should exit 0 when reusing outputs.\nstdout:\n{}\nstderr:\n{}",
+    String::from_utf8_lossy(&output_reuse.stdout),
+    String::from_utf8_lossy(&output_reuse.stderr)
+  );
+
   let output_fail = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .current_dir(repo_root())
-    .env("PATH", path)
+    .env("PATH", &path)
     .env("CARGO_TARGET_DIR", &target_dir)
     .args([
       "fixture-chrome-diff",

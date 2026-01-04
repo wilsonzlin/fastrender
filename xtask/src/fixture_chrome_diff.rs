@@ -124,6 +124,10 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long)]
   pub fail_on_differences: bool,
 
+  /// Skip rendering fixtures with FastRender and reuse the existing `<out>/fastrender` output dir.
+  #[arg(long)]
+  pub no_fastrender: bool,
+
   /// Explicit Chrome/Chromium binary path forwarded to the Chrome baseline step.
   #[arg(long, value_name = "PATH", conflicts_with = "chrome_dir")]
   pub chrome: Option<PathBuf>,
@@ -156,7 +160,16 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
   let out_root = resolve_repo_path(&repo_root, &args.out_dir);
   let layout = Layout::new(&out_root);
 
-  let render_fixtures = build_render_fixtures_command(&repo_root, &fixtures_root, &args, &layout)?;
+  let render_fixtures = if args.no_fastrender {
+    None
+  } else {
+    Some(build_render_fixtures_command(
+      &repo_root,
+      &fixtures_root,
+      &args,
+      &layout,
+    )?)
+  };
   let chrome_baseline = if args.no_chrome {
     None
   } else {
@@ -179,7 +192,9 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     println!("  json: {}", layout.report_json.display());
     println!();
 
-    crate::print_command(&render_fixtures);
+    if let Some(cmd) = render_fixtures.as_ref() {
+      crate::print_command(cmd);
+    }
     if let Some(cmd) = chrome_baseline.as_ref() {
       crate::print_command(cmd);
     }
@@ -194,7 +209,16 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     )
   })?;
 
-  clear_dir(&layout.fastrender).context("clear FastRender output dir")?;
+  if args.no_fastrender {
+    if !layout.fastrender.is_dir() {
+      bail!(
+        "--no-fastrender was set, but FastRender output dir does not exist: {}",
+        layout.fastrender.display()
+      );
+    }
+  } else {
+    clear_dir(&layout.fastrender).context("clear FastRender output dir")?;
+  }
   if args.no_chrome {
     if !layout.chrome.is_dir() {
       bail!(
@@ -208,8 +232,10 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
   remove_file_if_exists(&layout.report_html).context("clear existing report.html")?;
   remove_file_if_exists(&layout.report_json).context("clear existing report.json")?;
 
-  println!("Rendering fixtures with FastRender...");
-  crate::run_command(render_fixtures).context("render_fixtures failed")?;
+  if let Some(cmd) = render_fixtures {
+    println!("Rendering fixtures with FastRender...");
+    crate::run_command(cmd).context("render_fixtures failed")?;
+  }
 
   if let Some(cmd) = chrome_baseline {
     println!("Rendering fixtures with Chrome baseline...");
