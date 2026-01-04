@@ -4502,6 +4502,7 @@ impl InlineFormattingContext {
             inline_pos,
             inline_vertical,
             line_origin,
+            Point::ZERO,
             anchor_positions.as_deref_mut(),
             positioned_containing_blocks.as_deref_mut(),
           );
@@ -4528,6 +4529,7 @@ impl InlineFormattingContext {
           inline_pos,
           inline_vertical,
           line_origin,
+          Point::ZERO,
           anchor_positions.as_deref_mut(),
           positioned_containing_blocks.as_deref_mut(),
         );
@@ -4738,6 +4740,7 @@ impl InlineFormattingContext {
     inline_pos: f32,
     inline_vertical: bool,
     line_origin: Point,
+    parent_offset_in_line: Point,
     mut anchor_positions: Option<&mut HashMap<usize, Point>>,
     mut positioned_containing_blocks: Option<&mut HashMap<usize, ContainingBlock>>,
   ) -> FragmentNode {
@@ -4806,6 +4809,7 @@ impl InlineFormattingContext {
       }
       InlineItem::InlineBox(box_item) => {
         let record_containing_block = |bounds: Rect,
+                                       parent_offset_in_line: Point,
                                        positioned_containing_blocks: &mut Option<
           &mut HashMap<usize, ContainingBlock>,
         >| {
@@ -4815,7 +4819,10 @@ impl InlineFormattingContext {
           let Some(map) = positioned_containing_blocks.as_deref_mut() else {
             return;
           };
-          let border_rect = bounds.translate(line_origin);
+          // `bounds` is expressed in the coordinate space of the inline box's parent (often another
+          // inline box). Translate it into line coordinates before applying the line's own origin so
+          // containing-block rects stay correct for nested inline boxes.
+          let border_rect = bounds.translate(line_origin.translate(parent_offset_in_line));
           let padding_width =
             (border_rect.size.width - box_item.border_left - box_item.border_right).max(0.0);
           let padding_height =
@@ -4869,8 +4876,8 @@ impl InlineFormattingContext {
         };
 
         if inline_vertical {
-          let mut child_inline = box_item.start_edge + inline_pos;
-          let child_block = box_item.content_offset_y + block_pos;
+          let mut child_inline = box_item.start_edge;
+          let child_block = box_item.content_offset_y;
           let mut children = Vec::with_capacity(box_item.children.len());
           for child in &box_item.children {
             let fragment = self.create_item_fragment_oriented(
@@ -4879,6 +4886,7 @@ impl InlineFormattingContext {
               child_inline,
               inline_vertical,
               line_origin,
+              parent_offset_in_line.translate(Point::new(block_pos, inline_pos)),
               anchor_positions.as_deref_mut(),
               positioned_containing_blocks.as_deref_mut(),
             );
@@ -4891,7 +4899,7 @@ impl InlineFormattingContext {
             box_item.metrics.height,
             box_item.width(),
           );
-          record_containing_block(bounds, &mut positioned_containing_blocks);
+          record_containing_block(bounds, parent_offset_in_line, &mut positioned_containing_blocks);
           let box_id = (box_item.box_id != 0).then_some(box_item.box_id);
           FragmentNode::new_with_style(
             bounds,
@@ -4903,8 +4911,8 @@ impl InlineFormattingContext {
             box_item.style.clone(),
           )
         } else {
-          let mut child_x = box_item.start_edge + inline_pos;
-          let child_y = box_item.content_offset_y + block_pos;
+          let mut child_x = box_item.start_edge;
+          let child_y = box_item.content_offset_y;
           let mut children = Vec::with_capacity(box_item.children.len());
           for child in &box_item.children {
             let fragment = self.create_item_fragment_oriented(
@@ -4913,6 +4921,7 @@ impl InlineFormattingContext {
               child_x,
               inline_vertical,
               line_origin,
+              parent_offset_in_line.translate(Point::new(inline_pos, block_pos)),
               anchor_positions.as_deref_mut(),
               positioned_containing_blocks.as_deref_mut(),
             );
@@ -4926,7 +4935,7 @@ impl InlineFormattingContext {
             box_item.width(),
             box_item.metrics.height,
           );
-          record_containing_block(bounds, &mut positioned_containing_blocks);
+          record_containing_block(bounds, parent_offset_in_line, &mut positioned_containing_blocks);
           let box_id = (box_item.box_id != 0).then_some(box_item.box_id);
           FragmentNode::new_with_style(
             bounds,
@@ -5004,9 +5013,13 @@ impl InlineFormattingContext {
           // Nested anchors must include any inline box offsets (e.g. padding) that affect where the
           // positioned element would have appeared in flow.
           let anchor_point = if inline_vertical {
-            Point::new(line_origin.x + block_pos, line_origin.y + inline_pos)
+            line_origin
+              .translate(parent_offset_in_line)
+              .translate(Point::new(block_pos, inline_pos))
           } else {
-            Point::new(line_origin.x + inline_pos, line_origin.y + block_pos)
+            line_origin
+              .translate(parent_offset_in_line)
+              .translate(Point::new(inline_pos, block_pos))
           };
           map.insert(anchor.box_id, anchor_point);
         }
@@ -8369,9 +8382,9 @@ impl InlineFormattingContext {
             AvailableSpace::Definite(available_inline),
             constraints.available_height,
           );
-          let fragment = fc.layout(block_node, &child_constraints)?;
-          let translate_y = line_offset + margin_top - fragment.bounds.y();
-          let translated = fragment.translate_subtree_absolute(Point::new(0.0, translate_y));
+          let mut translated = fc.layout(block_node, &child_constraints)?;
+          let translate_y = line_offset + margin_top - translated.bounds.y();
+          translated.translate_root_in_place(Point::new(0.0, translate_y));
           block_run_max_width = block_run_max_width
             .max(translated.bounds.x() + translated.bounds.width() + margin_right);
           line_offset += margin_top + translated.bounds.height() + margin_bottom;
@@ -8597,7 +8610,7 @@ impl InlineFormattingContext {
         {
           return Err(LayoutError::Timeout { elapsed });
         }
-        *child = child.translate_subtree_absolute(Point::new(block_shift, 0.0));
+        child.translate_root_in_place(Point::new(block_shift, 0.0));
       }
     }
 
