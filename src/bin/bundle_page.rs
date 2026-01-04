@@ -1130,16 +1130,17 @@ fn crawl_document(
   }
 
   fn enqueue_unique(
-    queue: &mut VecDeque<(String, FetchDestination)>,
+    queue: &mut VecDeque<(String, FetchDestination, String)>,
     seen: &mut HashSet<String>,
     url: String,
     destination: FetchDestination,
+    referrer: &str,
   ) {
     if url.is_empty() {
       return;
     }
     if seen.insert(url.clone()) {
-      queue.push_back((url, destination));
+      queue.push_back((url, destination, referrer.to_string()));
     }
   }
 
@@ -1223,16 +1224,17 @@ fn crawl_document(
     })
     .collect::<Vec<_>>();
   let policy = ResourceAccessPolicy {
-    document_origin: origin_from_url(&document.base_hint),
+    document_origin: None,
     allow_file_from_http: false,
     block_mixed_content: false,
     same_origin_only: render.same_origin_subresources,
     allowed_origins,
   };
 
-  let mut queue: VecDeque<(String, FetchDestination)> = VecDeque::new();
+  let mut queue: VecDeque<(String, FetchDestination, String)> = VecDeque::new();
   let mut seen: HashSet<String> = HashSet::new();
   let mut fetch_errors: Vec<(String, String)> = Vec::new();
+  let root_referrer = document.base_hint.as_str();
 
   let css_links = fastrender::css::loader::extract_css_links(
     &document.html,
@@ -1242,34 +1244,56 @@ fn crawl_document(
   .unwrap_or_default();
   let has_link_stylesheets = !css_links.is_empty();
   for css_url in css_links {
-    enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+    enqueue_unique(
+      &mut queue,
+      &mut seen,
+      css_url,
+      FetchDestination::Style,
+      root_referrer,
+    );
   }
 
   let has_style_tag = html_has_style_tag(&document.html);
   if !has_link_stylesheets && !has_style_tag {
-    for css_url in fastrender::css::loader::extract_embedded_css_urls(
-      &document.html,
-      &document.base_url,
-    )
-    .unwrap_or_default()
+    for css_url in
+      fastrender::css::loader::extract_embedded_css_urls(&document.html, &document.base_url)
+        .unwrap_or_default()
     {
-      enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+      enqueue_unique(
+        &mut queue,
+        &mut seen,
+        css_url,
+        FetchDestination::Style,
+        root_referrer,
+      );
     }
   }
 
   for css_chunk in extract_inline_css_chunks(&document.html) {
     for (url, destination) in discover_css_urls_with_destination(&css_chunk, &document.base_url) {
-      enqueue_unique(&mut queue, &mut seen, url, destination);
+      enqueue_unique(&mut queue, &mut seen, url, destination, root_referrer);
     }
   }
 
   let html_assets =
     fastrender::html::asset_discovery::discover_html_asset_urls(&document.html, &document.base_url);
   for url in discover_html_images(&document.html, &document.base_url, render)? {
-    enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
+    enqueue_unique(
+      &mut queue,
+      &mut seen,
+      url,
+      FetchDestination::Image,
+      root_referrer,
+    );
   }
   for url in html_assets.documents {
-    enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Document);
+    enqueue_unique(
+      &mut queue,
+      &mut seen,
+      url,
+      FetchDestination::Document,
+      root_referrer,
+    );
   }
 
   const MAX_CRAWL_URLS: usize = 10_000;
@@ -1277,7 +1301,7 @@ fn crawl_document(
   // deterministic fixture. The HTML/CSS rewrite step will still produce local references for these
   // URLs, but the stored bytes are replaced with an empty placeholder.
   const MAX_CRAWL_IMAGE_BYTES: usize = 1_000_000;
-  while let Some((url, destination)) = queue.pop_front() {
+  while let Some((url, destination, referrer)) = queue.pop_front() {
     if seen.len() > MAX_CRAWL_URLS {
       eprintln!(
         "Warning: crawl URL limit exceeded ({}); skipping remaining discoveries",
@@ -1286,16 +1310,17 @@ fn crawl_document(
       break;
     }
 
+    let policy_for_request = policy.for_origin(origin_from_url(&referrer));
     let allowed = match destination {
-      FetchDestination::Document => policy.allows_document(&url),
-      _ => policy.allows(&url),
+      FetchDestination::Document => policy_for_request.allows_document(&url),
+      _ => policy_for_request.allows(&url),
     };
     if let Err(err) = allowed {
       eprintln!("Skipping blocked subresource {url}: {}", err.reason);
       continue;
     }
 
-    let req = FetchRequest::new(&url, destination).with_referrer(document.base_hint.as_str());
+    let req = FetchRequest::new(&url, destination).with_referrer(&referrer);
     let res = match fetcher.fetch_with_request(req) {
       Ok(res) => res,
       Err(err) => {
@@ -1319,8 +1344,10 @@ fn crawl_document(
     };
 
     let allowed = match destination {
-      FetchDestination::Document => policy.allows_document_with_final(&url, res.final_url.as_deref()),
-      _ => policy.allows_with_final(&url, res.final_url.as_deref()),
+      FetchDestination::Document => {
+        policy_for_request.allows_document_with_final(&url, res.final_url.as_deref())
+      }
+      _ => policy_for_request.allows_with_final(&url, res.final_url.as_deref()),
     };
     if let Err(err) = allowed {
       eprintln!(
@@ -1333,28 +1360,30 @@ fn crawl_document(
     }
 
     let validation = match destination {
-      FetchDestination::Style => ensure_http_success(&res, &url).and_then(|_| {
-        ensure_stylesheet_mime_sane(&res, &url)
-      }),
-      FetchDestination::Font => ensure_http_success(&res, &url).and_then(|_| ensure_font_mime_sane(&res, &url)),
-      FetchDestination::Image => ensure_http_success(&res, &url).and_then(|_| ensure_image_mime_sane(&res, &url)),
-      FetchDestination::Document => {
-        ensure_http_success(&res, &url).and_then(|_| {
-          if document_response_looks_like_html(&res, &url) {
-            Ok(())
-          } else {
-            let content_type = res.content_type.as_deref().unwrap_or("<missing>");
-            let status = res
-              .status
-              .map(|s| s.to_string())
-              .unwrap_or_else(|| "<missing>".to_string());
-            let final_url = res.final_url.as_deref().unwrap_or(&url);
-            Err(fastrender::Error::Other(format!(
-              "unexpected content-type {content_type} (status {status}, final_url {final_url})"
-            )))
-          }
-        })
+      FetchDestination::Style => {
+        ensure_http_success(&res, &url).and_then(|_| ensure_stylesheet_mime_sane(&res, &url))
       }
+      FetchDestination::Font => {
+        ensure_http_success(&res, &url).and_then(|_| ensure_font_mime_sane(&res, &url))
+      }
+      FetchDestination::Image => {
+        ensure_http_success(&res, &url).and_then(|_| ensure_image_mime_sane(&res, &url))
+      }
+      FetchDestination::Document => ensure_http_success(&res, &url).and_then(|_| {
+        if document_response_looks_like_html(&res, &url) {
+          Ok(())
+        } else {
+          let content_type = res.content_type.as_deref().unwrap_or("<missing>");
+          let status = res
+            .status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "<missing>".to_string());
+          let final_url = res.final_url.as_deref().unwrap_or(&url);
+          Err(fastrender::Error::Other(format!(
+            "unexpected content-type {content_type} (status {status}, final_url {final_url})"
+          )))
+        }
+      }),
       FetchDestination::Other => Ok(()),
     };
     if let Err(err) = validation {
@@ -1378,7 +1407,7 @@ fn crawl_document(
         let css_base = res.final_url.as_deref().unwrap_or(&url);
         let css = decode_css_bytes(&res.bytes, res.content_type.as_deref());
         for (dep, destination) in discover_css_urls_with_destination(&css, css_base) {
-          enqueue_unique(&mut queue, &mut seen, dep, destination);
+          enqueue_unique(&mut queue, &mut seen, dep, destination, &referrer);
         }
       }
       FetchDestination::Document => {
@@ -1388,15 +1417,18 @@ fn crawl_document(
         let base_hint = res.final_url.as_deref().unwrap_or(&url);
         let doc = decode_html_resource(&res, base_hint);
 
-        let css_links = fastrender::css::loader::extract_css_links(
-          &doc.html,
-          &doc.base_url,
-          MediaType::Screen,
-        )
-        .unwrap_or_default();
+        let css_links =
+          fastrender::css::loader::extract_css_links(&doc.html, &doc.base_url, MediaType::Screen)
+            .unwrap_or_default();
         let has_link_stylesheets = !css_links.is_empty();
         for css_url in css_links {
-          enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+          enqueue_unique(
+            &mut queue,
+            &mut seen,
+            css_url,
+            FetchDestination::Style,
+            doc.base_hint.as_str(),
+          );
         }
 
         let has_style_tag = html_has_style_tag(&doc.html);
@@ -1405,24 +1437,48 @@ fn crawl_document(
             fastrender::css::loader::extract_embedded_css_urls(&doc.html, &doc.base_url)
               .unwrap_or_default()
           {
-            enqueue_unique(&mut queue, &mut seen, css_url, FetchDestination::Style);
+            enqueue_unique(
+              &mut queue,
+              &mut seen,
+              css_url,
+              FetchDestination::Style,
+              doc.base_hint.as_str(),
+            );
           }
         }
 
         for css_chunk in extract_inline_css_chunks(&doc.html) {
           for (url, destination) in discover_css_urls_with_destination(&css_chunk, &doc.base_url) {
-            enqueue_unique(&mut queue, &mut seen, url, destination);
+            enqueue_unique(
+              &mut queue,
+              &mut seen,
+              url,
+              destination,
+              doc.base_hint.as_str(),
+            );
           }
         }
 
         for url in discover_html_images(&doc.html, &doc.base_url, render)? {
-          enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Image);
+          enqueue_unique(
+            &mut queue,
+            &mut seen,
+            url,
+            FetchDestination::Image,
+            doc.base_hint.as_str(),
+          );
         }
 
         let html_assets =
           fastrender::html::asset_discovery::discover_html_asset_urls(&doc.html, &doc.base_url);
         for url in html_assets.documents {
-          enqueue_unique(&mut queue, &mut seen, url, FetchDestination::Document);
+          enqueue_unique(
+            &mut queue,
+            &mut seen,
+            url,
+            FetchDestination::Document,
+            doc.base_hint.as_str(),
+          );
         }
       }
       _ => {}
@@ -1797,6 +1853,88 @@ mod tests {
       !calls.iter().any(|(url, _, _)| url == "https://example.com/bg.png"),
       "should not crawl dependencies from stylesheet error body"
     );
+
+    Ok(())
+  }
+
+  #[test]
+  fn crawl_uses_frame_referrer_and_origin_for_nested_document_subresources() -> Result<()> {
+    #[derive(Default)]
+    struct NestedFrameFetcher {
+      calls: Mutex<Vec<(String, FetchDestination, Option<String>)>>,
+    }
+
+    impl NestedFrameFetcher {
+      fn calls(&self) -> Vec<(String, FetchDestination, Option<String>)> {
+        self
+          .calls
+          .lock()
+          .map(|calls| calls.clone())
+          .unwrap_or_default()
+      }
+    }
+
+    impl ResourceFetcher for NestedFrameFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.fetch_with_request(FetchRequest::new(url, FetchDestination::Other))
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push((
+          req.url.to_string(),
+          req.destination,
+          req.referrer.map(|r| r.to_string()),
+        ));
+
+        match req.url {
+          "https://example.com/" => Ok(FetchedResource::with_final_url(
+            br#"<html><body><iframe src="https://frame.com/frame.html"></iframe></body></html>"#
+              .to_vec(),
+            Some("text/html".to_string()),
+            Some(req.url.to_string()),
+          )),
+          "https://frame.com/frame.html" => Ok(FetchedResource::with_final_url(
+            br#"<html><head><link rel="stylesheet" href="frame.css"></head><body></body></html>"#
+              .to_vec(),
+            Some("text/html".to_string()),
+            Some(req.url.to_string()),
+          )),
+          "https://frame.com/frame.css" => Ok(FetchedResource::with_final_url(
+            b"body { background: black; }".to_vec(),
+            Some("text/css".to_string()),
+            Some(req.url.to_string()),
+          )),
+          other => Err(fastrender::Error::Other(format!(
+            "unexpected fetch: {other}"
+          ))),
+        }
+      }
+    }
+
+    let inner = Arc::new(NestedFrameFetcher::default());
+    let recording = RecordingFetcher::new(inner.clone());
+    let (doc, _) = fetch_document(&recording, "https://example.com/")?;
+
+    let render = BundleRenderConfig {
+      viewport: (1200, 800),
+      device_pixel_ratio: 1.0,
+      scroll_x: 0.0,
+      scroll_y: 0.0,
+      full_page: false,
+      same_origin_subresources: true,
+      allowed_subresource_origins: Vec::new(),
+      compat_profile: fastrender::compat::CompatProfile::default(),
+      dom_compat_mode: fastrender::dom::DomCompatibilityMode::default(),
+    };
+
+    crawl_document(&recording, &doc, &render, CrawlMode::Strict)?;
+
+    let calls = inner.calls();
+    assert!(calls.iter().any(|(url, dest, referrer)| {
+      url == "https://frame.com/frame.css"
+        && *dest == FetchDestination::Style
+        && referrer.as_deref() == Some("https://frame.com/frame.html")
+    }));
 
     Ok(())
   }
