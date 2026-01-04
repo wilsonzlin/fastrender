@@ -53,6 +53,7 @@ use super::harness::TestMetadata;
 use super::harness::TestResult;
 use super::harness::TestStatus;
 use super::harness::TestType;
+use fastrender::ResourcePolicy;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::font_loader::FontContext;
 use html5ever::parse_document;
@@ -71,6 +72,13 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
+use url::Url;
+
+fn build_offline_renderer() -> fastrender::Result<fastrender::FastRender> {
+  fastrender::FastRender::builder()
+    .resource_policy(ResourcePolicy::default().allow_http(false).allow_https(false))
+    .build()
+}
 
 /// Main WPT test runner
 ///
@@ -297,6 +305,7 @@ impl WptRunner {
   pub fn run_test(&mut self, test_path: &Path) -> TestResult {
     let mut metadata = TestMetadata::from_path(test_path.to_path_buf());
     metadata.id = Self::test_id_for_path(&metadata.path, &self.config.test_dir);
+    self.apply_sidecar_metadata(&mut metadata);
     if metadata.timeout_ms == 0 {
       metadata.timeout_ms = self.config.default_timeout_ms;
     }
@@ -406,7 +415,7 @@ impl WptRunner {
       tests
         .into_par_iter()
         .map(|metadata| {
-          let mut renderer = match fastrender::FastRender::new() {
+          let mut renderer = match build_offline_renderer() {
             Ok(renderer) => renderer,
             Err(e) => {
               return TestResult::error(
@@ -1023,7 +1032,13 @@ impl WptRunner {
     };
 
     // Render test HTML
-    let test_image = match Self::render_html(renderer, &test_html, metadata) {
+    let test_image = match Self::render_html_for_path(
+      renderer,
+      &test_html,
+      &metadata.path,
+      metadata.viewport_width,
+      metadata.viewport_height,
+    ) {
       Ok(img) => img,
       Err(e) => {
         return TestResult::error(
@@ -1035,7 +1050,13 @@ impl WptRunner {
     };
 
     // Render reference HTML
-    let ref_image = match Self::render_html(renderer, &ref_html, metadata) {
+    let ref_image = match Self::render_html_for_path(
+      renderer,
+      &ref_html,
+      ref_path,
+      metadata.viewport_width,
+      metadata.viewport_height,
+    ) {
       Ok(img) => img,
       Err(e) => {
         return TestResult::error(
@@ -1095,7 +1116,13 @@ impl WptRunner {
       }
     };
 
-    let rendered_image = match Self::render_html(renderer, &test_html, metadata) {
+    let rendered_image = match Self::render_html_for_path(
+      renderer,
+      &test_html,
+      &metadata.path,
+      metadata.viewport_width,
+      metadata.viewport_height,
+    ) {
       Ok(img) => img,
       Err(e) => {
         return TestResult::error(
@@ -1160,7 +1187,13 @@ impl WptRunner {
     };
 
     // Try to render - success means no crash
-    match Self::render_html(renderer, &test_html, metadata) {
+    match Self::render_html_for_path(
+      renderer,
+      &test_html,
+      &metadata.path,
+      metadata.viewport_width,
+      metadata.viewport_height,
+    ) {
       Ok(rendered) => {
         let mut result = TestResult::pass(metadata.clone(), start.elapsed())
           .with_images(rendered.clone(), rendered);
@@ -1181,14 +1214,23 @@ impl WptRunner {
     }
   }
 
-  /// Renders HTML and returns PNG bytes
-  fn render_html(
+  /// Renders HTML for a given source file path and returns PNG bytes.
+  ///
+  /// The `path` is converted to a `file://` URL and installed as the per-document base URL so
+  /// relative asset references (CSS/images/fonts) resolve the same way a browser would.
+  fn render_html_for_path(
     renderer: &mut fastrender::FastRender,
     html: &str,
-    metadata: &TestMetadata,
+    path: &Path,
+    viewport_width: u32,
+    viewport_height: u32,
   ) -> Result<Vec<u8>, String> {
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let base_url = Url::from_file_path(&canonical)
+      .map_err(|_| format!("Failed to convert path to file URL: {canonical:?}"))?;
+    renderer.set_base_url(base_url.to_string());
     renderer
-      .render_to_png(html, metadata.viewport_width, metadata.viewport_height)
+      .render_to_png(html, viewport_width, viewport_height)
       .map_err(|e| format!("Render error: {}", e))
   }
 
@@ -1707,10 +1749,14 @@ impl WptRunnerBuilder {
   ///
   /// # Panics
   ///
-  /// Panics if no renderer was provided
+  /// Panics if a renderer cannot be initialized.
   pub fn build(self) -> WptRunner {
+    let renderer = match self.renderer {
+      Some(renderer) => renderer,
+      None => build_offline_renderer().expect("Failed to initialize offline renderer"),
+    };
     WptRunner {
-      renderer: self.renderer.expect("Renderer is required"),
+      renderer,
       config: self.config,
       stats: RunnerStats::default(),
     }
@@ -1729,7 +1775,7 @@ mod tests {
   use tempfile::TempDir;
 
   fn create_test_renderer() -> fastrender::FastRender {
-    fastrender::FastRender::new().unwrap()
+    build_offline_renderer().unwrap()
   }
 
   #[test]

@@ -37,7 +37,14 @@ mod wpt_runner_tests {
 
   fn create_test_renderer() -> fastrender::FastRender {
     ensure_bundled_fonts();
-    fastrender::FastRender::new().unwrap()
+    fastrender::FastRender::builder()
+      .resource_policy(
+        fastrender::ResourcePolicy::default()
+          .allow_http(false)
+          .allow_https(false),
+      )
+      .build()
+      .unwrap()
   }
 
   // =========================================================================
@@ -229,6 +236,223 @@ mod wpt_runner_tests {
   }
 
   #[test]
+  fn wpt_relative_stylesheet_loads_with_base_url() {
+    ensure_bundled_fonts();
+    let temp = TempDir::new().unwrap();
+    let support_dir = temp.path().join("support");
+    std::fs::create_dir_all(&support_dir).unwrap();
+
+    std::fs::write(
+      support_dir.join("style.css"),
+      r#"body { margin: 0; }
+.box { width: 100px; height: 100px; background: rgb(0, 255, 0); }"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+      temp.path().join("test.html"),
+      r#"<!doctype html>
+<html>
+  <head>
+    <link rel="match" href="ref.html">
+    <link rel="stylesheet" href="support/style.css">
+  </head>
+  <body><div class="box"></div></body>
+</html>"#,
+    )
+    .unwrap();
+
+    // Inline styles in the reference ensure this only passes if the linked stylesheet in the test
+    // document is resolved relative to the test file (base_url set correctly).
+    std::fs::write(
+      temp.path().join("ref.html"),
+      r#"<!doctype html>
+<html>
+  <head>
+    <style>
+      body { margin: 0; }
+      .box { width: 100px; height: 100px; background: rgb(0, 255, 0); }
+    </style>
+  </head>
+  <body><div class="box"></div></body>
+</html>"#,
+    )
+    .unwrap();
+
+    let mut runner = WptRunnerBuilder::new()
+      .test_dir(temp.path())
+      .expected_dir(temp.path().join("expected"))
+      .output_dir(temp.path().join("out"))
+      .no_report()
+      .build();
+
+    let result = runner.run_test(&temp.path().join("test.html"));
+    assert_eq!(
+      result.status,
+      TestStatus::Pass,
+      "expected PASS, got {:?}: {:?}",
+      result.status,
+      result.message
+    );
+  }
+
+  #[test]
+  fn wpt_reftest_base_url_isolated_per_document() {
+    ensure_bundled_fonts();
+    let temp = TempDir::new().unwrap();
+
+    let test_dir = temp.path().join("test");
+    let ref_dir = temp.path().join("ref");
+    std::fs::create_dir_all(&test_dir).unwrap();
+    std::fs::create_dir_all(ref_dir.join("support")).unwrap();
+
+    // Test uses inline styles.
+    std::fs::write(
+      test_dir.join("test.html"),
+      r#"<!doctype html>
+<html>
+  <head>
+    <link rel="match" href="../ref/ref.html">
+    <style>
+      body { margin: 0; }
+      .box { width: 100px; height: 100px; background: rgb(0, 255, 0); }
+    </style>
+  </head>
+  <body><div class="box"></div></body>
+</html>"#,
+    )
+    .unwrap();
+
+    // Reference loads its stylesheet relative to *its own* directory.
+    std::fs::write(
+      ref_dir.join("support/style.css"),
+      r#"body { margin: 0; }
+.box { width: 100px; height: 100px; background: rgb(0, 255, 0); }"#,
+    )
+    .unwrap();
+    std::fs::write(
+      ref_dir.join("ref.html"),
+      r#"<!doctype html>
+<html>
+  <head>
+    <link rel="stylesheet" href="support/style.css">
+  </head>
+  <body><div class="box"></div></body>
+</html>"#,
+    )
+    .unwrap();
+
+    let mut runner = WptRunnerBuilder::new()
+      .test_dir(temp.path())
+      .expected_dir(temp.path().join("expected"))
+      .output_dir(temp.path().join("out"))
+      .no_report()
+      .build();
+
+    let result = runner.run_test(&test_dir.join("test.html"));
+    assert_eq!(
+      result.status,
+      TestStatus::Pass,
+      "expected PASS, got {:?}: {:?}",
+      result.status,
+      result.message
+    );
+  }
+
+  #[test]
+  fn wpt_runner_default_is_offline() {
+    ensure_bundled_fonts();
+    let temp = TempDir::new().unwrap();
+
+    let css = r#"body { margin: 0; }
+.box { width: 100px; height: 100px; background: rgb(0, 255, 0); }"#;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let saw_request = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let saw_request_thread = std::sync::Arc::clone(&saw_request);
+
+    let server = std::thread::spawn(move || {
+      use std::io::{Read, Write};
+      use std::sync::atomic::Ordering;
+      use std::time::{Duration, Instant};
+
+      listener.set_nonblocking(true).unwrap();
+      let start = Instant::now();
+      while start.elapsed() < Duration::from_millis(500) {
+        match listener.accept() {
+          Ok((mut stream, _)) => {
+            saw_request_thread.store(true, Ordering::SeqCst);
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+              "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: {}\r\n\r\n{}",
+              css.len(),
+              css
+            );
+            let _ = stream.write_all(response.as_bytes());
+            return;
+          }
+          Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            std::thread::sleep(Duration::from_millis(10));
+          }
+          Err(_) => return,
+        }
+      }
+    });
+
+    let css_url = format!("http://{addr}/style.css");
+
+    std::fs::write(
+      temp.path().join("test.html"),
+      format!(
+        r#"<!doctype html>
+<html>
+  <head>
+    <link rel="match" href="ref.html">
+    <link rel="stylesheet" href="{css_url}">
+  </head>
+  <body><div class="box"></div></body>
+</html>"#
+      ),
+    )
+    .unwrap();
+    std::fs::write(
+      temp.path().join("ref.html"),
+      r#"<!doctype html>
+<html>
+  <head>
+    <style>
+      body { margin: 0; }
+      .box { width: 100px; height: 100px; background: rgb(0, 255, 0); }
+    </style>
+  </head>
+  <body><div class="box"></div></body>
+</html>"#,
+    )
+    .unwrap();
+
+    // Build without supplying a renderer. This should default to an offline renderer with
+    // http/https disabled.
+    let mut runner = WptRunnerBuilder::new()
+      .test_dir(temp.path())
+      .expected_dir(temp.path().join("expected"))
+      .output_dir(temp.path().join("out"))
+      .no_report()
+      .build();
+
+    let result = runner.run_test(&temp.path().join("test.html"));
+    assert!(result.status.is_failure(), "expected failure, got {result:?}");
+
+    server.join().unwrap();
+    assert!(
+      !saw_request.load(std::sync::atomic::Ordering::SeqCst),
+      "offline policy should block HTTP requests"
+    );
+  }
+
+  #[test]
   fn test_wpt_runner_suite_aggregated() {
     let renderer = create_test_renderer();
     let mut runner = WptRunner::new(renderer);
@@ -259,6 +483,10 @@ mod wpt_runner_tests {
       .spawn(|| {
         let renderer = create_test_renderer();
         let mut config = HarnessConfig::default();
+        // The discovery directory under `tests/wpt/tests/` contains harness-focused metadata
+        // fixtures (expected failures, disables, etc.). Keep the smoke-test suite focused on the
+        // curated manifest entries so UPDATE_WPT_EXPECTED mode doesn't trip over those fixtures.
+        config.discovery_mode = DiscoveryMode::ManifestOnly;
         config.expected_dir = PathBuf::from("target/wpt-expected");
         if std::env::var("UPDATE_WPT_EXPECTED").is_ok() {
           config = config.update_expected();
