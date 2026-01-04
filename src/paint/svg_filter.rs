@@ -7057,6 +7057,29 @@ mod filter_primitive_region_override_tests {
       "expected pixels inside primitive region"
     );
   }
+
+  #[test]
+  fn primitive_region_partial_override_inherits_user_space_filter_region_when_primitive_units_object_bbox()
+  {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='objectBoundingBox' x='5' y='5' width='20' height='20'><feFlood x='0'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("filter");
+
+    let mut pixmap = new_pixmap(30, 30).unwrap();
+    let bbox = Rect::from_xywh(10.0, 10.0, 10.0, 10.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    assert_eq!(pixmap.pixel(0, 0).unwrap().alpha(), 0);
+    assert_eq!(
+      pixmap.pixel(6, 10).unwrap().alpha(),
+      0,
+      "expected left edge clipped by primitive override"
+    );
+    assert!(
+      pixmap.pixel(10, 10).unwrap().alpha() > 0,
+      "expected primitive output inside the resolved filter region"
+    );
+  }
 }
 
 #[cfg(test)]
