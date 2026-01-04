@@ -4619,14 +4619,14 @@ impl DisplayListRenderer {
       self.canvas.height() as f32 / self.scale,
     ));
 
-    // `ResolvedMask::rects` are expressed in the CSS coordinate space of the overall scene. When
-    // rendering into a translated canvas (e.g. per-tile parallel painting or bounded layers),
-    // offset those rects into the local canvas coordinate system so mask tiling/positioning stays
-    // stable even when the underlying pixmap origin changes.
-    //
-    // At the moment `render_mask` assumes the canvas transform is translation-only. This is
-    // sufficient for tiling (which uses `Canvas::translate`) and avoids incorrectly applying an
-    // affine transform to mask-origin computations that currently operate in axis-aligned space.
+    let rects = mask.rects;
+    let mut combined: Option<CompositeMask> = None;
+    // `ResolvedMask` geometry is expressed in element CSS coordinates. Under parallel tiling and
+    // bounded layers the canvas is translated so pixmap coordinates no longer map 1:1 to element
+    // coordinates. Compute the visible element-space rect by inverting the current canvas
+    // transform so we can clip/size mask rasterization correctly.
+    let canvas_bounds_device = self.canvas.bounds();
+    let canvas_clip_device = self.canvas.clip_bounds().unwrap_or(canvas_bounds_device);
     let canvas_transform = self.canvas.transform();
     let is_translation_only = {
       const EPS: f32 = 1e-6;
@@ -4635,38 +4635,35 @@ impl DisplayListRenderer {
         && canvas_transform.kx.abs() < EPS
         && canvas_transform.ky.abs() < EPS
     };
-    let canvas_offset_css = if is_translation_only && self.scale.is_finite() && self.scale != 0.0 {
-      Point::new(canvas_transform.tx / self.scale, canvas_transform.ty / self.scale)
-    } else {
-      Point::ZERO
-    };
-
-    let mut rects = mask.rects;
-    if canvas_offset_css != Point::ZERO {
-      rects.border = rects.border.translate(canvas_offset_css);
-      rects.padding = rects.padding.translate(canvas_offset_css);
-      rects.content = rects.content.translate(canvas_offset_css);
-    }
-    let mut combined: Option<CompositeMask> = None;
-    let canvas_bounds_device = self.canvas.bounds();
-    let canvas_bounds_css = Rect::from_xywh(
-      canvas_bounds_device.x() / self.scale,
-      canvas_bounds_device.y() / self.scale,
-      canvas_bounds_device.width() / self.scale,
-      canvas_bounds_device.height() / self.scale,
-    );
-    let canvas_clip_bounds_css = self
-      .canvas
-      .clip_bounds()
-      .map(|rect| {
-        Rect::from_xywh(
-          rect.x() / self.scale,
-          rect.y() / self.scale,
-          rect.width() / self.scale,
-          rect.height() / self.scale,
+    let (canvas_bounds_local_device, canvas_clip_local_device) =
+      if canvas_transform == Transform::identity() {
+        (canvas_bounds_device, canvas_clip_device)
+      } else if let Some(inv) = invert_transform(canvas_transform) {
+        (
+          transform_rect(canvas_bounds_device, &inv),
+          transform_rect(canvas_clip_device, &inv),
         )
-      })
-      .unwrap_or(canvas_bounds_css);
+      } else {
+        // Non-invertible transforms are exceedingly rare; fall back to the pre-translation behavior.
+        (canvas_bounds_device, canvas_clip_device)
+      };
+    let canvas_bounds_css = Rect::from_xywh(
+      canvas_bounds_local_device.x() / self.scale,
+      canvas_bounds_local_device.y() / self.scale,
+      canvas_bounds_local_device.width() / self.scale,
+      canvas_bounds_local_device.height() / self.scale,
+    );
+    let canvas_clip_bounds_css = Rect::from_xywh(
+      canvas_clip_local_device.x() / self.scale,
+      canvas_clip_local_device.y() / self.scale,
+      canvas_clip_local_device.width() / self.scale,
+      canvas_clip_local_device.height() / self.scale,
+    );
+    let visible_local_device = canvas_bounds_local_device
+      .intersection(canvas_clip_local_device)
+      .unwrap_or(Rect::ZERO);
+    let (visible_local_x0, visible_local_y0, visible_local_x1, visible_local_y1) =
+      rect_int_bounds(&visible_local_device);
 
     for layer in mask.layers.iter().rev() {
       let origin_rect_css = match layer.origin {
@@ -4898,19 +4895,18 @@ impl DisplayListRenderer {
           converted_tile.as_ref().unwrap()
         }
       };
-
+ 
+      // Allocate and paint only the portion of the mask that overlaps the visible canvas bounds in
+      // *element/device* space. Under tiling and bounded layers the canvas is translated, so the
+      // visible rect might not start at (0,0).
       let mut x0 = (clip_rect_css.min_x() * self.scale).floor() as i32;
       let mut y0 = (clip_rect_css.min_y() * self.scale).floor() as i32;
       let mut x1 = (clip_rect_css.max_x() * self.scale).ceil() as i32;
       let mut y1 = (clip_rect_css.max_y() * self.scale).ceil() as i32;
-      let canvas_x0 = canvas_bounds_device.min_x().floor() as i32;
-      let canvas_y0 = canvas_bounds_device.min_y().floor() as i32;
-      let canvas_x1 = canvas_bounds_device.max_x().ceil() as i32;
-      let canvas_y1 = canvas_bounds_device.max_y().ceil() as i32;
-      x0 = x0.clamp(canvas_x0, canvas_x1);
-      y0 = y0.clamp(canvas_y0, canvas_y1);
-      x1 = x1.clamp(canvas_x0, canvas_x1);
-      y1 = y1.clamp(canvas_y0, canvas_y1);
+      x0 = x0.clamp(visible_local_x0, visible_local_x1);
+      y0 = y0.clamp(visible_local_y0, visible_local_y1);
+      x1 = x1.clamp(visible_local_x0, visible_local_x1);
+      y1 = y1.clamp(visible_local_y0, visible_local_y1);
       let region_w = x1.saturating_sub(x0) as u32;
       let region_h = y1.saturating_sub(y0) as u32;
       if region_w == 0 || region_h == 0 {
@@ -5006,7 +5002,22 @@ impl DisplayListRenderer {
 
       let layer_mask = CompositeMask::Region(OffsetMask {
         mask: layer_mask,
-        origin: (x0, y0),
+        // `apply_mask_with_offset` expects mask coordinates in the same device-space coordinate
+        // system as the layer origin returned by `Canvas::pop_layer_raw`. When the canvas is
+        // translated (parallel tiling / bounded layers), pixmap coordinates are offset relative to
+        // the element's local device coordinates, so we need to apply the translation here.
+        //
+        // Note: For now we only remap translation-only transforms; that covers the tile/bounded
+        // layer cases. More complex affine transforms would require warping the mask itself, not
+        // just offsetting its origin.
+        origin: if is_translation_only {
+          (
+            x0.saturating_add(canvas_transform.tx.round() as i32),
+            y0.saturating_add(canvas_transform.ty.round() as i32),
+          )
+        } else {
+          (x0, y0)
+        },
       });
 
       combined = Some(match combined.take() {
@@ -14004,6 +14015,70 @@ mod tests {
     let pixmap = renderer.render(&list).unwrap();
     assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
     assert_eq!(pixel(&pixmap, 3, 0), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn mask_renders_under_translated_canvas() {
+    // Regressions: parallel tiling/bounded layers translate the canvas so the visible CSS range no
+    // longer starts at (0,0). `render_mask` must compute visibility using the current canvas
+    // transform; otherwise the mask resolves to empty and the entire stacking context disappears.
+    let mut renderer = DisplayListRenderer::new(20, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    renderer.canvas.translate(-10.0, 0.0);
+
+    let bounds = Rect::from_xywh(25.0, 2.0, 4.0, 4.0);
+    let mut layer = MaskLayer::default();
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Raster(image),
+        repeat: layer.repeat,
+        position: layer.position,
+        size: layer.size,
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      viewport: None,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds,
+      plane_rect: bounds,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: true,
+      transform: None,
+      child_perspective: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: Some(mask),
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: bounds,
+      color: Rgba::BLUE,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    // Bounds.x (25px) maps to pixel 15 after the -10px translation.
+    assert_eq!(pixel(&pixmap, 15, 2), (0, 0, 255, 255));
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
   }
 
   #[test]

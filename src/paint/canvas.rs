@@ -588,11 +588,10 @@ impl Canvas {
     paint.opacity = opacity;
     paint.blend_mode = composite_blend.unwrap_or(self.current_state.blend_mode);
     let clip = self.current_state.clip_mask.as_deref();
-    // Layer contents are rasterized in destination (parent) device space: the current canvas
-    // transform is applied while painting into the offscreen pixmap. When compositing back onto
-    // the parent pixmap we must *not* re-apply the transform, otherwise non-identity transforms
-    // (e.g. translated tile painters / bounded layers) would double-transform the already
-    // rasterized content.
+    // `push_layer[_bounded]` keeps the current transform active while painting into the offscreen
+    // pixmap, so the layer is already rasterized in the parent's device/pixmap coordinate space.
+    // When compositing back, we must not re-apply the transform, otherwise non-identity transforms
+    // (e.g. translated tile painters / bounded layers) would double-transform the content.
     let transform = Transform::identity();
 
     if paint.blend_mode == SkiaBlendMode::Plus {
@@ -2284,6 +2283,23 @@ mod tests {
       bounded_pixmap.data(),
       "bounded layer should match full layer rendering"
     );
+  }
+
+  #[test]
+  fn layer_composite_does_not_double_apply_transforms() {
+    // Regression test: offscreen layers are painted with the current transform active. When
+    // compositing the layer back onto the parent pixmap we must not apply that transform again,
+    // otherwise translated canvases (used by parallel tiling) shift layer content twice.
+    let mut canvas = Canvas::new(20, 10, Rgba::WHITE).unwrap();
+    canvas.translate(-10.0, 0.0);
+
+    canvas.push_layer(1.0).unwrap();
+    canvas.draw_rect(Rect::from_xywh(25.0, 2.0, 4.0, 4.0), Rgba::BLUE);
+    canvas.pop_layer().unwrap();
+
+    let pixmap = canvas.into_pixmap();
+    assert_eq!(pixel(&pixmap, 15, 2), (0, 0, 255, 255));
+    assert_eq!(pixel(&pixmap, 5, 2), (255, 255, 255, 255));
   }
 
   #[test]

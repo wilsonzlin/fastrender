@@ -9,8 +9,8 @@ use fastrender::paint::display_list_renderer::{DisplayListRenderer, PaintParalle
 use fastrender::render_control::{DeadlineGuard, RenderDeadline};
 use fastrender::style::types::{
   BackfaceVisibility, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat,
-  BackgroundSize, BackgroundSizeComponent, MaskClip, MaskComposite, MaskMode, MaskOrigin,
-  TransformStyle,
+  BackgroundSize, BackgroundSizeComponent, MaskClip, MaskComposite, MaskLayer, MaskMode,
+  MaskOrigin, TransformStyle,
 };
 use fastrender::text::font_loader::FontContext;
 use fastrender::{BorderRadii, Length, LengthUnit, Point, Rect, Rgba};
@@ -1012,6 +1012,98 @@ fn huge_effect_halo_triggers_serial_fallback() {
     "expected halo amplification fallback reason, got {:?}",
     report.fallback_reason
   );
+  assert_eq!(serial.data(), report.pixmap.data());
+}
+
+#[test]
+fn parallel_paint_masked_element_matches_serial_off_origin_tiles() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 96.0, 32.0),
+    color: Rgba::WHITE,
+  }));
+
+  let bounds = Rect::from_xywh(72.0, 8.0, 12.0, 12.0);
+  let mut layer = MaskLayer::default();
+  layer.repeat = BackgroundRepeat::no_repeat();
+  layer.size = BackgroundSize::Explicit(
+    BackgroundSizeComponent::Length(Length::percent(100.0)),
+    BackgroundSizeComponent::Length(Length::percent(100.0)),
+  );
+
+  let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+  let mask = ResolvedMask {
+    layers: vec![ResolvedMaskLayer {
+      image: ResolvedMaskImage::Raster(image),
+      repeat: layer.repeat,
+      position: layer.position,
+      size: layer.size,
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode: MaskMode::Alpha,
+      composite: MaskComposite::Add,
+    }],
+    color: Rgba::BLACK,
+    font_size: 16.0,
+    root_font_size: 16.0,
+    viewport: None,
+    rects: MaskReferenceRects {
+      border: bounds,
+      padding: bounds,
+      content: bounds,
+    },
+  };
+
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(mask),
+  };
+
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::new(0, 0, 255, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(96, 32, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 32,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 32, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
   assert_eq!(serial.data(), report.pixmap.data());
 }
 
