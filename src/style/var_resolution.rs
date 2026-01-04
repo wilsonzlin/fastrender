@@ -153,6 +153,11 @@ fn parse_simple_var_call<'a>(raw: &'a str) -> Option<(&'a str, Option<&'a str>)>
 
   // Reject anything with nested parentheses; those require a full tokenizer to interpret.
   let inner = trimmed.get(4..trimmed.len().saturating_sub(1))?;
+  // Comments can appear inside var() arguments (`var(--x/*comment*/)`); treat those as "complex"
+  // so we fall back to cssparser tokenization where comments are correctly ignored.
+  if inner.as_bytes().contains(&b'/') && inner.contains("/*") {
+    return None;
+  }
   if inner.contains('(') || inner.contains(')') {
     return None;
   }
@@ -1525,6 +1530,30 @@ mod tests {
 
     assert_eq!(css_text.as_ref(), "");
     assert_eq!(TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()), 0);
+  }
+
+  #[test]
+  fn test_simple_var_call_with_comment_in_name_falls_back_to_tokenizer() {
+    let props = make_props(&[("--x", "10px")]);
+    let value = PropertyValue::Keyword("var(--x/*comment*/)".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
+    let resolved = resolve_var_for_property(&value, &props, "width");
+
+    let VarResolutionResult::Resolved { value, css_text } = resolved else {
+      panic!("expected var() resolution to succeed, got {resolved:?}");
+    };
+
+    assert_eq!(css_text.trim(), "10px");
+    assert!(matches!(
+      value.as_ref(),
+      PropertyValue::Length(len)
+        if (len.value - 10.0).abs() < f32::EPSILON && len.unit == LengthUnit::Px
+    ));
+    assert!(
+      TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()) > 0,
+      "comment-containing var() call should fall back to tokenization"
+    );
   }
 
   #[test]
