@@ -206,10 +206,6 @@ struct Args {
   #[arg(long, default_value = DEFAULT_ASSET_CACHE_DIR)]
   cache_dir: PathBuf,
 
-  /// Override render output directory (PNG/logs/diagnostics)
-  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
-  out_dir: PathBuf,
-
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
   css_limit: Option<usize>,
