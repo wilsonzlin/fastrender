@@ -16467,6 +16467,34 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn registered_custom_property_revert_accepts_trailing_comment() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        #target { --len: 10px; --len: revert/*comment*/; width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(5.0)));
+    let value = styled
+      .styles
+      .custom_properties
+      .get("--len")
+      .expect("registered custom property");
+    assert!(matches!(
+      value.typed,
+      Some(CustomPropertyTypedValue::Length(len)) if len == Length::px(5.0)
+    ));
+  }
+
+  #[test]
   fn text_combine_upright_inherits() {
     let mut parent = ComputedStyle::default();
     parent.text_combine_upright = TextCombineUpright::Digits(3);
