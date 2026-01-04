@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<head>
+  <title>Data-* URL attributes fixture</title>
+</head>
+<body>
+  <p>This fixture includes network URLs in data-* attributes, which should not be treated as fetchable.</p>
+  <img data-src="https://example.com/image.png" alt="external">
+  <img data-srcset="https://example.com/image.png 1x, /resources/green.png 2x" alt="external">
+  <img src="/resources/green.png" alt="local">
+</body>
+</html>

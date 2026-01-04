@@ -472,20 +472,22 @@ fn rewrite_html(
     }
   }
 
-  let attr_regex =
-    Regex::new("(?i)(?P<prefix>(?:src|href)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])")
-      .unwrap();
+  let attr_regex = Regex::new(
+    "(?i)(?P<prefix>\\s(?:src|href|xlink:href)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
+  )
+  .unwrap();
   let url_regex =
     Regex::new("(?i)(?P<prefix>url\\(\\s*[\"']?)(?P<url>[^\"')]+)(?P<suffix>[\"']?\\s*\\))")
       .unwrap();
   let import_regex =
     Regex::new("(?i)(?P<prefix>@import\\s+['\"])(?P<url>[^\"']+)(?P<suffix>['\"])").unwrap();
   let attr_unquoted_regex =
-    Regex::new("(?i)(?P<prefix>(?:src|href)\\s*=\\s*)(?P<url>[^\\s\"'>]+)").unwrap();
+    Regex::new("(?i)(?P<prefix>\\s(?:src|href|xlink:href)\\s*=\\s*)(?P<url>[^\\s\"'>]+)")
+      .unwrap();
   let srcset_double =
-    Regex::new("(?i)(?P<prefix>\\bsrcset\\s*=\\s*\")(?P<value>[^\"]*)(?P<suffix>\")").unwrap();
+    Regex::new("(?i)(?P<prefix>\\ssrcset\\s*=\\s*\")(?P<value>[^\"]*)(?P<suffix>\")").unwrap();
   let srcset_single =
-    Regex::new("(?i)(?P<prefix>\\bsrcset\\s*=\\s*')(?P<value>[^']*)(?P<suffix>')").unwrap();
+    Regex::new("(?i)(?P<prefix>\\ssrcset\\s*=\\s*')(?P<value>[^']*)(?P<suffix>')").unwrap();
 
   let mut rewritten = apply_rewrite(
     &attr_regex,
@@ -926,14 +928,14 @@ fn find_network_urls(content: &str) -> Vec<String> {
   // such as SVG namespace URIs (`xmlns="http://www.w3.org/2000/svg"`) or text embedded inside
   // `data:` URLs.
   let attr_regex =
-    Regex::new("(?i)(?:src|href)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']").unwrap();
+    Regex::new("(?i)\\s(?:src|href|xlink:href)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']").unwrap();
   let attr_unquoted_regex =
-    Regex::new("(?i)(?:src|href)\\s*=\\s*(?P<url>[^\\s\"'>]+)").unwrap();
+    Regex::new("(?i)\\s(?:src|href|xlink:href)\\s*=\\s*(?P<url>[^\\s\"'>]+)").unwrap();
   let url_regex =
     Regex::new("(?i)url\\(\\s*[\"']?(?P<url>[^\"')]+)[\"']?\\s*\\)").unwrap();
   let import_regex = Regex::new("(?i)@import\\s+[\"'](?P<url>[^\"']+)[\"']").unwrap();
-  let srcset_double = Regex::new("(?i)\\bsrcset\\s*=\\s*\"(?P<value>[^\"]*)\"").unwrap();
-  let srcset_single = Regex::new("(?i)\\bsrcset\\s*=\\s*'(?P<value>[^']*)'").unwrap();
+  let srcset_double = Regex::new("(?i)\\ssrcset\\s*=\\s*\"(?P<value>[^\"]*)\"").unwrap();
+  let srcset_single = Regex::new("(?i)\\ssrcset\\s*=\\s*'(?P<value>[^']*)'").unwrap();
 
   let mut urls = Vec::new();
   for regex in [&attr_regex, &attr_unquoted_regex, &url_regex, &import_regex] {
@@ -1552,6 +1554,29 @@ mod tests {
       }
       other => panic!("unexpected error: {other:?}"),
     }
+  }
+
+  #[test]
+  fn offline_validation_ignores_network_urls_in_data_attributes() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/data-attrs.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+
+    let imported = fs::read_to_string(out_dir.path().join("out/html/network/data-attrs.html")).unwrap();
+    assert!(imported.contains("data-src=\"https://example.com/image.png\""));
+    assert!(imported.contains("data-srcset=\"https://example.com/image.png 1x, /resources/green.png 2x\""));
+    assert!(!imported.contains("src=\"/resources/"));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
   }
 
   #[test]
