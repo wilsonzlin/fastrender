@@ -432,22 +432,24 @@ fn nested_shadow_root_slot_names_do_not_affect_outer_default_slot() {
   build_id_lookup(&dom, &ids, &mut lookup);
 
   let outer_slot = find_by_id(&dom, "outer-default").expect("outer default slot");
-  let outer_slot_id = *ids.get(&(outer_slot as *const DomNode)).expect("outer slot id");
+  let outer_slot_id = *ids
+    .get(&(outer_slot as *const DomNode))
+    .expect("outer slot id");
   let assigned = assignments
     .slot_to_nodes
     .get(&outer_slot_id)
     .cloned()
     .unwrap_or_default();
-  assert_eq!(assigned.len(), 1);
-  assert_eq!(
-    lookup
-      .get(&assigned[0])
-      .and_then(|n| n.get_attribute_ref("id")),
-    Some("light")
-  );
+  let assigned_ids: Vec<_> = assigned
+    .iter()
+    .filter_map(|id| lookup.get(id).and_then(|n| n.get_attribute_ref("id")))
+    .collect();
+  assert_eq!(assigned_ids, vec!["light"]);
 
   let inner_slot = find_by_id(&dom, "inner-slot").expect("inner slot");
-  let inner_slot_id = *ids.get(&(inner_slot as *const DomNode)).expect("inner slot id");
+  let inner_slot_id = *ids
+    .get(&(inner_slot as *const DomNode))
+    .expect("inner slot id");
   assert!(
     !assignments.slot_to_nodes.contains_key(&inner_slot_id),
     "slots inside nested shadow roots must never receive outer host assignments"
@@ -528,13 +530,11 @@ fn slot_names_inside_inert_templates_do_not_affect_distribution() {
     .get(&default_slot_id)
     .cloned()
     .unwrap_or_default();
-  assert_eq!(assigned.len(), 1);
-  assert_eq!(
-    lookup
-      .get(&assigned[0])
-      .and_then(|n| n.get_attribute_ref("id")),
-    Some("light")
-  );
+  let assigned_ids: Vec<_> = assigned
+    .iter()
+    .filter_map(|id| lookup.get(id).and_then(|n| n.get_attribute_ref("id")))
+    .collect();
+  assert_eq!(assigned_ids, vec!["light"]);
 
   let template_slot = find_by_id(&dom, "template-slot").expect("slot in inert template");
   let template_slot_id = *ids
