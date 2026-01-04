@@ -473,7 +473,7 @@ fn rewrite_html(
   }
 
   let attr_regex = Regex::new(
-    "(?i)(?P<prefix>\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
+    "(?i)(?P<prefix>\\s(?:src|xlink:href|poster|data)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
   )
   .unwrap();
   let url_regex =
@@ -482,8 +482,16 @@ fn rewrite_html(
   let import_regex =
     Regex::new("(?i)(?P<prefix>@import\\s+['\"])(?P<url>[^\"']+)(?P<suffix>['\"])").unwrap();
   let attr_unquoted_regex =
-    Regex::new("(?i)(?P<prefix>\\s(?:src|href|xlink:href|poster|data)\\s*=\\s*)(?P<url>[^\\s\"'>]+)")
+    Regex::new("(?i)(?P<prefix>\\s(?:src|xlink:href|poster|data)\\s*=\\s*)(?P<url>[^\\s\"'>]+)")
       .unwrap();
+  let svg_href_regex = Regex::new(
+    "(?is)(?P<prefix><(?:image|use|feimage)\\b[^>]*?\\shref\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
+  )
+  .unwrap();
+  let svg_href_unquoted_regex = Regex::new(
+    "(?is)(?P<prefix><(?:image|use|feimage)\\b[^>]*?\\shref\\s*=\\s*)(?P<url>[^\\s\"'>]+)",
+  )
+  .unwrap();
   let srcset_double =
     Regex::new("(?i)(?P<prefix>\\ssrcset\\s*=\\s*\")(?P<value>[^\"]*)(?P<suffix>\")").unwrap();
   let srcset_single =
@@ -533,6 +541,26 @@ fn rewrite_html(
     &mut seen,
   )?;
 
+  rewritten = apply_rewrite(
+    &svg_href_regex,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_rewrite_no_suffix(
+    &svg_href_unquoted_regex,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
   rewritten = apply_srcset_rewrite(
     &srcset_double,
     &rewritten,
@@ -565,6 +593,15 @@ fn rewrite_html(
 
   rewritten = apply_srcset_rewrite(
     &imagesrcset_single,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_link_href_rewrite(
     &rewritten,
     config,
     src_dir,
@@ -680,6 +717,92 @@ fn apply_rewrite_no_suffix(
         error = Some(err);
         caps[0].to_string()
       }
+    })
+    .to_string();
+
+  if let Some(err) = error {
+    return Err(err);
+  }
+
+  Ok(rewritten)
+}
+
+fn apply_link_href_rewrite(
+  input: &str,
+  config: &ImportConfig,
+  src_dir: &Path,
+  dest_dir: &Path,
+  references: &mut Vec<Reference>,
+  seen: &mut HashSet<PathBuf>,
+) -> Result<String> {
+  let link_tag = Regex::new("(?is)<link\\b[^>]*>").unwrap();
+  let rel_attr = Regex::new("(?is)(?:^|\\s)rel\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+    .unwrap();
+  let href_quoted = Regex::new(
+    "(?is)(?P<prefix>(?:^|\\s)href\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
+  )
+  .unwrap();
+  let href_unquoted =
+    Regex::new("(?is)(?P<prefix>(?:^|\\s)href\\s*=\\s*)(?P<url>[^\\s\"'>]+)").unwrap();
+
+  let mut error: Option<ImportError> = None;
+  let rewritten = link_tag
+    .replace_all(input, |m: &regex::Match<'_>| {
+      if error.is_some() {
+        return m.as_str().to_string();
+      }
+      let tag = m.as_str();
+
+      let Some(rel_caps) = rel_attr.captures(tag) else {
+        return tag.to_string();
+      };
+      let rel_value = rel_caps
+        .get(1)
+        .or_else(|| rel_caps.get(2))
+        .or_else(|| rel_caps.get(3))
+        .map(|m| m.as_str())
+        .unwrap_or("");
+      if !link_rel_requires_fetch(rel_value) {
+        return tag.to_string();
+      }
+
+      let mut out = href_quoted
+        .replace_all(tag, |caps: &regex::Captures<'_>| match rewrite_reference(
+          config,
+          src_dir,
+          dest_dir,
+          &caps["url"],
+          references,
+          seen,
+        ) {
+          Ok(Some(new_value)) => format!("{}{}{}", &caps["prefix"], new_value, &caps["suffix"]),
+          Ok(None) => caps[0].to_string(),
+          Err(err) => {
+            error = Some(err);
+            caps[0].to_string()
+          }
+        })
+        .to_string();
+
+      out = href_unquoted
+        .replace_all(&out, |caps: &regex::Captures<'_>| match rewrite_reference(
+          config,
+          src_dir,
+          dest_dir,
+          &caps["url"],
+          references,
+          seen,
+        ) {
+          Ok(Some(new_value)) => format!("{}{}", &caps["prefix"], new_value),
+          Ok(None) => caps[0].to_string(),
+          Err(err) => {
+            error = Some(err);
+            caps[0].to_string()
+          }
+        })
+        .to_string();
+
+      out
     })
     .to_string();
 
@@ -989,19 +1112,6 @@ fn find_network_urls(content: &str) -> Vec<String> {
     }
   }
 
-  fn link_rel_requires_fetch(rel: &str) -> bool {
-    rel.split_whitespace().any(|token| {
-      token.eq_ignore_ascii_case("stylesheet")
-        || token.eq_ignore_ascii_case("preload")
-        || token.eq_ignore_ascii_case("modulepreload")
-        || token.eq_ignore_ascii_case("match")
-        || token.eq_ignore_ascii_case("mismatch")
-        || token.eq_ignore_ascii_case("icon")
-        || token.eq_ignore_ascii_case("mask-icon")
-        || token.eq_ignore_ascii_case("manifest")
-    })
-  }
-
   // `href` is only fetchable in a subset of contexts (notably `<link>`). Avoid flagging common
   // WPT metadata like `<link rel=help href="https://...">` by only validating the `href` value
   // when the `<link rel>` indicates a fetchable relation.
@@ -1102,6 +1212,19 @@ fn find_network_urls(content: &str) -> Vec<String> {
   urls.sort();
   urls.dedup();
   urls
+}
+
+fn link_rel_requires_fetch(rel: &str) -> bool {
+  rel.split_whitespace().any(|token| {
+    token.eq_ignore_ascii_case("stylesheet")
+      || token.eq_ignore_ascii_case("preload")
+      || token.eq_ignore_ascii_case("modulepreload")
+      || token.eq_ignore_ascii_case("match")
+      || token.eq_ignore_ascii_case("mismatch")
+      || token.eq_ignore_ascii_case("icon")
+      || token.eq_ignore_ascii_case("mask-icon")
+      || token.eq_ignore_ascii_case("manifest")
+  })
 }
 
 fn validate_strict_offline(dest_path: &Path, content: &str) -> Result<()> {
@@ -1897,6 +2020,29 @@ mod tests {
       }
       other => panic!("unexpected error: {other:?}"),
     }
+  }
+
+  #[test]
+  fn ignores_anchor_href_links() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/anchor-link.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+    let imported =
+      fs::read_to_string(out_dir.path().join("out/html/network/anchor-link.html")).unwrap();
+    assert!(imported.contains("href=\"/does-not-exist.html\""));
+    assert!(!imported.contains("href=\"/resources/"));
+    assert!(!imported.contains("src=\"/resources/"));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
   }
 
   #[test]

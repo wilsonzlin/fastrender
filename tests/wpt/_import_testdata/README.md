@@ -19,6 +19,7 @@ The layout mirrors a tiny subset of upstream WPT with:
   - `imagesrcset-external.html`: `imagesrcset="https://example.com/..."` rejection
   - `data-url.html`: data: URLs containing `http://...` substrings in payloads (should not trigger validation)
   - `data-attrs.html`: `data-src`/`data-srcset` containing network URLs (should not trigger non-strict validation)
+  - `anchor-link.html`: `<a href="/...">` navigation links are ignored by the importer
   - `mailto.html`: non-fetchable `mailto:` links
   - `poster.html`: `poster="/resources/..."` rewrite
   - `object-data.html`: `data="/resources/..."` rewrite
