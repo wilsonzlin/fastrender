@@ -12742,8 +12742,12 @@ mod tests {
     text_style.display = Display::Inline;
     let text_style = Arc::new(text_style);
 
+    // Split the RTL run across multiple items to ensure paragraph bidi reordering would swap them
+    // if we didn't apply the vertical-upright override.
     let children = vec![
-      BoxNode::new_text(text_style.clone(), "אבג".to_string()),
+      BoxNode::new_text(text_style.clone(), "א".to_string()),
+      BoxNode::new_text(text_style.clone(), "ב".to_string()),
+      BoxNode::new_text(text_style.clone(), "ג".to_string()),
       BoxNode::new_text(text_style, "abc".to_string()),
     ];
     let root = BoxNode::new_block(root_style, FormattingContextType::Inline, children);
