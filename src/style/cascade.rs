@@ -10863,6 +10863,158 @@ mod tests {
   }
 
   #[test]
+  fn container_query_size_range_syntax_applies() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "container".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "inner".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+
+    let stylesheet = parse_stylesheet(
+      r#"
+        #inner { color: rgb(10, 20, 30); }
+        @container (width >= 600px) { #inner { color: rgb(1, 2, 3); } }
+      "#,
+    )
+    .expect("parse stylesheet");
+    let style_set = StyleSet::from_document(stylesheet);
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+
+    let base = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      &dom, &style_set, &media_ctx, None, None, None, None, None, None, None, None,
+    )
+    .expect("cascade without container query context");
+
+    let container_ctx = ContainerQueryContext {
+      base_media: media_ctx.clone(),
+      containers: HashMap::from([(
+        1usize,
+        ContainerQueryInfo {
+          inline_size: 600.0,
+          block_size: 400.0,
+          container_type: ContainerType::InlineSize,
+          names: Vec::new(),
+          font_size: 16.0,
+          styles: Arc::clone(&base.styles),
+        },
+      )]),
+    };
+
+    let styled = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      &dom,
+      &style_set,
+      &media_ctx,
+      None,
+      None,
+      None,
+      Some(&container_ctx),
+      None,
+      None,
+      None,
+      None,
+    )
+    .expect("cascade with container query context");
+
+    let base_inner = base.children.first().expect("base inner");
+    let inner = styled.children.first().expect("inner");
+    assert_eq!(base_inner.styles.color, Rgba::rgb(10, 20, 30));
+    assert_eq!(inner.styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn container_query_size_range_syntax_supports_calc() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "container".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "inner".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+
+    let stylesheet = parse_stylesheet(
+      r#"
+        #inner { color: rgb(10, 20, 30); }
+        @container (width >= calc( 1rem * 2 )) { #inner { color: rgb(1, 2, 3); } }
+      "#,
+    )
+    .expect("parse stylesheet");
+    let style_set = StyleSet::from_document(stylesheet);
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+
+    let base = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      &dom, &style_set, &media_ctx, None, None, None, None, None, None, None, None,
+    )
+    .expect("cascade without container query context");
+
+    let container_ctx = |inline_size| ContainerQueryContext {
+      base_media: media_ctx.clone(),
+      containers: HashMap::from([(
+        1usize,
+        ContainerQueryInfo {
+          inline_size,
+          block_size: 400.0,
+          container_type: ContainerType::InlineSize,
+          names: Vec::new(),
+          font_size: 16.0,
+          styles: Arc::clone(&base.styles),
+        },
+      )]),
+    };
+
+    let styled_31 = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      &dom,
+      &style_set,
+      &media_ctx,
+      None,
+      None,
+      None,
+      Some(&container_ctx(31.0)),
+      None,
+      None,
+      None,
+      None,
+    )
+    .expect("cascade with 31px container");
+    let inner_31 = styled_31.children.first().expect("inner 31px");
+    assert_eq!(inner_31.styles.color, Rgba::rgb(10, 20, 30));
+
+    let styled_32 = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      &dom,
+      &style_set,
+      &media_ctx,
+      None,
+      None,
+      None,
+      Some(&container_ctx(32.0)),
+      None,
+      None,
+      None,
+      None,
+    )
+    .expect("cascade with 32px container");
+    let inner_32 = styled_32.children.first().expect("inner 32px");
+    assert_eq!(inner_32.styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
   fn prepared_cascade_caches_inline_style_declarations_across_passes() {
     let dom = DomNode {
       node_type: DomNodeType::Element {

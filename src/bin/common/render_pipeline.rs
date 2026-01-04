@@ -613,8 +613,6 @@ mod tests {
         status: Some(200),
         etag: None,
         last_modified: None,
-        access_control_allow_origin: None,
-        timing_allow_origin: None,
         final_url: Some(url.to_string()),
         cache_policy: None,
         access_control_allow_origin: None,
