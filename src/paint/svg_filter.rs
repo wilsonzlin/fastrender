@@ -3306,6 +3306,7 @@ fn apply_primitive(
         *octaves,
         *stitch_tiles,
         *kind,
+        color_interpolation_filters,
       )?
       else {
         return Ok(None);
@@ -5778,6 +5779,50 @@ mod tests {
       "expected timeout, got {result:?}"
     );
     assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn turbulence_encodes_channels_based_on_color_interpolation_filters() {
+    let (width, height) = (2, 2);
+    let region = Rect::from_xywh(0.0, 0.0, width as f32, height as f32);
+
+    let render = |cif| {
+      turbulence::render_turbulence(
+        width,
+        height,
+        region,
+        (0.0, 0.0),
+        0,
+        1,
+        false,
+        TurbulenceType::FractalNoise,
+        cif,
+      )
+      .unwrap()
+      .unwrap()
+    };
+
+    let srgb = render(ColorInterpolationFilters::SRGB);
+    for px in srgb.pixels() {
+      assert_eq!(px.red(), 128);
+      assert_eq!(px.green(), 128);
+      assert_eq!(px.blue(), 128);
+      assert_eq!(px.alpha(), 255);
+    }
+
+    let linear = render(ColorInterpolationFilters::LinearRGB);
+    for px in linear.pixels() {
+      let expected = 188u8;
+      let actual = px.red();
+      let diff = (actual as i16 - expected as i16).abs();
+      assert!(
+        diff <= 1,
+        "expected ~{expected} for linearRGB encoding, got {actual}"
+      );
+      assert_eq!(px.green(), actual);
+      assert_eq!(px.blue(), actual);
+      assert_eq!(px.alpha(), 255);
+    }
   }
 
   #[test]

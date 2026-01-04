@@ -26,6 +26,7 @@ fn base_filter(steps: Vec<FilterStep>) -> SvgFilter {
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   filter
 }
 
@@ -84,6 +85,7 @@ fn primitive_region_userspace_respects_scale() {
   }];
   let mut filter = base_filter(steps);
   filter.primitive_units = SvgFilterUnits::UserSpaceOnUse;
+  filter.refresh_fingerprint();
 
   let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
   apply_svg_filter(&filter, &mut pixmap, 2.0, bbox).unwrap();
@@ -115,5 +117,5 @@ fn turbulence_is_deterministic() {
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
   let checksum: u32 = pixmap.data().iter().map(|b| *b as u32).sum();
-  assert_eq!(checksum, 2709);
+  assert_eq!(checksum, 3333);
 }

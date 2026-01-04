@@ -25,6 +25,7 @@ fn turbulence_filter(primitive: FilterPrimitive) -> SvgFilter {
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
     fingerprint: 0,
   };
+  filter.refresh_fingerprint();
   filter
 }
 

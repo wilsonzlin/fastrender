@@ -99,6 +99,7 @@ fn filter_region_respects_bbox_offset() {
     },
     region: None,
   });
+  filter.refresh_fingerprint();
 
   let mut pixmap = Pixmap::new(20, 20).unwrap();
   let bbox = Rect::from_xywh(5.0, 6.0, 10.0, 8.0);

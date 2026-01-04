@@ -5,7 +5,7 @@ use crate::render_control::{active_deadline, check_active, with_deadline};
 use rayon::prelude::*;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
-use super::{RenderResult, TurbulenceType, FILTER_DEADLINE_STRIDE};
+use super::{ColorInterpolationFilters, RenderResult, TurbulenceType, FILTER_DEADLINE_STRIDE};
 
 #[derive(Clone, Copy, Debug)]
 struct ResolvedRegion {
@@ -58,6 +58,7 @@ pub(super) fn render_turbulence(
   octaves: u32,
   stitch_tiles: bool,
   kind: TurbulenceType,
+  color_interpolation_filters: ColorInterpolationFilters,
 ) -> RenderResult<Option<Pixmap>> {
   check_active(RenderStage::Paint)?;
   let region = match resolve_region(filter_region, output_width, output_height) {
@@ -133,7 +134,11 @@ pub(super) fn render_turbulence(
             0.0
           };
           let mapped = (normalized * 0.5 + 0.5).clamp(0.0, 1.0);
-          let byte = (mapped * 255.0).round().clamp(0.0, 255.0) as u8;
+          let encoded = match color_interpolation_filters {
+            ColorInterpolationFilters::SRGB => mapped,
+            ColorInterpolationFilters::LinearRGB => super::linear_to_srgb(mapped),
+          };
+          let byte = (encoded * 255.0).round().clamp(0.0, 255.0) as u8;
           *px = PremultipliedColorU8::from_rgba(byte, byte, byte, 255)
             .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
