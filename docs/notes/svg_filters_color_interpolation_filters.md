@@ -81,6 +81,13 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     `reencode_pixmap_to_srgb()`.
 - `feDropShadow`
   - The blur portion follows the same policy as `feGaussianBlur` using the same re-encode helpers.
+- `feOffset`
+  - Runs in **linearRGB** when requested *and* the offset requires interpolation (fractional
+    `dx`/`dy`).
+  - Implementation: `reencode_pixmap_to_linear_rgb()` -> bilinear resampling ->
+    `reencode_pixmap_to_srgb()`.
+  - Integer offsets (no interpolation) are effectively just a copy/shift, so no color-space
+    conversion is needed.
 - `feColorMatrix`
   - Runs in **linearRGB** when requested.
   - Implementation uses `unpack_color()` / `pack_color()` per pixel.
@@ -116,7 +123,7 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
 Primitives/operations that currently **ignore `color-interpolation-filters`** (they do not
 explicitly re-encode between sRGB <-> linearRGB):
 
-- `feOffset` (subpixel offsets use bilinear resampling in the stored space)
+- `filterRes` downsampling/upsampling (uses tiny-skia bilinear resampling in the stored space)
 - `feTile` / `feImage` (no re-encoding; `feImage` currently draws with nearest sampling)
 - `feTurbulence` / `feFlood` (outputs are generated/written as premultiplied RGBA8)
 
@@ -128,5 +135,6 @@ explicitly re-encode between sRGB <-> linearRGB):
   computation instead of keeping a float/linear surface across multiple primitives.
 - **Partial coverage of `color-interpolation-filters`:** some primitives do not yet apply explicit
   sRGB <-> linearRGB conversion for resampling; `linearRGB` may not be fully honored for filter
-  graphs that rely on subpixel `feOffset` or `filterRes` downsampling/upsampling (which uses
-  tiny-skia bilinear resampling in the stored space).
+  graphs that rely on `filterRes` downsampling/upsampling (which uses tiny-skia bilinear resampling
+  in the stored space), or on primitives like `feTurbulence` that currently generate channel values
+  without CIF-aware encoding.
