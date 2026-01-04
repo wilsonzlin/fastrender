@@ -96,6 +96,54 @@ exit 1
   path
 }
 
+fn write_headless_fallback_stub_chrome(dir: &std::path::Path) -> PathBuf {
+  let path = dir.join("chrome");
+  fs::write(
+    &path,
+    r#"#!/usr/bin/env sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo "Chromium 87.0.0.0"
+  exit 0
+fi
+
+echo "stub chrome args: $@"
+
+case " $* " in
+  *" --headless=new "*)
+    echo "unknown option: --headless=new" >&2
+    exit 1
+    ;;
+esac
+
+for arg in "$@"; do
+  case "$arg" in
+    --screenshot=*)
+      out="${arg#--screenshot=}"
+      mkdir -p "$(dirname "$out")"
+      # Minimal non-empty PNG header.
+      printf '\x89PNG\r\n\x1a\n' > "$out"
+      ;;
+  esac
+done
+exit 0
+"#,
+  )
+  .expect("write headless fallback stub chrome");
+
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&path)
+      .expect("stat headless fallback chrome")
+      .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).expect("chmod headless fallback chrome");
+  }
+
+  path
+}
+
 #[test]
 fn chrome_baseline_fixtures_respects_sharding_and_writes_outputs() {
   let repo_root = repo_root();
@@ -302,5 +350,52 @@ fn chrome_baseline_fixtures_removes_stale_outputs_on_failure() {
   assert!(
     out_dir.join("hello.chrome.log").is_file(),
     "chrome log should be replaced on failure"
+  );
+}
+
+#[test]
+fn chrome_baseline_fixtures_falls_back_to_legacy_headless() {
+  let repo_root = repo_root();
+  let temp = tempdir().expect("temp dir");
+  let fixture_root = temp.path().join("fixtures");
+  let out_dir = temp.path().join("out");
+  let chrome_dir = temp.path().join("chrome");
+  fs::create_dir_all(&chrome_dir).expect("create chrome dir");
+  write_headless_fallback_stub_chrome(&chrome_dir);
+
+  write_fixture(&fixture_root, "hello");
+
+  let status = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(&repo_root)
+    .arg("chrome-baseline-fixtures")
+    .arg("--fixture-dir")
+    .arg(&fixture_root)
+    .arg("--out-dir")
+    .arg(&out_dir)
+    .arg("--chrome-dir")
+    .arg(&chrome_dir)
+    .arg("--fixtures")
+    .arg("hello")
+    .status()
+    .expect("run chrome-baseline-fixtures");
+  assert!(status.success(), "command exited with {status}");
+
+  let log = fs::read_to_string(out_dir.join("hello.chrome.log")).expect("read log");
+  assert!(
+    log.contains("--headless=new") && log.to_ascii_lowercase().contains("unknown option"),
+    "log should contain unsupported headless=new hint; got:\n{log}"
+  );
+  assert!(
+    log.contains("# Retrying with --headless") && log.contains("--headless "),
+    "log should contain retry note and legacy headless args; got:\n{log}"
+  );
+
+  let meta: serde_json::Value =
+    serde_json::from_slice(&fs::read(out_dir.join("hello.json")).expect("read metadata json"))
+      .expect("parse metadata json");
+  assert_eq!(
+    meta.get("headless").and_then(|v| v.as_str()),
+    Some("legacy"),
+    "metadata should record legacy headless mode; got:\n{meta}"
   );
 }
