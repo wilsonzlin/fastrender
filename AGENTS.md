@@ -32,6 +32,14 @@ A task only “counts” if it produces at least one of:
 
 If you can’t show a measurable/evidenced delta, you are not done.
 
+### What does NOT count (guard against “infra drift”)
+
+- **Tooling/infra-only work does not count** unless it is immediately used to ship an accuracy/capability/stability/termination win (same session or the very next commit/hand-off).
+- **Perf-only work does not count** unless it fixes a timeout/loop, prevents oversubscription, or is required to make an accuracy fix feasible (e.g. render finishes under the hard budget so we can diff and iterate).
+- **Docs-only work does not count** unless it removes a real source of confusion that is actively blocking pageset fixes.
+
+If you find yourself “improving the harness” without changing renderer behavior, stop and implement the missing behavior.
+
 ### Evidence loop (accuracy work)
 
 For accuracy tasks, evidence should usually be one of:
